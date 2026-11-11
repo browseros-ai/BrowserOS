@@ -33,7 +33,6 @@ pub(crate) enum EnvCall {
     /// `OpEnv::recheck_reach`, with the other tabs of the op page's opener-linked group.
     RecheckReach(Vec<TabId>),
     MarkSent,
-    MarkSensitiveTarget,
     Note(String),
 }
 
@@ -244,10 +243,6 @@ impl OpEnv for LiveEnv {
         self.record(EnvCall::MarkSent);
     }
 
-    fn mark_sensitive_target(&self) {
-        self.record(EnvCall::MarkSensitiveTarget);
-    }
-
     fn note(&self, line: String) {
         self.record(EnvCall::Note(line));
     }
@@ -273,10 +268,6 @@ impl OpEnv for DefaultHost<'_> {
 
     fn mark_sent(&self) {
         self.0.mark_sent();
-    }
-
-    fn mark_sensitive_target(&self) {
-        self.0.mark_sensitive_target();
     }
 
     fn note(&self, line: String) {

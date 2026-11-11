@@ -1452,10 +1452,6 @@ impl OpEnv for DefaultReach {
         self.0.mark_sent();
     }
 
-    fn mark_sensitive_target(&self) {
-        self.0.mark_sensitive_target();
-    }
-
     fn note(&self, line: String) {
         self.0.note(line);
     }

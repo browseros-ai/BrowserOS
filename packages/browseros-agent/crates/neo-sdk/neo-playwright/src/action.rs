@@ -63,5 +63,5 @@ mod requested_navigations;
 mod subject;
 
 pub(crate) use action_op::ActionOp;
-pub(crate) use copy_refusal::{Focus, focus_of, refuse_copy};
+pub(crate) use copy_refusal::{focus_of, refuse_copy};
 pub(crate) use focus_lease::{FocusLease, lease};

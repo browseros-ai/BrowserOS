@@ -67,10 +67,6 @@ pub trait OpEnv: Send + Sync {
     /// `recheck` and, for a main-world send on a linked page, `recheck_reach`.
     fn mark_sent(&self);
 
-    /// The op's target is a password, card or one-time-code field, so the trace redacts the
-    /// op's sensitive arguments.
-    fn mark_sensitive_target(&self);
-
     /// One line of Playwright's call log, mirrored into the op's trace record. Lines never
     /// carry a typed value.
     fn note(&self, line: String);

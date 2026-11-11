@@ -10,7 +10,7 @@ use neo_trace::{
     Delivery, Effect, EpochMillis, OperationEnded, OperationId, OperationKind, OperationStarted,
     Outcome, PageState, PrivateReason, RedactionLimits, Redactor, RequestId, RetentionPolicy,
     RunEffects, RunQuery, RunStatus, SecretSet, SecretSetConfig, ShotRead, ShotState, TailQuery,
-    TargetSensitivity, TaskId, TraceError, TraceStore, WriterConfig, spawn_writer,
+    TaskId, TraceError, TraceStore, WriterConfig, spawn_writer,
 };
 use sea_orm::sqlx::sqlite::SqliteConnectOptions;
 use sea_orm::sqlx::{self, Connection, Row, SqliteConnection};
@@ -283,6 +283,36 @@ async fn shape(path: &Path) -> TestResult<Value> {
 }
 
 #[tokio::test]
+async fn legacy_redacted_arguments_and_withheld_code_remain_readable() -> TestResult {
+    let (_directory, path) = fixture("s5", true).await?;
+    let mut conn = connection(&path).await?;
+    // Seed the representation an older writer produced. Adoption must preserve these rows;
+    // removing the live policy cannot recover their original input or code.
+    sqlx::query("UPDATE runs SET code = NULL, code_withheld = 'sensitive_input' WHERE id = ?")
+        .bind(A)
+        .execute(&mut conn)
+        .await?;
+    sqlx::query("UPDATE operations SET args = ? WHERE run_id = ? AND seq = 1")
+        .bind(json!({"value": "[redacted]"}).to_string())
+        .bind(A)
+        .execute(&mut conn)
+        .await?;
+    conn.close().await?;
+
+    let store = TraceStore::open(&path).await?;
+    let detail = store.run(A.parse()?).await?.ok_or("missing legacy run")?;
+    assert_eq!(detail.code, None);
+    assert_eq!(detail.code_withheld.as_deref(), Some("sensitive_input"));
+    assert_eq!(
+        detail.operations[0].args,
+        Some(json!({"value": "[redacted]"})),
+        "legacy arguments are returned as stored"
+    );
+    assert!(detail.summary.complete);
+    Ok(())
+}
+
+#[tokio::test]
 async fn a_fresh_file_has_exactly_the_v1_schema() -> TestResult {
     let (_legacy, old) = fixture("s5", false).await?;
     let fresh = tempfile::tempdir()?;
@@ -438,7 +468,6 @@ async fn an_s4_file_gains_notes_and_takes_operation_ends() -> TestResult {
         effect: Effect::Read,
         tab: Some(TabId(3)),
         args: Value::Null,
-        policy: Arc::default(),
         also_mask: None,
         at: EpochMillis::from_millis(40),
     });
@@ -451,7 +480,6 @@ async fn an_s4_file_gains_notes_and_takes_operation_ends() -> TestResult {
         result: None,
         error: None,
         page_after: None,
-        target: TargetSensitivity::Ordinary,
         also_mask: None,
         at: EpochMillis::from_millis(41),
     });
@@ -764,7 +792,6 @@ async fn legacy_page_ids_stay_inert_while_native_tab_records_round_trip() -> Tes
         effect: Effect::Read,
         tab: Some(TabId(3)),
         args: Value::Null,
-        policy: Arc::default(),
         also_mask: None,
         at: EpochMillis::from_millis(40),
     });
@@ -781,7 +808,6 @@ async fn legacy_page_ids_stay_inert_while_native_tab_records_round_trip() -> Tes
         result: None,
         error: None,
         page_after: Some(page.clone()),
-        target: TargetSensitivity::Ordinary,
         also_mask: None,
         at: EpochMillis::from_millis(41),
     });

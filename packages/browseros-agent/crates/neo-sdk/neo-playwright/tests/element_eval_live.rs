@@ -923,8 +923,7 @@ async fn tests_that_a_handle_argument_is_adopted_from_its_own_document_only() ->
 }
 
 /// Every element form is one send: the host's recheck, then the mark, nothing between, as for
-/// `page.evaluate`. A locator's wait also logs its call-log notes and marks a sensitive target
-/// before it, which are no sends.
+/// `page.evaluate`. A locator's wait also logs its call-log notes before it, which are no sends.
 #[tokio::test]
 #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
 async fn tests_that_each_element_send_is_rechecked_then_marked() -> TestResult {

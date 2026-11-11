@@ -5,7 +5,6 @@
 
 use std::env;
 use std::error::Error;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
@@ -79,7 +78,6 @@ impl PlaywrightHooks for RecordingHooks {
 pub(crate) struct LiveEnv {
     view: BrowserView,
     run_state: Arc<RunState>,
-    sensitive_marks: Arc<AtomicUsize>,
 }
 
 impl OpEnv for LiveEnv {
@@ -102,10 +100,6 @@ impl OpEnv for LiveEnv {
 
     fn mark_sent(&self) {}
 
-    fn mark_sensitive_target(&self) {
-        self.sensitive_marks.fetch_add(1, Ordering::Relaxed);
-    }
-
     fn note(&self, _line: String) {}
 }
 
@@ -114,9 +108,6 @@ pub(crate) struct LiveBrowser {
     pub(crate) browser: Arc<BrowserSession>,
     pub(crate) playwright: Arc<Playwright>,
     pub(crate) hooks: Arc<RecordingHooks>,
-    /// How many ops so far told the host their target is a password, card or one-time-code
-    /// field (`OpEnv::mark_sensitive_target`).
-    pub(crate) sensitive_marks: Arc<AtomicUsize>,
 }
 
 impl LiveBrowser {
@@ -137,7 +128,6 @@ impl LiveBrowser {
             browser,
             playwright,
             hooks,
-            sensitive_marks: Arc::default(),
         };
         // `Playwright::new` reads the open tabs in the background, and that read decides
         // where a tab's seqs start. An op on a tab that is already open waits for it, so a
@@ -224,7 +214,6 @@ impl LiveBrowser {
         let env = LiveEnv {
             view: BrowserView::unbound(Arc::clone(&self.browser), None),
             run_state: Arc::default(),
-            sensitive_marks: Arc::clone(&self.sensitive_marks),
         };
         Ok(self.playwright.invoke(&env, op, input).await)
     }

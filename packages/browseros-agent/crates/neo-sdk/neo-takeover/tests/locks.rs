@@ -11,8 +11,8 @@ use neo_takeover::{
 };
 use neo_trace::{
     Delivery, Effect, EpochMillis, OperationEnded, OperationId, OperationKind, OperationStarted,
-    Outcome, RedactionLimits, Redactor, RunId, RunStarted, SecretSet, SecretSetConfig,
-    TargetSensitivity, TraceSink, TraceStore, WriterConfig, spawn_writer,
+    Outcome, RedactionLimits, Redactor, RunId, RunStarted, SecretSet, SecretSetConfig, TraceSink,
+    TraceStore, WriterConfig, spawn_writer,
 };
 use std::sync::Arc;
 use std::time::Duration;
@@ -76,7 +76,6 @@ fn write_in_flight(sink: &TraceSink, tab: i64) -> OperationId {
         effect: Effect::Write,
         tab: Some(TabId(tab)),
         args: serde_json::json!({ "selector": "#pay" }),
-        policy: Arc::default(),
         also_mask: None,
         at: EpochMillis::now(),
     });
@@ -92,7 +91,6 @@ fn write_done(sink: &TraceSink, op: OperationId) {
         result: None,
         error: None,
         page_after: None,
-        target: TargetSensitivity::Ordinary,
         also_mask: None,
         at: EpochMillis::now(),
     });

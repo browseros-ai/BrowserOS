@@ -383,7 +383,7 @@ impl Dispatcher {
             Caller::Neo => None,
         };
         // An `Internal` name gets the same answer as a missing one, so a script cannot probe
-        // for hidden methods; the record keeps the real spec and its redaction. A brand is
+        // for hidden methods; the record keeps the real spec. A brand is
         // decided before visibility is, so it gets one answer under every name, and it is never
         // decoded or run, its page never opened and no rule asked.
         //
@@ -403,10 +403,7 @@ impl Dispatcher {
                 ))
             }
         };
-        let (spec, redaction) = registered.map_or_else(
-            || (UNKNOWN_METHOD, Arc::default()),
-            |registered| (registered.spec(), Arc::clone(registered.redaction())),
-        );
+        let spec = registered.map_or(UNKNOWN_METHOD, super::registry::Registered::spec);
         let target = decoded.as_ref().ok().and_then(|decoded| decoded.target());
         // The tab the call names, unchecked: the record lists what the script asked for, even
         // when the door then refuses it. A lazy default page has no tab until it opens.
@@ -421,7 +418,6 @@ impl Dispatcher {
             state: Arc::clone(&state),
             name,
             spec,
-            redaction,
             args: input,
             tab,
             site,

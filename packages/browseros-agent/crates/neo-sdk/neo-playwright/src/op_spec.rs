@@ -1,6 +1,6 @@
 //! What the host needs to register one op: plain data, read once at startup.
 
-use neo_trace::{Effect, JsonPointer, RedactionPolicy};
+use neo_trace::Effect;
 
 /// One op's registration metadata. claw-sdk copies it field by field into its `MethodSpec`;
 /// the prelude's `ops.generated.ts` carries the same name, effect, target and lifetime. A host
@@ -19,10 +19,6 @@ pub struct OpSpec {
     pub target: OpTarget,
     /// `Background` only for the prelude's event pump.
     pub lifetime: OpLifetime,
-    /// JSON pointers into the input that the trace redacts once the op marks its target
-    /// sensitive (a password, card or one-time-code field), such as `/value` for a fill. Each
-    /// names a top-level field of the op's input and starts with `/`.
-    pub sensitive_args: &'static [&'static str],
     /// What the op reaches beyond its page's sealed world. Empty for an op that only reads and
     /// acts in the sealed world or sends trusted input, which is most of them. A unit test pins
     /// every op's list to an audit: changing one changes what a host holds or polices.
@@ -91,21 +87,6 @@ pub(crate) const PAGE: OpTarget = OpTarget::Field("page");
 pub(crate) const TARGET: OpTarget = OpTarget::Field("target");
 
 impl OpSpec {
-    /// The trace's redaction policy: the sensitive arguments, redacted only once the op marks
-    /// its target sensitive. No argument of a Playwright op is always secret.
-    #[must_use]
-    pub fn redaction(&self) -> RedactionPolicy {
-        RedactionPolicy {
-            secret: Vec::new(),
-            // A unit test parses every declared pointer, so none is dropped here.
-            sensitive: self
-                .sensitive_args
-                .iter()
-                .filter_map(|pointer| JsonPointer::parse(pointer).ok())
-                .collect(),
-        }
-    }
-
     /// Whether the op declares `capability`.
     #[must_use]
     pub fn uses(&self, capability: Capability) -> bool {
@@ -130,7 +111,6 @@ impl OpSpec {
             effect: Effect::Read,
             target,
             lifetime: OpLifetime::Operation,
-            sensitive_args: &[],
             capabilities: &[],
             policed: false,
         }
@@ -141,14 +121,6 @@ impl OpSpec {
         Self {
             effect: Effect::Write,
             ..Self::read(name, target, doc)
-        }
-    }
-
-    /// The same op, with arguments the trace redacts for a sensitive target.
-    pub(crate) const fn sensitive(self, sensitive_args: &'static [&'static str]) -> Self {
-        Self {
-            sensitive_args,
-            ..self
         }
     }
 

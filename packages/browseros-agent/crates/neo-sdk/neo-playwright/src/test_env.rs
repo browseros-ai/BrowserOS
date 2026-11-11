@@ -21,7 +21,6 @@ pub(crate) enum EnvCall {
     /// `OpEnv::recheck_reach`, with the other tabs of the op page's opener-linked group.
     RecheckReach(Vec<TabId>),
     MarkSent,
-    MarkSensitiveTarget,
     Note(String),
     /// The close evidence handed to the host with a delivered event.
     ReportClose(TabId, TargetId, u64),
@@ -108,10 +107,6 @@ impl OpEnv for TestEnv {
 
     fn mark_sent(&self) {
         self.record(EnvCall::MarkSent);
-    }
-
-    fn mark_sensitive_target(&self) {
-        self.record(EnvCall::MarkSensitiveTarget);
     }
 
     fn report_close(&self, tab: TabId, target: &TargetId, seq: u64) {
