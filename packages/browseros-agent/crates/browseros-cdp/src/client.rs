@@ -459,7 +459,7 @@ fn open_socket(inner: Arc<Inner>) -> BoxFuture<'static, Result<(), CdpError>> {
 
         let reader_inner = inner.clone();
         let handle = tokio::spawn(async move {
-            reader_loop(reader_inner, reader).await;
+            reader_loop(reader_inner, reader, epoch).await;
         });
         *inner.reader_task.lock().await = Some(handle);
         Ok(())
@@ -522,12 +522,12 @@ async fn connect_websocket(url: &Url, connect_timeout: Duration) -> Result<WsStr
     Ok(ws)
 }
 
-async fn reader_loop(inner: Arc<Inner>, mut reader: WsReader) {
+async fn reader_loop(inner: Arc<Inner>, mut reader: WsReader, epoch: u64) {
     while let Some(message) = reader.next().await {
         match message {
-            Ok(Message::Text(text)) => handle_text_message(&inner, text.as_str()).await,
+            Ok(Message::Text(text)) => handle_text_message(&inner, text.as_str(), epoch).await,
             Ok(Message::Binary(bytes)) => match std::str::from_utf8(&bytes) {
-                Ok(text) => handle_text_message(&inner, text).await,
+                Ok(text) => handle_text_message(&inner, text, epoch).await,
                 Err(err) => debug!("ignoring non-utf8 CDP binary frame: {err}"),
             },
             Ok(Message::Close(_)) => break,
@@ -546,7 +546,7 @@ async fn reader_loop(inner: Arc<Inner>, mut reader: WsReader) {
     mark_connection_lost(inner).await;
 }
 
-async fn handle_text_message(inner: &Arc<Inner>, text: &str) {
+async fn handle_text_message(inner: &Arc<Inner>, text: &str, epoch: u64) {
     let parsed = serde_json::from_str::<Value>(text);
     let Ok(value) = parsed else {
         return;
@@ -583,7 +583,9 @@ async fn handle_text_message(inner: &Arc<Inner>, text: &str) {
         params,
         session_id,
     };
-    let Some(event) = inner.targeted.deliver(event) else {
+    // Capture the reader's epoch, not the current socket's: reconnect can publish a new
+    // socket while a consumer still has these events queued.
+    let Some(event) = inner.targeted.deliver_at_epoch(event, epoch) else {
         return;
     };
     let _ = inner.events_tx.send(event);

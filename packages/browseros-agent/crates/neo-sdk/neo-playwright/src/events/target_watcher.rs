@@ -139,6 +139,9 @@ struct Watcher {
     writer: EventWriter,
     attach_log: Arc<FrameAttachLog>,
     lifecycle: FrameLifecycleTracker,
+    /// Generation whose events own the caches. Discovery readiness is separate: a rescan
+    /// must never retire dialogs already opened on this socket.
+    connection_epoch: u64,
     /// The connection epoch discovery ran for; `None` until it succeeds, and after a lag.
     epoch: Option<u64>,
     /// The tabs the watcher knows.
@@ -159,7 +162,7 @@ struct Watcher {
     next_reap: Instant,
     /// Window lookups report their popup back on this channel, so only this task writes the
     /// log. The receiving end is a local of the task's loop.
-    found: UnboundedSender<OpenedPage>,
+    found: UnboundedSender<(u64, OpenedPage)>,
 }
 
 struct KnownPage {
@@ -303,9 +306,10 @@ impl Watcher {
         browser: Arc<BrowserSession>,
         writer: EventWriter,
         attach_log: Arc<FrameAttachLog>,
-    ) -> (Self, UnboundedReceiver<OpenedPage>) {
+    ) -> (Self, UnboundedReceiver<(u64, OpenedPage)>) {
         let (found, found_rx) = mpsc::unbounded_channel();
         let watcher = Self {
+            connection_epoch: browser.connection().connection_epoch(),
             view: BrowserView::unbound(Arc::clone(&browser), None),
             browser,
             writer,
@@ -327,7 +331,7 @@ impl Watcher {
 
     async fn run(
         mut self,
-        mut found: UnboundedReceiver<OpenedPage>,
+        mut found: UnboundedReceiver<(u64, OpenedPage)>,
         mut events: Option<broadcast::Receiver<CdpEvent>>,
         mut dialogs: Option<ObservedEvents>,
     ) {
@@ -338,11 +342,11 @@ impl Watcher {
             tokio::select! {
                 received = async {
                     match dialogs.as_mut() {
-                        Some(dialogs) => dialogs.recv().await,
+                        Some(dialogs) => dialogs.recv_with_epoch().await,
                         None => future::pending().await,
                     }
                 } => match received {
-                    Some(event) => self.handle(event).await,
+                    Some((event, epoch)) => self.handle_from_epoch(event, epoch).await,
                     None => return,
                 },
                 received = async {
@@ -360,7 +364,12 @@ impl Watcher {
                     }
                     Err(RecvError::Closed) => return,
                 },
-                Some(opened) = found.recv() => self.found(opened),
+                Some((epoch, opened)) = found.recv() => {
+                    self.sync_connection_epoch();
+                    if epoch == self.connection_epoch {
+                        self.found(opened);
+                    }
+                },
                 _ = tick.tick() => self.tick().await,
                 () = time::sleep_until(grace_ends.unwrap_or_else(Instant::now)), if grace_ends.is_some() => {
                     self.end_graces();
@@ -370,14 +379,17 @@ impl Watcher {
     }
 
     async fn tick(&mut self) {
-        let epoch = self.browser.connection().connection_epoch();
+        self.sync_connection_epoch();
+        let epoch = self.connection_epoch;
         if self.epoch != Some(epoch) && self.browser.is_connected() {
-            let changed = self.epoch.is_some_and(|known| known != epoch);
-            if self.discover(changed).await.is_ok() {
+            if self.discover().await.is_ok()
+                && self.browser.connection().connection_epoch() == epoch
+            {
                 self.epoch = Some(epoch);
             }
         }
         self.observe_context().await;
+        self.sync_connection_epoch();
         let now = Instant::now();
         let overdue: Vec<(TargetId, Option<i64>)> = self
             .pages
@@ -402,9 +414,31 @@ impl Watcher {
         }
     }
 
-    /// Learns the tabs that exist and turns discovery on. `changed`: the connection is a new
-    /// one, so every session id the watcher knew died with the old socket.
-    async fn discover(&mut self, changed: bool) -> Result<(), CoreError> {
+    /// Retires only old-socket state, before a new event can populate it. Rediscovery and lag
+    /// recovery do not clear dialogs that belong to the current generation.
+    fn sync_connection_epoch(&mut self) {
+        let epoch = self.browser.connection().connection_epoch();
+        if epoch == self.connection_epoch {
+            return;
+        }
+        self.connection_epoch = epoch;
+        self.epoch = None;
+        self.lifecycle = FrameLifecycleTracker::default();
+        self.sessions.clear();
+        self.lifecycle_sources = LifecycleSources::default();
+        self.frames.clear();
+        self.pending_dialogs.clear();
+        self.graces.clear();
+        self.closed_early.clear();
+        for page in self.pages.values_mut() {
+            page.state = PageState::Reported;
+        }
+        self.writer.hub().dialogs().forget_sessions();
+    }
+
+    /// Learns the tabs that exist and turns discovery on for the current socket.
+    async fn discover(&mut self) -> Result<(), CoreError> {
+        let epoch = self.connection_epoch;
         #[derive(Deserialize)]
         #[serde(rename_all = "camelCase")]
         struct Targets {
@@ -415,6 +449,11 @@ impl Watcher {
                 .cdp("Target.getTargets", json!({}), None)
                 .await?,
         )?;
+        if self.browser.connection().connection_epoch() != epoch {
+            return Err(CoreError::Message(
+                "connection changed during target discovery".to_owned(),
+            ));
+        }
         let live: HashSet<TargetId> = targets
             .target_infos
             .into_iter()
@@ -436,14 +475,6 @@ impl Watcher {
                 state: PageState::Reported,
             });
         }
-        if changed {
-            self.lifecycle = FrameLifecycleTracker::default();
-            self.sessions.clear();
-            self.lifecycle_sources = LifecycleSources::default();
-            self.frames.clear();
-            self.pending_dialogs.clear();
-            self.writer.hub().dialogs().forget_sessions();
-        }
         self.browser
             .cdp(
                 "Target.setDiscoverTargets",
@@ -464,6 +495,14 @@ impl Watcher {
     }
 
     async fn handle(&mut self, event: CdpEvent) {
+        self.handle_from_epoch(event, None).await;
+    }
+
+    async fn handle_from_epoch(&mut self, event: CdpEvent, epoch: Option<u64>) {
+        self.sync_connection_epoch();
+        if epoch.is_some_and(|epoch| epoch != self.connection_epoch) {
+            return;
+        }
         let CdpEvent {
             method,
             params,
@@ -616,16 +655,20 @@ impl Watcher {
         page.state = PageState::LookingUp;
         let browser = Arc::clone(&self.browser);
         let found = self.found.clone();
+        let epoch = self.connection_epoch;
         let target = target.clone();
         tokio::spawn(async move {
             let window = window_kind(&browser, &target, window_id).await;
             // The watcher may be gone already; then nobody reads the answer.
-            let _ = found.send(OpenedPage {
-                target,
-                opener: Some(opener),
-                url,
-                window,
-            });
+            let _ = found.send((
+                epoch,
+                OpenedPage {
+                    target,
+                    opener: Some(opener),
+                    url,
+                    window,
+                },
+            ));
         });
     }
 
@@ -910,6 +953,7 @@ impl Watcher {
     /// Ends every grace that is over: a dialog somebody listens for by now stays held for
     /// them, any other is closed by Neo.
     fn end_graces(&mut self) {
+        self.sync_connection_epoch();
         let now = Instant::now();
         while let Some(grace) = self.graces.front()
             && grace.ends <= now
@@ -931,13 +975,17 @@ impl Watcher {
 
     /// Answers a dialog nobody else will, off the watcher's loop.
     fn close_unanswered(&self, dialog: Unanswered) {
-        let session = self.browser.protocol_session(dialog.session);
+        let connection = self.browser.connection();
+        let epoch = self.connection_epoch;
         tokio::spawn(async move {
-            // It may have closed meanwhile (its tab, the owner); then there is nothing to do.
-            let _ = session
-                .send_value(
+            // A reconnect can happen after scheduling this answer. Atomic dispatch rejects
+            // an old socket's session instead of replaying the answer on its replacement.
+            let _ = connection
+                .send_at_epoch(
+                    epoch,
                     "Page.handleJavaScriptDialog",
                     json!({ "accept": dialog.accept }),
+                    Some(&dialog.session),
                 )
                 .await;
         });
@@ -1117,6 +1165,104 @@ mod tests {
     #[tokio::test]
     async fn dialog_order_and_answers_survive_broadcast_overflow() {
         verify_unanswered_alert(64).await;
+    }
+
+    #[tokio::test]
+    async fn a_live_alert_before_reconnect_discovery_is_not_forgotten() {
+        let connection = Recording::streaming();
+        connection.reply(
+            "Target.getTargets",
+            json!({"targetInfos":[{"targetId":"T","type":"page"}]}),
+        );
+        let browser = BrowserSession::new(
+            Arc::clone(&connection) as Arc<dyn CdpConnection>,
+            BrowserSessionHooks::default(),
+        );
+        let (hub, writer) = EventHub::new();
+        let (mut watcher, _found) =
+            Watcher::new(browser, writer, Arc::new(FrameAttachLog::default()));
+        watcher.tick().await;
+        connection.reconnect();
+        watcher
+            .handle(CdpEvent {
+                method: "Target.attachedToTarget".to_owned(),
+                params: json!({"sessionId":"new","targetInfo":{"targetId":"T","type":"page"}}),
+                session_id: None,
+            })
+            .await;
+        watcher
+            .handle(CdpEvent {
+                method: "Page.javascriptDialogOpening".to_owned(),
+                params: json!({"type":"alert","message":"new"}),
+                session_id: Some(SessionId::from("new")),
+            })
+            .await;
+        assert!(
+            hub.dialogs()
+                .is_open(DialogId(1), &TargetId("T".to_owned()))
+        );
+        watcher.tick().await;
+        assert!(
+            hub.dialogs()
+                .is_open(DialogId(1), &TargetId("T".to_owned()))
+        );
+    }
+
+    #[tokio::test]
+    async fn stale_queued_attachments_cannot_own_a_new_connections_alert() {
+        let connection = Recording::streaming();
+        connection.reply(
+            "Target.getTargets",
+            json!({"targetInfos":[{"targetId":"T","type":"page"}]}),
+        );
+        let browser = BrowserSession::new(
+            Arc::clone(&connection) as Arc<dyn CdpConnection>,
+            BrowserSessionHooks::default(),
+        );
+        let (hub, writer) = EventHub::new();
+        let (mut watcher, _found) =
+            Watcher::new(browser, writer, Arc::new(FrameAttachLog::default()));
+        watcher.tick().await;
+        let Some(mut events) = connection.observe_events(LIFECYCLE_EVENTS) else {
+            panic!("streaming transport supports observation")
+        };
+        for session in ["old", "new"] {
+            if session == "new" {
+                connection.reconnect();
+            }
+            connection.emit(CdpEvent {
+                method: "Target.attachedToTarget".to_owned(),
+                params: json!({"sessionId":session,"targetInfo":{"targetId":"T","type":"page"}}),
+                session_id: None,
+            });
+            connection.emit(CdpEvent {
+                method: "Page.javascriptDialogOpening".to_owned(),
+                params: json!({"type":"alert","message":session}),
+                session_id: Some(SessionId::from(session)),
+            });
+        }
+        while let Ok((event, epoch)) = events.try_recv_with_epoch() {
+            watcher.handle_from_epoch(event, epoch).await;
+        }
+        watcher.tick().await;
+        let target = TargetId("T".to_owned());
+        assert!(hub.dialogs().is_open(DialogId(1), &target));
+        assert_eq!(
+            hub.answer_dialog(DialogId(1), &target)
+                .ok()
+                .map(|answer| answer.session().clone()),
+            Some(SessionId::from("new"))
+        );
+        let messages: Vec<String> = hub
+            .read_after(0)
+            .records
+            .into_iter()
+            .filter_map(|record| match record.event {
+                PageEvent::Dialog(dialog) => Some(dialog.message),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(messages, ["new"]);
     }
 
     #[tokio::test]

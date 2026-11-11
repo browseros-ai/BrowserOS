@@ -46,12 +46,30 @@ impl ObservedEvents {
     pub fn try_recv(&mut self) -> Result<CdpEvent, mpsc::error::TryRecvError> {
         self.receiver.try_recv().map(|queued| queued.event)
     }
+
+    /// Includes the producing socket's generation so reconnecting consumers can reject queued
+    /// events from an old socket. Custom unversioned producers report `None`.
+    pub async fn recv_with_epoch(&mut self) -> Option<(CdpEvent, Option<u64>)> {
+        self.receiver
+            .recv()
+            .await
+            .map(|queued| (queued.event, queued.epoch))
+    }
+
+    pub fn try_recv_with_epoch(
+        &mut self,
+    ) -> Result<(CdpEvent, Option<u64>), mpsc::error::TryRecvError> {
+        self.receiver
+            .try_recv()
+            .map(|queued| (queued.event, queued.epoch))
+    }
 }
 
 /// Holds a chatty event's budget slot only while it waits in the queue, not during handling.
 #[derive(Debug)]
 struct ObservedEvent {
     event: CdpEvent,
+    epoch: Option<u64>,
     _log_slot: Option<OwnedSemaphorePermit>,
 }
 
@@ -69,7 +87,7 @@ struct Observer {
 impl Observer {
     /// False removes a closed registration. A full log budget drops only that message;
     /// lifecycle events still enter the same queue in wire order.
-    fn offer(&self, event: &CdpEvent) -> bool {
+    fn offer(&self, event: &CdpEvent, epoch: Option<u64>) -> bool {
         if self.sender.is_closed() {
             return false;
         }
@@ -90,6 +108,7 @@ impl Observer {
         self.sender
             .send(ObservedEvent {
                 event: event.clone(),
+                epoch,
                 _log_slot: log_slot,
             })
             .is_ok()
@@ -144,10 +163,20 @@ impl TargetedEvents {
     /// Copies `event` to passive observers, then hands it to every targeted subscriber of its
     /// method. Gives it back when no targeted subscriber took it, for the caller to broadcast.
     pub fn deliver(&self, event: CdpEvent) -> Option<CdpEvent> {
+        self.deliver_observed(event, None)
+    }
+
+    /// Observations retain the socket that produced the event. Ordinary targeted and
+    /// broadcast consumers keep their existing event shape and delivery.
+    pub fn deliver_at_epoch(&self, event: CdpEvent, epoch: u64) -> Option<CdpEvent> {
+        self.deliver_observed(event, Some(epoch))
+    }
+
+    fn deliver_observed(&self, event: CdpEvent, epoch: Option<u64>) -> Option<CdpEvent> {
         let mut subscribers = self.subscribers();
         subscribers
             .observers
-            .retain(|observer| observer.offer(&event));
+            .retain(|observer| observer.offer(&event, epoch));
         let Some(senders) = subscribers.targeted.get_mut(&event.method) else {
             return Some(event);
         };
@@ -220,6 +249,28 @@ mod tests {
             Some("closed".to_owned())
         );
         assert!(observer.try_recv().is_err());
+    }
+
+    #[test]
+    fn observed_backlog_retains_its_producing_socket_epoch() {
+        let events = TargetedEvents::default();
+        let mut observer = events.observe(&["opening"]);
+        let _ = events.deliver_at_epoch(event("opening"), 41);
+        let _ = events.deliver_at_epoch(event("opening"), 42);
+        assert_eq!(
+            observer
+                .try_recv_with_epoch()
+                .ok()
+                .and_then(|(_, epoch)| epoch),
+            Some(41)
+        );
+        assert_eq!(
+            observer
+                .try_recv_with_epoch()
+                .ok()
+                .and_then(|(_, epoch)| epoch),
+            Some(42)
+        );
     }
 
     #[test]

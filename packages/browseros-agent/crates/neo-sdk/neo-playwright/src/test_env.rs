@@ -1,6 +1,8 @@
 //! The host side of an op for unit tests: an [`OpEnv`] that records what the crate asked of
 //! it, over a browser view whose CDP connection is never there.
 
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use browseros_cdp::{CdpError, CdpEvent, ObservedEvents, TargetedEvents};
@@ -164,9 +166,22 @@ pub(crate) struct Recording {
     sent: Mutex<Vec<(String, Value)>>,
     targeted: TargetedEvents,
     events: Option<broadcast::Sender<CdpEvent>>,
+    epoch: AtomicU64,
+    replies: Mutex<HashMap<String, Value>>,
 }
 
 impl Recording {
+    pub(crate) fn reconnect(&self) {
+        self.epoch.fetch_add(1, Ordering::SeqCst);
+    }
+
+    pub(crate) fn reply(&self, method: &str, value: Value) {
+        self.replies
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(method.to_owned(), value);
+    }
+
     /// A recording connection with a live event stream, for watcher lifecycle tests.
     pub(crate) fn streaming() -> Arc<Self> {
         Arc::new(Self {
@@ -177,7 +192,9 @@ impl Recording {
 
     /// Delivers through the same targeted-before-broadcast routing as the real connection.
     pub(crate) fn emit(&self, event: CdpEvent) {
-        if let Some(event) = self.targeted.deliver(event)
+        if let Some(event) = self
+            .targeted
+            .deliver_at_epoch(event, self.connection_epoch())
             && let Some(events) = &self.events
         {
             let _ = events.send(event);
@@ -202,6 +219,25 @@ impl Recording {
 }
 
 impl CdpConnection for Recording {
+    fn send_at_epoch<'a>(
+        &'a self,
+        expected_epoch: u64,
+        method: &'a str,
+        params: Value,
+        session: Option<&'a SessionId>,
+    ) -> BoxFuture<'a, Result<Value, CdpError>> {
+        let actual = self.connection_epoch();
+        if actual != expected_epoch {
+            return Box::pin(async move {
+                Err(CdpError::EpochChanged {
+                    expected: expected_epoch,
+                    actual,
+                })
+            });
+        }
+        self.send(method, params, session)
+    }
+
     fn send<'a>(
         &'a self,
         method: &'a str,
@@ -212,7 +248,14 @@ impl CdpConnection for Recording {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .push((method.to_owned(), params));
-        Box::pin(async { Ok(Value::Object(Map::new())) })
+        let reply = self
+            .replies
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(method)
+            .cloned()
+            .unwrap_or_else(|| Value::Object(Map::new()));
+        Box::pin(async move { Ok(reply) })
     }
 
     fn send_raw_json<'a>(
@@ -243,6 +286,6 @@ impl CdpConnection for Recording {
     }
 
     fn connection_epoch(&self) -> u64 {
-        1
+        self.epoch.load(Ordering::SeqCst) + 1
     }
 }
