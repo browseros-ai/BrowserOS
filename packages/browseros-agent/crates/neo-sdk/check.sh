@@ -88,4 +88,12 @@ cargo_pinned clippy "${PACKAGE_ARGS[@]}" --all-targets --locked -- -D warnings
 step "tests"
 cargo_pinned test "${PACKAGE_ARGS[@]}" --locked
 
+# The embedded host is off in the default graph. Shared startup or constructor changes must
+# still compile and pass the same lints and tests through that composition root.
+step "clippy hosted-run -D warnings"
+cargo_pinned clippy -p neo-server --all-targets --locked --features hosted-run -- -D warnings
+
+step "tests hosted-run"
+cargo_pinned test -p neo-server --locked --features hosted-run
+
 printf '\ncheck.sh: all checks passed\n'
