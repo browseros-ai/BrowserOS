@@ -102,7 +102,7 @@ async fn harness(tabs: &[i64]) -> Result<Harness, BoxError> {
         Arc::new(Viewports::default()),
     );
     let locks = Locks::new(store.clone(), sink.clone());
-    let fits = Fits::new(tabs.clone(), xvnc.xvnc(HOME), secrets);
+    let fits = Fits::new(tabs.clone(), xvnc.xvnc(HOME));
     let displays = Displays::new(
         xvnc.addr(),
         tabs.clone(),
