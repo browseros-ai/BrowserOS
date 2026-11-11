@@ -114,6 +114,27 @@ async function nestedNavigations(page, child, local, remote) {
   assert.equal(page.url(), `${local}/parent`)
 }
 
+async function specialUrls(page, child, local) {
+  const error = await child
+    .goto('javascript:window.__childNavigation = 1', { timeout: 5000 })
+    .catch((error) => error)
+  assert.match(error.message, /ERR_ABORTED/)
+  assert.equal(await child.evaluate(() => window.__childNavigation), 1)
+  assert.equal(
+    await page.evaluate(() => typeof window.__childNavigation),
+    'undefined',
+  )
+  assert.equal(
+    await child.goto('data:text/html,data-child', { timeout: 5000 }),
+    null,
+  )
+  assert.equal(
+    await child.evaluate(() => document.body.textContent),
+    'data-child',
+  )
+  assert.equal(page.url(), `${local}/parent`)
+}
+
 async function immediateRedirect(child, remote) {
   const result = await child
     .goto(`${remote}/redirect`, { waitUntil: 'commit', timeout: 5000 })
@@ -140,6 +161,7 @@ test(
       await page.goto(`${local}/parent`)
       const child = await simpleNavigations(page, local, remote)
       await nestedNavigations(page, child, local, remote)
+      await specialUrls(page, child, local)
       await immediateRedirect(child, remote)
     }),
 )
