@@ -310,6 +310,30 @@ impl SkillService {
         }
     }
 
+    /// Brings every SKILL.md with a flow in line with whether ultrafast skills are on: plain
+    /// steps while off, so agents never reach for `run_skill` the server does not offer, and
+    /// "Run it fast" or the repair note again once on. Flows and their rows are kept as they are.
+    pub async fn sync_skill_md(&self, enabled: bool) -> AppResult<()> {
+        use crate::services::flow::FlowStatus;
+        for row in self.repo.all_flows().await? {
+            let name = row.skill_name.as_str();
+            let status = FlowStatus::parse(&row.status);
+            let result = if !enabled {
+                self.rerender(name, SkillMd::Plain).await
+            } else if status.runs() {
+                self.reconcile_flow_after_edit(name).await
+            } else if status == FlowStatus::Broken {
+                self.rerender(name, SkillMd::Repair).await
+            } else {
+                Ok(())
+            };
+            if let Err(error) = result {
+                tracing::warn!(skill = name, error = %error, "could not re-render SKILL.md");
+            }
+        }
+        Ok(())
+    }
+
     /// The directory holding the skill's SKILL.md (and flow.md beside it).
     #[must_use]
     pub fn skill_dir(&self, name: &str) -> PathBuf {

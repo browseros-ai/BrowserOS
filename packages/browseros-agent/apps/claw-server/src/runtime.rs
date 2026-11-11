@@ -164,6 +164,18 @@ impl AppRuntime {
                 }),
             },
             BackgroundTask {
+                name: "skill file sync",
+                handle: tokio::spawn({
+                    let skills = state.skills.clone();
+                    let enabled = state.ultrafast_enabled();
+                    async move {
+                        if let Err(error) = skills.sync_skill_md(enabled).await {
+                            warn!(error = %error, "skill file sync failed");
+                        }
+                    }
+                }),
+            },
+            BackgroundTask {
                 name: "skill run reconciliation",
                 handle: tokio::spawn({
                     let skill_runs = state.skill_runs.clone();
