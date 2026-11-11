@@ -128,7 +128,6 @@ test('navigation waits retain events, document identity and their deadline', {
     record(
       'adopted tab child crossing renderers keeps its navigation and response',
     )
-    await adopted.close()
     const selected = page.waitForNavigation({
       url: '**/rapid-a',
       timeout: 5000,
@@ -145,6 +144,32 @@ test('navigation waits retain events, document identity and their deadline', {
       'rapid replacement never lends a later document response to an earlier match',
     )
     await page.close()
+    // A fresh host adopts the existing OOPIF on a new CDP session. Listing its Frame must
+    // enable navigation reporting before a same-renderer fragment change can race a waiter.
+    await sdk.finish()
+    sdk = await openClaw(browser.port, {
+      timeoutMs: 60000,
+      stateDir: path.join(output, 'adopted-sdk-state'),
+      browserosVersion: browserVersion(executable),
+    })
+    const existing = sdk.context
+      .pages()
+      .find((candidate) => candidate.url() === url)
+    assert(existing, 'the adopted launch tab survives the first host')
+    await existing.waitForLoadState()
+    await existing.evaluate(() => 1)
+    const existingChild = existing.frames()[1]
+    const [fragmentResponse] = await Promise.all([
+      existingChild.waitForNavigation({ timeout: 3000 }),
+      existing.evaluate(
+        (next) => (document.querySelector('iframe').src = next),
+        `${cross}#adopted`,
+      ),
+    ])
+    assert.equal(fragmentResponse, null)
+    assert.equal(existingChild.url(), `${cross}#adopted`)
+    record('adopted OOPIF reports same-renderer navigation before wait setup')
+    await existing.close()
     fs.writeFileSync(
       path.join(output, 'proof.json'),
       JSON.stringify({ passed }, null, 2),
