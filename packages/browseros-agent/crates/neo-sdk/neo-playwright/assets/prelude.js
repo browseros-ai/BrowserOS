@@ -1629,6 +1629,41 @@
         return false;
       return this.every((byte, index) => byte === other[index]);
     }
+    readUInt8(offset = 0) {
+      return this.#readUnsigned(offset, 1, "be");
+    }
+    readUInt16BE(offset = 0) {
+      return this.#readUnsigned(offset, 2, "be");
+    }
+    readUInt16LE(offset = 0) {
+      return this.#readUnsigned(offset, 2, "le");
+    }
+    readUInt32BE(offset = 0) {
+      return this.#readUnsigned(offset, 4, "be");
+    }
+    readUInt32LE(offset = 0) {
+      return this.#readUnsigned(offset, 4, "le");
+    }
+    readInt32BE(offset = 0) {
+      return this.readUInt32BE(offset) | 0;
+    }
+    #readUnsigned(offset, width, order) {
+      if (typeof offset !== "number")
+        throw nodeError(TypeError, "ERR_INVALID_ARG_TYPE", `The "offset" argument must be of type number. ${received(offset)}`);
+      if (Math.floor(offset) !== offset)
+        throw outOfRange("offset", "an integer", offset);
+      const last = this.length - width;
+      if (last < 0)
+        throw nodeError(RangeError, "ERR_BUFFER_OUT_OF_BOUNDS", "Attempt to access memory outside buffer bounds");
+      if (offset < 0 || offset > last)
+        throw outOfRange("offset", `>= 0 and <= ${last}`, offset);
+      let value = 0;
+      for (let index = 0;index < width; index++) {
+        const at = order === "be" ? offset + index : offset + width - index - 1;
+        value = value * 256 + (this[at] ?? 0);
+      }
+      return value;
+    }
     slice(start, end) {
       return this.subarray(start, end);
     }
