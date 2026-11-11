@@ -1554,10 +1554,12 @@ fn on_tab(sink: &TraceSink, id: OperationId, name: &str, tab: i64, millis: i64) 
 
 /// Two tasks share one browser: its initial new tab page (tab 1), alpha's page (2) and beta's
 /// (3). Each run listens for events on every tab it knows, the other task's page included, and
-/// acts only on its own. A listen or a file chooser lease names a tab without acting on it, so
-/// each task's run record, its `/v1/tabs` association and its last tab are its own page only.
+/// acts only on its own; alpha's event pump delivers an event from beta's page, and alpha opens a
+/// page (4) it never acts on. A listen, a file chooser lease or the pump names a tab without
+/// acting on it, so each task's run record, its `/v1/tabs` association and its last tab are its
+/// own pages only.
 #[tokio::test]
-async fn a_subscription_makes_no_tab_a_runs_or_a_tasks() {
+async fn a_subscription_makes_no_tab_a_runs_or_a_tasks() -> Result<(), Box<dyn std::error::Error>> {
     let h = harness(WriterConfig::default()).await;
     let alpha = start_in(&h.sink, Some("alpha"), 0);
     let beta = start_in(&h.sink, Some("beta"), 0);
@@ -1574,6 +1576,23 @@ async fn a_subscription_makes_no_tab_a_runs_or_a_tasks() {
         3,
         70,
     );
+    // The pump has no target; it ends on the page its event came from.
+    let pump = OperationId::new(alpha, 5);
+    op_started(
+        &h.sink,
+        Op {
+            tab: None,
+            at: at(80),
+            ..simple(pump, "events.next", Effect::Read)
+        },
+    );
+    let beta_page = PageState {
+        tab_id: Some(TabId(3)),
+        url: Some("https://beta.example/".into()),
+        title: None,
+    };
+    h.sink.op_ended(answered(pump, 80, None, Some(beta_page)));
+    new_page(&h.sink, OperationId::new(alpha, 6), TabId(4), 15);
     flushed(&h).await;
 
     let store = &h.store;
@@ -1581,38 +1600,37 @@ async fn a_subscription_makes_no_tab_a_runs_or_a_tasks() {
         store
             .run(run)
             .await
-            .unwrap_or_else(|error| panic!("run: {error}"))
-            .map(|detail| detail.summary.tabs)
+            .map(|detail| detail.map(|detail| detail.summary.tabs))
     };
     assert_eq!(
-        tabs(alpha).await,
-        Some(vec![TabId(2)]),
-        "alpha's own page only"
+        tabs(alpha).await?,
+        Some(vec![TabId(2), TabId(4)]),
+        "alpha's own page and the page it opened"
     );
     assert_eq!(
-        tabs(beta).await,
+        tabs(beta).await?,
         Some(vec![TabId(3)]),
         "beta's own page only"
     );
 
     let tasks = h
         .store
-        .tasks_for_tabs(&[TabId(1), TabId(2), TabId(3)])
-        .await
-        .unwrap_or_else(|error| panic!("tasks_for_tabs: {error}"));
+        .tasks_for_tabs(&[TabId(1), TabId(2), TabId(3), TabId(4)])
+        .await?;
     assert_eq!(
         tasks.get(&TabId(1)),
         None,
         "the new tab page belongs to no task"
     );
     assert_eq!(tasks.get(&TabId(2)), Some(&vec![task("alpha")]));
-    assert_eq!(tasks.get(&TabId(3)), Some(&vec![task("beta")]));
+    assert_eq!(
+        tasks.get(&TabId(3)),
+        Some(&vec![task("beta")]),
+        "not alpha's pump"
+    );
+    assert_eq!(tasks.get(&TabId(4)), Some(&vec![task("alpha")]));
 
     // alpha's last operations listened on beta's page; its last tab is still its own.
-    let last = h
-        .store
-        .task_last_act(&task("alpha"))
-        .await
-        .unwrap_or_else(|error| panic!("task_last_act: {error}"));
-    assert_eq!(last, act(2, 20));
+    assert_eq!(h.store.task_last_act(&task("alpha")).await?, act(2, 20));
+    Ok(())
 }

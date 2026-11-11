@@ -16,7 +16,7 @@ use super::entities::{operations, run_tabs, runs};
 use super::record_rows::{json_error, parse_id};
 use crate::run_outputs::RunOutputs;
 use crate::screenshot_files::ShotFiles;
-use crate::trace_store::is_subscription;
+use crate::trace_store;
 use crate::{
     Delivery, Effect, EpochMillis, ErrorRecord, OperationId, OperationKind, Outcome, PageState,
     RequestId, RetentionPolicy, RunEffects, RunId, RunStatus, Shot, ShotState, Swept, TaskId,
@@ -284,19 +284,25 @@ impl TraceBatch {
                 .await?;
         }
         // A subscription names a tab without acting on it, so it links no tab to the run.
-        if let Some(tab) = op.tab.filter(|_| !is_subscription(op.name)) {
-            run_tabs::Entity::insert(run_tabs::ActiveModel {
-                tab_id: Set(tab.0),
-                run_id: Set(op.id.run.to_string()),
-            })
-            .on_conflict(
-                OnConflict::columns([run_tabs::Column::TabId, run_tabs::Column::RunId])
-                    .do_nothing()
-                    .to_owned(),
-            )
-            .exec_without_returning(&self.txn)
-            .await?;
+        if let Some(tab) = op.tab.filter(|_| !trace_store::is_subscription(op.name)) {
+            self.link_tab(op.id.run, tab).await?;
         }
+        Ok(())
+    }
+
+    /// Makes `tab` one of `run`'s tabs (the run record's `tabs`).
+    pub(crate) async fn link_tab(&self, run: RunId, tab: TabId) -> Result<(), TraceError> {
+        run_tabs::Entity::insert(run_tabs::ActiveModel {
+            tab_id: Set(tab.0),
+            run_id: Set(run.to_string()),
+        })
+        .on_conflict(
+            OnConflict::columns([run_tabs::Column::TabId, run_tabs::Column::RunId])
+                .do_nothing()
+                .to_owned(),
+        )
+        .exec_without_returning(&self.txn)
+        .await?;
         Ok(())
     }
 

@@ -45,7 +45,7 @@ use crate::screenshot_rule::{self, TouchedTabs};
 use crate::storage::{
     OperationEndRow, OperationStartRow, RunCode, RunEndRow, RunStartRow, TraceBatch,
 };
-use crate::trace_store::{RetentionPolicy, Swept};
+use crate::trace_store::{self, RetentionPolicy, Swept};
 use crate::{
     Delivery, Effect, EpochMillis, OperationEnded, OperationId, OperationReached, OperationStarted,
     Outcome, Redactor, RunEffects, RunEnded, RunId, RunStarted, RunStatus, Shot, ShotAnswer,
@@ -433,6 +433,8 @@ impl OpenRun {
 
 struct OpenOperation {
     tab: Option<TabId>,
+    /// The operation opens a tab (`trace_store::OPENERS`), whose end names it.
+    opens: bool,
     effect: Effect,
     args: Value,
     /// Raw, like `args`: bounded only when the end stores them.
@@ -670,6 +672,7 @@ impl Writer {
             event.id.seq,
             OpenOperation {
                 tab: event.tab,
+                opens: trace_store::OPENERS.contains(&event.name.as_str()),
                 effect: event.effect,
                 args: event.args,
                 notes: Vec::new(),
@@ -732,6 +735,13 @@ impl Writer {
                 run.gaps += 1;
             }
             return Ok(None);
+        }
+        // The tab an opener opened is the run's: it had no target to link at the start.
+        if let (true, Some(tab)) = (
+            open.as_ref().is_some_and(|open| open.opens),
+            page.as_ref().and_then(|page| page.tab_id),
+        ) {
+            tx.link_tab(event.id.run, tab).await?;
         }
         let shot_tab = open.as_ref().and_then(|open| {
             screenshot_rule::after_op(open.effect, open.tab, event.outcome, error.as_ref())

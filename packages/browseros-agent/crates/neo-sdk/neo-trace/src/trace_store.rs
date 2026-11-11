@@ -50,12 +50,21 @@ use crate::{
     RunSummary, ShotRead, ShotState, TailQuery, TaskAct, TaskId, TraceError, TraceTail, salvage,
 };
 
-/// Operations that only subscribe to a page's events: the prelude's `page.on` and `context.on`
-/// (`events.listen`) and the file chooser lease that comes with a `filechooser` listener. They
-/// name the tab they listen on but do nothing to it, so they never make a tab a run's or a
-/// task's: a run that listens on every tab of the browser (the initial new tab page, another
-/// task's pages) owns only what it opened or acted on. Their rows still record that tab.
-pub(crate) const SUBSCRIPTIONS: [&str; 2] = ["events.listen", "events.interceptFileChooser"];
+/// Operations that only subscribe to or deliver a page's events: the prelude's `page.on` and
+/// `context.on` (`events.listen`), the file chooser lease that comes with a `filechooser`
+/// listener, and the event pump (`events.next`), which ends on the page an event came from.
+/// They name a tab without acting on it, so they never make a tab a run's or a task's: a run
+/// that listens on every tab of the browser (the initial new tab page, another task's pages)
+/// owns only what it opened or acted on. Their rows still record that tab.
+pub(crate) const SUBSCRIPTIONS: [&str; 3] = [
+    "events.listen",
+    "events.interceptFileChooser",
+    "events.next",
+];
+
+/// Operations that open a tab, which arrives on their end (`page_after`) rather than as their
+/// target: the run opened it, so it is the run's even before the script acts on it.
+pub(crate) const OPENERS: [&str; 1] = ["context.newPage"];
 
 /// Whether the operation `name` only subscribes (see [`SUBSCRIPTIONS`]), so it makes no tab its
 /// run's or its task's. The door asks too, for the task's default page it keeps in memory.
