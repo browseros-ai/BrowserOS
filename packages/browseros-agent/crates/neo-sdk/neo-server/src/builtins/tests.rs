@@ -2598,6 +2598,14 @@ async fn a_crate_failure_keeps_its_owner_and_timeout_and_its_answer_decides_deli
             Delivery::Unknown,
         ),
         (
+            "navigation_observation_timeout",
+            true,
+            ErrorOwner::Neo,
+            ErrorCode::NAVIGATION_OBSERVATION_TIMEOUT,
+            true,
+            Delivery::Unknown,
+        ),
+        (
             "no_match",
             false,
             ErrorOwner::Script,
