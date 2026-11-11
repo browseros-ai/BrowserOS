@@ -18,7 +18,6 @@ use neo_takeover::{
     BarAction, BarOutcome, BrowserBar, BrowserTabs, Fit, FitId, FitMode, FitState, Fits, Fitted,
     PartError, ScreenSize,
 };
-use neo_trace::{SecretSet, SecretSetConfig, SecretSource, SecretValue};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio_util::sync::CancellationToken;
@@ -47,7 +46,6 @@ struct Harness {
     browser: Arc<FakeBrowser>,
     session: Arc<BrowserSession>,
     viewports: Arc<Viewports>,
-    secrets: Arc<SecretSet>,
     fits: Arc<Fits>,
 }
 
@@ -56,18 +54,15 @@ async fn harness(tabs: &[i64]) -> Result<Harness, Box<dyn std::error::Error + Se
     let browser = FakeBrowser::new(Arc::clone(&xvnc), tabs);
     let session = BrowserSession::new(browser.clone(), BrowserSessionHooks::default());
     let viewports = Arc::new(Viewports::default());
-    let secrets = Arc::new(SecretSet::new(SecretSetConfig::default()));
     let fits = Fits::new(
         BrowserTabs::new(Arc::clone(&session), Arc::clone(&viewports)),
         xvnc.xvnc(HOME),
-        Arc::clone(&secrets),
     );
     Ok(Harness {
         xvnc,
         browser,
         session,
         viewports,
-        secrets,
         fits,
     })
 }
@@ -361,16 +356,11 @@ async fn unusable_viewers_and_closed_tabs_fit_nothing() -> TestResult {
 }
 
 #[tokio::test]
-async fn the_owner_view_reads_keyboard_boxes_and_a_masked_browser_bar() -> TestResult {
+async fn the_owner_view_reads_keyboard_boxes_and_the_current_browser_bar() -> TestResult {
     let h = harness(&[3]).await?;
-    let _registration = h.secrets.register_from(
-        SecretValue::new("hunter2-secret".to_string()),
-        None,
-        SecretSource::Page,
-    );
     h.browser.navigate(
         3,
-        "https://shop.example/search?q=hunter2-secret",
+        "https://shop.example/search?q=typed-value",
         "form_submit",
     );
     h.browser.focus_fields(&[[16.0, 40.0, 200.0, 30.0]]);
@@ -382,7 +372,7 @@ async fn the_owner_view_reads_keyboard_boxes_and_a_masked_browser_bar() -> TestR
     assert_eq!(
         read.bar,
         Some(BrowserBar {
-            url: "https://shop.example/search?q=[private]".to_string(),
+            url: "https://shop.example/search?q=typed-value".to_string(),
             back: true,
             forward: false,
         })
