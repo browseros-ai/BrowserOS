@@ -2,7 +2,8 @@
 //! and page matcher passing and failing as scripts write them (the real prelude in QuickJS),
 //! `.not`, a matcher that holds only after the page changes, the timeout message and call log,
 //! `toHaveValue` on a typed password, a password's `value` attribute compared as markup after
-//! an edit, and a matcher four frames deep.
+//! an edit, a matcher four frames deep, and BrowserOS's own takeover bar kept out of selectors
+//! and snapshots.
 //!
 //! Needs a throwaway BrowserOS with CDP on `BROWSEROS_CDP_PORT` (default 9005), for example
 //! `PORT_BASE=9511 spikes/eval/browser.sh <profile> &`, then
@@ -586,6 +587,64 @@ async fn tests_that_every_matcher_passes_and_fails_as_scripts_write_it() -> Test
         })
         .collect();
     assert!(wrong.is_empty(), "{wrong:#?}");
+    Ok(())
+}
+
+/// BrowserOS's own UI stays out of what a script sees. The claw app mounts its takeover bar in
+/// every page as `<browseros-neo-takeover>`, with an open shadow root holding a `<body>` of its
+/// own; the test waits for BrowserOS to mount it and gives it a button, as an active takeover
+/// shows one. `locator('body')` is still the page's one body, the bar's button matches no role or
+/// text, and neither snapshot lists it, while the page's own content is all there.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_browseros_own_ui_stays_out_of_selectors_and_snapshots() -> TestResult {
+    let server = FixtureServer::start(pages()).await?;
+    let url = server.url("127.0.0.1", "/expect/page.html");
+    let run = Arc::new(LiveRun::connect().await?);
+    let host: Arc<dyn OpHost> = run;
+    let seed = json!({ "page": null, "pages": [], "browserVersion": "" });
+    let script = format!(
+        "try {{\n\
+           await page.goto({url})\n\
+           const mounted = () => page.evaluate(() => !!document.querySelector('browseros-neo-takeover')?.shadowRoot?.querySelector('body'))\n\
+           const deadline = Date.now() + 10_000\n\
+           while (!(await mounted())) {{\n\
+             if (Date.now() > deadline) throw new Error('this BrowserOS mounted no takeover bar')\n\
+             await page.waitForTimeout(100)\n\
+           }}\n\
+           await page.evaluate(() => {{\n\
+             const button = document.createElement('button')\n\
+             button.textContent = 'Hand back control'\n\
+             document.querySelector('browseros-neo-takeover').shadowRoot.querySelector('body').append(button)\n\
+           }})\n\
+           return {{\n\
+             bodies: await page.locator('body').count(),\n\
+             byRole: await page.getByRole('button', {{ name: 'Hand back control' }}).count(),\n\
+             byText: await page.getByText('Hand back control').count(),\n\
+             snapshot: await page.ariaSnapshot(),\n\
+             ai: await page.ariaSnapshot({{ mode: 'ai' }}),\n\
+           }}\n\
+         }} finally {{\n\
+           await page.close()\n\
+         }}",
+        url = json!(url),
+    );
+    let seen = run_script(&host, &seed, &script).await?;
+    assert_eq!(seen["bodies"], json!(1), "{seen}");
+    assert_eq!(seen["byRole"], json!(0), "{seen}");
+    assert_eq!(seen["byText"], json!(0), "{seen}");
+    for mode in ["snapshot", "ai"] {
+        let snapshot = seen[mode].as_str().ok_or("a snapshot is text")?;
+        assert!(
+            snapshot.contains("Hullo"),
+            "{mode}: the page's own heading: {snapshot}"
+        );
+        // The bar's own `<html>` reads as a `document` node, its button as one inside it.
+        assert!(
+            !snapshot.contains("Hand back control") && !snapshot.contains("- document"),
+            "{mode} lists the bar: {snapshot}"
+        );
+    }
     Ok(())
 }
 

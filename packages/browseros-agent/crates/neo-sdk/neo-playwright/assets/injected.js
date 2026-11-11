@@ -8370,6 +8370,40 @@ ${value.stack}`;
     }
   }
 
+  // crates/neo-sdk/neo-playwright-js/src/probe/browseros-ui.ts
+  var BROWSEROS_UI_HOSTS = new Set([
+    "browseros-neo-takeover"
+  ]);
+  function isBrowserOSUi(element) {
+    return BROWSEROS_UI_HOSTS.has(element.localName);
+  }
+  var installed = false;
+  function hideBrowserOSUi() {
+    if (installed)
+      return;
+    let owner = Element.prototype;
+    let descriptor;
+    while (owner && !descriptor) {
+      descriptor = Object.getOwnPropertyDescriptor(owner, "shadowRoot");
+      owner = Object.getPrototypeOf(owner);
+    }
+    if (!descriptor) {
+      installed = true;
+      return;
+    }
+    const read = descriptor.get;
+    if (typeof read !== "function")
+      throw new ProbeError("internal", "this world's Element.prototype.shadowRoot is not an accessor");
+    Object.defineProperty(Element.prototype, "shadowRoot", {
+      configurable: true,
+      enumerable: descriptor.enumerable ?? true,
+      get() {
+        return isBrowserOSUi(this) ? null : Reflect.apply(read, this, []);
+      }
+    });
+    installed = true;
+  }
+
   // crates/neo-sdk/neo-playwright-js/src/probe/document.ts
   function documentText(world, request) {
     const { injected } = world;
@@ -8551,7 +8585,7 @@ ${value.stack}`;
   }
 
   // crates/neo-sdk/neo-playwright-js/src/probe/protocol.ts
-  var PROTOCOL = 23;
+  var PROTOCOL = 24;
 
   // crates/neo-sdk/neo-playwright-js/src/probe/read.ts
   var XHTML = "http://www.w3.org/1999/xhtml";
@@ -9031,6 +9065,7 @@ ${value.stack}`;
         pins.clear();
         refs.forget();
         listenForMoves();
+        hideBrowserOSUi();
         const injected = createEngine(frameSeq);
         injected.onGlobalListenersRemoved.add(listenForMoves);
         refs.install(engineTable(injected), injected.utils);
