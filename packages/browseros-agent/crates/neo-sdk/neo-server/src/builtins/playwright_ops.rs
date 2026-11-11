@@ -75,6 +75,7 @@ const PLAYWRIGHT_API: &str = "Playwright's API on `page`, `context` and `browser
     `locator.waitForFunction`, `elementHandle.evaluate`, \
     and `$eval` and `$$eval` on a page, frame or element handle; a `frame` form runs in its \
     frame, a child frame too) with Playwright's values, arguments, element handles and errors, \
+    `page.addScriptTag` and `page.addStyleTag` (also on frames), returning element handles, \
     `page.setContent` and `frame.setContent`, whose HTML's scripts run there too, `screenshot` and \
     `pdf`, events (`page.on`, `waitForEvent`), and `expect`: \
     retrying locator matchers (`toBeVisible`, `toBeChecked`, `toHaveText`, `toContainText`, \

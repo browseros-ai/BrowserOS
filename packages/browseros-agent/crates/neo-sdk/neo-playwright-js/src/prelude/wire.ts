@@ -420,6 +420,17 @@ export type OpInputs = {
   'page.waitForLoadState': FrameArgs & { state: LoadState }
   'page.title': FrameArgs
   'page.content': FrameArgs
+  'page.addScriptTag': FrameArgs & {
+    url?: string
+    path?: string
+    content?: string
+    type?: string
+  }
+  'page.addStyleTag': FrameArgs & {
+    url?: string
+    path?: string
+    content?: string
+  }
   'page.setContent': FrameArgs & { html: string; waitUntil: LoadState }
   'page.close': PageArgs & { runBeforeUnload?: true }
   'page.opener': PageArgs
@@ -545,6 +556,8 @@ export type OpOutputs = {
   'page.waitForLoadState': NavigationResult | null
   'page.title': string
   'page.content': string
+  'page.addScriptTag': ElementBrand
+  'page.addStyleTag': ElementBrand
   'page.setContent': NavigationResult | null
   'page.close': Done
   'page.opener': { opener: PageBrand | null }

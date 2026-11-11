@@ -87,6 +87,15 @@ import type {
   WaitForState,
 } from './wire'
 
+/** Tag inputs mirror Playwright; paths are read on Neo's host before entering the renderer. */
+export type ScriptTagOptions = {
+  url?: string
+  path?: string
+  content?: string
+  type?: string
+}
+export type StyleTagOptions = Omit<ScriptTagOptions, 'type'>
+
 export type StrictOption = { strict?: boolean }
 export type ClickOptions = PointerOptions &
   TimeoutOption &
@@ -554,6 +563,14 @@ export class Frame extends EventEmitter {
 
   content(): Promise<string> {
     return this._content('frame.content')
+  }
+
+  addScriptTag(options: ScriptTagOptions = {}): Promise<ElementHandle> {
+    return this._addTag('frame.addScriptTag', 'page.addScriptTag', options)
+  }
+
+  addStyleTag(options: StyleTagOptions = {}): Promise<ElementHandle> {
+    return this._addTag('frame.addStyleTag', 'page.addStyleTag', options)
   }
 
   setContent(html: string, options?: NavigateOptions): Promise<void> {
@@ -1245,6 +1262,50 @@ export class Frame extends EventEmitter {
       this._call(api, 0),
       await this._frameArgs(api),
     )
+  }
+
+  /** Page delegates here so frame routing, errors and returned node ownership stay identical. */
+  async _addTag(
+    api: string,
+    op: 'page.addScriptTag' | 'page.addStyleTag',
+    options: ScriptTagOptions,
+  ): Promise<ElementHandle> {
+    const keys =
+      op === 'page.addScriptTag'
+        ? (['url', 'path', 'content', 'type'] as const)
+        : (['url', 'path', 'content'] as const)
+    const input = pick(options, keys)
+    for (const key of keys) {
+      const value = input[key]
+      if (value !== undefined && typeof value !== 'string')
+        throw clientError(
+          api,
+          `${key}: expected string, got ${value === null ? 'object' : typeof value}`,
+        )
+    }
+    let handle: ElementHandle | null
+    try {
+      handle = this._page._handle(
+        await invoke(op, this._call(api, 0), {
+          ...(await this._frameArgs(api)),
+          ...input,
+        }),
+      )
+    } catch (error) {
+      // File reads are upstream client work, whose errors carry no API prefix.
+      if (
+        error instanceof Error &&
+        error.message.startsWith(`${api}: `) &&
+        /^(?:E[A-Z0-9]+|UNKNOWN): .*?, (?:open|read) '/.test(
+          error.message.slice(api.length + 2),
+        )
+      )
+        error.message = error.message.slice(api.length + 2)
+      throw error
+    }
+    if (!handle)
+      throw plainError(api, 'The inserted tag did not return an element')
+    return handle
   }
 
   async _setContent(

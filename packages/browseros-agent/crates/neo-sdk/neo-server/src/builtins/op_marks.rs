@@ -309,6 +309,20 @@ mod tests {
                 placement: Served,
             },
             Row {
+                op: "page.addScriptTag",
+                declared: vec![MainWorld, HostFiles],
+                gated: true,
+                policed: vec![MainWorld, HostFiles],
+                placement: Served,
+            },
+            Row {
+                op: "page.addStyleTag",
+                declared: vec![MainWorld, HostFiles],
+                gated: true,
+                policed: vec![MainWorld, HostFiles],
+                placement: Served,
+            },
+            Row {
                 op: "page.evaluate",
                 declared: vec![MainWorld],
                 gated: true,
@@ -524,6 +538,18 @@ mod tests {
     /// The BrowserOS cases of the ops that reach past their page's sealed world into the main
     /// world, Neo's files or Neo's screen, where no fake browser shows what a real one does.
     const BROWSEROS_CASES: &[BrowserosCase] = &[
+        BrowserosCase {
+            op: "page.addScriptTag",
+            file: "main_world_browseros.rs",
+            test: "tags_behave_as_playwright_on_browseros",
+            proves: Proves::Served,
+        },
+        BrowserosCase {
+            op: "page.addStyleTag",
+            file: "main_world_browseros.rs",
+            test: "tags_behave_as_playwright_on_browseros",
+            proves: Proves::Served,
+        },
         BrowserosCase {
             op: "page.evaluate",
             file: "main_world_browseros.rs",
