@@ -1,5 +1,5 @@
 //! The page's navigations: `goto`, `reload`, `goBack` and `goForward` send one command to the
-//! main frame and wait as `waitUntil` asks; `waitForLoadState` sends nothing and waits for the
+//! named frame and wait as `waitUntil` asks; `waitForLoadState` sends nothing and waits for the
 //! document a frame shows now.
 //!
 //! ```text
@@ -22,10 +22,10 @@ use tokio::time;
 
 use crate::op_output::to_output;
 use crate::op_scope::{AdmittedPage, OpScope, Sent};
-use crate::page::LoadState;
 use crate::page::document_watch::{
     Arrival, CommitOutcome, DocumentWatch, Expect, FrameTreeReply, WatchError, decode,
 };
+use crate::page::{LoadState, OpPage, frame_tree};
 use crate::target::PageRef;
 use crate::{ErrorCode, Playwright, PlaywrightError};
 
@@ -75,11 +75,11 @@ pub(crate) struct LoadStateInput {
     state: LoadState,
 }
 
-/// What starts a navigation of the main frame.
+/// What starts a frame navigation (history and reload remain page-wide).
 #[derive(Clone, Debug)]
 pub(crate) enum Navigation {
     /// `Page.navigate`, which names the document it starts by loader id. `frame` is the
-    /// frame `frame.goto` named, which must be the main frame.
+    /// frame `frame.goto` named; absent means the main frame.
     Goto {
         frame: Option<FrameId>,
         url: String,
@@ -92,14 +92,15 @@ pub(crate) enum Navigation {
     History(i64),
 }
 
-/// What a navigation op returns. `url` refreshes the prelude's synchronous `page.url()`.
+/// A navigation's result. `url` refreshes the addressed frame; only the main frame also
+/// changes the prelude's synchronous `page.url()`.
 #[derive(Debug, Serialize)]
 pub(crate) struct NavigationResult {
     pub(crate) response: Option<Response>,
     pub(crate) url: Option<String>,
 }
 
-/// Playwright's `Response` for the main document, from its navigation timing entry.
+/// Playwright's `Response` for the navigated document, from its navigation timing entry.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct Response {
@@ -142,7 +143,7 @@ fn complete_user_url(url: String) -> String {
     }
 }
 
-/// Runs `navigation` on `page`'s main frame and waits for `wait_until`.
+/// Runs `navigation` on its named frame and waits within one operation deadline.
 pub(crate) async fn navigate(
     pw: &Playwright,
     scope: &OpScope<'_>,
@@ -151,21 +152,14 @@ pub(crate) async fn navigate(
     wait_until: LoadState,
 ) -> Result<Value, PlaywrightError> {
     let admitted = scope.admit(pw.browser(), page).await?;
-    // The watch below follows the main frame's documents only, so a child frame's goto would
-    // wait on the wrong loader. Refused before anything is sent.
-    if let Navigation::Goto {
-        frame: Some(frame), ..
-    } = &navigation
-        && *frame != main_frame(admitted)
-    {
-        return Err(scope.fail(
-            ErrorCode::Unsupported,
-            "Neo navigates only a page's main frame; navigate the page, or set the iframe's \
-             src with page.evaluate",
-        ));
-    }
-    let session_id = admitted.session.session_id.clone();
-    let session = pw.browser().protocol_session(session_id.clone());
+    let main = main_frame(admitted);
+    let frame = match &navigation {
+        Navigation::Goto {
+            frame: Some(frame), ..
+        } => frame.clone(),
+        _ => main.clone(),
+    };
+    let page = OpPage::observed(pw, scope, admitted).await;
     scope.log(match &navigation {
         Navigation::Goto { url, .. } => {
             format!("navigating to \"{url}\", waiting until \"{wait_until}\"")
@@ -174,20 +168,40 @@ pub(crate) async fn navigate(
             format!("waiting for navigation until \"{wait_until}\"")
         }
     });
-    let mut watch = DocumentWatch::new(
-        pw.browser(),
-        session.clone(),
-        session_id,
-        main_frame(admitted),
-    );
-    let drive = drive(scope, &session, &mut watch, navigation, wait_until);
-    let response = match scope.within(drive).await {
-        Ok(response) => response?,
-        Err(_expired) => return Err(scope.timed_out(ErrorCode::WaitTimeout)),
+    let work = async {
+        // Native tree membership selects the transport without depending on a sealed
+        // JavaScript world's install/cache state after a renderer handoff.
+        let session = if frame == main {
+            pw.browser()
+                .protocol_session(admitted.session.session_id.clone())
+        } else {
+            frame_session(scope, &page, &frame).await?
+        };
+
+        let session_id = session
+            .session_id()
+            .cloned()
+            .ok_or_else(|| scope.fail(ErrorCode::TargetClosed, "Frame was detached"))?;
+        // Subscribe after endpoint resolution but before enabling lifecycle or dispatching.
+        let follows_child = frame != main;
+        let mut watch = DocumentWatch::new(pw.browser(), session, session_id, frame);
+        if follows_child {
+            watch.follow_frame_events(main);
+            watch
+                .read_current()
+                .await
+                .map_err(|error| watch_error(scope, &error))?;
+        }
+
+        let response = Box::pin(drive(scope, &page, &mut watch, navigation, wait_until)).await?;
+        Ok::<_, PlaywrightError>(NavigationResult {
+            response,
+            url: watch.url().map(str::to_owned),
+        })
     };
-    let result = NavigationResult {
-        response,
-        url: watch.url().map(str::to_owned),
+    let result = match scope.within(work).await {
+        Ok(result) => result?,
+        Err(_expired) => return Err(scope.timed_out(ErrorCode::WaitTimeout)),
     };
     to_output(scope, &result)
 }
@@ -200,20 +214,30 @@ fn main_frame(admitted: &AdmittedPage) -> FrameId {
 /// The command and every wait after it, all inside the op's timeout.
 async fn drive(
     scope: &OpScope<'_>,
-    session: &ProtocolSession,
+    page: &OpPage<'_>,
     watch: &mut DocumentWatch,
     navigation: Navigation,
     wait_until: LoadState,
 ) -> Result<Option<Response>, PlaywrightError> {
+    let session = watch.session().clone();
+    let frame = watch.frame_id().clone();
     let failed = |error: WatchError| watch_error(scope, &error);
     let core = |error: CoreError| scope.core_error(&error);
+
+    watch.enable_page().await.map_err(failed)?;
     watch.enable_lifecycle().await.map_err(failed)?;
+
     let arrival = match navigation {
         Navigation::Goto { url, referer, .. } => {
             let sent = scope.send_effect()?;
-            let reply = send_navigate(session, &sent, &url, referer.as_deref())
+            // The tab's channel survives when an OOPIF merges into its parent. Sending on
+            // the retiring child session can lose the acknowledgement; frameId lets the
+            // browser route this one command without replaying it after the handoff.
+            let command_session = page.main_endpoint().session;
+            let reply = send_navigate(&command_session, &sent, &frame, &url, referer.as_deref())
                 .await
                 .map_err(core)?;
+
             // A download is answered with an error text too, so it goes first, as upstream.
             if reply.is_download {
                 return Err(scope.fail(ErrorCode::NavigationFailed, "Download is starting"));
@@ -230,8 +254,8 @@ async fn drive(
                 }
                 return Err(scope.fail(ErrorCode::NavigationFailed, &format!("{error} at {url}")));
             }
-            match reply.loader_id {
-                Some(loader) => match watch.committed(&loader).await.map_err(failed)? {
+            if let Some(loader) = reply.loader_id {
+                match committed(scope, page, watch, &loader).await? {
                     CommitOutcome::Committed(commit) => Arrival::NewDocument(commit),
                     CommitOutcome::Interrupted(other) => {
                         let message = format!(
@@ -239,25 +263,28 @@ async fn drive(
                         );
                         return Err(scope.fail(ErrorCode::NavigationFailed, &message));
                     }
-                },
-                // No loader: Chromium already moved inside the current document.
-                None => Arrival::SameDocument,
+                }
+            } else {
+                // No commit event selects the loader for a same-document navigation.
+                // Replay already queued its states; name that current document now.
+                watch.read_current().await.map_err(failed)?;
+                Arrival::SameDocument
             }
         }
         Navigation::Reload => {
             let sent = scope.send_effect()?;
-            send_reload(session, &sent).await.map_err(core)?;
+            send_reload(&session, &sent).await.map_err(core)?;
             watch.arrived(Expect::NewDocument).await.map_err(failed)?
         }
         Navigation::History(delta) => {
-            // The current document's states, for a same-document step that keeps it.
+            // A same-document history step keeps the current document's lifecycle states.
             watch.read_current().await.map_err(failed)?;
-            let Some(entry) = history_entry(session, delta).await.map_err(core)? else {
+            let Some(entry) = history_entry(&session, delta).await.map_err(core)? else {
                 // Nothing to go to: upstream returns null without navigating.
                 return Ok(None);
             };
             let sent = scope.send_effect()?;
-            send_history_step(session, &sent, entry)
+            send_history_step(&session, &sent, entry)
                 .await
                 .map_err(core)?;
             watch.arrived(Expect::AnyNavigation).await.map_err(failed)?
@@ -269,13 +296,80 @@ async fn drive(
         let message = format!("the browser could not load {unreachable}");
         return Err(scope.fail(ErrorCode::NavigationFailed, &message));
     }
-    watch.reached(wait_until).await.map_err(failed)?;
+
+    loop {
+        match watch.reached(wait_until).await {
+            Ok(()) => break,
+            Err(WatchError::Left) => resume_frame(scope, page, watch).await?,
+            Err(error) => return Err(failed(error)),
+        }
+    }
     Ok(match arrival {
         Arrival::NewDocument(commit) => {
-            read_response(session, &commit.url, None, Some(&commit.loader)).await
+            read_response(
+                watch.session(),
+                &commit.url,
+                Some(&frame),
+                Some(&commit.loader),
+            )
+            .await
         }
         Arrival::SameDocument => None,
     })
+}
+
+/// The original receiver retains commits queued while the child is being attached elsewhere.
+async fn committed(
+    scope: &OpScope<'_>,
+    page: &OpPage<'_>,
+    watch: &mut DocumentWatch,
+    loader: &str,
+) -> Result<CommitOutcome, PlaywrightError> {
+    loop {
+        match watch.committed(loader).await {
+            Err(WatchError::Left) => resume_frame(scope, page, watch).await?,
+            result => return result.map_err(|error| watch_error(scope, &error)),
+        }
+    }
+}
+
+/// Resolve/attach the current native host without replaying the dispatched navigation or
+/// replacing the receiver that holds the original command's queued commit facts.
+async fn resume_frame(
+    scope: &OpScope<'_>,
+    page: &OpPage<'_>,
+    watch: &mut DocumentWatch,
+) -> Result<(), PlaywrightError> {
+    let frame = watch.frame_id().clone();
+    if frame == page.main_endpoint().frame {
+        return Err(watch_error(scope, &WatchError::Left));
+    }
+
+    let session = frame_session(scope, page, &frame).await?;
+
+    watch
+        .resume_on(session)
+        .await
+        .map_err(|error| watch_error(scope, &error))
+}
+
+/// Resolve a native endpoint from this page's frame membership. Protocol navigation needs
+/// no installed JavaScript context in the document it is about to replace.
+async fn frame_session(
+    scope: &OpScope<'_>,
+    page: &OpPage<'_>,
+    frame: &FrameId,
+) -> Result<ProtocolSession, PlaywrightError> {
+    let tree = frame_tree::read(
+        page.browser(),
+        page.core_page(),
+        &page.main_endpoint().session,
+    )
+    .await
+    .map_err(|error| scope.core_error(&error))?;
+    tree.session(frame)
+        .cloned()
+        .ok_or_else(|| scope.fail(ErrorCode::TargetClosed, "Frame was detached"))
 }
 
 /// `page.waitForLoadState` and `frame.waitForLoadState`: the frame's current document, or the
@@ -310,8 +404,8 @@ pub(crate) async fn wait_for_load_state(
     }
 }
 
-/// The session that hosts child frame `frame`: the page's own session for a same-process
-/// frame, else the frame's own, which core's frame registry attaches or already holds.
+/// The session whose native renderer tree lists `frame`. A same-process descendant of an
+/// OOPIF shares that OOPIF's session, rather than the tab's session.
 pub(crate) async fn frame_host(
     pw: &Playwright,
     scope: &OpScope<'_>,
@@ -319,36 +413,19 @@ pub(crate) async fn frame_host(
     root: (SessionId, ProtocolSession),
     frame: &FrameId,
 ) -> Result<(SessionId, ProtocolSession), PlaywrightError> {
-    let tree: FrameTreeReply = root
-        .1
-        .send_value("Page.getFrameTree", json!({}))
-        .await
-        .and_then(decode)
-        .map_err(|error| scope.core_error(&error))?;
-    if tree
-        .frame_tree
-        .into_frames()
-        .any(|known| known.id == frame.as_str())
-    {
-        return Ok(root);
-    }
-    let target = pw
-        .browser()
-        .frames()
-        .resolve_frame_target(
-            scope.admit(pw.browser(), page).await?.core_page.clone(),
-            Some(frame.clone()),
-            None,
-            true,
-        )
+    let admitted = scope.admit(pw.browser(), page).await?;
+    let tree = frame_tree::read(pw.browser(), &admitted.core_page, &root.1)
         .await
         .map_err(|error| scope.core_error(&error))?;
-    let session_id = target
-        .session
+    let session = tree
+        .session(frame)
+        .cloned()
+        .ok_or_else(|| scope.fail(ErrorCode::TargetClosed, "Frame was detached"))?;
+    let id = session
         .session_id()
         .cloned()
         .ok_or_else(|| scope.fail(ErrorCode::TargetClosed, "Frame was detached"))?;
-    Ok((session_id, target.session))
+    Ok((id, session))
 }
 
 /// A watch that could not answer, as the op's error.
@@ -375,18 +452,19 @@ struct NavigateReply {
     is_download: bool,
 }
 
-/// Starts a navigation of the main frame.
+/// Starts one browser-routed navigation on the admitted tab's stable session.
 async fn send_navigate(
     session: &ProtocolSession,
     _sent: &Sent<'_>,
+    frame: &FrameId,
     url: &str,
     referer: Option<&str>,
 ) -> Result<NavigateReply, CoreError> {
     let params = match referer {
         Some(referer) => {
-            json!({ "url": url, "referrer": referer, "referrerPolicy": "unsafeUrl" })
+            json!({ "frameId": frame, "url": url, "referrer": referer, "referrerPolicy": "unsafeUrl" })
         }
-        None => json!({ "url": url }),
+        None => json!({ "frameId": frame, "url": url }),
     };
     decode(session.send_value("Page.navigate", params).await?)
 }
@@ -447,7 +525,7 @@ struct Timing {
     url: String,
 }
 
-/// The response for the main document at `url`, or `None` for one that has none (about:blank
+/// The response for the selected document at `url`, or `None` for one that has none (about:blank
 /// and data URLs, for which upstream's goto returns null too: measured by conformance Runner
 /// P) or whose timing entry cannot be read in time.
 pub(crate) async fn read_response(

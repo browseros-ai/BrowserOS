@@ -16,22 +16,31 @@
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::iter;
+use std::sync::Arc;
 
 use browseros_cdp::{CdpError, CdpEvent};
-use browseros_core::{BrowserSession, CoreError, FrameId, ProtocolSession, SessionId};
+use browseros_core::{
+    BrowserSession, CdpConnection, CoreError, FrameId, ProtocolSession, SessionId,
+};
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 use tokio::sync::broadcast::Receiver;
-use tokio::sync::broadcast::error::RecvError;
+use tokio::sync::broadcast::error::{RecvError, TryRecvError};
 
 use crate::page::LoadState;
 
-/// One op's view of one frame (the main frame, unless `frame.waitForLoadState` names another),
-/// from just before its command to the op's end.
+/// One operation's document history. Most waits observe one session; child goto retains
+/// its original receiver and follows the logical frame across successor sessions.
 pub(crate) struct DocumentWatch {
     /// Taken in [`DocumentWatch::new`], before the op sends anything.
     events: Receiver<CdpEvent>,
+    connection: Arc<dyn CdpConnection>,
+    /// Child goto keeps this same receiver across renderer changes. The containing target
+    /// distinguishes closing the page from retiring an OOPIF's old target during a swap.
+    containing_page: Option<FrameId>,
+    /// A new hosting session must replay states that may have fired before its attachment.
+    lifecycle_pending: bool,
     /// The session that hosts the frame, raw: the op already admitted the page.
     session: ProtocolSession,
     session_id: SessionId,
@@ -77,8 +86,8 @@ struct WatchedFrame {
     /// The frame's URL as last reported, for the prelude's synchronous `page.url()`.
     url: Option<String>,
     /// The frame left the watched session: `Page.frameDetached` named it there, either reason
-    /// (`swap`, `remove`), or the session detached. Only [`DocumentWatch::navigated`] acts on
-    /// it.
+    /// (`swap`, `remove`), or the session detached. Navigation callers re-resolve this frame
+    /// before continuing a commit or lifecycle wait.
     left: bool,
 }
 
@@ -141,11 +150,31 @@ impl DocumentWatch {
     ) -> Self {
         Self {
             events: browser.cdp_events(),
+            connection: browser.connection(),
+            containing_page: None,
+            lifecycle_pending: false,
             session,
             session_id,
             frame_id,
             frame: WatchedFrame::default(),
         }
+    }
+
+    /// The native host selected by the latest frame commit or explicit attachment.
+    pub(crate) fn session(&self) -> &ProtocolSession {
+        &self.session
+    }
+
+    /// The logical frame identity survives process swaps.
+    pub(crate) fn frame_id(&self) -> &FrameId {
+        &self.frame_id
+    }
+
+    /// Follow this child by its stable `FrameId` on every native session. Keeping the original
+    /// receiver preserves commits queued during handoff, including immediate redirects that
+    /// a newly subscribed watch could never recover from the current frame tree.
+    pub(crate) fn follow_frame_events(&mut self, containing_page: FrameId) {
+        self.containing_page = Some(containing_page);
     }
 
     /// The frame's URL as last reported, if the watch saw one.
@@ -208,6 +237,9 @@ impl DocumentWatch {
                     CommitOutcome::Interrupted(first.url.clone())
                 });
             }
+            if self.frame.left {
+                return Err(WatchError::Left);
+            }
             self.next().await?;
         }
     }
@@ -255,11 +287,18 @@ impl DocumentWatch {
     /// meanwhile becomes the one waited on, as upstream resets its fired states on a commit.
     pub(crate) async fn reached(&mut self, state: LoadState) -> Result<(), WatchError> {
         loop {
+            if self.containing_page.is_some() && self.frame.left {
+                return Err(WatchError::Left);
+            }
             if self.frame.has_reached(state) {
                 return Ok(());
             }
             if self.frame.left {
                 return Err(WatchError::Left);
+            }
+            if self.lifecycle_pending {
+                self.lifecycle_pending = false;
+                self.enable_lifecycle().await?;
             }
             self.next().await?;
         }
@@ -269,6 +308,9 @@ impl DocumentWatch {
     async fn next(&mut self) -> Result<(), WatchError> {
         match self.events.recv().await {
             Ok(event) => {
+                if self.containing_page.is_some() && self.followed_event(&event) {
+                    return Ok(());
+                }
                 if event.session_id.as_ref() == Some(&self.session_id) {
                     self.frame.apply(&event, &self.frame_id);
                 } else if event.method == "Target.detachedFromTarget"
@@ -299,6 +341,99 @@ impl DocumentWatch {
                 Err(WatchError::Core(CoreError::Cdp(CdpError::ConnectionLost)))
             }
         }
+    }
+
+    /// A child can commit on its parent's session after an OOPIF disappears. Its `FrameId`,
+    /// not the retired session, correlates the native event; loader ids still select the
+    /// dispatched navigation. Only actual removal or closing its containing page ends it.
+    fn followed_event(&mut self, event: &CdpEvent) -> bool {
+        let names_frame = event
+            .params
+            .get("frameId")
+            .and_then(Value::as_str)
+            .or_else(|| event.params.get("frame")?.get("id")?.as_str())
+            == Some(self.frame_id.as_str());
+        if names_frame && event.method.starts_with("Page.") {
+            if event.method == "Page.frameDetached" {
+                if event.params.get("reason").and_then(Value::as_str) != Some("swap")
+                    || event.session_id.as_ref() == Some(&self.session_id)
+                {
+                    self.frame.left = true;
+                }
+            } else {
+                if event.method == "Page.frameNavigated"
+                    && let Some(session) = &event.session_id
+                {
+                    self.rehost(session.clone());
+                }
+                self.frame.apply(event, &self.frame_id);
+            }
+            return true;
+        }
+        if event.method == "Target.targetDestroyed"
+            && event.params.get("targetId").and_then(Value::as_str)
+                == self.containing_page.as_ref().map(FrameId::as_str)
+        {
+            self.frame.left = true;
+            return true;
+        }
+        if event.method == "Target.detachedFromTarget" {
+            if event.params.get("sessionId").and_then(Value::as_str)
+                == Some(self.session_id.as_str())
+            {
+                self.frame.left = true;
+            }
+            return true;
+        }
+        false
+    }
+
+    fn rehost(&mut self, session: SessionId) {
+        if session != self.session_id {
+            self.session =
+                ProtocolSession::for_session(Arc::clone(&self.connection), session.clone());
+            self.session_id = session;
+            self.lifecycle_pending = true;
+        }
+    }
+
+    /// Adopt the resolved host while retaining the original cursor and loader history. Drain
+    /// handoff events before consulting the snapshot: an immediate redirect must not replace
+    /// an already queued commit. A genuinely newer snapshot settles an interrupted loader;
+    /// the old pre-dispatch document is not a new commit.
+    pub(crate) async fn resume_on(&mut self, session: ProtocolSession) -> Result<(), WatchError> {
+        self.session_id = session
+            .session_id()
+            .cloned()
+            .ok_or(WatchError::FrameDetached)?;
+        self.session = session;
+        self.frame.left = false;
+        self.lifecycle_pending = false;
+        self.enable_page().await?;
+        self.enable_lifecycle().await?;
+        for _ in 0..self.events.len() {
+            match self.events.try_recv() {
+                Ok(event) => {
+                    self.followed_event(&event);
+                }
+                Err(TryRecvError::Lagged(_)) => {}
+                Err(_) => break,
+            }
+        }
+        if self.frame.left {
+            return Ok(());
+        }
+        let current = self.read_frame().await?;
+        if !current.loader_id.is_empty()
+            && self.frame.current.as_deref() != Some(current.loader_id.as_str())
+        {
+            self.frame.commit(Commit {
+                loader: current.loader_id,
+                url: with_fragment(current.url, current.url_fragment.as_deref()),
+                unreachable: current.unreachable_url,
+            });
+        }
+        Ok(())
     }
 
     /// The watched frame as `Page.getFrameTree` reports it now.
