@@ -111,22 +111,35 @@ async function beforeDeadline(promise, remaining) {
   }
 }
 
+// The least time the first read gets, whatever the timeout: Neo's own expect gives its first
+// poll the same (`ONE_SHOT_FLOOR`, neo-playwright/src/expect/expectation.rs), as upstream's
+// one-shot check finishes even past the timeout. Without it `toBeVisible({ timeout: 1 })`
+// fails on a visible element, because no read over CDP answers within 1 ms.
+const ONE_SHOT_FLOOR_MS = 1000
+
 async function poll(actual, name, read, args, options, isNot) {
   const timeout = options.timeout ?? 5000
-  const deadline = timeout === 0 ? Infinity : performance.now() + timeout
+  const started = performance.now()
+  const deadline = timeout === 0 ? Infinity : started + timeout
   let last = {
     received: 'no successful read',
     expected: args.length ? args : true,
   }
   let readError
+  let first = true
   do {
+    // The first read runs to the floor if the timeout ends sooner; later reads end with it.
+    const until = first
+      ? Math.max(deadline, started + ONE_SHOT_FLOOR_MS)
+      : deadline
+    first = false
     try {
       last = await beforeDeadline(
         read(actual, args, {
           ...options,
-          timeout: Math.max(1, Math.min(100, deadline - performance.now())),
+          timeout: Math.max(1, Math.min(100, until - performance.now())),
         }),
-        Math.max(1, deadline - performance.now()),
+        Math.max(1, until - performance.now()),
       )
       readError = undefined
       if (last.pass !== isNot) return
