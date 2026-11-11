@@ -21,7 +21,7 @@ use crate::probe::{
 };
 use crate::resolve::failed;
 use crate::target::PageRef;
-use crate::world::{Endpoint, Place, SealedWorld};
+use crate::world::{Endpoint, IsolatedWorld, Place};
 use crate::{ErrorCode, Playwright, PlaywrightError};
 
 pub(crate) const READ_SPEC: OpSpec = OpSpec::read(
@@ -153,7 +153,7 @@ async fn write(
 
 /// The probe's `webStorage` write, which only an op that marked itself sent may make.
 async fn send(
-    world: &SealedWorld,
+    world: &IsolatedWorld,
     request: &ProbeRequest,
     _sent: &Sent<'_>,
 ) -> Result<ProbeReply, ProbeFailure> {
