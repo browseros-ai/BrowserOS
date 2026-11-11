@@ -4,14 +4,17 @@
 //! the one before (`waiting for getByRole('button')`, `  locator resolved to <button>`,
 //! `attempting click action`, `  waiting for element to be visible, enabled and stable`).
 //! Rendering ports upstream's `compressCallLog` (server/callLog.ts at v1.64.1): a block of lines
-//! repeated back to back prints once, as `N × <first line>`. Neo adds one bound, at most 12
-//! rendered lines (the first and the latest 11), so a long retry keeps its context line and its
-//! latest state.
+//! repeated back to back prints once, as `N × <first line>`. Upstream sets no bound: compression
+//! keeps a retrying action's log to about 16 lines. Neo adds one past that, at most 48 rendered
+//! lines (the first 8 and the latest 40), so a log that never repeats stays bounded and keeps
+//! both its context (the locator, what it resolved to, the step) and its latest state.
 //!
 //! The lines are mirrored into the op's trace record (`OpEnv::note`).
 
-/// Rendered lines kept in an error: the first one and the latest `MAX_LINES - 1`.
-const MAX_LINES: usize = 12;
+/// Rendered lines kept in an error: the first `HEAD_LINES` and the latest `MAX_LINES -
+/// HEAD_LINES`. Upstream's logs fit whole, so its lines read the same here.
+const MAX_LINES: usize = 48;
+const HEAD_LINES: usize = 8;
 
 /// Raw lines a failed matcher's `matcherResult.log` keeps, the first one and the latest
 /// `MAX_RAW_LINES - 1`: a 5 s wait logs a few dozen.
@@ -57,6 +60,11 @@ impl CallLog {
             .collect()
     }
 
+    /// Forgets every line, as [`OpScope::restart_log`](crate::op_scope::OpScope) starts over.
+    pub(crate) fn clear(&mut self) {
+        self.lines.clear();
+    }
+
     /// What follows an error's first line, as upstream's client appends it:
     /// `"\nCall log:\n  - waiting for ...\n"`, or nothing when no line was recorded.
     pub(crate) fn render(&self) -> String {
@@ -67,8 +75,8 @@ impl CallLog {
         let kept: Vec<&str> = if lines.len() > MAX_LINES {
             lines
                 .iter()
-                .take(1)
-                .chain(lines.iter().skip(lines.len() - (MAX_LINES - 1)))
+                .take(HEAD_LINES)
+                .chain(lines.iter().skip(lines.len() - (MAX_LINES - HEAD_LINES)))
                 .map(String::as_str)
                 .collect()
         } else {
@@ -289,18 +297,28 @@ mod tests {
     }
 
     #[test]
-    fn tests_that_a_long_log_keeps_its_first_line_and_the_latest_eleven() {
-        let text: Vec<String> = (0..30).map(|line| format!("step {line}")).collect();
+    fn tests_that_a_long_log_keeps_its_head_and_its_latest_lines() {
+        let text: Vec<String> = (0..100).map(|line| format!("step {line}")).collect();
         let mut log = CallLog::default();
         for line in &text {
             log.push(line);
         }
         let rendered = log.render();
         let kept: Vec<&str> = rendered.lines().skip(2).collect();
-        assert_eq!(kept.len(), 12, "at most 12 rendered lines: {rendered}");
-        assert_eq!(kept.first(), Some(&"  - step 0"), "the context line stays");
-        assert_eq!(kept.get(1), Some(&"  - step 19"), "then the latest 11");
-        assert_eq!(kept.last(), Some(&"  - step 29"));
+        assert_eq!(kept.len(), 48, "at most 48 rendered lines: {rendered}");
+        assert_eq!(kept.get(7), Some(&"  - step 7"), "the first 8 stay");
+        assert_eq!(kept.get(8), Some(&"  - step 60"), "then the latest 40");
+        assert_eq!(kept.last(), Some(&"  - step 99"));
+    }
+
+    #[test]
+    fn tests_that_a_log_of_upstreams_size_renders_whole() {
+        let text: Vec<String> = (0..20).map(|line| format!("step {line}")).collect();
+        let mut log = CallLog::default();
+        for line in &text {
+            log.push(line);
+        }
+        assert_eq!(log.render().lines().skip(2).count(), 20);
     }
 
     #[test]

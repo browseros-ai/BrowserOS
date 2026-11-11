@@ -268,6 +268,14 @@ impl<'env> OpScope<'env> {
         }
     }
 
+    /// Starts the error's call log over, for the actions upstream's client runs as two calls
+    /// (`_withElement`: a selector wait, then the handle's own call): once the element is found,
+    /// the wait's lines belong to a call that succeeded, and the error shows the handle's
+    /// alone. The trace keeps every line it was already given.
+    pub(crate) fn restart_log(&self) {
+        self.lock_log().clear();
+    }
+
     /// Sleeps on Rust's clock, never the page's, so a background tab's throttled timers cannot
     /// stall a retry. `Err` once the op's timeout passes or the script aborts it, either of
     /// which may cut the sleep short.

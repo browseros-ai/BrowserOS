@@ -29,6 +29,7 @@ import {
   type ProbeRequest,
   type ReplyTo,
   type RequestOf,
+  type Resolution,
   type Uninstalled,
   type ValueOp,
 } from './protocol'
@@ -215,9 +216,22 @@ function classify(error: unknown): ErrorClass {
 }
 
 function thrownReply(error: unknown): ErrorReply {
-  return errorReply(
+  const reply = errorReply(
     classify(error),
     error instanceof Error ? error.message : String(error),
+  )
+  // A file-input read's refusal carries what its chunk resolved to (read.ts).
+  const resolved: unknown =
+    error instanceof Error ? Reflect.get(error, 'resolved') : undefined
+  return isResolution(resolved) ? { ...reply, resolved } : reply
+}
+
+function isResolution(value: unknown): value is Resolution {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    typeof Reflect.get(value, 'preview') === 'string' &&
+    typeof Reflect.get(value, 'count') === 'number'
   )
 }
 

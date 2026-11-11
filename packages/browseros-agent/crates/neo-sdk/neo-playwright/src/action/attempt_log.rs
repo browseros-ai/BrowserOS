@@ -34,7 +34,17 @@ impl<'s> AttemptLog<'s> {
 
     /// The element was seen: the held lines go to the log, and later ones go there at once.
     pub(crate) fn found(&mut self) {
-        for line in self.held.take().unwrap_or_default() {
+        self.found_with(None);
+    }
+
+    /// [`AttemptLog::found`], `leading` first: what upstream logs between resolving the locator
+    /// and attempting the action (`locator resolved to <button>`, `fill("x")`). Only the
+    /// pass's first sighting logs them; a retry on the same pass already did.
+    pub(crate) fn found_with(&mut self, leading: impl IntoIterator<Item = String>) {
+        let Some(held) = self.held.take() else {
+            return;
+        };
+        for line in leading.into_iter().chain(held) {
             self.scope.log(line);
         }
     }

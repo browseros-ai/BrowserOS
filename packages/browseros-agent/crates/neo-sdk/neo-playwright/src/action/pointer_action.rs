@@ -41,7 +41,7 @@ use crate::op_scope::{OpScope, Sent};
 use crate::page::OpPage;
 use crate::probe::{
     ArmPlan, DropEntry, Edit, FilePayload, Hit, HitAction, PageText, Point, ProbeFailure,
-    ProbeReply, ProbeRequest, ProbeTarget, Ran, Read, Rect, ScrollPlan, Want,
+    ProbeReply, ProbeRequest, ProbeTarget, Ran, Read, Rect, Resolution, ScrollPlan, Want,
 };
 use crate::resolve::{self, Resolved};
 use crate::target::{Strictness, Target};
@@ -413,8 +413,11 @@ impl<'a> PointerRunner<'a> {
             want: Want::Element,
         };
         match self.call(located, &request).await? {
-            Called::Reply(ProbeReply::Element { pin, .. }) => {
+            Called::Reply(ProbeReply::Element { pin, resolved, .. }) => {
                 self.matched = true;
+                if let Some(resolved) = resolved {
+                    self.scope.log(resolved.log_line());
+                }
                 Ok(Some(pin))
             }
             Called::Reply(ProbeReply::None { stale_ref: None } | ProbeReply::Detached) => Ok(None),
@@ -511,8 +514,10 @@ impl<'a> PointerRunner<'a> {
             let measure = self.act_request(located, action, &req, target, scroll, None);
             let called = self.call(located, &measure).await?;
             match &called {
-                Called::Reply(ProbeReply::Measured { .. } | ProbeReply::State { .. }) => {
-                    attempt.found();
+                // A pass's first request resolves the locator: upstream logs what it resolved
+                // to before the attempt's own lines.
+                Called::Reply(reply @ (ProbeReply::Measured { .. } | ProbeReply::State { .. })) => {
+                    attempt.found_with(reply.resolution().map(Resolution::log_line));
                 }
                 // The locator matches nothing yet: back to the outer loop with nothing logged, as
                 // upstream's `continuePolling`. Once the element was seen, this is a detach.
@@ -539,7 +544,7 @@ impl<'a> PointerRunner<'a> {
                         border_offset,
                     }
                 }
-                Called::Reply(ProbeReply::State { missing }) => {
+                Called::Reply(ProbeReply::State { missing, .. }) => {
                     self.matched = true;
                     if action.force {
                         return Err(self.forced("Element is not visible"));
@@ -582,13 +587,14 @@ impl<'a> PointerRunner<'a> {
                         browser_mapped,
                     } => (point, browser_mapped),
                     Placed::Covered { by } => {
-                        self.log_covered(by);
+                        self.log_hit_refused(&req, by);
                         continue;
                     }
                     Placed::Outside => {
                         if action.force {
                             return Err(self.forced("Element is outside of the viewport"));
                         }
+                        self.log_steps_before_hit(&req);
                         self.scope
                             .log("  element is outside of the viewport".to_owned());
                         continue;
@@ -639,13 +645,13 @@ impl<'a> PointerRunner<'a> {
                         });
                         continue;
                     }
-                    Called::Reply(ProbeReply::State { missing }) => {
+                    Called::Reply(ProbeReply::State { missing, .. }) => {
                         self.scope
                             .log(format!("  element is not {}", state_name(missing)));
                         continue;
                     }
                     Called::Reply(ProbeReply::Covered { by }) => {
-                        self.log_covered(by);
+                        self.log_hit_refused(&req, by);
                         continue;
                     }
                     Called::Reply(ProbeReply::None { stale_ref: None } | ProbeReply::Detached) => {
@@ -1007,6 +1013,22 @@ impl<'a> PointerRunner<'a> {
             // next pass.
             Projection::Gone => Ok(Placed::Reresolve),
         }
+    }
+
+    /// A hit test that refused before any input: upstream checks the hit target only after the
+    /// states held and the element scrolled (dom.ts `_performPointerAction`), so its log has
+    /// those lines first, then whose markup intercepts pointer events.
+    fn log_hit_refused(&self, req: &Requirements, by: PageText) {
+        self.log_steps_before_hit(req);
+        self.log_covered(by);
+    }
+
+    /// The lines upstream logs between the states holding and its viewport and hit checks,
+    /// which a refusal at either check follows.
+    fn log_steps_before_hit(&self, req: &Requirements) {
+        self.scope.log(format!("  element is {}", req.waits_for()));
+        self.scope.log("  scrolling into view if needed".to_owned());
+        self.scope.log("  done scrolling".to_owned());
     }
 
     /// Upstream's `<element> intercepts pointer events` line: the element's description, the

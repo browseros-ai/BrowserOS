@@ -607,7 +607,7 @@ async fn tests_that_a_legacy_sdk_world_is_never_reused_by_the_engine() -> TestRe
         frame_visible: true,
         read: Read::InputValue,
     };
-    let Ok(ProbeReply::Read { value }) = probe::call(&world, &read).await else {
+    let Ok(ProbeReply::Read { value, .. }) = probe::call(&world, &read).await else {
         return Err("the password field did not read".into());
     };
     assert_eq!(
