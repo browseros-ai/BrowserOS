@@ -101,6 +101,7 @@ export type PageFact = {
   url?: string
   title?: string
   closed?: boolean
+  viewportSize?: { width: number; height: number } | null
 }
 
 /** One frame of a page's tree, main frame first; `parentId` null only for the main frame. */
@@ -309,6 +310,8 @@ export type FilePayload = { name: string; mimeType: string; buffer: string }
 export type FilesInput = { paths: string[] } | { payloads: FilePayload[] }
 export type TargetArgs = { target: Target; strict: Strictness }
 export type EveryMatchArgs = { target: Target }
+/** `locator.normalize`: the locator's own selector rides along for upstream's messages. */
+export type NormalizeArgs = { target: Target; selector: string }
 export type PageArgs = { page: PageHandle }
 /** A page op on one of the page's frames; `frame` is left out for the main frame. */
 export type FrameArgs = PageArgs & { frame?: string }
@@ -365,6 +368,7 @@ export type OpInputs = {
   'locator.isVisible': TargetArgs
   'locator.isHidden': TargetArgs
   'locator.count': EveryMatchArgs
+  'locator.normalize': NormalizeArgs
   'locator.allTextContents': EveryMatchArgs
   'locator.allInnerTexts': EveryMatchArgs
   'locator.boundingBox': TargetArgs
@@ -379,10 +383,15 @@ export type OpInputs = {
   /** `noWait` is `page.$`: the first match now, or null, instead of waiting for one. */
   'locator.elementHandle': TargetArgs & { noWait?: true }
   'locator.elementHandles': EveryMatchArgs
-  'page.ariaSnapshot': PageArgs & { mode: 'ai' | 'default'; depth?: number }
+  'page.ariaSnapshot': PageArgs & {
+    mode: 'ai' | 'default'
+    depth?: number
+    boxes?: boolean
+  }
   'locator.ariaSnapshot': TargetArgs & {
     mode: 'ai' | 'default'
     depth?: number
+    boxes?: boolean
   }
   'expect.locator': { target: Target } & ExpectArgs
   'expect.page': PageArgs & ExpectArgs
@@ -446,6 +455,9 @@ export type OpInputs = {
     strict?: Strictness
   } & ScreenshotOptions
   'page.pdf': PageArgs & PdfOptions
+  'page.setViewportSize': PageArgs & {
+    viewportSize: { width: number; height: number }
+  }
   'page.addInitScript': PageArgs & { script: InitSource }
   'context.pages': Record<string, never>
   'context.newPage': Record<string, never>
@@ -522,6 +534,7 @@ export type OpOutputs = {
   'locator.isVisible': boolean
   'locator.isHidden': boolean
   'locator.count': number
+  'locator.normalize': { selector: string }
   'locator.allTextContents': string[]
   'locator.allInnerTexts': string[]
   'locator.boundingBox': Rect | null
@@ -565,6 +578,7 @@ export type OpOutputs = {
   /** The `{"$neo":"bytes"}` brand, revived as the prelude's Buffer (index.ts). */
   'page.screenshot': unknown
   'page.pdf': unknown
+  'page.setViewportSize': Done
   /** The id `disposable.dispose` takes. */
   'page.addInitScript': { id: number }
   'context.pages': { pages: PageEntry[] }

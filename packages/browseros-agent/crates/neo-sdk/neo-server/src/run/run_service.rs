@@ -16,6 +16,7 @@ use tokio_util::sync::CancellationToken;
 use super::request_ledger::{Admission, LedgerLimits, RunTicket};
 use super::{HostData, RequestLedger, RunHandle, RunMeta, RunReply, RunRequest};
 use crate::browser::{BrowserLink, PageRef, RunView, TabRegistry};
+use crate::builtins;
 use crate::config::Defaults;
 use crate::dispatch::{
     Dispatcher, ErrorCode, OperationError, PageFact, PageFacts, RunCtx, RunStart, StopReason,
@@ -252,6 +253,17 @@ impl RunService {
         {
             ops.shutdown().await;
         }
+        // Before the reply, so a host that reads a download right after it finds the file; and
+        // before the end record, which drops the run state that lists the downloads.
+        builtins::keep_downloads(&run, self.store.outputs()).await;
+        // A run's init scripts end with it: removed before the reply, so the next run's first
+        // navigation, or the owner's, loads without them. A renderer that does not answer within
+        // the grace leaves the rest to the run state's drop, which removes them in the background.
+        let _removed = time::timeout(
+            Defaults::TEARDOWN_GRACE,
+            builtins::remove_init_scripts(&run),
+        )
+        .await;
         // The run's end record is built from its reply, so the trace and a `requestId` replay keep
         // exactly what the caller got.
         let reply = Arc::new(RunReply::build(&run, end));
@@ -288,7 +300,7 @@ impl RunService {
                 let pages = pages
                     .iter()
                     .zip(observation.infos)
-                    .map(|(page, info)| PageFact::new(page, info))
+                    .map(|(page, info)| PageFact::in_view(page, info, run.view()))
                     .collect();
                 PageFacts {
                     pages,

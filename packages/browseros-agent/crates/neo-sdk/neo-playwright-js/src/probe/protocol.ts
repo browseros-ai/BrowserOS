@@ -20,7 +20,7 @@ import type { ParsedSelector } from '../../../neo-playwright/third_party/playwri
  * reports it, and an install whose number differs from Rust's PROBE_PROTOCOL fails as
  * `neo / internal` (the engine asset is stale).
  */
-export const PROTOCOL = 14
+export const PROTOCOL = 16
 
 /**
  * The function declaration Rust sends with every request. Rust calls it on the world's global
@@ -82,11 +82,16 @@ export type ArmPlan = {
   expiryMs: number
   expectRect?: Rect
 }
-export type SelectOption =
-  | { valueOrLabel: string }
-  | { value: string }
-  | { label: string }
-  | { index: number }
+/**
+ * One option to select, as upstream's client sends it: an option matches when every attribute
+ * named here does (injected `selectOptions`), and one that names none matches any option.
+ */
+export type SelectOption = {
+  valueOrLabel?: string
+  value?: string
+  label?: string
+  index?: number
+}
 /**
  * An edit of a pinned element; each answers `value` or `detached`. A `fill` answers
  * `Filled`, a `selectOptions` answers `Selected`, a `setFiles` answers `FilesSet`, the others
@@ -237,11 +242,22 @@ export type ReadAllRequest = {
   target: ProbeTarget
   read: ReadAll
 }
+/**
+ * `locator.normalize`: upstream's `generateSelectorSimple` for the first element `target`
+ * matches now, in this frame. Rust asks once in the element's world and once per parent frame
+ * for its `<iframe>`, then joins the parts with `internal:control=enter-frame`.
+ */
+export type SelectorRequest = { op: 'selector'; target: ProbeTarget }
 export type SnapshotRequest = {
   op: 'snapshot'
   root: ProbeTarget
   mode: SnapshotMode
   depth?: number
+  /**
+   * Each node's box (`{ x, y, width, height }`, rounded) in this frame's own viewport, as
+   * upstream's `boxes` option gives it: a child frame's boxes are not offset into the page.
+   */
+  boxes?: boolean
 }
 /**
  * One poll of one retrying matcher. Rust's loop owns the timing, `.not` and the failure, so a
@@ -298,6 +314,7 @@ export type ProbeRequest =
   | EditRequest
   | ReadRequest
   | ReadAllRequest
+  | SelectorRequest
   | SnapshotRequest
   | ExpectRequest
   | FocusedRequest
@@ -394,6 +411,8 @@ export type Values = {
   count: number
   values: unknown[]
 }
+/** A selector upstream's generator wrote for one element. */
+export type GeneratedSelector = { kind: 'selector'; selector: string }
 export type Snapshot = {
   kind: 'snapshot'
   json: AriaSnapshotJSON
@@ -454,6 +473,7 @@ export type ProbeReply =
   | Value
   | ReadValue
   | Values
+  | GeneratedSelector
   | Snapshot
   | ExpectPoll
   | Focused
@@ -483,6 +503,7 @@ export const REPLY_KINDS = {
   edit: ['value', 'detached'],
   read: ['read', 'none', 'strict', 'detached'],
   readAll: ['values'],
+  selector: ['selector', 'none', 'detached'],
   snapshot: ['snapshot', 'none', 'strict', 'detached'],
   expect: ['expect', 'none', 'strict', 'detached'],
   focused: ['focused'],

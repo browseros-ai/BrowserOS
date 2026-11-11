@@ -11,7 +11,8 @@
 //!     └▶ every write op later admitted on a tab without it: recheck that op's tab, then add it
 //!        there (OpScope::admit), before the op's own effect, so the op's navigation runs it
 //!  disposable.dispose     every registration of that id removed, and awaited
-//!  the run ends           RunState drops the registry; each registration's guard removes it
+//!  the run ends           the host awaits RunState::remove_init_scripts before it answers;
+//!                         dropping the state then removes whatever that missed (guards)
 //! ```
 //!
 //! **Lifetime: the run.** A Neo run is a whole Playwright script, and the tab outlives it, so
@@ -38,6 +39,7 @@ use std::mem;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use browseros_core::{BrowserSession, CoreError, ProtocolSession, SessionId, TabId};
+use futures_util::future;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::runtime::Handle;
@@ -262,6 +264,18 @@ pub(crate) async fn dispose(
 impl InitScripts {
     fn lock(&self) -> MutexGuard<'_, Registry> {
         self.registry.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Forgets every script and removes each registration, all at once, awaiting them all:
+    /// [`RunState::remove_init_scripts`](crate::RunState::remove_init_scripts), at the run's end.
+    pub(crate) async fn remove_all(&self) {
+        let added = {
+            let mut registry = self.lock();
+            registry.context.clear();
+            registry.adding.clear();
+            mem::take(&mut registry.added)
+        };
+        future::join_all(added.into_iter().map(|added| added.registration.remove())).await;
     }
 
     /// Adds every context script `admitted`'s session lacks, for a write op admitted on that tab.

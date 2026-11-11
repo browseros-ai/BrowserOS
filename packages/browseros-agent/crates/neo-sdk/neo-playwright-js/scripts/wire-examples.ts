@@ -47,6 +47,7 @@ const FRAMES = {
 const ANSWERS: Record<string, unknown> = {
   'locator.selectOption': ['a'],
   'locator.count': 0,
+  'locator.normalize': { selector: 'internal:role=button[name="Go"i]' },
   'locator.allTextContents': [],
   'locator.allInnerTexts': [],
   'locator.waitFor': ELEMENT,
@@ -86,10 +87,10 @@ const EVERY_OP = `
   await l.dispatchEvent('click'); await l.scrollIntoViewIfNeeded()
   await l.textContent(); await l.innerText(); await l.innerHTML(); await l.getAttribute('id'); await l.inputValue()
   await l.isEnabled(); await l.isDisabled(); await l.isEditable(); await l.isChecked(); await l.isVisible(); await l.isHidden()
-  await l.count(); await l.allTextContents(); await l.allInnerTexts(); await l.boundingBox(); await l.waitFor()
+  await l.count(); await l.normalize(); await l.allTextContents(); await l.allInnerTexts(); await l.boundingBox(); await l.waitFor()
   const handle = await l.elementHandle(); await handle.click(); await l.elementHandles()
   await handle.$('b'); await handle.$$('b')
-  await page.ariaSnapshot(); await l.ariaSnapshot()
+  await page.ariaSnapshot(); await l.ariaSnapshot(); await page.ariaSnapshotJSON({ boxes: true })
   await expect(l).toBeVisible(); await expect(page).toHaveTitle('x')
   await page.keyboard.down('a'); await page.keyboard.up('a'); await page.keyboard.press('a')
   await page.keyboard.type('ab'); await page.keyboard.insertText('ab')
@@ -105,6 +106,7 @@ const EVERY_OP = `
   await handle.evaluate((e) => e.id); await handle.$eval('b', (e) => e.id); await handle.$$eval('b', (es) => es.length)
   await page.$eval('b', (e) => e.id); await page.$$eval('b', (es) => es.length); await page.evaluate((e, h) => h.id, handle)
   await page.screenshot(); await l.screenshot(); await page.pdf()
+  await page.setViewportSize({ width: 640, height: 480 })
   const script = await page.addInitScript((a) => { window.a = a }, 1)
   // Rust reads a path before any page work, so the offline decode needs a file that exists.
   await page.addInitScript({ path: 'Cargo.toml' }); await context.addInitScript('window.b = 1')

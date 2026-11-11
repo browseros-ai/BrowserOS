@@ -193,6 +193,13 @@ impl<'env> OpScope<'env> {
             .page_session(info.page_id.clone())
             .await
             .map_err(|error| self.core_error(&error))?;
+        // Raw SDK calls bypass core's operation leases. Recover an interrupted earlier
+        // resize here, before any page read can observe its rejected metrics. This path
+        // takes no lease when the viewport is already applied and leaves dialogs usable.
+        self.view()
+            .repair_viewport(&info.page_id, &session)
+            .await
+            .map_err(|error| self.core_error(&error))?;
         Ok(Some(AdmittedPage {
             tab,
             core_page: info.page_id,

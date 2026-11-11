@@ -3,12 +3,12 @@
 //! The dispatcher's hooks are synchronous and must never wait on disk, so every event is a
 //! channel send. The writer takes the first event, gathers more for up to `batch_window` (or
 //! `batch_max` events), bounds their values, and commits them in one transaction. After the commit it
-//! answers any privacy commit or flush in the batch, then publishes the committed events to
+//! answers sweep and flush commands in the batch, then publishes the committed events to
 //! subscribers (the service API's SSE).
 //!
 //! Backpressure: if the disk stalls and the backlog passes `max_backlog`, operation events are
 //! dropped and counted as the run's `trace_gaps` (which make its effects `unknown`). Run
-//! lifecycle events, privacy commits and flushes are never dropped.
+//! lifecycle events, sweeps and flushes are never dropped.
 //!
 //! Run and operation events name the run's task, and operation events the target tab, so the
 //! SSE route filters by either without a store read. The writer learns a run's task at its start
@@ -48,12 +48,10 @@ use crate::storage::{
 use crate::trace_store::{RetentionPolicy, Swept};
 use crate::{
     Delivery, Effect, EpochMillis, OperationEnded, OperationId, OperationReached, OperationStarted,
-    Outcome, PrivacyRecord, PrivacyStore, PrivateReason, Redactor, RunEffects, RunEnded, RunId,
-    RunStarted, RunStatus, Shot, ShotAnswer, ShotJob, ShotQueue, TaskId, TraceError, TraceStore,
-    Truncation,
+    Outcome, Redactor, RunEffects, RunEnded, RunId, RunStarted, RunStatus, Shot, ShotAnswer,
+    ShotJob, ShotQueue, TaskId, TraceError, TraceStore, Truncation,
 };
 use browseros_core::TabId;
-use futures_util::future::BoxFuture;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::mem;
@@ -87,7 +85,7 @@ impl Default for WriterConfig {
     }
 }
 
-/// A committed, redacted change, for live subscribers. Subscribers read details from the store.
+/// A committed change, for live subscribers. Subscribers read details from the store.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TraceRecordEvent {
     /// A run was admitted.
@@ -140,15 +138,6 @@ pub enum TraceRecordEvent {
         /// When.
         at: EpochMillis,
     },
-    /// A tab's private flag is on disk.
-    TabPrivate {
-        /// The tab.
-        tab: TabId,
-        /// Why it went private.
-        reason: PrivateReason,
-        /// When it went private: no pixel from then on is captured.
-        at: EpochMillis,
-    },
     /// A run is complete: it ended and every screenshot job it made was answered, so a re-read
     /// returns the same data. `GET /v1/runs/{id}?wait=` wakes on it. Not an SSE event.
     RunComplete {
@@ -167,22 +156,13 @@ enum Event {
 
 enum Command {
     Event(Box<Event>),
-    PersistPrivate {
-        tab: TabId,
-        record: PrivacyRecord,
-        reply: oneshot::Sender<Result<(), TraceError>>,
-    },
-    ForgetPrivate {
-        tab: TabId,
-        reply: oneshot::Sender<Result<(), TraceError>>,
-    },
     Sweep {
         policy: RetentionPolicy,
         now: EpochMillis,
         reply: oneshot::Sender<Result<Swept, TraceError>>,
     },
     Flush(oneshot::Sender<Result<(), TraceError>>),
-    /// The camera's answer to one job. Never dropped, like privacy commits: a lost answer would
+    /// The camera's answer to one job. Never dropped: a lost answer would
     /// hold its run incomplete.
     Screenshot {
         op: OperationId,
@@ -227,13 +207,6 @@ impl DroppedEvents {
 /// One command's work inside a batch, its reply already set aside.
 enum Work {
     Event(Box<Event>),
-    Private {
-        tab: TabId,
-        record: PrivacyRecord,
-    },
-    Forget {
-        tab: TabId,
-    },
     Sweep {
         policy: RetentionPolicy,
         now: EpochMillis,
@@ -376,33 +349,6 @@ impl TraceSink {
         self.inner.tx.send(command).map_err(|_| {
             self.inner.backlog.fetch_sub(1, Ordering::Relaxed);
             TraceError::Closed
-        })
-    }
-}
-
-impl PrivacyStore for TraceSink {
-    // These send the command when called, not when the future first runs. `Privacy` calls them
-    // under its lock, so the queue, and the disk after it, sees a tab's writes in the order
-    // memory made them.
-    fn persist_private(
-        &self,
-        tab: TabId,
-        record: PrivacyRecord,
-    ) -> BoxFuture<'_, Result<(), TraceError>> {
-        let (reply, done) = oneshot::channel();
-        let queued = self.command(Command::PersistPrivate { tab, record, reply });
-        Box::pin(async move {
-            queued?;
-            done.await.map_err(|_| TraceError::Closed)?
-        })
-    }
-
-    fn forget_private(&self, tab: TabId) -> BoxFuture<'_, Result<(), TraceError>> {
-        let (reply, done) = oneshot::channel();
-        let queued = self.command(Command::ForgetPrivate { tab, reply });
-        Box::pin(async move {
-            queued?;
-            done.await.map_err(|_| TraceError::Closed)?
         })
     }
 }
@@ -551,20 +497,11 @@ impl Writer {
                 .iter()
                 .map(|&(op, shot)| Work::Screenshot { op, shot }),
         );
-        let mut privacy_replies = Vec::new();
         let mut sweep_replies = Vec::new();
         let mut flushes = Vec::new();
         for command in batch {
             match command {
                 Command::Event(event) => work.push(Work::Event(event)),
-                Command::PersistPrivate { tab, record, reply } => {
-                    work.push(Work::Private { tab, record });
-                    privacy_replies.push(reply);
-                }
-                Command::ForgetPrivate { tab, reply } => {
-                    work.push(Work::Forget { tab });
-                    privacy_replies.push(reply);
-                }
                 Command::Sweep { policy, now, reply } => {
                     work.push(Work::Sweep { policy, now });
                     sweep_replies.push(reply);
@@ -583,20 +520,10 @@ impl Writer {
             for item in work {
                 match item {
                     Work::Event(event) => self.apply(&tx, *event, &mut published).await?,
-                    Work::Private { tab, record } => {
-                        tx.persist_private(tab, record).await?;
-                        published.push(TraceRecordEvent::TabPrivate {
-                            tab,
-                            reason: record.reason,
-                            at: record.since,
-                        });
-                    }
-                    Work::Forget { tab } => {
-                        tx.forget_private(tab).await?;
-                    }
                     Work::Sweep { policy, now } => {
                         let files = self.store.files().clone();
-                        swept.push(tx.sweep(&files, policy, now).await?);
+                        let outputs = self.store.outputs().clone();
+                        swept.push(tx.sweep(&files, &outputs, policy, now).await?);
                     }
                     Work::Screenshot { op, shot } => {
                         tx.store_screenshot(op, shot).await?;
@@ -628,9 +555,6 @@ impl Writer {
                         shots.send(job);
                     }
                 }
-                for reply in privacy_replies {
-                    let _ = reply.send(Ok(()));
-                }
                 for (swept, reply) in swept.into_iter().zip(sweep_replies) {
                     let _ = reply.send(Ok(swept));
                 }
@@ -644,9 +568,6 @@ impl Writer {
             Err(error) => {
                 tracing::error!(%error, "trace batch failed; its records are lost");
                 drop(planned);
-                for reply in privacy_replies {
-                    let _ = reply.send(Err(TraceError::BatchLost(error.to_string())));
-                }
                 for reply in sweep_replies {
                     let _ = reply.send(Err(TraceError::BatchLost(error.to_string())));
                 }
@@ -977,9 +898,8 @@ mod tests {
     use super::{TraceRecordEvent, TraceSink, WriterConfig, spawn_writer};
     use crate::{
         Delivery, Effect, EpochMillis, OperationEnded, OperationId, OperationKind,
-        OperationStarted, Outcome, PrivacyRecord, PrivacyStore, PrivateReason, RedactionLimits,
-        Redactor, RetentionPolicy, RunEnded, RunId, RunStarted, RunStatus, Shot, ShotRead,
-        TraceError, TraceStore, screenshot_queue,
+        OperationStarted, Outcome, RedactionLimits, Redactor, RetentionPolicy, RunEnded, RunId,
+        RunStarted, RunStatus, Shot, ShotRead, TraceError, TraceStore, screenshot_queue,
     };
     use browseros_core::TabId;
     use std::time::Duration;
@@ -996,34 +916,6 @@ mod tests {
             None,
         );
         (dir, store, sink)
-    }
-
-    #[tokio::test]
-    async fn a_private_flag_is_announced_only_once_it_commits() {
-        let (_dir, store, sink) = writer().await;
-        let mut events = sink.subscribe();
-        let record = PrivacyRecord {
-            since: EpochMillis::from_millis(7),
-            reason: PrivateReason::Host,
-        };
-        assert!(sink.persist_private(TabId(3), record).await.is_ok());
-        assert_eq!(
-            events.recv().await.ok(),
-            Some(TraceRecordEvent::TabPrivate {
-                tab: TabId(3),
-                reason: PrivateReason::Host,
-                at: record.since,
-            })
-        );
-        // Break the next batch: the flag's insert fails and the transaction rolls back.
-        let dropped = crate::storage::test_faults::break_table(store.db(), "private_tabs").await;
-        assert!(dropped.is_ok());
-        assert!(sink.persist_private(TabId(4), record).await.is_err());
-        let _ = sink.flush().await;
-        assert!(
-            events.try_recv().is_err(),
-            "a flag that never reached the disk was announced"
-        );
     }
 
     /// The invariant behind "swept with its runs": no tab link outlives its run, or `run_tabs`
@@ -1075,6 +967,60 @@ mod tests {
             .unwrap_or_else(|error| panic!("tab links: {error}"));
         assert_eq!(orphans, 0);
         assert_eq!(links, 1, "the running run keeps its link");
+    }
+
+    /// A run's kept downloads live exactly as long as its record.
+    #[tokio::test]
+    async fn a_swept_runs_kept_downloads_go_with_it() {
+        let (dir, store, sink) = writer().await;
+        let day = 24 * 60 * 60 * 1000;
+        let source = dir.path().join("statement.txt");
+        tokio::fs::write(&source, b"balance")
+            .await
+            .unwrap_or_else(|error| panic!("source: {error}"));
+        let (aged, recent) = (RunId::new(), RunId::new());
+        for (run, started) in [(aged, 0), (recent, 8 * day)] {
+            sink.run_started(RunStarted {
+                id: run,
+                code: String::new(),
+                request_id: None,
+                task_id: None,
+                host_data: None,
+                at: EpochMillis::from_millis(started),
+            });
+            sink.run_ended(RunEnded {
+                id: run,
+                status: RunStatus::Ok,
+                error: None,
+                result: None,
+                replay: None,
+                at: EpochMillis::from_millis(started + 10),
+            });
+            store
+                .outputs()
+                .keep_download(run, 0, &source)
+                .await
+                .unwrap_or_else(|error| panic!("keep: {error}"));
+        }
+        let swept = sink
+            .sweep(
+                RetentionPolicy::default(),
+                EpochMillis::from_millis(8 * day + 1),
+            )
+            .await;
+        assert_eq!(swept.ok().map(|swept| swept.runs), Some(1));
+        for (run, kept) in [(aged, false), (recent, true)] {
+            let found = store
+                .outputs()
+                .open_download(run, 0)
+                .await
+                .unwrap_or_else(|error| panic!("open: {error}"));
+            assert_eq!(
+                found.is_some(),
+                kept,
+                "only the recent run keeps its download"
+            );
+        }
     }
 
     /// Jobs leave only once their batch commits; a rolled-back batch's jobs answer `Dropped`,
@@ -1158,7 +1104,8 @@ mod tests {
     /// An answer whose batch rolls back is stored by the next batch and counted once: its run
     /// neither waits for it forever nor completes while its other job is still out.
     #[tokio::test]
-    async fn an_answer_in_a_rolled_back_batch_is_stored_by_the_next_one() {
+    async fn an_answer_in_a_rolled_back_batch_is_stored_by_the_next_one()
+    -> Result<(), Box<dyn std::error::Error>> {
         let dir = tempfile::tempdir().unwrap_or_else(|error| panic!("tempdir: {error}"));
         let store = TraceStore::open(&dir.path().join("trace.db"))
             .await
@@ -1215,6 +1162,12 @@ mod tests {
         let (Some(first_job), Some(second_job)) = (jobs.try_recv(), jobs.try_recv()) else {
             panic!("a job per write expected");
         };
+        let jpeg = b"\xff\xd8 retry \xff\xd9";
+        for job in [&first_job, &second_job] {
+            let parent = job.path.parent().ok_or("screenshot path without parent")?;
+            tokio::fs::create_dir_all(parent).await?;
+            tokio::fs::write(&job.path, jpeg).await?;
+        }
         let complete = || {
             let store = store.clone();
             async move {
@@ -1226,27 +1179,45 @@ mod tests {
                     .map(|run| run.complete)
             }
         };
-        // Break the batch the first answer lands in: the private flag sent beside it fails, and
-        // the transaction rolls back.
-        let dropped = crate::storage::test_faults::break_table(store.db(), "private_tabs").await;
-        assert!(dropped.is_ok());
-        first_job.answer.send(Shot::Withheld);
-        let record = PrivacyRecord {
-            since: EpochMillis::from_millis(5),
-            reason: PrivateReason::Host,
-        };
-        let lost = sink.persist_private(TabId(9), record).await;
+        // Fail an operation insert beside the answer, rolling back both in one transaction.
+        // The next batch must retry the consumed answer without completing the other job.
+        assert!(
+            crate::storage::test_faults::reject_test_operation(store.db(), true)
+                .await
+                .is_ok()
+        );
+        first_job.answer.send(Shot::Taken {
+            bytes_len: jpeg.len() as u64,
+        });
+        sink.op_started(OperationStarted {
+            id: OperationId::new(RunId::new(), 1),
+            parent: None,
+            name: "test.fail".into(),
+            kind: OperationKind::Builtin,
+            effect: Effect::Read,
+            tab: None,
+            args: serde_json::Value::Null,
+            at: EpochMillis::from_millis(5),
+        });
+        let lost = sink.flush().await;
         assert!(matches!(lost, Err(TraceError::BatchLost(_))), "{lost:?}");
+        assert!(
+            crate::storage::test_faults::reject_test_operation(store.db(), false)
+                .await
+                .is_ok()
+        );
 
         let _ = sink.flush().await;
         assert_eq!(
             store.screenshot(first).await.ok(),
-            Some(ShotRead::Withheld),
+            Some(ShotRead::Jpeg(jpeg.to_vec())),
             "the next batch stored the answer"
         );
         assert_eq!(complete().await, Some(false), "the second job is still out");
 
-        second_job.answer.send(Shot::Withheld);
+        second_job.answer.send(Shot::Taken {
+            bytes_len: jpeg.len() as u64,
+        });
         let announced = tokio::time::timeout(Duration::from_secs(5), async {
             loop {
                 match events.recv().await {
@@ -1261,8 +1232,9 @@ mod tests {
         assert_eq!(complete().await, Some(true));
         assert_eq!(
             store.screenshot(second).await.ok(),
-            Some(ShotRead::Withheld)
+            Some(ShotRead::Jpeg(jpeg.to_vec()))
         );
+        Ok(())
     }
 
     #[tokio::test]

@@ -35,7 +35,7 @@ use super::op_marks::{self, Hold, OpMarks};
 use crate::browser::PageRef;
 use crate::dispatch::{
     ErrorCode, LeafError, Method, MethodSpec, OpCtx, OperationError, PageChange, PageTarget,
-    RegistryBuilder, RegistryError, StandingRefusal,
+    RegistryBuilder, RegistryError, RunCtx, StandingRefusal,
 };
 
 /// neo-playwright's prelude, which the agent realm evaluates after its bootstrap: the
@@ -77,7 +77,9 @@ const PLAYWRIGHT_API: &str = "Playwright's API on `page`, `context` and `browser
     frame, a child frame too) with Playwright's values, arguments, element handles and errors, \
     `page.setContent` and `frame.setContent`, whose HTML's scripts run there too, init scripts \
     (`page.addInitScript`, `context.addInitScript`) that every new document runs in its main \
-    world, `screenshot` and `pdf`, events (`page.on`, `waitForEvent`), and `expect`: \
+    world, `screenshot` and `pdf`, events (`page.on`, `waitForEvent`), downloads \
+    (`download.path()` waits for the file and returns where the browser saved it, which a later \
+    run can upload with `setInputFiles`; `saveAs(path)` copies it; `failure()`), and `expect`: \
     retrying locator matchers (`toBeVisible`, `toBeChecked`, `toHaveText`, `toContainText`, \
     `toHaveValue`, `toHaveCount`, `toHaveAttribute`, ...) and page matchers (`toHaveTitle`, \
     `toHaveURL`), with `.not`, value matchers (`toBe`, `toEqual`, ...), `expect.poll` and \
@@ -100,6 +102,13 @@ const PLAYWRIGHT_API: &str = "Playwright's API on `page`, `context` and `browser
     run ends, then its tab no longer runs it; a context's init script reaches each tab before \
     the run's first write to it, so a popup's first document and cross-site iframes run \
     without it; `exposeFunctions` is not available.";
+
+/// At a run's end, after its ops drained: removes the init scripts its ops registered from every
+/// tab, awaiting each removal (neo-playwright's `RunState::remove_init_scripts`). The run service
+/// calls it before it answers, so a script ends with the run that registered it.
+pub(crate) async fn remove_init_scripts(run: &RunCtx) {
+    run.slot::<RunState>().remove_init_scripts().await;
+}
 
 /// Schemes shared by goto and reload. Goto additionally passes file and JavaScript URLs to
 /// Chromium; other browser-specific schemes remain unsupported.
@@ -660,7 +669,9 @@ fn error_code(code: PlaywrightCode) -> ErrorCode {
         PlaywrightCode::ElementDetached => ErrorCode::ELEMENT_DETACHED,
         PlaywrightCode::PageError => ErrorCode::PAGE_ERROR,
         PlaywrightCode::NavigationFailed => ErrorCode::NAVIGATION_FAILED,
+        PlaywrightCode::DownloadFailed => ErrorCode::DOWNLOAD_FAILED,
         PlaywrightCode::WaitTimeout => ErrorCode::WAIT_TIMEOUT,
+        PlaywrightCode::NavigationObservationTimeout => ErrorCode::NAVIGATION_OBSERVATION_TIMEOUT,
         PlaywrightCode::InvalidInput => ErrorCode::INVALID_INPUT,
         PlaywrightCode::Unsupported => ErrorCode::UNSUPPORTED,
         PlaywrightCode::SensitiveCopyRefused => ErrorCode::SENSITIVE_COPY_REFUSED,

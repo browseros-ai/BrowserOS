@@ -982,6 +982,21 @@ export class Frame extends EventEmitter {
     return await invoke(op, this._call(api, 0), input)
   }
 
+  /**
+   * Upstream's `resolveSelector`: the selector Playwright's generator writes for the element
+   * `selector` matches now, from the main frame down through every `<iframe>` on the way.
+   */
+  async _normalize(api: string, selector: string): Promise<string> {
+    const target = await this._locatorBrand(api, selector)
+    const input = { target, selector }
+    const resolved = await invoke(
+      'locator.normalize',
+      this._call(api, 0),
+      input,
+    )
+    return resolved.selector
+  }
+
   async _boundingBox(
     api: string,
     selector: string,
@@ -1096,13 +1111,12 @@ export class Frame extends EventEmitter {
     selector: string | null,
     options: SnapshotOptions = {},
   ): Promise<SnapshotResult> {
-    if (options.boxes)
-      throw unsupportedError(
-        api,
-        'Neo snapshots carry no boxes; use locator.boundingBox()',
-      )
     const mode = options.mode ?? 'default'
-    const shape = pick({ mode, depth: options.depth }, ['mode', 'depth'])
+    const shape = pick({ mode, depth: options.depth, boxes: options.boxes }, [
+      'mode',
+      'depth',
+      'boxes',
+    ])
     const wait = this._wait(api, options)
     if (selector !== null)
       return await this._selectorOp(

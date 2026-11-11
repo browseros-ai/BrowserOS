@@ -23,7 +23,7 @@ use crate::world::{FrameSeq, Pin};
 /// contract: a world keeps the probe an earlier build installed, and the install replaces that
 /// probe only when its number differs (`engine_source`), so a shape changed under the same
 /// number reaches this build in the old shape. The lock's test catches a change without a bump.
-pub(crate) const PROBE_PROTOCOL: u32 = 14;
+pub(crate) const PROBE_PROTOCOL: u32 = 16;
 
 /// One reply; `kind` is the tag. Any request may also answer `error`, and `uninstalled` when
 /// the world has no booted probe.
@@ -128,6 +128,10 @@ pub(crate) enum ProbeReply {
         count: u32,
         values: Vec<PageText>,
     },
+    /// The selector upstream's generator wrote for one element.
+    Selector {
+        selector: String,
+    },
     /// One frame's `ariaSnapshotJSON` and its rendered iframes.
     Snapshot {
         json: Value,
@@ -192,6 +196,7 @@ impl ProbeReply {
             Self::Value { .. } => "value",
             Self::Read { .. } => "read",
             Self::Values { .. } => "values",
+            Self::Selector { .. } => "selector",
             Self::Snapshot { .. } => "snapshot",
             Self::Expect { .. } => "expect",
             Self::Focused { .. } => "focused",

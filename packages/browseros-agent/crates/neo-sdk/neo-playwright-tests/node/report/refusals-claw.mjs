@@ -540,13 +540,6 @@ const rustHints = [
   },
   {
     wording:
-      '<api>: Neo does not hand downloaded files to scripts in v1; the download event still reports url() and suggestedFilename()',
-    sources: ['neo-playwright/src/events/event_op.rs'],
-    expression:
-      'Neo does not hand downloaded files to scripts in v1; the download event still reports url\\(\\) and suggestedFilename\\(\\)',
-  },
-  {
-    wording:
       "<api>: context.on('{event}') is not available in Neo; listen on the page: page.on('{event}')",
     sources: ['neo-playwright/src/events/event_op.rs'],
     expression:

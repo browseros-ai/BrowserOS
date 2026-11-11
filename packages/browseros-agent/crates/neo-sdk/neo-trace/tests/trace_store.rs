@@ -1,19 +1,15 @@
 //! The trace store and writer through the crate's public API, on a real SQLite file: what a
 //! run's records look like after a flush, what a crash leaves behind, idempotent replay,
-//! listing by task and tab, the trace tail, size bounds, backpressure, retention, live events and
-//! durable per-tab privacy.
+//! listing by task and tab, the trace tail, size bounds, backpressure, retention and live events.
 
 use browseros_core::TabId;
-use futures_util::future::BoxFuture;
 use neo_trace::{
     Delivery, Effect, EpochMillis, ErrorOwner, ErrorRecord, OperationEnded, OperationId,
-    OperationKind, OperationStarted, Outcome, PageState, Privacy, PrivacyRecord, PrivacyStore,
-    PrivateReason, RedactionLimits, Redactor, RequestId, RetentionPolicy, RunEffects, RunEnded,
-    RunId, RunQuery, RunStarted, RunStatus, TailQuery, TaskAct, TaskId, TraceError,
-    TraceRecordEvent, TraceSink, TraceStore, WriterConfig, spawn_writer,
+    OperationKind, OperationStarted, Outcome, PageState, RedactionLimits, Redactor, RequestId,
+    RetentionPolicy, RunEffects, RunEnded, RunId, RunQuery, RunStarted, RunStatus, TailQuery,
+    TaskAct, TaskId, TraceRecordEvent, TraceSink, TraceStore, WriterConfig, spawn_writer,
 };
 use serde_json::{Value, json};
-use std::sync::Arc;
 use std::time::Duration;
 use std::{fs, io};
 use tempfile::TempDir;
@@ -826,9 +822,8 @@ async fn over_the_backlog_operation_events_drop_but_lifecycle_events_do_not() {
 }
 
 #[tokio::test]
-async fn retention_deletes_old_runs_and_keeps_private_tabs() {
+async fn retention_deletes_old_runs_and_keeps_running_runs() {
     let h = harness(WriterConfig::default()).await;
-    let privacy = Privacy::new(Arc::new(h.sink.clone()), Default::default());
     let old = start_in(&h.sink, Some("task-1"), 0);
     read_on(&h.sink, OperationId::new(old, 1), Some(TabId(3)), 10);
     h.sink.run_ended(RunEnded {
@@ -839,12 +834,6 @@ async fn retention_deletes_old_runs_and_keeps_private_tabs() {
         replay: None,
         at: at(20),
     });
-    assert!(
-        privacy
-            .make_private(TabId(3), PrivateReason::SecretInput, at(15))
-            .await
-            .is_ok()
-    );
     let eight_days = 8 * 24 * 60 * 60 * 1000;
     let recent = start_in(&h.sink, Some("task-1"), eight_days);
     flushed(&h).await;
@@ -872,287 +861,6 @@ async fn retention_deletes_old_runs_and_keeps_private_tabs() {
         h.store.run(recent).await.ok().flatten().is_some(),
         "a running run is kept"
     );
-    let private = h.store.private_tabs().await.unwrap_or_default();
-    assert!(
-        private.contains_key(&TabId(3)),
-        "privacy outlives the runs on its tab"
-    );
-}
-
-#[tokio::test]
-async fn a_private_tab_is_announced_and_its_flag_survives_a_reopen() {
-    let h = harness(WriterConfig::default()).await;
-    let mut events = h.sink.subscribe();
-    let privacy = Privacy::new(Arc::new(h.sink.clone()), Default::default());
-    let tab = TabId(9);
-    assert!(
-        privacy
-            .make_private(tab, PrivateReason::Takeover, at(5))
-            .await
-            .is_ok()
-    );
-    assert_eq!(
-        events.recv().await.ok(),
-        Some(TraceRecordEvent::TabPrivate {
-            tab,
-            reason: PrivateReason::Takeover,
-            at: at(5),
-        })
-    );
-    let Harness { dir, sink, .. } = h;
-    drop(privacy);
-    drop(sink);
-
-    let reopened = open(&dir).await;
-    let loaded = reopened.private_tabs().await.unwrap_or_default();
-    assert_eq!(
-        loaded.get(&tab).map(|record| record.reason),
-        Some(PrivateReason::Takeover)
-    );
-    let privacy = Privacy::new(Arc::new(writer(&reopened)), loaded);
-    assert!(privacy.capture(tab).is_none());
-    assert!(privacy.capture(TabId(10)).is_some());
-}
-
-#[tokio::test]
-async fn closed_and_vanished_tabs_lose_their_flags_durably() {
-    let h = harness(WriterConfig::default()).await;
-    let privacy = Privacy::new(Arc::new(h.sink.clone()), Default::default());
-    for tab in [TabId(1), TabId(2), TabId(3)] {
-        assert!(
-            privacy
-                .make_private(tab, PrivateReason::Host, at(1))
-                .await
-                .is_ok()
-        );
-    }
-    privacy.tab_closed(TabId(1)).await;
-    // The browser restarted: only tab 3 is open, and tab 2's id may come back as a new tab.
-    privacy.retain_tabs(&[TabId(3)]).await;
-    let Harness { dir, sink, .. } = h;
-    drop(privacy);
-    drop(sink);
-
-    let reopened = open(&dir).await;
-    let mut tabs = reopened
-        .private_tabs()
-        .await
-        .unwrap_or_default()
-        .into_keys()
-        .collect::<Vec<_>>();
-    tabs.sort_unstable();
-    assert_eq!(tabs, vec![TabId(3)]);
-}
-
-/// Which of a tab's two privacy writes a [`Slow`] store is slow around.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum PrivacyWrite {
-    /// The commit of its flag.
-    Commit,
-    /// The delete of its flag.
-    Forget,
-}
-
-/// Long enough for a racing call on another thread to ask for its own write.
-const PAUSE: Duration = Duration::from_millis(100);
-
-/// The writer as a `PrivacyStore` that pauses around its `slow` write, once in the call before
-/// it calls the writer and once before the caller waits on the write. A racing call on the same
-/// tab runs inside the first pause if `Privacy` calls the store after releasing its lock, and
-/// inside the second if the writer queues a write only when it is awaited.
-struct Slow {
-    sink: TraceSink,
-    slow: PrivacyWrite,
-}
-
-impl Slow {
-    fn pause_in_call(&self, write: PrivacyWrite) {
-        if write == self.slow {
-            std::thread::sleep(PAUSE);
-        }
-    }
-
-    async fn pause_before_wait(&self, write: PrivacyWrite) {
-        if write == self.slow {
-            tokio::time::sleep(PAUSE).await;
-        }
-    }
-}
-
-impl PrivacyStore for Slow {
-    fn persist_private(
-        &self,
-        tab: TabId,
-        record: PrivacyRecord,
-    ) -> BoxFuture<'_, Result<(), TraceError>> {
-        self.pause_in_call(PrivacyWrite::Commit);
-        let written = self.sink.persist_private(tab, record);
-        Box::pin(async move {
-            self.pause_before_wait(PrivacyWrite::Commit).await;
-            written.await
-        })
-    }
-
-    fn forget_private(&self, tab: TabId) -> BoxFuture<'_, Result<(), TraceError>> {
-        self.pause_in_call(PrivacyWrite::Forget);
-        let written = self.sink.forget_private(tab);
-        Box::pin(async move {
-            self.pause_before_wait(PrivacyWrite::Forget).await;
-            written.await
-        })
-    }
-}
-
-fn slow_privacy(h: &Harness, slow: PrivacyWrite) -> Arc<Privacy> {
-    let store = Slow {
-        sink: h.sink.clone(),
-        slow,
-    };
-    Privacy::new(Arc::new(store), Default::default())
-}
-
-/// Waits until `Privacy::is_private` reports `private` for `tab`, which a call on another thread
-/// changes.
-async fn until_private(privacy: &Privacy, tab: TabId, private: bool) {
-    let changed = tokio::time::timeout(Duration::from_secs(5), async {
-        while privacy.is_private(tab).is_some() != private {
-            tokio::task::yield_now().await;
-        }
-    })
-    .await;
-    assert!(
-        changed.is_ok(),
-        "the racing call sets tab {}'s flag to private = {private} within seconds",
-        tab.0
-    );
-}
-
-/// Flushes the writer, then reports whether `tab`'s flag is on disk, where a restart would load
-/// it.
-async fn flag_on_disk(h: &Harness, tab: TabId) -> bool {
-    flushed(h).await;
-    h.store
-        .private_tabs()
-        .await
-        .unwrap_or_else(|error| panic!("private tabs: {error}"))
-        .contains_key(&tab)
-}
-
-/// The tab closes on another thread while `make_private` is between setting the flag and
-/// committing it. A delete that reaches the disk before the flag leaves the flag there, and a
-/// restart makes the next tab with this id private.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_tab_that_closes_while_it_goes_private_leaves_no_flag_on_disk()
--> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let h = harness(WriterConfig::default()).await;
-    let privacy = slow_privacy(&h, PrivacyWrite::Commit);
-    let tab = TabId(4);
-    let made = tokio::spawn({
-        let privacy = Arc::clone(&privacy);
-        async move { privacy.make_private(tab, PrivateReason::Host, at(1)).await }
-    });
-    until_private(&privacy, tab, true).await;
-    privacy.tab_closed(tab).await;
-    made.await??;
-    assert!(
-        privacy.is_private(tab).is_none(),
-        "the close forgot the flag"
-    );
-    assert!(
-        !flag_on_disk(&h, tab).await,
-        "the delete reached the disk after the flag it deletes"
-    );
-    Ok(())
-}
-
-/// The reverse race. The tab goes private again on another thread while its close is between
-/// forgetting the flag and deleting it. A delete that reaches the disk after the new flag erases
-/// it, and a restart captures a tab that memory keeps private.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_tab_that_goes_private_while_its_flag_is_forgotten_keeps_it_on_disk()
--> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let h = harness(WriterConfig::default()).await;
-    let privacy = slow_privacy(&h, PrivacyWrite::Forget);
-    let tab = TabId(4);
-    privacy
-        .make_private(tab, PrivateReason::Host, at(1))
-        .await?;
-    let closed = tokio::spawn({
-        let privacy = Arc::clone(&privacy);
-        async move { privacy.tab_closed(tab).await }
-    });
-    until_private(&privacy, tab, false).await;
-    privacy
-        .make_private(tab, PrivateReason::Host, at(2))
-        .await?;
-    closed.await?;
-    assert!(
-        privacy.is_private(tab).is_some(),
-        "the flag set after the close holds"
-    );
-    assert!(
-        flag_on_disk(&h, tab).await,
-        "the new flag reached the disk after the delete it raced"
-    );
-    Ok(())
-}
-
-/// The commit is already queued when the tab closes, so the delete comes after it and wins.
-#[tokio::test]
-async fn a_flag_already_queued_when_its_tab_closes_is_deleted_on_disk()
--> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    use futures_util::FutureExt;
-
-    let h = harness(WriterConfig::default()).await;
-    let privacy = Privacy::new(Arc::new(h.sink.clone()), Default::default());
-    let tab = TabId(4);
-    let made = privacy.make_private(tab, PrivateReason::Host, at(1));
-    tokio::pin!(made);
-    assert!(
-        made.as_mut().now_or_never().is_none(),
-        "the commit is queued and waits on the writer"
-    );
-    privacy.tab_closed(tab).await;
-    made.await?;
-    assert!(privacy.is_private(tab).is_none());
-    assert!(
-        !flag_on_disk(&h, tab).await,
-        "the delete was queued after the commit, so it wins"
-    );
-    Ok(())
-}
-
-/// A commit's answer says only that the flag it wrote is on disk. Here the answer is read after
-/// the tab closed and went private again, while the new flag's own commit is still queued.
-#[tokio::test]
-async fn make_private_answers_only_once_its_own_flag_is_on_disk()
--> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    use futures_util::FutureExt;
-
-    let h = harness(WriterConfig::default()).await;
-    let privacy = Privacy::new(Arc::new(h.sink.clone()), Default::default());
-    let tab = TabId(4);
-    let first = privacy.make_private(tab, PrivateReason::Host, at(1));
-    tokio::pin!(first);
-    assert!(first.as_mut().now_or_never().is_none());
-    // Commits the first flag, whose answer `first` has not read yet.
-    flushed(&h).await;
-    privacy.tab_closed(tab).await;
-    let second = privacy.make_private(tab, PrivateReason::Host, at(2));
-    tokio::pin!(second);
-    assert!(second.as_mut().now_or_never().is_none());
-    first.await?;
-    // Nothing has yielded to the writer since the second commit was queued.
-    let third = privacy
-        .make_private(tab, PrivateReason::Host, at(3))
-        .now_or_never();
-    assert!(
-        third.is_none(),
-        "make_private answers once the flag is on disk, and its commit is still queued"
-    );
-    second.await?;
-    assert!(flag_on_disk(&h, tab).await);
-    Ok(())
 }
 
 #[tokio::test]

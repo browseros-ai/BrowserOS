@@ -15,7 +15,7 @@ use neo_takeover::{
 };
 use neo_trace::{
     Delivery, Effect, EpochMillis, ErrorRecord, OperationId, OperationRow, Page, PageState,
-    RunDetail, RunSummary, ShotState, TaskId, TraceTail,
+    RunDetail, RunDownload, RunSummary, ShotState, TaskId, TraceTail,
 };
 use std::collections::HashMap;
 use std::time::Duration;
@@ -123,6 +123,23 @@ pub(crate) fn run(run: &RunDetail, inlined: &Inlined) -> api::Run {
             .iter()
             .map(|op| operation(op, inlined))
             .collect(),
+        downloads: (!run.downloads.is_empty())
+            .then(|| run.downloads.iter().map(run_download).collect()),
+    }
+}
+
+/// One of a run's downloads.
+fn run_download(download: &RunDownload) -> api::RunDownload {
+    api::RunDownload {
+        index: i32::try_from(download.index).unwrap_or(i32::MAX),
+        url: download.url.clone(),
+        suggested_filename: download.suggested_filename.clone(),
+        path: download.path.clone(),
+        size: download
+            .size
+            .map(|size| i64::try_from(size).unwrap_or(i64::MAX)),
+        state: download.state.as_str().to_owned(),
+        failure: download.failure.clone(),
     }
 }
 

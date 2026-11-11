@@ -3,7 +3,7 @@ use std::{env, io};
 
 use neo_captcha::config::CaptchaConfig;
 
-use super::{EnvConfig, LaunchConfig, SecretFiles};
+use super::{EnvConfig, LaunchConfig};
 
 /// Everything a process starts with, parsed once at the boundary (`main`) and trusted after.
 #[derive(Clone, Debug)]
@@ -15,10 +15,6 @@ pub struct AppConfig {
     /// neighbors). The key files are read here, once, so the solver never touches the
     /// environment or the disk on a run. Its `Debug` redacts the keys.
     pub(crate) captcha: CaptchaConfig,
-    /// Where Neo's own secrets are on disk, which `setInputFiles` never uploads. Located here,
-    /// once: neo-playwright's hooks are fixed when the app builds its `Playwright`, so the
-    /// list must exist before then.
-    pub(crate) secret_files: SecretFiles,
 }
 
 /// A config Neo cannot start with. `main` prints it on one line and exits 1, never 2, which
@@ -55,11 +51,9 @@ impl AppConfig {
     /// Reads Chromium's launch file at `path` and the process environment.
     pub fn load(path: &Path) -> Result<Self, ConfigError> {
         let lookup = |name: &str| env::var(name).ok();
-        let cwd = env::current_dir();
         let launch = LaunchConfig::read(path)?;
         let env = EnvConfig::from_lookup(&lookup, &env::home_dir)?;
         Ok(Self {
-            secret_files: SecretFiles::locate(&env, &launch, &cwd),
             launch,
             env,
             // A key file that cannot be read leaves its provider off, as the crate decides;
@@ -86,7 +80,7 @@ mod tests {
     use neo_captcha::config::CaptchaConfig;
 
     use super::AppConfig;
-    use crate::config::{EnvConfig, HostApiConfig, HostedMode, LaunchConfig, SecretFiles};
+    use crate::config::{EnvConfig, HostApiConfig, HostedMode, LaunchConfig};
     use crate::test_support::CLOSED_XVNC;
 
     fn config(launch_version: Option<&str>, env_version: Option<&str>) -> AppConfig {
@@ -100,8 +94,6 @@ mod tests {
             },
             env: EnvConfig {
                 state_dir: PathBuf::from("/state"),
-                home: None,
-                captcha_key_files: Vec::new(),
                 log_filter: "info".to_owned(),
                 hosted_mode: HostedMode::On,
                 native_version: env_version.map(str::to_owned),
@@ -114,7 +106,6 @@ mod tests {
                 xvnc: CLOSED_XVNC,
             },
             captcha: CaptchaConfig::default(),
-            secret_files: SecretFiles::Named(Vec::new()),
         }
     }
 

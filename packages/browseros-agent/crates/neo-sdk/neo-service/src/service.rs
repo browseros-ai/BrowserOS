@@ -4,9 +4,8 @@
 //! The service also builds the takeover parts once, and the v1 takeover flow over them, so the
 //! app reaches them through it rather than wiring each one: the lock policy and tab cleanup read
 //! [`Service::locks`], the app's door and its `page.bringToFront()` read [`Service::front`],
-//! and the browser link's tab events go to [`Service::tab_opened`],
-//! [`Service::tab_closed`] and [`Service::retain_tabs`], which hand each event to every part
-//! that keeps state about tabs: the takeovers, `Privacy`, the fits and the locks. A reconcile
+//! and the browser link's tab events go to [`Service::tab_closed`] and [`Service::retain_tabs`], which hand each event to every part
+//! that keeps state about tabs: the takeovers, the fits and the locks. A reconcile
 //! takes a [`Service::tab_fence`] before its listing, so `retain_tabs` keeps what a host changed on a
 //! tab that opened after it, through a host route (`tab_stamps`).
 
@@ -17,10 +16,10 @@ use crate::tab_stamps::{TabFence, TabStamps};
 use crate::{router, wire};
 use axum::Router;
 use browseros_core::viewport::Viewports;
-use browseros_core::{BrowserSession, TabId};
+use browseros_core::{BrowserSession, ProtocolSession, TabId};
 use neo_capture::{CaptureHub, CaptureTransport, CdpPortTransport};
 use neo_takeover::{BrowserTabs, Displays, Fits, Front, Locks, Takeovers, Xvnc};
-use neo_trace::{EpochMillis, Privacy, PrivacyError, ShotJobs, TraceSink, TraceStore};
+use neo_trace::{EpochMillis, ShotJobs, TraceSink, TraceStore};
 use std::sync::Arc;
 use tokio_util::sync::{CancellationToken, DropGuard};
 
@@ -30,8 +29,6 @@ pub struct ServiceInputs {
     pub store: TraceStore,
     /// The trace writer. Its committed events feed `/v1/events` and `wait=`.
     pub sink: TraceSink,
-    /// Durable tab-flag state shared with browser lifecycle cleanup.
-    pub privacy: Arc<Privacy>,
     /// The agent's browser connection (the app's browser link). Screenshots are taken on it,
     /// never on a connection of their own (decision 21), and the takeover parts reach the
     /// browser through it.
@@ -60,9 +57,11 @@ pub struct Service {
 pub(crate) struct ServiceState {
     pub(crate) store: TraceStore,
     pub(crate) sink: TraceSink,
-    pub(crate) privacy: Arc<Privacy>,
     pub(crate) events: Arc<EventLog>,
     pub(crate) browser: BrowserTabs,
+    /// Read-only native inventory over the app's existing connection. Unlike the page cache,
+    /// this includes internal/extension tabs too, so the host sees every open native tab.
+    pub(crate) tab_inventory: ProtocolSession,
     pub(crate) locks: Arc<Locks>,
     pub(crate) fits: Arc<Fits>,
     /// Neo's screen over RFB for `GET /v1/display`, in view or control mode.
@@ -109,7 +108,6 @@ impl Service {
         let ServiceInputs {
             store,
             sink,
-            privacy,
             browser,
             viewports,
             screenshots,
@@ -124,6 +122,7 @@ impl Service {
             viewports: Arc::clone(&viewports),
         }
         .spawn(screenshots);
+        let tab_inventory = ProtocolSession::root(browser.connection());
         let browser = BrowserTabs::new(browser, viewports);
         let fits = Fits::new(browser.clone(), xvnc);
         let stamps = Arc::new(TabStamps::default());
@@ -155,9 +154,9 @@ impl Service {
             state: Arc::new(ServiceState {
                 store,
                 sink,
-                privacy,
                 events,
                 browser,
+                tab_inventory,
                 locks,
                 fits,
                 displays,
@@ -192,30 +191,17 @@ impl Service {
         &self.state.front
     }
 
-    /// The browser link saw a tab open. Updates the service's compatibility tab state.
-    ///
-    /// It takes no stamp. So call it in order with each reconcile, never between a
-    /// [`Service::tab_fence`] and its [`Service::retain_tabs`], or that reconcile could end a
-    /// flag set there on a tab its listing lacks. The app's tab feed runs both in one loop.
-    ///
-    /// # Errors
-    /// When the tab's private flag could not be committed. It still holds in memory.
-    pub async fn tab_opened(&self, tab: TabId, at: EpochMillis) -> Result<(), PrivacyError> {
-        self.state.privacy.tab_opened(tab, at).await
-    }
-
     /// The browser link saw a tab close. Its stamp is forgotten first, so the close waits out a
     /// reconcile's parts before it touches the tab's state, as a route does (`tab_stamps`). Then
     /// its takeover is released, while its lock still holds, so the release lifts the lock itself
     /// and gives back what it took; then its fit is restored (so the screen does not stay at the
-    /// owner's size), its locks end, its private flag is forgotten, and `tab.closed` is
+    /// owner's size), its locks end, and `tab.closed` is
     /// published, so a host that reads it finds the tab's state already gone.
     pub async fn tab_closed(&self, tab: TabId) {
         self.state.stamps.forget(tab).await;
         self.state.takeovers.tab_closed(tab).await;
         self.state.fits.tab_closed(tab).await;
         self.state.locks.tab_closed(tab);
-        self.state.privacy.tab_closed(tab).await;
         self.state.events.publish(LogEvent::new(
             EventKind::TabClosed,
             None,
@@ -241,6 +227,5 @@ impl Service {
         self.state.takeovers.retain_tabs(&kept.tabs).await;
         self.state.fits.retain_tabs(&kept.tabs).await;
         self.state.locks.retain_tabs(&kept.tabs);
-        self.state.privacy.retain_tabs(&kept.tabs).await;
     }
 }

@@ -114,7 +114,6 @@ mod tests {
             None,
             "an unsupported method is no op"
         );
-        assert_eq!(names.len(), 81, "the v1 op list has 81 ops");
     }
 
     #[test]
@@ -166,7 +165,9 @@ mod tests {
     )]
     fn tests_that_every_op_declares_exactly_its_audited_capabilities() {
         use Capability::{Capture, HostFiles, MainWorld};
-        const AUDITED: [(&str, &[Capability], bool); 81] = [
+        // The explicit rows are the capability contract. Exhaustive comparisons below catch
+        // additions and removals without a second, independently maintained operation count.
+        const AUDITED: &[(&str, &[Capability], bool)] = &[
             ("locator.click", &[], true),
             ("locator.dblclick", &[], true),
             ("locator.hover", &[], true),
@@ -201,6 +202,7 @@ mod tests {
             ("locator.waitFor", &[], true),
             ("locator.elementHandle", &[], true),
             ("locator.elementHandles", &[], true),
+            ("locator.normalize", &[], true),
             ("page.ariaSnapshot", &[], true),
             ("locator.ariaSnapshot", &[], true),
             ("expect.locator", &[], true),
@@ -235,6 +237,7 @@ mod tests {
             ("locator.waitForFunction", &[MainWorld], true),
             ("page.screenshot", &[Capture], true),
             ("page.pdf", &[Capture], true),
+            ("page.setViewportSize", &[], true),
             ("page.addInitScript", &[MainWorld, HostFiles], true),
             ("context.pages", &[], true),
             ("context.newPage", &[], true),
@@ -249,8 +252,14 @@ mod tests {
             ("download.path", &[], true),
             ("download.saveAs", &[], true),
         ];
-        let mut audited = BTreeMap::from(
-            AUDITED.map(|(name, capabilities, gated)| (name, (capabilities, gated))),
+        let mut audited: BTreeMap<_, _> = AUDITED
+            .iter()
+            .map(|&(name, capabilities, gated)| (name, (capabilities, gated)))
+            .collect();
+        assert_eq!(
+            audited.len(),
+            AUDITED.len(),
+            "each operation has one unambiguous audit row"
         );
         let mut differ = Vec::new();
         for spec in Op::all().map(Op::spec) {

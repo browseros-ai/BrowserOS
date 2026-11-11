@@ -108,6 +108,9 @@ export class Page extends EventEmitter {
   #urlKnown: boolean
   _title = ''
   _closed = false
+  #viewportSize: { width: number; height: number } | null = null
+  /** Upstream's client cache belongs to this Page once a call sets it, even if it rejects. */
+  #viewportSet = false
   /** The newest host read applied to this tab. */
   #observedSeq = 0
   /** Close events recorded through the last live observation belong to its earlier life. */
@@ -193,9 +196,31 @@ export class Page extends EventEmitter {
     return null
   }
 
-  /** The hosted viewport is fixed by Neo, not set through Playwright. */
-  viewportSize(): null {
-    return null
+  viewportSize(): { width: number; height: number } | null {
+    return this.#viewportSize || null
+  }
+
+  async setViewportSize(viewportSize: {
+    width: number
+    height: number
+  }): Promise<void> {
+    // Playwright caches the caller's object before sending, without cloning it. Host facts
+    // initialize a fresh realm; they must not overwrite a local call's synchronous cache.
+    this.#viewportSize = viewportSize
+    this.#viewportSet = true
+    for (const side of ['width', 'height'] as const) {
+      if (!Number.isInteger(viewportSize?.[side]))
+        throw clientError(
+          'page.setViewportSize',
+          `viewportSize.${side}: expected integer`,
+        )
+    }
+    const size = { width: viewportSize.width, height: viewportSize.height }
+    await invoke(
+      'page.setViewportSize',
+      { api: 'page.setViewportSize', timeoutMs: 0 },
+      { page: await this._brand('page.setViewportSize'), viewportSize: size },
+    )
   }
 
   workers(): never[] {
@@ -943,6 +968,18 @@ export class Page extends EventEmitter {
     }
   }
 
+  /** Host refreshes preserve the cached object when dimensions agree, as upstream does. */
+  #applyViewport(size: PageFact['viewportSize']): void {
+    if (this.#viewportSet || size === undefined) return
+    if (
+      this.#viewportSize === null ||
+      size === null ||
+      this.#viewportSize.width !== size.width ||
+      this.#viewportSize.height !== size.height
+    )
+      this.#viewportSize = size
+  }
+
   _applyFact(
     fact: PageFact,
     at: Observation | null,
@@ -950,6 +987,7 @@ export class Page extends EventEmitter {
   ): void {
     if (fact.tab !== undefined) this._tab = fact.tab
     if (at === null) {
+      this.#applyViewport(fact.viewportSize)
       if (fact.url !== undefined && !this.#urlKnown) {
         this._url = fact.url
         this.#urlKnown = true
@@ -958,6 +996,7 @@ export class Page extends EventEmitter {
     }
     if (at.seq < this.#observedSeq) return
     this.#observedSeq = at.seq
+    this.#applyViewport(fact.viewportSize)
     if (fact.url !== undefined) {
       this._url = fact.url
       this.#urlKnown = true

@@ -10,7 +10,7 @@ use tokio::time;
 
 use crate::test_env::{EnvCall, TestEnv};
 use crate::test_support::{self, RecordingHooks};
-use crate::{Op, Playwright, Refusal};
+use crate::{Op, OpEnv, Playwright, Refusal};
 
 type TestResult = Result<(), Box<dyn Error>>;
 
@@ -57,7 +57,7 @@ fn page_input(source: &str) -> Value {
 
 /// A context script reaches a tab at the run's first write to it, once however many writes
 /// follow, and never at a read. Disposing a page script removes it at once; the run's end
-/// removes everything else.
+/// removes everything else, and dropping the run state removes anything registered after that.
 #[tokio::test]
 async fn tests_that_a_context_script_reaches_a_written_tab_once_and_leaves_with_the_run()
 -> TestResult {
@@ -123,14 +123,29 @@ async fn tests_that_a_context_script_reaches_a_written_tab_once_and_leaves_with_
         "dispose removes its own script, before it returns"
     );
 
+    env.run_state().remove_init_scripts().await;
+    assert_eq!(
+        sent(&connection, REMOVE)?.len(),
+        3,
+        "the run's end removes the two scripts left, before it returns"
+    );
+
+    // A script a straggling op registers after that is removed when the run state drops.
+    invoke(
+        &playwright,
+        &env,
+        "page.addInitScript",
+        page_input("window.r = 1"),
+    )
+    .await?;
     drop(env);
     time::timeout(Duration::from_secs(5), async {
-        while sent(&connection, REMOVE).map_or(0, |removed| removed.len()) < 3 {
+        while sent(&connection, REMOVE).map_or(0, |removed| removed.len()) < 4 {
             time::sleep(Duration::from_millis(10)).await;
         }
     })
     .await
-    .map_err(|_elapsed| "the run's end removes the two scripts left")?;
+    .map_err(|_elapsed| "dropping the run state removes what is left")?;
     Ok(())
 }
 

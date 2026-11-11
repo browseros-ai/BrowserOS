@@ -4,7 +4,7 @@
 //! ```text
 //!  startup ─ HostApi::bind: token file ─▶ host socket bound (or none) ─┐
 //!  the link's first connect ─▶ HostApi::serve ─▶ Service::start
-//!        (store, sink, compatibility privacy input, session, viewports, screenshot jobs,
+//!        (store, sink, session, viewports, screenshot jobs,
 //!        xvnc, cdp port)
 //!        ─▶ TakeoverLock armed with Service::locks
 //!        ─▶ Service::retain_tabs(a listing taken then, Service::tab_fence from before it)

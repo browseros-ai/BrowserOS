@@ -16,6 +16,7 @@ import type {
   ProbeTarget,
   ReplyTo,
   ResolveRequest,
+  SelectorRequest,
   Strictness,
   StrictViolation,
 } from './protocol'
@@ -161,6 +162,25 @@ export function resolve(
     key: world.refs.frameKey(element),
     visible: world.injected.utils.isElementVisible(element),
     src,
+  }
+}
+
+/**
+ * `locator.normalize`'s part in one frame: upstream's `generateSelectorSimple` for the first
+ * element `target` matches now (server/frames.ts `resolveSelector`, which queries without
+ * waiting and without strict mode).
+ */
+export function generatedSelector(
+  world: World,
+  request: SelectorRequest,
+  root: Node | undefined,
+): ReplyTo<'selector'> {
+  const found = resolveTarget(world, request.target, 'firstMatch', root)
+  if (found.kind !== 'one')
+    return found.kind === 'strict' ? { kind: 'none' } : found
+  return {
+    kind: 'selector',
+    selector: world.injected.generateSelectorSimple(found.element),
   }
 }
 

@@ -5,7 +5,6 @@ use std::collections::HashSet;
 use std::error::Error;
 use std::fs;
 use std::future::Future;
-use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
@@ -13,9 +12,7 @@ use browseros_core::{NativeCapabilities, TabId, TargetId};
 use futures_util::future::{self, Either};
 use neo_captcha::CaptchaSolver;
 use neo_captcha::config::{CAPSOLVER_KEY_FILE_ENV, CAPSOLVER_URL_ENV, CaptchaConfig};
-use neo_playwright::{
-    ErrorCode as PlaywrightCode, Op, OpEnv, PlaywrightError, PlaywrightHooks, Refusal, RunState,
-};
+use neo_playwright::{ErrorCode as PlaywrightCode, Op, OpEnv, PlaywrightError, Refusal, RunState};
 use neo_takeover::{Lock, LockBinding, LockTtl, Locks, Reads};
 use neo_trace::{
     Delivery, Effect, EpochMillis, ErrorOwner, OperationId, OperationRow, Outcome, RedactionLimits,
@@ -31,9 +28,9 @@ use tokio::time::{self, Instant};
 use super::event_release::EventRelease;
 use super::op_marks::Hold;
 use super::playwright_ops::{self, OpCtxEnv, leaf_error};
-use super::{BuiltinDeps, CaptchaClaims, PlaywrightFacade, PrivacyHooks, TabJanitor};
+use super::{BuiltinDeps, CaptchaClaims, PlaywrightFacade, TabJanitor};
 use crate::browser::{BrowserLink, PageRef, TabRegistry};
-use crate::config::{Defaults, SecretFiles};
+use crate::config::Defaults;
 use crate::dispatch::{
     Call, Dispatcher, ErrorCode, EventLog, LeafError, Lifetime, Listing, Method, MethodSpec,
     Observer, OpCtx, OpFailure, OpReply, OperationError, PageChange, PageScript, PageTarget,
@@ -41,7 +38,7 @@ use crate::dispatch::{
     StopReason, Visibility,
 };
 use crate::host::TakeoverLock;
-use crate::test_support::{FakeCdp, test_config};
+use crate::test_support::FakeCdp;
 
 /// The built-ins' door on the fake browser, with the app's own rules in the app's order
 /// (`door_rules`): the takeover lock over neo-takeover's real `Locks`, then the CAPTCHA claims.
@@ -58,8 +55,6 @@ struct Harness {
     takeover: Arc<TakeoverLock>,
     /// The facade every Playwright op of `dispatcher` runs on, as app.rs builds it.
     playwright: Arc<PlaywrightFacade>,
-    /// The facade's hooks, used to check the upload deny list.
-    hooks: Arc<PrivacyHooks>,
     dispatcher: Arc<Dispatcher>,
     /// Keeps the store's directory for the test's life.
     _dir: TempDir,
@@ -71,20 +66,8 @@ impl Harness {
         Self::with_solver(None).await
     }
 
-    /// A Neo that names no secret files, since no test that uploads uses it.
+    /// A Neo with the chosen CAPTCHA solver.
     async fn with_solver(solver: Option<Arc<CaptchaSolver>>) -> Result<Self, Box<dyn Error>> {
-        Self::build(solver, SecretFiles::Named(Vec::new())).await
-    }
-
-    /// A Neo whose config located `secret_files`, which its hooks name to the crate's deny list.
-    async fn naming(secret_files: SecretFiles) -> Result<Self, Box<dyn Error>> {
-        Self::build(None, secret_files).await
-    }
-
-    async fn build(
-        solver: Option<Arc<CaptchaSolver>>,
-        secret_files: SecretFiles,
-    ) -> Result<Self, Box<dyn Error>> {
         let fake = FakeCdp::new();
         let tabs = Arc::new(TabRegistry::new());
         let connect = Arc::clone(&fake);
@@ -112,8 +95,7 @@ impl Harness {
         let takeover = Arc::new(TakeoverLock::default());
         takeover.arm(Arc::clone(&locks));
         let claims = Arc::new(CaptchaClaims::default());
-        let hooks = Arc::new(PrivacyHooks::new(secret_files));
-        let playwright = PlaywrightFacade::start(Arc::clone(&link), Arc::clone(&hooks) as _);
+        let playwright = PlaywrightFacade::start(Arc::clone(&link));
         let mut registry = RegistryBuilder::default();
         let deps = BuiltinDeps {
             solver,
@@ -138,7 +120,6 @@ impl Harness {
             locks,
             takeover,
             playwright,
-            hooks,
             dispatcher,
             _dir: dir,
         })
@@ -284,15 +265,6 @@ fn placeholder_solver() -> Result<Arc<CaptchaSolver>, Box<dyn Error>> {
     Ok(Arc::new(
         CaptchaSolver::new(config).ok_or("a readable key file makes a solver")?,
     ))
-}
-
-/// Neo's secret files when its host token, its state and its browser profile all sit under
-/// `root`, located as `AppConfig::load` locates them: the token `root/host-token`, the trace
-/// store's directory `root/claw-sdk` and the profile `root/profile`.
-fn secret_files_under(root: &Path) -> SecretFiles {
-    let mut config = test_config(root);
-    config.env.host_api.token_file = Some(root.join("host-token"));
-    SecretFiles::locate(&config.env, &config.launch, &Ok(PathBuf::from("/")))
 }
 
 /// `neo.solveCaptcha` on `page`, as a script calls it.
@@ -529,6 +501,91 @@ async fn a_closed_page_names_who_closed_it() -> Result<(), Box<dyn Error>> {
         "someone else closed it: {}",
         theirs.error
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_takeover_while_a_viewport_change_waits_prevents_its_first_send()
+-> Result<(), Box<dyn Error>> {
+    let harness = Harness::new().await?;
+    let (run, _guard) = harness.run()?;
+    let page = page_of(&value(
+        harness.submit(&run, "context.newPage", json!({})).await,
+    )?)?;
+    let info = run
+        .view()
+        .list_pages()
+        .await?
+        .pages
+        .into_iter()
+        .find(|info| info.tab_id == page.tab)
+        .ok_or("the opened tab is listed")?;
+    let held = run.view().hold_viewport(info.page_id).await;
+    let input = json!({ "page": handle(&page), "viewportSize": { "width": 640, "height": 480 } });
+    let pending = harness.submit(&run, "page.setViewportSize", input);
+    tokio::pin!(pending);
+    tokio::select! {
+        _ = &mut pending => return Err("the viewport change must queue behind the held capture".into()),
+        () = time::sleep(Duration::from_millis(25)) => {}
+    }
+    let lock = harness.lock(page.tab, Reads::Allow).await?;
+    let before = harness.fake.calls().len();
+    drop(held);
+    let refused = failure(pending.await)?;
+    assert_eq!(
+        refused.delivery,
+        Delivery::NotSent,
+        "the final recheck sees the takeover acquired during preparation"
+    );
+    assert!(
+        harness
+            .fake
+            .calls()
+            .iter()
+            .skip(before)
+            .all(|call| call.method != "Emulation.setDeviceMetricsOverride"),
+        "no queued resize may overwrite an owner fit"
+    );
+    harness.locks.unlock_host(lock.id)?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_viewport_write_is_refused_before_cdp_while_the_owner_locks_the_tab()
+-> Result<(), Box<dyn Error>> {
+    let harness = Harness::new().await?;
+    let (run, _guard) = harness.run()?;
+    let page = page_of(&value(
+        harness.submit(&run, "context.newPage", json!({})).await,
+    )?)?;
+    let lock = harness.lock(page.tab, Reads::Allow).await?;
+    let before = harness.fake.calls().len();
+    let refused = failure(
+        harness
+            .submit(
+                &run,
+                "page.setViewportSize",
+                json!({
+                    "page": handle(&page), "viewportSize": { "width": 640, "height": 480 }
+                }),
+            )
+            .await,
+    )?;
+    assert_eq!(
+        refused.delivery,
+        Delivery::NotSent,
+        "a viewport change is an agent action on the locked tab"
+    );
+    assert!(
+        harness
+            .fake
+            .calls()
+            .iter()
+            .skip(before)
+            .all(|call| call.method != "Emulation.setDeviceMetricsOverride"),
+        "the owner's fit must keep its metrics override"
+    );
+    harness.locks.unlock_host(lock.id)?;
     Ok(())
 }
 
@@ -1266,35 +1323,6 @@ async fn the_janitor_closes_idle_agent_tabs_through_the_door() -> Result<(), Box
     assert!(
         !harness.is_open(held.tab).await?,
         "once the owner lets go, the next sweep closes it"
-    );
-    Ok(())
-}
-
-/// The crate asks the hooks for its deny list on every upload: they answer with Neo's own secret
-/// files as config located them, each by its absolute path, or with nothing while one has no
-/// known place, and then the crate uploads no file from Neo's disk.
-#[tokio::test]
-async fn the_hooks_name_neos_secret_files_to_the_crate() -> Result<(), Box<dyn Error>> {
-    let root = tempfile::tempdir()?;
-    let harness = Harness::naming(secret_files_under(root.path())).await?;
-    assert_eq!(
-        harness.hooks.secret_paths(),
-        Some(vec![
-            root.path().join("host-token"),
-            root.path().join("claw-sdk"),
-            root.path().join("profile"),
-        ]),
-        "the host token, the trace store's directory and the browser profile"
-    );
-
-    let mut config = test_config(root.path());
-    config.launch.execution_dir = None;
-    let unplaced = SecretFiles::locate(&config.env, &config.launch, &Ok(PathBuf::from("/")));
-    let harness = Harness::naming(unplaced).await?;
-    assert_eq!(
-        harness.hooks.secret_paths(),
-        None,
-        "with the profile's place unknown, the crate refuses every upload from a path"
     );
     Ok(())
 }
@@ -2594,6 +2622,14 @@ async fn a_crate_failure_keeps_its_owner_and_timeout_and_its_answer_decides_deli
             true,
             ErrorOwner::Website,
             ErrorCode::WAIT_TIMEOUT,
+            true,
+            Delivery::Unknown,
+        ),
+        (
+            "navigation_observation_timeout",
+            true,
+            ErrorOwner::Neo,
+            ErrorCode::NAVIGATION_OBSERVATION_TIMEOUT,
             true,
             Delivery::Unknown,
         ),
