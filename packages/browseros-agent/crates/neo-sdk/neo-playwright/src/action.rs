@@ -10,6 +10,7 @@
 //!  ops                                what to do     runner           sent by
 //!  click dblclick hover check uncheck PointerAction  PointerRunner    PageInput (mouse)
 //!  dragTo                             DragPhases     PointerRunner    PageInput (mouse)
+//!  drop                               DropData       PointerRunner    page edit (DataTransfer)
 //!  press pressSequentially            Keys           KeyRunner        PageInput (keys)
 //!  fill selectOption selectText       FormEdit       FormRunner       page edit (+ PageInput)
 //!  focus blur dispatchEvent           Edit           ElementRunner    page edit
@@ -59,6 +60,7 @@ mod frame_projection;
 pub(crate) mod input_files;
 mod key_action;
 mod pointer_action;
+mod pointer_quads;
 mod requested_navigations;
 mod subject;
 

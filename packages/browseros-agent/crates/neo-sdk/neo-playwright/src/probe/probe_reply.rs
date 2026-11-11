@@ -22,7 +22,7 @@ use crate::world::{FrameSeq, Pin};
 /// contract: a world keeps the probe an earlier build installed, and the install replaces that
 /// probe only when its number differs (`engine_source`), so a shape changed under the same
 /// number reaches this build in the old shape. The lock's test catches a change without a bump.
-pub(crate) const PROBE_PROTOCOL: u32 = 18;
+pub(crate) const PROBE_PROTOCOL: u32 = 20;
 
 /// One reply; `kind` is the tag. Any request may also answer `error`, and `uninstalled` when
 /// the world has no booted probe.
@@ -84,6 +84,9 @@ pub(crate) enum ProbeReply {
         point: Point,
         in_view: bool,
         transformed: bool,
+        /// The original element's border width plus explicit position, not a retarget's rect.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        border_offset: Option<Point>,
     },
     /// Upstream's description of what intercepts pointer events: the page's own markup.
     Covered {

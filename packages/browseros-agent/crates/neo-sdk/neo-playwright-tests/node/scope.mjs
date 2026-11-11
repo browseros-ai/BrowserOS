@@ -4,8 +4,8 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { flattenResults, isGeneratedSkip, outcome } from './report/classify.mjs'
 
-export const scopePath = new URL('./scope.json', import.meta.url)
-export const scopeReasons = ['network', 'handles', 'drift', 'decided-deviation']
+const scopePath = new URL('./scope.json', import.meta.url)
+const scopeReasons = ['network', 'handles', 'drift', 'decided-deviation']
 const digest = (bytes) => createHash('sha256').update(bytes).digest('hex')
 
 /** A selector is a corpus-relative spec file, optionally narrowed to stable corpus test IDs. */

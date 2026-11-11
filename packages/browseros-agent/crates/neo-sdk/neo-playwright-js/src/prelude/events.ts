@@ -4,7 +4,8 @@
  *   page.on('dialog', fn)   first listener ──▶ events.listen { page, event, on: true, since }
  *   page.off(...)           last listener  ──▶ events.listen { page, event, on: false, since }
  *   pump (one per run)      events.next {}, a background long poll ──▶ { events, lost }
- *                           ──▶ emit each on its page or the context
+ *                           ──▶ emit each on its page or the context, or answer a binding call
+ *                           (bindings.ts), the pump running while a binding is exposed too
  *   page.waitForEvent(e)    since = Date.now() at the call ──▶ events.wait { page, event, since }
  *                           predicate said no ──▶ events.wait again with after = that seq,
  *                           with what is left of one deadline (since + timeout)
@@ -18,7 +19,8 @@
  * attached after the pump read past an event still gets it if it is newer than its own stamp.
  * A reply lost when the host cancels the pump at the run's end loses its events with the run.
  */
-import { invoke, invokeObserved } from './bridge'
+import { answerBindingCall } from './bindings'
+import { invoke, invokeObserved, pumpDispatched } from './bridge'
 import { trackChooserSetup } from './chooser-setup'
 import type { EventEmitter } from './emitter'
 import { abortedError, prefixed, unsupportedError } from './errors'
@@ -201,6 +203,24 @@ export class EventHub {
   }
 
   /**
+   * A page or the context exposed a binding: its calls reach the realm through the pump, which
+   * runs while one is exposed as it does while a listener exists. Rust listens for the tab's
+   * calls itself, from the moment it installs the binding.
+   */
+  bindingAdded(): void {
+    this.listening++
+    if (!this.pumping) {
+      this.pumping = true
+      void this.pump()
+    }
+  }
+
+  /** A binding was disposed; the pump stops once nothing needs it. */
+  bindingRemoved(): void {
+    this.listening--
+  }
+
+  /**
    * `waitForEvent`: the first `event` recorded at or after `since` that the predicate accepts.
    * Every re-wait sends the same `since`, and the time left of one deadline (see
    * `EventDeadline`), so a rejected event never restarts the clock.
@@ -376,27 +396,22 @@ export class EventHub {
   private async pump(): Promise<void> {
     try {
       while (this.listening > 0) {
-        const {
-          value: { events },
-          observed,
-        } = await invokeObserved(
-          'events.next',
-          { api: 'events.next', timeoutMs: 0 },
-          {},
-          ({ events }) => this.stageBatch(events),
-        )
-        // The listener stages host-approved closes. Delivering records in log order makes
-        // earlier callbacks observe the page before its close, even within the same reply.
+        // Delivered as the reply is decoded. Rust holds an op that ends until its events are in
+        // a counted pump reply (`events_before_reply`), and the bridge holds that op's result
+        // until this many replies were dispatched (the pump ledger), so the listeners run before
+        // the script resumes past the op, as upstream's do.
         try {
-          for (const event of events) this.deliver(event, observed)
-        } finally {
-          try {
-            this.settleCloses(observed)
-          } finally {
-            const batch = this.batch
-            this.batch = null
-            batch?.finish()
-          }
+          await invokeObserved(
+            'events.next',
+            { api: 'events.next', timeoutMs: 0 },
+            {},
+            ({ events }, observed) => this.deliverBatch(events, observed),
+          )
+        } catch (error) {
+          // An error reply is dispatched too: ops held on a reply Rust counted before it failed
+          // go on at once instead of waiting out their bound.
+          pumpDispatched()
+          throw error
         }
       }
     } catch {
@@ -404,6 +419,30 @@ export class EventHub {
       // restarts with the next first listener.
     } finally {
       this.pumping = false
+    }
+  }
+
+  /**
+   * One pump reply's records, in log order, so earlier callbacks observe the page before its
+   * close, even within the same reply. Its host-approved closes are staged first, before waits
+   * can consume them, and settled after.
+   */
+  private deliverBatch(
+    events: EventRecord[],
+    observed: Observation | null,
+  ): void {
+    this.stageBatch(events)
+    try {
+      for (const event of events) this.deliver(event, observed)
+    } finally {
+      try {
+        this.settleCloses(observed)
+      } finally {
+        const batch = this.batch
+        this.batch = null
+        batch?.finish()
+        pumpDispatched()
+      }
     }
   }
 
@@ -437,6 +476,12 @@ export class EventHub {
   }
 
   private deliver(record: EventRecord, observed: Observation | null): void {
+    if (record.event === 'binding') {
+      // Answered on its own, as upstream answers each call: a slow callback holds up neither
+      // the pump nor the page's other calls. Not a context event, whatever it carries.
+      void answerBindingCall(this.page(record.page), record).catch(() => {})
+      return
+    }
     const context =
       record.event === 'page' ||
       record.event === 'pageload' ||
@@ -586,6 +631,9 @@ export class EventHub {
         return this.download(this.page(record.page), record.download)
       case 'filechooser':
         return this.chooser(record.seq, this.page(record.page), record.chooser)
+      case 'binding':
+        // Only the pump receives binding calls; no `waitForEvent` names them.
+        return undefined
     }
   }
 

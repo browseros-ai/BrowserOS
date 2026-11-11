@@ -25,7 +25,8 @@
 
 use std::time::Duration;
 
-use browseros_core::FrameId;
+use browseros_cdp::CdpError;
+use browseros_core::{CoreError, FrameId};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -93,10 +94,12 @@ pub(crate) async fn wait_for_url(
     // The frame is found under the timeout too, as upstream's covers the whole call: a parent
     // whose renderer never answers holds the op no longer than that.
     let wait = async {
-        let Followed::Watching(mut followed) =
-            Followed::find(pw, &page, scope, frame_id.as_ref()).await?
-        else {
-            return Err(scope.fail(ErrorCode::TargetClosed, "Frame was detached"));
+        let mut followed = match Followed::find(pw, &page, scope, frame_id.as_ref()).await? {
+            Followed::Watching(followed) => followed,
+            Followed::Moving => follow(pw, &page, scope, frame_id.as_ref()).await?,
+            Followed::Detached => {
+                return Err(scope.fail(ErrorCode::TargetClosed, "Frame was detached"));
+            }
         };
         let probed = |failure| failed(scope, failure);
         let watched = |error| navigation::watch_error(scope, &error);
@@ -192,7 +195,8 @@ impl Followed {
             .session_id()
             .cloned()
             .ok_or_else(|| scope.fail(ErrorCode::Internal, "the frame has no session"))?;
-        let (session_id, session) = if frame_id == main.frame {
+        let is_main = frame_id == main.frame;
+        let (session_id, session) = if is_main {
             (root_id, main.session)
         } else {
             match navigation::frame_host(pw, scope, page.tab(), (root_id, main.session), &frame_id)
@@ -214,7 +218,15 @@ impl Followed {
         };
         match started.await {
             Ok(()) => Ok(Self::Watching(Box::new(Watching { frame, watch }))),
-            Err(WatchError::FrameDetached) => Ok(Self::Moving),
+            // Discovery can still name the old OOPIF session during a renderer handoff.
+            // Its retirement says nothing about the logical frame's lifetime: rediscover
+            // it under the same navigation deadline before deciding the frame detached.
+            Err(
+                WatchError::FrameDetached | WatchError::Core(CoreError::Cdp(CdpError::SessionGone)),
+            ) if !is_main => {
+                scope.run_state().frames.forget(page.tab());
+                Ok(Self::Moving)
+            }
             Err(error) => Err(navigation::watch_error(scope, &error)),
         }
     }

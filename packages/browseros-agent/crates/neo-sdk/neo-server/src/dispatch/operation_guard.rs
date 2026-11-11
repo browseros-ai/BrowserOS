@@ -294,6 +294,7 @@ fn settle(
     }
     let id = state.id();
     let sent_at = state.sent_at();
+    let pumped = state.after_pump();
     let settlement = Settlement::decide(sent_at.is_some(), &spec, ending);
     for note in state.take_notes() {
         tracing::debug!(operation = %id, method = spec.name, %note, "op note");
@@ -342,6 +343,7 @@ fn settle(
         pages,
         observed,
         default_page,
+        pumped,
     });
 }
 

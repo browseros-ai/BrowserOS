@@ -1,44 +1,59 @@
-//! Init scripts: `page.addInitScript`, `context.addInitScript` and the disposable each returns.
-//! A script runs in the page's main world in every new document of its tab, before the page's
-//! own scripts, through CDP's `Page.addScriptToEvaluateOnNewDocument`, as upstream's `crPage`
-//! registers one. It is the second gateway of `Capability::MainWorld` (after the evaluate guard),
-//! and, for the `{ path }` form, of `Capability::HostFiles`.
+//! Init scripts and bindings: `page.addInitScript`, `context.addInitScript`, `exposeBinding` and
+//! `exposeFunction` on a page and on the context, and the disposable each returns. An init script
+//! runs in the page's main world in every new document of its tab, before the page's own scripts,
+//! through CDP's `Page.addScriptToEvaluateOnNewDocument`, as upstream's `crPage` registers one. A
+//! binding is upstream's too: the CDP binding `__playwright__binding__`, the vendored
+//! `BindingsController` (`assets/bindings-controller.js`) and one stub per binding, each an init
+//! script that also runs at once in the documents already loaded. This is a gateway of
+//! `Capability::MainWorld` (beside the evaluate guard), and, for the `{ path }` form, of
+//! `Capability::HostFiles`.
 //!
 //! ```text
 //!  page.addInitScript     require(MainWorld, HostFiles) ─ read a path ─ admit the page
 //!                         ─ send_effect (the door's rules on the tab) ─ add on its session
-//!  context.addInitScript  require(...) ─ read a path ─ send_effect ─ kept in the run's registry
+//!  page.exposeBinding     require(MainWorld) ─ admit ─ send_effect ─ plumb the tab session once:
+//!                         listen for its binding calls, Runtime.addBinding, the controller
+//!                         ─ add the stub, run at once in the loaded documents
+//!  context.addInitScript, context.exposeBinding   send_effect ─ kept in the run's registry
 //!     └▶ every write op later admitted on a tab without it: recheck that op's tab, then add it
 //!        there (OpScope::admit), before the op's own effect, so the op's navigation runs it
-//!  disposable.dispose     every registration of that id removed, and awaited
+//!  a page calls a binding ─ Runtime.bindingCalled ─ the watcher records it for the run
+//!     ─ the prelude's pump runs the agent's function ─ bindingCall.resolve answers it in the
+//!       calling context (evaluate_guard::resolve_binding)
+//!  disposable.dispose     every registration of that id removed, and awaited; a binding's stub
+//!                         also leaves the loaded documents
 //!  the run ends           the host awaits RunState::remove_init_scripts before it answers;
 //!                         dropping the state then removes whatever that missed (guards)
 //! ```
 //!
 //! **Lifetime: the run.** A Neo run is a whole Playwright script, and the tab outlives it, so
-//! a script registered by one run must not run in documents another run's script loads later.
-//! Every registration lives in the run's [`RunState`](crate::RunState) and is removed when the
-//! run ends, however it ends (returned, failed, cancelled, timed out): a registration's guard
-//! removes it on drop. Within the run it stays registered across navigations, so a later `goto`
-//! in the same run gets it, as a model writing a Playwright script expects.
+//! a script registered by one run must not run in documents another run's script loads later,
+//! and a binding whose run (the realm that answers it) ended must not stay callable. Every
+//! registration lives in the run's [`RunState`](crate::RunState) and is removed when the run ends,
+//! however it ends (returned, failed, cancelled, timed out): the host awaits the removals before
+//! it answers, and a registration's guard removes it on drop in any case. Within the run it stays
+//! registered across navigations, so a later `goto` in the same run gets it, as a model writing a
+//! Playwright script expects. The CDP binding itself stays on the session: it only posts calls,
+//! which the watcher records only while a run exposes a binding there, and another run on the tab
+//! may be using it.
 //!
-//! **The context's tabs.** Neo's context is the owner's whole profile, so a context script does
-//! not go to every tab at once: it goes to each tab the run writes to, at that write op's
-//! admission, through that op's own recheck of its tab. Every navigation a run drives is a write
-//! (`goto`, `reload`, a click, a script), so each gets the script; a popup's first document,
-//! which loads before the run acts on the popup, does not, where Playwright's would.
+//! **The context's tabs.** Neo's context is the owner's whole profile, so a context script or
+//! binding does not go to every tab at once: it goes to each tab the run writes to, at that write
+//! op's admission, through that op's own recheck of its tab. Every navigation a run drives is a
+//! write (`goto`, `reload`, a click, a script), so each gets it; a popup's first document, which
+//! loads before the run acts on the popup, does not, where Playwright's would.
 //!
 //! **Sessions.** A registration belongs to the session it was added on: the tab's page session
 //! covers the main frame and its same-process frames, across cross-process navigations of the
-//! main frame. An out-of-process frame has a session of its own, which Neo does not add the
-//! script to, so a cross-site iframe runs without it. A tab whose page session changed (core
-//! attached again) gets the context's scripts again on the new one.
+//! main frame. An out-of-process frame has a session of its own, which Neo does not add to, so a
+//! cross-site iframe runs without the scripts and bindings. A tab whose page session changed
+//! (core attached again) gets the context's registrations again on the new one.
 
 use std::collections::HashMap;
 use std::mem;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
-use browseros_core::{BrowserSession, CoreError, ProtocolSession, SessionId, TabId};
+use browseros_core::{BrowserSession, CoreError, ProtocolSession, SessionId, TabId, TargetId};
 use futures_util::future;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -46,11 +61,25 @@ use tokio::runtime::Handle;
 use tokio::sync::OnceCell;
 
 use crate::action::input_files;
+use crate::events::event_hub::now_ms;
+use crate::events::{BINDING_NAME, EventHub, PageEventKind, Subscription};
 use crate::op_output::to_output;
 use crate::op_scope::{AdmittedPage, OpScope, Sent};
 use crate::op_spec::Capability;
 use crate::target::PageRef;
-use crate::{Playwright, PlaywrightError};
+use crate::{ErrorCode, Playwright, PlaywrightError};
+
+/// The page side of every binding: upstream's `BindingsController`, which installs itself at
+/// `globalThis.__playwright__binding__controller__` unless a run already did. Built by
+/// crates/neo-sdk/neo-playwright-js/scripts/build.ts from the vendored source.
+const BINDINGS_CONTROLLER_JS: &str = include_str!("../../assets/bindings-controller.js");
+
+/// upstream's `kBindingsControllerProperty`.
+const CONTROLLER: &str = "__playwright__binding__controller__";
+
+/// The disposable id of a tab session's binding plumbing (the controller script): never handed
+/// out, so only the run's end removes it.
+const PLUMBING: u64 = 0;
 
 /// The run's init scripts. Lives in [`RunState`](crate::RunState), so it ends with the run.
 #[derive(Debug, Default)]
@@ -63,14 +92,22 @@ pub(crate) struct InitScripts {
 struct Registry {
     /// The last disposable id handed out; ids start at 1 and are never reused in a run.
     last_id: u64,
-    /// The context's scripts, in registration order.
+    /// The context's scripts and bindings, in registration order.
     context: Vec<ContextScript>,
-    /// Every script added to a tab, the page's own and the context's.
+    /// Every script added to a tab: the page's own, the context's, binding stubs and plumbing.
     added: Vec<Added>,
-    /// One single-flight cell per context script and tab session: two write ops admitted on one
-    /// tab at once share one add, the second awaiting the first's, so the tab runs the script
-    /// once a document. A failed add leaves its cell empty, and the next write tries again.
+    /// One single-flight cell per context registration and tab session: two write ops admitted
+    /// on one tab at once share one add, the second awaiting the first's, so the tab runs the
+    /// script once a document. A failed add leaves its cell empty, and the next write tries again.
     adding: HashMap<Adding, Arc<OnceCell<()>>>,
+    /// One single-flight cell per tab session that has the bindings' plumbing for this run.
+    plumbed: HashMap<(TabId, SessionId), Arc<OnceCell<()>>>,
+    /// The event hub binding calls are recorded in, kept by the first `exposeBinding`, for a
+    /// context binding a later write op adds, whose admission has no `Playwright` at hand.
+    hub: Option<Arc<EventHub>>,
+    /// The binding names each disposable id holds on each tab ([`EventHub::claim_binding`]),
+    /// released when it is disposed so its calls stop reaching the run.
+    claims: HashMap<u64, Vec<(TargetId, String)>>,
 }
 
 /// A context script on one tab's page session.
@@ -81,11 +118,52 @@ struct Adding {
     session: SessionId,
 }
 
-/// One `context.addInitScript`, which each tab the run writes to gets once.
+/// One `context.addInitScript` or `context.exposeBinding`, which each tab the run writes to gets
+/// once.
 #[derive(Debug)]
 struct ContextScript {
     id: u64,
-    source: Arc<str>,
+    reach: Reach,
+}
+
+/// What a context registration adds to a tab.
+#[derive(Clone, Debug)]
+enum Reach {
+    /// An init script's source.
+    Script(Arc<str>),
+    /// A binding's stub, after the tab session's plumbing.
+    Binding(Arc<BindingName>),
+}
+
+/// A binding as `exposeBinding` names it.
+#[derive(Debug)]
+struct BindingName {
+    name: String,
+    /// upstream's `noGlobal`: the binding exists for the controller only, not as `window[name]`,
+    /// as for the functions `addInitScript` passes with `exposeFunctions`.
+    no_global: bool,
+}
+
+impl BindingName {
+    /// upstream's `PageBinding` init script: the controller adds the binding, and unless
+    /// `no_global`, `window[name]`.
+    fn stub(&self) -> String {
+        format!(
+            "(() => {{\n  globalThis['{CONTROLLER}'].addBinding({}, {});\n}})();",
+            json!(self.name),
+            self.no_global
+        )
+    }
+
+    /// upstream's `cleanupScript`, run in the documents loaded when the binding goes. The
+    /// controller is there in every document the stub ran in; one loaded before the run's
+    /// plumbing has neither, hence `?.`.
+    fn cleanup(&self) -> String {
+        format!(
+            "{{ globalThis['{CONTROLLER}']?.removeBinding({}); }};",
+            json!(self.name)
+        )
+    }
 }
 
 /// One script added to one tab's page session.
@@ -105,15 +183,19 @@ struct Registration {
     /// across a reconnect, as cleanup must (`ProtocolSession::cancellation_endpoint`).
     session: Option<ProtocolSession>,
     identifier: String,
+    /// What the documents already loaded run once the script goes: a binding's
+    /// `removeBinding`, so the page can no longer call into a run that let it go.
+    cleanup: Option<String>,
 }
 
 impl Registration {
-    /// Removes the script now. A session that is gone (the tab closed) has nothing to remove.
-    /// The session is let go only once the removal answered, so a removal cut short by the op's
-    /// drop is sent again by `Drop`; a second removal of one identifier changes nothing.
+    /// Removes the script now, and runs its cleanup. A session that is gone (the tab closed) has
+    /// nothing to remove. The session is let go only once both answered, so a removal cut short
+    /// by the op's drop is sent again by `Drop`; a second removal of one identifier, or a second
+    /// `removeBinding`, changes nothing.
     async fn remove(mut self) {
         if let Some(session) = &self.session {
-            remove(session, &self.identifier).await;
+            remove(session, &self.identifier, self.cleanup.as_deref()).await;
         }
         self.session = None;
     }
@@ -128,17 +210,48 @@ impl Drop for Registration {
             return;
         };
         let identifier = mem::take(&mut self.identifier);
-        drop(runtime.spawn(async move { remove(&session, &identifier).await }));
+        let cleanup = self.cleanup.take();
+        drop(runtime.spawn(async move {
+            remove(&session, &identifier, cleanup.as_deref()).await;
+        }));
     }
 }
 
-async fn remove(session: &ProtocolSession, identifier: &str) {
+async fn remove(session: &ProtocolSession, identifier: &str, cleanup: Option<&str>) {
     let _removed = session
         .send::<_, Value>(
             "Page.removeScriptToEvaluateOnNewDocument",
             json!({ "identifier": identifier }),
         )
         .await;
+    if let Some(cleanup) = cleanup {
+        run_in_loaded_documents(session, cleanup).await;
+    }
+}
+
+/// Runs `source` once in the main world of every document the session has loaded now, and in no
+/// later one: added with `runImmediately`, then removed. Upstream evaluates a binding's cleanup
+/// in every frame (`safeNonStallingEvaluateInAllFrames`); this reaches the same documents without
+/// a `Runtime.evaluate`, and, like upstream's, ignores a document that fails it.
+async fn run_in_loaded_documents(session: &ProtocolSession, source: &str) {
+    #[derive(Deserialize)]
+    struct AddedScript {
+        identifier: String,
+    }
+    let added: Result<AddedScript, CoreError> = session
+        .send(
+            "Page.addScriptToEvaluateOnNewDocument",
+            json!({ "source": source, "runImmediately": true }),
+        )
+        .await;
+    if let Ok(AddedScript { identifier }) = added {
+        let _removed = session
+            .send::<_, Value>(
+                "Page.removeScriptToEvaluateOnNewDocument",
+                json!({ "identifier": identifier }),
+            )
+            .await;
+    }
 }
 
 /// The script's source as the prelude built it (upstream's client `evaluationScript`), or the
@@ -175,7 +288,26 @@ pub(crate) struct DisposeInput {
     id: u64,
 }
 
-/// What `addInitScript` returns: the id its disposable disposes.
+/// `page.exposeBinding`'s input: `exposeFunction` sends it too.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub(crate) struct PageBindingInput {
+    page: PageRef,
+    name: String,
+    #[serde(default)]
+    no_global: bool,
+}
+
+/// `context.exposeBinding`'s input.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub(crate) struct ContextBindingInput {
+    name: String,
+    #[serde(default)]
+    no_global: bool,
+}
+
+/// What `addInitScript` and `exposeBinding` return: the id their disposable disposes.
 #[derive(Debug, Serialize)]
 struct Registered {
     id: u64,
@@ -197,11 +329,57 @@ pub(crate) async fn add_to_page(
     let registration = add(&session, &source, &sent)
         .await
         .map_err(|error| scope.core_error(&error))?;
+    let id = scope.run_state().init_scripts.keep(registration);
+    to_output(scope, &Registered { id })
+}
+
+/// `page.exposeBinding`: the binding's stub added to the page's session, after the door's rules
+/// on the page and the session's plumbing, and run at once in the documents it has loaded, as
+/// upstream's `Page.exposeBinding` adds its init script and evaluates it in every frame.
+pub(crate) async fn expose_on_page(
+    pw: &Playwright,
+    scope: &OpScope<'_>,
+    input: PageBindingInput,
+) -> Result<Value, PlaywrightError> {
+    scope.require(Capability::MainWorld)?;
     let scripts = &scope.run_state().init_scripts;
-    let mut registry = scripts.lock();
-    let id = registry.next_id();
-    registry.added.push(Added { id, registration });
-    drop(registry);
+    let hub = scripts.keep_hub(pw);
+    let admitted = scope.admit(pw.browser(), input.page.tab()).await?;
+    let session = pw
+        .browser()
+        .protocol_session(admitted.session.session_id.clone());
+    let sent = scope.send_effect()?;
+    let binding = BindingName {
+        name: input.name,
+        no_global: input.no_global,
+    };
+    let registration = expose(scope, &hub, admitted, &session, &binding, &sent).await?;
+    let id = scripts.keep(registration);
+    scripts
+        .lock()
+        .claims
+        .entry(id)
+        .or_default()
+        .push((admitted.session.target_id.clone(), binding.name));
+    to_output(scope, &Registered { id })
+}
+
+/// `context.exposeBinding`: the binding kept for every tab the run writes to from now on, as
+/// `context.addInitScript` keeps a script. Marked sent; no tab is touched here.
+pub(crate) fn expose_on_context(
+    pw: &Playwright,
+    scope: &OpScope<'_>,
+    input: ContextBindingInput,
+) -> Result<Value, PlaywrightError> {
+    scope.require(Capability::MainWorld)?;
+    let scripts = &scope.run_state().init_scripts;
+    let _hub = scripts.keep_hub(pw);
+    let _sent = scope.send_effect()?;
+    let binding = BindingName {
+        name: input.name,
+        no_global: input.no_global,
+    };
+    let id = scripts.keep_for_context(Reach::Binding(Arc::new(binding)));
     to_output(scope, &Registered { id })
 }
 
@@ -213,14 +391,10 @@ pub(crate) async fn add_to_context(
 ) -> Result<Value, PlaywrightError> {
     let source = gate(scope, input.script).await?;
     let _sent = scope.send_effect()?;
-    let scripts = &scope.run_state().init_scripts;
-    let mut registry = scripts.lock();
-    let id = registry.next_id();
-    registry.context.push(ContextScript {
-        id,
-        source: source.into(),
-    });
-    drop(registry);
+    let id = scope
+        .run_state()
+        .init_scripts
+        .keep_for_context(Reach::Script(source.into()));
     to_output(scope, &Registered { id })
 }
 
@@ -235,8 +409,15 @@ pub(crate) async fn dispose(
     input: DisposeInput,
 ) -> Result<Value, PlaywrightError> {
     let _sent = scope.send_effect()?;
+    let run = scope.run_state();
     let (removed, in_flight) = {
-        let mut registry = scope.run_state().init_scripts.lock();
+        let mut registry = run.init_scripts.lock();
+        if let (Some(hub), Some(claims)) = (registry.hub.clone(), registry.claims.remove(&input.id))
+        {
+            for (target, name) in claims {
+                hub.release_binding(&target, &name, run);
+            }
+        }
         registry.context.retain(|script| script.id != input.id);
         let in_flight: Vec<Arc<OnceCell<()>>> = registry
             .adding
@@ -266,6 +447,84 @@ impl InitScripts {
         self.registry.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
+    /// Files a registration of the page's own under a new disposable id.
+    fn keep(&self, registration: Registration) -> u64 {
+        let mut registry = self.lock();
+        let id = registry.next_id();
+        registry.added.push(Added { id, registration });
+        id
+    }
+
+    /// Keeps a context registration under a new disposable id.
+    fn keep_for_context(&self, reach: Reach) -> u64 {
+        let mut registry = self.lock();
+        let id = registry.next_id();
+        registry.context.push(ContextScript { id, reach });
+        id
+    }
+
+    /// The event hub binding calls go to, kept for the context's later adds.
+    fn keep_hub(&self, pw: &Playwright) -> Arc<EventHub> {
+        Arc::clone(
+            self.lock()
+                .hub
+                .get_or_insert_with(|| Arc::clone(pw.event_hub())),
+        )
+    }
+
+    /// The bindings' plumbing on `admitted`'s tab session, once a run, in the order a binding
+    /// call needs it: the run listens for the tab's binding calls before any can be made, the CDP
+    /// binding goes into the session's main worlds (only those: `executionContextName: ""`, so
+    /// Neo's sealed world never holds it), then the controller, in every document from now on and
+    /// at once in the loaded ones. Concurrent first uses share one plumbing.
+    async fn plumb(
+        &self,
+        scope: &OpScope<'_>,
+        hub: &EventHub,
+        admitted: &AdmittedPage,
+        session: &ProtocolSession,
+    ) -> Result<(), PlaywrightError> {
+        let key = (admitted.tab, admitted.session.session_id.clone());
+        let cell = Arc::clone(self.lock().plumbed.entry(key).or_default());
+        cell.get_or_try_init(|| async {
+            // Each write below rechecks the tab first: an owner who took it while this op
+            // waited (for another add's plumbing, or for Chromium) gets nothing more.
+            scope.recheck()?;
+            let run = scope.run_state();
+            hub.bind(run);
+            let since = now_ms();
+            run.events.listen(
+                Subscription::Page {
+                    tab: admitted.tab,
+                    target: admitted.session.target_id.clone(),
+                    event: PageEventKind::Binding,
+                },
+                since,
+                hub.position_at(since),
+            );
+            hub.wake();
+            let core = |error| scope.core_error(&error);
+            session
+                .send_value(
+                    "Runtime.addBinding",
+                    json!({ "name": BINDING_NAME, "executionContextName": "" }),
+                )
+                .await
+                .map_err(core)?;
+            scope.recheck()?;
+            let controller = add_script(session, BINDINGS_CONTROLLER_JS, RunNow::Yes, None)
+                .await
+                .map_err(core)?;
+            self.lock().added.push(Added {
+                id: PLUMBING,
+                registration: controller,
+            });
+            Ok::<(), PlaywrightError>(())
+        })
+        .await?;
+        Ok(())
+    }
+
     /// Forgets every script and removes each registration, all at once, awaiting them all:
     /// [`RunState::remove_init_scripts`](crate::RunState::remove_init_scripts), at the run's end.
     pub(crate) async fn remove_all(&self) {
@@ -273,6 +532,9 @@ impl InitScripts {
             let mut registry = self.lock();
             registry.context.clear();
             registry.adding.clear();
+            registry.plumbed.clear();
+            // The run is ending: its claims go with its state, unread calls with its queue.
+            registry.claims.clear();
             mem::take(&mut registry.added)
         };
         future::join_all(added.into_iter().map(|added| added.registration.remove())).await;
@@ -306,7 +568,7 @@ impl InitScripts {
             return Ok(());
         }
         let session = browser.protocol_session(admitted.session.session_id.clone());
-        for (adding, source, cell) in missing {
+        for (adding, reach, cell) in missing {
             cell.get_or_try_init(|| async {
                 // A dispose since the snapshot took this script's cell and waited for nothing,
                 // so it must not go out now.
@@ -314,9 +576,24 @@ impl InitScripts {
                     return Ok(());
                 }
                 scope.recheck()?;
-                let registration = add_unsent(&session, &source)
-                    .await
-                    .map_err(|error| scope.core_error(&error))?;
+                let registration = match &reach {
+                    Reach::Script(source) => add_script(&session, source, RunNow::No, None)
+                        .await
+                        .map_err(|error| scope.core_error(&error))?,
+                    Reach::Binding(binding) => {
+                        let hub = self.lock().hub.clone().ok_or_else(|| {
+                            scope.fail(
+                                ErrorCode::Internal,
+                                "a context binding was kept without its event hub",
+                            )
+                        })?;
+                        match add_binding(self, scope, &hub, admitted, &session, binding).await? {
+                            Some(registration) => registration,
+                            // Another run's binding of that name stays on this tab.
+                            None => return Ok(()),
+                        }
+                    }
+                };
                 // Kept or handed back under one lock, so a dispose sees either the registration
                 // or this add still in flight, never neither.
                 let disposed = {
@@ -326,6 +603,13 @@ impl InitScripts {
                             id: adding.id,
                             registration,
                         });
+                        if let Reach::Binding(binding) = &reach {
+                            registry
+                                .claims
+                                .entry(adding.id)
+                                .or_default()
+                                .push((admitted.session.target_id.clone(), binding.name.clone()));
+                        }
                         None
                     } else {
                         Some(registration)
@@ -343,13 +627,13 @@ impl InitScripts {
         Ok(())
     }
 
-    /// Whether the context still keeps the script `id`.
+    /// Whether the context still keeps the registration `id`.
     fn keeps(&self, id: u64) -> bool {
         self.lock().context.iter().any(|script| script.id == id)
     }
 
-    /// The context's scripts whose add to `admitted`'s tab session has not completed, with their
-    /// sources and single-flight cells, copied out so no lock is held while they are added. The
+    /// The context's registrations whose add to `admitted`'s tab session has not completed, with
+    /// their single-flight cells, copied out so no lock is held while they are added. The
     /// cells are made here, under the lock that reads the scripts, so a dispose from now on finds
     /// each one and waits out its add, which then sees the script gone.
     fn missing(&self, admitted: &AdmittedPage) -> Vec<Missing> {
@@ -366,14 +650,14 @@ impl InitScripts {
                     session: admitted.session.session_id.clone(),
                 };
                 let cell = Arc::clone(adding.entry(key.clone()).or_default());
-                (!cell.initialized()).then(|| (key, Arc::clone(&script.source), cell))
+                (!cell.initialized()).then(|| (key, script.reach.clone(), cell))
             })
             .collect()
     }
 }
 
-/// A context script one tab session lacks: where it goes, its source, and its add's cell.
-type Missing = (Adding, Arc<str>, Arc<OnceCell<()>>);
+/// A context registration one tab session lacks: where it goes, what it adds, and its add's cell.
+type Missing = (Adding, Reach, Arc<OnceCell<()>>);
 
 impl Registry {
     fn next_id(&mut self) -> u64 {
@@ -402,24 +686,100 @@ async fn add(
     source: &str,
     _sent: &Sent<'_>,
 ) -> Result<Registration, CoreError> {
-    add_unsent(session, source).await
+    add_script(session, source, RunNow::No, None).await
 }
 
-/// [`add`] for a context script, which the admitting op's own recheck covers and which does not
-/// mark that op sent: it changes only documents a later effect loads.
+/// A binding's stub on a tab session whose plumbing it brings in first. Takes `&Sent`. A name
+/// another run on the tab holds fails as upstream's duplicate does, with nothing added.
+async fn expose(
+    scope: &OpScope<'_>,
+    hub: &EventHub,
+    admitted: &AdmittedPage,
+    session: &ProtocolSession,
+    binding: &BindingName,
+    _sent: &Sent<'_>,
+) -> Result<Registration, PlaywrightError> {
+    add_binding(
+        &scope.run_state().init_scripts,
+        scope,
+        hub,
+        admitted,
+        session,
+        binding,
+    )
+    .await?
+    .ok_or_else(|| {
+        scope.fail(
+            ErrorCode::InvalidInput,
+            &format!(
+                "Function \"{}\" has been already registered by another run on this page",
+                binding.name
+            ),
+        )
+    })
+}
+
+/// [`expose`] without the proof, for a context binding, which the admitting op's recheck covers.
+/// `None` when another live run holds the name on this tab ([`EventHub::claim_binding`]): the
+/// page keeps that run's binding, and this one adds nothing there.
+async fn add_binding(
+    scripts: &InitScripts,
+    scope: &OpScope<'_>,
+    hub: &EventHub,
+    admitted: &AdmittedPage,
+    session: &ProtocolSession,
+    binding: &BindingName,
+) -> Result<Option<Registration>, PlaywrightError> {
+    let target = &admitted.session.target_id;
+    if !hub.claim_binding(target, &binding.name, scope.run_state()) {
+        return Ok(None);
+    }
+    scripts.plumb(scope, hub, admitted, session).await?;
+    scope.recheck()?;
+    add_script(
+        session,
+        &binding.stub(),
+        RunNow::Yes,
+        Some(binding.cleanup()),
+    )
+    .await
+    .map(Some)
+    .map_err(|error| scope.core_error(&error))
+}
+
+/// Whether a script also runs at once in the documents the session has loaded.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum RunNow {
+    /// An init script: new documents only, as upstream's `addInitScript`.
+    No,
+    /// The bindings' scripts, which upstream also evaluates in every frame when it adds them.
+    Yes,
+}
+
+/// Registers `source` for new documents, in a task of its own, and returns the registration
+/// that removes it (and runs `cleanup`, when given, in the documents loaded then).
 ///
 /// The command goes out from a task of its own, which the op awaits. The host drops an op's
 /// future at the run's stop or deadline, and that can land after the command was sent and before
 /// Chromium answered: awaited inline, the answer would be lost with the future and the script
 /// would stay registered past the run. The task always gets the answer, and when the op is gone
 /// its output, the [`Registration`], is dropped as the task ends, which removes the script.
-async fn add_unsent(session: &ProtocolSession, source: &str) -> Result<Registration, CoreError> {
+async fn add_script(
+    session: &ProtocolSession,
+    source: &str,
+    run_now: RunNow,
+    cleanup: Option<String>,
+) -> Result<Registration, CoreError> {
     #[derive(Deserialize)]
     struct AddedScript {
         identifier: String,
     }
     let session = session.cancellation_endpoint();
-    let params = json!({ "source": source });
+    let params = if run_now == RunNow::Yes {
+        json!({ "source": source, "runImmediately": true })
+    } else {
+        json!({ "source": source })
+    };
     let added = tokio::spawn(async move {
         let AddedScript { identifier } = session
             .send("Page.addScriptToEvaluateOnNewDocument", params)
@@ -427,6 +787,7 @@ async fn add_unsent(session: &ProtocolSession, source: &str) -> Result<Registrat
         Ok::<_, CoreError>(Registration {
             session: Some(session),
             identifier,
+            cleanup,
         })
     });
     added.await.unwrap_or_else(|join| {

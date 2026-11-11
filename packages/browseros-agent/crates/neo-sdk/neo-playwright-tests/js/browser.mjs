@@ -212,7 +212,7 @@ const contextDefaults = {
 
 /** Captures the upstream fixture preconditions and rejects anything this initial-page
  * bootstrap cannot establish. Unsupported configuration is evidence loss, never a Neo API. */
-export function contextBootstrapPlan(options = {}, fixtureOptions = {}) {
+function contextBootstrapPlan(options = {}, fixtureOptions = {}) {
   const effective = {
     ...structuredClone(contextDefaults),
     ...Object.fromEntries(
@@ -252,7 +252,7 @@ export function contextBootstrapPlan(options = {}, fixtureOptions = {}) {
 
 /** This session must stay attached until the engine finishes because CDP can clear emulation
  * on detach. No value read from this infrastructure connection is returned to a test. */
-export async function bootstrapInitialPage(
+async function bootstrapInitialPage(
   cdp,
   pageId,
   plan,
@@ -312,7 +312,7 @@ export async function bootstrapInitialPage(
 
 /** Normalizes BrowserOS's tab-strip identifiers against observer-owned pages. A missing or
  * ambiguous strip cannot be inferred from DOM focus, especially in headless mode. */
-export function projectActivation(tabs, pages) {
+function projectActivation(tabs, pages) {
   if (!Array.isArray(tabs))
     throw new Error('Browser.getTabs did not return a tab strip')
   const live = new Map(
