@@ -402,26 +402,30 @@ impl<'a> PointerRunner<'a> {
         let req = requirements(action.kind);
         let trial = if action.trial { " (trial run)" } else { "" };
         let inner = Backoff::inner();
+        // Whether this element was seen: a pin came in, or a reply described it.
+        let mut found = pin.is_some();
         for retry in 0.. {
             let wait = inner.wait(retry);
+            // An attempt's lines wait until the element is found. Upstream starts an attempt only
+            // once its locator resolved, so a locator that matches nothing logs `waiting for
+            // <locator>` alone; Neo finds and checks the element in one request (①).
+            let mut lines = Vec::new();
             if retry == 0 {
-                self.scope
-                    .log(format!("attempting {} action{trial}", req.name));
+                lines.push(format!("attempting {} action{trial}", req.name));
             } else {
-                self.scope
-                    .log(format!("retrying {} action{trial}", req.name));
+                lines.push(format!("retrying {} action{trial}", req.name));
                 if !wait.is_zero() {
-                    self.scope.log(format!("  waiting {}ms", wait.as_millis()));
+                    lines.push(format!("  waiting {}ms", wait.as_millis()));
                 }
             }
             if self.scope.sleep(wait).await.is_err() {
+                self.log_found(found, lines);
                 return Err(self.timed_out());
             }
 
             // ① Resolve or reuse the pin, check the states, scroll, measure.
             if !action.force {
-                self.scope
-                    .log(format!("  waiting for element to be {}", req.waits_for()));
+                lines.push(format!("  waiting for element to be {}", req.waits_for()));
             }
             let scroll = if action.scroll {
                 SCROLL_ROTATION
@@ -433,7 +437,15 @@ impl<'a> PointerRunner<'a> {
             };
             let target = pin.map_or_else(|| self.subject.first_target(), ProbeTarget::Pin);
             let measure = self.act_request(located, action, &req, target, scroll, None);
-            let measured = match self.call(located, &measure).await? {
+            let called = self.call(located, &measure).await?;
+            // The locator matches nothing yet: back to the outer loop, logging nothing more, as
+            // upstream's `continuePolling`. An element seen before and gone now is a detach.
+            if !found && matches!(called, Called::Reply(ProbeReply::None { stale_ref: None })) {
+                return Ok(Inner::Reresolve);
+            }
+            found = true;
+            self.log_found(true, lines);
+            let measured = match called {
                 Called::Reply(ProbeReply::Measured {
                     pin: pinned,
                     rect,
@@ -853,6 +865,15 @@ impl<'a> PointerRunner<'a> {
     }
 
     /// The element went away between two requests: a locator resolves again, a handle fails.
+    /// An attempt's held lines, logged once its element was found.
+    fn log_found(&self, found: bool, lines: Vec<String>) {
+        if found {
+            for line in lines {
+                self.scope.log(line);
+            }
+        }
+    }
+
     fn detached_from_dom(&self) -> Result<Inner, PlaywrightError> {
         self.subject.detached()?;
         Ok(Inner::Reresolve)
