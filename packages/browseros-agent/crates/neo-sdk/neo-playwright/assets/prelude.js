@@ -8557,6 +8557,7 @@ ${value.stack}`;
     workerPages = new Set;
     pumping = false;
     batch = null;
+    newestSeen = null;
     dialogs = new Map;
     downloads = new Map;
     choosers = new Map;
@@ -8617,6 +8618,7 @@ ${value.stack}`;
       this.listening--;
     }
     async wait(api, page, event, optionsOrPredicate, since, settings) {
+      const seen = this.newestSeen;
       const kind = page === null ? "context" : "page";
       checkReported(api, event, kind);
       if (!isReported(event, kind))
@@ -8629,16 +8631,17 @@ ${value.stack}`;
         return await untilAborted(signal, () => abortedError(api, signal), async () => {
           if (lease)
             await deadline.race(lease.ready);
-          return this.waitFor(api, page, event, options, since, deadline, signal);
+          return this.waitFor(api, page, event, options, { since, after: seen }, deadline, signal);
         });
       } finally {
         if (lease)
           lease.release().catch(() => {});
       }
     }
-    async waitFor(api, page, event, options, since, deadline, signal) {
+    async waitFor(api, page, event, options, from, deadline, signal) {
+      const { since } = from;
       const target = page === null ? null : await page._openedBrand(api);
-      let after = null;
+      let after = from.after;
       for (;; ) {
         const left = deadline.left();
         let record;
@@ -8648,6 +8651,7 @@ ${value.stack}`;
         } catch (error) {
           throw deadline.named(error);
         }
+        this.saw(record.seq);
         if (record.event === "close" && this.batch?.closes.has(record.seq))
           await this.batch.done;
         let value;
@@ -8732,7 +8736,13 @@ ${value.stack}`;
         this.pumping = false;
       }
     }
+    saw(seq) {
+      if (this.newestSeen === null || seq > this.newestSeen)
+        this.newestSeen = seq;
+    }
     deliverBatch(events, observed) {
+      for (const event of events)
+        this.saw(event.seq);
       this.stageBatch(events);
       try {
         for (const event of events)

@@ -122,6 +122,29 @@ describe('waitForEvent', () => {
     ])
   })
 
+  it('tests that a later wait starts after the event the script last received, in the same millisecond', async () => {
+    const records = [
+      popup(5, 8, 'https://first.example/'),
+      popup(9, 9, 'https://second.example/'),
+    ]
+    const runtime = loadPrelude({
+      seed: SEED,
+      answer: (call) => (call.name === 'events.wait' ? records.shift() : null),
+    })
+    const urls = await runtime.run(`
+      Date.now = () => 500
+      const first = await page.waitForEvent('popup')
+      const second = await page.waitForEvent('popup')
+      return [first.url(), second.url()]
+    `)
+    expect(urls).toEqual(['https://first.example/', 'https://second.example/'])
+    expect(
+      runtime
+        .sent('events.wait')
+        .map((call) => (call.input as { after: unknown }).after),
+    ).toEqual([null, 5])
+  })
+
   it("tests that a predicate's error rejects the wait with the method first", async () => {
     const runtime = loadPrelude({
       seed: SEED,
