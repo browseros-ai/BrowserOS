@@ -56,7 +56,16 @@ pub(crate) async fn normalize(
             &format!("No element matching {}", input.selector),
         )
     };
-    let Some(Landed { reply, path, .. }) = resolver.attempt_at(request).await? else {
+    let landed = match resolver.attempt_at(request).await {
+        Ok(landed) => landed,
+        // A ref whose document is gone (`element_detached` from a ref jump): upstream's query
+        // finds nothing there either, and says so as for any other miss.
+        Err(error) if error.error_code() == Some(ErrorCode::ElementDetached) => {
+            return Err(no_element());
+        }
+        Err(error) => return Err(error),
+    };
+    let Some(Landed { reply, path, .. }) = landed else {
         return Err(no_element());
     };
     let element = match reply {
