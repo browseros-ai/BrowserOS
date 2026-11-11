@@ -19,8 +19,7 @@ use neo_playwright::{
 use neo_takeover::{Lock, LockBinding, LockTtl, Locks, Reads};
 use neo_trace::{
     Delivery, Effect, EpochMillis, ErrorOwner, OperationId, OperationRow, Outcome, RedactionLimits,
-    Redactor, RunId, RunStatus, SecretSet, SecretSetConfig, TraceSink, TraceStore, WriterConfig,
-    spawn_writer,
+    Redactor, RunId, RunStatus, TraceSink, TraceStore, WriterConfig, spawn_writer,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -106,8 +105,7 @@ impl Harness {
         fake.answer("Target.getTargetInfo", json!({ "targetInfo": {} }));
         let dir = tempfile::tempdir()?;
         let store = TraceStore::open(&dir.path().join("trace.db")).await?;
-        let secrets = Arc::new(SecretSet::new(SecretSetConfig::default()));
-        let redactor = Redactor::new(Arc::clone(&secrets), RedactionLimits::default());
+        let redactor = Redactor::new(RedactionLimits::default());
         let sink = spawn_writer(&store, redactor, WriterConfig::default(), None);
         // Armed the way the host API arms it once the service starts.
         let locks = Locks::new(store.clone(), sink.clone());
@@ -2351,9 +2349,6 @@ async fn a_goto_sends_web_file_and_javascript_urls_to_the_browser() -> Result<()
         "filesystem:https://bank.example/temporary/x",
         // No scheme the URL Standard reads, so none to allow.
         "bank.example/login",
-        // Its scheme is `localhost` to the URL Standard, as to the browser. Playwright's own goto
-        // would add `http://`; Neo reads the URL as written, and the script writes the scheme.
-        "localhost:3000/",
     ] {
         let (operation, reply) = harness.submit_op(&run, "page.goto", goto(url)).await;
         let refused = failure(reply)?;
@@ -2383,7 +2378,9 @@ async fn a_goto_sends_web_file_and_javascript_urls_to_the_browser() -> Result<()
         "no refused URL reached the tab"
     );
 
-    let allowed = [
+    for url in [
+        "localhost:3000/",
+        "127.0.0.1:3000/",
         "http://bank.example/",
         "HTTPS://bank.example/login",
         "data:text/html,<p>made in the script</p>",
@@ -2394,8 +2391,7 @@ async fn a_goto_sends_web_file_and_javascript_urls_to_the_browser() -> Result<()
         "javascript:void(document.title = 'ran')",
         " JavaScript:void(0)",
         "java\tscript:void(0)",
-    ];
-    for url in allowed {
+    ] {
         let failed = failure(harness.submit(&run, "page.goto", goto(url)).await)?;
         assert_eq!(
             (failed.error.code(), failed.delivery),
@@ -2414,6 +2410,8 @@ async fn a_goto_sends_web_file_and_javascript_urls_to_the_browser() -> Result<()
     assert_eq!(
         sent,
         [
+            "http://localhost:3000/",
+            "http://127.0.0.1:3000/",
             "http://bank.example/",
             "https://bank.example/login",
             "data:text/html,<p>made in the script</p>",

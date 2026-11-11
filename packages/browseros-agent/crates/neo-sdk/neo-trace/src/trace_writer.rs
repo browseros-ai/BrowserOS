@@ -2,8 +2,8 @@
 //!
 //! The dispatcher's hooks are synchronous and must never wait on disk, so every event is a
 //! channel send. The writer takes the first event, gathers more for up to `batch_window` (or
-//! `batch_max` events), redacts them, and commits them in one transaction. After the commit it
-//! answers any privacy commit or flush in the batch, then publishes the redacted events to
+//! `batch_max` events), bounds their values, and commits them in one transaction. After the commit it
+//! answers any privacy commit or flush in the batch, then publishes the committed events to
 //! subscribers (the service API's SSE).
 //!
 //! Backpressure: if the disk stalls and the backlog passes `max_backlog`, operation events are
@@ -15,28 +15,15 @@
 //! and keeps it with the open run until the run's end, which is never dropped, so the map
 //! cannot grow without bound in a live process.
 //!
-//! An operation's input reaches disk only with its end, and a run's host data only with the
-//! run's end. The end's own set can mask values known only then, such as one only the
-//! operation's own sweep found.
+//! Input visibility follows the record lifecycle: an operation's arguments and notes appear
+//! with its end, and a run's code and host data appear with the run's end. Start rows expose
+//! identity and state only. Readers of the rows and SSE events rely on this deferral; writing
+//! input earlier would also change what interrupted or dropped-end records retain.
 //!
-//! A start row written earlier would put such a value on disk raw, in the row, in the WAL page
-//! a later rewrite leaves behind, and in the `operation.started` event, which reads the row. So
-//! the raw input and host data stay in this task's memory while the record is open, with the
-//! start's own set, and the end stores them masked with both sets at once. An operation whose
-//! end never reaches the writer (a crash, a dropped event) keeps no input, and a run that never
-//! ends keeps no host data. An operation's notes wait in the same place and reach disk in its
-//! end's update, masked and bounded: whoever reads the end (its `operation.ended` event
-//! included) reads every note, and none arrive after it.
-//!
-//! Masking: each record is masked with the process `SecretSet` and with the sets the record
-//! itself carries (`also_mask`: what claw-sdk still holds unregistered as it sends the record,
-//! the same values it masks the agent's reply with), all at once, and only then cut to size.
-//! Every text a host reads (`/v1/runs`, `/v1/operations`, `/v1/trace`, and `/v1/events`, which
-//! reads the store as each batch commits) comes from these rows, so masking them as they are
-//! written covers all of them. An operation's end is masked with its own set and its start's,
-//! and a run's code with the start's and the end's: a value held at either moment may be in
-//! the text, grown or shrunk at the other. An operation's name is the one text stored at its
-//! start, so it gets the start's sets alone.
+//! Raw input stays in this task's memory while its record is open, and is bounded only when
+//! the end materializes it. An operation whose end never arrives keeps no stored input or
+//! notes; a run with no end keeps no stored code or host data. An operation's notes become
+//! final with its end, so readers of `operation.ended` see the complete bounded list.
 //!
 //! Screenshots: the writer decides and accounts, and the camera only takes pictures. This task
 //! is the one that sees each operation's start (effect, tab) and end (outcome, error owner) in
@@ -62,15 +49,14 @@ use crate::trace_store::{RetentionPolicy, Swept};
 use crate::{
     Delivery, Effect, EpochMillis, OperationEnded, OperationId, OperationReached, OperationStarted,
     Outcome, PrivacyRecord, PrivacyStore, PrivateReason, Redactor, RunEffects, RunEnded, RunId,
-    RunStarted, RunStatus, SecretSet, Shot, ShotAnswer, ShotJob, ShotQueue, TaskId, TraceError,
-    TraceStore, Truncation,
+    RunStarted, RunStatus, Shot, ShotAnswer, ShotJob, ShotQueue, TaskId, TraceError, TraceStore,
+    Truncation,
 };
 use browseros_core::TabId;
 use futures_util::future::BoxFuture;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::mem;
-use std::ops::Range;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
@@ -322,7 +308,7 @@ impl TraceSink {
         let _ = event;
     }
 
-    /// Committed, redacted changes from now on.
+    /// Committed changes from now on.
     #[must_use]
     pub fn subscribe(&self) -> broadcast::Receiver<TraceRecordEvent> {
         self.inner.events.subscribe()
@@ -467,17 +453,11 @@ pub fn spawn_writer(
 struct OpenRun {
     /// Named by every event the run publishes until its end.
     task: Option<TaskId>,
-    /// The code as given, held in memory until the run ends, when it is masked and bounded.
+    /// The code as given, held in memory until the run ends, when it is bounded.
     /// `None` when the run's start was never seen.
     code: Option<String>,
-    /// Where the code holds a value the process set or the start's own set knew as the run
-    /// began. The end masks these together with its own matches, then cuts.
-    code_spans: Vec<Range<usize>>,
-    /// The host's data as given, held in memory only, like the code. The end stores it masked
-    /// with the process set, the start's own set and the end's.
+    /// The host's data as given, held in memory until the run ends, like the code.
     host_data: Option<Value>,
-    /// The start's own set, which the end masks the host data with too.
-    also_mask: Option<Arc<SecretSet>>,
     gaps: u64,
     operations: HashMap<u32, OpenOperation>,
     /// Each tab's last operation and the jobs still out, for the run-end screenshots.
@@ -489,22 +469,14 @@ struct OpenRun {
 impl OpenRun {
     /// A run the writer has seen no start of: no code and no host data to store.
     fn unseen(task: Option<TaskId>) -> Self {
-        Self::new(task, None, Vec::new(), None, None)
+        Self::new(task, None, None)
     }
 
-    fn new(
-        task: Option<TaskId>,
-        code: Option<String>,
-        code_spans: Vec<Range<usize>>,
-        host_data: Option<Value>,
-        also_mask: Option<Arc<SecretSet>>,
-    ) -> Self {
+    fn new(task: Option<TaskId>, code: Option<String>, host_data: Option<Value>) -> Self {
         Self {
             task,
             code,
-            code_spans,
             host_data,
-            also_mask,
             gaps: 0,
             operations: HashMap::new(),
             tabs: TouchedTabs::default(),
@@ -517,9 +489,7 @@ struct OpenOperation {
     tab: Option<TabId>,
     effect: Effect,
     args: Value,
-    /// The start's own set, which the end masks with too.
-    also_mask: Option<Arc<SecretSet>>,
-    /// Raw, like `args`: masked and bounded only when the end stores them.
+    /// Raw, like `args`: bounded only when the end stores them.
     notes: Vec<String>,
 }
 
@@ -706,10 +676,6 @@ impl Writer {
     ) -> Result<(), TraceError> {
         let change = match event {
             Event::RunStarted(event) => {
-                let mut code_spans = Vec::new();
-                self.redactor
-                    .also_masking(&event.also_mask)
-                    .spans(&event.code, &mut code_spans);
                 tx.insert_run(RunStartRow {
                     id: event.id,
                     task: event.task_id.as_ref(),
@@ -719,13 +685,7 @@ impl Writer {
                 .await?;
                 self.runs.insert(
                     event.id,
-                    OpenRun::new(
-                        event.task_id.clone(),
-                        Some(event.code),
-                        code_spans,
-                        event.host_data,
-                        event.also_mask,
-                    ),
+                    OpenRun::new(event.task_id.clone(), Some(event.code), event.host_data),
                 );
                 Some(TraceRecordEvent::RunStarted {
                     run: event.id,
@@ -766,15 +726,8 @@ impl Writer {
             })
             .await?;
         }
-        // A script can call any name, so an unknown method's name may hold a secret. A running
-        // operation is listed by its name, so the row is written now and only the start's sets
-        // reach it. Masking it again at the end would mean rewriting the row, which leaves the
-        // raw name in the WAL page the rewrite replaced (decision 51). A value only the end's set
-        // knows stays in the name.
-        let name = self
-            .redactor
-            .also_masking(&event.also_mask)
-            .text(&event.name);
+        // Names identify running operations immediately; input still waits for the end.
+        let name = self.redactor.text(&event.name);
         tx.insert_operation(OperationStartRow {
             id: event.id,
             parent: event.parent,
@@ -798,7 +751,6 @@ impl Writer {
                 tab: event.tab,
                 effect: event.effect,
                 args: event.args,
-                also_mask: event.also_mask,
                 notes: Vec::new(),
             },
         );
@@ -820,12 +772,7 @@ impl Writer {
             .runs
             .get_mut(&event.id.run)
             .and_then(|run| run.operations.remove(&event.id.seq));
-        let redactor = self.redactor.also_masking(
-            event
-                .also_mask
-                .iter()
-                .chain(open.as_ref().and_then(|open| open.also_mask.as_ref())),
-        );
+        let redactor = self.redactor.clone();
         let precise = open.as_ref().map(|open| redactor.args(&open.args));
         let notes = open
             .as_mut()
@@ -914,28 +861,18 @@ impl Writer {
         // Answers earlier in this batch count toward the end, though they come off the run's
         // count only when the batch commits.
         let complete = pending <= self.answering.get(&event.id).copied().unwrap_or(0);
-        let redactor = self.redactor.also_masking(&event.also_mask);
+        let redactor = self.redactor.clone();
         let result = event.result.as_ref().map(|result| redactor.result(result));
         let error = event.error.map(|mut error| {
             error.message = redactor.text(&error.message);
             error
         });
-        // The start's matches with the end's, so a value the process set has learned since, or
-        // one held then that grew or shrank, is masked whole.
         let bounded = match open.as_ref() {
-            Some(run) => run
-                .code
-                .as_deref()
-                .map(|code| redactor.code_with(code, run.code_spans.clone())),
+            Some(run) => run.code.as_deref().map(|code| redactor.code(code)),
             _ => None,
         };
-        // Masked with the start's own set and the end's at once: the end's may know a value the
-        // host put there that only the run's own sweeps found.
         let host_data = open.as_ref().and_then(|run| {
             let data = run.host_data.as_ref()?;
-            let redactor = self
-                .redactor
-                .also_masking(event.also_mask.iter().chain(run.also_mask.as_ref()));
             Some(redactor.host_data(data).value)
         });
         let code = match bounded.as_ref() {
@@ -1041,11 +978,10 @@ mod tests {
     use crate::{
         Delivery, Effect, EpochMillis, OperationEnded, OperationId, OperationKind,
         OperationStarted, Outcome, PrivacyRecord, PrivacyStore, PrivateReason, RedactionLimits,
-        Redactor, RetentionPolicy, RunEnded, RunId, RunStarted, RunStatus, SecretSet,
-        SecretSetConfig, Shot, ShotRead, TraceError, TraceStore, screenshot_queue,
+        Redactor, RetentionPolicy, RunEnded, RunId, RunStarted, RunStatus, Shot, ShotRead,
+        TraceError, TraceStore, screenshot_queue,
     };
     use browseros_core::TabId;
-    use std::sync::Arc;
     use std::time::Duration;
 
     async fn writer() -> (tempfile::TempDir, TraceStore, TraceSink) {
@@ -1055,10 +991,7 @@ mod tests {
             .unwrap_or_else(|error| panic!("open: {error}"));
         let sink = spawn_writer(
             &store,
-            Redactor::new(
-                Arc::new(SecretSet::new(SecretSetConfig::default())),
-                RedactionLimits::default(),
-            ),
+            Redactor::new(RedactionLimits::default()),
             WriterConfig::default(),
             None,
         );
@@ -1107,7 +1040,6 @@ mod tests {
                 request_id: None,
                 task_id: None,
                 host_data: None,
-                also_mask: None,
                 at: EpochMillis::from_millis(started),
             });
             sink.op_started(OperationStarted {
@@ -1118,7 +1050,6 @@ mod tests {
                 effect: Effect::Read,
                 tab: Some(TabId(3)),
                 args: serde_json::Value::Null,
-                also_mask: None,
                 at: EpochMillis::from_millis(started),
             });
             if let Some(ended) = ended {
@@ -1128,7 +1059,6 @@ mod tests {
                     error: None,
                     result: None,
                     replay: None,
-                    also_mask: None,
                     at: EpochMillis::from_millis(ended),
                 });
             }
@@ -1158,10 +1088,7 @@ mod tests {
         let (queue, mut jobs) = screenshot_queue();
         let sink = spawn_writer(
             &store,
-            Redactor::new(
-                Arc::new(SecretSet::new(SecretSetConfig::default())),
-                RedactionLimits::default(),
-            ),
+            Redactor::new(RedactionLimits::default()),
             WriterConfig::default(),
             Some(queue),
         );
@@ -1173,7 +1100,6 @@ mod tests {
             request_id: None,
             task_id: None,
             host_data: None,
-            also_mask: None,
             at: EpochMillis::from_millis(1),
         });
         assert!(sink.flush().await.is_ok());
@@ -1189,7 +1115,6 @@ mod tests {
             effect: Effect::Write,
             tab: Some(TabId(3)),
             args: serde_json::Value::Null,
-            also_mask: None,
             at: EpochMillis::from_millis(2),
         });
         sink.op_ended(OperationEnded {
@@ -1200,7 +1125,6 @@ mod tests {
             result: None,
             error: None,
             page_after: None,
-            also_mask: None,
             at: EpochMillis::from_millis(3),
         });
         let lost = sink.flush().await;
@@ -1215,7 +1139,6 @@ mod tests {
             error: None,
             result: None,
             replay: None,
-            also_mask: None,
             at: EpochMillis::from_millis(4),
         });
         let complete = tokio::time::timeout(std::time::Duration::from_secs(5), async {
@@ -1243,10 +1166,7 @@ mod tests {
         let (queue, mut jobs) = screenshot_queue();
         let sink = spawn_writer(
             &store,
-            Redactor::new(
-                Arc::new(SecretSet::new(SecretSetConfig::default())),
-                RedactionLimits::default(),
-            ),
+            Redactor::new(RedactionLimits::default()),
             WriterConfig::default(),
             Some(queue),
         );
@@ -1258,7 +1178,6 @@ mod tests {
             request_id: None,
             task_id: None,
             host_data: None,
-            also_mask: None,
             at: EpochMillis::from_millis(1),
         });
         let (first, second) = (OperationId::new(run, 1), OperationId::new(run, 2));
@@ -1271,7 +1190,6 @@ mod tests {
                 effect: Effect::Write,
                 tab: Some(TabId(3)),
                 args: serde_json::Value::Null,
-                also_mask: None,
                 at: EpochMillis::from_millis(2),
             });
             sink.op_ended(OperationEnded {
@@ -1282,7 +1200,6 @@ mod tests {
                 result: None,
                 error: None,
                 page_after: None,
-                also_mask: None,
                 at: EpochMillis::from_millis(3),
             });
         }
@@ -1292,7 +1209,6 @@ mod tests {
             error: None,
             result: None,
             replay: None,
-            also_mask: None,
             at: EpochMillis::from_millis(4),
         });
         assert!(sink.flush().await.is_ok());
@@ -1361,7 +1277,6 @@ mod tests {
             request_id: None,
             task_id: None,
             host_data: None,
-            also_mask: None,
             at: EpochMillis::from_millis(1),
         });
         let first = sink.flush().await;

@@ -104,6 +104,12 @@ impl<'env> OpScope<'env> {
         self.objects.on(session)
     }
 
+    /// Releases the op's remote objects now, keeping its group for later ones
+    /// ([`ObjectGroup::release_now`]). Only for a leaf whose tries share no remote object.
+    pub(crate) async fn release_objects(&self) {
+        self.objects.release_now().await;
+    }
+
     /// The op's Playwright timeout; `None` waits until the host drops the op.
     pub(crate) fn timeout(&self) -> Option<Duration> {
         self.timeout
@@ -123,7 +129,13 @@ impl<'env> OpScope<'env> {
 
     /// Carries delivered-close evidence to the host before the operation returns its value.
     pub(crate) fn report_close(&self, tab: TabId, target: &TargetId, seq: u64) {
+        self.run_state().frames.forget(tab);
         self.env.report_close(tab, target, seq);
+    }
+
+    /// Carries a page event's possible URL change to hosts that keep synchronous page facts.
+    pub(crate) fn report_navigation(&self, tab: TabId) {
+        self.env.report_navigation(tab);
     }
 
     /// Resolves a native tab in core's cache, listing once only on a miss, then performs the
@@ -330,7 +342,12 @@ impl<'env> OpScope<'env> {
 
     /// A core or CDP failure the leaf could not recover from, as one of the crate's codes.
     pub(crate) fn core_error(&self, error: &CoreError) -> PlaywrightError {
-        self.fail(ErrorCode::from_core(error), &error.to_string())
+        let code = ErrorCode::from_core(error);
+        if code == ErrorCode::TargetClosed {
+            self.fail(code, "Target page, context or browser has been closed")
+        } else {
+            self.fail(code, &error.to_string())
+        }
     }
 
     /// `neo / internal`: this op's leaf is not built yet.
@@ -770,6 +787,43 @@ mod tests {
             [Some(SessionId::from("A")), Some(SessionId::from("B"))],
             "released once on each session that holds one of the op's objects"
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_releasing_the_objects_frees_the_group_now_and_keeps_it()
+    -> Result<(), Box<dyn Error>> {
+        let recording = Arc::new(Recording::default());
+        let connection: Arc<dyn CdpConnection> = Arc::clone(&recording) as Arc<dyn CdpConnection>;
+        let session = ProtocolSession::for_session(connection, SessionId::from("A"));
+        let env = TestEnv::new();
+        let scope = OpScope::new(&env, op("locator.waitForFunction")?, CallHeader::default());
+        let group = scope.object_group(&session).to_owned();
+        let releases = || {
+            recording
+                .sent
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .iter()
+                .filter(|(method, params, session)| {
+                    method == "Runtime.releaseObjectGroup"
+                        && params["objectGroup"] == group.as_str()
+                        && *session == Some(SessionId::from("A"))
+                })
+                .count()
+        };
+        scope.release_objects().await;
+        assert_eq!(releases(), 1, "released at once, before the op ends");
+        assert_eq!(
+            scope.object_group(&session),
+            group,
+            "the next try's objects join the same group"
+        );
+        drop(scope);
+        for _ in 0..10 {
+            task::yield_now().await;
+        }
+        assert_eq!(releases(), 2, "and the op's end releases them too");
         Ok(())
     }
 

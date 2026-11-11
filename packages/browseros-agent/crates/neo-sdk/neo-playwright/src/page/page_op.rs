@@ -40,6 +40,7 @@ listed_enum! {
         EvaluateOnElement,
         EvaluateOnAll,
         WaitForFunction,
+        WaitForFunctionOnElement,
         Screenshot,
         Pdf,
     }
@@ -121,6 +122,13 @@ impl PageOp {
                 "page.waitForFunction",
                 PAGE,
                 "poll a main-world function from Rust until it returns truthy",
+            )
+            .using(&[Capability::MainWorld])
+            .policed(),
+            Self::WaitForFunctionOnElement => OpSpec::write(
+                "locator.waitForFunction",
+                TARGET,
+                "call a main-world function with the locator's element until it returns truthy",
             )
             .using(&[Capability::MainWorld])
             .policed(),
@@ -211,6 +219,14 @@ pub(crate) async fn invoke(
             ))
             .await
         }
+        PageOp::WaitForFunctionOnElement => {
+            Box::pin(element_evaluate::wait_for_function_on_element(
+                pw,
+                scope,
+                args.decode(scope)?,
+            ))
+            .await
+        }
     }
 }
 
@@ -259,6 +275,9 @@ async fn close(
             .close_page(admitted.core_page.clone())
             .await
             .map_err(core)?;
+    }
+    if !input.run_before_unload {
+        scope.run_state().frames.forget(page);
     }
     Ok(json!({}))
 }

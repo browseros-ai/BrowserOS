@@ -24,8 +24,8 @@ use neo_takeover::{
 };
 use neo_trace::{
     Delivery, Effect, EpochMillis, OperationEnded, OperationId, OperationKind, OperationStarted,
-    Outcome, RedactionLimits, Redactor, RunId, RunStarted, SecretSet, SecretSetConfig, TaskId,
-    TraceSink, TraceStore, WriterConfig, spawn_writer,
+    Outcome, RedactionLimits, Redactor, RunId, RunStarted, TaskId, TraceSink, TraceStore,
+    WriterConfig, spawn_writer,
 };
 use serde_json::{Value, json};
 use std::net::SocketAddr;
@@ -312,10 +312,9 @@ async fn harness() -> Result<Harness, BoxError> {
 async fn harness_at(xvnc: FakeXvnc, addr: SocketAddr) -> Result<Harness, BoxError> {
     let dir = tempfile::tempdir()?;
     let store = TraceStore::open(&dir.path().join("trace.db")).await?;
-    let secrets = Arc::new(SecretSet::new(SecretSetConfig::default()));
     let sink = spawn_writer(
         &store,
-        Redactor::new(Arc::clone(&secrets), RedactionLimits::default()),
+        Redactor::new(RedactionLimits::default()),
         WriterConfig::default(),
         None,
     );
@@ -446,7 +445,6 @@ impl Harness {
             result: None,
             error: None,
             page_after: None,
-            also_mask: None,
             at,
         });
     }
@@ -461,7 +459,6 @@ impl Harness {
                 request_id: None,
                 task_id: None,
                 host_data: None,
-                also_mask: None,
                 at: EpochMillis::now(),
             });
         }
@@ -529,7 +526,6 @@ fn run_of(run: RunId, task: &TaskId, at: EpochMillis) -> RunStarted {
         request_id: None,
         task_id: Some(task.clone()),
         host_data: None,
-        also_mask: None,
         at,
     }
 }
@@ -550,7 +546,6 @@ fn first_operation(
         effect,
         tab,
         args: json!({}),
-        also_mask: None,
         at,
     }
 }

@@ -62,6 +62,28 @@ impl Default for ObjectGroup {
 }
 
 impl ObjectGroup {
+    /// Releases every object in the group now, on every session that holds one, and keeps the
+    /// group: an object asked for later under the same name joins it again, and the owner's
+    /// drop releases that one. For an op that tries again and again with nothing shared between
+    /// tries (`locator.waitForFunction`), so a long wait does not keep every try's document and
+    /// element, and the subtrees the page replaced under them, alive until it ends.
+    pub(crate) async fn release_now(&self) {
+        // Cloned out: the std mutex is never held across the sends.
+        let sessions = self
+            .sessions
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
+        for session in sessions {
+            let _released = session
+                .send::<_, Value>(
+                    "Runtime.releaseObjectGroup",
+                    json!({ "objectGroup": self.name }),
+                )
+                .await;
+        }
+    }
+
     pub(crate) fn on(&self, session: &ProtocolSession) -> &str {
         let mut sessions = self.sessions.lock().unwrap_or_else(PoisonError::into_inner);
         if !sessions.iter().any(|known| known.same_session(session)) {

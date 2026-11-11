@@ -11,19 +11,25 @@
 //!  locator.evaluateAll, $$eval ── every match now, pinned ─▶ Subject::Elements in their frame
 //!                                 nothing matched, or a frame on the way missing ─▶ fn([]) in
 //!                                 the query's starting frame (measured, spike S-detached)
+//!  locator.waitForFunction ── on the outer backoff: the first match now (strict) ─▶
+//!                             Subject::Element, judged truthy in the page ─▶ done, or try again
 //! ```
 //!
 //! Elements reach the main world by backend node id, never as sealed-world objects: an object
 //! of one world cannot be an argument in another, and the main world resolves its own (the
 //! guard's `run`).
 
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use serde::Deserialize;
 use serde_json::Value;
 
+use crate::backoff::Backoff;
 use crate::op_scope::OpScope;
 use crate::page::evaluate::ScriptInput;
 use crate::page::evaluate_guard::{
-    self, DOCUMENT_REPLACED, EvaluateGuard, MainWorldCall, NAVIGATED, Outcome, Subject, TreeFrame,
+    self, DOCUMENT_REPLACED, EvaluateGuard, MainWorldCall, NAVIGATED, Outcome, Script, Subject,
+    TreeFrame,
 };
 use crate::page::{OpPage, world_call};
 use crate::read::{self, Returning, SelectorState};
@@ -52,6 +58,15 @@ pub(crate) struct EvaluateOnElementInput {
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub(crate) struct EvaluateOnAllInput {
     target: Target,
+    script: ScriptInput,
+}
+
+/// `locator.waitForFunction(fn, arg)`.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub(crate) struct WaitForFunctionOnElementInput {
+    target: Target,
+    strict: Strictness,
     script: ScriptInput,
 }
 
@@ -123,6 +138,121 @@ pub(crate) async fn evaluate_on_all(
         MainWorldCall::once(script.into(), subject),
     )
     .await
+}
+
+/// Runs upstream's `waitForFunctionExpressionOnElement` (PW frames.ts, `_waitForFunctionOnSelector`
+/// in the main world): `waiting for <locator>` in the call log, then tries on the outer backoff
+/// until `fn(element, arg)` is truthy, within the op's timeout. Each try matches the locator
+/// afresh, so an element the page re-rendered is found again, and the page judges the result
+/// as it was returned (`MainWorldCall::truthy`). A strict violation or a throw in the page ends
+/// the wait, as upstream's non-retriable errors do; no match yet, an element gone before its
+/// script ran, or a document replaced under it, tries again. It resolves to nothing, as
+/// upstream's does.
+pub(crate) async fn wait_for_function_on_element(
+    pw: &Playwright,
+    scope: &OpScope<'_>,
+    input: WaitForFunctionOnElementInput,
+) -> Result<Value, PlaywrightError> {
+    let WaitForFunctionOnElementInput {
+        target,
+        strict,
+        script,
+    } = input;
+    let Target::Locator(locator) = target else {
+        return Err(scope.fail(
+            ErrorCode::InvalidInput,
+            "target: locator.waitForFunction takes a locator, not an element handle",
+        ));
+    };
+    // Upstream's server normalizes the expression before it waits, so its refusal comes first.
+    let script = Script::from(script);
+    if let Script::Refused(message) = &script {
+        return Err(scope.fail(ErrorCode::InvalidInput, message));
+    }
+    let matched = AtomicBool::new(false);
+    let tries = Box::pin(truthy_tries(pw, scope, &locator, strict, &script, &matched));
+    let done = scope.within(tries).await;
+    done.unwrap_or_else(|_expired| Err(timed_out(scope, &matched)))
+}
+
+/// The timeout, as the reads' wait for an element words it when nothing ever matched (the
+/// script's locator, with nothing sent), and as `page.waitForFunction`'s once the predicate ran.
+fn timed_out(scope: &OpScope<'_>, matched: &AtomicBool) -> PlaywrightError {
+    scope.timed_out(if matched.load(Ordering::Relaxed) {
+        ErrorCode::WaitTimeout
+    } else {
+        ErrorCode::NoMatch
+    })
+}
+
+/// [`wait_for_function_on_element`]'s tries, which its deadline drops wherever they are.
+async fn truthy_tries(
+    pw: &Playwright,
+    scope: &OpScope<'_>,
+    locator: &LocatorTarget,
+    strict: Strictness,
+    script: &Script,
+    matched: &AtomicBool,
+) -> Result<Value, PlaywrightError> {
+    scope.log(format!("waiting for {}", locator.display));
+    let backoff = Backoff::outer(scope.timeout());
+    for attempt in 0.. {
+        if scope.sleep(backoff.wait(attempt)).await.is_err() {
+            return Err(timed_out(scope, matched));
+        }
+        if truthy_try(pw, scope, locator, strict, script, matched).await? {
+            return Ok(Value::Null);
+        }
+        // Nothing of a try is used by the next, which matches the locator afresh.
+        scope.release_objects().await;
+    }
+    Err(timed_out(scope, matched))
+}
+
+/// One try: the locator's match now, and whether `fn(element, arg)` was truthy on it. `false`
+/// tries again: nothing matched, the match left the page before its script ran, or a document
+/// replaced it.
+async fn truthy_try(
+    pw: &Playwright,
+    scope: &OpScope<'_>,
+    locator: &LocatorTarget,
+    strict: Strictness,
+    script: &Script,
+    matched: &AtomicBool,
+) -> Result<bool, PlaywrightError> {
+    let found = read::query_one(pw, scope, locator, strict).await?;
+    if found.is_null() {
+        return Ok(false);
+    }
+    matched.store(true, Ordering::Relaxed);
+    let element = handle_of(scope, found)?;
+    let page = element.page().clone();
+    let call = MainWorldCall::truthy(script.clone(), element);
+    let mut guard = match EvaluateGuard::open(pw, scope, &page, call).await {
+        Ok(guard) => guard,
+        // The match went away between the query and its binding, as a re-render removes it:
+        // upstream's query and call are one page call, so its next try finds the new one.
+        Err(error)
+            if matches!(
+                error.error_code(),
+                Some(ErrorCode::ElementDetached | ErrorCode::PageError)
+            ) =>
+        {
+            return Ok(false);
+        }
+        Err(error) => return Err(error),
+    };
+    match guard.run(scope).await? {
+        Outcome::Answered(answer) => match answer.finish(scope)?.value {
+            Value::Bool(truthy) => Ok(truthy),
+            _ => Err(scope.fail(
+                ErrorCode::Internal,
+                "a truthiness try answered something other than a boolean",
+            )),
+        },
+        Outcome::NotRun | Outcome::Destroyed | Outcome::Navigated => Ok(false),
+        Outcome::Falsy => Err(scope.fail(ErrorCode::Internal, "a script run once answered a poll")),
+    }
 }
 
 /// One run through the guard. An element's script that found its document or a node gone

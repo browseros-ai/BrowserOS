@@ -3,14 +3,13 @@
 use std::collections::BTreeMap;
 use std::error::Error;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 
 use browseros_core::TabId;
 use neo_trace::{
     Delivery, Effect, EpochMillis, OperationEnded, OperationId, OperationKind, OperationStarted,
     Outcome, PageState, PrivateReason, RedactionLimits, Redactor, RequestId, RetentionPolicy,
-    RunEffects, RunQuery, RunStatus, SecretSet, SecretSetConfig, ShotRead, ShotState, TailQuery,
-    TaskId, TraceError, TraceStore, WriterConfig, spawn_writer,
+    RunEffects, RunQuery, RunStatus, ShotRead, ShotState, TailQuery, TaskId, TraceError,
+    TraceStore, WriterConfig, spawn_writer,
 };
 use sea_orm::sqlx::sqlite::SqliteConnectOptions;
 use sea_orm::sqlx::{self, Connection, Row, SqliteConnection};
@@ -452,10 +451,7 @@ async fn an_s4_file_gains_notes_and_takes_operation_ends() -> TestResult {
     let store = TraceStore::open(&path).await?;
     let sink = spawn_writer(
         &store,
-        Redactor::new(
-            Arc::new(SecretSet::new(SecretSetConfig::default())),
-            RedactionLimits::default(),
-        ),
+        Redactor::new(RedactionLimits::default()),
         WriterConfig::default(),
         None,
     );
@@ -468,7 +464,6 @@ async fn an_s4_file_gains_notes_and_takes_operation_ends() -> TestResult {
         effect: Effect::Read,
         tab: Some(TabId(3)),
         args: Value::Null,
-        also_mask: None,
         at: EpochMillis::from_millis(40),
     });
     sink.op_notes(id, vec!["adopted note".into()]);
@@ -480,7 +475,6 @@ async fn an_s4_file_gains_notes_and_takes_operation_ends() -> TestResult {
         result: None,
         error: None,
         page_after: None,
-        also_mask: None,
         at: EpochMillis::from_millis(41),
     });
     sink.flush().await?;
@@ -680,10 +674,7 @@ async fn a_store_with_no_stored_shots_sweeps_cleanly() -> TestResult {
     let store = TraceStore::open(&path).await?;
     let sink = spawn_writer(
         &store,
-        Redactor::new(
-            Arc::new(SecretSet::new(SecretSetConfig::default())),
-            RedactionLimits::default(),
-        ),
+        Redactor::new(RedactionLimits::default()),
         WriterConfig::default(),
         None,
     );
@@ -776,10 +767,7 @@ async fn legacy_page_ids_stay_inert_while_native_tab_records_round_trip() -> Tes
     );
     let sink = spawn_writer(
         &store,
-        Redactor::new(
-            Arc::new(SecretSet::new(SecretSetConfig::default())),
-            RedactionLimits::default(),
-        ),
+        Redactor::new(RedactionLimits::default()),
         WriterConfig::default(),
         None,
     );
@@ -792,7 +780,6 @@ async fn legacy_page_ids_stay_inert_while_native_tab_records_round_trip() -> Tes
         effect: Effect::Read,
         tab: Some(TabId(3)),
         args: Value::Null,
-        also_mask: None,
         at: EpochMillis::from_millis(40),
     });
     let page = PageState {
@@ -808,7 +795,6 @@ async fn legacy_page_ids_stay_inert_while_native_tab_records_round_trip() -> Tes
         result: None,
         error: None,
         page_after: Some(page.clone()),
-        also_mask: None,
         at: EpochMillis::from_millis(41),
     });
     sink.flush().await?;

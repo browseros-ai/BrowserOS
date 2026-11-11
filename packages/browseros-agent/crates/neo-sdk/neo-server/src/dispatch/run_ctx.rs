@@ -91,7 +91,7 @@ pub(crate) struct RunEnd {
     pub(crate) error: Option<ErrorRecord>,
     /// The script's return value.
     pub(crate) result: Option<Value>,
-    /// The masked reply, kept by the trace to answer a repeated `requestId`.
+    /// The exact reply, kept by the trace to answer a repeated `requestId`.
     pub(crate) replay: Option<Value>,
 }
 
@@ -186,7 +186,6 @@ impl RunCtx {
             request_id,
             task_id: task_id.clone(),
             host_data,
-            also_mask: None,
             at: EpochMillis::now(),
         });
         let run = Arc::new(Self {
@@ -451,7 +450,6 @@ impl RunGuard {
                 error: end.error,
                 result: end.result,
                 replay: end.replay,
-                also_mask: None,
                 at: EpochMillis::now(),
             });
         }
@@ -474,7 +472,6 @@ impl Drop for RunGuard {
             error: Some(error),
             result: None,
             replay: None,
-            also_mask: None,
             at: EpochMillis::now(),
         });
     }

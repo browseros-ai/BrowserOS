@@ -8,6 +8,7 @@
 //!  page.waitForFunction, frame.waitForFunction ────────────────────▶ page.waitForFunction
 //!  locator.evaluate, elementHandle.evaluate, $eval (page, frame, handle) ─▶ locator.evaluate
 //!  locator.evaluateAll, $$eval (page, frame, handle) ──────────────▶ locator.evaluateAll
+//!  locator.waitForFunction ─────────────────────────────────────────▶ locator.waitForFunction
 //!  page.setContent, frame.setContent ──────────────────────────────▶ page.setContent
 //!    each op: the crate's gateway rechecks the op's tab and sends ─ the door: the rules again as a
 //!    read of the tab ─▶ the realm, and the trace the host reads back
@@ -69,6 +70,11 @@ async fn wait_for_function_behaves_as_playwright_on_browseros() -> TestResult {
 #[tokio::test(flavor = "multi_thread")]
 async fn locator_evaluate_and_dollar_eval_behave_as_playwright_on_browseros() -> TestResult {
     on_browseros(|rig| Box::pin(locator_evaluate(rig))).await
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn locator_wait_for_function_behaves_as_playwright_on_browseros() -> TestResult {
+    on_browseros(|rig| Box::pin(locator_wait_for_function(rig))).await
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -329,6 +335,66 @@ async fn locator_evaluate(rig: &Rig) -> TestResult {
             ),
         }),
         "locator.evaluate and every API that sends it, as Playwright runs them"
+    );
+    Ok(())
+}
+
+/// `locator.waitForFunction`: the predicate called with the locator's element and an argument,
+/// the locator matched afresh on every try, until it is truthy. A string expression, a promise
+/// (truthy, never awaited, as upstream), an element handle argument, a child frame's element,
+/// and upstream's errors: a wait that matched but stayed falsy, one that never matched, a strict
+/// violation and a throw.
+async fn locator_wait_for_function(rig: &Rig) -> TestResult {
+    let script = r"
+        const item = await page.$('.item');
+        const field = page.locator('#user');
+        // Waits that resolve take as long as they need: the test checks what they do, not speed.
+        const patient = { timeout: 20000 };
+        const resolved = [
+          // The first try replaces the field and answers false, so only a try that matches the
+          // locator afresh sees the new one.
+          await field.waitForFunction((el) => {
+            if (el.value !== 'ada') return el.value === 'grace';
+            el.replaceWith(Object.assign(document.createElement('input'), { id: 'user', value: 'grace' }));
+            return false;
+          }, undefined, patient),
+          await field.waitForFunction((el, n) => el.value.length === n, 5, patient),
+          await field.waitForFunction((el, other) => other.textContent === 'one', item, patient),
+          await field.waitForFunction(`el => el.value === 'grace'`, undefined, patient),
+          await field.waitForFunction(async () => false, undefined, patient),
+          await page.frameLocator('iframe').locator('#inner')
+            .waitForFunction((el) => el.textContent === 'in frame', undefined, patient),
+        ];
+        return {
+          resolved: resolved.map((value) => value === undefined),
+          // Long enough for a try to reach the page on a loaded machine, so it was sent.
+          falsy: await failed(() => field.waitForFunction(() => false, null, { timeout: 3000 })),
+          missing: await failed(() => page.locator('#missing').waitForFunction(() => true, null, { timeout: 300 })),
+          strict: await failed(() => page.locator('.item').waitForFunction(() => true)),
+          thrown: await failed(() => field.waitForFunction(() => { throw new Error('nope'); }, null, patient)),
+        };";
+    let value = observed(rig, "locator-wait-for-function", script).await?;
+    assert_eq!(
+        value,
+        json!({
+            "resolved": [true, true, true, true, true, true],
+            "falsy": threw(
+                "TimeoutError", "website", "wait_timeout", "unknown",
+                "locator.waitForFunction: Timeout 3000ms exceeded.",
+            ),
+            "missing": threw(
+                "TimeoutError", "script", "no_match", "not_sent",
+                "locator.waitForFunction: Timeout 300ms exceeded.",
+            ),
+            "strict": threw(
+                "Error", "script", "strict_mode_violation", "not_sent",
+                "locator.waitForFunction: Error: strict mode violation: locator('.item') resolved to 2 elements:",
+            ),
+            "thrown": threw(
+                "Error", "website", "page_error", "done", "locator.waitForFunction: Error: nope"
+            ),
+        }),
+        "locator.waitForFunction as Playwright runs it"
     );
     Ok(())
 }

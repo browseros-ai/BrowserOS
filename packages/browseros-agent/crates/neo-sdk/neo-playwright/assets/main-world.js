@@ -659,6 +659,16 @@ function neoMainWorld(mode, isFunction, expression, argCount, ...argTextsThenHan
     const out = utility.evaluate(isFunction, true, expression, argCount, ...args, ...handles);
     return isThenable(out) ? out.then((value) => asText(value)) : asText(out);
   }
+  if (mode === "truthy") {
+    const element = argCount > 0 ? parseEvaluationResultValue(args[0], handles) : undefined;
+    if (!element?.isConnected)
+      return "false";
+    const arg = argCount > 1 ? parseEvaluationResultValue(args[1], handles) : undefined;
+    let result = globalThis.eval(expression);
+    if (isFunction === true || isFunction !== false && typeof result === "function")
+      result = result(element, arg);
+    return result ? "true" : "false";
+  }
   const arg = argCount > 0 ? parseEvaluationResultValue(args[0], handles) : undefined;
   let evaledExpression;
   const predicate = () => {
