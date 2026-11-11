@@ -7,12 +7,12 @@ import { join } from 'node:path'
 import { classify } from './judge.mjs'
 import { hostGet, runNeo, traceCodeEvidence } from './runner-neo.mjs'
 
-test('verifies complete source and records when sensitive source is withheld', () => {
+test('verifies complete source and rejects missing source evidence', () => {
   expect(traceCodeEvidence('return 1', { code: 'return 1' })).toBe('full')
   expect(traceCodeEvidence('return 1', { code: 'return 2' })).toBeUndefined()
   expect(
     traceCodeEvidence('return 1', { codeWithheld: 'sensitive_input' }),
-  ).toBe('withheld')
+  ).toBeUndefined()
   expect(
     traceCodeEvidence('return 1', { codeWithheld: 'unavailable' }),
   ).toBeUndefined()
