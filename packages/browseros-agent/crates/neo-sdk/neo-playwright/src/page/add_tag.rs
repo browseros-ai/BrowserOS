@@ -9,7 +9,8 @@ use browseros_cdp::CdpEvent;
 use browseros_core::FrameId;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use tokio::sync::broadcast::{self, error::RecvError, error::TryRecvError};
+use tokio::sync::broadcast;
+use tokio::sync::broadcast::error::{RecvError, TryRecvError};
 use tokio::{fs, time};
 
 use crate::op_scope::OpScope;
