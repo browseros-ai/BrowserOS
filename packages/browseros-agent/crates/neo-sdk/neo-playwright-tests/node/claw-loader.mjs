@@ -54,6 +54,9 @@ export async function openClaw(cdpPort, options = {}, { onUncaught } = {}) {
       stateDir,
       executionDir: options.executionDir,
       browserosVersion: options.browserosVersion,
+      // The browser's launch mode, as launchBrowser defaults it: hosted only for --hosted-mode.
+      hostedMode:
+        options.hostedMode ?? process.env.NEO_NODE_HOSTED_MODE === '1',
     })
     native = await runtime.openRun({ timeoutMs: options.timeoutMs })
     const holder = {

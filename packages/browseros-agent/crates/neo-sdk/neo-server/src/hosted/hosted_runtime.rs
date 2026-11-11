@@ -54,7 +54,9 @@ impl Drop for Executor {
 
 impl HostedRuntime {
     /// Starts the product's browser link to loopback CDP, and resolves after it connects.
-    /// The caller owns the browser and must launch it with `BROWSERCLAW_HOSTED_MODE=1`.
+    /// The caller owns the browser, and `options.hosted_mode` must say whether it launched it
+    /// with `BROWSERCLAW_HOSTED_MODE=1`: a mismatch refuses console and page-error waits the
+    /// browser would answer, or waits for ones hosted BrowserOS never sends.
     pub async fn connect(cdp_port: u16, options: HostedOptions) -> Result<Self, HostedError> {
         Self::start(options, move |native, tabs| {
             BrowserLink::start(cdp_port, native, tabs)

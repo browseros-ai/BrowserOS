@@ -1009,6 +1009,7 @@
   function markHandle(object) {
     handles.add(object);
   }
+  var inspectCustom = Symbol.for("nodejs.util.inspect.custom");
   function isHandle(value) {
     return typeof value === "object" && value !== null && handles.has(value);
   }
@@ -6552,6 +6553,37 @@ ${value.stack}`;
     };
   }
 
+  // crates/neo-sdk/neo-playwright-js/src/prelude/signal.ts
+  function signalOf(api, options) {
+    if (typeof options !== "object" || options === null)
+      return;
+    const signal = Reflect.get(options, "signal");
+    if (signal === undefined)
+      return;
+    if (typeof signal !== "object" || signal === null || typeof Reflect.get(signal, "aborted") !== "boolean" || typeof Reflect.get(signal, "addEventListener") !== "function" || typeof Reflect.get(signal, "removeEventListener") !== "function")
+      throw clientError(api, "signal: expected an AbortSignal");
+    if (signal.aborted)
+      throw abortedError(api, signal);
+    return signal;
+  }
+  async function untilAborted(signal, aborted, work) {
+    if (signal === undefined)
+      return await work();
+    if (signal.aborted)
+      throw aborted();
+    let detach = () => {};
+    const abort = new Promise((_, reject) => {
+      const listener = () => reject(aborted());
+      signal.addEventListener("abort", listener, { once: true });
+      detach = () => signal.removeEventListener("abort", listener);
+    });
+    try {
+      return await Promise.race([work(), abort]);
+    } finally {
+      detach();
+    }
+  }
+
   // crates/neo-sdk/neo-playwright-js/src/prelude/locator.ts
   function testIdAttributeName() {
     return "data-testid";
@@ -6570,6 +6602,9 @@ ${value.stack}`;
     }
     toString() {
       return asLocatorDescription("javascript", this._selector);
+    }
+    [inspectCustom]() {
+      return this.toString();
     }
     description() {
       return locatorCustomDescription(this._selector) ?? null;
@@ -6857,7 +6892,8 @@ ${value.stack}`;
     }
     async evaluate(pageFunction, arg, options) {
       const api = "locator.evaluate";
-      const script = pageCall(api, "locator", pageFunction, arg, options);
+      signalOf(api, options);
+      const script = await this._frame._page._evaluationScript(api, "locator", pageFunction, arg, options);
       return await this._frame._evaluateOn(api, this._selector, true, script, false, typeof options === "object" && options !== null ? options : {});
     }
     async waitForFunction(pageFunction, arg, options) {
@@ -6967,37 +7003,6 @@ ${value.stack}`;
     if (!path)
       return;
     await invoke("page.saveScreenshot", { api, timeoutMs: 0 }, { path, base64: decode(bytes, "base64") }, signal);
-  }
-
-  // crates/neo-sdk/neo-playwright-js/src/prelude/signal.ts
-  function signalOf(api, options) {
-    if (typeof options !== "object" || options === null)
-      return;
-    const signal = Reflect.get(options, "signal");
-    if (signal === undefined)
-      return;
-    if (typeof signal !== "object" || signal === null || typeof Reflect.get(signal, "aborted") !== "boolean" || typeof Reflect.get(signal, "addEventListener") !== "function" || typeof Reflect.get(signal, "removeEventListener") !== "function")
-      throw clientError(api, "signal: expected an AbortSignal");
-    if (signal.aborted)
-      throw abortedError(api, signal);
-    return signal;
-  }
-  async function untilAborted(signal, aborted, work) {
-    if (signal === undefined)
-      return await work();
-    if (signal.aborted)
-      throw aborted();
-    let detach = () => {};
-    const abort = new Promise((_, reject) => {
-      const listener = () => reject(aborted());
-      signal.addEventListener("abort", listener, { once: true });
-      detach = () => signal.removeEventListener("abort", listener);
-    });
-    try {
-      return await Promise.race([work(), abort]);
-    } finally {
-      detach();
-    }
   }
 
   // crates/neo-sdk/neo-playwright-js/src/prelude/snapshot.ts
@@ -7575,7 +7580,7 @@ ${value.stack}`;
       await this._page._navigated(api, this, result, observed);
     }
     async _evaluate(api, pageFunction, arg, options) {
-      const script = pageCall(api, "frame", pageFunction, arg, options);
+      const script = await this._page._evaluationScript(api, "frame", pageFunction, arg, options);
       const { value: result, observed } = await invokeObserved("page.evaluate", this._call(api, 0), {
         ...await this._frameArgs(api),
         script
@@ -7867,7 +7872,7 @@ ${value.stack}`;
     async evaluate(pageFunction, arg, options) {
       const api = "elementHandle.evaluate";
       this.#live(api);
-      const script = pageCall(api, "handle", pageFunction, arg, options);
+      const script = await this._page._evaluationScript(api, "handle", pageFunction, arg, options);
       return fromPageValue(api, await this.#op("locator.evaluate", api, 0, { script }));
     }
     async $eval(selector, pageFunction, arg) {
@@ -7905,8 +7910,115 @@ ${value.stack}`;
     }
   }
 
-  // crates/neo-sdk/neo-playwright-js/src/prelude/evaluation.ts
+  // crates/neo-sdk/neo-playwright-js/src/prelude/init-script.ts
   var TOO_MANY_ARGUMENTS = "Too many arguments. If you need to pass more than 1 argument to the function wrap them in an object.";
+  async function addInitScript(api, owner, script, arg, options) {
+    if (options !== undefined && (typeof options !== "object" || options === null || Array.isArray(options)))
+      throw plainError(api, TOO_MANY_ARGUMENTS);
+    if (options && Reflect.get(options, "exposeFunctions")) {
+      if (typeof script !== "function")
+        throw plainError(api, "Passing functions requires the init script to be a function");
+      return await withExposedFunctions(owner, script, arg);
+    }
+    return registration(await owner.register(initSource(api, script, arg)));
+  }
+  async function withExposedFunctions(owner, script, arg) {
+    const exposing = [];
+    const undo = async (error) => {
+      const settled = await Promise.allSettled(exposing);
+      await Promise.all(settled.map((outcome) => outcome.status === "fulfilled" ? outcome.value.dispose().catch(() => {}) : undefined));
+      throw error;
+    };
+    let serialized;
+    try {
+      serialized = serializeAsCallArgument(arg, (value) => {
+        if (typeof value === "function") {
+          const name = callbackName();
+          exposing.push(owner.expose(name, (_source, ...args) => Reflect.apply(value, undefined, args)));
+          return { fn: name };
+        }
+        return { fallThrough: value };
+      });
+    } catch (error) {
+      return await undo(error);
+    }
+    let bindings;
+    let init;
+    try {
+      bindings = await Promise.all(exposing);
+      const source = `(${String(script)})(globalThis['${kBindingsControllerProperty}'].parseInitScriptArg(${JSON.stringify(serialized)}))`;
+      init = registration(await owner.register({ source }));
+    } catch (error) {
+      return await undo(error);
+    }
+    let disposed = false;
+    return new Disposable(async () => {
+      if (disposed)
+        return;
+      disposed = true;
+      await Promise.all(bindings.map((binding) => binding.dispose().catch(() => {})));
+      await init.dispose();
+    });
+  }
+  function callbackName() {
+    let text = kFunctionBindingPrefix;
+    for (let index = 0;index < 16; index++)
+      text += Math.floor(Math.random() * 256).toString(16).padStart(2, "0");
+    return text;
+  }
+  function initSource(api, script, arg) {
+    if (typeof script === "function") {
+      const argText = Object.is(arg, undefined) ? "undefined" : JSON.stringify(arg);
+      return { source: `(${String(script)})(${argText})` };
+    }
+    if (arg !== undefined)
+      throw plainError(api, "Cannot evaluate a string with arguments");
+    if (typeof script === "string")
+      return { source: script };
+    if (typeof script === "object" && script !== null) {
+      const content = Reflect.get(script, "content");
+      if (content !== undefined)
+        return { source: String(content) };
+      const path = Reflect.get(script, "path");
+      if (path !== undefined)
+        return { path: String(path) };
+    }
+    throw plainError(api, "Either path or content property must be present");
+  }
+
+  class Disposable {
+    #dispose;
+    constructor(dispose) {
+      this.#dispose = dispose;
+    }
+    async dispose() {
+      await this.#dispose();
+    }
+  }
+  function registration(id, forget) {
+    return new Disposable(async () => {
+      try {
+        await invoke("disposable.dispose", { api: "disposable.dispose", timeoutMs: 0 }, { id });
+      } finally {
+        forget?.();
+      }
+    });
+  }
+  var asyncDispose = Reflect.get(Symbol, "asyncDispose");
+  if (typeof asyncDispose === "symbol")
+    Object.defineProperty(Disposable.prototype, asyncDispose, {
+      configurable: true,
+      writable: true,
+      value() {
+        return this.dispose();
+      }
+    });
+
+  // crates/neo-sdk/neo-playwright-js/src/prelude/evaluation.ts
+  function exposesFunctions(options) {
+    return typeof options === "object" && options !== null && !!Reflect.get(options, "exposeFunctions");
+  }
+  var TOO_MANY_ARGUMENTS2 = "Too many arguments. If you need to pass more than 1 argument to the function wrap them in an object.";
   var REFUSALS = {
     unsupported: unsupportedError,
     client: clientError,
@@ -7922,15 +8034,11 @@ ${value.stack}`;
   }
   function assertMaxArguments(api, count, max) {
     if (count > max)
-      throw plainError(api, TOO_MANY_ARGUMENTS);
+      throw plainError(api, TOO_MANY_ARGUMENTS2);
   }
   function assertEvaluateOptions(options) {
     if (options !== undefined && (typeof options !== "object" || options === null || Array.isArray(options)))
-      throw new FailedCheck("plain", TOO_MANY_ARGUMENTS);
-  }
-  function refuseExposedFunctions(api, options) {
-    if (typeof options === "object" && options !== null && Reflect.get(options, "exposeFunctions"))
-      throw unsupportedError(api, "pages cannot call back into the script in Neo; return what the page computed instead");
+      throw new FailedCheck("plain", TOO_MANY_ARGUMENTS2);
   }
   var fallThrough = (value) => ({ fallThrough: value });
   var FORMS = {
@@ -7939,14 +8047,12 @@ ${value.stack}`;
     handle: { options: true, afterWait: false },
     query: { options: false, afterWait: false }
   };
-  function pageCall(api, form, pageFunction, arg, options) {
+  function pageCall(api, form, pageFunction, arg, options, callbacks) {
     const { options: checksOptions, afterWait } = FORMS[form];
-    if (checksOptions)
-      refuseExposedFunctions(api, options);
     try {
       if (checksOptions)
         assertEvaluateOptions(options);
-      return script(api, pageFunction, arg);
+      return script(api, pageFunction, arg, callbacks);
     } catch (error) {
       if (afterWait) {
         const message = error instanceof Error ? error.message : String(error);
@@ -7959,9 +8065,9 @@ ${value.stack}`;
       throw error;
     }
   }
-  function script(api, pageFunction, arg) {
+  function script(api, pageFunction, arg, callbacks) {
     const isFunction = typeof pageFunction === "function";
-    const { serialized, clientHandles } = serializeArgument(api, arg);
+    const { serialized, clientHandles } = serializeArgument(api, arg, callbacks);
     let expression;
     try {
       expression = normalizeEvaluationExpression(String(pageFunction), isFunction);
@@ -7985,12 +8091,17 @@ ${value.stack}`;
       }
     };
   }
-  function serializeArgument(api, arg) {
+  function serializeArgument(api, arg, callbacks) {
     let serialized;
     const clientHandles = [];
     const copies = new Map;
     try {
       serialized = serializeValue(arg, (value) => {
+        if (typeof value === "function" && callbacks) {
+          const name = callbackName();
+          callbacks.push([name, value]);
+          return { fn: name };
+        }
         if (value instanceof ElementHandle) {
           clientHandles.push(value);
           return { h: clientHandles.length - 1 };
@@ -8072,110 +8183,6 @@ ${value.stack}`;
       expression = `(${expression})`;
     return expression;
   }
-
-  // crates/neo-sdk/neo-playwright-js/src/prelude/init-script.ts
-  var TOO_MANY_ARGUMENTS2 = "Too many arguments. If you need to pass more than 1 argument to the function wrap them in an object.";
-  async function addInitScript(api, owner, script, arg, options) {
-    if (options !== undefined && (typeof options !== "object" || options === null || Array.isArray(options)))
-      throw plainError(api, TOO_MANY_ARGUMENTS2);
-    if (options && Reflect.get(options, "exposeFunctions")) {
-      if (typeof script !== "function")
-        throw plainError(api, "Passing functions requires the init script to be a function");
-      return await withExposedFunctions(owner, script, arg);
-    }
-    return registration(await owner.register(initSource(api, script, arg)));
-  }
-  async function withExposedFunctions(owner, script, arg) {
-    const exposing = [];
-    const undo = async (error) => {
-      const settled = await Promise.allSettled(exposing);
-      await Promise.all(settled.map((outcome) => outcome.status === "fulfilled" ? outcome.value.dispose().catch(() => {}) : undefined));
-      throw error;
-    };
-    let serialized;
-    try {
-      serialized = serializeAsCallArgument(arg, (value) => {
-        if (typeof value === "function") {
-          const name = kFunctionBindingPrefix + guid();
-          exposing.push(owner.expose(name, (_source, ...args) => Reflect.apply(value, undefined, args)));
-          return { fn: name };
-        }
-        return { fallThrough: value };
-      });
-    } catch (error) {
-      return await undo(error);
-    }
-    let bindings;
-    let init;
-    try {
-      bindings = await Promise.all(exposing);
-      const source = `(${String(script)})(globalThis['${kBindingsControllerProperty}'].parseInitScriptArg(${JSON.stringify(serialized)}))`;
-      init = registration(await owner.register({ source }));
-    } catch (error) {
-      return await undo(error);
-    }
-    let disposed = false;
-    return new Disposable(async () => {
-      if (disposed)
-        return;
-      disposed = true;
-      await Promise.all(bindings.map((binding) => binding.dispose().catch(() => {})));
-      await init.dispose();
-    });
-  }
-  function guid() {
-    let text = "";
-    for (let index = 0;index < 16; index++)
-      text += Math.floor(Math.random() * 256).toString(16).padStart(2, "0");
-    return text;
-  }
-  function initSource(api, script, arg) {
-    if (typeof script === "function") {
-      const argText = Object.is(arg, undefined) ? "undefined" : JSON.stringify(arg);
-      return { source: `(${String(script)})(${argText})` };
-    }
-    if (arg !== undefined)
-      throw plainError(api, "Cannot evaluate a string with arguments");
-    if (typeof script === "string")
-      return { source: script };
-    if (typeof script === "object" && script !== null) {
-      const content = Reflect.get(script, "content");
-      if (content !== undefined)
-        return { source: String(content) };
-      const path = Reflect.get(script, "path");
-      if (path !== undefined)
-        return { path: String(path) };
-    }
-    throw plainError(api, "Either path or content property must be present");
-  }
-
-  class Disposable {
-    #dispose;
-    constructor(dispose) {
-      this.#dispose = dispose;
-    }
-    async dispose() {
-      await this.#dispose();
-    }
-  }
-  function registration(id, forget) {
-    return new Disposable(async () => {
-      try {
-        await invoke("disposable.dispose", { api: "disposable.dispose", timeoutMs: 0 }, { id });
-      } finally {
-        forget?.();
-      }
-    });
-  }
-  var asyncDispose = Reflect.get(Symbol, "asyncDispose");
-  if (typeof asyncDispose === "symbol")
-    Object.defineProperty(Disposable.prototype, asyncDispose, {
-      configurable: true,
-      writable: true,
-      value() {
-        return this.dispose();
-      }
-    });
 
   // crates/neo-sdk/neo-playwright-js/src/prelude/bindings.ts
   async function exposeOnPage(page, api, name, callback, noGlobal = false) {
@@ -8455,6 +8462,9 @@ ${value.stack}`;
     }
     toString() {
       return this.#info.text;
+    }
+    [inspectCustom]() {
+      return this.text();
     }
   }
   function pageError(info) {
@@ -9309,6 +9319,19 @@ ${value.stack}`;
     }
     exposeFunction(name, callback) {
       return exposeOnPage(this, "page.exposeFunction", name, (_source, ...args) => Reflect.apply(callback, undefined, args));
+    }
+    async _evaluationScript(api, form, pageFunction, arg, options) {
+      const callbacks = exposesFunctions(options) ? [] : undefined;
+      const script = pageCall(api, form, pageFunction, arg, options, callbacks);
+      if (!callbacks?.length || !("run" in script))
+        return script;
+      const settled = await Promise.allSettled(callbacks.map(([name, callback]) => exposeOnPage(this, api, name, (_source, ...args) => Reflect.apply(callback, undefined, args), true)));
+      const failed = settled.find((outcome) => outcome.status === "rejected");
+      if (failed) {
+        await Promise.all(settled.map((outcome) => outcome.status === "fulfilled" ? outcome.value.dispose().catch(() => {}) : undefined));
+        throw failed.reason;
+      }
+      return script;
     }
     async _bindingFrame(id) {
       if (id === null)

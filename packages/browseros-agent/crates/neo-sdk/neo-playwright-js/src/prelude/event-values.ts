@@ -5,7 +5,7 @@
  */
 import { invoke } from './bridge'
 import type { ElementHandle } from './element-handle'
-import { markHandle } from './options'
+import { inspectCustom, markHandle } from './options'
 import type { Page } from './page'
 import type {
   ConsoleInfo,
@@ -212,6 +212,10 @@ export class ConsoleMessage {
 
   toString(): string {
     return this.#info.text
+  }
+
+  [inspectCustom](): string {
+    return this.text()
   }
 }
 
