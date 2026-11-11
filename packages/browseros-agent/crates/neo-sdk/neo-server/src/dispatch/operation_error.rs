@@ -5,7 +5,22 @@ use std::fmt;
 
 use neo_trace::{Delivery, ErrorOwner, ErrorRecord, OperationId};
 
-use super::RunMask;
+/// How many characters of a script-chosen text the door keeps in an error it builds: a thrown
+/// error's name and its message, and a prelude refusal's reason (FR/RC C4). One constant, so they
+/// cannot drift. The trace writer bounds what it stores on its own.
+pub(crate) const TEXT_CHARS: usize = 4096;
+
+/// `text` cut to `chars` characters, with `…` marking the cut. The door's bound on a text the
+/// script chose before it goes into one of the door's own errors, so a script cannot make a
+/// refusal, or the run's error, as large as it likes.
+#[must_use]
+pub(crate) fn clip(mut text: String, chars: usize) -> String {
+    if let Some((cut, _)) = text.char_indices().nth(chars) {
+        text.truncate(cut);
+        text.push('…');
+    }
+    text
+}
 
 /// A failure and who must change to fix it (STYLE.md P5). Leaves, rules and the door build one
 /// with the owner-named constructors at the point that knows the cause; the door adds delivery,
@@ -68,7 +83,7 @@ impl OperationError {
         self.code
     }
 
-    /// The human message. The door masks it before a script sees it.
+    /// The human message.
     #[must_use]
     pub(crate) fn message(&self) -> &str {
         &self.message
@@ -78,11 +93,6 @@ impl OperationError {
     #[must_use]
     pub(crate) fn is_timeout(&self) -> bool {
         self.timed_out
-    }
-
-    /// Masks the message with `mask`.
-    pub(super) fn mask(&mut self, mask: &RunMask<'_>) {
-        mask.mask_str(&mut self.message);
     }
 
     /// The error as the trace stores it. The writer masks and bounds the message.
@@ -186,10 +196,6 @@ error_codes! {
     CAPTCHA_UNAVAILABLE = "captcha_unavailable";
     /// The tab is private, so Neo captures no more of its pixels (sdk-traces' privacy).
     PAGE_PRIVATE = "page_private";
-    /// A value the run's output had to be masked with is masked nowhere: more were typed into
-    /// sensitive fields while it ran than Neo keeps, or the process's secret set was full and
-    /// refused one. Its reply and later records are withheld.
-    OUTPUT_WITHHELD = "output_withheld";
 
     // neo-playwright's codes. The crate's own error table picks each one's owner, whether
     // it is a timeout and whether Neo can vouch for what happened; builtins/playwright_ops.rs

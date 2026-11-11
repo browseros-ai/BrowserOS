@@ -6,7 +6,6 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use browseros_core::{TabId, TargetId};
 use neo_trace::TaskId;
-use tokio::sync::broadcast;
 use tokio::time::{Duration, Instant};
 
 use super::PageRef;
@@ -17,8 +16,6 @@ const TASKS_REMEMBERED: usize = 1024;
 /// Retained close history. Evicted history advances `forgotten`, so bounded memory never
 /// turns an old admission into proof that a tab is still open.
 const TOMBSTONES: usize = 256;
-/// Tab closes a slow subscriber may fall behind by before it sees `Lagged`.
-const CLOSED_BACKLOG: usize = 256;
 
 /// What Neo keeps in memory per tab: who opened it, when an op last touched it, its feature
 /// state, and which tab each task used last.
@@ -29,10 +26,6 @@ const CLOSED_BACKLOG: usize = 256;
 /// else closes the tab.
 pub(crate) struct TabRegistry {
     state: Mutex<TabState>,
-    /// Tab closes, for state a feature keeps per tab outside this registry. Only tabs an op
-    /// touched are reported; sdk-traces' privacy and live views hear of every close from
-    /// `tab_watch`, through the host API's tab feed, instead.
-    closed: broadcast::Sender<TabId>,
 }
 
 /// Who opened a tab. Core has no public `is_agent_created`, so Neo's own page opener marks its
@@ -80,7 +73,6 @@ impl TabRegistry {
     pub(crate) fn new() -> Self {
         Self {
             state: Mutex::default(),
-            closed: broadcast::channel(CLOSED_BACKLOG).0,
         }
     }
 
@@ -115,7 +107,7 @@ impl TabRegistry {
     }
 
     /// Retires a cache entry while core still holds its removal lock. The returned work
-    /// drops feature state and notifies subscribers after both locks are released. A later
+    /// drops feature state after both locks are released. A later
     /// same-target admission can then retain its own evidence while this work is delayed.
     pub(crate) fn removing(&self, tab: TabId) -> Box<dyn FnOnce() + Send> {
         let entry = {
@@ -131,11 +123,7 @@ impl TabRegistry {
             state.gone.remove(&tab);
             state.open.remove(&tab)
         };
-        let closed = self.closed.clone();
         Box::new(move || {
-            if entry.is_some() {
-                let _ = closed.send(tab);
-            }
             // Slot destructors may re-enter this registry or core's cache.
             drop(entry);
         })
@@ -218,13 +206,6 @@ impl TabRegistry {
             })
             .map(|(tab, _)| PageRef { tab: *tab })
             .collect()
-    }
-
-    /// Tab closes from now on. Only tabs an op touched are reported: the registry learns a
-    /// tab's id from its first op.
-    #[must_use]
-    pub(crate) fn subscribe_closed(&self) -> broadcast::Receiver<TabId> {
-        self.closed.subscribe()
     }
 
     fn lock(&self) -> MutexGuard<'_, TabState> {
@@ -416,26 +397,6 @@ mod tests {
             vec![agent],
             "a touch keeps an agent tab the janitor's"
         );
-    }
-
-    #[test]
-    fn closes_are_broadcast_with_the_tab_id() -> Result<(), Box<dyn Error>> {
-        let tabs = TabRegistry::new();
-        let tab = page(1, 101);
-        let mut closes = tabs.subscribe_closed();
-        tabs.touched(&tab, tabs.seen(), None);
-        tabs.removing(tab.tab)();
-        assert_eq!(
-            closes.try_recv()?,
-            tab.tab,
-            "subscribers learn the closed tab's id"
-        );
-        tabs.removing(tab.tab)();
-        assert!(
-            closes.try_recv().is_err(),
-            "a second detach of the same page says nothing"
-        );
-        Ok(())
     }
 
     fn flood(tabs: &TabRegistry, count: usize) {
