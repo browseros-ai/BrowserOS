@@ -1574,8 +1574,11 @@ async fn every_playwright_op_is_one_listed_script_method_with_the_crates_spec()
         assert_eq!(spec.visibility, Visibility::Script, "{}", spec.name);
         assert_eq!(
             spec.lifetime == Lifetime::Background,
-            matches!(spec.name, "events.next" | "page.locatorHandlerTriggered"),
-            "{}: only the prelude's pulls are cut quietly when the run ends",
+            matches!(
+                spec.name,
+                "events.listen" | "events.next" | "page.locatorHandlerTriggered"
+            ),
+            "{}: only the prelude's event work is cut quietly when the run ends",
             spec.name
         );
         let Listing::Grouped(line) = spec.listing else {
@@ -1956,6 +1959,65 @@ async fn an_action_runs_in_the_crate_on_the_tab_its_locator_names() -> Result<()
         harness.row(operation).await?.tab,
         Some(page.tab),
         "the rules and the trace see the tab the locator names"
+    );
+    Ok(())
+}
+
+/// Teardown may win before prelude setup's task starts. Both calls enter the real registry;
+/// only the foreground call belongs to the script's promise obligations.
+#[tokio::test]
+async fn prelude_listener_setup_is_cancelled_without_a_not_awaited_notice()
+-> Result<(), Box<dyn Error>> {
+    let harness = Harness::new().await?;
+    let page = harness.owner_tab("https://example.com/").await?;
+    let (run, _guard) = harness.run()?;
+    let listen = harness.dispatcher.submit(
+        &run,
+        Call::script(
+            "events.listen".to_owned(),
+            json!({
+                "call":{"api":"page.on","timeoutMs":0}, "page":handle(&page),
+                "event":"workerstate", "on":true, "since":0,
+            }),
+            None,
+        ),
+    );
+    let foreground = harness.dispatcher.submit(
+        &run,
+        Call::script(
+            "page.title".to_owned(),
+            json!({
+                "call":{"api":"page.title","timeoutMs":0}, "page":handle(&page),
+            }),
+            None,
+        ),
+    );
+    let listen_id = listen.operation();
+    let foreground_id = foreground.operation();
+    // This current-thread test does not yield between admission and teardown, so both
+    // operations are deterministically pending rather than racing a fast fake browser.
+    run.stop(StopReason::ScriptReturned);
+    drop(run.close_ops());
+    let _listen_reply = listen.wait().await;
+    let _foreground_reply = foreground.wait().await;
+    let report = run.report();
+    let names: Vec<_> = report.not_awaited.iter().map(|line| line.name).collect();
+    assert_eq!(
+        names,
+        ["page.title"],
+        "only the script's own unawaited op is reported"
+    );
+    let listen = harness.row(listen_id).await?;
+    assert_eq!(
+        (listen.outcome, listen.delivery, listen.error),
+        (Some(Outcome::Cancelled), Some(Delivery::NotSent), None),
+        "prelude setup is cancelled without a not_awaited trace error"
+    );
+    let foreground = harness.row(foreground_id).await?;
+    assert_eq!(
+        foreground.error.map(|error| error.code),
+        Some("not_awaited".to_owned()),
+        "the foreground operation retains the script's not_awaited error"
     );
     Ok(())
 }

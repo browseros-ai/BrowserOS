@@ -53,7 +53,7 @@ pub(crate) struct MethodSpec {
     pub(crate) visibility: Visibility,
     /// How the `run` tool's description shows it.
     pub(crate) listing: Listing,
-    /// A normal operation, or a background pull that the run's end cuts quietly.
+    /// A normal operation, or prelude-owned work that the run's end cuts quietly.
     pub(crate) lifetime: Lifetime,
     /// Whether the method runs the agent's own script in its page's main world, which decides
     /// what of its end the door checks against the rules before release.
@@ -109,12 +109,12 @@ pub(crate) enum PageScript {
     MainWorld,
 }
 
-/// Whether a method is a normal operation or a background pull.
+/// Whether a method belongs to the script or the prelude's event infrastructure.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Lifetime {
     /// Listed in the run's "still running when the script returned" line.
     Operation,
-    /// A long poll (sdk-playwright's event pump) that the run's end cuts quietly: cancelled with
+    /// Prelude listener setup or a long poll that the run's end cuts quietly: cancelled with
     /// no error on its record, no line in the run's reply, and nothing in its effects.
     Background,
 }

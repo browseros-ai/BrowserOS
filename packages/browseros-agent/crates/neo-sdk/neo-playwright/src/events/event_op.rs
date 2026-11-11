@@ -51,11 +51,14 @@ impl EventOp {
                 OpTarget::None,
                 "acquire or release this run's native file chooser interception lease",
             ),
+            // on/off are synchronous APIs: their setup promise belongs to the prelude,
+            // never to the script. A returning run may cancel it without an unawaited-op notice.
             Self::Listen => OpSpec::read(
                 "events.listen",
                 OpTarget::None,
                 "start or stop this run's interest in a page or context event (on, once, off)",
-            ),
+            )
+            .background(),
             Self::Next => OpSpec::read(
                 "events.next",
                 OpTarget::None,

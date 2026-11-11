@@ -25,7 +25,7 @@ fn render() -> Result<String, Box<dyn Error>> {
          /**\n \
          * Every operation the prelude can invoke, in Rust's registration order, with what the\n \
          * host's dispatcher knows about it: whether it may change the page, which input field\n \
-         * holds the page handle, and whether it is the background event pump.\n \
+         * holds the page handle, and whether it is prelude-owned background work.\n \
          */\n\
          export const OPS = {\n",
     );

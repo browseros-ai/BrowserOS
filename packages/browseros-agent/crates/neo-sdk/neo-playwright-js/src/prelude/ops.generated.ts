@@ -5,7 +5,7 @@
 /**
  * Every operation the prelude can invoke, in Rust's registration order, with what the
  * host's dispatcher knows about it: whether it may change the page, which input field
- * holds the page handle, and whether it is the background event pump.
+ * holds the page handle, and whether it is prelude-owned background work.
  */
 export const OPS = {
   'locator.click': {
@@ -446,7 +446,7 @@ export const OPS = {
   'events.listen': {
     effect: 'read',
     target: null,
-    lifetime: 'operation',
+    lifetime: 'background',
   },
   'events.next': {
     effect: 'read',

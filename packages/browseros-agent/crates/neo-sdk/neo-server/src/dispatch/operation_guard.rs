@@ -120,10 +120,10 @@ pub(super) enum Settled {
     Value(Value),
     /// The op failed: the error is on its record and in its reply.
     Failed(OperationError),
-    /// A background pull (sdk-playwright's event pump) that the run's stop cut. A pull has no
-    /// end of its own, so this is how every pull ends, not a failure: its record carries no
-    /// error (skeleton D7 rule 15). A caller still waiting on it gets the stop's error, as any
-    /// cancelled call does; in practice the script is gone by then.
+    /// Prelude event work that the run's stop cut. Pumps and synchronous listener setup
+    /// have no script-owned promise to await, so teardown is not a failure: their records
+    /// carry no error. A caller still waiting internally gets the stop's error; the prelude
+    /// handles it after its script has gone.
     Retired(StopReason),
 }
 

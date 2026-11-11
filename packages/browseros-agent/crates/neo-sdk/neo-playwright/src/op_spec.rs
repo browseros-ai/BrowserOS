@@ -17,7 +17,7 @@ pub struct OpSpec {
     pub effect: Effect,
     /// Which input field holds the page handle, for the dispatcher's tab lock and page facts.
     pub target: OpTarget,
-    /// `Background` only for the prelude's event pump.
+    /// `Background` only for prelude-owned listener setup and event pulls.
     pub lifetime: OpLifetime,
     /// What the op reaches beyond its page's isolated world. Empty for an op that only reads and
     /// acts in the isolated world or sends trusted input, which is most of them. A unit test pins
@@ -74,7 +74,8 @@ pub enum OpTarget {
 pub enum OpLifetime {
     /// Ends before the run does, like every Playwright call.
     Operation,
-    /// The event pump: a long poll that the host cancels quietly when the run ends.
+    /// Prelude-owned event work, including synchronous listener setup and long polls,
+    /// that the host cancels quietly when the run ends.
     Background,
 }
 
@@ -121,7 +122,7 @@ impl OpSpec {
         }
     }
 
-    /// The same op, as the background event pump.
+    /// The same op, owned by the prelude rather than an awaitable script call.
     pub(crate) const fn background(self) -> Self {
         Self {
             lifetime: OpLifetime::Background,

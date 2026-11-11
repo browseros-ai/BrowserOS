@@ -197,6 +197,66 @@ async fn a_selector_with_scope_inside_has_reaches_its_op() -> TestResult {
     on_browseros(|rig| Box::pin(scope_inside_has(rig))).await
 }
 
+/// Every task starts its own worker monitors when its first page operation opens a tab.
+/// Their synchronous listener setup must never become an obligation the script left behind.
+#[tokio::test(flavor = "multi_thread")]
+async fn fresh_short_tasks_never_report_prelude_listeners_as_not_awaited() -> TestResult {
+    on_browseros(|rig| Box::pin(short_fresh_tasks(rig))).await
+}
+
+async fn short_fresh_tasks(rig: &Rig) -> TestResult {
+    rig.until_ready().await?;
+    let client = rig.client().await?;
+    for attempt in 0..12 {
+        let task = format!("fresh-short-title-{attempt}");
+        let reply = run(
+            &client,
+            "return await page.title()",
+            &json!({"taskId":task}),
+        )
+        .await?;
+        let meta = outcome(&reply)?;
+        assert_eq!(
+            meta.get("status"),
+            Some(&json!("ok")),
+            "task {attempt}: {reply:?}"
+        );
+        let public = serde_json::to_value(&reply)?;
+        let encoded = public.to_string();
+        for forbidden in ["[not awaited]", "notAwaited", "not_awaited"] {
+            assert!(
+                !encoded.contains(forbidden),
+                "task {attempt}: unexpected {forbidden}: {public}"
+            );
+        }
+        let id = meta
+            .get("id")
+            .and_then(Value::as_str)
+            .ok_or("a run has its id")?;
+        let trace = rig
+            .host(
+                "GET",
+                &format!("/v1/runs/{id}?wait=30"),
+                Some(browseros_rig::HOST_TOKEN),
+                None,
+            )
+            .await?;
+        assert_eq!(trace.status, 200, "task {attempt}: {}", trace.text());
+        let trace = trace.json()?;
+        assert!(
+            !trace.to_string().contains("not_awaited"),
+            "task {attempt}: {trace}"
+        );
+        assert_eq!(
+            trace.get("complete"),
+            Some(&json!(true)),
+            "task {attempt}: {trace}"
+        );
+    }
+    client.cancel().await?;
+    Ok(())
+}
+
 /// `drive` on a fresh BrowserOS within the test's budget, with both processes' logs on failure.
 async fn on_browseros(
     drive: impl for<'a> FnOnce(&'a Rig) -> Pin<Box<dyn Future<Output = TestResult> + 'a>>,
