@@ -9,6 +9,7 @@ use std::sync::{Mutex, MutexGuard, PoisonError};
 use browseros_core::file_transfers::FileChooserInterception;
 use browseros_core::{TabId, TargetId};
 
+use crate::events::event_hub::LOG_CAPACITY;
 use crate::events::page_event::BindingCalled;
 use crate::events::{ListenerKey, PageEventKind, Subscription};
 
@@ -33,6 +34,8 @@ struct Inner {
     /// Calls dropped because [`QUEUED_CALLS`] were already waiting, since the pump last took
     /// them: the pump reports them in its `lost` count.
     dropped_calls: u64,
+    /// View-approved identities remain usable by retained events after the tab disappears.
+    known_pages: VecDeque<KnownPage>,
 }
 
 /// How many binding calls wait for one run's pump at most. A page calls faster than the realm
@@ -49,6 +52,13 @@ pub(crate) struct QueuedCall {
     /// The run's tab for the call's page.
     pub(crate) tab: TabId,
     pub(crate) call: BindingCalled,
+}
+
+/// Historical native identity, admitted by this run rather than guessed from a dead target.
+#[derive(Debug)]
+struct KnownPage {
+    target: TargetId,
+    tab: TabId,
 }
 
 #[derive(Debug)]
@@ -178,6 +188,29 @@ impl RunEvents {
             .keys()
             .chain(inner.waiting.keys())
             .any(|subscription| matches!(subscription, Subscription::Context(_)))
+    }
+
+    /// Retain only identities approved by this run's view. The journal bounds how much
+    /// history can still be delivered, so the identity cache follows the same capacity.
+    pub(crate) fn remember_page(&self, target: &TargetId, tab: TabId) {
+        let mut inner = self.lock();
+        inner.known_pages.retain(|page| page.target != *target);
+        inner.known_pages.push_back(KnownPage {
+            target: target.clone(),
+            tab,
+        });
+        while inner.known_pages.len() > LOG_CAPACITY {
+            inner.known_pages.pop_front();
+        }
+    }
+
+    /// A retained event may name a tab that no live listing can resolve any longer.
+    pub(crate) fn known_page(&self, target: &TargetId) -> Option<TabId> {
+        self.lock()
+            .known_pages
+            .iter()
+            .find(|page| page.target == *target)
+            .map(|page| page.tab)
     }
 
     /// The listeners and their places, for one pass of the pump.

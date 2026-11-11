@@ -12,6 +12,7 @@ listed_enum! {
         Popup,
         Close,
         Dialog,
+        DialogClosed,
         Console,
         PageError,
         Download,
@@ -34,6 +35,7 @@ impl PageEventKind {
             Self::Popup => "popup",
             Self::Close => "close",
             Self::Dialog => "dialog",
+            Self::DialogClosed => "dialogclosed",
             Self::Console => "console",
             Self::PageError => "pageerror",
             Self::Download => "download",
@@ -51,6 +53,7 @@ impl PageEventKind {
     pub(crate) fn context(name: &str) -> Option<Self> {
         match name {
             "pageload" => Some(Self::Load),
+            "dialogclosed" => Some(Self::DialogClosed),
             "frameattached" => Some(Self::FrameAttached),
             "framenavigated" => Some(Self::FrameNavigated),
             "framedetached" => Some(Self::FrameDetached),
@@ -101,7 +104,7 @@ pub(crate) enum Subscription {
     },
     /// `context.on('page')`: every new tab of the context.
     ContextPage,
-    /// A lifecycle event forwarded from every page in the context.
+    /// A lifecycle or dialog-closure event forwarded from every page in the context.
     Context(PageEventKind),
 }
 
@@ -130,7 +133,8 @@ impl Subscription {
     /// Whether `event` is one this subscription receives.
     pub(crate) fn matches(&self, event: &PageEvent) -> bool {
         match (self, event) {
-            (Self::ContextPage, PageEvent::Opened(_)) => true,
+            (Self::ContextPage, PageEvent::Opened(_))
+            | (Self::Context(PageEventKind::DialogClosed), PageEvent::DialogClosed(_)) => true,
             (Self::Context(event), PageEvent::FrameLifecycle(frame)) => frame.kind == *event,
             (Self::Context(event), PageEvent::Load { kind, .. }) => kind == event,
             (Self::ContextPage | Self::Context(_), _) => false,
