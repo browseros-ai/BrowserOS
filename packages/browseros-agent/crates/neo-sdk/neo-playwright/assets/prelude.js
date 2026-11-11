@@ -868,7 +868,8 @@
     "clip",
     "animations",
     "caret",
-    "style"
+    "style",
+    "scale"
   ];
   var handles = new WeakSet;
   function markHandle(object) {
@@ -7400,8 +7401,6 @@ ${value.stack}`;
       return "Neo cannot mask elements in a screenshot; omit mask";
     if (options.omitBackground)
       return "Neo cannot capture a transparent background; omit omitBackground";
-    if (options.scale === "css")
-      return 'Neo captures at the device scale; omit scale or pass "device"';
     return;
   }
   var HELD_VALUE = "Neo's waitForFunction handle holds the value, not the page's object; read it with jsonValue()";

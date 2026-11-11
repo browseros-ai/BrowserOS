@@ -1178,6 +1178,25 @@ impl BrowserView {
         Ok(capture)
     }
 
+    /// Captures caller-normalized `Page.captureScreenshot` parameters, retaining the view's
+    /// native target/profile admission and freshness checks. The SDK uses this when Playwright
+    /// geometry differs from core's viewport/full-page presets; both paths share the capture
+    /// queue and pointer hiding.
+    pub async fn screenshot_cdp(&self, page: PageId, params: Value) -> Result<String, CoreError> {
+        if self.epoch_guard()?.is_none() {
+            let session = self.session.pages.get_session(page).await?;
+            return crate::screenshot::capture_cdp(&session.session, params).await;
+        }
+        let access = self
+            .page_access(page)
+            .await?
+            .ok_or_else(|| cdp_policy::unsupported("Page.captureScreenshot"))?;
+        let session = access.session().await?;
+        let data = crate::screenshot::capture_cdp(&session.session, params).await?;
+        access.fresh().await?;
+        Ok(data)
+    }
+
     /// [`Self::screenshot`] with the caller's last word on the capture: `before_capture` runs
     /// after the page is admitted, inside the session's capture lock, once the pointer is
     /// hidden, with no await before `Page.captureScreenshot`. A privacy check placed before this
