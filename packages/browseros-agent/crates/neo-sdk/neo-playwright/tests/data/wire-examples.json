@@ -2003,6 +2003,18 @@
           "tab": 1007
         },
         "mode": "default"
+      },
+      {
+        "call": {
+          "api": "page.ariaSnapshotJSON",
+          "timeoutMs": 5000
+        },
+        "page": {
+          "$neo": "page",
+          "tab": 1007
+        },
+        "mode": "default",
+        "boxes": true
       }
     ],
     "page.close": [
