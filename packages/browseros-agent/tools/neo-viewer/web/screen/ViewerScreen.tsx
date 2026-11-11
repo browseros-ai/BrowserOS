@@ -34,6 +34,7 @@ import { Splitter, useSidebarWidth } from './Splitter'
 import { DEFAULT_SORT, type RunSort } from './sort'
 import { TimeStrip } from './TimeStrip'
 import { TopBar } from './TopBar'
+import { useContainer } from './use-container'
 
 /** How often a running run's elapsed time and the live strip redraw. */
 const TICK_MS = 250
@@ -57,6 +58,7 @@ export function ViewerScreen() {
   const [fullId, setFullId] = useState<string | null>(null)
   const [sidebarWidth, setSidebarWidth] = useSidebarWidth()
   const live = useLiveScreen()
+  const container = useContainer(info)
   const [popped, setPopped] = useState(false)
   const nowMs = useNow(runs.some((run) => run.status === 'running'))
 
@@ -92,7 +94,11 @@ export function ViewerScreen() {
 
   return (
     <div className="flex h-screen flex-col overflow-hidden bg-white font-plex text-ink text-xs leading-4 antialiased">
-      <TopBar info={info} onClear={onClear} live={live} />
+      <TopBar
+        info={info && { ...info, container }}
+        onClear={onClear}
+        live={live}
+      />
       {error && (
         <p
           role="alert"
