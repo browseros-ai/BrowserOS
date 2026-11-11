@@ -22,13 +22,9 @@ pub(crate) async fn list_tabs(
         .send("Browser.getTabs", json!({}))
         .await
         .map_err(PartError::Browser)?;
-    let ids = native
-        .tabs
-        .iter()
-        .map(|tab| TabId(tab.tab_id))
-        .collect::<Vec<_>>();
+    let ids: Vec<TabId> = native.tabs.iter().map(|tab| TabId(tab.tab_id)).collect();
     let mut tasks = service.store.tasks_for_tabs(&ids).await?;
-    let items = native
+    let items: Vec<api::Tab> = native
         .tabs
         .into_iter()
         .map(|tab| api::Tab {

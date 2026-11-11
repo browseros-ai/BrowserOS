@@ -31,6 +31,9 @@ async fn all_open_native_tabs_include_distinct_task_history_and_current_metadata
             },
         );
         support::op_started(&h.sink, OperationId::new(run, 1), Op::write(tab, 1));
+        if task == Some("zulu") {
+            support::op_started(&h.sink, OperationId::new(run, 2), Op::write(5, 2));
+        }
     }
     support::start_run(
         &h.sink,
@@ -80,7 +83,7 @@ async fn all_open_native_tabs_include_distinct_task_history_and_current_metadata
         reply.body,
         json!({"items": [
             {"tabId":3,"targetId":"target-3","url":"https://example.test/3","title":"Tab 3","taskIds":["alpha","zulu"]},
-            {"tabId":5,"targetId":"target-5","url":"https://example.test/5","title":"Tab 5","taskIds":["created"]},
+            {"tabId":5,"targetId":"target-5","url":"https://example.test/5","title":"Tab 5","taskIds":["created","zulu"]},
             {"tabId":88,"targetId":"target-88","url":"https://example.test/88","title":"Tab 88","taskIds":[]},
             {"tabId":77,"targetId":"target-77","url":"chrome-extension://test/panel.html","title":"Tab 77","taskIds":[]}
         ]})
@@ -137,5 +140,21 @@ async fn an_empty_browser_is_empty_and_an_unreachable_browser_is_a_503() -> Test
     h.get("/v1/tabs")
         .await?
         .assert_error(StatusCode::SERVICE_UNAVAILABLE, "browser_unavailable");
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_failed_association_query_is_a_generic_500_not_an_empty_task_list() -> TestResult {
+    let h = harness().await?;
+    h.browser.open_tab(3);
+    let pool = sqlx::SqlitePool::connect_with(
+        sqlx::sqlite::SqliteConnectOptions::new().filename(h.dir.path().join("trace.db")),
+    )
+    .await?;
+    sqlx::query("DROP TABLE operations").execute(&pool).await?;
+    pool.close().await;
+    let reply = h.get("/v1/tabs").await?;
+    reply.assert_error(StatusCode::INTERNAL_SERVER_ERROR, "internal_error");
+    assert_eq!(reply.body["message"], "internal error");
     Ok(())
 }

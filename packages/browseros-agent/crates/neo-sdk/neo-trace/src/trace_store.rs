@@ -487,7 +487,7 @@ impl TraceStore {
         // as well as new ones, without rewriting stored run/tab links.
         let tab = Expr::col((operations::Entity, operations::Column::TargetTabId))
             .if_null(Expr::col((operations::Entity, operations::Column::TabId)));
-        let rows = operations::Entity::find()
+        let rows: Vec<(i64, String)> = operations::Entity::find()
             .select_only()
             .column_as(tab.clone(), "tab")
             .column(runs::Column::TaskId)
