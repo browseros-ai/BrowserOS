@@ -186,15 +186,7 @@ async fn enter_child(
         strictness: Strictness::Strict,
         want: Want::Frame,
     };
-    // An owner that is no iframe is previewed, which takes the parent's site's values.
-    let (reply, masked) = match probe::call_on(parent, &request, &object).await {
-        Ok(ProbeReply::NeedsMask) => {
-            let remasked = resolver::remask(page, scope, parent, &request, Some(&object));
-            (Box::pin(remasked).await?, true)
-        }
-        reply => (reply, false),
-    };
-    match reply {
+    match probe::call_on(parent, &request, &object).await {
         Ok(ProbeReply::Frame {
             pin, key, visible, ..
         }) => {
@@ -207,7 +199,6 @@ async fn enter_child(
             resolver::enter_iframe(page, scope, parent, iframe).await
         }
         Ok(ProbeReply::None { stale_ref: None } | ProbeReply::Detached) => Ok(Hopped::Missing),
-        Ok(ProbeReply::NotFrame { .. }) if !masked => Err(resolver::unmasked(scope)),
         Ok(ProbeReply::NotFrame { preview }) => Err(scope.fail(
             ErrorCode::Unsupported,
             &format!(

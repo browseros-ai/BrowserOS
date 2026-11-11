@@ -1,14 +1,13 @@
 //! The page's one aria snapshot, stitched from every frame's own, as upstream's server stitches
-//! it (`ariaSnapshotJSONForFrame`, server/page.ts at v1.64.1), then Neo's name rule and
-//! sdk-privacy's mask. Pure: the snapshot leaf reads each frame through its probe and hands the
-//! results here.
+//! it (`ariaSnapshotJSONForFrame`, server/page.ts at v1.64.1), then Neo's name rule. Pure: the
+//! snapshot leaf reads each frame through its probe and hands the results here.
 //!
 //! ```text
-//!  FrameSnapshot { json, sweep, children }          one per frame the leaf read
+//!  FrameSnapshot { json, children }                 one per frame the leaf read
 //!    ChildFrame::Read { iframe_ref, snapshot }      stitched under the iframe node `iframe_ref`
 //!    ChildFrame::Partial(PartialFrame)              the iframe node stays a leaf
-//!  stitch(root) ─▶ merge bottom-up ─▶ drop_prohibited_names ─▶ mask page text with every
-//!                 frame's sweep ─▶ SnapshotResult { json, partial }, the op's output
+//!  stitch(root) ─▶ merge bottom-up ─▶ drop_prohibited_names ─▶ SnapshotResult { json, partial },
+//!                 the op's output
 //! ```
 //!
 //! The YAML is rendered in the agent runtime, never in a page: rendering the stitched tree in
@@ -16,9 +15,7 @@
 //! renderer process, which site isolation exists to prevent.
 
 use std::collections::HashMap;
-use std::mem;
 
-use browseros_core::sensitive_fields::FieldValues;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -27,9 +24,9 @@ use super::snapshot_rules;
 /// One node of `ariaSnapshotJSON`: upstream's `AriaNodeJSON` (isomorphic/ariaSnapshot.ts).
 ///
 /// The strings a page controls are typed (`name`, `text`, `url`, `placeholder`, string
-/// children), because the mask covers exactly those. The rest is vocabulary or numbers and
-/// passes through as upstream wrote it. Decoding rejects unknown fields: a field a Playwright
-/// upgrade adds could carry page text the mask would miss, so it fails until it is classified.
+/// children). The rest is vocabulary or numbers and passes through as upstream wrote it.
+/// Decoding rejects unknown fields, so a field a Playwright upgrade adds fails until the
+/// stitch and the name rule are checked against it.
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct AriaNode {
@@ -92,10 +89,6 @@ pub(crate) enum AriaChild {
 pub(crate) struct FrameSnapshot {
     /// The frame's `ariaSnapshotJSON` nodes, its iframe nodes not stitched yet.
     pub(crate) json: Vec<AriaNode>,
-    /// The sensitive values of every frame of the frame's site, its own document's among them
-    /// (`page::site_sweep`). One frame's sweep masks echoes in every frame: a code typed in one
-    /// frame can be printed by another.
-    pub(crate) sweep: FieldValues,
     /// One entry per iframe the frame printed with a ref, in any order.
     pub(crate) children: Vec<ChildFrame>,
 }
@@ -119,8 +112,7 @@ pub(crate) enum ChildFrame {
 pub(crate) struct PartialFrame {
     /// The iframe node's ref in its parent frame.
     pub(crate) r#ref: String,
-    /// The frame's URL as far as Neo knows it, the iframe's `src`. Page text, so it is masked
-    /// like the tree.
+    /// The frame's URL as far as Neo knows it, the iframe's `src`.
     pub(crate) frame: String,
     /// `timeout after 2000 ms`, `frame detached`, `target closed`.
     pub(crate) reason: String,
@@ -138,8 +130,8 @@ pub(crate) struct PartialFrame {
 /// }
 /// ```
 ///
-/// `json` is upstream's `AriaSnapshotJSON` with every frame stitched in, the name rule applied
-/// and swept values masked. The prelude renders it with the vendored `renderAriaSnapshotAsYaml`
+/// `json` is upstream's `AriaSnapshotJSON` with every frame stitched in and the name rule
+/// applied. The prelude renders it with the vendored `renderAriaSnapshotAsYaml`
 /// and adds a `# partial` line under each partial iframe. `tests/data/snapshot-output.json` is
 /// one recorded from real frames.
 #[derive(Debug, PartialEq, Serialize)]
@@ -148,33 +140,21 @@ pub(crate) struct SnapshotResult {
     pub(crate) partial: Vec<PartialFrame>,
 }
 
-/// The page's snapshot from the root frame's tree: every read child stitched in, the name rule
-/// applied, and every page string masked with the union of every frame's sweep.
+/// The page's snapshot from the root frame's tree: every read child stitched in and the name
+/// rule applied.
 pub(crate) fn stitch(root: FrameSnapshot) -> SnapshotResult {
     let mut partial = Vec::new();
-    let (mut json, sweep) = merge(root, &mut partial);
+    let mut json = merge(root, &mut partial);
     for node in &mut json {
         snapshot_rules::drop_prohibited_names(node);
-    }
-    if !sweep.is_empty() {
-        for node in &mut json {
-            mask_node(node, &sweep);
-        }
-        for frame in &mut partial {
-            mask_text(&mut frame.frame, &sweep);
-        }
     }
     SnapshotResult { json, partial }
 }
 
 /// Upstream's merge, bottom-up: each read child is stitched first, then set under the iframe
-/// node with its ref. Returns the frame's stitched nodes and the union of every sweep below.
-fn merge(frame: FrameSnapshot, partial: &mut Vec<PartialFrame>) -> (Vec<AriaNode>, FieldValues) {
-    let FrameSnapshot {
-        mut json,
-        mut sweep,
-        children,
-    } = frame;
+/// node with its ref. Returns the frame's stitched nodes.
+fn merge(frame: FrameSnapshot, partial: &mut Vec<PartialFrame>) -> Vec<AriaNode> {
+    let FrameSnapshot { mut json, children } = frame;
     let mut stitched = HashMap::new();
     for child in children {
         match child {
@@ -182,9 +162,7 @@ fn merge(frame: FrameSnapshot, partial: &mut Vec<PartialFrame>) -> (Vec<AriaNode
                 iframe_ref,
                 snapshot,
             } => {
-                let (nodes, child_sweep) = merge(snapshot, partial);
-                sweep = sweep.union(child_sweep);
-                stitched.insert(iframe_ref, nodes);
+                stitched.insert(iframe_ref, merge(snapshot, partial));
             }
             ChildFrame::Partial(frame) => partial.push(frame),
         }
@@ -192,7 +170,7 @@ fn merge(frame: FrameSnapshot, partial: &mut Vec<PartialFrame>) -> (Vec<AriaNode
     for node in &mut json {
         attach(node, &mut stitched);
     }
-    (json, sweep)
+    json
 }
 
 /// Upstream's `mergeIframeChildren`: an iframe node with a ref takes its child's nodes, unless
@@ -219,48 +197,14 @@ fn attach(node: &mut AriaNode, stitched: &mut HashMap<String, Vec<AriaNode>>) {
     }
 }
 
-/// Masks every string the page controls in `node` and below. Keys, roles, refs and the other
-/// vocabulary are left alone: no page text reaches them, and masking one would break a ref or
-/// show which word a secret equals.
-fn mask_node(node: &mut AriaNode, values: &FieldValues) {
-    let AriaNode {
-        name,
-        url,
-        placeholder,
-        text,
-        children,
-        ..
-    } = node;
-    for text in [name, url, placeholder, text].into_iter().flatten() {
-        mask_text(text, values);
-    }
-    for child in children {
-        match child {
-            AriaChild::Text(text) => mask_text(text, values),
-            AriaChild::Node(node) => mask_node(node, values),
-        }
-    }
-}
-
-/// `FieldValues::mask_json` on one string: a long value wherever it occurs, a short one where
-/// it is the whole string.
-fn mask_text(text: &mut String, values: &FieldValues) {
-    let mut leaf = Value::String(mem::take(text));
-    values.mask_json(&mut leaf);
-    if let Value::String(masked) = leaf {
-        *text = masked;
-    }
-}
-
 #[cfg(test)]
 pub(crate) mod tests {
     use std::error::Error;
     use std::fs;
     use std::path::Path;
 
-    use browseros_core::sensitive_fields::FieldValues;
     use serde::Deserialize;
-    use serde_json::{Value, json};
+    use serde_json::json;
 
     use super::{AriaChild, AriaNode, ChildFrame, FrameSnapshot, PartialFrame, merge, stitch};
 
@@ -295,25 +239,13 @@ pub(crate) mod tests {
 
     /// The fixture page: 0 is the top frame; its iframe `e10` holds frame 1 (cross-site),
     /// whose iframe `f1e4` holds frame 3; its iframe `e11` holds frame 2.
-    const CHILD: usize = 1;
     const SIDE: usize = 2;
     const GRANDCHILD: usize = 3;
 
-    /// The tree the snapshot leaf would build from the recorded frames, with `sweeps` as each
-    /// frame's sensitive values and the frames in `unread` past their budget.
-    fn tree(
-        recorded: &Recorded,
-        index: usize,
-        sweeps: &[(usize, Value)],
-        unread: &[usize],
-    ) -> FrameSnapshot {
+    /// The tree the snapshot leaf would build from the recorded frames, with the frames in
+    /// `unread` past their budget.
+    fn tree(recorded: &Recorded, index: usize, unread: &[usize]) -> FrameSnapshot {
         let frame = &recorded.frames[index];
-        let sweep = sweeps
-            .iter()
-            .find(|(swept, _)| *swept == index)
-            .map_or_else(FieldValues::default, |(_, values)| {
-                FieldValues::from_sweep(values)
-            });
         let children = frame
             .iframes
             .iter()
@@ -327,14 +259,13 @@ pub(crate) mod tests {
                 } else {
                     ChildFrame::Read {
                         iframe_ref: iframe.r#ref.clone(),
-                        snapshot: tree(recorded, iframe.frame, sweeps, unread),
+                        snapshot: tree(recorded, iframe.frame, unread),
                     }
                 }
             })
             .collect();
         FrameSnapshot {
             json: frame.json.clone(),
-            sweep,
             children,
         }
     }
@@ -359,7 +290,7 @@ pub(crate) mod tests {
     -> Result<(), Box<dyn Error>> {
         let recorded = recorded()?;
         let mut partial = Vec::new();
-        let (json, _) = merge(tree(&recorded, 0, &[], &[]), &mut partial);
+        let json = merge(tree(&recorded, 0, &[]), &mut partial);
         assert!(partial.is_empty(), "every frame was read");
         assert_eq!(
             serde_json::to_value(&json)?,
@@ -373,7 +304,7 @@ pub(crate) mod tests {
     fn tests_that_a_partial_child_keeps_its_ref_while_the_rest_is_stitched()
     -> Result<(), Box<dyn Error>> {
         let recorded = recorded()?;
-        let result = stitch(tree(&recorded, 0, &[], &[SIDE, GRANDCHILD]));
+        let result = stitch(tree(&recorded, 0, &[SIDE, GRANDCHILD]));
         assert_eq!(
             result.partial,
             [
@@ -406,45 +337,6 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn tests_that_a_value_swept_in_one_frame_is_masked_where_another_frame_prints_it()
-    -> Result<(), Box<dyn Error>> {
-        let recorded = recorded()?;
-        // The code is typed in the top frame and echoed by its cross-site child; a value from
-        // the deepest frame is printed by the top frame.
-        let sweeps = [
-            (0, json!(["482913"])),
-            (GRANDCHILD, json!(["Plain paragraph"])),
-        ];
-        let result = stitch(tree(&recorded, 0, &sweeps, &[]));
-        let echo = find(&result.json, "f1e3").and_then(|node| node.text.clone());
-        assert_eq!(echo.as_deref(), Some("Confirm your code [private]"));
-        let paragraph = find(&result.json, "e7").and_then(|node| node.text.clone());
-        assert_eq!(paragraph.as_deref(), Some("[private]"));
-        Ok(())
-    }
-
-    /// Only page strings are masked. A secret that equals a role or a ref leaves both whole:
-    /// masking them would break the ref and show which word the secret is.
-    #[test]
-    fn tests_that_roles_and_refs_are_never_masked_but_names_and_frame_urls_are()
-    -> Result<(), Box<dyn Error>> {
-        let recorded = recorded()?;
-        let sweeps = [(CHILD, json!(["button", "e11", "side"]))];
-        let result = stitch(tree(&recorded, 0, &sweeps, &[SIDE]));
-        let retry = find(&result.json, "e6");
-        assert_eq!(retry.map(|node| node.role.as_str()), Some("button"));
-        let child_button = find(&result.json, "f1e2").and_then(|node| node.name.clone());
-        assert_eq!(child_button.as_deref(), Some("Child [private]"));
-        assert!(find(&result.json, "e11").is_some(), "the ref e11 is whole");
-        assert_eq!(
-            result.partial.first().map(|frame| frame.frame.as_str()),
-            Some("http://[::1]:42051/snapshot/[private].html"),
-            "a frame's URL is page text"
-        );
-        Ok(())
-    }
-
-    #[test]
     fn tests_that_a_field_upstream_does_not_write_fails_to_decode() {
         let unknown = serde_json::from_value::<AriaNode>(json!({
             "role": "button",
@@ -452,19 +344,19 @@ pub(crate) mod tests {
         }));
         assert!(
             unknown.is_err(),
-            "an unclassified field could carry unmasked page text"
+            "a field the stitch has not been checked against fails"
         );
     }
 
     /// tests/data/snapshot-output.json is what `stitch` returns for the recorded page, with the
-    /// top frame's code echoed by its child and the side frame past its budget. The prelude's
+    /// side frame past its budget. The prelude's
     /// renderer is tested on it (crates/neo-sdk/neo-playwright-js), so the file must track this
     /// code: a stale one is rewritten and the test fails until it is committed.
     #[test]
     fn tests_that_the_snapshot_output_fixture_is_what_stitch_returns() -> Result<(), Box<dyn Error>>
     {
         let recorded = recorded()?;
-        let result = stitch(tree(&recorded, 0, &[(0, json!(["482913"]))], &[SIDE]));
+        let result = stitch(tree(&recorded, 0, &[SIDE]));
         let fresh = format!("{}\n", serde_json::to_string_pretty(&result)?);
         let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(OUTPUT);
         if fs::read_to_string(&path).ok().as_deref() != Some(fresh.as_str()) {

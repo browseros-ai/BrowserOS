@@ -424,10 +424,7 @@ mod tests {
             event: PageEvent::Closed(target.clone()),
         };
         let delivered = super::deliver(
-            &Playwright::new(
-                test_env::offline_session(),
-                Arc::new(RecordingHooks::default()),
-            ),
+            &Playwright::new(test_env::offline_session(), Arc::new(RecordingHooks)),
             &scope,
             &subscription,
             &record,

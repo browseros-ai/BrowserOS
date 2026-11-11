@@ -27,8 +27,7 @@ use neo_takeover::{
 };
 use neo_trace::{
     Effect, EpochMillis, OperationId, OperationKind, OperationStarted, RedactionLimits, Redactor,
-    RunId, RunStarted, SecretSet, SecretSetConfig, TaskId, TraceSink, TraceStore, WriterConfig,
-    spawn_writer,
+    RunId, RunStarted, TaskId, TraceSink, TraceStore, WriterConfig, spawn_writer,
 };
 use serde_json::json;
 use std::sync::Arc;
@@ -88,10 +87,9 @@ struct Harness {
 async fn harness(tabs: &[i64]) -> Result<Harness, BoxError> {
     let dir = tempfile::tempdir()?;
     let store = TraceStore::open(&dir.path().join("trace.db")).await?;
-    let secrets = Arc::new(SecretSet::new(SecretSetConfig::default()));
     let sink = spawn_writer(
         &store,
-        Redactor::new(Arc::clone(&secrets), RedactionLimits::default()),
+        Redactor::new(RedactionLimits::default()),
         WriterConfig::default(),
         None,
     );
@@ -164,7 +162,6 @@ impl Harness {
             request_id: None,
             task_id: Some(task.clone()),
             host_data: None,
-            also_mask: None,
             at: EpochMillis::now(),
         });
         self.sink.op_started(OperationStarted {
@@ -175,7 +172,6 @@ impl Harness {
             effect: Effect::Write,
             tab: Some(TabId(tab)),
             args: json!({ "selector": "#next" }),
-            also_mask: None,
             at: EpochMillis::now(),
         });
     }

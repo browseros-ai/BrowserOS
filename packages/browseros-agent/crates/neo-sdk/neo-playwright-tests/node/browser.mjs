@@ -60,9 +60,34 @@ export function isAlive(pid) {
 }
 
 function groupOwned(pid, profile) {
-  const processes = execFileSync('ps', ['-axo', 'pgid=,command='], {
+  // Host command lines can exceed execFileSync's output buffer and strand a cleanup slot.
+  // Enumerate compact numeric ids first, then read commands only in the owned group.
+  const members = execFileSync('ps', ['-axo', 'pid=,pgid='], {
     encoding: 'utf8',
   })
+    .split('\n')
+    .flatMap((line) => {
+      const [member, group] = line.trim().split(/\s+/).map(Number)
+      return group === pid && Number.isInteger(member) && member > 0
+        ? [member]
+        : []
+    })
+  if (!members.length) return false
+  let processes
+  try {
+    processes = execFileSync(
+      'ps',
+      ['-p', members.join(','), '-o', 'pgid=,command='],
+      {
+        encoding: 'utf8',
+      },
+    )
+  } catch (error) {
+    // Every listed member can exit between the two reads. Ownership then fails closed.
+    if (error.status === 1) return false
+    throw error
+  }
+  // Recheck the group as well as the profile: a pid can be reused between the reads.
   return processes.split('\n').some((line) => {
     const match = line.trim().match(/^(\d+)\s+(.*)$/)
     return (

@@ -118,9 +118,6 @@ tower.workspace = true
 tracing.workspace = true
 tracing-appender.workspace = true
 tracing-subscriber.workspace = true
-# Values typed or read in a sensitive field, held until the field is done, are zeroed when
-# dropped (builtins/typed_values.rs).
-zeroize.workspace = true
 
 [dev-dependencies]
 neo-server = { path = ".", features = ["test-support"] }

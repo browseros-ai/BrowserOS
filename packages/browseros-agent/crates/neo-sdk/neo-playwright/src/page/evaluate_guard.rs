@@ -36,33 +36,22 @@
 //! document: the script frame's, on the op's page. Upstream also adopts one from a same-origin
 //! frame of the same process, through a context id Neo never names, so that case is a decided
 //! deviation with upstream's adoption error.
-//!
-//! The site sweep at the end of this file (`sweep_site` and what it calls) is not the scripts':
-//! read masking (`site_sweep`) sweeps a read's site with it. No main-world send here sweeps or
-//! masks anything.
 
-use std::future::Future;
-use std::time::Duration;
-use std::{mem, slice};
+use std::slice;
 
 use browseros_cdp::CdpError;
-use browseros_core::sensitive_fields::FieldValues;
 use browseros_core::{CoreError, FrameId, ProtocolSession};
 use futures_util::future;
 use serde::{Deserialize, Deserializer};
 use serde_json::{Value, json};
-use tokio::time::{self, Instant};
 
 use crate::op_scope::{OpScope, Sent};
 use crate::op_spec::Capability;
 use crate::page::OpPage;
-use crate::page::document_watch::{FrameFields, decode};
-use crate::page::frame_tree::frame_tree;
-use crate::page::op_page::TryCut;
+use crate::page::document_watch::decode;
 use crate::page::page_value::{self, PageValue, TOO_DEEP, Unreadable};
-use crate::page::sweep_scope::{self, LinkedTab, Site};
-use crate::page::world_call::{self, unexpected, with_world};
-use crate::probe::{self, NAVIGATED_OR_CLOSED, ProbeFailure, ProbeReply, ProbeRequest, Ran};
+use crate::page::world_call::{self, with_world};
+use crate::probe::{NAVIGATED_OR_CLOSED, ProbeFailure, Ran};
 use crate::resolve::{self, HandleSite};
 use crate::target::{ElementTarget, PageRef};
 use crate::world::{BackendNodeId, Endpoint, FrameSeq, Place, SealedWorld, SeqLookup};
@@ -71,15 +60,6 @@ use crate::{ErrorCode, Playwright, PlaywrightError};
 mod document_write;
 
 pub(crate) use document_write::DocumentWrite;
-
-/// How long one frame may take to be swept, from the start of the work that reaches it to the
-/// end of its sweep: attaching its session, reading its session's frames, a second read after a
-/// lost session, installing its world on first use, and the sweep, all under one deadline
-/// (decisions.md, "Main-world sweep scope"). A healthy frame takes a few milliseconds. A frame
-/// of a read's site that misses it fails that try closed, and the whole sweep goes again on
-/// fresh budgets while the op's window has room (`LateRetry`), each budget ending at the
-/// window's end at the latest (`TryCut`); late on the last try, it fails the read closed.
-pub(crate) const FRAME_BUDGET: Duration = Duration::from_secs(1);
 
 /// The function every agent script runs in, built by the JS package's `scripts/build.ts` from
 /// the vendored `UtilityScript` and its serializers plus `src/main-world/index.ts`: one function
@@ -141,6 +121,8 @@ const OUTSIDE_FORMAT: &str = "the page answered with a value outside Playwright'
 
 /// The agent's script as the prelude built it (`wire.ts` `PageScript`). No `Debug`: the
 /// argument may hold a password the agent was given, and no log line may carry it (STYLE P4).
+/// `Clone`, for `locator.waitForFunction`, which sends it again on every try.
+#[derive(Clone)]
 pub(crate) enum Script {
     /// Ready to run: upstream's normalized expression (`normalizeEvaluationExpression`, run in
     /// the prelude), whether it is a function, and the argument.
@@ -181,6 +163,7 @@ pub(crate) enum Subject {
 
 /// Playwright's in-page serialized argument as JSON text: opaque here, parsed by the page. As
 /// text it stays one string through the host's decode and the CDP request, however deep it is.
+#[derive(Clone)]
 pub(crate) struct ArgText(pub(crate) String);
 
 /// How often one op runs its script.
@@ -188,6 +171,10 @@ pub(crate) struct ArgText(pub(crate) String);
 pub(crate) enum CallMode {
     /// `page.evaluate`: once, its result by value.
     Once,
+    /// One try of `locator.waitForFunction`: once, as `Once`, but the page answers only whether
+    /// the result is truthy, judged as upstream's `waitForFunctionExpressionOnElement` callback
+    /// judges it (a promise is truthy, never awaited).
+    Truthy,
     /// `waitForFunction`: upstream's predicate, built once in the page with its argument parsed
     /// once, then called on every poll. The user gesture goes with the call that builds it only:
     /// upstream's later polls run from page timers.
@@ -207,6 +194,15 @@ impl MainWorldCall {
             script,
             subject,
             mode: CallMode::Once,
+        }
+    }
+
+    /// One try of `locator.waitForFunction` on the element its locator matched.
+    pub(crate) fn truthy(script: Script, element: ElementTarget) -> Self {
+        Self {
+            script,
+            subject: Subject::Element(element),
+            mode: CallMode::Truthy,
         }
     }
 
@@ -394,7 +390,7 @@ impl<'op> EvaluateGuard<'op> {
             _sent: &sent,
         };
         let called = match script.mode {
-            CallMode::Once => call.evaluate(&document, script, &objects).await,
+            CallMode::Once | CallMode::Truthy => call.evaluate(&document, script, &objects).await,
             CallMode::Poll => script.poll(&call, &document, &objects).await,
         };
         let outcome = called.map_err(|error| scope.core_error(&error))?;
@@ -498,387 +494,14 @@ fn returned(scope: &OpScope<'_>, value: PageValue) -> Result<Value, PlaywrightEr
     }
 }
 
-/// One world's sweep: the raw value of every sensitive field in its document, those inside its
-/// closed shadow roots included. The seal finds only the closed roots it was handed, and the page
-/// can attach one at any time without a trace in the page, so each sweep first scans the
-/// document and has the seal watch every root it does not watch yet (`world::hidden_roots`).
-/// The scan shares the frame's budget, so a frame whose roots cannot be watched in time is
-/// `Unswept::Late` like any other late frame, and the op is refused.
-async fn sweep_world(world: SealedWorld) -> Result<FieldValues, ProbeFailure> {
-    sweep_watched(&world).await
-}
-
-/// The watch's hold lives until the sweep has read, so a root whose host the page removed is
-/// still alive for it.
-async fn sweep_watched(world: &SealedWorld) -> Result<FieldValues, ProbeFailure> {
-    let _held = world.watch_hidden_roots().await?;
-    match probe::call(world, &ProbeRequest::Sweep).await? {
-        ProbeReply::Sweep { values } => Ok(values),
-        other => Err(unexpected("sweep", other)),
-    }
-}
-
-/// Why a sweep left a frame of the read's site unswept.
-pub(crate) enum Unswept {
-    /// It missed its [`FRAME_BUDGET`] on the last try the op's window had room for, or that try
-    /// reached the window's end first, as an unresponsive renderer's calls do.
-    Late,
-    /// It came back gone on a second read of its target too (a lost session, a session of
-    /// another target, a missing frame), while the browser still lists that target.
-    Lost,
-    /// The frame the sweep was taken for came back gone, on a fresh world too: its document,
-    /// its frame or its session went away, as mid-navigation. A read there lands nowhere and
-    /// polls again, as its own call coming back gone would (`SiteSweep::values_or_gone`).
-    Gone,
-    /// It failed for another reason.
-    Failed(ProbeFailure),
-}
-
-/// What a sweep found so far, and the first frame of the read's site it could not sweep.
-#[derive(Default)]
-pub(crate) struct Found {
-    pub(crate) values: FieldValues,
-    pub(crate) unswept: Option<Unswept>,
-}
-
-impl Found {
-    fn add(&mut self, values: FieldValues) {
-        self.values = mem::take(&mut self.values).union(values);
-    }
-
-    fn fail(&mut self, unswept: Unswept) {
-        self.unswept = self.unswept.take().or(Some(unswept));
-    }
-
-    fn merge(&mut self, other: Self) {
-        self.values = mem::take(&mut self.values).union(other.values);
-        self.unswept = self.unswept.take().or(other.unswept);
-    }
-}
-
-/// Every frame in the site of the read's frame at `script`, of the page and of every tab its
-/// opener links connect it to, swept again while a frame missed its budget and the op's window
-/// has room for another try as long as the last (`OpPage::late_retry`). Each try is a whole
-/// sweep on fresh budgets, its frames, targets and links read anew, so a frame that left
-/// meanwhile is not waited for. A try after the first is cut at the window's end
-/// (`LateRetry::cut`): a try can outlast the one before it, and run past the op's deadline,
-/// where the op's own timeout would replace Neo's refusal. Every try's values are kept, a cut
-/// one's too, a linked tab's among them, and a late try's go to the host before the next
-/// starts. A frame still late when the window closes leaves the sweep `Unswept::Late`, as one
-/// late try did before.
-pub(crate) async fn sweep_site(page: &OpPage<'_>, script: &Endpoint, place: &Place) -> Found {
-    let retry = page.late_retry();
-    let mut found = Found::default();
-    let mut cut = TryCut::default();
-    loop {
-        let started = Instant::now();
-        let tried = sweep_site_once(page, script, place, cut).await;
-        found.add(tried.values);
-        match tried.unswept {
-            Some(Unswept::Late) if retry.has_room(started.elapsed()) => {
-                cut = retry.cut();
-                if !found.values.is_empty() {
-                    page.playwright()
-                        .hooks()
-                        .values_swept(page.tab(), &found.values);
-                }
-            }
-            unswept => {
-                found.unswept = unswept;
-                return found;
-            }
-        }
-    }
-}
-
-/// One try of [`sweep_site`], every budget in it ending at `cut` at the latest, a linked tab's
-/// too.
-///
-/// The read's frame is swept while its session's frames and the browser's list of targets are
-/// read; then the session's other frames, every other target of the page that may be of the
-/// site, and each linked tab's such targets are swept, all at once. The targets come from
-/// the browser, so one of another site, or of a tab no link connects, is never asked anything,
-/// hung or not (`sweep_scope`). The list is read on every sweep: no renderer-side count finds
-/// every out-of-process frame, and links change as tabs open and close (decisions.md,
-/// "Main-world sweep scope"). A page with no opener link reaches its own targets only, from
-/// the same reply. The list's read
-/// has no frame budget, being the browser's, but `cut` ends it too: a try cut before the
-/// browser listed the targets is late.
-async fn sweep_site_once(
-    page: &OpPage<'_>,
-    script: &Endpoint,
-    place: &Place,
-    cut: TryCut,
-) -> Found {
-    // The script's session is read once for all of its frames, so they share one deadline.
-    let deadline = cut.budget();
-    let (own, tree, reach) = future::join3(
-        sweep_frame(page, script.clone(), place.clone(), deadline),
-        read_within_budget(deadline, frame_tree(&script.session)),
-        cut.before(sweep_scope::reach(
-            page.browser(),
-            &page.main_endpoint().frame,
-        )),
-    )
-    .await;
-    let mut found = Found::default();
-    match own {
-        Ok(Some(values)) => found.add(values),
-        Ok(None) => found.fail(Unswept::Gone),
-        Err(unswept) => found.fail(unswept),
-    }
-    let tree = match tree {
-        Ok(Some(tree)) => tree.frame_tree,
-        Ok(None) => {
-            found.fail(Unswept::Gone);
-            return found;
-        }
-        Err(unswept) => {
-            found.fail(unswept);
-            return found;
-        }
-    };
-    let reach = match reach {
-        Some(Ok(reach)) => reach,
-        Some(Err(error)) => {
-            found.fail(Unswept::Failed(ProbeFailure::Cdp(error)));
-            return found;
-        }
-        None => {
-            found.fail(Unswept::Late);
-            return found;
-        }
-    };
-    let site = Site::of(&tree.frame.url, tree.frame.domain_and_registry.as_deref());
-    // A session's root frame is its target: the page's main frame, or the OOPIF.
-    let own_target = FrameId(tree.frame.id.clone());
-    let own_frames = TargetFrames {
-        session: script.session.clone(),
-        frames: tree.into_frames().collect(),
-    };
-    let in_targets = reach
-        .own
-        .into_iter()
-        .filter(|target| target.frame != own_target && site.may_hold(&target.url))
-        .map(|target| async move {
-            let deadline = cut.budget();
-            sweep_target(page, &target.frame, None, None, deadline).await
-        });
-    let in_tabs = reach
-        .linked
-        .into_iter()
-        .map(|tab| sweep_linked(page, tab, &site, cut));
-    let (own, targets, tabs) = future::join3(
-        sweep_target(
-            page,
-            &own_target,
-            Some(own_frames),
-            Some(&script.frame),
-            deadline,
-        ),
-        future::join_all(in_targets),
-        future::join_all(in_tabs),
-    )
-    .await;
-    found.merge(own);
-    for swept in targets.into_iter().chain(tabs) {
-        found.merge(swept);
-    }
-    found
-}
-
-/// Every target of `tab` that may be of `site`, in a tab opener links connect to the page. A
-/// tab with none is never asked anything. Otherwise the tab is found in core, its page state is
-/// set up, and its targets are swept as the page's are, all by the tab's one deadline from when
-/// finding it starts, a frame budget that ends at the try's `cut` at the latest, so the group's
-/// sweeps are the try's and never outlast it. A tab core cannot reach is skipped only once the
-/// browser no longer lists it.
-async fn sweep_linked(page: &OpPage<'_>, tab: LinkedTab, site: &Site, cut: TryCut) -> Found {
-    let mut found = Found::default();
-    let targets: Vec<_> = tab
-        .targets
-        .into_iter()
-        .filter(|target| site.may_hold(&target.url))
-        .collect();
-    if targets.is_empty() {
-        return found;
-    }
-    let deadline = cut.budget();
-    let missing = match read_within_budget(deadline, page.linked_tab(&tab.main)).await {
-        Ok(Some(Some(reached))) => {
-            // A tab's first page state waits on browser-side reads (`PageRegistry::page`), so
-            // the tab's deadline ends that wait as late too. A cut setup leaves no state behind, and the try's other
-            // sweeps keep what they found.
-            let Ok(linked) = time::timeout_at(deadline, page.linked(&reached)).await else {
-                found.fail(Unswept::Late);
-                return found;
-            };
-            let sweeps = targets
-                .iter()
-                .map(|target| sweep_target(&linked, &target.frame, None, None, deadline));
-            for swept in future::join_all(sweeps).await {
-                found.merge(swept);
-            }
-            return found;
-        }
-        Err(Unswept::Late) => {
-            found.fail(Unswept::Late);
-            return found;
-        }
-        Ok(Some(None) | None) => Unswept::Lost,
-        Err(unswept) => unswept,
-    };
-    let listed = read_within_budget(deadline, sweep_scope::is_listed(page.browser(), &tab.main));
-    match listed.await {
-        Ok(Some(false)) => {}
-        Ok(Some(true) | None) => found.fail(missing),
-        Err(unswept) => found.fail(unswept),
-    }
-    found
-}
-
-/// One target's frames as one read found them: the session that reaches them, and every
-/// frame its tree lists, the target's root first.
-struct TargetFrames {
-    session: ProtocolSession,
-    frames: Vec<FrameFields>,
-}
-
-/// How one attempt at a target's frames ended.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Attempt {
-    /// Every frame its tree listed was swept.
-    Swept,
-    /// Its session was gone or answered for another target, or a frame came back gone. None
-    /// of that shows the frame left the page, so one of the target's frames may be unswept.
-    Lost,
-    /// A read or a sweep failed otherwise, recorded in the [`Found`]; another attempt would
-    /// not change that.
-    Failed,
-}
-
-/// Every frame of `target` but `except`, from `first` when the caller already read the target
-/// (the script's own session), else from a read here.
-///
-/// A lost debugger session proves nothing about its frames: another client's detach, or a
-/// `Target.detachedFromTarget` core missed, ends a session while the frame lives on, and core
-/// forgets a session the browser refused as gone, so its next resolve attaches anew
-/// (`EvictingConnection`). So an attempt that comes back gone is followed by one look at the
-/// browser's target list. A target the browser no longer lists left the page, and with it
-/// every frame no script can reach any more; otherwise the target is read and swept again,
-/// and a frame gone a second time leaves it [`Unswept::Lost`]. All of it runs by the frames'
-/// one `deadline`, so a second attempt never extends their budget.
-async fn sweep_target(
-    page: &OpPage<'_>,
-    target: &FrameId,
-    first: Option<TargetFrames>,
-    except: Option<&FrameId>,
-    deadline: Instant,
-) -> Found {
-    let mut found = Found::default();
-    let first = match first {
-        Some(read) => Ok(Some(read)),
-        None => read_target(page, target, deadline).await,
-    };
-    if sweep_attempt(page, first, except, deadline, &mut found).await != Attempt::Lost {
-        return found;
-    }
-    let listed = read_within_budget(deadline, sweep_scope::is_listed(page.browser(), target)).await;
-    match listed {
-        Ok(Some(false)) => return found,
-        Ok(Some(true) | None) => {}
-        Err(unswept) => {
-            found.fail(unswept);
-            return found;
-        }
-    }
-    let again = read_target(page, target, deadline).await;
-    if sweep_attempt(page, again, except, deadline, &mut found).await == Attempt::Lost {
-        found.fail(Unswept::Lost);
-    }
-    found
-}
-
-/// `target`'s session and frames: the page's own session for the page's target, else the
-/// OOPIF's from core's frame registry, which attaches one when it holds none. `None` when the
-/// session was gone, or when core answered with another target's session, as it does for a
-/// frame it cannot attach.
-async fn read_target(
-    page: &OpPage<'_>,
-    target: &FrameId,
-    deadline: Instant,
-) -> Result<Option<TargetFrames>, Unswept> {
-    let main = page.main_endpoint();
-    let read = read_within_budget(deadline, async {
-        let session = if *target == main.frame {
-            main.session.clone()
-        } else {
-            page.browser()
-                .frames()
-                .resolve_frame_target(page.core_page().clone(), Some(target.clone()), None, true)
-                .await?
-                .session
-        };
-        let tree = frame_tree(&session).await?;
-        Ok((session, tree.frame_tree))
-    })
-    .await?;
-    Ok(read
-        .filter(|(_, tree)| tree.frame.id == target.as_str())
-        .map(|(session, tree)| TargetFrames {
-            session,
-            frames: tree.into_frames().collect(),
-        }))
-}
-
-/// Sweeps every frame of `read` but `except` at once, into `found`.
-async fn sweep_attempt(
-    page: &OpPage<'_>,
-    read: Result<Option<TargetFrames>, Unswept>,
-    except: Option<&FrameId>,
-    deadline: Instant,
-    found: &mut Found,
-) -> Attempt {
-    let read = match read {
-        Ok(Some(read)) => read,
-        Ok(None) => return Attempt::Lost,
-        Err(unswept) => {
-            found.fail(unswept);
-            return Attempt::Failed;
-        }
-    };
-    let sweeps = read
-        .frames
-        .into_iter()
-        .filter(|frame| except.is_none_or(|except| frame.id != except.as_str()))
-        .map(|frame| {
-            let TreeFrame { endpoint, place } =
-                frame_endpoint(page, &read.session, FrameId(frame.id));
-            sweep_frame(page, endpoint, place, deadline)
-        });
-    let mut attempt = Attempt::Swept;
-    for frame in future::join_all(sweeps).await {
-        match frame {
-            Ok(Some(values)) => found.add(values),
-            Ok(None) if attempt == Attempt::Swept => attempt = Attempt::Lost,
-            Ok(None) => {}
-            Err(unswept) => {
-                found.fail(unswept);
-                attempt = Attempt::Failed;
-            }
-        }
-    }
-    attempt
-}
-
-/// A frame of a session's tree as its sweep reaches it: the endpoint its world lives on, and
-/// the frame's place in the page, which the world's install takes with it.
+/// A frame of the page as an op reaches it: the endpoint its world lives on, and the frame's
+/// place in the page, which the world's install takes with it.
 pub(crate) struct TreeFrame {
     pub(crate) endpoint: Endpoint,
     pub(crate) place: Place,
 }
 
-/// Where `frame` of `session`'s tree is swept: the page's main frame, whose first document
+/// Where `frame` of `session`'s tree is reached: the page's main frame, whose first document
 /// takes the page's first seq, through the main endpoint; any other as a frame found in a tree
 /// rather than through a hop.
 pub(crate) fn frame_endpoint(
@@ -897,39 +520,6 @@ pub(crate) fn frame_endpoint(
             endpoint: page.child_endpoint(session.clone(), frame),
             place: Place::Descendant,
         }
-    }
-}
-
-/// One frame's install and sweep by its `deadline`; `None` when it came back gone: its
-/// document, its frame or its session.
-async fn sweep_frame(
-    page: &OpPage<'_>,
-    endpoint: Endpoint,
-    place: Place,
-    deadline: Instant,
-) -> Result<Option<FieldValues>, Unswept> {
-    let swept = with_world(page, &endpoint, &place, sweep_world);
-    match time::timeout_at(deadline, swept).await {
-        Err(_) | Ok(Err(ProbeFailure::Late)) => Err(Unswept::Late),
-        Ok(Ok(swept)) => Ok(Some(swept)),
-        Ok(Err(ProbeFailure::Gone(_))) => Ok(None),
-        Ok(Err(failure)) => Err(Unswept::Failed(failure)),
-    }
-}
-
-/// `read`, a session's tree or the browser's targets, by the `deadline` of the frames it is
-/// read for; `None` when it came back gone.
-async fn read_within_budget<T>(
-    deadline: Instant,
-    read: impl Future<Output = Result<T, CoreError>>,
-) -> Result<Option<T>, Unswept> {
-    match time::timeout_at(deadline, read).await {
-        Err(_late) => Err(Unswept::Late),
-        Ok(Ok(value)) => Ok(Some(value)),
-        Ok(Err(error)) => match ProbeFailure::from_core(error) {
-            ProbeFailure::Gone(_) => Ok(None),
-            failure => Err(Unswept::Failed(failure)),
-        },
     }
 }
 
@@ -1053,7 +643,8 @@ impl Shape {
 }
 
 impl MainCall<'_> {
-    /// `page.evaluate`'s one call: upstream's `UtilityScript.evaluate` on the main-world document.
+    /// `page.evaluate`'s one call: upstream's `UtilityScript.evaluate` on the main-world document,
+    /// or for a `Truthy` script the truthiness of its result, as serialized text all the same.
     async fn evaluate(
         &self,
         document: &str,
@@ -1064,7 +655,15 @@ impl MainCall<'_> {
             .send(
                 document,
                 MAIN_WORLD_JS,
-                arguments("evaluate", script, objects),
+                arguments(
+                    if script.mode == CallMode::Truthy {
+                        "truthy"
+                    } else {
+                        "evaluate"
+                    },
+                    script,
+                    objects,
+                ),
                 Shape::Evaluate,
             )
             .await?;

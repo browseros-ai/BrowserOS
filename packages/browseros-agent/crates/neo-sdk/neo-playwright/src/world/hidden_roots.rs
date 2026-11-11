@@ -7,7 +7,7 @@
 //! `__clawSeal.watch(root)` so subsequent sweeps include its fields.
 //!
 //! ```text
-//!  SealedWorld::install, and every sweep before it reads (evaluate_guard::sweep_world)
+//!  SealedWorld::install
 //!    └─ SealedWorld::watch_hidden_roots()    under the WatchedRoots lock
 //!         ├─ HiddenRoots::scan   DOM.describeNode { the world's document, depth 30, pierce },
 //!         │                      then again from each node the depth cut off, until none is

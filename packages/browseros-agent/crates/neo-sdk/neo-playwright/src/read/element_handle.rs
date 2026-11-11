@@ -177,26 +177,19 @@ pub(crate) async fn query_one(
         frame_visible,
         read: Read::Located,
     };
-    // Its preview becomes the handle's display: the site's values go with the request.
-    let Some(Landed {
-        reply,
-        world,
-        alongside: site,
-        ..
-    }) = resolver.attempt_masked(request).await?
-    else {
+    // Its preview becomes the handle's display.
+    let Some(Landed { reply, world, .. }) = resolver.attempt_at(request).await? else {
         return Ok(Value::Null);
     };
     match reply {
-        ProbeReply::Read { value, sweep, .. } => {
-            let value = site.with_own(pw, page.tab(), sweep).mask(value);
-            let located: Located = element_read::read_value(scope, value)?;
+        ProbeReply::Read { value, .. } => {
+            let located: Located = element_read::read_value(scope, value.into_value())?;
             let brand =
                 element_brand(scope, &target.page, &world, located.pin, &located.preview).await?;
             Ok(brand.unwrap_or(Value::Null))
         }
         ProbeReply::None { stale_ref: None } | ProbeReply::Detached => Ok(Value::Null),
-        other => Err(site.refused(scope, other)),
+        other => Err(resolver.refused(other)),
     }
 }
 
@@ -219,28 +212,16 @@ pub(crate) async fn query_all(
         target: ProbeTarget::Chunk(last),
         read: ReadAll::Pins,
     };
-    // Each match's preview becomes its handle's display: the site's values go with the request.
-    let Some(Landed {
-        reply,
-        world,
-        alongside: site,
-        ..
-    }) = resolver.attempt_masked(request).await?
-    else {
+    // Each match's preview becomes its handle's display.
+    let Some(Landed { reply, world, .. }) = resolver.attempt_at(request).await? else {
         return Ok(json!([]));
     };
-    let ProbeReply::Values {
-        count,
-        values,
-        sweep,
-    } = reply
-    else {
-        return Err(site.refused(scope, reply));
+    let ProbeReply::Values { count, values } = reply else {
+        return Err(resolver.refused(reply));
     };
-    let site = site.with_own(pw, page.tab(), sweep);
     let mut handles = Vec::with_capacity(values.len());
     for value in values {
-        let PinnedMatch { pin, preview } = element_read::read_value(scope, site.mask(value))?;
+        let PinnedMatch { pin, preview } = element_read::read_value(scope, value.into_value())?;
         let Some(brand) = element_brand(scope, &target.page, &world, pin, &preview).await? else {
             return Err(scope.fail(
                 ErrorCode::TargetClosed,

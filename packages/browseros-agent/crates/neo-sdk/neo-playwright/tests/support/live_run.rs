@@ -232,23 +232,17 @@ fn op(name: &str) -> Result<Op, PlaywrightError> {
         .ok_or_else(|| PlaywrightError::new(ErrorCode::Internal, format!("{name} is not an op")))
 }
 
-/// The host's privacy layer: every value a read's sweep found is kept, as the host would register
-/// it. The unused capture hook can refuse to detect callers.
+/// The host's hooks. No op calls them back; the capture hook can refuse, so capture tests prove
+/// it is bypassed.
 #[derive(Default)]
 struct LiveHooks {
     capture: Mutex<Option<Refusal>>,
-    swept: Mutex<Vec<String>>,
 }
 
 impl PlaywrightHooks for LiveHooks {
     fn field_entered(&self, _page: TabId, _entry: JournalEntry, _by: TypedBy) {}
 
-    fn values_swept(&self, _page: TabId, values: &FieldValues) {
-        self.swept
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .extend(values.registrable().map(str::to_owned));
-    }
+    fn values_swept(&self, _page: TabId, _values: &FieldValues) {}
 
     fn capture_allowed(&self, _page: TabId) -> Result<(), Refusal> {
         self.capture
@@ -476,15 +470,6 @@ impl LiveRun {
             .send_value("Input.insertText", json!({ "text": text }))
             .await?;
         Ok(())
-    }
-
-    /// The values the sweeps reported so far, long enough to register.
-    pub(crate) fn swept(&self) -> Vec<String> {
-        self.hooks
-            .swept
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clone()
     }
 
     /// Makes the retained capture hook refuse, so capture tests prove it is bypassed.

@@ -76,7 +76,7 @@ impl<'a> ElementRunner<'a> {
                     continue;
                 }
                 None => continue,
-                Some(other) => return Err(self.subject.refused(&located, other).await),
+                Some(other) => return Err(self.subject.refused(other)),
             };
             // The edit can move the focus (a focus, a blur, a page handler of the event), so it
             // waits for the tab's input, as keys and a fill hold it: between a fill's select and
@@ -92,7 +92,7 @@ impl<'a> ElementRunner<'a> {
                 Some(ProbeReply::Detached) => self.subject.detached()?,
                 None => {}
                 // The probe threw before the edit changed anything (a bad event init).
-                Some(other) => return Err(self.subject.refused(&located, other).await),
+                Some(other) => return Err(self.subject.refused(other)),
             }
         }
         Err(self.scope.timed_out(ErrorCode::NoMatch))
@@ -224,7 +224,7 @@ impl<'a> ElementRunner<'a> {
             Some(ProbeReply::None { stale_ref: None } | ProbeReply::Detached) | None => {
                 Measured::Gone
             }
-            Some(other) => return Err(self.subject.refused(located, other).await),
+            Some(other) => return Err(self.subject.refused(other)),
         })
     }
 
@@ -247,7 +247,7 @@ impl<'a> ElementRunner<'a> {
         let Ok(asked) = self.scope.within(self.subject.call(located, request)).await else {
             return Err(self.scope.timed_out(ErrorCode::NoMatch));
         };
-        match asked? {
+        match asked {
             Ok(reply) => Ok(Some(reply)),
             Err(ProbeFailure::Gone(_)) => self.subject.lost(located).map(|()| None),
             Err(failure) => Err(resolve::failed(self.scope, failure)),

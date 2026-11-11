@@ -24,7 +24,7 @@ struct SlowNewTab {
 
 impl TabScript for SlowNewTab {
     fn probe(&self, _frame: &str, _request: &Value) -> ProbeAnswer {
-        ProbeAnswer::empty_sweep()
+        ProbeAnswer::unexpected()
     }
 
     fn delay(&self, method: &str) -> Duration {
@@ -169,7 +169,7 @@ impl AnswersAfterTheClient {
 
 impl TabScript for AnswersAfterTheClient {
     fn probe(&self, _frame: &str, _request: &Value) -> ProbeAnswer {
-        ProbeAnswer::empty_sweep()
+        ProbeAnswer::unexpected()
     }
 
     fn outlasts_client(&self, method: &str) -> bool {

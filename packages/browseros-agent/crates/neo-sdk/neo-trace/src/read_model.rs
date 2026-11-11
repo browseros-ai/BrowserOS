@@ -1,4 +1,4 @@
-//! What [`TraceStore`](crate::TraceStore) reads back: records as stored (masked and bounded),
+//! What [`TraceStore`](crate::TraceStore) reads back: records as stored (bounded),
 //! typed, ready for the service routes to map onto `neo-sdk-api` models.
 //!
 //! A host finds its records by its own ids (`requestId`, `taskId`), by browser tab, and by
@@ -20,7 +20,7 @@ pub struct OperationRow {
     pub parent: Option<OperationId>,
     /// The tab it targeted, when it had one.
     pub tab: Option<TabId>,
-    /// The method name: masked, clipped.
+    /// The method name: clipped.
     pub name: String,
     /// Its place in the tree.
     pub kind: OperationKind,
@@ -28,11 +28,11 @@ pub struct OperationRow {
     pub effect: Effect,
     /// How its tab looked after it.
     pub page: PageState,
-    /// Safe input: redacted, masked, bounded.
+    /// Input: bounded.
     pub args: Option<Value>,
     /// Whether `args` was cut.
     pub args_truncated: bool,
-    /// Safe result: masked, bounded.
+    /// Result: bounded.
     pub result: Option<Value>,
     /// Whether `result` was cut.
     pub result_truncated: bool,
@@ -42,7 +42,7 @@ pub struct OperationRow {
     pub delivery: Option<Delivery>,
     /// Its error, when it failed.
     pub error: Option<ErrorRecord>,
-    /// Its call-log lines, oldest first: masked, bounded. Empty while it runs, and when it noted
+    /// Its call-log lines, oldest first: bounded. Empty while it runs, and when it noted
     /// nothing.
     pub notes: Vec<String>,
     /// When it was admitted.
@@ -134,16 +134,16 @@ pub struct RunSummary {
 pub struct RunDetail {
     /// The run.
     pub summary: RunSummary,
-    /// The host data it was started with, masked.
+    /// The bounded host data, present once the run ends.
     pub host_data: Option<Value>,
-    /// Its code, masked; `None` when withheld.
+    /// Its bounded code; `None` while running or when unavailable.
     pub code: Option<String>,
     /// Whether `code` was cut.
     pub code_truncated: bool,
     /// Why code is absent: `unavailable`, or a legacy `sensitive_input` marker. The reader
     /// preserves older rows even though new runs no longer withhold code for sensitive fields.
     pub code_withheld: Option<String>,
-    /// Its return value, masked and bounded.
+    /// Its return value, bounded.
     pub result: Option<Value>,
     /// Whether `result` was cut.
     pub result_truncated: bool,

@@ -41,16 +41,16 @@ pub struct Run {
     pub complete: bool,
     #[serde(rename = "traceGaps", skip_serializing_if = "Option::is_none")]
     pub trace_gaps: Option<i64>,
-    /// The host data the run was started with (`_meta[\"com.browseros.neo/run\"].hostData`), if any; masked. Present once the run has ended: Neo masks it with what the run's end knows, so a running run, or one cut short by a restart, has none.
+    /// The host data the run was started with (`_meta[\"com.browseros.neo/run\"].hostData`), if any; bounded for storage. Present once the run has ended, so a running run, or one cut short by a restart, has none.
     #[serde(rename = "hostData", skip_serializing_if = "Option::is_none")]
     pub host_data: Option<serde_json::Value>,
-    /// The script, masked. Stored when the run ends, so it is absent while the run is `running`. Older runs may also have no stored code.
+    /// The script, bounded for storage. Stored when the run ends, so it is absent while the run is `running`. Older runs may also have no stored code.
     #[serde(rename = "code", skip_serializing_if = "Option::is_none")]
     pub code: Option<String>,
     /// Neo stopped before the run ended, so its code was never stored.
     #[serde(rename = "codeWithheld", skip_serializing_if = "Option::is_none")]
     pub code_withheld: Option<String>,
-    /// The script's return value, masked and bounded.
+    /// The script's return value, bounded for storage.
     #[serde(
         rename = "result",
         default,

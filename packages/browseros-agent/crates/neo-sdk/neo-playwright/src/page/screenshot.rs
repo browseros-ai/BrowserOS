@@ -3,9 +3,11 @@
 //! A per-tab guard prepares every frame, captures through core (which hides the agent pointer),
 //! then restores temporary rendering state. Its queue remains held through cancellation cleanup.
 
-use browseros_core::screenshot::{ScreenshotCaptureOptions, ScreenshotFormat};
+use browseros_core::screenshot::{
+    ScreenshotBackground, ScreenshotCaptureOptions, ScreenshotFormat,
+};
 use serde::Deserialize;
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 
 use crate::backoff::Backoff;
 use crate::page::OpPage;
@@ -45,7 +47,9 @@ pub(crate) struct ScreenshotInput {
     scale: Scale,
     #[serde(default, rename = "type")]
     image: ImageType,
-    /// JPEG only, 0 to 100.
+    #[serde(default)]
+    omit_background: bool,
+    /// JPEG and WebP, 0 to 100.
     #[serde(default)]
     quality: Option<u8>,
 }
@@ -59,10 +63,12 @@ impl ScreenshotInput {
                 "options.quality is unsupported for the png screenshots",
             ));
         }
-        if self.quality.is_some_and(|quality| quality > 100) {
+        if let Some(quality) = self.quality.filter(|quality| *quality > 100) {
             return Err(scope.fail(
                 ErrorCode::InvalidInput,
-                "options.quality is out of the range 0..100",
+                &format!(
+                    "Expected options.quality to be between 0 and 100 (inclusive), got {quality}"
+                ),
             ));
         }
         if let Some(clip) = self.clip {
@@ -80,6 +86,15 @@ impl ScreenshotInput {
             }
         }
         Ok(())
+    }
+
+    /// Chromium encodes WebP losslessly at quality 100, matching upstream's default.
+    fn encoding_quality(&self) -> Option<i64> {
+        match self.image {
+            ImageType::Png => None,
+            ImageType::Jpeg => Some(i64::from(self.quality.unwrap_or(80))),
+            ImageType::Webp => Some(i64::from(self.quality.unwrap_or(100))),
+        }
     }
 }
 
@@ -101,13 +116,14 @@ enum Caret {
     Initial,
 }
 
-/// Playwright's two screenshot formats.
+/// Playwright's screenshot formats; PNG and WebP support transparency.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "lowercase")]
 enum ImageType {
     #[default]
     Png,
     Jpeg,
+    Webp,
 }
 
 /// Captures the page as `input` asks.
@@ -122,6 +138,7 @@ pub(crate) async fn capture(
     let format = match input.image {
         ImageType::Png => ScreenshotFormat::Png,
         ImageType::Jpeg => ScreenshotFormat::Jpeg,
+        ImageType::Webp => ScreenshotFormat::Webp,
     };
     let capture = async {
         let backoff = Backoff::outer(scope.timeout());
@@ -188,20 +205,25 @@ async fn capture_pixels(
     target: Option<&Target>,
     format: ScreenshotFormat,
 ) -> Result<String, PlaywrightError> {
-    // Chromium already knows its default viewport and device density. Measure layout
-    // only when an element or an explicit geometry option changes the captured area.
-    if input.target.is_none()
+    let default_viewport = input.target.is_none()
         && !input.full_page
         && input.clip.is_none()
-        && input.scale == Scale::Device
-    {
+        && input.scale == Scale::Device;
+    let background = if input.omit_background && input.image != ImageType::Jpeg {
+        ScreenshotBackground::Transparent
+    } else {
+        ScreenshotBackground::Default
+    };
+    // The default opaque path needs no layout or utility-world support. Transparent captures
+    // use the normalized core path, which owns background isolation from audit captures.
+    if default_viewport && background == ScreenshotBackground::Default {
         return scope
             .view()
             .screenshot(
                 page.core_page().clone(),
                 ScreenshotCaptureOptions {
                     format: Some(format),
-                    quality: input.quality.map(i64::from),
+                    quality: input.encoding_quality(),
                     full_page: Some(false),
                     annotate: None,
                     clip: None,
@@ -211,36 +233,45 @@ async fn capture_pixels(
             .map(|shot| shot.data)
             .map_err(|error| scope.core_error(&error));
     }
-    let geometry = Box::pin(ScreenshotGeometry::measure(
-        pw,
-        page,
-        scope,
-        GeometryOptions {
-            target,
-            strict: input.strict.unwrap_or(Strictness::Strict),
-            full_page: input.full_page,
-            clip: input.clip,
-            scale: input.scale,
-        },
-    ))
-    .await?;
-    let clip = geometry.clip;
-    let mut params = json!({ "format": format.as_str(),
-        "clip": { "x": clip.x, "y": clip.y, "width": clip.width, "height": clip.height, "scale": clip.scale },
-        "captureBeyondViewport": geometry.beyond_viewport,
-    });
-    let quality = match input.image {
-        ImageType::Png => None,
-        ImageType::Jpeg => Some(input.quality.unwrap_or(80)),
+    let geometry = if default_viewport {
+        None
+    } else {
+        Some(
+            Box::pin(ScreenshotGeometry::measure(
+                pw,
+                page,
+                scope,
+                GeometryOptions {
+                    target,
+                    strict: input.strict.unwrap_or(Strictness::Strict),
+                    full_page: input.full_page,
+                    clip: input.clip,
+                    scale: input.scale,
+                },
+            ))
+            .await?,
+        )
     };
-    if let Some(quality) = quality
-        && let Value::Object(fields) = &mut params
-    {
-        fields.insert("quality".to_owned(), json!(quality));
+    let mut params = Map::new();
+    params.insert("format".to_owned(), json!(format.as_str()));
+    params.insert(
+        "captureBeyondViewport".to_owned(),
+        json!(
+            geometry
+                .as_ref()
+                .is_some_and(|geometry| geometry.beyond_viewport)
+        ),
+    );
+    if let Some(geometry) = geometry {
+        let clip = geometry.clip;
+        params.insert("clip".to_owned(), json!({ "x": clip.x, "y": clip.y, "width": clip.width, "height": clip.height, "scale": clip.scale }));
+    }
+    if let Some(quality) = input.encoding_quality() {
+        params.insert("quality".to_owned(), json!(quality));
     }
     scope
         .view()
-        .screenshot_cdp(page.core_page().clone(), params)
+        .screenshot_cdp_with_background(page.core_page().clone(), Value::Object(params), background)
         .await
         .map_err(|error| scope.core_error(&error))
 }
@@ -269,7 +300,7 @@ mod tests {
         let connection = TestConnection::new([]);
         let test_support::OneTab { browser } = test_support::one_tab(&connection).await?;
         connection.always("Page.captureScreenshot", json!({ "data": "cG5n" }))?;
-        let playwright = Playwright::new(Arc::clone(&browser), Arc::new(RecordingHooks::default()));
+        let playwright = Playwright::new(Arc::clone(&browser), Arc::new(RecordingHooks));
         let env = TestEnv::over(BrowserView::unbound(Arc::clone(&browser), None));
         let input = || {
             serde_json::from_value::<ScreenshotInput>(
@@ -314,10 +345,7 @@ mod tests {
     #[tokio::test]
     async fn tests_that_an_undeclared_op_is_refused_before_its_page_is_looked_up()
     -> Result<(), Box<dyn Error>> {
-        let playwright = Playwright::new(
-            test_env::offline_session(),
-            Arc::new(RecordingHooks::default()),
-        );
+        let playwright = Playwright::new(test_env::offline_session(), Arc::new(RecordingHooks));
         let env = TestEnv::new();
         let evaluate = Op::from_name("page.evaluate").ok_or("page.evaluate is an op")?;
         let undeclared = OpScope::new(&env, evaluate, CallHeader::default());

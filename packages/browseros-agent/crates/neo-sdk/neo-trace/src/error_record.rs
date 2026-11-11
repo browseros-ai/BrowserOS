@@ -33,7 +33,7 @@ impl ErrorOwner {
     }
 }
 
-/// A failure as it is stored: masked and bounded on the writer before it reaches disk.
+/// A failure as it is stored: bounded on the writer before it reaches disk.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ErrorRecord {

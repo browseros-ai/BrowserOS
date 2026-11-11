@@ -69,8 +69,8 @@ pub(crate) async fn listed_frame_world(
 /// install that fails `Gone` because the frame itself went away, is returned.
 ///
 /// `call` must be safe to repeat after a `Gone`, also one that may have run before its document
-/// went (`Ran::Maybe`): every caller's is a read, a sweep, a document read or a URL match, which
-/// changes nothing in the page.
+/// went (`Ran::Maybe`): every caller's is a read, a document read or a URL match, which changes
+/// nothing in the page.
 pub(crate) async fn with_world<T, F, Fut>(
     page: &OpPage<'_>,
     endpoint: &Endpoint,

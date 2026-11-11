@@ -220,7 +220,7 @@ mod tests {
         struct Fonts(AtomicBool);
         impl TabScript for Fonts {
             fn probe(&self, _frame: &str, _request: &Value) -> ProbeAnswer {
-                ProbeAnswer::empty_sweep()
+                ProbeAnswer::unexpected()
             }
             fn main_world(
                 &self,

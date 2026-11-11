@@ -8,8 +8,7 @@ use crate::op_input::OpArgs;
 use crate::op_scope::OpScope;
 use crate::op_spec::{OpSpec, TARGET};
 use crate::page::OpPage;
-use crate::page::site_sweep::ReadMask;
-use crate::probe::{ProbeReply, ProbeRequest, ProbeTarget, QueryState, Read, ReadAll};
+use crate::probe::{PageText, ProbeReply, ProbeRequest, ProbeTarget, QueryState, Read, ReadAll};
 use crate::read::element_read::Visibility;
 use crate::read::element_wait::ElementWait;
 use crate::read::selector_wait::{Returning, SelectorState};
@@ -371,32 +370,16 @@ async fn every_match(
         target: ProbeTarget::Chunk(last),
         read,
     };
-    let masked = |world| ReadMask::of(&page, world, read.holds_page_text());
-    let Some(Landed {
-        reply,
-        alongside: mask,
-        ..
-    }) = resolver.attempt_alongside(request, masked).await?
-    else {
+    let Some(Landed { reply, .. }) = resolver.attempt_at(request).await? else {
         return Ok(Matched::default());
     };
-    let ProbeReply::Values {
-        count,
-        values,
-        sweep,
-    } = reply
-    else {
+    let ProbeReply::Values { count, values } = reply else {
         return Err(resolver.refused(reply));
     };
-    let values = match mask {
-        ReadMask::Site(site) => {
-            let site = site.values(pw, scope, page.tab(), sweep)?;
-            values.into_iter().map(|value| site.mask(value)).collect()
-        }
-        // The count sends no values.
-        ReadMask::Textless => Vec::new(),
-    };
-    Ok(Matched { count, values })
+    Ok(Matched {
+        count,
+        values: values.into_iter().map(PageText::into_value).collect(),
+    })
 }
 
 /// One element's read, once the locator matches (`read_attached`).

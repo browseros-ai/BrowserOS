@@ -13,9 +13,7 @@
  * The seal comes first in the same script, so a seal that throws leaves no engine behind,
  * and `boot` refuses a world without one. After that every request is one CALL_FUNCTION
  * (protocol.ts). Each request family has its own handler file; this one owns the lifecycle
- * (boot and re-key), the dispatch table, the error replies, and the gate that answers
- * `needsMask` for a reply whose page text the engine cut without the call's mask
- * (page-mask.ts).
+ * (boot and re-key), the dispatch table and the error replies.
  */
 import { isInvalidSelectorError } from '../../../neo-playwright/third_party/playwright/packages/isomorphic/selectorParser'
 import { act, disarm, frameBox, listenForMoves, moves, verdict } from './act'
@@ -24,14 +22,11 @@ import { documentText, replaceDocument } from './document'
 import { edit } from './edit'
 import { expect } from './expect'
 import { armInput, inputArrived } from './files'
-import { underMask } from './page-mask'
 import {
   type BootOptions,
   type Described,
   type ErrorClass,
   type ErrorReply,
-  type Mask,
-  type NeedsMask,
   type NeoProbe,
   PROTOCOL,
   type ProbeRequest,
@@ -42,7 +37,7 @@ import {
 } from './protocol'
 import { read, readAll } from './read'
 import { pinned, resolve } from './resolve'
-import { focused, sealIn, sweep } from './sensitive'
+import { focused, sealIn } from './sensitive'
 import { snapshot } from './snapshot'
 import { matchUrl } from './url'
 import {
@@ -79,7 +74,6 @@ const HANDLERS: Handlers = {
   readAll,
   snapshot,
   expect,
-  sweep,
   focused,
   matchUrl,
   document: documentText,
@@ -89,7 +83,6 @@ const HANDLERS: Handlers = {
 }
 
 const UNINSTALLED: Uninstalled = { kind: 'uninstalled' }
-const NEEDS_MASK: NeedsMask = { kind: 'needsMask' }
 
 function described(world: World): Described {
   return {
@@ -107,11 +100,7 @@ function createProbe(): NeoProbe {
   const refs = new RefMap()
   let world: World | undefined
 
-  /**
-   * One request's reply in `booted`, the error replies included. A handler that answers with
-   * a promise (`expect`'s viewport check) has its mask in force only until its first await,
-   * so it cuts and quotes page text before it awaits.
-   */
+  /** One request's reply in `booted`, the error replies included. */
   function answer(
     booted: World,
     request: ProbeRequest,
@@ -154,38 +143,16 @@ function createProbe(): NeoProbe {
         : { ...described(world), retired }
     },
 
-    call(request, root, mask) {
+    call(request, root) {
       const booted = world
       if (!booted) return UNINSTALLED
       if (!hasKnownOp(request))
         return errorReply('internal', 'not a probe request')
-      if (!isMask(mask)) return errorReply('internal', 'not a probe mask')
       // On a context call CALL_FUNCTION passes the world's global as `root`.
       const scope = root instanceof Node ? root : undefined
-      // Rust's mask is the site as its sweep found it, a round trip or more ago, and this
-      // frame's fields may have been typed into since. Read now, in the same synchronous call
-      // as every cut, this frame's own values are never newer than the mask; Rust's sweep
-      // after the call catches another frame of the site that changed (resolve::masked_call).
-      const callMask =
-        mask === undefined
-          ? undefined
-          : [...mask, ...booted.seal.sensitiveValues()]
-      // A reply that holds page text the engine cut or quoted without a mask never leaves
-      // the page: Rust is asked for the mask instead, and sends the request again with it.
-      const { value, needsMask } = underMask(callMask, () =>
-        answer(booted, request, scope),
-      )
-      return needsMask ? NEEDS_MASK : value
+      return answer(booted, request, scope)
     },
   }
-}
-
-/** No mask, or Rust's: an array of strings. */
-function isMask(mask: unknown): mask is Mask | undefined {
-  return (
-    mask === undefined ||
-    (Array.isArray(mask) && mask.every((value) => typeof value === 'string'))
-  )
 }
 
 /** `op` travels beside the request so the table lookup and the request agree on one op. */
