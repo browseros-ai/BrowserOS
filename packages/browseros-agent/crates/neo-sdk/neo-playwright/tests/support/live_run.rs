@@ -5,7 +5,6 @@
 //! connection passes through a [`Tap`], so a test can step in at one CDP command of an op.
 
 use std::error::Error;
-use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 use std::{env, future};
@@ -292,15 +291,12 @@ fn op(name: &str) -> Result<Op, PlaywrightError> {
 }
 
 /// The host's privacy layer: every value the evaluate guard swept is kept, as the host would
-/// register it. The unused capture hook can refuse to detect callers. It names no secret files
-/// until a test names some, so every path a test uploads is served, as
-/// real Playwright serves it.
+/// register it. The unused capture hook can refuse to detect callers.
 #[derive(Default)]
 struct LiveHooks {
     capture: Mutex<Option<Refusal>>,
     swept: Mutex<Vec<String>>,
     heard: Arc<Mutex<Vec<Heard>>>,
-    secrets: Mutex<Vec<PathBuf>>,
 }
 
 impl PlaywrightHooks for LiveHooks {
@@ -322,10 +318,6 @@ impl PlaywrightHooks for LiveHooks {
             .unwrap_or_else(PoisonError::into_inner)
             .clone()
             .map_or(Ok(()), Err)
-    }
-
-    fn secret_paths(&self) -> Option<Vec<PathBuf>> {
-        Some(lock(&self.secrets).clone())
     }
 }
 
@@ -572,11 +564,6 @@ impl LiveRun {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .clone()
-    }
-
-    /// Names `secrets` as Neo's secret files from the next `setInputFiles` on.
-    pub(crate) fn name_secrets(&self, secrets: Vec<PathBuf>) {
-        *lock(&self.hooks.secrets) = secrets;
     }
 
     /// Makes the retained capture hook refuse, so capture tests prove it is bypassed.
