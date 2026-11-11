@@ -142,3 +142,40 @@ fn tests_that_pointer_inputs_and_reply_bytes_match_the_before_recording()
     );
     Ok(())
 }
+
+/// Optional TypeScript keys must not widen the old serde bool contract: omission defaults,
+/// but an explicitly supplied null was invalid before these fields became Option<bool>.
+#[test]
+fn tests_that_defaulted_pointer_flags_reject_explicit_null() -> Result<(), Box<dyn Error>> {
+    let recording: Recording =
+        serde_json::from_str(include_str!("../../tests/data/pointer-wire.json"))?;
+    for (op, flags) in [
+        (ActionOp::Click, &["force", "trial", "noWaitAfter"][..]),
+        (ActionOp::Dblclick, &["force", "trial"][..]),
+        (ActionOp::Hover, &["force", "trial"][..]),
+        (ActionOp::Check, &["force", "trial"][..]),
+        (ActionOp::Uncheck, &["force", "trial"][..]),
+        (ActionOp::DragTo, &["force", "trial"][..]),
+    ] {
+        let exchange = recording
+            .scenarios
+            .iter()
+            .flat_map(|s| &s.exchanges)
+            .find(|exchange| exchange.op == op.spec().name)
+            .ok_or("pointer recording is missing an op")?;
+        for flag in flags {
+            let mut args: Value = serde_json::from_str(&exchange.args)?;
+            args.as_object_mut().ok_or("object args")?.remove("call");
+            args.get_mut("options")
+                .and_then(Value::as_object_mut)
+                .ok_or("pointer options")?
+                .insert((*flag).to_owned(), Value::Null);
+            assert!(
+                decode_pointer_input(op, args).is_err(),
+                "{} accepted null for {flag}",
+                op.spec().name
+            );
+        }
+    }
+    Ok(())
+}

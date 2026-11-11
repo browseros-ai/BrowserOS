@@ -4,7 +4,7 @@
 //! actionability, retrying, focus leases and navigation waits; typing the wire does not move
 //! those checks or grant an op any capability.
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Map, Value};
 use std::sync::Arc;
 use ts_rs::TS;
@@ -206,6 +206,13 @@ fn route<'a, R: Route<'a>>(op: ActionOp, r: R) -> R::Out {
     }
 }
 
+/// These flags were defaulted bools before deriving the contract. Option marks omission for
+/// TypeScript, but a present null must still fail before any action can run. Field defaults
+/// handle omission; only an actual boolean reaches this deserializer.
+fn optional_bool<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<bool>, D::Error> {
+    bool::deserialize(deserializer).map(Some)
+}
+
 /// Each pointer op owns exactly the script options it forwards; a hover cannot silently
 /// acquire click-only fields through the old shared pointer decoder.
 #[derive(Debug, Deserialize, TS)]
@@ -225,13 +232,16 @@ struct ClickOptions {
     click_count: Option<u32>,
     /// Milliseconds, after each press and between clicks.
     delay: Option<f64>,
+    #[serde(default, deserialize_with = "optional_bool")]
     force: Option<bool>,
     modifiers: Option<Vec<WireModifier>>,
+    #[serde(default, deserialize_with = "optional_bool")]
     no_wait_after: Option<bool>,
     #[ts(optional, type = "import('../../../probe/protocol').Point")]
     position: Option<Point>,
     scroll: Option<ScrollOption>,
     steps: Option<u32>,
+    #[serde(default, deserialize_with = "optional_bool")]
     trial: Option<bool>,
 }
 
@@ -251,12 +261,14 @@ options!(DblclickInput => DblclickOptions);
 struct DblclickOptions {
     button: Option<WireButton>,
     delay: Option<f64>,
+    #[serde(default, deserialize_with = "optional_bool")]
     force: Option<bool>,
     modifiers: Option<Vec<WireModifier>>,
     #[ts(optional, type = "import('../../../probe/protocol').Point")]
     position: Option<Point>,
     scroll: Option<ScrollOption>,
     steps: Option<u32>,
+    #[serde(default, deserialize_with = "optional_bool")]
     trial: Option<bool>,
 }
 
@@ -274,11 +286,13 @@ options!(HoverInput => HoverOptions);
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 #[ts(optional_fields)]
 struct HoverOptions {
+    #[serde(default, deserialize_with = "optional_bool")]
     force: Option<bool>,
     modifiers: Option<Vec<WireModifier>>,
     #[ts(optional, type = "import('../../../probe/protocol').Point")]
     position: Option<Point>,
     scroll: Option<ScrollOption>,
+    #[serde(default, deserialize_with = "optional_bool")]
     trial: Option<bool>,
 }
 
@@ -296,10 +310,12 @@ options!(CheckInput => CheckOptions);
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 #[ts(optional_fields)]
 struct CheckOptions {
+    #[serde(default, deserialize_with = "optional_bool")]
     force: Option<bool>,
     #[ts(optional, type = "import('../../../probe/protocol').Point")]
     position: Option<Point>,
     scroll: Option<ScrollOption>,
+    #[serde(default, deserialize_with = "optional_bool")]
     trial: Option<bool>,
 }
 
@@ -317,10 +333,12 @@ options!(UncheckInput => UncheckOptions);
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 #[ts(optional_fields)]
 struct UncheckOptions {
+    #[serde(default, deserialize_with = "optional_bool")]
     force: Option<bool>,
     #[ts(optional, type = "import('../../../probe/protocol').Point")]
     position: Option<Point>,
     scroll: Option<ScrollOption>,
+    #[serde(default, deserialize_with = "optional_bool")]
     trial: Option<bool>,
 }
 
@@ -346,6 +364,7 @@ options!(DragInput => DragOptions);
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 #[ts(optional_fields)]
 struct DragOptions {
+    #[serde(default, deserialize_with = "optional_bool")]
     force: Option<bool>,
     scroll: Option<ScrollOption>,
     #[ts(optional, type = "import('../../../probe/protocol').Point")]
@@ -353,6 +372,7 @@ struct DragOptions {
     #[ts(optional, type = "import('../../../probe/protocol').Point")]
     target_position: Option<Point>,
     steps: Option<u32>,
+    #[serde(default, deserialize_with = "optional_bool")]
     trial: Option<bool>,
 }
 
