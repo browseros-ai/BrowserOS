@@ -379,21 +379,17 @@ export class EventHub {
         // a counted pump reply (`events_before_reply`), and the bridge holds that op's result
         // until this many replies were dispatched (the pump ledger), so the listeners run before
         // the script resumes past the op, as upstream's do.
-        let delivered = false
         try {
           await invokeObserved(
             'events.next',
             { api: 'events.next', timeoutMs: 0 },
             {},
-            ({ events }, observed) => {
-              delivered = true
-              this.deliverBatch(events, observed)
-            },
+            ({ events }, observed) => this.deliverBatch(events, observed),
           )
         } catch (error) {
-          // Rust counted the reply it meant to give, and this error is what came instead:
-          // counting it keeps the ops held on it from waiting out their bound.
-          if (!delivered) pumpDispatched()
+          // An error reply is dispatched too: ops held on a reply Rust counted before it failed
+          // go on at once instead of waiting out their bound.
+          pumpDispatched()
           throw error
         }
       }

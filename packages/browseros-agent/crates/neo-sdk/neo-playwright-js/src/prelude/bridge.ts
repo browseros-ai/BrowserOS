@@ -139,11 +139,16 @@ export async function invokeObserved<Op extends OpName>(
 /**
  * The pump ledger. Rust holds an op that ends until the run's events pump has taken the events
  * that came before it (`Playwright::events_before_reply`), and every reply envelope says how many
- * pump replies exist by then (`pumped`). The host settles each op's promise on its own, in no
- * fixed order, so an op's result could reach the script before the pump reply that carries its
+ * pump replies Rust counted by then (`pumped`). The host settles each op's promise on its own, in
+ * no fixed order, so an op's result could reach the script before the pump reply that carries its
  * events; the op's result waits here until the pump dispatched that many replies, as upstream's
- * listeners have run before the call that preceded them resolves. Every counted reply exists,
- * so the hold ends; it is bounded anyway, for a pump the host cut off at the run's end.
+ * listeners have run before the call that preceded them resolves.
+ *
+ * The prelude never counts pump replies itself: Rust counts only replies that carry events, and
+ * a pump reply's own envelope (read here before its value) carries the count including it. One
+ * pump runs at a time, so once one of its replies, a value or an error, is dispatched, so is
+ * every reply counted so far. Every counted reply exists, so a hold ends; it is bounded anyway,
+ * for a pump the host cut off at the run's end.
  */
 const PUMP_HOLD_MS = 1000
 let pumpsNeeded = 0
@@ -161,9 +166,9 @@ function countPumps(): void {
   })
 }
 
-/** The events pump dispatched one more of its replies (events.ts). */
+/** The events pump dispatched a reply, a value or an error (events.ts): it caught up. */
 export function pumpDispatched(): void {
-  pumpsDispatched += 1
+  pumpsDispatched = Math.max(pumpsDispatched, pumpsNeeded)
   for (const hold of pumpHolds.filter((hold) => hold.needed <= pumpsDispatched))
     hold.release()
 }

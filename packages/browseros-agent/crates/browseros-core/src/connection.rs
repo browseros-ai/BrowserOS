@@ -79,6 +79,13 @@ pub trait CdpConnection: Send + Sync {
         0
     }
 
+    /// A receiver of [`Self::events`] and the [`Self::events_broadcast`] count of the events it
+    /// will never receive, taken together so no event is in both or in neither. A transport
+    /// that does not count answers 0.
+    fn events_counted(&self) -> (broadcast::Receiver<CdpEvent>, u64) {
+        (self.events(), 0)
+    }
+
     fn is_connected(&self) -> bool;
     fn connection_epoch(&self) -> u64;
 }
@@ -137,6 +144,10 @@ impl CdpConnection for CdpClient {
 
     fn events_broadcast(&self) -> u64 {
         CdpClient::events_broadcast(self)
+    }
+
+    fn events_counted(&self) -> (broadcast::Receiver<CdpEvent>, u64) {
+        CdpClient::events_counted(self)
     }
 
     fn is_connected(&self) -> bool {

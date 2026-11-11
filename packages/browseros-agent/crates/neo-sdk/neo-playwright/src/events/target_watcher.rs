@@ -296,10 +296,10 @@ impl Watcher {
     }
 
     async fn run(mut self, mut found: UnboundedReceiver<OpenedPage>) {
-        // Subscribed before discovery, so no target is created unseen in between, and before
-        // the count is read, so the count can only include an event this receiver gets.
-        let mut events = self.browser.cdp_events();
-        self.progress.start(self.browser.cdp_events_broadcast());
+        // Subscribed before discovery, so no target is created unseen in between. The count
+        // comes with the subscription, so it holds exactly the events this receiver never gets.
+        let (mut events, before) = self.browser.cdp_events_counted();
+        self.progress.start(before);
         let mut tick = time::interval(TICK);
         tick.set_missed_tick_behavior(MissedTickBehavior::Delay);
         loop {

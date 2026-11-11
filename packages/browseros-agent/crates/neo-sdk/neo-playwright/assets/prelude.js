@@ -686,7 +686,7 @@
     });
   }
   function pumpDispatched() {
-    pumpsDispatched += 1;
+    pumpsDispatched = Math.max(pumpsDispatched, pumpsNeeded);
     for (const hold of pumpHolds.filter((hold) => hold.needed <= pumpsDispatched))
       hold.release();
   }
@@ -2238,15 +2238,10 @@
     async pump() {
       try {
         while (this.listening > 0) {
-          let delivered = false;
           try {
-            await invokeObserved("events.next", { api: "events.next", timeoutMs: 0 }, {}, ({ events }, observed) => {
-              delivered = true;
-              this.deliverBatch(events, observed);
-            });
+            await invokeObserved("events.next", { api: "events.next", timeoutMs: 0 }, {}, ({ events }, observed) => this.deliverBatch(events, observed));
           } catch (error) {
-            if (!delivered)
-              pumpDispatched();
+            pumpDispatched();
             throw error;
           }
         }

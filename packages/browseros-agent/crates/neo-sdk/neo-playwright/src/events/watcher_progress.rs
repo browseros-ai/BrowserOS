@@ -25,8 +25,8 @@ pub(crate) struct WatcherProgress {
 }
 
 impl WatcherProgress {
-    /// The watcher subscribed when the client had broadcast `base` events. Read after the
-    /// subscription, so it can only count an event the receiver also gets, never miss one.
+    /// The watcher subscribed when the client had broadcast `base` events, which its receiver
+    /// never gets (`BrowserSession::cdp_events_counted` takes both at once).
     pub(crate) fn start(&self, base: u64) {
         self.handled.store(base, Ordering::Release);
         self.changed.notify_waiters();
