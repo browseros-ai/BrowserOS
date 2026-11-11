@@ -21,6 +21,9 @@ use crate::test_support::{ProbeAnswer, SCRIPTED_MAIN, ScriptedRun, ScriptedTab, 
 struct LostCapture {
     captures: AtomicUsize,
     started: Notify,
+    document: AtomicUsize,
+    prepared: AtomicUsize,
+    fonts: AtomicUsize,
 }
 
 impl TabScript for LostCapture {
@@ -40,7 +43,38 @@ impl TabScript for LostCapture {
     }
 
     fn cdp_reply(&self, method: &str, _params: &Value) -> Option<Value> {
-        (method == "Page.captureScreenshot").then(|| json!({ "data": "AQID" }))
+        let document = self.document.load(Ordering::SeqCst);
+        match method {
+            "Runtime.evaluate" => Some(json!({ "result": {
+                "type": "object", "objectId": format!("g{document}"),
+            } })),
+            "Page.getFrameTree" => Some(json!({ "frameTree": { "frame": {
+                "id": SCRIPTED_MAIN, "loaderId": format!("loader-{document}"),
+                "url": "https://a.test/",
+            } } })),
+            "Page.captureScreenshot" => {
+                let prepared = self.prepared.load(Ordering::SeqCst) == document
+                    && self.fonts.load(Ordering::SeqCst) == document;
+                Some(json!({ "data": if prepared { "AQID" } else { "BAUG" } }))
+            }
+            _ => None,
+        }
+    }
+
+    fn main_world(&self, object: &str, function: &str) -> Option<Result<Value, &'static str>> {
+        let document = self.document.load(Ordering::SeqCst);
+        if object.starts_with('g') && object != format!("g{document}") {
+            return Some(Err("Cannot find context with specified id"));
+        }
+        if function == include_str!("../../../assets/screenshot-prepare.js") {
+            self.prepared.store(document, Ordering::SeqCst);
+            Some(Ok(json!({ "result": {} })))
+        } else if function.contains("document.fonts.ready") {
+            self.fonts.store(document, Ordering::SeqCst);
+            Some(Ok(json!({ "result": {} })))
+        } else {
+            None
+        }
     }
 }
 
@@ -69,13 +103,20 @@ async fn capture_restarts_after_document_change_without_waiting_for_a_lost_reply
     };
     let shot = task::spawn(async move {
         run.playwright
-            .invoke(&run.env, op, json!({ "page": run.page }))
+            .invoke(
+                &run.env,
+                op,
+                json!({
+                    "page": run.page, "style": "body { background: blue !important }",
+                    "animations": "disabled",
+                }),
+            )
             .await
     });
     tab.script().started.notified().await;
     let navigation = |frame: &str| {
         json!({ "frame": {
-        "id": frame, "loaderId": "next-loader", "url": "https://a.test/next",
+        "id": frame, "loaderId": "loader-1", "url": "https://a.test/next",
     } })
     };
     tab.emit_on(
@@ -95,6 +136,7 @@ async fn capture_restarts_after_document_change_without_waiting_for_a_lost_reply
         !shot.is_finished(),
         "another frame or session must not cancel this page's pending capture"
     );
+    tab.script().document.store(1, Ordering::SeqCst);
     tab.emit_on(
         "Page.frameNavigated",
         navigation(SCRIPTED_MAIN),
@@ -109,7 +151,7 @@ async fn capture_restarts_after_document_change_without_waiting_for_a_lost_reply
     );
     assert_eq!(
         data["base64"], "AQID",
-        "the caller receives the replacement document's completed capture"
+        "the replacement document is prepared and its fonts are ready before pixels return"
     );
     assert_eq!(
         tab.script().captures.load(Ordering::SeqCst),
@@ -121,6 +163,7 @@ async fn capture_restarts_after_document_change_without_waiting_for_a_lost_reply
         reload_watch.arrived(Expect::NewDocument),
     )
     .await
-    .map_err(|_| "capture observation stole the commit from the concurrent reload")??;
+    .map_err(|_| "capture observation stole the commit from the concurrent reload")?
+    .map_err(|error| format!("concurrent reload observation failed: {error:?}"))?;
     Ok(())
 }

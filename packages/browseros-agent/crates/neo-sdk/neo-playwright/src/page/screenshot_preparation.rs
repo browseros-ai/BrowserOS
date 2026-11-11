@@ -16,6 +16,7 @@ use tokio::time;
 use crate::op_scope::OpScope;
 use crate::page::screenshot_masks::{MaskLocator, ScreenshotMasks};
 use crate::page::{OpPage, frame_tree, world_call};
+use crate::probe::ProbeFailure;
 use crate::resolve::{self, HandleSite};
 use crate::target::Target;
 use crate::world::SealedWorld;
@@ -71,8 +72,14 @@ impl ScreenshotPreparation {
 
     /// Applies Playwright's utility-world algorithm independently in every frame. Detached or
     /// stalled children are skipped, as upstream's safe non-stalling evaluation skips them;
-    /// font readiness is independent of the requested DOM mutations.
-    pub(super) async fn prepare(&mut self, page: &OpPage<'_>, scope: &OpScope<'_>, options: Value) {
+    /// font readiness is independent of the requested DOM mutations. A destroyed main world
+    /// must be reacquired before capture, rather than silently omitting the requested styles.
+    pub(super) async fn prepare(
+        &mut self,
+        page: &OpPage<'_>,
+        scope: &OpScope<'_>,
+        options: Value,
+    ) -> bool {
         let main = page.main_endpoint().frame;
         let mut ids = vec![main.clone()];
         if let Ok(Ok(tree)) = time::timeout(
@@ -83,21 +90,40 @@ impl ScreenshotPreparation {
         {
             ids.extend(tree.ids().filter(|id| **id != main).cloned());
         }
+        let main_frame = &main;
         let worlds = future::join_all(ids.iter().map(|id| async move {
-            time::timeout(FRAME_STALL, world_call::frame_world(page, scope, Some(id)))
-                .await
-                .ok()
-                .and_then(Result::ok)
+            match time::timeout(FRAME_STALL, world_call::frame_world(page, scope, Some(id))).await {
+                Ok(Ok(world)) => (Some(world), false),
+                Ok(Err(error)) => (
+                    None,
+                    id == main_frame && error.error_code() == Some(ErrorCode::TargetClosed),
+                ),
+                Err(_) => (None, false),
+            }
         }))
         .await;
-        self.worlds.extend(worlds.into_iter().flatten());
+        let retry = worlds.iter().any(|(_, retry)| *retry);
+        self.worlds
+            .extend(worlds.into_iter().filter_map(|(world, _)| world));
         // Register every world before sending mutations: cancellation can lose a reply even
         // though its script already changed the document.
-        future::join_all(self.worlds.iter().map(|world| async {
-            let _prepared =
-                time::timeout(FRAME_STALL, world.call_for_screenshot(PREPARE, &options)).await;
+        let prepared = future::join_all(self.worlds.iter().map(|world| async {
+            match time::timeout(FRAME_STALL, world.call_for_screenshot(PREPARE, &options)).await {
+                Ok(Err(error)) => {
+                    if matches!(ProbeFailure::from_core(error), ProbeFailure::Gone(_)) {
+                        // Invalidate only this installation. A concurrent operation may already
+                        // have installed a usable successor, which owns different remote handles.
+                        page.frames().invalidate(world);
+                        *world.frame() != main
+                    } else {
+                        true
+                    }
+                }
+                _ => true,
+            }
         }))
         .await;
+        !retry && prepared.into_iter().all(|ready| ready)
     }
 
     /// Font loading must precede element stability checks. An element capture waits in its
@@ -107,7 +133,7 @@ impl ScreenshotPreparation {
         page: &OpPage<'_>,
         scope: &OpScope<'_>,
         target: Option<&Target>,
-    ) -> Result<(), PlaywrightError> {
+    ) -> Result<bool, PlaywrightError> {
         let world = match target {
             None => self
                 .worlds
@@ -127,16 +153,22 @@ impl ScreenshotPreparation {
         };
         if let Some(world) = world {
             scope.log("waiting for fonts to load...".to_owned());
-            // Upstream ignores a wait whose utility context disappears. A pending font promise
-            // still waits for the screenshot's timeout, including with caret: 'initial'.
-            let _fonts = world
+            // A pending promise keeps the original screenshot deadline. A retired world
+            // restarts preparation so the replacement's own fonts are awaited as well.
+            let fonts = world
                 .call_for_screenshot(
                     "function() { return document.fonts.ready.then(() => {}); }",
                     &json!([]),
                 )
                 .await;
+            if let Err(error) = fonts {
+                if matches!(ProbeFailure::from_core(error), ProbeFailure::Gone(_)) {
+                    page.frames().invalidate(&world);
+                    return Ok(false);
+                }
+            }
         }
-        Ok(())
+        Ok(true)
     }
 
     /// Restores before returning bytes, so the caller can immediately inspect animation and

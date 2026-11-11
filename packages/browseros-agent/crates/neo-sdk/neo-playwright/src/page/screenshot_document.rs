@@ -4,26 +4,24 @@
 use std::future::Future;
 
 use crate::op_scope::OpScope;
-use crate::page::OpPage;
 use crate::page::document_watch::{DocumentWatch, Expect};
-use crate::page::navigation;
-use crate::target::Target;
+use crate::page::{OpPage, navigation};
 use crate::{ErrorCode, PlaywrightError};
 
 /// The caller retains preparation and capture ownership through either outcome's cleanup.
 pub(super) enum Attempt {
     Captured(String),
     Navigated,
+    RetryPreparation,
 }
 
 pub(super) async fn capture<F>(
     page: &OpPage<'_>,
     scope: &OpScope<'_>,
-    target: Option<&Target>,
     pixels: F,
 ) -> Result<Attempt, PlaywrightError>
 where
-    F: Future<Output = Result<String, PlaywrightError>>,
+    F: Future<Output = Result<Attempt, PlaywrightError>>,
 {
     let endpoint = page.main_endpoint();
     let session = endpoint.session.session_id().cloned().ok_or_else(|| {
@@ -42,16 +40,12 @@ where
         .map_err(|error| navigation::watch_error(scope, &error))?;
     tokio::select! {
         biased;
-        data = pixels => data.map(Attempt::Captured),
         changed = watch.arrived(Expect::NewDocument) => {
             changed.map_err(|error| navigation::watch_error(scope, &error))?;
             // Dropping the pixel future frees its CDP reply slot. The caller still owns its
             // preparation guard, including any shared core lease held for explicit masks.
-            if target.is_some() {
-                Err(scope.fail(ErrorCode::ElementDetached, "Element is not attached to the DOM"))
-            } else {
-                Ok(Attempt::Navigated)
-            }
-        }
+            Ok(Attempt::Navigated)
+        },
+        data = pixels => data,
     }
 }

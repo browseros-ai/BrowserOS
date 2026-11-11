@@ -155,23 +155,31 @@ pub(crate) async fn capture(
             .await?;
             let page = OpPage::admit_handle(pw, scope, &input.page).await?;
             let mut preparation = ScreenshotPreparation::acquire(&page).await;
-            preparation
-                .prepare(
-                    &page,
-                    scope,
-                    json!([
-                        input.style.as_deref().unwrap_or_default(),
-                        input.caret == Caret::Hide,
-                        input.animations == Animations::Disabled,
-                        false,
-                    ]),
-                )
-                .await;
-            let captured = async {
-                preparation
+            // Observe commits before preparation too: a replacement must receive its own
+            // styles and font wait, even when the old renderer loses a preparation reply.
+            let work = async {
+                if !preparation
+                    .prepare(
+                        &page,
+                        scope,
+                        json!([
+                            input.style.as_deref().unwrap_or_default(),
+                            input.caret == Caret::Hide,
+                            input.animations == Animations::Disabled,
+                            false,
+                        ]),
+                    )
+                    .await
+                {
+                    return Ok(screenshot_document::Attempt::RetryPreparation);
+                }
+                if !preparation
                     .wait_for_fonts(&page, scope, target.as_deref())
-                    .await?;
-                let pixels = capture_pixels(
+                    .await?
+                {
+                    return Ok(screenshot_document::Attempt::RetryPreparation);
+                }
+                capture_pixels(
                     pw,
                     &page,
                     scope,
@@ -179,15 +187,25 @@ pub(crate) async fn capture(
                     target.as_deref(),
                     format,
                     &mut preparation,
-                );
-                screenshot_document::capture(&page, scope, target.as_deref(), pixels).await
-            }
-            .await;
+                )
+                .await
+                .map(screenshot_document::Attempt::Captured)
+            };
+            let captured = screenshot_document::capture(&page, scope, work).await;
             preparation.restore().await;
             match captured {
                 Ok(screenshot_document::Attempt::Captured(data)) => return Ok(data),
                 Ok(screenshot_document::Attempt::Navigated) => {
+                    if matches!(input.target, Some(Target::Element(_))) {
+                        return Err(scope.fail(
+                            ErrorCode::ElementDetached,
+                            "Element is not attached to the DOM",
+                        ));
+                    }
                     scope.log("document changed during screenshot, retrying".to_owned());
+                }
+                Ok(screenshot_document::Attempt::RetryPreparation) => {
+                    scope.log("screenshot utility world was replaced, retrying".to_owned());
                 }
                 Err(error)
                     if error.error_code() == Some(ErrorCode::ElementDetached)
