@@ -278,6 +278,36 @@ paths:
                 $ref: '#/components/schemas/Event'
         '401':
           $ref: '#/components/responses/Unauthorized'
+  /v1/tabs:
+    get:
+      operationId: listTabs
+      summary: Every open tab, its DevTools target and its task associations.
+      description: |
+        Lists the live native browser inventory, including tabs no task has touched, in the
+        browser's order. Metadata comes from one browser listing over Neo's existing connection.
+        `taskIds` are distinct, sorted ids whose retained, committed runs touched the tab;
+        untasked runs add no id. Trace writes are asynchronous, so a just-started operation may
+        appear after its batch commits. Retention removes associations with their runs.
+        These are historical associations, not exclusive ownership or a permission check.
+        Tab ids can be reused after a browser restart. The list is a point-in-time observation;
+        a tab may close or navigate after the listing. No separate host CDP connection is needed.
+      responses:
+        '200':
+          description: All currently open tabs, or an empty list when none are open.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TabList'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          description: Neo could not read the tab/task associations (`internal_error`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          $ref: '#/components/responses/Unavailable'
   /v1/tabs/{tabId}/screencast:
     get:
       operationId: getScreencast
@@ -840,6 +870,34 @@ components:
         operationId:
           type: string
           description: On a run's error, the operation it came from.
+    TabList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Tab'
+    Tab:
+      type: object
+      required: [tabId, targetId, url, title, taskIds]
+      properties:
+        tabId:
+          type: integer
+          format: int64
+          description: The browser's native tab id.
+        targetId:
+          type: string
+          description: The tab's current DevTools target id.
+        url:
+          type: string
+        title:
+          type: string
+        taskIds:
+          type: array
+          description: Distinct sorted task ids from retained committed runs that touched this tab.
+          items:
+            type: string
     PageRef:
       type: object
       properties:
