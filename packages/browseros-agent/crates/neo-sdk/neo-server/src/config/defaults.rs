@@ -82,31 +82,6 @@ impl Defaults {
     pub(crate) const HOUSEKEEPING_EVERY: Duration = Duration::from_mins(1);
     /// How often housekeeping deletes trace records past `RetentionPolicy`'s age and cap.
     pub(crate) const TRACE_SWEEP_EVERY: Duration = Duration::from_mins(10);
-    /// How long a value typed into a sensitive field waits for the next keystroke before the
-    /// secret set learns it, so it learns the field's final value and none of its prefixes
-    /// (sdk-traces decision 32, the takeover journal's own rule), when `CLAW_TYPED_QUIET_MS` is
-    /// unset. That variable only lengthens it, up to [`Defaults::TYPED_QUIET_MAX`]: a shorter
-    /// period would make the prefixes of a slow typist's password secrets for a day.
-    pub(crate) const TYPED_QUIET: Duration = Duration::from_secs(1);
-    /// The longest quiet period `CLAW_TYPED_QUIET_MS` may set. The BrowserOS e2e rig sets this
-    /// one, so a stall on a loaded machine never ends a field's typing between two keys.
-    pub(crate) const TYPED_QUIET_MAX: Duration = Duration::from_mins(10);
-    /// The most typed values held at once. A page can raise input events on its own fields, so
-    /// past this the value typed longest ago is registered at once (decision 32).
-    pub(crate) const MAX_TYPED: usize = 64;
-    /// The most superseded values kept for the runs going (decision 34). Past this the oldest is
-    /// forgotten, never registered, since it may be a prefix, and each run that may have read it
-    /// withholds its output from then on. A page can raise input events on its own fields. Each
-    /// record a run sends builds a matcher over these values, and this bounds its cost.
-    pub(crate) const MAX_SUPERSEDED: usize = 256;
-    /// The most values the secret set learned from typing and reads that are kept to recognize a
-    /// later read of them, while a run that went on as they were learned goes (decision 29).
-    /// neo-playwright reports a main-world script's sweeps as their union, so a prefix the
-    /// field was typed past comes back after the field's value registered. Past this the oldest
-    /// is forgotten, and until those runs end a read's value that nothing covers masks them only
-    /// and is never registered, since it may be that value's prefix. A page can raise input
-    /// events on its own fields, and these cost a comparison per read, not a matcher.
-    pub(crate) const MAX_LEARNED: usize = 256;
     /// Tokio worker stacks. QuickJS plus nested futures overflowed the default 2 MiB in debug
     /// builds on Linux, which aborts the process. Reserved address space, committed as used.
     pub(crate) const WORKER_STACK_BYTES: usize = 8 * 1024 * 1024;

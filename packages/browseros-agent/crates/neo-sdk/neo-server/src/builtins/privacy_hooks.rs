@@ -2,25 +2,20 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Duration;
 
 use browseros_core::TabId;
 use browseros_core::sensitive_fields::{FieldValues, JournalEntry};
 use neo_playwright::{PlaywrightHooks, Refusal, TypedBy};
 use neo_trace::{ErrorOwner, Privacy, PrivacyRecord};
 
-use super::TypedValues;
 use crate::browser::TabRegistry;
 use crate::config::SecretFiles;
 use crate::dispatch::{ErrorCode, OperationError, Output, Policy, PolicyCheck, ResultHold};
 use crate::host::FlagRecovery;
 
-/// neo-playwright's privacy callbacks, over sdk-traces' `Privacy` (privacy layers L1 and
-/// L2). A value the crate saw in a password, card or one-time-code field joins the process's
-/// secret set, which the door masks out of everything a script, a host or the trace sees, and a
-/// private tab's pixels are never captured. A value typed or read there joins once its field is
-/// done ([`TypedValues`]), so none of its prefixes does. No upload hands a page one of Neo's own
-/// secret files ([`SecretFiles`]).
+/// neo-playwright's privacy callbacks, over sdk-traces' `Privacy`: a private tab's pixels are
+/// never captured, and no upload hands a page one of Neo's own secret files ([`SecretFiles`]).
+/// Neo keeps nothing of what the crate reports seeing in password, card or one-time-code fields.
 ///
 /// The crate calls `field_entered` from its journal task and the others from inside an op, so
 /// nothing here awaits or holds a lock for longer than a lookup.
@@ -28,8 +23,6 @@ pub(crate) struct PrivacyHooks {
     privacy: Arc<Privacy>,
     /// Admission/close state: pixels fail closed after the tab leaves the registry.
     tabs: Arc<TabRegistry>,
-    /// Typed values, until each field is done.
-    typed: Arc<TypedValues>,
     /// Pending while Neo makes up for private flags a replaced trace store lost: no tab's pixels
     /// are captured meanwhile.
     recovery: Arc<FlagRecovery>,
@@ -39,54 +32,32 @@ pub(crate) struct PrivacyHooks {
 }
 
 impl PrivacyHooks {
-    /// The hooks over the process's one `Privacy`, which holds the secret set the door masks with,
-    /// and over Neo's secret files, which no upload hands a page. A typed value joins the set
-    /// once its field got no input for `typed_quiet`.
+    /// The hooks over the process's one `Privacy`, which says which tabs are private, and over
+    /// Neo's secret files, which no upload hands a page.
     #[must_use]
     pub(crate) fn new(
         privacy: Arc<Privacy>,
         tabs: Arc<TabRegistry>,
         recovery: Arc<FlagRecovery>,
         secret_files: SecretFiles,
-        typed_quiet: Duration,
     ) -> Self {
-        let typed = TypedValues::start(
-            Arc::clone(privacy.secrets()),
-            typed_quiet,
-            tabs.subscribe_closed(),
-        );
         Self {
             privacy,
             tabs,
-            typed,
             recovery,
             secret_files,
         }
     }
-
-    /// The values typed into sensitive fields that the set has not learned yet. The door is built
-    /// with them, and masks every run's records and reply with them.
-    #[must_use]
-    pub(crate) fn typed(&self) -> Arc<TypedValues> {
-        Arc::clone(&self.typed)
-    }
 }
 
 impl PlaywrightHooks for PrivacyHooks {
-    /// Masked once its field is done, whoever typed it, the agent included, as the takeover
-    /// journal masks the owner's typing. `by` decides what a full secret set may drop for it: a
-    /// value the agent typed outranks a page's (`TypedValues::note`). A page's privacy is the
-    /// takeover's and the host's to decide, so a value entered here never makes the tab private
-    /// by itself.
-    fn field_entered(&self, tab: TabId, entry: JournalEntry, by: TypedBy) {
-        self.typed.note(tab, entry, by);
-    }
+    /// Ignored: Neo keeps no value typed into a sensitive field. The crate's trait still asks
+    /// every host for this hook.
+    fn field_entered(&self, _tab: TabId, _entry: JournalEntry, _by: TypedBy) {}
 
-    /// Held until its field is done, as a typed value is: a read between two keystrokes finds a
-    /// prefix. The crate masked these values out of the read's own result already.
-    fn values_swept(&self, tab: TabId, values: &FieldValues) {
-        self.typed.swept(tab, values);
-    }
+    /// Ignored: Neo keeps no value a read found in a sensitive field. The crate's trait still
+    /// asks every host for this hook.
+    fn values_swept(&self, _tab: TabId, _values: &FieldValues) {}
 
     /// Refused as `host / page_private` while the tab is private. Pixels taken before the tab
     /// went private stay, as sdk-traces keeps them; this decides only whether to take new ones.

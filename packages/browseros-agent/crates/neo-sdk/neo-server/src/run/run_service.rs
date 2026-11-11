@@ -8,9 +8,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use neo_trace::{
-    EpochMillis, RunEnded, RunId, RunStarted, SecretSet, TaskId, TraceSink, TraceStore,
-};
+use neo_trace::{EpochMillis, RunEnded, RunId, RunStarted, TaskId, TraceSink, TraceStore};
 use tokio::task::JoinSet;
 use tokio::time::{self, Instant};
 use tokio_util::sync::CancellationToken;
@@ -20,8 +18,7 @@ use super::{HostData, RequestLedger, RunHandle, RunMeta, RunReply, RunRequest};
 use crate::browser::{BrowserLink, PageRef, RunView, TabRegistry};
 use crate::config::Defaults;
 use crate::dispatch::{
-    Dispatcher, ErrorCode, OperationError, PageFact, PageFacts, RunCtx, RunMask, RunStart,
-    StopReason,
+    Dispatcher, ErrorCode, OperationError, PageFact, PageFacts, RunCtx, RunStart, StopReason,
 };
 use crate::runtime::{Script, run_script};
 
@@ -34,7 +31,6 @@ pub(crate) struct RunService {
     tabs: Arc<TabRegistry>,
     store: TraceStore,
     trace: TraceSink,
-    secrets: Arc<SecretSet>,
     ledger: Arc<RequestLedger>,
     /// Cancelled on SIGTERM: every run stops as `neo / shutting_down` and records its end.
     shutdown: CancellationToken,
@@ -58,8 +54,6 @@ pub(crate) struct RunServiceParts {
     pub(crate) store: TraceStore,
     /// The trace writer.
     pub(crate) trace: TraceSink,
-    /// The process's known secrets, masked out of every reply.
-    pub(crate) secrets: Arc<SecretSet>,
     /// Fires on SIGTERM.
     pub(crate) shutdown: CancellationToken,
     /// `Defaults::ORPHAN_GRACE` in the app.
@@ -76,7 +70,6 @@ impl RunService {
             tabs,
             store,
             trace,
-            secrets,
             shutdown,
             orphan_grace,
         } = parts;
@@ -87,7 +80,6 @@ impl RunService {
             tabs,
             store,
             trace,
-            secrets,
             shutdown,
             orphan_grace,
             #[cfg(test)]
@@ -144,25 +136,22 @@ impl RunService {
         meta: RunMeta,
         error: &OperationError,
     ) -> Arc<RunReply> {
-        self.record_refused(code, meta, RunReply::refused(id, error, &self.secrets))
+        self.record_refused(code, meta, RunReply::refused(id, error))
     }
 
     /// Records a refused call as a run that ended at once, so the reply's `id` resolves in the
     /// trace. Without the request id, though: nothing ran, and a recorded request id would
     /// make the store refuse that request's retry as a duplicate for good. Its code and host
-    /// data are stored all the same, so its records, and its reply, are masked with what is
-    /// held as it is refused, as a run's are with what was held while it went on.
-    fn record_refused(&self, code: String, meta: RunMeta, mut reply: RunReply) -> Arc<RunReply> {
+    /// data are stored all the same.
+    fn record_refused(&self, code: String, meta: RunMeta, reply: RunReply) -> Arc<RunReply> {
         let id = reply.id;
-        let held = Arc::clone(self.dispatcher.held()).watch(id).held();
-        reply.mask_held(&held);
         self.trace.run_started(RunStarted {
             id,
             code,
             request_id: None,
             task_id: meta.task_id,
             host_data: meta.host_data.map(HostData::into_value),
-            also_mask: held.set(),
+            also_mask: None,
             at: EpochMillis::now(),
         });
         let end = reply.trace_end(None);
@@ -172,7 +161,7 @@ impl RunService {
             error: end.error,
             result: end.result,
             replay: end.replay,
-            also_mask: held.set(),
+            also_mask: None,
             at: EpochMillis::now(),
         });
         Arc::new(reply)
@@ -258,27 +247,18 @@ impl RunService {
         {
             ops.shutdown().await;
         }
-        // The reply is masked once, here. A value typed into a sensitive field while the run went
-        // on is no secret yet, and may be a prefix of one still being typed (sdk-traces decision
-        // 32), but the reply may show it. So the reply is masked with every value held since the
-        // run began, those a later keystroke superseded included, and they all stay unregistered,
-        // or withheld when the run lost one of them. The run's end record is built from this reply
-        // and masked with this same set (decision 34).
-        let held = run.held_values();
-        let mut reply = RunReply::build(&run, end, &self.secrets);
-        reply.mask_held(&held);
-        let reply = Arc::new(reply);
-        guard.finish(reply.trace_end(request_id.as_ref()), held.set());
+        // The run's end record is built from its reply, so the trace and a `requestId` replay keep
+        // exactly what the caller got.
+        let reply = Arc::new(RunReply::build(&run, end));
+        guard.finish(reply.trace_end(request_id.as_ref()));
         ticket.finish(reply);
     }
 
     /// Every tab open as the run starts, for its init (decision 25, PB input 4): Playwright's
     /// `context.pages()` is synchronous, so the prelude can list a tab only once something named
-    /// it, and this names them all before the script's first op. The facts are a reply's, masked
-    /// the same way: the init is the realm's other entry, so a tab showing a value the run holds
-    /// shows it masked (decision 35b). A listing that fails leaves the list empty, and replies
-    /// then name the tabs the script touches. Raced with the run's stop, inside the race with its
-    /// deadline.
+    /// it, and this names them all before the script's first op. The facts are a reply's, the
+    /// realm's other entry. A listing that fails leaves the list empty, and replies then name the
+    /// tabs the script touches. Raced with the run's stop, inside the race with its deadline.
     async fn open_pages(&self, run: &RunCtx) -> PageFacts {
         let listing = tokio::select! {
             biased;
@@ -300,16 +280,10 @@ impl RunService {
                     .observer()
                     .observe(&self.browser, &self.tabs, &tabs, &HashMap::new(), None)
                     .await;
-                // New held values may arrive while observation waits for its cache reads.
-                let mask = RunMask::of(&self.secrets, &run.held_values());
                 let pages = pages
                     .iter()
                     .zip(observation.infos)
-                    .map(|(page, info)| {
-                        let mut fact = PageFact::new(page, info);
-                        fact.mask(&mask);
-                        fact
-                    })
+                    .map(|(page, info)| PageFact::new(page, info))
                     .collect();
                 PageFacts {
                     pages,
@@ -409,16 +383,14 @@ mod observation_tests {
         on_neo_runtime(async {
             let rig = TestRig::new().await?;
             let page = rig.owner_tab("https://closing.example/").await?;
-            let live = rig
-                .owner_tab("https://live.example/?token=held-after-list")
-                .await?;
+            let live = rig.owner_tab("https://live.example/?token=7Qx").await?;
             let service = rig.run_service(Duration::ZERO);
             let (run, _guard) = rig.run(Duration::from_secs(30), None)?;
             let held = service.dispatcher.observer().hold().await;
             // Publish a distinct cache value only through this listing. Counting the CDP
             // request alone can race its reply and let the close precede the snapshot.
             rig.fake.hold_events();
-            let listed_url = "https://live.example/?token=held-after-list&snapshot=ready";
+            let listed_url = "https://live.example/?token=7Qx&snapshot=ready";
             assert!(rig.fake.navigate_tab(live.tab, listed_url, "Live"));
             let pending_service = Arc::clone(&service);
             let pending = tokio::spawn(async move { pending_service.open_pages(&run).await });
@@ -437,7 +409,6 @@ mod observation_tests {
                 !pending.is_finished(),
                 "the observation waits behind the held serial"
             );
-            rig.hold("held-after-list");
             assert!(rig.fake.close_tab(page.tab));
             rig.fake.release_events();
             within(Duration::from_secs(2), async {
@@ -466,8 +437,8 @@ mod observation_tests {
                 .ok_or("live tab fact")?;
             assert_eq!(
                 live.url.as_deref(),
-                Some("https://live.example/?token=[private]&snapshot=ready"),
-                "values held during the async observation are masked before initialization"
+                Some(listed_url),
+                "the init carries the URL the observation read"
             );
             Ok(())
         })

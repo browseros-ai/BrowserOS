@@ -1,6 +1,6 @@
 //! A live browser for the crate's own live tests: one CDP connection with a `Playwright` over
 //! it, as claw-sdk builds them, tabs it opens and closes, and hooks that record what the
-//! journal reports and what the sweeps told the host. Needs BrowserOS with CDP on
+//! sweeps told the host. Needs BrowserOS with CDP on
 //! `BROWSEROS_CDP_PORT` (default 9005). Also the scripted browsers unit tests run an op against
 //! ([`one_tab`], and [`ScriptedTab`] for ops that install and call a sealed world); they live
 //! here because core's `page_js_guard` reads every other non-test file as production code, and
@@ -17,7 +17,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use browseros_cdp::{CdpClient, CdpError, CdpEvent, ConnectOptions, TargetedEvents};
-use browseros_core::sensitive_fields::{FieldValues, JournalEntry, SensitiveKind};
+use browseros_core::sensitive_fields::{FieldValues, JournalEntry};
 use browseros_core::testing::TestConnection;
 use browseros_core::{
     BrowserSession, BrowserSessionHooks, BrowserView, CdpConnection, PageId, ProtocolSession,
@@ -36,21 +36,10 @@ use crate::{Playwright, PlaywrightHooks, Refusal, TypedBy};
 
 pub(crate) type TestResult<T = ()> = Result<T, Box<dyn Error>>;
 
-/// One value the journal reported.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct Journaled {
-    pub(crate) page: TabId,
-    pub(crate) kind: SensitiveKind,
-    pub(crate) value: String,
-    pub(crate) by: TypedBy,
-}
-
-/// Hooks that remember what the journal reported and every value a sweep told the host. They
-/// name no secret files unless built with [`RecordingHooks::naming_secrets`], so path uploads
-/// are refused, as a host's default.
+/// Hooks that remember every value a sweep told the host. They name no secret files unless
+/// built with [`RecordingHooks::naming_secrets`], so path uploads are refused, as a host's default.
 #[derive(Default)]
 pub(crate) struct RecordingHooks {
-    journaled: Mutex<Vec<Journaled>>,
     swept: Mutex<Vec<String>>,
     secrets: Option<Vec<PathBuf>>,
 }
@@ -64,13 +53,6 @@ impl RecordingHooks {
         }
     }
 
-    pub(crate) fn journaled(&self) -> Vec<Journaled> {
-        self.journaled
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clone()
-    }
-
     /// Every value `values_swept` was told so far, long enough to register, in order.
     pub(crate) fn swept(&self) -> Vec<String> {
         self.swept
@@ -78,31 +60,10 @@ impl RecordingHooks {
             .unwrap_or_else(PoisonError::into_inner)
             .clone()
     }
-
-    /// Waits up to 2 s for `expected` to be reported.
-    pub(crate) async fn wait_for(&self, expected: &Journaled) -> bool {
-        for _ in 0..40 {
-            if self.journaled().contains(expected) {
-                return true;
-            }
-            time::sleep(Duration::from_millis(50)).await;
-        }
-        false
-    }
 }
 
 impl PlaywrightHooks for RecordingHooks {
-    fn field_entered(&self, page: TabId, entry: JournalEntry, by: TypedBy) {
-        self.journaled
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .push(Journaled {
-                page,
-                kind: entry.kind,
-                value: entry.value.to_string(),
-                by,
-            });
-    }
+    fn field_entered(&self, _page: TabId, _entry: JournalEntry, _by: TypedBy) {}
 
     fn values_swept(&self, _page: TabId, values: &FieldValues) {
         self.swept
@@ -124,7 +85,6 @@ impl PlaywrightHooks for RecordingHooks {
 pub(crate) struct LiveBrowser {
     pub(crate) browser: Arc<BrowserSession>,
     pub(crate) playwright: Arc<Playwright>,
-    pub(crate) hooks: Arc<RecordingHooks>,
 }
 
 impl LiveBrowser {
@@ -146,7 +106,6 @@ impl LiveBrowser {
         Ok(Self {
             browser,
             playwright,
-            hooks,
         })
     }
 

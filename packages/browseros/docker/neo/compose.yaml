@@ -31,4 +31,6 @@ services:
       NEO_SOFTWARE_GRAPHICS: ${NEO_SOFTWARE_GRAPHICS:-true}
       NEO_DISABLE_BROWSEROS_EXTENSIONS: ${NEO_DISABLE_BROWSEROS_EXTENSIONS:-true}
       NEO_ARGS: ${NEO_ARGS:-}
+      # false stops the published MCP port answering (README "Security").
+      NEO_MCP_REMOTE: ${NEO_MCP_REMOTE:-true}
     restart: unless-stopped
