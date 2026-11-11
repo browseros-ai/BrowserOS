@@ -101,11 +101,11 @@ export const UNSUPPORTED = {
       'Neo keeps agent tabs in the background; act on the page directly',
     cancelPickLocator: NO_INSPECTOR,
     clearConsoleMessages:
-      'Neo keeps no console history; listen with page.on("console")',
+      'Neo keeps no console history; hosted BrowserOS emits no console events',
     clearPageErrors:
-      'Neo keeps no error history; listen with page.on("pageerror")',
+      'Neo keeps no error history; hosted BrowserOS emits no pageerror events',
     consoleMessages:
-      'Neo keeps no console history; listen with page.on("console") before the page logs',
+      'Neo keeps no console history; hosted BrowserOS emits no console events',
     emulateMedia: 'media emulation is not available in Neo',
     evaluateHandle: NO_HANDLES,
     exposeBinding:
@@ -114,7 +114,7 @@ export const UNSUPPORTED = {
       'pages cannot call back into the script; read state with page.evaluate()',
     hideHighlight: NO_INSPECTOR,
     pageErrors:
-      'Neo keeps no error history; listen with page.on("pageerror") before the page fails',
+      'Neo keeps no error history; hosted BrowserOS emits no pageerror events',
     pause: NO_INSPECTOR,
     pickLocator: NO_INSPECTOR,
     removeLocatorHandler: 'locator handlers are not available in Neo',

@@ -1940,7 +1940,7 @@
     crash: "Neo does not report crashes; a crashed page fails its next call",
     pageload: "Neo does not report load events; use page.waitForLoadState()",
     pageclose: 'listen for close on the page itself: page.on("close")',
-    weberror: 'listen for pageerror on the page itself: page.on("pageerror")',
+    weberror: "the context reports no weberror events; pageerror listeners are silent in hosted BrowserOS",
     dialogclosed: "Neo does not report closed dialogs"
   };
   function checkReported(api, event, reported) {
@@ -9467,15 +9467,15 @@ Timeout: ${timeout}ms`);
       addStyleTag: "adding tags is not available in Neo; change the page with page.evaluate()",
       bringToFront: "Neo keeps agent tabs in the background; act on the page directly",
       cancelPickLocator: NO_INSPECTOR,
-      clearConsoleMessages: 'Neo keeps no console history; listen with page.on("console")',
-      clearPageErrors: 'Neo keeps no error history; listen with page.on("pageerror")',
-      consoleMessages: 'Neo keeps no console history; listen with page.on("console") before the page logs',
+      clearConsoleMessages: "Neo keeps no console history; hosted BrowserOS emits no console events",
+      clearPageErrors: "Neo keeps no error history; hosted BrowserOS emits no pageerror events",
+      consoleMessages: "Neo keeps no console history; hosted BrowserOS emits no console events",
       emulateMedia: "media emulation is not available in Neo",
       evaluateHandle: NO_HANDLES,
       exposeBinding: "pages cannot call back into the script; read state with page.evaluate()",
       exposeFunction: "pages cannot call back into the script; read state with page.evaluate()",
       hideHighlight: NO_INSPECTOR,
-      pageErrors: 'Neo keeps no error history; listen with page.on("pageerror") before the page fails',
+      pageErrors: "Neo keeps no error history; hosted BrowserOS emits no pageerror events",
       pause: NO_INSPECTOR,
       pickLocator: NO_INSPECTOR,
       removeLocatorHandler: "locator handlers are not available in Neo",

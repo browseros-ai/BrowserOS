@@ -350,6 +350,21 @@ async fn wait(
     scope: &OpScope<'_>,
     input: WaitInput,
 ) -> Result<Value, PlaywrightError> {
+    // The native browser cannot produce these in hosted mode. Refuse before installing a
+    // wait lease or consuming its timeout; ordinary listeners remain accepted and silent.
+    if scope.hosted_mode()
+        && input.page.is_some()
+        && matches!(input.event.as_str(), "console" | "pageerror")
+    {
+        return Err(scope.fail(
+            ErrorCode::Unsupported,
+            &format!(
+                "Hosted BrowserOS does not emit '{}' events; page.waitForEvent('{}') is \
+                 unavailable in hosted mode",
+                input.event, input.event
+            ),
+        ));
+    }
     let subscription = subscription(pw, scope, input.page, &input.event).await?;
     let run = scope.run_state();
     pw.events().bind(run);

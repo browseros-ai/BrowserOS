@@ -68,6 +68,14 @@ impl Harness {
 
     /// A Neo with the chosen CAPTCHA solver.
     async fn with_solver(solver: Option<Arc<CaptchaSolver>>) -> Result<Self, Box<dyn Error>> {
+        Self::with_mode(solver, false).await
+    }
+
+    /// A browser with explicit event capabilities: the fake can emit native console events.
+    async fn with_mode(
+        solver: Option<Arc<CaptchaSolver>>,
+        hosted: bool,
+    ) -> Result<Self, Box<dyn Error>> {
         let fake = FakeCdp::new();
         let tabs = Arc::new(TabRegistry::new());
         let connect = Arc::clone(&fake);
@@ -95,7 +103,7 @@ impl Harness {
         let takeover = Arc::new(TakeoverLock::default());
         takeover.arm(Arc::clone(&locks));
         let claims = Arc::new(CaptchaClaims::default());
-        let playwright = PlaywrightFacade::start(Arc::clone(&link));
+        let playwright = PlaywrightFacade::start(Arc::clone(&link), hosted);
         let mut registry = RegistryBuilder::default();
         let deps = BuiltinDeps {
             solver,
@@ -1469,7 +1477,7 @@ impl Method for EnvProbe {
         op: &OpCtx<Self>,
         input: EnvProbeInput,
     ) -> impl Future<Output = Result<Value, LeafError>> + Send {
-        let env = OpCtxEnv::new(op);
+        let env = OpCtxEnv::new(op, false);
         let shares_the_runs_state = Arc::ptr_eq(env.run_state(), &op.run().slot::<RunState>());
         future::ready(match env.recheck() {
             Ok(()) => {
@@ -1606,7 +1614,7 @@ impl Method for ReachProbe {
     }
 
     async fn call(&self, op: &OpCtx<Self>, input: ReachProbeInput) -> Result<Value, LeafError> {
-        let env = OpCtxEnv::new(op);
+        let env = OpCtxEnv::new(op, false);
         let saw = |refused: &Refusal| {
             self.seen
                 .lock()
@@ -2883,7 +2891,7 @@ impl Method for InFlightClose {
                 "missing event operation",
             ))
         })?;
-        let env = OpCtxEnv::new(op);
+        let env = OpCtxEnv::new(op, false);
         let value = self
             .playwright
             .get()
@@ -3180,7 +3188,7 @@ impl Method for InFlightPayload {
                 "missing payload operation",
             ))
         })?;
-        let env = OpCtxEnv::new(op);
+        let env = OpCtxEnv::new(op, false);
         let result = self
             .playwright
             .get()
@@ -3765,5 +3773,62 @@ async fn a_late_read_lock_withholds_the_close_and_its_binding_fact() -> Result<(
             .await;
         assert_eq!(next.pages.first().map(|fact| fact.closed), Some(!rebind));
     }
+    Ok(())
+}
+
+/// Hosted mode cannot produce these events; a valid wait fails before spending its timeout,
+/// while ordinary listeners retain their existing accepted-but-silent behavior.
+#[tokio::test]
+async fn hosted_console_and_pageerror_waits_refuse_without_changing_listeners()
+-> Result<(), Box<dyn Error>> {
+    let harness = Harness::with_mode(None, true).await?;
+    let page = harness.owner_tab("https://example.com/events").await?;
+    let (run, _guard) = harness.run()?;
+    for event in ["console", "pageerror"] {
+        let listen = json!({"call":{"api":"page.on","timeoutMs":0},
+            "page":handle(&page),"event":event,"on":true,"since":0});
+        assert_eq!(
+            value(harness.submit(&run, "events.listen", listen).await)?,
+            json!({})
+        );
+        let wait = json!({"call":{"api":"page.waitForEvent","timeoutMs":30000},
+            "page":handle(&page),"event":event,"since":0});
+        let refused = failure(within(harness.submit(&run, "events.wait", wait)).await?)?;
+        assert_eq!(
+            (
+                refused.error.owner(),
+                refused.error.code(),
+                refused.delivery
+            ),
+            (ErrorOwner::Neo, ErrorCode::UNSUPPORTED, Delivery::NotSent)
+        );
+        assert!(
+            refused
+                .error
+                .message()
+                .contains("Hosted BrowserOS does not emit")
+        );
+        assert!(refused.error.message().contains(event));
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_nonhosted_console_wait_still_receives_native_messages() -> Result<(), Box<dyn Error>> {
+    let harness = Harness::new().await?;
+    let page = harness.owner_tab("https://example.com/events").await?;
+    let (run, _guard) = harness.run()?;
+    let listen = json!({"call":{"api":"page.on","timeoutMs":0},
+        "page":handle(&page),"event":"console","on":true,"since":0});
+    value(harness.submit(&run, "events.listen", listen).await)?;
+    harness.fake.page_event(
+        page.tab,
+        "Runtime.consoleAPICalled",
+        console_log("native console"),
+    );
+    let wait = json!({"call":{"api":"page.waitForEvent","timeoutMs":30000},
+        "page":handle(&page),"event":"console","since":0});
+    let message = value(within(harness.submit(&run, "events.wait", wait)).await?)?;
+    assert!(message.to_string().contains("native console"), "{message}");
     Ok(())
 }

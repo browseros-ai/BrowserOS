@@ -127,6 +127,11 @@ impl<'env> OpScope<'env> {
         self.env.run_state()
     }
 
+    /// The browser's startup mode, supplied by the host for this operation.
+    pub(crate) fn hosted_mode(&self) -> bool {
+        self.env.hosted_mode()
+    }
+
     /// Carries delivered-close evidence to the host before the operation returns its value.
     pub(crate) fn report_close(&self, tab: TabId, target: &TargetId, seq: u64) {
         self.run_state().frames.forget(tab);

@@ -200,7 +200,7 @@ impl Method for PlaywrightOp {
         let pages = self.pages.of_call(&input);
         let input = input.resolved(page);
         let playwright = self.facade.get().await;
-        let env = OpCtxEnv::new(op);
+        let env = OpCtxEnv::new(op, self.facade.hosted_mode());
         let result = op
             .race_classified(playwright.invoke(&env, self.op, input))
             .await?;
@@ -513,21 +513,27 @@ impl OpenedPage {
 /// of their own.
 pub(super) struct OpCtxEnv<'a, M> {
     op: &'a OpCtx<M>,
+    hosted: bool,
     /// The run's one `RunState`, shared by all of its ops and dropped when the run ends.
     run_state: Arc<RunState>,
 }
 
 impl<'a, M> OpCtxEnv<'a, M> {
     /// The env for the op that `op` runs.
-    pub(super) fn new(op: &'a OpCtx<M>) -> Self {
+    pub(super) fn new(op: &'a OpCtx<M>, hosted: bool) -> Self {
         Self {
             op,
+            hosted,
             run_state: op.run().slot::<RunState>(),
         }
     }
 }
 
 impl<M> OpEnv for OpCtxEnv<'_, M> {
+    fn hosted_mode(&self) -> bool {
+        self.hosted
+    }
+
     fn view(&self) -> &BrowserView {
         self.op.run().view()
     }
