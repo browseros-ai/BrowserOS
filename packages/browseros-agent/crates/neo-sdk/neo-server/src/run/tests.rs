@@ -826,13 +826,13 @@ fn a_reply_over_the_limit_names_blobs_already_kept_with_the_run() -> Result<(), 
             reply.value,
             json!({ "shot": { "$neo": "blob", "id": "b0", "size": 300 * 1024 } })
         );
-        let (_file, size) = rig
+        let kept = rig
             .store
             .outputs()
             .open_blob(reply.id, BlobId::new(0))
             .await?
             .ok_or("the blob is kept before the reply")?;
-        assert_eq!(size, 300 * 1024);
+        assert_eq!(kept.size, 300 * 1024);
         Ok(())
     })
 }

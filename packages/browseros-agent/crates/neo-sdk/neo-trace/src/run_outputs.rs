@@ -69,11 +69,7 @@ impl RunOutputs {
     ///
     /// # Errors
     /// When the file exists but cannot be opened.
-    pub async fn open_blob(
-        &self,
-        run: RunId,
-        id: BlobId,
-    ) -> Result<Option<(tokio::fs::File, u64)>, TraceError> {
+    pub async fn open_blob(&self, run: RunId, id: BlobId) -> Result<Option<KeptFile>, TraceError> {
         open(&self.blob_path(run, id)).await
     }
 
@@ -134,19 +130,28 @@ impl RunOutputs {
         &self,
         run: RunId,
         index: u32,
-    ) -> Result<Option<(tokio::fs::File, u64)>, TraceError> {
+    ) -> Result<Option<KeptFile>, TraceError> {
         open(&self.download_path(run, index)).await
     }
 }
 
-async fn open(path: &Path) -> Result<Option<(tokio::fs::File, u64)>, TraceError> {
+/// A file a run kept, open for reading.
+#[derive(Debug)]
+pub struct KeptFile {
+    /// The file, at its start.
+    pub file: tokio::fs::File,
+    /// Its length in bytes.
+    pub size: u64,
+}
+
+async fn open(path: &Path) -> Result<Option<KeptFile>, TraceError> {
     let file = match tokio::fs::File::open(path).await {
         Ok(file) => file,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(TraceError::Output(error)),
     };
     let size = file.metadata().await.map_err(TraceError::Output)?.len();
-    Ok(Some((file, size)))
+    Ok(Some(KeptFile { file, size }))
 }
 
 #[cfg(test)]
@@ -156,7 +161,7 @@ mod tests {
 
     use tokio::io::AsyncReadExt;
 
-    use super::RunOutputs;
+    use super::{KeptFile, RunOutputs};
     use crate::{BlobId, DownloadStatus, RunDownload, RunId};
 
     #[test]
@@ -184,13 +189,13 @@ mod tests {
         let run = RunId::new();
         assert!(outputs.open_blob(run, BlobId::new(0)).await?.is_none());
         outputs.keep_blob(run, BlobId::new(0), b"\x89PNG").await?;
-        let (mut file, length) = outputs
+        let KeptFile { mut file, size } = outputs
             .open_blob(run, BlobId::new(0))
             .await?
             .ok_or("kept")?;
         let mut bytes = Vec::new();
         file.read_to_end(&mut bytes).await?;
-        assert_eq!((bytes.as_slice(), length), (&b"\x89PNG"[..], 4));
+        assert_eq!((bytes.as_slice(), size), (&b"\x89PNG"[..], 4));
         Ok(())
     }
 
@@ -219,10 +224,10 @@ mod tests {
             .record_downloads(run, std::slice::from_ref(&record))
             .await?;
         assert_eq!(outputs.downloads(run).await?, vec![record]);
-        let (mut file, length) = outputs.open_download(run, 0).await?.ok_or("kept")?;
+        let KeptFile { mut file, size } = outputs.open_download(run, 0).await?.ok_or("kept")?;
         let mut bytes = Vec::new();
         file.read_to_end(&mut bytes).await?;
-        assert_eq!((bytes.as_slice(), length), (&b"balance 42"[..], 10));
+        assert_eq!((bytes.as_slice(), size), (&b"balance 42"[..], 10));
         Ok(())
     }
 }

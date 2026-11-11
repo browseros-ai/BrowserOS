@@ -45,22 +45,34 @@ pub(crate) fn fit_result(value: &mut Value, limit: usize) -> Result<Vec<ResultBl
     if size <= limit {
         return Ok(Vec::new());
     }
-    // Each bytes value's place in a fixed walk order, with its JSON length, largest first.
+    // Each bytes value, largest first, with what moving it saves: its JSON less its marker's.
+    // The marker is counted with the widest id any blob of this value can get, so the running
+    // size never undercounts and the loop never stops before the value fits; a value whose
+    // marker would be no smaller stays inline.
     let mut found = Vec::new();
     walk(value, |place, item| {
         if let Some(base64) = bytes_brand(item) {
-            found.push((place, json_len(item), base64.len()));
+            found.push(Candidate {
+                place,
+                json_len: json_len(item),
+                decoded_len: decoded_len(base64),
+            });
         }
     });
-    found.sort_by_key(|&(place, length, _)| (Reverse(length), place));
+    let widest_id = BlobId::new(u32::try_from(found.len()).unwrap_or(u32::MAX));
+    found.sort_by_key(|candidate| (Reverse(candidate.json_len), candidate.place));
     let mut moving = BTreeSet::new();
-    for (place, length, base64) in found {
+    for candidate in found {
         if size <= limit {
             break;
         }
-        moving.insert(place);
-        // The marker's own length is about that of its decoded size's digits plus 40.
-        size = size.saturating_sub(length) + 40 + (base64 / 4 * 3).to_string().len();
+        let saved = candidate
+            .json_len
+            .saturating_sub(json_len(&marker(widest_id, candidate.decoded_len)));
+        if saved > 0 {
+            moving.insert(candidate.place);
+            size -= saved;
+        }
     }
     let mut blobs = Vec::new();
     walk_mut(value, |place, item| {
@@ -71,12 +83,37 @@ pub(crate) fn fit_result(value: &mut Value, limit: usize) -> Result<Vec<ResultBl
             return false;
         };
         let id = BlobId::new(u32::try_from(blobs.len()).unwrap_or(u32::MAX));
-        *item = json!({ BRAND: BLOB, "id": id.to_string(), "size": bytes.len() });
+        *item = marker(id, bytes.len());
         blobs.push(ResultBlob { id, bytes });
         true
     });
     let size = json_len(value);
     if size <= limit { Ok(blobs) } else { Err(size) }
+}
+
+/// One bytes value of the result, a candidate to move.
+struct Candidate {
+    /// Its place in the walk.
+    place: usize,
+    /// Its length as JSON, brand included.
+    json_len: usize,
+    /// How many bytes its base64 decodes to.
+    decoded_len: usize,
+}
+
+/// What a kept blob is in the reply.
+fn marker(id: BlobId, size: usize) -> Value {
+    json!({ BRAND: BLOB, "id": id.to_string(), "size": size })
+}
+
+/// How many bytes standard, padded base64 of this length decodes to.
+fn decoded_len(base64: &str) -> usize {
+    let padding = base64
+        .bytes()
+        .rev()
+        .take_while(|byte| *byte == b'=')
+        .count();
+    (base64.len() / 4 * 3).saturating_sub(padding)
 }
 
 /// The base64 of `value` when it is exactly the bootstrap's bytes brand.
@@ -208,6 +245,22 @@ mod tests {
         assert_eq!(value[0], bytes(3000, 2));
         assert_eq!(value[2], bytes(10, 4));
         assert_eq!(value[4], "kept");
+        Ok(())
+    }
+
+    /// The reviewer's boundary: moving the large value alone fits by one byte, and moving the
+    /// small one too would push it back over.
+    #[test]
+    fn a_value_that_fits_after_one_move_moves_nothing_else() -> Result<(), Box<dyn Error>> {
+        let limit = 256 * 1024;
+        let mut value = json!({ "large": bytes(300_000, 0), "small": bytes(1, 1), "text": "" });
+        let marker = json_len(&json!({ "$neo": "blob", "id": "b0", "size": 300_000 }));
+        let inline = json_len(&value) - json_len(&value["large"]) + marker;
+        value["text"] = json!("x".repeat(limit - inline));
+        let blobs = fit_result(&mut value, limit).map_err(|size| format!("did not fit: {size}"))?;
+        assert_eq!(json_len(&value), limit);
+        assert_eq!(blobs.len(), 1, "only the large value moved");
+        assert_eq!(value["small"], bytes(1, 1));
         Ok(())
     }
 

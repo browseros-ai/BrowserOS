@@ -20,7 +20,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio::time;
 
-use super::fit_result::{ResultBlob, fit_result};
+use super::fit_result::{self, ResultBlob};
 use super::install_web_globals::install_web_globals;
 use super::{Bridge, RunLogs};
 use crate::browser::PageRef;
@@ -412,7 +412,7 @@ fn settle(json: &str, bridge: &Bridge, blobs: &mut Vec<ResultBlob>) -> ScriptOut
         json.starts_with(SETTLED_OK) && json.len() > Defaults::MAX_RESULT_BYTES + SETTLED_OVERHEAD;
     match serde_json::from_str::<Settled>(json) {
         Ok(Settled::Ok(mut value)) if over => {
-            match fit_result(&mut value, Defaults::MAX_RESULT_BYTES) {
+            match fit_result::fit_result(&mut value, Defaults::MAX_RESULT_BYTES) {
                 Ok(kept) => {
                     *blobs = kept;
                     ScriptOutcome::Returned(value)
