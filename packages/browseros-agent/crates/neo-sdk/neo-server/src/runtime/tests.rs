@@ -6,9 +6,7 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::time::Duration;
 
-use neo_trace::{
-    Delivery, ErrorOwner, OperationId, Outcome, SecretSetConfig, SecretSource, SecretValue,
-};
+use neo_trace::{Delivery, ErrorOwner, OperationId, Outcome};
 use rquickjs::{AsyncContext, AsyncRuntime, Context, Runtime};
 use serde_json::{Value, json};
 use tokio::time::{self, Instant};
@@ -510,67 +508,6 @@ fn a_thrown_error_is_a_script_error_at_its_line() -> Result<(), TestError> {
             thrown.message(),
             "plain text",
             "a thrown non-error is its own text"
-        );
-        Ok(())
-    })
-}
-
-/// A value the secret set refuses is masked nowhere, so every run going is lost: what enters its
-/// realm from then on is `neo / output_withheld`, in place of what each op returned.
-#[test]
-fn a_value_the_set_refuses_withholds_what_enters_the_realm() -> Result<(), TestError> {
-    on_neo_runtime(async {
-        // The set keeps one value, the host's, which nothing pushes out: it refuses the next.
-        let rig = TestRig::with_secret_set(SecretSetConfig {
-            max_entries: 1,
-            ..SecretSetConfig::default()
-        })
-        .await?;
-        let _host = rig.secrets.register_from(
-            SecretValue::new("host-secret-7Qx".to_owned()),
-            None,
-            SecretSource::Host,
-        );
-        let (run, _guard) = rig.run(BUDGET, None)?;
-        rig.hold("agent-pw-7Qx");
-        time::sleep(Defaults::TYPED_QUIET + Duration::from_millis(250)).await;
-        let code = r#"
-            try {
-              return await __neo.invoke("test.echo", { said: "hello" });
-            } catch (e) {
-              return [e.owner, e.code];
-            }"#;
-        assert_eq!(
-            returned(run_code(&rig, &run, code).await)?,
-            json!(["neo", "output_withheld"]),
-            "the field went quiet and the set refused its value, so the run held a value \
-             nothing masks"
-        );
-        Ok(())
-    })
-}
-
-/// Graft G3. A script can hold a value its realm never received, such as a password it typed
-/// itself, and throw it. The thrown text is masked with what the run holds too, before it is cut
-/// to `TEXT_CHARS`: a cut through the value would leave a prefix that no mask recognizes, in the
-/// run's error and its replay.
-#[test]
-fn a_thrown_errors_held_value_is_masked_before_its_clip() -> Result<(), TestError> {
-    on_neo_runtime(async {
-        let rig = TestRig::new().await?;
-        let value = "typed-pw-7Qx-0123";
-        rig.hold(value);
-        // The message keeps 4096 characters, so this cut falls inside the value.
-        let code = format!("throw new Error('x'.repeat(4090) + '{value}');");
-        let error = failed(script(&rig, &code).await?)?;
-        let message = error.message();
-        let prefix = value.get(..4).unwrap_or(value);
-        assert!(
-            !message.contains(prefix),
-            "no part of the held value survives the cut: {}",
-            message
-                .get(message.len().saturating_sub(40)..)
-                .unwrap_or_default()
         );
         Ok(())
     })

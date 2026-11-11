@@ -162,10 +162,10 @@ impl App {
         log_startup(&config, address);
 
         let OpenedTrace { store, recovery } = open_trace(&config.env.trace_dir()).await?;
-        // One secret set for the process: every exit a script or the trace sees is masked
-        // with it, and sdk-traces' privacy and protected fills register into it.
-        let secrets = Arc::new(SecretSet::new(SecretSetConfig::default()));
-        let redactor = Redactor::new(Arc::clone(&secrets), RedactionLimits::default());
+        // neo-trace's writer still takes a secret set to mask records with. Neo hands it one that
+        // nothing registers into, so the trace keeps what each op produced, as the script got it.
+        let unmasked = Arc::new(SecretSet::new(SecretSetConfig::default()));
+        let redactor = Redactor::new(unmasked, RedactionLimits::default());
         let writer = WriterConfig {
             replay_window: Defaults::REPLAY_WINDOW,
             ..WriterConfig::default()
@@ -174,6 +174,9 @@ impl App {
         // once the browser links.
         let (shots, screenshots) = neo_trace::screenshot_queue();
         let trace = neo_trace::spawn_writer(&store, redactor, writer, Some(shots));
+        // The host API's secret set, which it reads from `Privacy` (`/v1/secrets`, the takeover
+        // journal). Neither the door nor the trace masks with it; housekeeping expires it.
+        let secrets = Arc::new(SecretSet::new(SecretSetConfig::default()));
         // Private flags committed by an earlier Neo still hold until their tabs are gone.
         let privacy = Privacy::new(
             Arc::clone(&secrets),
@@ -198,15 +201,14 @@ impl App {
         let tabs = Arc::new(TabRegistry::new());
         let native = NativeCapabilities::from_browseros_version(config.browseros_version());
         let browser = link(native, Arc::clone(&tabs));
-        // neo-playwright's privacy callbacks feed the same secret set the door masks with,
-        // and name Neo's own secret files to its upload deny list. The crate holds them from
-        // `PlaywrightFacade::start` on, so the list is config's, located before the start.
+        // neo-playwright's privacy callbacks: which tabs may be captured, and Neo's own secret
+        // files for its upload deny list. The crate holds them from `PlaywrightFacade::start` on,
+        // so the list is config's, located before the start.
         let hooks = Arc::new(PrivacyHooks::new(
             privacy,
             Arc::clone(&tabs),
             recovery,
             config.secret_files,
-            config.env.typed_quiet,
         ));
         let playwright = PlaywrightFacade::start(Arc::clone(&browser), Arc::clone(&hooks) as _);
 
@@ -226,11 +228,7 @@ impl App {
         let dispatcher = Arc::new(Dispatcher::new(
             methods,
             builtins::door_rules(&takeover, &hooks, &claims),
-            Arc::clone(&secrets),
             trace.clone(),
-            // What every run's records and reply are masked with beyond the secret set: the
-            // values typed or swept that the set learns only once their fields go quiet.
-            hooks.typed(),
             Arc::clone(&browser),
             Arc::clone(&tabs),
             Observer::new(playwright),
@@ -242,7 +240,6 @@ impl App {
             tabs: Arc::clone(&tabs),
             store: store.clone(),
             trace: trace.clone(),
-            secrets: Arc::clone(&secrets),
             shutdown: shutdown.clone(),
             orphan_grace: Defaults::ORPHAN_GRACE,
         });

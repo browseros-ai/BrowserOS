@@ -1,10 +1,9 @@
 //! The main-world scripts on a real BrowserOS, through MCP `run` (S4, S5): each API that runs the
 //! agent's script or HTML in the page behaves as Playwright 1.64.1's, the frame forms in a child
-//! frame included, no password field's value reaches the realm or the trace raw, not even from the
-//! other end of an opener link, an owner's lock that blocks reads withholds what a script that was
-//! already running read, of its own page or across an opener link, a popup's script is sent only
-//! while no one holds its opener, which the script can act on, and a lock taken on the opener while
-//! the popup's script runs is not settled.
+//! frame included, an owner's lock that blocks reads withholds what a script that was already
+//! running read, of its own page or across an opener link, a popup's script is sent only while no
+//! one holds its opener, which the script can act on, and a lock taken on the opener while the
+//! popup's script runs is not settled.
 //!
 //! ```text
 //!  page.evaluate, frame.evaluate ──────────────────────────────────▶ page.evaluate
@@ -12,8 +11,8 @@
 //!  locator.evaluate, elementHandle.evaluate, $eval (page, frame, handle) ─▶ locator.evaluate
 //!  locator.evaluateAll, $$eval (page, frame, handle) ──────────────▶ locator.evaluateAll
 //!  page.setContent, frame.setContent ──────────────────────────────▶ page.setContent
-//!    each op: the crate's evaluate guard sweeps, sends, sweeps, masks ─ the door: RunMask, and the
-//!    rules again as a read of the tab ─▶ the realm, and the trace the host reads back
+//!    each op: the crate's evaluate guard sweeps, sends, sweeps, masks ─ the door: the rules again
+//!    as a read of the tab ─▶ the realm, and the trace the host reads back
 //! ```
 //!
 //! Each case's script returns what it saw, as the realm saw it, and the test compares that with
@@ -90,25 +89,8 @@ async fn set_content_behaves_as_playwright_on_browseros() -> TestResult {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn a_password_field_reaches_neither_the_realm_nor_the_record_raw() -> TestResult {
-    on_browseros(|rig| Box::pin(password_fields(rig))).await
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn a_held_value_read_back_as_a_number_reaches_neither_the_realm_nor_the_record() -> TestResult
-{
-    on_browseros(|rig| Box::pin(held_number(rig))).await
-}
-
-#[tokio::test(flavor = "multi_thread")]
 async fn an_owner_lock_that_blocks_reads_withholds_what_a_running_script_read() -> TestResult {
     on_browseros(|rig| Box::pin(lock_while_a_script_runs(rig))).await
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn a_long_wait_on_a_password_field_registers_its_value_once_not_once_per_poll() -> TestResult
-{
-    on_browseros_logging(Some(REGISTRATIONS), |rig| Box::pin(long_wait(rig))).await
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -129,11 +111,6 @@ async fn an_owner_lock_on_an_opener_is_not_settled_while_its_popups_script_runs(
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn a_password_field_reaches_neither_end_of_an_opener_link_raw() -> TestResult {
-    on_browseros(|rig| Box::pin(password_fields_across_an_opener_link(rig))).await
-}
-
-#[tokio::test(flavor = "multi_thread")]
 async fn a_popup_a_click_opened_takes_a_script_at_once_from_either_end() -> TestResult {
     on_browseros(|rig| Box::pin(popup_scripts_at_once(rig))).await
 }
@@ -142,19 +119,10 @@ async fn a_popup_a_click_opened_takes_a_script_at_once_from_either_end() -> Test
 async fn on_browseros(
     drive: impl for<'a> FnOnce(&'a Rig) -> Pin<Box<dyn Future<Output = TestResult> + 'a>>,
 ) -> TestResult {
-    on_browseros_logging(None, drive).await
-}
-
-/// [`on_browseros`], with claw-sdk's log filter set to `log` when given.
-async fn on_browseros_logging(
-    log: Option<&str>,
-    drive: impl for<'a> FnOnce(&'a Rig) -> Pin<Box<dyn Future<Output = TestResult> + 'a>>,
-) -> TestResult {
     let Some(browser) = browseros_rig::browser_or_skip() else {
         return Ok(());
     };
-    let env = log.map(|filter| ("CLAW_LOG", filter));
-    let rig = Rig::start_with(&browser, CaptchaKey::Absent, env.as_slice())?;
+    let rig = Rig::start(&browser, CaptchaKey::Absent)?;
     let failure = match time::timeout(TEST_BUDGET, drive(&rig)).await {
         Ok(Ok(())) => return Ok(()),
         Ok(Err(error)) => error.to_string(),
@@ -424,16 +392,14 @@ async fn evaluate_all(rig: &Rig) -> TestResult {
     Ok(())
 }
 
-/// The password [`set_content`]'s HTML gives its field. The agent's code holds it whole, as the
-/// code of an agent that writes such a page does.
+/// The password [`set_content`]'s HTML gives its field.
 const WRITTEN_SECRET: &str = "setc-pw-7Rb3";
 
 /// `page.setContent`, and `frame.setContent`, which sends it, on a child frame and on the main
 /// frame: each writes its own frame's document, the HTML's inline script runs once, and Neo
 /// refuses `networkidle`, which it cannot observe after a write. A password field the HTML writes
 /// reads masked through every read the realm has, a child frame's script reaching its parent
-/// included, and the record the host reads back keeps no copy of it: not the op's own `html`,
-/// and not the run's code.
+/// included: the crate's seal and its evaluate guard mask it.
 async fn set_content(rig: &Rig) -> TestResult {
     let script = format!(
         r#"
@@ -501,13 +467,8 @@ async fn set_content(rig: &Rig) -> TestResult {
     set_content_recorded(&run_record(rig, &result).await?)
 }
 
-/// [`set_content`]'s run as the host reads it back: one row per write, and the password nowhere.
+/// [`set_content`]'s run as the host reads it back: one row per write.
 fn set_content_recorded(recorded: &Value) -> TestResult {
-    let text = recorded.to_string();
-    assert!(
-        !text.contains(WRITTEN_SECRET),
-        "the run's records keep no copy of the password: {text}"
-    );
     let writes: Vec<&Value> = operations(recorded)?
         .iter()
         .filter(|row| row.get("name") == Some(&json!("page.setContent")))
@@ -530,156 +491,6 @@ fn set_content_recorded(recorded: &Value) -> TestResult {
             (Some("page.setContent"), Some("not_sent")),
         ],
         "each write is one row, as the crate op both APIs share: {recorded}"
-    );
-    let stored = writes
-        .iter()
-        .filter_map(|row| row.pointer("/args/html").and_then(Value::as_str))
-        .find(|html| html.contains("id=\"pw\""))
-        .ok_or_else(|| format!("the password write is stored with its html: {recorded}"))?;
-    assert!(
-        stored.contains(r#"<input type="password" id="pw" value="[private]">"#),
-        "the op's html is stored with the value Neo's sweep found in the page masked: {stored}"
-    );
-    Ok(())
-}
-
-/// The secrets the page writes into its own password fields. The page builds each from parts, so
-/// neither the script nor the URL it loads holds one whole: only a field value can carry it.
-const PAGE_SECRET: &str = "page-pw-5Tq8";
-const LATE_SECRET: &str = "late-pw-9Vw2";
-
-/// The three ways a main-world script meets a password field: `page.evaluate` of one the agent
-/// filled, `$$eval` over a form whose password the page wrote, and `waitForFunction` on a password
-/// the page writes only after the wait began. The realm reports whether it saw a value raw, since
-/// the run's reply is masked again on its way out; the record the host reads back keeps none of
-/// them, and each op's stored result shows the mask.
-async fn password_fields(rig: &Rig) -> TestResult {
-    let typed = "typed-pw-3Kd7";
-    let script = format!(
-        r"
-        const TYPED = {typed};
-        const PAGE_SECRET = ['page', '-pw', '-5Tq8'].join('');
-        const LATE_SECRET = ['late', '-pw', '-9Vw2'].join('');
-        await page.goto('data:text/html,' + encodeURIComponent(`<title>Sign in</title>
-          <form><input id='name' value='ada'><input type='password' id='typed'>
-          <input type='password' id='written'><input id='note' value='plain'></form>
-          <input type='password' id='late'>
-          <button id='reveal'>Reveal</button>
-          <script>
-            document.getElementById('written').value = ['page', '-pw', '-5Tq8'].join('');
-            document.getElementById('reveal').onclick = () => setTimeout(() => {{
-              document.getElementById('late').value = ['late', '-pw', '-9Vw2'].join('');
-            }}, 500);
-          </script>`));
-        await page.locator('#typed').fill(TYPED);
-        const evaluated = await page.evaluate(() => document.getElementById('typed').value);
-        const form = await page.$$eval('form input', (fields) => fields.map((field) => field.value));
-        await page.locator('#reveal').click();
-        const waited = await page.waitForFunction(() => {{
-          const value = document.getElementById('late').value;
-          return value.length > 0 && value;
-        }});
-        const late = [await waited.jsonValue(), String(waited)];
-        return {{
-          evaluate: [evaluated, evaluated.includes(TYPED)],
-          dollarDollarEval: [form, form.some((value) => value.includes(PAGE_SECRET) || value.includes(TYPED))],
-          waitForFunction: [late, late.some((value) => value.includes(LATE_SECRET))],
-        }};",
-        typed = json!(typed)
-    );
-    rig.until_ready().await?;
-    let client = rig.client().await?;
-    let result = browseros_rig::run(&client, &script, &json!({ "taskId": "passwords" })).await?;
-    client.cancel().await?;
-    assert_eq!(
-        returned(&result)?,
-        json!({
-            "evaluate": ["[private]", false],
-            "dollarDollarEval": [["ada", "[private]", "[private]", "plain"], false],
-            "waitForFunction": [["[private]", "[private]"], false],
-        }),
-        "the realm gets each password field masked, and the other fields as they are"
-    );
-    let recorded = run_record(rig, &result).await?;
-    let text = recorded.to_string();
-    for secret in [typed, PAGE_SECRET, LATE_SECRET] {
-        assert!(
-            !text.contains(secret),
-            "the run's records keep no password ({secret}): {text}"
-        );
-    }
-    for op in [
-        "page.evaluate",
-        "locator.evaluateAll",
-        "page.waitForFunction",
-    ] {
-        let rows = operations(&recorded)?;
-        let stored = rows
-            .iter()
-            .find(|row| row.get("name") == Some(&json!(op)))
-            .and_then(|row| row.get("result"))
-            .ok_or_else(|| format!("{op} is recorded with its result: {recorded}"))?;
-        assert!(
-            stored.to_string().contains("[private]"),
-            "{op}'s stored result holds the field masked, not left out: {stored}"
-        );
-    }
-    Ok(())
-}
-
-/// The code [`held_number`]'s page writes into its password field, from parts.
-const SAVED_CODE: &str = "734921";
-
-/// Decision 35z (S4 review, finding 1). One `page.evaluate` saves a password field's value in the
-/// page and removes the field, so the run holds the value from that op's sweep while no later
-/// sweep finds it. A later script reads it back as a number, which cannot hold `[private]`. The
-/// realm gets the string of its masked text, bare and inside an object, and the record the host
-/// reads back keeps no copy. A number that only comes near the code stays a number in both.
-async fn held_number(rig: &Rig) -> TestResult {
-    let script = r"
-        await page.goto('data:text/html,' + encodeURIComponent(`<title>Code</title>
-          <input type='password' id='code'>
-          <script>document.getElementById('code').value = ['734', '921'].join('');</script>`));
-        await page.evaluate(() => {
-          window.saved = document.getElementById('code').value;
-          document.getElementById('code').remove();
-        });
-        const CODE = Number(['734', '921'].join(''));
-        const bare = await page.evaluate(() => Number(window.saved));
-        const nested = await page.evaluate(() => ({ code: Number(window.saved) }));
-        const near = await page.evaluate(() => Number(window.saved) + 1);
-        return {
-          bare: [bare, bare === CODE],
-          nested: [nested.code, nested.code === CODE],
-          near: [typeof near, near === CODE + 1],
-        };";
-    rig.until_ready().await?;
-    let client = rig.client().await?;
-    let result = browseros_rig::run(&client, script, &json!({ "taskId": "held-number" })).await?;
-    client.cancel().await?;
-    assert_eq!(
-        returned(&result)?,
-        json!({
-            "bare": ["[private]", false],
-            "nested": ["[private]", false],
-            "near": ["number", true],
-        }),
-        "the code reaches the realm as its masked text wherever the answer holds it, and the \
-         number next to it as a number"
-    );
-    let recorded = run_record(rig, &result).await?;
-    let text = recorded.to_string();
-    assert!(
-        !text.contains(SAVED_CODE),
-        "the run's records keep no copy of the code: {text}"
-    );
-    let near_stored = operations(&recorded)?
-        .iter()
-        .filter(|row| row.get("name") == Some(&json!("page.evaluate")))
-        .any(|row| row.get("result") == Some(&json!(734_922)));
-    assert!(
-        near_stored,
-        "the number next to the code is stored as the number it is: {recorded}"
     );
     Ok(())
 }
@@ -1067,129 +878,6 @@ async fn serve_opener(released: watch::Receiver<bool>) -> Result<String, Box<dyn
     Ok(origin)
 }
 
-/// The secrets [`password_fields_across_an_opener_link`]'s pages write into their own password
-/// fields, and the plain values they write into fields no seal masks. Each page builds each from
-/// parts, so neither the script nor a URL holds one whole: only a field value can carry it, and
-/// only a script's result can carry a plain one to the trace store.
-const OPENER_SECRET: &str = "opener-pw-4Rk2";
-const POPUP_SECRET: &str = "popup-pw-8Jx5";
-const OPENER_PLAIN: &str = "opener-note-2Fb6";
-const POPUP_PLAIN: &str = "popup-note-7Hq1";
-
-/// sdk-privacy's finding 6, on the path it found, both ways: a popup's script reads its opener's
-/// fields through `window.opener`, and an opener's script reads its popup's through the window
-/// `window.open` returned, or by the popup's name. Each page opens its popup on a click.
-///
-/// Each way has a link of its own, and the end that is read is never an op's own page before the
-/// read: an op's sweep of its own page would register the value, and the run's mask would hide it
-/// whether or not the crate swept across the link. So the first popup reads its opener, whose
-/// page wrote one password and the agent filled another. Then the opener loads a second page,
-/// whose second popup it reads, a popup its page wrote. No `context.newPage()` gives the second
-/// link its opener: readying a background tab can take a minute on a loaded machine.
-///
-/// Each password reaches the realm `[private]` and each plain field as it is, which shows the read
-/// crossed the link; the realm names a password it saw raw. The trace store's files, the database
-/// and its WAL, keep no copy of any password, and do keep the plain values, which shows the scan
-/// reads where the ops are written.
-async fn password_fields_across_an_opener_link(rig: &Rig) -> TestResult {
-    let typed = "typed-opener-pw-6Mc3";
-    let script = format!(
-        r#"
-        const TYPED = {typed};
-        const SECRETS = [
-          ['typed', TYPED],
-          ['opener', ['opener', '-pw', '-4Rk2'].join('')],
-          ['popup', ['popup', '-pw', '-8Jx5'].join('')],
-        ];
-        const seen = (values) => values.map((value) => {{
-          const secret = SECRETS.find(([, secret]) => String(value).includes(secret));
-          return secret ? `raw ${{secret[0]}}` : value;
-        }});
-        const opened = async (opener) => {{
-          const popup = opener.waitForEvent('popup');
-          await opener.locator('#open').click();
-          return await popup;
-        }};
-
-        await page.goto('data:text/html,' + encodeURIComponent(`<title>Opener</title>
-          <input type='password' id='written'><input type='password' id='typed'><input id='note'>
-          <button id='open'>Open</button>
-          <script>
-            document.getElementById('written').value = ['opener', '-pw', '-4Rk2'].join('');
-            document.getElementById('note').value = ['opener', '-note', '-2Fb6'].join('');
-            document.getElementById('open').onclick = () => {{
-              const reader = window.open('', 'reader');
-              reader.document.write('<title>Reader</title>');
-              reader.document.close();
-            }};
-          </script>`));
-        await page.locator('#typed').fill(TYPED);
-        const reader = await opened(page);
-        const popupReadsOpener = await reader.evaluate(() =>
-          ['written', 'typed', 'note'].map((id) => window.opener.document.getElementById(id).value));
-
-        await reader.close();
-        await page.goto('data:text/html,' + encodeURIComponent(`<title>Second opener</title>
-          <button id='open'>Open</button>
-          <script>
-            document.getElementById('open').onclick = () => {{
-              const popup = window.open('', 'secrets');
-              popup.document.write("<title>Secrets</title><input type='password' id='pw'><input id='note'>");
-              popup.document.close();
-              popup.document.getElementById('pw').value = ['popup', '-pw', '-8Jx5'].join('');
-              popup.document.getElementById('note').value = ['popup', '-note', '-7Hq1'].join('');
-              window.popup = popup;
-            }};
-          </script>`));
-        await opened(page);
-        const openerReadsPopup = await page.evaluate(() =>
-          ['pw', 'note'].map((id) => window.popup.document.getElementById(id).value));
-        const openerReadsByName = await page.evaluate(() =>
-          window.open('', 'secrets').document.getElementById('pw').value);
-        return {{
-          popupReadsOpener: seen(popupReadsOpener),
-          openerReadsPopup: seen(openerReadsPopup),
-          openerReadsByName: seen([openerReadsByName]),
-        }};"#,
-        typed = json!(typed)
-    );
-    rig.until_ready().await?;
-    let client = rig.client().await?;
-    let result =
-        browseros_rig::run(&client, &script, &json!({ "taskId": "opener-passwords" })).await?;
-    client.cancel().await?;
-    assert_eq!(
-        returned(&result)?,
-        json!({
-            "popupReadsOpener": ["[private]", "[private]", OPENER_PLAIN],
-            "openerReadsPopup": ["[private]", POPUP_PLAIN],
-            "openerReadsByName": ["[private]"],
-        }),
-        "each end of an opener link reads the other's password fields masked, and its plain \
-         field as it is"
-    );
-    let recorded = run_record(rig, &result).await?;
-    let text = recorded.to_string();
-    let stored = trace_files(rig)?;
-    for plain in [OPENER_PLAIN, POPUP_PLAIN] {
-        assert!(
-            holds(&stored, plain),
-            "the trace store's files hold the plain value {plain} a script read: {text}"
-        );
-    }
-    for secret in [typed, OPENER_SECRET, POPUP_SECRET] {
-        assert!(
-            !text.contains(secret),
-            "the run's records keep no password ({secret}): {text}"
-        );
-        assert!(
-            !holds(&stored, secret),
-            "trace.db and its WAL keep no copy of the password {secret}"
-        );
-    }
-    Ok(())
-}
-
 /// The page [`popup_scripts_at_once`] loads: each click on its button opens a popup linked to
 /// it, numbered in its title, and keeps the window `window.open` returned.
 const POPUP_OPENER: &str = r"
@@ -1279,89 +967,6 @@ fn holds(stored: &[u8], value: &str) -> bool {
     stored
         .windows(value.len())
         .any(|bytes| bytes == value.as_bytes())
-}
-
-/// claw-sdk's log filter for the long wait: the default, and a line for each value `TypedValues`
-/// hands the secret set.
-const REGISTRATIONS: &str = "info,rmcp=warn,neo_server::builtins::typed_values=debug";
-/// The line `TypedValues` writes for each value it hands the secret set.
-const REGISTERED: &str = "a field value went to the secret set";
-/// The value the long wait's page writes into its password field, from parts.
-const LONG_WAIT_SECRET: &str = "long-wait-6Hn4";
-
-/// The held-methods design's open question: each `waitForFunction` poll sweeps the page and reports
-/// its password field's value again. Over a wait of 30 s, a poll every 100 ms, the value reaches
-/// the secret set once: the first sweep holds it, it registers once the field is quiet, and each
-/// later poll finds it kept for the run. A second run's wait hands it over once more, which only
-/// moves its expiry. So the count grows per value and per run, never per poll.
-async fn long_wait(rig: &Rig) -> TestResult {
-    rig.until_ready().await?;
-    let client = rig.client().await?;
-    let meta = json!({ "taskId": "long-wait" });
-    let long = r"
-        await page.goto('data:text/html,' + encodeURIComponent(`<title>Long wait</title>
-          <input type='password' id='pw'>
-          <script>document.getElementById('pw').value = ['long', '-wait', '-6Hn4'].join('');</script>`));
-        const waited = await page.waitForFunction(() => {
-          window.polls = (window.polls || 0) + 1;
-          window.since = window.since || Date.now();
-          return Date.now() - window.since >= 30000 && document.getElementById('pw').value;
-        }, null, { timeout: 50000 });
-        return { polls: await page.evaluate(() => window.polls), value: await waited.jsonValue() };";
-    let first = returned(&browseros_rig::run(&client, long, &meta).await?)?;
-    let polls = first
-        .get("polls")
-        .and_then(Value::as_u64)
-        .ok_or_else(|| format!("the page counts its polls: {first}"))?;
-    assert!(
-        polls >= 50,
-        "a 30 s wait polled {polls} times, too few to tell a count per poll from one per value"
-    );
-    assert_eq!(first.get("value"), Some(&json!("[private]")), "{first}");
-    assert_eq!(
-        registrations(rig)?,
-        ["source=Page registration=Registered"],
-        "over {polls} polls the field's value went to the set once"
-    );
-
-    let again = r"
-        const waited = await page.waitForFunction(() => document.getElementById('pw').value);
-        return await waited.jsonValue();";
-    let second = returned(&browseros_rig::run(&client, again, &meta).await?)?;
-    client.cancel().await?;
-    assert_eq!(second, json!("[private]"));
-    // The second run's sweep holds the value until its field is quiet for 1 s.
-    time::timeout(PATIENCE, async {
-        while registrations(rig).map_or(0, |lines| lines.len()) < 2 {
-            time::sleep(Duration::from_millis(100)).await;
-        }
-    })
-    .await
-    .map_err(|_elapsed| format!("the second run's value reached the set within {PATIENCE:?}"))?;
-    time::sleep(Duration::from_secs(2)).await;
-    assert_eq!(
-        registrations(rig)?,
-        [
-            "source=Page registration=Registered",
-            "source=Page registration=Refreshed",
-        ],
-        "a second run hands the value over once more, as a refresh"
-    );
-    assert!(
-        !rig.neo_log()?.contains(LONG_WAIT_SECRET),
-        "no log line names the value"
-    );
-    Ok(())
-}
-
-/// Each value `TypedValues` handed the secret set so far, as its log line's fields.
-fn registrations(rig: &Rig) -> Result<Vec<String>, Box<dyn Error>> {
-    Ok(rig
-        .neo_log()?
-        .lines()
-        .filter_map(|line| line.split_once(REGISTERED))
-        .map(|(_, fields)| fields.trim().to_owned())
-        .collect())
 }
 
 /// The title the scripts of [`lock_while_a_script_runs`], [`lock_an_opener_while_its_popup_reads`]
