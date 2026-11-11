@@ -92,6 +92,7 @@ import type {
   SerializedValue,
   SnapshotResult,
   Strictness,
+  TargetArgs,
   WaitForState,
 } from './wire'
 
@@ -689,7 +690,29 @@ export class Frame extends EventEmitter {
     return locatorBrand(api, await this._page._brand(api), this._id, selector)
   }
 
-  /** One op on the element `selector` names in this frame. */
+  /**
+   * The addressing a locator op's input starts with: the locator's brand in this frame, and
+   * whether a second match fails. A described op spreads it into its `send` literal, resolved
+   * before the call header as `_selectorOp` does:
+   * `const addressed = await this._targetArgs(api, selector, strict)` then
+   * `send[op](site, this._call(api, wait.timeout), { ...addressed, ...fields }, wait.signal)`.
+   * The op's own fields stay checked against Rust's input type; the spread ones are typed.
+   */
+  async _targetArgs(
+    api: string,
+    selector: string,
+    strict: boolean | undefined,
+  ): Promise<TargetArgs> {
+    return {
+      target: await this._locatorBrand(api, selector),
+      strict: strict === true ? 'strict' : 'firstMatch',
+    }
+  }
+
+  /**
+   * One op on the element `selector` names in this frame, for the ops Rust does not describe
+   * yet: their inputs are cast, so only the recorded wire examples check them.
+   */
   async _selectorOp<Op extends SelectorOp>(
     op: Op,
     site: CallSite,
@@ -699,10 +722,8 @@ export class Frame extends EventEmitter {
     wait: Wait,
     args: Omit<OpInputs[Op], 'target' | 'strict'>,
   ): Promise<OpOutputs[Op]> {
-    const target = await this._locatorBrand(api, selector)
     const input = {
-      target,
-      strict: strict === true ? 'strict' : 'firstMatch',
+      ...(await this._targetArgs(api, selector, strict)),
       ...args,
     } as OpInputs[Op]
     return await invoke(
@@ -1300,17 +1321,11 @@ export class Frame extends EventEmitter {
     const { depth, boxes } = options
     const wait = this._wait(api, options)
     if (selector !== null) {
-      const target = await this._locatorBrand(api, selector)
+      const addressed = await this._targetArgs(api, selector, true)
       return await send['locator.ariaSnapshot'](
         site,
         this._call(api, wait.timeout),
-        {
-          target,
-          strict: 'strict',
-          mode,
-          depth,
-          boxes,
-        },
+        { ...addressed, mode, depth, boxes },
         wait.signal,
       )
     }

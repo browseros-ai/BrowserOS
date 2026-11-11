@@ -7601,11 +7601,15 @@ ${value.stack}`;
         throw clientError(api, `selector: expected string, got ${typeof selector}`);
       return locatorBrand(api, await this._page._brand(api), this._id, selector);
     }
+    async _targetArgs(api, selector, strict) {
+      return {
+        target: await this._locatorBrand(api, selector),
+        strict: strict === true ? "strict" : "firstMatch"
+      };
+    }
     async _selectorOp(op, site, api, selector, strict, wait, args) {
-      const target = await this._locatorBrand(api, selector);
       const input = {
-        target,
-        strict: strict === true ? "strict" : "firstMatch",
+        ...await this._targetArgs(api, selector, strict),
         ...args
       };
       return await invoke(op, site, this._call(api, wait.timeout), input, wait.signal);
@@ -7795,14 +7799,8 @@ ${value.stack}`;
       const { depth, boxes } = options;
       const wait = this._wait(api, options);
       if (selector !== null) {
-        const target = await this._locatorBrand(api, selector);
-        return await send["locator.ariaSnapshot"](site, this._call(api, wait.timeout), {
-          target,
-          strict: "strict",
-          mode,
-          depth,
-          boxes
-        }, wait.signal);
+        const addressed = await this._targetArgs(api, selector, true);
+        return await send["locator.ariaSnapshot"](site, this._call(api, wait.timeout), { ...addressed, mode, depth, boxes }, wait.signal);
       }
       if (this._id !== null)
         throw unsupportedError(api, "snapshot a child frame through its iframe: page.locator('iframe').contentFrame().locator('body').ariaSnapshot()");
