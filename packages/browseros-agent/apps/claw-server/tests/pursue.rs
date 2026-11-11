@@ -311,3 +311,31 @@ async fn a_hosted_server_refuses_pursue_by_name() -> anyhow::Result<()> {
     );
     Ok(())
 }
+
+#[tokio::test]
+async fn once_pursue_has_handed_a_task_back_it_does_not_take_it_again() -> anyhow::Result<()> {
+    let app = test_app(ULTRAFAST_DESKTOP).await?;
+    let session = connect(&app).await?;
+    let other = connect(&app).await?;
+    app.state
+        .sessions
+        .lookup(&SessionId::new(session.clone()))
+        .await
+        .ok_or_else(|| anyhow::anyhow!("no session"))?
+        .mark_pursue_handed_back();
+
+    let body = call_pursue(&app, &session).await?;
+    let reply = &body["result"]["structuredContent"];
+    assert_eq!(body["result"]["isError"], false, "{body:?}");
+    assert_eq!(reply["outcome"], "handed_back");
+    assert_eq!(reply["status"], "already_handed_back");
+    assert_eq!(reply["continueWith"], "run");
+
+    let elsewhere = call_pursue(&app, &other).await?;
+    assert_ne!(
+        elsewhere["result"]["structuredContent"]["status"], "already_handed_back",
+        "another task still gets its own pursue"
+    );
+    assert!(app.worker.requests().is_empty());
+    Ok(())
+}

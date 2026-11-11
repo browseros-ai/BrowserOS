@@ -33,6 +33,7 @@ pub struct Session {
     dispatches_drained: Notify,
     operator_stop_requested: AtomicBool,
     task_declared: AtomicBool,
+    pursue_handed_back: AtomicBool,
     cancel: CancellationToken,
     last_activity: Mutex<Instant>,
 }
@@ -80,6 +81,7 @@ impl Session {
             dispatches_drained: Notify::new(),
             operator_stop_requested: AtomicBool::new(false),
             task_declared: AtomicBool::new(false),
+            pursue_handed_back: AtomicBool::new(false),
             cancel: CancellationToken::new(),
             last_activity: Mutex::new(now),
         })
@@ -193,6 +195,17 @@ impl Session {
         self.task_declared
             .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
             .is_ok()
+    }
+
+    /// Whether a pursue run in this task decided it could not go on and handed the task back.
+    /// From then on the task carries on with run.
+    #[must_use]
+    pub fn pursue_handed_back(&self) -> bool {
+        self.pursue_handed_back.load(Ordering::Acquire)
+    }
+
+    pub fn mark_pursue_handed_back(&self) {
+        self.pursue_handed_back.store(true, Ordering::Release);
     }
 
     /// Keeps Stop-owned calls active until their effects finish and audit reconciliation is queued.

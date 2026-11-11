@@ -205,6 +205,9 @@ impl ClawMcpService {
         else {
             return ToolResult::error("pursue needs the page to work on");
         };
+        if started.session.pursue_handed_back() {
+            return already_handed_back(page);
+        }
         let Some(goal) = raw_args
             .get("goal")
             .and_then(Value::as_str)
@@ -308,8 +311,41 @@ impl ClawMcpService {
         let run = Run::new(goal, budget).offering(offered);
         let outcome = advance_writing(&oracle, &driver, writer.as_ref(), run).await;
         let told = tell(&outcome);
-        finished(page, Ending::of(&outcome.status), &told, outcome.writes)
+        let ending = Ending::of(&outcome.status);
+        if uses_up_pursue(ending, outcome.decisions) {
+            started.session.mark_pursue_handed_back();
+        }
+        finished(page, ending, &told, outcome.writes)
     }
+}
+
+/// A task may keep using pursue while its runs keep finding a next step. The first hand back after
+/// something was decided uses it up; a run that ended before deciding anything does not.
+pub(super) fn uses_up_pursue(ending: Ending, decisions: u32) -> bool {
+    ending == Ending::HandedBack && decisions > 0
+}
+
+/// A call after this task's pursue handed back: run carries the task from here.
+fn already_handed_back(page: u32) -> ToolResult {
+    let said = format!(
+        "neo already handed this task back, so it will not take it again. Carry on with run on page {page}."
+    );
+    ToolResult::text(
+        said.clone(),
+        Some(json!({
+            "outcome": Ending::HandedBack.as_str(),
+            "said": said,
+            "continueWith": "run",
+            "page": page,
+            "story": [],
+            "remaining": null,
+            "status": "already_handed_back",
+            "actions": 0,
+            "decisions": 0,
+            "jevTokens": 0,
+            "writerCalls": 0,
+        })),
+    )
 }
 
 /// A run that never asked anything: a hand back with nothing done, which leaves pursue usable.
@@ -427,6 +463,14 @@ mod tests {
             Ending::of(&Status::Blocked("nothing".to_string())),
             Ending::HandedBack
         );
+    }
+
+    #[test]
+    fn only_a_hand_back_after_a_decision_uses_pursue_up() {
+        assert!(uses_up_pursue(Ending::HandedBack, 3));
+        assert!(!uses_up_pursue(Ending::HandedBack, 0));
+        assert!(!uses_up_pursue(Ending::Completed, 5));
+        assert!(!uses_up_pursue(Ending::Cancelled, 2));
     }
 
     #[test]
