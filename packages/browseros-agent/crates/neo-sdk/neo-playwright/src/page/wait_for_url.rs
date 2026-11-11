@@ -195,7 +195,8 @@ impl Followed {
             .session_id()
             .cloned()
             .ok_or_else(|| scope.fail(ErrorCode::Internal, "the frame has no session"))?;
-        let (session_id, session) = if frame_id == main.frame {
+        let is_main = frame_id == main.frame;
+        let (session_id, session) = if is_main {
             (root_id, main.session)
         } else {
             match navigation::frame_host(pw, scope, page.tab(), (root_id, main.session), &frame_id)
@@ -222,7 +223,7 @@ impl Followed {
             // it under the same navigation deadline before deciding the frame detached.
             Err(
                 WatchError::FrameDetached | WatchError::Core(CoreError::Cdp(CdpError::SessionGone)),
-            ) => {
+            ) if !is_main => {
                 scope.run_state().frames.forget(page.tab());
                 Ok(Self::Moving)
             }

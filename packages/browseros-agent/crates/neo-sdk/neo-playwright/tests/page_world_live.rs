@@ -1147,6 +1147,32 @@ async fn tests_that_frame_wait_for_url_follows_its_frame_out_of_process() -> Tes
     .await
 }
 
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_url_wait_rejects_when_its_page_closes() -> TestResult {
+    on_page("/login.html", |run, _server, page| async move {
+        let result = async {
+            let waiting = run.invoke(
+                "page.waitForURL",
+                json!({ "call": { "timeoutMs": 2000 }, "page": brand(&page),
+                        "url": { "glob": "**/never" }, "waitUntil": "load" }),
+            );
+            let (waited, closed) = tokio::join!(waiting, async {
+                time::sleep(Duration::from_millis(50)).await;
+                run.invoke("page.close", json!({ "page": brand(&page) }))
+                    .await
+            });
+            closed?;
+            let error = waited.err().ok_or("a closed page must reject its wait")?;
+            assert_eq!(error.error_code(), Some(ErrorCode::TargetClosed));
+            Ok(())
+        }
+        .await;
+        (run, result)
+    })
+    .await
+}
+
 /// `frame.setContent` replaces a child frame's document, in process and out of it, and leaves
 /// the page's own document alone; it waits for the child's load state as the page form does.
 /// On a tab the agent did not open, core enables no `Page` domain on the out-of-process frame's
