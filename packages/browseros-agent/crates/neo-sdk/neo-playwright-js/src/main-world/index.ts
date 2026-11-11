@@ -19,6 +19,10 @@
  *
  *   evaluate  (isFunction, expression, argCount, ...argTexts, ...handles)
  *             → UtilityScript.evaluate → the result's serialized text, or undefined
+ *   truthy    (isFunction, expression, argCount, ...argTexts, ...handles)
+ *             → 'true' or 'false': whether the result is truthy, judged as it was returned, as
+ *               upstream's `waitForFunctionExpressionOnElement` callback judges it (PW frames.ts):
+ *               a promise is truthy and is not awaited
  *   poller    (isFunction, expression, argCount, ...argTexts, ...handles)
  *             → the poll function, by reference, its first poll already run (`first`, so the
  *               agent's code runs in this call, with its user gesture); each call of it judges
@@ -58,7 +62,7 @@ const asText = (value: SerializedValue | undefined): string | undefined =>
   value === undefined ? undefined : writeJson(value)
 
 export default function neoMainWorld(
-  mode: 'evaluate' | 'poller',
+  mode: 'evaluate' | 'truthy' | 'poller',
   isFunction: boolean | undefined,
   expression: string,
   argCount: number,
@@ -83,6 +87,26 @@ export default function neoMainWorld(
     return isThenable(out)
       ? out.then((value) => asText(value as SerializedValue | undefined))
       : asText(out as SerializedValue | undefined)
+  }
+  if (mode === 'truthy') {
+    // `locator.waitForFunction`'s try on the element its locator matched, as upstream's server
+    // evaluates its expression and calls it with the element and the argument. Rust reads the
+    // answer as a serialized boolean.
+    const element =
+      argCount > 0 ? parseEvaluationResultValue(args[0], handles) : undefined
+    const arg =
+      argCount > 1 ? parseEvaluationResultValue(args[1], handles) : undefined
+    // biome-ignore lint/security/noGlobalEval: the agent's script, evaluated in the page's global scope as upstream's callback does.
+    let result: unknown = globalThis.eval(expression)
+    if (
+      isFunction === true ||
+      (isFunction !== false && typeof result === 'function')
+    )
+      result = (result as (element: unknown, arg: unknown) => unknown)(
+        element,
+        arg,
+      )
+    return result ? 'true' : 'false'
   }
   // The predicate as upstream's server writes it: the expression is evaluated once (a string
   // expression on every poll), the argument is parsed once, so a predicate that keeps state in

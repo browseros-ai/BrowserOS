@@ -71,7 +71,8 @@ const PLAYWRIGHT_API: &str = "Playwright's API on `page`, `context` and `browser
     `page.keyboard` (`press`, `type`, `insertText`, `down`, `up`), `page.mouse` (`move`, \
     `down`, `up`, `click`, `dblclick`, `wheel`), navigation (`goto`, `reload`, `waitForURL`, \
     `waitForLoadState`), scripts in the page's main world (`page.evaluate`, \
-    `page.waitForFunction`, `locator.evaluate`, `locator.evaluateAll`, `elementHandle.evaluate`, \
+    `page.waitForFunction`, `locator.evaluate`, `locator.evaluateAll`, \
+    `locator.waitForFunction`, `elementHandle.evaluate`, \
     and `$eval` and `$$eval` on a page, frame or element handle; a `frame` form runs in its \
     frame, a child frame too) with Playwright's values, arguments, element handles and errors, \
     `page.setContent` and `frame.setContent`, whose HTML's scripts run there too, `screenshot` and \

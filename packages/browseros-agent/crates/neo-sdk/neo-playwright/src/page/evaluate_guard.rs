@@ -141,6 +141,8 @@ const OUTSIDE_FORMAT: &str = "the page answered with a value outside Playwright'
 
 /// The agent's script as the prelude built it (`wire.ts` `PageScript`). No `Debug`: the
 /// argument may hold a password the agent was given, and no log line may carry it (STYLE P4).
+/// `Clone`, for `locator.waitForFunction`, which sends it again on every try.
+#[derive(Clone)]
 pub(crate) enum Script {
     /// Ready to run: upstream's normalized expression (`normalizeEvaluationExpression`, run in
     /// the prelude), whether it is a function, and the argument.
@@ -181,6 +183,7 @@ pub(crate) enum Subject {
 
 /// Playwright's in-page serialized argument as JSON text: opaque here, parsed by the page. As
 /// text it stays one string through the host's decode and the CDP request, however deep it is.
+#[derive(Clone)]
 pub(crate) struct ArgText(pub(crate) String);
 
 /// How often one op runs its script.
@@ -188,6 +191,10 @@ pub(crate) struct ArgText(pub(crate) String);
 pub(crate) enum CallMode {
     /// `page.evaluate`: once, its result by value.
     Once,
+    /// One try of `locator.waitForFunction`: once, as `Once`, but the page answers only whether
+    /// the result is truthy, judged as upstream's `waitForFunctionExpressionOnElement` callback
+    /// judges it (a promise is truthy, never awaited).
+    Truthy,
     /// `waitForFunction`: upstream's predicate, built once in the page with its argument parsed
     /// once, then called on every poll. The user gesture goes with the call that builds it only:
     /// upstream's later polls run from page timers.
@@ -207,6 +214,15 @@ impl MainWorldCall {
             script,
             subject,
             mode: CallMode::Once,
+        }
+    }
+
+    /// One try of `locator.waitForFunction` on the element its locator matched.
+    pub(crate) fn truthy(script: Script, element: ElementTarget) -> Self {
+        Self {
+            script,
+            subject: Subject::Element(element),
+            mode: CallMode::Truthy,
         }
     }
 
@@ -394,7 +410,7 @@ impl<'op> EvaluateGuard<'op> {
             _sent: &sent,
         };
         let called = match script.mode {
-            CallMode::Once => call.evaluate(&document, script, &objects).await,
+            CallMode::Once | CallMode::Truthy => call.evaluate(&document, script, &objects).await,
             CallMode::Poll => script.poll(&call, &document, &objects).await,
         };
         let outcome = called.map_err(|error| scope.core_error(&error))?;
@@ -1053,7 +1069,8 @@ impl Shape {
 }
 
 impl MainCall<'_> {
-    /// `page.evaluate`'s one call: upstream's `UtilityScript.evaluate` on the main-world document.
+    /// `page.evaluate`'s one call: upstream's `UtilityScript.evaluate` on the main-world document,
+    /// or for a `Truthy` script the truthiness of its result, as serialized text all the same.
     async fn evaluate(
         &self,
         document: &str,
@@ -1064,7 +1081,15 @@ impl MainCall<'_> {
             .send(
                 document,
                 MAIN_WORLD_JS,
-                arguments("evaluate", script, objects),
+                arguments(
+                    if script.mode == CallMode::Truthy {
+                        "truthy"
+                    } else {
+                        "evaluate"
+                    },
+                    script,
+                    objects,
+                ),
                 Shape::Evaluate,
             )
             .await?;

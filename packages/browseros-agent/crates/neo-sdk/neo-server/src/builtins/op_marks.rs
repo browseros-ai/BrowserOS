@@ -341,6 +341,13 @@ mod tests {
                 placement: Served,
             },
             Row {
+                op: "locator.waitForFunction",
+                declared: vec![MainWorld],
+                gated: true,
+                policed: vec![MainWorld],
+                placement: Served,
+            },
+            Row {
                 op: "page.screenshot",
                 declared: vec![Capture],
                 gated: true,
@@ -537,6 +544,12 @@ mod tests {
             op: "page.waitForFunction",
             file: "main_world_browseros.rs",
             test: "wait_for_function_behaves_as_playwright_on_browseros",
+            proves: Proves::Served,
+        },
+        BrowserosCase {
+            op: "locator.waitForFunction",
+            file: "main_world_browseros.rs",
+            test: "locator_wait_for_function_behaves_as_playwright_on_browseros",
             proves: Proves::Served,
         },
         BrowserosCase {
