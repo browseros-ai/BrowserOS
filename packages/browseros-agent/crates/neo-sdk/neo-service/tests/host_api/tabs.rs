@@ -66,7 +66,7 @@ async fn all_open_native_tabs_include_distinct_task_history_and_current_metadata
         result: None,
         error: None,
         page_after: Some(PageState {
-            tab: Some(TabId(5)),
+            tab_id: Some(TabId(5)),
             url: None,
             title: None,
         }),

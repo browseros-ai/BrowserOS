@@ -28,7 +28,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use browseros_core::TabId;
-use sea_orm::sea_query::{Expr, Func, Query, SelectStatement, SimpleExpr};
+use sea_orm::sea_query::{Expr, ExprTrait, Func, Query, SelectStatement, SimpleExpr};
 use sea_orm::sqlx::ConnectOptions;
 use sea_orm::sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions, SqliteSynchronous};
 use sea_orm::{
@@ -482,12 +482,17 @@ impl TraceStore {
         if tabs.is_empty() {
             return Ok(HashMap::new());
         }
-        let rows = run_tabs::Entity::find()
+        // A creator has no target at admission: its tab arrives in page_after at the end.
+        // Match task_last_act's target-first rule so newPage associations work for old traces
+        // as well as new ones, without rewriting stored run/tab links.
+        let tab = Expr::col((operations::Entity, operations::Column::TargetTabId))
+            .if_null(Expr::col((operations::Entity, operations::Column::TabId)));
+        let rows = operations::Entity::find()
             .select_only()
-            .column(run_tabs::Column::TabId)
+            .column_as(tab.clone(), "tab")
             .column(runs::Column::TaskId)
             .inner_join(runs::Entity)
-            .filter(run_tabs::Column::TabId.is_in(tabs.iter().map(|tab| tab.0)))
+            .filter(tab.is_in(tabs.iter().map(|tab| tab.0)))
             .filter(runs::Column::TaskId.is_not_null())
             .distinct()
             .order_by_asc(runs::Column::TaskId)
