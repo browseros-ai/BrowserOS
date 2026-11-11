@@ -205,6 +205,13 @@ async function chooseImage(launch: LaunchOptions): Promise<string> {
       )
     newBuild = { tag: plan.tag, id: currentId, fingerprint: plan.fingerprint }
   }
+  // Without the id of the image this start runs, cleanup could not tell it from the ones to retire.
+  if (!currentId) {
+    console.log(
+      `Could not read ${plan.tag}'s id; no image is removed this start`,
+    )
+    return plan.tag
+  }
   const settled = await settleImages(
     run,
     state,

@@ -264,14 +264,29 @@ export async function imageId(
   run: Runner,
   tag: string,
 ): Promise<string | null> {
+  const found = await lookUpImage(run, tag)
+  return 'id' in found ? found.id : null
+}
+
+/**
+ * The image's id; `missing` only when Docker says there is no such image, so a Docker that did
+ * not answer is never taken for an image that is gone.
+ */
+async function lookUpImage(
+  run: Runner,
+  ref: string,
+): Promise<{ id: string } | { missing: true } | { error: string }> {
   const result = await run('docker', [
     'image',
     'inspect',
     '--format',
     '{{.Id}}',
-    tag,
+    ref,
   ])
-  return result.code === 0 ? result.stdout.trim() : null
+  if (result.code === 0) return { id: result.stdout.trim() }
+  return /no such (image|object)/i.test(result.stderr)
+    ? { missing: true }
+    : { error: firstLine(result.stderr) }
 }
 
 /** The newest `neo-sdk:*` image on the machine (for `--no-build`). */
@@ -333,7 +348,15 @@ export async function retireImages(
   const removed: ImageRef[] = []
   const kept: KeptImage[] = []
   for (const image of images) {
-    if ((await imageId(run, image.id)) === null) continue
+    const found = await lookUpImage(run, image.id)
+    if ('missing' in found) continue
+    if ('error' in found) {
+      kept.push({
+        ...image,
+        reason: `docker image inspect failed (${found.error})`,
+      })
+      continue
+    }
     const holder = await imageHolder(run, image, otherStates)
     if (holder) {
       kept.push({ ...image, reason: holder })
@@ -349,12 +372,13 @@ export async function retireImages(
 /**
  * A start's image bookkeeping, once it knows the image it runs: retires what this instance's
  * builds replaced (its previous build when this start built a new one, and what earlier starts
- * had to keep) and returns the state to save. The image this start runs is never retired.
+ * had to keep) and returns the state to save. The image this start runs is never retired; when it
+ * is one an earlier start kept, it stays on the kept list, so a later start still removes it.
  */
 export async function settleImages(
   run: Runner,
   state: StartState,
-  start: { built: StartState['lastBuild']; running: string | null },
+  start: { built: StartState['lastBuild']; running: string },
   otherStates: StartState[],
 ): Promise<{ state: StartState; removed: ImageRef[]; kept: KeptImage[] }> {
   const replaced = new Map<string, ImageRef>()
@@ -365,7 +389,12 @@ export async function settleImages(
     })
   for (const image of state.kept ?? [])
     replaced.set(image.id, { tag: image.tag, id: image.id })
-  if (start.running) replaced.delete(start.running)
+  const running = replaced.get(start.running)
+  replaced.delete(start.running)
+  const carried =
+    running && state.kept?.some((image) => image.id === running.id)
+      ? [running]
+      : []
   const { removed, kept } = await retireImages(
     run,
     [...replaced.values()],
@@ -374,7 +403,7 @@ export async function settleImages(
   return {
     state: {
       lastBuild: start.built ?? state.lastBuild,
-      kept: kept.map(({ tag, id }) => ({ tag, id })),
+      kept: [...carried, ...kept.map(({ tag, id }) => ({ tag, id }))],
     },
     removed,
     kept,

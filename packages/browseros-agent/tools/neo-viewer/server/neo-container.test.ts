@@ -401,7 +401,7 @@ describe('cleanup touches only what the viewer created', () => {
     const unknown = await settleImages(
       docker.run,
       mine,
-      { built: null, running: null },
+      { built: null, running: 'sha256:cccccccccccccccc' },
       [other],
     )
     expect(unknown.kept[0]?.reason).toBe(
@@ -410,24 +410,66 @@ describe('cleanup touches only what the viewer created', () => {
     psFails = false
     expect(
       (
-        await settleImages(docker.run, mine, { built: null, running: null }, [
-          other,
-        ])
+        await settleImages(
+          docker.run,
+          mine,
+          { built: null, running: 'sha256:cccccccccccccccc' },
+          [other],
+        )
       ).removed,
     ).toEqual([x])
   })
 
+  test('a Docker that does not answer an inspect keeps the image on the list; one that says it is gone drops it', async () => {
+    const x = { tag: 'neo-sdk:x-arm64', id: 'sha256:aaaaaaaaaaaaaaaa' }
+    let inspect: CommandResult = {
+      code: 1,
+      stdout: '',
+      stderr: 'Cannot connect to the Docker daemon\n',
+    }
+    const docker = fakeDocker((args) =>
+      args[0] === 'image' && args[1] === 'inspect' ? inspect : ok(),
+    )
+    const state: StartState = { lastBuild: null, kept: [x] }
+    const unanswered = await settleImages(
+      docker.run,
+      state,
+      { built: null, running: 'sha256:cccccccccccccccc' },
+      [],
+    )
+    expect(unanswered.state.kept).toEqual([x])
+    expect(unanswered.kept[0]?.reason).toBe(
+      'docker image inspect failed (Cannot connect to the Docker daemon)',
+    )
+    inspect = {
+      code: 1,
+      stdout: '',
+      stderr:
+        'Error response from daemon: No such image: sha256:aaaaaaaaaaaaaaaa\n',
+    }
+    const gone = await settleImages(
+      docker.run,
+      state,
+      { built: null, running: 'sha256:cccccccccccccccc' },
+      [],
+    )
+    expect(gone.state.kept).toEqual([])
+    expect(docker.calls.some((call) => call[2] === 'rm')).toBe(false)
+  })
+
   test('the image a start runs is never retired, even when an earlier start kept it', async () => {
     const x = { tag: 'neo-sdk:x-arm64', id: 'sha256:aaaaaaaaaaaaaaaa' }
+    const y = { tag: 'neo-sdk:y-arm64', id: 'sha256:bbbbbbbbbbbbbbbb' }
     const docker = fakeDocker(() => ok(`${x.id}\n`))
     const settled = await settleImages(
       docker.run,
-      { lastBuild: { ...x, fingerprint: null }, kept: [x] },
+      { lastBuild: { ...y, fingerprint: null }, kept: [x] },
       { built: null, running: x.id },
       [],
     )
+    // Not removed, and still recorded: once this instance moves off it, a later start removes it.
     expect(settled).toEqual({
-      state: { lastBuild: { ...x, fingerprint: null }, kept: [] },
+      state: { lastBuild: { ...y, fingerprint: null }, kept: [x] },
       removed: [],
       kept: [],
     })
