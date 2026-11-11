@@ -1,8 +1,7 @@
 //! Aria snapshots through `Playwright::invoke` against a real browser: the required
 //! nested-frame tests F1, F2, F4, F5, F6 and F7 of design D22 on the 4-level fixture, a
-//! locator-level snapshot inside a frame, typed secrets echoed in page text coming back
-//! masked, and a child frame that answers too late: partial when it is of another site,
-//! withholding the snapshot when it is of the page's own.
+//! locator-level snapshot inside a frame, typed values echoed unchanged in page text, and
+//! partial results for children that answer too late, on either the same or another site.
 //!
 //! The live tests need BrowserOS with CDP on `BROWSEROS_CDP_PORT` (default 9005):
 //! `cargo test -p neo-playwright --test snapshot_live -- --ignored`. They serve the
@@ -531,8 +530,22 @@ async fn tests_that_f6_an_unresponsive_frame_is_partial_and_the_rest_returns_wit
         .open(&server.url("127.0.0.1", "/nest/top.html?hang"))
         .await?;
     loaded(&live, &page).await?;
-    // hang.html spins forever from 1.5 s after its load event.
-    time::sleep(Duration::from_secs(2)).await;
+    // Background timers can fire late. The child posts just before its infinite loop, and
+    // the parent verifies the sender, so the measured snapshot starts with a real hung frame.
+    time::timeout(Duration::from_secs(10), async {
+        loop {
+            if live
+                .main_world(&page, "globalThis.__hangStarted === true")
+                .await?
+                == json!(true)
+            {
+                return TestResult::Ok(());
+            }
+            time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .map_err(|_| "the hang fixture did not signal readiness within 10 s")??;
 
     let started = Instant::now();
     let snapshot = live
