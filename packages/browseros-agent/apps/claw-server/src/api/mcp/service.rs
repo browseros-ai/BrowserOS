@@ -9,7 +9,7 @@ use crate::{
         hosted,
         naming::{SESSION_NAME_INPUT_MAX_LEN, normalize_small_name, session_group_title},
         observers::audit::{LocalToolDispatch, record_local_tool_dispatch},
-        prompt::mcp_instructions,
+        prompt::{mcp_instructions, with_pursue_guidance},
         session_handle, tab_grouping,
     },
     config::{ServerMode, TabGrouping},
@@ -1064,13 +1064,20 @@ impl ServerHandler for ClawMcpService {
         implementation.title = Some(SERVER_TITLE.to_string());
         InitializeResult::new(capabilities)
             .with_server_info(implementation)
-            .with_instructions(mcp_instructions(
-                self.mode(),
-                self.human_help(),
-                self.ultrafast(),
-                self.native(),
-                self.tab_grouping(),
-            ))
+            .with_instructions({
+                let instructions = mcp_instructions(
+                    self.mode(),
+                    self.human_help(),
+                    self.ultrafast(),
+                    self.native(),
+                    self.tab_grouping(),
+                );
+                if self.pursue_offered() {
+                    with_pursue_guidance(instructions)
+                } else {
+                    instructions
+                }
+            })
     }
 
     fn supported_protocol_versions(&self) -> Cow<'static, [ProtocolVersion]> {

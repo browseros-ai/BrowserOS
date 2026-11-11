@@ -138,6 +138,11 @@ async fn post(
 }
 
 async fn connect(app: &TestApp) -> anyhow::Result<String> {
+    Ok(connect_reading_instructions(app).await?.0)
+}
+
+/// Connects as an agent does, returning the session and the instructions the server sent.
+async fn connect_reading_instructions(app: &TestApp) -> anyhow::Result<(String, String)> {
     let initialize = json!({
         "jsonrpc": "2.0",
         "id": 1,
@@ -150,6 +155,10 @@ async fn connect(app: &TestApp) -> anyhow::Result<String> {
     });
     let (status, headers, body) = post(&app.router, initialize, None).await?;
     assert_eq!(status, StatusCode::OK, "{body:?}");
+    let instructions = body["result"]["instructions"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string();
     let session = headers
         .get("mcp-session-id")
         .and_then(|value| value.to_str().ok())
@@ -169,7 +178,7 @@ async fn connect(app: &TestApp) -> anyhow::Result<String> {
             .contains(&SessionId::new(session.clone()))
             .await
         {
-            return Ok(session);
+            return Ok((session, instructions));
         }
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
@@ -337,5 +346,21 @@ async fn once_pursue_has_handed_a_task_back_it_does_not_take_it_again() -> anyho
         "another task still gets its own pursue"
     );
     assert!(app.worker.requests().is_empty());
+    Ok(())
+}
+
+#[tokio::test]
+async fn agents_are_taught_pursue_only_when_it_is_offered() -> anyhow::Result<()> {
+    let offered = test_app(ULTRAFAST_DESKTOP).await?;
+    let (_, instructions) = connect_reading_instructions(&offered).await?;
+    assert!(instructions.contains("try pursue first"), "{instructions}");
+
+    let lapsed = test_app(Setup {
+        ultrafast: false,
+        ..ULTRAFAST_DESKTOP
+    })
+    .await?;
+    let (_, instructions) = connect_reading_instructions(&lapsed).await?;
+    assert!(!instructions.contains("pursue"));
     Ok(())
 }
