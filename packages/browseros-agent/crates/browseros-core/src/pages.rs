@@ -1233,12 +1233,15 @@ mod tests {
                     on_page_removed: Some(Arc::new(move |info| {
                         before
                             .lock()
-                            .unwrap()
+                            .unwrap_or_else(|error| panic!("hook mutex poisoned: {error}"))
                             .push(("removed", info.target_id.clone()));
                         Box::new(|| {})
                     })),
                     on_page_detached: Some(Arc::new(move |_, _, target| {
-                        after.lock().unwrap().push(("detached", target));
+                        after
+                            .lock()
+                            .unwrap_or_else(|error| panic!("hook mutex poisoned: {error}"))
+                            .push(("detached", target));
                     })),
                     ..PageManagerHooks::default()
                 },
@@ -1264,7 +1267,9 @@ mod tests {
             changed?;
             let target = TargetId(if present { "T2" } else { "T1" }.into());
             assert_eq!(
-                *removed.lock().unwrap(),
+                *removed
+                    .lock()
+                    .unwrap_or_else(|error| panic!("hook mutex poisoned: {error}")),
                 [("removed", target.clone()), ("detached", target.clone())]
             );
             assert!(manager.get_info_by_tab(crate::TabId(7)).await.is_none());
