@@ -709,13 +709,15 @@ export class Frame extends EventEmitter {
     target: string,
     options: DragOptions & TimeoutOption & StrictOption = {},
   ): Promise<void> {
+    // Read before the first await, as every action reads its signal (signal.ts).
+    const wait = this._wait(api, options)
     const to = await this._locatorBrand(api, target)
     await this._selectorOp(
       'locator.dragTo',
       api,
       source,
       options.strict,
-      this._wait(api, options),
+      wait,
       {
         to,
         options: pick(options, DRAG_KEYS),

@@ -361,6 +361,21 @@ impl<'env> OpScope<'env> {
         self.fail(code, &format!("Timeout {millis}ms exceeded."))
     }
 
+    /// The op's answer, unless the script aborted it while it ran. Upstream's progress race
+    /// rejects an aborted call even when its work would have finished, and a leaf's last steps
+    /// do not all wait through this scope (a snapshot's frame stitching, a script's final
+    /// sweep), so an op that answered after the abort reports the abort instead. A failure
+    /// stands: it is what the op met first.
+    pub(crate) fn settle(
+        &self,
+        answered: Result<Value, PlaywrightError>,
+    ) -> Result<Value, PlaywrightError> {
+        match answered {
+            Ok(value) => self.aborted_error().map_or(Ok(value), Err),
+            Err(error) => Err(error),
+        }
+    }
+
     /// Upstream's abort of an op (`Progress.abort` and the client's `AbortError`): the call log
     /// gains `operation was aborted: <reason>`, and the error reads `<api>: <reason>` with it.
     /// `None` while the script has not aborted the op. A leaf with a timeout message of its own
@@ -1089,6 +1104,33 @@ mod tests {
         assert_eq!(scope.sleep(Duration::from_secs(1)).await, Err(Expired));
         assert_eq!(scope.within(async {}).await, Err(Expired));
         assert_eq!(Instant::now(), started, "neither waited");
+        Ok(())
+    }
+
+    /// An op whose last step finished after the abort reports the abort, not its value.
+    #[tokio::test]
+    async fn tests_that_an_answer_after_the_abort_settles_as_the_abort()
+    -> Result<(), Box<dyn Error>> {
+        let host = AbortingHost::new();
+        let scope = OpScope::new(&host, op("locator.ariaSnapshot")?, header(None, None));
+        assert_eq!(scope.settle(Ok(json!("before")))?, json!("before"));
+        host.abort("stop");
+        let error = scope
+            .settle(Ok(json!("after")))
+            .err()
+            .ok_or("an answer after the abort must fail")?;
+        assert_eq!(error.error_code(), Some(ErrorCode::Aborted));
+        assert!(error.message().starts_with("locator.ariaSnapshot: stop"));
+        let failed = scope.fail(ErrorCode::NoMatch, "gone");
+        let settled = scope
+            .settle(Err(failed))
+            .err()
+            .ok_or("a failure stays a failure")?;
+        assert_eq!(
+            settled.error_code(),
+            Some(ErrorCode::NoMatch),
+            "a failure stands"
+        );
         Ok(())
     }
 

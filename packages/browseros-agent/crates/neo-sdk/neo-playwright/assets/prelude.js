@@ -6668,8 +6668,9 @@ ${value.stack}`;
       });
     }
     async _dragAndDrop(api, source, target, options = {}) {
+      const wait = this._wait(api, options);
       const to = await this._locatorBrand(api, target);
-      await this._selectorOp("locator.dragTo", api, source, options.strict, this._wait(api, options), {
+      await this._selectorOp("locator.dragTo", api, source, options.strict, wait, {
         to,
         options: pick(options, DRAG_KEYS)
       });

@@ -146,6 +146,23 @@ describe('signal', () => {
     ])
   })
 
+  it('tests that dragTo reads its signal at the call, before it brands the target', async () => {
+    const runtime = loadPrelude({
+      seed: SEED,
+      answer: abortedWhenAsked('locator.dragTo'),
+    })
+    const outcome = json(
+      await runtime.run(`${SIGNAL}
+        const pending = page.locator('#a').dragTo(page.locator('#b'), { signal })
+        abort('stop')
+        const error = await pending.catch((e) => e)
+        return [error.name, error.message.split('\\n')[0]]
+      `),
+    )
+    expect(outcome).toEqual(['AbortError', 'locator.dragTo: stop'])
+    expect(runtime.sent('locator.dragTo')).toHaveLength(1)
+  })
+
   it('tests that waitForLoadState and waitForURL abort as upstream Waiter does, stopping the op in flight', async () => {
     const runtime = loadPrelude({
       seed: SEED,
