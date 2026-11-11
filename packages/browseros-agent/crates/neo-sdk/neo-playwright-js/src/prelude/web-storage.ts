@@ -5,6 +5,7 @@
  * `webStorage.write` for the rest, so the trace says which calls changed the page.
  */
 import { invoke } from './bridge'
+import { captureSite } from './call-site'
 import { clientError } from './errors'
 import type { Page } from './page'
 
@@ -20,9 +21,11 @@ export class WebStorage {
   }
 
   async items(): Promise<{ name: string; value: string }[]> {
+    const site = captureSite()
     const api = 'webStorage.items'
     const items = await invoke(
       'webStorage.read',
+      site,
       { api, timeoutMs: 0 },
       { page: await this.#page._brand(api), kind: this.#kind, action: 'items' },
     )
@@ -30,9 +33,11 @@ export class WebStorage {
   }
 
   async getItem(name: string): Promise<string | null> {
+    const site = captureSite()
     const api = 'webStorage.getItem'
     const value = await invoke(
       'webStorage.read',
+      site,
       { api, timeoutMs: 0 },
       {
         page: await this.#page._brand(api),
@@ -45,9 +50,11 @@ export class WebStorage {
   }
 
   async setItem(name: string, value: string): Promise<void> {
+    const site = captureSite()
     const api = 'webStorage.setItem'
     await invoke(
       'webStorage.write',
+      site,
       { api, timeoutMs: 0 },
       {
         page: await this.#page._brand(api),
@@ -60,9 +67,11 @@ export class WebStorage {
   }
 
   async removeItem(name: string): Promise<void> {
+    const site = captureSite()
     const api = 'webStorage.removeItem'
     await invoke(
       'webStorage.write',
+      site,
       { api, timeoutMs: 0 },
       {
         page: await this.#page._brand(api),
@@ -74,9 +83,11 @@ export class WebStorage {
   }
 
   async clear(): Promise<void> {
+    const site = captureSite()
     const api = 'webStorage.clear'
     await invoke(
       'webStorage.write',
+      site,
       { api, timeoutMs: 0 },
       { page: await this.#page._brand(api), kind: this.#kind, action: 'clear' },
     )

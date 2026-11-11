@@ -11,6 +11,7 @@
  * Jest's semantics (expect-values.ts). `expect.poll` and `toPass` retry here.
  */
 import { sleep } from './bridge'
+import { type CallSite, captureSite } from './call-site'
 import { assertionError, plainError, unsupportedError } from './errors'
 import {
   Any,
@@ -43,6 +44,7 @@ export type Matchers = Record<string, unknown>
 /** A retrying matcher's call: the Page predicate form of toHaveURL, or one op. */
 function retrying(
   name: string,
+  site: CallSite,
   actual: unknown,
   state: State,
   args: never[],
@@ -55,13 +57,14 @@ function retrying(
       )
     return urlPredicate(
       actual,
+      site,
       args[0] as (url: unknown) => unknown,
       state,
       args[1] as TimeoutOption | undefined,
     )
   }
   const build = RETRYING[name] as (...args: never[]) => Retrying
-  return retry(name, actual, state, Reflect.apply(build, undefined, args))
+  return retry(name, site, actual, state, Reflect.apply(build, undefined, args))
 }
 
 function matchers(actual: unknown, state: State): Matchers {
@@ -77,15 +80,17 @@ function matchers(actual: unknown, state: State): Matchers {
       return state.promise ? settle(actual, state, run, name) : run(actual)
     }
   for (const name of Object.keys(RETRYING))
-    built[name] = (...args: never[]) =>
-      state.promise
+    built[name] = (...args: never[]) => {
+      const site = captureSite()
+      return state.promise
         ? settle(
             actual,
             state,
-            (value) => retrying(name, value, state, args),
+            (value) => retrying(name, site, value, state, args),
             name,
           )
-        : retrying(name, actual, state, args)
+        : retrying(name, site, actual, state, args)
+    }
   built.toPass = (options?: { timeout?: number; intervals?: number[] }) =>
     toPass(actual, state, options)
   installUnsupportedExpect(built, 'matchers')

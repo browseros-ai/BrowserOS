@@ -11,12 +11,16 @@ import type { SignalLike } from './signal'
 export type RefusalCode = 'method_unavailable' | 'invalid_input'
 
 export type Bootstrap = {
+  /** Synchronous source capture, before a public prelude method awaits. */
+  callSite?(): string
   /** Pure error construction, shared with the TimeoutError parameter given to scripts. */
   timeoutError?(message: string): Error
   invoke(
     name: string,
     input?: unknown,
     options?: {
+      /** An explicitly carried source location; empty for prelude-owned work. */
+      site: string
       observed?: boolean
       onResult?: (value: unknown, observed: unknown) => void
       /** Makes the op abortable: the bootstrap aborts it when the signal fires. */

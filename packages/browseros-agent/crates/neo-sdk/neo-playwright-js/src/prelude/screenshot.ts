@@ -3,6 +3,7 @@
  * bytes. Saving is a separate targetless write so capture remains readable during takeover.
  */
 import { invoke } from './bridge'
+import type { CallSite } from './call-site'
 import { decode } from './encodings'
 import { plainError } from './errors'
 import type { SignalLike } from './signal'
@@ -28,11 +29,13 @@ export function screenshotType({
 /** Await the product's filesystem write before returning the original screenshot Buffer. */
 export async function saveScreenshot({
   api,
+  site,
   bytes,
   path,
   signal,
 }: {
   api: string
+  site: CallSite
   bytes: Uint8Array
   path: string | undefined
   signal: SignalLike | undefined
@@ -42,6 +45,7 @@ export async function saveScreenshot({
   // run budget and cancellation, without starting another screenshot timeout for disk I/O.
   await invoke(
     'page.saveScreenshot',
+    site,
     { api, timeoutMs: 0 },
     { path, base64: decode(bytes, 'base64') },
     signal,

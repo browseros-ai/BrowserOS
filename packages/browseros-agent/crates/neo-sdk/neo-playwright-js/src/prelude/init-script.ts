@@ -12,6 +12,7 @@ import {
 } from '../../../neo-playwright/third_party/playwright/packages/isomorphic/utilityScriptSerializers'
 import type { BindingCallback } from './bindings'
 import { invoke } from './bridge'
+import { type CallSite, captureSite } from './call-site'
 import { plainError } from './errors'
 import type { InitSource } from './wire'
 
@@ -107,13 +108,13 @@ async function withExposedFunctions(
     return await undo(error)
   }
   let disposed = false
-  return new Disposable(async () => {
+  return new Disposable(async (site) => {
     if (disposed) return
     disposed = true
     await Promise.all(
-      bindings.map((binding) => binding.dispose().catch(() => {})),
+      bindings.map((binding) => binding._dispose(site).catch(() => {})),
     )
-    await init.dispose()
+    await init._dispose(site)
   })
 }
 
@@ -167,14 +168,20 @@ export function initSource(
  * any case.
  */
 export class Disposable {
-  readonly #dispose: () => Promise<void>
+  readonly #dispose: (site: CallSite) => Promise<void>
 
-  constructor(dispose: () => Promise<void>) {
+  constructor(dispose: (site: CallSite) => Promise<void>) {
     this.#dispose = dispose
   }
 
   async dispose(): Promise<void> {
-    await this.#dispose()
+    const site = captureSite()
+    await this.#dispose(site)
+  }
+
+  /** Composite cleanup keeps its public caller's site after awaiting earlier disposals. */
+  async _dispose(site: CallSite): Promise<void> {
+    await this.#dispose(site)
   }
 }
 
@@ -184,10 +191,11 @@ export class Disposable {
  * binding's callback leaving the realm) runs either way.
  */
 export function registration(id: number, forget?: () => void): Disposable {
-  return new Disposable(async () => {
+  return new Disposable(async (site) => {
     try {
       await invoke(
         'disposable.dispose',
+        site,
         { api: 'disposable.dispose', timeoutMs: 0 },
         { id },
       )

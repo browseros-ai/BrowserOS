@@ -4,6 +4,7 @@
  * per call, with no Playwright timeout.
  */
 import { invoke } from './bridge'
+import { captureSite } from './call-site'
 import { markHandle, pick } from './options'
 import type { Page } from './page'
 import type { MouseButton } from './wire'
@@ -19,27 +20,33 @@ export class Keyboard {
   }
 
   async down(key: string): Promise<void> {
+    const site = captureSite()
     const api = 'keyboard.down'
     await invoke(
       'keyboard.down',
+      site,
       { api, timeoutMs: 0 },
       { page: await this.#page._brand(api), key },
     )
   }
 
   async up(key: string): Promise<void> {
+    const site = captureSite()
     const api = 'keyboard.up'
     await invoke(
       'keyboard.up',
+      site,
       { api, timeoutMs: 0 },
       { page: await this.#page._brand(api), key },
     )
   }
 
   async press(key: string, options: { delay?: number } = {}): Promise<void> {
+    const site = captureSite()
     const api = 'keyboard.press'
     await invoke(
       'keyboard.press',
+      site,
       { api, timeoutMs: 0 },
       {
         page: await this.#page._brand(api),
@@ -50,9 +57,11 @@ export class Keyboard {
   }
 
   async type(text: string, options: { delay?: number } = {}): Promise<void> {
+    const site = captureSite()
     const api = 'keyboard.type'
     await invoke(
       'keyboard.type',
+      site,
       { api, timeoutMs: 0 },
       {
         page: await this.#page._brand(api),
@@ -63,9 +72,11 @@ export class Keyboard {
   }
 
   async insertText(text: string): Promise<void> {
+    const site = captureSite()
     const api = 'keyboard.insertText'
     await invoke(
       'keyboard.insertText',
+      site,
       { api, timeoutMs: 0 },
       { page: await this.#page._brand(api), text },
     )
@@ -85,9 +96,11 @@ export class Mouse {
     y: number,
     options: { steps?: number } = {},
   ): Promise<void> {
+    const site = captureSite()
     const api = 'mouse.move'
     await invoke(
       'mouse.move',
+      site,
       { api, timeoutMs: 0 },
       {
         page: await this.#page._brand(api),
@@ -99,9 +112,11 @@ export class Mouse {
   }
 
   async down(options: ButtonOptions = {}): Promise<void> {
+    const site = captureSite()
     const api = 'mouse.down'
     await invoke(
       'mouse.down',
+      site,
       { api, timeoutMs: 0 },
       {
         page: await this.#page._brand(api),
@@ -111,9 +126,11 @@ export class Mouse {
   }
 
   async up(options: ButtonOptions = {}): Promise<void> {
+    const site = captureSite()
     const api = 'mouse.up'
     await invoke(
       'mouse.up',
+      site,
       { api, timeoutMs: 0 },
       {
         page: await this.#page._brand(api),
@@ -140,9 +157,11 @@ export class Mouse {
   }
 
   async wheel(deltaX: number, deltaY: number): Promise<void> {
+    const site = captureSite()
     const api = 'mouse.wheel'
     await invoke(
       'mouse.wheel',
+      site,
       { api, timeoutMs: 0 },
       { page: await this.#page._brand(api), deltaX, deltaY },
     )
@@ -154,8 +173,10 @@ export class Mouse {
     y: number,
     options: ButtonOptions & { delay?: number },
   ): Promise<void> {
+    const site = captureSite()
     await invoke(
       'mouse.click',
+      site,
       { api, timeoutMs: 0 },
       {
         page: await this.#page._brand(api),

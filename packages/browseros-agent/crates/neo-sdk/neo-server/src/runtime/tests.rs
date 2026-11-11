@@ -543,7 +543,7 @@ fn script_call_sites_survive_on_the_operation_record() -> Result<(), TestError> 
         assert_eq!(returned(run_code(&rig, &run, code).await)?, json!(1));
         rig.sink.flush().await?;
         let detail = rig.store.run(run.id()).await?.ok_or("recorded run")?;
-        for (name, line) in [("test.title", 2), ("test.echo", 4)] {
+        for (name, line) in [("test.title", 2), ("test.echo", 4), ("page.title", 5)] {
             let op = detail
                 .operations
                 .iter()
@@ -553,14 +553,6 @@ fn script_call_sites_survive_on_the_operation_record() -> Result<(), TestError> 
             assert_eq!(site.line, line, "{name}");
             assert!(site.column > 0, "{name} has a 1-based column");
         }
-        // The current prelude captures after its own await. Persist that absence honestly;
-        // capturing at public method entry is the separate follow-up to this storage change.
-        let playwright = detail
-            .operations
-            .iter()
-            .find(|op| op.name == "page.title")
-            .ok_or("Playwright operation")?;
-        assert_eq!(playwright.site, None);
         let internal = detail
             .operations
             .iter()
@@ -1900,6 +1892,63 @@ fn background_operations_do_not_borrow_a_script_call_site() -> Result<(), TestEr
             .find(|op| op.name == "test.pull")
             .ok_or("background poll")?;
         assert_eq!(poll.site, None);
+        Ok(())
+    })
+}
+
+/// Use real public prelude methods: the fake registry refuses their browser work, but those
+/// operations still cross the actual QuickJS bridge and keep the caller's exact script line.
+#[test]
+fn awaited_playwright_calls_keep_separate_sites_in_helpers_and_concurrent_calls()
+-> Result<(), TestError> {
+    on_neo_runtime(async {
+        let rig = TestRig::new().await?;
+        let (run, _guard) = rig.run(BUDGET, None)?;
+        let code = "await page.title().catch(() => {});\nawait page.content().catch(() => {});\nasync function helper() {\n  await page.title().catch(() => {});\n}\nawait helper();\nawait Promise.all([\n  page.title().catch(() => {}),\n  page.title().catch(() => {})\n]);\nreturn 1;";
+        assert_eq!(returned(run_code(&rig, &run, code).await)?, json!(1));
+        rig.sink.flush().await?;
+        let detail = rig.store.run(run.id()).await?.ok_or("recorded run")?;
+        let mut lines: Vec<_> = detail
+            .operations
+            .iter()
+            .filter_map(|op| op.site.map(|site| site.line))
+            .collect();
+        lines.sort_unstable();
+        assert_eq!(
+            lines,
+            [1, 2, 4, 8, 9],
+            "each invocation owns its site through native awaits"
+        );
+        assert!(
+            detail
+                .operations
+                .iter()
+                .filter_map(|op| op.site)
+                .all(|site| site.column > 0)
+        );
+        Ok(())
+    })
+}
+
+#[test]
+fn listener_registration_does_not_give_internal_event_work_a_site() -> Result<(), TestError> {
+    on_neo_runtime(async {
+        let rig = TestRig::new().await?;
+        let (run, _guard) = rig.run(BUDGET, None)?;
+        let code = "page.on('dialog', () => {});\nawait __neo.invoke('test.echo', {});\nreturn 1;";
+        assert_eq!(returned(run_code(&rig, &run, code).await)?, json!(1));
+        rig.sink.flush().await?;
+        let detail = rig.store.run(run.id()).await?.ok_or("recorded run")?;
+        let events: Vec<_> = detail
+            .operations
+            .iter()
+            .filter(|op| op.name.starts_with("events."))
+            .collect();
+        assert!(
+            !events.is_empty(),
+            "registration starts the prelude's event work"
+        );
+        assert!(events.iter().all(|op| op.site.is_none()));
         Ok(())
     })
 }

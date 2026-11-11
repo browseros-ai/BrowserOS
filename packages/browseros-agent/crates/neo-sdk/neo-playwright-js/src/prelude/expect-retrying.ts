@@ -6,6 +6,7 @@
 import type { ExpectParams } from '../probe/protocol'
 import { parseTemplate, unshift } from './aria-template'
 import { invoke } from './bridge'
+import type { CallSite } from './call-site'
 import { plainError, prefixed } from './errors'
 import { receiverText, stringify } from './expect-equality'
 import { fail, header, type State } from './expect-values'
@@ -502,6 +503,7 @@ export const RETRYING: Record<string, (...args: never[]) => Retrying> = {
 
 export async function retry(
   name: string,
+  site: CallSite,
   actual: unknown,
   state: State,
   matcher: Retrying,
@@ -533,12 +535,12 @@ export async function retry(
   }
   try {
     if (actual instanceof Page)
-      await invoke('expect.page', call, {
+      await invoke('expect.page', site, call, {
         page: await actual._brand(api),
         ...shape,
       })
     else if (actual instanceof Locator)
-      await invoke('expect.locator', call, {
+      await invoke('expect.locator', site, call, {
         target: await actual._frame._locatorBrand(api, actual._selector),
         ...shape,
       })
@@ -598,6 +600,7 @@ function completeMatcherResult(
 /** `toHaveURL(predicate)`: the predicate on each URL the page commits, until it passes. */
 export async function urlPredicate(
   page: Page,
+  site: CallSite,
   predicate: (url: unknown) => unknown,
   state: State,
   options: TimeoutOption | undefined,
@@ -621,6 +624,7 @@ export async function urlPredicate(
     try {
       await page._waitForURL(
         'expect.toHaveURL',
+        site,
         page._mainFrame,
         (url) => {
           const href =

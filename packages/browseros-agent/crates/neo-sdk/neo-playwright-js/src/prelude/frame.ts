@@ -9,6 +9,7 @@
  * page's frame tree; the main frame sends none.
  */
 import { invoke, invokeObserved, sleep } from './bridge'
+import { type CallSite, captureSite } from './call-site'
 import type { ElementHandle } from './element-handle'
 import { EventEmitter } from './emitter'
 import {
@@ -512,11 +513,13 @@ export class Frame extends EventEmitter {
     pageFunction: unknown,
     arg?: unknown,
   ): Promise<unknown> {
+    const site = captureSite()
     // biome-ignore lint/complexity/noArguments: upstream counts the arguments passed, not the parameters.
     assertMaxArguments('frame.$eval', arguments.length, 3)
     const api = 'frame.$eval'
     return await this._evaluateOn(
       api,
+      site,
       selector,
       false,
       pageCall(api, 'query', pageFunction, arg),
@@ -558,7 +561,13 @@ export class Frame extends EventEmitter {
   }
 
   waitForLoadState(state?: LoadState, options?: TimeoutOption): Promise<void> {
-    return this._waitForLoadState('frame.waitForLoadState', state, options)
+    const site = captureSite()
+    return this._waitForLoadState(
+      'frame.waitForLoadState',
+      site,
+      state,
+      options,
+    )
   }
 
   waitForNavigation(
@@ -575,13 +584,16 @@ export class Frame extends EventEmitter {
     url: UrlMatcher,
     options?: TimeoutOption & { waitUntil?: LoadState },
   ): Promise<void> {
-    return this._page._waitForURL('frame.waitForURL', this, url, options)
+    const site = captureSite()
+    return this._page._waitForURL('frame.waitForURL', site, this, url, options)
   }
 
   async title(): Promise<string> {
+    const site = captureSite()
     const api = 'frame.title'
     return await invoke(
       'page.title',
+      site,
       this._call(api, 0),
       await this._frameArgs(api),
     )
@@ -675,6 +687,7 @@ export class Frame extends EventEmitter {
   /** One op on the element `selector` names in this frame. */
   async _selectorOp<Op extends SelectorOp>(
     op: Op,
+    site: CallSite,
     api: string,
     selector: string,
     strict: boolean | undefined,
@@ -687,7 +700,13 @@ export class Frame extends EventEmitter {
       strict: strict === true ? 'strict' : 'firstMatch',
       ...args,
     } as OpInputs[Op]
-    return await invoke(op, this._call(api, wait.timeout), input, wait.signal)
+    return await invoke(
+      op,
+      site,
+      this._call(api, wait.timeout),
+      input,
+      wait.signal,
+    )
   }
 
   async _click(
@@ -695,10 +714,12 @@ export class Frame extends EventEmitter {
     selector: string,
     options: ClickOptions = {},
   ): Promise<void> {
+    const site = captureSite()
     const wait = this._wait(api, options)
     const deadline = new EventDeadline(api, null, Date.now(), wait.timeout)
     const result = await this._selectorOp(
       'locator.click',
+      site,
       api,
       selector,
       options.strict,
@@ -736,8 +757,10 @@ export class Frame extends EventEmitter {
     selector: string,
     options: ClickOptions = {},
   ): Promise<void> {
+    const site = captureSite()
     await this._selectorOp(
       'locator.dblclick',
+      site,
       api,
       selector,
       options.strict,
@@ -753,8 +776,10 @@ export class Frame extends EventEmitter {
     selector: string,
     options: ClickOptions = {},
   ): Promise<void> {
+    const site = captureSite()
     await this._selectorOp(
       'locator.hover',
+      site,
       api,
       selector,
       options.strict,
@@ -772,9 +797,11 @@ export class Frame extends EventEmitter {
     checked: boolean,
     options: ClickOptions = {},
   ): Promise<void> {
+    const site = captureSite()
     const op = checked ? 'locator.check' : 'locator.uncheck'
     await this._selectorOp(
       op,
+      site,
       api,
       selector,
       options.strict,
@@ -791,11 +818,13 @@ export class Frame extends EventEmitter {
     target: string,
     options: DragOptions & TimeoutOption & StrictOption = {},
   ): Promise<void> {
+    const site = captureSite()
     // Read before the first await, as every action reads its signal (signal.ts).
     const wait = this._wait(api, options)
     const to = await this._locatorBrand(api, target)
     await this._selectorOp(
       'locator.dragTo',
+      site,
       api,
       source,
       options.strict,
@@ -813,10 +842,12 @@ export class Frame extends EventEmitter {
     value: string,
     options: FillOptions & TimeoutOption & StrictOption = {},
   ): Promise<void> {
+    const site = captureSite()
     if (typeof value !== 'string')
       throw clientError(api, `value: expected string, got ${typeof value}`)
     await this._selectorOp(
       'locator.fill',
+      site,
       api,
       selector,
       options.strict,
@@ -834,8 +865,10 @@ export class Frame extends EventEmitter {
     key: string,
     options: KeyOptions & TimeoutOption & StrictOption = {},
   ): Promise<void> {
+    const site = captureSite()
     await this._selectorOp(
       'locator.press',
+      site,
       api,
       selector,
       options.strict,
@@ -854,8 +887,10 @@ export class Frame extends EventEmitter {
     text: string,
     options: KeyOptions & TimeoutOption & StrictOption = {},
   ): Promise<void> {
+    const site = captureSite()
     await this._selectorOp(
       'locator.pressSequentially',
+      site,
       api,
       selector,
       options.strict,
@@ -869,8 +904,10 @@ export class Frame extends EventEmitter {
     selector: string,
     options: TimeoutOption & StrictOption = {},
   ): Promise<void> {
+    const site = captureSite()
     await this._selectorOp(
       'locator.focus',
+      site,
       api,
       selector,
       options.strict,
@@ -884,8 +921,10 @@ export class Frame extends EventEmitter {
     selector: string,
     options: TimeoutOption & StrictOption = {},
   ): Promise<void> {
+    const site = captureSite()
     await this._selectorOp(
       'locator.blur',
+      site,
       api,
       selector,
       options.strict,
@@ -900,8 +939,10 @@ export class Frame extends EventEmitter {
     values: unknown,
     options: TimeoutOption & StrictOption & { force?: boolean } = {},
   ): Promise<string[]> {
+    const site = captureSite()
     return await this._selectorOp(
       'locator.selectOption',
+      site,
       api,
       selector,
       options.strict,
@@ -915,8 +956,10 @@ export class Frame extends EventEmitter {
     selector: string,
     options: TimeoutOption & StrictOption & { force?: boolean } = {},
   ): Promise<void> {
+    const site = captureSite()
     await this._selectorOp(
       'locator.selectText',
+      site,
       api,
       selector,
       options.strict,
@@ -931,12 +974,14 @@ export class Frame extends EventEmitter {
     options: TimeoutOption &
       SignalOption & { position?: { x: number; y: number } },
   ): Promise<void> {
+    const site = captureSite()
     const api = 'locator.drop'
     const files =
       payload.files === undefined ? undefined : dropFiles(api, payload.files)
     await withClientErrors(api, () =>
       this._selectorOp(
         'locator.drop',
+        site,
         api,
         selector,
         true,
@@ -959,11 +1004,13 @@ export class Frame extends EventEmitter {
     files: unknown,
     options: TimeoutOption & StrictOption = {},
   ): Promise<void> {
+    const site = captureSite()
     // Upstream's client converts the files before it sends the selector anywhere.
     const input = inputFiles(api, files)
     await withClientErrors(api, () =>
       this._selectorOp(
         'locator.setInputFiles',
+        site,
         api,
         selector,
         options.strict,
@@ -980,8 +1027,10 @@ export class Frame extends EventEmitter {
     eventInit: unknown,
     options: TimeoutOption & StrictOption = {},
   ): Promise<void> {
+    const site = captureSite()
     await this._selectorOp(
       'locator.dispatchEvent',
+      site,
       api,
       selector,
       options.strict,
@@ -995,8 +1044,10 @@ export class Frame extends EventEmitter {
     selector: string,
     options: TimeoutOption & StrictOption = {},
   ): Promise<void> {
+    const site = captureSite()
     await this._selectorOp(
       'locator.scrollIntoViewIfNeeded',
+      site,
       api,
       selector,
       options.strict,
@@ -1022,9 +1073,11 @@ export class Frame extends EventEmitter {
     selector: string,
     options: TimeoutOption & StrictOption = {},
   ): Promise<OpOutputs[Op]> {
+    const site = captureSite()
     const args = {} as Omit<OpInputs[Op], 'target' | 'strict'>
     return await this._selectorOp(
       op,
+      site,
       api,
       selector,
       options.strict,
@@ -1039,8 +1092,10 @@ export class Frame extends EventEmitter {
     name: string,
     options: TimeoutOption & StrictOption = {},
   ): Promise<string | null> {
+    const site = captureSite()
     return await this._selectorOp(
       'locator.getAttribute',
+      site,
       api,
       selector,
       options.strict,
@@ -1056,8 +1111,10 @@ export class Frame extends EventEmitter {
     selector: string,
     options: StrictOption = {},
   ): Promise<boolean> {
+    const site = captureSite()
     return await this._selectorOp(
       op,
+      site,
       api,
       selector,
       options.strict,
@@ -1072,9 +1129,10 @@ export class Frame extends EventEmitter {
       | 'locator.allTextContents'
       | 'locator.allInnerTexts',
   >(op: Op, api: string, selector: string): Promise<OpOutputs[Op]> {
+    const site = captureSite()
     const target = await this._locatorBrand(api, selector)
     const input = { target } as OpInputs[Op]
-    return await invoke(op, this._call(api, 0), input)
+    return await invoke(op, site, this._call(api, 0), input)
   }
 
   /**
@@ -1082,10 +1140,12 @@ export class Frame extends EventEmitter {
    * `selector` matches now, from the main frame down through every `<iframe>` on the way.
    */
   async _normalize(api: string, selector: string): Promise<string> {
+    const site = captureSite()
     const target = await this._locatorBrand(api, selector)
     const input = { target, selector }
     const resolved = await invoke(
       'locator.normalize',
+      site,
       this._call(api, 0),
       input,
     )
@@ -1097,8 +1157,10 @@ export class Frame extends EventEmitter {
     selector: string,
     options: TimeoutOption = {},
   ): Promise<OpOutputs['locator.boundingBox']> {
+    const site = captureSite()
     return await this._selectorOp(
       'locator.boundingBox',
+      site,
       api,
       selector,
       true,
@@ -1113,6 +1175,7 @@ export class Frame extends EventEmitter {
     options: WaitForSelectorOptions = {},
     omitReturnValue: boolean,
   ): Promise<ElementHandle | null> {
+    const site = captureSite()
     const raw: unknown = options
     if (typeof raw === 'object' && raw !== null && 'visibility' in raw)
       throw clientError(
@@ -1122,6 +1185,7 @@ export class Frame extends EventEmitter {
     const state = options.state ?? 'visible'
     const handle = await this._selectorOp(
       'locator.waitFor',
+      site,
       api,
       selector,
       options.strict,
@@ -1138,8 +1202,10 @@ export class Frame extends EventEmitter {
     noWait: boolean,
     options: TimeoutOption = {},
   ): Promise<ElementHandle | null> {
+    const site = captureSite()
     const handle = await this._selectorOp(
       'locator.elementHandle',
+      site,
       api,
       selector,
       strict,
@@ -1153,10 +1219,16 @@ export class Frame extends EventEmitter {
     api: string,
     selector: string,
   ): Promise<ElementHandle[]> {
+    const site = captureSite()
     const target = await this._locatorBrand(api, selector)
-    const handles = await invoke('locator.elementHandles', this._call(api, 0), {
-      target,
-    })
+    const handles = await invoke(
+      'locator.elementHandles',
+      site,
+      this._call(api, 0),
+      {
+        target,
+      },
+    )
     return handles.flatMap((handle) => {
       const element = this._page._handle(handle)
       return element ? [element] : []
@@ -1169,6 +1241,7 @@ export class Frame extends EventEmitter {
    */
   async _evaluateOn(
     api: string,
+    site: CallSite,
     selector: string,
     strict: boolean,
     script: PageScript,
@@ -1177,6 +1250,7 @@ export class Frame extends EventEmitter {
   ): Promise<unknown> {
     const value = await this._selectorOp(
       'locator.evaluate',
+      site,
       api,
       selector,
       strict,
@@ -1192,11 +1266,17 @@ export class Frame extends EventEmitter {
     selector: string,
     script: PageScript,
   ): Promise<unknown> {
+    const site = captureSite()
     const target = await this._locatorBrand(api, selector)
-    const value = await invoke('locator.evaluateAll', this._call(api, 0), {
-      target,
-      script,
-    })
+    const value = await invoke(
+      'locator.evaluateAll',
+      site,
+      this._call(api, 0),
+      {
+        target,
+        script,
+      },
+    )
     return fromPageValue(api, value)
   }
 
@@ -1206,6 +1286,7 @@ export class Frame extends EventEmitter {
     selector: string | null,
     options: SnapshotOptions = {},
   ): Promise<SnapshotResult> {
+    const site = captureSite()
     const mode = options.mode ?? 'default'
     const shape = pick({ mode, depth: options.depth, boxes: options.boxes }, [
       'mode',
@@ -1216,6 +1297,7 @@ export class Frame extends EventEmitter {
     if (selector !== null)
       return await this._selectorOp(
         'locator.ariaSnapshot',
+        site,
         api,
         selector,
         true,
@@ -1229,6 +1311,7 @@ export class Frame extends EventEmitter {
       )
     return await invoke(
       'page.ariaSnapshot',
+      site,
       this._call(api, wait.timeout),
       { page: await this._page._brand(api), ...shape },
       wait.signal,
@@ -1256,6 +1339,7 @@ export class Frame extends EventEmitter {
     selector: string | null,
     options: ScreenshotOptionsInput = {},
   ): Promise<unknown> {
+    const site = captureSite()
     const wire = await screenshotOptions(api, options)
     if (!wire.type && options.path)
       wire.type = screenshotType({ api, path: options.path })
@@ -1272,11 +1356,18 @@ export class Frame extends EventEmitter {
           }
     const image = await invoke(
       'page.screenshot',
+      site,
       this._call(api, timeout),
       input,
       signal,
     )
-    await saveScreenshot({ api, bytes: image, path: options.path, signal })
+    await saveScreenshot({
+      api,
+      site,
+      bytes: image,
+      path: options.path,
+      signal,
+    })
     return image
   }
 
@@ -1285,6 +1376,7 @@ export class Frame extends EventEmitter {
     url: string,
     options: NavigateOptions = {},
   ): Promise<Response | null> {
+    const site = captureSite()
     if (typeof url !== 'string')
       throw clientError(api, `url: expected string, got ${typeof url}`)
     const waitUntil = loadState(api, 'waitUntil', options.waitUntil ?? 'load')
@@ -1294,6 +1386,7 @@ export class Frame extends EventEmitter {
       let completion: Promise<Response | null> | undefined
       const { value: result, observed } = await invokeObserved(
         'page.goto',
+        site,
         this._call(api, this._navigationTimeout(options)),
         {
           ...args,
@@ -1316,6 +1409,7 @@ export class Frame extends EventEmitter {
 
   async _waitForLoadState(
     api: string,
+    site: CallSite,
     state: LoadState | undefined,
     options: TimeoutOption & SignalOption = {},
   ): Promise<void> {
@@ -1328,6 +1422,7 @@ export class Frame extends EventEmitter {
       async () => {
         const { value: result, observed } = await invokeObserved(
           'page.waitForLoadState',
+          site,
           this._call(api, this._navigationTimeout(options)),
           { ...(await this._frameArgs(api)), state: verified },
           undefined,
@@ -1339,8 +1434,10 @@ export class Frame extends EventEmitter {
   }
 
   async _content(api: string): Promise<string> {
+    const site = captureSite()
     return await invoke(
       'page.content',
+      site,
       this._call(api, 0),
       await this._frameArgs(api),
     )
@@ -1352,6 +1449,7 @@ export class Frame extends EventEmitter {
     op: 'page.addScriptTag' | 'page.addStyleTag',
     options: ScriptTagOptions,
   ): Promise<ElementHandle> {
+    const site = captureSite()
     const keys =
       op === 'page.addScriptTag'
         ? (['url', 'path', 'content', 'type'] as const)
@@ -1369,6 +1467,7 @@ export class Frame extends EventEmitter {
     try {
       const { value: result, observed } = await invokeObserved(
         op,
+        site,
         this._call(api, 0),
         {
           ...(await this._frameArgs(api)),
@@ -1399,10 +1498,12 @@ export class Frame extends EventEmitter {
     html: string,
     options: NavigateOptions = {},
   ): Promise<void> {
+    const site = captureSite()
     const waitUntil = loadState(api, 'waitUntil', options.waitUntil ?? 'load')
     const signal = signalOf(api, options)
     const { value: result, observed } = await invokeObserved(
       'page.setContent',
+      site,
       this._call(api, this._navigationTimeout(options)),
       { ...(await this._frameArgs(api)), html, waitUntil },
       undefined,
@@ -1418,8 +1519,10 @@ export class Frame extends EventEmitter {
     arg: unknown,
     options: EvaluateOptions | undefined,
   ): Promise<unknown> {
+    const site = captureSite()
     const script = await this._page._evaluationScript(
       api,
+      site,
       'frame',
       pageFunction,
       arg,
@@ -1427,6 +1530,7 @@ export class Frame extends EventEmitter {
     )
     const { value: result, observed } = await invokeObserved(
       'page.evaluate',
+      site,
       this._call(api, 0),
       {
         ...(await this._frameArgs(api)),
@@ -1445,12 +1549,14 @@ export class Frame extends EventEmitter {
     arg: unknown,
     options: WaitForFunctionOptions = {},
   ): Promise<WaitHandle> {
+    const site = captureSite()
     if (typeof options.polling === 'string' && options.polling !== 'raf')
       throw plainError(api, `Unknown polling option: ${options.polling}`)
     const script = pageCall(api, 'frame', pageFunction, arg)
     const wait = this._wait(api, options)
     const { value, preview } = await invoke(
       'page.waitForFunction',
+      site,
       this._call(api, wait.timeout),
       {
         ...(await this._frameArgs(api)),

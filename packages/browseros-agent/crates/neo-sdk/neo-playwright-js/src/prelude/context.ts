@@ -1,3 +1,4 @@
+import { captureSite } from './call-site'
 /**
  * The one browser context a run sees: every tab of the owner's profile, which Neo never closes
  * or recreates. It owns the run's Page objects (one per tab, so identity holds across
@@ -90,6 +91,7 @@ export class BrowserContext extends EventEmitter {
     arg?: unknown,
     options?: unknown,
   ): Promise<Disposable> {
+    const site = captureSite()
     const api = 'browserContext.addInitScript'
     return addInitScript(
       api,
@@ -98,12 +100,13 @@ export class BrowserContext extends EventEmitter {
           (
             await invoke(
               'context.addInitScript',
+              site,
               { api, timeoutMs: 0 },
               { script: source },
             )
           ).id,
         expose: (name, callback) =>
-          exposeOnContext(this, api, name, callback, true),
+          exposeOnContext(this, site, api, name, callback, true),
       },
       script,
       arg,
@@ -117,7 +120,14 @@ export class BrowserContext extends EventEmitter {
    * `window[name]`.
    */
   exposeBinding(name: string, callback: BindingCallback): Promise<Disposable> {
-    return exposeOnContext(this, 'browserContext.exposeBinding', name, callback)
+    const site = captureSite()
+    return exposeOnContext(
+      this,
+      site,
+      'browserContext.exposeBinding',
+      name,
+      callback,
+    )
   }
 
   /** upstream's `browserContext.exposeFunction`. */
@@ -125,8 +135,10 @@ export class BrowserContext extends EventEmitter {
     name: string,
     callback: (...args: unknown[]) => unknown,
   ): Promise<Disposable> {
+    const site = captureSite()
     return exposeOnContext(
       this,
+      site,
       'browserContext.exposeFunction',
       name,
       (_source, ...args) => Reflect.apply(callback, undefined, args),
@@ -141,9 +153,11 @@ export class BrowserContext extends EventEmitter {
     event: string,
     optionsOrPredicate: unknown = {},
   ): Promise<unknown> {
+    const site = captureSite()
     const since = Date.now()
     return this._events.wait(
       'browserContext.waitForEvent',
+      site,
       null,
       event,
       optionsOrPredicate,
@@ -250,7 +264,13 @@ export class BrowserContext extends EventEmitter {
   }
 
   async #openPage(api: string): Promise<Page> {
-    const opened = await invoke('context.newPage', { api, timeoutMs: 0 }, {})
+    const site = captureSite()
+    const opened = await invoke(
+      'context.newPage',
+      site,
+      { api, timeoutMs: 0 },
+      {},
+    )
     const page = this._pageFromResult(opened.page, opened.url)
     if (!page) throw internalError(api, 'context.newPage returned no page')
     return page

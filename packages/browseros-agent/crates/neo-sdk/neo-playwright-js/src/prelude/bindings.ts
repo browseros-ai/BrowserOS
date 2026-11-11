@@ -13,6 +13,7 @@
  * is disposed. The callbacks live here, in the realm, which is why a binding cannot outlive the run.
  */
 import { invoke } from './bridge'
+import { type CallSite, INTERNAL_SITE } from './call-site'
 import type { BrowserContext } from './context'
 import { clientError } from './errors'
 import { fromInPageArgument, inPageArgument } from './evaluation'
@@ -43,6 +44,7 @@ type Payload = { name: unknown; seq: unknown; serializedArgs: unknown }
  */
 export async function exposeOnPage(
   page: Page,
+  site: CallSite,
   api: string,
   name: string,
   callback: BindingCallback,
@@ -67,6 +69,7 @@ export async function exposeOnPage(
   try {
     const { id } = await invoke(
       'page.exposeBinding',
+      site,
       { api, timeoutMs: 0 },
       {
         page: await page._brand(api),
@@ -84,6 +87,7 @@ export async function exposeOnPage(
 /** upstream's `BrowserContext.exposeBinding`, as [`exposeOnPage`] for every page of the run. */
 export async function exposeOnContext(
   context: BrowserContext,
+  site: CallSite,
   api: string,
   name: string,
   callback: BindingCallback,
@@ -105,6 +109,7 @@ export async function exposeOnContext(
   try {
     const { id } = await invoke(
       'context.exposeBinding',
+      site,
       { api, timeoutMs: 0 },
       { name, ...(noGlobal ? { noGlobal: true as const } : {}) },
     )
@@ -139,6 +144,7 @@ export async function answerBindingCall(
   page: Page,
   record: BindingRecord,
 ): Promise<void> {
+  const site = INTERNAL_SITE
   let payload: Payload
   try {
     payload = JSON.parse(record.payload) as Payload
@@ -188,6 +194,7 @@ export async function answerBindingCall(
   const api = 'bindingCall.resolve'
   await invoke(
     'bindingCall.resolve',
+    site,
     { api, timeoutMs: 0 },
     { page: await page._brand(api), context: record.executionContext, arg },
   ).catch(() => {})
