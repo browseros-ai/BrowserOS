@@ -84,6 +84,9 @@ jobs:
       - name: Cache Rust build
         uses: Swatinem/rust-cache@v2
         with:
+          # Must match the Tests workflow exactly; see the note there on why
+          # the namespace changed when the shared Cargo build-dir was removed.
+          prefix-key: browseros-target-v1
           workspaces: packages/browseros-agent
           # Must match the Tests workflow exactly. Without it the key embeds
           # GITHUB_JOB and this cache would be unreadable there.
@@ -96,7 +99,6 @@ jobs:
           # cargo fingerprints by rustc version itself, so a toolchain change
           # rebuilds rather than reusing the wrong artifacts.
           add-rust-environment-hash-key: false
-          cache-directories: ~/.cargo/build/browseros
           # Save even though nothing here is a pass/fail gate; warming is the
           # entire point of the job.
           save-if: "true"
