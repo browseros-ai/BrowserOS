@@ -51,11 +51,7 @@ impl PageOp {
     /// This op's registration metadata.
     pub(crate) const fn spec(self) -> OpSpec {
         match self {
-            Self::SetViewportSize => OpSpec::write(
-                "page.setViewportSize",
-                PAGE,
-                "set this tab's viewport and screen size until the tab closes",
-            ),
+            Self::SetViewportSize => viewport_size::SPEC,
             Self::Goto => OpSpec::write(
                 "page.goto",
                 PAGE,

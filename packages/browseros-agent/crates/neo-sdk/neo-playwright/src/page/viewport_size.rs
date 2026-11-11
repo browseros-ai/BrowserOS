@@ -5,8 +5,16 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::op_scope::OpScope;
+use crate::op_spec::{OpSpec, PAGE};
 use crate::target::PageRef;
 use crate::{ErrorCode, Playwright, PlaywrightError};
+
+/// A tab write, so the dispatcher's takeover lock guards resizing just like navigation.
+pub(crate) const SPEC: OpSpec = OpSpec::write(
+    "page.setViewportSize",
+    PAGE,
+    "set this tab's viewport and screen size until the tab closes",
+);
 
 /// `page.setViewportSize` uses no Playwright timeout; the run still bounds the operation.
 #[derive(Debug, Deserialize)]
