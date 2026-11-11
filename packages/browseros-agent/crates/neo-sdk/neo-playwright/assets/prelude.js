@@ -3720,7 +3720,27 @@ ${value.stack}`;
 
   // crates/neo-sdk/neo-playwright-js/src/prelude/generated/read.ts
   var READ_OPTION_KEYS = {};
-  var READ_SEND = {};
+  var READ_SEND = {
+    "locator.textContent": (site, call, input, signal) => invoke("locator.textContent", site, call, input, signal),
+    "locator.innerText": (site, call, input, signal) => invoke("locator.innerText", site, call, input, signal),
+    "locator.innerHTML": (site, call, input, signal) => invoke("locator.innerHTML", site, call, input, signal),
+    "locator.getAttribute": (site, call, input, signal) => invoke("locator.getAttribute", site, call, input, signal),
+    "locator.inputValue": (site, call, input, signal) => invoke("locator.inputValue", site, call, input, signal),
+    "locator.isEnabled": (site, call, input, signal) => invoke("locator.isEnabled", site, call, input, signal),
+    "locator.isDisabled": (site, call, input, signal) => invoke("locator.isDisabled", site, call, input, signal),
+    "locator.isEditable": (site, call, input, signal) => invoke("locator.isEditable", site, call, input, signal),
+    "locator.isChecked": (site, call, input, signal) => invoke("locator.isChecked", site, call, input, signal),
+    "locator.isVisible": (site, call, input, signal) => invoke("locator.isVisible", site, call, input, signal),
+    "locator.isHidden": (site, call, input, signal) => invoke("locator.isHidden", site, call, input, signal),
+    "locator.count": (site, call, input, signal) => invoke("locator.count", site, call, input, signal),
+    "locator.allTextContents": (site, call, input, signal) => invoke("locator.allTextContents", site, call, input, signal),
+    "locator.allInnerTexts": (site, call, input, signal) => invoke("locator.allInnerTexts", site, call, input, signal),
+    "locator.boundingBox": (site, call, input, signal) => invoke("locator.boundingBox", site, call, input, signal),
+    "locator.waitFor": (site, call, input, signal) => invoke("locator.waitFor", site, call, input, signal),
+    "locator.elementHandle": (site, call, input, signal) => invoke("locator.elementHandle", site, call, input, signal),
+    "locator.elementHandles": (site, call, input, signal) => invoke("locator.elementHandles", site, call, input, signal),
+    "locator.normalize": (site, call, input, signal) => invoke("locator.normalize", site, call, input, signal)
+  };
 
   // crates/neo-sdk/neo-playwright-js/src/prelude/generated/snapshot.ts
   var SNAPSHOT_OPTION_KEYS = {};
@@ -7760,33 +7780,43 @@ ${value.stack}`;
     }
     async _read(op, api, selector, options = {}) {
       const site = captureSite();
-      const args = {};
-      return await this._selectorOp(op, site, api, selector, options.strict, this._wait(api, options), args);
+      const strict = options.strict;
+      const wait = this._wait(api, options);
+      const addressed = await this._targetArgs(api, selector, strict);
+      return await send[op](site, this._call(api, wait.timeout), { ...addressed }, wait.signal);
     }
     async _getAttribute(api, selector, name, options = {}) {
       const site = captureSite();
-      return await this._selectorOp("locator.getAttribute", site, api, selector, options.strict, this._wait(api, options), { name });
+      const strict = options.strict;
+      const wait = this._wait(api, options);
+      const addressed = await this._targetArgs(api, selector, strict);
+      return await send["locator.getAttribute"](site, this._call(api, wait.timeout), { ...addressed, name }, wait.signal);
     }
     async _isVisible(op, api, selector, options = {}) {
       const site = captureSite();
-      return await this._selectorOp(op, site, api, selector, options.strict, { timeout: 0 }, {});
+      const strict = options.strict;
+      const addressed = await this._targetArgs(api, selector, strict);
+      return await send[op](site, this._call(api, 0), { ...addressed });
     }
     async _everyMatch(op, api, selector) {
       const site = captureSite();
       const target = await this._locatorBrand(api, selector);
-      const input = { target };
-      return await invoke(op, site, this._call(api, 0), input);
+      return await send[op](site, this._call(api, 0), { target });
     }
     async _normalize(api, selector) {
       const site = captureSite();
       const target = await this._locatorBrand(api, selector);
-      const input = { target, selector };
-      const resolved = await invoke("locator.normalize", site, this._call(api, 0), input);
+      const resolved = await send["locator.normalize"](site, this._call(api, 0), {
+        target,
+        selector
+      });
       return resolved.selector;
     }
     async _boundingBox(api, selector, options = {}) {
       const site = captureSite();
-      return await this._selectorOp("locator.boundingBox", site, api, selector, true, this._wait(api, options), {});
+      const wait = this._wait(api, options);
+      const addressed = await this._targetArgs(api, selector, true);
+      return await send["locator.boundingBox"](site, this._call(api, wait.timeout), { ...addressed }, wait.signal);
     }
     async _waitForSelector(api, selector, options = {}, omitReturnValue) {
       const site = captureSite();
@@ -7794,18 +7824,23 @@ ${value.stack}`;
       if (typeof raw === "object" && raw !== null && "visibility" in raw)
         throw clientError(api, "options.visibility is not supported, did you mean options.state?");
       const state = options.state ?? "visible";
-      const handle = await this._selectorOp("locator.waitFor", site, api, selector, options.strict, this._wait(api, options), { state, omitReturnValue });
+      const strict = options.strict;
+      const wait = this._wait(api, options);
+      const addressed = await this._targetArgs(api, selector, strict);
+      const handle = await send["locator.waitFor"](site, this._call(api, wait.timeout), { ...addressed, state, omitReturnValue }, wait.signal);
       return this._page._handle(handle);
     }
     async _elementHandle(api, selector, strict, noWait, options = {}) {
       const site = captureSite();
-      const handle = await this._selectorOp("locator.elementHandle", site, api, selector, strict, noWait ? { timeout: 0 } : this._wait(api, options), noWait ? { noWait: true } : {});
+      const wait = noWait ? { timeout: 0 } : this._wait(api, options);
+      const addressed = await this._targetArgs(api, selector, strict);
+      const handle = noWait ? await send["locator.elementHandle"](site, this._call(api, wait.timeout), { ...addressed, noWait: true }, wait.signal) : await send["locator.elementHandle"](site, this._call(api, wait.timeout), { ...addressed }, wait.signal);
       return this._page._handle(handle);
     }
     async _elementHandles(api, selector) {
       const site = captureSite();
       const target = await this._locatorBrand(api, selector);
-      const handles = await invoke("locator.elementHandles", site, this._call(api, 0), {
+      const handles = await send["locator.elementHandles"](site, this._call(api, 0), {
         target
       });
       return handles.flatMap((handle) => {
@@ -8085,6 +8120,11 @@ ${value.stack}`;
       };
       return await invoke(op, site, { api, timeoutMs: timeoutMs(api, timeout) }, input);
     }
+    async#read(op, site, api) {
+      this.#live(api);
+      const target = this._brand;
+      return await send[op](site, { api, timeoutMs: timeoutMs(api, 0) }, { target, strict: "strict" });
+    }
     #timeout(options) {
       return this._page._timeoutSettings.timeout(options);
     }
@@ -8100,7 +8140,7 @@ ${value.stack}`;
     async $(selector) {
       const site = captureSite();
       const api = "elementHandle.$";
-      const handle = await invoke("locator.elementHandle", site, { api, timeoutMs: timeoutMs(api, 0) }, {
+      const handle = await send["locator.elementHandle"](site, { api, timeoutMs: timeoutMs(api, 0) }, {
         target: this.#rooted(api, selector),
         strict: "firstMatch",
         noWait: true
@@ -8110,7 +8150,7 @@ ${value.stack}`;
     async $$(selector) {
       const site = captureSite();
       const api = "elementHandle.$$";
-      const handles = await invoke("locator.elementHandles", site, { api, timeoutMs: timeoutMs(api, 0) }, { target: this.#rooted(api, selector) });
+      const handles = await send["locator.elementHandles"](site, { api, timeoutMs: timeoutMs(api, 0) }, { target: this.#rooted(api, selector) });
       return handles.flatMap((handle) => {
         const element = this._page._handle(handle);
         return element ? [element] : [];
@@ -8223,60 +8263,62 @@ ${value.stack}`;
     }
     async waitForElementState(state, options = {}) {
       const site = captureSite();
-      await this.#op("locator.waitFor", site, "elementHandle.waitForElementState", this.#timeout(options), {
-        state,
-        omitReturnValue: true
-      });
+      const api = "elementHandle.waitForElementState";
+      const timeout = this.#timeout(options);
+      this.#live(api);
+      const target = this._brand;
+      await send["locator.waitFor"](site, { api, timeoutMs: timeoutMs(api, timeout) }, { target, strict: "strict", state, omitReturnValue: true });
     }
     textContent() {
       const site = captureSite();
-      return this.#op("locator.textContent", site, "elementHandle.textContent", 0, {});
+      return this.#read("locator.textContent", site, "elementHandle.textContent");
     }
     innerText() {
       const site = captureSite();
-      return this.#op("locator.innerText", site, "elementHandle.innerText", 0, {});
+      return this.#read("locator.innerText", site, "elementHandle.innerText");
     }
     innerHTML() {
       const site = captureSite();
-      return this.#op("locator.innerHTML", site, "elementHandle.innerHTML", 0, {});
+      return this.#read("locator.innerHTML", site, "elementHandle.innerHTML");
     }
     inputValue() {
       const site = captureSite();
-      return this.#op("locator.inputValue", site, "elementHandle.inputValue", 0, {});
+      return this.#read("locator.inputValue", site, "elementHandle.inputValue");
     }
-    getAttribute(name) {
+    async getAttribute(name) {
       const site = captureSite();
-      return this.#op("locator.getAttribute", site, "elementHandle.getAttribute", 0, {
-        name
-      });
+      const api = "elementHandle.getAttribute";
+      this.#live(api);
+      const target = this._brand;
+      return await send["locator.getAttribute"](site, { api, timeoutMs: timeoutMs(api, 0) }, { target, strict: "strict", name });
     }
     isChecked() {
       const site = captureSite();
-      return this.#op("locator.isChecked", site, "elementHandle.isChecked", 0, {});
+      return this.#read("locator.isChecked", site, "elementHandle.isChecked");
     }
     isDisabled() {
       const site = captureSite();
-      return this.#op("locator.isDisabled", site, "elementHandle.isDisabled", 0, {});
+      return this.#read("locator.isDisabled", site, "elementHandle.isDisabled");
     }
     isEditable() {
       const site = captureSite();
-      return this.#op("locator.isEditable", site, "elementHandle.isEditable", 0, {});
+      return this.#read("locator.isEditable", site, "elementHandle.isEditable");
     }
     isEnabled() {
       const site = captureSite();
-      return this.#op("locator.isEnabled", site, "elementHandle.isEnabled", 0, {});
+      return this.#read("locator.isEnabled", site, "elementHandle.isEnabled");
     }
     isHidden() {
       const site = captureSite();
-      return this.#op("locator.isHidden", site, "elementHandle.isHidden", 0, {});
+      return this.#read("locator.isHidden", site, "elementHandle.isHidden");
     }
     isVisible() {
       const site = captureSite();
-      return this.#op("locator.isVisible", site, "elementHandle.isVisible", 0, {});
+      return this.#read("locator.isVisible", site, "elementHandle.isVisible");
     }
     boundingBox() {
       const site = captureSite();
-      return this.#op("locator.boundingBox", site, "elementHandle.boundingBox", 0, {});
+      return this.#read("locator.boundingBox", site, "elementHandle.boundingBox");
     }
     async evaluate(pageFunction, arg, options) {
       const site = captureSite();

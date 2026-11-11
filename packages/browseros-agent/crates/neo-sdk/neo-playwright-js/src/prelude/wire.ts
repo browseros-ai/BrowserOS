@@ -306,8 +306,6 @@ export type FilePayload = { name: string; mimeType: string; buffer: string }
 export type FilesInput = { paths: string[] } | { payloads: FilePayload[] }
 export type TargetArgs = { target: Target; strict: Strictness }
 export type EveryMatchArgs = { target: Target }
-/** `locator.normalize`: the locator's own selector rides along for upstream's messages. */
-export type NormalizeArgs = { target: Target; selector: string }
 export type PageArgs = { page: PageHandle }
 /** A page op on one of the page's frames; `frame` is left out for the main frame. */
 export type FrameArgs = PageArgs & { frame?: string }
@@ -331,37 +329,6 @@ export type HandInputs = {
   'locator.setInputFiles': TargetArgs & { files: FilesInput }
   'locator.dispatchEvent': TargetArgs & { type: string; eventInit: unknown }
   'locator.scrollIntoViewIfNeeded': TargetArgs
-  /**
-   * The reads below wait for a locator's element, as upstream's do; an element handle's
-   * target needs no waiting, so no flag says it.
-   */
-  'locator.textContent': TargetArgs
-  'locator.innerText': TargetArgs
-  'locator.innerHTML': TargetArgs
-  'locator.getAttribute': TargetArgs & { name: string }
-  'locator.inputValue': TargetArgs
-  'locator.isEnabled': TargetArgs
-  'locator.isDisabled': TargetArgs
-  'locator.isEditable': TargetArgs
-  'locator.isChecked': TargetArgs
-  'locator.isVisible': TargetArgs
-  'locator.isHidden': TargetArgs
-  'locator.count': EveryMatchArgs
-  'locator.normalize': NormalizeArgs
-  'locator.allTextContents': EveryMatchArgs
-  'locator.allInnerTexts': EveryMatchArgs
-  'locator.boundingBox': TargetArgs
-  /**
-   * `locator.waitFor`, `page.waitForSelector` and `elementHandle.waitForElementState` (whose
-   * states are the element-state names). `omitReturnValue` skips pinning a handle.
-   */
-  'locator.waitFor': TargetArgs & {
-    state: WaitForState | ElementStateName
-    omitReturnValue: boolean
-  }
-  /** `noWait` is `page.$`: the first match now, or null, instead of waiting for one. */
-  'locator.elementHandle': TargetArgs & { noWait?: true }
-  'locator.elementHandles': EveryMatchArgs
   'page.requestGC': PageArgs
   'page.emulateMedia': PageArgs & {
     media?: 'screen' | 'print' | 'no-override'
@@ -491,25 +458,6 @@ export type HandOutputs = {
   'locator.setInputFiles': null
   'locator.dispatchEvent': null
   'locator.scrollIntoViewIfNeeded': null
-  'locator.textContent': string | null
-  'locator.innerText': string
-  'locator.innerHTML': string
-  'locator.getAttribute': string | null
-  'locator.inputValue': string
-  'locator.isEnabled': boolean
-  'locator.isDisabled': boolean
-  'locator.isEditable': boolean
-  'locator.isChecked': boolean
-  'locator.isVisible': boolean
-  'locator.isHidden': boolean
-  'locator.count': number
-  'locator.normalize': { selector: string }
-  'locator.allTextContents': string[]
-  'locator.allInnerTexts': string[]
-  'locator.boundingBox': Rect | null
-  'locator.waitFor': ElementBrand | null
-  'locator.elementHandle': ElementBrand | null
-  'locator.elementHandles': ElementBrand[]
   'page.requestGC': null
   'page.emulateMedia': null
   'page.addScriptTag': { element: ElementBrand; frames?: FrameInfo[] }

@@ -3,11 +3,77 @@
 // route row in Rust, then run `cargo test -p neo-playwright --test wire_generated`, which
 // rewrites this folder.
 
+import type * as pw from '../../../../neo-playwright/third_party/playwright/packages/playwright-core/src/client/channels'
+import { invoke } from '../bridge'
+import type { CallSite } from '../call-site'
+import type { SignalLike } from '../signal'
+import type { Assert, UpstreamCheck, VoidIsNull } from '../upstream-check'
+import type { CallHeader } from '../wire'
+import type { ElementBrand } from './types/ElementBrand'
+import type { ReadAttributeInput } from './types/ReadAttributeInput'
+import type { ReadElementHandleInput } from './types/ReadElementHandleInput'
+import type { ReadElementInput } from './types/ReadElementInput'
+import type { ReadEveryMatchInput } from './types/ReadEveryMatchInput'
+import type { ReadNormalizeInput } from './types/ReadNormalizeInput'
+import type { ReadNormalized } from './types/ReadNormalized'
+import type { ReadWaitForInput } from './types/ReadWaitForInput'
+import type { Rect } from './types/Rect'
+
+export type { ReadAttributeInput } from './types/ReadAttributeInput'
+export type { ReadElementHandleInput } from './types/ReadElementHandleInput'
+export type { ReadElementInput } from './types/ReadElementInput'
+export type { ReadEveryMatchInput } from './types/ReadEveryMatchInput'
+export type { ReadNormalizeInput } from './types/ReadNormalizeInput'
+export type { ReadNormalized } from './types/ReadNormalized'
+export type { ReadWaitForInput } from './types/ReadWaitForInput'
+export type { ReadWaitState } from './types/ReadWaitState'
+export type { Rect } from './types/Rect'
+
 /** Each read op's input, after the `call` header every op shares. */
-export type ReadInputs = {}
+export type ReadInputs = {
+  'locator.textContent': ReadElementInput
+  'locator.innerText': ReadElementInput
+  'locator.innerHTML': ReadElementInput
+  'locator.getAttribute': ReadAttributeInput
+  'locator.inputValue': ReadElementInput
+  'locator.isEnabled': ReadElementInput
+  'locator.isDisabled': ReadElementInput
+  'locator.isEditable': ReadElementInput
+  'locator.isChecked': ReadElementInput
+  'locator.isVisible': ReadElementInput
+  'locator.isHidden': ReadElementInput
+  'locator.count': ReadEveryMatchInput
+  'locator.allTextContents': ReadEveryMatchInput
+  'locator.allInnerTexts': ReadEveryMatchInput
+  'locator.boundingBox': ReadElementInput
+  'locator.waitFor': ReadWaitForInput
+  'locator.elementHandle': ReadElementHandleInput
+  'locator.elementHandles': ReadEveryMatchInput
+  'locator.normalize': ReadNormalizeInput
+}
 
 /** Each read op's result. */
-export type ReadOutputs = {}
+export type ReadOutputs = {
+  'locator.textContent': string | null
+  'locator.innerText': string
+  'locator.innerHTML': string
+  'locator.getAttribute': string | null
+  'locator.inputValue': string
+  'locator.isEnabled': boolean
+  'locator.isDisabled': boolean
+  'locator.isEditable': boolean
+  'locator.isChecked': boolean
+  'locator.isVisible': boolean
+  'locator.isHidden': boolean
+  'locator.count': number
+  'locator.allTextContents': Array<string>
+  'locator.allInnerTexts': Array<string>
+  'locator.boundingBox': Rect | null
+  'locator.waitFor': ElementBrand | null
+  'locator.elementHandle': ElementBrand | null
+  'locator.elementHandles': Array<ElementBrand>
+  'locator.normalize': ReadNormalized
+}
 
 /**
  * The script's option keys of each read op that takes an `options` bag: the fields of its
@@ -20,4 +86,179 @@ export const READ_OPTION_KEYS = {} as const
  * One typed sender per read op. A class passes its input as an object literal, so every
  * field is checked against Rust's input type and the result is Rust's result type.
  */
-export const READ_SEND = {}
+export const READ_SEND = {
+  'locator.textContent': (
+    site: CallSite,
+    call: CallHeader,
+    input: ReadElementInput,
+    signal?: SignalLike,
+  ): Promise<string | null> => invoke('locator.textContent', site, call, input, signal),
+  'locator.innerText': (
+    site: CallSite,
+    call: CallHeader,
+    input: ReadElementInput,
+    signal?: SignalLike,
+  ): Promise<string> => invoke('locator.innerText', site, call, input, signal),
+  'locator.innerHTML': (
+    site: CallSite,
+    call: CallHeader,
+    input: ReadElementInput,
+    signal?: SignalLike,
+  ): Promise<string> => invoke('locator.innerHTML', site, call, input, signal),
+  'locator.getAttribute': (
+    site: CallSite,
+    call: CallHeader,
+    input: ReadAttributeInput,
+    signal?: SignalLike,
+  ): Promise<string | null> => invoke('locator.getAttribute', site, call, input, signal),
+  'locator.inputValue': (
+    site: CallSite,
+    call: CallHeader,
+    input: ReadElementInput,
+    signal?: SignalLike,
+  ): Promise<string> => invoke('locator.inputValue', site, call, input, signal),
+  'locator.isEnabled': (
+    site: CallSite,
+    call: CallHeader,
+    input: ReadElementInput,
+    signal?: SignalLike,
+  ): Promise<boolean> => invoke('locator.isEnabled', site, call, input, signal),
+  'locator.isDisabled': (
+    site: CallSite,
+    call: CallHeader,
+    input: ReadElementInput,
+    signal?: SignalLike,
+  ): Promise<boolean> => invoke('locator.isDisabled', site, call, input, signal),
+  'locator.isEditable': (
+    site: CallSite,
+    call: CallHeader,
+    input: ReadElementInput,
+    signal?: SignalLike,
+  ): Promise<boolean> => invoke('locator.isEditable', site, call, input, signal),
+  'locator.isChecked': (
+    site: CallSite,
+    call: CallHeader,
+    input: ReadElementInput,
+    signal?: SignalLike,
+  ): Promise<boolean> => invoke('locator.isChecked', site, call, input, signal),
+  'locator.isVisible': (
+    site: CallSite,
+    call: CallHeader,
+    input: ReadElementInput,
+    signal?: SignalLike,
+  ): Promise<boolean> => invoke('locator.isVisible', site, call, input, signal),
+  'locator.isHidden': (
+    site: CallSite,
+    call: CallHeader,
+    input: ReadElementInput,
+    signal?: SignalLike,
+  ): Promise<boolean> => invoke('locator.isHidden', site, call, input, signal),
+  'locator.count': (
+    site: CallSite,
+    call: CallHeader,
+    input: ReadEveryMatchInput,
+    signal?: SignalLike,
+  ): Promise<number> => invoke('locator.count', site, call, input, signal),
+  'locator.allTextContents': (
+    site: CallSite,
+    call: CallHeader,
+    input: ReadEveryMatchInput,
+    signal?: SignalLike,
+  ): Promise<Array<string>> => invoke('locator.allTextContents', site, call, input, signal),
+  'locator.allInnerTexts': (
+    site: CallSite,
+    call: CallHeader,
+    input: ReadEveryMatchInput,
+    signal?: SignalLike,
+  ): Promise<Array<string>> => invoke('locator.allInnerTexts', site, call, input, signal),
+  'locator.boundingBox': (
+    site: CallSite,
+    call: CallHeader,
+    input: ReadElementInput,
+    signal?: SignalLike,
+  ): Promise<Rect | null> => invoke('locator.boundingBox', site, call, input, signal),
+  'locator.waitFor': (
+    site: CallSite,
+    call: CallHeader,
+    input: ReadWaitForInput,
+    signal?: SignalLike,
+  ): Promise<ElementBrand | null> => invoke('locator.waitFor', site, call, input, signal),
+  'locator.elementHandle': (
+    site: CallSite,
+    call: CallHeader,
+    input: ReadElementHandleInput,
+    signal?: SignalLike,
+  ): Promise<ElementBrand | null> => invoke('locator.elementHandle', site, call, input, signal),
+  'locator.elementHandles': (
+    site: CallSite,
+    call: CallHeader,
+    input: ReadEveryMatchInput,
+    signal?: SignalLike,
+  ): Promise<Array<ElementBrand>> => invoke('locator.elementHandles', site, call, input, signal),
+  'locator.normalize': (
+    site: CallSite,
+    call: CallHeader,
+    input: ReadNormalizeInput,
+    signal?: SignalLike,
+  ): Promise<ReadNormalized> => invoke('locator.normalize', site, call, input, signal),
+}
+
+// Each route row against Playwright's own protocol at the pin (upstream-check.ts): tsc
+// names the op and every key that differs without a reason, or whose reason went stale.
+// locator.textContent: ElementHandle.textContent
+type _locator_textContent = Assert<UpstreamCheck<'locator.textContent', ReadElementInput, pw.ElementHandleTextContentParams, never, never, never>>
+type _locator_textContent_result = Assert<VoidIsNull<'locator.textContent', pw.ElementHandleTextContentResult, string | null>>
+// locator.innerText: ElementHandle.innerText
+type _locator_innerText = Assert<UpstreamCheck<'locator.innerText', ReadElementInput, pw.ElementHandleInnerTextParams, never, never, never>>
+type _locator_innerText_result = Assert<VoidIsNull<'locator.innerText', pw.ElementHandleInnerTextResult, string>>
+// locator.innerHTML: ElementHandle.innerHTML
+type _locator_innerHTML = Assert<UpstreamCheck<'locator.innerHTML', ReadElementInput, pw.ElementHandleInnerHTMLParams, never, never, never>>
+type _locator_innerHTML_result = Assert<VoidIsNull<'locator.innerHTML', pw.ElementHandleInnerHTMLResult, string>>
+// locator.getAttribute: ElementHandle.getAttribute
+type _locator_getAttribute = Assert<UpstreamCheck<'locator.getAttribute', ReadAttributeInput, pw.ElementHandleGetAttributeParams, never, never, never>>
+type _locator_getAttribute_result = Assert<VoidIsNull<'locator.getAttribute', pw.ElementHandleGetAttributeResult, string | null>>
+// locator.inputValue: ElementHandle.inputValue
+type _locator_inputValue = Assert<UpstreamCheck<'locator.inputValue', ReadElementInput, pw.ElementHandleInputValueParams, never, never, never>>
+type _locator_inputValue_result = Assert<VoidIsNull<'locator.inputValue', pw.ElementHandleInputValueResult, string>>
+// locator.isEnabled: ElementHandle.isEnabled
+type _locator_isEnabled = Assert<UpstreamCheck<'locator.isEnabled', ReadElementInput, pw.ElementHandleIsEnabledParams, never, never, never>>
+type _locator_isEnabled_result = Assert<VoidIsNull<'locator.isEnabled', pw.ElementHandleIsEnabledResult, boolean>>
+// locator.isDisabled: ElementHandle.isDisabled
+type _locator_isDisabled = Assert<UpstreamCheck<'locator.isDisabled', ReadElementInput, pw.ElementHandleIsDisabledParams, never, never, never>>
+type _locator_isDisabled_result = Assert<VoidIsNull<'locator.isDisabled', pw.ElementHandleIsDisabledResult, boolean>>
+// locator.isEditable: ElementHandle.isEditable
+type _locator_isEditable = Assert<UpstreamCheck<'locator.isEditable', ReadElementInput, pw.ElementHandleIsEditableParams, never, never, never>>
+type _locator_isEditable_result = Assert<VoidIsNull<'locator.isEditable', pw.ElementHandleIsEditableResult, boolean>>
+// locator.isChecked: ElementHandle.isChecked
+type _locator_isChecked = Assert<UpstreamCheck<'locator.isChecked', ReadElementInput, pw.ElementHandleIsCheckedParams, never, never, never>>
+type _locator_isChecked_result = Assert<VoidIsNull<'locator.isChecked', pw.ElementHandleIsCheckedResult, boolean>>
+// locator.isVisible: ElementHandle.isVisible
+type _locator_isVisible = Assert<UpstreamCheck<'locator.isVisible', ReadElementInput, pw.ElementHandleIsVisibleParams, never, never, never>>
+type _locator_isVisible_result = Assert<VoidIsNull<'locator.isVisible', pw.ElementHandleIsVisibleResult, boolean>>
+// locator.isHidden: ElementHandle.isHidden
+type _locator_isHidden = Assert<UpstreamCheck<'locator.isHidden', ReadElementInput, pw.ElementHandleIsHiddenParams, never, never, never>>
+type _locator_isHidden_result = Assert<VoidIsNull<'locator.isHidden', pw.ElementHandleIsHiddenResult, boolean>>
+// locator.count: Frame.queryCount
+type _locator_count = Assert<UpstreamCheck<'locator.count', ReadEveryMatchInput, pw.FrameQueryCountParams, never, never, never>>
+type _locator_count_result = Assert<VoidIsNull<'locator.count', pw.FrameQueryCountResult, number>>
+// locator.allTextContents: Neo only: upstream evaluates all matches in the client; Neo performs a probe read
+// locator.allInnerTexts: Neo only: upstream evaluates all matches in the client; Neo performs a probe read
+// locator.boundingBox: ElementHandle.boundingBox
+type _locator_boundingBox = Assert<UpstreamCheck<'locator.boundingBox', ReadElementInput, pw.ElementHandleBoundingBoxParams, never, never, never>>
+type _locator_boundingBox_result = Assert<VoidIsNull<'locator.boundingBox', pw.ElementHandleBoundingBoxResult, Rect | null>>
+// locator.waitFor: Frame.waitForSelector
+//   retypes state: also serves waitForElementState's stable/enabled/disabled/editable states
+type _locator_waitFor = Assert<UpstreamCheck<'locator.waitFor', ReadWaitForInput, pw.FrameWaitForSelectorParams, never, never, 'state'>>
+type _locator_waitFor_result = Assert<VoidIsNull<'locator.waitFor', pw.FrameWaitForSelectorResult, ElementBrand | null>>
+// locator.elementHandle: Frame.querySelector
+//   adds noWait: selects the immediate page.$ query instead of a locator wait
+type _locator_elementHandle = Assert<UpstreamCheck<'locator.elementHandle', ReadElementHandleInput, pw.FrameQuerySelectorParams, 'noWait', never, never>>
+type _locator_elementHandle_result = Assert<VoidIsNull<'locator.elementHandle', pw.FrameQuerySelectorResult, ElementBrand | null>>
+// locator.elementHandles: Frame.querySelectorAll
+type _locator_elementHandles = Assert<UpstreamCheck<'locator.elementHandles', ReadEveryMatchInput, pw.FrameQuerySelectorAllParams, never, never, never>>
+type _locator_elementHandles_result = Assert<VoidIsNull<'locator.elementHandles', pw.FrameQuerySelectorAllResult, Array<ElementBrand>>>
+// locator.normalize: Frame.resolveSelector
+//   adds selector: original selector for diagnostics after brand resolution
+//   omits sdkLanguage: Neo always formats a JavaScript locator
+type _locator_normalize = Assert<UpstreamCheck<'locator.normalize', ReadNormalizeInput, pw.FrameResolveSelectorParams, 'selector', 'sdkLanguage', never>>
+type _locator_normalize_result = Assert<VoidIsNull<'locator.normalize', pw.FrameResolveSelectorResult, ReadNormalized>>

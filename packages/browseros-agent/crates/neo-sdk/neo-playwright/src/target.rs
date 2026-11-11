@@ -114,7 +114,7 @@ impl LocatorTarget {
 }
 
 /// The handle a query is rooted at, with its `$neo` tag, which must say `element`.
-#[derive(Clone, Debug, Deserialize, TS)]
+#[derive(Clone, Debug, Deserialize, Serialize, TS)]
 #[serde(tag = "$neo", rename_all = "lowercase")]
 #[ts(rename = "ElementBrand")]
 pub(crate) enum RootHandle {
@@ -124,7 +124,7 @@ pub(crate) enum RootHandle {
 /// `{"$neo":"element","page":{"$neo":"page","tab":1234},"seq":4,"node":1234,
 /// "display":"<button>Save</button>"}`. Once document `seq` is gone, the handle is detached for
 /// good.
-#[derive(Clone, Debug, Deserialize, TS)]
+#[derive(Clone, Debug, Deserialize, Serialize, TS)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct ElementTarget {
     /// The page the element was pinned on.

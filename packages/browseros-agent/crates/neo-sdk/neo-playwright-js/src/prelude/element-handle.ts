@@ -51,6 +51,20 @@ import type {
   Strictness,
 } from './wire'
 
+/** These generated senders all take only an element target and strictness. */
+type ElementReadOp =
+  | 'locator.textContent'
+  | 'locator.innerText'
+  | 'locator.innerHTML'
+  | 'locator.inputValue'
+  | 'locator.isChecked'
+  | 'locator.isDisabled'
+  | 'locator.isEditable'
+  | 'locator.isEnabled'
+  | 'locator.isVisible'
+  | 'locator.isHidden'
+  | 'locator.boundingBox'
+
 type ElementOp = {
   [Op in OpName]: OpInputs[Op] extends { target: unknown; strict: Strictness }
     ? Op
@@ -129,6 +143,25 @@ export class ElementHandle extends EventEmitter {
     )
   }
 
+  #read<Op extends ElementReadOp>(
+    op: Op,
+    site: CallSite,
+    api: string,
+  ): Promise<OpOutputs[Op]>
+  async #read(
+    op: ElementReadOp,
+    site: CallSite,
+    api: string,
+  ): Promise<OpOutputs[ElementReadOp]> {
+    this.#live(api)
+    const target = this._brand
+    return await send[op](
+      site,
+      { api, timeoutMs: timeoutMs(api, 0) },
+      { target, strict: 'strict' },
+    )
+  }
+
   #timeout(options: TimeoutOption | undefined): number {
     return this._page._timeoutSettings.timeout(options)
   }
@@ -151,8 +184,7 @@ export class ElementHandle extends EventEmitter {
   async $(selector: string): Promise<ElementHandle | null> {
     const site = captureSite()
     const api = 'elementHandle.$'
-    const handle = await invoke(
-      'locator.elementHandle',
+    const handle = await send['locator.elementHandle'](
       site,
       { api, timeoutMs: timeoutMs(api, 0) },
       {
@@ -168,8 +200,7 @@ export class ElementHandle extends EventEmitter {
   async $$(selector: string): Promise<ElementHandle[]> {
     const site = captureSite()
     const api = 'elementHandle.$$'
-    const handles = await invoke(
-      'locator.elementHandles',
+    const handles = await send['locator.elementHandles'](
       site,
       { api, timeoutMs: timeoutMs(api, 0) },
       { target: this.#rooted(api, selector) },
@@ -397,114 +428,82 @@ export class ElementHandle extends EventEmitter {
     options: TimeoutOption = {},
   ): Promise<void> {
     const site = captureSite()
-    await this.#op(
-      'locator.waitFor',
+    const api = 'elementHandle.waitForElementState'
+    const timeout = this.#timeout(options)
+    this.#live(api)
+    const target = this._brand
+    await send['locator.waitFor'](
       site,
-      'elementHandle.waitForElementState',
-      this.#timeout(options),
-      {
-        state,
-        omitReturnValue: true,
-      },
+      { api, timeoutMs: timeoutMs(api, timeout) },
+      { target, strict: 'strict', state, omitReturnValue: true },
     )
   }
 
   textContent(): Promise<string | null> {
     const site = captureSite()
-    return this.#op(
-      'locator.textContent',
-      site,
-      'elementHandle.textContent',
-      0,
-      {},
-    )
+    return this.#read('locator.textContent', site, 'elementHandle.textContent')
   }
 
   innerText(): Promise<string> {
     const site = captureSite()
-    return this.#op('locator.innerText', site, 'elementHandle.innerText', 0, {})
+    return this.#read('locator.innerText', site, 'elementHandle.innerText')
   }
 
   innerHTML(): Promise<string> {
     const site = captureSite()
-    return this.#op('locator.innerHTML', site, 'elementHandle.innerHTML', 0, {})
+    return this.#read('locator.innerHTML', site, 'elementHandle.innerHTML')
   }
 
   inputValue(): Promise<string> {
     const site = captureSite()
-    return this.#op(
-      'locator.inputValue',
-      site,
-      'elementHandle.inputValue',
-      0,
-      {},
-    )
+    return this.#read('locator.inputValue', site, 'elementHandle.inputValue')
   }
 
-  getAttribute(name: string): Promise<string | null> {
+  async getAttribute(name: string): Promise<string | null> {
     const site = captureSite()
-    return this.#op(
-      'locator.getAttribute',
+    const api = 'elementHandle.getAttribute'
+    this.#live(api)
+    const target = this._brand
+    return await send['locator.getAttribute'](
       site,
-      'elementHandle.getAttribute',
-      0,
-      {
-        name,
-      },
+      { api, timeoutMs: timeoutMs(api, 0) },
+      { target, strict: 'strict', name },
     )
   }
 
   isChecked(): Promise<boolean> {
     const site = captureSite()
-    return this.#op('locator.isChecked', site, 'elementHandle.isChecked', 0, {})
+    return this.#read('locator.isChecked', site, 'elementHandle.isChecked')
   }
 
   isDisabled(): Promise<boolean> {
     const site = captureSite()
-    return this.#op(
-      'locator.isDisabled',
-      site,
-      'elementHandle.isDisabled',
-      0,
-      {},
-    )
+    return this.#read('locator.isDisabled', site, 'elementHandle.isDisabled')
   }
 
   isEditable(): Promise<boolean> {
     const site = captureSite()
-    return this.#op(
-      'locator.isEditable',
-      site,
-      'elementHandle.isEditable',
-      0,
-      {},
-    )
+    return this.#read('locator.isEditable', site, 'elementHandle.isEditable')
   }
 
   isEnabled(): Promise<boolean> {
     const site = captureSite()
-    return this.#op('locator.isEnabled', site, 'elementHandle.isEnabled', 0, {})
+    return this.#read('locator.isEnabled', site, 'elementHandle.isEnabled')
   }
 
   isHidden(): Promise<boolean> {
     const site = captureSite()
-    return this.#op('locator.isHidden', site, 'elementHandle.isHidden', 0, {})
+    return this.#read('locator.isHidden', site, 'elementHandle.isHidden')
   }
 
   isVisible(): Promise<boolean> {
     const site = captureSite()
-    return this.#op('locator.isVisible', site, 'elementHandle.isVisible', 0, {})
+    return this.#read('locator.isVisible', site, 'elementHandle.isVisible')
   }
 
   boundingBox(): Promise<Rect | null> {
     const site = captureSite()
-    return this.#op(
-      'locator.boundingBox',
-      site,
-      'elementHandle.boundingBox',
-      0,
-      {},
-    )
+    return this.#read('locator.boundingBox', site, 'elementHandle.boundingBox')
   }
 
   /** upstream's `JSHandle.evaluate`: its checks first, then the script on this node. */

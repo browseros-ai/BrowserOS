@@ -9,9 +9,9 @@ use crate::page::OpPage;
 use crate::probe::{self, ProbeFailure, ProbeReply, ProbeRequest, ProbeTarget, Read, ReadAll};
 use crate::read::element_read;
 use crate::resolve::{self, Landed, Resolver};
-use crate::target::{LocatorTarget, PageRef, Strictness};
+use crate::target::{ElementTarget, LocatorTarget, PageRef, RootHandle, Strictness};
 use crate::world::{BackendNodeId, IsolatedWorld, Pin};
-use crate::{ErrorCode, Playwright, PlaywrightError};
+use crate::{ErrorCode, Playwright, PlaywrightError, op_output};
 
 /// A `located` read's value: the first match, pinned, and what `waitForSelector` checks and
 /// logs on each poll.
@@ -77,16 +77,15 @@ pub(crate) async fn element_brand(
     world: &IsolatedWorld,
     pin: Pin,
     preview: &str,
-) -> Result<Option<Value>, PlaywrightError> {
+) -> Result<Option<RootHandle>, PlaywrightError> {
     let Some(node) = backend_node(scope, world, pin).await? else {
         return Ok(None);
     };
-    Ok(Some(json!({
-        "$neo": "element",
-        "page": page,
-        "seq": world.seq(),
-        "node": node,
-        "display": preview,
+    Ok(Some(RootHandle::Element(ElementTarget {
+        page: page.clone(),
+        seq: world.seq(),
+        node,
+        display: preview.to_owned(),
     })))
 }
 
@@ -161,14 +160,25 @@ pub(crate) async fn every_match(
     Ok(Some((world, nodes)))
 }
 
-/// `page.$` and `frame.$`: the first match now as a handle, or null, as upstream's
-/// `querySelector` (no waiting; strict only when the script asked).
+/// Temporary JSON boundary for `page/element_evaluate.rs` only. It goes away when the
+/// page families (PRs 12 and 13) use the typed core; Read handlers never pass through it.
 pub(crate) async fn query_one(
     pw: &Playwright,
     scope: &OpScope<'_>,
     target: &LocatorTarget,
     strict: Strictness,
 ) -> Result<Value, PlaywrightError> {
+    op_output::to_output(scope, &find_one(pw, scope, target, strict).await?)
+}
+
+/// `page.$` and `frame.$`: the first match now as a handle, or null, as upstream's
+/// `querySelector` (no waiting; strict only when the script asked).
+pub(crate) async fn find_one(
+    pw: &Playwright,
+    scope: &OpScope<'_>,
+    target: &LocatorTarget,
+    strict: Strictness,
+) -> Result<Option<RootHandle>, PlaywrightError> {
     let page = OpPage::admit_handle(pw, scope, &target.page).await?;
     let resolver = Resolver::new(&page, scope, target, strict);
     let request = |last, frame_visible| ProbeRequest::Read {
@@ -179,16 +189,16 @@ pub(crate) async fn query_one(
     };
     // Its preview becomes the handle's display.
     let Some(Landed { reply, world, .. }) = resolver.attempt_at(request).await? else {
-        return Ok(Value::Null);
+        return Ok(None);
     };
     match reply {
         ProbeReply::Read { value, .. } => {
             let located: Located = element_read::read_value(scope, value.into_value())?;
             let brand =
                 element_brand(scope, &target.page, &world, located.pin, &located.preview).await?;
-            Ok(brand.unwrap_or(Value::Null))
+            Ok(brand)
         }
-        ProbeReply::None { stale_ref: None } | ProbeReply::Detached => Ok(Value::Null),
+        ProbeReply::None { stale_ref: None } | ProbeReply::Detached => Ok(None),
         other => Err(resolver.refused(other)),
     }
 }
@@ -205,7 +215,7 @@ pub(crate) async fn query_all(
     pw: &Playwright,
     scope: &OpScope<'_>,
     target: &LocatorTarget,
-) -> Result<Value, PlaywrightError> {
+) -> Result<Vec<RootHandle>, PlaywrightError> {
     let page = OpPage::admit_handle(pw, scope, &target.page).await?;
     let resolver = Resolver::new(&page, scope, target, Strictness::FirstMatch);
     let request = |last, _| ProbeRequest::ReadAll {
@@ -214,7 +224,7 @@ pub(crate) async fn query_all(
     };
     // Each match's preview becomes its handle's display.
     let Some(Landed { reply, world, .. }) = resolver.attempt_at(request).await? else {
-        return Ok(json!([]));
+        return Ok(Vec::new());
     };
     let ProbeReply::Values { count, values } = reply else {
         return Err(resolver.refused(reply));
@@ -234,5 +244,5 @@ pub(crate) async fn query_all(
         };
         handles.push(brand);
     }
-    Ok(Value::Array(handles))
+    Ok(handles)
 }

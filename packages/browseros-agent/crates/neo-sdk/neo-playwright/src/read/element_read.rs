@@ -163,16 +163,18 @@ pub(crate) async fn read_visibility(
     target: &Target,
     strict: Strictness,
     visibility: Visibility,
-) -> Result<Value, PlaywrightError> {
+) -> Result<bool, PlaywrightError> {
     let read = Read::State {
         state: visibility.state(),
     };
-    let without_element = Value::Bool(visibility.without_element());
+    let without_element = visibility.without_element();
     let target = match target {
         Target::Locator(target) => target,
         Target::Element(target) => {
             let reading = read_handle(pw, scope, target, &read).await?;
-            return Ok(reading.map_or(without_element, |reading| reading.value));
+            return reading.map_or(Ok(without_element), |reading| {
+                read_value(scope, reading.value)
+            });
         }
     };
     let page = OpPage::admit_handle(pw, scope, &target.page).await?;
@@ -191,7 +193,7 @@ pub(crate) async fn read_visibility(
     };
     match reply {
         ProbeReply::None { stale_ref: None } | ProbeReply::Detached => Ok(without_element),
-        ProbeReply::Read { value, .. } => Ok(value.into_value()),
+        ProbeReply::Read { value, .. } => read_value(scope, value.into_value()),
         other => Err(resolve::refused(scope, other)),
     }
 }
