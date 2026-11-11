@@ -298,6 +298,15 @@ impl ProtocolSession {
         endpoint
     }
 
+    /// Browser-scope cleanup for an attachment owned by this endpoint. Keep its original
+    /// socket epoch so a delayed detach cannot address a reused session on a new connection.
+    #[must_use]
+    pub fn cancellation_root(&self) -> Self {
+        let mut endpoint = self.cancellation_endpoint();
+        endpoint.session_id = None;
+        endpoint
+    }
+
     /// Pin this endpoint to the current websocket incarnation without changing admission.
     /// Background renderer setup must never publish an old session id onto a new connection.
     #[must_use]

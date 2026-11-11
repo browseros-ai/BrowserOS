@@ -72,6 +72,9 @@ pub struct FrameRegistry {
     /// How a parent last resolved each child frame. See [`FrameLink`].
     frame_links: Mutex<HashMap<FrameId, FrameLink>>,
     page_sessions: Mutex<HashMap<PageId, SessionId>>,
+    /// Routing selects one endpoint, but concurrent attachments can leave older parents
+    /// alive and auto-attaching. Ownership lasts until detach, independently of that choice.
+    live_parent_sessions: Mutex<HashSet<SessionId>>,
 }
 
 /// A child frame as its parent resolved it: the parent's endpoint, whose document holds the
@@ -96,6 +99,7 @@ impl FrameRegistry {
             same_process_sessions: Mutex::new(HashMap::new()),
             frame_links: Mutex::new(HashMap::new()),
             page_sessions: Mutex::new(HashMap::new()),
+            live_parent_sessions: Mutex::new(HashSet::new()),
         });
         Self::spawn_event_listener(registry.clone());
         registry
@@ -145,6 +149,10 @@ impl FrameRegistry {
                     return Err(guard.invalidated.clone().into());
                 }
             }
+            self.live_parent_sessions
+                .lock()
+                .await
+                .insert(session_id.clone());
             sessions.insert(page_id.clone(), session_id);
         }
         let initialized = page_session.at_connection_epoch();
@@ -362,6 +370,7 @@ impl FrameRegistry {
         self.same_process_sessions.lock().await.clear();
         self.frame_links.lock().await.clear();
         self.page_sessions.lock().await.clear();
+        self.live_parent_sessions.lock().await.clear();
         *cached_epoch = current_epoch;
     }
 
@@ -409,17 +418,7 @@ impl FrameRegistry {
     /// Adopting their descendants can replace foreground routes or release startup before
     /// their owner finishes setup. Browser-scope manual attachments retain their old path.
     async fn owns_parent_session(&self, parent: &SessionId) -> bool {
-        {
-            let pages = self.page_sessions.lock().await;
-            if pages.values().any(|session| session == parent) {
-                return true;
-            }
-        }
-        self.oopif_sessions
-            .lock()
-            .await
-            .values()
-            .any(|session| session == parent)
+        self.live_parent_sessions.lock().await.contains(parent)
     }
 
     async fn on_attached(&self, params: target::AttachedToTargetEvent, parent: Option<SessionId>) {
@@ -501,6 +500,10 @@ impl FrameRegistry {
                     return Err(guard.invalidated.clone().into());
                 }
             }
+            self.live_parent_sessions
+                .lock()
+                .await
+                .insert(session_id.clone());
             sessions.insert(frame_id, session_id.clone());
         }
         let session = ProtocolSession::for_session(self.cdp.clone(), session_id)
@@ -594,6 +597,7 @@ impl FrameRegistry {
 
     async fn on_detached(&self, session_id: &SessionId) {
         self.clear_sessions_from_prior_connection().await;
+        self.live_parent_sessions.lock().await.remove(session_id);
         self.oopif_sessions
             .lock()
             .await
@@ -1099,10 +1103,8 @@ mod tests {
         registry.clear_sessions_from_prior_connection().await;
         let parent = SessionId::from("owned-parent");
         registry
-            .oopif_sessions
-            .lock()
-            .await
-            .insert(FrameId("parent".to_owned()), parent.clone());
+            .register_oopif_session(FrameId("parent".to_owned()), parent.clone(), false, None)
+            .await;
         let attached = |session: &str, kind: &str| {
             serde_json::from_value::<browseros_cdp::target::AttachedToTargetEvent>(json!({
                 "sessionId": session, "waitingForDebugger": true,
@@ -1136,6 +1138,84 @@ mod tests {
             Some(&SessionId::from("owned-child"))
         );
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn replaced_page_sessions_keep_parent_ownership_until_detach()
+    -> Result<(), Box<dyn Error>> {
+        let connection = crate::testing::TestConnection::new([]);
+        for method in [
+            "DOM.enable",
+            "Accessibility.enable",
+            "Target.setAutoAttach",
+            "Runtime.runIfWaitingForDebugger",
+        ] {
+            connection.always(method, json!({}))?;
+        }
+        let registry = FrameRegistry::new(connection.clone());
+        let first = SessionId::from("first-page");
+        let second = SessionId::from("second-page");
+        for id in [&first, &second] {
+            registry
+                .register_page(
+                    ProtocolSession::for_session(connection.clone(), id.clone()),
+                    PageId(1),
+                    id.clone(),
+                )
+                .await?;
+        }
+        assert!(
+            registry.owns_parent_session(&first).await,
+            "a replaced routing entry is still a live attachment owner"
+        );
+        assert!(registry.owns_parent_session(&second).await);
+        registry.on_attached(serde_json::from_value(json!({
+            "sessionId":"first-child", "waitingForDebugger":true,
+            "targetInfo":{"targetId":"child","type":"iframe","title":"Child","url":"https://child.test/","attached":true,"canAccessOpener":false}
+        }))?, Some(first.clone())).await;
+        assert_eq!(
+            registry
+                .oopif_sessions
+                .lock()
+                .await
+                .get(&FrameId("child".to_owned())),
+            Some(&SessionId::from("first-child"))
+        );
+        registry.on_detached(&first).await;
+        assert!(!registry.owns_parent_session(&first).await);
+        assert!(registry.owns_parent_session(&second).await);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn delayed_attachment_cleanup_cannot_cross_a_socket_epoch() {
+        let connection = Arc::new(NoopConnection::default());
+        let endpoint =
+            ProtocolSession::for_session(connection.clone(), SessionId::from("reused-session"))
+                .at_connection_epoch();
+        let cleanup = endpoint.cancellation_root();
+        assert!(
+            cleanup.session_id().is_none(),
+            "detach is a browser command"
+        );
+        connection.epoch.store(2, Ordering::SeqCst);
+        assert!(
+            cleanup
+                .send_value(
+                    "Target.detachFromTarget",
+                    json!({"sessionId":"reused-session"})
+                )
+                .await
+                .is_err()
+        );
+        assert!(
+            connection
+                .sent
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .is_empty(),
+            "an old lease must never send a detach on the new socket"
+        );
     }
 
     #[tokio::test]

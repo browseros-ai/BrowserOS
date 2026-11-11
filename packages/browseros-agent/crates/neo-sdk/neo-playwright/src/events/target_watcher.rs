@@ -39,6 +39,8 @@ use std::mem;
 use std::sync::Arc;
 use std::time::Duration;
 
+use futures_util::future;
+
 use browseros_cdp::CdpEvent;
 use browseros_core::{
     BrowserSession, BrowserView, CoreError, FrameId, ProtocolSession, SessionId, TargetId,
@@ -51,7 +53,7 @@ use tokio::sync::broadcast::Receiver;
 use tokio::sync::broadcast::error::{RecvError, TryRecvError};
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use tokio::sync::oneshot;
-use tokio::task::JoinHandle;
+use tokio::task::{JoinHandle, JoinSet};
 use tokio::time::{self, Instant, MissedTickBehavior};
 
 use crate::events::dialog_table::{ClosedBy, HeldDialog, Unanswered};
@@ -161,7 +163,7 @@ struct Watcher {
     /// Which tab each page or OOPIF session belongs to.
     sessions: HashMap<SessionId, TargetId>,
     /// Only the chosen auto-attach endpoint publishes a worker's console and close.
-    worker_sessions: HashMap<SessionId, String>,
+    worker_sessions: HashMap<SessionId, WorkerAttachment>,
     /// Older Chromium has no workerScriptLoaded event and uses context creation instead.
     worker_script_events: Option<bool>,
     /// Watcher-owned root sessions only auto-attach descendants; page Runtime stays off.
@@ -169,6 +171,9 @@ struct Watcher {
     /// Observer descendants belong to this watcher, not core's foreground frame registry.
     /// Arm their own descendants before releasing the startup pause that this tree requested.
     observer_frames: HashSet<SessionId>,
+    /// Resume acknowledgements can depend on sibling startup. Keep the event loop free to
+    /// receive those siblings; lag and shutdown abort jobs before retiring their trees.
+    observer_initializers: JoinSet<()>,
     /// Core may attach concurrently. One source per native target prevents each CDP session
     /// from publishing the same lifecycle transition; OOPIFs have their own native target.
     lifecycle_sources: LifecycleSources,
@@ -187,6 +192,13 @@ struct Watcher {
     found: UnboundedSender<OpenedPage>,
 }
 
+/// The watcher armed recursive attachment on this Runtime endpoint. Its cleanup root keeps
+/// that exact socket epoch, even when recovery is delayed until after a reconnect.
+struct WorkerAttachment {
+    worker: String,
+    root: ProtocolSession,
+}
+
 /// The watcher owns only this root attachment, fenced to the socket that created it.
 struct RootObserver {
     target: TargetId,
@@ -195,23 +207,13 @@ struct RootObserver {
 
 impl Drop for Watcher {
     fn drop(&mut self) {
-        let observers = mem::take(&mut self.root_observers);
-        if observers.is_empty() {
+        self.observer_initializers.abort_all();
+        let attachments = self.take_owned_attachments();
+        if attachments.is_empty() {
             return;
         }
         if let Ok(runtime) = Handle::try_current() {
-            runtime.spawn(async move {
-                for (session, observer) in observers {
-                    let _ = time::timeout(
-                        Duration::from_secs(1),
-                        observer.root.send_value(
-                            "Target.detachFromTarget",
-                            json!({"sessionId": session.as_str()}),
-                        ),
-                    )
-                    .await;
-                }
-            });
+            runtime.spawn(detach_attachments(attachments));
         }
     }
 }
@@ -270,6 +272,8 @@ struct TargetEvent {
 struct Attached {
     session_id: SessionId,
     target_info: TargetInfo,
+    #[serde(default)]
+    waiting_for_debugger: bool,
 }
 
 #[derive(Deserialize)]
@@ -407,6 +411,7 @@ impl Watcher {
             worker_script_events: None,
             root_observers: HashMap::new(),
             observer_frames: HashSet::new(),
+            observer_initializers: JoinSet::new(),
             lifecycle_sources: LifecycleSources::default(),
             frames: HashMap::new(),
             contexts: HashMap::new(),
@@ -441,9 +446,7 @@ impl Watcher {
                     // Events were dropped: rediscover, which records what closed meanwhile, and
                     // tell the frame log that commits may be missing.
                     Err(RecvError::Lagged(skipped)) => {
-                        self.epoch = None;
-                        self.attach_log.lost_events();
-                        self.progress.handled(skipped);
+                        self.lost_events(skipped).await;
                     }
                     Err(RecvError::Closed) => {
                         self.progress.stopped();
@@ -466,6 +469,9 @@ impl Watcher {
                     }
                     let _ = request.done.send(());
                 }
+                Some(finished) = self.observer_initializers.join_next(), if !self.observer_initializers.is_empty() => {
+                    if finished.is_err() { self.lost_events(0).await; }
+                },
                 Some(opened) = found.recv() => self.found(opened),
                 _ = tick.tick() => self.tick().await,
                 () = time::sleep_until(grace_ends.unwrap_or_else(Instant::now)), if grace_ends.is_some() => {
@@ -517,11 +523,46 @@ impl Watcher {
     fn session_detached(&mut self, session: &SessionId) {
         self.root_observers.remove(session);
         self.observer_frames.remove(session);
-        if let Some(id) = self.worker_sessions.remove(session) {
-            self.close_worker(&id);
+        if let Some(attachment) = self.worker_sessions.remove(session) {
+            self.close_worker(&attachment.worker);
         }
         self.contexts.retain(|(known, _), _| known != session);
         self.sessions.remove(session);
+    }
+
+    /// A lost attach event also loses its session id. Detaching the roots we armed releases
+    /// unknown descendants' startup throttles; merely attaching another endpoint cannot.
+    /// Forget tracking before detach so late detach events cannot close retained Worker objects.
+    async fn lost_events(&mut self, skipped: u64) {
+        self.observer_initializers.abort_all();
+        while self.observer_initializers.join_next().await.is_some() {}
+        let attachments = self.take_owned_attachments();
+        let mut retired = mem::take(&mut self.observer_frames);
+        retired.extend(attachments.iter().map(|(session, _)| session.clone()));
+        self.sessions
+            .retain(|session, _| !retired.contains(session));
+        self.contexts
+            .retain(|(session, _), _| !retired.contains(session));
+        for session in retired {
+            self.lifecycle_sources.detach(&session);
+        }
+        self.epoch = None;
+        self.attach_log.lost_events();
+        detach_attachments(attachments).await;
+        self.progress.handled(skipped);
+    }
+
+    fn take_owned_attachments(&mut self) -> Vec<(SessionId, ProtocolSession)> {
+        let mut attachments: Vec<_> = mem::take(&mut self.root_observers)
+            .into_iter()
+            .map(|(session, observer)| (session, observer.root))
+            .collect();
+        attachments.extend(
+            mem::take(&mut self.worker_sessions)
+                .into_iter()
+                .map(|(session, worker)| (session, worker.root)),
+        );
+        attachments
     }
 
     /// Handles every broadcast event already queued, without waiting for more.
@@ -534,9 +575,7 @@ impl Watcher {
                     self.progress.handled(1);
                 }
                 Err(TryRecvError::Lagged(skipped)) => {
-                    self.epoch = None;
-                    self.attach_log.lost_events();
-                    self.progress.handled(skipped);
+                    self.lost_events(skipped).await;
                 }
                 Err(TryRecvError::Empty | TryRecvError::Closed) => return,
             }
@@ -634,11 +673,17 @@ impl Watcher {
             .filter(|info| info.kind == "worker")
             .map(|info| info.target_id.as_str())
             .collect();
-        let gone_workers: Vec<String> = self
-            .worker_sessions
-            .values()
-            .filter(|id| !live_workers.contains(id.as_str()))
+        let owners: HashSet<_> = self
+            .pages
+            .keys()
+            .chain(self.sessions.values())
             .cloned()
+            .collect();
+        let gone_workers: Vec<String> = owners
+            .iter()
+            .flat_map(|page| self.writer.hub().workers.list(page))
+            .filter(|worker| !live_workers.contains(worker.id.as_str()))
+            .map(|worker| worker.id)
             .collect();
         for id in gone_workers {
             self.close_worker(&id);
@@ -665,8 +710,15 @@ impl Watcher {
             });
         }
         if changed {
+            self.observer_initializers.abort_all();
+            while self.observer_initializers.join_next().await.is_some() {}
             self.lifecycle = FrameLifecycleTracker::default();
-            for id in self.worker_sessions.values().cloned().collect::<Vec<_>>() {
+            let workers: Vec<_> = owners
+                .iter()
+                .flat_map(|page| self.writer.hub().workers.list(page))
+                .map(|worker| worker.id)
+                .collect();
+            for id in workers {
                 self.close_worker(&id);
             }
             self.worker_sessions.clear();
@@ -917,7 +969,12 @@ impl Watcher {
         message.worker = self
             .worker_sessions
             .get(session)
-            .and_then(|id| self.writer.hub().workers.get(&message.target, id))
+            .and_then(|attachment| {
+                self.writer
+                    .hub()
+                    .workers
+                    .get(&message.target, &attachment.worker)
+            })
             .map(|worker| worker.info.clone());
         self.writer.record(PageEvent::Console(message));
     }
@@ -973,14 +1030,19 @@ impl Watcher {
         }
         for target in targets.iter().filter(|info| info.kind == "worker") {
             let known = self
-                .sessions
-                .values()
+                .pages
+                .keys()
+                .chain(self.sessions.values())
                 .find_map(|page| self.writer.hub().workers.get(page, &target.target_id));
             if known.as_ref().is_some_and(|worker| {
-                matches!(
-                    *worker.context.borrow(),
-                    super::worker_table::WorkerContext::Ready(_)
-                )
+                worker
+                    .session()
+                    .session_id()
+                    .is_some_and(|session| self.worker_sessions.contains_key(session))
+                    && matches!(
+                        *worker.context.borrow(),
+                        super::worker_table::WorkerContext::Ready(_)
+                    )
             }) {
                 continue;
             }
@@ -1030,8 +1092,13 @@ impl Watcher {
                 // new Runtime agent instead of mistaking endpoint replacement for closure.
                 worker.rebind(session.clone(), wait_for_script);
                 self.sessions.insert(attached.session_id.clone(), owner);
-                self.worker_sessions
-                    .insert(attached.session_id, worker.info.id.clone());
+                self.worker_sessions.insert(
+                    attached.session_id,
+                    WorkerAttachment {
+                        worker: worker.info.id.clone(),
+                        root: session.cancellation_root(),
+                    },
+                );
                 Self::enable_worker(&session).await;
             } else {
                 let info = super::worker_table::WorkerInfo {
@@ -1070,7 +1137,13 @@ impl Watcher {
                 .await;
             return;
         }
-        self.worker_sessions.insert(session_id, info.id.clone());
+        self.worker_sessions.insert(
+            session_id,
+            WorkerAttachment {
+                worker: info.id.clone(),
+                root: session.cancellation_root(),
+            },
+        );
         if announce {
             self.writer.record(PageEvent::Worker {
                 target: tab,
@@ -1100,6 +1173,7 @@ impl Watcher {
         let Attached {
             session_id,
             target_info,
+            waiting_for_debugger,
         } = attached;
         match target_info.kind.as_str() {
             "worker" => {
@@ -1136,7 +1210,7 @@ impl Watcher {
                         self.frames.insert(target_info.target_id, tab.clone());
                         self.sessions.insert(session_id.clone(), tab);
                         self.observer_frames.insert(session_id.clone());
-                        self.observe_worker_frame(&session_id).await;
+                        self.observe_worker_frame(&session_id, waiting_for_debugger);
                         return;
                     }
                     self.lifecycle_sources
@@ -1227,20 +1301,15 @@ impl Watcher {
         }
     }
 
-    /// A paused observer frame must discover its workers and nested frames before running
-    /// page script. Core ignores this attachment tree, so this owner always releases the pause
-    /// even when recursive setup fails; it never enables Runtime on the frame itself.
-    async fn observe_worker_frame(&self, id: &SessionId) {
+    /// Stamp ownership before spawning: descendant attach events can arrive as soon as the
+    /// recursive command is armed, and resume must never block their owner event loop.
+    fn observe_worker_frame(&mut self, id: &SessionId, waiting_for_debugger: bool) {
         let session = self
             .browser
             .protocol_session(id.clone())
             .at_connection_epoch();
-        let _armed = session
-            .send_value("Target.setAutoAttach", worker_auto_attach())
-            .await;
-        let _resumed = session
-            .send_value("Runtime.runIfWaitingForDebugger", json!({}))
-            .await;
+        self.observer_initializers
+            .spawn(prepare_observer_frame(session, waiting_for_debugger));
     }
 
     async fn observe_workers(&mut self, target: TargetId) {
@@ -1605,6 +1674,34 @@ async fn window_kind(
     }
 }
 
+/// Recursive discovery is armed before page script starts. A paused target is always released
+/// after setup, including failures; an already running frame needs no Runtime command.
+async fn prepare_observer_frame(session: ProtocolSession, waiting_for_debugger: bool) {
+    let _armed = session
+        .send_value("Target.setAutoAttach", worker_auto_attach())
+        .await;
+    if waiting_for_debugger {
+        let _resumed = session
+            .send_value("Runtime.runIfWaitingForDebugger", json!({}))
+            .await;
+    }
+}
+
+/// Bound teardown as a group: many observers must not multiply the lag-recovery delay.
+async fn detach_attachments(attachments: Vec<(SessionId, ProtocolSession)>) {
+    future::join_all(attachments.into_iter().map(|(session, root)| async move {
+        let _ = time::timeout(
+            Duration::from_secs(1),
+            root.send_value(
+                "Target.detachFromTarget",
+                json!({"sessionId":session.as_str()}),
+            ),
+        )
+        .await;
+    }))
+    .await;
+}
+
 /// A worker observer traverses OOPIFs too, without taking ownership of page/prerender targets.
 fn worker_auto_attach() -> Value {
     json!({"autoAttach":true, "waitForDebuggerOnStart":true, "flatten":true,
@@ -1710,10 +1807,13 @@ mod worker_observation_tests {
             ("observer-grandchild", "grandchild"),
         ] {
             watcher.attached(Some(&parent), serde_json::from_value(json!({
-                "sessionId":session, "targetInfo":{"targetId":target,"type":"iframe","url":"https://child.test/"}
+                "sessionId":session, "waitingForDebugger":true, "targetInfo":{"targetId":target,"type":"iframe","url":"https://child.test/"}
             }))?).await;
             parent = SessionId::from(session);
             assert!(watcher.observer_frames.contains(&parent));
+            while let Some(finished) = watcher.observer_initializers.join_next().await {
+                finished?;
+            }
             let methods: Vec<_> = connection
                 .calls()?
                 .into_iter()
@@ -1735,6 +1835,221 @@ mod worker_observation_tests {
         );
         watcher.session_detached(&parent);
         assert!(!watcher.observer_frames.contains(&parent));
+        Ok(())
+    }
+
+    async fn wait_for_resume(
+        connection: &TestConnection,
+        session: &SessionId,
+    ) -> Result<(), Box<dyn Error>> {
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            loop {
+                if connection.calls()?.iter().any(|call| {
+                    call.method == "Runtime.runIfWaitingForDebugger"
+                        && call.session.as_ref() == Some(session)
+                }) {
+                    return Ok::<_, Box<dyn Error>>(());
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await?
+    }
+
+    #[tokio::test]
+    async fn a_pending_resume_cannot_block_the_next_observer_attachment()
+    -> Result<(), Box<dyn Error>> {
+        let (connection, mut watcher) = observer_watcher()?;
+        watcher.observe_workers(TargetId("page".to_owned())).await;
+        let root = watcher
+            .root_observers
+            .keys()
+            .next()
+            .cloned()
+            .ok_or("observer exists")?;
+        connection.always(
+            "Runtime.runIfWaitingForDebugger",
+            browseros_core::testing::cdp_pending(),
+        )?;
+        let first = SessionId::from("first-frame");
+        tokio::time::timeout(std::time::Duration::from_secs(2), watcher.attached(Some(&root), serde_json::from_value(json!({"sessionId":first,"waitingForDebugger":true,"targetInfo":{"targetId":"first","type":"iframe"}}))?)).await?;
+        wait_for_resume(&connection, &first).await?;
+        connection.always("Runtime.runIfWaitingForDebugger", json!({}))?;
+        let second = SessionId::from("second-frame");
+        tokio::time::timeout(std::time::Duration::from_secs(2), watcher.attached(Some(&root), serde_json::from_value(json!({"sessionId":second,"waitingForDebugger":true,"targetInfo":{"targetId":"second","type":"iframe"}}))?)).await?;
+        wait_for_resume(&connection, &second).await?;
+        watcher.lost_events(1).await;
+        assert!(
+            watcher.observer_initializers.is_empty(),
+            "retired trees cannot be re-armed by late jobs"
+        );
+        Ok(())
+    }
+
+    fn observer_watcher() -> Result<(Arc<TestConnection>, Watcher), Box<dyn Error>> {
+        let connection = TestConnection::new([]);
+        for method in [
+            "Target.setAutoAttach",
+            "Target.detachFromTarget",
+            "Runtime.runIfWaitingForDebugger",
+            "Runtime.enable",
+            "Target.setDiscoverTargets",
+            "Browser.setDownloadBehavior",
+        ] {
+            connection.always(method, json!({}))?;
+        }
+        connection.always("Browser.getVersion", json!({"product":"Chrome/143.0"}))?;
+        let browser = BrowserSession::new(
+            Arc::clone(&connection) as Arc<dyn CdpConnection>,
+            BrowserSessionHooks::default(),
+        );
+        let (_hub, writer) = EventHub::new();
+        let (watcher, _found) = Watcher::new(
+            browser,
+            writer,
+            Arc::new(FrameAttachLog::default()),
+            Arc::new(WatcherProgress::default()),
+        );
+        Ok((connection, watcher))
+    }
+
+    #[tokio::test]
+    async fn lag_detaches_the_root_even_when_the_child_attach_was_lost()
+    -> Result<(), Box<dyn Error>> {
+        let (connection, mut watcher) = observer_watcher()?;
+        let page = TargetId("page".to_owned());
+        watcher.observe_workers(page.clone()).await;
+        let root = watcher
+            .root_observers
+            .keys()
+            .next()
+            .cloned()
+            .ok_or("observer root exists")?;
+        // No child event is delivered: recovery must release its throttle through the root.
+        watcher.lost_events(1).await;
+        assert!(watcher.root_observers.is_empty());
+        assert!(
+            connection
+                .calls()?
+                .iter()
+                .any(|call| call.method == "Target.detachFromTarget"
+                    && call.params.get("sessionId") == Some(&json!(root)))
+        );
+        watcher.observe_workers(page).await;
+        assert_eq!(watcher.root_observers.len(), 1);
+        assert!(!watcher.root_observers.contains_key(&root));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn lag_rebinds_a_ready_worker_without_replacing_its_client_identity()
+    -> Result<(), Box<dyn Error>> {
+        let (connection, mut watcher) = observer_watcher()?;
+        let page = TargetId("page".to_owned());
+        watcher.pages.insert(
+            page.clone(),
+            super::KnownPage {
+                opener: None,
+                state: super::PageState::Reported,
+            },
+        );
+        watcher.observe_workers(page.clone()).await;
+        let old = SessionId::from("original-worker");
+        watcher
+            .start_worker(
+                page.clone(),
+                WorkerInfo {
+                    id: "worker".to_owned(),
+                    url: "worker.js".to_owned(),
+                },
+                old.clone(),
+                true,
+            )
+            .await;
+        watcher.writer.hub().workers.context(&old, 1);
+        watcher.writer.hub().workers.script_loaded(&old);
+        let retained = watcher
+            .writer
+            .hub()
+            .workers
+            .get(&page, "worker")
+            .ok_or("worker exists")?;
+        watcher.lost_events(2).await;
+        assert!(watcher.worker_sessions.is_empty());
+        assert!(
+            connection
+                .calls()?
+                .iter()
+                .any(|call| call.method == "Target.detachFromTarget"
+                    && call.params.get("sessionId") == Some(&json!(old)))
+        );
+        watcher.recover_workers(&[serde_json::from_value(json!({"targetId":"worker","type":"worker","parentFrameId":"page","url":"worker.js"}))?]).await;
+        let rebound = watcher
+            .writer
+            .hub()
+            .workers
+            .get(&page, "worker")
+            .ok_or("worker identity survives recovery")?;
+        assert!(Arc::ptr_eq(&retained, &rebound));
+        assert_ne!(
+            rebound.session().session_id(),
+            Some(&old),
+            "ready context state cannot hide a retired attachment"
+        );
+        assert!(
+            rebound
+                .session()
+                .session_id()
+                .is_some_and(|id| watcher.worker_sessions.contains_key(id))
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn lag_reconciles_workers_that_disappeared_after_tracking_was_reset()
+    -> Result<(), Box<dyn Error>> {
+        let (connection, mut watcher) = observer_watcher()?;
+        let page = TargetId("page".to_owned());
+        watcher.pages.insert(
+            page.clone(),
+            super::KnownPage {
+                opener: None,
+                state: super::PageState::Reported,
+            },
+        );
+        watcher
+            .start_worker(
+                page.clone(),
+                WorkerInfo {
+                    id: "gone".to_owned(),
+                    url: "worker.js".to_owned(),
+                },
+                SessionId::from("gone-session"),
+                true,
+            )
+            .await;
+        watcher.lost_events(1).await;
+        connection.always(
+            "Target.getTargets",
+            json!({"targetInfos":[{"targetId":"page","type":"page"}]}),
+        )?;
+        watcher.discover(false).await?;
+        assert!(watcher.writer.hub().workers.get(&page, "gone").is_none());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn an_existing_observer_frame_does_not_receive_a_resume_command()
+    -> Result<(), Box<dyn Error>> {
+        let (connection, mut watcher) = observer_watcher()?;
+        let session = SessionId::from("already-running");
+        watcher.observe_worker_frame(&session, false);
+        while let Some(finished) = watcher.observer_initializers.join_next().await {
+            finished?;
+        }
+        let calls = connection.calls()?;
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].method, "Target.setAutoAttach");
         Ok(())
     }
 
