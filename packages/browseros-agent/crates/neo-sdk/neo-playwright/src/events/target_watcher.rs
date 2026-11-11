@@ -1,4 +1,4 @@
-//! The background task that turns CDP's target, dialog, console and download events into the
+//! The background task that turns CDP's target, navigation, dialog and console events into the
 //! event log's records. One per `Playwright`, and the log's only writer.
 //!
 //! - **Discovery.** On start, after a lag in the event stream and on every connection epoch
@@ -37,13 +37,14 @@ use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use tokio::task::JoinHandle;
 use tokio::time::{self, Instant, MissedTickBehavior};
 
-use crate::events::PageEventKind;
 use crate::events::dialog_table::{ClosedBy, HeldDialog, Unanswered};
 use crate::events::event_hub::EventWriter;
 use crate::events::page_event::{
     ConsoleMessage, ConsoleParams, DialogId, DialogKind, DialogOpened, DownloadStarted,
-    ExceptionParams, OpenedPage, PageError, PageEvent, WindowKind,
+    ExceptionParams, FileChooserOpened, OpenedPage, PageError, PageEvent, WindowKind,
 };
+use crate::events::{PageEventKind, navigation_event};
+use crate::world::BackendNodeId;
 
 /// How long a dialog nobody listens for stays open, for a listener that lands just after the
 /// click that opened it (build-design graft 7).
@@ -183,6 +184,13 @@ struct DialogParams {
     message: String,
     #[serde(default)]
     default_prompt: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct FileChooserParams {
+    frame_id: FrameId,
+    backend_node_id: Option<BackendNodeId>,
 }
 
 #[derive(Deserialize)]
@@ -338,6 +346,11 @@ impl Watcher {
             session_id,
         } = event;
         match method.as_str() {
+            "Page.frameNavigated" | "Page.navigatedWithinDocument" | "Page.frameDetached" => {
+                if let Some(navigation) = navigation_event::parse(&method, params) {
+                    self.writer.record(navigation);
+                }
+            }
             "Target.targetCreated" => {
                 if let Some(TargetEvent { target_info }) = parse(params) {
                     self.created(target_info);
@@ -367,6 +380,24 @@ impl Watcher {
             "Page.javascriptDialogOpening" => {
                 if let (Some(session), Some(dialog)) = (session_id, parse(params)) {
                     self.dialog_opened(session, dialog).await;
+                }
+            }
+            "Page.fileChooserOpened" => {
+                // Core owns interception on agent tabs and their remote descendants. Keep
+                // every chooser in the bounded log: a wait may be admitted after its click,
+                // but its synchronous `since` stamp still predates this event.
+                if let Some(session) = session_id
+                    && let Some(target) = self.target_of(&session).await
+                    && let Some(params) = parse::<FileChooserParams>(params)
+                    && let Some(node) = params.backend_node_id
+                {
+                    self.writer
+                        .record(PageEvent::FileChooser(FileChooserOpened {
+                            target,
+                            session,
+                            frame: params.frame_id,
+                            node,
+                        }));
                 }
             }
             "Page.javascriptDialogClosed" => {

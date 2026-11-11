@@ -128,7 +128,6 @@ export const UNSUPPORTED = {
     tap: NO_TOUCH,
     unroute: NETWORK,
     unrouteAll: NETWORK,
-    waitForNavigation: 'use page.waitForURL() or page.waitForLoadState()',
     waitForRequest:
       'Neo does not report network events; wait for what the page shows instead',
     waitForResponse:
@@ -169,7 +168,6 @@ export const UNSUPPORTED = {
     frameElement:
       "locate the iframe from its parent instead: page.locator('iframe')",
     tap: NO_TOUCH,
-    waitForNavigation: 'use frame.waitForURL() or frame.waitForLoadState()',
     webmcp: { hint: 'WebMCP is not available in Neo', kind: 'property' },
   },
   Locator: {

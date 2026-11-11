@@ -23,7 +23,7 @@
 //! the turn would not compile.
 
 use crate::PartError;
-use crate::limits::{ACTIVATE_TIMEOUT, FRONT_SHOWN_POLL, WINDOW_POLL, WINDOW_SETTLE};
+use crate::limits::{ACTIVATE_TIMEOUT, WINDOW_POLL, WINDOW_SETTLE};
 use crate::screen_rule::{ScreenFacts, ScreenHolder};
 use browseros_core::navigation::Navigation;
 use browseros_core::pages::PageInfo;
@@ -36,7 +36,6 @@ use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 use std::sync::{Arc, Mutex, PoisonError};
-use std::time::Duration;
 use tokio::sync::watch;
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
@@ -57,8 +56,7 @@ pub struct BrowserTabs {
 struct FrontState {
     /// Held from a mover's last check to its activation's reply, so no other Neo activation
     /// lands between a mover's decision and its send. A tokio mutex: fair, so movers
-    /// activate in the order they asked, and held across the CDP round trip and a private
-    /// switch's confirm read. A fit takes it inside its claim's `Step::Activate`, under the
+    /// activate in the order they asked, and held across the CDP round trip. A fit takes it inside its claim's `Step::Activate`, under the
     /// surface lock; nothing takes the turn and then waits for the surface, so the two cannot
     /// deadlock.
     turn: tokio::sync::Mutex<()>,
@@ -145,24 +143,6 @@ impl FrontTurn<'_> {
             .send_replace(Some(FrontMove { tab, by, at }));
         Ok(())
     }
-
-    /// Whether `tab` reads as in front in `Browser.getTabs` within `within`, read every
-    /// `FRONT_SHOWN_POLL`; a failed read counts as not yet. The agent's private switch keeps
-    /// views out until this holds, so its guarantee does not rest on whether
-    /// `Browser.activateTab` answers before or after the switch.
-    pub(crate) async fn shows(&self, tab: TabId, within: Duration) -> bool {
-        let shown = async {
-            while !self
-                .browser
-                .front_tabs()
-                .await
-                .is_ok_and(|front| front.contains(&tab))
-            {
-                tokio::time::sleep(FRONT_SHOWN_POLL).await;
-            }
-        };
-        tokio::time::timeout(within, shown).await.is_ok()
-    }
 }
 
 impl BrowserTabs {
@@ -245,18 +225,6 @@ impl BrowserTabs {
 
     pub(crate) async fn pages(&self) -> Result<Vec<PageInfo>, PartError> {
         self.session.pages.list().await.map_err(PartError::Browser)
-    }
-
-    /// The tabs in front: each window's active tab, from a fresh `Browser.getTabs`. Neo has one
-    /// window, so this is the tab its one screen shows.
-    pub(crate) async fn front_tabs(&self) -> Result<Vec<TabId>, PartError> {
-        Ok(self
-            .pages()
-            .await?
-            .into_iter()
-            .filter(|page| page.is_active)
-            .map(|page| page.tab_id)
-            .collect())
     }
 }
 
@@ -573,6 +541,7 @@ mod tests {
     use neo_trace::EpochMillis;
     use serde_json::json;
     use std::sync::Arc;
+
     use std::time::Duration;
 
     type BoxError = Box<dyn std::error::Error + Send + Sync>;

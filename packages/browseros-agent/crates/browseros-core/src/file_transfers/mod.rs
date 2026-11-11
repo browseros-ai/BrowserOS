@@ -1,12 +1,16 @@
 //! File selection and download capture behind one scoped browser interface. BrowserSession
 //! owns chooser state across calls; this handle retains the caller's immutable BrowserView.
 //! The browser keeps download naming/history, while all local-file checks happen beside it.
+mod file_chooser_interception;
 mod state;
+pub use file_chooser_interception::FileChooserInterception;
 pub(crate) use state::TransferState;
 
 use crate::{BrowserView, CoreError, FrameId, PageId, PageJs, ProtocolSession, Ref, SessionId};
 use serde_json::{Value, json};
-use std::{path::PathBuf, sync::Arc, time::Duration};
+use std::path::PathBuf;
+use std::sync::Arc;
+use std::time::Duration;
 
 const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(60);
 const CHOOSER_TIMEOUT: Duration = Duration::from_secs(10);
@@ -38,6 +42,15 @@ pub struct FileTransfers {
 }
 
 impl FileTransfers {
+    /// Borrows interception for a listener or wait on an admitted page. Concurrent callers
+    /// and uploads share ownership; dropping the last lease restores an adopted tab.
+    pub async fn intercept_choosers(
+        &self,
+        page: PageId,
+    ) -> Result<FileChooserInterception, CoreError> {
+        let session = self.view.page_session(page).await?.session;
+        self.state.lease_interception(&session).await
+    }
     /// Observe without changing Chrome's destination or collision handling. Enabling events
     /// is connection/context setup, serialized across callers rather than toggled per click.
     async fn enable_downloads(&self) -> Result<(), CoreError> {
@@ -228,23 +241,7 @@ impl FileTransfers {
             // The opener can delegate to an ancestor/sibling frame (for example via
             // postMessage). Lease the page tree, rather than only the opener's subtree.
             let interception = self.view.page_session(page.clone()).await?.session;
-            let session_id = interception.session_id().cloned();
-            // Arm restoration before setup's first await: cancellation can arrive while
-            // Chrome is acknowledging interception, before setup returns an installed flag.
-            let mut lease = InterceptionLease {
-                state: self.state.clone(),
-                operation: Some(_operation),
-                session: session_id.clone().filter(|id| !self.state.intercepts(id)),
-            };
-            match self.state.intercept(&interception).await {
-                Ok(installed) => lease.session = installed.then_some(session_id).flatten(),
-                Err(error) => {
-                    if let Err(cleanup) = lease.restore().await {
-                        tracing::warn!(%cleanup, "file chooser setup failed and cleanup remains pending");
-                    }
-                    return Err(error);
-                }
-            }
+            let mut lease = self.state.lease_interception(&interception).await?;
             let mut changes = self.state.changes();
             let wait = async {
                 loop {
@@ -272,7 +269,7 @@ impl FileTransfers {
                         "Upload control did not open a file chooser within 10000ms".into(),
                     )
                 })?;
-            lease.restore().await?;
+            lease.release().await?;
             result
         } else {
             let chooser = self.pending_chooser(page.clone()).await?.ok_or_else(|| {
@@ -387,41 +384,6 @@ impl FileTransfers {
         self.view.page(page).await?;
         self.state.clear(chooser);
         Ok(())
-    }
-}
-
-/// Holds a borrowed page's override and operation lock until restoration, even on cancellation.
-struct InterceptionLease {
-    state: Arc<TransferState>,
-    session: Option<SessionId>,
-    operation: Option<tokio::sync::OwnedMutexGuard<()>>,
-}
-impl InterceptionLease {
-    async fn restore(&mut self) -> Result<(), CoreError> {
-        if let Some(session) = self.session.as_ref() {
-            self.state.restore(session).await?;
-            self.session = None;
-        }
-        self.operation.take();
-        Ok(())
-    }
-}
-impl Drop for InterceptionLease {
-    fn drop(&mut self) {
-        if let Some(session) = self.session.take() {
-            let state = self.state.clone();
-            let operation = self.operation.take();
-            // Keep the page lock until restoration finishes: otherwise an old cancellation
-            // could disable interception underneath the next upload on this borrowed page.
-            // Cancellation drops the upload future. Restore a borrowed tab even then,
-            // using the retained epoch and session identity rather than a new capability.
-            tokio::spawn(async move {
-                if let Err(error) = state.restore(&session).await {
-                    tracing::warn!(%error, "could not restore file chooser interception");
-                }
-                drop(operation);
-            });
-        }
     }
 }
 

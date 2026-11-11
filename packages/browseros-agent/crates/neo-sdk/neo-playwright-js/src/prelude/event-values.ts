@@ -4,14 +4,51 @@
  * (wire.ts `EventRecord`); dialogs and downloads keep the id Rust answers them by.
  */
 import { invoke } from './bridge'
+import type { ElementHandle } from './element-handle'
 import { markHandle } from './options'
 import type { Page } from './page'
 import type {
   ConsoleInfo,
   DialogInfo,
   DownloadInfo,
+  FileChooserInfo,
   PageErrorInfo,
 } from './wire'
+
+/** One intercepted input. All upload forms share ElementHandle.setInputFiles' validation. */
+export class FileChooser {
+  readonly #pageValue: Page
+  readonly #element: ElementHandle
+  readonly #multiple: boolean
+
+  constructor(page: Page, info: FileChooserInfo) {
+    this.#pageValue = page
+    const element = page._handle(info.element)
+    if (!element) throw new Error('Rust returned a chooser without its input')
+    this.#element = element
+    this.#multiple = info.isMultiple
+    markHandle(this)
+  }
+
+  element(): ElementHandle {
+    return this.#element
+  }
+
+  isMultiple(): boolean {
+    return this.#multiple
+  }
+
+  page(): Page {
+    return this.#pageValue
+  }
+
+  async setFiles(
+    files: unknown,
+    options?: Parameters<ElementHandle['setInputFiles']>[1],
+  ): Promise<void> {
+    await this.#element.setInputFiles(files, options)
+  }
+}
 
 export class Dialog {
   readonly #pageValue: Page

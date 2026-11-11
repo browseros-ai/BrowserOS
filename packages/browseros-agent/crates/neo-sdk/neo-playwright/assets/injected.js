@@ -8576,7 +8576,7 @@ ${value.stack}`;
     textarea.selectionEnd = world.seal.rawLength(textarea);
   }
   function edit(world, request) {
-    const element = world.pins.live(request.pin);
+    const element = request.edit.kind === "setFiles" ? world.pins.held(request.pin) : world.pins.live(request.pin);
     if (!element)
       return { kind: "detached" };
     const edited = apply(world, request.edit, element);
@@ -8835,7 +8835,7 @@ ${value.stack}`;
   ]);
   function read(world, request, root) {
     const reader = readerFor(request, root);
-    const found = resolveTarget(world, request.target, request.strictness, root);
+    const found = request.read.kind === "fileInput" && request.target === "root" && root instanceof Element ? { kind: "one", element: root } : resolveTarget(world, request.target, request.strictness, root);
     if (found.kind !== "one")
       return found;
     const { value, from } = reader(world, found.element);

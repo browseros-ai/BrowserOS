@@ -268,6 +268,11 @@ export const OPS = {
     target: 'page',
     lifetime: 'operation',
   },
+  'page.waitForNavigation': {
+    effect: 'read',
+    target: 'page',
+    lifetime: 'operation',
+  },
   'page.waitForURL': {
     effect: 'read',
     target: 'page',
@@ -359,6 +364,11 @@ export const OPS = {
     lifetime: 'background',
   },
   'events.wait': {
+    effect: 'read',
+    target: null,
+    lifetime: 'operation',
+  },
+  'events.interceptFileChooser': {
     effect: 'read',
     target: null,
     lifetime: 'operation',

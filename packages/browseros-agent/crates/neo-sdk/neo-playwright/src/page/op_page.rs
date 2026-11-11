@@ -115,6 +115,22 @@ impl<'op> OpPage<'op> {
         })
     }
 
+    /// A page already checked through the run's view, for an event batch's read-only work.
+    /// This does not select an action target in the scope; several chooser records can be
+    /// adopted by one pump operation without weakening the single-tab write invariant.
+    pub(crate) async fn observed(
+        pw: &'op Playwright,
+        scope: &'op OpScope<'_>,
+        admitted: &'op AdmittedPage,
+    ) -> Self {
+        Self {
+            pw,
+            admitted,
+            state: pw.pages().page(pw.browser(), admitted).await,
+            deadline: scope.deadline(),
+        }
+    }
+
     /// Admits the native tab named by a target's page brand.
     pub(crate) async fn admit_handle(
         pw: &'op Playwright,

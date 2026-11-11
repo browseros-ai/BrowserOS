@@ -114,7 +114,7 @@ mod tests {
             None,
             "an unsupported method is no op"
         );
-        assert_eq!(names.len(), 75, "the v1 op list has 75 ops");
+        assert_eq!(names.len(), 77, "the v1 op list has 77 ops");
     }
 
     #[test]
@@ -150,9 +150,13 @@ mod tests {
     /// `frame.$eval` and `elementHandle.evaluate` send `locator.evaluate`; `$$eval` sends
     /// `locator.evaluateAll`; the `frame` forms send the page ops.
     #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one explicit audited capability row per operation keeps additions reviewable"
+    )]
     fn tests_that_every_op_declares_exactly_its_audited_capabilities() {
         use Capability::{Capture, HostFiles, MainWorld};
-        const AUDITED: [(&str, &[Capability], bool); 75] = [
+        const AUDITED: [(&str, &[Capability], bool); 77] = [
             ("locator.click", &[], true),
             ("locator.dblclick", &[], true),
             ("locator.hover", &[], true),
@@ -205,6 +209,7 @@ mod tests {
             ("page.reload", &[], true),
             ("page.goBack", &[], true),
             ("page.goForward", &[], true),
+            ("page.waitForNavigation", &[], true),
             ("page.waitForURL", &[], true),
             ("page.waitForLoadState", &[], true),
             ("page.title", &[], true),
@@ -224,15 +229,15 @@ mod tests {
             ("events.listen", &[], true),
             ("events.next", &[], true),
             ("events.wait", &[], true),
+            ("events.interceptFileChooser", &[], true),
             ("dialog.accept", &[], true),
             ("dialog.dismiss", &[], true),
             ("download.path", &[], true),
             ("download.saveAs", &[], true),
         ];
-        let mut audited: BTreeMap<&str, (&[Capability], bool)> = AUDITED
-            .into_iter()
-            .map(|(name, capabilities, gated)| (name, (capabilities, gated)))
-            .collect();
+        let mut audited = BTreeMap::from(
+            AUDITED.map(|(name, capabilities, gated)| (name, (capabilities, gated))),
+        );
         let mut differ = Vec::new();
         for spec in Op::all().map(Op::spec) {
             let row = audited.remove(spec.name);

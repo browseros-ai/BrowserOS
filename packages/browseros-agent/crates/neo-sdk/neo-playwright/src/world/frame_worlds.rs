@@ -1,11 +1,6 @@
 //! One page's sealed worlds: which frame documents have one, their seqs, and how each child
 //! frame was reached from its parent.
 
-#![cfg_attr(
-    not(test),
-    expect(dead_code, reason = "the resolver reaches every world through it")
-)]
-
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};

@@ -3,11 +3,9 @@
 //! between a test viewer and the fake Xvnc.
 
 use crate::support::{BoxError, Harness, TestResult, harness};
-use browseros_core::TabId;
 use futures_util::{SinkExt, StreamExt};
 use neo_service::{HostAuth, HostToken, PeerRule, host_service};
 use neo_takeover::{OwnerHasScreen, ScreenHolder};
-use neo_trace::{EpochMillis, PrivateReason};
 use std::future::IntoFuture;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -257,12 +255,6 @@ async fn the_owners_first_key_closes_views_with_4001_until_their_display_closes(
         }
     })
     .await?;
-    let private = h
-        .privacy
-        .is_private(TabId(12))
-        .ok_or("tab 12 is not private")?;
-    assert_eq!(private.reason, PrivateReason::DisplayInput);
-
     // The owner closes, and Neo answers the close (RFC 6455) once the display has fully ended.
     control.close(None).await?;
     let answer = timeout(WITHIN, control.next()).await?;
@@ -270,54 +262,12 @@ async fn the_owners_first_key_closes_views_with_4001_until_their_display_closes(
         matches!(answer, Some(Ok(Message::Close(_)))),
         "the owner's close was not answered: {answer:?}"
     );
-    assert_eq!(
-        refused(&socket.path, Open::new("mode=view")).await?,
-        (409, "display_paused".to_owned()),
-        "tab 12 stays private, and it is in front"
-    );
-    h.browser.open_tab(13);
-    h.browser.bring_to_front(13);
+
     let (mut back, _) = handshake(&socket.path, Open::new("mode=view")).await?;
     back.send(Message::binary(UPDATE.to_vec())).await?;
     assert!(
         !read(&mut back, 4).await?.is_empty(),
-        "views are let in again once a tab that is not private is in front"
-    );
-    Ok(())
-}
-
-#[tokio::test]
-async fn a_view_closes_with_4001_when_the_host_makes_the_tab_in_front_private() -> TestResult {
-    let h = harness().await?;
-    for tab in [12, 13] {
-        h.browser.open_tab(tab);
-    }
-    h.browser.bring_to_front(12);
-    let socket = serve(&h)?;
-    let (mut view, _) = handshake(&socket.path, Open::new("mode=view")).await?;
-    view.send(Message::binary(UPDATE.to_vec())).await?;
-    assert!(
-        !read(&mut view, 4).await?.is_empty(),
-        "an update from the screen"
-    );
-
-    h.privacy
-        .make_private(TabId(12), PrivateReason::Host, EpochMillis::now())
-        .await?;
-    let (code, reason) = closed(&mut view).await?;
-    assert_eq!(code, 4001, "{reason}");
-    assert!(reason.starts_with("paused"), "{reason}");
-    assert_eq!(
-        refused(&socket.path, Open::new("mode=view")).await?,
-        (409, "display_paused".to_owned())
-    );
-
-    h.browser.bring_to_front(13);
-    let (mut back, _) = handshake(&socket.path, Open::new("mode=view")).await?;
-    back.send(Message::binary(UPDATE.to_vec())).await?;
-    assert!(
-        !read(&mut back, 4).await?.is_empty(),
-        "views are let in again with tab 13 in front"
+        "views are let in again once the owner leaves"
     );
     Ok(())
 }
@@ -354,18 +304,11 @@ async fn a_takeovers_display_closes_with_4002_at_its_release() -> TestResult {
         refused(&socket.path, Open::new(&query)).await?,
         (409, "takeover_released".to_owned())
     );
-    assert_eq!(
-        refused(&socket.path, Open::new("mode=view")).await?,
-        (409, "display_paused".to_owned()),
-        "tab 12 stays private after the release, and it is in front"
-    );
-    h.browser.open_tab(13);
-    h.browser.bring_to_front(13);
     let (_, response) = open(&socket.path, Open::new("mode=view")).await?;
     assert_eq!(
         response.status(),
         101,
-        "spectators are back with tab 13 in front"
+        "spectators are back after the release"
     );
     Ok(())
 }
@@ -387,17 +330,14 @@ async fn a_text_frame_or_a_message_the_filter_refuses_closes_the_display() -> Te
 }
 
 #[tokio::test]
-async fn only_a_view_is_refused_with_503_while_the_browser_cannot_list_its_tabs() -> TestResult {
+async fn displays_can_open_while_the_browser_cannot_list_its_tabs() -> TestResult {
     let h = harness().await?;
-    h.browser.open_tab(12);
     let socket = serve(&h)?;
     h.browser.become_unreachable();
-    assert_eq!(
-        refused(&socket.path, Open::new("mode=view")).await?,
-        (503, "browser_unavailable".to_owned())
-    );
-    let (mut control, _) = handshake(&socket.path, Open::new("mode=control")).await?;
-    control.close(None).await?;
+    for mode in ["mode=view", "mode=control"] {
+        let (mut display, _) = handshake(&socket.path, Open::new(mode)).await?;
+        display.close(None).await?;
+    }
     Ok(())
 }
 
@@ -435,38 +375,5 @@ async fn an_open_control_display_holds_the_screen_until_it_closes() -> TestResul
         "the owner's close was not answered: {answer:?}"
     );
     assert_eq!(front.check(), Ok(()), "the closed display gave it back");
-    Ok(())
-}
-
-#[tokio::test]
-async fn the_agents_move_onto_a_private_tab_closes_a_routed_view_with_4001() -> TestResult {
-    let h = harness().await?;
-    for tab in [12, 13] {
-        h.browser.open_tab(tab);
-    }
-    h.browser.bring_to_front(12);
-    h.privacy
-        .make_private(TabId(13), PrivateReason::Host, EpochMillis::now())
-        .await?;
-    let socket = serve(&h)?;
-    let (mut view, _) = handshake(&socket.path, Open::new("mode=view")).await?;
-
-    h.service
-        .front()
-        .bring_to_front(TabId(13), None, || Ok::<_, ()>(()))
-        .await?;
-    let (code, reason) = closed(&mut view).await?;
-    assert_eq!(code, 4001, "{reason}");
-    assert!(reason.starts_with("paused"), "{reason}");
-    assert_eq!(
-        h.browser.front(),
-        Some(13),
-        "the browser brought the private tab forward"
-    );
-    assert_eq!(
-        refused(&socket.path, Open::new("mode=view")).await?,
-        (409, "display_paused".to_owned()),
-        "and views stay out while it is in front"
-    );
     Ok(())
 }
