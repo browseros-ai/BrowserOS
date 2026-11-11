@@ -1,6 +1,9 @@
 <!doctype html><html><head><meta charset="utf-8"><title>Hang</title><script src="frame.js"></script></head>
 <body><h1>Hang (D, level 1)</h1><button>Hang button</button>
-<script>addEventListener("load", () => setTimeout(() => {
-  parent.postMessage('neo-fixture-hang-started', '*');
-  for (;;) {}
-}, 3000)); // delayed readiness is separate from the snapshot's 2 s measurement budget</script></body></html>
+<script>
+addEventListener('message', ({data, source}) => {
+  if (data === 'neo-fixture-spin' && source === parent) for (;;) {}
+});
+// Cross-process messages leave when this task ends; the parent's later command starts the spin.
+addEventListener('load', () => setTimeout(() => parent.postMessage('neo-fixture-hang-ready', '*'), 3000));
+</script></body></html>

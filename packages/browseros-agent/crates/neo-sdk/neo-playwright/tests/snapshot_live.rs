@@ -530,22 +530,48 @@ async fn tests_that_f6_an_unresponsive_frame_is_partial_and_the_rest_returns_wit
         .open(&server.url("127.0.0.1", "/nest/top.html?hang"))
         .await?;
     loaded(&live, &page).await?;
-    // Background timers can fire late. The child posts just before its infinite loop, and
-    // the parent verifies the sender, so the measured snapshot starts with a real hung frame.
+    // A cross-process message cannot leave a task that spins forever. Let the child announce
+    // readiness and return, command the spin from the parent, then confirm a read stalls.
+    // Fixture startup is outside the snapshot's measured budget, including delayed timers.
     time::timeout(Duration::from_secs(10), async {
         loop {
             if live
-                .main_world(&page, "globalThis.__hangStarted === true")
+                .main_world(&page, "globalThis.__hangReady === true")
                 .await?
                 == json!(true)
             {
-                return TestResult::Ok(());
+                break;
             }
+            time::sleep(Duration::from_millis(50)).await;
+        }
+        live.main_world(
+            &page,
+            "document.querySelector('iframe[title=hang]').contentWindow.postMessage('neo-fixture-spin', '*')",
+        )
+        .await?;
+        let button = locator(
+            &page,
+            &[attr("[title=\"hang\"s]"), enter_frame(), css("button")],
+            "hang fixture button",
+        );
+        let probe = json!({ "target": button });
+        loop {
+            let Ok(answer) = time::timeout(
+                Duration::from_millis(250),
+                live.invoke("locator.count", probe.clone()),
+            )
+            .await
+            else {
+                return TestResult::Ok(());
+            };
+            assert_eq!(answer??, json!(1), "the fixture button stays attached");
             time::sleep(Duration::from_millis(50)).await;
         }
     })
     .await
-    .map_err(|_| "the hang fixture did not signal readiness within 10 s")??;
+    .map_err(|elapsed| {
+        format!("the hang fixture did not become unresponsive within 10 s: {elapsed}")
+    })??;
 
     let started = Instant::now();
     let snapshot = live
