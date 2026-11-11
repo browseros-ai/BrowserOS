@@ -4,7 +4,7 @@
  * crates/neo-sdk/neo-playwright/assets/injected.js: one module graph, so the probe shares the
  * engine's single copy of module state, and one global, `__neoProbe`.
  *
- * Rust installs it once per frame document, in the isolated `browseros-sdk` world:
+ * Rust installs it once per frame document, in the isolated `browseros-engine` world:
  *
  *   (() => { if (!globalThis.__neoProbe) { <injected.js> }
  *            return globalThis.__neoProbe.boot({ frameSeq, epoch }) })()

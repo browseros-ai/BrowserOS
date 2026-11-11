@@ -1,7 +1,7 @@
 /**
  * Live smoke for the page asset, over raw CDP from Node against a real BrowserOS (or
  * Chromium) on BROWSEROS_CDP_PORT (default 9005). It installs the probe the way the crate
- * will, in an isolated world named browseros-sdk:
+ * will, in an isolated world named browseros-engine:
  *
  *   (() => { if (!globalThis.__neoProbe) { <assets/injected.js> }
  *            return globalThis.__neoProbe.boot({ frameSeq, epoch }) })()
@@ -31,7 +31,7 @@ const PROTOCOL = JSON.parse(
   readFileSync(resolve(crate, 'tests/data/probe-protocol.json'), 'utf8'),
 )
 const PORT = Number(process.env.BROWSEROS_CDP_PORT ?? 9005)
-const WORLD = 'browseros-sdk'
+const WORLD = 'browseros-engine'
 
 const isomorphic = (() => {
   const context = {}
@@ -233,7 +233,7 @@ async function plainPage(cdp, server, epoch) {
         described.protocol === PROTOCOL.protocol &&
         described.seq === 0 &&
         described.url === url,
-      'asset and boot install in the browseros-sdk world in one script',
+      'asset and boot install in the browseros-engine world in one script',
       described,
     )
     const describe = await tab.call(contextId, { op: 'describe' })
@@ -456,7 +456,7 @@ async function cspPage(cdp, server, epoch) {
 
 /**
  * A second DevTools connection stands in for a restarted claw-sdk on a tab that stayed open.
- * Whether it shares the first connection's browseros-sdk world is measured and printed; either
+ * Whether it shares the first connection's browseros-engine world is measured and printed; either
  * way its install, with its own epoch, must leave nothing the first one handed out usable.
  */
 async function secondConnection(tab, epoch) {

@@ -1,4 +1,4 @@
-//! Sealed worlds: one `browseros-sdk` isolated world per frame document, each holding
+//! Sealed worlds: one `browseros-engine` isolated world per frame document, each holding
 //! Playwright's `InjectedScript` and Neo's probe, apart from the page's main world.
 //!
 //! ```text
@@ -50,10 +50,6 @@ pub(crate) use frame_worlds::{
 };
 pub(crate) use sealed_world::{ContextWatch, Installed, SealedWorld};
 pub(crate) use session_setup::{SessionKind, SessionSetup};
-
-/// The name of the isolated world the engine runs in, one per frame document. Distinct from
-/// core's `PageJs` world, so the engine's globals never meet core's helpers.
-pub(crate) const SEALED_WORLD: &str = "browseros-sdk";
 
 #[cfg(test)]
 mod live_tests;

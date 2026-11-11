@@ -1,6 +1,6 @@
 /**
  * The probe protocol: the one contract between neo-playwright's Rust half and Neo's
- * probe in each frame's isolated `browseros-sdk` world.
+ * probe in each frame's isolated `browseros-engine` world.
  *
  * Rust sends one ProbeRequest per `Runtime.callFunctionOn` (CALL_FUNCTION, `returnByValue`)
  * on the world's execution context, or on an element's object id, and decodes one reply.

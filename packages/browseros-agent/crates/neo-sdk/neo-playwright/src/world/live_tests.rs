@@ -24,14 +24,15 @@ use crate::op::Op;
 use crate::op_scope::OpScope;
 use crate::page::OpPage;
 use crate::probe::{
-    self, PROBE_PROTOCOL, ParsedSelector, ProbeFailure, ProbeReply, ProbeRequest, ProbeTarget, Want,
+    self, PROBE_PROTOCOL, ParsedSelector, ProbeFailure, ProbeReply, ProbeRequest, ProbeTarget,
+    Read, Want,
 };
 use crate::target::{CallHeader, Strictness};
 use crate::test_support::fixture_server::{FixtureServer, Page};
 use crate::test_support::{LiveBrowser, Tab, TestResult, count_op};
+use crate::world::sealed_world::SEALED_WORLD;
 use crate::world::{
-    ContextWatch, FrameSeq, ParentLink, Pin, Place, SEALED_WORLD, SealedWorld, SeqLookup,
-    SessionKind,
+    ContextWatch, FrameSeq, ParentLink, Pin, Place, SealedWorld, SeqLookup, SessionKind,
 };
 
 const PASSWORD_PAGE: &str = r#"<!doctype html><title>pw</title>
@@ -558,6 +559,57 @@ async fn tests_that_a_second_playwright_rekeys_the_world_so_old_refs_fail() -> T
         "the world answers with the new instance's numbering"
     );
     first.close(&tab).await;
+    Ok(())
+}
+
+/// A world an earlier claw-sdk sealed keeps core's seal, and its replaced `value` getter, for
+/// as long as its document lives; the engine installs in a world of its own name, so it reads a
+/// field as the page holds it on such a page too.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT (default 9005)"]
+async fn tests_that_a_world_an_earlier_build_sealed_is_never_the_engines() -> TestResult {
+    let live = LiveBrowser::connect().await?;
+    let server = fixtures().await?;
+    let tab = live
+        .open(&server.url("127.0.0.1", "/password.html"))
+        .await?;
+    tab.main_world("document.getElementById('pw').value = 'typed-secret'")
+        .await?;
+    // What an earlier build left in the document: the seal's getter in its `browseros-sdk` world.
+    let created: Value = tab
+        .session
+        .send(
+            "Page.createIsolatedWorld",
+            json!({ "frameId": tab.target.as_str(), "worldName": "browseros-sdk" }),
+        )
+        .await?;
+    let sealed = "Object.defineProperty(HTMLInputElement.prototype, 'value', \
+                  { configurable: true, get() { return '••••' } }); 1";
+    tab.session
+        .send::<_, Value>(
+            "Runtime.evaluate",
+            json!({ "expression": sealed, "contextId": created["executionContextId"] }),
+        )
+        .await?;
+
+    let env = live.env();
+    let scope = OpScope::new(&env, count_op()?, CallHeader::default());
+    let world = main_world(&live, &scope, &tab).await?;
+    let read = ProbeRequest::Read {
+        target: ProbeTarget::Chunk(css("#pw")?),
+        strictness: Strictness::Strict,
+        frame_visible: true,
+        read: Read::InputValue,
+    };
+    let Ok(ProbeReply::Read { value }) = probe::call(&world, &read).await else {
+        return Err("the password field did not read".into());
+    };
+    assert_eq!(
+        value.into_value(),
+        json!("typed-secret"),
+        "the engine's world is not the one the earlier build sealed"
+    );
+    live.close(&tab).await;
     Ok(())
 }
 

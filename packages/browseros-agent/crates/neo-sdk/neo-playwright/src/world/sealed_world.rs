@@ -1,5 +1,5 @@
 //! One sealed world, and the install that makes it. One of the three files in core's
-//! `tests/page_js_guard.rs` ALLOWED list: it creates the `browseros-sdk` world and runs the
+//! `tests/page_js_guard.rs` ALLOWED list: it creates the `browseros-engine` world and runs the
 //! engine there, apart from the page's main world.
 
 use browseros_cdp::{CdpError, CdpEvent};
@@ -11,7 +11,16 @@ use tokio::sync::broadcast::error::TryRecvError;
 
 use crate::probe::{self, PROBE_PROTOCOL, ProbeFailure, ProbeReply, Ran};
 use crate::world::engine_source::install_function;
-use crate::world::{ContextId, Epoch, FrameSeq, SEALED_WORLD};
+use crate::world::{ContextId, Epoch, FrameSeq};
+
+/// The name of the isolated world the engine runs in, one per frame document. Distinct from
+/// core's `PageJs` world, so the engine's globals never meet core's helpers. Not `browseros-engine`:
+/// a world of that name may hold core's seal, installed by an earlier claw-sdk in a document that
+/// is still open, and a document keeps its isolated worlds, their replaced DOM getters included,
+/// for its whole life; the engine reading through them would read `••••` and select a masked
+/// length. A document only an earlier build numbered is therefore not re-keyed here; the random
+/// seq base of pages already open (`PageRegistry`) keeps its old refs from naming a new document.
+pub(crate) const SEALED_WORLD: &str = "browseros-engine";
 
 /// The object group of every world's handles, its global's and its document's. Never released:
 /// they die with their context, and an op's own group (`OpScope`) holds only the objects that
@@ -69,7 +78,7 @@ pub(crate) struct ContextWatch {
 /// What a session reported about one numeric context id while a watch ran.
 #[derive(Debug, PartialEq, Eq)]
 enum Reported {
-    /// `executionContextCreated` for this frame's `browseros-sdk` world under the id: the
+    /// `executionContextCreated` for this frame's `browseros-engine` world under the id: the
     /// world the create made, with its system-unique id.
     Created(String),
     /// Nothing about the id: the world already existed, so the create made no context and the
@@ -148,7 +157,7 @@ struct Handle {
 }
 
 impl SealedWorld {
-    /// Creates (or finds, by name) the frame's `browseros-sdk` world and installs the engine
+    /// Creates (or finds, by name) the frame's `browseros-engine` world and installs the engine
     /// there, or re-keys the probe already there. `candidate` is the seq for a new
     /// document; the reply's seq wins, because a world this `Playwright` already booted keeps
     /// the one it has, and a re-key reports the seq it replaced. `Runtime` must already be
@@ -158,7 +167,7 @@ impl SealedWorld {
     ///  watch (subscribed by the caller)                       Runtime events of the session
     ///  Page.createIsolatedWorld { frameId, worldName }        → a numeric id N
     ///  read the watch about N:
-    ///    created  { id N, frameId, isolated, browseros-sdk, uniqueId U }   a new world
+    ///    created  { id N, frameId, isolated, browseros-engine, uniqueId U }   a new world
     ///      Runtime.evaluate { uniqueContextId: U, "globalThis", group }
     ///    nothing  (the world already existed: no event)
     ///      Runtime.evaluate { contextId: N, "globalThis", group }, then read again: nothing
@@ -472,7 +481,7 @@ mod tests {
     use serde_json::{Value, json};
     use tokio::sync::{broadcast, mpsc};
 
-    use super::{ContextWatch, Installed, SealedWorld};
+    use super::{ContextWatch, Installed, SEALED_WORLD, SealedWorld};
     use crate::probe::{PROBE_PROTOCOL, ProbeFailure};
     use crate::world::{Epoch, FrameSeq};
 
@@ -590,7 +599,7 @@ mod tests {
     }
 
     fn our_world() -> Value {
-        created(CONTEXT, "browseros-sdk", "isolated", FRAME)
+        created(CONTEXT, SEALED_WORLD, "isolated", FRAME)
     }
 
     /// `Runtime.evaluate`'s reply: the global's handle.
@@ -660,8 +669,8 @@ mod tests {
     -> TestResult {
         for (name, kind, frame) in [
             ("", "default", FRAME),
-            ("browseros-sdk", "isolated", "another frame"),
-            ("browseros-sdk", "default", FRAME),
+            (SEALED_WORLD, "isolated", "another frame"),
+            (SEALED_WORLD, "default", FRAME),
             ("another world", "isolated", FRAME),
         ] {
             let browser = Browser::new();

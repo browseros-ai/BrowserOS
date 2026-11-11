@@ -1,5 +1,5 @@
 //! The built page asset against a real browser: evaluated in an isolated world named like the
-//! sealed world (`browseros-sdk`), it defines `__neoProbe` there and not in the page's own
+//! sealed world (`browseros-engine`), it defines `__neoProbe` there and not in the page's own
 //! world, and the probe protocol's call answers `uninstalled` until `boot` runs, then
 //! `described`. The install the crate runs (boot, re-key, requests) is covered by its own live
 //! tests in `src/world/live_tests.rs`.
@@ -89,7 +89,7 @@ async fn exercise(client: &CdpClient, target_id: &str) -> TestResult {
     let world = client
         .send(
             "Page.createIsolatedWorld",
-            json!({ "frameId": frame_id, "worldName": "browseros-sdk" }),
+            json!({ "frameId": frame_id, "worldName": "browseros-engine" }),
             session,
         )
         .await?;

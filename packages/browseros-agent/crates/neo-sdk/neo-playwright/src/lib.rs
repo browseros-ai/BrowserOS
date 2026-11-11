@@ -2,7 +2,7 @@
 //!
 //! Agent scripts call the Playwright API they already know. Element work (selector resolution,
 //! strict mode, actionability states, hit tests) runs in the page's sealed isolated world
-//! (`browseros-sdk`), using Playwright's own `InjectedScript` built from the sources vendored
+//! (`browseros-engine`), using Playwright's own `InjectedScript` built from the sources vendored
 //! unmodified under `third_party/playwright/`; the build only has the engine mask field values
 //! out of page text before it cuts or quotes that text (its README says where). Retries,
 //! timeouts, frame hops and every decision stay in Rust, which also sends the trusted input.
