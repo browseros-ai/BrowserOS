@@ -3,6 +3,7 @@
  * the time between calls (the model thinking, the agent's other tools, any human wait).
  */
 
+import { Fragment } from 'react'
 import type { RunSummary } from '../../shared/api'
 import type { RunTotals } from './measures'
 import { type StripLayout, type StripTone, stripLayout } from './strip'
@@ -72,15 +73,26 @@ function Clock({
     <div className="relative h-[52px] min-w-0 flex-1 font-code text-[11px] leading-[14px]">
       <div className="absolute inset-x-0 top-[18px] h-3.5 rounded-[2px] bg-line-2" />
       {layout.blocks.map((block) => (
-        <div
-          key={block.runId}
-          title={`run ${block.seq}`}
-          className={`absolute top-[18px] h-3.5 ${BLOCK[block.tone]}`}
-          style={{
-            left: `min(${percent(block.left)}, calc(100% - 2px))`,
-            width: `max(2px, ${percent(block.width)})`,
-          }}
-        />
+        <Fragment key={block.runId}>
+          {block.hold > 0 && (
+            <div
+              title={`run ${block.seq}: held by the viewer before forwarding`}
+              className="absolute top-[18px] h-3.5 bg-control"
+              style={{
+                left: percent(block.left),
+                width: percent(block.hold),
+              }}
+            />
+          )}
+          <div
+            title={`run ${block.seq}`}
+            className={`absolute top-[18px] h-3.5 ${BLOCK[block.tone]}`}
+            style={{
+              left: `min(${percent(block.left + block.hold)}, calc(100% - 2px))`,
+              width: `max(2px, ${percent(block.width)})`,
+            }}
+          />
+        </Fragment>
       ))}
       {layout.blocks
         .filter((block) => block.labelled)

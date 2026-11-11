@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test'
-import { findMatches, markLine, stepMatch } from './find'
+import { findMatches, markLine, rangesByLine, stepMatch } from './find'
 import type { Line } from './text-lines'
 
 describe('find in output', () => {
@@ -26,6 +26,22 @@ describe('find in output', () => {
       { line: 0, start: 0, end: 3 },
     ])
     expect(findMatches(['[ref=e5]'], '[ref=')).toHaveLength(1)
+  })
+
+  it('groups the matches by line, marking the current one', () => {
+    const matches = findMatches(['a a', 'b', 'a'], 'a')
+    expect(rangesByLine(matches, 1)).toEqual(
+      new Map([
+        [
+          0,
+          [
+            { start: 0, end: 1, current: false },
+            { start: 2, end: 3, current: true },
+          ],
+        ],
+        [2, [{ start: 0, end: 1, current: false }]],
+      ]),
+    )
   })
 
   it('steps forward and back through the matches, wrapping at the ends', () => {

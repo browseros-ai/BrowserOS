@@ -143,7 +143,15 @@ function lineCount(code: string): number {
 /** A closed row: the script's first line, its length, and why it failed if it did. */
 function ClosedSummary({ run }: { run: RunSummary }) {
   const lines = codeLines(run.code.trim())
-  const first = lines[0] ?? []
+  // The first line that does something: a leading comment says less than the code under it.
+  const first =
+    lines.find((line) =>
+      line.some(
+        (segment) => segment.tone !== 'comment' && segment.text.trim() !== '',
+      ),
+    ) ??
+    lines[0] ??
+    []
   const total = lineCount(run.code)
   const failure =
     run.status === 'error'

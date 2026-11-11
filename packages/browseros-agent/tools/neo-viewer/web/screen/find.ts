@@ -41,6 +41,34 @@ export function stepMatch(
   return (index + direction + total) % total
 }
 
+export interface MarkRange {
+  start: number
+  end: number
+  current: boolean
+}
+
+/**
+ * Each line's matches, built once per search: rendering asks per line, and scanning every match
+ * for every line is quadratic in a large output with many matches.
+ */
+export function rangesByLine(
+  matches: Match[],
+  active: number,
+): Map<number, MarkRange[]> {
+  const byLine = new Map<number, MarkRange[]>()
+  matches.forEach((match, index) => {
+    const range = {
+      start: match.start,
+      end: match.end,
+      current: index === active,
+    }
+    const ranges = byLine.get(match.line)
+    if (ranges) ranges.push(range)
+    else byLine.set(match.line, [range])
+  })
+  return byLine
+}
+
 export type Mark = 'none' | 'match' | 'current'
 
 export interface MarkedSegment {
@@ -50,10 +78,7 @@ export interface MarkedSegment {
 }
 
 /** The line's segments cut at each match's edges, each piece marked as in a match or not. */
-export function markLine(
-  line: Line,
-  ranges: { start: number; end: number; current: boolean }[],
-): MarkedSegment[] {
+export function markLine(line: Line, ranges: MarkRange[]): MarkedSegment[] {
   const marked: MarkedSegment[] = []
   let offset = 0
   for (const segment of line) {

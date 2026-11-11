@@ -6,20 +6,26 @@ import { clock } from './units'
 describe('the "where the time went" strip', () => {
   it('places each run where it sat in the wall clock, a running one reaching now', () => {
     const runs = [
-      runSummary(1, { at: 0, roundTripMs: 400 }),
+      runSummary(1, { at: 0, roundTripMs: 400, proxyMs: 100 }),
       runSummary(2, { at: 6_000, roundTripMs: 100, status: 'error' }),
-      runSummary(3, { at: 9_000, roundTripMs: null }),
+      runSummary(3, { at: 9_000, roundTripMs: null, proxyMs: 200 }),
     ]
     const start = Date.parse(runs[0]?.sentAt ?? '')
     const layout = stripLayout(runs, start + 10_000, 'run-2')
     expect(layout?.live).toBe(true)
     expect(layout?.endLabel).toBe('now')
+    // The viewer's hold before forwarding is kept apart from Neo's answer.
     expect(
-      layout?.blocks.map(({ left, width, tone }) => ({ left, width, tone })),
+      layout?.blocks.map(({ left, hold, width, tone }) => ({
+        left,
+        hold,
+        width,
+        tone,
+      })),
     ).toEqual([
-      { left: 0, width: 0.04, tone: 'neo' },
-      { left: 0.6, width: 0.01, tone: 'bad' },
-      { left: 0.9, width: 0.1, tone: 'busy' },
+      { left: 0, hold: 0.01, width: 0.03, tone: 'neo' },
+      { left: 0.6, hold: 0, width: 0.01, tone: 'bad' },
+      { left: 0.9, hold: 0.02, width: 0.08, tone: 'busy' },
     ])
   })
 

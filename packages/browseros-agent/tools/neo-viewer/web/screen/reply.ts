@@ -113,13 +113,15 @@ function valueLines(value: string): Line[] {
     return JSON.stringify(data, null, 2).split('\n').map(jsonLine)
   }
   const keys = Object.keys(data)
-  const width = Math.max(...keys.map((key) => key.length)) + 1
+  const width =
+    keys.reduce((widest, key) => Math.max(widest, key.length), 0) + 1
   const lines: Line[] = []
   for (const key of keys) {
     const item = data[key]
     if (typeof item === 'string' && item.includes('\n')) {
       lines.push([{ text: key, tone: 'key' }])
-      lines.push(...item.split('\n').map(snapshotLine))
+      // A loop, not push(...lines): a snapshot can have more lines than a call takes arguments.
+      for (const text of item.split('\n')) lines.push(snapshotLine(text))
       continue
     }
     const json = JSON.stringify(item, null, 2) ?? 'undefined'

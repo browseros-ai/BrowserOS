@@ -60,6 +60,13 @@ describe("reading a run's reply", () => {
     expect(returnedWhat(detail)).toBe('returned 3 values')
   })
 
+  it('formats a snapshot with more lines than a call takes arguments', () => {
+    // Within Neo's 256 KiB reply limit.
+    const text = JSON.stringify({ snapshot: '\n'.repeat(130_000) })
+    const detail = runDetail(runSummary(1, { reply: text }), text)
+    expect(formattedLines(detail)).toHaveLength(130_002)
+  })
+
   it('shows a short value as it is, and a failure by its code', () => {
     expect(
       valueChip('{"name":"Grace Hopper","notes":"Leave at door"}'),

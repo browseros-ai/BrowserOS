@@ -7,7 +7,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { RunSummary } from '../../shared/api'
 import { useRunDetail } from '../use-viewer'
-import { findMatches, markLine, stepMatch } from './find'
+import { findMatches, markLine, rangesByLine, stepMatch } from './find'
 import { formattedLines, noReplyReason, rawLines, replyParts } from './reply'
 import { lineText } from './text-lines'
 import { LineSpans, REPLY_VIEWS, type ReplyView, Switch } from './ui'
@@ -61,6 +61,7 @@ export function FullOutput({
   const matches = useMemo(() => findMatches(texts, query), [texts, query])
   const active =
     matches.length === 0 ? -1 : Math.min(current, matches.length - 1)
+  const marks = useMemo(() => rangesByLine(matches, active), [matches, active])
   const { previous, next } = neighbours(runs, run)
 
   // The pop-up opens ready to find. React's autoFocus would run before showModal, while the
@@ -212,17 +213,7 @@ export function FullOutput({
       <div ref={body} className="min-h-0 flex-1 overflow-auto px-5 pt-3.5 pb-5">
         <div className="w-max min-w-full font-code text-[12.5px] leading-5">
           {lines.map((line, index) => {
-            const ranges = matches.flatMap((match, at) =>
-              match.line === index
-                ? [
-                    {
-                      start: match.start,
-                      end: match.end,
-                      current: at === active,
-                    },
-                  ]
-                : [],
-            )
+            const ranges = marks.get(index)
             return (
               // biome-ignore lint/suspicious/noArrayIndexKey: an output line is its line number.
               <div key={index} className="flex gap-3.5">
@@ -232,9 +223,7 @@ export function FullOutput({
                 <span className="whitespace-pre text-ink">
                   <LineSpans
                     line={line}
-                    marked={
-                      ranges.length > 0 ? markLine(line, ranges) : undefined
-                    }
+                    marked={ranges ? markLine(line, ranges) : undefined}
                   />
                 </span>
               </div>

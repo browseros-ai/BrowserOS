@@ -1,7 +1,9 @@
 /**
  * The "where the time went" strip: the task's wall clock from its first call to its last reply
  * (or now, while a run is running), with each run drawn where it sat in it. A run spans its round
- * trip (sent → answered); the space between runs is the time between calls.
+ * trip: first the viewer's hold (finding the calling process before forwarding), then Neo's
+ * answer, the time the headline counts as "in Neo". The space between runs is the time between
+ * calls.
  *
  * Positions are shares of the strip's width (0..1), so the component draws them as percentages
  * at any width.
@@ -16,7 +18,11 @@ export type StripTone = 'neo' | 'bad' | 'busy' | 'idle'
 export interface StripBlock {
   runId: string
   seq: number
+  /** When the call reached the viewer. */
   left: number
+  /** The viewer's hold before forwarding, drawn apart so it is not counted as Neo's. */
+  hold: number
+  /** Neo's answer: from forwarding to the reply (or now, while running). */
   width: number
   tone: StripTone
   /** Whether the run's number is printed above it; dense strips print every few. */
@@ -58,7 +64,10 @@ export function stripLayout(
 ): StripLayout | null {
   if (runs.length === 0) return null
   const live = runs.some((run) => run.status === 'running')
-  const startMs = Math.min(...runs.map((run) => Date.parse(run.sentAt)))
+  const startMs = runs.reduce(
+    (earliest, run) => Math.min(earliest, Date.parse(run.sentAt)),
+    Number.POSITIVE_INFINITY,
+  )
   let endMs = live ? nowMs : startMs
   for (const run of runs) {
     const ended = run.answeredAt ? Date.parse(run.answeredAt) : null
@@ -77,6 +86,7 @@ export function stripLayout(
         : run.answeredAt
           ? Date.parse(run.answeredAt)
           : sent
+    const forwarded = Math.min(sent + run.proxyMs, ended)
     const left = (sent - startMs) / span
     const mustLabel = index === ordered.length - 1 || run.id === selectedId
     const labelled = mustLabel || left - lastLabel >= LABEL_GAP
@@ -85,7 +95,8 @@ export function stripLayout(
       runId: run.id,
       seq: run.seq,
       left,
-      width: Math.max(0, ended - sent) / span,
+      hold: Math.max(0, forwarded - sent) / span,
+      width: Math.max(0, ended - forwarded) / span,
       tone: toneOf(run),
       labelled,
     }
