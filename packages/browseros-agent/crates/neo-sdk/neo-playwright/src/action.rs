@@ -60,6 +60,7 @@ mod frame_projection;
 pub(crate) mod input_files;
 mod key_action;
 mod pointer_action;
+mod pointer_quads;
 mod requested_navigations;
 mod subject;
 
