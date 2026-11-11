@@ -6,6 +6,7 @@ use navigation_publications::NavigationPublications;
 
 use crate::DownloadFacts;
 use crate::events::{RunDownloads, RunEvents};
+use crate::locator_handler::LocatorHandlers;
 use crate::object_group::ObjectGroup;
 use crate::page::{FrameRoutes, InitScripts};
 
@@ -28,6 +29,8 @@ pub struct RunState {
     /// is how a script ends with the run that registered it.
     pub(crate) init_scripts: InitScripts,
     pub(crate) downloads: RunDownloads,
+    /// `page.addLocatorHandler` registrations; dropping them wakes any action still paused.
+    pub(crate) locator_handlers: LocatorHandlers,
 }
 
 impl RunState {

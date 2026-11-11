@@ -86,14 +86,18 @@ const ANSWERS: Record<string, unknown> = {
   'context.addInitScript': { id: 2 },
   'page.exposeBinding': { id: 3 },
   'context.exposeBinding': { id: 4 },
+  'page.addLocatorHandler': { uid: 1 },
 }
 
 /**
  * A plausible result for each op, so the script runs to its end. The pump's first pull answers
- * one binding call, which makes the prelude send `bindingCall.resolve`; it idles after that.
+ * one binding call, which makes the prelude send `bindingCall.resolve`; the locator-handler
+ * pull's first answer triggers the one handler, which makes it send `page.resolveLocatorHandler`.
+ * Both idle after that.
  */
 function everyOpAnswer(): (call: Call) => unknown {
   let pulled = false
+  let triggered = false
   return (call) => {
     if (call.name === 'events.wait') {
       if (call.input.event === 'worker')
@@ -110,6 +114,11 @@ function everyOpAnswer(): (call: Call) => unknown {
       if (pulled) return new Promise(() => {})
       pulled = true
       return { events: [BINDING_CALL], lost: 0 }
+    }
+    if (call.name === 'page.locatorHandlerTriggered') {
+      if (triggered) return new Promise(() => {})
+      triggered = true
+      return { uid: 1 }
     }
     return ANSWERS[call.name] ?? null
   }
@@ -144,7 +153,9 @@ const EVERY_OP = `
   await pay.goto('https://pay.example/'); await pay.waitForLoadState('domcontentloaded'); await pay.locator('#card').count()
   await page.waitForNavigation(); await pay.waitForNavigation({ url: '**/pay' });
   await page.waitForURL('**/a'); await page.waitForLoadState(); await page.title(); await page.content()
+  await page.requestGC();
   await page.emulateMedia({ media: 'print', colorScheme: 'dark', reducedMotion: 'reduce', forcedColors: 'active', contrast: 'more' });
+  await page.localStorage.getItem('token'); await page.sessionStorage.setItem('flag', '1')
   await page.addScriptTag({ content: 'window.injected = true' }); await pay.addStyleTag({ content: 'body { color: red }' });
   await page.setContent('<p>hi</p>'); await page.opener(); await page.evaluate(() => 1)
   await l.evaluate((e) => e.id); await l.evaluateAll((es) => es.length); await page.waitForFunction(() => true)
@@ -159,6 +170,8 @@ const EVERY_OP = `
   await page.addInitScript({ path: 'Cargo.toml' }); await context.addInitScript('window.b = 1')
   await page.addInitScript(({ cb }) => cb(1), { cb: () => 2 }, { exposeFunctions: true })
   await script.dispose()
+  await page.addLocatorHandler(page.getByText('Accept cookies'), async () => {}, { noWaitAfter: true, times: 2 })
+  await page.removeLocatorHandler(page.getByText('Accept cookies'))
   const tab = await context.newPage()
   page.on('console', () => {}); context.on('page', () => {})
   const chooserListener = () => {}

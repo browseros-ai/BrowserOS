@@ -171,6 +171,44 @@ pub(crate) enum ProbeRequest {
     ArmInput { pin: Pin },
     /// Whether that `input` has come: `value` true or false.
     InputArrived { pin: Pin },
+    /// One call on the document's `localStorage` or `sessionStorage`, from this world. `name`
+    /// is for `getItem`, `setItem` and `removeItem`; `value` for `setItem`.
+    WebStorage {
+        kind: StorageKind,
+        action: StorageAction,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        name: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        value: Option<String>,
+    },
+}
+
+/// Which Storage a `webStorage` request uses.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) enum StorageKind {
+    /// `page.localStorage`.
+    Local,
+    /// `page.sessionStorage`.
+    Session,
+}
+
+/// Upstream's `WebStorage` methods, the call a `webStorage` request makes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) enum StorageAction {
+    Items,
+    GetItem,
+    SetItem,
+    RemoveItem,
+    Clear,
+}
+
+impl StorageAction {
+    /// Whether the call changes the storage, so its op must mark itself sent first.
+    pub(crate) const fn writes(self) -> bool {
+        matches!(self, Self::SetItem | Self::RemoveItem | Self::Clear)
+    }
 }
 
 /// Which text of the document a `document` request reads.

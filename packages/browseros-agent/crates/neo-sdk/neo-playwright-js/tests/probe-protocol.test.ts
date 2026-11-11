@@ -33,10 +33,15 @@ const kindOf = (op: string, request: unknown): string => {
 }
 
 /**
- * Request kinds linkedom cannot run: it has no document.open. They still must answer one of
- * their kinds or an error; the live tests cover them in a real browser.
+ * Request kinds linkedom cannot run: it has no document.open, and no localStorage or
+ * sessionStorage. They still must answer one of their kinds or an error; the live tests and
+ * the spec run cover them in a real browser.
  */
-const NEEDS_A_BROWSER = new Set<string>(['setContent', 'screenshotMask'])
+const NEEDS_A_BROWSER = new Set<string>([
+  'setContent',
+  'screenshotMask',
+  'webStorage',
+])
 
 /**
  * Built handlers whose example answers `internal` on this page by design: a fresh page has

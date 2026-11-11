@@ -323,6 +323,11 @@ export const OPS = {
     target: 'page',
     lifetime: 'operation',
   },
+  'page.requestGC': {
+    effect: 'write',
+    target: 'page',
+    lifetime: 'operation',
+  },
   'page.close': {
     effect: 'write',
     target: 'page',
@@ -403,6 +408,16 @@ export const OPS = {
     target: 'page',
     lifetime: 'operation',
   },
+  'webStorage.read': {
+    effect: 'read',
+    target: 'page',
+    lifetime: 'operation',
+  },
+  'webStorage.write': {
+    effect: 'write',
+    target: 'page',
+    lifetime: 'operation',
+  },
   'context.pages': {
     effect: 'read',
     target: null,
@@ -465,6 +480,26 @@ export const OPS = {
   },
   'download.saveAs': {
     effect: 'write',
+    target: null,
+    lifetime: 'operation',
+  },
+  'page.addLocatorHandler': {
+    effect: 'read',
+    target: 'target',
+    lifetime: 'operation',
+  },
+  'page.removeLocatorHandler': {
+    effect: 'read',
+    target: null,
+    lifetime: 'operation',
+  },
+  'page.locatorHandlerTriggered': {
+    effect: 'read',
+    target: null,
+    lifetime: 'background',
+  },
+  'page.resolveLocatorHandler': {
+    effect: 'read',
     target: null,
     lifetime: 'operation',
   },

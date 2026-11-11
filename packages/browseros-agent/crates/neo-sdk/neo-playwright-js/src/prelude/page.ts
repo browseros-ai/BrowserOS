@@ -56,6 +56,7 @@ import {
 import { addInitScript, type Disposable } from './init-script'
 import { Keyboard, Mouse } from './input'
 import type { FrameLocator, Locator } from './locator'
+import type { LocatorHandlerOptions } from './locator-handlers'
 import { markHandle, pick } from './options'
 import { Publications } from './publication'
 import { Response } from './response'
@@ -72,6 +73,7 @@ import {
   type ByRoleOptions,
   escapeRegExp,
 } from './vendored'
+import { WebStorage } from './web-storage'
 import type {
   DragOptions,
   FillOptions,
@@ -125,6 +127,8 @@ export class Page extends EventEmitter {
   readonly _mainFrame: Frame
   readonly keyboard: Keyboard
   readonly mouse: Mouse
+  readonly localStorage: WebStorage
+  readonly sessionStorage: WebStorage
   _url: string
   /** Historical opening events fill an unknown URL once. Live observations keep it current. */
   #urlKnown: boolean
@@ -180,6 +184,8 @@ export class Page extends EventEmitter {
     this._mainFrame = new Frame(this, null, null)
     this.keyboard = new Keyboard(this)
     this.mouse = new Mouse(this)
+    this.localStorage = new WebStorage(this, 'local')
+    this.sessionStorage = new WebStorage(this, 'session')
     markHandle(this)
   }
 
@@ -642,6 +648,30 @@ export class Page extends EventEmitter {
     )
   }
 
+  // ---- locator handlers (locator-handlers.ts) -------------------------------------------
+
+  addLocatorHandler(
+    locator: Locator,
+    handler: (locator: Locator) => unknown,
+    options?: LocatorHandlerOptions,
+  ): Promise<void> {
+    return this._context._locatorHandlers.add(
+      'page.addLocatorHandler',
+      this,
+      locator,
+      handler,
+      options,
+    )
+  }
+
+  removeLocatorHandler(locator: Locator): Promise<void> {
+    return this._context._locatorHandlers.remove(
+      'page.removeLocatorHandler',
+      this,
+      locator,
+    )
+  }
+
   // ---- the document -------------------------------------------------------------------
 
   goto(url: string, options?: NavigateOptions): Promise<Response | null> {
@@ -683,6 +713,16 @@ export class Page extends EventEmitter {
     options?: TimeoutOption & { waitUntil?: LoadState },
   ): Promise<void> {
     return this._waitForURL('page.waitForURL', this._mainFrame, url, options)
+  }
+
+  /** The host admits/rechecks this page and collects in its root renderer. */
+  async requestGC(): Promise<void> {
+    const api = 'page.requestGC'
+    await invoke(
+      'page.requestGC',
+      { api, timeoutMs: 0 },
+      { page: await this._brand(api) },
+    )
   }
 
   async title(): Promise<string> {

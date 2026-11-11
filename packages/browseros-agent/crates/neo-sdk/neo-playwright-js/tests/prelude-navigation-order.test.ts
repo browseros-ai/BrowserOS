@@ -146,6 +146,43 @@ it('does not join a navigation predicate that itself awaits the click', async ()
   ).toBe(true)
 })
 
+it('does not join a navigation wait that started after the script received that navigation', async () => {
+  let waits = 0
+  const runtime = loadPrelude({
+    seed: SEED,
+    now: 100,
+    answer: ({ name }) => {
+      if (name === 'page.frames') return tree
+      if (name === 'events.wait') {
+        waits += 1
+        if (waits > 1) return new Promise(() => {})
+        return {
+          seq: 8,
+          at: 100,
+          event: 'framenavigated',
+          page: { $neo: 'page', tab: 1007 },
+          frame,
+          context: false,
+        }
+      }
+      if (name === 'locator.click') return { navigation: { seq: 8, at: 100 } }
+      return null
+    },
+  })
+  const result = await runtime.run(`
+    await page.waitForEvent('framenavigated')
+    // Starts after seq 8, in the same millisecond: it will never receive that navigation.
+    page.waitForEvent('framenavigated').catch(() => {})
+    try {
+      await page.click('a', { timeout: 200 })
+      return 'clicked'
+    } catch (error) {
+      return error.message
+    }
+  `)
+  expect(json(result)).toBe('clicked')
+})
+
 it('publishes page and context navigation listeners before a click resolves', async () => {
   const batch = deferred<unknown>()
   const clicked = deferred<void>()

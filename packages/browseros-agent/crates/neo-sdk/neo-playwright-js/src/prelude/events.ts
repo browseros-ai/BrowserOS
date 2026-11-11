@@ -6,7 +6,8 @@
  *   pump (one per run)      events.next {}, a background long poll ──▶ { events, lost }
  *                           ──▶ emit each on its page or the context, or answer a binding call
  *                           (bindings.ts), the pump running while a binding is exposed too
- *   page.waitForEvent(e)    since = Date.now() at the call ──▶ events.wait { page, event, since }
+ *   page.waitForEvent(e)    since = Date.now() at the call, after = the newest seq the script
+ *                           received then ──▶ events.wait { page, event, since, after }
  *                           predicate said no ──▶ events.wait again with after = that seq,
  *                           with what is left of one deadline (since + timeout)
  *
@@ -138,7 +139,17 @@ type WaitOptions = {
   signal?: SignalLike
 }
 
-type NavigationWait = { page: Page | null; since: number; done: Promise<void> }
+/**
+ * An unfiltered `framenavigated` wait a click's navigation publication joins. `after` is the
+ * newest seq the script had received when the wait started: a navigation at or before it is
+ * one the wait will never receive, so the click must not wait on it.
+ */
+type NavigationWait = {
+  page: Page | null
+  since: number
+  after: number | null
+  done: Promise<void>
+}
 type NavigationPublication = {
   page: Page
   cut: NavigationCut
@@ -168,6 +179,14 @@ export class EventHub {
     done: Promise<void>
     finish: () => void
   } | null = null
+  /**
+   * The newest log seq the script has received, through a listener or a wait. A wait made
+   * later starts after it: upstream's `waitForEvent` sees only what is emitted after the call,
+   * and `since` alone, inclusive to the millisecond, let a new wait take the event the last one
+   * just returned when both fell in one millisecond (ER-006). Every event the script received
+   * was emitted before the call, so nothing a wait should see is skipped.
+   */
+  private newestSeen: number | null = null
   /** One object per dialog and download, so every listener and wait answers the same one. */
   private readonly dialogs = new Map<number, Dialog>()
   private readonly downloads = new Map<string, Download>()
@@ -280,6 +299,9 @@ export class EventHub {
     since: number,
     settings: TimeoutSettings,
   ): Promise<unknown> {
+    // Taken with the caller's `since`, before anything awaits: an event the pump hands over
+    // during the setup below happened after the call, and the wait must still see it.
+    const seen = this.newestSeen
     const kind = page === null ? 'context' : 'page'
     checkReported(api, event, kind)
     if (!isReported(event, kind))
@@ -308,6 +330,7 @@ export class EventHub {
         ? {
             page,
             since,
+            after: seen,
             done: new Promise<void>((resolve) => {
               finish = resolve
             }),
@@ -325,7 +348,7 @@ export class EventHub {
             page,
             event,
             options,
-            since,
+            { since, after: seen },
             deadline,
             signal,
           )
@@ -355,7 +378,9 @@ export class EventHub {
     const waits = [...this.navigationWaits]
       .filter(
         (wait) =>
-          (wait.page === null || wait.page === page) && wait.since <= cut.at,
+          (wait.page === null || wait.page === page) &&
+          wait.since <= cut.at &&
+          (wait.after === null || wait.after < cut.seq),
       )
       .map((wait) => wait.done)
     let finish!: () => void
@@ -404,18 +429,22 @@ export class EventHub {
     }
   }
 
-  /** `wait`'s loop: one `events.wait` per candidate, until the predicate accepts one. */
+  /**
+   * `wait`'s loop: one `events.wait` per candidate, until the predicate accepts one. `from` is
+   * where the call left the log: its time, and the newest seq the script had received then.
+   */
   private async waitFor(
     api: string,
     page: Page | null,
     event: EventName,
     options: WaitOptions,
-    since: number,
+    from: { since: number; after: number | null },
     deadline: EventDeadline,
     signal: SignalLike | undefined,
   ): Promise<unknown> {
+    const { since } = from
     const target = page === null ? null : await page._openedBrand(api)
-    let after: number | null = null
+    let after = from.after
     for (;;) {
       const left = deadline.left()
       let record: EventRecord
@@ -425,7 +454,9 @@ export class EventHub {
           'events.wait',
           { api, timeoutMs: left },
           { page: target, event, since, after },
-          undefined,
+          // As the reply is decoded, before any other reply's callbacks: a listener the pump
+          // runs before this wait resumes must not see this record as new.
+          (received) => this.saw(received.seq),
           signal,
         ))
       } catch (error) {
@@ -556,6 +587,11 @@ export class EventHub {
     }
   }
 
+  /** The script received the record logged as `seq` (`newestSeen`). */
+  private saw(seq: number): void {
+    if (this.newestSeen === null || seq > this.newestSeen) this.newestSeen = seq
+  }
+
   /**
    * One pump reply's records, in log order, so earlier callbacks observe the page before its
    * close, even within the same reply. Its host-approved closes are staged first, before waits
@@ -566,6 +602,8 @@ export class EventHub {
     lost: number,
     observed: Observation | null,
   ): void {
+    // Before any listener runs: one that calls waitForEvent must not see this batch again.
+    for (const event of events) this.saw(event.seq)
     this.stageBatch(events)
     try {
       for (const event of events) this.deliver(event, observed)

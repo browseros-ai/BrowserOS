@@ -8,6 +8,16 @@
       ],
       "properties": []
     },
+    "WebStorage": {
+      "methods": [
+        "clear",
+        "getItem",
+        "items",
+        "removeItem",
+        "setItem"
+      ],
+      "properties": []
+    },
     "Browser": {
       "methods": [
         "addListener",

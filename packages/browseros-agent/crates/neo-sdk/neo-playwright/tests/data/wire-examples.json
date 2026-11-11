@@ -194,7 +194,7 @@
         },
         "event": "dialog",
         "since": 1700000000000,
-        "after": null
+        "after": 3
       },
       {
         "call": {
@@ -207,7 +207,7 @@
         },
         "event": "download",
         "since": 1700000000000,
-        "after": null
+        "after": 3
       },
       {
         "call": {
@@ -220,7 +220,7 @@
         },
         "event": "worker",
         "since": 1700000000000,
-        "after": null
+        "after": 3
       }
     ],
     "expect.locator": [
@@ -2124,6 +2124,35 @@
         }
       }
     ],
+    "page.addLocatorHandler": [
+      {
+        "call": {
+          "api": "page.addLocatorHandler",
+          "timeoutMs": 0
+        },
+        "target": {
+          "$neo": "locator",
+          "page": {
+            "$neo": "page",
+            "tab": 1007
+          },
+          "frame": null,
+          "chunks": [
+            {
+              "parts": [
+                {
+                  "name": "internal:text",
+                  "body": "\"Accept cookies\"i",
+                  "source": "\"Accept cookies\"i"
+                }
+              ]
+            }
+          ],
+          "display": "getByText('Accept cookies')"
+        },
+        "noWaitAfter": true
+      }
+    ],
     "page.addScriptTag": [
       {
         "call": {
@@ -2482,6 +2511,14 @@
         }
       }
     ],
+    "page.locatorHandlerTriggered": [
+      {
+        "call": {
+          "api": "page.locatorHandlerTriggered",
+          "timeoutMs": 0
+        }
+      }
+    ],
     "page.opener": [
       {
         "call": {
@@ -2521,6 +2558,36 @@
           "id": 2,
           "acknowledged": []
         }
+      }
+    ],
+    "page.removeLocatorHandler": [
+      {
+        "call": {
+          "api": "page.removeLocatorHandler",
+          "timeoutMs": 0
+        },
+        "uid": 1
+      }
+    ],
+    "page.requestGC": [
+      {
+        "call": {
+          "api": "page.requestGC",
+          "timeoutMs": 0
+        },
+        "page": {
+          "$neo": "page",
+          "tab": 1007
+        }
+      }
+    ],
+    "page.resolveLocatorHandler": [
+      {
+        "call": {
+          "api": "page.resolveLocatorHandler",
+          "timeoutMs": 0
+        },
+        "uid": 1
       }
     ],
     "page.saveScreenshot": [
@@ -2719,6 +2786,37 @@
           "glob": "**/a"
         },
         "waitUntil": "load"
+      }
+    ],
+    "webStorage.read": [
+      {
+        "call": {
+          "api": "webStorage.getItem",
+          "timeoutMs": 0
+        },
+        "page": {
+          "$neo": "page",
+          "tab": 1007
+        },
+        "kind": "local",
+        "action": "getItem",
+        "name": "token"
+      }
+    ],
+    "webStorage.write": [
+      {
+        "call": {
+          "api": "webStorage.setItem",
+          "timeoutMs": 0
+        },
+        "page": {
+          "$neo": "page",
+          "tab": 1007
+        },
+        "kind": "session",
+        "action": "setItem",
+        "name": "flag",
+        "value": "1"
       }
     ],
     "worker.evaluate": [

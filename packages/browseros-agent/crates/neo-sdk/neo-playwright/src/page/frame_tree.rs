@@ -27,9 +27,14 @@ use crate::target::PageRef;
 use crate::{ErrorCode, Playwright, PlaywrightError};
 
 /// Loading can mean an uncommitted navigation that blocks renderer reads, or just a child
-/// resource in an otherwise responsive document. Give optional facts a small budget in that
-/// case: dropping every loading tree would hide newly attached children after `setContent`.
+/// resource in an otherwise responsive document. Keep those optional reads short without
+/// hiding every newly attached child after `setContent`.
 const LOADING_SNAPSHOT: Duration = Duration::from_millis(100);
+
+/// Even a fully loaded page can contain a child that never answers. Allow ordinary discovery
+/// more time than an active navigation, but retain cached identity and route hints when a
+/// busy child prevents a complete refresh.
+const SNAPSHOT_BUDGET: Duration = Duration::from_secs(1);
 
 /// `page.frames()`: `{ page }`.
 #[derive(Debug, Deserialize)]
@@ -236,9 +241,9 @@ pub(crate) async fn frames(
     to_output(scope, &Snapshot { frames })
 }
 
-/// Cache metadata must not become a navigation barrier. Browser-owned loading state bounds
-/// reads during an existing navigation; a watcher subscribed before that read catches one
-/// that starts in between. The caller retains its previous tree when the renderer is busy.
+/// Cache metadata must not become a renderer barrier. Bound discovery even after loading has
+/// finished, and discard it when a navigation starts. Only a complete refresh replaces the
+/// caller's previous tree and native route hints.
 pub(crate) async fn snapshot(
     pw: &Playwright,
     scope: &OpScope<'_>,
@@ -272,7 +277,7 @@ pub(crate) async fn snapshot(
         }
     };
     tokio::select! {
-        result = read => result,
+        result = time::timeout(SNAPSHOT_BUDGET, read) => result.unwrap_or(Ok(None)),
         _ = watch.navigation_started() => Ok(None),
     }
 }

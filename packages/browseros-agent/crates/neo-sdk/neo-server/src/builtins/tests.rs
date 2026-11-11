@@ -1574,8 +1574,8 @@ async fn every_playwright_op_is_one_listed_script_method_with_the_crates_spec()
         assert_eq!(spec.visibility, Visibility::Script, "{}", spec.name);
         assert_eq!(
             spec.lifetime == Lifetime::Background,
-            spec.name == "events.next",
-            "{}: only the event pump is cut quietly when the run ends",
+            matches!(spec.name, "events.next" | "page.locatorHandlerTriggered"),
+            "{}: only the prelude's pulls are cut quietly when the run ends",
             spec.name
         );
         let Listing::Grouped(line) = spec.listing else {

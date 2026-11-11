@@ -41,6 +41,7 @@ use tokio::fs;
 use crate::action::focus_lease;
 use crate::action::subject::Subject;
 use crate::backoff::Backoff;
+use crate::locator_handler::Prechecks;
 use crate::op_scope::{OpScope, Sent};
 use crate::op_spec::Capability;
 use crate::page::OpPage;
@@ -222,7 +223,10 @@ pub(crate) async fn set_input_files(
         if scope.sleep(backoff.wait(pass)).await.is_err() {
             break;
         }
-        let Ok(located) = scope.within(subject.locate(pass)).await else {
+        let Ok(located) = scope
+            .within(subject.locate(pass, Prechecks::LocatorPasses))
+            .await
+        else {
             break;
         };
         let Some(located) = located? else {

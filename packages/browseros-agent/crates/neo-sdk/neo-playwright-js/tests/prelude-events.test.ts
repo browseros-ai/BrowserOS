@@ -50,6 +50,19 @@ const popup = (seq: number, id: number, url: string, opener = 7) => ({
   popup: { page: brand(id), url },
 })
 
+/** A console message from the opener page. */
+const consoleRecord = (seq: number) => ({
+  seq,
+  event: 'console',
+  page: brand(7),
+  message: {
+    type: 'log',
+    text: 'logged',
+    location: { url: '', lineNumber: 0, columnNumber: 0 },
+    timestamp: 1,
+  },
+})
+
 /** The context's `page` event for a tab that opened. */
 const newTab = (seq: number, id: number, url: string) => ({
   seq,
@@ -120,6 +133,63 @@ describe('waitForEvent', () => {
         after: 5,
       },
     ])
+  })
+
+  it('tests that a later wait starts after the event the script last received, in the same millisecond', async () => {
+    const records = [
+      popup(5, 8, 'https://first.example/'),
+      popup(9, 9, 'https://second.example/'),
+    ]
+    const runtime = loadPrelude({
+      seed: SEED,
+      answer: (call) => (call.name === 'events.wait' ? records.shift() : null),
+    })
+    const urls = await runtime.run(`
+      Date.now = () => 500
+      const first = await page.waitForEvent('popup')
+      const second = await page.waitForEvent('popup')
+      return [first.url(), second.url()]
+    `)
+    expect(urls).toEqual(['https://first.example/', 'https://second.example/'])
+    expect(
+      runtime
+        .sent('events.wait')
+        .map((call) => (call.input as { after: unknown }).after),
+    ).toEqual([null, 5])
+  })
+
+  it('tests that a wait made by a listener the pump runs before the last wait resumed starts after that wait', async () => {
+    let waited = () => {}
+    const waitAnswered = new Promise<void>((resolve) => {
+      waited = resolve
+    })
+    let waits = 0
+    let pumps = 0
+    const runtime = loadPrelude({
+      seed: SEED,
+      answer: async (call) => {
+        if (call.name === 'events.wait') {
+          waits += 1
+          if (waits > 1) return never
+          waited()
+          return popup(10, 8, 'https://first.example/')
+        }
+        if (call.name !== 'events.next') return null
+        if (++pumps > 1) return never
+        await waitAnswered
+        return { events: [consoleRecord(9)], lost: 0 }
+      },
+    })
+    await runtime.run(`
+      page.on('console', () => { page.waitForEvent('popup').catch(() => {}) })
+      await page.waitForEvent('popup')
+      await new Promise((resolve) => setTimeout(resolve, 20))
+    `)
+    expect(
+      runtime
+        .sent('events.wait')
+        .map((call) => (call.input as { after: unknown }).after),
+    ).toEqual([null, 10])
   })
 
   it("tests that a predicate's error rejects the wait with the method first", async () => {

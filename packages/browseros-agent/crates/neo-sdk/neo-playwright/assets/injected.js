@@ -7938,7 +7938,14 @@ ${value.stack}`;
       const [pin = 0] = this.addAll([element]);
       return pin;
     }
+    addFrame(element) {
+      const [pin = 0] = this.record([new WeakRef(element)]);
+      return pin;
+    }
     addAll(elements) {
+      return this.record(elements);
+    }
+    record(elements) {
       const pins = elements.map((element) => {
         const pin = this.next++;
         this.elements.set(pin, element);
@@ -7956,11 +7963,12 @@ ${value.stack}`;
       return pins;
     }
     live(pin) {
-      const element = this.elements.get(pin);
+      const element = this.held(pin);
       return element?.isConnected ? element : undefined;
     }
     held(pin) {
-      return this.elements.get(pin);
+      const entry = this.elements.get(pin);
+      return entry instanceof WeakRef ? entry.deref() : entry;
     }
     clear() {
       this.elements.clear();
@@ -8098,7 +8106,7 @@ ${value.stack}`;
       return { kind: "notFrame", preview: world.injected.previewNode(element) };
     return {
       kind: "frame",
-      pin: world.pins.add(element),
+      pin: world.pins.addFrame(element),
       key: world.refs.frameKey(element),
       visible: world.injected.utils.isElementVisible(element),
       src
@@ -8539,7 +8547,7 @@ ${value.stack}`;
   }
 
   // crates/neo-sdk/neo-playwright-js/src/probe/protocol.ts
-  var PROTOCOL = 21;
+  var PROTOCOL = 22;
 
   // crates/neo-sdk/neo-playwright-js/src/probe/read.ts
   var XHTML = "http://www.w3.org/1999/xhtml";
@@ -8922,6 +8930,48 @@ ${value.stack}`;
     }
   }
 
+  // crates/neo-sdk/neo-playwright-js/src/probe/web-storage.ts
+  function webStorage(world, request) {
+    try {
+      return call(world, request);
+    } catch (error) {
+      if (error instanceof DOMException)
+        throw new ProbeError("script", `${error.name}: ${error.message}`);
+      throw error;
+    }
+  }
+  function call(world, request) {
+    const { window: window2 } = world.injected;
+    const storage = request.kind === "local" ? window2.localStorage : window2.sessionStorage;
+    switch (request.action) {
+      case "items": {
+        const items = [];
+        for (let index = 0;index < storage.length; index++) {
+          const name = storage.key(index);
+          if (name !== null)
+            items.push({ name, value: storage.getItem(name) ?? "" });
+        }
+        return { kind: "value", value: items };
+      }
+      case "getItem":
+        return { kind: "value", value: storage.getItem(named(request)) };
+      case "setItem":
+        storage.setItem(named(request), request.value ?? "");
+        return { kind: "value", value: null };
+      case "removeItem":
+        storage.removeItem(named(request));
+        return { kind: "value", value: null };
+      case "clear":
+        storage.clear();
+        return { kind: "value", value: null };
+    }
+  }
+  function named(request) {
+    if (request.name === undefined)
+      throw new ProbeError("internal", `webStorage ${request.action} needs a name`);
+    return request.name;
+  }
+
   // crates/neo-sdk/neo-playwright-js/src/probe/index.ts
   var HANDLERS = {
     describe: described2,
@@ -8943,7 +8993,8 @@ ${value.stack}`;
     document: documentText,
     setContent: replaceDocument,
     armInput,
-    inputArrived
+    inputArrived,
+    webStorage
   };
   var UNINSTALLED = { kind: "uninstalled" };
   function described2(world) {

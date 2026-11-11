@@ -512,6 +512,7 @@ export type OpInputs = {
   }
   'page.waitForURL': FrameArgs & { url: UrlPattern; waitUntil: LoadState }
   'page.waitForLoadState': FrameArgs & { state: LoadState }
+  'page.requestGC': PageArgs
   'page.title': FrameArgs
   'page.content': FrameArgs
   'page.emulateMedia': PageArgs & {
@@ -566,6 +567,27 @@ export type OpInputs = {
   'page.exposeBinding': PageArgs & { name: string; noGlobal?: true }
   /** `arg`: `{ name, seq, result }` or `{ name, seq, error }` as in-page JSON text. */
   'bindingCall.resolve': PageArgs & { context: number; arg: string }
+  'webStorage.read': PageArgs & {
+    kind: 'local' | 'session'
+    action: 'items' | 'getItem'
+    name?: string
+  }
+  'webStorage.write': PageArgs & {
+    kind: 'local' | 'session'
+    action: 'setItem' | 'removeItem' | 'clear'
+    name?: string
+    value?: string
+  }
+  /** A handler's locator, on the main frame of its page; `uid` names the registration. */
+  'page.addLocatorHandler': { target: LocatorBrand; noWaitAfter?: true }
+  'page.removeLocatorHandler': { uid: number }
+  /**
+   * The background pull for locator handlers: answers the uid of the next handler an action
+   * paused for, or null once the run has none left (locator-handlers.ts).
+   */
+  'page.locatorHandlerTriggered': Record<string, never>
+  /** The script ran the handler; `remove` once its `times` ran out. The paused action goes on. */
+  'page.resolveLocatorHandler': { uid: number; remove?: true }
   'context.pages': Record<string, never>
   'context.newPage': Record<string, never>
   'context.addInitScript': { script: InitSource }
@@ -675,6 +697,7 @@ export type OpOutputs = {
   'page.waitForNavigation': NavigationResult & { navigationSeq: number }
   'page.waitForURL': NavigationResult | null
   'page.waitForLoadState': NavigationResult | null
+  'page.requestGC': null
   'page.title': string
   'page.content': string
   'page.emulateMedia': null
@@ -701,6 +724,13 @@ export type OpOutputs = {
   'page.addInitScript': { id: number }
   'page.exposeBinding': { id: number }
   'bindingCall.resolve': Done
+  /** `items`'s name/value pairs, or `getItem`'s string, null when absent. */
+  'webStorage.read': { name: string; value: string }[] | string | null
+  'webStorage.write': null
+  'page.addLocatorHandler': { uid: number }
+  'page.removeLocatorHandler': Done
+  'page.locatorHandlerTriggered': { uid: number | null }
+  'page.resolveLocatorHandler': Done
   'context.pages': { pages: PageEntry[] }
   'context.newPage': PageEntry
   'context.addInitScript': { id: number }
