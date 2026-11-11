@@ -25,12 +25,13 @@ mod live_browser;
 mod locator;
 
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use fixture_server::{FixtureServer, Page, nest_pages};
 use live_browser::{LiveBrowser, TestPage, TestResult};
 use locator::{aria_ref, attr, css, enter_frame, locator, role};
-use neo_playwright::ErrorCode;
+use neo_playwright::{ErrorCode, RunState};
 use serde_json::{Value, json};
 use tokio::sync::Semaphore;
 use tokio::time;
@@ -530,6 +531,8 @@ async fn tests_that_f6_an_unresponsive_frame_is_partial_and_the_rest_returns_wit
         .open(&server.url("127.0.0.1", "/nest/top.html?hang"))
         .await?;
     loaded(&live, &page).await?;
+    let run = Arc::new(RunState::default());
+    let cached = cache_responsive_frame(&live, &page, &run).await?;
     // A cross-process message cannot leave a task that spins forever. Let the child announce
     // readiness and return, command the spin from the parent, then confirm a read stalls.
     // Fixture startup is outside the snapshot's measured budget, including delayed timers.
@@ -573,7 +576,7 @@ async fn tests_that_f6_an_unresponsive_frame_is_partial_and_the_rest_returns_wit
         format!("the hang fixture did not become unresponsive within 10 s: {elapsed}")
     })??;
 
-    assert_metadata_remains_bounded(&live, &page).await?;
+    assert_metadata_remains_bounded(&live, &page, &run, cached).await?;
 
     let started = Instant::now();
     let snapshot = live
@@ -620,10 +623,16 @@ async fn tests_that_f6_an_unresponsive_frame_is_partial_and_the_rest_returns_wit
 
 /// The prelude refreshes optional frame metadata between agent calls. A busy child must
 /// preserve the last complete tree instead of stalling that handoff or looking detached.
-async fn assert_metadata_remains_bounded(live: &LiveBrowser, page: &TestPage) -> TestResult {
+async fn assert_metadata_remains_bounded(
+    live: &LiveBrowser,
+    page: &TestPage,
+    run: &Arc<RunState>,
+    cached: (String, String),
+) -> TestResult {
     let metadata = time::timeout(
         Duration::from_millis(1_500),
-        live.invoke(
+        live.invoke_in_run(
+            Arc::clone(run),
             "page.frames",
             json!({ "call": { "api": "page.frames", "timeoutMs": 0 }, "page": page.brand() }),
         ),
@@ -636,8 +645,42 @@ async fn assert_metadata_remains_bounded(live: &LiveBrowser, page: &TestPage) ->
         metadata.get("frames").is_none(),
         "a busy tree leaves its cache intact: {metadata}"
     );
-
+    // A lost route would force rediscovery through the still-hung sibling and time out.
+    // This public frame operation must keep using the endpoint saved before the hang.
+    live.invoke_in_run(
+        Arc::clone(run),
+        "page.waitForURL",
+        json!({ "call": { "api": "frame.waitForURL", "timeoutMs": 1_000 },
+                "page": page.brand(), "frame": cached.0,
+                "url": { "glob": cached.1 }, "waitUntil": "commit" }),
+    )
+    .await??;
     Ok(())
+}
+
+/// Saves a real OOPIF endpoint in the same run that will later refresh the busy tree.
+async fn cache_responsive_frame(
+    live: &LiveBrowser,
+    page: &TestPage,
+    run: &Arc<RunState>,
+) -> TestResult<(String, String)> {
+    let tree = live
+        .invoke_in_run(
+            Arc::clone(run),
+            "page.frames",
+            json!({ "page": page.brand() }),
+        )
+        .await??;
+    tree.get("frames")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .find_map(|frame| {
+            let url = frame.get("url")?.as_str()?;
+            url.contains("/nest/b1.html")
+                .then_some((frame.get("id")?.as_str()?.to_owned(), url.to_owned()))
+        })
+        .ok_or_else(|| "the complete initial frame tree contains B1".into())
 }
 
 #[tokio::test]
