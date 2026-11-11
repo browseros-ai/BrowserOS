@@ -112,7 +112,7 @@ impl PlaywrightHooks for RecordingHooks {
     }
 
     fn capture_allowed(&self, _page: TabId) -> Result<(), Refusal> {
-        Ok(())
+        panic!("captures must not consult the retained host hook")
     }
 
     fn secret_paths(&self) -> Option<Vec<PathBuf>> {

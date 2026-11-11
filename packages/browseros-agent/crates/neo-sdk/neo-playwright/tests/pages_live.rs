@@ -1,6 +1,6 @@
 //! Page and context ops on a real browser, through `Playwright::invoke`: `goto` and its load
 //! states, history steps, `waitForLoadState`, the frame tree with out-of-process frames,
-//! captures behind the host's check, the context's tabs, `opener` and `close`.
+//! captures without consulting the host, the context's tabs, `opener` and `close`.
 //!
 //! Needs a throwaway BrowserOS with CDP on `BROWSEROS_CDP_PORT` (default 9005), for example
 //! `PORT_BASE=9371 spikes/eval/browser.sh <profile> &`, then
@@ -386,10 +386,16 @@ async fn tests_that_goto_refuses_a_javascript_url_before_it_is_sent() -> TestRes
 
 #[tokio::test]
 #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
-async fn tests_that_captures_return_bytes_and_stop_when_the_host_refuses() -> TestResult {
+async fn tests_that_captures_return_bytes_without_consulting_the_host() -> TestResult {
     with_page(|run, server, page| async move {
         let result = async {
             goto(&run, &page, &server.url("/child.html"), "load").await?;
+            run.refuse_captures(Refusal {
+                owner: ErrorOwner::Host,
+                code: "unused_capture_hook".to_owned(),
+                message: "captures must not consult the retained host hook".to_owned(),
+                host_code: None,
+            });
             let png = run
                 .invoke("page.screenshot", json!({ "page": brand(&page) }))
                 .await?;
@@ -420,24 +426,6 @@ async fn tests_that_captures_return_bytes_and_stop_when_the_host_refuses() -> Te
             let pdf = run.invoke("page.pdf", json!({ "page": brand(&page) })).await?;
             assert!(base64_of(&pdf)?.starts_with("JVBERi0"), "%PDF- magic");
 
-            run.refuse_captures(Refusal {
-                owner: ErrorOwner::Host,
-                code: "page_private".to_owned(),
-                message: "page.screenshot: the owner marked this page private".to_owned(),
-                host_code: None,
-            });
-            for op in ["page.screenshot", "page.pdf"] {
-                let error = run
-                    .invoke(op, json!({ "page": brand(&page) }))
-                    .await
-                    .err()
-                    .ok_or(format!("{op} must be refused"))?;
-                assert_eq!(
-                    (error.owner(), error.code(), error.answer()),
-                    (ErrorOwner::Host, "page_private", Answer::Definite),
-                    "{op}: the host's refusal reaches the script unchanged"
-                );
-            }
             Ok(())
         }
         .await;
