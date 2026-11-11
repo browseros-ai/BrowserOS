@@ -196,15 +196,20 @@ forget_zoom_levels() {
 #                         gets a 404 for the PUT and the container exits unhealthy.
 #   HOST_SOCKET           claw-sdk's host API socket directory (prepare_host_socket).
 #                         claw-server serves its /v1 on 9010 and has no socket.
+#   BACK_FORWARD_CACHE    Chromium's back-forward cache (start_neo). claw-sdk serves
+#                         Playwright's API, and Playwright launches every Chromium
+#                         with the cache off: a page restored from it fires no load
+#                         or DOMContentLoaded, so goBack() and goForward() waiting
+#                         for either would time out with their outcome unknown.
 server_policy() {
   local kind
   kind=$(neo-server-info kind) || die "Could not identify the installed Neo server"
   case "$kind" in
-    claw-server) VIEWER=1 CLIPBOARD_TO_VIEWERS=1 AGENT_SETTINGS=1 HOST_SOCKET=0 ;;
-    claw-sdk) VIEWER=0 CLIPBOARD_TO_VIEWERS=0 AGENT_SETTINGS=0 HOST_SOCKET=1 ;;
+    claw-server) VIEWER=1 CLIPBOARD_TO_VIEWERS=1 AGENT_SETTINGS=1 HOST_SOCKET=0 BACK_FORWARD_CACHE=1 ;;
+    claw-sdk) VIEWER=0 CLIPBOARD_TO_VIEWERS=0 AGENT_SETTINGS=0 HOST_SOCKET=1 BACK_FORWARD_CACHE=0 ;;
     *) die "Unknown Neo server '$kind'" ;;
   esac
-  readonly VIEWER CLIPBOARD_TO_VIEWERS AGENT_SETTINGS HOST_SOCKET
+  readonly VIEWER CLIPBOARD_TO_VIEWERS AGENT_SETTINGS HOST_SOCKET BACK_FORWARD_CACHE
   log "Server: $kind"
 }
 
@@ -376,6 +381,8 @@ apply_minimal_ui() {
 # DevTools emulation, not browser zoom, and still works.
 start_neo() {
   forget_zoom_levels
+  local history_flag=""
+  [ "$BACK_FORWARD_CACHE" = 1 ] || history_flag=--disable-back-forward-cache
   # Releases verify the packaged/overlaid server, so pin it for the image's
   # lifetime. Keep this outside NEO_ARGS, which Compose/callers may replace.
   # NEO_ARGS goes last so a caller's value for a repeated switch wins.
@@ -384,6 +391,7 @@ start_neo() {
     "${sandbox_flags[@]}" \
     "${browseros_extension_flags[@]}" \
     "${gpu_flags[@]}" \
+    ${history_flag:+"$history_flag"} \
     --user-data-dir="$PROFILE" \
     --no-first-run \
     --no-default-browser-check \

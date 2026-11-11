@@ -60,12 +60,13 @@ def server_is(kind: str) -> str:
 
 
 class StartNeoTest(unittest.TestCase):
-    def launch(self, neo_args: str) -> tuple[list[str], list[str]]:
+    def launch(self, neo_args: str, kind: str = "claw-server") -> tuple[list[str], list[str]]:
         """start_neo's calls in order, and the browser's argv, with the image's defaults."""
         with tempfile.TemporaryDirectory() as directory:
             calls, argv = Path(directory) / "calls", Path(directory) / "argv"
             run_bash(
-                f"forget_zoom_levels() {{ echo forget_zoom_levels >> '{calls}'; }}\n"
+                server_is(kind)
+                + f"forget_zoom_levels() {{ echo forget_zoom_levels >> '{calls}'; }}\n"
                 f"spawn_as_neo() {{ echo spawn_as_neo >> '{calls}'; "
                 f"printf '%s\\n' \"$@\" > '{argv}' & }}\n"
                 "sandbox_flags=(--no-sandbox)\n"
@@ -96,6 +97,15 @@ class StartNeoTest(unittest.TestCase):
         calls, _ = self.launch("")
 
         self.assertEqual(calls, ["forget_zoom_levels", "spawn_as_neo"])
+
+    def test_claw_sdk_turns_the_back_forward_cache_off_as_playwright_does(self):
+        # A page restored from the cache fires no load event, so Playwright's goBack() would hang.
+        _, sdk = self.launch("--lang=de", kind="claw-sdk")
+        _, server = self.launch("--lang=de")
+
+        self.assertIn("--disable-back-forward-cache", sdk)
+        self.assertNotIn("--disable-back-forward-cache", server)
+        self.assertEqual(sdk[-1], "--lang=de")
 
 
 class OutputDirectoryTest(unittest.TestCase):
