@@ -1,9 +1,8 @@
 //! What the trace hears about runs. Lifecycle events are never dropped, even when the writer
 //! falls behind: a run's end is what turns its open operations into a verdict.
 
-use crate::{EpochMillis, ErrorRecord, RequestId, RunId, SecretSet, TaskId};
+use crate::{EpochMillis, ErrorRecord, RequestId, RunId, TaskId};
 use serde_json::Value;
-use std::sync::Arc;
 
 /// How a run ended.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -88,22 +87,17 @@ impl RunEffects {
 pub struct RunStarted {
     /// Its id.
     pub id: RunId,
-    /// The script, as given. The writer masks and bounds it.
+    /// The script, as given. The writer bounds it.
     pub code: String,
     /// The host's own id for this request (`_meta["com.browseros.neo/run"].requestId`, zuzu's
     /// tool-call id). It is the host's lookup key, and admission never runs a repeat of it.
-    /// Stored verbatim: masking a key would break the lookup.
+    /// Stored verbatim to preserve the replay lookup key.
     pub request_id: Option<RequestId>,
     /// The host's task this run belongs to (`_meta["com.browseros.neo/run"].taskId`). Runs are
     /// listed by it and it scopes `request_id` replay. Stored verbatim, like `request_id`.
     pub task_id: Option<TaskId>,
     /// The host's own data for the run (`_meta["com.browseros.neo/run"].hostData`). Optional.
     pub host_data: Option<Value>,
-    /// Values the process set does not mask yet that this record must not keep: what claw-sdk
-    /// still holds unregistered (sdk-traces decision 32). The writer masks the code and host data
-    /// with it after the process set, and registers nothing from it. `None` masks with the
-    /// process set alone.
-    pub also_mask: Option<Arc<SecretSet>>,
     /// When it was admitted.
     pub at: EpochMillis,
 }
@@ -117,14 +111,11 @@ pub struct RunEnded {
     pub status: RunStatus,
     /// The uncaught error, when the script threw.
     pub error: Option<ErrorRecord>,
-    /// The script's return value. The writer masks and bounds it.
+    /// The script's return value. The writer bounds it.
     pub result: Option<Value>,
-    /// The exact MCP result handed to the client, already masked, kept to answer a repeated
+    /// The exact MCP result handed to the client, kept to answer a repeated
     /// `request_id` without running again.
     pub replay: Option<Value>,
-    /// Values this record must not keep beyond the process set's, as on [`RunStarted`]. The
-    /// writer masks the result, the error's message and the stored code with it.
-    pub also_mask: Option<Arc<SecretSet>>,
     /// When it ended.
     pub at: EpochMillis,
 }

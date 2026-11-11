@@ -11,8 +11,8 @@ use neo_takeover::{
 };
 use neo_trace::{
     Delivery, Effect, EpochMillis, OperationEnded, OperationId, OperationKind, OperationStarted,
-    Outcome, RedactionLimits, Redactor, RunId, RunStarted, SecretSet, SecretSetConfig, TraceSink,
-    TraceStore, WriterConfig, spawn_writer,
+    Outcome, RedactionLimits, Redactor, RunId, RunStarted, TraceSink, TraceStore, WriterConfig,
+    spawn_writer,
 };
 use std::sync::Arc;
 use std::time::Duration;
@@ -36,10 +36,9 @@ async fn harness_with(
 ) -> Result<Harness, Box<dyn std::error::Error + Send + Sync>> {
     let dir = tempfile::tempdir()?;
     let store = TraceStore::open(&dir.path().join("trace.db")).await?;
-    let secrets = Arc::new(SecretSet::new(SecretSetConfig::default()));
     let sink = spawn_writer(
         &store,
-        Redactor::new(secrets, RedactionLimits::default()),
+        Redactor::new(RedactionLimits::default()),
         config,
         None,
     );
@@ -64,7 +63,6 @@ fn write_in_flight(sink: &TraceSink, tab: i64) -> OperationId {
         request_id: None,
         task_id: None,
         host_data: None,
-        also_mask: None,
         at: EpochMillis::now(),
     });
     let op = OperationId::new(run, 1);
@@ -76,7 +74,6 @@ fn write_in_flight(sink: &TraceSink, tab: i64) -> OperationId {
         effect: Effect::Write,
         tab: Some(TabId(tab)),
         args: serde_json::json!({ "selector": "#pay" }),
-        also_mask: None,
         at: EpochMillis::now(),
     });
     op
@@ -91,7 +88,6 @@ fn write_done(sink: &TraceSink, op: OperationId) {
         result: None,
         error: None,
         page_after: None,
-        also_mask: None,
         at: EpochMillis::now(),
     });
 }

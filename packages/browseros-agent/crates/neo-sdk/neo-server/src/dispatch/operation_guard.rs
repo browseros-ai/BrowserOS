@@ -312,7 +312,6 @@ fn settle(
         result,
         error,
         page_after,
-        also_mask: None,
         at: EpochMillis::now(),
     });
     let line = OpLine {
@@ -374,7 +373,6 @@ impl Unsent {
             effect,
             tab,
             args,
-            also_mask: None,
             at,
         }
     }

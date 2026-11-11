@@ -5,10 +5,9 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Run and operation records, secret masking and pixel privacy for hosted BrowserOS Neo (claw-sdk)"
+description = "Bounded run and operation records, screenshots and request replay for hosted BrowserOS Neo (claw-sdk)"
 
 [dependencies]
-aho-corasick.workspace = true
 browseros-core.workspace = true
 futures-util.workspace = true
 percent-encoding.workspace = true
@@ -20,7 +19,6 @@ thiserror.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 uuid = { workspace = true, features = ["v7"] }
-zeroize.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

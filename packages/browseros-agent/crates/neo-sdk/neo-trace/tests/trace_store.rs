@@ -1,6 +1,6 @@
 //! The trace store and writer through the crate's public API, on a real SQLite file: what a
 //! run's records look like after a flush, what a crash leaves behind, idempotent replay,
-//! listing by task and tab, the trace tail, redaction, backpressure, retention, live events and
+//! listing by task and tab, the trace tail, size bounds, backpressure, retention, live events and
 //! durable per-tab privacy.
 
 use browseros_core::TabId;
@@ -9,9 +9,8 @@ use neo_trace::{
     Delivery, Effect, EpochMillis, ErrorOwner, ErrorRecord, OperationEnded, OperationId,
     OperationKind, OperationStarted, Outcome, PageState, Privacy, PrivacyRecord, PrivacyStore,
     PrivateReason, RedactionLimits, Redactor, RequestId, RetentionPolicy, RunEffects, RunEnded,
-    RunId, RunQuery, RunStarted, RunStatus, SecretSet, SecretSetConfig, SecretSource, SecretValue,
-    TailQuery, TaskAct, TaskId, TraceError, TraceRecordEvent, TraceSink, TraceStore, WriterConfig,
-    spawn_writer,
+    RunId, RunQuery, RunStarted, RunStatus, TailQuery, TaskAct, TaskId, TraceError,
+    TraceRecordEvent, TraceSink, TraceStore, WriterConfig, spawn_writer,
 };
 use serde_json::{Value, json};
 use std::sync::Arc;
@@ -23,25 +22,18 @@ struct Harness {
     dir: TempDir,
     store: TraceStore,
     sink: TraceSink,
-    secrets: Arc<SecretSet>,
 }
 
 async fn harness(config: WriterConfig) -> Harness {
     let dir = tempfile::tempdir().unwrap_or_else(|error| panic!("tempdir: {error}"));
     let store = open(&dir).await;
-    let secrets = Arc::new(SecretSet::new(SecretSetConfig::default()));
     let sink = spawn_writer(
         &store,
-        Redactor::new(secrets.clone(), RedactionLimits::default()),
+        Redactor::new(RedactionLimits::default()),
         config,
         None,
     );
-    Harness {
-        dir,
-        store,
-        sink,
-        secrets,
-    }
+    Harness { dir, store, sink }
 }
 
 async fn open(dir: &TempDir) -> TraceStore {
@@ -53,10 +45,7 @@ async fn open(dir: &TempDir) -> TraceStore {
 fn writer(store: &TraceStore) -> TraceSink {
     spawn_writer(
         store,
-        Redactor::new(
-            Arc::new(SecretSet::new(SecretSetConfig::default())),
-            RedactionLimits::default(),
-        ),
+        Redactor::new(RedactionLimits::default()),
         WriterConfig::default(),
         None,
     )
@@ -102,7 +91,6 @@ fn start_run(sink: &TraceSink, start: Start<'_>) -> RunId {
         request_id: start.request.map(request),
         task_id: start.task.map(task),
         host_data: Some(json!({"ownerRun": "r1"})),
-        also_mask: None,
         at: at(start.at),
     });
     run
@@ -148,7 +136,6 @@ fn op_ended(sink: &TraceSink, id: OperationId, delivery: Delivery, result: Optio
             url: Some("https://x.example/done".into()),
             title: Some("Done".into()),
         }),
-        also_mask: None,
         at: at(i64::from(id.seq) * 10 + 5),
     });
 }
@@ -160,7 +147,6 @@ fn end_run(sink: &TraceSink, run: RunId, status: RunStatus, error: Option<ErrorR
         error,
         result: Some(json!({"title": "Done"})),
         replay: Some(json!({"content": [{"type": "text", "text": "Done"}]})),
-        also_mask: None,
         at: at(1_000),
     });
 }
@@ -207,7 +193,6 @@ fn answered(
         result: None,
         error: None,
         page_after,
-        also_mask: None,
         at: at(millis + 5),
     }
 }
@@ -672,48 +657,6 @@ async fn typed_arguments_and_code_are_kept_after_the_end() {
     assert_eq!(done.code_withheld, None);
 }
 
-#[tokio::test]
-async fn registered_secrets_never_reach_the_file() {
-    let h = harness(WriterConfig::default()).await;
-    let _registration = h.secrets.register_from(
-        SecretValue::new("123-456-otp".into()),
-        None,
-        SecretSource::Page,
-    );
-    let run = start_run(
-        &h.sink,
-        Start {
-            code: "return '123-456-otp'",
-            ..Start::default()
-        },
-    );
-    let read = OperationId::new(run, 1);
-    op_started(&h.sink, simple(read, "locator.textContent", Effect::Read));
-    op_ended(
-        &h.sink,
-        read,
-        Delivery::Done,
-        Some(json!({"text": "your code is 123-456-otp"})),
-    );
-    end_run(&h.sink, run, RunStatus::Ok, None);
-    flushed(&h).await;
-    let Some(done) = h.store.run(run).await.ok().flatten() else {
-        panic!("run not found");
-    };
-    assert_eq!(done.code.as_deref(), Some("return '[private]'"));
-    assert_eq!(
-        done.operations[0].result,
-        Some(json!({"text": "your code is [private]"}))
-    );
-
-    let bytes = std::fs::read(h.dir.path().join("claw-sdk/trace.db")).unwrap_or_default();
-    let wal = std::fs::read(h.dir.path().join("claw-sdk/trace.db-wal")).unwrap_or_default();
-    let needle = b"123-456-otp";
-    for file in [&bytes, &wal] {
-        assert!(!file.windows(needle.len()).any(|window| window == needle));
-    }
-}
-
 /// Host data whose compact JSON, the size the app checks, is exactly `bytes` long. It is one
 /// string, so a cut per string would show as much as a cut of the whole.
 fn host_data_of(bytes: usize) -> Value {
@@ -735,7 +678,6 @@ async fn host_data_of_4_kib_is_stored_whole_and_a_larger_one_is_cut()
             request_id: None,
             task_id: None,
             host_data: Some(host_data_of(bytes)),
-            also_mask: None,
             at: at(0),
         });
         // Host data reaches disk with the run's end.
@@ -779,14 +721,9 @@ async fn notes_of(
 }
 
 #[tokio::test]
-async fn an_operations_notes_reach_its_record_with_its_end_masked_bounded_and_in_order()
+async fn an_operations_notes_reach_its_record_with_its_end_bounded_and_in_order()
 -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let h = harness(WriterConfig::default()).await;
-    let _registration = h.secrets.register_from(
-        SecretValue::new("hunter2-swordfish".into()),
-        None,
-        SecretSource::Page,
-    );
     let limits = RedactionLimits::default();
     let run = start_in(&h.sink, None, 0);
     let click = OperationId::new(run, 1);
@@ -823,7 +760,7 @@ async fn an_operations_notes_reach_its_record_with_its_end_masked_bounded_and_in
     let notes = notes_of(&h.store, click).await?;
     assert_eq!(notes.len(), limits.note_lines + 1, "{notes:?}");
     assert_eq!(notes[0], "waiting for getByRole('button')");
-    assert_eq!(notes[1], "typed [private] into the field");
+    assert_eq!(notes[1], "typed hunter2-swordfish into the field");
     assert!(
         notes[2].starts_with("xxx") && notes[2].contains("…[+") && notes[2].len() <= limits.note,
         "{} bytes: {}",
@@ -848,18 +785,12 @@ async fn an_operations_notes_reach_its_record_with_its_end_masked_bounded_and_in
         .collect();
     assert_eq!(in_run, [notes, Vec::new()]);
 
-    // The database must be read; only the WAL may be absent (after a checkpoint). A read that
-    // fails must fail the test, or the scan would pass without looking at the file.
-    let bytes = fs::read(h.dir.path().join("claw-sdk/trace.db"))?;
-    let wal = match fs::read(h.dir.path().join("claw-sdk/trace.db-wal")) {
-        Ok(wal) => wal,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => Vec::new(),
-        Err(error) => return Err(error.into()),
-    };
-    let needle = b"hunter2-swordfish";
-    for file in [&bytes, &wal] {
-        assert!(!file.windows(needle.len()).any(|window| window == needle));
-    }
+    assert!(
+        store_files(&h)?
+            .iter()
+            .any(|file| holds(file, "hunter2-swordfish")),
+        "the completed note is stored as given"
+    );
     Ok(())
 }
 
@@ -897,11 +828,7 @@ async fn over_the_backlog_operation_events_drop_but_lifecycle_events_do_not() {
 #[tokio::test]
 async fn retention_deletes_old_runs_and_keeps_private_tabs() {
     let h = harness(WriterConfig::default()).await;
-    let privacy = Privacy::new(
-        h.secrets.clone(),
-        Arc::new(h.sink.clone()),
-        Default::default(),
-    );
+    let privacy = Privacy::new(Arc::new(h.sink.clone()), Default::default());
     let old = start_in(&h.sink, Some("task-1"), 0);
     read_on(&h.sink, OperationId::new(old, 1), Some(TabId(3)), 10);
     h.sink.run_ended(RunEnded {
@@ -910,7 +837,6 @@ async fn retention_deletes_old_runs_and_keeps_private_tabs() {
         error: None,
         result: None,
         replay: None,
-        also_mask: None,
         at: at(20),
     });
     assert!(
@@ -957,11 +883,7 @@ async fn retention_deletes_old_runs_and_keeps_private_tabs() {
 async fn a_private_tab_is_announced_and_its_flag_survives_a_reopen() {
     let h = harness(WriterConfig::default()).await;
     let mut events = h.sink.subscribe();
-    let privacy = Privacy::new(
-        h.secrets.clone(),
-        Arc::new(h.sink.clone()),
-        Default::default(),
-    );
+    let privacy = Privacy::new(Arc::new(h.sink.clone()), Default::default());
     let tab = TabId(9);
     assert!(
         privacy
@@ -987,11 +909,7 @@ async fn a_private_tab_is_announced_and_its_flag_survives_a_reopen() {
         loaded.get(&tab).map(|record| record.reason),
         Some(PrivateReason::Takeover)
     );
-    let privacy = Privacy::new(
-        Arc::new(SecretSet::new(SecretSetConfig::default())),
-        Arc::new(writer(&reopened)),
-        loaded,
-    );
+    let privacy = Privacy::new(Arc::new(writer(&reopened)), loaded);
     assert!(privacy.capture(tab).is_none());
     assert!(privacy.capture(TabId(10)).is_some());
 }
@@ -999,11 +917,7 @@ async fn a_private_tab_is_announced_and_its_flag_survives_a_reopen() {
 #[tokio::test]
 async fn closed_and_vanished_tabs_lose_their_flags_durably() {
     let h = harness(WriterConfig::default()).await;
-    let privacy = Privacy::new(
-        h.secrets.clone(),
-        Arc::new(h.sink.clone()),
-        Default::default(),
-    );
+    let privacy = Privacy::new(Arc::new(h.sink.clone()), Default::default());
     for tab in [TabId(1), TabId(2), TabId(3)] {
         assert!(
             privacy
@@ -1094,7 +1008,7 @@ fn slow_privacy(h: &Harness, slow: PrivacyWrite) -> Arc<Privacy> {
         sink: h.sink.clone(),
         slow,
     };
-    Privacy::new(h.secrets.clone(), Arc::new(store), Default::default())
+    Privacy::new(Arc::new(store), Default::default())
 }
 
 /// Waits until `Privacy::is_private` reports `private` for `tab`, which a call on another thread
@@ -1190,11 +1104,7 @@ async fn a_flag_already_queued_when_its_tab_closes_is_deleted_on_disk()
     use futures_util::FutureExt;
 
     let h = harness(WriterConfig::default()).await;
-    let privacy = Privacy::new(
-        h.secrets.clone(),
-        Arc::new(h.sink.clone()),
-        Default::default(),
-    );
+    let privacy = Privacy::new(Arc::new(h.sink.clone()), Default::default());
     let tab = TabId(4);
     let made = privacy.make_private(tab, PrivateReason::Host, at(1));
     tokio::pin!(made);
@@ -1220,11 +1130,7 @@ async fn make_private_answers_only_once_its_own_flag_is_on_disk()
     use futures_util::FutureExt;
 
     let h = harness(WriterConfig::default()).await;
-    let privacy = Privacy::new(
-        h.secrets.clone(),
-        Arc::new(h.sink.clone()),
-        Default::default(),
-    );
+    let privacy = Privacy::new(Arc::new(h.sink.clone()), Default::default());
     let tab = TabId(4);
     let first = privacy.make_private(tab, PrivateReason::Host, at(1));
     tokio::pin!(first);
@@ -1773,23 +1679,6 @@ async fn recording_an_operation_never_waits_on_the_writer() {
     assert_eq!(count, Some(u64::from(samples)));
 }
 
-/// A value claw-sdk still holds unregistered (decision 32), which no process set knows.
-const HELD: &str = "held-7Qx-swordfish";
-
-/// A set of its own, as claw-sdk passes its held values: the writer masks a record with it and
-/// the process set never learns them.
-fn also_mask(values: &[&str]) -> Arc<SecretSet> {
-    let set = SecretSet::new(SecretSetConfig::default());
-    for value in values {
-        let _registration = set.register_from(
-            SecretValue::new((*value).to_string()),
-            None,
-            SecretSource::Page,
-        );
-    }
-    Arc::new(set)
-}
-
 /// The store file and its WAL, each read whole. Only the WAL may be absent (after a
 /// checkpoint): a read that fails must fail the test, or a scan would pass without looking.
 fn store_files(h: &Harness) -> Result<[Vec<u8>; 2], Box<dyn std::error::Error + Send + Sync>> {
@@ -1807,332 +1696,7 @@ fn holds(file: &[u8], needle: &str) -> bool {
         .any(|window| window == needle.as_bytes())
 }
 
-fn failure(message: String) -> ErrorRecord {
-    ErrorRecord {
-        owner: ErrorOwner::Website,
-        code: "assertion_failed".into(),
-        message,
-        host_code: None,
-        retryable: false,
-        operation_id: None,
-    }
-}
-
-#[tokio::test]
-async fn a_records_also_mask_masks_every_text_it_stores_and_registers_nothing()
--> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let h = harness(WriterConfig::default()).await;
-    let held = also_mask(&[HELD]);
-    let run = RunId::new();
-    h.sink.run_started(RunStarted {
-        id: run,
-        code: format!("return '{HELD}'"),
-        request_id: None,
-        task_id: None,
-        host_data: Some(json!({"note": format!("for {HELD}")})),
-        also_mask: Some(Arc::clone(&held)),
-        at: at(0),
-    });
-    let read = OperationId::new(run, 1);
-    h.sink.op_started(OperationStarted {
-        args: json!({"expected": format!("Welcome {HELD}")}),
-        also_mask: Some(Arc::clone(&held)),
-        ..started(simple(read, "page.title", Effect::Read))
-    });
-    flushed(&h).await;
-    let admitted = h
-        .store
-        .operation(read)
-        .await?
-        .ok_or("operation not found")?;
-    assert_eq!(admitted.args, None, "the start row stores no input");
-
-    h.sink
-        .op_notes(read, vec![format!("read {HELD} from the title")]);
-    h.sink.op_ended(OperationEnded {
-        result: Some(json!({"title": format!("Welcome {HELD}")})),
-        page_after: Some(PageState {
-            tab_id: Some(TabId(3)),
-            url: Some(format!("https://b.test/welcome?name={HELD}")),
-            title: Some(format!("Welcome {HELD}")),
-        }),
-        also_mask: Some(Arc::clone(&held)),
-        ..ended(read)
-    });
-    // An end with no set of its own still masks with what its start was given: a value held as
-    // the operation began may be in what it returned.
-    let check = OperationId::new(run, 2);
-    h.sink.op_started(OperationStarted {
-        also_mask: Some(Arc::clone(&held)),
-        ..started(simple(check, "expect.toHaveTitle", Effect::Read))
-    });
-    h.sink.op_ended(OperationEnded {
-        outcome: Outcome::Error,
-        error: Some(failure(format!("expected title {HELD}"))),
-        ..ended(check)
-    });
-    h.sink.run_ended(RunEnded {
-        id: run,
-        status: RunStatus::Error,
-        error: Some(failure(format!("Error: expected title {HELD}"))),
-        result: Some(json!({"echo": HELD})),
-        replay: None,
-        also_mask: Some(Arc::clone(&held)),
-        at: at(1_000),
-    });
-    flushed(&h).await;
-
-    let done = h.store.run(run).await?.ok_or("run not found")?;
-    assert_eq!(done.code.as_deref(), Some("return '[private]'"));
-    assert_eq!(done.host_data, Some(json!({"note": "for [private]"})));
-    assert_eq!(done.result, Some(json!({"echo": "[private]"})));
-    assert_eq!(
-        done.summary.error.map(|error| error.message).as_deref(),
-        Some("Error: expected title [private]")
-    );
-    let [title, expect] = &done.operations[..] else {
-        panic!("two operations: {:?}", done.operations);
-    };
-    assert_eq!(title.args, Some(json!({"expected": "Welcome [private]"})));
-    assert_eq!(title.notes, ["read [private] from the title"]);
-    assert_eq!(title.result, Some(json!({"title": "Welcome [private]"})));
-    assert_eq!(
-        title.page.url.as_deref(),
-        Some("https://b.test/welcome?name=[private]")
-    );
-    assert_eq!(title.page.title.as_deref(), Some("Welcome [private]"));
-    assert_eq!(
-        expect.error.as_ref().map(|error| error.message.as_str()),
-        Some("expected title [private]")
-    );
-    for file in store_files(&h)? {
-        assert!(!holds(&file, HELD), "the file keeps the held value");
-    }
-
-    assert_eq!(h.secrets.count(), 0, "a record's set registers nothing");
-    let later = start_run(
-        &h.sink,
-        Start {
-            code: HELD,
-            ..Start::default()
-        },
-    );
-    end_run(&h.sink, later, RunStatus::Ok, None);
-    flushed(&h).await;
-    let later = h.store.run(later).await?.ok_or("run not found")?;
-    assert_eq!(
-        later.code.as_deref(),
-        Some(HELD),
-        "a record without the set keeps what the process set does not know"
-    );
-    Ok(())
-}
-
-/// The prefix of [`HELD`] the owner had typed, or left after a backspace, at one end of a record.
-const PREFIX: &str = "held-7Qx";
-
-#[tokio::test]
-async fn a_held_value_that_grew_or_shrank_between_an_ops_start_and_end_is_masked_whole()
--> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let h = harness(WriterConfig::default()).await;
-    let run = start_in(&h.sink, None, 0);
-    // Typed on as the op ran, then backspaced as the next one ran: the start's set and the
-    // end's each hold the value or its prefix, so whichever set masks first must not leave the
-    // other's tail behind.
-    let grew = OperationId::new(run, 1);
-    let shrank = OperationId::new(run, 2);
-    for (op, at_start, at_end) in [(grew, PREFIX, HELD), (shrank, HELD, PREFIX)] {
-        h.sink.op_started(OperationStarted {
-            args: json!({"expected": HELD}),
-            also_mask: Some(also_mask(&[at_start])),
-            ..started(simple(op, "locator.textContent", Effect::Read))
-        });
-        h.sink.op_ended(OperationEnded {
-            result: Some(json!({"text": HELD})),
-            also_mask: Some(also_mask(&[at_end])),
-            ..ended(op)
-        });
-    }
-    flushed(&h).await;
-    for op in [grew, shrank] {
-        let row = h.store.operation(op).await?.ok_or("operation not found")?;
-        assert_eq!(row.args, Some(json!({"expected": "[private]"})), "{op}");
-        assert_eq!(row.result, Some(json!({"text": "[private]"})), "{op}");
-    }
-    Ok(())
-}
-
-#[tokio::test]
-async fn a_held_value_that_grew_or_shrank_during_a_run_is_masked_whole_in_its_code()
--> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let h = harness(WriterConfig::default()).await;
-    let mut runs = Vec::new();
-    for (at_start, at_end) in [(PREFIX, HELD), (HELD, PREFIX)] {
-        let run = RunId::new();
-        h.sink.run_started(RunStarted {
-            id: run,
-            code: format!("return '{HELD}'"),
-            request_id: None,
-            task_id: None,
-            host_data: None,
-            also_mask: Some(also_mask(&[at_start])),
-            at: at(0),
-        });
-        h.sink.run_ended(RunEnded {
-            id: run,
-            status: RunStatus::Ok,
-            error: None,
-            result: None,
-            replay: None,
-            also_mask: Some(also_mask(&[at_end])),
-            at: at(1_000),
-        });
-        runs.push(run);
-    }
-    flushed(&h).await;
-    for run in runs {
-        let done = h.store.run(run).await?.ok_or("run not found")?;
-        assert_eq!(done.code.as_deref(), Some("return '[private]'"), "{run}");
-    }
-    Ok(())
-}
-
-#[tokio::test]
-async fn a_held_value_whose_prefix_the_process_set_knows_is_masked_whole()
--> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let h = harness(WriterConfig::default()).await;
-    // The owner paused long enough for the prefix to be registered, then typed on. The record's
-    // set holds the value only as typed, not as the process set's mask leaves it.
-    let _registration = h.secrets.register_from(
-        SecretValue::new(PREFIX.to_string()),
-        None,
-        SecretSource::Page,
-    );
-    let run = start_in(&h.sink, None, 0);
-    let read = OperationId::new(run, 1);
-    op_started(&h.sink, simple(read, "locator.textContent", Effect::Read));
-    h.sink.op_ended(OperationEnded {
-        result: Some(json!({"text": HELD})),
-        also_mask: Some(also_mask(&[HELD])),
-        ..ended(read)
-    });
-    flushed(&h).await;
-    let row = h
-        .store
-        .operation(read)
-        .await?
-        .ok_or("operation not found")?;
-    assert_eq!(row.result, Some(json!({"text": "[private]"})));
-    Ok(())
-}
-
-/// A held value long enough that a cut placed near it falls inside it.
-const LONG_HELD: &str = "held-7Qx-swordfish-and-a-long-passphrase-tail";
-
-/// Where a clip of a text with `limit` bytes cuts: it keeps room for its `…[+N bytes]` marker.
-const MARKER_ROOM: usize = 24;
-
-#[tokio::test]
-async fn a_held_value_the_size_cut_falls_on_is_masked_before_the_cut()
--> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let h = harness(WriterConfig::default()).await;
-    let limits = RedactionLimits::default();
-    let held = also_mask(&[LONG_HELD]);
-    let head = &LONG_HELD[..8];
-    // The held value starts 16 bytes before where `cut` says the clip falls, and text follows
-    // it. A cut made before the mask keeps the value's head; one made after keeps `[private`.
-    let across = |cut: usize, fill: char| {
-        format!(
-            "{}{LONG_HELD}{}",
-            fill.to_string().repeat(cut - 16),
-            "z".repeat(100)
-        )
-    };
-    // A JSON string's room is the string limit; host data's is its whole budget, less the
-    // object around its one string.
-    let json_cut = limits.string - MARKER_ROOM;
-    let host_cut = limits.host_data - json!({"blob": ""}).to_string().len() - MARKER_ROOM;
-    let run = RunId::new();
-    h.sink.run_started(RunStarted {
-        id: run,
-        code: across(limits.code - MARKER_ROOM, 'c'),
-        request_id: None,
-        task_id: None,
-        host_data: Some(json!({"blob": across(host_cut, 'h')})),
-        also_mask: Some(Arc::clone(&held)),
-        at: at(0),
-    });
-    let read = OperationId::new(run, 1);
-    h.sink.op_started(OperationStarted {
-        also_mask: Some(Arc::clone(&held)),
-        ..started(simple(read, "page.title", Effect::Read))
-    });
-    h.sink
-        .op_notes(read, vec![across(limits.note - MARKER_ROOM, 'n')]);
-    h.sink.op_ended(OperationEnded {
-        result: Some(json!({"text": across(json_cut, 'r')})),
-        page_after: Some(PageState {
-            tab_id: Some(TabId(3)),
-            url: None,
-            title: Some(across(limits.text - MARKER_ROOM, 't')),
-        }),
-        also_mask: Some(Arc::clone(&held)),
-        ..ended(read)
-    });
-    h.sink.run_ended(RunEnded {
-        id: run,
-        status: RunStatus::Ok,
-        error: None,
-        result: Some(json!({"text": across(json_cut, 'e')})),
-        replay: None,
-        also_mask: Some(Arc::clone(&held)),
-        at: at(1_000),
-    });
-    flushed(&h).await;
-
-    let done = h.store.run(run).await?.ok_or("run not found")?;
-    let title = &done.operations[0];
-    assert!(
-        done.code_truncated && done.result_truncated && title.result_truncated,
-        "every text was cut"
-    );
-    let stored = [
-        done.code.clone().unwrap_or_default(),
-        done.host_data
-            .map(|data| data.to_string())
-            .unwrap_or_default(),
-        done.result
-            .map(|result| result.to_string())
-            .unwrap_or_default(),
-        title.notes.join("\n"),
-        title
-            .result
-            .as_ref()
-            .map(Value::to_string)
-            .unwrap_or_default(),
-        title.page.title.clone().unwrap_or_default(),
-    ];
-    for text in &stored {
-        assert!(text.contains("…[+"), "not cut: …{}", tail_of(text));
-        assert!(
-            !text.contains(head),
-            "the cut kept the held value's head: …{}",
-            tail_of(text)
-        );
-    }
-    for file in store_files(&h)? {
-        assert!(!holds(&file, head), "the file keeps the held value's head");
-    }
-    Ok(())
-}
-
-/// The last 40 characters, enough to show what a cut kept.
-fn tail_of(text: &str) -> String {
-    let chars: Vec<char> = text.chars().collect();
-    chars[chars.len().saturating_sub(40)..].iter().collect()
-}
-
-/// `op`'s start, as [`op_started`] sends it, with no set of its own.
+/// `op`'s start, as [`op_started`] sends it.
 fn started(op: Op<'_>) -> OperationStarted {
     OperationStarted {
         id: op.id,
@@ -2142,12 +1706,11 @@ fn started(op: Op<'_>) -> OperationStarted {
         effect: op.effect,
         tab: op.tab,
         args: op.args,
-        also_mask: None,
         at: op.at,
     }
 }
 
-/// An end that returned nothing, with no set of its own.
+/// An end that returned nothing.
 fn ended(id: OperationId) -> OperationEnded {
     OperationEnded {
         id,
@@ -2157,28 +1720,25 @@ fn ended(id: OperationId) -> OperationEnded {
         result: None,
         error: None,
         page_after: None,
-        also_mask: None,
         at: at(i64::from(id.seq) * 10 + 5),
     }
 }
 
-/// What a run's open operation and the run itself have on disk while they are open: neither its
-/// input nor its host data, until its end masks them with what the end's own set knows.
+/// Start rows and WAL pages keep arguments, code and host data absent until the corresponding
+/// end materializes them. Ended records keep the original values, bounded to their budgets.
 #[tokio::test]
-async fn a_start_keeps_its_input_and_host_data_off_disk_until_its_end_masks_them()
+async fn a_start_keeps_input_code_and_host_data_off_disk_until_the_end()
 -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let h = harness(WriterConfig::default()).await;
-    // A value only the end's own set knows: the op's own sweep found it, so the start's set
-    // (and the process set) did not have it yet.
-    let found = "swept-9Qp-cardnumber";
+    let found = "deferred-input-9Qp";
+    let code = format!("return '{found}'");
     let run = RunId::new();
     h.sink.run_started(RunStarted {
         id: run,
-        code: "x".to_string(),
+        code: code.clone(),
         request_id: None,
         task_id: None,
         host_data: Some(json!({"note": format!("for {found}")})),
-        also_mask: None,
         at: at(0),
     });
     let fill = OperationId::new(run, 1);
@@ -2189,6 +1749,7 @@ async fn a_start_keeps_its_input_and_host_data_off_disk_until_its_end_masks_them
     flushed(&h).await;
 
     let open = h.store.run(run).await?.ok_or("run not found")?;
+    assert_eq!(open.code, None, "an open run stores no code");
     assert_eq!(open.host_data, None, "an open run stores no host data");
     let admitted = h
         .store
@@ -2203,30 +1764,27 @@ async fn a_start_keeps_its_input_and_host_data_off_disk_until_its_end_masks_them
         );
     }
 
-    let held = also_mask(&[found]);
-    h.sink.op_ended(OperationEnded {
-        also_mask: Some(Arc::clone(&held)),
-        ..ended(fill)
-    });
+    h.sink.op_ended(ended(fill));
     h.sink.run_ended(RunEnded {
         id: run,
         status: RunStatus::Ok,
         error: None,
         result: None,
         replay: None,
-        also_mask: Some(held),
         at: at(1_000),
     });
     flushed(&h).await;
     let done = h.store.run(run).await?.ok_or("run not found")?;
-    assert_eq!(done.host_data, Some(json!({"note": "for [private]"})));
+    assert_eq!(
+        done.host_data,
+        Some(json!({"note": format!("for {found}")}))
+    );
     assert_eq!(
         done.operations[0].args,
-        Some(json!({"value": "copied [private]"}))
+        Some(json!({"value": format!("copied {found}")}))
     );
-    for file in store_files(&h)? {
-        assert!(!holds(&file, found), "the file keeps the value");
-    }
+    assert_eq!(done.code.as_deref(), Some(code.as_str()));
+    assert!(store_files(&h)?.iter().any(|file| holds(file, found)));
     Ok(())
 }
 
@@ -2253,39 +1811,22 @@ async fn names_read(
     ])
 }
 
-/// A script can call any name, and an unknown method is recorded under the name it was called
-/// by, which may hold a value its run still holds or one the process set knows. A running
-/// operation is listed by its name, so the name is stored as the operation starts, masked with
-/// what the start knows.
+/// Operation names are visible from the start and remain identical across every read surface.
 #[tokio::test]
-async fn an_operations_name_is_masked_with_what_its_start_knows_before_it_is_stored()
+async fn an_operations_name_is_stored_as_given_at_its_start()
 -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let h = harness(WriterConfig::default()).await;
-    let known = "known-4Rt-apikey";
-    let _registration = h.secrets.register_from(
-        SecretValue::new(known.to_string()),
-        None,
-        SecretSource::Page,
-    );
     let run = start_in(&h.sink, Some("checkout"), 0);
     let call = OperationId::new(run, 1);
-    let name = format!("vault.{HELD}.{known}");
-    h.sink.op_started(OperationStarted {
-        also_mask: Some(also_mask(&[HELD])),
-        ..started(simple(call, &name, Effect::Write))
-    });
+    let name = "vault.original-value".to_string();
+    h.sink
+        .op_started(started(simple(call, &name, Effect::Write)));
     flushed(&h).await;
-
-    let masked = "vault.[private].[private]".to_string();
     assert_eq!(
         names_read(&h, call, "checkout").await?,
-        [masked.clone(), masked.clone(), masked],
-        "the operation's row (/v1/operations, /v1/events), its run while it runs, the trace"
+        [name.clone(), name.clone(), name.clone()],
+        "the operation row, running run and trace keep the same name"
     );
-    for file in store_files(&h)? {
-        assert!(!holds(&file, HELD), "the file keeps the held value");
-        assert!(!holds(&file, known), "the file keeps the registered value");
-    }
-    assert_eq!(h.secrets.count(), 1, "the start's set registers nothing");
+    assert!(store_files(&h)?.iter().any(|file| holds(file, &name)));
     Ok(())
 }

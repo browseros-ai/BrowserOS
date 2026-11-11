@@ -35,7 +35,7 @@ pub struct Operation {
     pub tab_id: Option<i64>,
     #[serde(rename = "page", skip_serializing_if = "Option::is_none")]
     pub page: Option<Box<models::PageRef>>,
-    /// Arguments, masked and bounded. Target field kinds do not redact them. Page and locator handles appear as their branded JSON, e.g. `{\"$neo\":\"locator\",\"page\":3,\"selector\":\"…\"}`. Present once the operation has ended: Neo masks them with what the operation's end knows, so an operation still running, or one whose end Neo never recorded, has none.
+    /// Original arguments, bounded for storage. Page and locator handles appear as their branded JSON, e.g. `{\"$neo\":\"locator\",\"page\":3,\"selector\":\"…\"}`. Present once the operation has ended, so an operation still running, or one whose end Neo never recorded, has none.
     #[serde(
         rename = "args",
         default,
@@ -45,7 +45,7 @@ pub struct Operation {
     pub args: Option<Option<serde_json::Value>>,
     #[serde(rename = "argsTruncated", skip_serializing_if = "Option::is_none")]
     pub args_truncated: Option<bool>,
-    /// Safe result, masked and bounded.
+    /// Result, bounded for storage.
     #[serde(
         rename = "result",
         default,
@@ -63,7 +63,7 @@ pub struct Operation {
     pub delivery: Option<String>,
     #[serde(rename = "error", skip_serializing_if = "Option::is_none")]
     pub error: Option<Box<models::OperationError>>,
-    /// Its call-log lines, oldest first, e.g. `waiting for getByRole('button')`. Masked and bounded: a long line ends in `…[+N bytes]`, and lines past the limit are counted in one last `…[+N lines]` line. They are stored with the operation's end, so the field is absent while it runs and when it noted nothing.
+    /// Its call-log lines, oldest first, e.g. `waiting for getByRole('button')`. Bounded: a long line ends in `…[+N bytes]`, and lines past the limit are counted in one last `…[+N lines]` line. They are stored with the operation's end, so the field is absent while it runs and when it noted nothing.
     #[serde(rename = "notes", skip_serializing_if = "Option::is_none")]
     pub notes: Option<Vec<String>>,
     #[serde(rename = "startedAt")]
