@@ -5,6 +5,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
+import { loadScope } from '../scope.mjs'
 import { flattenResults } from './classify.mjs'
 import { commandLine, renderReport, runnerCommand } from './report.mjs'
 
@@ -107,6 +108,26 @@ test('report exposes commands, actual counts, transitions, gaps and _expect limi
   assert.match(report.markdown, /not proof that later assertions would pass/)
   assert.match(report.markdown, /Page.setExtraHTTPHeaders \(created context\)/)
   assert.ok(!report.markdown.includes('\x1b'))
+})
+
+test('report shows both scores, reason counts and passing excluded tests without changing verdicts', () => {
+  const input = inputs()
+  const original = renderReport(input)
+  const [row] = flattenResults(input.neo.results)
+  const scope = {
+    ...loadScope(),
+    entries: [{ file: row.suite, reason: 'network' }],
+  }
+  const report = renderReport({ ...input, scope })
+  assert.deepEqual(report.counts, original.counts)
+  assert.deepEqual(report.rows, original.rows)
+  assert.deepEqual(report.scores.all, { passed: 1, total: 5 })
+  assert.deepEqual(report.scores.inScope, { passed: 0, total: 0 })
+  assert.match(report.markdown, /All tests: \*\*1\/5 \(20.0%\)\*\*/)
+  assert.match(report.markdown, /In-scope tests: \*\*0\/0 \(n\/a\)\*\*/)
+  assert.match(report.markdown, /\| network \| 5 \| 1 \|/)
+  assert.match(report.markdown, /Passing tests in scope file \(1\)/)
+  assert.match(report.markdown, /legacy run/)
 })
 
 test('runner errors are visible without fabricating per-case transitions', () => {

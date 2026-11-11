@@ -149,7 +149,8 @@ function isLoopError(line) {
   )
 }
 
-function outcome(row) {
+/** Shared Playwright outcome semantics for verdict classification and scope scores. */
+export function outcome(row) {
   const test = row.test
   const results = test.results || []
   if (test.status === 'skipped') return 'skip'
