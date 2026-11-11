@@ -4,7 +4,8 @@
  * the last Clear current from `/api/events`: a run appears when its call reaches the proxy and
  * fills in when Neo's reply passes back. Every agent's runs share one list (owner, 2026-11-11).
  *
- *   ┌ TopBar: name · container line · MCP URL + Copy · Clear · Take over ──────────┐
+ *   ┌ TopBar: name · container line · MCP URL + Copy · Export · Clear · Take over ─┐
+ *   ├ ExportNotice: the last export's folder + Copy path, until dismissed ─────────┤
  *   ├ TimeStrip: where the wall clock went, since the last Clear ──────────────────┤
  *   │ RunTable: one row per run(); open rows show RunBlock    ┃ Sidebar: live      │
  *   │ (code + "Model read"); totals row                       ┃ screen, then the   │
@@ -22,7 +23,7 @@
  */
 
 import { useEffect, useState } from 'react'
-import type { RunSummary } from '../../shared/api'
+import type { ExportResponse, RunSummary } from '../../shared/api'
 import { LiveScreenPopup } from '../live-screen/LiveScreen'
 import { useLiveScreen } from '../live-screen/use-live-screen'
 import { useViewer } from '../use-viewer'
@@ -33,7 +34,7 @@ import { Sidebar } from './Sidebar'
 import { Splitter, useSidebarWidth } from './Splitter'
 import { DEFAULT_SORT, type RunSort } from './sort'
 import { TimeStrip } from './TimeStrip'
-import { TopBar } from './TopBar'
+import { ExportNotice, TopBar } from './TopBar'
 import { useContainer } from './use-container'
 
 /** How often a running run's elapsed time and the live strip redraw. */
@@ -51,7 +52,9 @@ function useNow(ticking: boolean): number {
 }
 
 export function ViewerScreen() {
-  const { info, runs, log, clear, error } = useViewer()
+  const { info, runs, log, clear, exportRuns, error } = useViewer()
+  const [exported, setExported] = useState<ExportResponse | null>(null)
+  const [exporting, setExporting] = useState(false)
   const [chosenId, setChosenId] = useState<string | null>(null)
   const [openIds, setOpenIds] = useState<ReadonlySet<string>>(new Set())
   const [sort, setSort] = useState<RunSort>(DEFAULT_SORT)
@@ -73,6 +76,15 @@ export function ViewerScreen() {
     setOpenIds(new Set())
     setFullId(null)
     void clear()
+  }
+
+  const onExport = () => {
+    setExporting(true)
+    void exportRuns()
+      .then((written) => {
+        if (written) setExported(written)
+      })
+      .finally(() => setExporting(false))
   }
 
   const onRow = (run: RunSummary) => {
@@ -97,8 +109,13 @@ export function ViewerScreen() {
       <TopBar
         info={info && { ...info, container }}
         onClear={onClear}
+        onExport={onExport}
+        exporting={exporting}
         live={live}
       />
+      {exported && (
+        <ExportNotice exported={exported} onDismiss={() => setExported(null)} />
+      )}
       {error && (
         <p
           role="alert"

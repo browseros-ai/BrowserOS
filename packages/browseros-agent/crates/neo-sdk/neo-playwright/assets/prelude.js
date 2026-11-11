@@ -3728,6 +3728,69 @@ ${value.stack}`;
     return (typeof value === "object" || typeof value === "function") && value !== null && typeof Reflect.get(value, "then") === "function";
   }
 
+  // crates/neo-sdk/neo-playwright-js/src/prelude/generated/action.ts
+  var ACTION_OPTION_KEYS = {};
+  var ACTION_SEND = {};
+
+  // crates/neo-sdk/neo-playwright-js/src/prelude/generated/read.ts
+  var READ_OPTION_KEYS = {};
+  var READ_SEND = {};
+
+  // crates/neo-sdk/neo-playwright-js/src/prelude/generated/snapshot.ts
+  var SNAPSHOT_OPTION_KEYS = {};
+  var SNAPSHOT_SEND = {
+    "page.ariaSnapshot": (site, call, input, signal) => invoke("page.ariaSnapshot", site, call, input, signal),
+    "locator.ariaSnapshot": (site, call, input, signal) => invoke("locator.ariaSnapshot", site, call, input, signal)
+  };
+
+  // crates/neo-sdk/neo-playwright-js/src/prelude/generated/expect.ts
+  var EXPECT_OPTION_KEYS = {};
+  var EXPECT_SEND = {};
+
+  // crates/neo-sdk/neo-playwright-js/src/prelude/generated/input.ts
+  var INPUT_OPTION_KEYS = {};
+  var INPUT_SEND = {};
+
+  // crates/neo-sdk/neo-playwright-js/src/prelude/generated/page.ts
+  var PAGE_OPTION_KEYS = {};
+  var PAGE_SEND = {};
+
+  // crates/neo-sdk/neo-playwright-js/src/prelude/generated/context.ts
+  var CONTEXT_OPTION_KEYS = {};
+  var CONTEXT_SEND = {};
+
+  // crates/neo-sdk/neo-playwright-js/src/prelude/generated/event.ts
+  var EVENT_OPTION_KEYS = {};
+  var EVENT_SEND = {};
+
+  // crates/neo-sdk/neo-playwright-js/src/prelude/generated/locator-handler.ts
+  var LOCATOR_HANDLER_OPTION_KEYS = {};
+  var LOCATOR_HANDLER_SEND = {};
+
+  // crates/neo-sdk/neo-playwright-js/src/prelude/generated/index.ts
+  var OPTION_KEYS = {
+    ...ACTION_OPTION_KEYS,
+    ...READ_OPTION_KEYS,
+    ...SNAPSHOT_OPTION_KEYS,
+    ...EXPECT_OPTION_KEYS,
+    ...INPUT_OPTION_KEYS,
+    ...PAGE_OPTION_KEYS,
+    ...CONTEXT_OPTION_KEYS,
+    ...EVENT_OPTION_KEYS,
+    ...LOCATOR_HANDLER_OPTION_KEYS
+  };
+  var send = {
+    ...ACTION_SEND,
+    ...READ_SEND,
+    ...SNAPSHOT_SEND,
+    ...EXPECT_SEND,
+    ...INPUT_SEND,
+    ...PAGE_SEND,
+    ...CONTEXT_SEND,
+    ...EVENT_SEND,
+    ...LOCATOR_HANDLER_SEND
+  };
+
   // crates/neo-sdk/neo-playwright/third_party/playwright/packages/isomorphic/stringUtils.ts
   function escapeWithQuotes(text, char = "'") {
     const stringified = JSON.stringify(text);
@@ -7729,17 +7792,26 @@ ${value.stack}`;
     async _snapshot(api, selector, options = {}) {
       const site = captureSite();
       const mode = options.mode ?? "default";
-      const shape = pick({ mode, depth: options.depth, boxes: options.boxes }, [
-        "mode",
-        "depth",
-        "boxes"
-      ]);
+      const { depth, boxes } = options;
       const wait = this._wait(api, options);
-      if (selector !== null)
-        return await this._selectorOp("locator.ariaSnapshot", site, api, selector, true, wait, shape);
+      if (selector !== null) {
+        const target = await this._locatorBrand(api, selector);
+        return await send["locator.ariaSnapshot"](site, this._call(api, wait.timeout), {
+          target,
+          strict: "strict",
+          mode,
+          depth,
+          boxes
+        }, wait.signal);
+      }
       if (this._id !== null)
         throw unsupportedError(api, "snapshot a child frame through its iframe: page.locator('iframe').contentFrame().locator('body').ariaSnapshot()");
-      return await invoke("page.ariaSnapshot", site, this._call(api, wait.timeout), { page: await this._page._brand(api), ...shape }, wait.signal);
+      return await send["page.ariaSnapshot"](site, this._call(api, wait.timeout), {
+        page: await this._page._brand(api),
+        mode,
+        depth,
+        boxes
+      }, wait.signal);
     }
     async _ariaSnapshot(api, selector, options) {
       return renderSnapshot(await this._snapshot(api, selector, options));
@@ -18233,24 +18305,24 @@ Call Log:
     ConsoleMessage,
     Response
   });
-  var context = new BrowserContext;
-  var browser = new Browser(context);
-  var expect = createExpect();
-  registerBrand("page", (json) => context._pageFromResult(json));
+  var context2 = new BrowserContext;
+  var browser = new Browser(context2);
+  var expect2 = createExpect();
+  registerBrand("page", (json) => context2._pageFromResult(json));
   registerBrand("element", (json) => {
     const brand = elementBrand(json);
-    return brand ? new ElementHandle(context._pageFor(brand.page), brand) : json;
+    return brand ? new ElementHandle(context2._pageFor(brand.page), brand) : json;
   });
   registerBrand("bytes", (json) => Buffer.from(String(Reflect.get(json, "base64") ?? ""), "base64"));
-  onReply((reply) => context._applyReply(reply));
+  onReply((reply) => context2._applyReply(reply));
   provide("page", awaitsProviders() ? async (init) => {
-    const page = context._runPage(init);
+    const page = context2._runPage(init);
     await page._readInitialFrames();
     return page;
-  } : (init) => context._runPage(init));
-  provide("context", () => context);
+  } : (init) => context2._runPage(init));
+  provide("context", () => context2);
   provide("browser", () => browser);
-  provide("expect", () => expect);
+  provide("expect", () => expect2);
   provide("playwright", () => createPlaywright());
   provide("Buffer", () => Buffer);
 })();

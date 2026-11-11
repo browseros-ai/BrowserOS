@@ -108,7 +108,7 @@ The page at `/` (the approved design, "Viewer C v2"):
 
 - **Top bar.** Whether the container is running and its image tag (read-only; with `--upstream`
   it says the image is managed outside the viewer and where MCP goes), the MCP URL with **Copy**,
-  **Clear**, and **Take over** (below).
+  **Clear**, **Export** (below), and **Take over** (below).
 - **Where the time went.** The wall clock since the last Clear, from the first call to the last
   reply (to now while a run is running): each run sits where it happened, its time in Neo in blue
   (red if it failed, amber while running) after a grey sliver for the time the viewer held the call.
@@ -181,11 +181,32 @@ On disk: one append-only JSONL file, `log.jsonl`, in the instance's state folder
 the host token and `start-state.json`. The first
 line starts the log; then one line per thing as it happened (`run-start` with the request body as
 sent, `run-end` with the reply body as received, its text, structured content and `_meta`,
-`neo-run` with Neo's record of the run, `tools-list` with the size of the tool list a client read).
+`neo-run` with Neo's record of the run, `tools-list` with the tool list a client read and its size).
 A restart reads the file back, so nothing written is lost; a run that had started but not ended
 when the viewer stopped shows as `lost`. Each start of `bun run neo:viewer` begins with an empty
 log, as it does with a fresh browser profile, unless given `--keep-data` (or `--upstream`, which
 starts no container). Tokens are estimates, characters divided by four, always shown with "≈".
+
+## Export
+
+**Export** (top bar, or `POST /api/export`) writes every run since the last Clear to a new folder
+for an agent to read, and shows its path with Copy path until dismissed; the terminal prints it too:
+
+```text
+/tmp/neo-viewer/<instance>/export-<YYYYMMDD-HHMMSS>/
+  README.md            start here: what this is, totals, one row per run, how to read the rest
+  session.json         the same facts as data, each run's file paths; no code or replies inline
+  runs/NNN.md          one run top to bottom (shared/run-markdown.ts): code as the page lays it
+                       out, each line's methods, every operation, the reply's first 2,000 chars
+  runs/NNN.json        that run complete: request and reply as they crossed, Neo's record
+  runs/NNN.reply.txt   the text the model read, alone (.reply.json when it is JSON)
+  log.jsonl            the raw log
+```
+
+It lives outside the state folder, so it survives the viewer stopping and Clear. An agent can start
+at one small file and open only what a question needs: README.md stays under about 300 lines however
+many runs there are. No host token or Authorization header is ever in an export. Screenshots are
+not exported.
 
 ## The API
 
@@ -197,6 +218,7 @@ starts no container). Tokens are estimates, characters divided by four, always s
 | `GET /api/runs` | `RunsResponse`: every `RunSummary` since the last Clear, in order, and the log's totals (`LogSummary`) |
 | `GET /api/runs/:runId` | `RunResponse`: one `RunDetail`, request and reply as they crossed |
 | `POST /api/clear` | `RunsResponse`, empty: starts a new log, keeps the previous as `log.prev.jsonl`; only from the viewer's own page |
+| `POST /api/export` | `ExportResponse` (`dir`, `files`, `runs`): writes the folder above; only from the viewer's own page |
 | `GET /api/events` | SSE: one `ViewerEvent` per change: `{type:'run'}`, `{type:'log'}` (totals), `{type:'clear'}` |
 
 Once a run's reply is in, the viewer reads Neo's record of it through the host API
@@ -265,12 +287,16 @@ script that opens displays and drops them mid-handshake can still block every di
 - `server/`: the Bun server. `main.ts` and `launch.ts` are the one command (`config.ts` its flags,
   `dependencies.ts` the package check, `neo-container.ts` Docker); `proxy/` forwards and reads MCP,
   `log/` the JSONL log and the in-memory store, `neo-runs.ts` joins Neo's run records, `hostApi.ts`
-  is the host API client, `api/` the routes, `live-screen/` the display relay and takeover routes.
+  is the host API client, `export/` writes an export, `api/` the routes, `live-screen/` the display
+  relay and takeover routes.
 - `web/`: the page, React and Tailwind as in `apps/claw-app`: `web/screen/` the designed screen,
   `web/App.tsx` the plain list, `web/live-screen/` the live-screen panel. `server/page.ts` bundles it
   in memory when the viewer starts (`Bun.build`, about 40 ms), compiling Tailwind with the same
   `@tailwindcss/node` and `oxide` packages claw-app's Vite plugin uses.
-- `shared/api.ts`: the API's types; `shared/live-screen.ts`: the live screen's.
+- `shared/api.ts`: the API's types; `shared/live-screen.ts`: the live screen's;
+  `shared/code-format.ts` (with `code-gaps.ts`, `code-tree.ts`): a script laid out by statement,
+  whitespace only, with sites mapped to display lines; `shared/run-markdown.ts`: one run as Markdown,
+  for an export's `runs/NNN.md`.
 
 ```sh
 bun run test                     # in this folder: unit tests, the proxy and the relay against a fake Neo, the screen

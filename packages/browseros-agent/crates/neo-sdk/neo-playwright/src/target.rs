@@ -28,17 +28,23 @@ use browseros_core::{FrameId, TabId};
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::value::{self, RawValue};
 use serde_json::{Value, json};
+use ts_rs::TS;
 
 use crate::world::{BackendNodeId, FrameSeq};
 
 /// A tab-only page handle. The host resolves a lazy `{tab:null}` before invoking the crate;
 /// null or an obsolete `id` field therefore fails decoding here, before any input is sent.
 /// The admitted core id is looked up for one operation and never retained in this brand.
-#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize, TS)]
 #[serde(deny_unknown_fields)]
+#[ts(rename = "PageHandle")]
 pub(crate) struct PageRef {
     #[serde(rename = "$neo")]
+    #[ts(type = "'page'")]
     _brand: PageBrand,
+    // The door replaces the unopened page's null before Rust decodes it. TypeScript must
+    // accept that input while Rust continues requiring the admitted tab id here.
+    #[ts(type = "number | null")]
     tab: TabId,
 }
 
@@ -57,7 +63,7 @@ enum PageBrand {
 }
 
 /// What an element op acts on.
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, TS)]
 #[serde(tag = "$neo", rename_all = "lowercase")]
 pub(crate) enum Target {
     /// Re-resolved on every attempt, as a Playwright `Locator` is.
@@ -78,7 +84,7 @@ impl Target {
 
 /// `{"$neo":"locator","page":{"$neo":"page","tab":1234},"frame":null,"chunks":[...],
 /// "display":"getByRole('button')"}`.
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, TS)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct LocatorTarget {
     /// The page the locator was built on.
@@ -87,11 +93,13 @@ pub(crate) struct LocatorTarget {
     #[serde(default)]
     pub(crate) frame: Option<FrameId>,
     /// One chunk per frame. Every chunk but the last selects the `<iframe>` to enter.
+    #[ts(type = "import('../../vendored').ParsedSelector[]")]
     pub(crate) chunks: NonEmpty<Chunk>,
     /// The element handle a query is rooted at (`elementHandle.$(..)`, `elementHandle.$$(..)`):
     /// the first chunk runs from that node, in its own document, and `frame` plays no part. A
     /// leading ref jumps away from it, as upstream drops the scope once the frame changes.
     #[serde(default)]
+    #[ts(optional)]
     pub(crate) root: Option<RootHandle>,
     /// Playwright's `asLocator` rendering, for messages and the call log.
     pub(crate) display: String,
@@ -106,8 +114,9 @@ impl LocatorTarget {
 }
 
 /// The handle a query is rooted at, with its `$neo` tag, which must say `element`.
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, TS)]
 #[serde(tag = "$neo", rename_all = "lowercase")]
+#[ts(rename = "ElementBrand")]
 pub(crate) enum RootHandle {
     Element(ElementTarget),
 }
@@ -115,12 +124,17 @@ pub(crate) enum RootHandle {
 /// `{"$neo":"element","page":{"$neo":"page","tab":1234},"seq":4,"node":1234,
 /// "display":"<button>Save</button>"}`. Once document `seq` is gone, the handle is detached for
 /// good.
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, TS)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct ElementTarget {
     /// The page the element was pinned on.
+    // An element is already pinned to an opened page; unlike locator inputs its page can
+    // never be the lazy null brand. Reuse the output-side page type for this stronger promise.
+    #[ts(as = "crate::page::PageHandle")]
     pub(crate) page: PageRef,
+    #[ts(as = "u32")]
     pub(crate) seq: FrameSeq,
+    #[ts(as = "i64")]
     pub(crate) node: BackendNodeId,
     /// Playwright's preview of the element, for messages.
     pub(crate) display: String,
@@ -275,7 +289,7 @@ pub(crate) struct CallHeader {
 
 /// Whether a resolution that matches several elements fails. The probe protocol carries it
 /// with the same names.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub(crate) enum Strictness {
     /// Locator methods: a second match throws `strict mode violation` at once.

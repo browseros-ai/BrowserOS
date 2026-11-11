@@ -11,6 +11,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type {
+  ExportResponse,
   LogSummary,
   RunDetail,
   RunResponse,
@@ -56,6 +57,8 @@ export interface ViewerState {
   log: LogSummary | null
   /** Empties the log (the server keeps the previous one as `log.prev.jsonl`). */
   clear: () => Promise<void>
+  /** Writes every run since the last Clear to a new folder; null when the server refused. */
+  exportRuns: () => Promise<ExportResponse | null>
   error: string | null
 }
 
@@ -113,7 +116,25 @@ export function useViewer(): ViewerState {
     // The stream's `clear` event empties the list, here and on any other open page.
   }, [])
 
-  return { info, runs: state.runs, log: state.log, clear, error }
+  const exportRuns = useCallback(async () => {
+    try {
+      const response = await fetch(apiRoutes.export, { method: 'POST' })
+      if (!response.ok) {
+        const body = (await response.json().catch(() => null)) as {
+          error?: string
+        } | null
+        setError(body?.error ?? `${apiRoutes.export}: HTTP ${response.status}`)
+        return null
+      }
+      return (await response.json()) as ExportResponse
+    } catch (cause) {
+      // The viewer stopped, or answered with something that is not an export.
+      setError(`${apiRoutes.export}: ${String(cause)}`)
+      return null
+    }
+  }, [])
+
+  return { info, runs: state.runs, log: state.log, clear, exportRuns, error }
 }
 
 /** One run in full, refetched whenever its summary changes (it was still running). */

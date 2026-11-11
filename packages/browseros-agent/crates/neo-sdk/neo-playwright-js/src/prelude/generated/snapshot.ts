@@ -3,11 +3,41 @@
 // route row in Rust, then run `cargo test -p neo-playwright --test wire_generated`, which
 // rewrites this folder.
 
+import type * as pw from '../../../../neo-playwright/third_party/playwright/packages/playwright-core/src/client/channels'
+import { invoke } from '../bridge'
+import type { CallSite } from '../call-site'
+import type { SignalLike } from '../signal'
+import type { Assert, UpstreamCheck, VoidIsNull } from '../upstream-check'
+import type { CallHeader } from '../wire'
+import type { LocatorSnapshotInput } from './types/LocatorSnapshotInput'
+import type { PageSnapshotInput } from './types/PageSnapshotInput'
+import type { SnapshotResult } from './types/SnapshotResult'
+
+export type { ElementBrand } from './types/ElementBrand'
+export type { ElementTarget } from './types/ElementTarget'
+export type { FrameId } from './types/FrameId'
+export type { LocatorSnapshotInput } from './types/LocatorSnapshotInput'
+export type { LocatorTarget } from './types/LocatorTarget'
+export type { PageBrand } from './types/PageBrand'
+export type { PageHandle } from './types/PageHandle'
+export type { PageSnapshotInput } from './types/PageSnapshotInput'
+export type { PartialFrame } from './types/PartialFrame'
+export type { SnapshotResult } from './types/SnapshotResult'
+export type { Strictness } from './types/Strictness'
+export type { TabId } from './types/TabId'
+export type { Target } from './types/Target'
+
 /** Each snapshot op's input, after the `call` header every op shares. */
-export type SnapshotInputs = {}
+export type SnapshotInputs = {
+  'page.ariaSnapshot': PageSnapshotInput
+  'locator.ariaSnapshot': LocatorSnapshotInput
+}
 
 /** Each snapshot op's result. */
-export type SnapshotOutputs = {}
+export type SnapshotOutputs = {
+  'page.ariaSnapshot': SnapshotResult
+  'locator.ariaSnapshot': SnapshotResult
+}
 
 /**
  * The script's option keys of each snapshot op that takes an `options` bag: the fields of its
@@ -20,4 +50,26 @@ export const SNAPSHOT_OPTION_KEYS = {} as const
  * One typed sender per snapshot op. A class passes its input as an object literal, so every
  * field is checked against Rust's input type and the result is Rust's result type.
  */
-export const SNAPSHOT_SEND = {}
+export const SNAPSHOT_SEND = {
+  'page.ariaSnapshot': (
+    site: CallSite,
+    call: CallHeader,
+    input: PageSnapshotInput,
+    signal?: SignalLike,
+  ): Promise<SnapshotResult> => invoke('page.ariaSnapshot', site, call, input, signal),
+  'locator.ariaSnapshot': (
+    site: CallSite,
+    call: CallHeader,
+    input: LocatorSnapshotInput,
+    signal?: SignalLike,
+  ): Promise<SnapshotResult> => invoke('locator.ariaSnapshot', site, call, input, signal),
+}
+
+// Each route row against Playwright's own protocol at the pin (upstream-check.ts): tsc
+// names the op and every key that differs without a reason, or whose reason went stale.
+// page.ariaSnapshot: Frame.ariaSnapshot
+type _page_ariaSnapshot = Assert<UpstreamCheck<'page.ariaSnapshot', PageSnapshotInput, pw.FrameAriaSnapshotParams, never, never, never>>
+type _page_ariaSnapshot_result = Assert<VoidIsNull<'page.ariaSnapshot', pw.FrameAriaSnapshotResult, SnapshotResult>>
+// locator.ariaSnapshot: Frame.ariaSnapshot
+type _locator_ariaSnapshot = Assert<UpstreamCheck<'locator.ariaSnapshot', LocatorSnapshotInput, pw.FrameAriaSnapshotParams, never, never, never>>
+type _locator_ariaSnapshot_result = Assert<VoidIsNull<'locator.ariaSnapshot', pw.FrameAriaSnapshotResult, SnapshotResult>>

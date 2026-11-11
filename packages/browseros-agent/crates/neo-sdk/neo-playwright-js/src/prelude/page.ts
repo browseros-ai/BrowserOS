@@ -1128,7 +1128,9 @@ export class Page extends EventEmitter {
     const brand = await this._brand(api)
     if (brand.tab === null)
       throw new Error(`${api}: Neo opened no tab for the run's page`)
-    return brand
+    // The generated input type has a nullable tab field; this check narrows it to the
+    // output-side brand, whose tab is always open. The assertion changes no runtime value.
+    return brand as PageBrand
   }
 
   /** An element handle from an op result, revived or raw; null when the op found none. */
