@@ -78,6 +78,13 @@ fn tests_that_the_vendored_mime_files_are_the_bytes_sync_sh_recorded() -> TestRe
     vendored_as_synced("third_party/mime")
 }
 
+/// The same for the `yaml` library the prelude parses aria templates with, which must stay the
+/// bytes of the npm release Playwright bundles.
+#[test]
+fn tests_that_the_vendored_yaml_files_are_the_bytes_sync_sh_recorded() -> TestResult {
+    vendored_as_synced("third_party/yaml")
+}
+
 /// The manifest check of one vendored tree (`dir`, from the crate's root) with its own
 /// `sync.sh` and `SHA256SUMS`.
 fn vendored_as_synced(dir: &str) -> TestResult {

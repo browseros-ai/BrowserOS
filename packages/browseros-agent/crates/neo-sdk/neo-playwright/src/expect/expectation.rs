@@ -101,6 +101,9 @@ pub(crate) enum Expression {
     Title,
     #[serde(rename = "to.have.url")]
     Url,
+    /// `toMatchAriaSnapshot`, its template parsed by the prelude as upstream's server parses it.
+    #[serde(rename = "to.match.aria")]
+    MatchAria,
 }
 
 impl Expression {
@@ -134,6 +137,9 @@ impl Expression {
             | E::Value
             | E::Title
             | E::Url => Shape::Text(text),
+            // The template and the snapshot it was matched against, both as text (Neo prints
+            // the two lines where upstream prints their diff).
+            E::MatchAria => Shape::Text(TextExpected::Exact),
             E::Values
             | E::Count
             | E::TextArray
@@ -168,9 +174,27 @@ impl Expression {
         )
     }
 
-    /// The page matchers, which run on the main frame's document.
-    const fn on_page(self) -> bool {
-        matches!(self, Self::Title | Self::Url)
+    /// Whether the matcher runs on `subject`: the title and URL only on a page (its main
+    /// frame's document), an aria template on either, every other matcher on a locator.
+    const fn runs_on(self, subject: &Subject) -> bool {
+        let page = matches!(subject, Subject::Page);
+        match self {
+            Self::Title | Self::Url => page,
+            Self::MatchAria => true,
+            _ => !page,
+        }
+    }
+
+    /// The compared value as the failure and the call log print it. An aria match receives
+    /// upstream's `{ raw, regex }`, and both print `raw`, the snapshot's YAML
+    /// (`renderUnexpectedValue`, server/frames.ts); `regex` is for writing baselines.
+    fn printed_received(self, received: Value) -> Value {
+        match (self, received) {
+            (Self::MatchAria, Value::Object(mut fields)) => {
+                fields.remove("raw").unwrap_or(Value::Null)
+            }
+            (_, received) => received,
+        }
     }
 }
 
@@ -223,6 +247,8 @@ pub(crate) struct MatcherArgs {
     /// Playwright's Expected line, `Expected: "Hello"`.
     pub(crate) expected: String,
     pub(crate) params: ExpectParams,
+    /// The parser's message for an aria template that did not parse.
+    pub(crate) template_error: Option<String>,
 }
 
 /// What the matcher runs on.
@@ -293,7 +319,7 @@ impl Expectation {
                  locator.evaluate((element) => element.name)).toEqual(value) instead",
             ));
         }
-        if expression.on_page() != matches!(subject, Subject::Page) {
+        if !expression.runs_on(&subject) {
             return Err(scope.fail(
                 ErrorCode::InvalidInput,
                 &format!("{} is not a matcher of this receiver", args.matcher),
@@ -339,7 +365,8 @@ impl Expectation {
 
     /// Polls until the matcher's result differs from `.not`. `poll` runs one probe call and
     /// maps its reply with [`Expectation::poll_of`]; it fails only for what ends the op at
-    /// once (a strict violation, an error the engine threw, a stale ref, a gone page).
+    /// once (a strict violation, an error the engine threw, a stale ref, a gone page), or
+    /// before the first poll for a template that did not parse.
     /// `checkpoint` is the page's locator-handler checkpoint, which upstream's `expect` runs
     /// under the timeout before the one-shot and before every later poll. `root_snapshot` reads
     /// the body's aria snapshot of the frame the matcher started in, for a failure that found
@@ -366,6 +393,11 @@ impl Expectation {
             &self.args.matcher,
             scope.timeout(),
         ));
+        // Upstream's server parses the template first thing in `Frame.expect`, so its failure
+        // follows the title and nothing else.
+        if let Some(error) = &self.args.template_error {
+            return Err(self.thrown(scope, ErrorCode::InvalidInput, error));
+        }
         if let Receiver::Locator(display) = receiver {
             scope.log(format!("waiting for {display}"));
         }
@@ -436,7 +468,9 @@ impl Expectation {
             } => Ok(Poll::Ran {
                 matches,
                 resolved: resolved.into_line(),
-                received: received.map(PageText::into_value),
+                received: received
+                    .map(PageText::into_value)
+                    .map(|value| self.expression.printed_received(value)),
                 aria_snapshot: aria_snapshot.map(PageText::into_line),
             }),
             ProbeReply::None { stale_ref: None } | ProbeReply::Detached => Ok(self.nothing_found()),
@@ -660,6 +694,7 @@ mod tests {
             expectation: "expected".to_owned(),
             expected: "Expected: \"hunter2\"".to_owned(),
             params: ExpectParams(params),
+            template_error: None,
         };
         Expectation::new(Subject::Locator("locator('#pw')".to_owned()), args, scope)
     }
@@ -747,6 +782,118 @@ mod tests {
     /// A frame with no body to snapshot.
     fn no_snapshot() -> future::Ready<Option<String>> {
         future::ready(None)
+    }
+
+    /// `toMatchAriaSnapshot` as the prelude sends it: the parsed template, or the parser's
+    /// message when the template did not parse.
+    fn aria(
+        scope: &OpScope<'_>,
+        subject: Subject,
+        template_error: Option<&str>,
+    ) -> Result<Expectation, PlaywrightError> {
+        let mut params = json!({ "expression": "to.match.aria", "isNot": false });
+        if template_error.is_none() {
+            params["expectedValue"] = json!({ "kind": "role", "role": "heading", "name": "x" });
+        }
+        let Value::Object(params) = params else {
+            return Err(scope.fail(ErrorCode::Internal, "params are an object"));
+        };
+        let args = MatcherArgs {
+            matcher: "toMatchAriaSnapshot".to_owned(),
+            expectation: "expected".to_owned(),
+            expected: "Expected: \"- heading \\\"x\\\"\"".to_owned(),
+            params: ExpectParams(params),
+            template_error: template_error.map(str::to_owned),
+        };
+        Expectation::new(subject, args, scope)
+    }
+
+    #[tokio::test]
+    async fn tests_that_a_template_that_did_not_parse_fails_after_the_title_without_polling()
+    -> Result<(), Box<dyn Error>> {
+        let env = TestEnv::new();
+        let scope = locator_scope(&env)?;
+        let expect = aria(
+            &scope,
+            Subject::Page,
+            Some("Unsupported attribute [bogus]:\n\nheading [bogus]\n         ^\n"),
+        )?;
+        let error = expect
+            .run(
+                &scope,
+                no_handlers,
+                || async {
+                    Err::<Poll, _>(PlaywrightError::new(
+                        ErrorCode::Internal,
+                        "polled".to_owned(),
+                    ))
+                },
+                no_snapshot,
+            )
+            .await
+            .err()
+            .ok_or("a template that did not parse cannot pass")?;
+        assert_eq!(error.error_code(), Some(ErrorCode::InvalidInput));
+        assert_eq!(
+            error.message(),
+            "expect(page).toMatchAriaSnapshot(expected) failed\n\n\
+             Expected: \"- heading \\\"x\\\"\"\n\
+             Error: Unsupported attribute [bogus]:\n\nheading [bogus]\n         ^\n\n\
+             Call log:\n  - Expect \"toMatchAriaSnapshot\" with timeout 5000ms\n"
+        );
+        Ok(())
+    }
+
+    /// The probe reports upstream's `{ raw, regex }`; the failure and the call log print `raw`.
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_an_aria_match_runs_on_either_receiver_and_prints_its_snapshot_text()
+    -> Result<(), Box<dyn Error>> {
+        let env = TestEnv::new();
+        let scope = scope_with_timeout(&env, 300)?;
+        aria(&scope, Subject::Locator("locator('h1')".to_owned()), None)?;
+        let expect = aria(&scope, Subject::Page, None)?;
+        let snapshot = "- heading \"y\" [level=1]";
+        let error = expect
+            .run(
+                &scope,
+                no_handlers,
+                || async {
+                    Ok(Poll::Ran {
+                        matches: false,
+                        resolved: "<body>…</body>".to_owned(),
+                        received: Some(expect.expression.printed_received(
+                            json!({ "raw": snapshot, "regex": "- heading \"y\" [level=1]" }),
+                        )),
+                        aria_snapshot: None,
+                    })
+                },
+                no_snapshot,
+            )
+            .await
+            .err()
+            .ok_or("a snapshot that does not match cannot pass")?;
+        assert_eq!(error.error_code(), Some(ErrorCode::AssertionFailed));
+        let message = error.message();
+        assert!(
+            message.starts_with(
+                "expect(page).toMatchAriaSnapshot(expected) failed\n\n\
+                 Expected: \"- heading \\\"x\\\"\"\n\
+                 Received: \"- heading \\\"y\\\" [level=1]\"\n\
+                 Timeout:  300ms\n"
+            ),
+            "{message}"
+        );
+        assert!(
+            message.contains("- unexpected value \"- heading \"y\" [level=1]\"\n"),
+            "{message}"
+        );
+        let facts = error.matcher_details().ok_or("the failure carries facts")?;
+        assert_eq!(
+            facts["actual"],
+            json!(snapshot),
+            "matcherResult.actual is the snapshot's YAML, as upstream's received.raw"
+        );
+        Ok(())
     }
 
     fn visible(scope: &OpScope<'_>) -> Result<Expectation, PlaywrightError> {

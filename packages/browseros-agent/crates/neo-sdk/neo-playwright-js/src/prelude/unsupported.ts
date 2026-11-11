@@ -102,7 +102,6 @@ export const UNSUPPORTED = {
       'Neo keeps no error history; hosted BrowserOS emits no pageerror events',
     pause: NO_INSPECTOR,
     pickLocator: NO_INSPECTOR,
-    requestGC: 'garbage collection is not available in Neo',
     requests: 'Neo does not record network requests',
     route: NETWORK,
     routeFromHAR: NETWORK,
@@ -196,8 +195,6 @@ export const UNSUPPORTED = {
     },
     toBeOK: 'use expect(response.ok()).toBe(true)',
     toHaveScreenshot: 'visual comparisons are not available in Neo',
-    toMatchAriaSnapshot:
-      'compare the text of await locator.ariaSnapshot() instead, such as with toContain()',
     toMatchSnapshot: 'snapshot files are not available in Neo',
   },
 } satisfies Record<string, Record<string, Entry>>

@@ -7938,7 +7938,14 @@ ${value.stack}`;
       const [pin = 0] = this.addAll([element]);
       return pin;
     }
+    addFrame(element) {
+      const [pin = 0] = this.record([new WeakRef(element)]);
+      return pin;
+    }
     addAll(elements) {
+      return this.record(elements);
+    }
+    record(elements) {
       const pins = elements.map((element) => {
         const pin = this.next++;
         this.elements.set(pin, element);
@@ -7956,11 +7963,12 @@ ${value.stack}`;
       return pins;
     }
     live(pin) {
-      const element = this.elements.get(pin);
+      const element = this.held(pin);
       return element?.isConnected ? element : undefined;
     }
     held(pin) {
-      return this.elements.get(pin);
+      const entry = this.elements.get(pin);
+      return entry instanceof WeakRef ? entry.deref() : entry;
     }
     clear() {
       this.elements.clear();
@@ -8107,7 +8115,7 @@ ${value.stack}`;
       return { kind: "notFrame", preview: world.injected.previewNode(element) };
     return {
       kind: "frame",
-      pin: world.pins.add(element),
+      pin: world.pins.addFrame(element),
       key: world.refs.frameKey(element),
       visible: world.injected.utils.isElementVisible(element),
       src
@@ -8525,6 +8533,10 @@ ${value.stack}`;
   }
 
   // crates/neo-sdk/neo-playwright-js/src/probe/expect.ts
+  function pageAriaRoot(world) {
+    const body = world.injected.document.body;
+    return body?.localName === "body" ? { kind: "one", element: body } : { kind: "none" };
+  }
   async function expect(world, request, root) {
     const params = request.params;
     const checks = expectChecks(world.injected);
@@ -8533,7 +8545,7 @@ ${value.stack}`;
       const count = `${elements.length} element${elements.length === 1 ? "" : "s"}`;
       return poll(checks.every(elements, params), count);
     }
-    const found = resolveTarget(world, request.target, request.strictness, root);
+    const found = params.expression === "to.match.aria" && request.target === "document" ? pageAriaRoot(world) : resolveTarget(world, request.target, request.strictness, root);
     if (found.kind !== "one")
       return found;
     const { element } = found;
@@ -8557,7 +8569,7 @@ ${value.stack}`;
   }
 
   // crates/neo-sdk/neo-playwright-js/src/probe/protocol.ts
-  var PROTOCOL = 23;
+  var PROTOCOL = 24;
 
   // crates/neo-sdk/neo-playwright-js/src/probe/read.ts
   var XHTML = "http://www.w3.org/1999/xhtml";

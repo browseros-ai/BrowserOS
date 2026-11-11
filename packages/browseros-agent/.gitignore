@@ -124,6 +124,8 @@ out
 .nuxt
 dist
 packages/*/dist
+# Vendored source, not build output: the yaml package's ES modules the prelude bundles.
+!crates/neo-sdk/neo-playwright/third_party/yaml/browser/dist/
 
 # Gatsby files
 .cache/

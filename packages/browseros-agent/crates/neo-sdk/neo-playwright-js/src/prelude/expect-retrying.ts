@@ -4,6 +4,7 @@
  * polls, prints Received, Timeout and the call log, and owns the failure.
  */
 import type { ExpectParams } from '../probe/protocol'
+import { parseTemplate, unshift } from './aria-template'
 import { invoke } from './bridge'
 import { plainError, prefixed } from './errors'
 import { receiverText, stringify } from './expect-equality'
@@ -14,7 +15,8 @@ import { type TimeoutOption, timeoutMs } from './timeouts'
 import { normalizeUrl } from './url'
 
 export type Retrying = {
-  receiver: 'Locator' | 'Page'
+  /** What upstream's `expectTypes` accepts; toMatchAriaSnapshot takes either. */
+  receiver: 'Locator' | 'Page' | 'Page or Locator'
   /** The matcher's parenthesized argument in the failure header. */
   expectation: string
   /** Playwright's printed expectation, minus `not`. */
@@ -26,6 +28,11 @@ export type Retrying = {
   value: unknown
   params: Omit<ExpectParams, 'isNot'>
   options: TimeoutOption | undefined
+  /**
+   * An aria template that did not parse. Upstream's server throws it as the matcher's failure
+   * before it polls; Rust fails the op with it as the `Error:` line, after the call log's title.
+   */
+  templateError?: string
 }
 
 type ExpectedTextValue = NonNullable<ExpectParams['expectedText']>[number]
@@ -447,6 +454,35 @@ export const RETRYING: Record<string, (...args: never[]) => Retrying> = {
       textValues([expected], { normalizeWhiteSpace: true }),
       options,
     ),
+  toMatchAriaSnapshot: (expected?: unknown, options?: TimeoutOption) => {
+    // Upstream reads a template file when given no string, and writes a baseline when the
+    // template is empty. Neo has no snapshot files, and a run has no test to update.
+    if (typeof expected !== 'string')
+      throw argumentError(
+        'toMatchAriaSnapshot',
+        'snapshot files are not available in Neo; pass the expected snapshot as a YAML string',
+      )
+    const template = unshift(expected)
+    if (!template)
+      throw argumentError(
+        'toMatchAriaSnapshot',
+        'the expected snapshot is empty, and Neo writes no baselines; read the current one with await locator.ariaSnapshot()',
+      )
+    const parsed = parseTemplate(template)
+    return {
+      receiver: 'Page or Locator',
+      expectation: 'expected',
+      expected: (isNot) =>
+        `Expected: ${isNot ? 'not ' : ''}${stringify(template)}`,
+      value: template,
+      params:
+        'template' in parsed
+          ? { expression: 'to.match.aria', expectedValue: parsed.template }
+          : { expression: 'to.match.aria' },
+      templateError: 'error' in parsed ? parsed.error : undefined,
+      options,
+    }
+  },
   toHaveURL: (
     expected: string | RegExp,
     options?: TimeoutOption & { ignoreCase?: boolean },
@@ -473,10 +509,16 @@ export async function retry(
   const api = `expect.${name}`
   const isPage = actual instanceof Page
   const isLocator = actual instanceof Locator
-  if (matcher.receiver === 'Page' ? !isPage : !isLocator)
+  const accepted =
+    matcher.receiver === 'Page'
+      ? isPage
+      : matcher.receiver === 'Locator'
+        ? isLocator
+        : isPage || isLocator
+  if (!accepted)
     throw argumentError(
       name,
-      `${name} can be only used with ${matcher.receiver} object, was called with ${receiverText(actual)}`,
+      `${name} can be only used with ${matcher.receiver} object${matcher.receiver.includes(' or ') ? 's' : ''}, was called with ${receiverText(actual)}`,
     )
   const timeout = matcher.options?.timeout ?? state.config.timeout
   const call = { api, timeoutMs: timeoutMs(api, timeout) }
@@ -485,6 +527,9 @@ export async function retry(
     expectation: matcher.expectation,
     expected: matcher.expected(state.isNot),
     params: { ...matcher.params, isNot: state.isNot },
+    ...(matcher.templateError === undefined
+      ? {}
+      : { templateError: matcher.templateError }),
   }
   try {
     if (actual instanceof Page)

@@ -194,7 +194,7 @@
         },
         "event": "dialog",
         "since": 1700000000000,
-        "after": null
+        "after": 3
       },
       {
         "call": {
@@ -207,7 +207,7 @@
         },
         "event": "download",
         "since": 1700000000000,
-        "after": null
+        "after": 3
       },
       {
         "call": {
@@ -220,7 +220,7 @@
         },
         "event": "worker",
         "since": 1700000000000,
-        "after": null
+        "after": 3
       }
     ],
     "expect.locator": [
@@ -2567,6 +2567,18 @@
           "timeoutMs": 0
         },
         "uid": 1
+      }
+    ],
+    "page.requestGC": [
+      {
+        "call": {
+          "api": "page.requestGC",
+          "timeoutMs": 0
+        },
+        "page": {
+          "$neo": "page",
+          "tab": 1007
+        }
       }
     ],
     "page.resolveLocatorHandler": [

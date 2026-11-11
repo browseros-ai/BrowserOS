@@ -17,6 +17,12 @@ unmodified under `third_party/mime/` from its npm release (see its `README.md` a
 which gives an in-memory `setInputFiles` payload its type as Playwright does. `mime` is
 licensed under the MIT License, which follows verbatim at the end.
 
+`assets/prelude.js` also embeds the `yaml` package's ES modules, vendored unmodified under
+`third_party/yaml/` from its npm release (see its `README.md` and `VERSION`; the build replaces
+its logger module with a stand-in), with which the prelude parses a `toMatchAriaSnapshot`
+template as Playwright's server does. `yaml` is licensed
+under the ISC License, which follows verbatim at the end.
+
 ## Playwright NOTICE
 
 ```text
@@ -268,4 +274,22 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+```
+
+## yaml LICENSE
+
+```text
+Copyright Eemeli Aro <eemeli@gmail.com>
+
+Permission to use, copy, modify, and/or distribute this software for any purpose
+with or without fee is hereby granted, provided that the above copyright notice
+and this permission notice appear in all copies.
+
+THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
+REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY AND
+FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
+INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM LOSS
+OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER
+TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF
+THIS SOFTWARE.
 ```

@@ -76,6 +76,7 @@ const PLAYWRIGHT_API: &str = "Playwright's API on `page`, `context` and `browser
     `locator.waitForFunction`, `elementHandle.evaluate`, \
     and `$eval` and `$$eval` on a page, frame or element handle; a `frame` form runs in its \
     frame, a child frame too) with Playwright's values, arguments, element handles and errors, \
+    `page.requestGC` (its main renderer's garbage collection), \
     `page.emulateMedia` (per page across runs and navigations), `page.setViewportSize` (the \
     tab keeps the size in later runs, until it closes), \
     `page.addScriptTag` and `page.addStyleTag` (also on frames), returning element handles, \
@@ -89,10 +90,11 @@ const PLAYWRIGHT_API: &str = "Playwright's API on `page`, `context` and `browser
     (`download.path()` waits for the file and returns where the browser saved it, which a later \
     run can upload with `setInputFiles`; `saveAs(path)` copies it; `failure()`), and `expect`: \
     retrying locator matchers (`toBeVisible`, `toBeChecked`, `toHaveText`, `toContainText`, \
-    `toHaveValue`, `toHaveCount`, `toHaveAttribute`, ...) and page matchers (`toHaveTitle`, \
-    `toHaveURL`), with `.not`, value matchers (`toBe`, `toEqual`, ...), `expect.poll` and \
-    `toPass`; soft assertions, `toBeOK` and screenshot, snapshot and `toMatchAriaSnapshot` \
-    comparisons are not available. In hosted BrowserOS, console and pageerror listeners are \
+    `toHaveValue`, `toHaveCount`, `toHaveAttribute`, ...), page matchers (`toHaveTitle`, \
+    `toHaveURL`) and `toMatchAriaSnapshot` on either with the template as a YAML string, \
+    with `.not`, value matchers (`toBe`, `toEqual`, ...), `expect.poll` and `toPass`; soft \
+    assertions, `toBeOK`, screenshot comparisons and snapshot files are not available. In \
+    hosted BrowserOS, console and pageerror listeners are \
     accepted but stay silent; `page.waitForEvent` for either fails immediately with \
     `neo/unsupported`. A call that waits gives up after 5 s unless given a `timeout`, \
     and a navigation after 30 s. Unlike Playwright, `waitForFunction` \

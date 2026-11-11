@@ -132,4 +132,14 @@ mod tests {
         assert!(NOTICES.contains("usKeyboardLayout.ts"));
         assert!(NOTICES.contains("macEditingCommands.ts"));
     }
+
+    #[test]
+    fn tests_that_the_notices_carry_the_bundled_yaml_license_verbatim() {
+        const YAML_LICENSE: &str = include_str!("../third_party/yaml/LICENSE");
+        assert!(NOTICES.contains(YAML_LICENSE.trim_end()));
+        assert!(
+            PRELUDE_JS.contains("yaml: Copyright Eemeli Aro"),
+            "the prelude asset's header names the yaml it bundles"
+        );
+    }
 }
