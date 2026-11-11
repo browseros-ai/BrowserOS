@@ -21,7 +21,9 @@ and releases the private executor, including core's background tasks and CDP soc
 
 `state_dir` is required; the store is `<state_dir>/claw-sdk/trace.db`. Pass Chromium's
 `<user-data-dir>/.browseros` as `execution_dir` to locate the secret profile, and the installed
-app's version as `browseros_version` for native capability gates. Without an execution directory,
+app's version as `browseros_version` for native capability gates. Set `hosted_mode` when the
+browser was launched with `BROWSERCLAW_HOSTED_MODE=1`; it is off by default, as the spec runner
+launches BrowserOS unless given `--hosted-mode`. Without an execution directory,
 the product refuses path uploads. An initial run has `init.page = null`; `init.pages` includes
 all existing tabs, including the launch tab. The lazy default page opens when the SDK needs it.
 
