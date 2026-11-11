@@ -408,7 +408,13 @@ export class ElementHandle extends EventEmitter {
   ): Promise<unknown> {
     const api = 'elementHandle.evaluate'
     this.#live(api)
-    const script = pageCall(api, 'handle', pageFunction, arg, options)
+    const script = await this._page._evaluationScript(
+      api,
+      'handle',
+      pageFunction,
+      arg,
+      options,
+    )
     return fromPageValue(
       api,
       await this.#op('locator.evaluate', api, 0, { script }),

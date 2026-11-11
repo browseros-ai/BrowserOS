@@ -434,6 +434,35 @@ describe('listeners and the pump', () => {
     expect(listens).toContainEqual([null, 'page'])
   })
 
+  it("tests that util.inspect prints a console message's text and a locator's description, as upstream", async () => {
+    const runtime = loadPrelude({
+      seed: SEED,
+      answer: pumpAnswers([
+        [
+          {
+            seq: 2,
+            event: 'console',
+            page: brand(7),
+            message: {
+              type: 'log',
+              text: 'Hello world',
+              location: { url: '', lineNumber: 0, columnNumber: 0 },
+              timestamp: 1,
+            },
+          },
+        ],
+      ]),
+    })
+    const inspected = json(
+      await runtime.run(`
+        const custom = Symbol.for('nodejs.util.inspect.custom')
+        const message = await new Promise((resolve) => page.on('console', resolve))
+        return [message[custom](), page.locator('#name')[custom]()]
+      `),
+    )
+    expect(inspected).toEqual(['Hello world', "locator('#name')"])
+  })
+
   it("tests that an event older than the pump's last one still reaches its listener, and a close closes once", async () => {
     const runtime = loadPrelude({
       seed: SEED,

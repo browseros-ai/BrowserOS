@@ -608,7 +608,14 @@ fn screenshots_and_pdfs_work_after_a_trace_store_is_replaced() -> TestResult {
         fs::create_dir_all(&trace_dir)?;
         fs::write(trace_dir.join("trace.db"), "not a trace store")?;
         let fake = FakeCdp::new();
-        fake.open_tab("https://bank.example/", "Bank");
+        let tab = fake.open_tab("https://bank.example/", "Bank");
+        fake.answer(
+            "Page.getFrameTree",
+            json!({ "frameTree": { "frame": {
+            "id": format!("target-{}", tab.0), "loaderId": "bank-loader",
+            "url": "https://bank.example/",
+        } } }),
+        );
         fake.answer("Page.captureScreenshot", json!({ "data": "cGl4ZWxz" }));
         fake.answer("Page.printToPDF", json!({ "data": "JVBERi0xLjQ=" }));
         let neo = Neo::start_in(dir, fake).await?;
