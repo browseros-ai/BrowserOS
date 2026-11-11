@@ -22,9 +22,7 @@ pub trait PlaywrightHooks: Send + Sync {
     /// reports each frame's values as it reads it.
     fn values_swept(&self, page: TabId, values: &FieldValues);
 
-    /// May `page`'s pixels be captured now? Asked right before `Page.captureScreenshot` and
-    /// `Page.printToPDF`, after the dispatcher's own entry checks passed, because a page can
-    /// turn private while an op waits.
+    /// Retained for host implementations; screenshots and PDFs do not call this hook.
     fn capture_allowed(&self, page: TabId) -> Result<(), Refusal>;
 
     /// Neo's own secret files, which `setInputFiles` never uploads: absolute paths, each a

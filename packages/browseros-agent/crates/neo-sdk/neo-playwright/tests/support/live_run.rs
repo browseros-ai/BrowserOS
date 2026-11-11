@@ -291,8 +291,8 @@ fn op(name: &str) -> Result<Op, PlaywrightError> {
         .ok_or_else(|| PlaywrightError::new(ErrorCode::Internal, format!("{name} is not an op")))
 }
 
-/// The host's privacy layer: every capture is allowed until a test refuses them, and every value
-/// the evaluate guard swept is kept, as the host would register it. It names no secret files
+/// The host's privacy layer: every value the evaluate guard swept is kept, as the host would
+/// register it. The unused capture hook can refuse to detect callers. It names no secret files
 /// until a test names some, so every path a test uploads is served, as
 /// real Playwright serves it.
 #[derive(Default)]
@@ -579,7 +579,7 @@ impl LiveRun {
         *lock(&self.hooks.secrets) = secrets;
     }
 
-    /// Every capture from now on is refused with `refusal`.
+    /// Makes the retained capture hook refuse, so capture tests prove it is bypassed.
     pub(crate) fn refuse_captures(&self, refusal: Refusal) {
         *self
             .hooks
