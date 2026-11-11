@@ -182,6 +182,8 @@ error_codes! {
     TASK_PAGE_REQUIRED = "task_page_required";
     /// All task slots hold live tabs, so none can be evicted.
     TASK_LIMIT_REACHED = "task_limit_reached";
+    /// The requested tab is not among this task's open pages.
+    TASK_PAGE_MISSING = "task_page_missing";
     /// The script returned while this op still ran.
     NOT_AWAITED = "not_awaited";
     /// The caller went away, or a crate's own cancel fired.
