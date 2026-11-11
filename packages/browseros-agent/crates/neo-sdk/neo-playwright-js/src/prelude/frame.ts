@@ -1240,30 +1240,18 @@ export type ScreenshotOptionsInput = TimeoutOption &
     path?: string
     mask?: Locator[]
     maskColor?: string
-    style?: string
     omitBackground?: boolean
-    animations?: 'disabled' | 'allow'
-    caret?: 'hide' | 'initial'
     scale?: 'css' | 'device'
   }
 
-/**
- * Why Neo cannot take the screenshot `options` ask for, or undefined. Rust captures through
- * core's screenshot path at device scale with the page as it is, so an option that changes
- * the image is refused here rather than ignored. `caret` passes: Neo leaves the caret as the
- * page draws it, which is upstream's `'initial'`.
- */
+/** Options that need capture features beyond temporary DOM preparation. */
 export function refusedScreenshotOption(
   options: ScreenshotOptionsInput,
 ): string | undefined {
   if (options.mask !== undefined && options.mask.length > 0)
     return 'Neo cannot mask elements in a screenshot; omit mask'
-  if (options.style !== undefined)
-    return 'Neo cannot add a stylesheet to a screenshot; omit style'
   if (options.omitBackground)
     return 'Neo cannot capture a transparent background; omit omitBackground'
-  if (options.animations === 'disabled')
-    return 'Neo does not stop animations for a screenshot; omit animations'
   if (options.scale === 'css')
     return 'Neo captures at the device scale; omit scale or pass "device"'
   return undefined

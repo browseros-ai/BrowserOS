@@ -23,8 +23,8 @@ crates/neo-sdk/neo-server/docker/build.sh --platform linux/arm64   # a dev Mac
 crates/neo-sdk/neo-server/docker/build.sh --platform linux/amd64   # zuzu's cells
 ```
 
-The tag is `neo-sdk:<browser>-<commit>`, with `-dirty` when `packages/browseros-agent` or
-`packages/browseros/docker/neo` has uncommitted changes. `build.sh` prints `TAG=`, `IMAGE_ID=` and the
+The tag is `neo-sdk:<browser>-<commit>-<arch>`, with `-dirty` before the arch when
+`packages/browseros-agent` or `packages/browseros/docker/neo` has uncommitted changes. `build.sh` prints `TAG=`, `IMAGE_ID=` and the
 image's `provenance.json`. The server is cross-compiled with zig, so an amd64 image builds on an Apple
 silicon Mac without emulating rustc. The first build takes about 7 minutes; Cargo's cache is kept per
 architecture after that.
@@ -39,7 +39,13 @@ It boots the image in throwaway containers on a private `--internal` network, dr
 `run`, and checks the host contract below, the stop, persistence, a browser restart and a kill of every
 process at once, all under only the capabilities listed below. The header of `accept.sh` lists each check.
 An image for another architecture than the Docker engine's gets the static `identity` check only, because
-booting it would be emulated.
+booting it would be emulated. To prove amd64 natively, run both scripts on a GitHub-hosted amd64 runner:
+
+```sh
+gh workflow run neo-sdk-image.yml --ref <branch>   # .github/workflows/neo-sdk-image.yml
+```
+
+It never logs in to a registry or pushes; the accept log and `provenance.json` are its artifacts.
 
 ## The contract
 
@@ -155,7 +161,7 @@ cached layer, and a keyless build never mounts a key at all.
 # in a BrowserOS checkout, packages/browseros-agent
 crates/neo-sdk/neo-server/docker/build.sh --platform linux/amd64
 # in zuzu's cell/Dockerfile
-FROM neo-sdk:0.52.1.2-<commit>
+FROM neo-sdk:0.52.1.2-<commit>-amd64
 ```
 
 zuzu keeps calling `/usr/local/bin/neo-entrypoint` from its own supervisor, as root, with the same `/data`

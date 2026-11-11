@@ -637,16 +637,15 @@ describe('errors', () => {
     const refused = json(
       await runtime.run(`
         const refused = []
-        for (const options of [{ mask: [page.locator('#a')] }, { style: 'p {}' }, { omitBackground: true },
-                               { animations: 'disabled' }, { scale: 'css' }])
+        for (const options of [{ mask: [page.locator('#a')] }, { omitBackground: true }, { scale: 'css' }])
           try { await page.screenshot(options) } catch (e) { refused.push(e.code) }
-        await page.locator('#a').screenshot({ type: 'jpeg', quality: 50, caret: 'initial', animations: 'allow' })
+        await page.locator('#a').screenshot({ type: 'jpeg', quality: 50, caret: 'initial', animations: 'disabled', style: 'p {}' })
         return refused
       `),
     )
-    expect(refused).toEqual(Array(5).fill('method_unavailable'))
+    expect(refused).toEqual(Array(3).fill('method_unavailable'))
     expect(runtime.calls.filter(isRefusal).map((call) => call.name)).toEqual(
-      Array(5).fill('page.screenshot'),
+      Array(3).fill('page.screenshot'),
     )
     expect(
       runtime.calls
@@ -660,6 +659,9 @@ describe('errors', () => {
         strict: 'strict',
         type: 'jpeg',
         quality: 50,
+        caret: 'initial',
+        animations: 'disabled',
+        style: 'p {}',
       },
     ])
   })

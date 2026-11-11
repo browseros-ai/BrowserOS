@@ -626,6 +626,46 @@ impl SealedWorld {
         &self.global
     }
 
+    /// Runs rendering-only screenshot preparation in this held isolated world, returning no
+    /// page data. Keeping the CDP script gateway here prevents capture code from accidentally
+    /// evaluating in the page's main world or a recycled numeric execution context.
+    pub(crate) async fn render_for_screenshot(
+        &self,
+        script: &str,
+        arguments: &Value,
+    ) -> Result<(), CoreError> {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Reply {
+            exception_details: Option<Value>,
+        }
+        let arguments: Vec<Value> = arguments
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(|value| json!({ "value": value }))
+            .collect();
+        let reply: Reply = self
+            .session
+            .send(
+                "Runtime.callFunctionOn",
+                json!({
+                    "objectId": self.global(),
+                    "functionDeclaration": script,
+                    "arguments": arguments,
+                    "returnByValue": true,
+                    "awaitPromise": true,
+                }),
+            )
+            .await?;
+        if reply.exception_details.is_some() {
+            return Err(CoreError::PageScript(
+                "screenshot rendering failed".to_owned(),
+            ));
+        }
+        Ok(())
+    }
+
     /// The context id `DOM.resolveNode` needs; see the field.
     pub(crate) fn context(&self) -> ContextId {
         self.context

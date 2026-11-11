@@ -6,9 +6,8 @@
 //! [`Service::locks`], the app's door and its `page.bringToFront()` read [`Service::front`],
 //! and the browser link's tab events go to [`Service::tab_opened`],
 //! [`Service::tab_closed`] and [`Service::retain_tabs`], which hand each event to every part
-//! that keeps state about tabs: the takeovers, `Privacy`, the fits, the locks, and the displays
-//! (a control display arms its journal on each tab that opens). A reconcile takes a
-//! [`Service::tab_fence`] before its listing, so `retain_tabs` keeps what a host changed on a
+//! that keeps state about tabs: the takeovers, `Privacy`, the fits and the locks. A reconcile
+//! takes a [`Service::tab_fence`] before its listing, so `retain_tabs` keeps what a host changed on a
 //! tab that opened after it, through a route or through a control display's first input
 //! (`tab_stamps`).
 
@@ -21,7 +20,7 @@ use axum::Router;
 use browseros_core::viewport::Viewports;
 use browseros_core::{BrowserSession, TabId};
 use neo_capture::{CaptureHub, CaptureTransport, CdpPortTransport};
-use neo_takeover::{BrowserTabs, Displays, Fits, Front, Journal, Locks, Takeovers, Xvnc};
+use neo_takeover::{BrowserTabs, Displays, Fits, Front, Locks, Takeovers, Xvnc};
 use neo_trace::{EpochMillis, Privacy, PrivacyError, ShotJobs, TraceSink, TraceStore};
 use std::sync::Arc;
 use tokio_util::sync::{CancellationToken, DropGuard};
@@ -67,8 +66,7 @@ pub(crate) struct ServiceState {
     pub(crate) browser: BrowserTabs,
     pub(crate) locks: Arc<Locks>,
     pub(crate) fits: Arc<Fits>,
-    /// Neo's screen over RFB for `GET /v1/display`. Its control displays arm the control journal,
-    /// which registers into the same secret set as `privacy` (decision 31).
+    /// Neo's screen over RFB for `GET /v1/display`, in view or control mode.
     pub(crate) displays: Arc<Displays>,
     /// The v1 takeover flow over the parts above (`/v1/takeovers`, and `release=` on a display).
     pub(crate) takeovers: Arc<Takeovers>,
@@ -130,7 +128,6 @@ impl Service {
         }
         .spawn(screenshots);
         let browser = BrowserTabs::new(browser, viewports);
-        let journal = Journal::new(browser.clone(), Arc::clone(privacy.secrets()));
         let fits = Fits::new(browser.clone(), xvnc, Arc::clone(privacy.secrets()));
         use neo_takeover::TaintStamps;
 
@@ -140,7 +137,6 @@ impl Service {
             browser.clone(),
             Arc::clone(&privacy),
             Arc::clone(&stamps) as Arc<dyn TaintStamps>,
-            journal.clone(),
             Arc::clone(&locks),
             sink.clone(),
             store.clone(),
@@ -150,7 +146,6 @@ impl Service {
             Arc::clone(&locks),
             Arc::clone(&fits),
             Arc::clone(&displays),
-            journal,
             browser.clone(),
         );
         events.follow_takeovers(takeovers.subscribe());
@@ -211,19 +206,16 @@ impl Service {
     }
 
     /// The browser link saw a tab open. While a control display is open, the tab starts
-    /// private and that display's journal arms on it: the owner may already be typing into it.
+    /// private.
     ///
     /// It takes no stamp. So call it in order with each reconcile, never between a
     /// [`Service::tab_fence`] and its [`Service::retain_tabs`], or that reconcile could end a
     /// flag set there on a tab its listing lacks. The app's tab feed runs both in one loop.
     ///
     /// # Errors
-    /// When the tab's private flag could not be committed. It still holds in memory, and the
-    /// journal is armed either way.
+    /// When the tab's private flag could not be committed. It still holds in memory.
     pub async fn tab_opened(&self, tab: TabId, at: EpochMillis) -> Result<(), PrivacyError> {
-        let private = self.state.privacy.tab_opened(tab, at).await;
-        self.state.displays.tab_opened(tab).await;
-        private
+        self.state.privacy.tab_opened(tab, at).await
     }
 
     /// The browser link saw a tab close. Its stamp is forgotten first, so the close waits out a

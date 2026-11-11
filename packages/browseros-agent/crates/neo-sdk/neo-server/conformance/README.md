@@ -70,8 +70,8 @@ restarts a leaking rig and records the event. Private result directories retain 
 per-side record, trace, calibration, screenshot and report.
 
 `run` first compiles every generated program with the production QuickJS engine, then calibrates both
-runners. The calibrations intentionally include a wrong native expectation, a Neo refusal, a privacy
-difference, an assertion-count difference, a one-millisecond run timeout and a closed MCP port. They
+runners. The calibrations intentionally include a wrong native expectation, a Neo refusal, a deliberate
+assertion difference, an assertion-count difference, a one-millisecond run timeout and a closed MCP port. They
 must classify as intended before any upstream tests run. The runtime-global check exercises production
 URL/URLSearchParams/atob/btoa; there are no harness polyfills or pending-global exceptions.
 

@@ -15,11 +15,9 @@
 //! The bytes are written and framed by hand, not with `rfb_server`'s or `rfb_client`'s parsers,
 //! so a parser bug cannot hide behind a fake that shares it.
 //!
-//! [`NoStamps`] is the stamp hook for displays built without the service. [`owner_presses`]
-//! reads the owner's presses that control displays counted, and [`add_owner_presses`] counts
-//! some with no display.
+//! [`NoStamps`] is the stamp hook for displays built without the service.
 
-use crate::{Journal, ScreenSize, TaintStamps, Xvnc};
+use crate::{ScreenSize, TaintStamps, Xvnc};
 use browseros_core::TabId;
 use futures_util::future::BoxFuture;
 use std::io;
@@ -428,21 +426,6 @@ async fn take(socket: &mut TcpStream, message: &mut Vec<u8>, count: usize) -> io
     let start = message.len();
     message.resize(start + count, 0);
     socket.read_exact(&mut message[start..]).await.map(drop)
-}
-
-/// How many key-downs and pastes the control displays built with `journal` have sent on to Xvnc
-/// as the owner's presses (sdk-traces decision 54).
-#[must_use]
-pub fn owner_presses(journal: &Journal) -> u64 {
-    journal.owner_presses()
-}
-
-/// Counts `presses` more of the owner's presses on `journal`, as if a control display had sent
-/// that many key-downs or pastes on to Xvnc, for tests that play the owner without a display.
-pub fn add_owner_presses(journal: &Journal, presses: u64) {
-    for _ in 0..presses {
-        journal.owner_pressed();
-    }
 }
 
 /// A [`TaintStamps`] that stamps nothing. Displays built without the service have no reconcile

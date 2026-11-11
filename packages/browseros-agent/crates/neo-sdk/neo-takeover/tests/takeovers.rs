@@ -1,4 +1,4 @@
-//! `Takeovers` as the service's routes use them: real locks, displays, journal and fits over the
+//! `Takeovers` as the service's routes use them: real locks, displays and fits over the
 //! fit tests' fake Chromium and a fake Xvnc, and a real `Privacy` over a private-flag store the
 //! test can hold or fail.
 //!
@@ -14,7 +14,7 @@
 #[path = "fits/browser.rs"]
 mod browser;
 
-use browser::{Call, FakeBrowser, SWEEP_READ};
+use browser::{Call, FakeBrowser};
 use browseros_core::viewport::Viewports;
 use browseros_core::{BrowserSession, BrowserSessionHooks, TabId};
 use bytes::Bytes;
@@ -22,9 +22,9 @@ use futures_util::future::BoxFuture;
 use neo_takeover::testing::{FakeXvnc, NoStamps};
 use neo_takeover::{
     Admitted, BrowserTabs, DisplayEnd, DisplayRequest, Displays, FitState, Fits, Follow, Front,
-    FrontError, Journal, LockEnd, LockTarget, Locks, OwnerHasControl, OwnerHasScreen, PartError,
-    Reads, ReleaseReason, ScreenHolder, ScreenSize, Takeover, TakeoverRequest, TakeoverState,
-    TakeoverTtl, Takeovers,
+    FrontError, LockEnd, LockTarget, Locks, OwnerHasControl, OwnerHasScreen, PartError, Reads,
+    ReleaseReason, ScreenHolder, ScreenSize, Takeover, TakeoverRequest, TakeoverState, TakeoverTtl,
+    Takeovers,
 };
 use neo_trace::{
     Effect, EpochMillis, OperationId, OperationKind, OperationStarted, Privacy, PrivacyRecord,
@@ -66,9 +66,6 @@ const QUIET: Duration = Duration::from_millis(1500);
 const HANDSHAKE: &[u8] = b"RFB 003.008\n\x01\x00";
 /// Key `a` down, as a type-4 KeyEvent.
 const KEY_A: [u8; 8] = [4, 1, 0, 0, 0, 0, 0, 0x61];
-
-/// What the owner left in a password field.
-const TYPED: &str = "OWNER_TYPED_7f3a";
 
 /// The methods a fit's restore sends to the browser.
 const RESTORE: [&str; 4] = [
@@ -171,14 +168,12 @@ async fn harness(tabs: &[i64]) -> Result<Harness, BoxError> {
         Arc::new(Viewports::default()),
     );
     let locks = Locks::new(store.clone(), sink.clone());
-    let journal = Journal::new(tabs.clone(), Arc::clone(&secrets));
     let fits = Fits::new(tabs.clone(), xvnc.xvnc(HOME), secrets);
     let displays = Displays::new(
         xvnc.addr(),
         tabs.clone(),
         Arc::clone(&privacy),
         Arc::new(NoStamps),
-        journal.clone(),
         Arc::clone(&locks),
         sink.clone(),
         store,
@@ -188,7 +183,6 @@ async fn harness(tabs: &[i64]) -> Result<Harness, BoxError> {
         Arc::clone(&locks),
         Arc::clone(&fits),
         Arc::clone(&displays),
-        journal,
         tabs,
     );
     Ok(Harness {
@@ -314,7 +308,7 @@ impl Harness {
 
     /// Checks what a start leaves when it was not done by the time its TTL release was due. It
     /// answered `TimedOut`. Its takeover was announced once, as released (`Expired`), never as
-    /// active. The tab was swept and the journal disarmed while the agent's writes were refused,
+    /// active. The fit was restored while the agent's writes were refused,
     /// and the give-back lifted the lock before the lock's own TTL could.
     async fn given_back_in_time(
         &self,
@@ -339,24 +333,11 @@ impl Harness {
         assert_eq!(self.takeovers.get(released.id).as_ref(), Some(released));
 
         let calls = self.browser.calls();
-        let sweeps = calls
-            .iter()
-            .filter(|call| is_sweep_read(call))
-            .collect::<Vec<_>>();
-        assert!(
-            !sweeps.is_empty() && sweeps.iter().all(|call| call.probed == Some(true)),
-            "the tab was swept while the agent's writes were refused: {sweeps:#?}"
-        );
         assert!(
             calls.iter().all(|call| call.probed != Some(false)),
             "and so they were at every call: {calls:#?}"
         );
-        assert_eq!(
-            self.calls_since(0, "Page.removeScriptToEvaluateOnNewDocument")
-                .len(),
-            1,
-            "the journal was disarmed"
-        );
+
         let lock = self.locks.get(released.lock).ok_or("the lock")?;
         assert_eq!(
             lock.ended.map(|ended| ended.cause),
@@ -369,11 +350,6 @@ impl Harness {
             "the agent writes again once the lock lifted"
         );
         assert!(self.views_admitted().await?, "spectators are back");
-        let mut result = format!("the field held {TYPED}");
-        assert!(
-            self.privacy.secrets().mask_str(&mut result),
-            "what the owner left in the field is a known secret"
-        );
         Ok(())
     }
 }
@@ -413,10 +389,6 @@ async fn eventually(done: impl Fn() -> bool) -> TestResult {
     })
     .await?;
     Ok(())
-}
-
-fn is_sweep_read(call: &Call) -> bool {
-    call.method == "Runtime.evaluate" && call.params["expression"] == SWEEP_READ
 }
 
 fn released_for(takeover: &Takeover) -> Option<ReleaseReason> {
@@ -467,14 +439,7 @@ async fn the_tab_is_private_on_disk_before_the_agent_is_locked_out() -> TestResu
         1_200_000
     );
     assert!(!h.views_admitted().await?, "spectators are held off");
-    assert_eq!(
-        h.calls_since(0, "Page.addScriptToEvaluateOnNewDocument")
-            .iter()
-            .map(|call| call.tab)
-            .collect::<Vec<_>>(),
-        [Some(3)],
-        "the journal is armed on the tab, and only there"
-    );
+
     let fit = h.fits.view(takeover.fit.ok_or("a fit")?).ok_or("the fit")?;
     assert_eq!((fit.tab, fit.screen), (TAB, PHONE));
     assert_eq!(h.xvnc.size(), PHONE);
@@ -490,10 +455,7 @@ async fn a_flag_that_is_not_committed_refuses_the_start_with_nothing_taken() -> 
     assert!(matches!(refused, Err(PartError::Privacy(_))), "{refused:?}");
     assert!(!h.locks.is_locked(TAB));
     assert!(h.views_admitted().await?);
-    assert!(
-        h.calls_since(0, "Page.addScriptToEvaluateOnNewDocument")
-            .is_empty()
-    );
+
     assert!(h.xvnc.resizes().is_empty());
 
     h.flags.fail.store(false, Ordering::SeqCst);
@@ -511,12 +473,7 @@ async fn a_failed_fit_gives_back_what_the_start_took() -> TestResult {
     assert!(matches!(refused, Err(PartError::Screen(_))), "{refused:?}");
     assert!(!h.locks.is_locked(TAB), "the lock is lifted");
     assert!(h.views_admitted().await?, "spectators are let back");
-    assert_eq!(
-        h.calls_since(0, "Page.removeScriptToEvaluateOnNewDocument")
-            .len(),
-        1,
-        "the journal is disarmed"
-    );
+
     assert!(
         h.privacy.is_private(TAB).is_some(),
         "the tab stays private, which only over-protects it"
@@ -525,76 +482,36 @@ async fn a_failed_fit_gives_back_what_the_start_took() -> TestResult {
     Ok(())
 }
 
-/// The give-back's order, read from the browser's own log: the display's close sweep of every
-/// open tab, its journal's disarm, the tab's sweep, the takeover's journal, then the fit's
-/// restore. Sweep reads take a moment, so a step that did not wait for the one before it would
-/// interleave with it. The probe reads the lock at every one of those calls.
+/// Release stops display input before restoring the fit, while the agent stays locked.
 #[tokio::test]
 async fn release_gives_back_in_order_and_lifts_the_lock_last() -> TestResult {
     let h = harness(&[3, 4]).await?;
     let takeover = h.takeovers.start(request(Some(PHONE))?).await?;
     let control = h.owner_typing(&takeover).await?;
-    h.browser.type_into_fields(&[TYPED]);
-    h.browser.slow_sweep_reads(Duration::from_millis(100));
     let locks = Arc::clone(&h.locks);
     h.browser.probe_each_call(move || locks.is_locked(TAB));
     let from = h.browser.calls().len();
-    let resizes = h.xvnc.resizes().len();
 
-    let released = h
-        .takeovers
-        .release(takeover.id, ReleaseReason::Done)
-        .await?;
-    assert_eq!(released_for(&released), Some(ReleaseReason::Done));
+    h.browser.hold("Emulation.clearDeviceMetricsOverride");
+    let releasing = tokio::spawn({
+        let takeovers = Arc::clone(&h.takeovers);
+        async move { takeovers.release(takeover.id, ReleaseReason::Done).await }
+    });
+    eventually(|| h.browser.held("Emulation.clearDeviceMetricsOverride") > 0).await?;
     assert_eq!(control.ended().await?, DisplayEnd::Released);
+    assert!(
+        h.locks.is_locked(TAB),
+        "the display stops before restore lifts the lock"
+    );
+    h.browser.let_go("Emulation.clearDeviceMetricsOverride");
+    let released = timeout(WITHIN, releasing).await???;
+    assert_eq!(released_for(&released), Some(ReleaseReason::Done));
 
     let calls = h.browser.calls().split_off(from);
-    let at = |found: &dyn Fn(&Call) -> bool| -> Vec<usize> {
+    assert!(
         calls
             .iter()
-            .enumerate()
-            .filter(|(_, call)| found(call))
-            .map(|(at, _)| at)
-            .collect()
-    };
-    let sweeps = at(&is_sweep_read);
-    let mut swept = sweeps
-        .iter()
-        .filter_map(|&at| calls.get(at).and_then(|call| call.tab))
-        .collect::<Vec<_>>();
-    assert_eq!(
-        swept.pop(),
-        Some(3),
-        "the takeover's own sweep comes last: {swept:?}"
-    );
-    swept.sort_unstable();
-    assert_eq!(swept, [3, 4], "the display's close sweep reads every tab");
-    let removed = |script: &'static str| {
-        move |call: &Call| {
-            call.method == "Page.removeScriptToEvaluateOnNewDocument"
-                && call.params["identifier"] == script
-        }
-    };
-    // The takeover armed its tab at start (script 1); the display armed both tabs after.
-    let displays_journal = [at(&removed("script-2")), at(&removed("script-3"))].concat();
-    let takeovers_journal = at(&removed("script-1"));
-    let restore = at(&|call: &Call| RESTORE.contains(&call.method.as_str()));
-    let (Some(&own_sweep), Some(&own_disarm), Some(&first_restore)) =
-        (sweeps.last(), takeovers_journal.first(), restore.first())
-    else {
-        return Err(format!("a step is missing from the give-back: {calls:#?}").into());
-    };
-    assert_eq!(displays_journal.len(), 2, "{calls:#?}");
-    assert!(
-        displays_journal.iter().all(|&at| at < own_sweep),
-        "the display ended, its journal disarmed, before the tab's sweep"
-    );
-    assert!(own_sweep < own_disarm, "the tab's sweep, then its journal");
-    assert!(own_disarm < first_restore, "the journal, then the fit");
-    assert_eq!(
-        calls.get(own_disarm).map(|call| call.resizes),
-        Some(resizes),
-        "the screen goes home only after the journal is disarmed"
+            .any(|call| RESTORE.contains(&call.method.as_str()))
     );
     assert!(
         calls.iter().all(|call| call.probed == Some(true)),
@@ -605,24 +522,19 @@ async fn release_gives_back_in_order_and_lifts_the_lock_last() -> TestResult {
     assert!(h.views_admitted().await?, "and spectators are back");
     assert_eq!(h.xvnc.size(), HOME);
     assert_eq!(h.browser.window(), "maximized");
-    let mut result = format!("the field held {TYPED}");
-    assert!(
-        h.privacy.secrets().mask_str(&mut result),
-        "what the owner left in the field is a known secret"
-    );
     Ok(())
 }
 
 #[tokio::test]
 async fn views_and_the_lock_stay_until_the_give_back_is_done() -> TestResult {
     let h = harness(&[3]).await?;
-    let takeover = h.takeovers.start(request(None)?).await?;
-    h.browser.hold_sweep_reads();
+    let takeover = h.takeovers.start(request(Some(PHONE))?).await?;
+    h.browser.hold("Emulation.clearDeviceMetricsOverride");
     let releasing = tokio::spawn({
         let takeovers = Arc::clone(&h.takeovers);
         async move { takeovers.release(takeover.id, ReleaseReason::Done).await }
     });
-    eventually(|| h.browser.held_sweep_reads() > 0).await?;
+    eventually(|| h.browser.held("Emulation.clearDeviceMetricsOverride") > 0).await?;
     assert!(!h.views_admitted().await?, "spectators are still held off");
     assert!(
         h.locks.check(LockTarget::Tab(TAB), Effect::Write).is_err(),
@@ -641,7 +553,7 @@ async fn views_and_the_lock_stay_until_the_give_back_is_done() -> TestResult {
         "but no display can bind to it any more"
     );
 
-    h.browser.let_sweep_reads_go();
+    h.browser.let_go("Emulation.clearDeviceMetricsOverride");
     let released = timeout(WITHIN, releasing).await???;
     assert_eq!(released_for(&released), Some(ReleaseReason::Done));
     assert!(!h.locks.is_locked(TAB));
@@ -681,15 +593,15 @@ async fn a_start_whose_caller_hangs_up_still_finishes() -> TestResult {
 #[tokio::test]
 async fn a_release_whose_caller_hangs_up_still_lifts_the_lock() -> TestResult {
     let h = harness(&[3]).await?;
-    let takeover = h.takeovers.start(request(None)?).await?;
-    h.browser.hold_sweep_reads();
+    let takeover = h.takeovers.start(request(Some(PHONE))?).await?;
+    h.browser.hold("Emulation.clearDeviceMetricsOverride");
     let hung_up = timeout(
         Duration::from_millis(100),
         h.takeovers.release(takeover.id, ReleaseReason::Done),
     )
     .await;
     assert!(hung_up.is_err(), "the caller stopped waiting");
-    h.browser.let_sweep_reads_go();
+    h.browser.let_go("Emulation.clearDeviceMetricsOverride");
     eventually(|| !h.locks.is_locked(TAB)).await?;
     let released = h.takeovers.get(takeover.id).ok_or("the takeover")?;
     assert_eq!(released_for(&released), Some(ReleaseReason::Done));
@@ -700,9 +612,9 @@ async fn a_release_whose_caller_hangs_up_still_lifts_the_lock() -> TestResult {
 #[tokio::test]
 async fn a_step_that_fails_does_not_keep_the_lock() -> TestResult {
     let h = harness(&[3]).await?;
-    let takeover = h.takeovers.start(request(None)?).await?;
-    // The sweep's read never answers, so the sweep gives up on the frame and fails.
-    h.browser.hold_sweep_reads();
+    let takeover = h.takeovers.start(request(Some(PHONE))?).await?;
+    // A restore step times out; the remaining steps and unlock must still run.
+    h.browser.hold("Emulation.clearDeviceMetricsOverride");
     let released = h
         .takeovers
         .release(takeover.id, ReleaseReason::Idle)
@@ -710,55 +622,40 @@ async fn a_step_that_fails_does_not_keep_the_lock() -> TestResult {
     assert_eq!(released_for(&released), Some(ReleaseReason::Idle));
     assert!(!h.locks.is_locked(TAB));
     assert!(h.views_admitted().await?);
-    assert_eq!(
-        h.calls_since(0, "Page.removeScriptToEvaluateOnNewDocument")
-            .len(),
-        1,
-        "the journal was still disarmed"
-    );
+
     Ok(())
 }
 
-/// The owner's display arms the journal on six tabs, and none of its scripts can be removed: its
-/// end takes 2 s a tab, past the give-back's 10 s. The release stops waiting at 10 s and unlocks,
-/// and the steps it no longer waits for still run: the tab's sweep registers what it finds.
+/// Two restore steps never answer, exhausting the shared give-back budget. Unlock still runs.
 #[tokio::test]
 async fn a_give_back_that_runs_out_of_its_budget_still_lifts_the_lock() -> TestResult {
-    let h = harness(&[3, 4, 5, 6, 7, 8]).await?;
-    let takeover = h.takeovers.start(request(None)?).await?;
-    let binding = h.takeovers.binding(takeover.id)?;
-    let control = serve(
-        h.displays
-            .admit(DisplayRequest::Control {
-                binding: Some(binding),
-            })
-            .await?,
-    );
-    h.browser.type_into_fields(&[TYPED]);
-    h.browser.hang("Page.removeScriptToEvaluateOnNewDocument");
+    let h = harness(&[3]).await?;
+    let takeover = h.takeovers.start(request(Some(PHONE))?).await?;
+    h.browser.hold("Input.dispatchKeyEvent");
+    h.browser.hold("Browser.setWindowBounds");
+    let releasing = tokio::spawn({
+        let takeovers = Arc::clone(&h.takeovers);
+        async move { takeovers.release(takeover.id, ReleaseReason::Done).await }
+    });
+    eventually(|| h.browser.held("Input.dispatchKeyEvent") > 0).await?;
 
     tokio::time::pause();
     let started = Instant::now();
-    let released = h
-        .takeovers
-        .release(takeover.id, ReleaseReason::Done)
-        .await?;
+    let released = releasing.await??;
     let took = started.elapsed();
-    let still_ending = !control.serving.is_finished();
     tokio::time::resume();
+    h.browser.let_go("Input.dispatchKeyEvent");
+    h.browser.let_go("Browser.setWindowBounds");
 
     assert_eq!(released_for(&released), Some(ReleaseReason::Done));
     assert!(
-        took >= Duration::from_secs(10) && took < Duration::from_secs(11),
+        took >= Duration::from_secs(9) && took < Duration::from_secs(11),
         "{took:?}"
     );
-    assert!(still_ending, "the display's end goes on in the background");
-    assert!(!h.locks.is_locked(TAB));
-    eventually(|| {
-        let mut result = format!("the field held {TYPED}");
-        h.privacy.secrets().mask_str(&mut result)
-    })
-    .await?;
+    assert!(
+        !h.locks.is_locked(TAB),
+        "the give-back budget bounds the lock even if restore stalls"
+    );
     Ok(())
 }
 
@@ -810,36 +707,6 @@ async fn the_ttl_release_comes_10_s_before_the_lock_ends() -> TestResult {
     Ok(())
 }
 
-/// A page's frames do not answer while the journal arms them. Each waits out its 2 s frame
-/// budget, so arming 37 frames would outlast the 50 s a 60 s takeover has before its release is
-/// due. The start stops waiting then and gives back with the agent still locked out. The frames
-/// answer again just after, so the give-back, the late arming's disarm included, ends in time.
-#[tokio::test]
-async fn a_start_whose_frames_stall_is_given_back_before_its_lock_ends() -> TestResult {
-    let h = harness(&[3]).await?;
-    h.browser.add_child_frames(36);
-    h.browser.hold("Page.createIsolatedWorld");
-    h.browser.type_into_fields(&[TYPED]);
-    let mut changes = h.takeovers.subscribe();
-    let request = shortest(None)?;
-    let starting = tokio::spawn({
-        let takeovers = Arc::clone(&h.takeovers);
-        async move { takeovers.start(request).await }
-    });
-    // Arming begins after the lock has settled, the last read of the store.
-    eventually(|| h.browser.held("Page.createIsolatedWorld") > 0).await?;
-    h.probe_writes();
-
-    tokio::time::pause();
-    // The lock was taken before now, so its release fell due within these 50 s.
-    tokio::time::sleep(Duration::from_secs(50)).await;
-    h.browser.let_go("Page.createIsolatedWorld");
-    let started = timeout(WITHIN, starting).await??;
-    tokio::time::resume();
-
-    h.given_back_in_time(started, &mut changes).await
-}
-
 /// A fit waits on the browser past the takeover's release. The start stops waiting then and gives
 /// back with the agent still locked out. The fit lands during the give-back and is restored
 /// before the lock lifts.
@@ -847,7 +714,6 @@ async fn a_start_whose_frames_stall_is_given_back_before_its_lock_ends() -> Test
 async fn a_start_whose_fit_stalls_is_given_back_before_its_lock_ends() -> TestResult {
     let h = harness(&[3]).await?;
     h.browser.hold("Browser.getWindowForTarget");
-    h.browser.type_into_fields(&[TYPED]);
     let mut changes = h.takeovers.subscribe();
     let request = shortest(Some(PHONE))?;
     let starting = tokio::spawn({
@@ -892,7 +758,6 @@ async fn a_start_whose_fit_stalls_is_given_back_before_its_lock_ends() -> TestRe
 async fn a_closed_tab_releases_its_takeover_without_the_steps_that_need_it() -> TestResult {
     let h = harness(&[3, 4]).await?;
     let takeover = h.takeovers.start(request(Some(PHONE))?).await?;
-    h.browser.type_into_fields(&[TYPED]);
     h.browser.close_tab(3);
     let from = h.browser.calls().len();
     h.takeovers.tab_closed(TAB).await;
@@ -900,7 +765,6 @@ async fn a_closed_tab_releases_its_takeover_without_the_steps_that_need_it() -> 
     let released = h.takeovers.get(takeover.id).ok_or("the takeover")?;
     assert_eq!(released_for(&released), Some(ReleaseReason::TabClosed));
     let calls = h.browser.calls().split_off(from);
-    assert!(!calls.iter().any(is_sweep_read), "no sweep of a closed tab");
     assert!(
         !calls
             .iter()
@@ -929,14 +793,7 @@ async fn one_takeover_per_tab_and_one_give_back_per_takeover() -> TestResult {
     );
     let (first, second) = (first?, second?);
     assert_eq!(first, second, "the second start found the first");
-    assert_eq!(
-        h.calls_since(0, "Page.addScriptToEvaluateOnNewDocument")
-            .len(),
-        1,
-        "one journal"
-    );
 
-    let from = h.browser.calls().len();
     let (done, idle) = tokio::join!(
         h.takeovers.release(first.id, ReleaseReason::Done),
         h.takeovers.release(first.id, ReleaseReason::Idle)
@@ -944,16 +801,7 @@ async fn one_takeover_per_tab_and_one_give_back_per_takeover() -> TestResult {
     let (done, idle) = (done?, idle?);
     assert_eq!(done, idle, "both callers get the one release's answer");
     assert!(released_for(&done).is_some());
-    assert_eq!(
-        h.browser
-            .calls()
-            .split_off(from)
-            .iter()
-            .filter(|call| is_sweep_read(call))
-            .count(),
-        1,
-        "the steps ran once"
-    );
+
     let again = h.takeovers.release(first.id, ReleaseReason::Host).await?;
     assert_eq!(again, done, "the first reason stands");
 
@@ -1137,19 +985,9 @@ async fn a_takeover_without_a_viewer_holds_the_screen_and_activates_nothing() ->
     });
     assert_eq!(front.check(), held);
 
-    h.browser.hold_sweep_reads();
-    let releasing = tokio::spawn({
-        let takeovers = Arc::clone(&h.takeovers);
-        async move { takeovers.release(takeover.id, ReleaseReason::Done).await }
-    });
-    eventually(|| h.browser.held_sweep_reads() > 0).await?;
-    assert_eq!(
-        front.check(),
-        held,
-        "still the owner's while the release runs"
-    );
-    h.browser.let_sweep_reads_go();
-    timeout(WITHIN, releasing).await???;
+    h.takeovers
+        .release(takeover.id, ReleaseReason::Done)
+        .await?;
     assert_eq!(front.check(), Ok(()), "the release gave the screen back");
     assert!(
         h.browser.calls_of("Browser.activateTab").is_empty(),
