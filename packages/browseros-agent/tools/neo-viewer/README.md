@@ -39,12 +39,19 @@ build inputs (this tool, say) reuse the commit's image:
   Claude Code:    claude mcp add --transport http neo-viewer http://127.0.0.1:7310/mcp
 ```
 
+Before anything else it checks this tool's packages against its `package.json` and `bun.lock`
+(missing, or older than the lockfile after a pull) and builds the page, so a bad install fails in a
+second with no Docker work: run with the repo's pinned Bun (`packageManager`, 1.4.2) it installs
+them; with another Bun it says so and prints the one command to run
+(`npx -y bun@1.4.2 install --frozen-lockfile`), since an older Bun's install links nothing here.
+
 Ctrl-C stops the viewer and removes the container and network it started. Each start begins
 clean: it removes what the previous start left (the container, network and data) and, after a new
 build, the image the previous build made.
 
 | Flag | |
 |---|---|
+| `--name <instance>` | which viewer this is (default `default`); see below |
 | `--keep-data` | keep the browser profile (logins) and the run history between starts |
 | `--no-build` | use the newest `neo-sdk` image already on this machine |
 | `--image <tag>` | use this image |
@@ -53,7 +60,7 @@ build, the image the previous build made.
 | `--data-dir <dir>` | the viewer's state (below) |
 
 Pass flags after `--`: `bun run neo:viewer -- --keep-data`. The same settings come from
-`NEO_VIEWER_PORT`, `NEO_VIEWER_UPSTREAM` and `NEO_VIEWER_DATA_DIR`. The viewer listens on 127.0.0.1
+`NEO_VIEWER_INSTANCE`, `NEO_VIEWER_PORT`, `NEO_VIEWER_UPSTREAM` and `NEO_VIEWER_DATA_DIR`. The viewer listens on 127.0.0.1
 only.
 
 The container is started as [the image's README](../../crates/neo-sdk/neo-server/docker/README.md)
@@ -63,10 +70,17 @@ viewer's state folder; both ports are published on 127.0.0.1 at ports Docker pic
 container `CLAW_HOST_TCP` binds `0.0.0.0:9300`: bound to `127.0.0.1` the published port answers
 nothing, since Docker's port forward arrives from outside the container's loopback.
 
-It touches only what it created: the container `neo-viewer-sdk`, the network `neo-viewer-sdk-net`
-and the volume `neo-viewer-sdk-data`, each carrying the label `com.browseros.neo-viewer`, and the
-image its own last build recorded in `start-state.json`. A same-named thing without the label
-stops the start instead. `GET /api/info` reports the image in use and whether the container is up;
+Every start belongs to one instance, `--name <instance>` (or `NEO_VIEWER_INSTANCE`, default
+`default`): the container `neo-viewer-<instance>`, the network `neo-viewer-<instance>-net`, the
+volume `neo-viewer-<instance>-data` and the state folder `~/.local/state/neo-viewer/<instance>`.
+A start replaces only an earlier start of the same instance; if that one's viewer is still running
+it says so in one line, and refuses (touching nothing) when that viewer holds the same port.
+Cleanup never touches another instance: each object carries the labels `com.browseros.neo-viewer`
+and `com.browseros.neo-viewer.instance`, a same-named object without them stops the start, and the
+only image removed is the one this instance's own last build recorded in its `start-state.json`.
+**Workers and scripts: always pass your own `--name` and port; `default` is the owner's.**
+
+`GET /api/info` reports the image in use and whether the container is up;
 the command is the only control.
 
 ## What the proxy changes

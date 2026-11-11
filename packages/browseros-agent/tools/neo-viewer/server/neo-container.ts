@@ -16,11 +16,29 @@ import { createHash } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 
-export const NAMES = {
-  container: 'neo-viewer-sdk',
-  network: 'neo-viewer-sdk-net',
-  volume: 'neo-viewer-sdk-data',
-} as const
+/**
+ * The names one instance's objects go under. Every start, cleanup and Ctrl-C is scoped to one
+ * instance (`--name`, default `default`), so viewers started side by side under different names
+ * never touch each other's container, network, data or state.
+ */
+export interface InstanceNames {
+  instance: string
+  container: string
+  network: string
+  volume: string
+}
+
+/** What `--name` accepts: Docker's name characters, short enough for the derived names. */
+export const INSTANCE_PATTERN = /^[a-z0-9][a-z0-9_.-]{0,39}$/
+
+export function instanceNames(instance: string): InstanceNames {
+  return {
+    instance,
+    container: `neo-viewer-${instance}`,
+    network: `neo-viewer-${instance}-net`,
+    volume: `neo-viewer-${instance}-data`,
+  }
+}
 
 /** On everything the viewer creates; cleanup removes a fixed name only when it carries it. */
 const LABEL = 'com.browseros.neo-viewer'
@@ -274,6 +292,8 @@ type Kind = 'container' | 'network' | 'volume'
 
 /** Marks one launch's objects, so its Ctrl-C removes what it made and not a later launch's. */
 const LAUNCH_LABEL = `${LABEL}.launch`
+/** Marks the instance an object belongs to; a start removes only its own instance's leftovers. */
+const INSTANCE_LABEL = `${LABEL}.instance`
 
 /**
  * A named object's own reference (a container's or network's id; a volume's name) and one of its
@@ -328,20 +348,22 @@ async function remove(
  */
 export async function removeLeftovers(
   run: Runner,
+  names: InstanceNames,
   keepData: boolean,
 ): Promise<string[]> {
   const removed: string[] = []
   const targets: Array<[Kind, string]> = [
-    ['container', NAMES.container],
-    ['network', NAMES.network],
-    ['volume', NAMES.volume],
+    ['container', names.container],
+    ['network', names.network],
+    ['volume', names.volume],
   ]
   for (const [kind, name] of targets) {
     const found = await inspectLabel(run, kind, name, LABEL)
     if (found === undefined) continue
-    if (found.label !== '1') {
+    const instance = await inspectLabel(run, kind, found.ref, INSTANCE_LABEL)
+    if (found.label !== '1' || instance?.label !== names.instance) {
       throw new Error(
-        `neo-viewer: a ${kind} named ${name} exists but the viewer did not create it; remove or rename it`,
+        `neo-viewer: a ${kind} named ${name} exists but this viewer instance did not create it; remove or rename it`,
       )
     }
     if (kind === 'volume' && keepData) continue
@@ -367,21 +389,28 @@ export interface RunningContainer {
  */
 export async function startContainer(
   run: Runner,
-  options: { image: string; tokenFile: string; launch: string },
+  options: {
+    names: InstanceNames
+    image: string
+    tokenFile: string
+    launch: string
+  },
 ): Promise<RunningContainer> {
   const labels = [
+    '--label',
+    `${INSTANCE_LABEL}=${options.names.instance}`,
     '--label',
     `${LABEL}=1`,
     '--label',
     `${LAUNCH_LABEL}=${options.launch}`,
   ]
-  await createNetwork(run, labels)
+  await createNetwork(run, options.names, labels)
   // With --keep-data the volume (checked as the viewer's) is reused; create is then a no-op.
   const volume = await run('docker', [
     'volume',
     'create',
     ...labels,
-    NAMES.volume,
+    options.names.volume,
   ])
   if (volume.code !== 0)
     throw new Error(
@@ -391,10 +420,10 @@ export async function startContainer(
     'run',
     '-d',
     '--name',
-    NAMES.container,
+    options.names.container,
     ...labels,
     '--network',
-    NAMES.network,
+    options.names.network,
     '--shm-size=1g',
     '--stop-timeout',
     '25',
@@ -410,7 +439,7 @@ export async function startContainer(
     '-v',
     `${options.tokenFile}:${TOKEN_PATH}:ro`,
     '-v',
-    `${NAMES.volume}:/data`,
+    `${options.names.volume}:/data`,
     '-p',
     `127.0.0.1::${MCP_PORT}`,
     '-p',
@@ -419,11 +448,15 @@ export async function startContainer(
   ])
   if (started.code !== 0)
     throw new Error(`neo-viewer: docker run failed: ${started.stderr.trim()}`)
-  await waitUntilHealthy(run)
+  await waitUntilHealthy(run, options.names)
   return {
     image: options.image,
-    mcpUrl: new URL(`http://${await publishedAddress(run, MCP_PORT)}/mcp`),
-    hostApiUrl: new URL(`http://${await publishedAddress(run, HOST_API_PORT)}`),
+    mcpUrl: new URL(
+      `http://${await publishedAddress(run, options.names, MCP_PORT)}/mcp`,
+    ),
+    hostApiUrl: new URL(
+      `http://${await publishedAddress(run, options.names, HOST_API_PORT)}`,
+    ),
   }
 }
 
@@ -441,10 +474,11 @@ const FALLBACK_SUBNETS = Array.from(
  */
 export async function createNetwork(
   run: Runner,
+  names: InstanceNames,
   labels: string[],
 ): Promise<void> {
   const create = (extra: string[]) =>
-    run('docker', ['network', 'create', ...labels, ...extra, NAMES.network])
+    run('docker', ['network', 'create', ...labels, ...extra, names.network])
   const first = await create([])
   if (first.code === 0) return
   if (!/fully subnetted|address pools/i.test(first.stderr)) {
@@ -472,14 +506,17 @@ function ownerIds(): string[] {
 }
 
 /** Waits for the image's HEALTHCHECK (entrypoint done, `/system/ready` answers). */
-async function waitUntilHealthy(run: Runner): Promise<void> {
+async function waitUntilHealthy(
+  run: Runner,
+  names: InstanceNames,
+): Promise<void> {
   const deadline = Date.now() + READY_TIMEOUT_MS
   for (;;) {
     const state = await run('docker', [
       'inspect',
       '--format',
       '{{.State.Status}} {{if .State.Health}}{{.State.Health.Status}}{{end}}',
-      NAMES.container,
+      names.container,
     ])
     const [status, health] = state.stdout.trim().split(' ')
     if (health === 'healthy') return
@@ -492,7 +529,7 @@ async function waitUntilHealthy(run: Runner): Promise<void> {
         'logs',
         '--tail',
         '40',
-        NAMES.container,
+        names.container,
       ])
       throw new Error(
         `neo-viewer: the container did not come up (${status ?? 'gone'}, ${health ?? 'no health'}). Its last log lines:\n${logs.stdout}${logs.stderr}`,
@@ -502,8 +539,12 @@ async function waitUntilHealthy(run: Runner): Promise<void> {
   }
 }
 
-async function publishedAddress(run: Runner, port: number): Promise<string> {
-  const result = await run('docker', ['port', NAMES.container, `${port}/tcp`])
+async function publishedAddress(
+  run: Runner,
+  names: InstanceNames,
+  port: number,
+): Promise<string> {
+  const result = await run('docker', ['port', names.container, `${port}/tcp`])
   const address = result.stdout
     .split('\n')
     .find((line) => line.startsWith('127.0.0.1:'))
@@ -519,13 +560,14 @@ async function publishedAddress(run: Runner, port: number): Promise<string> {
  */
 export async function stopContainer(
   run: Runner,
+  names: InstanceNames,
   launch: string,
   keepData: boolean,
 ): Promise<void> {
   const targets: Array<[Kind, string]> = [
-    ['container', NAMES.container],
-    ['network', NAMES.network],
-    ...(keepData ? [] : ([['volume', NAMES.volume]] as Array<[Kind, string]>)),
+    ['container', names.container],
+    ['network', names.network],
+    ...(keepData ? [] : ([['volume', names.volume]] as Array<[Kind, string]>)),
   ]
   for (const [kind, name] of targets) {
     const found = await inspectLabel(run, kind, name, LAUNCH_LABEL)
@@ -535,12 +577,15 @@ export async function stopContainer(
 }
 
 /** Whether the viewer's container is running, for the page. */
-export async function containerUp(run: Runner): Promise<boolean> {
+export async function containerUp(
+  run: Runner,
+  names: InstanceNames,
+): Promise<boolean> {
   const result = await run('docker', [
     'inspect',
     '--format',
     '{{.State.Running}}',
-    NAMES.container,
+    names.container,
   ])
   return result.code === 0 && result.stdout.trim() === 'true'
 }
