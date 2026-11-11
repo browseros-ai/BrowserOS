@@ -134,24 +134,23 @@ export interface RunRecords {
  * Watches the store for runs that ended with a Neo run id and joins Neo's record to each, one read
  * per run at a time. An incomplete record is attached and read again, up to `MAX_READS`.
  */
-export function joinNeoRuns(store: RunRecords, read = readNeoRun): () => void {
-  const reading = new Set<string>()
-  const join = async (run: RunSummary) => {
-    const neoRunId = run.neoRunId
-    if (!neoRunId || reading.has(run.id)) return
-    reading.add(run.id)
-    try {
-      for (let attempt = 1; attempt <= MAX_READS; attempt++) {
-        const record = await read(neoRunId).catch(() => null)
-        if (!record) return
-        store.attachNeoRun(run.id, record)
-        if (record.complete) return
-      }
-    } finally {
-      reading.delete(run.id)
+/** Longest a stopping viewer waits for reads in flight, so Ctrl-C stays quick. */
+const DRAIN_MS = 3000
+
+export function joinNeoRuns(
+  store: RunRecords,
+  read = readNeoRun,
+): { stop: () => Promise<void> } {
+  const reading = new Map<string, Promise<void>>()
+  const join = async (runId: string, neoRunId: string) => {
+    for (let attempt = 1; attempt <= MAX_READS; attempt++) {
+      const record = await read(neoRunId).catch(() => null)
+      if (!record) return
+      store.attachNeoRun(runId, record)
+      if (record.complete) return
     }
   }
-  return store.subscribe((event) => {
+  const unsubscribe = store.subscribe((event) => {
     const run = event.run
     if (
       event.type !== 'run' ||
@@ -160,7 +159,23 @@ export function joinNeoRuns(store: RunRecords, read = readNeoRun): () => void {
       run.status === 'lost'
     )
       return
-    if (store.hasNeoRun(run.id)) return
-    void join(run)
+    if (!run.neoRunId || store.hasNeoRun(run.id) || reading.has(run.id)) return
+    const pending = join(run.id, run.neoRunId).finally(() =>
+      reading.delete(run.id),
+    )
+    reading.set(run.id, pending)
   })
+  return {
+    /**
+     * Stops joining and waits (at most `DRAIN_MS`) for reads in flight, so a run that ended just
+     * before Ctrl-C still gets its record into the log before the final flush.
+     */
+    async stop() {
+      unsubscribe()
+      await Promise.race([
+        Promise.allSettled(reading.values()),
+        Bun.sleep(DRAIN_MS),
+      ])
+    },
+  }
 }

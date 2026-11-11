@@ -221,3 +221,14 @@ test('a joined record is in the run detail and the list, and survives a restart'
     'locator.click',
   ])
 })
+
+test('stopping waits for a read in flight, so its record is attached before the final flush', async () => {
+  const fake = fakeStore()
+  const joiner = joinNeoRuns(fake.store, async () => {
+    await Bun.sleep(50)
+    return toNeoRunRecord(RUN)
+  })
+  fake.emit({ id: 'r1', status: 'ok', neoRunId: '01a1' })
+  await joiner.stop()
+  expect(fake.attached.map(([id]) => id)).toEqual(['r1'])
+})
