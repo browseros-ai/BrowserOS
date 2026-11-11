@@ -90,6 +90,15 @@ function skippedByHarness(row) {
   )
 }
 
+/** The scope entry that takes a flattened result row out of the in-scope score, if any. */
+export function excludedBy(manifest, row) {
+  return manifest.entries.find(
+    (entry) =>
+      entry.file === row.suite &&
+      (!entry.ids || entry.ids.includes(row.caseId)),
+  )
+}
+
 /**
  * Use Playwright outcomes, including flaky/expected failures. A skipped test ran nothing, so
  * it counts against neither rate: `skipped` reports it beside the denominator, and
@@ -118,11 +127,7 @@ export function scoreResults(results, manifest = loadScope()) {
     const result = outcome(row)
     const passed = result === 'pass'
     count(all, row, result)
-    const entry = manifest.entries.find(
-      (entry) =>
-        entry.file === row.suite &&
-        (!entry.ids || entry.ids.includes(row.caseId)),
-    )
+    const entry = excludedBy(manifest, row)
     if (entry) {
       byReason[entry.reason].total++
       if (passed) {

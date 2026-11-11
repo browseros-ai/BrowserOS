@@ -62,6 +62,7 @@
     "test:fixtures": "bun apps/server/tests/__fixtures__/browser-fixtures/serve.ts",
     "captcha:fixtures": "bun tools/captcha-testbed/fixtures/serve.ts",
     "test:main": "bun run ./scripts/run-test-suite.ts main",
+    "test:neo-spec": "bun crates/neo-sdk/neo-playwright-tests/spec.ts",
     "test:captcha-docker-e2e": "bash tools/captcha-testbed/docker/run.sh",
     "check": "bun run lint && bun run typecheck && bun run fallow",
     "typecheck": "bun run --filter '*' typecheck",
