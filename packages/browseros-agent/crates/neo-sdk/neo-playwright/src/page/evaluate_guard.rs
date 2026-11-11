@@ -498,25 +498,32 @@ impl<'op> EvaluateGuard<'op> {
             script.leave_document();
             return Ok(Outcome::NotRun);
         };
-        let evaluator = match &script.evaluator {
-            Evaluator::At(handle) => Some(handle.clone()),
-            Evaluator::Unmade | Evaluator::Absent => None,
-        };
-        let sent = scope.send_effect()?;
-        let call = MainCall {
-            session: &session,
-            group: &group,
-            evaluator: evaluator.as_deref(),
-            other_world: AtomicBool::new(false),
-            _sent: &sent,
-        };
-        let called = match script.mode {
-            CallMode::Once | CallMode::Truthy => call.evaluate(&document, script, &objects).await,
-            CallMode::Poll => script.poll(&call, &document, &objects).await,
-        };
-        if call.other_world.load(Ordering::Relaxed) {
+        // At most twice: Chromium refuses an evaluator of another context before anything runs,
+        // and the direct call then goes out after a recheck of its own (STYLE P6).
+        let called = loop {
+            let evaluator = match &script.evaluator {
+                Evaluator::At(handle) => Some(handle.clone()),
+                Evaluator::Unmade | Evaluator::Absent => None,
+            };
+            let sent = scope.send_effect()?;
+            let call = MainCall {
+                session: &session,
+                group: &group,
+                evaluator: evaluator.as_deref(),
+                other_world: AtomicBool::new(false),
+                _sent: &sent,
+            };
+            let called = match script.mode {
+                CallMode::Once | CallMode::Truthy => {
+                    call.evaluate(&document, script, &objects).await
+                }
+                CallMode::Poll => script.poll(&call, &document, &objects).await,
+            };
+            if !call.other_world.load(Ordering::Relaxed) {
+                break called;
+            }
             script.evaluator = Evaluator::Absent;
-        }
+        };
         let outcome = called.map_err(|error| scope.core_error(&error))?;
         if matches!(
             outcome,
@@ -720,7 +727,8 @@ struct MainCall<'a> {
     group: &'a str,
     /// The document's evaluator, when it has one.
     evaluator: Option<&'a str>,
-    /// Set when the evaluator turned out to live in another context than the document.
+    /// Set when the evaluator turned out to live in another context than the document: the
+    /// call ran nothing, and `run` sends it again without the evaluator.
     other_world: AtomicBool,
     _sent: &'a Sent<'a>,
 }
@@ -834,31 +842,33 @@ impl MainCall<'_> {
 
     /// The main-world function on `document` with `arguments`: through the document's evaluator
     /// when it has one, else as the call's own declaration. Chromium refuses an evaluator of
-    /// another context before anything runs, so that call goes again the old way.
+    /// another context before anything runs: that sets [`Self::other_world`] and answers that
+    /// nothing ran, and `EvaluateGuard::run` sends again the direct way after a fresh recheck.
     async fn main_world(
         &self,
         document: &str,
         arguments: Value,
         shape: Shape,
     ) -> Result<Called<Reply>, CoreError> {
-        if let Some(evaluator) = self.evaluator {
-            let through: Vec<Value> = [json!({ "objectId": evaluator })]
-                .into_iter()
-                .chain(arguments.as_array().cloned().unwrap_or_default())
-                .collect();
-            match self
-                .send(document, THROUGH_EVALUATOR, Value::Array(through), shape)
-                .await
+        let Some(evaluator) = self.evaluator else {
+            return self.send(document, MAIN_WORLD_JS, arguments, shape).await;
+        };
+        let through: Vec<Value> = [json!({ "objectId": evaluator })]
+            .into_iter()
+            .chain(arguments.as_array().cloned().unwrap_or_default())
+            .collect();
+        match self
+            .send(document, THROUGH_EVALUATOR, Value::Array(through), shape)
+            .await
+        {
+            Err(CoreError::Cdp(CdpError::Protocol { message, .. }))
+                if message.contains(OTHER_WORLD) =>
             {
-                Err(CoreError::Cdp(CdpError::Protocol { message, .. }))
-                    if message.contains(OTHER_WORLD) =>
-                {
-                    self.other_world.store(true, Ordering::Relaxed);
-                }
-                sent => return sent,
+                self.other_world.store(true, Ordering::Relaxed);
+                Ok(Called::Ended(Outcome::NotRun))
             }
+            sent => sent,
         }
-        self.send(document, MAIN_WORLD_JS, arguments, shape).await
     }
 
     /// A poll's answer: `function` called on the poller, its result read by value.
