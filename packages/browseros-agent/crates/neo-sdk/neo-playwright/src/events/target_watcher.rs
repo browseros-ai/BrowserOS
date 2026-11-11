@@ -1722,10 +1722,12 @@ fn decode<T: DeserializeOwned>(reply: Value) -> Result<T, CoreError> {
 mod worker_observation_tests {
     use std::error::Error;
     use std::sync::Arc;
+    use std::time::Duration;
 
-    use browseros_core::testing::TestConnection;
+    use browseros_core::testing::{self, TestConnection};
     use browseros_core::{BrowserSession, BrowserSessionHooks, CdpConnection, SessionId, TargetId};
     use serde_json::json;
+    use tokio::{task, time};
 
     use super::Watcher;
     use crate::events::worker_table::WorkerInfo;
@@ -1842,7 +1844,7 @@ mod worker_observation_tests {
         connection: &TestConnection,
         session: &SessionId,
     ) -> Result<(), Box<dyn Error>> {
-        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        time::timeout(Duration::from_secs(2), async {
             loop {
                 if connection.calls()?.iter().any(|call| {
                     call.method == "Runtime.runIfWaitingForDebugger"
@@ -1850,7 +1852,7 @@ mod worker_observation_tests {
                 }) {
                     return Ok::<_, Box<dyn Error>>(());
                 }
-                tokio::task::yield_now().await;
+                task::yield_now().await;
             }
         })
         .await?
@@ -1867,16 +1869,13 @@ mod worker_observation_tests {
             .next()
             .cloned()
             .ok_or("observer exists")?;
-        connection.always(
-            "Runtime.runIfWaitingForDebugger",
-            browseros_core::testing::cdp_pending(),
-        )?;
+        connection.always("Runtime.runIfWaitingForDebugger", testing::cdp_pending())?;
         let first = SessionId::from("first-frame");
-        tokio::time::timeout(std::time::Duration::from_secs(2), watcher.attached(Some(&root), serde_json::from_value(json!({"sessionId":first,"waitingForDebugger":true,"targetInfo":{"targetId":"first","type":"iframe"}}))?)).await?;
+        time::timeout(Duration::from_secs(2), watcher.attached(Some(&root), serde_json::from_value(json!({"sessionId":first,"waitingForDebugger":true,"targetInfo":{"targetId":"first","type":"iframe"}}))?)).await?;
         wait_for_resume(&connection, &first).await?;
         connection.always("Runtime.runIfWaitingForDebugger", json!({}))?;
         let second = SessionId::from("second-frame");
-        tokio::time::timeout(std::time::Duration::from_secs(2), watcher.attached(Some(&root), serde_json::from_value(json!({"sessionId":second,"waitingForDebugger":true,"targetInfo":{"targetId":"second","type":"iframe"}}))?)).await?;
+        time::timeout(Duration::from_secs(2), watcher.attached(Some(&root), serde_json::from_value(json!({"sessionId":second,"waitingForDebugger":true,"targetInfo":{"targetId":"second","type":"iframe"}}))?)).await?;
         wait_for_resume(&connection, &second).await?;
         watcher.lost_events(1).await;
         assert!(
