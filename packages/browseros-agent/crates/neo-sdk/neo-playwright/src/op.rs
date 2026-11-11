@@ -95,8 +95,8 @@ impl Op {
     pub fn wire(self) -> Option<OpWire> {
         match self.0 {
             OpKind::Snapshot(op) => op.wire(),
-            OpKind::Action(_)
-            | OpKind::Read(_)
+            OpKind::Action(op) => op.wire(),
+            OpKind::Read(_)
             | OpKind::Expect(_)
             | OpKind::Input(_)
             | OpKind::Page(_)

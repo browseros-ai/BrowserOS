@@ -1077,35 +1077,6 @@
         picked[key] = source[key];
     return picked;
   }
-  var POINTER_KEYS = [
-    "button",
-    "clickCount",
-    "delay",
-    "force",
-    "modifiers",
-    "noWaitAfter",
-    "position",
-    "scroll",
-    "steps",
-    "trial"
-  ];
-  var DBLCLICK_KEYS = POINTER_KEYS.filter((key) => key !== "clickCount" && key !== "noWaitAfter");
-  var HOVER_KEYS = [
-    "force",
-    "modifiers",
-    "position",
-    "scroll",
-    "trial"
-  ];
-  var CHECK_KEYS = ["force", "position", "scroll", "trial"];
-  var DRAG_KEYS = [
-    "force",
-    "scroll",
-    "sourcePosition",
-    "targetPosition",
-    "steps",
-    "trial"
-  ];
   var FILL_KEYS = ["force"];
   var PRESS_KEYS = ["delay", "noWaitAfter"];
   var TYPE_KEYS = ["delay"];
@@ -3729,8 +3700,23 @@ ${value.stack}`;
   }
 
   // crates/neo-sdk/neo-playwright-js/src/prelude/generated/action.ts
-  var ACTION_OPTION_KEYS = {};
-  var ACTION_SEND = {};
+  var ACTION_OPTION_KEYS = {
+    "locator.click": ["button", "clickCount", "delay", "force", "modifiers", "noWaitAfter", "position", "scroll", "steps", "trial"],
+    "locator.dblclick": ["button", "delay", "force", "modifiers", "position", "scroll", "steps", "trial"],
+    "locator.hover": ["force", "modifiers", "position", "scroll", "trial"],
+    "locator.check": ["force", "position", "scroll", "trial"],
+    "locator.uncheck": ["force", "position", "scroll", "trial"],
+    "locator.dragTo": ["force", "scroll", "sourcePosition", "targetPosition", "steps", "trial"]
+  };
+  var ACTION_SEND = {
+    "locator.click": (site, call, input, signal) => invoke("locator.click", site, call, input, signal),
+    "locator.dblclick": (site, call, input, signal) => invoke("locator.dblclick", site, call, input, signal),
+    "locator.hover": (site, call, input, signal) => invoke("locator.hover", site, call, input, signal),
+    "locator.check": (site, call, input, signal) => invoke("locator.check", site, call, input, signal),
+    "locator.uncheck": (site, call, input, signal) => invoke("locator.uncheck", site, call, input, signal),
+    "locator.dragTo": (site, call, input, signal) => invoke("locator.dragTo", site, call, input, signal),
+    "locator.drop": (site, call, input, signal) => invoke("locator.drop", site, call, input, signal)
+  };
 
   // crates/neo-sdk/neo-playwright-js/src/prelude/generated/read.ts
   var READ_OPTION_KEYS = {};
@@ -7618,7 +7604,10 @@ ${value.stack}`;
       const site = captureSite();
       const wait = this._wait(api, options);
       const deadline = new EventDeadline(api, null, Date.now(), wait.timeout);
-      const result = await this._selectorOp("locator.click", site, api, selector, options.strict, wait, { options: pick(options, POINTER_KEYS) });
+      const strict = options.strict;
+      const picked = pick(options, OPTION_KEYS["locator.click"]);
+      const addressed = await this._targetArgs(api, selector, strict);
+      const result = await send["locator.click"](site, this._call(api, wait.timeout), { ...addressed, options: picked }, wait.signal);
       if (result?.navigation) {
         try {
           await this._page._context._events.publishNavigation(this._page, result.navigation, api, deadline, wait.signal);
@@ -7637,31 +7626,37 @@ ${value.stack}`;
     }
     async _dblclick(api, selector, options = {}) {
       const site = captureSite();
-      await this._selectorOp("locator.dblclick", site, api, selector, options.strict, this._wait(api, options), {
-        options: pick(options, DBLCLICK_KEYS)
-      });
+      const strict = options.strict;
+      const wait = this._wait(api, options);
+      const picked = pick(options, OPTION_KEYS["locator.dblclick"]);
+      const addressed = await this._targetArgs(api, selector, strict);
+      await send["locator.dblclick"](site, this._call(api, wait.timeout), { ...addressed, options: picked }, wait.signal);
     }
     async _hover(api, selector, options = {}) {
       const site = captureSite();
-      await this._selectorOp("locator.hover", site, api, selector, options.strict, this._wait(api, options), {
-        options: pick(options, HOVER_KEYS)
-      });
+      const strict = options.strict;
+      const wait = this._wait(api, options);
+      const picked = pick(options, OPTION_KEYS["locator.hover"]);
+      const addressed = await this._targetArgs(api, selector, strict);
+      await send["locator.hover"](site, this._call(api, wait.timeout), { ...addressed, options: picked }, wait.signal);
     }
     async _check(api, selector, checked, options = {}) {
       const site = captureSite();
       const op = checked ? "locator.check" : "locator.uncheck";
-      await this._selectorOp(op, site, api, selector, options.strict, this._wait(api, options), {
-        options: pick(options, CHECK_KEYS)
-      });
+      const strict = options.strict;
+      const wait = this._wait(api, options);
+      const picked = pick(options, OPTION_KEYS[op]);
+      const addressed = await this._targetArgs(api, selector, strict);
+      await send[op](site, this._call(api, wait.timeout), { ...addressed, options: picked }, wait.signal);
     }
     async _dragAndDrop(api, source, target, options = {}) {
       const site = captureSite();
       const wait = this._wait(api, options);
       const to = await this._locatorBrand(api, target);
-      await this._selectorOp("locator.dragTo", site, api, source, options.strict, wait, {
-        to,
-        options: pick(options, DRAG_KEYS)
-      });
+      const strict = options.strict;
+      const picked = pick(options, OPTION_KEYS["locator.dragTo"]);
+      const addressed = await this._targetArgs(api, source, strict);
+      await send["locator.dragTo"](site, this._call(api, wait.timeout), { ...addressed, to, options: picked }, wait.signal);
     }
     async _fill(api, selector, value, options = {}) {
       const site = captureSite();
@@ -7703,14 +7698,16 @@ ${value.stack}`;
       const site = captureSite();
       const api = "locator.drop";
       const files = payload.files === undefined ? undefined : dropFiles(api, payload.files);
-      await withClientErrors(api, () => this._selectorOp("locator.drop", site, api, selector, true, this._wait(api, options), {
-        files,
-        data: Object.entries(payload.data ?? {}).map(([mimeType, value]) => ({
+      await withClientErrors(api, async () => {
+        const wait = this._wait(api, options);
+        const data = Object.entries(payload.data ?? {}).map(([mimeType, value]) => ({
           mimeType,
           value
-        })),
-        position: options.position
-      }));
+        }));
+        const position = options.position;
+        const addressed = await this._targetArgs(api, selector, true);
+        return await send["locator.drop"](site, this._call(api, wait.timeout), { ...addressed, files, data, position }, wait.signal);
+      });
     }
     async _setInputFiles(api, selector, files, options = {}) {
       const site = captureSite();
@@ -8084,37 +8081,52 @@ ${value.stack}`;
     }
     async click(options = {}) {
       const site = captureSite();
-      await this.#op("locator.click", site, "elementHandle.click", this.#timeout(options), {
-        options: pick(options, POINTER_KEYS)
-      });
+      const api = "elementHandle.click";
+      const timeout = this.#timeout(options);
+      const picked = pick(options, OPTION_KEYS["locator.click"]);
+      this.#live(api);
+      await send["locator.click"](site, { api, timeoutMs: timeoutMs(api, timeout) }, { target: this._brand, strict: "strict", options: picked });
     }
     async dblclick(options = {}) {
       const site = captureSite();
-      await this.#op("locator.dblclick", site, "elementHandle.dblclick", this.#timeout(options), {
-        options: pick(options, DBLCLICK_KEYS)
-      });
+      const api = "elementHandle.dblclick";
+      const timeout = this.#timeout(options);
+      const picked = pick(options, OPTION_KEYS["locator.dblclick"]);
+      this.#live(api);
+      await send["locator.dblclick"](site, { api, timeoutMs: timeoutMs(api, timeout) }, { target: this._brand, strict: "strict", options: picked });
     }
     async hover(options = {}) {
       const site = captureSite();
-      await this.#op("locator.hover", site, "elementHandle.hover", this.#timeout(options), {
-        options: pick(options, HOVER_KEYS)
-      });
+      const api = "elementHandle.hover";
+      const timeout = this.#timeout(options);
+      const picked = pick(options, OPTION_KEYS["locator.hover"]);
+      this.#live(api);
+      await send["locator.hover"](site, { api, timeoutMs: timeoutMs(api, timeout) }, { target: this._brand, strict: "strict", options: picked });
     }
     async check(options = {}) {
       const site = captureSite();
-      await this.#op("locator.check", site, "elementHandle.check", this.#timeout(options), {
-        options: pick(options, CHECK_KEYS)
-      });
+      const api = "elementHandle.check";
+      const timeout = this.#timeout(options);
+      const picked = pick(options, OPTION_KEYS["locator.check"]);
+      this.#live(api);
+      await send["locator.check"](site, { api, timeoutMs: timeoutMs(api, timeout) }, { target: this._brand, strict: "strict", options: picked });
     }
     async uncheck(options = {}) {
       const site = captureSite();
-      await this.#op("locator.uncheck", site, "elementHandle.uncheck", this.#timeout(options), {
-        options: pick(options, CHECK_KEYS)
-      });
+      const api = "elementHandle.uncheck";
+      const timeout = this.#timeout(options);
+      const picked = pick(options, OPTION_KEYS["locator.uncheck"]);
+      this.#live(api);
+      await send["locator.uncheck"](site, { api, timeoutMs: timeoutMs(api, timeout) }, { target: this._brand, strict: "strict", options: picked });
     }
     async setChecked(checked, options = {}) {
       const site = captureSite();
-      await this.#op(checked ? "locator.check" : "locator.uncheck", site, "elementHandle.setChecked", this.#timeout(options), { options: pick(options, CHECK_KEYS) });
+      const op = checked ? "locator.check" : "locator.uncheck";
+      const api = "elementHandle.setChecked";
+      const timeout = this.#timeout(options);
+      const picked = pick(options, OPTION_KEYS[op]);
+      this.#live(api);
+      await send[op](site, { api, timeoutMs: timeoutMs(api, timeout) }, { target: this._brand, strict: "strict", options: picked });
     }
     async fill(value, options = {}) {
       const site = captureSite();

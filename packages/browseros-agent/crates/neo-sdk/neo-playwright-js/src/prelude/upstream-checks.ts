@@ -7,12 +7,7 @@ import type * as pw from '../../../neo-playwright/third_party/playwright/package
 import type { GeneratedInputs } from './generated'
 import type { OpName } from './generated/ops'
 import type {
-  CHECK_KEYS,
-  DBLCLICK_KEYS,
-  DRAG_KEYS,
   FILL_KEYS,
-  HOVER_KEYS,
-  POINTER_KEYS,
   PRESS_KEYS,
   SCREENSHOT_KEYS,
   TYPE_KEYS,
@@ -29,67 +24,6 @@ export type UpstreamChecks = {
       pw.PageUpdateSubscriptionParams,
       'lease' | 'on',
       'enabled' | 'event',
-      never
-    >
-  >
-  'locator.click': Assert<
-    UpstreamCheck<
-      'locator.click',
-      OpInputs['locator.click'],
-      pw.ElementHandleClickParams,
-      never,
-      never,
-      never
-    >
-  >
-  'locator.dblclick': Assert<
-    UpstreamCheck<
-      'locator.dblclick',
-      OpInputs['locator.dblclick'],
-      pw.ElementHandleDblclickParams,
-      never,
-      never,
-      never
-    >
-  >
-  'locator.hover': Assert<
-    UpstreamCheck<
-      'locator.hover',
-      OpInputs['locator.hover'],
-      pw.ElementHandleHoverParams,
-      never,
-      never,
-      never
-    >
-  >
-  'locator.check': Assert<
-    UpstreamCheck<
-      'locator.check',
-      OpInputs['locator.check'],
-      pw.ElementHandleCheckParams,
-      never,
-      never,
-      never
-    >
-  >
-  'locator.uncheck': Assert<
-    UpstreamCheck<
-      'locator.uncheck',
-      OpInputs['locator.uncheck'],
-      pw.ElementHandleUncheckParams,
-      never,
-      never,
-      never
-    >
-  >
-  // Neo addresses both endpoints with brands (target/to), replacing upstream source/target selectors.
-  'locator.dragTo': Assert<
-    UpstreamCheck<
-      'locator.dragTo',
-      OpInputs['locator.dragTo'],
-      pw.FrameDragAndDropParams,
-      'to',
-      'source' | 'target',
       never
     >
   >
@@ -161,17 +95,6 @@ export type UpstreamChecks = {
       pw.FrameBlurParams,
       never,
       never,
-      never
-    >
-  >
-  // Neo resolves path/payload file input itself, replacing upstream localPaths, payloads and streams.
-  'locator.drop': Assert<
-    UpstreamCheck<
-      'locator.drop',
-      OpInputs['locator.drop'],
-      pw.FrameDropParams,
-      'files',
-      'localPaths' | 'payloads' | 'streams',
       never
     >
   >
@@ -942,48 +865,6 @@ export type AllOpsChecked = Assert<
 // Shared exported lists are checked by their actual inferred keys. Private and inline lists
 // use KeyList at their declaration/call site so their literal keys cannot drift from a copy.
 export type OptionChecks = {
-  'locator.click': Assert<
-    KeysCheck<
-      'locator.click',
-      (typeof POINTER_KEYS)[number],
-      pw.ElementHandleClickOptions
-    >
-  >
-  'locator.dblclick': Assert<
-    KeysCheck<
-      'locator.dblclick',
-      (typeof DBLCLICK_KEYS)[number],
-      pw.ElementHandleDblclickOptions
-    >
-  >
-  'locator.hover': Assert<
-    KeysCheck<
-      'locator.hover',
-      (typeof HOVER_KEYS)[number],
-      pw.ElementHandleHoverOptions
-    >
-  >
-  'locator.check': Assert<
-    KeysCheck<
-      'locator.check',
-      (typeof CHECK_KEYS)[number],
-      pw.ElementHandleCheckOptions
-    >
-  >
-  'locator.uncheck': Assert<
-    KeysCheck<
-      'locator.uncheck',
-      (typeof CHECK_KEYS)[number],
-      pw.ElementHandleUncheckOptions
-    >
-  >
-  'locator.dragTo': Assert<
-    KeysCheck<
-      'locator.dragTo',
-      (typeof DRAG_KEYS)[number],
-      pw.FrameDragAndDropOptions
-    >
-  >
   'locator.fill': Assert<
     KeysCheck<
       'locator.fill',

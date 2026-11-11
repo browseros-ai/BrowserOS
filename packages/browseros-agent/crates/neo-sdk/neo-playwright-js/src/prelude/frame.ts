@@ -27,17 +27,12 @@ import {
 } from './evaluation'
 import { EventDeadline } from './event-deadline'
 import { dropFiles, inputFiles, withClientErrors } from './files'
-import { send } from './generated'
+import { OPTION_KEYS, send } from './generated'
 import type { OpName } from './generated/ops'
 import { FrameLocator, Locator, testIdAttributeName } from './locator'
 import {
-  CHECK_KEYS,
-  DBLCLICK_KEYS,
-  DRAG_KEYS,
   FILL_KEYS,
-  HOVER_KEYS,
   markHandle,
-  POINTER_KEYS,
   PRESS_KEYS,
   pick,
   SCREENSHOT_KEYS,
@@ -743,14 +738,15 @@ export class Frame extends EventEmitter {
     const site = captureSite()
     const wait = this._wait(api, options)
     const deadline = new EventDeadline(api, null, Date.now(), wait.timeout)
-    const result = await this._selectorOp(
-      'locator.click',
+    const strict = options.strict
+    // Capture script options before resolving the page, which can await opening its tab.
+    const picked = pick(options, OPTION_KEYS['locator.click'])
+    const addressed = await this._targetArgs(api, selector, strict)
+    const result = await send['locator.click'](
       site,
-      api,
-      selector,
-      options.strict,
-      wait,
-      { options: pick(options, POINTER_KEYS) },
+      this._call(api, wait.timeout),
+      { ...addressed, options: picked },
+      wait.signal,
     )
     if (result?.navigation) {
       try {
@@ -784,16 +780,15 @@ export class Frame extends EventEmitter {
     options: ClickOptions = {},
   ): Promise<void> {
     const site = captureSite()
-    await this._selectorOp(
-      'locator.dblclick',
+    const strict = options.strict
+    const wait = this._wait(api, options)
+    const picked = pick(options, OPTION_KEYS['locator.dblclick'])
+    const addressed = await this._targetArgs(api, selector, strict)
+    await send['locator.dblclick'](
       site,
-      api,
-      selector,
-      options.strict,
-      this._wait(api, options),
-      {
-        options: pick(options, DBLCLICK_KEYS),
-      },
+      this._call(api, wait.timeout),
+      { ...addressed, options: picked },
+      wait.signal,
     )
   }
 
@@ -803,16 +798,15 @@ export class Frame extends EventEmitter {
     options: ClickOptions = {},
   ): Promise<void> {
     const site = captureSite()
-    await this._selectorOp(
-      'locator.hover',
+    const strict = options.strict
+    const wait = this._wait(api, options)
+    const picked = pick(options, OPTION_KEYS['locator.hover'])
+    const addressed = await this._targetArgs(api, selector, strict)
+    await send['locator.hover'](
       site,
-      api,
-      selector,
-      options.strict,
-      this._wait(api, options),
-      {
-        options: pick(options, HOVER_KEYS),
-      },
+      this._call(api, wait.timeout),
+      { ...addressed, options: picked },
+      wait.signal,
     )
   }
 
@@ -825,16 +819,15 @@ export class Frame extends EventEmitter {
   ): Promise<void> {
     const site = captureSite()
     const op = checked ? 'locator.check' : 'locator.uncheck'
-    await this._selectorOp(
-      op,
+    const strict = options.strict
+    const wait = this._wait(api, options)
+    const picked = pick(options, OPTION_KEYS[op])
+    const addressed = await this._targetArgs(api, selector, strict)
+    await send[op](
       site,
-      api,
-      selector,
-      options.strict,
-      this._wait(api, options),
-      {
-        options: pick(options, CHECK_KEYS),
-      },
+      this._call(api, wait.timeout),
+      { ...addressed, options: picked },
+      wait.signal,
     )
   }
 
@@ -848,17 +841,14 @@ export class Frame extends EventEmitter {
     // Read before the first await, as every action reads its signal (signal.ts).
     const wait = this._wait(api, options)
     const to = await this._locatorBrand(api, target)
-    await this._selectorOp(
-      'locator.dragTo',
+    const strict = options.strict
+    const picked = pick(options, OPTION_KEYS['locator.dragTo'])
+    const addressed = await this._targetArgs(api, source, strict)
+    await send['locator.dragTo'](
       site,
-      api,
-      source,
-      options.strict,
-      wait,
-      {
-        to,
-        options: pick(options, DRAG_KEYS),
-      },
+      this._call(api, wait.timeout),
+      { ...addressed, to, options: picked },
+      wait.signal,
     )
   }
 
@@ -1007,24 +997,23 @@ export class Frame extends EventEmitter {
     const api = 'locator.drop'
     const files =
       payload.files === undefined ? undefined : dropFiles(api, payload.files)
-    await withClientErrors(api, () =>
-      this._selectorOp(
-        'locator.drop',
+    await withClientErrors(api, async () => {
+      const wait = this._wait(api, options)
+      const data = Object.entries(payload.data ?? {}).map(
+        ([mimeType, value]) => ({
+          mimeType,
+          value,
+        }),
+      )
+      const position = options.position
+      const addressed = await this._targetArgs(api, selector, true)
+      return await send['locator.drop'](
         site,
-        api,
-        selector,
-        true,
-        this._wait(api, options),
-        {
-          files,
-          data: Object.entries(payload.data ?? {}).map(([mimeType, value]) => ({
-            mimeType,
-            value,
-          })),
-          position: options.position,
-        },
-      ),
-    )
+        this._call(api, wait.timeout),
+        { ...addressed, files, data, position },
+        wait.signal,
+      )
+    })
   }
 
   async _setInputFiles(

@@ -3,21 +3,160 @@
 // route row in Rust, then run `cargo test -p neo-playwright --test wire_generated`, which
 // rewrites this folder.
 
+import type * as pw from '../../../../neo-playwright/third_party/playwright/packages/playwright-core/src/client/channels'
+import { invoke } from '../bridge'
+import type { CallSite } from '../call-site'
+import type { SignalLike } from '../signal'
+import type { Assert, KeysCheck, UpstreamCheck, VoidIsNull } from '../upstream-check'
+import type { CallHeader } from '../wire'
+import type { CheckInput } from './types/CheckInput'
+import type { ClickInput } from './types/ClickInput'
+import type { Clicked } from './types/Clicked'
+import type { DblclickInput } from './types/DblclickInput'
+import type { DragInput } from './types/DragInput'
+import type { DropInput } from './types/DropInput'
+import type { HoverInput } from './types/HoverInput'
+import type { UncheckInput } from './types/UncheckInput'
+
+export type { CheckInput } from './types/CheckInput'
+export type { CheckOptions } from './types/CheckOptions'
+export type { ClickInput } from './types/ClickInput'
+export type { Clicked } from './types/Clicked'
+export type { DblclickInput } from './types/DblclickInput'
+export type { DblclickOptions } from './types/DblclickOptions'
+export type { DragInput } from './types/DragInput'
+export type { DragOptions } from './types/DragOptions'
+export type { DropFiles } from './types/DropFiles'
+export type { DropInput } from './types/DropInput'
+export type { DropPath } from './types/DropPath'
+export type { HoverInput } from './types/HoverInput'
+export type { HoverOptions } from './types/HoverOptions'
+export type { NavigationCut } from './types/NavigationCut'
+export type { PointerOptions } from './types/PointerOptions'
+export type { ScrollOption } from './types/ScrollOption'
+export type { UncheckInput } from './types/UncheckInput'
+export type { UncheckOptions } from './types/UncheckOptions'
+export type { WireButton } from './types/WireButton'
+export type { WireModifier } from './types/WireModifier'
+
 /** Each action op's input, after the `call` header every op shares. */
-export type ActionInputs = {}
+export type ActionInputs = {
+  'locator.click': ClickInput
+  'locator.dblclick': DblclickInput
+  'locator.hover': HoverInput
+  'locator.check': CheckInput
+  'locator.uncheck': UncheckInput
+  'locator.dragTo': DragInput
+  'locator.drop': DropInput
+}
 
 /** Each action op's result. */
-export type ActionOutputs = {}
+export type ActionOutputs = {
+  'locator.click': Clicked | null
+  'locator.dblclick': null
+  'locator.hover': null
+  'locator.check': null
+  'locator.uncheck': null
+  'locator.dragTo': null
+  'locator.drop': null
+}
 
 /**
  * The script's option keys of each action op that takes an `options` bag: the fields of its
  * Rust options struct, for `pick`. Each command row's list is held to upstream's
  * `<Command>Options` below, so a field the prelude computes is never forwarded from a script.
  */
-export const ACTION_OPTION_KEYS = {} as const
+export const ACTION_OPTION_KEYS = {
+  'locator.click': ['button', 'clickCount', 'delay', 'force', 'modifiers', 'noWaitAfter', 'position', 'scroll', 'steps', 'trial'],
+  'locator.dblclick': ['button', 'delay', 'force', 'modifiers', 'position', 'scroll', 'steps', 'trial'],
+  'locator.hover': ['force', 'modifiers', 'position', 'scroll', 'trial'],
+  'locator.check': ['force', 'position', 'scroll', 'trial'],
+  'locator.uncheck': ['force', 'position', 'scroll', 'trial'],
+  'locator.dragTo': ['force', 'scroll', 'sourcePosition', 'targetPosition', 'steps', 'trial'],
+} as const
 
 /**
  * One typed sender per action op. A class passes its input as an object literal, so every
  * field is checked against Rust's input type and the result is Rust's result type.
  */
-export const ACTION_SEND = {}
+export const ACTION_SEND = {
+  'locator.click': (
+    site: CallSite,
+    call: CallHeader,
+    input: ClickInput,
+    signal?: SignalLike,
+  ): Promise<Clicked | null> => invoke('locator.click', site, call, input, signal),
+  'locator.dblclick': (
+    site: CallSite,
+    call: CallHeader,
+    input: DblclickInput,
+    signal?: SignalLike,
+  ): Promise<null> => invoke('locator.dblclick', site, call, input, signal),
+  'locator.hover': (
+    site: CallSite,
+    call: CallHeader,
+    input: HoverInput,
+    signal?: SignalLike,
+  ): Promise<null> => invoke('locator.hover', site, call, input, signal),
+  'locator.check': (
+    site: CallSite,
+    call: CallHeader,
+    input: CheckInput,
+    signal?: SignalLike,
+  ): Promise<null> => invoke('locator.check', site, call, input, signal),
+  'locator.uncheck': (
+    site: CallSite,
+    call: CallHeader,
+    input: UncheckInput,
+    signal?: SignalLike,
+  ): Promise<null> => invoke('locator.uncheck', site, call, input, signal),
+  'locator.dragTo': (
+    site: CallSite,
+    call: CallHeader,
+    input: DragInput,
+    signal?: SignalLike,
+  ): Promise<null> => invoke('locator.dragTo', site, call, input, signal),
+  'locator.drop': (
+    site: CallSite,
+    call: CallHeader,
+    input: DropInput,
+    signal?: SignalLike,
+  ): Promise<null> => invoke('locator.drop', site, call, input, signal),
+}
+
+// Each route row against Playwright's own protocol at the pin (upstream-check.ts): tsc
+// names the op and every key that differs without a reason, or whose reason went stale.
+// locator.click: ElementHandle.click
+type _locator_click = Assert<UpstreamCheck<'locator.click', ClickInput, pw.ElementHandleClickParams, never, never, never>>
+type _locator_click_keys = Assert<KeysCheck<'locator.click', (typeof ACTION_OPTION_KEYS)['locator.click'][number], pw.ElementHandleClickOptions>>
+//   result: the requested-navigation event cut the prelude publishes before click resolves (no void check: Neo answers more than null on purpose)
+// locator.dblclick: ElementHandle.dblclick
+type _locator_dblclick = Assert<UpstreamCheck<'locator.dblclick', DblclickInput, pw.ElementHandleDblclickParams, never, never, never>>
+type _locator_dblclick_keys = Assert<KeysCheck<'locator.dblclick', (typeof ACTION_OPTION_KEYS)['locator.dblclick'][number], pw.ElementHandleDblclickOptions>>
+type _locator_dblclick_result = Assert<VoidIsNull<'locator.dblclick', pw.ElementHandleDblclickResult, null>>
+// locator.hover: ElementHandle.hover
+type _locator_hover = Assert<UpstreamCheck<'locator.hover', HoverInput, pw.ElementHandleHoverParams, never, never, never>>
+type _locator_hover_keys = Assert<KeysCheck<'locator.hover', (typeof ACTION_OPTION_KEYS)['locator.hover'][number], pw.ElementHandleHoverOptions>>
+type _locator_hover_result = Assert<VoidIsNull<'locator.hover', pw.ElementHandleHoverResult, null>>
+// locator.check: ElementHandle.check
+type _locator_check = Assert<UpstreamCheck<'locator.check', CheckInput, pw.ElementHandleCheckParams, never, never, never>>
+type _locator_check_keys = Assert<KeysCheck<'locator.check', (typeof ACTION_OPTION_KEYS)['locator.check'][number], pw.ElementHandleCheckOptions>>
+type _locator_check_result = Assert<VoidIsNull<'locator.check', pw.ElementHandleCheckResult, null>>
+// locator.uncheck: ElementHandle.uncheck
+type _locator_uncheck = Assert<UpstreamCheck<'locator.uncheck', UncheckInput, pw.ElementHandleUncheckParams, never, never, never>>
+type _locator_uncheck_keys = Assert<KeysCheck<'locator.uncheck', (typeof ACTION_OPTION_KEYS)['locator.uncheck'][number], pw.ElementHandleUncheckOptions>>
+type _locator_uncheck_result = Assert<VoidIsNull<'locator.uncheck', pw.ElementHandleUncheckResult, null>>
+// locator.dragTo: Frame.dragAndDrop
+//   adds to: Neo addresses the destination with a branded target
+//   omits source: the source selector is carried by Neo's target brand
+//   omits target: the destination selector is carried by Neo's to brand
+type _locator_dragTo = Assert<UpstreamCheck<'locator.dragTo', DragInput, pw.FrameDragAndDropParams, 'to', 'source' | 'target', never>>
+type _locator_dragTo_keys = Assert<KeysCheck<'locator.dragTo', (typeof ACTION_OPTION_KEYS)['locator.dragTo'][number], pw.FrameDragAndDropOptions>>
+type _locator_dragTo_result = Assert<VoidIsNull<'locator.dragTo', pw.FrameDragAndDropResult, null>>
+// locator.drop: Frame.drop
+//   adds files: Neo resolves paths or prepared payloads on its host
+//   omits localPaths: folded into Neo's files paths variant
+//   omits payloads: folded into Neo's files payloads variant
+//   omits streams: no client file streams in a stateless run
+type _locator_drop = Assert<UpstreamCheck<'locator.drop', DropInput, pw.FrameDropParams, 'files', 'localPaths' | 'payloads' | 'streams', never>>
+type _locator_drop_result = Assert<VoidIsNull<'locator.drop', pw.FrameDropResult, null>>

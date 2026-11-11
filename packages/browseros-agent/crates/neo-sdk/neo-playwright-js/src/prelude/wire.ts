@@ -19,7 +19,6 @@
 import type { SerializedValue } from '../../../neo-playwright/third_party/playwright/packages/isomorphic/utilityScriptSerializers'
 import type {
   ExpectParams,
-  Point,
   Rect,
   SelectOption,
   UrlPattern,
@@ -30,10 +29,17 @@ import type { OpName } from './generated/ops'
 // Rust owns these shared shapes now. LocatorBrand is a projection of the tagged Target
 // union, so its fields are never repeated in TypeScript.
 export type {
+  CheckOptions,
+  DblclickOptions,
+  DragOptions,
   ElementBrand,
+  HoverOptions,
+  NavigationCut,
   PageBrand,
   PageHandle,
   PartialFrame,
+  PointerOptions,
+  ScrollOption,
   SnapshotResult,
   Strictness,
   Target,
@@ -118,11 +124,8 @@ export type NavigationResult = {
   frameSnapshotAttempted?: boolean
 }
 
-/** The frame-event journal cut reached by one pointer action's actual navigations. */
 /** Run-local completion identity; acknowledgments keep the host receipt ledger bounded by in-flight work. */
 export type NavigationPublication = { id: number; acknowledged: number[] }
-
-export type NavigationCut = { seq: number; at: number }
 
 /** `page.frames`: every frame of the tab, the main frame first, each parent before its children. */
 export type FrameTree = { frames: FrameInfo[] }
@@ -252,43 +255,6 @@ export type Pumped = { events: EventRecord[]; lost: number }
 export type MouseButton = 'left' | 'right' | 'middle'
 export type Modifier = 'Alt' | 'Control' | 'ControlOrMeta' | 'Meta' | 'Shift'
 
-/**
- * Whether an action scrolls its element into view first (1.64.1's `scroll`). `none` leaves
- * the page where it is, and an element outside the viewport is then retried until it is in.
- */
-export type ScrollOption = 'auto' | 'none'
-
-/** Playwright's pointer options, minus the timeout (in the header) and strict (beside them). */
-export type PointerOptions = {
-  button?: MouseButton
-  clickCount?: number
-  delay?: number
-  force?: boolean
-  modifiers?: Modifier[]
-  noWaitAfter?: boolean
-  position?: Point
-  scroll?: ScrollOption
-  steps?: number
-  trial?: boolean
-}
-/** Only the fields each pointer op actually forwards; click alone can wait after navigation. */
-export type DblclickOptions = Omit<PointerOptions, 'clickCount' | 'noWaitAfter'>
-export type HoverOptions = Pick<
-  PointerOptions,
-  'force' | 'modifiers' | 'position' | 'scroll' | 'trial'
->
-export type CheckOptions = Pick<
-  PointerOptions,
-  'force' | 'position' | 'scroll' | 'trial'
->
-export type DragOptions = {
-  force?: boolean
-  scroll?: ScrollOption
-  sourcePosition?: Point
-  targetPosition?: Point
-  steps?: number
-  trial?: boolean
-}
 export type FillOptions = { force?: boolean }
 export type KeyOptions = { delay?: number; noWaitAfter?: boolean }
 export type LoadState = 'load' | 'domcontentloaded' | 'networkidle' | 'commit'
@@ -400,13 +366,6 @@ export type ExpectArgs = {
 /** Each op's input after `call`, for the ops Rust does not describe yet. */
 export type HandInputs = {
   'events.interceptFileChooser': PageArgs & { lease: number; on: boolean }
-  'locator.click': TargetArgs & { options: PointerOptions }
-  'locator.dblclick': TargetArgs & { options: DblclickOptions }
-  'locator.hover': TargetArgs & { options: HoverOptions }
-  'locator.check': TargetArgs & { options: CheckOptions }
-  'locator.uncheck': TargetArgs & { options: CheckOptions }
-  /** `to` is resolved in the source's frame, as upstream's `frame.dragAndDrop`. */
-  'locator.dragTo': TargetArgs & { to: Target; options: DragOptions }
   'locator.fill': TargetArgs & { value: string; options: FillOptions }
   'locator.press': TargetArgs & { key: string; options: KeyOptions }
   'locator.pressSequentially': TargetArgs & {
@@ -421,13 +380,6 @@ export type HandInputs = {
   'locator.selectText': TargetArgs & { force?: boolean }
   'locator.focus': TargetArgs
   'locator.blur': TargetArgs
-  'locator.drop': TargetArgs & {
-    files?:
-      | { paths: { path: string; mimeType: string }[] }
-      | { payloads: { name: string; mimeType: string; buffer: string }[] }
-    data: { mimeType: string; value: string }[]
-    position?: { x: number; y: number }
-  }
   'locator.setInputFiles': TargetArgs & { files: FilesInput }
   'locator.dispatchEvent': TargetArgs & { type: string; eventInit: unknown }
   'locator.scrollIntoViewIfNeeded': TargetArgs
@@ -634,12 +586,6 @@ export type HandInputs = {
 /** Each op's result, for the ops Rust does not describe yet. */
 export type HandOutputs = {
   'events.interceptFileChooser': Done
-  'locator.click': { navigation: NavigationCut } | null
-  'locator.dblclick': null
-  'locator.hover': null
-  'locator.check': null
-  'locator.uncheck': null
-  'locator.dragTo': null
   'locator.fill': null
   'locator.press': null
   'locator.pressSequentially': null
@@ -647,7 +593,6 @@ export type HandOutputs = {
   'locator.selectText': null
   'locator.focus': null
   'locator.blur': null
-  'locator.drop': null
   'locator.setInputFiles': null
   'locator.dispatchEvent': null
   'locator.scrollIntoViewIfNeeded': null

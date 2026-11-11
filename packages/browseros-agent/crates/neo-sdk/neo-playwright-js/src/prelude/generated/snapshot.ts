@@ -13,21 +13,10 @@ import type { LocatorSnapshotInput } from './types/LocatorSnapshotInput'
 import type { PageSnapshotInput } from './types/PageSnapshotInput'
 import type { SnapshotResult } from './types/SnapshotResult'
 
-export type { BackendNodeId } from './types/BackendNodeId'
-export type { ElementBrand } from './types/ElementBrand'
-export type { ElementTarget } from './types/ElementTarget'
-export type { FrameId } from './types/FrameId'
-export type { FrameSeq } from './types/FrameSeq'
 export type { LocatorSnapshotInput } from './types/LocatorSnapshotInput'
-export type { LocatorTarget } from './types/LocatorTarget'
-export type { PageBrand } from './types/PageBrand'
-export type { PageHandle } from './types/PageHandle'
 export type { PageSnapshotInput } from './types/PageSnapshotInput'
 export type { PartialFrame } from './types/PartialFrame'
 export type { SnapshotResult } from './types/SnapshotResult'
-export type { Strictness } from './types/Strictness'
-export type { TabId } from './types/TabId'
-export type { Target } from './types/Target'
 
 /** Each snapshot op's input, after the `call` header every op shares. */
 export type SnapshotInputs = {

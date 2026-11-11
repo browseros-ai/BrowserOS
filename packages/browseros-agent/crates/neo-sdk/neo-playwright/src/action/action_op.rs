@@ -27,8 +27,8 @@ use crate::op_spec::{Capability, OpSpec, TARGET};
 use crate::page::OpPage;
 use crate::probe::{DropEntry, Edit, FillValue, Point, SelectOption};
 use crate::target::{Strictness, Target};
-use crate::wire::{Nothing, options};
-use crate::{ErrorCode, Playwright, PlaywrightError, op_output};
+use crate::wire::{self, Describe, Nothing, OpWire, Route, Run, options};
+use crate::{ErrorCode, Playwright, PlaywrightError};
 
 listed_enum! {
     /// Actions on one element. The locator, page, frame and element-handle forms of a method
@@ -57,6 +57,11 @@ listed_enum! {
 }
 
 impl ActionOp {
+    /// Typed pointer ops describe their handlers; PR 10's remaining rows stay undescribed.
+    pub(crate) fn wire(self) -> Option<OpWire> {
+        route(self, Describe)
+    }
+
     /// This op's registration metadata.
     pub(crate) const fn spec(self) -> OpSpec {
         match self {
@@ -143,6 +148,63 @@ impl ActionOp {
     }
 }
 
+/// The same exhaustive rows drive runtime decoding and wire generation. The transitional
+/// rows keep the other action ops on their existing decoder until the second action PR.
+fn route<'a, R: Route<'a>>(op: ActionOp, r: R) -> R::Out {
+    match op {
+        ActionOp::Click => r.op(
+            wire::command("ElementHandle.click").result(
+                "the requested-navigation event cut the prelude publishes before click resolves",
+            ),
+            click,
+        ),
+        ActionOp::Dblclick => r.op(wire::command("ElementHandle.dblclick"), dblclick),
+        ActionOp::Hover => r.op(wire::command("ElementHandle.hover"), hover),
+        ActionOp::Check => r.op(wire::command("ElementHandle.check"), check),
+        ActionOp::Uncheck => r.op(wire::command("ElementHandle.uncheck"), uncheck),
+        ActionOp::DragTo => r.op(
+            wire::command("Frame.dragAndDrop")
+                .adds(&[("to", "Neo addresses the destination with a branded target")])
+                .omits(&[
+                    (
+                        "source",
+                        "the source selector is carried by Neo's target brand",
+                    ),
+                    (
+                        "target",
+                        "the destination selector is carried by Neo's to brand",
+                    ),
+                ]),
+            drag_to,
+        ),
+        ActionOp::Drop => r.op(
+            wire::command("Frame.drop")
+                .adds(&[(
+                    "files",
+                    "Neo resolves paths or prepared payloads on its host",
+                )])
+                .omits(&[
+                    ("localPaths", "folded into Neo's files paths variant"),
+                    ("payloads", "folded into Neo's files payloads variant"),
+                    ("streams", "no client file streams in a stateless run"),
+                ]),
+            drop,
+        ),
+        op @ (ActionOp::Fill
+        | ActionOp::Press
+        | ActionOp::PressSequentially
+        | ActionOp::SelectOption
+        | ActionOp::SelectText
+        | ActionOp::Focus
+        | ActionOp::Blur
+        | ActionOp::SetInputFiles
+        | ActionOp::DispatchEvent
+        | ActionOp::ScrollIntoViewIfNeeded) => {
+            r.untyped(move |pw, scope, args| run(pw, scope, op, args))
+        }
+    }
+}
+
 /// Each pointer op owns exactly the script options it forwards; a hover cannot silently
 /// acquire click-only fields through the old shared pointer decoder.
 #[derive(Debug, Deserialize, TS)]
@@ -165,13 +227,14 @@ struct ClickOptions {
     force: Option<bool>,
     modifiers: Option<Vec<WireModifier>>,
     no_wait_after: Option<bool>,
-    #[ts(type = "import('../../../probe/protocol').Point")]
+    #[ts(optional, type = "import('../../../probe/protocol').Point")]
     position: Option<Point>,
     scroll: Option<ScrollOption>,
     steps: Option<u32>,
     trial: Option<bool>,
 }
 
+/// The double-click wire input; upstream fixes the click count at two.
 #[derive(Debug, Deserialize, TS)]
 #[serde(deny_unknown_fields)]
 struct DblclickInput {
@@ -189,13 +252,14 @@ struct DblclickOptions {
     delay: Option<f64>,
     force: Option<bool>,
     modifiers: Option<Vec<WireModifier>>,
-    #[ts(type = "import('../../../probe/protocol').Point")]
+    #[ts(optional, type = "import('../../../probe/protocol').Point")]
     position: Option<Point>,
     scroll: Option<ScrollOption>,
     steps: Option<u32>,
     trial: Option<bool>,
 }
 
+/// A hover carries move options only, while the runner keeps actionability and focus ownership.
 #[derive(Debug, Deserialize, TS)]
 #[serde(deny_unknown_fields)]
 struct HoverInput {
@@ -211,12 +275,13 @@ options!(HoverInput => HoverOptions);
 struct HoverOptions {
     force: Option<bool>,
     modifiers: Option<Vec<WireModifier>>,
-    #[ts(type = "import('../../../probe/protocol').Point")]
+    #[ts(optional, type = "import('../../../probe/protocol').Point")]
     position: Option<Point>,
     scroll: Option<ScrollOption>,
     trial: Option<bool>,
 }
 
+/// A check uses the default physical click, then verifies the element became checked.
 #[derive(Debug, Deserialize, TS)]
 #[serde(deny_unknown_fields)]
 struct CheckInput {
@@ -231,12 +296,13 @@ options!(CheckInput => CheckOptions);
 #[ts(optional_fields)]
 struct CheckOptions {
     force: Option<bool>,
-    #[ts(type = "import('../../../probe/protocol').Point")]
+    #[ts(optional, type = "import('../../../probe/protocol').Point")]
     position: Option<Point>,
     scroll: Option<ScrollOption>,
     trial: Option<bool>,
 }
 
+/// An uncheck has its own contract even though it shares check's pointer runner.
 #[derive(Debug, Deserialize, TS)]
 #[serde(deny_unknown_fields)]
 struct UncheckInput {
@@ -251,7 +317,7 @@ options!(UncheckInput => UncheckOptions);
 #[ts(optional_fields)]
 struct UncheckOptions {
     force: Option<bool>,
-    #[ts(type = "import('../../../probe/protocol').Point")]
+    #[ts(optional, type = "import('../../../probe/protocol').Point")]
     position: Option<Point>,
     scroll: Option<ScrollOption>,
     trial: Option<bool>,
@@ -281,9 +347,9 @@ options!(DragInput => DragOptions);
 struct DragOptions {
     force: Option<bool>,
     scroll: Option<ScrollOption>,
-    #[ts(type = "import('../../../probe/protocol').Point")]
+    #[ts(optional, type = "import('../../../probe/protocol').Point")]
     source_position: Option<Point>,
-    #[ts(type = "import('../../../probe/protocol').Point")]
+    #[ts(optional, type = "import('../../../probe/protocol').Point")]
     target_position: Option<Point>,
     steps: Option<u32>,
     trial: Option<bool>,
@@ -299,7 +365,8 @@ struct DropInput {
     #[serde(default)]
     #[ts(optional)]
     files: Option<DropFiles>,
-    #[ts(type = "Array<import('../../../probe/protocol').DropEntry>")]
+    // The probe names this shape inside its Edit union rather than exporting a second alias.
+    #[ts(type = "Extract<import('../../../probe/protocol').Edit, { kind: 'drop' }>['data']")]
     data: Vec<DropEntry>,
     #[serde(default)]
     #[ts(optional, type = "import('../../../probe/protocol').Point")]
@@ -454,7 +521,7 @@ pub(crate) async fn invoke(
     op: ActionOp,
     args: OpArgs,
 ) -> Result<Value, PlaywrightError> {
-    Box::pin(run(pw, scope, op, args)).await
+    route(op, Run { pw, scope, args }).await
 }
 
 #[expect(
@@ -468,14 +535,17 @@ async fn run(
     args: OpArgs,
 ) -> Result<Value, PlaywrightError> {
     match op {
-        ActionOp::Click => {
-            return op_output::to_output(scope, &click(pw, scope, args.decode(scope)?).await?);
+        // These variants are always intercepted by typed route rows above. Keep this
+        // boundary explicit while the remaining ten variants still share the old runner.
+        ActionOp::Click
+        | ActionOp::Dblclick
+        | ActionOp::Hover
+        | ActionOp::Check
+        | ActionOp::Uncheck
+        | ActionOp::DragTo
+        | ActionOp::Drop => {
+            return Err(scope.fail(ErrorCode::Internal, "a typed action bypassed its route"));
         }
-        ActionOp::Dblclick => dblclick(pw, scope, args.decode(scope)?).await?,
-        ActionOp::Hover => hover(pw, scope, args.decode(scope)?).await?,
-        ActionOp::Check => check(pw, scope, args.decode(scope)?).await?,
-        ActionOp::Uncheck => uncheck(pw, scope, args.decode(scope)?).await?,
-        ActionOp::DragTo => drag_to(pw, scope, args.decode(scope)?).await?,
         ActionOp::Focus | ActionOp::Blur => {
             let input: TargetInput = args.decode(scope)?;
             let page = OpPage::admit_handle(pw, scope, input.target.page()).await?;
@@ -580,7 +650,6 @@ async fn run(
                 .run(&keys)
                 .await?;
         }
-        ActionOp::Drop => drop(pw, scope, args.decode(scope)?).await?,
         ActionOp::SetInputFiles => set_input_files(pw, scope, args.decode(scope)?).await?,
     }
     Ok(Value::Null)
