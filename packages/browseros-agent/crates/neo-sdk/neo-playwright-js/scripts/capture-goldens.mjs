@@ -434,6 +434,7 @@ async function captureApi(browser, page) {
   const handle = await page.$('body')
   try {
     const classes = {
+      WebStorage: page.localStorage,
       Browser: browser,
       BrowserContext: page.context(),
       Page: page,

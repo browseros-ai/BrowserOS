@@ -33,6 +33,7 @@ async function instances(): Promise<Record<string, object>> {
     answer: (call) => (call.name === 'locator.elementHandle' ? ELEMENT : null),
   })
   return (await runtime.run(`return {
+    WebStorage: page.localStorage,
     Browser: browser,
     BrowserContext: context,
     Page: page,

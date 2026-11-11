@@ -531,6 +531,17 @@ export type OpInputs = {
   'page.exposeBinding': PageArgs & { name: string; noGlobal?: true }
   /** `arg`: `{ name, seq, result }` or `{ name, seq, error }` as in-page JSON text. */
   'bindingCall.resolve': PageArgs & { context: number; arg: string }
+  'webStorage.read': PageArgs & {
+    kind: 'local' | 'session'
+    action: 'items' | 'getItem'
+    name?: string
+  }
+  'webStorage.write': PageArgs & {
+    kind: 'local' | 'session'
+    action: 'setItem' | 'removeItem' | 'clear'
+    name?: string
+    value?: string
+  }
   'context.pages': Record<string, never>
   'context.newPage': Record<string, never>
   'context.addInitScript': { script: InitSource }
@@ -661,6 +672,9 @@ export type OpOutputs = {
   'page.addInitScript': { id: number }
   'page.exposeBinding': { id: number }
   'bindingCall.resolve': Done
+  /** `items`'s name/value pairs, or `getItem`'s string, null when absent. */
+  'webStorage.read': { name: string; value: string }[] | string | null
+  'webStorage.write': null
   'context.pages': { pages: PageEntry[] }
   'context.newPage': PageEntry
   'context.addInitScript': { id: number }

@@ -70,6 +70,7 @@ import {
   type ByRoleOptions,
   escapeRegExp,
 } from './vendored'
+import { WebStorage } from './web-storage'
 import type {
   DragOptions,
   FillOptions,
@@ -120,6 +121,8 @@ export class Page extends EventEmitter {
   readonly _mainFrame: Frame
   readonly keyboard: Keyboard
   readonly mouse: Mouse
+  readonly localStorage: WebStorage
+  readonly sessionStorage: WebStorage
   _url: string
   /** Historical opening events fill an unknown URL once. Live observations keep it current. */
   #urlKnown: boolean
@@ -174,6 +177,8 @@ export class Page extends EventEmitter {
     this._mainFrame = new Frame(this, null, null)
     this.keyboard = new Keyboard(this)
     this.mouse = new Mouse(this)
+    this.localStorage = new WebStorage(this, 'local')
+    this.sessionStorage = new WebStorage(this, 'session')
     markHandle(this)
   }
 

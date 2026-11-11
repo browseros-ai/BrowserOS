@@ -118,7 +118,7 @@ mod tests {
 
     #[test]
     fn tests_that_names_are_playwright_receivers_and_methods() {
-        const RECEIVERS: [&str; 10] = [
+        const RECEIVERS: [&str; 11] = [
             "locator",
             "page",
             "keyboard",
@@ -129,6 +129,7 @@ mod tests {
             "dialog",
             "disposable",
             "bindingCall",
+            "webStorage",
         ];
         for op in Op::all() {
             let name = op.spec().name;
@@ -249,6 +250,8 @@ mod tests {
             ("page.addInitScript", &[MainWorld, HostFiles], true),
             ("page.exposeBinding", &[MainWorld], true),
             ("bindingCall.resolve", &[MainWorld], true),
+            ("webStorage.read", &[], true),
+            ("webStorage.write", &[], true),
             ("context.pages", &[], true),
             ("context.newPage", &[], true),
             ("context.addInitScript", &[MainWorld, HostFiles], true),
@@ -354,9 +357,13 @@ mod tests {
                 // The screenshot client's filesystem step has no browser target.
                 ("page.saveScreenshot", _) => OpTarget::None,
                 ("expect.locator", _) | (_, Some("locator")) => OpTarget::Field("target"),
-                (_, Some("page" | "keyboard" | "mouse" | "dialog" | "expect" | "bindingCall")) => {
-                    OpTarget::Field("page")
-                }
+                (
+                    _,
+                    Some(
+                        "page" | "keyboard" | "mouse" | "dialog" | "expect" | "bindingCall"
+                        | "webStorage",
+                    ),
+                ) => OpTarget::Field("page"),
                 _ => OpTarget::None,
             };
             assert_eq!(spec.target, expected, "{} target field", spec.name);

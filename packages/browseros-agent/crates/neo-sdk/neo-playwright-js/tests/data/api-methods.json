@@ -1,6 +1,16 @@
 {
   "playwright": "1.64.1",
   "classes": {
+    "WebStorage": {
+      "methods": [
+        "clear",
+        "getItem",
+        "items",
+        "removeItem",
+        "setItem"
+      ],
+      "properties": []
+    },
     "Browser": {
       "methods": [
         "addListener",

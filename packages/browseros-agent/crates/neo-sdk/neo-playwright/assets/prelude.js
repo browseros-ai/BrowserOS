@@ -404,6 +404,16 @@
       target: "page",
       lifetime: "operation"
     },
+    "webStorage.read": {
+      effect: "read",
+      target: "page",
+      lifetime: "operation"
+    },
+    "webStorage.write": {
+      effect: "write",
+      target: "page",
+      lifetime: "operation"
+    },
     "context.pages": {
       effect: "read",
       target: null,
@@ -9013,6 +9023,59 @@ ${value.stack}`;
     }
   }
 
+  // crates/neo-sdk/neo-playwright-js/src/prelude/web-storage.ts
+  class WebStorage {
+    #page;
+    #kind;
+    constructor(page, kind) {
+      this.#page = page;
+      this.#kind = kind;
+    }
+    async items() {
+      const api = "webStorage.items";
+      const items = await invoke("webStorage.read", { api, timeoutMs: 0 }, { page: await this.#page._brand(api), kind: this.#kind, action: "items" });
+      return Array.isArray(items) ? items : [];
+    }
+    async getItem(name) {
+      const api = "webStorage.getItem";
+      const value = await invoke("webStorage.read", { api, timeoutMs: 0 }, {
+        page: await this.#page._brand(api),
+        kind: this.#kind,
+        action: "getItem",
+        name: text(api, "name", name)
+      });
+      return typeof value === "string" ? value : null;
+    }
+    async setItem(name, value) {
+      const api = "webStorage.setItem";
+      await invoke("webStorage.write", { api, timeoutMs: 0 }, {
+        page: await this.#page._brand(api),
+        kind: this.#kind,
+        action: "setItem",
+        name: text(api, "name", name),
+        value: text(api, "value", value)
+      });
+    }
+    async removeItem(name) {
+      const api = "webStorage.removeItem";
+      await invoke("webStorage.write", { api, timeoutMs: 0 }, {
+        page: await this.#page._brand(api),
+        kind: this.#kind,
+        action: "removeItem",
+        name: text(api, "name", name)
+      });
+    }
+    async clear() {
+      const api = "webStorage.clear";
+      await invoke("webStorage.write", { api, timeoutMs: 0 }, { page: await this.#page._brand(api), kind: this.#kind, action: "clear" });
+    }
+  }
+  function text(api, field, value) {
+    if (typeof value !== "string")
+      throw clientError(api, `${field}: expected string, got ${typeof value}`);
+    return value;
+  }
+
   // crates/neo-sdk/neo-playwright-js/src/prelude/page.ts
   var PDF_KEYS = [
     "scale",
@@ -9038,6 +9101,8 @@ ${value.stack}`;
     _mainFrame;
     keyboard;
     mouse;
+    localStorage;
+    sessionStorage;
     _url;
     #urlKnown;
     _title = "";
@@ -9066,6 +9131,8 @@ ${value.stack}`;
       this._mainFrame = new Frame(this, null, null);
       this.keyboard = new Keyboard(this);
       this.mouse = new Mouse(this);
+      this.localStorage = new WebStorage(this, "local");
+      this.sessionStorage = new WebStorage(this, "session");
       markHandle(this);
     }
     context() {
@@ -10374,7 +10441,7 @@ ${expected === undefined ? "" : `Expected: ${state.isNot ? "not " : ""}${stringi
   function argumentError(matcher, message) {
     return plainError(`expect.${matcher}`, message);
   }
-  function text(matcher, receiver, expression, expected, values, options, extra = {}) {
+  function text2(matcher, receiver, expression, expected, values, options, extra = {}) {
     if (typeof expected !== "string" && !(expected instanceof RegExp))
       throw argumentError(matcher, "expected value must be a string or regular expression");
     const substring = values[0]?.matchSubstring === true;
@@ -10446,20 +10513,20 @@ ${expected === undefined ? "" : `Expected: ${state.isNot ? "not " : ""}${stringi
         normalizeWhiteSpace: true,
         ignoreCase: options?.ignoreCase
       })
-    }) : text("toContainText", "Locator", "to.have.text", expected, textValues([expected], {
+    }) : text2("toContainText", "Locator", "to.have.text", expected, textValues([expected], {
       matchSubstring: true,
       normalizeWhiteSpace: true,
       ignoreCase: options?.ignoreCase
     }), options),
-    toHaveAccessibleDescription: (expected, options) => text("toHaveAccessibleDescription", "Locator", "to.have.accessible.description", expected, textValues([expected], {
+    toHaveAccessibleDescription: (expected, options) => text2("toHaveAccessibleDescription", "Locator", "to.have.accessible.description", expected, textValues([expected], {
       ignoreCase: options?.ignoreCase,
       normalizeWhiteSpace: true
     }), options),
-    toHaveAccessibleName: (expected, options) => text("toHaveAccessibleName", "Locator", "to.have.accessible.name", expected, textValues([expected], {
+    toHaveAccessibleName: (expected, options) => text2("toHaveAccessibleName", "Locator", "to.have.accessible.name", expected, textValues([expected], {
       ignoreCase: options?.ignoreCase,
       normalizeWhiteSpace: true
     }), options),
-    toHaveAccessibleErrorMessage: (expected, options) => text("toHaveAccessibleErrorMessage", "Locator", "to.have.accessible.error.message", expected, textValues([expected], {
+    toHaveAccessibleErrorMessage: (expected, options) => text2("toHaveAccessibleErrorMessage", "Locator", "to.have.accessible.error.message", expected, textValues([expected], {
       ignoreCase: options?.ignoreCase,
       normalizeWhiteSpace: true
     }), options),
@@ -10473,11 +10540,11 @@ ${expected === undefined ? "" : `Expected: ${state.isNot ? "not " : ""}${stringi
           expressionArg: name
         });
       const value = expected;
-      return text("toHaveAttribute", "Locator", "to.have.attribute.value", value, textValues([value], { ignoreCase: options?.ignoreCase }), options, { expressionArg: name });
+      return text2("toHaveAttribute", "Locator", "to.have.attribute.value", value, textValues([value], { ignoreCase: options?.ignoreCase }), options, { expressionArg: name });
     },
     toHaveClass: (expected, options) => Array.isArray(expected) ? equal("to.have.class.array", expected, options, {
       expectedText: textValues(expected)
-    }) : text("toHaveClass", "Locator", "to.have.class", expected, textValues([expected]), options),
+    }) : text2("toHaveClass", "Locator", "to.have.class", expected, textValues([expected]), options),
     toContainClass: (expected, options) => {
       if (Array.isArray(expected)) {
         if (expected.some((item) => item instanceof RegExp))
@@ -10488,14 +10555,14 @@ ${expected === undefined ? "" : `Expected: ${state.isNot ? "not " : ""}${stringi
       }
       if (expected instanceof RegExp)
         throw argumentError("toContainClass", '"expected" argument in toContainClass cannot be a RegExp value');
-      return text("toContainClass", "Locator", "to.contain.class", expected, textValues([expected]), options);
+      return text2("toContainClass", "Locator", "to.contain.class", expected, textValues([expected]), options);
     },
     toHaveCount: (expected, options) => equal("to.have.count", expected, options, { expectedNumber: expected }),
-    toHaveCSS: (name, expected, options) => text("toHaveCSS", "Locator", "to.have.css", expected, textValues([expected]), options, {
+    toHaveCSS: (name, expected, options) => text2("toHaveCSS", "Locator", "to.have.css", expected, textValues([expected]), options, {
       expressionArg: name,
       ...options?.pseudo ? { pseudo: options.pseudo } : {}
     }),
-    toHaveId: (expected, options) => text("toHaveId", "Locator", "to.have.id", expected, textValues([expected]), options),
+    toHaveId: (expected, options) => text2("toHaveId", "Locator", "to.have.id", expected, textValues([expected]), options),
     toHaveJSProperty: (name, expected, options) => equal("to.have.property", expected, options, {
       expressionArg: name,
       expectedValue: expected
@@ -10503,25 +10570,25 @@ ${expected === undefined ? "" : `Expected: ${state.isNot ? "not " : ""}${stringi
     toHaveRole: (expected, options) => {
       if (typeof expected !== "string")
         throw argumentError("toHaveRole", '"role" argument in toHaveRole must be a string');
-      return text("toHaveRole", "Locator", "to.have.role", expected, textValues([expected]), options);
+      return text2("toHaveRole", "Locator", "to.have.role", expected, textValues([expected]), options);
     },
     toHaveText: (expected, options) => Array.isArray(expected) ? equal("to.have.text.array", expected, options, {
       expectedText: textValues(expected, {
         normalizeWhiteSpace: true,
         ignoreCase: options?.ignoreCase
       })
-    }) : text("toHaveText", "Locator", "to.have.text", expected, textValues([expected], {
+    }) : text2("toHaveText", "Locator", "to.have.text", expected, textValues([expected], {
       normalizeWhiteSpace: true,
       ignoreCase: options?.ignoreCase
     }), options),
-    toHaveValue: (expected, options) => text("toHaveValue", "Locator", "to.have.value", expected, textValues([expected]), options),
+    toHaveValue: (expected, options) => text2("toHaveValue", "Locator", "to.have.value", expected, textValues([expected]), options),
     toHaveValues: (expected, options) => equal("to.have.values", expected, options, {
       expectedText: textValues(expected)
     }),
-    toHaveTitle: (expected, options) => text("toHaveTitle", "Page", "to.have.title", expected, textValues([expected], { normalizeWhiteSpace: true }), options),
+    toHaveTitle: (expected, options) => text2("toHaveTitle", "Page", "to.have.title", expected, textValues([expected], { normalizeWhiteSpace: true }), options),
     toHaveURL: (expected, options) => {
       const value = typeof expected === "string" ? normalizeUrl(expected) : expected;
-      return text("toHaveURL", "Page", "to.have.url", value, textValues([value], { ignoreCase: options?.ignoreCase }), options);
+      return text2("toHaveURL", "Page", "to.have.url", value, textValues([value], { ignoreCase: options?.ignoreCase }), options);
     }
   };
   async function retry(name, actual, state, matcher) {
@@ -10698,20 +10765,12 @@ Timeout: ${timeout}ms`);
         kind: "property"
       },
       coverage: { hint: "coverage is not available in Neo", kind: "property" },
-      localStorage: {
-        hint: "read storage with page.evaluate(() => localStorage.getItem(key))",
-        kind: "property"
-      },
       request: {
         hint: "API requests are not available in Neo; fetch from the page with page.evaluate()",
         kind: "property"
       },
       screencast: {
         hint: "Neo records its own screencast of every tab",
-        kind: "property"
-      },
-      sessionStorage: {
-        hint: "read storage with page.evaluate(() => sessionStorage.getItem(key))",
         kind: "property"
       },
       touchscreen: {
