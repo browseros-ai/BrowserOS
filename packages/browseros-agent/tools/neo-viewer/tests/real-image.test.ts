@@ -223,17 +223,11 @@ describeReal('through a real Neo image', () => {
       expect(sent).toHaveLength(1)
       expect(received.equals(sent[0] as Buffer)).toBe(true)
 
-      // 2. Neo got the agent's call with only the task id added.
+      // 2. Neo got the agent's call exactly as sent: the viewer adds nothing.
       const forwarded =
         httpBodies(tap.toNeo().subarray(before.toNeo))[0]?.toString('utf8') ??
         ''
-      // Either a whole `_meta` (the call had none) or the run key inside the agent's `_meta`.
-      const taskId =
-        /"_meta":\{"com\.browseros\.neo\/run":\{"taskId":"[^"]+"\}\},|"com\.browseros\.neo\/run":\{"taskId":"[^"]+"\},/.exec(
-          forwarded,
-        )?.[0] ?? ''
-      expect(taskId).not.toBe('')
-      expect(forwarded.replace(taskId, '')).toBe(call.body)
+      expect(forwarded).toBe(call.body)
 
       // 3. The same call made directly answers the same, apart from the run's id.
       const direct = await (
@@ -260,16 +254,23 @@ describeReal('through a real Neo image', () => {
     }, 30_000)
   }
 
-  test('the log holds those runs, as one task, with replies as the agent read them', async () => {
-    const tasks = viewer.store.listTasks()
-    // The legacy call names no client, so it is "bun" (this test's User-Agent) and a task of its own.
-    const task = tasks.find(
-      (candidate) => candidate.client.name === 'claude-code',
-    )
-    expect(tasks).toHaveLength(2)
-    expect(task?.identifiedBy.kind).toBe('process')
-    const runs = viewer.store.task(task?.id ?? '')?.runs ?? []
-    expect(runs.map((run) => run.status)).toEqual(['ok', 'error', 'ok', 'ok'])
+  test('the log holds those runs in one list, in order, with replies as the agent read them', async () => {
+    const runs = viewer.store.list()
+    expect(runs.map((run) => run.status)).toEqual([
+      'ok',
+      'error',
+      'ok',
+      'ok',
+      'ok',
+    ])
+    // The legacy call names no client, so it is labelled from this test's User-Agent.
+    expect(runs.map((run) => run.client?.name)).toEqual([
+      'claude-code',
+      'claude-code',
+      'claude-code',
+      'claude-code',
+      'Bun',
+    ])
     expect(runs[2]?.replyPreview).toBe('7\nconsole:\nhi\n[warn] careful')
   })
 })

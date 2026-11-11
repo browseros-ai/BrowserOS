@@ -6,8 +6,7 @@
 import { brotliDecompressSync, gunzipSync, inflateSync } from 'node:zlib'
 import type { JsonRpcError, TextSize } from '../../shared/api'
 import { textSize } from '../../shared/api'
-import type { StoredRunEnd } from '../log/task-log'
-import type { Assignment } from '../tasks/task-rule'
+import type { StoredRunEnd } from '../log/run-log'
 import {
   JsonReader,
   type ReplyListener,
@@ -37,10 +36,8 @@ export interface Call {
   reply: ReplyMessage | null
   notifications: unknown[]
   keepAlives: number
-  /** The task, once chosen (tool calls only). */
-  assigned: Promise<Assignment> | null
-  /** The run's id in the store, once recorded (tool calls only). */
-  started: Promise<string> | null
+  /** The run's id in the store (tool calls only). */
+  runId: string | null
 }
 
 /** How the reply ended, for calls it never answered. */

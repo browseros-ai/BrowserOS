@@ -1,5 +1,5 @@
 /**
- * "Where the time went": the task's wall clock, the time spent answering run() calls against
+ * "Where the time went": the wall clock since the last Clear, the time spent answering run() calls against
  * the time between calls (the model thinking, the agent's other tools, any human wait).
  */
 

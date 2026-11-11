@@ -47,8 +47,9 @@ function RunRow({ run }: { run: RunSummary }) {
         <span>round trip {duration(run.roundTripMs)}</span>
         <span>code {tokens(run.codeSize)}</span>
         <span>reply {tokens(run.replySize)}</span>
-        {run.taskIdStamped && (
-          <span className="text-zinc-500">taskId stamped</span>
+        {run.client && <span className="text-zinc-500">{run.client.name}</span>}
+        {run.agentTaskId && (
+          <span className="text-zinc-500">task {run.agentTaskId}</span>
         )}
       </button>
       <div className="space-y-2 border-zinc-200 border-t px-3 py-2">
@@ -103,19 +104,7 @@ function Reply({ detail }: { detail: RunDetail }) {
       </div>
       {view === 'formatted' && <FormattedReply detail={detail} />}
       {view === 'raw' && <Block text={reply.raw ?? '(no body)'} />}
-      {view === 'request' && (
-        <>
-          <Block text={detail.request.raw} />
-          {detail.request.forwarded !== null && (
-            <>
-              <p className="text-xs text-zinc-500">
-                Forwarded to Neo with the stamped taskId:
-              </p>
-              <Block text={detail.request.forwarded} />
-            </>
-          )}
-        </>
-      )}
+      {view === 'request' && <Block text={detail.request.raw} />}
     </div>
   )
 }

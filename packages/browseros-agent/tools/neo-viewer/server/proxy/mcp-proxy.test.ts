@@ -2,8 +2,7 @@ import { afterEach, describe, expect, test } from 'bun:test'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { RunDetail, TaskSummary } from '../../shared/api'
-import type { ProcessFinder } from '../tasks/peer-process'
+import type { RunDetail } from '../../shared/api'
 import {
   type FakeNeo,
   type FakeReply,
@@ -26,10 +25,7 @@ afterEach(async () => {
 
 async function setup(
   respond: (body: string) => FakeReply,
-  options: {
-    processes?: (port: number) => ProcessFinder
-    dataDir?: string
-  } = {},
+  options: { dataDir?: string } = {},
 ) {
   const neo = startFakeNeo((request) => respond(request.body))
   cleanups.push(() => neo.stop())
@@ -37,10 +33,11 @@ async function setup(
     options.dataDir ?? (await mkdtemp(join(tmpdir(), 'neo-viewer-test-')))
   if (!options.dataDir)
     cleanups.push(() => rm(dataDir, { recursive: true, force: true }))
-  const viewer = await startViewer(
-    { port: 0, upstream: new URL(neo.url), dataDir },
-    options.processes ? { processes: options.processes } : {},
-  )
+  const viewer = await startViewer({
+    port: 0,
+    upstream: new URL(neo.url),
+    dataDir,
+  })
   cleanups.push(() => viewer.stop())
   return { neo, viewer, dataDir }
 }
@@ -91,10 +88,8 @@ async function waitFor<T>(
 }
 
 async function onlyRun(viewer: RunningViewer): Promise<RunDetail> {
-  const task = await waitFor(() => viewer.store.listTasks()[0])
   return waitFor(() => {
-    const runs = viewer.store.task(task.id)?.runs ?? []
-    const done = runs.find((run) => run.status !== 'running')
+    const done = viewer.store.list().find((run) => run.status !== 'running')
     return done ? viewer.store.run(done.id) : null
   })
 }
@@ -119,7 +114,8 @@ describe('a reply through the viewer is the direct reply, byte for byte', () => 
     expect(run).toMatchObject({
       status: 'ok',
       code: 'return 42',
-      taskIdStamped: true,
+      client: { name: 'claude-code', version: '2.1.322' },
+      agentTaskId: null,
       codeSize: { chars: 9, tokens: 2 },
       replySize: { chars: 2, tokens: 0 },
       neoRunId: '01a1cc18-ed14-78b3-a30d-2cb4ef81d9f4',
@@ -127,16 +123,8 @@ describe('a reply through the viewer is the direct reply, byte for byte', () => 
     expect(run.reply.raw).toBe(reply)
     expect(run.reply.structuredContent).toEqual({ value: 42 })
     expect(run.request.raw).toBe(body)
-    // Neo got the agent's bytes with only the task id added.
-    const task = viewer.store.listTasks()[0] as TaskSummary
-    const upstreamBody = neo.requests.at(-1)?.body
-    expect(upstreamBody).toBe(
-      body.replace(
-        '"_meta":{',
-        `"_meta":{"com.browseros.neo/run":{"taskId":${JSON.stringify(task.neoTaskId)}},`,
-      ),
-    )
-    expect(run.request.forwarded).toBe(upstreamBody ?? null)
+    // Neo got the agent's bytes, every one: the viewer adds nothing.
+    expect(neo.requests.at(-1)?.body).toBe(body)
   })
 
   test('an error result', async () => {
@@ -219,8 +207,7 @@ describe('a reply through the viewer is the direct reply, byte for byte', () => 
     expect(new TextDecoder().decode(first?.value)).toBe(':\n\n')
     expect(lastSentAt - firstAt).toBeGreaterThan(500)
     const runs = await waitFor(() => {
-      const task = viewer.store.listTasks()[0]
-      const list = task ? (viewer.store.task(task.id)?.runs ?? []) : []
+      const list = viewer.store.list()
       return list.length === 2 && list.every((run) => run.status === 'ok')
         ? list
         : null
@@ -351,8 +338,62 @@ test('a sized reply still streams: the first bytes reach the agent before the re
   expect((await onlyRun(viewer)).reply.keepAlives).toBe(1)
 })
 
-describe('tasks', () => {
-  test("a call that names its own task is forwarded untouched and joins the agent's task", async () => {
+describe('one log', () => {
+  test('thirteen calls from thirteen processes are thirteen runs in one list, in order, each reaching Neo as sent', async () => {
+    const { neo, viewer } = await setup((body) => {
+      const id = (JSON.parse(body) as { id: number }).id
+      return { chunks: [sseEvent(runResult(id, String(id), { value: id }))] }
+    })
+    // Like an agent that calls the MCP URL from a new curl or Python process every time.
+    const sent: string[] = []
+    for (let i = 1; i <= 13; i++) {
+      const body = JSON.stringify({
+        jsonrpc: '2.0',
+        id: i,
+        method: 'tools/call',
+        params: { name: 'run', arguments: { code: `return ${i}` } },
+      })
+      sent.push(body)
+      const child = Bun.spawn(
+        [
+          'curl',
+          '-sS',
+          '-o',
+          '/dev/null',
+          '-X',
+          'POST',
+          viewer.mcpUrl,
+          '-H',
+          'content-type: application/json',
+          '-H',
+          'accept: application/json, text/event-stream',
+          '-d',
+          body,
+        ],
+        { stdout: 'ignore', stderr: 'inherit' },
+      )
+      expect(await child.exited).toBe(0)
+    }
+    const runs = await waitFor(() => {
+      const list = viewer.store.list()
+      return list.length === 13 && list.every((run) => run.status === 'ok')
+        ? list
+        : null
+    })
+    expect(runs.map((run) => [run.seq, run.code])).toEqual(
+      sent.map((_, index) => [index + 1, `return ${index + 1}`]),
+    )
+    expect(
+      runs.every(
+        (run) => run.client?.name === 'curl' && run.agentTaskId === null,
+      ),
+    ).toBe(true)
+    // No _meta added: Neo received each body exactly as curl sent it.
+    expect(neo.requests.map((request) => request.body)).toEqual(sent)
+    expect(viewer.store.summary().totals.runs).toBe(13)
+  })
+
+  test('a call that carries its own taskId passes through unchanged, and the run keeps it as a label', async () => {
     const { neo, viewer } = await setup(() => ({
       chunks: [sseEvent(runResult(1, '1', { value: 1 }))],
     }))
@@ -361,42 +402,57 @@ describe('tasks', () => {
     })
     await post(viewer.mcpUrl, body)
     expect(neo.requests.at(-1)?.body).toBe(body)
-    const run = await onlyRun(viewer)
-    const task = viewer.store.listTasks()[0]
-    expect(run.taskIdStamped).toBe(false)
-    expect(task?.identifiedBy).toEqual({
-      kind: 'agent-task-id',
-      taskId: 'zuzu-42',
+    expect(await onlyRun(viewer)).toMatchObject({
+      agentTaskId: 'zuzu-42',
+      client: { name: 'claude-code', version: '2.1.322' },
     })
-    expect(task?.neoTaskId).toBe('zuzu-42')
-    expect(task?.name).toMatch(/^claude-code, \d\d:\d\d$/)
   })
 
-  test('without a process, calls group by client name and say why', async () => {
-    const processes = () => ({
-      find: () => ({
-        lookup: Promise.resolve({ found: false as const, reason: 'test' }),
-        release: () => {},
+  test('a legacy client is labelled from its initialize, an unnamed one from its User-Agent', async () => {
+    const { viewer } = await setup(() => ({
+      chunks: [sseEvent(runResult(1, '1', { value: 1 }))],
+    }))
+    const legacy = { ...MCP_HEADERS, 'user-agent': 'Python-urllib/3.12' }
+    await post(
+      viewer.mcpUrl,
+      JSON.stringify({
+        jsonrpc: '2.0',
+        id: 0,
+        method: 'initialize',
+        params: { clientInfo: { name: 'zuzu-recipes', version: '1' } },
       }),
-    })
-    const { viewer } = await setup(
-      () => ({ chunks: [sseEvent(runResult(1, '1', { value: 1 }))] }),
-      { processes },
+      legacy,
     )
-    await post(viewer.mcpUrl, runCall(1, 'return 1'))
-    await post(viewer.mcpUrl, runCall(1, 'return 2'))
-    const task = await waitFor(() =>
-      viewer.store.listTasks().find((candidate) => candidate.totals.runs === 2),
+    await post(
+      viewer.mcpUrl,
+      JSON.stringify({
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'tools/call',
+        params: { name: 'run', arguments: { code: 'return 1' } },
+      }),
+      legacy,
     )
-    expect(task.identifiedBy).toEqual({
-      kind: 'client-idle',
-      idleMinutes: 10,
-      reason: 'test',
-    })
-    expect(viewer.store.listTasks()).toHaveLength(1)
+    await post(
+      viewer.mcpUrl,
+      JSON.stringify({
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'tools/call',
+        params: { name: 'run', arguments: { code: 'return 2' } },
+      }),
+      { ...MCP_HEADERS, 'user-agent': 'node-fetch/1.0' },
+    )
+    const runs = await waitFor(() =>
+      viewer.store.list().length === 2 ? viewer.store.list() : null,
+    )
+    expect(runs.map((run) => run.client?.name)).toEqual([
+      'zuzu-recipes',
+      'node-fetch',
+    ])
   })
 
-  test('the gap before a run is the time since the previous reply; tools/list size is kept on the task', async () => {
+  test('the gap before a run is the time since the previous reply; the latest tools/list size is kept', async () => {
     const list = {
       jsonrpc: '2.0',
       id: 0,
@@ -413,7 +469,15 @@ describe('tasks', () => {
     const { viewer } = await setup((body) =>
       body.includes('tools/list')
         ? { chunks: [sseEvent(list)] }
-        : { chunks: [sseEvent(runResult(1, '1', { value: 1 }))] },
+        : {
+            chunks: [
+              sseEvent(
+                runResult((JSON.parse(body) as { id: number }).id, '1', {
+                  value: 1,
+                }),
+              ),
+            ],
+          },
     )
     await post(
       viewer.mcpUrl,
@@ -421,82 +485,32 @@ describe('tasks', () => {
         jsonrpc: '2.0',
         id: 0,
         method: 'tools/list',
-        params: {
-          _meta: {
-            'io.modelcontextprotocol/clientInfo': { name: 'claude-code' },
-          },
-        },
+        params: {},
       }),
     )
     await post(viewer.mcpUrl, runCall(1, 'return 1'))
-    await waitFor(() => viewer.store.listTasks()[0]?.totals.running === 0)
+    await waitFor(
+      () =>
+        viewer.store.summary().totals.running === 0 &&
+        viewer.store.list().length === 1,
+    )
     await Bun.sleep(120)
     await post(viewer.mcpUrl, runCall(2, 'return 2'))
-    const task = await waitFor(() => {
-      const found = viewer.store.listTasks()[0]
-      return found?.totals.runs === 2 && found.totals.running === 0
+    const runs = await waitFor(() => {
+      const found = viewer.store.list()
+      return found.length === 2 && found.every((run) => run.status === 'ok')
         ? found
         : null
     })
-    const runs = viewer.store.task(task.id)?.runs ?? []
     expect(runs[0]?.gapMs).toBeNull()
     expect(runs[1]?.gapMs).toBeGreaterThanOrEqual(100)
-    expect(task.toolsList).toEqual({
+    expect(viewer.store.summary().toolsList).toEqual({
       chars: 'run'.length + 400 + '{"type":"object"}'.length,
       tokens: 105,
     })
   })
 
-  test('two agent processes at once become two tasks and never mix', async () => {
-    const { viewer } = await setup((body) => {
-      const id = (JSON.parse(body) as { id: number }).id
-      return {
-        chunks: [40, sseEvent(runResult(id, String(id), { value: id }))],
-      }
-    })
-    const agent = (name: string) =>
-      Bun.spawn(
-        [
-          process.execPath,
-          '-e',
-          `for (let i = 1; i <= 4; i++) {
-             await fetch(${JSON.stringify(viewer.mcpUrl)}, { method: 'POST', headers: ${JSON.stringify(MCP_HEADERS)},
-               body: JSON.stringify({ jsonrpc: '2.0', id: i, method: 'tools/call', params: { name: 'run',
-                 arguments: { code: '// ${name} ' + i }, _meta: { 'io.modelcontextprotocol/clientInfo': { name: 'claude-code' } } } }) })
-               .then((r) => r.text())
-           }`,
-        ],
-        { stdout: 'ignore', stderr: 'inherit' },
-      )
-    const children = [agent('A'), agent('B')]
-    cleanups.push(async () => {
-      for (const child of children) child.kill()
-    })
-    expect(await Promise.all(children.map((child) => child.exited))).toEqual([
-      0, 0,
-    ])
-    const tasks = await waitFor(() => {
-      const list = viewer.store.listTasks()
-      return list.length === 2 &&
-        list.every(
-          (task) => task.totals.runs === 4 && task.totals.running === 0,
-        )
-        ? list
-        : null
-    })
-    const pids = tasks.map((task) =>
-      task.identifiedBy.kind === 'process' ? task.identifiedBy.pid : null,
-    )
-    expect(new Set(pids)).toEqual(new Set(children.map((child) => child.pid)))
-    for (const task of tasks) {
-      const agents = new Set(
-        viewer.store.task(task.id)?.runs.map((run) => run.code.split(' ')[1]),
-      )
-      expect(agents.size).toBe(1)
-    }
-  })
-
-  test('a restart reads the log back: the same tasks and runs, and the next call joins its task', async () => {
+  test('a restart reads the log back, and the next call joins the same list', async () => {
     const dataDir = await mkdtemp(join(tmpdir(), 'neo-viewer-test-'))
     cleanups.push(() => rm(dataDir, { recursive: true, force: true }))
     const respond = () => ({
@@ -504,15 +518,15 @@ describe('tasks', () => {
     })
     const first = await setup(respond, { dataDir })
     await post(first.viewer.mcpUrl, runCall(1, 'return 1'))
-    const before = (await onlyRun(first.viewer)).taskId
+    await onlyRun(first.viewer)
     await first.viewer.stop()
     const second = await setup(respond, { dataDir })
-    expect(second.viewer.store.listTasks().map((task) => task.id)).toEqual([
-      before,
-    ])
-    expect(second.viewer.store.task(before)?.runs[0]?.status).toBe('ok')
+    expect(
+      second.viewer.store.list().map((run) => [run.seq, run.status]),
+    ).toEqual([[1, 'ok']])
     await post(second.viewer.mcpUrl, runCall(2, 'return 2'))
-    await waitFor(() => second.viewer.store.task(before)?.runs.length === 2)
+    await waitFor(() => second.viewer.store.list().length === 2)
+    expect(second.viewer.store.list().map((run) => run.seq)).toEqual([1, 2])
   })
 })
 

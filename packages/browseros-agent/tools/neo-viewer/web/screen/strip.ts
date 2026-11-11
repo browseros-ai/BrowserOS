@@ -1,7 +1,7 @@
 /**
- * The "where the time went" strip: the task's wall clock from its first call to its last reply
- * (or now, while a run is running), with each run drawn where it sat in it. A run spans its round
- * trip: first the viewer's hold (finding the calling process before forwarding), then Neo's
+ * The "where the time went" strip: the wall clock since the last Clear, from the first call to the
+ * last reply (or now, while a run is running), with each run drawn where it sat in it. A run spans
+ * its round trip: first the viewer's hold (reading the call before forwarding it), then Neo's
  * answer, the time the headline counts as "in Neo". The space between runs is the time between
  * calls.
  *

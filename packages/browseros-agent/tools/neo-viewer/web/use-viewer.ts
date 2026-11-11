@@ -1,8 +1,9 @@
 /**
- * The page's data: the task list and the chosen task's runs, from the viewer's API, kept current
- * by `/api/events`. Each event carries the new state of one task or run and its change number.
+ * The page's data: every run since the last Clear, and the log's totals, from the viewer's API,
+ * kept current by `/api/events`. Each event carries the new state of one run (or of the log, or a
+ * clear) and its change number.
  *
- * The stream opens first and every (re)open takes fresh snapshots, so no change falls between a
+ * The stream opens first and every (re)open takes a fresh snapshot, so no change falls between a
  * snapshot and the stream. A snapshot can still land after events that are newer than it: the
  * page keeps the events since the stream opened and re-applies those numbered above the
  * snapshot's `version`.
@@ -10,12 +11,11 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type {
+  LogSummary,
   RunDetail,
   RunResponse,
   RunSummary,
-  TaskRunsResponse,
-  TaskSummary,
-  TasksResponse,
+  RunsResponse,
   ViewerEvent,
   ViewerInfo,
 } from '../shared/api'
@@ -30,43 +30,44 @@ async function getJson<T>(path: string): Promise<T> {
   return (await response.json()) as T
 }
 
-function upsert<T extends { id: string }>(
-  items: T[],
-  item: T,
-  order: (a: T, b: T) => number,
-): T[] {
-  const index = items.findIndex((candidate) => candidate.id === item.id)
+function upsert(runs: RunSummary[], run: RunSummary): RunSummary[] {
+  const index = runs.findIndex((candidate) => candidate.id === run.id)
   const next =
     index === -1
-      ? [...items, item]
-      : items.map((candidate, i) => (i === index ? item : candidate))
-  return next.sort(order)
+      ? [...runs, run]
+      : runs.map((candidate, i) => (i === index ? run : candidate))
+  return next.sort((a, b) => a.seq - b.seq)
 }
 
-const newestFirst = (a: TaskSummary, b: TaskSummary) =>
-  b.createdAt.localeCompare(a.createdAt)
-const inOrder = (a: RunSummary, b: RunSummary) => a.seq - b.seq
+/** The list and totals after one event: a clear empties the list, a run updates it, a log event the totals. */
+function apply(
+  state: { runs: RunSummary[]; log: LogSummary | null },
+  event: ViewerEvent,
+) {
+  if (event.type === 'clear') return { runs: [], log: event.log }
+  if (event.type === 'log') return { ...state, log: event.log }
+  return { ...state, runs: upsert(state.runs, event.run) }
+}
 
 export interface ViewerState {
   info: ViewerInfo | null
-  tasks: TaskSummary[]
-  taskId: string | null
-  selectTask: (taskId: string) => void
+  /** Every run since the last Clear, in arrival order. */
   runs: RunSummary[]
+  log: LogSummary | null
+  /** Empties the log (the server keeps the previous one as `log.prev.jsonl`). */
+  clear: () => Promise<void>
   error: string | null
 }
 
 export function useViewer(): ViewerState {
   const [info, setInfo] = useState<ViewerInfo | null>(null)
-  const [tasks, setTasks] = useState<TaskSummary[]>([])
-  const [taskId, setTaskId] = useState<string | null>(null)
-  const [runs, setRuns] = useState<RunSummary[]>([])
+  const [state, setState] = useState<{
+    runs: RunSummary[]
+    log: LogSummary | null
+  }>({ runs: [], log: null })
   const [error, setError] = useState<string | null>(null)
-  // Bumped each time the event stream opens; the snapshots below are taken after it.
+  // Bumped each time the event stream opens; the snapshot below is taken after it.
   const [opened, setOpened] = useState(0)
-  // The event handler outlives renders; it reads the chosen task from here.
-  const taskIdRef = useRef<string | null>(null)
-  taskIdRef.current = taskId
   const recent = useRef<ViewerEvent[]>([])
 
   useEffect(() => {
@@ -87,64 +88,32 @@ export function useViewer(): ViewerState {
       if (recent.current.length > KEPT_EVENTS) {
         recent.current.splice(0, recent.current.length - KEPT_EVENTS)
       }
-      if (event.type === 'task') {
-        setTasks((list) => upsert(list, event.task, newestFirst))
-        if (taskIdRef.current === null) setTaskId(event.task.id)
-      } else if (event.run.taskId === taskIdRef.current) {
-        setRuns((list) => upsert(list, event.run, inOrder))
-      }
+      setState((current) => apply(current, event))
     }
     return () => events.close()
   }, [])
 
   useEffect(() => {
     if (opened === 0) return
-    getJson<TasksResponse>(apiRoutes.tasks).then(
-      ({ tasks: snapshot, version }) => {
-        let list = snapshot
+    getJson<RunsResponse>(apiRoutes.runs).then(
+      ({ runs, log, version }) => {
+        let next: { runs: RunSummary[]; log: LogSummary | null } = { runs, log }
         for (const event of recent.current) {
-          if (event.version > version && event.type === 'task') {
-            list = upsert(list, event.task, newestFirst)
-          }
+          if (event.version > version) next = apply(next, event)
         }
-        setTasks(list)
-        setTaskId((current) => current ?? list[0]?.id ?? null)
+        setState(next)
       },
       (cause) => setError(String(cause)),
     )
   }, [opened])
 
-  useEffect(() => {
-    if (!taskId || opened === 0) return
-    let current = true
-    getJson<TaskRunsResponse>(apiRoutes.taskRuns(taskId)).then(
-      ({ runs: snapshot, version }) => {
-        if (!current) return
-        let list = snapshot
-        for (const event of recent.current) {
-          if (
-            event.version > version &&
-            event.type === 'run' &&
-            event.run.taskId === taskId
-          ) {
-            list = upsert(list, event.run, inOrder)
-          }
-        }
-        setRuns(list)
-      },
-      (cause) => setError(String(cause)),
-    )
-    return () => {
-      current = false
-    }
-  }, [taskId, opened])
-
-  const selectTask = useCallback((next: string) => {
-    setRuns([])
-    setTaskId(next)
+  const clear = useCallback(async () => {
+    const response = await fetch(apiRoutes.clear, { method: 'POST' })
+    if (!response.ok) setError(`${apiRoutes.clear}: HTTP ${response.status}`)
+    // The stream's `clear` event empties the list, here and on any other open page.
   }, [])
 
-  return { info, tasks, taskId, selectTask, runs, error }
+  return { info, runs: state.runs, log: state.log, clear, error }
 }
 
 /** One run in full, refetched whenever its summary changes (it was still running). */

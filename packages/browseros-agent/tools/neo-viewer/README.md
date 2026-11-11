@@ -9,7 +9,7 @@ under `tools/`: not shipped, and not part of the image.
  agent ──MCP──▶ viewer (Bun, 127.0.0.1:7310/mcp) ──MCP──▶ Neo SDK image (127.0.0.1:9010/mcp)
                   │ records every call and reply, as sent and as received
                   ▼
-               ~/.local/state/neo-viewer/tasks/<task>.jsonl ──▶ /api/* ──▶ the page at /
+               ~/.local/state/neo-viewer/<instance>/log.jsonl ──▶ /api/* ──▶ the page at /
 ```
 
 The page at `/` is the designed Viewer C v2 screen (PR D1): the time strip, the run table with its
@@ -86,54 +86,35 @@ the command is the only control.
 
 ## What the proxy changes
 
-Nothing, except one field. Every method, path, header and body reaches Neo as the agent sent it,
-and every reply reaches the agent as Neo sent it, byte for byte, chunk by chunk as it streams. A
-`run` call that has no `_meta["com.browseros.neo/run"].taskId` gets the viewer's task id added
-there, so each task has its own tab in Neo and `GET /v1/runs?taskId=` finds its runs. The stamp is
-spliced into the text as sent; nothing else in the body is re-serialized. Headers that belong to
-one HTTP hop (`connection`, `transfer-encoding`, `content-length`, `host`) are set by each hop, as
-for any proxy. When the agent goes away mid-reply the viewer closes its request to Neo, which is
-how Neo's stateless MCP learns to stop the run.
+Nothing, in either direction. Every method, path, header and body reaches Neo as the agent sent it,
+and every reply reaches the agent as Neo sent it, byte for byte, chunk by chunk as it streams; so
+Neo behaves exactly as it does without the viewer, and an agent's runs share its default tab. If the
+agent sends its own `_meta["com.browseros.neo/run"].taskId`, it passes through untouched and the run
+keeps it as a label (`RunSummary.agentTaskId`). Headers that belong to one HTTP hop (`connection`,
+`transfer-encoding`, `content-length`, `host`) are set by each hop, as for any proxy. When the agent
+goes away mid-reply the viewer closes its request to Neo, which is how Neo's stateless MCP learns to
+stop the run.
 
-## Which task a call belongs to
+## One list
 
-MCP would make each agent connection a session, but there is none to use: Neo's `/mcp` is stateless
-(it never sends `Mcp-Session-Id`), and current clients keep no session either. Claude Code 2.1
-speaks the 2026-07-28 revision: no `initialize`, `clientInfo` in every request's `_meta`, nothing
-per session, and it ignores a session id a server offers. So the viewer decides, in this order
-(`server/tasks/task-rule.ts`, the one module to replace to change it):
-
-1. **The agent's task id.** The call carries `_meta["com.browseros.neo/run"].taskId` (zuzu does):
-   that is the task.
-2. **The calling process.** The viewer finds the process at the other end of the TCP connection
-   (`netstat -anv` on macOS, `ss -tnp` on Linux, then `ps` for its start time, so a reused pid is a
-   new process). One task per process and client name: two Claude Codes are two tasks.
-3. **The client name, with an idle gap.** When the process cannot be found (the client closed its
-   connection before the lookup finished, or no socket table reader), one task per client name, and
-   a new one after 10 minutes without a call from that client.
-
-Each task records which rule grouped it (`identifiedBy` in `shared/api.ts`), and is named
-`<client>, HH:MM` from the client's name and its first call. A client that never sends `clientInfo`
-is named from its `initialize` (remembered by connection, process and User-Agent), then from its
-User-Agent. Calls from a container arrive through Docker Desktop's forwarder, so they share one
-process (`com.docker.backend`) and are grouped by rule 1 or by client name.
-
-The stamp has to name the task before the call goes to Neo, so a `run` without a task id waits for
-the process lookup: about 30 to 60 ms on the first call of a connection, cached while the
-connection is in use, and never more than 500 ms (then rule 3). Every run records that wait as
-`proxyMs`; `roundTripMs` is what the agent waited, from the call reaching the viewer to its reply
-leaving it. Calls that name their task, and every other request, are forwarded at once.
+Every call through the proxy is appended to one list, in the order it reached the viewer, whichever
+agent sent it (owner, 2026-11-11: an agent that calls the MCP URL from a new curl or Python process
+each time is still one job). Each run shows its client as a quiet label: its `clientInfo`, an older
+client's `initialize`, or its User-Agent's product name, since several agents may share the list.
+**Clear** (top bar, or `POST /api/clear`) empties it; the log before it is kept once, as
+`log.prev.jsonl`, in case of a mis-click.
 
 ## The log
 
-Append-only JSONL, one file per task, under `$NEO_VIEWER_DATA_DIR`, else
-`$XDG_STATE_HOME/neo-viewer`, else `~/.local/state/neo-viewer`: `tasks/<task id>.jsonl`. The first
-line describes the task; then one line per thing as it happened (`run-start` with the request body
-as sent and as forwarded, `run-end` with the reply body as received, its text, structured content
-and `_meta`, `tools-list` with the size of the tool list the client read). A restart reads every
-file back, so nothing written is lost; a run that had started but not ended when the viewer stopped
-shows as `lost`. `bun run neo:viewer` clears the history at each start, as it does the browser
-profile, unless given `--keep-data` (or `--upstream`, which starts no container). Tokens are estimates, characters divided by four, always shown with "≈".
+Append-only JSONL, one file, `log.jsonl` in the instance's state folder (`$NEO_VIEWER_DATA_DIR`,
+else `$XDG_STATE_HOME/neo-viewer/<instance>`, else `~/.local/state/neo-viewer/<instance>`). The first
+line starts the log; then one line per thing as it happened (`run-start` with the request body as
+sent, `run-end` with the reply body as received, its text, structured content and `_meta`,
+`neo-run` with Neo's record of the run, `tools-list` with the size of the tool list a client read).
+A restart reads the file back, so nothing written is lost; a run that had started but not ended
+when the viewer stopped shows as `lost`. `bun run neo:viewer` starts each run with an empty log, as
+it does the browser profile, unless given `--keep-data` (or `--upstream`, which starts no
+container). Tokens are estimates, characters divided by four, always shown with "≈".
 
 ## The API
 
@@ -142,14 +123,14 @@ profile, unless given `--keep-data` (or `--upstream`, which starts no container)
 | Route | Answer |
 |---|---|
 | `GET /api/info` | `ViewerInfo`: the MCP URL, the upstream, the data folder, and the container the command started (`container: {name, image, up}`, null with `--upstream`) |
-| `GET /api/tasks` | `TasksResponse`: every `TaskSummary`, newest first, with totals |
-| `GET /api/tasks/:taskId/runs` | `TaskRunsResponse`: the task and its `RunSummary` list, in order |
+| `GET /api/runs` | `RunsResponse`: every `RunSummary` since the last Clear, in order, and the log's totals (`LogSummary`) |
 | `GET /api/runs/:runId` | `RunResponse`: one `RunDetail`, request and reply as they crossed |
-| `GET /api/events` | SSE: one `ViewerEvent` (`{type:'task'}` or `{type:'run'}`) per change |
+| `POST /api/clear` | `RunsResponse`, empty: starts a new log, keeps the previous as `log.prev.jsonl`; only from the viewer's own page |
+| `GET /api/events` | SSE: one `ViewerEvent` per change: `{type:'run'}`, `{type:'log'}` (totals), `{type:'clear'}` |
 
 Once a run's reply is in, the viewer reads Neo's record of it through the host API
 (`GET /v1/runs/{id}?wait=10`, joined by the reply's `_meta["com.browseros.neo/run"].id`, which is
-`RunSummary.neoRunId`) and keeps it in the task log. `RunDetail.neo` holds it: the run's status,
+`RunSummary.neoRunId`) and keeps it in the log. `RunDetail.neo` holds it: the run's status,
 Neo time and error, and each operation's name, kind, effect, script site `{line, column}`, start
 offset, duration, args, result, notes, delivery and error (`NeoRunRecord`, `NeoOperation` in
 `shared/api.ts`). `RunSummary` gains `neoDurationMs` and `operationCount`. Neo bounds stored args
@@ -182,9 +163,9 @@ relays it and adds the token on its side; `shared/live-screen.ts` holds the rout
 
 | On the panel | What it opens on Neo |
 |---|---|
-| Follow agent | `GET /v1/display?mode=view&followTask=<task>`: watch; Neo keeps the task's current tab in front |
+| Follow agent | `GET /v1/display?mode=view`: watch the front tab (with an agent's own task id, `followTask=<id>` keeps its tab in front) |
 | Control | `GET /v1/display?mode=control`: clicks and keys reach the browser; the front tab stops following; the agent is not held |
-| Take over / Give back | `POST /v1/takeovers {tabId, viewer}` for the task's current tab (Neo's own rule, as `followTask` picks it), then `display?mode=control&release=<id>`; the agent's calls on that tab fail with `owner_has_control` until `POST /v1/takeovers/{id}/release`. `viewer` is Neo's own screen size, so Neo's fit brings the tab to the front and leaves the screen as it is; Neo puts the window back on release |
+| Take over / Give back | `POST /v1/takeovers {tabId, viewer}` for the agent's current tab: the one Neo's latest operation used (Neo's own rule for a task's tab, over its whole trace), then `display?mode=control&release=<id>`; the agent's calls on that tab fail with `owner_has_control` until `POST /v1/takeovers/{id}/release`. `viewer` is Neo's own screen size, so Neo's fit brings the tab to the front and leaves the screen as it is; Neo puts the window back on release |
 
 The relay passes RFB frames and close codes through unchanged (Neo's `4002 released` ends a
 takeover's display) and closes with its own codes for what Neo cannot say: 4901 the host API is not
@@ -195,7 +176,7 @@ page: a WebSocket is not covered by the same-origin policy. The viewer gives bac
 holds when it stops.
 
 The components are self-contained, for the designed screen to dock and pop out:
-`useLiveScreen(neoTaskId)` makes the controller; `<LiveScreen size="docked" | "large">`,
+`useLiveScreen(taskId | null)` makes the controller (null: no task to follow); `<LiveScreen size="docked" | "large">`,
 `<LiveScreenPopup>` and `<TakeOverButton>` take it (`web/live-screen/`).
 
 Neo's VNC server (TigerVNC's Xvnc) blocks a client address for 10 s, then twice as long each time,
@@ -205,7 +186,7 @@ script that opens displays and drops them mid-handshake can still block every di
 
 ## Layout and checks
 
-- `server/`: the Bun server. `proxy/` forwards and reads MCP, `tasks/` holds the task rule and the
+- `server/`: the Bun server. `proxy/` forwards and reads MCP, `log/` holds the run log and its store, the
   process lookup, `log/` the JSONL log and the in-memory store, `api/` the routes, `live-screen/`
   the display relay and the takeover routes.
 - `web/`: the page, React and Tailwind as in `apps/claw-app`; `web/screen/` is the designed screen,
@@ -222,7 +203,7 @@ NEO_VIEWER_REAL_UPSTREAM=… NEO_VIEWER_REAL_HOST=http://127.0.0.1:9300 \
   NEO_VIEWER_REAL_HOST_TOKEN_FILE=<token file> bun run test:real-image
 ```
 
-The live-screen real-image test speaks RFB through the relay without a browser: it follows a task,
+The live-screen real-image test speaks RFB through the relay without a browser: it follows the agent,
 clicks and types in control mode, takes over (the agent's run fails with `owner_has_control`) and
 gives back (Neo closes the owner's display with 4002).
 
