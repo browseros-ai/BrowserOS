@@ -69,7 +69,8 @@ pub(crate) async fn evaluate(
         "userGesture": true,
     });
     let _sent = scope.send_effect()?;
-    let call = worker.session.send_value("Runtime.callFunctionOn", params);
+    let session = worker.session();
+    let call = session.send_value("Runtime.callFunctionOn", params);
     let reply = tokio::select! {
         biased;
         _ = context.wait_for(|state| *state == WorkerContext::Closed) => return Err(closed()),

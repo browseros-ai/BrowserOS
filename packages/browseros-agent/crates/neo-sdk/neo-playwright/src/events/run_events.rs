@@ -213,6 +213,16 @@ impl RunEvents {
         inner.listening.keys().any(wanted) || inner.waiting.keys().any(wanted)
     }
 
+    /// Context lifecycle interest explicitly asks to observe untouched pages too.
+    pub(crate) fn wants_context_lifecycle(&self) -> bool {
+        let inner = self.lock();
+        inner
+            .listening
+            .keys()
+            .chain(inner.waiting.keys())
+            .any(|subscription| matches!(subscription, Subscription::Context(_)))
+    }
+
     /// Retain only identities approved by this run's view. The journal bounds how much
     /// history can still be delivered, so the identity cache follows the same capacity.
     pub(crate) fn remember_page(&self, target: &TargetId, tab: TabId) {

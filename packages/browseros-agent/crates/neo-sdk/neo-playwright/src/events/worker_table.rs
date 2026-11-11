@@ -33,8 +33,27 @@ pub(crate) enum WorkerContext {
 pub(crate) struct WorkerEndpoint {
     pub(crate) page: TargetId,
     pub(crate) info: WorkerInfo,
-    pub(crate) session: ProtocolSession,
+    session: Mutex<ProtocolSession>,
     pub(crate) context: watch::Sender<WorkerContext>,
+}
+
+impl WorkerEndpoint {
+    /// Startup recovery may replace the protocol session while a call waits on `context`.
+    /// A Ready endpoint is never rebound, so callers read this after their readiness wait.
+    pub(crate) fn session(&self) -> ProtocolSession {
+        self.session
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
+    pub(crate) fn rebind(&self, session: ProtocolSession, wait_for_script: bool) {
+        *self.session.lock().unwrap_or_else(PoisonError::into_inner) = session;
+        self.context.send_replace(WorkerContext::Starting {
+            context: None,
+            script_loaded: !wait_for_script,
+        });
+    }
 }
 
 /// Retains only live workers. Callers keep an endpoint while evaluating, so removal can
@@ -65,7 +84,7 @@ impl WorkerTable {
             Arc::new(WorkerEndpoint {
                 page,
                 info,
-                session,
+                session: Mutex::new(session),
                 context,
             }),
         );
@@ -98,7 +117,7 @@ impl WorkerTable {
             .unwrap_or_else(PoisonError::into_inner)
             .values()
         {
-            if worker.session.session_id() == Some(session) {
+            if worker.session().session_id() == Some(session) {
                 worker.context.send_modify(|state| {
                     *state = match *state {
                         WorkerContext::Starting {
@@ -129,7 +148,7 @@ impl WorkerTable {
             .unwrap_or_else(PoisonError::into_inner)
             .values()
         {
-            if worker.session.session_id() == Some(session) {
+            if worker.session().session_id() == Some(session) {
                 worker.context.send_modify(|state| {
                     *state = match *state {
                         WorkerContext::Starting {
@@ -155,5 +174,66 @@ impl WorkerTable {
             .remove(id)?;
         worker.context.send_replace(WorkerContext::Closed);
         Some(worker)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::error::Error;
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    use browseros_core::{SessionId, TargetId};
+    use tokio::time;
+
+    use super::{WorkerContext, WorkerInfo, WorkerTable};
+    use crate::test_env;
+
+    #[tokio::test]
+    async fn a_startup_waiter_follows_a_recovered_live_endpoint() -> Result<(), Box<dyn Error>> {
+        let browser = test_env::offline_session();
+        let table = WorkerTable::default();
+        let page = TargetId("page".to_owned());
+        let old = SessionId::from("old-session");
+        assert!(table.insert(
+            page.clone(),
+            WorkerInfo {
+                id: "worker".to_owned(),
+                url: "worker.js".to_owned()
+            },
+            browser.protocol_session(old.clone()),
+            true
+        ));
+        let endpoint = table.get(&page, "worker").ok_or("worker exists")?;
+        let retained = Arc::clone(&endpoint);
+        let mut context = endpoint.context.subscribe();
+        let waiter = tokio::spawn(async move {
+            loop {
+                let state = *context.borrow_and_update();
+                match state {
+                    WorkerContext::Ready(id) => {
+                        return Ok((retained.session().session_id().cloned(), id));
+                    }
+                    WorkerContext::Closed => return Err("a live worker was treated as closed"),
+                    WorkerContext::Starting { .. } => {
+                        if context.changed().await.is_err() {
+                            return Err("startup channel closed");
+                        }
+                    }
+                }
+            }
+        });
+        let recovered = SessionId::from("recovered-session");
+        endpoint.rebind(browser.protocol_session(recovered.clone()), true);
+        table.context(&old, 1);
+        table.context(&recovered, 42);
+        table.script_loaded(&recovered);
+        let answered = time::timeout(Duration::from_secs(1), waiter).await???;
+        assert_eq!(
+            answered,
+            (Some(recovered), 42),
+            "the original waiting call uses the recovered session and its context"
+        );
+        Ok(())
     }
 }

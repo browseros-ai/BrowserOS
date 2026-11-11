@@ -8564,6 +8564,10 @@ ${value.stack}`;
       this.workerPages.add(page);
       this.listen(page, "workerstate", true);
     }
+    forgetWorkers(page) {
+      if (this.workerPages.delete(page))
+        this.listen(page, "workerstate", false);
+    }
     listen(page, event, on) {
       const since = Date.now();
       this.listening += on ? 1 : -1;
@@ -9105,10 +9109,18 @@ ${value.stack}`;
             resolve(value);
             return;
           }
-          Promise.resolve().then(async () => {
-            if (typeof predicate !== "function" || await predicate(value))
+          try {
+            const accepted = predicate(value);
+            if ((typeof accepted === "object" || typeof accepted === "function") && accepted !== null && typeof Reflect.get(accepted, "then") === "function") {
+              Promise.resolve(accepted).then((result) => {
+                if (result)
+                  resolve(value);
+              }, reject);
+            } else if (accepted)
               resolve(value);
-          }).catch(reject);
+          } catch (error) {
+            reject(error);
+          }
         };
         closed = () => reject(clientError(api, "Target page, context or browser has been closed"));
         this.on(event, listener);
@@ -9770,7 +9782,6 @@ ${value.stack}`;
         return;
       this.#observedSeq = at.seq;
       if (fact.workers) {
-        this._context._events.observeWorkers(this);
         this.#workerSnapshot = fact.workers;
         for (const worker of fact.workers)
           this._worker(worker);
@@ -9793,13 +9804,18 @@ ${value.stack}`;
           this.#close();
         return;
       }
-      if (fact.closed !== false)
+      if (fact.closed !== false) {
+        if (!this._closed && fact.workers)
+          this._context._events.observeWorkers(this);
         return;
+      }
       this.#approvedClose = null;
       if (this._closed && at.events < this.#closeEvent)
         return;
       this.#liveHead = at.events;
       this._closed = false;
+      if (fact.workers)
+        this._context._events.observeWorkers(this);
     }
     _closeEvent(seq, at = null) {
       if (this.#approvedClose?.seq === seq) {
@@ -9832,6 +9848,7 @@ ${value.stack}`;
       if (this._closed)
         return;
       this._closed = true;
+      this._context._events.forgetWorkers(this);
       this.#workerSnapshot = [];
       this._settleWorkerFacts(null);
       this.emit("close", this);

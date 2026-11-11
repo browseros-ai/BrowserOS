@@ -1261,7 +1261,6 @@ export class Page extends EventEmitter {
     if (at.seq < this.#observedSeq) return
     this.#observedSeq = at.seq
     if (fact.workers) {
-      this._context._events.observeWorkers(this)
       this.#workerSnapshot = fact.workers
       for (const worker of fact.workers) this._worker(worker)
       if (at.deferWorkers) this.#workerBatches.add(at.seq)
@@ -1281,11 +1280,16 @@ export class Page extends EventEmitter {
       return
     }
     // A bound init page or result brand can carry identity without a liveness fact.
-    if (fact.closed !== false) return
+    if (fact.closed !== false) {
+      if (!this._closed && fact.workers)
+        this._context._events.observeWorkers(this)
+      return
+    }
     this.#approvedClose = null
     if (this._closed && at.events < this.#closeEvent) return
     this.#liveHead = at.events
     this._closed = false
+    if (fact.workers) this._context._events.observeWorkers(this)
   }
 
   _closeEvent(seq: number, at: Observation | null = null): void {
@@ -1320,6 +1324,7 @@ export class Page extends EventEmitter {
   #close(): void {
     if (this._closed) return
     this._closed = true
+    this._context._events.forgetWorkers(this)
     this.#workerSnapshot = []
     this._settleWorkerFacts(null)
     this.emit('close', this)

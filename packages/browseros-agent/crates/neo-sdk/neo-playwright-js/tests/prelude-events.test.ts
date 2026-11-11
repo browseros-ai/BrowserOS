@@ -1082,13 +1082,48 @@ it('delivers worker console before snapshot closure and preserves the worker ent
     worker.on('console', message => order.push(message.worker() === worker && message.worker().url()))
     worker.on('close', () => order.push('close'))
     const message = worker.waitForEvent('console')
+    const filtered = worker.waitForEvent('console', message => message.text() === 'last message')
     await page.evaluate(() => undefined)
-    return { text: (await message).text(), order, count: page.workers().length }
+    return { text: (await message).text(), filtered: (await filtered).text(), order, count: page.workers().length }
   `),
   )
   expect(result).toEqual({
     text: 'last message',
+    filtered: 'last message',
     order: [worker.url, 'close'],
     count: 0,
   })
+})
+
+it('releases internal worker bookkeeping once when a page closes', async () => {
+  let sequence = 0
+  const runtime = loadPrelude({
+    seed: { ...SEED, pages: [{ tab: 1007, closed: false, workers: [] }] },
+    answer: (call) => {
+      if (call.name === 'events.next') return never
+      if (call.name === 'page.close' || call.name === 'page.title')
+        return {
+          ok: call.name === 'page.title' ? { title: 'closed' } : {},
+          observed: { seq: ++sequence, events: sequence },
+          pages: [{ tab: 1007, closed: true, workers: [] }],
+        }
+      return null
+    },
+  })
+  await runtime.run('await page.close(); await page.title()')
+  await eventually(() =>
+    runtime
+      .sent('events.listen')
+      .some(
+        (call) => call.input.event === 'workerstate' && call.input.on === false,
+      ),
+  )
+  expect(
+    [...runtime.startCalls, ...runtime.calls]
+      .filter(
+        (call) =>
+          call.name === 'events.listen' && call.input.event === 'workerstate',
+      )
+      .map((call) => call.input.on),
+  ).toEqual([true, false])
 })

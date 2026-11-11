@@ -35,11 +35,14 @@
 //!   with `BROWSERCLAW_HOSTED_MODE=1`), so there those events never fire.
 
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::mem;
 use std::sync::Arc;
 use std::time::Duration;
 
 use browseros_cdp::CdpEvent;
-use browseros_core::{BrowserSession, BrowserView, CoreError, FrameId, SessionId, TargetId};
+use browseros_core::{
+    BrowserSession, BrowserView, CoreError, FrameId, ProtocolSession, SessionId, TargetId,
+};
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
@@ -161,6 +164,8 @@ struct Watcher {
     worker_sessions: HashMap<SessionId, String>,
     /// Older Chromium has no workerScriptLoaded event and uses context creation instead.
     worker_script_events: Option<bool>,
+    /// Watcher-owned root sessions only auto-attach descendants; page Runtime stays off.
+    root_observers: HashMap<SessionId, RootObserver>,
     /// Core may attach concurrently. One source per native target prevents each CDP session
     /// from publishing the same lifecycle transition; OOPIFs have their own native target.
     lifecycle_sources: LifecycleSources,
@@ -177,6 +182,35 @@ struct Watcher {
     /// Window lookups report their popup back on this channel, so only this task writes the
     /// log. The receiving end is a local of the task's loop.
     found: UnboundedSender<OpenedPage>,
+}
+
+/// The watcher owns only this root attachment, fenced to the socket that created it.
+struct RootObserver {
+    target: TargetId,
+    root: ProtocolSession,
+}
+
+impl Drop for Watcher {
+    fn drop(&mut self) {
+        let observers = mem::take(&mut self.root_observers);
+        if observers.is_empty() {
+            return;
+        }
+        if let Ok(runtime) = Handle::try_current() {
+            runtime.spawn(async move {
+                for (session, observer) in observers {
+                    let _ = time::timeout(
+                        Duration::from_secs(1),
+                        observer.root.send_value(
+                            "Target.detachFromTarget",
+                            json!({"sessionId": session.as_str()}),
+                        ),
+                    )
+                    .await;
+                }
+            });
+        }
+    }
 }
 
 struct KnownPage {
@@ -368,6 +402,7 @@ impl Watcher {
             sessions: HashMap::new(),
             worker_sessions: HashMap::new(),
             worker_script_events: None,
+            root_observers: HashMap::new(),
             lifecycle_sources: LifecycleSources::default(),
             frames: HashMap::new(),
             contexts: HashMap::new(),
@@ -476,6 +511,7 @@ impl Watcher {
 
     /// A session went: its tab and its contexts are forgotten.
     fn session_detached(&mut self, session: &SessionId) {
+        self.root_observers.remove(session);
         if let Some(id) = self.worker_sessions.remove(session) {
             self.close_worker(&id);
         }
@@ -630,6 +666,7 @@ impl Watcher {
             }
             self.worker_sessions.clear();
             self.worker_script_events = None;
+            self.root_observers.clear();
             self.sessions.clear();
             self.lifecycle_sources = LifecycleSources::default();
             self.frames.clear();
@@ -834,6 +871,8 @@ impl Watcher {
     }
 
     fn destroyed(&mut self, target: &TargetId) {
+        self.root_observers
+            .retain(|_, observer| observer.target != *target);
         self.close_worker(target.as_str());
         for worker in self.writer.hub().workers.list(target) {
             self.close_worker(&worker.id);
@@ -868,9 +907,6 @@ impl Watcher {
     }
 
     fn console(&mut self, session: &SessionId, target: TargetId, params: ConsoleParams) {
-        if !self.worker_sessions.contains_key(session) && !self.lifecycle_sources.accepts(session) {
-            return;
-        }
         let mut message = ConsoleMessage::from_params(target, params);
         message.worker = self
             .worker_sessions
@@ -882,7 +918,7 @@ impl Watcher {
 
     fn close_worker(&mut self, id: &str) {
         if let Some(worker) = self.writer.hub().workers.remove(id) {
-            if let Some(session) = worker.session.session_id() {
+            if let Some(session) = worker.session().session_id() {
                 self.worker_sessions.remove(session);
                 self.sessions.remove(session);
             }
@@ -974,18 +1010,31 @@ impl Watcher {
             let Some(attached) = reply.ok().and_then(parse::<AttachedWorker>) else {
                 continue;
             };
-            if let Some(old) = self.writer.hub().workers.remove(&target.target_id)
-                && let Some(session) = old.session.session_id()
-            {
-                self.worker_sessions.remove(session);
-                self.sessions.remove(session);
+            if let Some(worker) = known {
+                if let Some(old_session) = worker.session().session_id() {
+                    self.worker_sessions.remove(old_session);
+                    self.sessions.remove(old_session);
+                }
+                let session = self
+                    .browser
+                    .protocol_session(attached.session_id.clone())
+                    .at_connection_epoch();
+                let wait_for_script = self.worker_script_events().await;
+                // Retain the watch channel: waiting evaluations follow startup onto this
+                // new Runtime agent instead of mistaking endpoint replacement for closure.
+                worker.rebind(session.clone(), wait_for_script);
+                self.sessions.insert(attached.session_id.clone(), owner);
+                self.worker_sessions
+                    .insert(attached.session_id, worker.info.id.clone());
+                Self::enable_worker(&session).await;
+            } else {
+                let info = super::worker_table::WorkerInfo {
+                    id: target.target_id.clone(),
+                    url: target.url.clone(),
+                };
+                self.start_worker(owner, info, attached.session_id, true)
+                    .await;
             }
-            let info = super::worker_table::WorkerInfo {
-                id: target.target_id.clone(),
-                url: target.url.clone(),
-            };
-            self.start_worker(owner, info, attached.session_id, known.is_none())
-                .await;
         }
     }
 
@@ -1018,6 +1067,10 @@ impl Watcher {
                 closed: false,
             });
         }
+        Self::enable_worker(&session).await;
+    }
+
+    async fn enable_worker(session: &ProtocolSession) {
         // Runtime.enable replays startup contexts and console messages. Arm recursive
         // attachment as upstream does, so nested workers belong to the same Page.
         let _ = session.send_value("Runtime.enable", json!({})).await;
@@ -1050,6 +1103,11 @@ impl Watcher {
                 self.start_worker(tab, info, session_id, true).await;
             }
             "page" => {
+                // An observer has no Page/Runtime domains. Let a foreground core session
+                // become the lifecycle source when the script actually acts on this tab.
+                if self.root_observers.contains_key(&session_id) {
+                    return;
+                }
                 let target = TargetId(target_info.target_id);
                 self.lifecycle_sources.attach(&session_id, &target);
                 self.sessions.insert(session_id.clone(), target.clone());
@@ -1116,38 +1174,75 @@ impl Watcher {
         Some(info.target_id)
     }
 
-    /// Auto-attach every native page so `page.workers()` can enumerate existing workers in
-    /// untouched adopted tabs. Context lifecycle listeners reuse those sessions. Core owns
-    /// their shutdown, just like action sessions; nothing creates or selects a tab here.
-    async fn observe_context(&self) {
+    /// A raw observer auto-attaches workers without enabling Runtime on untouched pages.
+    /// Core's full renderer setup is reserved for foreground actions or explicit context
+    /// lifecycle listeners. Observer sessions belong to this watcher and detach on drop.
+    async fn observe_context(&mut self) {
         if let Ok(Ok(listing)) = time::timeout(Duration::from_secs(1), self.view.list_pages()).await
         {
+            let full = self.writer.hub().wants_context_lifecycle();
             for page in listing.pages {
-                // Agent-created tabs are initialized by their foreground creation call.
-                // Racing that call can add an attach attempt after its client timeout.
-                if self.browser.pages.is_agent_created(&page.page_id).await {
-                    continue;
-                }
-                if self
-                    .browser
-                    .pages
-                    .get_attached_session(page.page_id.clone())
-                    .await
-                    .is_some()
+                if self.browser.pages.is_agent_created(&page.page_id).await
+                    || self
+                        .browser
+                        .pages
+                        .get_attached_session(page.page_id.clone())
+                        .await
+                        .is_some()
                 {
                     continue;
                 }
-                if !self
-                    .sessions
-                    .values()
-                    .any(|target| *target == page.target_id)
-                {
+                if full {
                     let _ =
                         time::timeout(Duration::from_secs(1), self.view.page_session(page.page_id))
                             .await;
+                } else if !self
+                    .root_observers
+                    .values()
+                    .any(|observer| observer.target == page.target_id)
+                {
+                    self.observe_workers(page.target_id).await;
                 }
             }
         }
+    }
+
+    async fn observe_workers(&mut self, target: TargetId) {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Observed {
+            session_id: SessionId,
+        }
+        let root = ProtocolSession::root(self.browser.connection()).at_connection_epoch();
+        let reply = root
+            .send_value(
+                "Target.attachToTarget",
+                json!({"targetId": target.as_str(), "flatten": true}),
+            )
+            .await;
+        let Some(observed) = reply.ok().and_then(parse::<Observed>) else {
+            return;
+        };
+        self.root_observers.insert(
+            observed.session_id.clone(),
+            RootObserver {
+                target: target.clone(),
+                root,
+            },
+        );
+        self.sessions.insert(observed.session_id.clone(), target);
+        let session = self
+            .browser
+            .protocol_session(observed.session_id)
+            .at_connection_epoch();
+        // No Runtime.enable: console reporting on an unrelated page can execute preview
+        // getters used to detect inspection. Target auto-attach needs no renderer domains.
+        let _ = session
+            .send_value(
+                "Target.setAutoAttach",
+                json!({"autoAttach": true, "waitForDebuggerOnStart": true, "flatten": true}),
+            )
+            .await;
     }
 
     /// Sessions can attach to a tab whose documents existed before this watcher. Remember
@@ -1483,4 +1578,50 @@ fn parse<T: DeserializeOwned>(params: Value) -> Option<T> {
 
 fn decode<T: DeserializeOwned>(reply: Value) -> Result<T, CoreError> {
     serde_json::from_value(reply).map_err(|error| CoreError::Message(error.to_string()))
+}
+
+#[cfg(test)]
+mod worker_observation_tests {
+    use std::error::Error;
+    use std::sync::Arc;
+
+    use browseros_core::testing::TestConnection;
+    use browseros_core::{BrowserSession, BrowserSessionHooks, CdpConnection, TargetId};
+    use serde_json::json;
+
+    use super::Watcher;
+    use crate::events::{EventHub, WatcherProgress};
+    use crate::world::FrameAttachLog;
+
+    #[tokio::test]
+    async fn observing_an_untouched_page_never_enables_its_runtime() -> Result<(), Box<dyn Error>> {
+        let connection = TestConnection::new([("Target.setAutoAttach", json!({}))]);
+        let browser = BrowserSession::new(
+            Arc::clone(&connection) as Arc<dyn CdpConnection>,
+            BrowserSessionHooks::default(),
+        );
+        let (_hub, writer) = EventHub::new();
+        let (mut watcher, _found) = Watcher::new(
+            browser,
+            writer,
+            Arc::new(FrameAttachLog::default()),
+            Arc::new(WatcherProgress::default()),
+        );
+        watcher
+            .observe_workers(TargetId("untouched-page".to_owned()))
+            .await;
+        let calls = connection.calls()?;
+        assert_eq!(
+            calls.len(),
+            2,
+            "observation only attaches and arms descendant discovery"
+        );
+        assert_eq!(calls[0].method, "Target.attachToTarget");
+        assert_eq!(calls[1].method, "Target.setAutoAttach");
+        assert!(
+            !calls.iter().any(|call| call.method == "Runtime.enable"),
+            "page console reporting must stay off on an untouched tab"
+        );
+        Ok(())
+    }
 }

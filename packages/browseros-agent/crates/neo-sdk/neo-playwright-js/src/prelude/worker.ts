@@ -87,12 +87,20 @@ export class Worker extends EventEmitter {
           resolve(value)
           return
         }
-        void Promise.resolve()
-          .then(async () => {
-            if (typeof predicate !== 'function' || (await predicate(value)))
-              resolve(value)
-          })
-          .catch(reject)
+        try {
+          const accepted: unknown = predicate(value)
+          if (
+            (typeof accepted === 'object' || typeof accepted === 'function') &&
+            accepted !== null &&
+            typeof Reflect.get(accepted, 'then') === 'function'
+          ) {
+            void Promise.resolve(accepted).then((result) => {
+              if (result) resolve(value)
+            }, reject)
+          } else if (accepted) resolve(value)
+        } catch (error) {
+          reject(error)
+        }
       }
       closed = () =>
         reject(

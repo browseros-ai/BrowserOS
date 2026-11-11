@@ -179,6 +179,12 @@ export class EventHub {
     this.listen(page, 'workerstate', true)
   }
 
+  /** Closed pages release only their internal bookkeeping interest; user listeners keep
+   * Node's normal emitter semantics and their existing lifecycle handling. */
+  forgetWorkers(page: Page): void {
+    if (this.workerPages.delete(page)) this.listen(page, 'workerstate', false)
+  }
+
   /**
    * A page or the context gained its first listener for `event`, or lost its last one. The
    * stamp is taken now, synchronously, so Rust delivers only what happened after the script
