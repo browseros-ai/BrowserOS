@@ -14,7 +14,7 @@ read-only Playwright commit -> upstream transform -> program bytes (one file per
 ```
 
 The native BrowserOS oracle is not hosted. Neo uses the same browser binary in hosted mode,
-through the built server, its dispatcher, takeover rules and trace. A program's upstream test
+through the built server, its dispatcher and trace. A program's upstream test
 body, hooks and closure state stay in one module. Only Playwright Test infrastructure—test
 registration, fixtures, hook execution, budgets and soft assertions—is supplied by `src/runtime.js`.
 The runtime's own pages, locators, callbacks, handles and matchers remain under test.
