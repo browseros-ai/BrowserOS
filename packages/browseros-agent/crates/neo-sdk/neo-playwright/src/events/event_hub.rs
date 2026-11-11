@@ -34,9 +34,9 @@ struct EventLog {
     records: VecDeque<EventRecord>,
     /// The seq the last record got; seqs start at 1, so 0 reads "from the start".
     last_seq: u64,
-    /// Each live target's newest main-frame navigation, kept apart from `records` so the bounded
-    /// ring cannot evict one the host has not refreshed its URL facts for. Dropped when the
-    /// target's close is recorded.
+    /// Each open tab's newest main-frame navigation, kept apart from `records` so the bounded
+    /// ring cannot evict one the host has not refreshed its URL facts for. The watcher marks
+    /// them (`EventWriter::main_frame_navigated`); a tab's entry goes with its recorded close.
     navigated: HashMap<TargetId, u64>,
 }
 
@@ -232,16 +232,8 @@ impl EventWriter {
             let mut log = self.hub.lock_log();
             log.last_seq += 1;
             let seq = log.last_seq;
-            // A main frame's id is its target's id.
-            match &event {
-                PageEvent::Navigation(navigation) => {
-                    log.navigated
-                        .insert(TargetId(navigation.frame.as_str().to_owned()), seq);
-                }
-                PageEvent::Closed(target) => {
-                    log.navigated.remove(target);
-                }
-                _ => {}
+            if let PageEvent::Closed(target) = &event {
+                log.navigated.remove(target);
             }
             log.records.push_back(EventRecord {
                 seq,
@@ -256,6 +248,13 @@ impl EventWriter {
         // Outside the lock: woken readers take it at once.
         self.hub.changed.notify_waiters();
         seq
+    }
+
+    /// Records that the navigation recorded as `seq` was `tab`'s main frame's. The watcher calls
+    /// it, as only the watcher knows which tab a session's frame belongs to: a child frame's
+    /// navigation is never kept, so the map holds one entry per open tab.
+    pub(crate) fn main_frame_navigated(&mut self, tab: TargetId, seq: u64) {
+        self.hub.lock_log().navigated.insert(tab, seq);
     }
 
     /// The hub this writer appends to.
@@ -355,11 +354,18 @@ mod tests {
     #[test]
     fn tests_that_the_newest_navigation_outlives_the_ring_until_its_target_closes() {
         let (hub, mut writer) = EventHub::new();
+        let target = TargetId("A".to_owned());
         let moved = writer.record(navigated("A"));
+        writer.main_frame_navigated(target.clone(), moved);
+        let child = writer.record(navigated("child-frame"));
+        assert_eq!(
+            hub.navigated_at(&TargetId("child-frame".to_owned())),
+            None,
+            "a navigation the watcher did not mark as a main frame's is not kept: {child}"
+        );
         for _ in 0..LOG_CAPACITY + 5 {
             writer.record(closed("B"));
         }
-        let target = TargetId("A".to_owned());
         assert_eq!(hub.navigated_at(&target), Some(moved));
         writer.record(closed("A"));
         assert_eq!(hub.navigated_at(&target), None);

@@ -13,7 +13,7 @@ use browseros_core::{PageId, TabId};
 use neo_trace::{Delivery, Effect, OperationId, OperationReached, PageState, TraceSink};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use tokio::sync::oneshot;
+use tokio::sync::{Mutex as AsyncMutex, oneshot};
 
 use super::close_release::close_release;
 use super::op_ctx::{OpCore, OpState, PageChange, PageReport};
@@ -28,11 +28,17 @@ use super::{
 };
 use crate::browser::{BrowserLink, PageRef, TabRegistry};
 
-/// The event seq through which the door last refreshed a tab's entry in core's page cache, so
-/// a navigation the page made itself is refreshed once (`Dispatcher::navigated_since_refresh`).
-/// A per-tab slot, dropped with the tab.
+/// A tab's refresh bookkeeping, a per-tab slot dropped with the tab: the event seq through which
+/// the door last refreshed its entry in core's page cache, so a navigation the page made itself
+/// is refreshed once (`Dispatcher::refresh_if_navigated`), and the turn its refreshes take.
 #[derive(Debug, Default)]
-struct RefreshedThrough(AtomicU64);
+struct RefreshedThrough {
+    through: AtomicU64,
+    /// Core keeps the entry another refresh wrote while one was in flight and drops that one's
+    /// read (`refresh_with_epoch`), so two overlapping refreshes could leave the older read under
+    /// the newer mark. The door's refreshes of a tab take turns, each checking the mark again.
+    turn: AsyncMutex<()>,
+}
 
 /// The method the door calls, as Neo, to open a run's lazy default page: with `{}`, returning
 /// Playwright's page entry `{ page, url }` (`OpenedPage`) after reporting the page
@@ -675,8 +681,7 @@ impl Dispatcher {
                 }
                 PageChange::Navigated if !refreshed.contains(&page.tab) => {
                     refreshed.push(page.tab);
-                    self.refresh_and_mark(run, page, self.refresh_mark(page))
-                        .await;
+                    self.refresh_navigated(run, page).await;
                 }
                 PageChange::Navigated | PageChange::Linked => {}
                 PageChange::Gone { target, seq } => {
@@ -772,46 +777,55 @@ impl Dispatcher {
             if closed.contains(&page.tab) || refreshed.contains(&page.tab) {
                 continue;
             }
-            if let Some(mark) = self.navigated_since_refresh(page).await {
-                self.refresh_and_mark(run, page, Some(mark)).await;
-            }
+            self.refresh_if_navigated(run, page).await;
         }
     }
 
-    /// `page`'s refresh mark and the log's head now, when its main frame navigated past the
-    /// event seq the door last refreshed its cache entry through. A refresh that then reads core
-    /// covers every event up to that head. A tab the registry does not track has no mark.
-    async fn navigated_since_refresh(
-        &self,
-        page: &PageRef,
-    ) -> Option<(Arc<RefreshedThrough>, u64)> {
-        let through = self.tabs.slot::<RefreshedThrough>(page)?;
-        let info = self.browser.page(page.tab).await?;
-        let navigated = self.observer.navigated(&info.target_id)?;
-        (navigated > through.0.load(Ordering::Relaxed)).then(|| (through, self.observer.head()))
+    /// Refreshes `page` once its main frame navigated past the event seq the door last refreshed
+    /// it through, then moves the mark to the log's head from just before the refresh read core.
+    /// Only a refresh that read core moves it: a failed or cancelled one leaves the navigation
+    /// owed, so a later reply tries again. A tab the registry does not track has no mark.
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "the turn orders one tab's cache refreshes; see RefreshedThrough"
+    )]
+    async fn refresh_if_navigated(&self, run: &RunCtx, page: &PageRef) {
+        let Some(mark) = self.tabs.slot::<RefreshedThrough>(page) else {
+            return;
+        };
+        let Some(info) = self.browser.page(page.tab).await else {
+            return;
+        };
+        let Some(navigated) = self.observer.navigated(&info.target_id) else {
+            return;
+        };
+        if navigated <= mark.through.load(Ordering::Relaxed) {
+            return;
+        }
+        let _turn = mark.turn.lock().await;
+        // A refresh that had the turn while this one waited may already cover it.
+        if navigated <= mark.through.load(Ordering::Relaxed) {
+            return;
+        }
+        let head = self.observer.head();
+        if refresh(run, &self.browser, page.tab).await {
+            mark.through.fetch_max(head, Ordering::Relaxed);
+        }
     }
 
-    /// Refreshes `page`'s cache entry, then moves its mark to `mark`'s head. Only a refresh
-    /// that read core moves it: a failed or cancelled one leaves the navigation owed, so a later
-    /// reply tries again. A concurrent reply may refresh the same tab too, which costs one more
-    /// read and is never stale.
-    async fn refresh_and_mark(
-        &self,
-        run: &RunCtx,
-        page: &PageRef,
-        mark: Option<(Arc<RefreshedThrough>, u64)>,
-    ) {
+    /// A navigating op's refresh, in its tab's turn, moving the mark as one above does.
+    async fn refresh_navigated(&self, run: &RunCtx, page: &PageRef) {
+        let mark = self.tabs.slot::<RefreshedThrough>(page);
+        let _turn = match &mark {
+            Some(mark) => Some(mark.turn.lock().await),
+            None => None,
+        };
+        let head = self.observer.head();
         if refresh(run, &self.browser, page.tab).await
-            && let Some((through, head)) = mark
+            && let Some(mark) = &mark
         {
-            through.0.fetch_max(head, Ordering::Relaxed);
+            mark.through.fetch_max(head, Ordering::Relaxed);
         }
-    }
-
-    /// The head before a navigating op's refresh: its mark once that refresh read core.
-    fn refresh_mark(&self, page: &PageRef) -> Option<(Arc<RefreshedThrough>, u64)> {
-        let through = self.tabs.slot::<RefreshedThrough>(page)?;
-        Some((through, self.observer.head()))
     }
 
     /// Facts and their reported close records cross policy together, after the async cache
