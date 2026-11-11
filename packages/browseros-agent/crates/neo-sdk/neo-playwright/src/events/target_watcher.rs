@@ -784,6 +784,7 @@ impl Watcher {
             "Target.detachedFromTarget" => {
                 if let Some(Detached { session_id }) = parse(params) {
                     self.dialog_closed(&session_id);
+                    self.writer.hub().forget_log(&session_id);
                     self.session_detached(&session_id);
                     self.lifecycle_sources.detach(&session_id);
                 }

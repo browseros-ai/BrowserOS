@@ -217,6 +217,18 @@ impl Playwright {
     /// past this op, whatever order the host's promises settle in (the Node add-on settles each
     /// on a threadsafe function of its own, in no fixed order). A run with no listener has
     /// nothing to order and does not wait.
+    /// Returns once the watcher handled every `Log.entryAdded` the client handed out through
+    /// `through`, bounded as [`Self::events_before_reply`] is: how a `Log.enable` knows its replay
+    /// was judged (`event_op::enable_log`).
+    pub(crate) async fn log_entries_handled(&self, through: u64) {
+        let fence = Fence {
+            events: 0,
+            calls: 0,
+            logs: through,
+        };
+        let _bounded = time::timeout(EVENTS_BEFORE_REPLY, self.progress.reached(fence)).await;
+    }
+
     async fn events_before_reply(&self, scope: &OpScope<'_>) {
         let run = scope.run_state();
         if !run.events.has_listeners() {

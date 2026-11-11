@@ -7,19 +7,20 @@
 
 use std::path::{self, Path, PathBuf};
 use std::pin::pin;
+use std::time::Duration;
 use std::{io, slice};
 
 use browseros_core::{CoreError, ProtocolSession, SessionId, TabId};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use tokio::fs;
+use tokio::{fs, time};
 
 use crate::events::dialog_table::{ClosedBy, Unanswerable};
 use crate::events::event_hub::{now_ms, receives};
 use crate::events::event_reader::{Delivered, Tabs, WindowPopup, binding_call, deliver};
 use crate::events::page_event::DialogId;
 use crate::events::subscription::Unknown;
-use crate::events::{ListenerKey, PageEvent, PageEventKind, Subscription};
+use crate::events::{LOG_ENTRY_ADDED, ListenerKey, PageEvent, PageEventKind, Subscription};
 use crate::listed_enum::listed_enum;
 use crate::op_input::OpArgs;
 use crate::op_output::to_output;
@@ -27,6 +28,10 @@ use crate::op_scope::{Expired, OpScope, Sent};
 use crate::op_spec::{OpSpec, OpTarget, PAGE};
 use crate::target::PageRef;
 use crate::{DownloadState, ErrorCode, Playwright, PlaywrightError, file_save};
+
+/// How long a console listener's `Log.enable` may take, as a listener op has no deadline of its
+/// own; a renderer that does not answer (one mid-navigation) leaves browser log entries off.
+const LOG_ENABLE: Duration = Duration::from_secs(5);
 
 listed_enum! {
     /// Listening, the pump, one-shot waits, held dialogs and finished downloads.
@@ -243,48 +248,72 @@ async fn subscription(
     scope: &OpScope<'_>,
     page: Option<PageRef>,
     event: &str,
-) -> Result<Subscription, PlaywrightError> {
-    match page {
+) -> Result<Subscribed, PlaywrightError> {
+    let subscription = match page {
         Some(handle) => {
             let event = page_event(scope, event)?;
             let page = handle.tab();
             let admitted = scope.admit(pw.browser(), page).await?;
-            if event == PageEventKind::Console {
-                enable_log(pw, scope, &admitted.session.session_id).await;
-            }
-            Ok(Subscription::Page {
-                tab: page,
-                target: admitted.session.target_id.clone(),
-                event,
-            })
+            let log =
+                (event == PageEventKind::Console).then(|| admitted.session.session_id.clone());
+            return Ok(Subscribed {
+                subscription: Subscription::Page {
+                    tab: page,
+                    target: admitted.session.target_id.clone(),
+                    event,
+                },
+                log,
+            });
         }
-        None if event == "page" => Ok(Subscription::ContextPage),
-        None if PageEventKind::context(event).is_some() => Ok(Subscription::Context(
+        None if event == "page" => Subscription::ContextPage,
+        None if PageEventKind::context(event).is_some() => Subscription::Context(
             PageEventKind::context(event).ok_or_else(|| context_event(scope, event))?,
-        )),
-        None => Err(context_event(scope, event)),
-    }
+        ),
+        None => return Err(context_event(scope, event)),
+    };
+    Ok(Subscribed {
+        subscription,
+        log: None,
+    })
+}
+
+/// A resolved subscription, and for a page's console the session whose `Log` the op enables
+/// once its interest is registered ([`enable_log`]).
+struct Subscribed {
+    subscription: Subscription,
+    log: Option<SessionId>,
 }
 
 /// Enables `Log` on a page's session for its first console listener or wait, as upstream's
 /// `crPage` enables it on every page: a browser log entry (a CORS failure, say) is a console
-/// message too (CM-008). The watcher passes on only what the page logs from now on
-/// (`EventHub::enable_log`). Best effort: a page that refuses it keeps its console API messages.
+/// message too (CM-008). Sent after the op registered its interest, so a live entry during the
+/// enable is not dropped for want of a listener. Within the op's deadline and abort, and
+/// bounded for a listener, which has neither. Best effort: a page that refuses it keeps its
+/// console API messages.
 async fn enable_log(pw: &Playwright, scope: &OpScope<'_>, session: &SessionId) {
-    let hub = pw.events();
-    if !hub.enable_log(session) {
+    let Some(enabling) = pw.events().start_log(session) else {
         return;
-    }
-    let enabled = pw
-        .browser()
-        .protocol_session(session.clone())
-        .send_value("Log.enable", json!({}))
-        .await;
-    if let Err(error) = enabled {
-        hub.log_enable_failed(session);
-        scope.log(format!(
-            "browser log entries stay off on this page: {error}"
-        ));
+    };
+    let enable = async {
+        pw.browser()
+            .protocol_session(session.clone())
+            .send_value("Log.enable", json!({}))
+            .await?;
+        // Its replay came before its reply: confirm only once the watcher judged every entry
+        // delivered by then against the enable's start (`EventHub::log_entry_is_new`).
+        let replayed = pw.browser().cdp_events_targeted_delivered(LOG_ENTRY_ADDED);
+        pw.log_entries_handled(replayed).await;
+        Ok::<(), CoreError>(())
+    };
+    match time::timeout(LOG_ENABLE, scope.within(enable)).await {
+        Ok(Ok(Ok(()))) => enabling.confirm(),
+        Ok(Ok(Err(error))) => {
+            scope.log(format!(
+                "browser log entries stay off on this page: {error}"
+            ));
+        }
+        // Dropped unconfirmed: the next console listener tries again.
+        Ok(Err(_)) | Err(_) => {}
     }
 }
 
@@ -361,7 +390,8 @@ async fn listen(
         run.events.unlisten(&key);
         return Ok(json!({}));
     }
-    let subscription = subscription(pw, scope, input.page, &input.event).await?;
+    let Subscribed { subscription, log } =
+        subscription(pw, scope, input.page, &input.event).await?;
     let since = input.since.unwrap_or_else(now_ms);
     let hub = pw.events();
     hub.bind(run);
@@ -372,6 +402,9 @@ async fn listen(
     // the actual listener and cannot be undone when this on finishes.
     if observes_context {
         observe_context(scope).await?;
+    }
+    if let Some(session) = log {
+        enable_log(pw, scope, &session).await;
     }
     // A pump that already read past an event this listener should get reads again.
     hub.wake();
@@ -462,13 +495,17 @@ async fn wait(
             ),
         ));
     }
-    let subscription = subscription(pw, scope, input.page, &input.event).await?;
+    let Subscribed { subscription, log } =
+        subscription(pw, scope, input.page, &input.event).await?;
     let run = scope.run_state();
     pw.events().bind(run);
     // While it waits, the watcher records and holds what this wait could receive.
     let _waiting = run.events.waiting(subscription.clone());
     if matches!(subscription, Subscription::Context(_)) {
         observe_context(scope).await?;
+    }
+    if let Some(session) = log {
+        enable_log(pw, scope, &session).await;
     }
     let found = first_event(
         pw,

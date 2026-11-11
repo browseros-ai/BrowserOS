@@ -38,19 +38,47 @@ pub(crate) struct EventHub {
     /// ends. The page's controller keeps one binding per name, so two runs on one tab must not
     /// share one, or each would answer and remove the other's.
     bindings: Mutex<HashMap<(TargetId, String), Weak<RunState>>>,
-    /// Each page session's `Log` domain: whether Neo enabled it, and the newest entry time
-    /// passed on there. `Log.enable` replays the entries the page logged before it, and a second
-    /// enable (`addScriptTag`'s) replays them again; none of those is news.
-    log_sessions: Mutex<HashMap<SessionId, LogSession>>,
+    /// Each page session whose `Log` domain Neo enabled or is enabling (`EventHub::start_log`).
+    log_sessions: Mutex<HashMap<SessionId, LogState>>,
 }
 
-/// One page session's [`EventHub::log_sessions`] entry.
-#[derive(Debug, Default)]
-struct LogSession {
-    enabled: bool,
-    /// Entries logged at or before this, in ms since the epoch, were passed on or predate the
-    /// enable.
-    newest_ms: f64,
+/// Where one page session's `Log` domain stands for Neo. Blink's `Log.enable` replays the
+/// entries the page logged so far before it replies, and is a no-op once enabled, so only an
+/// entry that arrives while Neo's own enable is in flight can be a replay: one the page logged
+/// before the enable began. Every entry after the reply is live, whatever its timestamp.
+#[derive(Debug)]
+enum LogState {
+    /// The enable began at `since_ms`, in ms since the epoch, and has not been confirmed yet.
+    Enabling {
+        since_ms: f64,
+    },
+    Enabled,
+}
+
+/// One `Log.enable` in flight on a session ([`EventHub::start_log`]). Dropped unconfirmed, by a
+/// failure or a cancelled op, it lets the next console listener try again.
+pub(crate) struct LogEnabling<'hub> {
+    hub: &'hub EventHub,
+    session: SessionId,
+    confirmed: bool,
+}
+
+impl LogEnabling<'_> {
+    /// The enable replied and the watcher judged every entry delivered before that reply.
+    pub(crate) fn confirm(mut self) {
+        self.hub
+            .lock_log_sessions()
+            .insert(self.session.clone(), LogState::Enabled);
+        self.confirmed = true;
+    }
+}
+
+impl Drop for LogEnabling<'_> {
+    fn drop(&mut self) {
+        if !self.confirmed {
+            self.hub.lock_log_sessions().remove(&self.session);
+        }
+    }
 }
 
 #[derive(Debug, Default)]
@@ -113,52 +141,44 @@ impl EventHub {
         self.changed.notify_waiters();
     }
 
-    /// Whether the caller should send `Log.enable` on `session`: once, for the first console
-    /// listener or wait on its page. What the page logged before that point is a replay.
-    pub(crate) fn enable_log(&self, session: &SessionId) -> bool {
-        let mut sessions = self
-            .log_sessions
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
-        let log = sessions.entry(session.clone()).or_default();
-        if log.enabled {
-            return false;
+    /// The enable of `Log` on `session` for its page's first console listener or wait, when
+    /// none happened or is in flight: the caller sends `Log.enable` and confirms it.
+    pub(crate) fn start_log(&self, session: &SessionId) -> Option<LogEnabling<'_>> {
+        let mut sessions = self.lock_log_sessions();
+        if sessions.contains_key(session) {
+            return None;
         }
-        log.enabled = true;
         #[expect(
             clippy::cast_precision_loss,
             reason = "milliseconds since the epoch stay far below 2^52"
         )]
-        let now = now_ms() as f64;
-        log.newest_ms = log.newest_ms.max(now);
-        true
+        let since_ms = now_ms() as f64;
+        sessions.insert(session.clone(), LogState::Enabling { since_ms });
+        Some(LogEnabling {
+            hub: self,
+            session: session.clone(),
+            confirmed: false,
+        })
     }
 
-    /// `Log.enable` failed on `session`, so the next console listener tries it again.
-    pub(crate) fn log_enable_failed(&self, session: &SessionId) {
-        if let Some(log) = self
-            .log_sessions
+    /// Whether an entry `session` logged at `timestamp` is news: not one Neo's enable in flight
+    /// replayed from before it began ([`LogState`]).
+    pub(crate) fn log_entry_is_new(&self, session: &SessionId, timestamp: f64) -> bool {
+        match self.lock_log_sessions().get(session) {
+            Some(LogState::Enabling { since_ms }) => timestamp >= *since_ms,
+            Some(LogState::Enabled) | None => true,
+        }
+    }
+
+    /// The session detached: a later one with its id starts over.
+    pub(crate) fn forget_log(&self, session: &SessionId) {
+        self.lock_log_sessions().remove(session);
+    }
+
+    fn lock_log_sessions(&self) -> MutexGuard<'_, HashMap<SessionId, LogState>> {
+        self.log_sessions
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .get_mut(session)
-        {
-            log.enabled = false;
-        }
-    }
-
-    /// Whether an entry `session` logged at `timestamp` is new, and if so, notes it: an entry no
-    /// newer than one passed on, or than the enable, is a replay.
-    pub(crate) fn log_entry_is_new(&self, session: &SessionId, timestamp: f64) -> bool {
-        let mut sessions = self
-            .log_sessions
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
-        let log = sessions.entry(session.clone()).or_default();
-        if timestamp <= log.newest_ms {
-            return false;
-        }
-        log.newest_ms = timestamp;
-        true
     }
 
     /// The records after seq `after`.
@@ -687,35 +707,45 @@ mod tests {
         Ok(())
     }
 
-    /// CM-008: `Log` is enabled once per page session, what the page logged before is a replay,
-    /// and so is an entry replayed again by a later enable.
+    /// CM-008: `Log` is enabled once per page session at a time; while the enable is in flight,
+    /// an entry logged before it began is a replay, and after the confirm every entry is live,
+    /// a repeated or earlier timestamp included. An unconfirmed enable is tried again.
     #[test]
     #[expect(
         clippy::cast_precision_loss,
         reason = "milliseconds since the epoch stay far below 2^52"
     )]
-    fn tests_that_log_entries_pass_once_from_the_enable_on() {
+    fn tests_that_only_an_enable_in_flight_drops_entries_from_before_it() -> Result<(), String> {
         let (hub, _writer) = EventHub::new();
         let session = SessionId::from("S".to_owned());
+        let enabling = hub
+            .start_log(&session)
+            .ok_or("the first console listener enables Log")?;
+        assert!(hub.start_log(&session).is_none(), "one enable at a time");
+        let began = now_ms() as f64;
         assert!(
-            hub.enable_log(&session),
-            "the first console listener enables Log"
-        );
-        assert!(!hub.enable_log(&session), "once per session");
-        let enabled = now_ms() as f64;
-        assert!(
-            !hub.log_entry_is_new(&session, enabled - 5_000.0),
+            !hub.log_entry_is_new(&session, began - 5_000.0),
             "logged before the enable: a replay"
         );
-        assert!(hub.log_entry_is_new(&session, enabled + 10.0));
+        assert!(hub.log_entry_is_new(&session, began + 10.0));
+        enabling.confirm();
+        assert!(hub.start_log(&session).is_none(), "enabled once");
         assert!(
-            !hub.log_entry_is_new(&session, enabled + 10.0),
-            "replayed by a second enable"
+            hub.log_entry_is_new(&session, began + 10.0),
+            "the same time twice"
         );
-        assert!(hub.log_entry_is_new(&session, enabled + 11.0));
+        assert!(hub.log_entry_is_new(&session, began - 1.0), "out of order");
         let other = SessionId::from("T".to_owned());
-        assert!(hub.enable_log(&other));
-        hub.log_enable_failed(&other);
-        assert!(hub.enable_log(&other), "a failed enable is tried again");
+        drop(hub.start_log(&other));
+        assert!(
+            hub.start_log(&other).is_some(),
+            "an unconfirmed enable is tried again"
+        );
+        hub.forget_log(&session);
+        assert!(
+            hub.start_log(&session).is_some(),
+            "a detached session starts over"
+        );
+        Ok(())
     }
 }
