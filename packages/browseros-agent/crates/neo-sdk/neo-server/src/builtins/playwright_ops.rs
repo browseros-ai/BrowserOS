@@ -83,7 +83,9 @@ const PLAYWRIGHT_API: &str = "Playwright's API on `page`, `context` and `browser
     `toHaveValue`, `toHaveCount`, `toHaveAttribute`, ...) and page matchers (`toHaveTitle`, \
     `toHaveURL`), with `.not`, value matchers (`toBe`, `toEqual`, ...), `expect.poll` and \
     `toPass`; soft assertions, `toBeOK` and screenshot, snapshot and `toMatchAriaSnapshot` \
-    comparisons are not available. A call that waits gives up after 5 s unless given a `timeout`, \
+    comparisons are not available. In hosted BrowserOS, console and pageerror listeners are \
+    accepted but stay silent; `page.waitForEvent` for either fails immediately with \
+    `neo/unsupported`. A call that waits gives up after 5 s unless given a `timeout`, \
     and a navigation after 30 s. Unlike Playwright, `waitForFunction` \
     polls every 100 ms for its default `polling: 'raf'`, since animation frames never fire in \
     Neo's background tabs, and the handle it resolves to holds a snapshot of the value, which \
@@ -713,6 +715,14 @@ mod tests {
 
     fn brand(input: &Value) -> Result<PageTarget, serde_json::Error> {
         serde_json::from_value(input.clone())
+    }
+
+    #[test]
+    fn the_run_description_explains_hosted_console_and_pageerror_limits() {
+        let description = PLAYWRIGHT_LINE.as_str();
+        assert!(description.contains("In hosted BrowserOS, console and pageerror listeners"));
+        assert!(description.contains("accepted but stay silent"));
+        assert!(description.contains("fails immediately with `neo/unsupported`"));
     }
 
     #[test]
