@@ -2706,32 +2706,61 @@ async fn a_goto_sends_web_file_and_javascript_urls_to_the_browser() -> Result<()
 }
 
 #[tokio::test]
-async fn a_reload_reloads_web_and_file_pages() -> Result<(), Box<dyn Error>> {
+async fn a_reload_reloads_only_a_page_on_an_allowed_scheme() -> Result<(), Box<dyn Error>> {
     let harness = Harness::new().await?;
-    let local = harness.owner_tab("file:///tmp/local.html").await?;
+    // The owner opened a local file in a tab. The agent never navigated it, but a reload would
+    // load the file again for its next read.
+    let local = harness.owner_tab("file:///etc/hosts").await?;
     let web = harness.owner_tab("https://bank.example/").await?;
     let (run, _guard) = harness.run()?;
-    // The fake never finishes a reload. A timeout after Page.reload proves the server
-    // admitted the current URL, including a file that the owner opened originally.
-    for page in [&local, &web] {
-        let sent = failure(
-            harness
-                .submit(
-                    &run,
-                    "page.reload",
-                    json!({
-                        "call": { "api": "page.reload", "timeoutMs": 500 },
-                        "page": handle(page), "waitUntil": "load",
-                    }),
-                )
-                .await,
-        )?;
-        assert_eq!(sent.error.code(), ErrorCode::WAIT_TIMEOUT, "{}", sent.error);
-    }
+    // The browser never finishes a reload, so one the door lets through times out once sent.
+    let reload = |page: &PageRef| {
+        json!({
+            "call": { "api": "page.reload", "timeoutMs": 500 },
+            "page": handle(page),
+            "waitUntil": "load",
+        })
+    };
+    let (operation, reply) = harness.submit_op(&run, "page.reload", reload(&local)).await;
+    let refused = failure(reply)?;
+    assert_eq!(
+        (
+            refused.error.owner(),
+            refused.error.code(),
+            refused.delivery
+        ),
+        (
+            ErrorOwner::Script,
+            ErrorCode::INVALID_INPUT,
+            Delivery::NotSent
+        ),
+        "{}",
+        refused.error
+    );
     assert_eq!(
         harness.fake.count("Page.reload"),
-        2,
-        "both reloads reached Chromium"
+        0,
+        "the browser never saw the reload"
+    );
+    let row = harness.row(operation).await?;
+    assert_eq!(
+        (
+            row.delivery,
+            row.error.map(|error| (error.owner, error.code))
+        ),
+        (
+            Some(Delivery::NotSent),
+            Some((ErrorOwner::Script, "invalid_input".to_owned()))
+        ),
+        "the trace says what the door refused"
+    );
+
+    let sent = failure(harness.submit(&run, "page.reload", reload(&web)).await)?;
+    assert_eq!(
+        (sent.error.code(), harness.fake.count("Page.reload")),
+        (ErrorCode::WAIT_TIMEOUT, 1),
+        "a page on the web reloads: {}",
+        sent.error
     );
     Ok(())
 }

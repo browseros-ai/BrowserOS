@@ -86,18 +86,19 @@ const PLAYWRIGHT_API: &str = "Playwright's API on `page`, `context` and `browser
     Neo's background tabs, and the handle it resolves to holds a snapshot of the value, which \
     `jsonValue()` reads; `setContent` refuses `waitUntil: 'networkidle'`, which Neo cannot \
     observe after a write, with nothing sent; and a result nested more than about 50 objects \
-    deep can fail `Maximum call stack size exceeded`, where Playwright allows 98. `goto` and \
-    `reload` open `http`, `https`, `data`, `about`, `file` and `javascript` URLs; Chromium \
-    executes a `javascript:` URL before reporting `net::ERR_ABORTED`. `setInputFiles` uploads any \
+    deep can fail `Maximum call stack size exceeded`, where Playwright allows 98. `goto` opens \
+    `http`, `https`, `data`, `about`, `file` and `javascript` URLs; Chromium executes a \
+    `javascript:` URL before reporting `net::ERR_ABORTED`. `reload` opens only `http`, `https`, \
+    `data` and `about` URLs. `setInputFiles` uploads any \
     file Neo's process can read, as Playwright does \
     (a relative path resolves against Neo's working directory), except Neo's own secret files, \
     which fail `neo_secret_upload_refused` with nothing sent: the caller sandboxes the \
     filesystem. `{ name, mimeType, buffer }` payloads need no file and total under 10 MiB a \
     call. A directory upload needs its tab in front.";
 
-/// Schemes admitted by the server for goto and reload. Local files and JavaScript URLs are
-/// passed to Chromium as Playwright does; other browser-specific schemes remain unsupported.
-const NAVIGABLE_SCHEMES: [&str; 6] = ["http", "https", "data", "about", "file", "javascript"];
+/// Schemes shared by goto and reload. Goto additionally passes file and JavaScript URLs to
+/// Chromium; other browser-specific schemes remain unsupported.
+const NAVIGABLE_SCHEMES: [&str; 4] = ["http", "https", "data", "about"];
 
 /// Registers every neo-playwright op as a script method, as [`OpMarks`] decides from its
 /// declarations: a held op as its refusal alone, every other one as a [`PlaywrightOp`]. Called
@@ -273,7 +274,12 @@ impl OpInput {
     fn refused_navigation(&self) -> Option<OperationError> {
         let url = self.json.get("url")?.as_str()?;
         let which = match url_scheme(url) {
-            Some(scheme) if NAVIGABLE_SCHEMES.contains(&scheme.as_str()) => return None,
+            Some(scheme)
+                if NAVIGABLE_SCHEMES.contains(&scheme.as_str())
+                    || matches!(scheme.as_str(), "file" | "javascript") =>
+            {
+                return None;
+            }
             Some(scheme) => format!("this one is `{scheme}:`"),
             None => {
                 "this one has no scheme; write it whole, such as https://example.com/".to_owned()
@@ -327,7 +333,7 @@ async fn refused_reload<M>(
 fn not_navigable(which: &str) -> OperationError {
     OperationError::script(
         ErrorCode::INVALID_INPUT,
-        format_args!("Neo opens only http, https, data and about URLs in a page, and {which}."),
+        format_args!("Neo does not open this URL: {which}."),
     )
 }
 

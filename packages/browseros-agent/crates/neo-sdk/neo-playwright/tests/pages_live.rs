@@ -395,7 +395,7 @@ async fn tests_that_goto_executes_a_javascript_url_before_reporting_the_browser_
 
 #[tokio::test]
 #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
-async fn tests_that_goto_and_reload_load_a_local_file() -> TestResult {
+async fn tests_that_goto_loads_a_local_file() -> TestResult {
     with_page(|run, _server, page| async move {
         let result = async {
             let file =
@@ -421,10 +421,6 @@ async fn tests_that_goto_and_reload_load_a_local_file() -> TestResult {
                 assert_eq!(reply["response"]["ok"], json!(true));
                 assert_eq!(run.eval(&page, "document.title").await?, json!("Child"));
             }
-            run.eval(&page, "document.title = 'changed'").await?;
-            run.invoke("page.reload", json!({ "page": brand(&page) }))
-                .await?;
-            assert_eq!(run.eval(&page, "document.title").await?, json!("Child"));
             Ok(())
         }
         .await;
