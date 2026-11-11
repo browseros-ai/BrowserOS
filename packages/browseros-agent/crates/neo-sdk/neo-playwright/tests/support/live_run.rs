@@ -176,6 +176,24 @@ impl CdpConnection for Tap {
         self.browser.events_targeted(method)
     }
 
+    // The counts the watcher's fence reads: without them every op would skip the wait for
+    // events that came before its reply (`Playwright::events_before_reply`).
+    fn events_broadcast(&self) -> u64 {
+        self.browser.events_broadcast()
+    }
+
+    fn events_counted(&self) -> (broadcast::Receiver<CdpEvent>, u64) {
+        self.browser.events_counted()
+    }
+
+    fn events_targeted_counted(&self, method: &str) -> (mpsc::UnboundedReceiver<CdpEvent>, u64) {
+        self.browser.events_targeted_counted(method)
+    }
+
+    fn events_targeted_delivered(&self, method: &str) -> u64 {
+        self.browser.events_targeted_delivered(method)
+    }
+
     fn is_connected(&self) -> bool {
         self.browser.is_connected()
     }

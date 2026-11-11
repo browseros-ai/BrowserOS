@@ -8169,13 +8169,14 @@ ${value.stack}`;
       rect: box,
       point: place.point,
       inView: place.inView,
-      transformed: isTransformed(element)
+      transformed: isTransformed(element),
+      ...place.borderOffset ? { borderOffset: place.borderOffset } : {}
     };
-    if (!arm || !place.inView)
+    if (!arm || !arm.browserMapped && !place.inView)
       return measured;
     if (arm.expectRect && !sameRect(box, arm.expectRect))
       return measured;
-    const interception = injected.setupHitTargetInterceptor(element, arm.action, place.point, arm.blockAll);
+    const interception = injected.setupHitTargetInterceptor(element, arm.action, arm.browserMapped ? undefined : place.point, arm.blockAll);
     if (interception === "error:notconnected")
       return { kind: "detached" };
     if (typeof interception === "string")
@@ -8255,12 +8256,14 @@ ${value.stack}`;
     if (position) {
       const style = getComputedStyle(element);
       const box = element.getBoundingClientRect();
+      const borderOffset = {
+        x: parseInt(style.borderLeftWidth || "0", 10) + position.x,
+        y: parseInt(style.borderTopWidth || "0", 10) + position.y
+      };
       return {
-        point: {
-          x: box.x + parseInt(style.borderLeftWidth || "", 10) + position.x,
-          y: box.y + parseInt(style.borderTopWidth || "", 10) + position.y
-        },
-        inView: true
+        point: { x: box.x + borderOffset.x, y: box.y + borderOffset.y },
+        inView: true,
+        borderOffset
       };
     }
     const width = innerWidth;
@@ -8518,7 +8521,7 @@ ${value.stack}`;
   }
 
   // crates/neo-sdk/neo-playwright-js/src/probe/protocol.ts
-  var PROTOCOL = 19;
+  var PROTOCOL = 20;
 
   // crates/neo-sdk/neo-playwright-js/src/probe/read.ts
   var XHTML = "http://www.w3.org/1999/xhtml";
