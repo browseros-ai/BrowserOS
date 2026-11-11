@@ -428,6 +428,55 @@ async fn a_send_its_caller_abandons_frees_its_reply_slot() {
     client.disconnect().await;
 }
 
+#[tokio::test]
+async fn a_detached_sessions_unanswered_requests_fail_as_gone_and_others_wait() {
+    let browser = LoopbackBrowser::start().await;
+    let client = browser.connect().await;
+    let gone = SessionId::from("detached-frame");
+    let live = SessionId::from("live-frame");
+    let on_gone = tokio::spawn({
+        let client = client.clone();
+        async move { client.send("Fixture.never", json!({}), Some(&gone)).await }
+    });
+    let on_live = tokio::spawn({
+        let client = client.clone();
+        async move { client.send("Fixture.never", json!({}), Some(&live)).await }
+    });
+    let mut both_pending = false;
+    for _ in 0..50 {
+        if client.inner.pending.lock().await.len() == 2 {
+            both_pending = true;
+            break;
+        }
+        tokio::task::yield_now().await;
+    }
+    assert!(both_pending, "both requests were sent");
+    client
+        .send(
+            "Fixture.emit",
+            json!({
+                "method": "Target.detachedFromTarget",
+                "params": { "sessionId": "detached-frame" },
+            }),
+            None,
+        )
+        .await
+        .unwrap_or_else(|err| panic!("emit the detach: {err}"));
+    // Well inside the client's two-second request timeout.
+    let failed = timeout(Duration::from_millis(500), on_gone)
+        .await
+        .unwrap_or_else(|_elapsed| panic!("the detached session's request still waits"))
+        .unwrap_or_else(|err| panic!("join: {err}"));
+    assert!(matches!(failed, Err(CdpError::SessionGone)), "{failed:?}");
+    assert_eq!(
+        client.inner.pending.lock().await.len(),
+        1,
+        "another session's request keeps waiting for its own reply"
+    );
+    on_live.abort();
+    client.disconnect().await;
+}
+
 /// Has the loopback browser send one `method` event carrying `value`. Returns once the
 /// client's reader has routed it.
 async fn emit(client: &CdpClient, method: &str, value: u64) {

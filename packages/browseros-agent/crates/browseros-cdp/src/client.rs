@@ -39,6 +39,15 @@ type WsSink = SplitSink<WsStream, Message>;
 type WsReader = SplitStream<WsStream>;
 type PendingSender = oneshot::Sender<Result<Value, CdpError>>;
 
+/// A request waiting for its reply, with the flattened session it was sent on. Chromium never
+/// answers a command whose session detached before it replied, so the reader fails those
+/// requests itself when the session's `Target.detachedFromTarget` arrives (see
+/// [`reject_detached`]).
+struct Pending {
+    session: Option<SessionId>,
+    reply: PendingSender,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReconnectPolicy {
     Exit(i32),
@@ -100,7 +109,7 @@ pub struct CdpClient {
 struct Inner {
     opts: ConnectOptions,
     next_id: AtomicU64,
-    pending: Mutex<HashMap<u64, PendingSender>>,
+    pending: Mutex<HashMap<u64, Pending>>,
     /// Serializes socket publication with dispatch. An epoch-bound request must
     /// validate under this guard so reused browser IDs cannot reach a replacement.
     sink: Mutex<Option<WsSink>>,
@@ -254,6 +263,7 @@ impl CdpClient {
             expected_epoch,
             id,
             method,
+            session,
             Message::Text(Value::Object(frame).to_string().into()),
         )
         .await
@@ -316,7 +326,13 @@ impl CdpClient {
         }
         frame.push('}');
         let response = self
-            .send_frame(expected_epoch, id, method, Message::Text(frame.into()))
+            .send_frame(
+                expected_epoch,
+                id,
+                method,
+                session,
+                Message::Text(frame.into()),
+            )
             .await?;
         serde_json::to_string(&response).map_err(CdpError::from)
     }
@@ -387,10 +403,15 @@ impl CdpClient {
         expected_epoch: Option<u64>,
         id: u64,
         method: &str,
+        session: Option<&SessionId>,
         message: Message,
     ) -> Result<Value, CdpError> {
-        let (tx, rx) = oneshot::channel();
-        self.inner.pending.lock().await.insert(id, tx);
+        let (reply, rx) = oneshot::channel();
+        let pending = Pending {
+            session: session.cloned(),
+            reply,
+        };
+        self.inner.pending.lock().await.insert(id, pending);
         let _slot = PendingSlot {
             inner: Arc::clone(&self.inner),
             id,
@@ -603,8 +624,8 @@ async fn handle_text_message(inner: &Arc<Inner>, text: &str) {
         } else {
             Ok(value.get("result").cloned().unwrap_or_else(|| json!({})))
         };
-        if let Some(sender) = inner.pending.lock().await.remove(&id) {
-            let _ = sender.send(result);
+        if let Some(pending) = inner.pending.lock().await.remove(&id) {
+            let _ = pending.reply.send(result);
         }
         return;
     }
@@ -617,6 +638,11 @@ async fn handle_text_message(inner: &Arc<Inner>, text: &str) {
         .get("sessionId")
         .and_then(Value::as_str)
         .map(SessionId::from);
+    if method == "Target.detachedFromTarget"
+        && let Some(detached) = params.get("sessionId").and_then(Value::as_str)
+    {
+        reject_detached(inner, detached).await;
+    }
     let event = CdpEvent {
         method: method.to_string(),
         params,
@@ -766,8 +792,36 @@ async fn link_supervisor(inner: Arc<Inner>) {
 
 async fn reject_all_pending(inner: &Arc<Inner>, error: CdpError) {
     let pending = std::mem::take(&mut *inner.pending.lock().await);
-    for sender in pending.into_values() {
-        let _ = sender.send(Err(error.clone()));
+    for request in pending.into_values() {
+        let _ = request.reply.send(Err(error.clone()));
+    }
+}
+
+/// Fails every request still waiting on the flattened session `detached`, as
+/// [`CdpError::SessionGone`]: the error Chromium returns for a command sent a moment later.
+/// Chromium drops a detached session's unanswered commands without a reply (Playwright's and
+/// Puppeteer's sessions reject their callbacks on detach for the same reason). Without this,
+/// each such request holds its caller for the whole `request_timeout`. A frame that detaches
+/// while core is setting it up then blocks the frame registry's event loop, and with it the
+/// release of every out-of-process frame attached paused after it, so their pages never load.
+/// The detach event is read on the same socket after any reply the session sent, so no reply
+/// can still arrive for these requests.
+async fn reject_detached(inner: &Arc<Inner>, detached: &str) {
+    let mut pending = inner.pending.lock().await;
+    let gone: Vec<u64> = pending
+        .iter()
+        .filter(|(_, request)| {
+            request
+                .session
+                .as_ref()
+                .is_some_and(|session| session.as_str() == detached)
+        })
+        .map(|(id, _)| *id)
+        .collect();
+    for id in gone {
+        if let Some(request) = pending.remove(&id) {
+            let _ = request.reply.send(Err(CdpError::SessionGone));
+        }
     }
 }
 
