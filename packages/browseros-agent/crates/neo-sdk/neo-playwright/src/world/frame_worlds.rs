@@ -14,7 +14,7 @@ use browseros_core::{FrameId, ProtocolSession, SessionId, TargetId};
 use tokio::sync::OnceCell;
 
 use crate::probe::ProbeFailure;
-use crate::world::frame_attach_log::{FrameAttachLog, FrameEvent};
+use crate::world::frame_attach_log::{FrameAttachLog, FrameEvent, Taken};
 use crate::world::{Epoch, FrameSeq, Installed, SealedWorld, SessionKind, SessionSetup};
 
 /// Where a world is installed: a frame on a raw session, and how that session was set up.
@@ -111,17 +111,27 @@ struct WorldKey {
 /// - **Liveness is learned from failures.** A cell leaves the map only once a call proved its
 ///   world gone ([`FrameWorlds::invalidate`]), and its seq retires with it. A caller still
 ///   holding the old cell finds the stale world, fails again and gets the new cell.
-/// - **Seqs follow Playwright's order.** Upstream numbers a frame when it attaches and the main
-///   frame when it commits a new document; here a seq is picked when a world first installs.
-///   Each pick first replays the tab's [`FrameAttachLog`], which numbers every frame attached
-///   since in attach order, so a child's first document takes the seq its attach reserved
-///   (`f1` for the first iframe the page attached, however the reads that install them race).
+/// - **Seqs follow Playwright's order.** Upstream numbers a frame when it attaches, and
+///   renumbers the main frame when it commits a new document after a real one (server/frames.ts
+///   at v1.64.1), so `about:blank` to a page keeps `e5` and a page to another prints `f1e5`.
+///   Here a seq is picked when a world first installs, so each pick first replays the tab's
+///   [`FrameAttachLog`]: every frame attached since is numbered in attach order, and a child's
+///   first document takes the seq its attach reserved (`f1` for the first iframe the page
+///   attached, however the reads that install them race). Without a log (unit tests), every
+///   later main document takes the next seq at install instead.
 #[derive(Debug)]
 pub(crate) struct FrameWorlds {
     inner: Mutex<WorldsInner>,
-    /// The log the target watcher keeps of this tab's frames, and the tab's target id. Without
-    /// one (unit tests) seqs follow install order alone.
-    attach_log: Option<(Arc<FrameAttachLog>, TargetId)>,
+    /// Where the target watcher logs this tab's frames. Without one (unit tests) seqs follow
+    /// install order alone.
+    attach_log: Option<AttachLogBinding>,
+}
+
+/// One tab's place in the shared [`FrameAttachLog`].
+#[derive(Debug)]
+struct AttachLogBinding {
+    log: Arc<FrameAttachLog>,
+    tab: TargetId,
 }
 
 #[derive(Debug)]
@@ -137,6 +147,7 @@ struct WorldsInner {
     /// The next seq a later document gets. Everything in `first..next` was handed out, or
     /// skipped as foreign.
     next: u32,
+    /// Whether the main frame took `first` (or found it foreign).
     first_used: bool,
     /// Seqs an earlier `Playwright` gave documents of this tab, learned from the worlds this
     /// one re-keyed. None is handed out here, and a ref into one is stale (`Retired`).
@@ -146,8 +157,15 @@ struct WorldsInner {
     /// Child frames that took a seq, at attach or at install, so a late or repeated attach
     /// event never numbers one twice. A removed frame leaves it.
     numbered: HashSet<FrameId>,
-    /// The seq the main frame's next document takes, numbered when that document committed.
-    main_reserved: Option<FrameSeq>,
+    /// The main frame's seq, on a tab whose log reports its commits: every main document takes
+    /// it, and a commit after a real URL moves it on. Unset until the first pick or move.
+    main_seq: Option<FrameSeq>,
+    /// The URL the main frame last committed, as the log reported it; none before the first.
+    main_url: Option<String>,
+    /// Whether this tab has a log, so the main frame's seq follows its commits.
+    follows_commits: bool,
+    /// The log's gap count at the last replay.
+    seen_gaps: u64,
 }
 
 impl FrameWorlds {
@@ -164,7 +182,10 @@ impl FrameWorlds {
                 foreign: HashSet::new(),
                 reserved: HashMap::new(),
                 numbered: HashSet::new(),
-                main_reserved: None,
+                main_seq: None,
+                main_url: None,
+                follows_commits: false,
+                seen_gaps: 0,
             }),
             attach_log: None,
         }
@@ -172,7 +193,8 @@ impl FrameWorlds {
 
     /// The same, numbering the frames of `tab` in the order `log` saw them attach.
     pub(crate) fn with_attach_log(mut self, log: Arc<FrameAttachLog>, tab: TargetId) -> Self {
-        self.attach_log = Some((log, tab));
+        self.attach_log = Some(AttachLogBinding { log, tab });
+        self.lock().follows_commits = true;
         self
     }
 
@@ -297,16 +319,15 @@ impl FrameWorlds {
         }
     }
 
-    /// The seq `frame`'s next install takes, after the tab's log is replayed. The log's lock is
-    /// let go before this page's is taken, so the watcher never waits on an install.
+    /// The seq `frame`'s next install takes, after the tab's log is replayed. The log is taken
+    /// and replayed under this page's lock, so of two installs that race, the one that takes it
+    /// numbers every frame in it before the other picks. The lock order is the page's, then the
+    /// log's; the watcher only ever holds the log's.
     fn candidate(&self, frame: &FrameId, main: bool) -> FrameSeq {
-        let events = self
-            .attach_log
-            .as_ref()
-            .map(|(log, tab)| log.take(tab))
-            .unwrap_or_default();
         let mut inner = self.lock();
-        inner.replay(events);
+        if let Some(AttachLogBinding { log, tab }) = &self.attach_log {
+            inner.replay(log.take(tab));
+        }
         inner.candidate(frame, main)
     }
 
@@ -316,19 +337,24 @@ impl FrameWorlds {
 }
 
 impl WorldsInner {
-    /// The seq a new document would take: the page's first for the main frame's first
-    /// install; the one its commit reserved for a later main document; the one its attach
-    /// reserved for a child frame's first document; else the next one, never a foreign one.
-    /// Taken once, even if the install then fails.
+    /// The seq a new document would take. The main frame: its seq as its commits left it,
+    /// starting at the page's first; without a log, the first for its first install and the
+    /// next for every later one. A child frame: the seq its attach reserved for its first
+    /// document, else the next one. Never a foreign one; taken even if the install then fails.
     fn candidate(&mut self, frame: &FrameId, main: bool) -> FrameSeq {
         if main {
-            if !self.first_used {
-                self.first_used = true;
-                if !self.foreign.contains(&FrameSeq(self.first)) {
-                    return FrameSeq(self.first);
-                }
+            if self.follows_commits {
+                let seq = match self.main_seq {
+                    Some(seq) => seq,
+                    None => self.first_main_seq(),
+                };
+                self.main_seq = Some(seq);
+                return seq;
             }
-            return self.main_reserved.take().unwrap_or_else(|| self.next_seq());
+            if !self.first_used {
+                return self.first_main_seq();
+            }
+            return self.next_seq();
         }
         self.numbered.insert(frame.clone());
         self.reserved
@@ -337,8 +363,18 @@ impl WorldsInner {
     }
 
     /// Numbers what the tab's frames did since the last pick, in the order they did it, as
-    /// upstream's frame manager numbers them as the events arrive.
-    fn replay(&mut self, events: Vec<FrameEvent>) {
+    /// upstream's frame manager numbers them as the events arrive. A gap in the log since the
+    /// last replay may have hidden a commit away from a real page, so the main frame moves on to
+    /// a new seq as if it had seen one, and forgets which URL it is on.
+    fn replay(&mut self, taken: Taken) {
+        let Taken { events, gaps } = taken;
+        if gaps != self.seen_gaps {
+            self.seen_gaps = gaps;
+            self.main_url = None;
+            if self.main_seq.is_some() {
+                self.main_seq = Some(self.next_seq());
+            }
+        }
         for event in events {
             match event {
                 FrameEvent::Attached(frame) => {
@@ -351,13 +387,30 @@ impl WorldsInner {
                     self.numbered.remove(&frame);
                     self.reserved.remove(&frame);
                 }
-                // Until a main document installed, the first one to install takes the page's
-                // first seq, as upstream's first committed document keeps the base seq.
-                FrameEvent::MainCommitted if self.first_used => {
-                    self.main_reserved = Some(self.next_seq());
+                // Upstream: `if (frame === this._mainFrame && previousUrl && previousUrl !==
+                // 'about:blank') frame.seq = this._allocateFrameSeq();`
+                FrameEvent::MainCommitted { url } => {
+                    let left = self.main_url.replace(url);
+                    if left.is_some_and(|left| !left.is_empty() && left != "about:blank") {
+                        self.main_seq = Some(self.next_seq());
+                    }
                 }
-                FrameEvent::MainCommitted => {}
+                FrameEvent::Skipped(spent) => {
+                    for _ in 0..spent {
+                        self.next_seq();
+                    }
+                }
             }
+        }
+    }
+
+    /// The page's first seq for the main frame, unless an earlier `Playwright` gave it out.
+    fn first_main_seq(&mut self) -> FrameSeq {
+        self.first_used = true;
+        if self.foreign.contains(&FrameSeq(self.first)) {
+            self.next_seq()
+        } else {
+            FrameSeq(self.first)
         }
     }
 
@@ -560,7 +613,13 @@ mod tests {
         Ok(())
     }
 
-    /// Upstream renumbers the main frame when its new document commits, before that document
+    fn committed(url: &str) -> FrameEvent {
+        FrameEvent::MainCommitted {
+            url: url.to_owned(),
+        }
+    }
+
+    /// Upstream renumbers the main frame when it leaves a real page, before the new document
     /// attaches its frames, even if the iframe's world installs first.
     #[tokio::test]
     async fn tests_that_a_main_commit_numbers_the_main_frame_before_the_frames_it_attaches()
@@ -568,12 +627,40 @@ mod tests {
         let log = Arc::new(FrameAttachLog::default());
         let worlds = logged(&log);
         let installs = AtomicU32::new(0);
+        record(&log, [committed("https://a.test/")]);
         let first = install(&worlds, ("S", "main"), Place::Main, &installs).await?;
-        record(&log, [FrameEvent::MainCommitted, attached("child")]);
+        record(&log, [committed("https://b.test/"), attached("child")]);
         worlds.invalidate(&first);
-        let child = install(&worlds, ("S", "child"), child_of(0, "#1"), &installs).await?;
+        let child = install(&worlds, ("S", "child"), child_of(1, "#1"), &installs).await?;
         let main = install(&worlds, ("S", "main"), Place::Main, &installs).await?;
-        assert_eq!((main.seq(), child.seq()), (FrameSeq(1), FrameSeq(2)));
+        assert_eq!(
+            (first.seq(), main.seq(), child.seq()),
+            (FrameSeq(0), FrameSeq(1), FrameSeq(2))
+        );
+        Ok(())
+    }
+
+    /// AR-053 and server/frames.ts: the first document after `about:blank` keeps the main
+    /// frame's seq, so its refs print bare; leaving a real page, `about:blank` included as the
+    /// page left, renumbers.
+    #[tokio::test]
+    async fn tests_that_the_main_frame_keeps_its_seq_until_it_leaves_a_real_page() -> TestResult {
+        let log = Arc::new(FrameAttachLog::default());
+        let worlds = logged(&log);
+        let installs = AtomicU32::new(0);
+        let mut seqs = Vec::new();
+        for commits in [
+            vec![],
+            vec![committed("about:blank"), committed("https://a.test/")],
+            vec![committed("https://a.test/")],
+            vec![committed("about:blank"), committed("https://b.test/")],
+        ] {
+            record(&log, commits);
+            let main = install(&worlds, ("S", "main"), Place::Main, &installs).await?;
+            seqs.push(main.seq().0);
+            worlds.invalidate(&main);
+        }
+        assert_eq!(seqs, [0, 0, 1, 2]);
         Ok(())
     }
 
@@ -602,6 +689,35 @@ mod tests {
             (FrameSeq(1), FrameSeq(3), FrameSeq(4)),
             "the removed frame's seq stays handed out"
         );
+        Ok(())
+    }
+
+    /// A watcher that fell behind may have missed a commit away from a real page, so the next
+    /// main document takes a new seq rather than risk sharing the old one's.
+    #[tokio::test]
+    async fn tests_that_a_gap_in_the_log_moves_the_main_frame_on() -> TestResult {
+        let log = Arc::new(FrameAttachLog::default());
+        let worlds = logged(&log);
+        let installs = AtomicU32::new(0);
+        let before = install(&worlds, ("S", "main"), Place::Main, &installs).await?;
+        log.lost_events();
+        worlds.invalidate(&before);
+        let after = install(&worlds, ("S", "main"), Place::Main, &installs).await?;
+        assert_eq!((before.seq(), after.seq()), (FrameSeq(0), FrameSeq(1)));
+        Ok(())
+    }
+
+    /// A compacted queue spends the removed frames' seqs, so a later frame keeps upstream's
+    /// number.
+    #[tokio::test]
+    async fn tests_that_skipped_frames_still_spend_their_seqs() -> TestResult {
+        let log = Arc::new(FrameAttachLog::default());
+        let worlds = logged(&log);
+        let installs = AtomicU32::new(0);
+        record(&log, [FrameEvent::Skipped(5), attached("child")]);
+        install(&worlds, ("S", "main"), Place::Main, &installs).await?;
+        let child = install(&worlds, ("S", "child"), child_of(0, "#1"), &installs).await?;
+        assert_eq!(child.seq(), FrameSeq(6));
         Ok(())
     }
 
@@ -785,7 +901,8 @@ mod tests {
         use browseros_core::pages::PageSession;
         use browseros_core::{PageId, TabId};
         let browser = test_env::offline_session();
-        let registry = PageRegistry::new(Arc::default());
+        let log = Arc::new(FrameAttachLog::default());
+        let registry = PageRegistry::new(Arc::clone(&log));
         let admitted = |id| AdmittedPage {
             tab: TabId(51),
             core_page: PageId(id),
@@ -809,6 +926,15 @@ mod tests {
             Arc::ptr_eq(&before, &after),
             "a core cache replacement is the same browser tab"
         );
+        // The tab navigated away from a real page meanwhile, as the watcher would log it.
+        for url in ["https://example.test/", "https://example.test/next"] {
+            log.record(
+                &TargetId("tab-51".to_owned()),
+                FrameEvent::MainCommitted {
+                    url: url.to_owned(),
+                },
+            );
+        }
         let next = install(
             after.frames(),
             ("S2", "next"),

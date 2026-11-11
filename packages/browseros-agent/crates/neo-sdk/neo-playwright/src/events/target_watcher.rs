@@ -216,8 +216,14 @@ struct FrameNavigated {
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct NavigatedFrame {
     id: String,
+    #[serde(default)]
+    url: String,
+    /// The `#...` part, which CDP reports apart from `url`.
+    #[serde(default)]
+    url_fragment: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -265,8 +271,12 @@ impl Watcher {
             tokio::select! {
                 received = events.recv() => match received {
                     Ok(event) => self.handle(event).await,
-                    // Events were dropped: rediscover, which records what closed meanwhile.
-                    Err(RecvError::Lagged(_)) => self.epoch = None,
+                    // Events were dropped: rediscover, which records what closed meanwhile, and
+                    // tell the frame log that commits may be missing.
+                    Err(RecvError::Lagged(_)) => {
+                        self.epoch = None;
+                        self.attach_log.lost_events();
+                    }
                     Err(RecvError::Closed) => return,
                 },
                 Some(opened) = found.recv() => self.found(opened),
@@ -426,7 +436,10 @@ impl Watcher {
                     // A tab's main frame id is its target id; a child's commit keeps its number.
                     && frame.id == tab.0
                 {
-                    self.attach_log.record(&tab, FrameEvent::MainCommitted);
+                    // Upstream's frame URL: `framePayload.url + (framePayload.urlFragment || '')`.
+                    let url = format!("{}{}", frame.url, frame.url_fragment.unwrap_or_default());
+                    self.attach_log
+                        .record(&tab, FrameEvent::MainCommitted { url });
                 }
             }
             "Page.javascriptDialogOpening" => {
