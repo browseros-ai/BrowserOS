@@ -77,11 +77,6 @@ export class TaskRule {
       : `client:${client.name}`
   }
 
-  /** The task a key currently leads to, if any. */
-  taskFor(key: string): string | undefined {
-    return this.entries.get(key)?.taskId
-  }
-
   /** Chooses the call's task and counts the call as in flight until `callEnded`. */
   assign(origin: CallOrigin): Assignment {
     const agentKey = this.agentKey(origin.client, origin.process)

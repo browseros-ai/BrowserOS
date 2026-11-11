@@ -94,3 +94,33 @@ test('a lookup that fails or is too slow is "not found", with the reason', async
     reason: 'process lookup took over 20 ms',
   })
 })
+
+test('a reused pid on a new connection is read again, so its new start time makes a new process', async () => {
+  let clock = 0
+  let starts = 0
+  const finder = new PeerProcessFinder({
+    listenPort: 7310,
+    platform: 'darwin',
+    now: () => clock,
+    reuseMs: 1000,
+    run: async (command) => {
+      if (command === 'netstat') return NETSTAT
+      starts++
+      return `Wed Nov 11 10:14:0${starts} 2026 claude`
+    },
+  })
+  const peer = { address: '127.0.0.1', port: 52344 }
+  const first = finder.find(peer)
+  const before = await first.lookup
+  first.release()
+  clock = 5000
+  const after = await finder.find(peer).lookup
+  expect(before).toMatchObject({
+    pid: 24222,
+    startedAt: 'Wed Nov 11 10:14:01 2026',
+  })
+  expect(after).toMatchObject({
+    pid: 24222,
+    startedAt: 'Wed Nov 11 10:14:02 2026',
+  })
+})

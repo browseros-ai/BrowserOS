@@ -81,8 +81,12 @@ test('the API lists tasks, a task with its runs, one run in full, and streams ea
   ) {
     await Bun.sleep(10)
   }
-  const { tasks } = await get<TasksResponse>(apiRoutes.tasks)
+  const { tasks, version } = await get<TasksResponse>(apiRoutes.tasks)
   expect(tasks).toHaveLength(1)
+  // The snapshot includes every change announced so far.
+  expect(version).toBeGreaterThanOrEqual(
+    Math.max(...events.map((event) => event.version)),
+  )
   const taskId = tasks[0]?.id ?? ''
   const { task, runs } = await get<TaskRunsResponse>(apiRoutes.taskRuns(taskId))
   expect(task.totals).toMatchObject({ runs: 1, running: 0, failed: 0 })

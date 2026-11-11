@@ -50,10 +50,6 @@ const CONNECTION_REUSE_MS = 3000
 
 export class PeerProcessFinder implements ProcessFinder {
   private readonly connections = new Map<string, Cached>()
-  private readonly processes = new Map<
-    number,
-    Promise<{ startedAt: string | null; command: string | null }>
-  >()
   private readonly platform: NodeJS.Platform
   private readonly run: NonNullable<PeerProcessOptions['run']>
   private readonly reuseMs: number
@@ -169,26 +165,16 @@ export class PeerProcessFinder implements ProcessFinder {
     throw new Error(`no socket table reader for ${this.platform}`)
   }
 
+  /**
+   * The process's start time and command, read for every new connection: a pid alone is not an
+   * identity, since a pid freed by one agent can be given to the next.
+   */
   private processDetails(
     pid: number,
   ): Promise<{ startedAt: string | null; command: string | null }> {
-    let details = this.processes.get(pid)
-    if (!details) {
-      details = this.run('ps', [
-        '-o',
-        'lstart=',
-        '-o',
-        'comm=',
-        '-p',
-        String(pid),
-      ])
-        .then(parsePs)
-        .catch(() => ({ startedAt: null, command: null }))
-      this.processes.set(pid, details)
-      // A pid's start time never changes, but the pid can be reused; keep answers briefly.
-      setTimeout(() => this.processes.delete(pid), 60_000).unref()
-    }
-    return details
+    return this.run('ps', ['-o', 'lstart=', '-o', 'comm=', '-p', String(pid)])
+      .then(parsePs)
+      .catch(() => ({ startedAt: null, command: null }))
   }
 }
 

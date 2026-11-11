@@ -208,20 +208,31 @@ export interface ViewerInfo {
   startedAt: string
 }
 
+/**
+ * Snapshots carry `version`, the number of the last change they include; each event carries its
+ * own. A reader that fetches a snapshot while the event stream runs applies the snapshot, then
+ * only the events numbered above it.
+ */
 export interface TasksResponse {
   tasks: TaskSummary[]
+  version: number
 }
 
 export interface TaskRunsResponse {
   task: TaskSummary
   runs: RunSummary[]
+  version: number
 }
 
 export interface RunResponse {
   run: RunDetail
 }
 
-/** One message on `/api/events`: a task or run was created or changed; it carries the new state. */
-export type ViewerEvent =
+/**
+ * One message on `/api/events`: a task or run was created or changed; it carries the new state
+ * and the change's number (see `TasksResponse`).
+ */
+export type ViewerEvent = { version: number } & (
   | { type: 'task'; task: TaskSummary }
   | { type: 'run'; run: RunSummary }
+)

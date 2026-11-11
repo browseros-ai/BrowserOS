@@ -23,12 +23,18 @@ export function apiRouteTable(store: TaskStore, info: ViewerInfo) {
   return {
     [apiRoutes.info]: local(() => Response.json(info satisfies ViewerInfo)),
     [apiRoutes.tasks]: local(() =>
-      Response.json({ tasks: store.listTasks() } satisfies TasksResponse),
+      Response.json({
+        tasks: store.listTasks(),
+        version: store.version,
+      } satisfies TasksResponse),
     ),
     '/api/tasks/:taskId/runs': local((req: RouteRequest<'taskId'>) => {
       const found = store.task(req.params.taskId)
       return found
-        ? Response.json(found satisfies TaskRunsResponse)
+        ? Response.json({
+            ...found,
+            version: store.version,
+          } satisfies TaskRunsResponse)
         : notFound('task')
     }),
     '/api/runs/:runId': local((req: RouteRequest<'runId'>) => {

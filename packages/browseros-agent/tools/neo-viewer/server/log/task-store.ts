@@ -19,7 +19,11 @@ import type {
 } from '../../shared/api'
 import { textSize } from '../../shared/api'
 import { RUN_META_KEY } from '../proxy/request-body'
-import type { Assignment, TaskRule } from '../tasks/task-rule'
+import {
+  type Assignment,
+  DEFAULT_IDLE_MS,
+  type TaskRule,
+} from '../tasks/task-rule'
 import type {
   LogLine,
   StoredRunEnd,
@@ -47,12 +51,17 @@ interface RunState {
 /** A run as the proxy reports it starting (the store adds its `id`). */
 export type RunStart = Omit<StoredRunStart, 'id'>
 
+type ViewerChange =
+  | { type: 'task'; task: TaskSummary }
+  | { type: 'run'; run: RunSummary }
+
 export class TaskStore {
   private readonly tasks = new Map<string, TaskState>()
   private readonly runs = new Map<string, RunState>()
   private readonly toolsListByAgent = new Map<string, TextSize>()
   private readonly listeners = new Set<(event: ViewerEvent) => void>()
   private arrivals = 0
+  private changes = 0
 
   private constructor(private readonly log: TaskLog) {}
 
@@ -71,6 +80,15 @@ export class TaskStore {
 
   flush(): Promise<void> {
     return this.log.flush()
+  }
+
+  /**
+   * How many changes the store has announced. Each event carries its number and each snapshot
+   * the number it includes, so a reader that fetched a snapshot while events streamed in keeps
+   * only the events newer than it (`web/use-viewer.ts`).
+   */
+  get version(): number {
+    return this.changes
   }
 
   /** Starts the task an assignment created, named `<client>, HH:MM`. */
@@ -102,25 +120,25 @@ export class TaskStore {
   }
 
   /**
-   * A `tools/list` reply went to the agent behind `agentKey`. Each task records the first one:
-   * the agent's open task now, and any task it starts later.
+   * A `tools/list` reply went to the agent behind `agentKey` (its process, or its client name).
+   * Each task records the first one it can be tied to: a task this agent starts later, or one it
+   * is working on now, whichever rule named it. The reply can be logged after the agent's first
+   * run made its task, since logging waits for the process lookup.
    */
-  toolsListSeen(
-    agentKey: string,
-    openTaskId: string | undefined,
-    size: TextSize,
-    at: number,
-  ): void {
+  toolsListSeen(agentKey: string, size: TextSize, at: number): void {
     this.toolsListByAgent.set(agentKey, size)
-    const task = openTaskId ? this.tasks.get(openTaskId) : undefined
-    if (!task || task.toolsList) return
-    task.toolsList = size
-    this.write(task.record.id, {
-      type: 'tools-list',
-      at: new Date(at).toISOString(),
-      size,
-    })
-    this.emitTask(task.record.id)
+    for (const task of this.tasks.values()) {
+      if (task.record.agentKey !== agentKey || task.toolsList) continue
+      if (Math.abs(Date.parse(lastCallAt(task)) - at) > DEFAULT_IDLE_MS)
+        continue
+      task.toolsList = size
+      this.write(task.record.id, {
+        type: 'tools-list',
+        at: new Date(at).toISOString(),
+        size,
+      })
+      this.emitTask(task.record.id)
+    }
   }
 
   /**
@@ -148,8 +166,7 @@ export class TaskStore {
     this.runs.set(id, run)
     this.write(taskId, { type: 'run-start', run: run.start })
     // A run placed before others renumbers them.
-    const views = runViews(task)
-    for (const view of views.slice(index)) this.emit({ type: 'run', run: view })
+    this.emitRunsFrom(task, index)
     this.emitTask(taskId)
     return id
   }
@@ -160,7 +177,9 @@ export class TaskStore {
     run.end = end
     run.live = false
     this.write(run.taskId, { type: 'run-end', id: runId, end })
-    this.emitRun(run)
+    // Its reply can give later runs their gap (it may have been recorded after them).
+    const task = this.tasks.get(run.taskId)
+    if (task) this.emitRunsFrom(task, task.runs.indexOf(run))
     this.emitTask(run.taskId)
   }
 
@@ -224,15 +243,15 @@ export class TaskStore {
     if (task) this.emit({ type: 'task', task: summarizeTask(task) })
   }
 
-  private emitRun(run: RunState): void {
-    const task = this.tasks.get(run.taskId)
-    const view =
-      task && runViews(task).find((candidate) => candidate.id === run.start.id)
-    if (view) this.emit({ type: 'run', run: view })
+  private emitRunsFrom(task: TaskState, index: number): void {
+    for (const view of runViews(task).slice(Math.max(0, index))) {
+      this.emit({ type: 'run', run: view })
+    }
   }
 
-  private emit(event: ViewerEvent): void {
-    for (const listener of this.listeners) listener(event)
+  private emit(event: ViewerChange): void {
+    const numbered = { ...event, version: ++this.changes } as ViewerEvent
+    for (const listener of this.listeners) listener(numbered)
   }
 }
 

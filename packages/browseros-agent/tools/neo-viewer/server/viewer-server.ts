@@ -82,7 +82,7 @@ export async function startViewer(
     rule,
     processes:
       seams.processes?.(port) ?? new PeerProcessFinder({ listenPort: port }),
-    clients: new ClientNames(),
+    clients: new ClientNames(now),
     now,
   }
   return {

@@ -1,8 +1,11 @@
 /**
- * The page's data: the task list and the chosen task's runs, fetched from the viewer's API and
- * kept current by `/api/events`. Each event carries the new state of one task or run, so the
- * page applies it in place; after the event stream reconnects it refetches, since events sent
- * while it was down are not replayed.
+ * The page's data: the task list and the chosen task's runs, from the viewer's API, kept current
+ * by `/api/events`. Each event carries the new state of one task or run and its change number.
+ *
+ * The stream opens first and every (re)open takes fresh snapshots, so no change falls between a
+ * snapshot and the stream. A snapshot can still land after events that are newer than it: the
+ * page keeps the events since the stream opened and re-applies those numbered above the
+ * snapshot's `version`.
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react'
@@ -17,6 +20,9 @@ import type {
   ViewerInfo,
 } from '../shared/api'
 import { apiRoutes } from '../shared/api'
+
+/** Events kept for re-applying over a late snapshot; older ones are long since in any snapshot. */
+const KEPT_EVENTS = 2000
 
 async function getJson<T>(path: string): Promise<T> {
   const response = await fetch(path)
@@ -56,10 +62,12 @@ export function useViewer(): ViewerState {
   const [taskId, setTaskId] = useState<string | null>(null)
   const [runs, setRuns] = useState<RunSummary[]>([])
   const [error, setError] = useState<string | null>(null)
-  const [generation, setGeneration] = useState(0)
+  // Bumped each time the event stream opens; the snapshots below are taken after it.
+  const [opened, setOpened] = useState(0)
   // The event handler outlives renders; it reads the chosen task from here.
   const taskIdRef = useRef<string | null>(null)
   taskIdRef.current = taskId
+  const recent = useRef<ViewerEvent[]>([])
 
   useEffect(() => {
     getJson<ViewerInfo>(apiRoutes.info).then(setInfo, (cause) =>
@@ -67,44 +75,18 @@ export function useViewer(): ViewerState {
     )
   }, [])
 
-  // biome-ignore lint/correctness/useExhaustiveDependencies: `generation` is the refetch trigger.
-  useEffect(() => {
-    getJson<TasksResponse>(apiRoutes.tasks).then(
-      ({ tasks: list }) => {
-        setTasks(list)
-        setTaskId((current) => current ?? list[0]?.id ?? null)
-      },
-      (cause) => setError(String(cause)),
-    )
-  }, [generation])
-
-  // biome-ignore lint/correctness/useExhaustiveDependencies: `generation` is the refetch trigger.
-  useEffect(() => {
-    if (!taskId) return
-    let current = true
-    getJson<TaskRunsResponse>(apiRoutes.taskRuns(taskId)).then(
-      (found) => {
-        if (current) setRuns(found.runs)
-      },
-      (cause) => setError(String(cause)),
-    )
-    return () => {
-      current = false
-    }
-  }, [taskId, generation])
-
   useEffect(() => {
     const events = new EventSource(apiRoutes.events)
-    let dropped = false
-    events.onerror = () => {
-      dropped = true
-    }
     events.onopen = () => {
-      if (dropped) setGeneration((n) => n + 1)
-      dropped = false
+      recent.current = []
+      setOpened((n) => n + 1)
     }
     events.onmessage = (message) => {
       const event = JSON.parse(message.data) as ViewerEvent
+      recent.current.push(event)
+      if (recent.current.length > KEPT_EVENTS) {
+        recent.current.splice(0, recent.current.length - KEPT_EVENTS)
+      }
       if (event.type === 'task') {
         setTasks((list) => upsert(list, event.task, newestFirst))
         if (taskIdRef.current === null) setTaskId(event.task.id)
@@ -114,6 +96,48 @@ export function useViewer(): ViewerState {
     }
     return () => events.close()
   }, [])
+
+  useEffect(() => {
+    if (opened === 0) return
+    getJson<TasksResponse>(apiRoutes.tasks).then(
+      ({ tasks: snapshot, version }) => {
+        let list = snapshot
+        for (const event of recent.current) {
+          if (event.version > version && event.type === 'task') {
+            list = upsert(list, event.task, newestFirst)
+          }
+        }
+        setTasks(list)
+        setTaskId((current) => current ?? list[0]?.id ?? null)
+      },
+      (cause) => setError(String(cause)),
+    )
+  }, [opened])
+
+  useEffect(() => {
+    if (!taskId || opened === 0) return
+    let current = true
+    getJson<TaskRunsResponse>(apiRoutes.taskRuns(taskId)).then(
+      ({ runs: snapshot, version }) => {
+        if (!current) return
+        let list = snapshot
+        for (const event of recent.current) {
+          if (
+            event.version > version &&
+            event.type === 'run' &&
+            event.run.taskId === taskId
+          ) {
+            list = upsert(list, event.run, inOrder)
+          }
+        }
+        setRuns(list)
+      },
+      (cause) => setError(String(cause)),
+    )
+    return () => {
+      current = false
+    }
+  }, [taskId, opened])
 
   const selectTask = useCallback((next: string) => {
     setRuns([])

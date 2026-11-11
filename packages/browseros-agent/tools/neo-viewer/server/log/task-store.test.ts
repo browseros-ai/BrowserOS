@@ -54,12 +54,12 @@ function end(answeredAt: number): StoredRunEnd {
   }
 }
 
-async function withTask() {
+async function withTask(identity: 'process' | 'agent' = 'process') {
   const dataDir = await mkdtemp(join(tmpdir(), 'neo-viewer-store-'))
   dirs.push(dataDir)
   const { rule, store } = await open(dataDir)
   const assignment = rule.assign({
-    agentTaskId: null,
+    agentTaskId: identity === 'agent' ? 'zuzu-7' : null,
     client: { name: 'claude-code' },
     process: { found: false, reason: 'test' },
     at: 0,
@@ -119,4 +119,40 @@ test('a torn last line from a crash costs only itself, across restarts', async (
     ['before the crash', 'ok'],
     ['after the crash', 'ok'],
   ])
+})
+
+test('a reply recorded late gives the later run its gap, and says so', async () => {
+  const { store, taskId } = await withTask()
+  const events: Array<[number, string, number | null]> = []
+  store.subscribe((event) => {
+    if (event.type === 'run')
+      events.push([event.version, event.run.code, event.run.gapMs])
+  })
+  const firstStart = start(store, 1_000, 'a')
+  const second = store.startRun(taskId, start(store, 3_000, 'b'))
+  const first = store.startRun(taskId, firstStart)
+  store.endRun(second, end(3_500))
+  store.endRun(first, end(2_000))
+  const last = events.filter(([, code]) => code === 'b').at(-1)
+  expect(last?.[2]).toBe(1_000)
+  // Every event is numbered, in order, and a snapshot reports the latest number.
+  expect(events.map(([version]) => version)).toEqual(
+    [...events.map(([version]) => version)].sort((x, y) => x - y),
+  )
+  expect(store.version).toBeGreaterThanOrEqual(events.at(-1)?.[0] ?? 0)
+})
+
+test("a tools/list logged after the agent's first run still reaches that run's task", async () => {
+  const { store, taskId } = await withTask('agent')
+  store.startRun(taskId, start(store, 1_000, 'a'))
+  // The agent behind the run: rule 3's key for client claude-code (the process was not found).
+  store.toolsListSeen(
+    'client:claude-code',
+    { chars: 6_562, tokens: 1_640 },
+    900,
+  )
+  expect(store.task(taskId)?.task.toolsList).toEqual({
+    chars: 6_562,
+    tokens: 1_640,
+  })
 })

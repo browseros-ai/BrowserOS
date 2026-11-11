@@ -405,12 +405,7 @@ function settle(
           clientFor(call.message, process),
           process,
         )
-        deps.store.toolsListSeen(
-          agentKey,
-          deps.rule.taskFor(agentKey),
-          size,
-          at,
-        )
+        deps.store.toolsListSeen(agentKey, size, at)
       })
       continue
     }
