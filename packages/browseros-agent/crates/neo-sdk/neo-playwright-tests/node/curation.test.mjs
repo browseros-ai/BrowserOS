@@ -102,6 +102,31 @@ test(
 )
 
 test(
+  "a callback is found at either release's location: the call's start or its opening parenthesis",
+  prepared,
+  () => {
+    // Playwright 1.64 reports `it('…')` at column 3 (its parenthesis); later releases at column 1.
+    for (const column of [1, 3]) {
+      const files = validateManifest(
+        manifest([entry]),
+        [{ ...row, location: { line: 1, column } }],
+        () => original,
+      )
+      assert.equal(files.get(file).changes.get(`1:${column}`).length, 1)
+    }
+    assert.throws(
+      () =>
+        validateManifest(
+          manifest([entry]),
+          [{ ...row, location: { line: 1, column: 2 } }],
+          () => original,
+        ),
+      /callback drift/,
+    )
+  },
+)
+
+test(
   'missing, repeated and overlapping find strings fail before any write',
   prepared,
   (t) => {

@@ -1,25 +1,25 @@
 {
   "schemaVersion": 1,
-  "pin": "26137face0500cacddf90c767dc1364da7262559",
+  "pin": "cfe490d941f992655948eee8fd4fd94e1c4234bf",
   "entries": [
     {
       "file": "tests/library/browsercontext-pages.spec.ts",
       "id": "BC-060",
-      "title": "BC-060 should close page while a reload is committing",
+      "title": "should close page while a reload is committing",
       "action": "delete",
-      "reason": "upstream-skipped: excluded by the pinned Chromium run"
+      "reason": "upstream-skipped: the pinned spec skips or fixmes it on Chromium"
     },
     {
       "file": "tests/library/page-close.spec.ts",
       "id": "PA-040",
-      "title": "PA-040 expect should not print timed out error message when page closes",
+      "title": "expect should not print timed out error message when page closes",
       "action": "delete",
       "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/library/page-close.spec.ts",
       "id": "PA-041",
-      "title": "PA-041 addLocatorHandler should throw when page closes",
+      "title": "addLocatorHandler should throw when page closes",
       "action": "patch",
       "reason": "error wording: keep that it fails",
       "patches": [
@@ -32,24 +32,20 @@
     {
       "file": "tests/library/page-close.spec.ts",
       "id": "PA-042",
-      "title": "PA-042 should reject all promises when page is closed",
+      "title": "should reject all promises when page is closed",
       "action": "patch",
       "reason": "error wording: keep that it fails",
       "patches": [
         {
           "find": "expect(error.message).toContain(kTargetClosedErrorMessage);",
           "replace": "expect(error).toBeInstanceOf(Error);"
-        },
-        {
-          "find": "expect((await frameErrorPromise).message).toContain(kTargetClosedErrorMessage);",
-          "replace": "expect((await frameErrorPromise)).toBeInstanceOf(Error);"
         }
       ]
     },
     {
       "file": "tests/library/page-close.spec.ts",
       "id": "PA-045",
-      "title": "PA-045 should terminate network waiters",
+      "title": "should terminate network waiters",
       "action": "patch",
       "reason": "error wording: keep that it fails",
       "patches": [
@@ -66,7 +62,7 @@
     {
       "file": "tests/library/page-close.spec.ts",
       "id": "PA-048",
-      "title": "PA-048 should fail with error upon disconnect",
+      "title": "should fail with error upon disconnect",
       "action": "patch",
       "reason": "error wording: keep that it fails",
       "patches": [
@@ -79,7 +75,7 @@
     {
       "file": "tests/library/page-close.spec.ts",
       "id": "PA-051",
-      "title": "PA-051 interrupt request.response() and request.allHeaders() on page.close",
+      "title": "interrupt request.response() and request.allHeaders() on page.close",
       "action": "patch",
       "reason": "error diagnostics: remove wording and call logs; retain behavior and error classes",
       "patches": [
@@ -96,7 +92,7 @@
     {
       "file": "tests/library/page-close.spec.ts",
       "id": "PA-054",
-      "title": "PA-054 should reject response.finished if page closes",
+      "title": "should reject response.finished if page closes",
       "action": "patch",
       "reason": "error wording: keep that it fails",
       "patches": [
@@ -109,7 +105,7 @@
     {
       "file": "tests/page/elementhandle-click.spec.ts",
       "id": "EH-014",
-      "title": "EH-014 should throw for detached nodes",
+      "title": "should throw for detached nodes",
       "action": "patch",
       "reason": "error wording: keep that it fails",
       "patches": [
@@ -122,7 +118,7 @@
     {
       "file": "tests/page/elementhandle-click.spec.ts",
       "id": "EH-015",
-      "title": "EH-015 should throw for hidden nodes with force",
+      "title": "should throw for hidden nodes with force",
       "action": "patch",
       "reason": "error wording: keep that it fails",
       "patches": [
@@ -135,7 +131,7 @@
     {
       "file": "tests/page/elementhandle-click.spec.ts",
       "id": "EH-016",
-      "title": "EH-016 should throw for recursively hidden nodes with force",
+      "title": "should throw for recursively hidden nodes with force",
       "action": "patch",
       "reason": "error wording: keep that it fails",
       "patches": [
@@ -148,7 +144,7 @@
     {
       "file": "tests/page/elementhandle-click.spec.ts",
       "id": "EH-017",
-      "title": "EH-017 should throw for <br> elements with force",
+      "title": "should throw for <br> elements with force",
       "action": "patch",
       "reason": "error wording: keep that it fails",
       "patches": [
@@ -161,7 +157,7 @@
     {
       "file": "tests/page/elementhandle-convenience.spec.ts",
       "id": "EH-027",
-      "title": "EH-027 inputValue should work",
+      "title": "inputValue should work",
       "action": "patch",
       "reason": "error diagnostics: remove wording and call logs; retain behavior and error classes",
       "patches": [
@@ -178,7 +174,7 @@
     {
       "file": "tests/page/elementhandle-convenience.spec.ts",
       "id": "EH-030",
-      "title": "EH-030 innerText should throw",
+      "title": "innerText should throw",
       "action": "patch",
       "reason": "error wording: keep that it fails",
       "patches": [
@@ -195,7 +191,7 @@
     {
       "file": "tests/page/elementhandle-convenience.spec.ts",
       "id": "EH-038",
-      "title": "EH-038 isChecked should work",
+      "title": "isChecked should work",
       "action": "patch",
       "reason": "error diagnostics: remove wording and call logs; retain behavior and error classes",
       "patches": [
@@ -208,7 +204,7 @@
     {
       "file": "tests/page/elementhandle-eval-on-selector.spec.ts",
       "id": "EH-041",
-      "title": "EH-041 should throw in case of missing selector",
+      "title": "should throw in case of missing selector",
       "action": "patch",
       "reason": "error wording: keep that it fails",
       "patches": [
@@ -225,7 +221,7 @@
     {
       "file": "tests/page/elementhandle-screenshot.spec.ts",
       "id": "EH-083",
-      "title": "element screenshot › EH-083 should fail to screenshot a detached element",
+      "title": "element screenshot › should fail to screenshot a detached element",
       "action": "patch",
       "reason": "error wording: keep that it fails",
       "patches": [
@@ -238,7 +234,7 @@
     {
       "file": "tests/page/elementhandle-screenshot.spec.ts",
       "id": "EH-084",
-      "title": "element screenshot › EH-084 should timeout waiting for visible",
+      "title": "element screenshot › should timeout waiting for visible",
       "action": "patch",
       "reason": "error wording: keep that it fails",
       "patches": [
@@ -255,7 +251,7 @@
     {
       "file": "tests/page/elementhandle-scroll-into-view.spec.ts",
       "id": "EH-094",
-      "title": "EH-094 should throw for detached element",
+      "title": "should throw for detached element",
       "action": "patch",
       "reason": "error wording: keep that it fails",
       "patches": [
@@ -268,7 +264,7 @@
     {
       "file": "tests/page/elementhandle-scroll-into-view.spec.ts",
       "id": "EH-101",
-      "title": "EH-101 should timeout waiting for visible",
+      "title": "should timeout waiting for visible",
       "action": "patch",
       "reason": "error wording: keep that it fails",
       "patches": [
@@ -285,7 +281,7 @@
     {
       "file": "tests/page/elementhandle-select-text.spec.ts",
       "id": "EH-105",
-      "title": "EH-105 should timeout waiting for invisible element",
+      "title": "should timeout waiting for invisible element",
       "action": "patch",
       "reason": "error wording: keep that it fails",
       "patches": [
@@ -298,7 +294,7 @@
     {
       "file": "tests/page/elementhandle-wait-for-element-state.spec.ts",
       "id": "EH-114",
-      "title": "EH-114 should timeout waiting for visible",
+      "title": "should timeout waiting for visible",
       "action": "patch",
       "reason": "error wording: keep that it fails",
       "patches": [
@@ -311,7 +307,7 @@
     {
       "file": "tests/page/elementhandle-wait-for-element-state.spec.ts",
       "id": "EH-115",
-      "title": "EH-115 should throw waiting for visible when detached",
+      "title": "should throw waiting for visible when detached",
       "action": "patch",
       "reason": "error wording: keep that it fails",
       "patches": [
@@ -324,7 +320,7 @@
     {
       "file": "tests/page/elementhandle-wait-for-element-state.spec.ts",
       "id": "EH-119",
-      "title": "EH-119 should throw waiting for enabled when detached",
+      "title": "should throw waiting for enabled when detached",
       "action": "patch",
       "reason": "error wording: keep that it fails",
       "patches": [
@@ -337,7 +333,7 @@
     {
       "file": "tests/page/eval-on-selector.spec.ts",
       "id": "ES-014",
-      "title": "ES-014 should throw error if no element is found",
+      "title": "should throw error if no element is found",
       "action": "patch",
       "reason": "error wording: keep that it fails",
       "patches": [
@@ -350,7 +346,7 @@
     {
       "file": "tests/page/eval-on-selector.spec.ts",
       "id": "ES-020",
-      "title": "ES-020 should throw on multiple * captures",
+      "title": "should throw on multiple * captures",
       "action": "patch",
       "reason": "error wording: keep that it fails",
       "patches": [
@@ -363,7 +359,7 @@
     {
       "file": "tests/page/eval-on-selector.spec.ts",
       "id": "ES-021",
-      "title": "ES-021 should throw on malformed * capture",
+      "title": "should throw on malformed * capture",
       "action": "patch",
       "reason": "error wording: keep that it fails",
       "patches": [
@@ -376,7 +372,7 @@
     {
       "file": "tests/page/expect-boolean.spec.ts",
       "id": "EX-005",
-      "title": "toBeChecked › EX-005 with indeterminate:true and checked",
+      "title": "toBeChecked › with indeterminate:true and checked",
       "action": "patch",
       "reason": "error wording: keep that it fails",
       "patches": [
@@ -389,49 +385,49 @@
     {
       "file": "tests/page/expect-boolean.spec.ts",
       "id": "EX-006",
-      "title": "toBeChecked › EX-006 fail",
+      "title": "toBeChecked › fail",
       "action": "delete",
       "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/expect-boolean.spec.ts",
       "id": "EX-009",
-      "title": "toBeChecked › EX-009 fail with not",
+      "title": "toBeChecked › fail with not",
       "action": "delete",
       "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/expect-boolean.spec.ts",
       "id": "EX-010",
-      "title": "toBeChecked › EX-010 fail with checked:false",
+      "title": "toBeChecked › fail with checked:false",
       "action": "delete",
       "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/expect-boolean.spec.ts",
       "id": "EX-011",
-      "title": "toBeChecked › EX-011 fail with indeterminate: true",
+      "title": "toBeChecked › fail with indeterminate: true",
       "action": "delete",
       "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/expect-boolean.spec.ts",
       "id": "EX-012",
-      "title": "toBeChecked › EX-012 fail missing",
+      "title": "toBeChecked › fail missing",
       "action": "delete",
       "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/expect-boolean.spec.ts",
       "id": "EX-014",
-      "title": "toBeChecked › EX-014 friendly log",
+      "title": "toBeChecked › friendly log",
       "action": "delete",
       "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/expect-boolean.spec.ts",
       "id": "EX-022",
-      "title": "toBeEditable › EX-022 throws",
+      "title": "toBeEditable › throws",
       "action": "patch",
       "reason": "error wording: keep that it fails",
       "patches": [
@@ -444,63 +440,63 @@
     {
       "file": "tests/page/expect-boolean.spec.ts",
       "id": "EX-026",
-      "title": "toBeEnabled › EX-026 failed",
+      "title": "toBeEnabled › failed",
       "action": "delete",
       "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/expect-boolean.spec.ts",
       "id": "EX-045",
-      "title": "toBeVisible › EX-045 fail",
+      "title": "toBeVisible › fail",
       "action": "delete",
       "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/expect-boolean.spec.ts",
       "id": "EX-046",
-      "title": "toBeVisible › EX-046 fail with not",
+      "title": "toBeVisible › fail with not",
       "action": "delete",
       "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/expect-boolean.spec.ts",
       "id": "EX-057",
-      "title": "toBeHidden › EX-057 fail",
+      "title": "toBeHidden › fail",
       "action": "delete",
       "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/expect-boolean.spec.ts",
       "id": "EX-058",
-      "title": "toBeHidden › EX-058 fail with not",
+      "title": "toBeHidden › fail with not",
       "action": "delete",
       "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/expect-boolean.spec.ts",
       "id": "EX-059",
-      "title": "toBeHidden › EX-059 fail with not when nothing matching",
+      "title": "toBeHidden › fail with not when nothing matching",
       "action": "delete",
       "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/expect-boolean.spec.ts",
       "id": "EX-064",
-      "title": "EX-064 should print unknown engine error",
+      "title": "should print unknown engine error",
       "action": "delete",
       "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/expect-boolean.spec.ts",
       "id": "EX-065",
-      "title": "EX-065 should print selector syntax error",
+      "title": "should print selector syntax error",
       "action": "delete",
       "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/expect-boolean.spec.ts",
       "id": "EX-068",
-      "title": "EX-068 toBeOK fail with invalid argument",
+      "title": "toBeOK fail with invalid argument",
       "action": "skip",
       "reason": "expectLoop: toBeOK is not covered",
       "patches": [
@@ -514,7 +510,7 @@
     {
       "file": "tests/page/expect-boolean.spec.ts",
       "id": "EX-069",
-      "title": "EX-069 toBeOK fail with promise",
+      "title": "toBeOK fail with promise",
       "action": "patch",
       "reason": "error wording: keep that it fails",
       "patches": [
@@ -527,42 +523,42 @@
     {
       "file": "tests/page/expect-boolean.spec.ts",
       "id": "EX-070",
-      "title": "toBeOK should print response with text content type when fails › EX-070 text content type",
+      "title": "toBeOK should print response with text content type when fails › text content type",
       "action": "delete",
       "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/expect-boolean.spec.ts",
       "id": "EX-071",
-      "title": "toBeOK should print response with text content type when fails › EX-071 no content type",
+      "title": "toBeOK should print response with text content type when fails › no content type",
       "action": "delete",
       "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/expect-boolean.spec.ts",
       "id": "EX-072",
-      "title": "toBeOK should print response with text content type when fails › EX-072 image content type",
+      "title": "toBeOK should print response with text content type when fails › image content type",
       "action": "delete",
       "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/expect-boolean.spec.ts",
       "id": "EX-081",
-      "title": "toBeAttached › EX-081 fail",
+      "title": "toBeAttached › fail",
       "action": "delete",
       "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/expect-boolean.spec.ts",
       "id": "EX-082",
-      "title": "toBeAttached › EX-082 fail with not",
+      "title": "toBeAttached › fail with not",
       "action": "delete",
       "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/expect-builtins.spec.ts",
       "id": "EX-159",
-      "title": "asymmetric matchers › EX-159 Any throws when called with empty constructor",
+      "title": "asymmetric matchers › Any throws when called with empty constructor",
       "action": "patch",
       "reason": "error diagnostics: remove wording and call logs; retain behavior and error classes",
       "patches": [
@@ -575,7 +571,7 @@
     {
       "file": "tests/page/expect-builtins.spec.ts",
       "id": "EX-166",
-      "title": "asymmetric matchers › EX-166 ObjectContaining throws for non-objects",
+      "title": "asymmetric matchers › ObjectContaining throws for non-objects",
       "action": "patch",
       "reason": "error diagnostics: remove wording and call logs; retain behavior and error classes",
       "patches": [
@@ -588,7 +584,7 @@
     {
       "file": "tests/page/expect-builtins.spec.ts",
       "id": "EX-173",
-      "title": "asymmetric matchers › EX-173 closeTo throws if expected is not number",
+      "title": "asymmetric matchers › closeTo throws if expected is not number",
       "action": "patch",
       "reason": "error diagnostics: remove wording and call logs; retain behavior and error classes",
       "patches": [
@@ -601,7 +597,7 @@
     {
       "file": "tests/page/expect-matcher-result.spec.ts",
       "id": "EX-176",
-      "title": "EX-176 toMatchText-based assertions should have matcher result",
+      "title": "toMatchText-based assertions should have matcher result",
       "action": "patch",
       "reason": "error diagnostics: remove wording and call logs; retain behavior and error classes",
       "patches": [
@@ -626,7 +622,7 @@
     {
       "file": "tests/page/expect-matcher-result.spec.ts",
       "id": "EX-177",
-      "title": "EX-177 toBeTruthy-based assertions should have matcher result",
+      "title": "toBeTruthy-based assertions should have matcher result",
       "action": "patch",
       "reason": "error diagnostics: remove wording and call logs; retain behavior and error classes",
       "patches": [
@@ -651,7 +647,7 @@
     {
       "file": "tests/page/expect-matcher-result.spec.ts",
       "id": "EX-178",
-      "title": "EX-178 toEqual-based assertions should have matcher result",
+      "title": "toEqual-based assertions should have matcher result",
       "action": "patch",
       "reason": "error diagnostics: remove wording and call logs; retain behavior and error classes",
       "patches": [
@@ -676,7 +672,7 @@
     {
       "file": "tests/page/expect-matcher-result.spec.ts",
       "id": "EX-179",
-      "title": "EX-179 toBeChecked({ checked }) should have expected",
+      "title": "toBeChecked({ checked }) should have expected",
       "action": "patch",
       "reason": "error diagnostics: remove wording and call logs; retain behavior and error classes",
       "patches": [
@@ -725,7 +721,7 @@
     {
       "file": "tests/page/expect-matcher-result.spec.ts",
       "id": "EX-180",
-      "title": "EX-180 toHaveScreenshot should populate matcherResult",
+      "title": "toHaveScreenshot should populate matcherResult",
       "action": "skip",
       "reason": "expectLoop: toHaveScreenshot is not covered",
       "patches": [
@@ -743,77 +739,77 @@
     {
       "file": "tests/page/expect-misc.spec.ts",
       "id": "EX-186",
-      "title": "toHaveCount › EX-186 fail zero",
+      "title": "toHaveCount › fail zero",
       "action": "delete",
       "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/expect-misc.spec.ts",
       "id": "EX-187",
-      "title": "toHaveCount › EX-187 fail zero 2",
+      "title": "toHaveCount › fail zero 2",
       "action": "delete",
       "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/expect-misc.spec.ts",
       "id": "EX-189",
-      "title": "toHaveJSProperty › EX-189 fail",
+      "title": "toHaveJSProperty › fail",
       "action": "delete",
       "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/expect-misc.spec.ts",
       "id": "EX-191",
-      "title": "toHaveJSProperty › EX-191 fail string",
+      "title": "toHaveJSProperty › fail string",
       "action": "delete",
       "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/expect-misc.spec.ts",
       "id": "EX-193",
-      "title": "toHaveJSProperty › EX-193 fail number",
+      "title": "toHaveJSProperty › fail number",
       "action": "delete",
       "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/expect-misc.spec.ts",
       "id": "EX-195",
-      "title": "toHaveJSProperty › EX-195 fail boolean",
+      "title": "toHaveJSProperty › fail boolean",
       "action": "delete",
       "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/expect-misc.spec.ts",
       "id": "EX-197",
-      "title": "toHaveJSProperty › EX-197 fail boolean 2",
+      "title": "toHaveJSProperty › fail boolean 2",
       "action": "delete",
       "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/expect-misc.spec.ts",
       "id": "EX-201",
-      "title": "toHaveJSProperty › EX-201 fail nested",
+      "title": "toHaveJSProperty › fail nested",
       "action": "delete",
       "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/expect-misc.spec.ts",
       "id": "EX-204",
-      "title": "toHaveClass › EX-204 fail",
+      "title": "toHaveClass › fail",
       "action": "delete",
       "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/expect-misc.spec.ts",
       "id": "EX-206",
-      "title": "toHaveClass › EX-206 fail with array",
+      "title": "toHaveClass › fail with array",
       "action": "delete",
       "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/expect-misc.spec.ts",
       "id": "EX-207",
-      "title": "toContainClass › EX-207 pass",
+      "title": "toContainClass › pass",
       "action": "skip",
       "reason": "expectLoop: toContainClass is not covered",
       "patches": [
@@ -827,21 +823,21 @@
     {
       "file": "tests/page/expect-misc.spec.ts",
       "id": "EX-208",
-      "title": "toContainClass › EX-208 pass with SVGs",
+      "title": "toContainClass › pass with SVGs",
       "action": "skip",
       "reason": "expectLoop: toContainClass is not covered"
     },
     {
       "file": "tests/page/expect-misc.spec.ts",
       "id": "EX-209",
-      "title": "toContainClass › EX-209 fail",
+      "title": "toContainClass › fail",
       "action": "delete",
       "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/expect-misc.spec.ts",
       "id": "EX-210",
-      "title": "toContainClass › EX-210 pass with array",
+      "title": "toContainClass › pass with array",
       "action": "skip",
       "reason": "expectLoop: toContainClass is not covered",
       "patches": [
@@ -855,28 +851,28 @@
     {
       "file": "tests/page/expect-misc.spec.ts",
       "id": "EX-211",
-      "title": "toContainClass › EX-211 fail with array",
+      "title": "toContainClass › fail with array",
       "action": "delete",
       "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/expect-misc.spec.ts",
       "id": "EX-213",
-      "title": "toHaveTitle › EX-213 fail",
+      "title": "toHaveTitle › fail",
       "action": "delete",
       "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/expect-misc.spec.ts",
       "id": "EX-215",
-      "title": "toHaveURL › EX-215 fail string",
+      "title": "toHaveURL › fail string",
       "action": "delete",
       "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/expect-misc.spec.ts",
       "id": "EX-216",
-      "title": "toHaveURL › EX-216 fail with invalid argument",
+      "title": "toHaveURL › fail with invalid argument",
       "action": "patch",
       "reason": "error wording: keep that it fails",
       "patches": [
@@ -889,21 +885,21 @@
     {
       "file": "tests/page/expect-misc.spec.ts",
       "id": "EX-217",
-      "title": "toHaveURL › EX-217 fail with positive predicate",
+      "title": "toHaveURL › fail with positive predicate",
       "action": "delete",
       "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/expect-misc.spec.ts",
       "id": "EX-218",
-      "title": "toHaveURL › EX-218 fail with negative predicate",
+      "title": "toHaveURL › fail with negative predicate",
       "action": "delete",
       "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/expect-misc.spec.ts",
       "id": "EX-224",
-      "title": "toHaveAttribute › EX-224 should not match missing attribute",
+      "title": "toHaveAttribute › should not match missing attribute",
       "action": "patch",
       "reason": "error diagnostics: remove wording and call logs; retain behavior and error classes",
       "patches": [
@@ -920,7 +916,7 @@
     {
       "file": "tests/page/expect-misc.spec.ts",
       "id": "EX-225",
-      "title": "toHaveAttribute › EX-225 should match boolean attribute",
+      "title": "toHaveAttribute › should match boolean attribute",
       "action": "patch",
       "reason": "error diagnostics: remove wording and call logs; retain behavior and error classes",
       "patches": [
@@ -937,112 +933,112 @@
     {
       "file": "tests/page/expect-misc.spec.ts",
       "id": "EX-233",
-      "title": "toBeInViewport › EX-233 should work",
+      "title": "toBeInViewport › should work",
       "action": "skip",
       "reason": "expectLoop: toBeInViewport is not covered"
     },
     {
       "file": "tests/page/expect-misc.spec.ts",
       "id": "EX-234",
-      "title": "toBeInViewport › EX-234 should respect ratio option",
+      "title": "toBeInViewport › should respect ratio option",
       "action": "skip",
       "reason": "expectLoop: toBeInViewport is not covered"
     },
     {
       "file": "tests/page/expect-misc.spec.ts",
       "id": "EX-235",
-      "title": "toBeInViewport › EX-235 should have good stack",
+      "title": "toBeInViewport › should have good stack",
       "action": "delete",
       "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/expect-misc.spec.ts",
       "id": "EX-236",
-      "title": "toBeInViewport › EX-236 should report intersection even if fully covered by other element",
+      "title": "toBeInViewport › should report intersection even if fully covered by other element",
       "action": "skip",
       "reason": "expectLoop: toBeInViewport is not covered"
     },
     {
       "file": "tests/page/expect-misc.spec.ts",
       "id": "EX-237",
-      "title": "EX-237 toHaveCount should not produce logs twice",
+      "title": "toHaveCount should not produce logs twice",
       "action": "delete",
       "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/expect-misc.spec.ts",
       "id": "EX-238",
-      "title": "EX-238 toHaveText should not produce logs twice",
+      "title": "toHaveText should not produce logs twice",
       "action": "delete",
       "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/expect-misc.spec.ts",
       "id": "EX-239",
-      "title": "EX-239 toHaveText that does not match should not produce logs twice",
+      "title": "toHaveText that does not match should not produce logs twice",
       "action": "delete",
       "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/expect-misc.spec.ts",
       "id": "EX-240",
-      "title": "EX-240 strict mode violation error format",
+      "title": "strict mode violation error format",
       "action": "delete",
       "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/expect-misc.spec.ts",
       "id": "EX-241",
-      "title": "EX-241 invalid selector error format",
+      "title": "invalid selector error format",
       "action": "delete",
       "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/expect-misc.spec.ts",
       "id": "EX-242",
-      "title": "EX-242 should report expect error details when page closes during expect",
+      "title": "should report expect error details when page closes during expect",
       "action": "delete",
       "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/expect-misc.spec.ts",
       "id": "EX-243",
-      "title": "EX-243 should report page close reason when page closes during expect",
+      "title": "should report page close reason when page closes during expect",
       "action": "delete",
       "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/expect-timeout.spec.ts",
       "id": "EX-244",
-      "title": "EX-244 should print element not found",
+      "title": "should print element not found",
       "action": "delete",
       "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/expect-timeout.spec.ts",
       "id": "EX-245",
-      "title": "EX-245 should print timed out error message when value does not match",
+      "title": "should print timed out error message when value does not match",
       "action": "delete",
       "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/expect-timeout.spec.ts",
       "id": "EX-246",
-      "title": "EX-246 should print timed out error message with impossible timeout",
+      "title": "should print timed out error message with impossible timeout",
       "action": "delete",
       "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/expect-timeout.spec.ts",
       "id": "EX-247",
-      "title": "EX-247 should print timed out error message when value does not match with impossible timeout",
+      "title": "should print timed out error message when value does not match with impossible timeout",
       "action": "delete",
       "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/expect-timeout.spec.ts",
       "id": "EX-251",
-      "title": "EX-251 should timeout during first locator handler check",
+      "title": "should timeout during first locator handler check",
       "action": "patch",
       "reason": "error wording: keep that it fails",
       "patches": [
@@ -1063,7 +1059,7 @@
     {
       "file": "tests/page/expect-timeout.spec.ts",
       "id": "EX-253",
-      "title": "EX-253 should fail like a timeout when the signal is aborted mid-assertion",
+      "title": "should fail like a timeout when the signal is aborted mid-assertion",
       "action": "patch",
       "reason": "error diagnostics: remove wording and call logs; retain behavior and error classes",
       "patches": [
@@ -1076,7 +1072,7 @@
     {
       "file": "tests/page/expect-timeout.spec.ts",
       "id": "EX-254",
-      "title": "EX-254 should fail like a timeout when toHaveText is aborted mid-assertion",
+      "title": "should fail like a timeout when toHaveText is aborted mid-assertion",
       "action": "patch",
       "reason": "error diagnostics: remove wording and call logs; retain behavior and error classes",
       "patches": [
@@ -1089,7 +1085,7 @@
     {
       "file": "tests/page/expect-timeout.spec.ts",
       "id": "EX-255",
-      "title": "EX-255 should fail like a timeout when toHaveCount is aborted mid-assertion",
+      "title": "should fail like a timeout when toHaveCount is aborted mid-assertion",
       "action": "patch",
       "reason": "error diagnostics: remove wording and call logs; retain behavior and error classes",
       "patches": [
@@ -1102,7 +1098,7 @@
     {
       "file": "tests/page/expect-timeout.spec.ts",
       "id": "EX-256",
-      "title": "EX-256 should fail like a timeout when toMatchAriaSnapshot is aborted mid-assertion",
+      "title": "should fail like a timeout when toMatchAriaSnapshot is aborted mid-assertion",
       "action": "skip",
       "reason": "expectLoop: toMatchAriaSnapshot is not covered",
       "patches": [
@@ -1116,7 +1112,7 @@
     {
       "file": "tests/page/expect-timeout.spec.ts",
       "id": "EX-257",
-      "title": "EX-257 should fail like a timeout when toHaveURL is aborted mid-assertion",
+      "title": "should fail like a timeout when toHaveURL is aborted mid-assertion",
       "action": "patch",
       "reason": "error diagnostics: remove wording and call logs; retain behavior and error classes",
       "patches": [
@@ -1129,7 +1125,7 @@
     {
       "file": "tests/page/expect-timeout.spec.ts",
       "id": "EX-258",
-      "title": "EX-258 should fail the assertion when the signal is already aborted",
+      "title": "should fail the assertion when the signal is already aborted",
       "action": "patch",
       "reason": "error diagnostics: remove wording and call logs; retain behavior and error classes",
       "patches": [
@@ -1146,105 +1142,105 @@
     {
       "file": "tests/page/expect-to-have-accessible.spec.ts",
       "id": "EX-259",
-      "title": "EX-259 toHaveAccessibleName",
+      "title": "toHaveAccessibleName",
       "action": "skip",
       "reason": "expectLoop: toHaveAccessibleName is not covered"
     },
     {
       "file": "tests/page/expect-to-have-accessible.spec.ts",
       "id": "EX-260",
-      "title": "EX-260 toHaveAccessibleDescription",
+      "title": "toHaveAccessibleDescription",
       "action": "skip",
       "reason": "expectLoop: toHaveAccessibleDescription is not covered"
     },
     {
       "file": "tests/page/expect-to-have-accessible.spec.ts",
       "id": "EX-261",
-      "title": "EX-261 toHaveAccessibleErrorMessage",
+      "title": "toHaveAccessibleErrorMessage",
       "action": "skip",
       "reason": "expectLoop: toHaveAccessibleErrorMessage is not covered"
     },
     {
       "file": "tests/page/expect-to-have-accessible.spec.ts",
       "id": "EX-262",
-      "title": "EX-262 toHaveAccessibleErrorMessage should handle multiple aria-errormessage references",
+      "title": "toHaveAccessibleErrorMessage should handle multiple aria-errormessage references",
       "action": "skip",
       "reason": "expectLoop: toHaveAccessibleErrorMessage is not covered"
     },
     {
       "file": "tests/page/expect-to-have-accessible.spec.ts",
       "id": "EX-263",
-      "title": "toHaveAccessibleErrorMessage should handle aria-invalid attribute › evaluated in false › EX-263 no aria-invalid attribute",
+      "title": "toHaveAccessibleErrorMessage should handle aria-invalid attribute › evaluated in false › no aria-invalid attribute",
       "action": "skip",
       "reason": "expectLoop: toHaveAccessibleErrorMessage is not covered"
     },
     {
       "file": "tests/page/expect-to-have-accessible.spec.ts",
       "id": "EX-264",
-      "title": "toHaveAccessibleErrorMessage should handle aria-invalid attribute › evaluated in false › EX-264 aria-invalid=\"false\"",
+      "title": "toHaveAccessibleErrorMessage should handle aria-invalid attribute › evaluated in false › aria-invalid=\"false\"",
       "action": "skip",
       "reason": "expectLoop: toHaveAccessibleErrorMessage is not covered"
     },
     {
       "file": "tests/page/expect-to-have-accessible.spec.ts",
       "id": "EX-265",
-      "title": "toHaveAccessibleErrorMessage should handle aria-invalid attribute › evaluated in false › EX-265 aria-invalid=\"\" (empty string)",
+      "title": "toHaveAccessibleErrorMessage should handle aria-invalid attribute › evaluated in false › aria-invalid=\"\" (empty string)",
       "action": "skip",
       "reason": "expectLoop: toHaveAccessibleErrorMessage is not covered"
     },
     {
       "file": "tests/page/expect-to-have-accessible.spec.ts",
       "id": "EX-266",
-      "title": "toHaveAccessibleErrorMessage should handle aria-invalid attribute › evaluated in true › EX-266 aria-invalid=\"true\"",
+      "title": "toHaveAccessibleErrorMessage should handle aria-invalid attribute › evaluated in true › aria-invalid=\"true\"",
       "action": "skip",
       "reason": "expectLoop: toHaveAccessibleErrorMessage is not covered"
     },
     {
       "file": "tests/page/expect-to-have-accessible.spec.ts",
       "id": "EX-267",
-      "title": "toHaveAccessibleErrorMessage should handle aria-invalid attribute › evaluated in true › EX-267 aria-invalid=\"foo\" (unrecognized value)",
+      "title": "toHaveAccessibleErrorMessage should handle aria-invalid attribute › evaluated in true › aria-invalid=\"foo\" (unrecognized value)",
       "action": "skip",
       "reason": "expectLoop: toHaveAccessibleErrorMessage is not covered"
     },
     {
       "file": "tests/page/expect-to-have-accessible.spec.ts",
       "id": "EX-268",
-      "title": "EX-268 should show error message when validity is false and aria-invalid is true",
+      "title": "should show error message when validity is false and aria-invalid is true",
       "action": "skip",
       "reason": "expectLoop: toHaveAccessibleErrorMessage is not covered"
     },
     {
       "file": "tests/page/expect-to-have-accessible.spec.ts",
       "id": "EX-269",
-      "title": "EX-269 should show error message when validity is true and aria-invalid is true",
+      "title": "should show error message when validity is true and aria-invalid is true",
       "action": "skip",
       "reason": "expectLoop: toHaveAccessibleErrorMessage is not covered"
     },
     {
       "file": "tests/page/expect-to-have-accessible.spec.ts",
       "id": "EX-270",
-      "title": "EX-270 should show error message when validity is false and aria-invalid is false",
+      "title": "should show error message when validity is false and aria-invalid is false",
       "action": "skip",
       "reason": "expectLoop: toHaveAccessibleErrorMessage is not covered"
     },
     {
       "file": "tests/page/expect-to-have-accessible.spec.ts",
       "id": "EX-271",
-      "title": "EX-271 should not show error message when validity is true and aria-invalid is false",
+      "title": "should not show error message when validity is true and aria-invalid is false",
       "action": "skip",
       "reason": "expectLoop: toHaveAccessibleErrorMessage is not covered"
     },
     {
       "file": "tests/page/expect-to-have-accessible.spec.ts",
       "id": "EX-272",
-      "title": "EX-272 should show error message for all roles",
+      "title": "should show error message for all roles",
       "action": "skip",
       "reason": "expectLoop: toHaveAccessibleErrorMessage is not covered"
     },
     {
       "file": "tests/page/expect-to-have-accessible.spec.ts",
       "id": "EX-273",
-      "title": "EX-273 toHaveRole",
+      "title": "toHaveRole",
       "action": "skip",
       "reason": "expectLoop: toHaveRole is not covered",
       "patches": [
@@ -1258,56 +1254,56 @@
     {
       "file": "tests/page/expect-to-have-text.spec.ts",
       "id": "EX-275",
-      "title": "toHaveText with regex › EX-275 fail",
+      "title": "toHaveText with regex › fail",
       "action": "delete",
       "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/expect-to-have-text.spec.ts",
       "id": "EX-277",
-      "title": "toContainText with regex › EX-277 fail",
+      "title": "toContainText with regex › fail",
       "action": "delete",
       "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/expect-to-have-text.spec.ts",
       "id": "EX-279",
-      "title": "toContainText with string › EX-279 fail",
+      "title": "toContainText with string › fail",
       "action": "delete",
       "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/expect-to-have-text.spec.ts",
       "id": "EX-282",
-      "title": "toHaveText with text › EX-282 fail",
+      "title": "toHaveText with text › fail",
       "action": "delete",
       "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/expect-to-have-text.spec.ts",
       "id": "EX-286",
-      "title": "toHaveText with text › EX-286 fail with impossible timeout",
+      "title": "toHaveText with text › fail with impossible timeout",
       "action": "delete",
       "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/expect-to-have-text.spec.ts",
       "id": "EX-287",
-      "title": "toHaveText with text › EX-287 do not show \"element(s) not found\" when the real failure is a string mismatch",
+      "title": "toHaveText with text › do not show \"element(s) not found\" when the real failure is a string mismatch",
       "action": "delete",
       "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/expect-to-have-text.spec.ts",
       "id": "EX-289",
-      "title": "not.toHaveText › EX-289 fail",
+      "title": "not.toHaveText › fail",
       "action": "delete",
       "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/expect-to-have-text.spec.ts",
       "id": "EX-290",
-      "title": "not.toHaveText › EX-290 should work when selector does not match",
+      "title": "not.toHaveText › should work when selector does not match",
       "action": "patch",
       "reason": "error wording: keep that it fails",
       "patches": [
@@ -1328,21 +1324,21 @@
     {
       "file": "tests/page/expect-to-have-text.spec.ts",
       "id": "EX-296",
-      "title": "toHaveText with array › EX-296 fail on not+empty",
+      "title": "toHaveText with array › fail on not+empty",
       "action": "delete",
       "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/expect-to-have-text.spec.ts",
       "id": "EX-298",
-      "title": "toHaveText with array › EX-298 fail",
+      "title": "toHaveText with array › fail",
       "action": "delete",
       "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/expect-to-have-text.spec.ts",
       "id": "EX-299",
-      "title": "toHaveText with array › EX-299 fail on repeating array matchers",
+      "title": "toHaveText with array › fail on repeating array matchers",
       "action": "patch",
       "reason": "error wording: keep that it fails",
       "patches": [
@@ -1355,35 +1351,35 @@
     {
       "file": "tests/page/expect-to-have-text.spec.ts",
       "id": "EX-301",
-      "title": "toContainText with array › EX-301 fail",
+      "title": "toContainText with array › fail",
       "action": "delete",
       "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/expect-to-have-value.spec.ts",
       "id": "EX-305",
-      "title": "EX-305 should support failure",
+      "title": "should support failure",
       "action": "delete",
       "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/expect-to-have-value.spec.ts",
       "id": "EX-308",
-      "title": "toHaveValues with multi-select › EX-308 exact match with text failure",
+      "title": "toHaveValues with multi-select › exact match with text failure",
       "action": "delete",
       "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/expect-to-have-value.spec.ts",
       "id": "EX-310",
-      "title": "toHaveValues with multi-select › EX-310 fails when items not selected",
+      "title": "toHaveValues with multi-select › fails when items not selected",
       "action": "delete",
       "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/expect-to-have-value.spec.ts",
       "id": "EX-311",
-      "title": "toHaveValues with multi-select › EX-311 fails when multiple not specified",
+      "title": "toHaveValues with multi-select › fails when multiple not specified",
       "action": "patch",
       "reason": "error wording: keep that it fails",
       "patches": [
@@ -1396,7 +1392,7 @@
     {
       "file": "tests/page/expect-to-have-value.spec.ts",
       "id": "EX-312",
-      "title": "toHaveValues with multi-select › EX-312 fails when not a select element",
+      "title": "toHaveValues with multi-select › fails when not a select element",
       "action": "patch",
       "reason": "error wording: keep that it fails",
       "patches": [
@@ -1409,70 +1405,70 @@
     {
       "file": "tests/page/expect-with-snapshot.spec.ts",
       "id": "EX-317",
-      "title": "property matchers print only the element line › EX-317 toHaveRole failure prints just the element line",
+      "title": "property matchers print only the element line › toHaveRole failure prints just the element line",
       "action": "skip",
       "reason": "expectLoop: toHaveRole is not covered"
     },
     {
       "file": "tests/page/expect-with-snapshot.spec.ts",
       "id": "EX-326",
-      "title": "matchers that should not include an aria snapshot › EX-326 toMatchAriaSnapshot failure has no extra aria snapshot",
+      "title": "matchers that should not include an aria snapshot › toMatchAriaSnapshot failure has no extra aria snapshot",
       "action": "skip",
       "reason": "expectLoop: toMatchAriaSnapshot is not covered"
     },
     {
       "file": "tests/page/firefox-network-response.spec.ts",
       "id": "FF-005",
-      "title": "FF-005 should preserve original response header fields for 200 responses",
+      "title": "should preserve original response header fields for 200 responses",
       "action": "delete",
-      "reason": "upstream-skipped: excluded by the pinned Chromium run"
+      "reason": "upstream-skipped: the pinned spec skips or fixmes it on Chromium"
     },
     {
       "file": "tests/page/firefox-network-response.spec.ts",
       "id": "FF-005",
-      "title": "FF-005 should preserve original response header fields for 302 responses",
+      "title": "should preserve original response header fields for 302 responses",
       "action": "delete",
-      "reason": "upstream-skipped: excluded by the pinned Chromium run"
+      "reason": "upstream-skipped: the pinned spec skips or fixmes it on Chromium"
     },
     {
       "file": "tests/page/firefox-network-response.spec.ts",
       "id": "FF-006",
-      "title": "FF-006 should preserve synthesized response header fields",
+      "title": "should preserve synthesized response header fields",
       "action": "delete",
-      "reason": "upstream-skipped: excluded by the pinned Chromium run"
+      "reason": "upstream-skipped: the pinned spec skips or fixmes it on Chromium"
     },
     {
       "file": "tests/page/firefox-network-response.spec.ts",
       "id": "FF-007",
-      "title": "FF-007 should report current effective fields after cache revalidation",
+      "title": "should report current effective fields after cache revalidation",
       "action": "delete",
-      "reason": "upstream-skipped: excluded by the pinned Chromium run"
+      "reason": "upstream-skipped: the pinned spec skips or fixmes it on Chromium"
     },
     {
       "file": "tests/page/firefox-network-response.spec.ts",
       "id": "FF-008",
-      "title": "FF-008 should report a standalone 304 response without waiting for a cache merge",
+      "title": "should report a standalone 304 response without waiting for a cache merge",
       "action": "delete",
-      "reason": "upstream-skipped: excluded by the pinned Chromium run"
+      "reason": "upstream-skipped: the pinned spec skips or fixmes it on Chromium"
     },
     {
       "file": "tests/page/frame-evaluate.spec.ts",
       "id": "FR-003",
-      "title": "FR-003 should dispose context on navigation",
+      "title": "should dispose context on navigation",
       "action": "skip",
       "reason": "needs Playwright internals: toImpl"
     },
     {
       "file": "tests/page/frame-evaluate.spec.ts",
       "id": "FR-004",
-      "title": "FR-004 should dispose context on cross-origin navigation",
+      "title": "should dispose context on cross-origin navigation",
       "action": "skip",
       "reason": "needs Playwright internals: toImpl"
     },
     {
       "file": "tests/page/frame-evaluate.spec.ts",
       "id": "FR-006",
-      "title": "FR-006 should not allow cross-frame js handles",
+      "title": "should not allow cross-frame js handles",
       "action": "patch",
       "reason": "error diagnostics: remove wording and call logs; retain behavior and error classes",
       "patches": [
@@ -1485,7 +1481,7 @@
     {
       "file": "tests/page/frame-evaluate.spec.ts",
       "id": "FR-008",
-      "title": "FR-008 should not allow cross-frame element handles when frames do not script each other",
+      "title": "should not allow cross-frame element handles when frames do not script each other",
       "action": "patch",
       "reason": "error wording: keep that it fails",
       "patches": [
@@ -1498,7 +1494,7 @@
     {
       "file": "tests/page/frame-evaluate.spec.ts",
       "id": "FR-009",
-      "title": "FR-009 should throw for detached frames",
+      "title": "should throw for detached frames",
       "action": "patch",
       "reason": "error wording: keep that it fails",
       "patches": [
@@ -1511,7 +1507,7 @@
     {
       "file": "tests/page/frame-frame-element.spec.ts",
       "id": "FR-017",
-      "title": "FR-017 should throw when detached",
+      "title": "should throw when detached",
       "action": "patch",
       "reason": "error wording: keep that it fails",
       "patches": [
@@ -1524,7 +1520,7 @@
     {
       "file": "tests/page/frame-goto.spec.ts",
       "id": "FR-021",
-      "title": "FR-021 should reject when frame detaches",
+      "title": "should reject when frame detaches",
       "action": "patch",
       "reason": "error wording: keep that it fails",
       "patches": [
@@ -1541,7 +1537,7 @@
     {
       "file": "tests/page/frame-goto.spec.ts",
       "id": "FR-022",
-      "title": "FR-022 should continue after client redirect",
+      "title": "should continue after client redirect",
       "action": "patch",
       "reason": "error wording: keep that it fails",
       "patches": [
@@ -1558,7 +1554,7 @@
     {
       "file": "tests/page/interception.spec.ts",
       "id": "RO-154",
-      "title": "RO-154 should throw on unbalanced glob braces",
+      "title": "should throw on unbalanced glob braces",
       "action": "patch",
       "reason": "error diagnostics: remove wording and call logs; retain behavior and error classes",
       "patches": [
@@ -1591,7 +1587,7 @@
     {
       "file": "tests/page/interception.spec.ts",
       "id": "RO-155",
-      "title": "RO-155 should throw on page.route with invalid glob",
+      "title": "should throw on page.route with invalid glob",
       "action": "patch",
       "reason": "error diagnostics: remove wording and call logs; retain behavior and error classes",
       "patches": [
@@ -1604,21 +1600,21 @@
     {
       "file": "tests/page/interception.spec.ts",
       "id": "RO-163",
-      "title": "RO-163 should disable memory cache when intercepting",
+      "title": "should disable memory cache when intercepting",
       "action": "delete",
       "reason": "invalid-here: fails on reference Playwright"
     },
     {
       "file": "tests/page/interception.spec.ts",
       "id": "RO-164",
-      "title": "RO-164 should intercept blob url requests",
+      "title": "should intercept blob url requests",
       "action": "delete",
-      "reason": "upstream-skipped: excluded by the pinned Chromium run"
+      "reason": "upstream-skipped: the pinned spec skips or fixmes it on Chromium"
     },
     {
       "file": "tests/page/locator-any-frame.spec.ts",
       "id": "LO-003",
-      "title": "LO-003 should fail click when elements match in multiple frames",
+      "title": "should fail click when elements match in multiple frames",
       "action": "patch",
       "reason": "error wording: keep that it fails",
       "patches": [
@@ -1635,7 +1631,7 @@
     {
       "file": "tests/page/locator-any-frame.spec.ts",
       "id": "LO-004",
-      "title": "LO-004 should fail click upon strict mode violation inside a single frame",
+      "title": "should fail click upon strict mode violation inside a single frame",
       "action": "patch",
       "reason": "error wording: keep that it fails",
       "patches": [
@@ -1652,7 +1648,7 @@
     {
       "file": "tests/page/locator-any-frame.spec.ts",
       "id": "LO-005",
-      "title": "LO-005 should time out on click when there are no matches",
+      "title": "should time out on click when there are no matches",
       "action": "patch",
       "reason": "error wording: keep that it fails",
       "patches": [
@@ -1669,7 +1665,7 @@
     {
       "file": "tests/page/locator-any-frame.spec.ts",
       "id": "LO-007",
-      "title": "LO-007 should fail count when elements match in multiple frames",
+      "title": "should fail count when elements match in multiple frames",
       "action": "patch",
       "reason": "error wording: keep that it fails",
       "patches": [
@@ -1682,7 +1678,7 @@
     {
       "file": "tests/page/locator-any-frame.spec.ts",
       "id": "LO-010",
-      "title": "LO-010 should fail toHaveCount when elements match in multiple frames",
+      "title": "should fail toHaveCount when elements match in multiple frames",
       "action": "patch",
       "reason": "error wording: keep that it fails",
       "patches": [
@@ -1699,7 +1695,7 @@
     {
       "file": "tests/page/locator-any-frame.spec.ts",
       "id": "LO-013",
-      "title": "LO-013 should fail toHaveText when elements match in multiple frames",
+      "title": "should fail toHaveText when elements match in multiple frames",
       "action": "patch",
       "reason": "error wording: keep that it fails",
       "patches": [
@@ -1716,7 +1712,7 @@
     {
       "file": "tests/page/locator-any-frame.spec.ts",
       "id": "LO-014",
-      "title": "LO-014 should fail toHaveText with an array when elements match in multiple frames",
+      "title": "should fail toHaveText with an array when elements match in multiple frames",
       "action": "patch",
       "reason": "error wording: keep that it fails",
       "patches": [
@@ -1729,7 +1725,7 @@
     {
       "file": "tests/page/locator-any-frame.spec.ts",
       "id": "LO-015",
-      "title": "LO-015 should fail toHaveText upon strict mode violation inside a single frame",
+      "title": "should fail toHaveText upon strict mode violation inside a single frame",
       "action": "patch",
       "reason": "error wording: keep that it fails",
       "patches": [
@@ -1746,7 +1742,7 @@
     {
       "file": "tests/page/locator-any-frame.spec.ts",
       "id": "LO-017",
-      "title": "LO-017 should fail evaluate when elements match in multiple frames",
+      "title": "should fail evaluate when elements match in multiple frames",
       "action": "patch",
       "reason": "error wording: keep that it fails",
       "patches": [
@@ -1759,7 +1755,7 @@
     {
       "file": "tests/page/locator-any-frame.spec.ts",
       "id": "LO-018",
-      "title": "LO-018 should time out on evaluate when there are no matches",
+      "title": "should time out on evaluate when there are no matches",
       "action": "patch",
       "reason": "error wording: keep that it fails",
       "patches": [
@@ -1776,7 +1772,7 @@
     {
       "file": "tests/page/locator-any-frame.spec.ts",
       "id": "LO-020",
-      "title": "LO-020 should fail evaluateAll when elements match in multiple frames",
+      "title": "should fail evaluateAll when elements match in multiple frames",
       "action": "patch",
       "reason": "error wording: keep that it fails",
       "patches": [
@@ -1789,7 +1785,7 @@
     {
       "file": "tests/page/locator-any-frame.spec.ts",
       "id": "LO-039",
-      "title": "LO-039 should fail when the frame to enter matches in multiple frames",
+      "title": "should fail when the frame to enter matches in multiple frames",
       "action": "patch",
       "reason": "error wording: keep that it fails",
       "patches": [
@@ -1802,7 +1798,7 @@
     {
       "file": "tests/page/locator-any-frame.spec.ts",
       "id": "LO-042",
-      "title": "LO-042 should not allow frameLocator() inside a composite locator",
+      "title": "should not allow frameLocator() inside a composite locator",
       "action": "patch",
       "reason": "error wording: keep that it fails",
       "patches": [
@@ -1831,7 +1827,7 @@
     {
       "file": "tests/page/locator-any-frame.spec.ts",
       "id": "LO-045",
-      "title": "LO-045 should not allow first/last/nth on frameLocator()",
+      "title": "should not allow first/last/nth on frameLocator()",
       "action": "patch",
       "reason": "error diagnostics: remove wording and call logs; retain behavior and error classes",
       "patches": [
@@ -1852,7 +1848,7 @@
     {
       "file": "tests/page/locator-any-frame.spec.ts",
       "id": "LO-046",
-      "title": "LO-046 should not allow owner on frameLocator()",
+      "title": "should not allow owner on frameLocator()",
       "action": "patch",
       "reason": "error wording: keep that it fails",
       "patches": [
@@ -1865,7 +1861,7 @@
     {
       "file": "tests/page/locator-any-frame.spec.ts",
       "id": "LO-051",
-      "title": "LO-051 should treat elements inside hidden iframe as hidden",
+      "title": "should treat elements inside hidden iframe as hidden",
       "action": "patch",
       "reason": "error diagnostics: remove wording and call logs; retain behavior and error classes",
       "patches": [
@@ -1878,7 +1874,7 @@
     {
       "file": "tests/page/locator-convenience.spec.ts",
       "id": "LO-059",
-      "title": "LO-059 inputValue should work",
+      "title": "inputValue should work",
       "action": "patch",
       "reason": "error diagnostics: remove wording and call logs; retain behavior and error classes",
       "patches": [
@@ -1895,7 +1891,7 @@
     {
       "file": "tests/page/locator-convenience.spec.ts",
       "id": "LO-062",
-      "title": "LO-062 innerText should throw",
+      "title": "innerText should throw",
       "action": "patch",
       "reason": "error wording: keep that it fails",
       "patches": [
@@ -1912,14 +1908,14 @@
     {
       "file": "tests/page/locator-convenience.spec.ts",
       "id": "LO-063",
-      "title": "LO-063 innerText should produce log",
+      "title": "innerText should produce log",
       "action": "delete",
       "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/locator-convenience.spec.ts",
       "id": "LO-066",
-      "title": "LO-066 isEditable should work",
+      "title": "isEditable should work",
       "action": "patch",
       "reason": "error diagnostics: remove wording and call logs; retain behavior and error classes",
       "patches": [
@@ -1932,7 +1928,7 @@
     {
       "file": "tests/page/locator-convenience.spec.ts",
       "id": "LO-067",
-      "title": "LO-067 isChecked should work",
+      "title": "isChecked should work",
       "action": "patch",
       "reason": "error diagnostics: remove wording and call logs; retain behavior and error classes",
       "patches": [
@@ -1945,7 +1941,7 @@
     {
       "file": "tests/page/locator-frame.spec.ts",
       "id": "LO-092",
-      "title": "LO-092 should wait for frame",
+      "title": "should wait for frame",
       "action": "patch",
       "reason": "error wording: keep that it fails",
       "patches": [
@@ -1958,7 +1954,7 @@
     {
       "file": "tests/page/locator-frame.spec.ts",
       "id": "LO-102",
-      "title": "LO-102 should non work for non-frame",
+      "title": "should non work for non-frame",
       "action": "patch",
       "reason": "error wording: keep that it fails",
       "patches": [
@@ -1975,7 +1971,7 @@
     {
       "file": "tests/page/locator-frame.spec.ts",
       "id": "LO-104",
-      "title": "LO-104 locator.frameLocator should throw on ambiguity",
+      "title": "locator.frameLocator should throw on ambiguity",
       "action": "patch",
       "reason": "error wording: keep that it fails",
       "patches": [
@@ -1988,7 +1984,7 @@
     {
       "file": "tests/page/locator-frame.spec.ts",
       "id": "LO-107",
-      "title": "LO-107 wait for hidden should succeed when frame is not in dom",
+      "title": "wait for hidden should succeed when frame is not in dom",
       "action": "patch",
       "reason": "error diagnostics: remove wording and call logs; retain behavior and error classes",
       "patches": [
@@ -2001,7 +1997,7 @@
     {
       "file": "tests/page/locator-frame.spec.ts",
       "id": "LO-112",
-      "title": "LO-112 should wait for hidden iframe to become visible",
+      "title": "should wait for hidden iframe to become visible",
       "action": "patch",
       "reason": "error diagnostics: remove wording and call logs; retain behavior and error classes",
       "patches": [
@@ -2014,7 +2010,7 @@
     {
       "file": "tests/page/locator-is-visible.spec.ts",
       "id": "LO-125",
-      "title": "LO-125 isVisible with invalid selector should throw",
+      "title": "isVisible with invalid selector should throw",
       "action": "patch",
       "reason": "error wording: keep that it fails",
       "patches": [
@@ -2027,7 +2023,7 @@
     {
       "file": "tests/page/locator-misc-1.spec.ts",
       "id": "LO-137",
-      "title": "LO-137 focus should respect strictness",
+      "title": "focus should respect strictness",
       "action": "patch",
       "reason": "error wording: keep that it fails",
       "patches": [
@@ -2040,7 +2036,7 @@
     {
       "file": "tests/page/locator-misc-2.spec.ts",
       "id": "LO-156",
-      "title": "LO-156 press should throw on unknown keys",
+      "title": "press should throw on unknown keys",
       "action": "patch",
       "reason": "error diagnostics: remove wording and call logs; retain behavior and error classes",
       "patches": [
@@ -2061,7 +2057,7 @@
     {
       "file": "tests/page/locator-query.spec.ts",
       "id": "LO-159",
-      "title": "LO-159 should throw on capture w/ nth()",
+      "title": "should throw on capture w/ nth()",
       "action": "patch",
       "reason": "error wording: keep that it fails",
       "patches": [
@@ -2074,7 +2070,7 @@
     {
       "file": "tests/page/locator-query.spec.ts",
       "id": "LO-160",
-      "title": "LO-160 should throw on due to strictness",
+      "title": "should throw on due to strictness",
       "action": "patch",
       "reason": "error wording: keep that it fails",
       "patches": [
@@ -2087,7 +2083,7 @@
     {
       "file": "tests/page/locator-query.spec.ts",
       "id": "LO-161",
-      "title": "LO-161 should throw on due to strictness 2",
+      "title": "should throw on due to strictness 2",
       "action": "patch",
       "reason": "error wording: keep that it fails",
       "patches": [
@@ -2100,14 +2096,14 @@
     {
       "file": "tests/page/locator-query.spec.ts",
       "id": "LO-167",
-      "title": "LO-167 should filter by regex with a single quote",
+      "title": "should filter by regex with a single quote",
       "action": "skip",
       "reason": "needs Playwright internals: Locator._expect"
     },
     {
       "file": "tests/page/locator-query.spec.ts",
       "id": "LO-178",
-      "title": "LO-178 should allow some, but not all nested frameLocators",
+      "title": "should allow some, but not all nested frameLocators",
       "action": "patch",
       "reason": "error diagnostics: remove wording and call logs; retain behavior and error classes",
       "patches": [
@@ -2124,7 +2120,7 @@
     {
       "file": "tests/page/locator-query.spec.ts",
       "id": "LO-179",
-      "title": "LO-179 should keep the capture when removing a common frame prefix",
+      "title": "should keep the capture when removing a common frame prefix",
       "action": "patch",
       "reason": "error diagnostics: remove wording and call logs; retain behavior and error classes",
       "patches": [
@@ -2137,7 +2133,7 @@
     {
       "file": "tests/page/locator-query.spec.ts",
       "id": "LO-180",
-      "title": "LO-180 should enforce same frame for has/leftOf/rightOf/above/below/near",
+      "title": "should enforce same frame for has/leftOf/rightOf/above/below/near",
       "action": "patch",
       "reason": "error wording: keep that it fails",
       "patches": [
@@ -2150,7 +2146,7 @@
     {
       "file": "tests/page/locator-wait-for-function.spec.ts",
       "id": "LO-190",
-      "title": "LO-190 should throw on strict mode violation",
+      "title": "should throw on strict mode violation",
       "action": "patch",
       "reason": "error wording: keep that it fails",
       "patches": [
@@ -2163,7 +2159,7 @@
     {
       "file": "tests/page/matchers.misc.spec.ts",
       "id": "EX-328",
-      "title": "EX-328 should print no-locator-resolved error when locator matcher did not resolve to any element",
+      "title": "should print no-locator-resolved error when locator matcher did not resolve to any element",
       "action": "patch",
       "reason": "error diagnostics: remove wording and call logs; retain behavior and error classes",
       "patches": [
@@ -2180,7 +2176,7 @@
     {
       "file": "tests/page/network-post-data.spec.ts",
       "id": "NE-110",
-      "title": "NE-110 should throw on invalid JSON in post data",
+      "title": "should throw on invalid JSON in post data",
       "action": "patch",
       "reason": "error wording: keep that it fails",
       "patches": [
@@ -2193,7 +2189,7 @@
     {
       "file": "tests/page/page-add-init-script-callback.spec.ts",
       "id": "IS-013",
-      "title": "IS-013 should throw when the script is not a function",
+      "title": "should throw when the script is not a function",
       "action": "patch",
       "reason": "error diagnostics: remove wording and call logs; retain behavior and error classes",
       "patches": [
@@ -2206,7 +2202,7 @@
     {
       "file": "tests/page/page-add-init-script.spec.ts",
       "id": "IS-004",
-      "title": "IS-004 should throw without path and content",
+      "title": "should throw without path and content",
       "action": "patch",
       "reason": "error wording: keep that it fails",
       "patches": [
@@ -2219,14 +2215,14 @@
     {
       "file": "tests/page/page-add-locator-handler.spec.ts",
       "id": "LH-001",
-      "title": "LH-001 should work",
+      "title": "should work",
       "action": "skip",
       "reason": "expectLoop: toBe is not covered"
     },
     {
       "file": "tests/page/page-add-locator-handler.spec.ts",
       "id": "LH-005",
-      "title": "LH-005 should throw when handler times out",
+      "title": "should throw when handler times out",
       "action": "patch",
       "reason": "error diagnostics: remove wording and call logs; retain behavior and error classes",
       "patches": [
@@ -2243,14 +2239,14 @@
     {
       "file": "tests/page/page-add-locator-handler.spec.ts",
       "id": "LH-008",
-      "title": "LH-008 should work with toHaveScreenshot",
+      "title": "should work with toHaveScreenshot",
       "action": "skip",
       "reason": "expectLoop: toHaveScreenshot is not covered"
     },
     {
       "file": "tests/page/page-add-locator-handler.spec.ts",
       "id": "LH-010",
-      "title": "LH-010 should work with times: option",
+      "title": "should work with times: option",
       "action": "patch",
       "reason": "error diagnostics: remove wording and call logs; retain behavior and error classes",
       "patches": [
@@ -2267,7 +2263,7 @@
     {
       "file": "tests/page/page-add-locator-handler.spec.ts",
       "id": "LH-012",
-      "title": "LH-012 should wait for hidden by default 2",
+      "title": "should wait for hidden by default 2",
       "action": "patch",
       "reason": "error diagnostics: remove wording and call logs; retain behavior and error classes",
       "patches": [
@@ -2280,7 +2276,7 @@
     {
       "file": "tests/page/page-add-locator-handler.spec.ts",
       "id": "LH-014",
-      "title": "LH-014 should removeLocatorHandler",
+      "title": "should removeLocatorHandler",
       "action": "patch",
       "reason": "error diagnostics: remove wording and call logs; retain behavior and error classes",
       "patches": [
@@ -2293,7 +2289,7 @@
     {
       "file": "tests/page/page-add-script-tag.spec.ts",
       "id": "AT-001",
-      "title": "AT-001 should throw an error if no options are provided",
+      "title": "should throw an error if no options are provided",
       "action": "patch",
       "reason": "error wording: keep that it fails",
       "patches": [
@@ -2306,7 +2302,7 @@
     {
       "file": "tests/page/page-add-script-tag.spec.ts",
       "id": "AT-012",
-      "title": "AT-012 should throw a nice error when the request fails",
+      "title": "should throw a nice error when the request fails",
       "action": "patch",
       "reason": "error wording: keep that it fails",
       "patches": [
@@ -2319,7 +2315,7 @@
     {
       "file": "tests/page/page-add-style-tag.spec.ts",
       "id": "AT-013",
-      "title": "AT-013 should throw an error if no options are provided",
+      "title": "should throw an error if no options are provided",
       "action": "patch",
       "reason": "error wording: keep that it fails",
       "patches": [
@@ -2332,7 +2328,7 @@
     {
       "file": "tests/page/page-aria-snapshot-ai.spec.ts",
       "id": "AR-052",
-      "title": "AR-052 should stitch all frame snapshots",
+      "title": "should stitch all frame snapshots",
       "action": "patch",
       "reason": "error diagnostics: remove wording and call logs; retain behavior and error classes",
       "patches": [
@@ -2345,7 +2341,7 @@
     {
       "file": "tests/page/page-aria-snapshot-ai.spec.ts",
       "id": "AR-053",
-      "title": "AR-053 should re-number refs across navigations but not same-document navigations",
+      "title": "should re-number refs across navigations but not same-document navigations",
       "action": "patch",
       "reason": "error diagnostics: remove wording and call logs; retain behavior and error classes",
       "patches": [
@@ -2358,294 +2354,273 @@
     {
       "file": "tests/page/page-aria-snapshot-ai.spec.ts",
       "id": "AR-071",
-      "title": "AR-071 should not distill snapshots outside of ai mode",
+      "title": "should not distill snapshots outside of ai mode",
       "action": "skip",
       "reason": "expectLoop: toMatchAriaSnapshot is not covered"
     },
     {
       "file": "tests/page/page-aria-snapshot.spec.ts",
       "id": "AR-001",
-      "title": "AR-001 should snapshot",
+      "title": "should snapshot",
       "action": "skip",
       "reason": "needs Playwright internals: Locator._expect"
     },
     {
       "file": "tests/page/page-aria-snapshot.spec.ts",
       "id": "AR-002",
-      "title": "AR-002 should snapshot list",
+      "title": "should snapshot list",
       "action": "skip",
       "reason": "needs Playwright internals: Locator._expect"
     },
     {
       "file": "tests/page/page-aria-snapshot.spec.ts",
       "id": "AR-003",
-      "title": "AR-003 should snapshot list with accessible name",
+      "title": "should snapshot list with accessible name",
       "action": "skip",
       "reason": "needs Playwright internals: Locator._expect"
     },
     {
       "file": "tests/page/page-aria-snapshot.spec.ts",
       "id": "AR-004",
-      "title": "AR-004 should quote names that look like regexes",
+      "title": "should quote names that look like regexes",
       "action": "skip",
       "reason": "needs Playwright internals: Locator._expect"
     },
     {
       "file": "tests/page/page-aria-snapshot.spec.ts",
       "id": "AR-005",
-      "title": "AR-005 should snapshot complex",
+      "title": "should snapshot complex",
       "action": "skip",
       "reason": "needs Playwright internals: Locator._expect"
     },
     {
       "file": "tests/page/page-aria-snapshot.spec.ts",
       "id": "AR-006",
-      "title": "AR-006 should allow text nodes",
+      "title": "should allow text nodes",
       "action": "skip",
       "reason": "needs Playwright internals: Locator._expect"
     },
     {
       "file": "tests/page/page-aria-snapshot.spec.ts",
       "id": "AR-007",
-      "title": "AR-007 should snapshot details visibility",
-      "action": "skip",
-      "reason": "needs Playwright internals: Locator._expect"
-    },
-    {
-      "file": "tests/page/page-aria-snapshot.spec.ts",
-      "id": "AR-008",
-      "title": "AR-008 should not snapshot text directly inside closed details",
-      "action": "skip",
-      "reason": "needs Playwright internals: Locator._expect"
-    },
-    {
-      "file": "tests/page/page-aria-snapshot.spec.ts",
-      "id": "AR-009",
-      "title": "AR-009 should not snapshot text that is not assigned to a slot",
+      "title": "should snapshot details visibility",
       "action": "skip",
       "reason": "needs Playwright internals: Locator._expect"
     },
     {
       "file": "tests/page/page-aria-snapshot.spec.ts",
       "id": "AR-010",
-      "title": "AR-010 should snapshot integration",
+      "title": "should snapshot integration",
       "action": "skip",
       "reason": "needs Playwright internals: Locator._expect"
     },
     {
       "file": "tests/page/page-aria-snapshot.spec.ts",
       "id": "AR-011",
-      "title": "AR-011 should support multiline text",
+      "title": "should support multiline text",
       "action": "skip",
       "reason": "expectLoop: toMatchAriaSnapshot is not covered"
     },
     {
       "file": "tests/page/page-aria-snapshot.spec.ts",
       "id": "AR-012",
-      "title": "AR-012 should concatenate span text",
+      "title": "should concatenate span text",
       "action": "skip",
       "reason": "needs Playwright internals: Locator._expect"
     },
     {
       "file": "tests/page/page-aria-snapshot.spec.ts",
       "id": "AR-013",
-      "title": "AR-013 should concatenate span text 2",
+      "title": "should concatenate span text 2",
       "action": "skip",
       "reason": "needs Playwright internals: Locator._expect"
     },
     {
       "file": "tests/page/page-aria-snapshot.spec.ts",
       "id": "AR-014",
-      "title": "AR-014 should concatenate div text with spaces",
+      "title": "should concatenate div text with spaces",
       "action": "skip",
       "reason": "needs Playwright internals: Locator._expect"
     },
     {
       "file": "tests/page/page-aria-snapshot.spec.ts",
       "id": "AR-015",
-      "title": "AR-015 should include pseudo in text",
+      "title": "should include pseudo in text",
       "action": "skip",
       "reason": "needs Playwright internals: Locator._expect"
     },
     {
       "file": "tests/page/page-aria-snapshot.spec.ts",
       "id": "AR-016",
-      "title": "AR-016 should not include hidden pseudo in text",
+      "title": "should not include hidden pseudo in text",
       "action": "skip",
       "reason": "needs Playwright internals: Locator._expect"
     },
     {
       "file": "tests/page/page-aria-snapshot.spec.ts",
       "id": "AR-017",
-      "title": "AR-017 should include new line for block pseudo",
+      "title": "should include new line for block pseudo",
       "action": "skip",
       "reason": "needs Playwright internals: Locator._expect"
     },
     {
       "file": "tests/page/page-aria-snapshot.spec.ts",
       "id": "AR-018",
-      "title": "AR-018 should work with slots",
+      "title": "should work with slots",
       "action": "skip",
       "reason": "needs Playwright internals: Locator._expect"
     },
     {
       "file": "tests/page/page-aria-snapshot.spec.ts",
       "id": "AR-019",
-      "title": "AR-019 should snapshot inner text",
+      "title": "should snapshot inner text",
       "action": "skip",
       "reason": "needs Playwright internals: Locator._expect"
     },
     {
       "file": "tests/page/page-aria-snapshot.spec.ts",
       "id": "AR-020",
-      "title": "AR-020 should include pseudo codepoints",
+      "title": "should include pseudo codepoints",
       "action": "skip",
       "reason": "needs Playwright internals: Locator._expect"
     },
     {
       "file": "tests/page/page-aria-snapshot.spec.ts",
       "id": "AR-021",
-      "title": "AR-021 check aria-hidden text",
+      "title": "check aria-hidden text",
       "action": "skip",
       "reason": "needs Playwright internals: Locator._expect"
     },
     {
       "file": "tests/page/page-aria-snapshot.spec.ts",
       "id": "AR-022",
-      "title": "AR-022 should ignore presentation and none roles",
+      "title": "should ignore presentation and none roles",
       "action": "skip",
       "reason": "needs Playwright internals: Locator._expect"
     },
     {
       "file": "tests/page/page-aria-snapshot.spec.ts",
       "id": "AR-023",
-      "title": "AR-023 should treat input value as text in templates, but not for checkbox/radio/file",
+      "title": "should treat input value as text in templates, but not for checkbox/radio/file",
       "action": "skip",
       "reason": "needs Playwright internals: Locator._expect"
     },
     {
       "file": "tests/page/page-aria-snapshot.spec.ts",
       "id": "AR-024",
-      "title": "AR-024 should not use on as checkbox value",
+      "title": "should not use on as checkbox value",
       "action": "skip",
       "reason": "needs Playwright internals: Locator._expect"
     },
     {
       "file": "tests/page/page-aria-snapshot.spec.ts",
       "id": "AR-025",
-      "title": "AR-025 should respect aria-owns",
+      "title": "should respect aria-owns",
       "action": "skip",
       "reason": "needs Playwright internals: Locator._expect"
     },
     {
       "file": "tests/page/page-aria-snapshot.spec.ts",
       "id": "AR-026",
-      "title": "AR-026 should be ok with circular ownership",
+      "title": "should be ok with circular ownership",
       "action": "skip",
       "reason": "needs Playwright internals: Locator._expect"
     },
     {
       "file": "tests/page/page-aria-snapshot.spec.ts",
       "id": "AR-027",
-      "title": "AR-027 should escape yaml text in text nodes",
+      "title": "should escape yaml text in text nodes",
       "action": "skip",
       "reason": "needs Playwright internals: Locator._expect"
     },
     {
       "file": "tests/page/page-aria-snapshot.spec.ts",
       "id": "AR-028",
-      "title": "AR-028 should normalize whitespace",
+      "title": "should normalize whitespace",
       "action": "skip",
       "reason": "expectLoop: toMatchAriaSnapshot is not covered"
     },
     {
       "file": "tests/page/page-aria-snapshot.spec.ts",
       "id": "AR-029",
-      "title": "AR-029 should handle long strings",
+      "title": "should handle long strings",
       "action": "skip",
       "reason": "needs Playwright internals: Locator._expect"
     },
     {
       "file": "tests/page/page-aria-snapshot.spec.ts",
       "id": "AR-030",
-      "title": "AR-030 should escape special yaml characters",
+      "title": "should escape special yaml characters",
       "action": "skip",
       "reason": "needs Playwright internals: Locator._expect"
     },
     {
       "file": "tests/page/page-aria-snapshot.spec.ts",
       "id": "AR-031",
-      "title": "AR-031 should escape special yaml values",
+      "title": "should escape special yaml values",
       "action": "skip",
       "reason": "needs Playwright internals: Locator._expect"
     },
     {
       "file": "tests/page/page-aria-snapshot.spec.ts",
       "id": "AR-032",
-      "title": "AR-032 should not report textarea textContent",
+      "title": "should not report textarea textContent",
       "action": "skip",
       "reason": "needs Playwright internals: Locator._expect"
     },
     {
       "file": "tests/page/page-aria-snapshot.spec.ts",
       "id": "AR-036",
-      "title": "AR-036 match values both against regex and string",
+      "title": "match values both against regex and string",
       "action": "skip",
       "reason": "needs Playwright internals: Locator._expect"
     },
     {
       "file": "tests/page/page-aria-snapshot.spec.ts",
       "id": "AR-041",
-      "title": "AR-041 should snapshot a locator inside a frameset frame",
-      "action": "skip",
-      "reason": "needs Playwright internals: Locator._expect"
-    },
-    {
-      "file": "tests/page/page-aria-snapshot.spec.ts",
-      "id": "AR-171",
-      "title": "AR-171 should include inert elements and elements outside of a modal dialog",
+      "title": "should snapshot a locator inside a frameset frame",
       "action": "skip",
       "reason": "needs Playwright internals: Locator._expect"
     },
     {
       "file": "tests/page/page-autowaiting-basic.spec.ts",
       "id": "AW-010",
-      "title": "AW-010 should report navigation in the log when clicking anchor",
+      "title": "should report navigation in the log when clicking anchor",
       "action": "delete",
       "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/page-autowaiting-basic.spec.ts",
       "id": "AW-011",
-      "title": "AW-011 should report and collapse log in action",
+      "title": "should report and collapse log in action",
       "action": "delete",
       "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/page-autowaiting-basic.spec.ts",
       "id": "AW-012",
-      "title": "AW-012 should report and collapse log in expect",
+      "title": "should report and collapse log in expect",
       "action": "delete",
       "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/page-basic.spec.ts",
       "id": "PA-002",
-      "title": "PA-002 async stacks should work",
+      "title": "async stacks should work",
       "action": "delete",
       "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/page-basic.spec.ts",
       "id": "PA-018",
-      "title": "PA-018 has navigator.webdriver set to true",
+      "title": "has navigator.webdriver set to true",
       "action": "delete",
       "reason": "invalid-here: fails on reference Playwright"
     },
     {
       "file": "tests/page/page-check.spec.ts",
       "id": "CH-010",
-      "title": "CH-010 should throw when not a checkbox",
+      "title": "should throw when not a checkbox",
       "action": "patch",
       "reason": "error wording: keep that it fails",
       "patches": [
@@ -2658,7 +2633,7 @@
     {
       "file": "tests/page/page-check.spec.ts",
       "id": "CH-011",
-      "title": "CH-011 should throw when not a checkbox 2",
+      "title": "should throw when not a checkbox 2",
       "action": "patch",
       "reason": "error wording: keep that it fails",
       "patches": [
@@ -2671,7 +2646,7 @@
     {
       "file": "tests/page/page-check.spec.ts",
       "id": "CH-017",
-      "title": "CH-017 should throw when trying to uncheck radio button",
+      "title": "should throw when trying to uncheck radio button",
       "action": "patch",
       "reason": "error wording: keep that it fails",
       "patches": [
@@ -2684,7 +2659,7 @@
     {
       "file": "tests/page/page-click-react.spec.ts",
       "id": "CL-106",
-      "title": "CL-106 should timeout when click opens alert",
+      "title": "should timeout when click opens alert",
       "action": "patch",
       "reason": "error wording: keep that it fails",
       "patches": [
@@ -2697,14 +2672,14 @@
     {
       "file": "tests/page/page-click-scroll.spec.ts",
       "id": "CL-097",
-      "title": "CL-097 should scroll into view display:contents with position",
+      "title": "should scroll into view display:contents with position",
       "action": "delete",
-      "reason": "upstream-skipped: excluded by the pinned Chromium run"
+      "reason": "upstream-skipped: the pinned spec skips or fixmes it on Chromium"
     },
     {
       "file": "tests/page/page-click-scroll.spec.ts",
       "id": "CL-098",
-      "title": "CL-098 should not crash when force-clicking hidden input",
+      "title": "should not crash when force-clicking hidden input",
       "action": "patch",
       "reason": "error wording: keep that it fails",
       "patches": [
@@ -2717,7 +2692,7 @@
     {
       "file": "tests/page/page-click-scroll.spec.ts",
       "id": "CL-101",
-      "title": "CL-101 should not scroll the page when scroll is \"none\"",
+      "title": "should not scroll the page when scroll is \"none\"",
       "action": "patch",
       "reason": "error diagnostics: remove wording and call logs; retain behavior and error classes",
       "patches": [
@@ -2730,7 +2705,7 @@
     {
       "file": "tests/page/page-click-scroll.spec.ts",
       "id": "CL-104",
-      "title": "CL-104 should not scroll on hover when scroll is \"none\"",
+      "title": "should not scroll on hover when scroll is \"none\"",
       "action": "patch",
       "reason": "error diagnostics: remove wording and call logs; retain behavior and error classes",
       "patches": [
@@ -2743,7 +2718,7 @@
     {
       "file": "tests/page/page-click-timeout-1.spec.ts",
       "id": "CL-110",
-      "title": "CL-110 should avoid side effects after timeout",
+      "title": "should avoid side effects after timeout",
       "action": "patch",
       "reason": "error diagnostics: remove wording and call logs; retain behavior and error classes",
       "patches": [
@@ -2756,7 +2731,7 @@
     {
       "file": "tests/page/page-click-timeout-1.spec.ts",
       "id": "CL-111",
-      "title": "CL-111 should timeout waiting for button to be enabled",
+      "title": "should timeout waiting for button to be enabled",
       "action": "patch",
       "reason": "error diagnostics: remove wording and call logs; retain behavior and error classes",
       "patches": [
@@ -2775,30 +2750,9 @@
       ]
     },
     {
-      "file": "tests/page/page-click-timeout-1.spec.ts",
-      "id": "CL-112",
-      "title": "CL-112 should timeout waiting for inert element to become non-inert",
-      "action": "patch",
-      "reason": "error diagnostics: remove wording and call logs; retain behavior and error classes",
-      "patches": [
-        {
-          "find": "expect(error.message).toContain('page.click: Timeout 3000ms exceeded.');",
-          "replace": ""
-        },
-        {
-          "find": "expect(error.message).toContain('element is inert');",
-          "replace": ""
-        },
-        {
-          "find": "expect(error.message).toContain('retrying click action');",
-          "replace": ""
-        }
-      ]
-    },
-    {
       "file": "tests/page/page-click-timeout-2.spec.ts",
       "id": "CL-114",
-      "title": "CL-114 should timeout waiting for display:none to be gone",
+      "title": "should timeout waiting for display:none to be gone",
       "action": "patch",
       "reason": "error wording: keep that it fails",
       "patches": [
@@ -2823,7 +2777,7 @@
     {
       "file": "tests/page/page-click-timeout-2.spec.ts",
       "id": "CL-115",
-      "title": "CL-115 should timeout waiting for visibility:hidden to be gone",
+      "title": "should timeout waiting for visibility:hidden to be gone",
       "action": "patch",
       "reason": "error wording: keep that it fails",
       "patches": [
@@ -2848,7 +2802,7 @@
     {
       "file": "tests/page/page-click-timeout-3.spec.ts",
       "id": "CL-116",
-      "title": "CL-116 should fail when element jumps during hit testing",
+      "title": "should fail when element jumps during hit testing",
       "action": "patch",
       "reason": "error diagnostics: remove wording and call logs; retain behavior and error classes",
       "patches": [
@@ -2869,7 +2823,7 @@
     {
       "file": "tests/page/page-click-timeout-3.spec.ts",
       "id": "CL-117",
-      "title": "CL-117 should timeout waiting for hit target",
+      "title": "should timeout waiting for hit target",
       "action": "patch",
       "reason": "error wording: keep that it fails",
       "patches": [
@@ -2894,14 +2848,14 @@
     {
       "file": "tests/page/page-click-timeout-3.spec.ts",
       "id": "CL-119",
-      "title": "CL-119 should report wrong hit target subtree",
+      "title": "should report wrong hit target subtree",
       "action": "delete",
       "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/page-click-timeout-4.spec.ts",
       "id": "CL-120",
-      "title": "CL-120 should timeout waiting for stable position",
+      "title": "should timeout waiting for stable position",
       "action": "patch",
       "reason": "error wording: keep that it fails",
       "patches": [
@@ -2926,7 +2880,7 @@
     {
       "file": "tests/page/page-click-timeout-4.spec.ts",
       "id": "CL-121",
-      "title": "CL-121 should click for the second time after first timeout",
+      "title": "should click for the second time after first timeout",
       "action": "patch",
       "reason": "error diagnostics: remove wording and call logs; retain behavior and error classes",
       "patches": [
@@ -2939,7 +2893,7 @@
     {
       "file": "tests/page/page-click-timeout-4.spec.ts",
       "id": "CL-122",
-      "title": "CL-122 should fail to click the button behind a large header after scrolling around",
+      "title": "should fail to click the button behind a large header after scrolling around",
       "action": "patch",
       "reason": "error diagnostics: remove wording and call logs; retain behavior and error classes",
       "patches": [
@@ -2952,7 +2906,7 @@
     {
       "file": "tests/page/page-click.spec.ts",
       "id": "CL-019",
-      "title": "CL-019 should not wait with force",
+      "title": "should not wait with force",
       "action": "patch",
       "reason": "error diagnostics: remove wording and call logs; retain behavior and error classes",
       "patches": [
@@ -2965,14 +2919,14 @@
     {
       "file": "tests/page/page-click.spec.ts",
       "id": "CL-035",
-      "title": "CL-035 should click the button with fixed position inside an iframe",
+      "title": "should click the button with fixed position inside an iframe",
       "action": "delete",
-      "reason": "upstream-skipped: excluded by the pinned Chromium run"
+      "reason": "upstream-skipped: the pinned spec skips or fixmes it on Chromium"
     },
     {
       "file": "tests/page/page-click.spec.ts",
       "id": "CL-045",
-      "title": "CL-045 trial run should work with short timeout",
+      "title": "trial run should work with short timeout",
       "action": "patch",
       "reason": "error diagnostics: remove wording and call logs; retain behavior and error classes",
       "patches": [
@@ -2985,7 +2939,7 @@
     {
       "file": "tests/page/page-click.spec.ts",
       "id": "CL-059",
-      "title": "CL-059 should report nice error when element is detached and force-clicked",
+      "title": "should report nice error when element is detached and force-clicked",
       "action": "patch",
       "reason": "error diagnostics: remove wording and call logs; retain behavior and error classes",
       "patches": [
@@ -2998,7 +2952,7 @@
     {
       "file": "tests/page/page-click.spec.ts",
       "id": "CL-060",
-      "title": "CL-060 should fail when element detaches after animation",
+      "title": "should fail when element detaches after animation",
       "action": "patch",
       "reason": "error diagnostics: remove wording and call logs; retain behavior and error classes",
       "patches": [
@@ -3011,7 +2965,7 @@
     {
       "file": "tests/page/page-click.spec.ts",
       "id": "CL-063",
-      "title": "CL-063 should fail when element is animating from outside the viewport with force",
+      "title": "should fail when element is animating from outside the viewport with force",
       "action": "patch",
       "reason": "error diagnostics: remove wording and call logs; retain behavior and error classes",
       "patches": [
@@ -3024,7 +2978,7 @@
     {
       "file": "tests/page/page-click.spec.ts",
       "id": "CL-068",
-      "title": "CL-068 should retry when navigating during the click",
+      "title": "should retry when navigating during the click",
       "action": "patch",
       "reason": "error wording: keep that it fails",
       "patches": [
@@ -3037,7 +2991,7 @@
     {
       "file": "tests/page/page-click.spec.ts",
       "id": "CL-069",
-      "title": "CL-069 should not hang when frame is detached",
+      "title": "should not hang when frame is detached",
       "action": "patch",
       "reason": "error diagnostics: remove wording and call logs; retain behavior and error classes",
       "patches": [
@@ -3050,7 +3004,7 @@
     {
       "file": "tests/page/page-click.spec.ts",
       "id": "CL-090",
-      "title": "CL-090 should abort via signal",
+      "title": "should abort via signal",
       "action": "patch",
       "reason": "error diagnostics: remove wording and call logs; retain behavior and error classes",
       "patches": [
@@ -3067,7 +3021,7 @@
     {
       "file": "tests/page/page-click.spec.ts",
       "id": "CL-091",
-      "title": "CL-091 should throw an Error when aborted in-flight with a string reason",
+      "title": "should throw an Error when aborted in-flight with a string reason",
       "action": "patch",
       "reason": "error diagnostics: remove wording and call logs; retain behavior and error classes",
       "patches": [
@@ -3080,7 +3034,7 @@
     {
       "file": "tests/page/page-click.spec.ts",
       "id": "CL-092",
-      "title": "CL-092 should abort via already-aborted signal",
+      "title": "should abort via already-aborted signal",
       "action": "patch",
       "reason": "error diagnostics: remove wording and call logs; retain behavior and error classes",
       "patches": [
@@ -3093,7 +3047,7 @@
     {
       "file": "tests/page/page-dispatchevent.spec.ts",
       "id": "DE-017",
-      "title": "DE-017 should throw if argument is from different frame",
+      "title": "should throw if argument is from different frame",
       "action": "patch",
       "reason": "error diagnostics: remove wording and call logs; retain behavior and error classes",
       "patches": [
@@ -3106,21 +3060,21 @@
     {
       "file": "tests/page/page-drag.spec.ts",
       "id": "DD-006",
-      "title": "Drag and drop › iframe › DD-006 should drag into an iframe",
+      "title": "Drag and drop › iframe › should drag into an iframe",
       "action": "delete",
-      "reason": "upstream-skipped: excluded by the pinned Chromium run"
+      "reason": "upstream-skipped: the pinned spec skips or fixmes it on Chromium"
     },
     {
       "file": "tests/page/page-drag.spec.ts",
       "id": "DD-007",
-      "title": "Drag and drop › iframe › DD-007 should drag out of an iframe",
+      "title": "Drag and drop › iframe › should drag out of an iframe",
       "action": "delete",
-      "reason": "upstream-skipped: excluded by the pinned Chromium run"
+      "reason": "upstream-skipped: the pinned spec skips or fixmes it on Chromium"
     },
     {
       "file": "tests/page/page-drop.spec.ts",
       "id": "DD-026",
-      "title": "DD-026 should throw when target does not accept drop",
+      "title": "should throw when target does not accept drop",
       "action": "patch",
       "reason": "error diagnostics: remove wording and call logs; retain behavior and error classes",
       "patches": [
@@ -3133,7 +3087,7 @@
     {
       "file": "tests/page/page-drop.spec.ts",
       "id": "DD-027",
-      "title": "DD-027 should throw when neither files nor data provided",
+      "title": "should throw when neither files nor data provided",
       "action": "patch",
       "reason": "error diagnostics: remove wording and call logs; retain behavior and error classes",
       "patches": [
@@ -3146,7 +3100,7 @@
     {
       "file": "tests/page/page-emulate-media.spec.ts",
       "id": "EM-002",
-      "title": "EM-002 should throw in case of bad media argument",
+      "title": "should throw in case of bad media argument",
       "action": "patch",
       "reason": "error wording: keep that it fails",
       "patches": [
@@ -3159,7 +3113,7 @@
     {
       "file": "tests/page/page-emulate-media.spec.ts",
       "id": "EM-005",
-      "title": "EM-005 should throw in case of bad colorScheme argument",
+      "title": "should throw in case of bad colorScheme argument",
       "action": "patch",
       "reason": "error wording: keep that it fails",
       "patches": [
@@ -3172,7 +3126,7 @@
     {
       "file": "tests/page/page-evaluate-callback.spec.ts",
       "id": "EV-112",
-      "title": "EV-112 should throw without the exposeFunctions option",
+      "title": "should throw without the exposeFunctions option",
       "action": "patch",
       "reason": "error diagnostics: remove wording and call logs; retain behavior and error classes",
       "patches": [
@@ -3185,14 +3139,14 @@
     {
       "file": "tests/page/page-evaluate-no-stall.spec.ts",
       "id": "EV-135",
-      "title": "EV-135 should work",
+      "title": "should work",
       "action": "skip",
       "reason": "needs Playwright internals: toImpl"
     },
     {
       "file": "tests/page/page-evaluate-no-stall.spec.ts",
       "id": "EV-136",
-      "title": "EV-136 should throw while pending navigation",
+      "title": "should throw while pending navigation",
       "action": "skip",
       "reason": "needs Playwright internals: toImpl",
       "patches": [
@@ -3206,7 +3160,7 @@
     {
       "file": "tests/page/page-evaluate-no-stall.spec.ts",
       "id": "EV-137",
-      "title": "EV-137 should throw when no main execution context",
+      "title": "should throw when no main execution context",
       "action": "skip",
       "reason": "needs Playwright internals: toImpl",
       "patches": [
@@ -3220,7 +3174,7 @@
     {
       "file": "tests/page/page-evaluate.spec.ts",
       "id": "EV-022",
-      "title": "EV-022 should throw when evaluation triggers reload",
+      "title": "should throw when evaluation triggers reload",
       "action": "patch",
       "reason": "error wording: keep that it fails",
       "patches": [
@@ -3233,7 +3187,7 @@
     {
       "file": "tests/page/page-evaluate.spec.ts",
       "id": "EV-027",
-      "title": "EV-027 should reject promise with exception",
+      "title": "should reject promise with exception",
       "action": "patch",
       "reason": "error diagnostics: remove wording and call logs; retain behavior and error classes",
       "patches": [
@@ -3245,21 +3199,8 @@
     },
     {
       "file": "tests/page/page-evaluate.spec.ts",
-      "id": "EV-037",
-      "title": "EV-037 should work with overwritten Promise",
-      "action": "patch",
-      "reason": "error diagnostics: remove wording and call logs; retain behavior and error classes",
-      "patches": [
-        {
-          "find": "expect(error.message).toContain('Timeout 500ms exceeded');",
-          "replace": ""
-        }
-      ]
-    },
-    {
-      "file": "tests/page/page-evaluate.spec.ts",
       "id": "EV-038",
-      "title": "EV-038 should throw when passed more than one parameter",
+      "title": "should throw when passed more than one parameter",
       "action": "patch",
       "reason": "error wording: keep that it fails",
       "patches": [
@@ -3272,7 +3213,7 @@
     {
       "file": "tests/page/page-evaluate.spec.ts",
       "id": "EV-048",
-      "title": "EV-048 should throw for too deep reference chain",
+      "title": "should throw for too deep reference chain",
       "action": "patch",
       "reason": "error diagnostics: remove wording and call logs; retain behavior and error classes",
       "patches": [
@@ -3285,7 +3226,7 @@
     {
       "file": "tests/page/page-evaluate.spec.ts",
       "id": "EV-049",
-      "title": "EV-049 should throw for too deep reference chain 2",
+      "title": "should throw for too deep reference chain 2",
       "action": "patch",
       "reason": "error diagnostics: remove wording and call logs; retain behavior and error classes",
       "patches": [
@@ -3298,7 +3239,7 @@
     {
       "file": "tests/page/page-evaluate.spec.ts",
       "id": "EV-050",
-      "title": "EV-050 should throw usable message for unserializable shallow function",
+      "title": "should throw usable message for unserializable shallow function",
       "action": "patch",
       "reason": "error wording: keep that it fails",
       "patches": [
@@ -3311,7 +3252,7 @@
     {
       "file": "tests/page/page-evaluate.spec.ts",
       "id": "EV-051",
-      "title": "EV-051 should throw usable message for unserializable object one deep function",
+      "title": "should throw usable message for unserializable object one deep function",
       "action": "patch",
       "reason": "error wording: keep that it fails",
       "patches": [
@@ -3324,7 +3265,7 @@
     {
       "file": "tests/page/page-evaluate.spec.ts",
       "id": "EV-052",
-      "title": "EV-052 should throw usable message for unserializable object nested function",
+      "title": "should throw usable message for unserializable object nested function",
       "action": "patch",
       "reason": "error wording: keep that it fails",
       "patches": [
@@ -3337,7 +3278,7 @@
     {
       "file": "tests/page/page-evaluate.spec.ts",
       "id": "EV-053",
-      "title": "EV-053 should throw usable message for unserializable array nested function",
+      "title": "should throw usable message for unserializable array nested function",
       "action": "patch",
       "reason": "error wording: keep that it fails",
       "patches": [
@@ -3350,7 +3291,7 @@
     {
       "file": "tests/page/page-evaluate.spec.ts",
       "id": "EV-061",
-      "title": "EV-061 should throw if underlying element was disposed",
+      "title": "should throw if underlying element was disposed",
       "action": "patch",
       "reason": "error wording: keep that it fails",
       "patches": [
@@ -3363,7 +3304,7 @@
     {
       "file": "tests/page/page-evaluate.spec.ts",
       "id": "EV-063",
-      "title": "EV-063 should throw a nice error after a navigation",
+      "title": "should throw a nice error after a navigation",
       "action": "patch",
       "reason": "error wording: keep that it fails",
       "patches": [
@@ -3376,7 +3317,7 @@
     {
       "file": "tests/page/page-evaluate.spec.ts",
       "id": "EV-078",
-      "title": "EV-078 should evaluate exception",
+      "title": "should evaluate exception",
       "action": "patch",
       "reason": "error diagnostics: remove wording and call logs; retain behavior and error classes",
       "patches": [
@@ -3393,7 +3334,7 @@
     {
       "file": "tests/page/page-evaluate.spec.ts",
       "id": "EV-079",
-      "title": "EV-079 should pass exception argument",
+      "title": "should pass exception argument",
       "action": "patch",
       "reason": "error diagnostics: remove wording and call logs; retain behavior and error classes",
       "patches": [
@@ -3410,7 +3351,7 @@
     {
       "file": "tests/page/page-evaluate.spec.ts",
       "id": "EV-093",
-      "title": "EV-093 should throw when frame is detached",
+      "title": "should throw when frame is detached",
       "action": "patch",
       "reason": "error diagnostics: remove wording and call logs; retain behavior and error classes",
       "patches": [
@@ -3423,7 +3364,7 @@
     {
       "file": "tests/page/page-event-network.spec.ts",
       "id": "NE-086",
-      "title": "NE-086 Page.Events.RequestFailed @smoke",
+      "title": "Page.Events.RequestFailed @smoke",
       "action": "patch",
       "reason": "error diagnostics: remove wording and call logs; retain behavior and error classes",
       "patches": [
@@ -3451,42 +3392,15 @@
     },
     {
       "file": "tests/page/page-event-network.spec.ts",
-      "id": "NE-090",
-      "title": "NE-090 should resolve responses after a cross-process navigation",
-      "action": "patch",
-      "reason": "error diagnostics: remove wording and call logs; retain behavior and error classes",
-      "patches": [
-        {
-          "find": "expect(request.failure().errorText).toContain({ chromium: 'net::ERR_ABORTED', firefox: 'NS_BINDING_ABORTED', webkit: 'cancelled' }[browserName]);",
-          "replace": ""
-        }
-      ]
-    },
-    {
-      "file": "tests/page/page-event-network.spec.ts",
-      "id": "NE-143",
-      "title": "NE-143 should resolve responses after a same-process navigation",
-      "action": "patch",
-      "reason": "error diagnostics: remove wording and call logs; retain behavior and error classes",
-      "patches": [
-        {
-          "find": "expect(request.failure().errorText).toContain(errorText);",
-          "replace": ""
-        },
-        {
-          "find": "expect(streamingResponse.request().failure().errorText).toContain(errorText);",
-          "replace": ""
-        },
-        {
-          "find": "expect((await streamingTextPromise).message).toContain('navigated away');",
-          "replace": ""
-        }
-      ]
+      "id": "NE-901",
+      "title": "should resolve responses after a navigation",
+      "action": "delete",
+      "reason": "upstream-skipped: the pinned spec skips or fixmes it on Chromium"
     },
     {
       "file": "tests/page/page-event-pageerror.spec.ts",
       "id": "ER-001",
-      "title": "ER-001 should fire",
+      "title": "should fire",
       "action": "patch",
       "reason": "error diagnostics: remove wording and call logs; retain behavior and error classes",
       "patches": [
@@ -3505,29 +3419,13 @@
         {
           "find": "expect(error.stack).toBe(`Error: Fancy error!\n    at c (myscript.js:14:11)\n    at b (myscript.js:10:5)\n    at a (myscript.js:6:5)\n    at  (myscript.js:3:1)`);",
           "replace": ""
-        },
-        {
-          "find": "expect(crossOriginError.message).toBe('Fancy error!');",
-          "replace": ""
-        },
-        {
-          "find": "expect(crossOriginError.stack).toBe(`Uncaught Error: Fancy error!\n    at c (${crossOriginUrl}:14:11)\n    at b (${crossOriginUrl}:10:5)\n    at a (${crossOriginUrl}:6:5)\n    at <anonymous> (${crossOriginUrl}:3:1)`);",
-          "replace": ""
-        },
-        {
-          "find": "expect(crossOriginError.stack).toBe(`Error: Fancy error!\n    at c (${crossOriginUrl}:14:36)\n    at b (${crossOriginUrl}:10:6)\n    at a (${crossOriginUrl}:6:6)\n    at global code (${crossOriginUrl}:3:2)`);",
-          "replace": ""
-        },
-        {
-          "find": "expect(crossOriginError.stack).toBe(`Error: Fancy error!\n    at c (${crossOriginUrl}:14:11)\n    at b (${crossOriginUrl}:10:5)\n    at a (${crossOriginUrl}:6:5)\n    at  (${crossOriginUrl}:3:1)`);",
-          "replace": ""
         }
       ]
     },
     {
       "file": "tests/page/page-event-pageerror.spec.ts",
       "id": "ER-004",
-      "title": "ER-004 should contain the Error.name property",
+      "title": "should contain the Error.name property",
       "action": "patch",
       "reason": "error diagnostics: remove wording and call logs; retain behavior and error classes",
       "patches": [
@@ -3540,7 +3438,7 @@
     {
       "file": "tests/page/page-event-pageerror.spec.ts",
       "id": "ER-005",
-      "title": "ER-005 should support an empty Error.name property",
+      "title": "should support an empty Error.name property",
       "action": "patch",
       "reason": "error diagnostics: remove wording and call logs; retain behavior and error classes",
       "patches": [
@@ -3553,7 +3451,7 @@
     {
       "file": "tests/page/page-event-pageerror.spec.ts",
       "id": "ER-011",
-      "title": "ER-011 pageErrors should work",
+      "title": "pageErrors should work",
       "action": "patch",
       "reason": "error diagnostics: remove wording and call logs; retain behavior and error classes",
       "patches": [
@@ -3566,7 +3464,7 @@
     {
       "file": "tests/page/page-event-pageerror.spec.ts",
       "id": "ER-012",
-      "title": "ER-012 clearPageErrors should work",
+      "title": "clearPageErrors should work",
       "action": "patch",
       "reason": "error diagnostics: remove wording and call logs; retain behavior and error classes",
       "patches": [
@@ -3587,7 +3485,7 @@
     {
       "file": "tests/page/page-event-request.spec.ts",
       "id": "NE-097",
-      "title": "NE-097 should report navigation requests and responses handled by service worker",
+      "title": "should report navigation requests and responses handled by service worker",
       "action": "patch",
       "reason": "error diagnostics: remove wording and call logs; retain behavior and error classes",
       "patches": [
@@ -3600,7 +3498,7 @@
     {
       "file": "tests/page/page-event-request.spec.ts",
       "id": "NE-098",
-      "title": "NE-098 should report navigation requests and responses handled by service worker with routing",
+      "title": "should report navigation requests and responses handled by service worker with routing",
       "action": "patch",
       "reason": "error diagnostics: remove wording and call logs; retain behavior and error classes",
       "patches": [
@@ -3613,7 +3511,7 @@
     {
       "file": "tests/page/page-expose-function.spec.ts",
       "id": "EF-003",
-      "title": "EF-003 should dispose",
+      "title": "should dispose",
       "action": "patch",
       "reason": "error diagnostics: remove wording and call logs; retain behavior and error classes",
       "patches": [
@@ -3626,7 +3524,7 @@
     {
       "file": "tests/page/page-expose-function.spec.ts",
       "id": "EF-014",
-      "title": "EF-014 should throw for duplicate registrations",
+      "title": "should throw for duplicate registrations",
       "action": "patch",
       "reason": "error wording: keep that it fails",
       "patches": [
@@ -3639,7 +3537,7 @@
     {
       "file": "tests/page/page-expose-function.spec.ts",
       "id": "EF-020",
-      "title": "EF-020 should fail with busted Array.prototype.toJSON",
+      "title": "should fail with busted Array.prototype.toJSON",
       "action": "patch",
       "reason": "error diagnostics: remove wording and call logs; retain behavior and error classes",
       "patches": [
@@ -3652,14 +3550,14 @@
     {
       "file": "tests/page/page-filechooser.spec.ts",
       "id": "FC-001",
-      "title": "FC-001 should upload multiple large files",
+      "title": "should upload multiple large files",
       "action": "delete",
       "reason": "invalid-here: fails on reference Playwright"
     },
     {
       "file": "tests/page/page-fill.spec.ts",
       "id": "FI-003",
-      "title": "FI-003 should throw on unsupported inputs",
+      "title": "should throw on unsupported inputs",
       "action": "patch",
       "reason": "error wording: keep that it fails",
       "patches": [
@@ -3672,7 +3570,7 @@
     {
       "file": "tests/page/page-fill.spec.ts",
       "id": "FI-018",
-      "title": "FI-018 should throw nice error without injected script stack when element is not an <input>",
+      "title": "should throw nice error without injected script stack when element is not an <input>",
       "action": "patch",
       "reason": "error wording: keep that it fails",
       "patches": [
@@ -3685,7 +3583,7 @@
     {
       "file": "tests/page/page-fill.spec.ts",
       "id": "FI-019",
-      "title": "FI-019 should throw if passed a non-string value",
+      "title": "should throw if passed a non-string value",
       "action": "patch",
       "reason": "error wording: keep that it fails",
       "patches": [
@@ -3698,7 +3596,7 @@
     {
       "file": "tests/page/page-fill.spec.ts",
       "id": "FI-029",
-      "title": "FI-029 should not be able to fill text into the input[type=number]",
+      "title": "should not be able to fill text into the input[type=number]",
       "action": "patch",
       "reason": "error wording: keep that it fails",
       "patches": [
@@ -3709,47 +3607,30 @@
       ]
     },
     {
-      "file": "tests/page/page-fill.spec.ts",
-      "id": "FI-036",
-      "title": "FI-036 should fail with a nice error on inert element",
-      "action": "patch",
-      "reason": "error wording: keep that it fails",
-      "patches": [
-        {
-          "find": "expect(error.message).toContain('Timeout 1000ms exceeded');",
-          "replace": "expect(error.name).toBe('TimeoutError');"
-        },
-        {
-          "find": "expect(error.message).toContain('element is inert');",
-          "replace": ""
-        }
-      ]
-    },
-    {
       "file": "tests/page/page-focus.spec.ts",
       "id": "FO-006",
-      "title": "FO-006 should traverse only form elements",
+      "title": "should traverse only form elements",
       "action": "delete",
-      "reason": "upstream-skipped: excluded by the pinned Chromium run"
+      "reason": "upstream-skipped: the pinned spec skips or fixmes it on Chromium"
     },
     {
       "file": "tests/page/page-focus.spec.ts",
       "id": "FO-008",
-      "title": "FO-008 tab should cycle between single input and browser",
+      "title": "tab should cycle between single input and browser",
       "action": "delete",
-      "reason": "upstream-skipped: excluded by the pinned Chromium run"
+      "reason": "upstream-skipped: the pinned spec skips or fixmes it on Chromium"
     },
     {
       "file": "tests/page/page-focus.spec.ts",
       "id": "FO-009",
-      "title": "FO-009 tab should cycle between document elements and browser",
+      "title": "tab should cycle between document elements and browser",
       "action": "delete",
-      "reason": "upstream-skipped: excluded by the pinned Chromium run"
+      "reason": "upstream-skipped: the pinned spec skips or fixmes it on Chromium"
     },
     {
       "file": "tests/page/page-goto.spec.ts",
       "id": "NA-020",
-      "title": "NA-020 should fail when server returns 204",
+      "title": "should fail when server returns 204",
       "action": "patch",
       "reason": "error diagnostics: remove wording and call logs; retain behavior and error classes",
       "patches": [
@@ -3770,7 +3651,7 @@
     {
       "file": "tests/page/page-goto.spec.ts",
       "id": "NA-023",
-      "title": "NA-023 should fail when navigating to bad url",
+      "title": "should fail when navigating to bad url",
       "action": "patch",
       "reason": "error wording: keep that it fails",
       "patches": [
@@ -3795,7 +3676,7 @@
     {
       "file": "tests/page/page-goto.spec.ts",
       "id": "NA-024",
-      "title": "NA-024 should fail when navigating to bad SSL",
+      "title": "should fail when navigating to bad SSL",
       "action": "patch",
       "reason": "error wording: keep that it fails",
       "patches": [
@@ -3808,7 +3689,7 @@
     {
       "file": "tests/page/page-goto.spec.ts",
       "id": "NA-025",
-      "title": "NA-025 should fail when navigating to bad SSL after redirects",
+      "title": "should fail when navigating to bad SSL after redirects",
       "action": "patch",
       "reason": "error wording: keep that it fails",
       "patches": [
@@ -3821,7 +3702,7 @@
     {
       "file": "tests/page/page-goto.spec.ts",
       "id": "NA-028",
-      "title": "NA-028 should throw if networkidle2 is passed as an option",
+      "title": "should throw if networkidle2 is passed as an option",
       "action": "patch",
       "reason": "error wording: keep that it fails",
       "patches": [
@@ -3834,7 +3715,7 @@
     {
       "file": "tests/page/page-goto.spec.ts",
       "id": "NA-029",
-      "title": "NA-029 should fail when main resources failed to load",
+      "title": "should fail when main resources failed to load",
       "action": "patch",
       "reason": "error wording: keep that it fails",
       "patches": [
@@ -3859,7 +3740,7 @@
     {
       "file": "tests/page/page-goto.spec.ts",
       "id": "NA-030",
-      "title": "NA-030 should fail when exceeding maximum navigation timeout",
+      "title": "should fail when exceeding maximum navigation timeout",
       "action": "patch",
       "reason": "error diagnostics: remove wording and call logs; retain behavior and error classes",
       "patches": [
@@ -3876,7 +3757,7 @@
     {
       "file": "tests/page/page-goto.spec.ts",
       "id": "NA-031",
-      "title": "NA-031 should fail when exceeding default maximum navigation timeout",
+      "title": "should fail when exceeding default maximum navigation timeout",
       "action": "patch",
       "reason": "error diagnostics: remove wording and call logs; retain behavior and error classes",
       "patches": [
@@ -3893,7 +3774,7 @@
     {
       "file": "tests/page/page-goto.spec.ts",
       "id": "NA-032",
-      "title": "NA-032 should fail when exceeding browser context navigation timeout",
+      "title": "should fail when exceeding browser context navigation timeout",
       "action": "patch",
       "reason": "error diagnostics: remove wording and call logs; retain behavior and error classes",
       "patches": [
@@ -3910,7 +3791,7 @@
     {
       "file": "tests/page/page-goto.spec.ts",
       "id": "NA-033",
-      "title": "NA-033 should fail when exceeding default maximum timeout",
+      "title": "should fail when exceeding default maximum timeout",
       "action": "patch",
       "reason": "error diagnostics: remove wording and call logs; retain behavior and error classes",
       "patches": [
@@ -3927,7 +3808,7 @@
     {
       "file": "tests/page/page-goto.spec.ts",
       "id": "NA-034",
-      "title": "NA-034 should fail when exceeding browser context timeout",
+      "title": "should fail when exceeding browser context timeout",
       "action": "patch",
       "reason": "error diagnostics: remove wording and call logs; retain behavior and error classes",
       "patches": [
@@ -3944,7 +3825,7 @@
     {
       "file": "tests/page/page-goto.spec.ts",
       "id": "NA-035",
-      "title": "NA-035 should prioritize default navigation timeout over default timeout",
+      "title": "should prioritize default navigation timeout over default timeout",
       "action": "patch",
       "reason": "error diagnostics: remove wording and call logs; retain behavior and error classes",
       "patches": [
@@ -3961,7 +3842,7 @@
     {
       "file": "tests/page/page-goto.spec.ts",
       "id": "NA-037",
-      "title": "NA-037 should fail when replaced by another navigation",
+      "title": "should fail when replaced by another navigation",
       "action": "patch",
       "reason": "error wording: keep that it fails",
       "patches": [
@@ -3986,7 +3867,7 @@
     {
       "file": "tests/page/page-goto.spec.ts",
       "id": "NA-038",
-      "title": "NA-038 js redirect overrides url bar navigation ",
+      "title": "js redirect overrides url bar navigation ",
       "action": "patch",
       "reason": "error diagnostics: remove wording and call logs; retain behavior and error classes",
       "patches": [
@@ -4003,14 +3884,14 @@
     {
       "file": "tests/page/page-goto.spec.ts",
       "id": "NA-050",
-      "title": "NA-050 should fail when navigating and show the url at the error message",
+      "title": "should fail when navigating and show the url at the error message",
       "action": "delete",
       "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/page-goto.spec.ts",
       "id": "NA-054",
-      "title": "NA-054 should reject referer option when setExtraHTTPHeaders provides referer",
+      "title": "should reject referer option when setExtraHTTPHeaders provides referer",
       "action": "patch",
       "reason": "error wording: keep that it fails",
       "patches": [
@@ -4027,7 +3908,7 @@
     {
       "file": "tests/page/page-goto.spec.ts",
       "id": "NA-059",
-      "title": "NA-059 should not throw unhandled rejections on invalid url",
+      "title": "should not throw unhandled rejections on invalid url",
       "action": "patch",
       "reason": "error wording: keep that it fails",
       "patches": [
@@ -4039,22 +3920,15 @@
     },
     {
       "file": "tests/page/page-history.spec.ts",
-      "id": "NA-071",
-      "title": "NA-071 page.goBack should work @smoke",
-      "action": "delete",
-      "reason": "invalid-here: fails on reference Playwright"
-    },
-    {
-      "file": "tests/page/page-history.spec.ts",
       "id": "NA-074",
-      "title": "NA-074 goBack/goForward should work with bfcache-able pages",
+      "title": "goBack/goForward should work with bfcache-able pages",
       "action": "delete",
       "reason": "invalid-here: fails on reference Playwright"
     },
     {
       "file": "tests/page/page-keyboard.spec.ts",
       "id": "KB-027",
-      "title": "KB-027 should throw on unknown keys",
+      "title": "should throw on unknown keys",
       "action": "patch",
       "reason": "error wording: keep that it fails",
       "patches": [
@@ -4075,42 +3949,42 @@
     {
       "file": "tests/page/page-keyboard.spec.ts",
       "id": "KB-037",
-      "title": "KB-037 should expose keyIdentifier in webkit",
+      "title": "should expose keyIdentifier in webkit",
       "action": "delete",
-      "reason": "upstream-skipped: excluded by the pinned Chromium run"
+      "reason": "upstream-skipped: the pinned spec skips or fixmes it on Chromium"
     },
     {
       "file": "tests/page/page-leaks.spec.ts",
       "id": "LE-001",
-      "title": "LE-001 click should not leak",
+      "title": "click should not leak",
       "action": "skip",
       "reason": "needs Playwright internals: toImpl"
     },
     {
       "file": "tests/page/page-leaks.spec.ts",
       "id": "LE-002",
-      "title": "LE-002 fill should not leak",
+      "title": "fill should not leak",
       "action": "skip",
       "reason": "needs Playwright internals: toImpl"
     },
     {
       "file": "tests/page/page-leaks.spec.ts",
       "id": "LE-003",
-      "title": "LE-003 expect should not leak",
+      "title": "expect should not leak",
       "action": "skip",
       "reason": "needs Playwright internals: toImpl"
     },
     {
       "file": "tests/page/page-leaks.spec.ts",
       "id": "LE-004",
-      "title": "LE-004 waitFor should not leak",
+      "title": "waitFor should not leak",
       "action": "skip",
       "reason": "needs Playwright internals: toImpl"
     },
     {
       "file": "tests/page/page-listeners.spec.ts",
       "id": "EE-003",
-      "title": "EE-003 wait should throw",
+      "title": "wait should throw",
       "action": "patch",
       "reason": "error diagnostics: remove wording and call logs; retain behavior and error classes",
       "patches": [
@@ -4123,7 +3997,7 @@
     {
       "file": "tests/page/page-network-request.spec.ts",
       "id": "NE-027",
-      "title": "NE-027 should not allow to access frame on popup main request",
+      "title": "should not allow to access frame on popup main request",
       "action": "patch",
       "reason": "error diagnostics: remove wording and call logs; retain behavior and error classes",
       "patches": [
@@ -4136,7 +4010,7 @@
     {
       "file": "tests/page/page-network-request.spec.ts",
       "id": "NE-029",
-      "title": "NE-029 should handle mixed-content blocked requests",
+      "title": "should handle mixed-content blocked requests",
       "action": "patch",
       "reason": "error diagnostics: remove wording and call logs; retain behavior and error classes",
       "patches": [
@@ -4149,7 +4023,7 @@
     {
       "file": "tests/page/page-network-response.spec.ts",
       "id": "NE-036",
-      "title": "NE-036 should throw when requesting body of redirected response",
+      "title": "should throw when requesting body of redirected response",
       "action": "patch",
       "reason": "error wording: keep that it fails",
       "patches": [
@@ -4162,7 +4036,7 @@
     {
       "file": "tests/page/page-network-response.spec.ts",
       "id": "NE-057",
-      "title": "NE-057 should give a readable error when response.body() races with navigation",
+      "title": "should give a readable error when response.body() races with navigation",
       "action": "patch",
       "reason": "error diagnostics: remove wording and call logs; retain behavior and error classes",
       "patches": [
@@ -4175,7 +4049,7 @@
     {
       "file": "tests/page/page-network-sizes.spec.ts",
       "id": "NE-066",
-      "title": "NE-066 should throw for failed requests",
+      "title": "should throw for failed requests",
       "action": "patch",
       "reason": "error diagnostics: remove wording and call logs; retain behavior and error classes",
       "patches": [
@@ -4188,21 +4062,21 @@
     {
       "file": "tests/page/page-network-sizes.spec.ts",
       "id": "NE-068",
-      "title": "NE-068 should have correct responseBodySize for 404 with content",
+      "title": "should have correct responseBodySize for 404 with content",
       "action": "delete",
-      "reason": "upstream-skipped: excluded by the pinned Chromium run"
+      "reason": "upstream-skipped: the pinned spec skips or fixmes it on Chromium"
     },
     {
       "file": "tests/page/page-network-sizes.spec.ts",
       "id": "NE-069",
-      "title": "NE-069 should return sizes without hanging",
+      "title": "should return sizes without hanging",
       "action": "delete",
-      "reason": "upstream-skipped: excluded by the pinned Chromium run"
+      "reason": "upstream-skipped: the pinned spec skips or fixmes it on Chromium"
     },
     {
       "file": "tests/page/page-request-continue.spec.ts",
       "id": "RO-063",
-      "title": "RO-063 should not allow changing protocol when overriding url",
+      "title": "should not allow changing protocol when overriding url",
       "action": "patch",
       "reason": "error diagnostics: remove wording and call logs; retain behavior and error classes",
       "patches": [
@@ -4215,7 +4089,7 @@
     {
       "file": "tests/page/page-request-continue.spec.ts",
       "id": "RO-064",
-      "title": "RO-064 should not throw if request was cancelled by the page",
+      "title": "should not throw if request was cancelled by the page",
       "action": "patch",
       "reason": "error wording: keep that it fails",
       "patches": [
@@ -4228,7 +4102,7 @@
     {
       "file": "tests/page/page-request-fulfill.spec.ts",
       "id": "RO-100",
-      "title": "RO-100 should not throw if request was cancelled by the page",
+      "title": "should not throw if request was cancelled by the page",
       "action": "patch",
       "reason": "error diagnostics: remove wording and call logs; retain behavior and error classes",
       "patches": [
@@ -4241,21 +4115,21 @@
     {
       "file": "tests/page/page-request-gc.spec.ts",
       "id": "RO-150",
-      "title": "RO-150 should collect element retained by locator hit-target interceptor after detach",
+      "title": "should collect element retained by locator hit-target interceptor after detach",
       "action": "delete",
-      "reason": "upstream-skipped: excluded by the pinned Chromium run"
+      "reason": "upstream-skipped: the pinned spec skips or fixmes it on Chromium"
     },
     {
       "file": "tests/page/page-request-intercept.spec.ts",
       "id": "RO-141",
-      "title": "RO-141 should intercept multipart/form-data request body",
+      "title": "should intercept multipart/form-data request body",
       "action": "delete",
-      "reason": "upstream-skipped: excluded by the pinned Chromium run"
+      "reason": "upstream-skipped: the pinned spec skips or fixmes it on Chromium"
     },
     {
       "file": "tests/page/page-request-intercept.spec.ts",
       "id": "RO-143",
-      "title": "RO-143 should support timeout option in route.fetch",
+      "title": "should support timeout option in route.fetch",
       "action": "patch",
       "reason": "error wording: keep that it fails",
       "patches": [
@@ -4272,7 +4146,7 @@
     {
       "file": "tests/page/page-route.spec.ts",
       "id": "RO-016",
-      "title": "RO-016 should be abortable with custom error codes",
+      "title": "should be abortable with custom error codes",
       "action": "patch",
       "reason": "error diagnostics: remove wording and call logs; retain behavior and error classes",
       "patches": [
@@ -4293,7 +4167,7 @@
     {
       "file": "tests/page/page-route.spec.ts",
       "id": "RO-017",
-      "title": "RO-017 should not throw if request was cancelled by the page",
+      "title": "should not throw if request was cancelled by the page",
       "action": "patch",
       "reason": "error wording: keep that it fails",
       "patches": [
@@ -4306,7 +4180,7 @@
     {
       "file": "tests/page/page-route.spec.ts",
       "id": "RO-019",
-      "title": "RO-019 should fail navigation when aborting main resource",
+      "title": "should fail navigation when aborting main resource",
       "action": "patch",
       "reason": "error diagnostics: remove wording and call logs; retain behavior and error classes",
       "patches": [
@@ -4331,14 +4205,14 @@
     {
       "file": "tests/page/page-route.spec.ts",
       "id": "RO-033",
-      "title": "RO-033 should not fulfill with redirect status",
+      "title": "should not fulfill with redirect status",
       "action": "delete",
-      "reason": "upstream-skipped: excluded by the pinned Chromium run"
+      "reason": "upstream-skipped: the pinned spec skips or fixmes it on Chromium"
     },
     {
       "file": "tests/page/page-route.spec.ts",
       "id": "RO-034",
-      "title": "RO-034 should support cors with GET",
+      "title": "should support cors with GET",
       "action": "patch",
       "reason": "error diagnostics: remove wording and call logs; retain behavior and error classes",
       "patches": [
@@ -4358,15 +4232,8 @@
     },
     {
       "file": "tests/page/page-route.spec.ts",
-      "id": "RO-042",
-      "title": "RO-042 should not abort preflighted cross-origin redirect when a route is registered",
-      "action": "delete",
-      "reason": "invalid-here: fails on reference Playwright"
-    },
-    {
-      "file": "tests/page/page-route.spec.ts",
       "id": "RO-053",
-      "title": "RO-053 route.abort should throw if called twice",
+      "title": "route.abort should throw if called twice",
       "action": "patch",
       "reason": "error wording: keep that it fails",
       "patches": [
@@ -4379,7 +4246,7 @@
     {
       "file": "tests/page/page-route.spec.ts",
       "id": "RO-053",
-      "title": "RO-053 route.continue should throw if called twice",
+      "title": "route.continue should throw if called twice",
       "action": "patch",
       "reason": "error wording: keep that it fails",
       "patches": [
@@ -4392,7 +4259,7 @@
     {
       "file": "tests/page/page-route.spec.ts",
       "id": "RO-053",
-      "title": "RO-053 route.fallback should throw if called twice",
+      "title": "route.fallback should throw if called twice",
       "action": "patch",
       "reason": "error wording: keep that it fails",
       "patches": [
@@ -4405,7 +4272,7 @@
     {
       "file": "tests/page/page-route.spec.ts",
       "id": "RO-053",
-      "title": "RO-053 route.fulfill should throw if called twice",
+      "title": "route.fulfill should throw if called twice",
       "action": "patch",
       "reason": "error wording: keep that it fails",
       "patches": [
@@ -4418,7 +4285,7 @@
     {
       "file": "tests/page/page-screenshot.spec.ts",
       "id": "SS-008",
-      "title": "page screenshot › SS-008 should throw on clip outside the viewport",
+      "title": "page screenshot › should throw on clip outside the viewport",
       "action": "patch",
       "reason": "error wording: keep that it fails",
       "patches": [
@@ -4431,7 +4298,7 @@
     {
       "file": "tests/page/page-screenshot.spec.ts",
       "id": "SS-009",
-      "title": "page screenshot › SS-009 should throw on a negative clip size",
+      "title": "page screenshot › should throw on a negative clip size",
       "action": "patch",
       "reason": "error wording: keep that it fails",
       "patches": [
@@ -4444,7 +4311,7 @@
     {
       "file": "tests/page/page-screenshot.spec.ts",
       "id": "SS-021",
-      "title": "page screenshot › SS-021 quality option should throw for webp when out of range",
+      "title": "page screenshot › quality option should throw for webp when out of range",
       "action": "patch",
       "reason": "error wording: keep that it fails",
       "patches": [
@@ -4457,7 +4324,7 @@
     {
       "file": "tests/page/page-screenshot.spec.ts",
       "id": "SS-032",
-      "title": "page screenshot › SS-032 path option should throw for unsupported mime type",
+      "title": "page screenshot › path option should throw for unsupported mime type",
       "action": "patch",
       "reason": "error wording: keep that it fails",
       "patches": [
@@ -4470,7 +4337,7 @@
     {
       "file": "tests/page/page-screenshot.spec.ts",
       "id": "SS-033",
-      "title": "page screenshot › SS-033 quality option should throw for png",
+      "title": "page screenshot › quality option should throw for png",
       "action": "patch",
       "reason": "error wording: keep that it fails",
       "patches": [
@@ -4483,7 +4350,7 @@
     {
       "file": "tests/page/page-screenshot.spec.ts",
       "id": "SS-034",
-      "title": "page screenshot › SS-034 zero quality option should throw for png",
+      "title": "page screenshot › zero quality option should throw for png",
       "action": "patch",
       "reason": "error wording: keep that it fails",
       "patches": [
@@ -4496,7 +4363,7 @@
     {
       "file": "tests/page/page-screenshot.spec.ts",
       "id": "SS-064",
-      "title": "page screenshot animations › SS-064 should wait for fonts to load",
+      "title": "page screenshot animations › should wait for fonts to load",
       "action": "patch",
       "reason": "error diagnostics: remove wording and call logs; retain behavior and error classes",
       "patches": [
@@ -4513,7 +4380,7 @@
     {
       "file": "tests/page/page-screenshot.spec.ts",
       "id": "SS-065",
-      "title": "SS-065 should throw if screenshot size is too large",
+      "title": "should throw if screenshot size is too large",
       "action": "patch",
       "reason": "error diagnostics: remove wording and call logs; retain behavior and error classes",
       "patches": [
@@ -4530,21 +4397,21 @@
     {
       "file": "tests/page/page-screenshot.spec.ts",
       "id": "SS-066",
-      "title": "SS-066 page screenshot should capture css transform",
+      "title": "page screenshot should capture css transform",
       "action": "skip",
       "reason": "expectLoop: toHaveScreenshot is not covered"
     },
     {
       "file": "tests/page/page-screenshot.spec.ts",
       "id": "SS-067",
-      "title": "SS-067 should capture css box-shadow",
+      "title": "should capture css box-shadow",
       "action": "skip",
       "reason": "expectLoop: toHaveScreenshot is not covered"
     },
     {
       "file": "tests/page/page-select-option.spec.ts",
       "id": "SO-009",
-      "title": "SO-009 should not select single option when some attributes do not match",
+      "title": "should not select single option when some attributes do not match",
       "action": "patch",
       "reason": "error diagnostics: remove wording and call logs; retain behavior and error classes",
       "patches": [
@@ -4557,7 +4424,7 @@
     {
       "file": "tests/page/page-select-option.spec.ts",
       "id": "SO-015",
-      "title": "SO-015 should throw when element is not a <select>",
+      "title": "should throw when element is not a <select>",
       "action": "patch",
       "reason": "error wording: keep that it fails",
       "patches": [
@@ -4570,7 +4437,7 @@
     {
       "file": "tests/page/page-select-option.spec.ts",
       "id": "SO-020",
-      "title": "SO-020 should not allow null items",
+      "title": "should not allow null items",
       "action": "patch",
       "reason": "error wording: keep that it fails",
       "patches": [
@@ -4583,7 +4450,7 @@
     {
       "file": "tests/page/page-select-option.spec.ts",
       "id": "SO-024",
-      "title": "SO-024 should throw if passed wrong types",
+      "title": "should throw if passed wrong types",
       "action": "patch",
       "reason": "error wording: keep that it fails",
       "patches": [
@@ -4608,7 +4475,7 @@
     {
       "file": "tests/page/page-select-option.spec.ts",
       "id": "SO-031",
-      "title": "SO-031 should wait for option to be enabled",
+      "title": "should wait for option to be enabled",
       "action": "patch",
       "reason": "error diagnostics: remove wording and call logs; retain behavior and error classes",
       "patches": [
@@ -4621,7 +4488,7 @@
     {
       "file": "tests/page/page-select-option.spec.ts",
       "id": "SO-032",
-      "title": "SO-032 should wait for optgroup to be enabled",
+      "title": "should wait for optgroup to be enabled",
       "action": "patch",
       "reason": "error diagnostics: remove wording and call logs; retain behavior and error classes",
       "patches": [
@@ -4632,26 +4499,9 @@
       ]
     },
     {
-      "file": "tests/page/page-select-option.spec.ts",
-      "id": "SO-034",
-      "title": "SO-034 should wait for select to become non-inert",
-      "action": "patch",
-      "reason": "error diagnostics: remove wording and call logs; retain behavior and error classes",
-      "patches": [
-        {
-          "find": "expect(error.message).toContain('Timeout 1000ms exceeded');",
-          "replace": ""
-        },
-        {
-          "find": "expect(error.message).toContain('element is inert');",
-          "replace": ""
-        }
-      ]
-    },
-    {
       "file": "tests/page/page-set-content.spec.ts",
       "id": "PA-027",
-      "title": "PA-027 should respect default navigation timeout",
+      "title": "should respect default navigation timeout",
       "action": "patch",
       "reason": "error diagnostics: remove wording and call logs; retain behavior and error classes",
       "patches": [
@@ -4664,7 +4514,7 @@
     {
       "file": "tests/page/page-set-content.spec.ts",
       "id": "PA-034",
-      "title": "PA-034 content() should throw nice error during navigation",
+      "title": "content() should throw nice error during navigation",
       "action": "patch",
       "reason": "error wording: keep that it fails",
       "patches": [
@@ -4677,7 +4527,7 @@
     {
       "file": "tests/page/page-set-content.spec.ts",
       "id": "PA-036",
-      "title": "PA-036 should handle timeout properly",
+      "title": "should handle timeout properly",
       "action": "skip",
       "reason": "needs Playwright internals: toImpl",
       "patches": [
@@ -4691,7 +4541,7 @@
     {
       "file": "tests/page/page-set-content.spec.ts",
       "id": "PA-037",
-      "title": "PA-037 should handle timeout properly 2",
+      "title": "should handle timeout properly 2",
       "action": "skip",
       "reason": "needs Playwright internals: toImpl",
       "patches": [
@@ -4705,7 +4555,7 @@
     {
       "file": "tests/page/page-set-extra-http-headers.spec.ts",
       "id": "NE-117",
-      "title": "NE-117 should throw for non-string header values",
+      "title": "should throw for non-string header values",
       "action": "patch",
       "reason": "error wording: keep that it fails",
       "patches": [
@@ -4722,7 +4572,7 @@
     {
       "file": "tests/page/page-set-input-files.spec.ts",
       "id": "IF-004",
-      "title": "IF-004 should upload a folder and throw for multiple directories",
+      "title": "should upload a folder and throw for multiple directories",
       "action": "patch",
       "reason": "error diagnostics: remove wording and call logs; retain behavior and error classes",
       "patches": [
@@ -4735,7 +4585,7 @@
     {
       "file": "tests/page/page-set-input-files.spec.ts",
       "id": "IF-005",
-      "title": "IF-005 should throw if a directory and files are passed",
+      "title": "should throw if a directory and files are passed",
       "action": "patch",
       "reason": "error diagnostics: remove wording and call logs; retain behavior and error classes",
       "patches": [
@@ -4748,7 +4598,7 @@
     {
       "file": "tests/page/page-set-input-files.spec.ts",
       "id": "IF-006",
-      "title": "IF-006 should throw when uploading a folder in a normal file upload input",
+      "title": "should throw when uploading a folder in a normal file upload input",
       "action": "patch",
       "reason": "error diagnostics: remove wording and call logs; retain behavior and error classes",
       "patches": [
@@ -4761,7 +4611,7 @@
     {
       "file": "tests/page/page-set-input-files.spec.ts",
       "id": "IF-007",
-      "title": "IF-007 should throw when uploading a file in a directory upload input",
+      "title": "should throw when uploading a file in a directory upload input",
       "action": "patch",
       "reason": "error diagnostics: remove wording and call logs; retain behavior and error classes",
       "patches": [
@@ -4774,14 +4624,14 @@
     {
       "file": "tests/page/page-set-input-files.spec.ts",
       "id": "IF-009",
-      "title": "IF-009 should upload large file",
+      "title": "should upload large file",
       "action": "delete",
       "reason": "invalid-here: fails on reference Playwright"
     },
     {
       "file": "tests/page/page-set-input-files.spec.ts",
       "id": "IF-010",
-      "title": "IF-010 should throw an error if the file does not exist",
+      "title": "should throw an error if the file does not exist",
       "action": "patch",
       "reason": "error wording: keep that it fails",
       "patches": [
@@ -4798,7 +4648,7 @@
     {
       "file": "tests/page/page-strict.spec.ts",
       "id": "SM-001",
-      "title": "SM-001 should fail page.textContent in strict mode",
+      "title": "should fail page.textContent in strict mode",
       "action": "patch",
       "reason": "error wording: keep that it fails",
       "patches": [
@@ -4819,7 +4669,7 @@
     {
       "file": "tests/page/page-strict.spec.ts",
       "id": "SM-002",
-      "title": "SM-002 should fail page.getAttribute in strict mode",
+      "title": "should fail page.getAttribute in strict mode",
       "action": "patch",
       "reason": "error wording: keep that it fails",
       "patches": [
@@ -4832,7 +4682,7 @@
     {
       "file": "tests/page/page-strict.spec.ts",
       "id": "SM-003",
-      "title": "SM-003 should fail page.fill in strict mode",
+      "title": "should fail page.fill in strict mode",
       "action": "patch",
       "reason": "error wording: keep that it fails",
       "patches": [
@@ -4853,7 +4703,7 @@
     {
       "file": "tests/page/page-strict.spec.ts",
       "id": "SM-004",
-      "title": "SM-004 should fail page.$ in strict mode",
+      "title": "should fail page.$ in strict mode",
       "action": "patch",
       "reason": "error wording: keep that it fails",
       "patches": [
@@ -4866,7 +4716,7 @@
     {
       "file": "tests/page/page-strict.spec.ts",
       "id": "SM-005",
-      "title": "SM-005 should fail page.waitForSelector in strict mode",
+      "title": "should fail page.waitForSelector in strict mode",
       "action": "patch",
       "reason": "error wording: keep that it fails",
       "patches": [
@@ -4879,7 +4729,7 @@
     {
       "file": "tests/page/page-strict.spec.ts",
       "id": "SM-006",
-      "title": "SM-006 should fail page.dispatchEvent in strict mode",
+      "title": "should fail page.dispatchEvent in strict mode",
       "action": "patch",
       "reason": "error wording: keep that it fails",
       "patches": [
@@ -4900,35 +4750,35 @@
     {
       "file": "tests/page/page-strict.spec.ts",
       "id": "SM-007",
-      "title": "SM-007 should properly format :nth-child() in strict mode message",
+      "title": "should properly format :nth-child() in strict mode message",
       "action": "delete",
       "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/page-strict.spec.ts",
       "id": "SM-008",
-      "title": "SM-008 should escape class names",
+      "title": "should escape class names",
       "action": "delete",
       "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/page-strict.spec.ts",
       "id": "SM-009",
-      "title": "SM-009 should escape tag names",
+      "title": "should escape tag names",
       "action": "delete",
       "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/page-strict.spec.ts",
       "id": "SM-010",
-      "title": "SM-010 should keep the engine name for a \"text=..\" selector in strict mode",
+      "title": "should keep the engine name for a \"text=..\" selector in strict mode",
       "action": "delete",
       "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/page-wait-for-function.spec.ts",
       "id": "WA-005",
-      "title": "WA-005 should avoid side effects after timeout",
+      "title": "should avoid side effects after timeout",
       "action": "patch",
       "reason": "error diagnostics: remove wording and call logs; retain behavior and error classes",
       "patches": [
@@ -4941,7 +4791,7 @@
     {
       "file": "tests/page/page-wait-for-function.spec.ts",
       "id": "WA-006",
-      "title": "WA-006 should throw on polling:mutation",
+      "title": "should throw on polling:mutation",
       "action": "patch",
       "reason": "error wording: keep that it fails",
       "patches": [
@@ -4954,7 +4804,7 @@
     {
       "file": "tests/page/page-wait-for-function.spec.ts",
       "id": "WA-012",
-      "title": "WA-012 should throw on bad polling value",
+      "title": "should throw on bad polling value",
       "action": "patch",
       "reason": "error diagnostics: remove wording and call logs; retain behavior and error classes",
       "patches": [
@@ -4967,7 +4817,7 @@
     {
       "file": "tests/page/page-wait-for-function.spec.ts",
       "id": "WA-013",
-      "title": "WA-013 should throw negative polling interval",
+      "title": "should throw negative polling interval",
       "action": "patch",
       "reason": "error diagnostics: remove wording and call logs; retain behavior and error classes",
       "patches": [
@@ -4980,7 +4830,7 @@
     {
       "file": "tests/page/page-wait-for-function.spec.ts",
       "id": "WA-017",
-      "title": "WA-017 should respect timeout",
+      "title": "should respect timeout",
       "action": "patch",
       "reason": "error diagnostics: remove wording and call logs; retain behavior and error classes",
       "patches": [
@@ -4993,7 +4843,7 @@
     {
       "file": "tests/page/page-wait-for-function.spec.ts",
       "id": "WA-018",
-      "title": "WA-018 should respect default timeout",
+      "title": "should respect default timeout",
       "action": "patch",
       "reason": "error diagnostics: remove wording and call logs; retain behavior and error classes",
       "patches": [
@@ -5006,7 +4856,7 @@
     {
       "file": "tests/page/page-wait-for-function.spec.ts",
       "id": "WA-026",
-      "title": "WA-026 should throw when frame is detached",
+      "title": "should throw when frame is detached",
       "action": "patch",
       "reason": "error diagnostics: remove wording and call logs; retain behavior and error classes",
       "patches": [
@@ -5019,7 +4869,7 @@
     {
       "file": "tests/page/page-wait-for-load-state.spec.ts",
       "id": "WA-078",
-      "title": "WA-078 should respect timeout",
+      "title": "should respect timeout",
       "action": "patch",
       "reason": "error wording: keep that it fails",
       "patches": [
@@ -5036,7 +4886,7 @@
     {
       "file": "tests/page/page-wait-for-load-state.spec.ts",
       "id": "WA-080",
-      "title": "WA-080 should throw for bad state",
+      "title": "should throw for bad state",
       "action": "patch",
       "reason": "error wording: keep that it fails",
       "patches": [
@@ -5049,7 +4899,7 @@
     {
       "file": "tests/page/page-wait-for-navigation.spec.ts",
       "id": "WA-096",
-      "title": "WA-096 should respect timeout",
+      "title": "should respect timeout",
       "action": "patch",
       "reason": "error wording: keep that it fails",
       "patches": [
@@ -5070,7 +4920,7 @@
     {
       "file": "tests/page/page-wait-for-navigation.spec.ts",
       "id": "WA-100",
-      "title": "WA-100 should work with clicking on links which do not commit navigation",
+      "title": "should work with clicking on links which do not commit navigation",
       "action": "patch",
       "reason": "error wording: keep that it fails",
       "patches": [
@@ -5083,7 +4933,7 @@
     {
       "file": "tests/page/page-wait-for-navigation.spec.ts",
       "id": "WA-109",
-      "title": "WA-109 should fail when frame detaches",
+      "title": "should fail when frame detaches",
       "action": "patch",
       "reason": "error wording: keep that it fails",
       "patches": [
@@ -5100,7 +4950,7 @@
     {
       "file": "tests/page/page-wait-for-request.spec.ts",
       "id": "WA-123",
-      "title": "WA-123 should respect timeout",
+      "title": "should respect timeout",
       "action": "patch",
       "reason": "error diagnostics: remove wording and call logs; retain behavior and error classes",
       "patches": [
@@ -5117,14 +4967,14 @@
     {
       "file": "tests/page/page-wait-for-request.spec.ts",
       "id": "WA-125",
-      "title": "WA-125 should log the url",
+      "title": "should log the url",
       "action": "delete",
       "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/page-wait-for-response.spec.ts",
       "id": "WA-131",
-      "title": "WA-131 should respect default timeout",
+      "title": "should respect default timeout",
       "action": "patch",
       "reason": "error diagnostics: remove wording and call logs; retain behavior and error classes",
       "patches": [
@@ -5137,14 +4987,14 @@
     {
       "file": "tests/page/page-wait-for-response.spec.ts",
       "id": "WA-132",
-      "title": "WA-132 should log the url",
+      "title": "should log the url",
       "action": "delete",
       "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/page-wait-for-selector-1.spec.ts",
       "id": "WA-027",
-      "title": "WA-027 should throw on waitFor",
+      "title": "should throw on waitFor",
       "action": "patch",
       "reason": "error wording: keep that it fails",
       "patches": [
@@ -5157,7 +5007,7 @@
     {
       "file": "tests/page/page-wait-for-selector-1.spec.ts",
       "id": "WA-032",
-      "title": "WA-032 elementHandle.waitForSelector should timeout",
+      "title": "elementHandle.waitForSelector should timeout",
       "action": "patch",
       "reason": "error wording: keep that it fails",
       "patches": [
@@ -5170,7 +5020,7 @@
     {
       "file": "tests/page/page-wait-for-selector-1.spec.ts",
       "id": "WA-033",
-      "title": "WA-033 elementHandle.waitForSelector should throw on navigation",
+      "title": "elementHandle.waitForSelector should throw on navigation",
       "action": "patch",
       "reason": "error wording: keep that it fails",
       "patches": [
@@ -5183,28 +5033,28 @@
     {
       "file": "tests/page/page-wait-for-selector-1.spec.ts",
       "id": "WA-036",
-      "title": "WA-036 should report logs while waiting for visible",
+      "title": "should report logs while waiting for visible",
       "action": "delete",
       "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/page-wait-for-selector-1.spec.ts",
       "id": "WA-037",
-      "title": "WA-037 should report logs while waiting for hidden",
+      "title": "should report logs while waiting for hidden",
       "action": "delete",
       "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/page-wait-for-selector-1.spec.ts",
       "id": "WA-038",
-      "title": "WA-038 should report logs when the selector resolves to multiple elements",
+      "title": "should report logs when the selector resolves to multiple elements",
       "action": "delete",
       "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/page-wait-for-selector-1.spec.ts",
       "id": "WA-043",
-      "title": "WA-043 should throw when frame is detached",
+      "title": "should throw when frame is detached",
       "action": "patch",
       "reason": "error diagnostics: remove wording and call logs; retain behavior and error classes",
       "patches": [
@@ -5217,7 +5067,7 @@
     {
       "file": "tests/page/page-wait-for-selector-2.spec.ts",
       "id": "WA-046",
-      "title": "WA-046 should not consider visible when zero-sized",
+      "title": "should not consider visible when zero-sized",
       "action": "patch",
       "reason": "error diagnostics: remove wording and call logs; retain behavior and error classes",
       "patches": [
@@ -5234,7 +5084,7 @@
     {
       "file": "tests/page/page-wait-for-selector-2.spec.ts",
       "id": "WA-053",
-      "title": "WA-053 should respect timeout",
+      "title": "should respect timeout",
       "action": "patch",
       "reason": "error diagnostics: remove wording and call logs; retain behavior and error classes",
       "patches": [
@@ -5251,21 +5101,21 @@
     {
       "file": "tests/page/page-wait-for-selector-2.spec.ts",
       "id": "WA-054",
-      "title": "WA-054 should have an error message specifically for awaiting an element to be hidden",
+      "title": "should have an error message specifically for awaiting an element to be hidden",
       "action": "delete",
       "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/page-wait-for-selector-2.spec.ts",
       "id": "WA-057",
-      "title": "WA-057 should have correct stack trace for timeout",
+      "title": "should have correct stack trace for timeout",
       "action": "delete",
       "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/page-wait-for-selector-2.spec.ts",
       "id": "WA-058",
-      "title": "WA-058 should throw for unknown state option",
+      "title": "should throw for unknown state option",
       "action": "patch",
       "reason": "error wording: keep that it fails",
       "patches": [
@@ -5278,7 +5128,7 @@
     {
       "file": "tests/page/page-wait-for-selector-2.spec.ts",
       "id": "WA-059",
-      "title": "WA-059 should throw for visibility option",
+      "title": "should throw for visibility option",
       "action": "patch",
       "reason": "error wording: keep that it fails",
       "patches": [
@@ -5291,7 +5141,7 @@
     {
       "file": "tests/page/page-wait-for-selector-2.spec.ts",
       "id": "WA-060",
-      "title": "WA-060 should throw for true state option",
+      "title": "should throw for true state option",
       "action": "patch",
       "reason": "error wording: keep that it fails",
       "patches": [
@@ -5304,7 +5154,7 @@
     {
       "file": "tests/page/page-wait-for-selector-2.spec.ts",
       "id": "WA-061",
-      "title": "WA-061 should throw for false state option",
+      "title": "should throw for false state option",
       "action": "patch",
       "reason": "error wording: keep that it fails",
       "patches": [
@@ -5317,7 +5167,7 @@
     {
       "file": "tests/page/page-wait-for-selector-2.spec.ts",
       "id": "WA-066",
-      "title": "WA-066 should respect timeout xpath",
+      "title": "should respect timeout xpath",
       "action": "patch",
       "reason": "error diagnostics: remove wording and call logs; retain behavior and error classes",
       "patches": [
@@ -5334,7 +5184,7 @@
     {
       "file": "tests/page/page-wait-for-selector-2.spec.ts",
       "id": "WA-068",
-      "title": "WA-068 should throw when frame is detached xpath",
+      "title": "should throw when frame is detached xpath",
       "action": "patch",
       "reason": "error diagnostics: remove wording and call logs; retain behavior and error classes",
       "patches": [
@@ -5347,7 +5197,7 @@
     {
       "file": "tests/page/page-wait-for-selector-2.spec.ts",
       "id": "WA-073",
-      "title": "WA-073 should fail when navigating while on handle",
+      "title": "should fail when navigating while on handle",
       "action": "patch",
       "reason": "error wording: keep that it fails",
       "patches": [
@@ -5360,7 +5210,7 @@
     {
       "file": "tests/page/page-wait-for-selector-2.spec.ts",
       "id": "WA-074",
-      "title": "WA-074 should fail if element handle was detached while waiting",
+      "title": "should fail if element handle was detached while waiting",
       "action": "patch",
       "reason": "error wording: keep that it fails",
       "patches": [
@@ -5373,7 +5223,7 @@
     {
       "file": "tests/page/page-wait-for-url.spec.ts",
       "id": "WA-111",
-      "title": "WA-111 should respect timeout",
+      "title": "should respect timeout",
       "action": "patch",
       "reason": "error wording: keep that it fails",
       "patches": [
@@ -5386,7 +5236,7 @@
     {
       "file": "tests/page/queryselector.spec.ts",
       "id": "QS-001",
-      "title": "QS-001 should throw for non-string selector",
+      "title": "should throw for non-string selector",
       "action": "patch",
       "reason": "error wording: keep that it fails",
       "patches": [
@@ -5397,16 +5247,9 @@
       ]
     },
     {
-      "file": "tests/page/selectors-css.spec.ts",
-      "id": "SE-001",
-      "title": "SE-001 should work with large DOM @smoke",
-      "action": "delete",
-      "reason": "runner-error: Node door handle cap"
-    },
-    {
       "file": "tests/page/selectors-frame.spec.ts",
       "id": "SE-105",
-      "title": "SE-105 $eval should throw for missing frame",
+      "title": "$eval should throw for missing frame",
       "action": "patch",
       "reason": "error wording: keep that it fails",
       "patches": [
@@ -5423,7 +5266,7 @@
     {
       "file": "tests/page/selectors-frame.spec.ts",
       "id": "SE-112",
-      "title": "SE-112 should not allow dangling enter-frame",
+      "title": "should not allow dangling enter-frame",
       "action": "patch",
       "reason": "error wording: keep that it fails",
       "patches": [
@@ -5440,7 +5283,7 @@
     {
       "file": "tests/page/selectors-frame.spec.ts",
       "id": "SE-113",
-      "title": "SE-113 should not allow leading enter-frame",
+      "title": "should not allow leading enter-frame",
       "action": "patch",
       "reason": "error wording: keep that it fails",
       "patches": [
@@ -5453,7 +5296,7 @@
     {
       "file": "tests/page/selectors-frame.spec.ts",
       "id": "SE-114",
-      "title": "SE-114 should not allow capturing before enter-frame",
+      "title": "should not allow capturing before enter-frame",
       "action": "patch",
       "reason": "error wording: keep that it fails",
       "patches": [
@@ -5466,7 +5309,7 @@
     {
       "file": "tests/page/selectors-frame.spec.ts",
       "id": "SE-123",
-      "title": "SE-123 should non work for non-frame",
+      "title": "should non work for non-frame",
       "action": "patch",
       "reason": "error wording: keep that it fails",
       "patches": [
@@ -5483,7 +5326,7 @@
     {
       "file": "tests/page/selectors-frame.spec.ts",
       "id": "SE-128",
-      "title": "SE-128 should throw when matching elements in multiple frames",
+      "title": "should throw when matching elements in multiple frames",
       "action": "patch",
       "reason": "error wording: keep that it fails",
       "patches": [
@@ -5496,7 +5339,7 @@
     {
       "file": "tests/page/selectors-frame.spec.ts",
       "id": "SE-129",
-      "title": "SE-129 should not allow any-frame in the middle of a selector",
+      "title": "should not allow any-frame in the middle of a selector",
       "action": "patch",
       "reason": "error wording: keep that it fails",
       "patches": [
@@ -5509,7 +5352,7 @@
     {
       "file": "tests/page/selectors-frame.spec.ts",
       "id": "SE-131",
-      "title": "SE-131 should not allow any-frame after entering a frame",
+      "title": "should not allow any-frame after entering a frame",
       "action": "patch",
       "reason": "error wording: keep that it fails",
       "patches": [
@@ -5522,7 +5365,7 @@
     {
       "file": "tests/page/selectors-frame.spec.ts",
       "id": "SE-132",
-      "title": "SE-132 should not allow dangling enter-frame after any-frame",
+      "title": "should not allow dangling enter-frame after any-frame",
       "action": "patch",
       "reason": "error wording: keep that it fails",
       "patches": [
@@ -5535,14 +5378,14 @@
     {
       "file": "tests/page/selectors-get-by.spec.ts",
       "id": "SE-090",
-      "title": "SE-090 getBy escaping",
+      "title": "getBy escaping",
       "action": "skip",
       "reason": "needs Playwright internals: Locator._expect"
     },
     {
       "file": "tests/page/selectors-misc.spec.ts",
       "id": "SE-135",
-      "title": "SE-135 should work with :visible",
+      "title": "should work with :visible",
       "action": "patch",
       "reason": "error diagnostics: remove wording and call logs; retain behavior and error classes",
       "patches": [
@@ -5555,7 +5398,7 @@
     {
       "file": "tests/page/selectors-misc.spec.ts",
       "id": "SE-136",
-      "title": "SE-136 should work with >> visible=",
+      "title": "should work with >> visible=",
       "action": "patch",
       "reason": "error diagnostics: remove wording and call logs; retain behavior and error classes",
       "patches": [
@@ -5568,7 +5411,7 @@
     {
       "file": "tests/page/selectors-misc.spec.ts",
       "id": "SE-138",
-      "title": "SE-138 should work with :nth-match",
+      "title": "should work with :nth-match",
       "action": "patch",
       "reason": "error diagnostics: remove wording and call logs; retain behavior and error classes",
       "patches": [
@@ -5589,7 +5432,7 @@
     {
       "file": "tests/page/selectors-misc.spec.ts",
       "id": "SE-141",
-      "title": "SE-141 should work with layout selectors",
+      "title": "should work with layout selectors",
       "action": "patch",
       "reason": "error diagnostics: remove wording and call logs; retain behavior and error classes",
       "patches": [
@@ -5602,14 +5445,14 @@
     {
       "file": "tests/page/selectors-misc.spec.ts",
       "id": "SE-145",
-      "title": "SE-145 should print original xpath in error",
+      "title": "should print original xpath in error",
       "action": "delete",
       "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/selectors-misc.spec.ts",
       "id": "SE-148",
-      "title": "SE-148 should work with internal:has=",
+      "title": "should work with internal:has=",
       "action": "patch",
       "reason": "error diagnostics: remove wording and call logs; retain behavior and error classes",
       "patches": [
@@ -5633,29 +5476,15 @@
     },
     {
       "file": "tests/page/selectors-role.spec.ts",
-      "id": "SE-052",
-      "title": "SE-052 should support checked",
-      "action": "skip",
-      "reason": "expectLoop: toMatchAriaSnapshot is not covered"
-    },
-    {
-      "file": "tests/page/selectors-role.spec.ts",
       "id": "SE-057",
-      "title": "SE-057 should support disabled fieldset",
+      "title": "should support disabled fieldset",
       "action": "skip",
       "reason": "needs Playwright internals: Locator._expect"
     },
     {
       "file": "tests/page/selectors-role.spec.ts",
-      "id": "SE-060",
-      "title": "SE-060 should support name",
-      "action": "skip",
-      "reason": "expectLoop: toHaveAccessibleName is not covered"
-    },
-    {
-      "file": "tests/page/selectors-role.spec.ts",
       "id": "SE-062",
-      "title": "SE-062 errors",
+      "title": "errors",
       "action": "patch",
       "reason": "error wording: keep that it fails",
       "patches": [
@@ -5700,7 +5529,7 @@
     {
       "file": "tests/page/selectors-text.spec.ts",
       "id": "SE-029",
-      "title": "SE-029 should work with :text",
+      "title": "should work with :text",
       "action": "patch",
       "reason": "error diagnostics: remove wording and call logs; retain behavior and error classes",
       "patches": [
@@ -5717,7 +5546,7 @@
     {
       "file": "tests/page/selectors-text.spec.ts",
       "id": "SE-035",
-      "title": "SE-035 should work with :has-text",
+      "title": "should work with :has-text",
       "action": "patch",
       "reason": "error diagnostics: remove wording and call logs; retain behavior and error classes",
       "patches": [
@@ -5732,100 +5561,93 @@
       ]
     },
     {
-      "file": "tests/page/selectors-text.spec.ts",
-      "id": "SE-036",
-      "title": "SE-036 should work with large DOM",
-      "action": "delete",
-      "reason": "runner-error: Node door handle cap"
-    },
-    {
       "file": "tests/page/to-match-aria-snapshot.spec.ts",
       "id": "AR-107",
-      "title": "AR-107 should match page",
+      "title": "should match page",
       "action": "skip",
       "reason": "expectLoop: toMatchAriaSnapshot is not covered"
     },
     {
       "file": "tests/page/to-match-aria-snapshot.spec.ts",
       "id": "AR-108",
-      "title": "AR-108 should match page complex",
+      "title": "should match page complex",
       "action": "skip",
       "reason": "expectLoop: toMatchAriaSnapshot is not covered"
     },
     {
       "file": "tests/page/to-match-aria-snapshot.spec.ts",
       "id": "AR-109",
-      "title": "AR-109 should match page with not",
+      "title": "should match page with not",
       "action": "skip",
       "reason": "expectLoop: toMatchAriaSnapshot is not covered"
     },
     {
       "file": "tests/page/to-match-aria-snapshot.spec.ts",
       "id": "AR-110",
-      "title": "AR-110 should fail page with timeout",
+      "title": "should fail page with timeout",
       "action": "delete",
       "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/to-match-aria-snapshot.spec.ts",
       "id": "AR-111",
-      "title": "AR-111 should match",
+      "title": "should match",
       "action": "skip",
       "reason": "expectLoop: toMatchAriaSnapshot is not covered"
     },
     {
       "file": "tests/page/to-match-aria-snapshot.spec.ts",
       "id": "AR-112",
-      "title": "AR-112 should match in list",
+      "title": "should match in list",
       "action": "skip",
       "reason": "expectLoop: toMatchAriaSnapshot is not covered"
     },
     {
       "file": "tests/page/to-match-aria-snapshot.spec.ts",
       "id": "AR-113",
-      "title": "AR-113 should match list with accessible name",
+      "title": "should match list with accessible name",
       "action": "skip",
       "reason": "expectLoop: toMatchAriaSnapshot is not covered"
     },
     {
       "file": "tests/page/to-match-aria-snapshot.spec.ts",
       "id": "AR-114",
-      "title": "AR-114 should match deep item",
+      "title": "should match deep item",
       "action": "skip",
       "reason": "expectLoop: toMatchAriaSnapshot is not covered"
     },
     {
       "file": "tests/page/to-match-aria-snapshot.spec.ts",
       "id": "AR-115",
-      "title": "AR-115 should match complex",
+      "title": "should match complex",
       "action": "skip",
       "reason": "expectLoop: toMatchAriaSnapshot is not covered"
     },
     {
       "file": "tests/page/to-match-aria-snapshot.spec.ts",
       "id": "AR-116",
-      "title": "AR-116 should match regex",
+      "title": "should match regex",
       "action": "skip",
       "reason": "expectLoop: toMatchAriaSnapshot is not covered"
     },
     {
       "file": "tests/page/to-match-aria-snapshot.spec.ts",
       "id": "AR-117",
-      "title": "AR-117 should allow text nodes",
+      "title": "should allow text nodes",
       "action": "skip",
       "reason": "expectLoop: toMatchAriaSnapshot is not covered"
     },
     {
       "file": "tests/page/to-match-aria-snapshot.spec.ts",
       "id": "AR-118",
-      "title": "AR-118 details visibility",
+      "title": "details visibility",
       "action": "skip",
       "reason": "expectLoop: toMatchAriaSnapshot is not covered"
     },
     {
       "file": "tests/page/to-match-aria-snapshot.spec.ts",
       "id": "AR-119",
-      "title": "AR-119 checked attribute",
+      "title": "checked attribute",
       "action": "skip",
       "reason": "expectLoop: toMatchAriaSnapshot is not covered",
       "patches": [
@@ -5847,7 +5669,7 @@
     {
       "file": "tests/page/to-match-aria-snapshot.spec.ts",
       "id": "AR-120",
-      "title": "AR-120 disabled attribute",
+      "title": "disabled attribute",
       "action": "skip",
       "reason": "expectLoop: toMatchAriaSnapshot is not covered",
       "patches": [
@@ -5869,7 +5691,7 @@
     {
       "file": "tests/page/to-match-aria-snapshot.spec.ts",
       "id": "AR-121",
-      "title": "AR-121 expanded attribute",
+      "title": "expanded attribute",
       "action": "skip",
       "reason": "expectLoop: toMatchAriaSnapshot is not covered",
       "patches": [
@@ -5891,7 +5713,7 @@
     {
       "file": "tests/page/to-match-aria-snapshot.spec.ts",
       "id": "AR-122",
-      "title": "AR-122 level attribute",
+      "title": "level attribute",
       "action": "skip",
       "reason": "expectLoop: toMatchAriaSnapshot is not covered",
       "patches": [
@@ -5913,7 +5735,7 @@
     {
       "file": "tests/page/to-match-aria-snapshot.spec.ts",
       "id": "AR-123",
-      "title": "AR-123 pressed attribute",
+      "title": "pressed attribute",
       "action": "skip",
       "reason": "expectLoop: toMatchAriaSnapshot is not covered",
       "patches": [
@@ -5935,7 +5757,7 @@
     {
       "file": "tests/page/to-match-aria-snapshot.spec.ts",
       "id": "AR-124",
-      "title": "AR-124 selected attribute",
+      "title": "selected attribute",
       "action": "skip",
       "reason": "expectLoop: toMatchAriaSnapshot is not covered",
       "patches": [
@@ -5953,70 +5775,70 @@
     {
       "file": "tests/page/to-match-aria-snapshot.spec.ts",
       "id": "AR-125",
-      "title": "AR-125 integration test",
+      "title": "integration test",
       "action": "skip",
       "reason": "expectLoop: toMatchAriaSnapshot is not covered"
     },
     {
       "file": "tests/page/to-match-aria-snapshot.spec.ts",
       "id": "AR-126",
-      "title": "AR-126 integration test 2",
+      "title": "integration test 2",
       "action": "skip",
       "reason": "expectLoop: toMatchAriaSnapshot is not covered"
     },
     {
       "file": "tests/page/to-match-aria-snapshot.spec.ts",
       "id": "AR-127",
-      "title": "AR-127 expected formatter",
+      "title": "expected formatter",
       "action": "delete",
       "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/to-match-aria-snapshot.spec.ts",
       "id": "AR-128",
-      "title": "AR-128 should unpack escaped names",
+      "title": "should unpack escaped names",
       "action": "skip",
       "reason": "expectLoop: toMatchAriaSnapshot is not covered"
     },
     {
       "file": "tests/page/to-match-aria-snapshot.spec.ts",
       "id": "AR-129",
-      "title": "AR-129 should report error in YAML",
+      "title": "should report error in YAML",
       "action": "delete",
       "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/to-match-aria-snapshot.spec.ts",
       "id": "AR-130",
-      "title": "AR-130 should report error in YAML keys",
+      "title": "should report error in YAML keys",
       "action": "delete",
       "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/to-match-aria-snapshot.spec.ts",
       "id": "AR-131",
-      "title": "AR-131 call log should contain actual snapshot",
+      "title": "call log should contain actual snapshot",
       "action": "delete",
       "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/to-match-aria-snapshot.spec.ts",
       "id": "AR-132",
-      "title": "AR-132 should parse attributes",
+      "title": "should parse attributes",
       "action": "skip",
       "reason": "expectLoop: toMatchAriaSnapshot is not covered"
     },
     {
       "file": "tests/page/to-match-aria-snapshot.spec.ts",
       "id": "AR-133",
-      "title": "AR-133 should not unshift actual template text",
+      "title": "should not unshift actual template text",
       "action": "delete",
       "reason": "error formatting only: Playwright messages, stacks and call logs"
     },
     {
       "file": "tests/page/to-match-aria-snapshot.spec.ts",
       "id": "AR-134",
-      "title": "AR-134 should not match what is not matched",
+      "title": "should not match what is not matched",
       "action": "skip",
       "reason": "expectLoop: toMatchAriaSnapshot is not covered",
       "patches": [
@@ -6030,14 +5852,14 @@
     {
       "file": "tests/page/to-match-aria-snapshot.spec.ts",
       "id": "AR-135",
-      "title": "AR-135 should match url",
+      "title": "should match url",
       "action": "skip",
       "reason": "expectLoop: toMatchAriaSnapshot is not covered"
     },
     {
       "file": "tests/page/to-match-aria-snapshot.spec.ts",
       "id": "AR-136",
-      "title": "AR-136 should detect unexpected children: equal",
+      "title": "should detect unexpected children: equal",
       "action": "skip",
       "reason": "expectLoop: toMatchAriaSnapshot is not covered",
       "patches": [
@@ -6055,7 +5877,7 @@
     {
       "file": "tests/page/to-match-aria-snapshot.spec.ts",
       "id": "AR-137",
-      "title": "AR-137 should detect unexpected children: deep-equal",
+      "title": "should detect unexpected children: deep-equal",
       "action": "skip",
       "reason": "expectLoop: toMatchAriaSnapshot is not covered",
       "patches": [
@@ -6073,7 +5895,7 @@
     {
       "file": "tests/page/to-match-aria-snapshot.spec.ts",
       "id": "AR-138",
-      "title": "AR-138 should allow restoring contain mode inside deep-equal",
+      "title": "should allow restoring contain mode inside deep-equal",
       "action": "skip",
       "reason": "expectLoop: toMatchAriaSnapshot is not covered",
       "patches": [
@@ -6091,7 +5913,7 @@
     {
       "file": "tests/page/to-match-aria-snapshot.spec.ts",
       "id": "AR-139",
-      "title": "AR-139 top-level deep-equal",
+      "title": "top-level deep-equal",
       "action": "skip",
       "reason": "expectLoop: toMatchAriaSnapshot is not covered",
       "patches": [
@@ -6105,14 +5927,14 @@
     {
       "file": "tests/page/to-match-aria-snapshot.spec.ts",
       "id": "AR-140",
-      "title": "AR-140 generated snapshot includes text children when name is longer than text",
+      "title": "generated snapshot includes text children when name is longer than text",
       "action": "skip",
       "reason": "expectLoop: toMatchAriaSnapshot is not covered"
     },
     {
       "file": "tests/page/to-match-aria-snapshot.spec.ts",
       "id": "AR-141",
-      "title": "AR-141 treat bad regex as a string",
+      "title": "treat bad regex as a string",
       "action": "skip",
       "reason": "expectLoop: toMatchAriaSnapshot is not covered",
       "patches": [
@@ -6134,7 +5956,7 @@
     {
       "file": "tests/page/to-match-aria-snapshot.spec.ts",
       "id": "AR-142",
-      "title": "AR-142 invalid attribute",
+      "title": "invalid attribute",
       "action": "skip",
       "reason": "expectLoop: toMatchAriaSnapshot is not covered",
       "patches": [
@@ -6148,7 +5970,7 @@
     {
       "file": "tests/page/workers.spec.ts",
       "id": "WO-002",
-      "title": "WO-002 should emit created and destroyed events",
+      "title": "should emit created and destroyed events",
       "action": "patch",
       "reason": "error diagnostics: remove wording and call logs; retain behavior and error classes",
       "patches": [
@@ -6164,23 +5986,10 @@
     },
     {
       "file": "tests/page/workers.spec.ts",
-      "id": "WO-003",
-      "title": "WO-003 should reject in-flight evaluate and emit close when page closes",
-      "action": "patch",
-      "reason": "error diagnostics: remove wording and call logs; retain behavior and error classes",
-      "patches": [
-        {
-          "find": "expect(error.message).toContain('worker.evaluate');",
-          "replace": ""
-        }
-      ]
-    },
-    {
-      "file": "tests/page/workers.spec.ts",
       "id": "WO-018",
-      "title": "WO-018 should report worker script as network request after redirect",
+      "title": "should report worker script as network request after redirect",
       "action": "delete",
-      "reason": "upstream-skipped: excluded by the pinned Chromium run"
+      "reason": "upstream-skipped: the pinned spec skips or fixmes it on Chromium"
     }
   ]
 }

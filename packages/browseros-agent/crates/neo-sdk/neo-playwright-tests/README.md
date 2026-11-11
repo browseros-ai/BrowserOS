@@ -1,13 +1,70 @@
 # Playwright corpus on Claw v1
 
-One runner uses Playwright Test's workers and pinned upstream specs. The unchanged
-v2 run-B curation selects 2,439 tests; legacy `expectLoop` passes remain a separate verdict.
-No tests are translated into SDK calls.
+One runner uses Playwright Test's workers and pinned upstream specs; legacy `expectLoop`
+passes remain a separate verdict. No tests are translated into SDK calls.
+
+## The corpus
+
+**Pin.** The specs are Playwright `v1.64.1`
+(`cfe490d941f992655948eee8fd4fd94e1c4234bf`), the release whose engine Neo vendors
+(`../neo-playwright/third_party/playwright/VERSION`). Tests and engine come from the same
+release, so no test asks for behavior newer than the engine. `corpus.json` holds the pin and
+each suite's SHA-256; `node/curation.json` and `node/case-ids.json` name the same commit, and a
+run stops if any of them disagrees with the prepared source.
+
+**Preparing the source.** `js/prepare.mjs` exports the pinned commit from a Playwright clone
+with `git archive` (the clone's checkout is not touched), runs `npm ci` and `npm run build` in
+the copy, and stamps it with the revision and the hashes of every test, fixture and build
+product. Every run verifies that stamp.
+
+```sh
+git clone https://github.com/microsoft/playwright ~/code/playwright   # or: git fetch origin tag v1.64.1
+NEO_TESTS_PLAYWRIGHT_SOURCE=/Users/shadowfax/llm/browseros/claw-sdk/inputs/playwright-v1.64.1 \
+  node packages/browseros-agent/crates/neo-sdk/neo-playwright-tests/js/prepare.mjs ~/code/playwright
+```
+
+It refuses to overwrite an existing directory; delete the old copy first to rebuild it.
+
+**Selection.** `corpus.json` lists 139 suites: all 136 `tests/page` specs, plus three
+`tests/library` specs that exercise pages: `page-close`, `browsercontext-pages`, and from
+`headful` only HE-012 (`Page.bringToFront should work`), which runs headless by owner policy;
+the file's other cases need a headed browser. Collection finds 2,649 tests. `node/curation.json`
+leaves out these, each entry with its reason:
+
+| Reason | Tests | Meaning |
+|---|---:|---|
+| `error formatting only` | 86 | The test checks only Playwright's message text, stack or call log. |
+| `upstream-skipped` | 22 | The pinned spec skips or fixmes it on Chromium, so it never runs there. |
+| `invalid-here` | 5 | It fails on reference Playwright against BrowserOS. |
+
+Every other test runs. Curation also patches assertions on error wording (keeping that the call
+fails, and its error class) and skips tests that need Playwright internals; `run.json.curation`
+counts each. Tests are never dropped to raise a score: a deletion whose reason stops holding at
+a new pin is removed.
+
+**Case IDs.** Scope, curation and reports name tests by ID (`FI-005`). Upstream added IDs to its
+test titles after 1.64.1 (#43485), so 1.64.1's titles carry none, and `node/case-ids.json`
+assigns them by spec file and title path:
+
+- A test whose file and title match a test in upstream's registry at `26137face` (the previous
+  pin, whose IDs the earlier results use) keeps that ID.
+- A test with no match gets the next `9NN` number of its file's code, from 901. Upstream numbers
+  each code from 001 and is below 600, so these cannot collide. At this pin: NE-901 (removed
+  later upstream as NE-090 and NE-143) and FI-901 to FI-907 (`page.fill` value validation,
+  removed upstream by #43400 before IDs existed).
+- An ID whose test is not at the pin is retired, never reused.
+
+Every run checks the map against the collected tests and stops on any test without an ID or
+any ID without a test. Playwright's own output and `--grep` see titles only, so `--grep FI-005`
+selects nothing: pass the spec file and `--grep` the title. Reports print the ID before the
+title.
+
+## Running
 
 ```sh
 export PATH=/opt/homebrew/opt/node@26/bin:$PATH
 export NEO_E2E_BROWSER="/Applications/BrowserOS neo.app/Contents/MacOS/BrowserOS neo"
-export NEO_TESTS_PLAYWRIGHT_SOURCE=/absolute/path/to/prepared/pw-source
+export NEO_TESTS_PLAYWRIGHT_SOURCE=/Users/shadowfax/llm/browseros/claw-sdk/inputs/playwright-v1.64.1
 export CARGO_TARGET_DIR=/Volumes/extssd/cargo-targets/claw-runner
 export CARGO_BUILD_BUILD_DIR=/Volumes/extssd/cargo-targets/claw-runner-build
 export NEO_NODE_OUTPUT_DIR="$PWD/.llm/claw-node-results"
@@ -84,8 +141,8 @@ opens popups as tabs, but suppresses CDP console events that vanilla Playwright'
   assertion engine ran; `--no-curation` disables all curation as before.
 - Each test sets its `testIdAttribute` through v1's `playwright.selectors`, so a
   test that changes the attribute does not leave it for the next test in the worker's run.
-- Curation, `_setupArtifacts`, `_browserOptions`, `toImplInWorkerScope` and
-  `startRemoteServer` retain v2's seams and explicit internals refusals.
+- `_setupArtifacts`, `_browserOptions`, `toImplInWorkerScope` and `startRemoteServer`
+  keep explicit internals refusals.
 
 The Node host registers its native `Buffer` parameter and byte-result reviver through the
 bootstrap's provider/brand hooks. Screenshot bytes therefore have Node Buffer identity for
@@ -144,8 +201,10 @@ prints the same scores alongside its unchanged verdicts.
 
 `node/scope.json` is reviewed reporting policy, separate from curation. Entries name
 a corpus-relative spec `file`, optionally narrowed with `ids`; omitting `ids` covers
-that whole spec. Each has one reason: `network`, `handles`, `drift`, or
-`decided-deviation`. Network/handle entries identify explicit refusal evidence;
+that whole spec. Each has one of the reasons the manifest declares: `network`, `handles`
+or `decided-deviation`. (`drift`, for specs newer than the engine, ended when the corpus
+moved to the engine's own release; runs recorded before that keep it in their copied
+manifest.) Network/handle entries identify explicit refusal evidence;
 ordinary failures stay in scope. The initial evidence is the lead's parity gap
 list and the corresponding per-test errors from the full run (mixed event groups
 also contain supported events, so the entire group is not excluded).

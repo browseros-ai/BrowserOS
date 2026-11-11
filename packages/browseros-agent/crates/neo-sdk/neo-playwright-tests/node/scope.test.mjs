@@ -65,7 +65,7 @@ test('both scores use selected Playwright outcomes; unknown failures stay in sco
         ids: ['EX-003'],
         reason: 'handles',
       },
-      { file: 'tests/page/elsewhere.spec.ts', reason: 'drift' },
+      { file: 'tests/page/elsewhere.spec.ts', reason: 'decided-deviation' },
     ]),
   )
   assert.deepEqual(scores.all, {
@@ -86,7 +86,10 @@ test('both scores use selected Playwright outcomes; unknown failures stay in sco
   )
   assert.deepEqual(scores.byReason.network, { total: 2, passed: 1 })
   assert.deepEqual(scores.byReason.handles, { total: 1, passed: 1 })
-  assert.deepEqual(scores.byReason.drift, { total: 0, passed: 0 })
+  assert.deepEqual(scores.byReason['decided-deviation'], {
+    total: 0,
+    passed: 0,
+  })
   assert.deepEqual(
     scores.passingExcluded.map((row) => row.id),
     ['EX-001', 'EX-003'],
@@ -189,6 +192,34 @@ test('policy rejects unknown reasons, malformed IDs and overlapping selectors', 
   ])
     assert.throws(() => validateScope(policy(entries)), /scope/i)
   assert.throws(() => validateScope(null), /scope/i)
+})
+
+test('reasons come from the manifest, so a recorded run keeps one the policy has retired', () => {
+  const current = loadScope()
+  assert.equal(current.reasons.drift, undefined)
+  const recorded = {
+    ...current,
+    reasons: { ...current.reasons, drift: 'Newer than the engine.' },
+    entries: [
+      { file: 'tests/page/example.spec.ts', ids: ['EX-001'], reason: 'drift' },
+    ],
+  }
+  const scores = scoreResults(
+    results([
+      ['EX-001', 'unexpected'],
+      ['EX-002', 'expected'],
+    ]),
+    recorded,
+  )
+  assert.deepEqual(scores.byReason.drift, { total: 1, passed: 0 })
+  assert.deepEqual(scores.inScope, {
+    passed: 1,
+    total: 1,
+    skipped: 0,
+    skippedByHarness: 0,
+  })
+  for (const reasons of [{}, { ...current.reasons, drift: ' ' }])
+    assert.throws(() => validateScope({ ...recorded, reasons }), /scope/i)
 })
 
 test('historical reports use the recorded manifest and reject tampering', (t) => {
