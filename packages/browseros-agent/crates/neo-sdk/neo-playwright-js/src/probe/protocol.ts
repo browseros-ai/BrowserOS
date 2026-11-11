@@ -393,7 +393,7 @@ export type FrameBox = {
 export type Value = { kind: 'value'; value: unknown }
 /**
  * One element's read, through the seal. `sensitive` is the seal's `kind` of the element the
- * value came from, so Rust can mark the op's target sensitive for the trace. `sweep` holds the
+ * value came from. `sweep` holds the
  * raw values of this document's sensitive fields when the value can carry page text (every
  * read but `state`, `boundingBox` and `frameOrigin`, which send none): the seal guards a field,
  * not an ancestor's text, and Rust masks the value with them. Never for the agent.
@@ -424,7 +424,7 @@ export type Snapshot = {
  * `3 elements`). `received` is the value the matcher compared, already masked by the seal;
  * left out when it is `undefined`. `sensitive` is the seal's kind of a field whose value or
  * value attribute was compared through `__clawSeal.valueEquals` or `attributeEquals`, so
- * Rust can mark the op's target sensitive.
+ * Rust can mask the expected value in assertion messages.
  */
 export type ExpectPoll = {
   kind: 'expect'

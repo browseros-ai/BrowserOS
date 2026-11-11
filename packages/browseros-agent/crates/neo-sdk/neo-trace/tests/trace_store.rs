@@ -6,12 +6,12 @@
 use browseros_core::TabId;
 use futures_util::future::BoxFuture;
 use neo_trace::{
-    Delivery, Effect, EpochMillis, ErrorOwner, ErrorRecord, JsonPointer, OperationEnded,
-    OperationId, OperationKind, OperationStarted, Outcome, PageState, Privacy, PrivacyRecord,
-    PrivacyStore, PrivateReason, RedactionLimits, RedactionPolicy, Redactor, RequestId,
-    RetentionPolicy, RunEffects, RunEnded, RunId, RunQuery, RunStarted, RunStatus, SecretSet,
-    SecretSetConfig, SecretSource, SecretValue, TailQuery, TargetSensitivity, TaskAct, TaskId,
-    TraceError, TraceRecordEvent, TraceSink, TraceStore, WriterConfig, spawn_writer,
+    Delivery, Effect, EpochMillis, ErrorOwner, ErrorRecord, OperationEnded, OperationId,
+    OperationKind, OperationStarted, Outcome, PageState, Privacy, PrivacyRecord, PrivacyStore,
+    PrivateReason, RedactionLimits, Redactor, RequestId, RetentionPolicy, RunEffects, RunEnded,
+    RunId, RunQuery, RunStarted, RunStatus, SecretSet, SecretSetConfig, SecretSource, SecretValue,
+    TailQuery, TaskAct, TaskId, TraceError, TraceRecordEvent, TraceSink, TraceStore, WriterConfig,
+    spawn_writer,
 };
 use serde_json::{Value, json};
 use std::sync::Arc;
@@ -128,7 +128,6 @@ struct Op<'a> {
     effect: Effect,
     tab: Option<TabId>,
     args: Value,
-    policy: RedactionPolicy,
     at: EpochMillis,
 }
 
@@ -136,13 +135,7 @@ fn op_started(sink: &TraceSink, op: Op<'_>) {
     sink.op_started(started(op));
 }
 
-fn op_ended(
-    sink: &TraceSink,
-    id: OperationId,
-    delivery: Delivery,
-    result: Option<Value>,
-    target: TargetSensitivity,
-) {
+fn op_ended(sink: &TraceSink, id: OperationId, delivery: Delivery, result: Option<Value>) {
     sink.op_ended(OperationEnded {
         id,
         outcome: Outcome::Ok,
@@ -155,7 +148,6 @@ fn op_ended(
             url: Some("https://x.example/done".into()),
             title: Some("Done".into()),
         }),
-        target,
         also_mask: None,
         at: at(i64::from(id.seq) * 10 + 5),
     });
@@ -183,7 +175,6 @@ fn simple(id: OperationId, name: &str, effect: Effect) -> Op<'_> {
         effect,
         tab: Some(TabId(3)),
         args: json!({"page": {"$neo": "page", "id": 3}}),
-        policy: RedactionPolicy::default(),
         at: at(i64::from(id.seq) * 10),
     }
 }
@@ -216,7 +207,6 @@ fn answered(
         result: None,
         error: None,
         page_after,
-        target: TargetSensitivity::Ordinary,
         also_mask: None,
         at: at(millis + 5),
     }
@@ -246,13 +236,6 @@ fn act(tab: i64, millis: i64) -> Option<TaskAct> {
         tab: TabId(tab),
         at: at(millis),
     })
-}
-
-fn fill_policy() -> RedactionPolicy {
-    RedactionPolicy {
-        secret: Vec::new(),
-        sensitive: JsonPointer::parse("/value").into_iter().collect(),
-    }
 }
 
 async fn flushed(h: &Harness) {
@@ -290,13 +273,7 @@ async fn a_run_reads_back_as_a_tree_with_owners_and_deliveries() {
     let host_call = OperationId::new(run, 3);
     let protected = OperationId::new(run, 4);
     op_started(&h.sink, simple(goto, "page.goto", Effect::Write));
-    op_ended(
-        &h.sink,
-        goto,
-        Delivery::Done,
-        None,
-        TargetSensitivity::Ordinary,
-    );
+    op_ended(&h.sink, goto, Delivery::Done, None);
     op_started(
         &h.sink,
         Op {
@@ -326,21 +303,13 @@ async fn a_run_reads_back_as_a_tree_with_owners_and_deliveries() {
         protected,
         Delivery::Done,
         Some(json!({"status": "filled"})),
-        TargetSensitivity::Ordinary,
     );
-    op_ended(
-        &h.sink,
-        host_call,
-        Delivery::Done,
-        None,
-        TargetSensitivity::Ordinary,
-    );
+    op_ended(&h.sink, host_call, Delivery::Done, None);
     op_ended(
         &h.sink,
         fill,
         Delivery::Done,
         Some(json!({"status": "filled"})),
-        TargetSensitivity::Ordinary,
     );
     end_run(&h.sink, run, RunStatus::Ok, None);
     flushed(&h).await;
@@ -377,25 +346,13 @@ async fn effects_roll_up_from_write_operations() {
     let reads = start_in(&h.sink, None, 0);
     let read = OperationId::new(reads, 1);
     op_started(&h.sink, simple(read, "locator.textContent", Effect::Read));
-    op_ended(
-        &h.sink,
-        read,
-        Delivery::Done,
-        Some(json!("text")),
-        TargetSensitivity::Ordinary,
-    );
+    op_ended(&h.sink, read, Delivery::Done, Some(json!("text")));
     end_run(&h.sink, reads, RunStatus::Ok, None);
 
     let unsure = start_in(&h.sink, None, 0);
     let click = OperationId::new(unsure, 1);
     op_started(&h.sink, simple(click, "locator.click", Effect::Write));
-    op_ended(
-        &h.sink,
-        click,
-        Delivery::Unknown,
-        None,
-        TargetSensitivity::Ordinary,
-    );
+    op_ended(&h.sink, click, Delivery::Unknown, None);
     end_run(
         &h.sink,
         unsure,
@@ -519,13 +476,7 @@ async fn dropped_events_still_count_when_the_last_sink_is_gone() {
     let run = start_in(&h.sink, None, 0);
     let click = OperationId::new(run, 1);
     op_started(&h.sink, simple(click, "locator.click", Effect::Write));
-    op_ended(
-        &h.sink,
-        click,
-        Delivery::Done,
-        None,
-        TargetSensitivity::Ordinary,
-    );
+    op_ended(&h.sink, click, Delivery::Done, None);
     end_run(&h.sink, run, RunStatus::Ok, None);
     let Harness { store, sink, .. } = h;
     // The run's end is still queued when the last sink goes; the writer drains it.
@@ -658,7 +609,7 @@ async fn request_ids_dedupe_per_task_when_one_is_given_else_globally() {
 }
 
 #[tokio::test]
-async fn sensitive_targets_redact_their_input_and_withhold_the_code() {
+async fn typed_arguments_and_code_are_kept_after_the_end() {
     let h = harness(WriterConfig::default()).await;
     let run = start_run(
         &h.sink,
@@ -674,7 +625,6 @@ async fn sensitive_targets_redact_their_input_and_withhold_the_code() {
             &h.sink,
             Op {
                 args: json!({"locator": {"$neo": "locator", "page": 3, "selector": "getByLabel('x')"}, "value": value}),
-                policy: fill_policy(),
                 ..simple(id, "locator.fill", Effect::Write)
             },
         );
@@ -687,20 +637,8 @@ async fn sensitive_targets_redact_their_input_and_withhold_the_code() {
         "while open, the input is not on disk: its end stores it"
     );
 
-    op_ended(
-        &h.sink,
-        email,
-        Delivery::Done,
-        None,
-        TargetSensitivity::Ordinary,
-    );
-    op_ended(
-        &h.sink,
-        password,
-        Delivery::Done,
-        None,
-        TargetSensitivity::Sensitive,
-    );
+    op_ended(&h.sink, email, Delivery::Done, None);
+    op_ended(&h.sink, password, Delivery::Done, None);
     end_run(&h.sink, run, RunStatus::Ok, None);
     flushed(&h).await;
     let Some(done) = h.store.run(run).await.ok().flatten() else {
@@ -718,7 +656,7 @@ async fn sensitive_targets_redact_their_input_and_withhold_the_code() {
             .args
             .as_ref()
             .map(|args| args["value"].clone()),
-        Some(json!("[redacted]"))
+        Some(json!("hunter22"))
     );
     assert_eq!(
         done.operations[1]
@@ -727,8 +665,11 @@ async fn sensitive_targets_redact_their_input_and_withhold_the_code() {
             .map(|args| args["locator"]["selector"].clone()),
         Some(json!("getByLabel('x')"))
     );
-    assert_eq!(done.code, None);
-    assert_eq!(done.code_withheld.as_deref(), Some("sensitive_input"));
+    assert_eq!(
+        done.code.as_deref(),
+        Some("await email.fill('me@x.example'); await pw.fill('hunter22')")
+    );
+    assert_eq!(done.code_withheld, None);
 }
 
 #[tokio::test]
@@ -753,7 +694,6 @@ async fn registered_secrets_never_reach_the_file() {
         read,
         Delivery::Done,
         Some(json!({"text": "your code is 123-456-otp"})),
-        TargetSensitivity::Ordinary,
     );
     end_run(&h.sink, run, RunStatus::Ok, None);
     flushed(&h).await;
@@ -875,20 +815,8 @@ async fn an_operations_notes_reach_its_record_with_its_end_masked_bounded_and_in
         "stored with the end"
     );
 
-    op_ended(
-        &h.sink,
-        click,
-        Delivery::Done,
-        None,
-        TargetSensitivity::Ordinary,
-    );
-    op_ended(
-        &h.sink,
-        title,
-        Delivery::Done,
-        None,
-        TargetSensitivity::Ordinary,
-    );
+    op_ended(&h.sink, click, Delivery::Done, None);
+    op_ended(&h.sink, title, Delivery::Done, None);
     h.sink.op_notes(click, vec!["after the end".to_string()]);
     flushed(&h).await;
 
@@ -947,13 +875,7 @@ async fn over_the_backlog_operation_events_drop_but_lifecycle_events_do_not() {
     op_started(&h.sink, simple(click, "locator.click", Effect::Write));
     h.sink
         .op_notes(click, vec!["attempting click action".to_string()]);
-    op_ended(
-        &h.sink,
-        click,
-        Delivery::Done,
-        None,
-        TargetSensitivity::Ordinary,
-    );
+    op_ended(&h.sink, click, Delivery::Done, None);
     end_run(&h.sink, run, RunStatus::Ok, None);
     flushed(&h).await;
     let Some(summary) = h.store.run(run).await.ok().flatten().map(|run| run.summary) else {
@@ -1572,13 +1494,7 @@ async fn a_tasks_last_tab_falls_back_to_the_tab_an_operation_ended_on() {
     // An operation with a target counts with it, not with the page it ended on (tab 77).
     let later = OperationId::new(run, 4);
     op_started(&h.sink, simple(later, "page.click", Effect::Write));
-    op_ended(
-        &h.sink,
-        later,
-        Delivery::Done,
-        None,
-        TargetSensitivity::Ordinary,
-    );
+    op_ended(&h.sink, later, Delivery::Done, None);
     flushed(&h).await;
     assert_eq!(last_tab().await, Some(TabId(3)));
 }
@@ -1617,13 +1533,7 @@ async fn events_name_the_task_and_the_target_tab() {
             ..simple(click, "locator.click", Effect::Write)
         },
     );
-    op_ended(
-        &h.sink,
-        click,
-        Delivery::Done,
-        None,
-        TargetSensitivity::Ordinary,
-    );
+    op_ended(&h.sink, click, Delivery::Done, None);
     end_run(&h.sink, tasked, RunStatus::Ok, None);
     let untasked = start_in(&h.sink, None, 0);
     let read = OperationId::new(untasked, 1);
@@ -1724,13 +1634,7 @@ async fn a_run_summary_is_the_run_without_its_operations() {
     assert_eq!(running.task_id, Some(task("task-9")));
     assert_eq!(running.request_id, Some(request("call-9")));
 
-    op_ended(
-        &h.sink,
-        goto,
-        Delivery::Unknown,
-        None,
-        TargetSensitivity::Ordinary,
-    );
+    op_ended(&h.sink, goto, Delivery::Unknown, None);
     end_run(&h.sink, run, RunStatus::Ok, None);
     flushed(&h).await;
     let ended = h.store.run_summary(run).await.ok().flatten();
@@ -1770,13 +1674,7 @@ async fn open_writes_count_a_tabs_unfinished_writes_in_running_runs() {
     let goto = OperationId::new(run, 4);
     op_started(&h.sink, simple(click, "locator.click", Effect::Write));
     op_started(&h.sink, simple(fill, "locator.fill", Effect::Write));
-    op_ended(
-        &h.sink,
-        fill,
-        Delivery::Done,
-        None,
-        TargetSensitivity::Ordinary,
-    );
+    op_ended(&h.sink, fill, Delivery::Done, None);
     op_started(
         &h.sink,
         simple(OperationId::new(run, 3), "page.title", Effect::Read),
@@ -1797,13 +1695,7 @@ async fn open_writes_count_a_tabs_unfinished_writes_in_running_runs() {
     assert_eq!(open_writes(4).await, 1);
     assert_eq!(open_writes(5).await, 0);
 
-    op_ended(
-        &h.sink,
-        click,
-        Delivery::Done,
-        None,
-        TargetSensitivity::Ordinary,
-    );
+    op_ended(&h.sink, click, Delivery::Done, None);
     flushed(&h).await;
     assert_eq!(open_writes(3).await, 0);
 
@@ -1863,13 +1755,7 @@ async fn recording_an_operation_never_waits_on_the_writer() {
     for seq in 1..=samples {
         let id = OperationId::new(run, seq);
         op_started(&h.sink, simple(id, "locator.click", Effect::Write));
-        op_ended(
-            &h.sink,
-            id,
-            Delivery::Done,
-            None,
-            TargetSensitivity::Ordinary,
-        );
+        op_ended(&h.sink, id, Delivery::Done, None);
     }
     let per_op = started.elapsed() / samples;
     assert!(
@@ -2256,7 +2142,6 @@ fn started(op: Op<'_>) -> OperationStarted {
         effect: op.effect,
         tab: op.tab,
         args: op.args,
-        policy: Arc::new(op.policy),
         also_mask: None,
         at: op.at,
     }
@@ -2272,7 +2157,6 @@ fn ended(id: OperationId) -> OperationEnded {
         result: None,
         error: None,
         page_after: None,
-        target: TargetSensitivity::Ordinary,
         also_mask: None,
         at: at(i64::from(id.seq) * 10 + 5),
     }

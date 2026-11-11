@@ -148,12 +148,7 @@ async fn poll_selector(
             continue;
         };
         let located: Located = match reply {
-            ProbeReply::Read {
-                value,
-                sensitive,
-                sweep,
-            } => {
-                element_read::mark_sensitive(scope, sensitive);
+            ProbeReply::Read { value, sweep, .. } => {
                 let value = site.with_own(pw, page.tab(), sweep).mask(value);
                 element_read::read_value(scope, value)?
             }

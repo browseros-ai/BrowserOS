@@ -58,14 +58,10 @@ pub(crate) struct MethodSpec {
     /// Whether the method runs the agent's own script in its page's main world, which decides
     /// what of its end the door checks against the rules before release.
     pub(crate) page_script: PageScript,
-    /// Input fields (JSON pointers) the trace always stores as `[redacted]`.
-    pub(crate) secret_args: &'static [&'static str],
-    /// Input fields redacted when the target turned out to be a sensitive field.
-    pub(crate) sensitive_args: &'static [&'static str],
 }
 
 impl MethodSpec {
-    /// A script-visible, unlisted, ordinary operation with no redacted fields.
+    /// A script-visible, unlisted, ordinary operation.
     #[must_use]
     pub(crate) const fn new(name: &'static str, effect: Effect) -> Self {
         Self {
@@ -75,8 +71,6 @@ impl MethodSpec {
             listing: Listing::Hidden,
             lifetime: Lifetime::Operation,
             page_script: PageScript::Sealed,
-            secret_args: &[],
-            sensitive_args: &[],
         }
     }
 }

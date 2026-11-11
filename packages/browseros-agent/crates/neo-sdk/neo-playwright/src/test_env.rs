@@ -19,7 +19,6 @@ use crate::{OpEnv, Refusal, RunState};
 pub(crate) enum EnvCall {
     Recheck,
     MarkSent,
-    MarkSensitiveTarget,
     Note(String),
     /// The close evidence handed to the host with a delivered event.
     ReportClose(TabId, TargetId, u64),
@@ -89,10 +88,6 @@ impl OpEnv for TestEnv {
 
     fn mark_sent(&self) {
         self.record(EnvCall::MarkSent);
-    }
-
-    fn mark_sensitive_target(&self) {
-        self.record(EnvCall::MarkSensitiveTarget);
     }
 
     fn report_close(&self, tab: TabId, target: &TargetId, seq: u64) {
