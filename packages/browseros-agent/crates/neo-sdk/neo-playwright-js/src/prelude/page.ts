@@ -42,6 +42,7 @@ import type { FrameLocator, Locator } from './locator'
 import { markHandle, pick } from './options'
 import { Response } from './response'
 import type { LocatorOptions } from './selectors'
+import { type SignalOption, signalOf } from './signal'
 import { type TimeoutOption, TimeoutSettings } from './timeouts'
 import {
   type AriaSnapshotJSON,
@@ -947,13 +948,14 @@ export class Page extends EventEmitter {
     api: string,
     frame: Frame,
     url: UrlMatcher,
-    options: TimeoutOption & { waitUntil?: LoadState } = {},
+    options: TimeoutOption & SignalOption & { waitUntil?: LoadState } = {},
   ): Promise<void> {
     // Neo's waitForURL keeps the prefix it always gave; upstream's depends on whether the URL
     // already matched (waitForLoadState's check, or waitForNavigation's wrapped one).
     const waitUntil = knownLoadState(options.waitUntil ?? 'load')
     if (waitUntil === null) throw clientError(api, loadStateError('waitUntil'))
     const timeout = frame._navigationTimeout(options)
+    const signal = signalOf(api, options)
     const args = await frame._frameArgs(api)
     if (typeof url !== 'function') {
       const pattern =
@@ -972,6 +974,8 @@ export class Page extends EventEmitter {
           url: pattern,
           waitUntil,
         },
+        undefined,
+        signal,
       )
       await this._navigated(api, frame, result, observed)
       return
@@ -988,7 +992,10 @@ export class Page extends EventEmitter {
       const elapsed = Date.now() - started
       const remaining = timeout === 0 ? 0 : Math.max(1, timeout - elapsed)
       if (matched) {
-        await frame._waitForLoadState(api, waitUntil, { timeout: remaining })
+        await frame._waitForLoadState(api, waitUntil, {
+          timeout: remaining,
+          signal,
+        })
         return
       }
       const { value: result, observed } = await invokeObserved(
@@ -1002,6 +1009,8 @@ export class Page extends EventEmitter {
           },
           waitUntil: 'commit',
         },
+        undefined,
+        signal,
       )
       await this._navigated(api, frame, result, observed)
     }
@@ -1016,6 +1025,8 @@ export class Page extends EventEmitter {
       api,
       this._mainFrame._call(api, this._mainFrame._navigationTimeout(options)),
       { page: await this._brand(api), waitUntil },
+      undefined,
+      signalOf(api, options),
     )
     return await this._navigated(api, this._mainFrame, result, observed)
   }

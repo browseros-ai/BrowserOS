@@ -10,7 +10,7 @@
 import type { Rect } from '../probe/protocol'
 import type { ElementHandle } from './element-handle'
 import { internalError, plainError } from './errors'
-import { type EvaluateOptions, pageCall, refuseSignal } from './evaluation'
+import { type EvaluateOptions, pageCall } from './evaluation'
 import type {
   ClickOptions,
   ExactOption,
@@ -22,6 +22,7 @@ import type {
 import { markHandle } from './options'
 import type { Page } from './page'
 import { type LocatorOptions, withLocatorOptions } from './selectors'
+import type { SignalOption } from './signal'
 import type { TimeoutOption } from './timeouts'
 import {
   type AriaSnapshotJSON,
@@ -590,16 +591,15 @@ export class Locator {
 
   /**
    * upstream's `_withElement`: the wait comes first, and `JSHandle.evaluate`'s checks run on the
-   * handle it found, inside the same call, so they fail after the wait with the prefix. Neo's
-   * refusal of `signal` comes before the wait.
+   * handle it found, inside the same call, so they fail after the wait with the prefix. Its
+   * `signal` aborts the one op that both waits and evaluates.
    */
   async evaluate(
     pageFunction: unknown,
     arg?: unknown,
-    options?: TimeoutOption & EvaluateOptions & { signal?: unknown },
+    options?: TimeoutOption & EvaluateOptions & SignalOption,
   ): Promise<unknown> {
     const api = 'locator.evaluate'
-    refuseSignal(api, options)
     const script = pageCall(api, 'locator', pageFunction, arg, options)
     return await this._frame._evaluateOn(
       api,

@@ -41,6 +41,7 @@ import {
   locatorBrand,
   withLocatorOptions,
 } from './selectors'
+import { type SignalLike, type SignalOption, signalOf } from './signal'
 import { renderSnapshot } from './snapshot'
 import { type TimeoutOption, timeoutMs } from './timeouts'
 import { globMatches } from './url'
@@ -77,23 +78,32 @@ import type {
 } from './wire'
 
 export type StrictOption = { strict?: boolean }
-export type ClickOptions = PointerOptions & TimeoutOption & StrictOption
+export type ClickOptions = PointerOptions &
+  TimeoutOption &
+  StrictOption &
+  SignalOption
 export type TextMatch = string | RegExp
 export type ExactOption = { exact?: boolean }
-export type SnapshotOptions = TimeoutOption & {
-  mode?: 'ai' | 'default'
-  depth?: number
-  boxes?: boolean
-}
-export type NavigateOptions = TimeoutOption & {
-  waitUntil?: LoadState | 'networkidle0'
-  referer?: string
-}
+export type SnapshotOptions = TimeoutOption &
+  SignalOption & {
+    mode?: 'ai' | 'default'
+    depth?: number
+    boxes?: boolean
+  }
+export type NavigateOptions = TimeoutOption &
+  SignalOption & {
+    waitUntil?: LoadState | 'networkidle0'
+    referer?: string
+  }
 export type WaitForSelectorOptions = TimeoutOption &
-  StrictOption & { state?: WaitForState }
-export type WaitForFunctionOptions = TimeoutOption & {
-  polling?: number | 'raf'
-}
+  StrictOption &
+  SignalOption & { state?: WaitForState }
+export type WaitForFunctionOptions = TimeoutOption &
+  SignalOption & {
+    polling?: number | 'raf'
+  }
+/** One call's resolved timeout and the signal that aborts it (`Frame._wait`). */
+export type Wait = { timeout: number; signal?: SignalLike }
 export type UrlMatcher = string | RegExp | ((url: unknown) => unknown)
 
 /** Ops that take a selector-built target and a strictness. */
@@ -565,6 +575,17 @@ export class Frame extends EventEmitter {
     return this._page._timeoutSettings.timeout(options)
   }
 
+  /**
+   * How long one call waits and what aborts it, as upstream's client `_timeout(options)` hands
+   * both to each channel call: the resolved timeout and the call's own `signal`.
+   */
+  _wait(
+    api: string,
+    options: (TimeoutOption & SignalOption) | undefined,
+  ): Wait {
+    return { timeout: this._timeout(options), signal: signalOf(api, options) }
+  }
+
   _navigationTimeout(options: TimeoutOption | undefined): number {
     return this._page._timeoutSettings.navigationTimeout(options)
   }
@@ -589,7 +610,7 @@ export class Frame extends EventEmitter {
     api: string,
     selector: string,
     strict: boolean | undefined,
-    timeout: number,
+    wait: Wait,
     args: Omit<OpInputs[Op], 'target' | 'strict'>,
   ): Promise<OpOutputs[Op]> {
     const target = await this._locatorBrand(api, selector)
@@ -598,7 +619,7 @@ export class Frame extends EventEmitter {
       strict: strict === true ? 'strict' : 'firstMatch',
       ...args,
     } as OpInputs[Op]
-    return await invoke(op, this._call(api, timeout), input)
+    return await invoke(op, this._call(api, wait.timeout), input, wait.signal)
   }
 
   async _click(
@@ -611,7 +632,7 @@ export class Frame extends EventEmitter {
       api,
       selector,
       options.strict,
-      this._timeout(options),
+      this._wait(api, options),
       {
         options: pick(options, POINTER_KEYS),
       },
@@ -628,7 +649,7 @@ export class Frame extends EventEmitter {
       api,
       selector,
       options.strict,
-      this._timeout(options),
+      this._wait(api, options),
       {
         options: pick(options, DBLCLICK_KEYS),
       },
@@ -645,7 +666,7 @@ export class Frame extends EventEmitter {
       api,
       selector,
       options.strict,
-      this._timeout(options),
+      this._wait(api, options),
       {
         options: pick(options, HOVER_KEYS),
       },
@@ -665,7 +686,7 @@ export class Frame extends EventEmitter {
       api,
       selector,
       options.strict,
-      this._timeout(options),
+      this._wait(api, options),
       {
         options: pick(options, CHECK_KEYS),
       },
@@ -684,7 +705,7 @@ export class Frame extends EventEmitter {
       api,
       source,
       options.strict,
-      this._timeout(options),
+      this._wait(api, options),
       {
         to,
         options: pick(options, DRAG_KEYS),
@@ -705,7 +726,7 @@ export class Frame extends EventEmitter {
       api,
       selector,
       options.strict,
-      this._timeout(options),
+      this._wait(api, options),
       {
         value,
         options: pick(options, FILL_KEYS),
@@ -724,7 +745,7 @@ export class Frame extends EventEmitter {
       api,
       selector,
       options.strict,
-      this._timeout(options),
+      this._wait(api, options),
       {
         key,
         options: pick(options, KEY_KEYS),
@@ -744,7 +765,7 @@ export class Frame extends EventEmitter {
       api,
       selector,
       options.strict,
-      this._timeout(options),
+      this._wait(api, options),
       { text, options: pick(options, KEY_KEYS) },
     )
   }
@@ -759,7 +780,7 @@ export class Frame extends EventEmitter {
       api,
       selector,
       options.strict,
-      this._timeout(options),
+      this._wait(api, options),
       {},
     )
   }
@@ -774,7 +795,7 @@ export class Frame extends EventEmitter {
       api,
       selector,
       options.strict,
-      this._timeout(options),
+      this._wait(api, options),
       {},
     )
   }
@@ -790,7 +811,7 @@ export class Frame extends EventEmitter {
       api,
       selector,
       options.strict,
-      this._timeout(options),
+      this._wait(api, options),
       { ...selectOptionValues(api, values), ...pick(options, ['force']) },
     )
   }
@@ -805,7 +826,7 @@ export class Frame extends EventEmitter {
       api,
       selector,
       options.strict,
-      this._timeout(options),
+      this._wait(api, options),
       pick(options, ['force']),
     )
   }
@@ -824,7 +845,7 @@ export class Frame extends EventEmitter {
         api,
         selector,
         options.strict,
-        this._timeout(options),
+        this._wait(api, options),
         { files: input },
       ),
     )
@@ -842,7 +863,7 @@ export class Frame extends EventEmitter {
       api,
       selector,
       options.strict,
-      this._timeout(options),
+      this._wait(api, options),
       { type, eventInit: eventInit ?? {} },
     )
   }
@@ -857,7 +878,7 @@ export class Frame extends EventEmitter {
       api,
       selector,
       options.strict,
-      this._timeout(options),
+      this._wait(api, options),
       {},
     )
   }
@@ -885,7 +906,7 @@ export class Frame extends EventEmitter {
       api,
       selector,
       options.strict,
-      this._timeout(options),
+      this._wait(api, options),
       args,
     )
   }
@@ -901,7 +922,7 @@ export class Frame extends EventEmitter {
       api,
       selector,
       options.strict,
-      this._timeout(options),
+      this._wait(api, options),
       { name },
     )
   }
@@ -913,7 +934,14 @@ export class Frame extends EventEmitter {
     selector: string,
     options: StrictOption = {},
   ): Promise<boolean> {
-    return await this._selectorOp(op, api, selector, options.strict, 0, {})
+    return await this._selectorOp(
+      op,
+      api,
+      selector,
+      options.strict,
+      { timeout: 0 },
+      {},
+    )
   }
 
   async _everyMatch<
@@ -937,7 +965,7 @@ export class Frame extends EventEmitter {
       api,
       selector,
       true,
-      this._timeout(options),
+      this._wait(api, options),
       {},
     )
   }
@@ -960,7 +988,7 @@ export class Frame extends EventEmitter {
       api,
       selector,
       options.strict,
-      this._timeout(options),
+      this._wait(api, options),
       { state, omitReturnValue },
     )
     return this._page._handle(handle)
@@ -978,7 +1006,7 @@ export class Frame extends EventEmitter {
       api,
       selector,
       strict,
-      noWait ? 0 : this._timeout(options),
+      noWait ? { timeout: 0 } : this._wait(api, options),
       noWait ? { noWait: true } : {},
     )
     return this._page._handle(handle)
@@ -1008,14 +1036,14 @@ export class Frame extends EventEmitter {
     strict: boolean,
     script: PageScript,
     noWait: boolean,
-    options: TimeoutOption = {},
+    options: TimeoutOption & SignalOption = {},
   ): Promise<unknown> {
     const value = await this._selectorOp(
       'locator.evaluate',
       api,
       selector,
       strict,
-      noWait ? 0 : this._timeout(options),
+      noWait ? { timeout: 0 } : this._wait(api, options),
       noWait ? { script, noWait: true, selector } : { script },
     )
     return fromPageValue(api, value)
@@ -1048,14 +1076,14 @@ export class Frame extends EventEmitter {
       )
     const mode = options.mode ?? 'default'
     const shape = pick({ mode, depth: options.depth }, ['mode', 'depth'])
-    const timeout = this._timeout(options)
+    const wait = this._wait(api, options)
     if (selector !== null)
       return await this._selectorOp(
         'locator.ariaSnapshot',
         api,
         selector,
         true,
-        timeout,
+        wait,
         shape,
       )
     if (this._id !== null)
@@ -1063,10 +1091,12 @@ export class Frame extends EventEmitter {
         api,
         "snapshot a child frame through its iframe: page.locator('iframe').contentFrame().locator('body').ariaSnapshot()",
       )
-    return await invoke('page.ariaSnapshot', this._call(api, timeout), {
-      page: await this._page._brand(api),
-      ...shape,
-    })
+    return await invoke(
+      'page.ariaSnapshot',
+      this._call(api, wait.timeout),
+      { page: await this._page._brand(api), ...shape },
+      wait.signal,
+    )
   }
 
   async _ariaSnapshot(
@@ -1132,6 +1162,8 @@ export class Frame extends EventEmitter {
         waitUntil,
         ...pick(options, ['referer']),
       },
+      undefined,
+      signalOf(api, options),
     )
     return await this._page._navigated(api, this, result, observed)
   }
@@ -1139,13 +1171,15 @@ export class Frame extends EventEmitter {
   async _waitForLoadState(
     api: string,
     state: LoadState | undefined,
-    options: TimeoutOption = {},
+    options: TimeoutOption & SignalOption = {},
   ): Promise<void> {
     const verified = loadState(api, 'state', state ?? 'load')
     const { value: result, observed } = await invokeObserved(
       'page.waitForLoadState',
       this._call(api, this._navigationTimeout(options)),
       { ...(await this._frameArgs(api)), state: verified },
+      undefined,
+      signalOf(api, options),
     )
     await this._page._navigated(api, this, result, observed)
   }
@@ -1168,6 +1202,8 @@ export class Frame extends EventEmitter {
       'page.setContent',
       this._call(api, this._navigationTimeout(options)),
       { ...(await this._frameArgs(api)), html, waitUntil },
+      undefined,
+      signalOf(api, options),
     )
     await this._page._navigated(api, this, result, observed)
   }
@@ -1197,9 +1233,10 @@ export class Frame extends EventEmitter {
     if (typeof options.polling === 'string' && options.polling !== 'raf')
       throw plainError(api, `Unknown polling option: ${options.polling}`)
     const script = pageCall(api, 'frame', pageFunction, arg)
+    const wait = this._wait(api, options)
     const { value, preview } = await invoke(
       'page.waitForFunction',
-      this._call(api, this._timeout(options)),
+      this._call(api, wait.timeout),
       {
         ...(await this._frameArgs(api)),
         script,
@@ -1207,6 +1244,7 @@ export class Frame extends EventEmitter {
           ? { polling: options.polling }
           : {}),
       },
+      wait.signal,
     )
     return new WaitHandle(value, preview)
   }

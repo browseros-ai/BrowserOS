@@ -105,24 +105,6 @@ export function refuseExposedFunctions(api: string, options: unknown): void {
     )
 }
 
-/**
- * upstream's `locator.evaluate` aborts its element wait on `signal` (`_withElement` hands it to
- * `waitForSelector`). Neo's ops cannot be aborted from the script, so a signal is refused rather
- * than ignored, before anything is sent. The other evaluate forms take no signal upstream, whose
- * channel drops the key, so they ignore it as upstream does.
- */
-export function refuseSignal(api: string, options: unknown): void {
-  if (
-    typeof options === 'object' &&
-    options !== null &&
-    Reflect.get(options, 'signal') !== undefined
-  )
-    throw unsupportedError(
-      api,
-      'an op cannot be aborted from the script in Neo; pass timeout instead',
-    )
-}
-
 const fallThrough = (value: unknown) => ({ fallThrough: value })
 
 /**

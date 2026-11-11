@@ -67,6 +67,10 @@ listed_enum! {
         TargetClosed,
         /// The CDP connection dropped, changed epoch or stopped answering.
         BrowserDisconnected,
+        /// The script aborted the op through Playwright's `signal` option. Like a timeout, the
+        /// op's input may already have landed, but the script chose to stop it, so it is not
+        /// one of Playwright's timeouts: the prelude throws `AbortError`.
+        Aborted,
         /// A Neo bug: a stale engine asset, a probe reply Rust cannot read, a missing seal.
         Internal,
     }
@@ -129,6 +133,7 @@ impl ErrorCode {
             Self::SecretUploadRefused => row("neo_secret_upload_refused", Script, No, Definite),
             Self::TargetClosed => row("target_closed", Neo, No, Ambiguous),
             Self::BrowserDisconnected => row("browser_disconnected", Neo, No, Ambiguous),
+            Self::Aborted => row("aborted", Script, No, Ambiguous),
             Self::Internal => row("internal", Neo, No, Definite),
         }
     }
@@ -347,7 +352,7 @@ mod tests {
 
     /// The error table as the sdk-playwright design states it, plus `wait_timeout`, written
     /// out apart from the code so a wrong row there fails here.
-    const TABLE: [(&str, ErrorOwner, TimedOut, Answer); 15] = [
+    const TABLE: [(&str, ErrorOwner, TimedOut, Answer); 16] = [
         (
             "strict_mode_violation",
             ErrorOwner::Script,
@@ -429,6 +434,12 @@ mod tests {
         (
             "browser_disconnected",
             ErrorOwner::Neo,
+            TimedOut::No,
+            Answer::Ambiguous,
+        ),
+        (
+            "aborted",
+            ErrorOwner::Script,
             TimedOut::No,
             Answer::Ambiguous,
         ),

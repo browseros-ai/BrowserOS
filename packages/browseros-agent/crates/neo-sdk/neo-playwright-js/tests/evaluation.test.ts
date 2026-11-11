@@ -223,7 +223,7 @@ it('tests that one waitForFunction handle twice in an argument reaches the page 
   ])
 })
 
-it('tests that locator.evaluate refuses a signal before anything is sent, and page.evaluate ignores one as upstream does', async () => {
+it('tests that locator.evaluate refuses a signal that is not an AbortSignal before anything is sent, and page.evaluate ignores one as upstream does', async () => {
   const runtime = loadPrelude({ seed: SEED })
   const outcomes = json(
     await runtime.run(`
@@ -235,17 +235,14 @@ it('tests that locator.evaluate refuses a signal before anything is sent, and pa
     `),
   )
   expect(outcomes).toEqual([
-    [
-      'locator.evaluate: an op cannot be aborted from the script in Neo; pass timeout instead',
-      'method_unavailable',
-    ],
+    ['locator.evaluate: signal: expected an AbortSignal', 'invalid_input'],
     'returned',
   ])
   expect(runtime.sent('locator.evaluate')).toEqual([
     refusalCall(
       'locator.evaluate',
-      'method_unavailable',
-      'locator.evaluate: an op cannot be aborted from the script in Neo; pass timeout instead',
+      'invalid_input',
+      'locator.evaluate: signal: expected an AbortSignal',
     ),
   ])
   expect(runtime.sent('page.evaluate')).toHaveLength(1)
