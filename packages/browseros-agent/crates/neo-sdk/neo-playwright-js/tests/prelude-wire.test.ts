@@ -592,7 +592,9 @@ describe('errors', () => {
               node: 41,
               display: '<b>',
             }
-          : null,
+          : call.name === 'page.evaluate'
+            ? { value: null }
+            : null,
     })
     const result = json(
       await runtime.run(`

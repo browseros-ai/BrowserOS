@@ -276,6 +276,11 @@ impl OpInput {
     /// same op; reload checks the current URL instead, and history follows a previous entry.
     fn refused_navigation(&self) -> Option<OperationError> {
         let url = self.json.get("url")?.as_str()?;
+        // The engine's completeUserURL supplies http:// for bare local addresses.
+        // Validate that completed scheme rather than mistaking localhost:port for a scheme.
+        if url.starts_with("localhost") || url.starts_with("127.0.0.1") {
+            return None;
+        }
         let which = match url_scheme(url) {
             Some(scheme)
                 if NAVIGABLE_SCHEMES.contains(&scheme.as_str())
@@ -415,9 +420,13 @@ impl PageEffect {
             // A successful navigation wait observes a URL change started by another op or
             // the page. Refresh core's cache too, so a later ordinary reply cannot restore
             // the pre-navigation URL over the wait's fresh frame facts.
-            "page.goto" | "page.goBack" | "page.goForward" | "page.waitForNavigation" => {
-                Self::Navigates
-            }
+            "page.goto"
+            | "page.goBack"
+            | "page.goForward"
+            | "page.waitForNavigation"
+            | "page.waitForURL"
+            | "page.waitForLoadState"
+            | "page.evaluate" => Self::Navigates,
             "page.reload" => Self::Reloads,
             "page.close" => Self::Closes,
             _ => Self::Untracked,
@@ -576,6 +585,10 @@ impl<M> OpEnv for OpCtxEnv<'_, M> {
                 seq,
             },
         );
+    }
+
+    fn report_navigation(&self, tab: TabId) {
+        self.op.report_page(&PageRef { tab }, PageChange::Navigated);
     }
 
     fn abort_reason(&self) -> Option<String> {

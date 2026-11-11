@@ -709,7 +709,7 @@ export class Page extends EventEmitter {
 
   async close(options: CloseOptions = {}): Promise<void> {
     const api = 'page.close'
-    if (this._tab === null) {
+    if (this._closed || this._tab === null) {
       this.#close()
       return
     }
@@ -730,7 +730,9 @@ export class Page extends EventEmitter {
     } catch (error) {
       // As upstream: closing a page that is already gone is not an error.
       if (
-        Reflect.get(Object(error), 'code') !== 'target_closed' ||
+        !['target_closed', 'page_closed'].includes(
+          String(Reflect.get(Object(error), 'code')),
+        ) ||
         options.runBeforeUnload
       )
         throw error
@@ -817,6 +819,12 @@ export class Page extends EventEmitter {
   }
 
   /** Applies what a navigation or wait returned; the frame tree is fetched if it was not. */
+  /** A script's supplemental facts must belong to this Page's current admitted binding. */
+  _evaluated(frames: FrameInfo[] | undefined, at: Observation | null): void {
+    if (this.#payloadCurrent(at) && Array.isArray(frames))
+      this._applyFrames(frames)
+  }
+
   async _navigated(
     api: string,
     frame: Frame,

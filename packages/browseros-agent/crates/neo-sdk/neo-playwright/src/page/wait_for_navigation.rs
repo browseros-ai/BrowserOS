@@ -13,8 +13,8 @@ use crate::op_scope::OpScope;
 use crate::page::document_watch::WatchError;
 use crate::page::frame_tree::{self, FrameTree};
 use crate::page::navigation::{self, NavigationResult};
-use crate::page::{LoadState, OpPage, wait_for_url};
-use crate::probe::UrlPattern;
+use crate::page::{LoadState, OpPage, subtree_load, wait_for_url};
+use crate::probe::{ProbeFailure, UrlPattern};
 use crate::target::PageRef;
 use crate::{ErrorCode, Playwright, PlaywrightError, resolve};
 
@@ -156,12 +156,21 @@ async fn complete_navigation(
     // A child may have moved to another CDP session. Its stable frame id is the journal's
     // correlation key; worlds and lifecycle observations must use its new session.
     let mut followed = wait_for_url::follow(pw, page, scope, input.frame.as_ref()).await?;
-    if let Some(pattern) = &input.url
-        && !wait_for_url::matches(page, &followed.frame, pattern, event.url.clone())
-            .await
-            .map_err(|failure| resolve::failed(scope, failure))?
-    {
-        return Ok(None);
+    if let Some(pattern) = &input.url {
+        loop {
+            match wait_for_url::matches(page, &followed.frame, pattern, event.url.clone()).await {
+                Ok(true) => break,
+                Ok(false) => return Ok(None),
+                // Concurrent waits can each install a world while successive navigations
+                // replace it. Matching the retained event URL is read-only; rediscover the
+                // endpoint before retrying, so a swap is followed and a closed frame fails.
+                // The enclosing navigation deadline bounds every attempt.
+                Err(ProbeFailure::Gone(_)) => {
+                    followed = wait_for_url::follow(pw, page, scope, input.frame.as_ref()).await?;
+                }
+                Err(failure) => return Err(resolve::failed(scope, failure)),
+            }
+        }
     }
     loop {
         match followed.watch.reached(input.wait_until).await {
@@ -171,6 +180,9 @@ async fn complete_navigation(
             }
             Err(error) => return Err(navigation::watch_error(scope, &error)),
         }
+    }
+    if input.wait_until == LoadState::NetworkIdle {
+        subtree_load::network_idle(pw, scope, page.tab(), frame).await?;
     }
     let response = if event.new_document && event.loader.is_some() {
         navigation::read_response(
@@ -198,6 +210,7 @@ async fn navigation_reply(
     navigation: NavigationResult,
     navigation_seq: u64,
 ) -> Result<NavigationReply, PlaywrightError> {
+    let since = pw.events().head();
     let frames = frame_tree::read(
         pw.browser(),
         page.core_page(),
@@ -205,6 +218,7 @@ async fn navigation_reply(
     )
     .await
     .map_err(|error| scope.core_error(&error))?;
+    frames.remember(pw, scope, page.tab(), &page.main_endpoint().session, since);
     Ok(NavigationReply {
         navigation,
         frames,

@@ -64,6 +64,9 @@ function groupOwned(pid, profile) {
   // Enumerate compact numeric ids first, then read commands only in the owned group.
   const members = execFileSync('ps', ['-axo', 'pid=,pgid='], {
     encoding: 'utf8',
+    // Concurrent agents can have very large command lines. Ownership must still be checked
+    // before cleanup; Node's 1 MiB default can otherwise strand the private browser group.
+    maxBuffer: 16 * 1024 * 1024,
   })
     .split('\n')
     .flatMap((line) => {

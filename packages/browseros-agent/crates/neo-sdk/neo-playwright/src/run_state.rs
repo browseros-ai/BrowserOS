@@ -3,11 +3,12 @@
 use crate::DownloadFacts;
 use crate::events::{RunDownloads, RunEvents};
 use crate::object_group::ObjectGroup;
+use crate::page::FrameRoutes;
 
-/// One run's Playwright state: what the run listens for, how far its event pump has read, and
-/// the downloads it was handed. The host creates it with `Default`, keeps it in its run slot and
-/// drops it with the run; the crate reaches it through `OpEnv::run_state`. Opaque, so its
-/// contents can change without the host noticing.
+/// One run's Playwright state: event cursors, discovered frame endpoints, retained chooser
+/// objects and the downloads it was handed. The host creates it with `Default`, keeps it in its
+/// run slot and drops it with the run; the crate reaches it through `OpEnv::run_state`. Opaque, so
+/// its contents can change without the host noticing.
 ///
 /// The event hub holds runs weakly, so dropping this is how a run's listeners and the dialogs
 /// held for them go away.
@@ -15,6 +16,7 @@ use crate::object_group::ObjectGroup;
 #[non_exhaustive]
 pub struct RunState {
     pub(crate) events: RunEvents,
+    pub(crate) frames: FrameRoutes,
     /// Inputs retained for chooser objects until the script and all its handles end.
     pub(crate) objects: ObjectGroup,
     pub(crate) downloads: RunDownloads,
