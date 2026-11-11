@@ -7,6 +7,7 @@ import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { parseArgs } from 'node:util'
 import type { HostApiConfig } from './hostApi'
+import { INSTANCE_PATTERN, type InstanceNames } from './neo-container'
 
 /** The port the agent's MCP URL and the UI use (the build contract's `:7310`). */
 const DEFAULT_PORT = 7310
@@ -21,11 +22,13 @@ export interface ViewerConfig {
   /** Neo's host API over `CLAW_HOST_TCP`; none when null. */
   hostApi?: HostApiConfig | null
   /** The container `bun run neo:viewer` started, shown read-only on the page; null with `--upstream`. */
-  container?: { name: string; image: string } | null
+  container?: { names: InstanceNames; image: string } | null
 }
 
 /** What `bun run neo:viewer` was asked to do. */
 export interface LaunchOptions {
+  /** Scopes every container, network, volume and state folder this start makes or removes. */
+  instance: string
   port: number
   dataDir: string
   /** Forward to this Neo and start no container. */
@@ -42,15 +45,17 @@ export interface LaunchOptions {
 
 const USAGE = `usage: bun run neo:viewer [-- options]   (from packages/browseros-agent)
   Builds this checkout's Neo SDK image if needed, starts it fresh, and serves the viewer.
+  --name NAME       this viewer's instance (default: default); its container is neo-viewer-NAME,
+                    and a start replaces only an earlier start of the same instance
   --keep-data       keep the browser profile and the run history between starts
   --no-build        use the newest neo-sdk image on this machine
   --image TAG       use this image
   --upstream URL    forward to this Neo MCP endpoint and start no container
   --port PORT       the viewer's port (7310)
-  --data-dir DIR    the viewer's state (~/.local/state/neo-viewer)
+  --data-dir DIR    the viewer's state (~/.local/state/neo-viewer/NAME)
   --host-token-file FILE [--host-api URL]
                     with --upstream: Neo's host API (CLAW_HOST_TCP, default http://127.0.0.1:9300)
-  env: NEO_VIEWER_PORT, NEO_VIEWER_UPSTREAM, NEO_VIEWER_DATA_DIR`
+  env: NEO_VIEWER_INSTANCE, NEO_VIEWER_PORT, NEO_VIEWER_UPSTREAM, NEO_VIEWER_DATA_DIR`
 
 export function launchOptionsFrom(
   argv: string[],
@@ -59,6 +64,7 @@ export function launchOptionsFrom(
   const { values } = parseArgs({
     args: argv,
     options: {
+      name: { type: 'string' },
       port: { type: 'string' },
       upstream: { type: 'string' },
       'data-dir': { type: 'string' },
@@ -78,12 +84,21 @@ export function launchOptionsFrom(
   if (!Number.isInteger(port) || port < 0 || port > 65535) {
     throw new Error(`bad port: ${port}\n${USAGE}`)
   }
+  const instance = values.name ?? env.NEO_VIEWER_INSTANCE ?? 'default'
+  if (!INSTANCE_PATTERN.test(instance)) {
+    throw new Error(
+      `bad --name: ${instance} (lowercase letters, digits, '.', '_' or '-', at most 40)\n${USAGE}`,
+    )
+  }
   const upstream = values.upstream ?? env.NEO_VIEWER_UPSTREAM
   return {
+    instance,
     port,
     // Absolute: the token file inside it is bind-mounted into the container by path.
     dataDir: resolve(
-      values['data-dir'] ?? env.NEO_VIEWER_DATA_DIR ?? defaultDataDir(env),
+      values['data-dir'] ??
+        env.NEO_VIEWER_DATA_DIR ??
+        join(defaultDataDir(env), instance),
     ),
     upstream: upstream ? new URL(upstream) : null,
     keepData: values['keep-data'] ?? false,
@@ -110,7 +125,7 @@ function hostApiFrom(
     : null
 }
 
-/** `$XDG_STATE_HOME/neo-viewer`, else `~/.local/state/neo-viewer`: outside any checkout. */
+/** `$XDG_STATE_HOME/neo-viewer`, else `~/.local/state/neo-viewer`: outside any checkout; one folder per instance below it. */
 function defaultDataDir(env: Record<string, string | undefined>): string {
   return join(
     env.XDG_STATE_HOME ?? join(homedir(), '.local', 'state'),

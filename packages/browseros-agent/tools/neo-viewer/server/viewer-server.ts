@@ -59,7 +59,11 @@ export async function startViewer(
   const currentInfo = async (): Promise<ViewerInfo> => ({
     ...info,
     container: container
-      ? { ...container, up: await containerUp(runCommand) }
+      ? {
+          name: container.names.container,
+          image: container.image,
+          up: await containerUp(runCommand, container.names),
+        }
       : null,
   })
 

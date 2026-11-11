@@ -5,7 +5,7 @@ import {
   type CommandResult,
   createNetwork,
   imageTag,
-  NAMES,
+  instanceNames,
   planImage,
   type Runner,
   removeLeftovers,
@@ -52,8 +52,10 @@ function dockerWith(
   })
 }
 
+const NAMES = instanceNames('t1')
 const ours = {
   'com.browseros.neo-viewer': '1',
+  'com.browseros.neo-viewer.instance': 't1',
   'com.browseros.neo-viewer.launch': 'launch-a',
 }
 const removals = (calls: string[][]) =>
@@ -154,10 +156,67 @@ describe('the image for this checkout', () => {
   })
 })
 
+describe('instances', () => {
+  test('each instance has its own names', () => {
+    expect(instanceNames('default')).toEqual({
+      instance: 'default',
+      container: 'neo-viewer-default',
+      network: 'neo-viewer-default-net',
+      volume: 'neo-viewer-default-data',
+    })
+    expect(instanceNames('vp-a').container).not.toBe(
+      instanceNames('vp-b').container,
+    )
+  })
+
+  test("a start looks only at its own instance's names, and refuses one labelled for another", async () => {
+    const docker = dockerWith({ container: ours, network: ours, volume: ours })
+    await removeLeftovers(docker.run, instanceNames('t1'), false)
+    const inspected = new Set(
+      docker.calls
+        .filter((call) => call[2] === 'inspect')
+        .map((call) => call.at(-1)),
+    )
+    expect(
+      [...inspected].every(
+        (name) => name?.startsWith('neo-viewer-t1') || name?.endsWith('-id'),
+      ),
+    ).toBe(true)
+    const other = dockerWith({
+      container: { ...ours, 'com.browseros.neo-viewer.instance': 't2' },
+    })
+    await expect(
+      removeLeftovers(other.run, instanceNames('t1'), false),
+    ).rejects.toThrow('did not create it')
+    expect(removals(other.calls)).toEqual([])
+  })
+
+  test('--name scopes the state folder; a bad name is refused', () => {
+    expect(
+      launchOptionsFrom(['--name', 'vp-a'], { XDG_STATE_HOME: '/state' }),
+    ).toMatchObject({
+      instance: 'vp-a',
+      dataDir: '/state/neo-viewer/vp-a',
+    })
+    expect(
+      launchOptionsFrom([], {
+        NEO_VIEWER_INSTANCE: 'ci',
+        XDG_STATE_HOME: '/state',
+      }).dataDir,
+    ).toBe('/state/neo-viewer/ci')
+    expect(launchOptionsFrom([], { XDG_STATE_HOME: '/state' }).instance).toBe(
+      'default',
+    )
+    expect(() => launchOptionsFrom(['--name', 'Bad Name'], {})).toThrow(
+      'bad --name',
+    )
+  })
+})
+
 describe('cleanup touches only what the viewer created', () => {
   test("a start removes the last start's labelled container, network and volume", async () => {
     const docker = dockerWith({ container: ours, network: ours, volume: ours })
-    const removed = await removeLeftovers(docker.run, false)
+    const removed = await removeLeftovers(docker.run, NAMES, false)
     expect(removed).toEqual([
       `container ${NAMES.container}`,
       `network ${NAMES.network}`,
@@ -172,7 +231,7 @@ describe('cleanup touches only what the viewer created', () => {
 
   test('with --keep-data the volume stays, the container gets its graceful stop first', async () => {
     const docker = dockerWith({ container: ours, volume: ours })
-    expect(await removeLeftovers(docker.run, true)).toEqual([
+    expect(await removeLeftovers(docker.run, NAMES, true)).toEqual([
       `container ${NAMES.container}`,
     ])
     expect(removals(docker.calls)).toEqual([
@@ -184,16 +243,16 @@ describe('cleanup touches only what the viewer created', () => {
   test('a same-named object without the label stops the start, even a volume --keep-data would keep', async () => {
     for (const keepData of [false, true]) {
       const docker = dockerWith({ volume: { owner: 'someone else' } })
-      await expect(removeLeftovers(docker.run, keepData)).rejects.toThrow(
-        'the viewer did not create it',
-      )
+      await expect(
+        removeLeftovers(docker.run, NAMES, keepData),
+      ).rejects.toThrow('did not create it')
       expect(removals(docker.calls)).toEqual([])
     }
   })
 
   test("Ctrl-C removes this launch's objects, never a later launch's or someone else's", async () => {
     const mine = dockerWith({ container: ours, network: ours, volume: ours })
-    await stopContainer(mine.run, 'launch-a', false)
+    await stopContainer(mine.run, NAMES, 'launch-a', false)
     expect(removals(mine.calls)).toEqual([
       ['docker', 'rm', '-f', 'container-id'],
       ['docker', 'network', 'rm', 'network-id'],
@@ -205,9 +264,9 @@ describe('cleanup touches only what the viewer created', () => {
       network: later,
       volume: later,
     })
-    await stopContainer(replaced.run, 'launch-a', false)
+    await stopContainer(replaced.run, NAMES, 'launch-a', false)
     const foreign = dockerWith({ container: { owner: 'someone else' } })
-    await stopContainer(foreign.run, 'launch-a', true)
+    await stopContainer(foreign.run, NAMES, 'launch-a', true)
     expect([...removals(replaced.calls), ...removals(foreign.calls)]).toEqual(
       [],
     )
@@ -248,7 +307,10 @@ test('a machine whose Docker address pools are used up still gets a network, on 
         }
       : ok()
   })
-  await createNetwork(docker.run, ['--label', 'com.browseros.neo-viewer=1'])
+  await createNetwork(docker.run, NAMES, [
+    '--label',
+    'com.browseros.neo-viewer=1',
+  ])
   expect(docker.calls.map((call) => call.at(-2))).toEqual([
     'com.browseros.neo-viewer=1',
     '10.213.0.0/24',
