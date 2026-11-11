@@ -11,8 +11,7 @@ use tokio::time;
 use crate::op_scope::OpScope;
 use crate::target::CallHeader;
 use crate::test_env::{EnvCall, TestEnv};
-use crate::test_support::{self, RecordingHooks};
-use crate::{Op, OpEnv, Playwright, Refusal};
+use crate::{Op, OpEnv, Playwright, Refusal, test_support};
 
 type TestResult = Result<(), Box<dyn Error>>;
 
@@ -65,7 +64,7 @@ async fn tests_that_a_context_script_reaches_a_written_tab_once_and_leaves_with_
 -> TestResult {
     let connection = TestConnection::new([]);
     let browser = browser(&connection).await?;
-    let playwright = Playwright::new(Arc::clone(&browser), Arc::new(RecordingHooks));
+    let playwright = Playwright::new(Arc::clone(&browser));
     let env = TestEnv::over(BrowserView::unbound(Arc::clone(&browser), None));
 
     let context = invoke(
@@ -157,7 +156,7 @@ async fn tests_that_a_context_script_reaches_a_written_tab_once_and_leaves_with_
 async fn tests_that_a_refused_tab_gets_no_script() -> TestResult {
     let connection = TestConnection::new([]);
     let browser = browser(&connection).await?;
-    let playwright = Playwright::new(Arc::clone(&browser), Arc::new(RecordingHooks));
+    let playwright = Playwright::new(Arc::clone(&browser));
     let refusal = Refusal {
         owner: ErrorOwner::Host,
         code: "owner_has_control".to_owned(),
@@ -199,7 +198,7 @@ async fn tests_that_a_refused_tab_gets_no_script() -> TestResult {
 async fn tests_that_a_script_disposed_after_a_writes_snapshot_is_not_added() -> TestResult {
     let connection = TestConnection::new([]);
     let browser = browser(&connection).await?;
-    let playwright = Playwright::new(Arc::clone(&browser), Arc::new(RecordingHooks));
+    let playwright = Playwright::new(Arc::clone(&browser));
     let env = TestEnv::over(BrowserView::unbound(Arc::clone(&browser), None));
     for source in ["window.one = 1", "window.two = 2"] {
         invoke(

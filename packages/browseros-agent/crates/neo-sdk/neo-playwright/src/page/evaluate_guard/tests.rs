@@ -1,6 +1,6 @@
 use std::error::Error;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Mutex, PoisonError};
 
 use browseros_cdp::CdpError;
 use browseros_core::CoreError;
@@ -14,9 +14,7 @@ use super::{
 use crate::op_scope::OpScope;
 use crate::target::{CallHeader, PageRef};
 use crate::test_env::{self, TestEnv};
-use crate::test_support::{
-    ProbeAnswer, RecordingHooks, SCRIPTED_DOCUMENT, ScriptedRun, ScriptedTab, TabScript,
-};
+use crate::test_support::{ProbeAnswer, SCRIPTED_DOCUMENT, ScriptedRun, ScriptedTab, TabScript};
 use crate::{ErrorCode, Op, Playwright};
 
 type TestResult = Result<(), Box<dyn Error>>;
@@ -267,7 +265,7 @@ async fn tests_that_a_binding_function_fails_as_upstreams_server_fails_it() -> T
 /// Paused: core waits out its own attach timeout before it gives up on the page.
 #[tokio::test(start_paused = true)]
 async fn tests_that_the_guard_lets_in_only_a_declared_op_and_a_script_to_run() -> TestResult {
-    let playwright = Playwright::new(test_env::offline_session(), Arc::new(RecordingHooks));
+    let playwright = Playwright::new(test_env::offline_session());
     let env = TestEnv::new();
     let screenshot = Op::from_name("page.screenshot").ok_or("page.screenshot is an op")?;
     let undeclared = OpScope::new(&env, screenshot, CallHeader::default());

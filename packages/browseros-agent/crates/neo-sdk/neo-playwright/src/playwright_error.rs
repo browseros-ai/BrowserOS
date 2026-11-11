@@ -60,12 +60,8 @@ listed_enum! {
         /// does not decode.
         InvalidInput,
         /// A Playwright feature Neo does not support here, such as a popup that opened as a
-        /// window or a `RegExp` value matcher on a password field.
+        /// window.
         Unsupported,
-        /// Copy or cut in a password, card or one-time-code field.
-        SensitiveCopyRefused,
-        /// Legacy upload refusal code retained for protocol compatibility.
-        SecretUploadRefused,
         /// The page or frame closed, or left the run's view, under the op.
         TargetClosed,
         /// The CDP connection dropped, changed epoch or stopped answering.
@@ -136,8 +132,6 @@ impl ErrorCode {
             }
             Self::InvalidInput => row("invalid_input", Script, No, Definite),
             Self::Unsupported => row("unsupported", Neo, No, Definite),
-            Self::SensitiveCopyRefused => row("sensitive_copy_refused", Script, No, Definite),
-            Self::SecretUploadRefused => row("neo_secret_upload_refused", Script, No, Definite),
             Self::TargetClosed => row("target_closed", Neo, No, Ambiguous),
             Self::BrowserDisconnected => row("browser_disconnected", Neo, No, Ambiguous),
             Self::Aborted => row("aborted", Script, No, Ambiguous),
@@ -360,7 +354,7 @@ mod tests {
 
     /// The error table as the sdk-playwright design states it, plus `wait_timeout`, written
     /// out apart from the code so a wrong row there fails here.
-    const TABLE: [(&str, ErrorOwner, TimedOut, Answer); 18] = [
+    const TABLE: [(&str, ErrorOwner, TimedOut, Answer); 16] = [
         (
             "strict_mode_violation",
             ErrorOwner::Script,
@@ -430,18 +424,6 @@ mod tests {
         (
             "unsupported",
             ErrorOwner::Neo,
-            TimedOut::No,
-            Answer::Definite,
-        ),
-        (
-            "sensitive_copy_refused",
-            ErrorOwner::Script,
-            TimedOut::No,
-            Answer::Definite,
-        ),
-        (
-            "neo_secret_upload_refused",
-            ErrorOwner::Script,
             TimedOut::No,
             Answer::Definite,
         ),
