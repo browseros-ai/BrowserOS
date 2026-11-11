@@ -2,6 +2,9 @@
 //! Abandon that obsolete read; the screenshot owner restores its guards before retrying.
 
 use std::future::Future;
+use std::time::Duration;
+
+use tokio::time;
 
 use crate::op_scope::OpScope;
 use crate::page::document_watch::{DocumentWatch, Expect};
@@ -33,11 +36,11 @@ where
     // Admission already enabled Page events. Share DocumentWatch's broadcast: a targeted
     // subscription would consume the commit needed by a concurrent reload's own watcher.
     let mut watch = DocumentWatch::new(page.browser(), endpoint.session, session, endpoint.frame);
-    // Seed the loader so DocumentWatch can recover a dropped event from the current tree.
-    watch
-        .read_current()
-        .await
-        .map_err(|error| navigation::watch_error(scope, &error))?;
+    // Seed the loader for lag recovery, but do not hold otherwise-ready pixels behind stalled
+    // renderer metadata. The already-subscribed watch can still observe live commits without it.
+    if let Ok(current) = time::timeout(Duration::from_secs(1), watch.read_current()).await {
+        current.map_err(|error| navigation::watch_error(scope, &error))?;
+    }
     tokio::select! {
         biased;
         changed = watch.arrived(Expect::NewDocument) => {
