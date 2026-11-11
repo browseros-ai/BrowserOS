@@ -349,13 +349,14 @@ async fn tests_that_a_dialog_nobody_listens_for_is_dismissed_after_the_grace() -
                 "dismissed after the 250 ms grace, not at once: {took:?}"
             );
 
-            // An alert is core's: accepted at once, before any listener could see it.
+            // Alerts use the same unanswered-dialog path as confirms in an SDK session.
             let started = Instant::now();
             run.click(&page, "#alert").await?;
             assert_eq!(run.eval(&page, "window.__answer").await?, json!("alerted"));
             assert!(
-                started.elapsed() < Duration::from_millis(250),
-                "core accepts alerts at once"
+                started.elapsed() >= Duration::from_millis(250)
+                    && started.elapsed() < Duration::from_secs(2),
+                "an unanswered alert is dismissed after the grace"
             );
             Ok(())
         }

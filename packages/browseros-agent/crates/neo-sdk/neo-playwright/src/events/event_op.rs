@@ -595,8 +595,6 @@ async fn answer(
     // `answering` reopens it for them unless the browser acknowledges the answer.
     let answering = match pw.events().answer_dialog(input.dialog, &target) {
         Ok(answering) => answering,
-        // Core accepted the alert before any listener saw it: the script's answer is moot.
-        Err(Unanswerable::Closed(ClosedBy::Core)) => return Ok(json!({})),
         Err(
             Unanswerable::Answering
             | Unanswerable::Closed(ClosedBy::Script | ClosedBy::Neo | ClosedBy::Browser),

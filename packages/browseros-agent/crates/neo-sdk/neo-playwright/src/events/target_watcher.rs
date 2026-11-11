@@ -16,8 +16,8 @@
 //! - **Sessions.** Page events arrive on page sessions. `Target.attachedToTarget` names each
 //!   session's tab (core's attaches and its OOPIF auto-attaches alike); a session attached
 //!   before the watcher started is looked up in core's page registry.
-//! - **Dialogs.** An `alert()` is already accepted by core's page signals (a listed deviation).
-//!   Any other dialog is held for the runs listening for dialogs on its tab, then
+//! - **Dialogs.** The facade delegates core's dialog handling to this watcher. Every dialog
+//!   is held for the runs listening for dialogs on its tab, then
 //!   [`DIALOG_GRACE`] later held for whoever listens by then, or closed by Neo; the reap tick
 //!   closes held dialogs whose runs all ended (`dialog_table.rs`).
 //! - **Frames.** `Page.frameAttached`, a removing `Page.frameDetached` and the main frame's
@@ -43,7 +43,7 @@ use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use tokio::task::JoinHandle;
 use tokio::time::{self, Instant, MissedTickBehavior};
 
-use crate::events::dialog_table::{ClosedBy, HeldDialog, Unanswered};
+use crate::events::dialog_table::{HeldDialog, Unanswered};
 use crate::events::event_hub::EventWriter;
 use crate::events::page_event::{
     ConsoleMessage, ConsoleParams, DialogId, DialogKind, DialogOpened, DownloadStarted,
@@ -707,24 +707,19 @@ impl Watcher {
         let kind = DialogKind::parse(&params.kind);
         let hub = self.writer.hub();
         let id = hub.dialogs().allocate();
-        if kind == DialogKind::Alert {
-            // Core's page signals accept every alert at once, before any listener sees it.
-            hub.dialogs().close(id, ClosedBy::Core);
-        } else {
-            let listening = target
-                .as_ref()
-                .map(|target| hub.listeners(target, PageEventKind::Dialog))
-                .unwrap_or_default();
-            hub.dialogs().hold(
-                id,
-                HeldDialog::new(session, target.clone(), kind, listening),
-            );
-            self.graces.push_back(Grace {
-                ends: Instant::now() + DIALOG_GRACE,
-                dialog: id,
-                target: target.clone(),
-            });
-        }
+        let listening = target
+            .as_ref()
+            .map(|target| hub.listeners(target, PageEventKind::Dialog))
+            .unwrap_or_default();
+        hub.dialogs().hold(
+            id,
+            HeldDialog::new(session, target.clone(), kind, listening),
+        );
+        self.graces.push_back(Grace {
+            ends: Instant::now() + DIALOG_GRACE,
+            dialog: id,
+            target: target.clone(),
+        });
         if let Some(target) = target {
             self.writer.record(PageEvent::Dialog(DialogOpened {
                 id,

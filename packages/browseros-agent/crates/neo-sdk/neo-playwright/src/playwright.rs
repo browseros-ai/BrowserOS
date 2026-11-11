@@ -53,6 +53,9 @@ impl Playwright {
     #[must_use]
     pub fn new(browser: Arc<BrowserSession>, hooks: Arc<dyn PlaywrightHooks>) -> Arc<Self> {
         drop(hooks);
+        // The SDK watcher owns every dialog answer, including alerts. Delegate before it
+        // starts so core's desktop auto-accept cannot race a script's dialog listener.
+        browser.page_signals.delegate_dialog_handling();
         let (events, writer) = EventHub::new();
         let attach_log = Arc::new(FrameAttachLog::default());
         let watcher = TargetWatcher::spawn(Arc::clone(&browser), writer, Arc::clone(&attach_log));

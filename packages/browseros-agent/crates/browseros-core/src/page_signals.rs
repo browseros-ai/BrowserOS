@@ -154,6 +154,8 @@ struct PageSignalState {
 struct SignalsState {
     sessions: HashMap<SessionId, PageId>,
     pages: HashMap<PageId, PageSignalState>,
+    /// An SDK session owns dialog answers; desktop sessions keep core's alert handling.
+    dialogs_delegated: bool,
 }
 
 type SignalAdmission = Arc<dyn Fn(&PageId) -> bool + Send + Sync>;
@@ -193,6 +195,16 @@ impl PageSignals {
     }
     fn allowed(&self, page: &PageId) -> bool {
         self.scope.as_ref().is_none_or(|scope| scope(page))
+    }
+
+    /// Gives an external event handler ownership of dialog answers for this session's lifetime.
+    /// Call before that handler starts driving pages. Core still tracks open dialogs, but does
+    /// not accept alerts or report them as dismissed; desktop's default behavior is unchanged.
+    /// Read-only task projections cannot change the session's dialog ownership.
+    pub fn delegate_dialog_handling(&self) {
+        if self.scope.is_none() {
+            self.state().dialogs_delegated = true;
+        }
     }
 
     pub fn attach_page(&self, page_id: PageId, session_id: SessionId) {
@@ -486,7 +498,8 @@ impl PageSignals {
             return;
         };
         let dialog = dialog_from_params(&event.params);
-        if dialog.is_alert() {
+        let delegated = self.state().dialogs_delegated;
+        if dialog.is_alert() && !delegated {
             self.record_alert_note(&page_id, dialog.message.clone());
             self.accept_alert(session_id).await;
             return;
@@ -1095,6 +1108,24 @@ mod tests {
             vec!["[page 7 dismissed an alert: \"Saved\"]"]
         );
         assert!(signals.take_alert_note_lines(&page_id).is_empty());
+    }
+
+    #[tokio::test]
+    async fn delegated_alert_waits_for_external_handler_without_a_dismissal_note() {
+        let (signals, connection, page_id) = harness();
+        signals.delegate_dialog_handling();
+        connection.emit(
+            "Page.javascriptDialogOpening",
+            json!({ "type": "alert", "message": "Saved" }),
+            Some("session-7"),
+        );
+
+        eventually(|| signals.pending_dialog(&page_id).is_some()).await;
+        assert!(signals.take_alert_note_lines(&page_id).is_empty());
+        assert!(connection.sent_calls().is_empty());
+
+        connection.emit("Page.javascriptDialogClosed", json!({}), Some("session-7"));
+        eventually(|| signals.pending_dialog(&page_id).is_none()).await;
     }
 
     #[tokio::test]

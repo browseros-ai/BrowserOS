@@ -1,8 +1,7 @@
 //! Who answers each JavaScript dialog: a listening run, or Neo once nobody listens.
 //!
 //! ```text
-//!  opening ─ alert ─────────────────────────────▶ Closed(Core): core already accepted it
-//!          ─ confirm, prompt, beforeunload ──────▶ Open { listeners: runs listening now }
+//!  opening ────────────────────────────────────▶ Open { listeners: runs listening now }
 //!  Open ── dialog.accept / dialog.dismiss ───────▶ Answering: the script's send is in flight
 //!       ── grace over (250 ms), nobody listening ▶ Closed(Neo): dismissed (beforeunload accepted)
 //!       ── reap (1 s tick), every listener gone ─▶ Closed(Neo)
@@ -69,8 +68,6 @@ pub(crate) enum ClosedBy {
     Script,
     /// Neo: nobody listened within the grace, or every listening run ended.
     Neo,
-    /// Core's page signals, which accept every `alert()` at once (a listed deviation).
-    Core,
     /// The browser: the owner answered it, or its tab closed.
     Browser,
 }
@@ -377,6 +374,8 @@ mod tests {
         let mut table = DialogTable::default();
         let confirm = table.allocate();
         table.hold(confirm, held(DialogKind::Confirm, Vec::new()));
+        let alert = table.allocate();
+        table.hold(alert, held(DialogKind::Alert, Vec::new()));
         let unload = table.allocate();
         table.hold(unload, held(DialogKind::BeforeUnload, Vec::new()));
         assert_eq!(
@@ -388,6 +387,11 @@ mod tests {
             table.end_grace(confirm, Vec::new()),
             Some(dismissed()),
             "a confirm nobody answers is dismissed"
+        );
+        assert_eq!(
+            table.end_grace(alert, Vec::new()),
+            Some(dismissed()),
+            "an alert nobody answers is dismissed"
         );
         assert_eq!(
             table.end_grace(unload, Vec::new()),
