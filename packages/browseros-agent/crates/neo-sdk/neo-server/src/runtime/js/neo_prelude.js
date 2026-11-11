@@ -88,7 +88,9 @@
           await invoke('neo.createTask', name === undefined ? {} : { name }),
         ),
       task: async (id) => Task._from(await invoke('neo.task', { id })),
-      tabs: async () => (await invoke('neo.tabs', {})).pages,
+      // A page this run closed is gone, as in Playwright's context.pages().
+      tabs: async () =>
+        (await invoke('neo.tabs', {})).pages.filter((page) => !page.isClosed()),
       // Every CAPTCHA verdict, unsolved included, remains a value to branch on.
       solveCaptcha: (page) => invoke('neo.solveCaptcha', { page }),
     })

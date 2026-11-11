@@ -76,6 +76,9 @@ struct FakeState {
     held_replies: Vec<oneshot::Sender<()>>,
     /// Target events waiting for [`FakeCdp::release_events`]; `None` while events flow.
     held_events: Option<Vec<CdpEvent>>,
+    /// Closed tabs `Browser.getTabs` still lists; `None` unless
+    /// [`FakeCdp::linger_closed_tabs`] was called.
+    lingering: Option<Vec<FakeTab>>,
 }
 
 #[derive(Clone, Debug)]
@@ -108,6 +111,7 @@ impl FakeCdp {
                 hold_next: HashSet::new(),
                 held_replies: Vec::new(),
                 held_events: None,
+                lingering: None,
             }),
             events: broadcast::channel(EVENT_BACKLOG).0,
             targeted: TargetedEvents::default(),
@@ -290,6 +294,12 @@ impl FakeCdp {
         self.lock().held_events.get_or_insert_with(Vec::new);
     }
 
+    /// From now on a closed tab stays in `Browser.getTabs` for good: Chromium acknowledges a
+    /// close before the tab leaves its listing, and this holds that moment still.
+    pub fn linger_closed_tabs(&self) {
+        self.lock().lingering.get_or_insert_with(Vec::new);
+    }
+
     /// Sends every held target event, in the order the browser made them, and stops holding.
     pub fn release_events(&self) {
         let held = self.lock().held_events.take().unwrap_or_default();
@@ -435,9 +445,12 @@ impl FakeState {
     fn answer(&mut self, method: &str, params: &Value, session: Option<&SessionId>) -> Reply {
         match method {
             "Browser.getTabs" => {
-                let tabs: Vec<Value> = (0..self.tabs.len())
+                let mut tabs: Vec<Value> = (0..self.tabs.len())
                     .filter_map(|index| self.tab_json(index))
                     .collect();
+                for entry in self.lingering.iter().flatten() {
+                    tabs.push(entry_json(entry, tabs.len()));
+                }
                 Reply::Now(Ok(json!({ "tabs": tabs })), Vec::new())
             }
             "Browser.getTabInfo" => {
@@ -501,6 +514,9 @@ impl FakeState {
         let Some(closed) = self.remove_tab(tab) else {
             return Reply::Now(Err(no_tab()), Vec::new());
         };
+        if let Some(lingering) = &mut self.lingering {
+            lingering.push(closed.clone());
+        }
         let events = self.destroyed_events(&closed.target);
         Reply::Now(Ok(json!({})), events)
     }
@@ -549,20 +565,7 @@ impl FakeState {
 
     /// A tab as Chromium's `Browser.TabInfo` describes it.
     fn tab_json(&self, index: usize) -> Option<Value> {
-        let entry = self.tabs.get(index)?;
-        Some(json!({
-            "tabId": entry.tab,
-            "targetId": entry.target,
-            "url": entry.url,
-            "title": entry.title,
-            "isActive": false,
-            "isLoading": false,
-            "loadProgress": 1.0,
-            "isPinned": false,
-            "isHidden": false,
-            "windowId": WINDOW_ID,
-            "index": index,
-        }))
+        Some(entry_json(self.tabs.get(index)?, index))
     }
 
     /// `Target.targetCreated` for the tab's current page target, in Chromium's shape with the
@@ -668,4 +671,21 @@ impl CdpConnection for FakeCdp {
     fn connection_epoch(&self) -> u64 {
         self.lock().epoch
     }
+}
+
+/// A tab as Chromium's `Browser.TabInfo` describes it, at `index` in the window.
+fn entry_json(entry: &FakeTab, index: usize) -> Value {
+    json!({
+        "tabId": entry.tab,
+        "targetId": entry.target,
+        "url": entry.url,
+        "title": entry.title,
+        "isActive": false,
+        "isLoading": false,
+        "loadProgress": 1.0,
+        "isPinned": false,
+        "isHidden": false,
+        "windowId": WINDOW_ID,
+        "index": index,
+    })
 }
