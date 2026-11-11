@@ -1,4 +1,4 @@
-//! `page.pdf()`, after the host allows the capture. The paper formats and the unit conversion
+//! `page.pdf()`. The paper formats and the unit conversion
 //! follow Playwright's `server/chromium/crPdf.ts` at v1.64.1 (Apache-2.0, Copyright Microsoft
 //! Corporation), so a size means what it means upstream.
 
@@ -167,14 +167,13 @@ struct PrintReply {
     data: String,
 }
 
-/// Prints the page as `input` asks, once the host allows it.
+/// Prints the page as `input` asks.
 pub(crate) async fn print(
     pw: &Playwright,
     scope: &OpScope<'_>,
     input: PdfInput,
 ) -> Result<Value, PlaywrightError> {
-    // An op that does not declare `Capture` is refused before its page is admitted;
-    // `capture_allowed` checks again, with the host, right before the print.
+    // Check the op's declared capability before admitting its page.
     scope.require(Capability::Capture)?;
     let params = input
         .params()
@@ -184,7 +183,6 @@ pub(crate) async fn print(
     let session = pw
         .browser()
         .protocol_session(admitted.session.session_id.clone());
-    pw.capture_allowed(scope, page)?;
     let reply: PrintReply = session
         .send_value("Page.printToPDF", params)
         .await
@@ -277,9 +275,8 @@ mod tests {
         Ok(())
     }
 
-    /// A host applies its pixel rules only to the ops that declare `Capture`, so the print path
-    /// prints for no other op: `page.pdf` gets its document, and an op that does not declare
-    /// `Capture` is refused before anything is printed.
+    /// The print path only serves ops that declare `Capture`; undeclared calls fail before
+    /// the page is admitted.
     #[tokio::test]
     async fn tests_that_only_an_op_declaring_capture_is_printed() -> Result<(), Box<dyn Error>> {
         let connection = TestConnection::new([]);

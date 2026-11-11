@@ -3,7 +3,7 @@
 use std::fmt;
 use std::sync::Arc;
 
-use browseros_core::{BrowserSession, TabId};
+use browseros_core::BrowserSession;
 use serde_json::Value;
 
 use crate::action::action_op;
@@ -13,7 +13,6 @@ use crate::input::input_op;
 use crate::op::{Op, OpKind};
 use crate::op_input::OpInput;
 use crate::op_scope::OpScope;
-use crate::op_spec::Capability;
 use crate::page::{PageRegistry, context_op, page_op};
 use crate::read::read_op;
 use crate::snapshot::snapshot_op;
@@ -109,23 +108,6 @@ impl Playwright {
     /// The host's privacy callbacks.
     pub(crate) fn hooks(&self) -> &dyn PlaywrightHooks {
         self.hooks.as_ref()
-    }
-
-    /// The gateway of `Capability::Capture`: the one check every capture runs right before it
-    /// reads `page`'s pixels. It first refuses an op whose spec does not declare `Capture`,
-    /// because a host applies its pixel rules only to the ops that declare it; claw-sdk's rule
-    /// withholds pixels taken while the tab went private, which this one check cannot see.
-    /// Then it asks the host whether the page may be captured now, since a page can turn
-    /// private while the op waits.
-    pub(crate) fn capture_allowed(
-        &self,
-        scope: &OpScope<'_>,
-        page: TabId,
-    ) -> Result<(), PlaywrightError> {
-        scope.require(Capability::Capture)?;
-        self.hooks
-            .capture_allowed(page)
-            .map_err(PlaywrightError::from)
     }
 
     /// This instance's epoch.
