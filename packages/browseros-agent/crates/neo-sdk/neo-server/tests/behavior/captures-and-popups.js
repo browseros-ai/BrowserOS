@@ -1,4 +1,4 @@
-// Format and popup contracts belong to Neo's behavior suite. Pixel compatibility is checked
+// Capture format and popup contracts belong to Neo's behavior suite. Pixel compatibility is checked
 // independently by the common screenshot programs, against the native BrowserOS oracle.
 await page.goto(`${origin}/child.html`)
 const png = await page.screenshot()

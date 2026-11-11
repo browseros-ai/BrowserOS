@@ -51,7 +51,7 @@ impl PageState {
         }
     }
 
-    /// The tab's sealed worlds.
+    /// The tab's isolated worlds.
     pub(crate) fn frames(&self) -> &FrameWorlds {
         &self.frames
     }

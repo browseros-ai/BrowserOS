@@ -51,12 +51,11 @@ A client can send its own ids in `_meta["com.browseros.neo/run"]` as `{ requestI
 
 The viewer opens in view mode. You see Neo's screen, and your keys and clicks go nowhere.
 
-To type into Neo, pick **Control** or open `http://127.0.0.1:16090/?mode=control`. Your first key, click or paste makes every open tab private. A private tab gets no screenshots, and view displays pause while one is in front of the screen. A tab stays private until it closes. To get the view back, close those tabs, for example with `./dev.sh run --task <task> -f devkit/examples/close-page.js`.
+To type into Neo, pick **Control** or open `http://127.0.0.1:16090/?mode=control`. View displays and screenshots keep working while you type. Use a takeover when the agent must stop acting on the tab until you release it.
 
 
 The status line says why a display ended:
 
-- `4409 display_paused` means the owner has control or a private tab is in front. The viewer retries every 2 seconds.
 - `4002 released` means the display's takeover was released.
 - `4502` means the gateway cannot reach claw-sdk. Check that the container is up.
 
@@ -127,22 +126,15 @@ run 01a1ad11-0d93-7030-96ae-f432286a6a94 ok effects=done 130ms tabs=[1276815223]
 
 `clear-field.js` and `set-checked.js` show `locator.clear()` and `locator.setChecked()`. The SDK runs them as `fill('')` and as `check()` or `uncheck()`, so the trace shows `locator.fill` and `locator.check`.
 
-### Upload a file, and see Neo's own secrets refused
+### Upload a file or a payload
 
-`upload-file.js` uploads `/etc/os-release` from the container into a file input, and the page shows the file's name and first line. Then it tries the host token that `compose.sdk-dev.yaml` mounts at `/run/neo-dev/host-token`.
+`upload-file.js` uploads `/etc/os-release` from the container, then an in-memory text file. The page shows each file's name and first line.
 
 ```sh
 ./dev.sh run --task howto-upload -f devkit/examples/upload-file.js
 ```
 
-```text
-{"shownAfterRefusal":"os-release: PRETTY_NAME=\"Ubuntu 24.04.5 LTS\"","token":{"code":"neo_secret_upload_refused","delivery":"not_sent","message":"locator.setInputFiles: Neo does not upload its own secret files","owner":"script"},"uploaded":"os-release: PRETTY_NAME=\"Ubuntu 24.04.5 LTS\""}
-run 01a1b043-47ac-7d72-8d4a-827de686e762 ok effects=done 321ms tabs=[1276815462]
-```
-
-In the trace UI the run has two `locator.setInputFiles` operations: the upload, delivered `done`, and the token's, `not_sent`.
-
-`setInputFiles` uploads any file Neo's process can read, as Playwright does, and `{ name, mimeType, buffer }` payloads too. Neo's own secret files are refused as `script / neo_secret_upload_refused`, delivery `not_sent`, and the message names no path. Those are the host token, the CAPTCHA keys, the trace store (`trace.db` and its WAL), the whole browser profile, and any path into `/dev` or `/proc`. A symlink, hard link or `..` path to one is refused too, and so is a directory that holds one. The script catches the refusal, so the run still ends `ok`, and the input keeps the file it had.
+The result contains `uploaded` (starting with `os-release: `) and `payload: "note.txt: hello from Neo"`. Both `locator.setInputFiles` operations are delivered `done` in the trace. Paths use the files Neo's process can read; there is no SDK path deny list.
 
 ### See a host lock refuse a write
 
@@ -173,7 +165,7 @@ run 01a1acf4-f13e-7333-8a6b-157c1468dbfc ok effects=done 57ms tabs=[1276814799]
 
 ### Take over a tab, then give it back
 
-A takeover makes the tab private, locks the agent out of it, and gives the owner a control display bound to the takeover. The quickest way is the viewer's **Takeover** panel: enter the tab id, pick **Start takeover**, type into the page, then pick **Release**. From the shell:
+A takeover locks the agent out of the tab and gives the owner a control display bound to the takeover. The quickest way is the viewer's **Takeover** panel: enter the tab id, pick **Start takeover**, type into the page, then pick **Release**. From the shell:
 
 ```sh
 ./dev.sh host POST /v1/takeovers '{"tabId":1276814799}'
@@ -181,7 +173,7 @@ open 'http://127.0.0.1:16090/?mode=control&release=<takeover id>'
 ./dev.sh run --task howto "return await page.title()"           # refused: host/owner_has_control
 ./dev.sh host POST /v1/takeovers/<takeover id>/release
 ./dev.sh run --task howto "return await page.title()"           # "Example Domain"
-./dev.sh run --task howto -f devkit/examples/close-page.js       # the tab stays private until it closes
+./dev.sh run --task howto -f devkit/examples/close-page.js       # close the example tab
 ```
 
 The takeover answers with the display to open:
@@ -210,24 +202,25 @@ To copy everything to disk, run `./dev.sh export`. It writes `~/.local/state/neo
 
 To call the host API yourself, use `./dev.sh host <METHOD> <path> [json]`, for example `./dev.sh host GET '/v1/runs?taskId=demo'`. It adds the bearer token, which never appears on the command line.
 
+Main-world evaluation (`page.evaluate` and element forms), `page.waitForFunction`, `page.setContent` and `file:`/`javascript:` navigation are supported. The evaluate and file URL probes check successful results.
+
 ## What does not work yet
 
-These are the gaps a tester hits first, on `feat/claw-sdk` at `1297d8062`, which includes the actions, `expect` and `setInputFiles`. `devkit/examples/check.sh` re-checks every row, and most rows have a `probe-*.js` script you can run yourself. The requirements behind them are in the claw-sdk gap analysis (`claw-sdk/requirements/gap-analysis.md`, rows 5 to 9).
+These are the supported probes and remaining gaps exercised by the kit. `devkit/examples/check.sh` re-checks every row, and most rows have a `probe-*.js` script you can run yourself. The requirements behind them are in the claw-sdk gap analysis (`claw-sdk/requirements/gap-analysis.md`, rows 5 to 9).
 
 | Call | What you get today | Why |
 |---|---|---|
-| `page.evaluate`, `page.waitForFunction`, `locator.evaluate`, `locator.evaluateAll`, `page.setContent` | `script / method_unavailable`, delivery `not_sent` | Held: they run script in the page's main world, and the privacy fix that lets them back is not merged. Read through locators, `page.content()` or `page.title()` instead. |
-| `locator.setInputFiles` on one of Neo's own secret files | `script / neo_secret_upload_refused`, delivery `not_sent`, and the message names no path | By design: every other path uploads, as Playwright does. Refused are the host token, the CAPTCHA keys, the trace store (`trace.db` and its WAL), the browser profile, and any path into `/dev` or `/proc`, also through a link or a directory. See the upload example above. |
 | `page.bringToFront` | `script / script_error: page.bringToFront: Neo keeps agent tabs in the background; act on the page directly` | Refused on purpose, so the owner's screen never jumps. A person brings a tab forward with the viewer's **Follow** or a takeover. |
 | Network: `page.waitForResponse`, `page.waitForRequest`, `page.on('request')`, `page.route` | `script / script_error: page.waitForResponse: Neo does not report network events; wait for what the page shows instead` (`route`: "network interception is not available in Neo") | Not built. The `Response` that `page.goto` returns works: `status()`, `ok()` and `url()`. |
 | A tab parameter on `run` | `run` takes only `{ code, timeout }`, and refuses any other field | A run picks its tab through `_meta["com.browseros.neo/run"].taskId`: a task's runs share its last tab. Without a `taskId`, a run drives the last tab any script touched. |
-| `page.goto('file:///…')` | `script / invalid_input`: Neo opens only http, https, data and about URLs | By design: a file in the container could show Neo's own secrets. |
 
 `page.waitForTimeout` works, although the gap analysis lists it as missing from the op table. It is a timer in the SDK, not a browser operation: `waitForTimeout(1500)` returned after 1502 ms. It shows in the run's time, not as an operation in the trace.
 
-`locator.clear` and `locator.setChecked` work too, although the gap analysis lists them as missing. The SDK runs them as `fill('')` and `check()` or `uncheck()`. `locator.screenshot` is an operation now. On a private tab it is refused as `host / page_private`, as `page.screenshot` is.
+`locator.clear` and `locator.setChecked` work too, although the gap analysis lists them as missing. The SDK runs them as `fill('')` and `check()` or `uncheck()`. `locator.screenshot` is an operation now. Screenshots keep working during owner input; Playwright's explicit `mask` option is supported.
 
 The held calls report `script / method_unavailable`. The ones the SDK refuses itself report `script / script_error` with no delivery, because nothing reached the browser.
+
+Use `./dev.sh host GET /v1/tabs` for every open tab's `tabId`, DevTools `targetId`, URL, title and touching `taskIds`. Trace rows are historical. `Operation.hasScreenshot` reports a stored image; missing or legacy withheld images return `404 not_found`, and retention returns `410 expired`.
 
 ## Gaps in Neo's trace
 
@@ -235,21 +228,18 @@ The trace UI needs a few things the host API does not record. Each row says what
 
 | Missing | Kit meanwhile | Field and place |
 |---|---|---|
-| The script's console output | Shows the CLI reply, which carries it | `Run.console`: the masked, bounded lines, on `Run` |
+| The script's console output | Shows the CLI reply, which carries it | `Run.console`: the bounded lines, on `Run` |
 | The code while a run is running (`Run.code` is stored when the run ends) | Shows the CLI log's `code` | `Run.code` from the start, on `Run` and `RunSummary` |
 | An event when a run is complete and its screenshots are taken (every `run.ended` arrives with `complete: false`) | Re-reads `GET /v1/runs/<id>?wait=10` after `run.ended` | A `run.completed` value of `Event.type` |
-| Whether an operation's missing screenshot was withheld (private tab) or never taken | Asks `/v1/operations/<id>/screenshot` for every operation with a tab: 410 means withheld, 404 means none | `Operation.screenshotWithheld` (`private` or `expired`); today only `TraceTail.visuals` says it |
 | Which lock or takeover refused an operation | Shows the error message, which names the lock | `OperationError.lockId` and `OperationError.takeoverId` |
 | The page Neo opens itself for a script's first call | Shows it as one of the script's own calls | `Operation.parentId` set to the call that needed the page |
 | Which operations the script called, and which the SDK made for it (`page.frames` is about a quarter of all operations) | Shows them all alike | `Operation.origin` (`agent`, `prelude` or `door`) |
 | Which line of the script made an operation | Nothing: a position appears only inside a script error's text, such as `(run:1:253)` | `Operation.callsite` (`{line, column}` into `Run.code`) |
-| Which tabs are open | The viewer's recent tabs come from `/v1/trace`, so closed tabs still show | `GET /v1/tabs` with each tab's id, URL, title and privacy, next to `/v1/tabs/{tabId}/private` |
 | That a repeated `requestId` got the first run's stored reply | The CLI log keeps the code it sent, which can differ from what ran; prefer `Run.code` | `replayed: true` in the reply's `_meta["com.browseros.neo/run"]` |
 
 ## When something goes wrong
 
 - **claw-sdk restarts in a loop with `setting the mode of <path>/host.sock`.** A folder that Docker Desktop shares from macOS cannot hold a Unix socket. The image's default socket, `/run/neo/host.sock`, is off the data folder, so this happens only when `CLAW_HOST_SOCKET` points into a shared folder. `compose.sdk-dev.yaml` keeps it in the container's `/tmp`.
-- **The viewer says `4409 display_paused` and keeps retrying.** A private tab is in front. Close the tabs that went private, or wait for the takeover to end.
 - **A run drives the wrong tab.** It had no `--task`. Pass one.
 - **A port is taken.** Set `NEO_GATEWAY_PORT` (16090), `NEO_HOST_PORT` (19300) or `NEO_MCP_PORT` (19010) before `up`.
 - **The gateway did not come up.** `up` prints the end of `~/.local/state/neo-dev/gateway.log`. The usual cause is that `npx` could not fetch Bun.

@@ -49,7 +49,7 @@ three are optional, and the two ids are at most 128 bytes each:
 - `taskId` is your label for the calls of one task. It replaces the session for grouping. You
   list a task's runs, trace and events by it, and the agent's `page` starts on the task's last
   tab. An unknown `taskId` is fine, and it never expires.
-- `hostData` is stored with the run, masked, and Neo never reads it.
+- `hostData` is stored with the run, bounded for storage, and Neo never reads it.
 
 ## Call by call
 
@@ -141,7 +141,7 @@ codes they do not know.
 Operation arguments no longer replace fields with `[redacted]` based on method metadata or a
 password, card or one-time-code target. Typing into these fields no longer withholds the run's
 code as `sensitive_input`. Arguments and code still wait for their end record before storage,
-with the existing secret-set masks and size bounds. `Run.codeWithheld: unavailable` still marks
+with the existing size bounds. `Run.codeWithheld: unavailable` still marks
 code that was never stored, for example after a restart.
 
 Existing trace rows remain readable: `[redacted]` arguments stay as recorded, and an older

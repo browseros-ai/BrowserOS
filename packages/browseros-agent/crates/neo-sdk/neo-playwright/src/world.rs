@@ -1,10 +1,10 @@
-//! Sealed worlds: one `browseros-engine` isolated world per frame document, each holding
+//! Isolated worlds: one `browseros-engine` isolated world per frame document, each holding
 //! Playwright's `InjectedScript` and Neo's probe, apart from the page's main world.
 //!
 //! ```text
 //!  first use of (session, frame) in a page ── FrameWorlds::world        single-flight cell
 //!     ├─ SessionSetup::ensure(session)       once per session: Runtime.enable (OOPIF only)
-//!     └─ SealedWorld::install                Page.createIsolatedWorld, then the handle to its
+//!     └─ IsolatedWorld::install                Page.createIsolatedWorld, then the handle to its
 //!          │                                 global by the new world's uniqueId (its
 //!          │                                 executionContextCreated, watched from before the
 //!          │                                 create), or by number for a world that existed
@@ -18,10 +18,10 @@
 //! Invariants, and what enforces each:
 //! - **The engine never runs in a page world.** The page's own scripts share the main world
 //!   with it, so the engine lives only in its isolated world.
-//! - **The handle is the sealed world's, never a page world's.** A numeric context id can name
+//! - **The handle is the isolated world's, never a page world's.** A numeric context id can name
 //!   a page's world in another renderer, so the install takes the handle by the new world's
 //!   `uniqueId`, or by number only across a window in which the session reported nothing about
-//!   that number (`SealedWorld::install`). Every later call goes by the handle.
+//!   that number (`IsolatedWorld::install`). Every later call goes by the handle.
 //! - **One engine per world.** The install's guard on `__neoProbe` makes it idempotent, and the
 //!   single-flight cell makes concurrent first uses share one install.
 //! - **A seq names one document forever.** Every new document gets a new seq and none is
@@ -40,7 +40,7 @@ mod engine_source;
 mod frame_attach_log;
 mod frame_seq;
 mod frame_worlds;
-mod sealed_world;
+mod isolated_world;
 mod session_setup;
 
 pub(crate) use frame_attach_log::{FrameAttachLog, FrameEvent};
@@ -48,7 +48,7 @@ pub(crate) use frame_seq::{BackendNodeId, ContextId, Epoch, FrameSeq, Pin};
 pub(crate) use frame_worlds::{
     Endpoint, FrameWorlds, Installer, LinkedParent, ParentLink, Place, SeqLookup,
 };
-pub(crate) use sealed_world::{ContextWatch, Installed, SealedWorld};
+pub(crate) use isolated_world::{ContextWatch, Installed, IsolatedWorld};
 pub(crate) use session_setup::{SessionKind, SessionSetup};
 
 #[cfg(test)]

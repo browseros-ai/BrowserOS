@@ -8,7 +8,6 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use std::{
     collections::HashMap,
-    convert::Infallible,
     sync::{
         Arc, Mutex as StdMutex, OnceLock,
         atomic::{AtomicU64, Ordering},
@@ -188,8 +187,7 @@ impl ScreenshotCapture {
         if let Some(access) = &self.access {
             access.fresh().await?;
         }
-        let Ok(data) =
-            capture_without_pointer(&self.session, params, || Ok::<(), Infallible>(())).await?;
+        let data = capture_without_pointer(&self.session, params).await?;
         if let Some(access) = &self.access {
             access.fresh().await?;
         }
@@ -202,86 +200,59 @@ impl ScreenshotCapture {
     }
 }
 
+/// Serializes overlays and pointer hiding with every other capture on this session, so a
+/// concurrent screenshot cannot observe another capture's temporary rendering state.
 pub async fn capture_screenshot_with_annotations(
     page_session: ProtocolSession,
     observer: Arc<Observer>,
     options: ScreenshotCaptureOptions,
 ) -> Result<ScreenshotCaptureResult, CoreError> {
-    let Ok(capture) =
-        capture_screenshot_checked(page_session, observer, options, || Ok::<(), Infallible>(()))
-            .await?;
-    Ok(capture)
-}
-
-/// [`capture_screenshot_with_annotations`] with the caller's last word on the capture.
-/// `before_capture` runs inside the session's capture lock, after the overlay is drawn and the
-/// agent pointer hidden, with no await between it and `Page.captureScreenshot`, so a page that
-/// turned private while those steps waited is still seen. A refusal sends no capture and comes
-/// back as `Ok(Err(refusal))`; the pointer and the overlay are restored either way.
-pub(crate) async fn capture_screenshot_checked<E>(
-    page_session: ProtocolSession,
-    observer: Arc<Observer>,
-    options: ScreenshotCaptureOptions,
-    before_capture: impl FnOnce() -> Result<(), E>,
-) -> Result<Result<ScreenshotCaptureResult, E>, CoreError> {
     let annotate = options.annotate.unwrap_or(false);
     run_exclusive_screenshot_capture(&page_session, || async {
         if annotate {
-            capture_annotated_screenshot(page_session.clone(), observer, options, before_capture)
-                .await
+            capture_annotated_screenshot(page_session.clone(), observer, options).await
         } else {
-            capture_plain_screenshot(&page_session, &options, before_capture).await
+            capture_plain_screenshot(&page_session, &options).await
         }
     })
     .await
 }
 
-async fn capture_plain_screenshot<E>(
+async fn capture_plain_screenshot(
     page_session: &ProtocolSession,
     options: &ScreenshotCaptureOptions,
-    before_capture: impl FnOnce() -> Result<(), E>,
-) -> Result<Result<ScreenshotCaptureResult, E>, CoreError> {
+) -> Result<ScreenshotCaptureResult, CoreError> {
     let format = options.format.unwrap_or(ScreenshotFormat::Png);
     let full_page = options.full_page.unwrap_or(false);
     let params = screenshot_params(format, options.quality, full_page, options.clip);
-    let captured = capture_without_pointer(page_session, params, before_capture).await?;
-    Ok(captured.map(|data| ScreenshotCaptureResult {
-        data,
+    let captured = capture_without_pointer(page_session, params).await?;
+    Ok(ScreenshotCaptureResult {
+        data: captured,
         mime_type: format!("image/{}", format.as_str()),
         annotations: Vec::new(),
-    }))
+    })
 }
 
-/// Hides the agent pointer, asks `before_capture`, and captures only if it agrees; the pointer
-/// comes back whatever happened. The check stays the last step before the capture: an await
-/// placed between them would let the page change after its verdict.
-async fn capture_without_pointer<E>(
+/// Hides the agent pointer for one capture and restores it even when CDP fails.
+async fn capture_without_pointer(
     page_session: &ProtocolSession,
     params: Value,
-    before_capture: impl FnOnce() -> Result<(), E>,
-) -> Result<Result<String, E>, CoreError> {
+) -> Result<String, CoreError> {
     let hidden = pointer::hide_for_capture(page_session).await;
-    let captured = match before_capture() {
-        Ok(()) => Ok(page_session
-            .send::<_, CaptureScreenshotResult>("Page.captureScreenshot", params)
-            .await),
-        Err(refused) => Err(refused),
-    };
+    let captured = page_session
+        .send::<_, CaptureScreenshotResult>("Page.captureScreenshot", params)
+        .await;
     if hidden {
         pointer::restore_after_capture(page_session).await;
     }
-    match captured {
-        Ok(sent) => sent.map(|shot| Ok(shot.data)),
-        Err(refused) => Ok(Err(refused)),
-    }
+    captured.map(|shot| shot.data)
 }
 
-async fn capture_annotated_screenshot<E>(
+async fn capture_annotated_screenshot(
     page_session: ProtocolSession,
     observer: Arc<Observer>,
     options: ScreenshotCaptureOptions,
-    before_capture: impl FnOnce() -> Result<(), E>,
-) -> Result<Result<ScreenshotCaptureResult, E>, CoreError> {
+) -> Result<ScreenshotCaptureResult, CoreError> {
     let format = options.format.unwrap_or(ScreenshotFormat::Png);
     let full_page = options.full_page.unwrap_or(false);
     let token = create_overlay_token();
@@ -327,12 +298,12 @@ async fn capture_annotated_screenshot<E>(
             overlay_injected = true;
         }
         let params = screenshot_params(format, options.quality, full_page, options.clip);
-        let captured = capture_without_pointer(&page_session, params, before_capture).await?;
-        Ok(captured.map(|data| ScreenshotCaptureResult {
-            data,
+        let captured = capture_without_pointer(&page_session, params).await?;
+        Ok(ScreenshotCaptureResult {
+            data: captured,
             mime_type: format!("image/{}", format.as_str()),
             annotations: project_annotations(&annotations, scroll, Some(image_scale)),
-        }))
+        })
     }
     .await;
 
@@ -708,16 +679,9 @@ mod tests {
         testing::{TestCall, TestConnection},
     };
     use serde_json::json;
-    use std::convert::Infallible;
 
-    /// A plain capture with nothing to refuse it.
     async fn capture(session: &ProtocolSession) -> Result<ScreenshotCaptureResult, CoreError> {
-        let Ok(capture) =
-            capture_plain_screenshot(session, &ScreenshotCaptureOptions::default(), || {
-                Ok::<(), Infallible>(())
-            })
-            .await?;
-        Ok(capture)
+        capture_plain_screenshot(session, &ScreenshotCaptureOptions::default()).await
     }
 
     fn is_pointer_call(call: &TestCall, js: &str) -> bool {
@@ -766,47 +730,6 @@ mod tests {
         assert_eq!(calls.len(), 2);
         assert_eq!(calls[0].method, "Runtime.evaluate");
         assert_eq!(calls[1].method, "Page.captureScreenshot");
-        Ok(())
-    }
-
-    /// The caller's check sees the page as the capture would, after the pointer is hidden. A
-    /// refusal then sends no capture, and the pointer still comes back.
-    #[tokio::test]
-    async fn tests_that_a_check_refusing_after_the_pointer_hide_sends_no_capture()
-    -> Result<(), Box<dyn std::error::Error>> {
-        let connection = TestConnection::new([
-            ("Runtime.evaluate", json!({ "result": { "value": true } })),
-            ("Runtime.evaluate", json!({ "result": { "value": true } })),
-            ("Page.captureScreenshot", json!({ "data": "cG5n" })),
-        ]);
-        let session = ProtocolSession::root(connection.clone());
-        let mut hidden_at_check = false;
-        let refused =
-            capture_plain_screenshot(&session, &ScreenshotCaptureOptions::default(), || {
-                hidden_at_check = connection
-                    .calls()
-                    .is_ok_and(|calls| calls.iter().any(|call| is_pointer_call(call, "p.hide()")));
-                Err("page_private")
-            })
-            .await?;
-        assert!(
-            hidden_at_check,
-            "the check runs after the pointer is hidden"
-        );
-        assert_eq!(refused, Err("page_private"));
-        let calls = connection.calls()?;
-        assert!(
-            calls
-                .iter()
-                .all(|call| call.method != "Page.captureScreenshot"),
-            "a refused capture is never sent: {calls:?}"
-        );
-        assert!(
-            calls
-                .last()
-                .is_some_and(|call| is_pointer_call(call, "p.show()")),
-            "the pointer comes back after a refusal"
-        );
         Ok(())
     }
 }

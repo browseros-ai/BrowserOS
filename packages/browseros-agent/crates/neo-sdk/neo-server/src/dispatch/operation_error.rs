@@ -121,7 +121,7 @@ impl OperationError {
         self.timed_out
     }
 
-    /// The error as the trace stores it. The writer masks and bounds the message.
+    /// The error as the trace stores it. The writer bounds the message.
     pub(super) fn record(&self, retryable: bool, operation: Option<OperationId>) -> ErrorRecord {
         ErrorRecord {
             owner: self.owner,

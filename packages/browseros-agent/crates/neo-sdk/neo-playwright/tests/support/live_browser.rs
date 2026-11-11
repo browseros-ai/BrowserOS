@@ -134,7 +134,7 @@ impl LiveBrowser {
         Err(format!("{url} did not load within 5 s").into())
     }
 
-    /// Evaluates `expression` in the page's own main world, which the seal leaves alone.
+    /// Evaluates `expression` in the page's own main world.
     pub(crate) async fn main_world(&self, page: &TestPage, expression: &str) -> TestResult<Value> {
         let session = self.browser.pages.get_session(page.id.clone()).await?;
         let result: Value = session

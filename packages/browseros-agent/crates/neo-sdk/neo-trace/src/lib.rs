@@ -39,7 +39,6 @@ mod blob_id;
 mod epoch_millis;
 mod error_record;
 mod ids;
-mod json_pointer;
 mod operation_record;
 mod read_model;
 mod redactor;
@@ -59,7 +58,6 @@ pub use blob_id::{BlobId, NotABlobId};
 pub use epoch_millis::EpochMillis;
 pub use error_record::{ErrorOwner, ErrorRecord};
 pub use ids::{IdError, OperationId, RequestId, RunId, TaskId};
-pub use json_pointer::{JsonPointer, PointerError};
 pub use operation_record::{
     Delivery, Effect, OperationEnded, OperationKind, OperationReached, OperationStarted, Outcome,
     PageState,

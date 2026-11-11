@@ -282,7 +282,7 @@ impl FileTransfers {
     }
 
     /// Sets `files` on a file input the caller found itself, such as neo-playwright's
-    /// `setInputFiles` on an element of its sealed world. A backend node id resolves only on
+    /// `setInputFiles` on an element of its isolated world. A backend node id resolves only on
     /// the session of the target that holds the node, so `session` must be the endpoint the
     /// node was resolved in: the page's root session or a frame's session from
     /// [`crate::frames::FrameRegistry`]. Core admits `page` and trusts the caller that

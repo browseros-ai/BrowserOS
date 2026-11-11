@@ -1,5 +1,5 @@
 //! The built page asset against a real browser: evaluated in an isolated world named like the
-//! sealed world (`browseros-engine`), it defines `__neoProbe` there and not in the page's own
+//! isolated world (`browseros-engine`), it defines `__neoProbe` there and not in the page's own
 //! world, and the probe protocol's call answers `uninstalled` until `boot` runs, then
 //! `described`. The install the crate runs (boot, re-key, requests) is covered by its own live
 //! tests in `src/world/live_tests.rs`.

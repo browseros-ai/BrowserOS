@@ -943,7 +943,7 @@ async fn tests_that_wait_for_times_out_with_upstreams_call_log() -> TestResult {
 /// Upstream's `should survive cross-process navigation` (page-wait-for-selector-2.spec.ts:23):
 /// a wait goes on polling while its page navigates within its site and then from site to site,
 /// and finds the element in the last process's document. A poll that lands mid-navigation, its
-/// frame gone under the site sweep it starts with, lands nowhere, as its read would. The page
+/// frame gone before selector resolution, is retried in the current document. The page
 /// changes process four times so that some poll lands mid-way (one change failed 2 of 3 runs
 /// before the fix).
 #[tokio::test]

@@ -980,7 +980,7 @@ export class Frame extends EventEmitter {
     )
   }
 
-  /** The reads that wait for one element, then return what the sealed world read. */
+  /** The reads that wait for one element, then return what the isolated world read. */
   async _read<
     Op extends
       | 'locator.textContent'
@@ -1487,7 +1487,7 @@ const HELD_VALUE =
 /**
  * What `waitForFunction` resolves to: upstream's JSHandle for the truthy value
  * (`JSHandle.from`, PW:62147), as a snapshot. Neo keeps no page object past an op, so the
- * handle holds the value Rust read when the wait ended, masked, in Playwright's format, and
+ * handle holds the value Rust read when the wait ended, in Playwright's format, and
  * upstream's preview of it. `jsonValue()` reads that value afresh on every call, as upstream's
  * does, and `toString()` is the preview. What needs the page's own object is refused.
  */

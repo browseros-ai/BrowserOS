@@ -1,4 +1,4 @@
-//! An element handle's node, found again in its own document's sealed world.
+//! An element handle's node, found again in its own document's isolated world.
 
 use browseros_cdp::CdpError;
 use browseros_core::CoreError;
@@ -10,7 +10,7 @@ use crate::page::OpPage;
 use crate::probe::{self, ProbeFailure, ProbeReply, ProbeRequest, ProbeTarget, QueryState, Read};
 use crate::resolve::{self, FramePath};
 use crate::target::{ElementTarget, Strictness};
-use crate::world::{SealedWorld, SeqLookup};
+use crate::world::{IsolatedWorld, SeqLookup};
 use crate::{ErrorCode, PlaywrightError};
 
 /// Where an element handle's node is, for one op: its document's world, that frame's parents
@@ -24,7 +24,7 @@ use crate::{ErrorCode, PlaywrightError};
 pub(crate) struct HandleSite<'a> {
     page: &'a OpPage<'a>,
     scope: &'a OpScope<'a>,
-    world: SealedWorld,
+    world: IsolatedWorld,
     path: FramePath,
     /// The node's remote object, in this world.
     node: String,
@@ -124,7 +124,7 @@ impl<'a> HandleSite<'a> {
     }
 
     /// The node's document's world.
-    pub(crate) fn world(&self) -> &SealedWorld {
+    pub(crate) fn world(&self) -> &IsolatedWorld {
         &self.world
     }
 

@@ -1,5 +1,5 @@
 //! The snapshot ops: `page.ariaSnapshot` and `locator.ariaSnapshot`, every frame read by its
-//! own probe in its own sealed world, as upstream's server reads them
+//! own probe in its own isolated world, as upstream's server reads them
 //! (`ariaSnapshotJSONForFrame`, server/page.ts at v1.64.1).
 //!
 //! ```text

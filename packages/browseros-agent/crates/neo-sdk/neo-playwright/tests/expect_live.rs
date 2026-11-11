@@ -431,7 +431,7 @@ const MATCHERS: &[Case] = &[
         "toHaveJSProperty",
         "expect(page.locator('#name')).toHaveJSProperty('value', 'Ada')",
         "unsupported",
-        "expect.toHaveJSProperty: toHaveJSProperty is not supported: Neo matches in a sealed \
+        "expect.toHaveJSProperty: toHaveJSProperty is not supported: Neo matches in an isolated \
          world that does not see the page's own JavaScript objects; use expect.poll(() => \
          locator.evaluate((element) => element.name)).toEqual(value) instead",
     ),

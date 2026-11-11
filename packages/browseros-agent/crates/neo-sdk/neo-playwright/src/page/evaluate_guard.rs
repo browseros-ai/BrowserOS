@@ -26,7 +26,7 @@
 //!
 //! The script runs on the main-world document node, never on an execution context id: context
 //! ids are per-renderer counters, and after a cross-process navigation a cached one can name a
-//! context of another world (measured, see `probe_call`). The sealed world names its document by
+//! context of another world (measured, see `probe_call`). The isolated world names its document by
 //! handle, and `DOM.resolveNode` without a context id resolves that node in its main world. The
 //! elements a script receives reach that world the same way, by backend node id, so they are
 //! objects of the document's own context, which a call on the document takes as arguments.
@@ -54,7 +54,7 @@ use crate::page::world_call::{self, with_world};
 use crate::probe::{NAVIGATED_OR_CLOSED, ProbeFailure, Ran};
 use crate::resolve::{self, HandleSite};
 use crate::target::{ElementTarget, PageRef};
-use crate::world::{BackendNodeId, Endpoint, FrameSeq, Place, SealedWorld, SeqLookup};
+use crate::world::{BackendNodeId, Endpoint, FrameSeq, IsolatedWorld, Place, SeqLookup};
 use crate::{ErrorCode, Playwright, PlaywrightError};
 
 mod document_write;
@@ -85,8 +85,8 @@ const SETTLED: &str = "function () { return this.last; }";
 const BINDING_CALLER: &str =
     "(...args) => globalThis[kBindingsControllerProperty].callBinding(name, ...args)";
 
-/// Names the document from the sealed world, by handle, so `DOM.describeNode` can name its node.
-const SEALED_DOCUMENT: &str = "function () { return document; }";
+/// Names the document from the isolated world, by handle, so `DOM.describeNode` can name its node.
+const ISOLATED_DOCUMENT: &str = "function () { return document; }";
 
 /// upstream's message for a handle argument from another document (`kUnableToAdoptErrorMessage`).
 pub(crate) const UNABLE_TO_ADOPT: &str = "Unable to adopt element handle from a different document";
@@ -630,24 +630,23 @@ struct Resolved {
 /// The main-world document of `world`'s frame, by handle in the op's object group.
 pub(super) async fn main_world_document(
     scope: &OpScope<'_>,
-    world: SealedWorld,
+    world: IsolatedWorld,
 ) -> Result<String, ProbeFailure> {
     let session = world.session();
     let group = scope.object_group(session).to_owned();
     let named: Named = session
         .send(
             "Runtime.callFunctionOn",
-            json!({ "objectId": world.global(), "functionDeclaration": SEALED_DOCUMENT,
+            json!({ "objectId": world.global(), "functionDeclaration": ISOLATED_DOCUMENT,
                     "objectGroup": group }),
         )
         .await
         .map_err(ProbeFailure::from_core)?;
-    let sealed = named
-        .result
-        .object_id
-        .ok_or_else(|| ProbeFailure::Broken("the sealed world returned no document".to_owned()))?;
+    let isolated = named.result.object_id.ok_or_else(|| {
+        ProbeFailure::Broken("the isolated world returned no document".to_owned())
+    })?;
     let described: Described = session
-        .send("DOM.describeNode", json!({ "objectId": sealed }))
+        .send("DOM.describeNode", json!({ "objectId": isolated }))
         .await
         .map_err(ProbeFailure::from_core)?;
     // No `executionContextId`: the node resolves in its own document's main world.
@@ -1035,7 +1034,7 @@ async fn place(
             Placed {
                 frame,
                 follow,
-                document: world.as_ref().map(SealedWorld::seq),
+                document: world.as_ref().map(IsolatedWorld::seq),
                 subject: Bound::Frame,
             }
         }
@@ -1253,7 +1252,7 @@ mod tests;
 /// A final browser round trip orders asynchronously reported inline CSP errors before success.
 pub(super) async fn insert_tag(
     scope: &OpScope<'_>,
-    world: &SealedWorld,
+    world: &IsolatedWorld,
     document: &str,
     params: Value,
     _sent: &Sent<'_>,

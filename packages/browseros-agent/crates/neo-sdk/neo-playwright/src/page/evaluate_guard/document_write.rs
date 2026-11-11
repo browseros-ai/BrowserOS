@@ -1,5 +1,5 @@
 //! `setContent`'s document write on the main-world gateway. The probe writes the HTML into the
-//! frame from the sealed world, but the HTML's scripts and handlers run in the main world from
+//! frame from the isolated world, but the HTML's scripts and handlers run in the main world from
 //! the write on, so the write goes through the same declaration check and host recheck as a
 //! script does.
 //!
@@ -22,7 +22,7 @@ use crate::page::document_watch::DocumentWatch;
 use crate::page::{LoadState, OpPage, navigation, world_call};
 use crate::probe::{self, ProbeFailure, ProbeReply, ProbeRequest, Ran};
 use crate::target::PageRef;
-use crate::world::SealedWorld;
+use crate::world::IsolatedWorld;
 use crate::{ErrorCode, Playwright, PlaywrightError, resolve};
 
 /// A frame whose document `setContent` replaces, found once its op's `MainWorld` declaration was
@@ -151,7 +151,7 @@ async fn bounded<T>(
 /// The probe's `setContent`, which replaces the frame's document, sent with the user gesture
 /// upstream's utility-world write carries.
 async fn write_document(
-    world: &SealedWorld,
+    world: &IsolatedWorld,
     html: &str,
     _sent: &Sent<'_>,
 ) -> Result<ProbeReply, ProbeFailure> {
