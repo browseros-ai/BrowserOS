@@ -73,9 +73,14 @@ opens popups as tabs, but suppresses CDP console events that vanilla Playwright'
 - Curation, `_setupArtifacts`, `_browserOptions`, `toImplInWorkerScope` and
   `startRemoteServer` retain v2's seams and explicit internals refusals.
 
+The Node host registers its native `Buffer` parameter and byte-result reviver through the
+bootstrap's provider/brand hooks. Screenshot bytes therefore have Node Buffer identity for
+upstream image libraries and assertions. The production bundle stays byte-identical; its
+QuickJS Buffer implementation has separate run-realm tests.
+
 Fidelity costs: Node/V8 replaces QuickJS; one SDK run and profile span a worker;
-`context.pages()` includes the launch tab; trace screenshots have no host camera;
-v1's Buffer is not Node's Buffer. These are harness differences, not SDK features.
+`context.pages()` includes the launch tab; trace screenshots have no host camera.
+These are harness differences, not SDK features.
 
 ## Tests and reports
 

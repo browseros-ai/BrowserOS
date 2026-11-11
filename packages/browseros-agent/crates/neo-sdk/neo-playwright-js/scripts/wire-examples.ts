@@ -58,6 +58,8 @@ const ANSWERS: Record<string, unknown> = {
   'page.frames': FRAMES,
   'page.opener': { opener: null },
   'page.evaluate': { value: null },
+  'page.addScriptTag': { element: ELEMENT },
+  'page.addStyleTag': { element: ELEMENT },
   'page.waitForFunction': { value: true, preview: 'true' },
   'context.newPage': {
     page: { $neo: 'page', tab: 1008 },
@@ -100,6 +102,7 @@ const EVERY_OP = `
   await pay.goto('https://pay.example/'); await pay.waitForLoadState('domcontentloaded'); await pay.locator('#card').count()
   await page.waitForNavigation(); await pay.waitForNavigation({ url: '**/pay' });
   await page.waitForURL('**/a'); await page.waitForLoadState(); await page.title(); await page.content()
+  await page.addScriptTag({ content: 'window.injected = true' }); await pay.addStyleTag({ content: 'body { color: red }' });
   await page.setContent('<p>hi</p>'); await page.opener(); await page.evaluate(() => 1)
   await l.evaluate((e) => e.id); await l.evaluateAll((es) => es.length); await page.waitForFunction(() => true)
   await l.waitForFunction((e) => e.id)

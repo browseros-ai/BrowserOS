@@ -2040,6 +2040,33 @@
         }
       }
     ],
+    "page.addScriptTag": [
+      {
+        "call": {
+          "api": "page.addScriptTag",
+          "timeoutMs": 0
+        },
+        "page": {
+          "$neo": "page",
+          "tab": 1007
+        },
+        "content": "window.injected = true"
+      }
+    ],
+    "page.addStyleTag": [
+      {
+        "call": {
+          "api": "frame.addStyleTag",
+          "timeoutMs": 0
+        },
+        "page": {
+          "$neo": "page",
+          "tab": 1007
+        },
+        "frame": "F1",
+        "content": "body { color: red }"
+      }
+    ],
     "page.ariaSnapshot": [
       {
         "call": {

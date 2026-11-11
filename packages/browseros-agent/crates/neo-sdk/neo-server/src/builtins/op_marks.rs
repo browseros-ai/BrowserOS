@@ -305,6 +305,8 @@ mod tests {
         let expected = vec![
             served("locator.setInputFiles", &[HostFiles]),
             served("page.setContent", &[MainWorld]),
+            served("page.addScriptTag", &[MainWorld, HostFiles]),
+            served("page.addStyleTag", &[MainWorld, HostFiles]),
             served("page.evaluate", &[MainWorld]),
             served("locator.evaluate", &[MainWorld]),
             served("locator.evaluateAll", &[MainWorld]),
@@ -491,6 +493,18 @@ mod tests {
             op: "context.addInitScript",
             file: "init_scripts_browseros.rs",
             test: "init_scripts_run_in_every_new_document_until_the_run_ends",
+            proves: Proves::Served,
+        },
+        BrowserosCase {
+            op: "page.addScriptTag",
+            file: "main_world_browseros.rs",
+            test: "tags_behave_as_playwright_on_browseros",
+            proves: Proves::Served,
+        },
+        BrowserosCase {
+            op: "page.addStyleTag",
+            file: "main_world_browseros.rs",
+            test: "tags_behave_as_playwright_on_browseros",
             proves: Proves::Served,
         },
         BrowserosCase {

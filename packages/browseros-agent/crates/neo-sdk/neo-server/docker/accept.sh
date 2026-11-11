@@ -27,6 +27,9 @@
 #                    browser's file, `saveAs()` copies it, the run's record lists it, the host
 #                    reads the same bytes at /v1/runs/{id}/downloads/0, and a second run uploads
 #                    that path with `setInputFiles`; after the restart, still served (persist)
+#   blobs            a 1.5 MB+ full-page PNG and a PDF returned from `run` come back as
+#                    {"$neo":"blob"} markers and read back whole at /v1/runs/{id}/blobs/{id};
+#                    small bytes stay inline; 300 KiB of text is still result_too_large
 #   mcp-remote       9011 is the same MCP over TLS; with NEO_MCP_REMOTE=false (the default) a
 #                    sibling container is cut off on 9010 and 9011; with true it is answered
 #   restart-browser  neo-quit 9110 quits cleanly, the supervisor restarts Neo, a new run passes
@@ -203,7 +206,7 @@ detail="$image_arch, browser $(fact browser), server $(fact marker) $(fact sha |
 if [ ${#problems[@]} -eq 0 ]; then result PASS identity "$detail"; else result FAIL identity "${problems[*]}"; fi
 
 if [ "$image_arch" != "$engine_arch" ]; then
-  for check in boot mcp host-api downloads mcp-remote restart-browser stop persist kill-all captcha-keys; do
+  for check in boot mcp host-api downloads blobs mcp-remote restart-browser stop persist kill-all captcha-keys; do
     result SKIP "$check" "$image_arch image on a $engine_arch engine: emulated, not evidence"
   done
   printf '\n'; printf '%s\n' "${results[@]}"
@@ -277,6 +280,17 @@ if [ "$booted" = 1 ]; then
     result FAIL downloads "$(jget "$downloaded" '"; ".join(d["problems"])' || printf '%s' "${downloaded:0:300}")"
   fi
 
+  # --- blobs ---------------------------------------------------------------------------------
+  # zuzu's full-page screenshot and PDF, too large for a reply, read back on the host socket.
+  blobbed=$(client "$main" "${as_host[@]}" python3 accept_client.py blobs \
+    http://127.0.0.1:9010/mcp /run/neo/host.sock /run/neo-accept/host-token 2>&1)
+  blob_run=$(jget "$blobbed" 'd["run"]') blob_id=$(jget "$blobbed" 'd["blob"]')
+  if [ "$(jget "$blobbed" 'd["ok"]')" = True ]; then
+    result PASS blobs "$(jget "$blobbed" 'd["detail"]')"
+  else
+    result FAIL blobs "$(jget "$blobbed" '"; ".join(d["problems"])' || printf '%s' "${blobbed:0:300}")"
+  fi
+
   # --- mcp-remote, loopback-only half ----------------------------------------------------------
   tls=$(docker exec "$main" curl -sk -o /dev/null -w '%{http_code}' https://127.0.0.1:9011/system/ready)
   main_ip=$(docker inspect -f "{{(index .NetworkSettings.Networks \"$network\").IPAddress}}" "$main")
@@ -318,11 +332,12 @@ if [ "$booted" = 1 ]; then
     replay=$(run_call "$second" "$task" "$request" 2>&1)
     count=$(runs_for "$second" "$request")
     kept=$(jget "$(host_get "$second" "/v1/runs/${download_run:-none}/downloads/0")" 'd["status"]')
+    kept_blob=$(jget "$(host_get "$second" "/v1/runs/${blob_run:-none}/blobs/${blob_id:-b0}")" 'd["status"]')
     if [ "$(jget "$record" 'd["status"]')" = 200 ] && [ "$(jget "$replay" 'd["meta"]["id"]')" = "$run_id_first" ] && [ "$count" = 1 ] \
-        && [ "$kept" = 200 ]; then
-      result PASS persist "new container on the same /data: run readable, $request replayed as $run_id_first, 1 run, its download still served"
+        && [ "$kept" = 200 ] && [ "$kept_blob" = 200 ]; then
+      result PASS persist "new container on the same /data: run readable, $request replayed as $run_id_first, 1 run, its download and blob still served"
     else
-      result FAIL persist "record=${record:0:120}; replay=${replay:0:160}; runs=$count; download=$kept"
+      result FAIL persist "record=${record:0:120}; replay=${replay:0:160}; runs=$count; download=$kept; blob=$kept_blob"
     fi
   else
     result FAIL persist "second container not healthy: $(docker logs "$second" 2>&1 | tail -3 | tr '\n' ' ')"
@@ -402,7 +417,7 @@ for pid in pids:
     result FAIL captcha-keys "image's own keys listed=$main_captcha (want $want_main); host key file listed=${keyed_captcha:-not booted}"
   fi
 else
-  for check in mcp host-api downloads mcp-remote restart-browser stop persist kill-all captcha-keys; do
+  for check in mcp host-api downloads blobs mcp-remote restart-browser stop persist kill-all captcha-keys; do
     result FAIL "$check" "not run: the image did not boot"
   done
 fi

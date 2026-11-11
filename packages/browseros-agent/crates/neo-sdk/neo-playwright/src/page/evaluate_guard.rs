@@ -553,7 +553,7 @@ struct Resolved {
 }
 
 /// The main-world document of `world`'s frame, by handle in the op's object group.
-async fn main_world_document(
+pub(super) async fn main_world_document(
     scope: &OpScope<'_>,
     world: SealedWorld,
 ) -> Result<String, ProbeFailure> {
@@ -1172,3 +1172,49 @@ pub(crate) fn present<'de, D: Deserializer<'de>>(
 
 #[cfg(test)]
 mod tests;
+
+/// Runs tag insertion against a document handle resolved in its own frame's main world.
+/// The operation owns every temporary object, and the host recheck's `Sent` gates the write.
+/// A final browser round trip orders asynchronously reported inline CSP errors before success.
+pub(super) async fn insert_tag(
+    scope: &OpScope<'_>,
+    world: &SealedWorld,
+    document: &str,
+    params: Value,
+    _sent: &Sent<'_>,
+) -> Result<String, PlaywrightError> {
+    let session = world.session();
+    let reply: Reply = session
+        .send(
+            "Runtime.callFunctionOn",
+            json!({
+                "objectId": document,
+                "functionDeclaration": include_str!("add_tag.js"),
+                "arguments": [{ "value": params }],
+                "awaitPromise": true,
+                "userGesture": true,
+                // A tag can remove itself while its script executes. Keep the returned node
+                // alive until the run ends so its ElementHandle survives browser GC.
+                "objectGroup": scope.run_state().objects.on(session),
+            }),
+        )
+        .await
+        .map_err(|error| scope.core_error(&error))?;
+    session
+        .send_value(
+            "Runtime.callFunctionOn",
+            json!({
+                "objectId": document, "functionDeclaration": "function () { return true; }",
+                "returnByValue": true,
+            }),
+        )
+        .await
+        .map_err(|error| scope.core_error(&error))?;
+    if let Some(thrown) = reply.thrown() {
+        return Err(scope.fail(ErrorCode::PageError, &thrown));
+    }
+    reply
+        .result
+        .object_id
+        .ok_or_else(|| scope.fail(ErrorCode::Internal, "The inserted tag returned no element"))
+}

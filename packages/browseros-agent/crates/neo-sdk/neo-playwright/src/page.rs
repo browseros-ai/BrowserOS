@@ -26,6 +26,7 @@
 //!                    document of a tab runs, registered for the run and removed when it ends
 //! ```
 
+mod add_tag;
 pub(crate) mod context_op;
 mod document_op;
 mod document_watch;

@@ -11,6 +11,8 @@
 //!      ▼
 //!  Bridge::submit, at the call ─▶ Dispatcher::submit ─▶ op task on the run's JoinSet
 //!      ─▶ Bridge::answer, once the realm yields: the envelope, over a oneshot
+//!  settled value ─ over MAX_RESULT_BYTES ─▶ fit_result: its largest bytes become blobs, which
+//!                                           the run service keeps with the run (ScriptEnd)
 //! ```
 //!
 //! Three rules keep QuickJS safe inside a multi-threaded server:
@@ -26,6 +28,7 @@
 //!   for a script awaiting a promise that never settles.
 
 mod bridge;
+mod fit_result;
 mod install_web_globals;
 mod run_logs;
 mod run_script;

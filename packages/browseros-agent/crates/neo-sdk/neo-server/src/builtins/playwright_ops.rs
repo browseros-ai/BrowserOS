@@ -75,6 +75,7 @@ const PLAYWRIGHT_API: &str = "Playwright's API on `page`, `context` and `browser
     `locator.waitForFunction`, `elementHandle.evaluate`, \
     and `$eval` and `$$eval` on a page, frame or element handle; a `frame` form runs in its \
     frame, a child frame too) with Playwright's values, arguments, element handles and errors, \
+    `page.addScriptTag` and `page.addStyleTag` (also on frames), returning element handles, \
     `page.setContent` and `frame.setContent`, whose HTML's scripts run there too, init scripts \
     (`page.addInitScript`, `context.addInitScript`) that every new document runs in its main \
     world, `screenshot` and `pdf`, events (`page.on`, `waitForEvent`), downloads \
@@ -84,7 +85,9 @@ const PLAYWRIGHT_API: &str = "Playwright's API on `page`, `context` and `browser
     `toHaveValue`, `toHaveCount`, `toHaveAttribute`, ...) and page matchers (`toHaveTitle`, \
     `toHaveURL`), with `.not`, value matchers (`toBe`, `toEqual`, ...), `expect.poll` and \
     `toPass`; soft assertions, `toBeOK` and screenshot, snapshot and `toMatchAriaSnapshot` \
-    comparisons are not available. A call that waits gives up after 5 s unless given a `timeout`, \
+    comparisons are not available. In hosted BrowserOS, console and pageerror listeners are \
+    accepted but stay silent; `page.waitForEvent` for either fails immediately with \
+    `neo/unsupported`. A call that waits gives up after 5 s unless given a `timeout`, \
     and a navigation after 30 s. Unlike Playwright, `waitForFunction` \
     polls every 100 ms for its default `polling: 'raf'`, since animation frames never fire in \
     Neo's background tabs, and the handle it resolves to holds a snapshot of the value, which \
@@ -211,7 +214,7 @@ impl Method for PlaywrightOp {
         let pages = self.pages.of_call(&input);
         let input = input.resolved(page);
         let playwright = self.facade.get().await;
-        let env = OpCtxEnv::new(op);
+        let env = OpCtxEnv::new(op, self.facade.hosted_mode());
         let result = op
             .race_classified(playwright.invoke(&env, self.op, input))
             .await?;
@@ -524,21 +527,27 @@ impl OpenedPage {
 /// of their own.
 pub(super) struct OpCtxEnv<'a, M> {
     op: &'a OpCtx<M>,
+    hosted: bool,
     /// The run's one `RunState`, shared by all of its ops and dropped when the run ends.
     run_state: Arc<RunState>,
 }
 
 impl<'a, M> OpCtxEnv<'a, M> {
     /// The env for the op that `op` runs.
-    pub(super) fn new(op: &'a OpCtx<M>) -> Self {
+    pub(super) fn new(op: &'a OpCtx<M>, hosted: bool) -> Self {
         Self {
             op,
+            hosted,
             run_state: op.run().slot::<RunState>(),
         }
     }
 }
 
 impl<M> OpEnv for OpCtxEnv<'_, M> {
+    fn hosted_mode(&self) -> bool {
+        self.hosted
+    }
+
     fn view(&self) -> &BrowserView {
         self.op.run().view()
     }
@@ -718,6 +727,14 @@ mod tests {
 
     fn brand(input: &Value) -> Result<PageTarget, serde_json::Error> {
         serde_json::from_value(input.clone())
+    }
+
+    #[test]
+    fn the_run_description_explains_hosted_console_and_pageerror_limits() {
+        let description = PLAYWRIGHT_LINE.as_str();
+        assert!(description.contains("In hosted BrowserOS, console and pageerror listeners"));
+        assert!(description.contains("accepted but stay silent"));
+        assert!(description.contains("fails immediately with `neo/unsupported`"));
     }
 
     #[test]

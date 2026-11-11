@@ -163,6 +163,42 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '404':
           $ref: '#/components/responses/NotFound'
+  /v1/runs/{runId}/blobs/{blobId}:
+    get:
+      operationId: getRunBlob
+      summary: The bytes a run's reply names as a blob.
+      description: >-
+        A run whose returned value would be over the 256 KiB inline limit keeps its largest byte
+        values (a `Buffer` or `Uint8Array`, which travel as `{"$neo":"bytes","base64"}`) with the
+        run, largest first until the value fits, and the reply carries
+        `{"$neo":"blob","id":"b0","size":N}` in each one's place. This reads one. It is there
+        once the reply has been sent, for as long as the run's record is kept, and goes when
+        retention removes the run. Text is never kept this way: a value that does not fit once
+        every byte value moved fails `script / result_too_large`.
+      parameters:
+        - name: runId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: blobId
+          in: path
+          required: true
+          description: The marker's `id`, such as `b0`.
+          schema:
+            type: string
+      responses:
+        '200':
+          description: The blob's bytes, `size` of them.
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
   /v1/operations/{operationId}:
     get:
       operationId: getOperation
@@ -1030,7 +1066,10 @@ components:
           description: Neo stopped before the run ended, so its code was never stored.
           x-extensible-enum: [unavailable]
         result:
-          description: The script's return value, bounded for storage.
+          description: >-
+            The script's return value, bounded for storage. A byte value the reply could not carry
+            inline is `{"$neo":"blob","id","size"}` here too; read it at
+            `GET /v1/runs/{runId}/blobs/{blobId}`.
         resultTruncated:
           type: boolean
         unknown:

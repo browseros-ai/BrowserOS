@@ -303,6 +303,16 @@ export const OPS = {
     target: 'page',
     lifetime: 'operation',
   },
+  'page.addScriptTag': {
+    effect: 'write',
+    target: 'page',
+    lifetime: 'operation',
+  },
+  'page.addStyleTag': {
+    effect: 'write',
+    target: 'page',
+    lifetime: 'operation',
+  },
   'page.close': {
     effect: 'write',
     target: 'page',

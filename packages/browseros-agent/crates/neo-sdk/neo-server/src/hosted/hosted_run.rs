@@ -209,6 +209,7 @@ impl HostedRun {
         let end = ScriptEnd {
             outcome: ScriptOutcome::Returned(Value::Null),
             logs: bridge.take_logs(),
+            blobs: Vec::new(),
         };
         let reply = RunReply::build(&context, end);
         guard.finish(reply.trace_end(None));

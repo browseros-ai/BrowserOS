@@ -50,7 +50,7 @@ pub struct Run {
     /// Neo stopped before the run ended, so its code was never stored.
     #[serde(rename = "codeWithheld", skip_serializing_if = "Option::is_none")]
     pub code_withheld: Option<String>,
-    /// The script's return value, bounded for storage.
+    /// The script's return value, bounded for storage. A byte value the reply could not carry inline is `{\"$neo\":\"blob\",\"id\",\"size\"}` here too; read it at `GET /v1/runs/{runId}/blobs/{blobId}`.
     #[serde(
         rename = "result",
         default,
