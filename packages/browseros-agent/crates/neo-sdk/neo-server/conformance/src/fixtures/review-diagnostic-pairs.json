@@ -1,0 +1,794 @@
+[
+  {
+    "id": "tests/page/page-wait-for-selector-2.spec.ts › should throw for visibility option",
+    "expected": "pass",
+    "native": {
+      "assertions": {
+        "called": 1,
+        "passed": 1,
+        "failed": 0
+      },
+      "diagnostics": [
+        {
+          "line": 179,
+          "column": 2,
+          "matcher": "toContain",
+          "kind": "message",
+          "rejects": false,
+          "matched": true,
+          "error": {
+            "name": "Error",
+            "message": "options.visibility is not supported, did you mean options.state?"
+          }
+        }
+      ]
+    },
+    "neo": {
+      "assertions": {
+        "called": 1,
+        "failed": 0,
+        "passed": 1
+      },
+      "diagnostics": [
+        {
+          "column": 2,
+          "error": {
+            "code": "invalid_input",
+            "message": "page.waitForSelector: options.visibility is not supported, did you mean options.state?",
+            "name": "Error",
+            "owner": "script"
+          },
+          "kind": "message",
+          "line": 179,
+          "matched": true,
+          "matcher": "toContain",
+          "rejects": false
+        }
+      ]
+    }
+  },
+  {
+    "id": "tests/page/selectors-role.spec.ts › errors",
+    "expected": "pass",
+    "native": {
+      "assertions": {
+        "called": 9,
+        "passed": 9,
+        "failed": 0
+      },
+      "diagnostics": [
+        {
+          "line": 511,
+          "column": 2,
+          "matcher": "toContain",
+          "kind": "message",
+          "rejects": false,
+          "matched": true,
+          "error": {
+            "name": "Error",
+            "message": "page.$: Error: Role must not be empty\n    at Object.queryAll (<anonymous>:5530:15)\n    at InjectedScript._queryEngineAll (<anonymous>:7241:49)\n    at InjectedScript.querySelectorAll (<anonymous>:7228:30)\n    at eval (eval at evaluate (:370:30), <anonymous>:2:42)\n    at UtilityScript.evaluate (<anonymous>:372:16)\n    at UtilityScript.<anonymous> (<anonymous>:1:44)"
+          }
+        },
+        {
+          "line": 514,
+          "column": 2,
+          "matcher": "toContain",
+          "kind": "message",
+          "rejects": false,
+          "matched": true,
+          "error": {
+            "name": "Error",
+            "message": "page.$: Error: Unknown attribute \"sElected\", must be one of \"checked\", \"description\", \"disabled\", \"expanded\", \"include-hidden\", \"level\", \"name\", \"pressed\", \"selected\".\n    at validateAttributes (<anonymous>:5462:15)\n    at Object.queryAll (<anonymous>:5531:23)\n    at InjectedScript._queryEngineAll (<anonymous>:7241:49)\n    at InjectedScript.querySelectorAll (<anonymous>:7228:30)\n    at eval (eval at evaluate (:370:30), <anonymous>:2:42)\n    at UtilityScript.evaluate (<anonymous>:372:16)\n    at UtilityScript.<anonymous> (<anonymous>:1:44)"
+          }
+        },
+        {
+          "line": 517,
+          "column": 2,
+          "matcher": "toContain",
+          "kind": "message",
+          "rejects": false,
+          "matched": true,
+          "error": {
+            "name": "Error",
+            "message": "page.$: Error: Unknown attribute \"bar.qux\", must be one of \"checked\", \"description\", \"disabled\", \"expanded\", \"include-hidden\", \"level\", \"name\", \"pressed\", \"selected\".\n    at validateAttributes (<anonymous>:5462:15)\n    at Object.queryAll (<anonymous>:5531:23)\n    at InjectedScript._queryEngineAll (<anonymous>:7241:49)\n    at InjectedScript.querySelectorAll (<anonymous>:7228:30)\n    at eval (eval at evaluate (:370:30), <anonymous>:2:42)\n    at UtilityScript.evaluate (<anonymous>:372:16)\n    at UtilityScript.<anonymous> (<anonymous>:1:44)"
+          }
+        },
+        {
+          "line": 520,
+          "column": 2,
+          "matcher": "toContain",
+          "kind": "message",
+          "rejects": false,
+          "matched": true,
+          "error": {
+            "name": "Error",
+            "message": "page.$: Error: \"level\" attribute must be compared to a number\n    at validateAttributes (<anonymous>:5425:17)\n    at Object.queryAll (<anonymous>:5531:23)\n    at InjectedScript._queryEngineAll (<anonymous>:7241:49)\n    at InjectedScript.querySelectorAll (<anonymous>:7228:30)\n    at eval (eval at evaluate (:370:30), <anonymous>:2:42)\n    at UtilityScript.evaluate (<anonymous>:372:16)\n    at UtilityScript.<anonymous> (<anonymous>:1:44)"
+          }
+        },
+        {
+          "line": 523,
+          "column": 2,
+          "matcher": "toContain",
+          "kind": "message",
+          "rejects": false,
+          "matched": true,
+          "error": {
+            "name": "Error",
+            "message": "page.$: Error: \"checked\" must be one of true, false, \"mixed\"\n    at validateSupportedValues (<anonymous>:5382:11)\n    at validateAttributes (<anonymous>:5394:9)\n    at Object.queryAll (<anonymous>:5531:23)\n    at InjectedScript._queryEngineAll (<anonymous>:7241:49)\n    at InjectedScript.querySelectorAll (<anonymous>:7228:30)\n    at eval (eval at evaluate (:370:30), <anonymous>:2:42)\n    at UtilityScript.evaluate (<anonymous>:372:16)\n    at UtilityScript.<anonymous> (<anonymous>:1:44)"
+          }
+        },
+        {
+          "line": 526,
+          "column": 2,
+          "matcher": "toContain",
+          "kind": "message",
+          "rejects": false,
+          "matched": true,
+          "error": {
+            "name": "Error",
+            "message": "page.$: InvalidSelectorError: Error while parsing selector `checkbox[checked~=true]` - cannot use ~= in attribute with non-string matching value - true\n    at readAttribute (<anonymous>:2183:13)\n    at parseAttributeSelector (<anonymous>:2193:28)\n    at Object.queryAll (<anonymous>:5527:22)\n    at InjectedScript._queryEngineAll (<anonymous>:7241:49)\n    at InjectedScript.querySelectorAll (<anonymous>:7228:30)\n    at eval (eval at evaluate (:370:30), <anonymous>:2:42)\n    at UtilityScript.evaluate (<anonymous>:372:16)\n    at UtilityScript.<anonymous> (<anonymous>:1:44)"
+          }
+        },
+        {
+          "line": 529,
+          "column": 2,
+          "matcher": "toContain",
+          "kind": "message",
+          "rejects": false,
+          "matched": true,
+          "error": {
+            "name": "Error",
+            "message": "page.$: Error: \"level\" attribute is only supported for roles: \"heading\", \"listitem\", \"row\", \"treeitem\"\n    at validateSupportedRole (<anonymous>:5378:11)\n    at validateAttributes (<anonymous>:5421:9)\n    at Object.queryAll (<anonymous>:5531:23)\n    at InjectedScript._queryEngineAll (<anonymous>:7241:49)\n    at InjectedScript.querySelectorAll (<anonymous>:7228:30)\n    at eval (eval at evaluate (:370:30), <anonymous>:2:42)\n    at UtilityScript.evaluate (<anonymous>:372:16)\n    at UtilityScript.<anonymous> (<anonymous>:1:44)"
+          }
+        },
+        {
+          "line": 532,
+          "column": 2,
+          "matcher": "toContain",
+          "kind": "message",
+          "rejects": false,
+          "matched": true,
+          "error": {
+            "name": "Error",
+            "message": "page.$: Error: \"name\" attribute must have a value\n    at validateAttributes (<anonymous>:5437:17)\n    at Object.queryAll (<anonymous>:5531:23)\n    at InjectedScript._queryEngineAll (<anonymous>:7241:49)\n    at InjectedScript.querySelectorAll (<anonymous>:7228:30)\n    at eval (eval at evaluate (:370:30), <anonymous>:2:42)\n    at UtilityScript.evaluate (<anonymous>:372:16)\n    at UtilityScript.<anonymous> (<anonymous>:1:44)"
+          }
+        },
+        {
+          "line": 535,
+          "column": 2,
+          "matcher": "toContain",
+          "kind": "message",
+          "rejects": false,
+          "matched": true,
+          "error": {
+            "name": "Error",
+            "message": "page.$: Error: \"expanded\" must be one of true, false\n    at validateSupportedValues (<anonymous>:5382:11)\n    at validateAttributes (<anonymous>:5415:9)\n    at Object.queryAll (<anonymous>:5531:23)\n    at InjectedScript._queryEngineAll (<anonymous>:7241:49)\n    at InjectedScript.querySelectorAll (<anonymous>:7228:30)\n    at eval (eval at evaluate (:370:30), <anonymous>:2:42)\n    at UtilityScript.evaluate (<anonymous>:372:16)\n    at UtilityScript.<anonymous> (<anonymous>:1:44)"
+          }
+        }
+      ]
+    },
+    "neo": {
+      "assertions": {
+        "called": 9,
+        "failed": 0,
+        "passed": 9
+      },
+      "diagnostics": [
+        {
+          "column": 2,
+          "error": {
+            "code": "invalid_input",
+            "message": "page.$: Error: Role must not be empty",
+            "name": "Error",
+            "owner": "script"
+          },
+          "kind": "message",
+          "line": 511,
+          "matched": true,
+          "matcher": "toContain",
+          "rejects": false
+        },
+        {
+          "column": 2,
+          "error": {
+            "code": "invalid_input",
+            "message": "page.$: Error: Unknown attribute \"sElected\", must be one of \"checked\", \"description\", \"disabled\", \"expanded\", \"include-hidden\", \"level\", \"name\", \"pressed\", \"selected\".",
+            "name": "Error",
+            "owner": "script"
+          },
+          "kind": "message",
+          "line": 514,
+          "matched": true,
+          "matcher": "toContain",
+          "rejects": false
+        },
+        {
+          "column": 2,
+          "error": {
+            "code": "invalid_input",
+            "message": "page.$: Error: Unknown attribute \"bar.qux\", must be one of \"checked\", \"description\", \"disabled\", \"expanded\", \"include-hidden\", \"level\", \"name\", \"pressed\", \"selected\".",
+            "name": "Error",
+            "owner": "script"
+          },
+          "kind": "message",
+          "line": 517,
+          "matched": true,
+          "matcher": "toContain",
+          "rejects": false
+        },
+        {
+          "column": 2,
+          "error": {
+            "code": "invalid_input",
+            "message": "page.$: Error: \"level\" attribute must be compared to a number",
+            "name": "Error",
+            "owner": "script"
+          },
+          "kind": "message",
+          "line": 520,
+          "matched": true,
+          "matcher": "toContain",
+          "rejects": false
+        },
+        {
+          "column": 2,
+          "error": {
+            "code": "invalid_input",
+            "message": "page.$: Error: \"checked\" must be one of true, false, \"mixed\"",
+            "name": "Error",
+            "owner": "script"
+          },
+          "kind": "message",
+          "line": 523,
+          "matched": true,
+          "matcher": "toContain",
+          "rejects": false
+        },
+        {
+          "column": 2,
+          "error": {
+            "code": "invalid_input",
+            "message": "page.$: Error while parsing selector `checkbox[checked~=true]` - cannot use ~= in attribute with non-string matching value - true",
+            "name": "Error",
+            "owner": "script"
+          },
+          "kind": "message",
+          "line": 526,
+          "matched": true,
+          "matcher": "toContain",
+          "rejects": false
+        },
+        {
+          "column": 2,
+          "error": {
+            "code": "invalid_input",
+            "message": "page.$: Error: \"level\" attribute is only supported for roles: \"heading\", \"listitem\", \"row\", \"treeitem\"",
+            "name": "Error",
+            "owner": "script"
+          },
+          "kind": "message",
+          "line": 529,
+          "matched": true,
+          "matcher": "toContain",
+          "rejects": false
+        },
+        {
+          "column": 2,
+          "error": {
+            "code": "invalid_input",
+            "message": "page.$: Error: \"name\" attribute must have a value",
+            "name": "Error",
+            "owner": "script"
+          },
+          "kind": "message",
+          "line": 532,
+          "matched": true,
+          "matcher": "toContain",
+          "rejects": false
+        },
+        {
+          "column": 2,
+          "error": {
+            "code": "invalid_input",
+            "message": "page.$: Error: \"expanded\" must be one of true, false",
+            "name": "Error",
+            "owner": "script"
+          },
+          "kind": "message",
+          "line": 535,
+          "matched": true,
+          "matcher": "toContain",
+          "rejects": false
+        }
+      ]
+    }
+  },
+  {
+    "id": "tests/page/page-set-input-files.spec.ts › should throw an error if the file does not exist",
+    "expected": "pass",
+    "native": {
+      "assertions": {
+        "called": 2,
+        "passed": 2,
+        "failed": 0
+      },
+      "diagnostics": [
+        {
+          "line": 198,
+          "column": 2,
+          "matcher": "toContain",
+          "kind": "message",
+          "rejects": false,
+          "matched": true,
+          "error": {
+            "name": "Error",
+            "message": "ENOENT: no such file or directory, stat 'i actually do not exist.txt'",
+            "code": "ENOENT"
+          }
+        },
+        {
+          "line": 199,
+          "column": 2,
+          "matcher": "toContain",
+          "kind": "message",
+          "rejects": false,
+          "matched": true,
+          "error": {
+            "name": "Error",
+            "message": "ENOENT: no such file or directory, stat 'i actually do not exist.txt'",
+            "code": "ENOENT"
+          }
+        }
+      ]
+    },
+    "neo": {
+      "assertions": {
+        "called": 2,
+        "failed": 0,
+        "passed": 2
+      },
+      "diagnostics": [
+        {
+          "column": 2,
+          "error": {
+            "code": "invalid_input",
+            "message": "ENOENT: no such file or directory, stat 'i actually do not exist.txt'",
+            "name": "Error",
+            "owner": "script"
+          },
+          "kind": "message",
+          "line": 198,
+          "matched": true,
+          "matcher": "toContain",
+          "rejects": false
+        },
+        {
+          "column": 2,
+          "error": {
+            "code": "invalid_input",
+            "message": "ENOENT: no such file or directory, stat 'i actually do not exist.txt'",
+            "name": "Error",
+            "owner": "script"
+          },
+          "kind": "message",
+          "line": 199,
+          "matched": true,
+          "matcher": "toContain",
+          "rejects": false
+        }
+      ]
+    }
+  },
+  {
+    "id": "tests/page/page-click.spec.ts › should not wait with force",
+    "expected": "fail",
+    "native": {
+      "assertions": {
+        "called": 2,
+        "passed": 2,
+        "failed": 0
+      },
+      "diagnostics": [
+        {
+          "line": 200,
+          "column": 2,
+          "matcher": "toContain",
+          "kind": "message",
+          "rejects": false,
+          "matched": true,
+          "error": {
+            "name": "Error",
+            "message": "page.click: Element is not visible\nCall log:\n  - waiting for locator('button')\n    - locator resolved to <button>Click target</button>\n  - attempting click action\n    - scrolling into view if needed\n"
+          }
+        }
+      ]
+    },
+    "neo": {
+      "assertions": {
+        "called": 2,
+        "failed": 0,
+        "passed": 2
+      },
+      "diagnostics": [
+        {
+          "column": 2,
+          "error": {
+            "code": "not_actionable",
+            "message": "page.click: Element is not visible\nCall log:\n  - waiting for locator('button')\n  - attempting click action\n",
+            "name": "TimeoutError",
+            "owner": "website"
+          },
+          "kind": "message",
+          "line": 200,
+          "matched": true,
+          "matcher": "toContain",
+          "rejects": false
+        }
+      ]
+    }
+  },
+  {
+    "id": "tests/page/locator-query.spec.ts › should allow some, but not all nested frameLocators",
+    "expected": "fail",
+    "native": {
+      "assertions": {
+        "called": 7,
+        "passed": 5,
+        "failed": 2
+      },
+      "diagnostics": [
+        {
+          "line": 267,
+          "column": 2,
+          "matcher": "toContain",
+          "kind": "message",
+          "rejects": false,
+          "matched": true,
+          "error": {
+            "name": "Error",
+            "message": "expect(locator).toHaveText(expected) failed\n\nLocator: locator('iframe').contentFrame().locator('div').or(locator('#iframe').contentFrame().locator('span'))\nExpected: \"world\"\nError: Frame locators are not allowed inside composite locators, while querying \"locator('iframe').contentFrame().locator('div').or(locator('#iframe').contentFrame().locator('span'))\"\n\nCall log:\n  - Expect \"toHaveText\" locator('iframe').contentFrame().locator('div').or(locator('#iframe').contentFrame().locator('span')) with timeout 10000ms\n  - waiting for locator('iframe').contentFrame().locator('div').or(locator('#iframe').contentFrame().locator('span'))\n"
+          }
+        },
+        {
+          "line": 269,
+          "column": 2,
+          "matcher": "toContain",
+          "kind": "message",
+          "rejects": false,
+          "matched": true,
+          "error": {
+            "name": "Error",
+            "message": "expect(locator).toHaveText(expected) failed\n\nLocator: locator('iframe').contentFrame().locator('div').and(locator('#iframe').contentFrame().locator('span'))\nExpected: \"world\"\nError: Frame locators are not allowed inside composite locators, while querying \"locator('iframe').contentFrame().locator('div').and(locator('#iframe').contentFrame().locator('span'))\"\n\nCall log:\n  - Expect \"toHaveText\" locator('iframe').contentFrame().locator('div').and(locator('#iframe').contentFrame().locator('span')) with timeout 10000ms\n  - waiting for locator('iframe').contentFrame().locator('div').and(locator('#iframe').contentFrame().locator('span'))\n"
+          }
+        }
+      ]
+    },
+    "neo": {
+      "assertions": {
+        "called": 7,
+        "failed": 2,
+        "passed": 5
+      },
+      "diagnostics": [
+        {
+          "column": 2,
+          "error": {
+            "code": "no_match",
+            "message": "expect(locator).toHaveText(expected) failed\n\nLocator: locator('iframe').contentFrame().locator('div').or(locator('#iframe').contentFrame().locator('span'))\nExpected: \"world\"\nTimeout: 10000ms\nError: element(s) not found\n\nCall log:\n  - Expect \"toHaveText\" locator('iframe').contentFrame().locator('div').or(locator('#iframe').contentFrame().locator('span')) with timeout 10000ms\n  - waiting for locator('iframe').contentFrame().locator('div').or(locator('#iframe').contentFrame().locator('span'))\n",
+            "name": "Error",
+            "owner": "script"
+          },
+          "kind": "message",
+          "line": 267,
+          "matched": false,
+          "matcher": "toContain",
+          "rejects": false
+        },
+        {
+          "column": 2,
+          "error": {
+            "code": "no_match",
+            "message": "expect(locator).toHaveText(expected) failed\n\nLocator: locator('iframe').contentFrame().locator('div').and(locator('#iframe').contentFrame().locator('span'))\nExpected: \"world\"\nTimeout: 10000ms\nError: element(s) not found\n\nCall log:\n  - Expect \"toHaveText\" locator('iframe').contentFrame().locator('div').and(locator('#iframe').contentFrame().locator('span')) with timeout 10000ms\n  - waiting for locator('iframe').contentFrame().locator('div').and(locator('#iframe').contentFrame().locator('span'))\n",
+            "name": "Error",
+            "owner": "script"
+          },
+          "kind": "message",
+          "line": 269,
+          "matched": false,
+          "matcher": "toContain",
+          "rejects": false
+        }
+      ]
+    }
+  },
+  {
+    "id": "tests/page/locator-wait-for-function.spec.ts › should throw when predicate throws",
+    "expected": "unsupported",
+    "native": {
+      "assertions": {
+        "called": 1,
+        "passed": 1,
+        "failed": 0
+      },
+      "diagnostics": [
+        {
+          "line": 73,
+          "column": 2,
+          "matcher": "toContain",
+          "kind": "message",
+          "rejects": false,
+          "matched": true,
+          "error": {
+            "name": "Error",
+            "message": "locator.waitForFunction: Error: oh my\n    at eval (eval at <anonymous> (eval at eval (:7098:24)), <anonymous>:2:11)\n    at eval (eval at eval (:7098:24), <anonymous>:4:23)\n    at eval (eval at eval (:7098:24), <anonymous>:4:28)\n    at eval (eval at evaluate (:370:30), <anonymous>:15:22)\n    at UtilityScript.evaluate (<anonymous>:372:16)\n    at UtilityScript.<anonymous> (<anonymous>:1:44)\nCall log:\n  - waiting for locator('#target')\n"
+          }
+        }
+      ]
+    },
+    "neo": {
+      "assertions": {
+        "called": 1,
+        "failed": 0,
+        "passed": 1
+      },
+      "diagnostics": [
+        {
+          "column": 2,
+          "error": {
+            "code": "method_unavailable",
+            "message": "locator.waitForFunction: poll with expect(locator).toPass() or page.waitForFunction()",
+            "name": "Error",
+            "owner": "script"
+          },
+          "kind": "message",
+          "line": 73,
+          "matched": false,
+          "matcher": "toContain",
+          "rejects": false
+        }
+      ],
+      "refusals": [
+        {
+          "owner": "script",
+          "code": "method_unavailable",
+          "message": "locator.waitForFunction: poll with expect(locator).toPass() or page.waitForFunction()",
+          "retryable": true,
+          "operationId": "01a1c80e-554d-7233-b600-a1c08b97049f.4",
+          "api": "locator.waitForFunction"
+        }
+      ]
+    }
+  },
+  {
+    "id": "tests/page/locator-wait-for-function.spec.ts › should throw on strict mode violation",
+    "expected": "unsupported",
+    "native": {
+      "assertions": {
+        "called": 1,
+        "passed": 1,
+        "failed": 0
+      },
+      "diagnostics": [
+        {
+          "line": 79,
+          "column": 2,
+          "matcher": "toContain",
+          "kind": "message",
+          "rejects": false,
+          "matched": true,
+          "error": {
+            "name": "Error",
+            "message": "locator.waitForFunction: Error: strict mode violation: locator('div.x') resolved to 2 elements:\n    1) <div class=\"x\">1</div> aka getByText('1')\n    2) <div class=\"x\">2</div> aka getByText('2')\n\nCall log:\n  - waiting for locator('div.x')\n"
+          }
+        }
+      ]
+    },
+    "neo": {
+      "assertions": {
+        "called": 1,
+        "failed": 0,
+        "passed": 1
+      },
+      "diagnostics": [
+        {
+          "column": 2,
+          "error": {
+            "code": "method_unavailable",
+            "message": "locator.waitForFunction: poll with expect(locator).toPass() or page.waitForFunction()",
+            "name": "Error",
+            "owner": "script"
+          },
+          "kind": "message",
+          "line": 79,
+          "matched": false,
+          "matcher": "toContain",
+          "rejects": false
+        }
+      ],
+      "refusals": [
+        {
+          "owner": "script",
+          "code": "method_unavailable",
+          "message": "locator.waitForFunction: poll with expect(locator).toPass() or page.waitForFunction()",
+          "retryable": true,
+          "operationId": "01a1c807-8b97-78a3-9ab1-feb86b998407.4",
+          "api": "locator.waitForFunction"
+        }
+      ]
+    }
+  },
+  {
+    "id": "tests/page/page-wait-for-selector-1.spec.ts › elementHandle.waitForSelector should timeout",
+    "expected": "unsupported",
+    "native": {
+      "assertions": {
+        "called": 1,
+        "passed": 1,
+        "failed": 0
+      },
+      "diagnostics": [
+        {
+          "line": 72,
+          "column": 2,
+          "matcher": "toContain",
+          "kind": "message",
+          "rejects": false,
+          "matched": true,
+          "error": {
+            "name": "TimeoutError",
+            "message": "elementHandle.waitForSelector: Timeout 100ms exceeded.\nCall log:\n  - waiting for locator('span') to be visible\n"
+          }
+        }
+      ]
+    },
+    "neo": {
+      "assertions": {
+        "called": 1,
+        "failed": 0,
+        "passed": 1
+      },
+      "diagnostics": [
+        {
+          "column": 2,
+          "error": {
+            "code": "method_unavailable",
+            "message": "elementHandle.waitForSelector: element handles cannot root a selector in Neo; use locator.locator(selector) instead",
+            "name": "Error",
+            "owner": "script"
+          },
+          "kind": "message",
+          "line": 72,
+          "matched": false,
+          "matcher": "toContain",
+          "rejects": false
+        }
+      ],
+      "refusals": [
+        {
+          "owner": "script",
+          "code": "method_unavailable",
+          "message": "elementHandle.waitForSelector: element handles cannot root a selector in Neo; use locator.locator(selector) instead",
+          "retryable": true,
+          "operationId": "01a1c80c-304b-7f80-8f0c-91c9439e260d.5",
+          "api": "elementHandle.waitForSelector"
+        }
+      ]
+    }
+  },
+  {
+    "id": "tests/page/page-wait-for-selector-2.spec.ts › should fail if element handle was detached while waiting",
+    "expected": "unsupported",
+    "native": {
+      "assertions": {
+        "called": 1,
+        "passed": 1,
+        "failed": 0
+      },
+      "diagnostics": [
+        {
+          "line": 339,
+          "column": 2,
+          "matcher": "toContain",
+          "kind": "message",
+          "rejects": false,
+          "matched": true,
+          "error": {
+            "name": "Error",
+            "message": "elementHandle.waitForSelector: Element is not attached to the DOM\nCall log:\n  - waiting for locator('something') to be visible\n"
+          }
+        }
+      ]
+    },
+    "neo": {
+      "assertions": {
+        "called": 1,
+        "failed": 0,
+        "passed": 1
+      },
+      "diagnostics": [
+        {
+          "column": 2,
+          "error": {
+            "code": "method_unavailable",
+            "message": "elementHandle.waitForSelector: element handles cannot root a selector in Neo; use locator.locator(selector) instead",
+            "name": "Error",
+            "owner": "script"
+          },
+          "kind": "message",
+          "line": 339,
+          "matched": false,
+          "matcher": "toContain",
+          "rejects": false
+        }
+      ],
+      "refusals": [
+        {
+          "owner": "script",
+          "code": "method_unavailable",
+          "message": "elementHandle.waitForSelector: element handles cannot root a selector in Neo; use locator.locator(selector) instead",
+          "retryable": true,
+          "operationId": "01a1c80c-6c1c-7cc2-bbc7-bb62bc8849bd.5",
+          "api": "elementHandle.waitForSelector"
+        }
+      ]
+    }
+  },
+  {
+    "id": "tests/page/page-wait-for-selector-1.spec.ts › elementHandle.waitForSelector should throw on navigation",
+    "expected": "unsupported",
+    "native": {
+      "assertions": {
+        "called": 1,
+        "passed": 1,
+        "failed": 0
+      },
+      "diagnostics": [
+        {
+          "line": 84,
+          "column": 2,
+          "matcher": "toContain",
+          "kind": "message",
+          "rejects": false,
+          "matched": true,
+          "error": {
+            "name": "Error",
+            "message": "elementHandle.waitForSelector: Execution context was destroyed, most likely because of a navigation\nCall log:\n  - waiting for locator('span') to be visible\n"
+          }
+        }
+      ]
+    },
+    "neo": {
+      "assertions": {
+        "called": 1,
+        "failed": 0,
+        "passed": 1
+      },
+      "diagnostics": [
+        {
+          "column": 2,
+          "error": {
+            "code": "method_unavailable",
+            "message": "elementHandle.waitForSelector: element handles cannot root a selector in Neo; use locator.locator(selector) instead",
+            "name": "Error",
+            "owner": "script"
+          },
+          "kind": "message",
+          "line": 84,
+          "matched": false,
+          "matcher": "toContain",
+          "rejects": false
+        }
+      ],
+      "refusals": [
+        {
+          "owner": "script",
+          "code": "method_unavailable",
+          "message": "elementHandle.waitForSelector: element handles cannot root a selector in Neo; use locator.locator(selector) instead",
+          "retryable": true,
+          "operationId": "01a1c80c-b059-7611-a807-3be7f8719081.5",
+          "api": "elementHandle.waitForSelector"
+        }
+      ]
+    }
+  }
+]

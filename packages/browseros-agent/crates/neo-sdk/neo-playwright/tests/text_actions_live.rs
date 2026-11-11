@@ -55,8 +55,8 @@ fn pages() -> HashMap<String, Page> {
         ("form", include_str!("data/actions/form.html")),
         ("next", include_str!("data/actions/next.html")),
         ("labels", include_str!("data/actions/labels.html")),
-        // The file inputs tier 1's set-input-files case drives, shared so both read alike.
-        ("files", include_str!("conformance/pages/files.html")),
+        // The authored file-input fixture retained for the live action tests.
+        ("files", include_str!("data/actions/files.html")),
     ] {
         pages.insert(format!("/actions/{name}.html"), Page::html(body));
     }
@@ -1278,7 +1278,7 @@ async fn tests_that_a_relative_path_resolves_against_the_working_directory_and_n
     let run = Arc::new(LiveRun::connect().await?);
     let server = FixtureServer::start(pages()).await?;
     let page = agent_tab(&run, &server.url("127.0.0.1", "/actions/files.html")).await?;
-    let relative = "tests/conformance/files/one.txt";
+    let relative = "tests/data/files/one.txt";
     script_on(
         &run,
         &page,
@@ -1327,15 +1327,15 @@ async fn tests_that_a_missing_path_fails_as_nodes_stat_unprefixed_and_sends_noth
     let thrown = script_on(
         &run,
         &page,
-        "try { await page.setInputFiles('#multi', ['tests/conformance/files/one.txt', \
-         'tests/conformance/files/missing.txt']) } catch (e) { return [e.name, e.message] }",
+        "try { await page.setInputFiles('#multi', ['tests/data/files/one.txt', \
+         'tests/data/files/missing.txt']) } catch (e) { return [e.name, e.message] }",
     )
     .await?;
     assert_eq!(
         thrown,
         json!([
             "Error",
-            "ENOENT: no such file or directory, stat 'tests/conformance/files/missing.txt'"
+            "ENOENT: no such file or directory, stat 'tests/data/files/missing.txt'"
         ]),
         "the path as the script wrote it, with no `page.setInputFiles:` prefix"
     );
@@ -1441,8 +1441,8 @@ async fn tests_that_a_non_file_input_refuses_paths_unsent_and_takes_payloads_sil
         "const handle = await page.$('#text');
          const outcome = async (work) => { try { await work; return null } catch (e) { return [e.name, e.message.split('\\n')[0]] } };
          return [
-           await outcome(handle.setInputFiles('tests/conformance/files/one.txt')),
-           await outcome(page.setInputFiles('#text', 'tests/conformance/files/one.txt', { timeout: 500 })),
+           await outcome(handle.setInputFiles('tests/data/files/one.txt')),
+           await outcome(page.setInputFiles('#text', 'tests/data/files/one.txt', { timeout: 500 })),
          ]",
     )
     .await?;
@@ -1508,8 +1508,8 @@ async fn tests_that_a_directory_goes_only_to_a_directory_input_and_lands_there()
         &page,
         "const outcome = async (work) => { try { await work; return null } catch (e) { return e.message.split('\\n')[0] } };
          return [
-           await outcome(page.setInputFiles('#single', 'tests/conformance/files/dir')),
-           await outcome(page.setInputFiles('#dir', 'tests/conformance/files/one.txt')),
+           await outcome(page.setInputFiles('#single', 'tests/data/files/dir')),
+           await outcome(page.setInputFiles('#dir', 'tests/data/files/one.txt')),
            await outcome(page.setInputFiles('#dir', [])),
          ]",
     )
@@ -1528,7 +1528,7 @@ async fn tests_that_a_directory_goes_only_to_a_directory_input_and_lands_there()
     let background = script_on(
         &run,
         &page,
-        "try { await page.setInputFiles('#dir', 'tests/conformance/files/dir', { timeout: 1500 }) } \
+        "try { await page.setInputFiles('#dir', 'tests/data/files/dir', { timeout: 1500 }) } \
          catch (e) { return [e.name, e.message.split('\\n')[0]] }",
     )
     .await?;
@@ -1558,7 +1558,7 @@ async fn tests_that_a_directory_goes_only_to_a_directory_input_and_lands_there()
     script_on(
         &run,
         &page,
-        "await page.setInputFiles('#dir', 'tests/conformance/files/dir'); return null",
+        "await page.setInputFiles('#dir', 'tests/data/files/dir'); return null",
     )
     .await?;
     let landed = files_of(&run, &page, "dir").await?;
@@ -1573,7 +1573,7 @@ async fn tests_that_a_directory_goes_only_to_a_directory_input_and_lands_there()
         events_of(&run, &page).await?,
         json!([event("input", "dir", true), event("change", "dir", true)]),
     );
-    let directory = json!([env::current_dir()?.join("tests/conformance/files/dir")]);
+    let directory = json!([env::current_dir()?.join("tests/data/files/dir")]);
     assert_eq!(
         run.file_inputs_sent()
             .iter()
