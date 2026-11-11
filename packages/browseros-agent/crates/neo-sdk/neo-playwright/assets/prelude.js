@@ -13,6 +13,13 @@
  */
 (() => {
   // crates/neo-sdk/neo-playwright-js/src/prelude/host.ts
+  function localTimeout(message) {
+    const neo = Reflect.get(globalThis, "__neo");
+    if (typeof neo !== "object" || neo === null)
+      return null;
+    const make = Reflect.get(neo, "timeoutError");
+    return typeof make === "function" ? Reflect.apply(make, neo, [message]) : null;
+  }
   function host() {
     const neo = Reflect.get(globalThis, "__neo");
     if (typeof neo !== "object" || neo === null)
@@ -120,7 +127,8 @@
     return new PlaywrightError(`${api}: ${message}`);
   }
   function waitTimeoutError(api, message) {
-    return withFields(new TimeoutError(`${api}: ${message}`), {
+    const text = `${api}: ${message}`;
+    return withFields(localTimeout(text) ?? new TimeoutError(text), {
       code: "wait_timeout",
       owner: "website",
       delivery: "not_sent",
@@ -1170,19 +1178,23 @@
     event;
     timeout;
     endsAt;
-    constructor(api, event, since, timeout) {
+    signal;
+    constructor(api, event, since, timeout, signal) {
       this.api = api;
       this.event = event;
       this.timeout = timeout;
       this.endsAt = timeout === 0 ? null : since + timeout;
+      this.signal = signal;
     }
     left() {
+      if (this.signal?.aborted)
+        throw this.aborted();
       if (this.endsAt === null)
-        return 0;
+        return this.signal ? 100 : 0;
       const left = this.endsAt - Date.now();
       if (left <= 0)
         throw this.expired();
-      return left;
+      return this.signal ? Math.min(left, 100) : left;
     }
     named(error) {
       if (!(error instanceof Error) || Reflect.get(error, "code") !== "wait_timeout")
@@ -1194,14 +1206,29 @@
       return error;
     }
     race(verdict) {
+      if (this.signal?.aborted)
+        return Promise.reject(this.aborted());
       const endsAt = this.endsAt;
-      if (endsAt === null || !isThenable(verdict))
+      if (!isThenable(verdict))
         return Promise.resolve(verdict);
       let cancel = () => {};
       const expired = new Promise((_, reject) => {
-        cancel = startTimer(Math.max(0, endsAt - Date.now()), () => reject(this.expired()));
+        const stopTimer = endsAt === null ? () => {} : startTimer(Math.max(0, endsAt - Date.now()), () => reject(this.expired()));
+        const abort = () => reject(this.aborted());
+        this.signal?.addEventListener("abort", abort, { once: true });
+        cancel = () => {
+          stopTimer();
+          this.signal?.removeEventListener("abort", abort);
+        };
       });
       return Promise.race([verdict, expired]).finally(cancel);
+    }
+    aborted() {
+      const error = new Error("The operation was aborted", {
+        cause: this.signal?.reason
+      });
+      error.name = "AbortError";
+      return error;
     }
     expired() {
       return waitTimeoutError(this.api, this.message());
@@ -1215,6 +1242,33 @@
   }
 
   // crates/neo-sdk/neo-playwright-js/src/prelude/event-values.ts
+  class FileChooser {
+    #pageValue;
+    #element;
+    #multiple;
+    constructor(page, info) {
+      this.#pageValue = page;
+      const element = page._handle(info.element);
+      if (!element)
+        throw new Error("Rust returned a chooser without its input");
+      this.#element = element;
+      this.#multiple = info.isMultiple;
+      markHandle(this);
+    }
+    element() {
+      return this.#element;
+    }
+    isMultiple() {
+      return this.#multiple;
+    }
+    page() {
+      return this.#pageValue;
+    }
+    async setFiles(files, options) {
+      await this.#element.setInputFiles(files, options);
+    }
+  }
+
   class Dialog {
     #pageValue;
     #info;
@@ -1382,7 +1436,8 @@
     "dialog",
     "console",
     "pageerror",
-    "download"
+    "download",
+    "filechooser"
   ]);
   var CONTEXT_EVENTS = new Set(["page"]);
   var UNREPORTED = {
@@ -1394,7 +1449,6 @@
     worker: "Neo does not report workers",
     serviceworker: "Neo does not report service workers",
     backgroundpage: "Neo does not report extension background pages",
-    filechooser: "Neo does not report file choosers; call locator.setInputFiles() on the input",
     frameattached: "Neo does not report frame events; read page.frames(), which Neo refreshes after navigations and waits",
     framedetached: "Neo does not report frame events; read page.frames(), which Neo refreshes after navigations and waits",
     framenavigated: "Neo does not report frame events; use page.waitForURL()",
@@ -1428,6 +1482,7 @@
     batch = null;
     dialogs = new Map;
     downloads = new Map;
+    choosers = new Map;
     constructor(owner) {
       this.owner = owner;
     }
@@ -1446,7 +1501,7 @@
       if (!isReported(event, kind))
         throw unsupportedError(api, `Neo reports only Playwright's events, not "${event}"`);
       const options = typeof optionsOrPredicate === "function" ? { predicate: optionsOrPredicate } : optionsOrPredicate ?? {};
-      const deadline = new EventDeadline(api, event, since, timeoutMs(api, settings.timeout(options)));
+      const deadline = new EventDeadline(api, event, since, timeoutMs(api, settings.timeout(options)), options.signal);
       const target = page === null ? null : await page._openedBrand(api);
       let after = null;
       for (;; ) {
@@ -1454,8 +1509,12 @@
         let record;
         let observed = null;
         try {
-          ({ value: record, observed } = await invokeObserved("events.wait", { api, timeoutMs: left }, { page: target, event, since, after }));
+          ({ value: record, observed } = await deadline.race(invokeObserved("events.wait", { api, timeoutMs: left }, { page: target, event, since, after })));
         } catch (error) {
+          if (options.signal && error instanceof Error && Reflect.get(error, "code") === "wait_timeout") {
+            deadline.left();
+            continue;
+          }
           throw deadline.named(error);
         }
         if (record.event === "close" && this.batch?.closes.has(record.seq))
@@ -1565,6 +1624,11 @@
           page.emit("download", this.download(page, record.download));
           return;
         }
+        case "filechooser": {
+          const page = this.page(record.page);
+          page.emit("filechooser", this.chooser(record.seq, page, record.chooser));
+          return;
+        }
       }
     }
     value(record, observed) {
@@ -1586,6 +1650,8 @@
           return pageError(record.error);
         case "download":
           return this.download(this.page(record.page), record.download);
+        case "filechooser":
+          return this.chooser(record.seq, this.page(record.page), record.chooser);
       }
     }
     dialog(page, info) {
@@ -1603,6 +1669,14 @@
       const download = new Download(page, info);
       this.downloads.set(info.id, download);
       return download;
+    }
+    chooser(seq, page, info) {
+      const known = this.choosers.get(seq);
+      if (known)
+        return known;
+      const chooser = new FileChooser(page, info);
+      this.choosers.set(seq, chooser);
+      return chooser;
     }
   }
 

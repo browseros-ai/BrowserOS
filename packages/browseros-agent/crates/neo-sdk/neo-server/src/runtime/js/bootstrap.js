@@ -531,6 +531,11 @@
   globalThis.__neo = Object.freeze({
     invoke,
     refuse,
+    // Local wait deadlines share the script's TimeoutError constructor. They have no
+    // operation identity: only errors received from the dispatcher enter `genuine`.
+    timeoutError(message) {
+      return new TimeoutError({ message })
+    },
     brands: Object.freeze({
       register(brand, fromJson) {
         brands.set(String(brand), fromJson)

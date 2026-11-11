@@ -31,6 +31,7 @@ mod dialog_table;
 mod event_hub;
 pub(crate) mod event_op;
 mod event_reader;
+mod file_chooser;
 mod page_event;
 mod run_events;
 mod subscription;

@@ -9,6 +9,8 @@
 export type RefusalCode = 'method_unavailable' | 'invalid_input'
 
 export type Bootstrap = {
+  /** Pure error construction, shared with the TimeoutError parameter given to scripts. */
+  timeoutError?(message: string): Error
   invoke(
     name: string,
     input?: unknown,
@@ -29,6 +31,14 @@ export type Bootstrap = {
    * older than that contract, which also builds every parameter synchronously (C5).
    */
   refuse?(api: string, code: RefusalCode, reason: string): Error
+}
+
+/** A local deadline uses the bootstrap's public error class, without inventing an op id. */
+export function localTimeout(message: string): Error | null {
+  const neo: unknown = Reflect.get(globalThis, '__neo')
+  if (typeof neo !== 'object' || neo === null) return null
+  const make: unknown = Reflect.get(neo, 'timeoutError')
+  return typeof make === 'function' ? Reflect.apply(make, neo, [message]) : null
 }
 
 /** The bootstrap, or a plain error when the prelude runs without one. */

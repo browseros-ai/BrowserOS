@@ -157,6 +157,7 @@ export type EventName =
   | 'console'
   | 'pageerror'
   | 'download'
+  | 'filechooser'
   | 'page'
 
 export type DialogInfo = {
@@ -179,6 +180,9 @@ export type DownloadInfo = {
   suggestedFilename: string
 }
 
+/** The exact native input, rather than a selector that could resolve to a replacement. */
+export type FileChooserInfo = { element: ElementBrand; isMultiple: boolean }
+
 /**
  * One event as Rust delivers it to one listener or wait. `event` is Playwright's name and
  * `page` the page it fires on; the context's `page` event names the new tab there. `seq` is the
@@ -200,6 +204,7 @@ export type EventRecord = { seq: number; at: number } & (
   | { event: 'console'; page: PageBrand; message: ConsoleInfo }
   | { event: 'pageerror'; page: PageBrand; error: PageErrorInfo }
   | { event: 'download'; page: PageBrand; download: DownloadInfo }
+  | { event: 'filechooser'; page: PageBrand; chooser: FileChooserInfo }
 )
 
 /**

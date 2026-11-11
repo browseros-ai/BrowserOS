@@ -15,6 +15,7 @@
     "scripts/run-bun-test.ts",
     "scripts/dev/inspect-ui.ts",
     "scripts/patch-windows-exe.ts",
+    "crates/neo-sdk/neo-server/src/runtime/js/abort_globals.js",
     "packages/agent-cursor/src/index.ts",
     "packages/agent-cursor/scripts/classic-entry.ts",
     "crates/neo-sdk/neo-server/conformance/conformance.mjs",

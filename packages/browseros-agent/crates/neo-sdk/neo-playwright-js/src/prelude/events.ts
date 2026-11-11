@@ -22,7 +22,13 @@ import { invoke, invokeObserved } from './bridge'
 import type { EventEmitter } from './emitter'
 import { prefixed, unsupportedError } from './errors'
 import { EventDeadline } from './event-deadline'
-import { ConsoleMessage, Dialog, Download, pageError } from './event-values'
+import {
+  ConsoleMessage,
+  Dialog,
+  Download,
+  FileChooser,
+  pageError,
+} from './event-values'
 import type { Page } from './page'
 import type { TimeoutSettings } from './timeouts'
 import { timeoutMs } from './timeouts'
@@ -31,6 +37,7 @@ import type {
   DownloadInfo,
   EventName,
   EventRecord,
+  FileChooserInfo,
   Observation,
 } from './wire'
 
@@ -42,6 +49,7 @@ const PAGE_EVENTS: ReadonlySet<string> = new Set([
   'console',
   'pageerror',
   'download',
+  'filechooser',
 ])
 /** Events the context reports. */
 const CONTEXT_EVENTS: ReadonlySet<string> = new Set(['page'])
@@ -60,8 +68,6 @@ const UNREPORTED: Readonly<Record<string, string>> = {
   worker: 'Neo does not report workers',
   serviceworker: 'Neo does not report service workers',
   backgroundpage: 'Neo does not report extension background pages',
-  filechooser:
-    'Neo does not report file choosers; call locator.setInputFiles() on the input',
   frameattached:
     'Neo does not report frame events; read page.frames(), which Neo refreshes after navigations and waits',
   framedetached:
@@ -112,7 +118,11 @@ export function isReported(
   )
 }
 
-type WaitOptions = { predicate?: (value: never) => unknown; timeout?: number }
+type WaitOptions = {
+  predicate?: (value: never) => unknown
+  timeout?: number
+  signal?: AbortSignal
+}
 
 /** What the hub needs from the context: its Page for a handle, and the context as an emitter. */
 export type EventOwner = EventEmitter & {
@@ -134,6 +144,8 @@ export class EventHub {
   /** One object per dialog and download, so every listener and wait answers the same one. */
   private readonly dialogs = new Map<number, Dialog>()
   private readonly downloads = new Map<string, Download>()
+  /** A record can reach several waits and the pump; they must share the chooser object. */
+  private readonly choosers = new Map<number, FileChooser>()
 
   constructor(owner: EventOwner) {
     this.owner = owner
@@ -183,6 +195,7 @@ export class EventHub {
       event,
       since,
       timeoutMs(api, settings.timeout(options)),
+      options.signal,
     )
     const target = page === null ? null : await page._openedBrand(api)
     let after: number | null = null
@@ -191,12 +204,24 @@ export class EventHub {
       let record: EventRecord
       let observed: Observation | null = null
       try {
-        ;({ value: record, observed } = await invokeObserved(
-          'events.wait',
-          { api, timeoutMs: left },
-          { page: target, event, since, after },
+        ;({ value: record, observed } = await deadline.race(
+          invokeObserved(
+            'events.wait',
+            { api, timeoutMs: left },
+            { page: target, event, since, after },
+          ),
         ))
       } catch (error) {
+        // The bridge has no per-call cancellation. Signal-aware waits use bounded host
+        // polls, so aborting releases the host's waiting guard within 100ms even at timeout 0.
+        if (
+          options.signal &&
+          error instanceof Error &&
+          Reflect.get(error, 'code') === 'wait_timeout'
+        ) {
+          deadline.left()
+          continue
+        }
         throw deadline.named(error)
       }
       // The bootstrap registers a batch before resolving either consumer. A duplicate
@@ -350,6 +375,11 @@ export class EventHub {
         page.emit('download', this.download(page, record.download))
         return
       }
+      case 'filechooser': {
+        const page = this.page(record.page)
+        page.emit('filechooser', this.chooser(record.seq, page, record.chooser))
+        return
+      }
     }
   }
 
@@ -373,6 +403,8 @@ export class EventHub {
         return pageError(record.error)
       case 'download':
         return this.download(this.page(record.page), record.download)
+      case 'filechooser':
+        return this.chooser(record.seq, this.page(record.page), record.chooser)
     }
   }
 
@@ -390,5 +422,13 @@ export class EventHub {
     const download = new Download(page, info)
     this.downloads.set(info.id, download)
     return download
+  }
+
+  private chooser(seq: number, page: Page, info: FileChooserInfo): FileChooser {
+    const known = this.choosers.get(seq)
+    if (known) return known
+    const chooser = new FileChooser(page, info)
+    this.choosers.set(seq, chooser)
+    return chooser
   }
 }

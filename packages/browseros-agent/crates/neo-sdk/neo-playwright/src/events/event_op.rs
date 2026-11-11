@@ -257,8 +257,15 @@ async fn next(pw: &Playwright, scope: &OpScope<'_>) -> Result<Value, PlaywrightE
             lost += read.lost;
             for record in &read.records {
                 if receives(&subscription, listening.since_ms, record)
-                    && let Some(event) =
-                        deliver(scope, &subscription, record, &mut tabs, WindowPopup::Skip).await?
+                    && let Some(event) = deliver(
+                        pw,
+                        scope,
+                        &subscription,
+                        record,
+                        &mut tabs,
+                        WindowPopup::Skip,
+                    )
+                    .await?
                 {
                     events.push(event);
                 }
@@ -321,8 +328,15 @@ async fn first_event(
         for record in hub.read_after(after).records {
             after = record.seq;
             if receives(subscription, since, &record)
-                && let Some(event) =
-                    deliver(scope, subscription, &record, &mut tabs, WindowPopup::Fail).await?
+                && let Some(event) = deliver(
+                    pw,
+                    scope,
+                    subscription,
+                    &record,
+                    &mut tabs,
+                    WindowPopup::Fail,
+                )
+                .await?
             {
                 return Ok(event);
             }

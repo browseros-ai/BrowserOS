@@ -195,26 +195,11 @@ impl<'env> OpScope<'env> {
         tab: TabId,
     ) -> Result<&AdmittedPage, PlaywrightError> {
         if self.page.get().is_none() {
-            let mut info = browser.pages.get_info_by_tab(tab).await;
-            if info.is_none() {
-                self.view()
-                    .resolve_tab_ids(&[tab])
-                    .await
-                    .map_err(|error| self.core_error(&error))?;
-                info = browser.pages.get_info_by_tab(tab).await;
-            }
-            let info =
-                info.ok_or_else(|| self.fail(ErrorCode::TargetClosed, "the tab was closed"))?;
-            let session = self
-                .view()
-                .page_session(info.page_id.clone())
-                .await
-                .map_err(|error| self.core_error(&error))?;
-            let _ = self.page.set(AdmittedPage {
-                tab,
-                core_page: info.page_id,
-                session,
-            });
+            let admitted = self
+                .observe_page(browser, tab)
+                .await?
+                .ok_or_else(|| self.fail(ErrorCode::TargetClosed, "the tab was closed"))?;
+            let _ = self.page.set(admitted);
         }
         match self.page.get() {
             Some(admitted) if admitted.tab == tab => {
@@ -226,6 +211,35 @@ impl<'env> OpScope<'env> {
             }
             _ => Err(self.fail(ErrorCode::Internal, "one operation acts on one tab")),
         }
+    }
+
+    /// View admission for one record in a batch read. Unlike `admit`, this does not select
+    /// the operation's action target or report a single payload source to the host: an event
+    /// pump can observe several tabs. Writes still need the separate single-tab admission.
+    pub(crate) async fn observe_page(
+        &self,
+        browser: &BrowserSession,
+        tab: TabId,
+    ) -> Result<Option<AdmittedPage>, PlaywrightError> {
+        let mut info = browser.pages.get_info_by_tab(tab).await;
+        if info.is_none() {
+            self.view()
+                .resolve_tab_ids(&[tab])
+                .await
+                .map_err(|error| self.core_error(&error))?;
+            info = browser.pages.get_info_by_tab(tab).await;
+        }
+        let Some(info) = info else { return Ok(None) };
+        let session = self
+            .view()
+            .page_session(info.page_id.clone())
+            .await
+            .map_err(|error| self.core_error(&error))?;
+        Ok(Some(AdmittedPage {
+            tab,
+            core_page: info.page_id,
+            session,
+        }))
     }
 
     /// The gateway check: refuses, as `neo / internal` with nothing sent, an op whose spec does
