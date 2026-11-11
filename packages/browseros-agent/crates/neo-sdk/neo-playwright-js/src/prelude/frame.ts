@@ -1386,7 +1386,13 @@ export class Frame extends EventEmitter {
     arg: unknown,
     options: EvaluateOptions | undefined,
   ): Promise<unknown> {
-    const script = pageCall(api, 'frame', pageFunction, arg, options)
+    const script = await this._page._evaluationScript(
+      api,
+      'frame',
+      pageFunction,
+      arg,
+      options,
+    )
     const { value: result, observed } = await invokeObserved(
       'page.evaluate',
       this._call(api, 0),
