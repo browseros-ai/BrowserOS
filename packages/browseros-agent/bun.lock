@@ -476,6 +476,8 @@
       "name": "@browseros/neo-viewer",
       "version": "0.1.0",
       "dependencies": {
+        "@fontsource-variable/jetbrains-mono": "^5.3.0",
+        "@fontsource/ibm-plex-sans": "^5.3.0",
         "@novnc/novnc": "^1.7.0",
         "react": "^19.3.0",
         "react-dom": "^19.3.0",
@@ -485,6 +487,7 @@
         "@tailwindcss/oxide": "^4.3.3",
         "@types/react": "^19.3.0",
         "@types/react-dom": "^19.3.0",
+        "linkedom": "^0.18.13",
         "tailwindcss": "^4.3.3",
       },
     },
@@ -978,6 +981,8 @@
     "@fontsource-variable/jetbrains-mono": ["@fontsource-variable/jetbrains-mono@5.3.0", "", {}, "sha512-F32xpS2NsGYoQi2ADSkKTgpJj7ozajsGgDJ8woTnqjmIB+dxDIqImjl4pXZVEExu8UFZ2ndhmX18EBS/hdz3Lw=="],
 
     "@fontsource-variable/schibsted-grotesk": ["@fontsource-variable/schibsted-grotesk@5.3.0", "", {}, "sha512-ndS6H/KICWANchlHF3q4UdZD+xrZ3Ji0rUobIuXlgvDUzDfqZDsVuXPXZb636nJZMHE9zZ9Fmwgqazm8hMB50Q=="],
+
+    "@fontsource/ibm-plex-sans": ["@fontsource/ibm-plex-sans@5.3.0", "", {}, "sha512-CbE4CbbEEZJX860XyUiRpsksXIQR8Rp2XDva2VO53NJox9tVNtusrysd2x5YkUEY3ErQ66W1IiiQL8/wihhw5w=="],
 
     "@fontsource/newsreader": ["@fontsource/newsreader@5.3.0", "", {}, "sha512-AFR6ZKY89GNL+9qBI2P2+66NhD5bhOj/v6fsLnFYLM4E0JnMB1yKb+Ro8cA64i1hwAWoBfTq5CHJGWH1toLDkw=="],
 

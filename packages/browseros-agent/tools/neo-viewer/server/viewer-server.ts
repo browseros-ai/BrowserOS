@@ -7,6 +7,7 @@
 import type { ViewerInfo } from '../shared/api'
 import { apiRouteTable, isLocalRequest } from './api/api-routes'
 import type { ViewerConfig } from './config'
+import { configureHostApi } from './hostApi'
 import { type LiveHost, viewerHost } from './live-screen/live-host'
 import { liveScreen } from './live-screen/live-routes'
 import { socketSessions } from './live-screen/socket-session'
@@ -49,6 +50,7 @@ export async function startViewer(
   const [store, page] = await Promise.all([
     TaskStore.open(config.dataDir, rule),
     buildPage(),
+    configureHostApi(config.hostApi ?? null),
   ])
   const live = liveScreen(seams.liveHost ?? viewerHost)
   // The proxy needs the bound port (for the process lookup) before the first request.

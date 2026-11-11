@@ -24,6 +24,9 @@ here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # upstream import that is not on this list makes the engine build fail, so a missed file cannot
 # ship silently.
 #
+# The generated channel and struct declarations are type-only inputs to the prelude's wire
+# check and the engine's typecheck. They are copied at the same pin and never bundled.
+#
 # Test-only sources are materialized by neo-server/conformance from this same commit.
 # They do not ship with the engine and are not inputs to its build.
 FILES=(
@@ -54,9 +57,11 @@ FILES=(
   packages/isomorphic/urlMatch.ts
   packages/isomorphic/utilityScriptSerializers.ts
   packages/isomorphic/yaml.ts
+  packages/playwright-core/src/client/channels.d.ts
   packages/playwright-core/src/server/macEditingCommands.ts
   packages/playwright-core/src/server/usKeyboardLayout.ts
   packages/protocol/src/serializers.ts
+  packages/protocol/src/structs.d.ts
 )
 
 commit="$(git -C "$checkout" rev-parse --verify "${tag}^{commit}")"

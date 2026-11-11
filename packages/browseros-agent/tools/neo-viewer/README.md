@@ -12,9 +12,11 @@ under `tools/`: not shipped, and not part of the image.
                ~/.local/state/neo-viewer/tasks/<task>.jsonl ──▶ /api/* ──▶ the page at /
 ```
 
-So far: the proxy, the per-task log, the API, a plain run list, the image started and removed with
-the viewer, and the live screen (watch, control, take over). Neo's operations joined to the runs
-and the designed Viewer C v2 screen come in the next PRs, on the same API.
+The page at `/` is the designed Viewer C v2 screen (PR D1): the time strip, the run table with its
+bars, each run's code and the reply the model read, and the full-output pop-up. `/?plain` keeps
+the plain run list for debugging, with the live screen beside it (watch, control, take over) until
+the designed screen docks it. Neo's operations and each code line's methods come in the next PRs,
+on the same API.
 
 ## Start it
 
@@ -133,9 +135,23 @@ profile, unless given `--keep-data` (or `--upstream`, which starts no container)
 `RunSummary.neoRunId` is the reply's `_meta["com.browseros.neo/run"].id`, the key to join Neo's
 run record (`GET /v1/runs/{id}`) when the host API arrives.
 
+## Neo's host API
+
+`server/hostApi.ts` is the viewer's one client for Neo's host API (`/v1`: runs, operations, tabs,
+the display, takeovers). `bun run neo:viewer` configures it with the container it starts; with
+`--upstream`, pass `--host-token-file` (and `--host-api`, default `http://127.0.0.1:9300`).
+
+- `hostFetch(path, init)`: a request on the host API, bearer token added; Neo's `Response` comes
+  back for `.json()` or `.arrayBuffer()`. With no host API the viewer answers in Neo's error shape:
+  `503 no_host_api`, or `502 host_api_unreachable` when nothing answers.
+- `hostWebSocketTarget(path)`: `{ url, headers }` for an upgrade route such as
+  `/v1/display?mode=view`, opened server-side with `new WebSocket(url, { headers })`. Neo accepts
+  the token only as a header, so it never goes in a URL and never reaches the browser.
+
 ## The live screen
 
-The panel beside the runs shows Neo's screen live and lets the owner step in. The browser cannot
+On the plain page (`/?plain`), the panel beside the runs shows Neo's screen live and lets the owner
+step in; the designed screen docks the same components next. The browser cannot
 reach Neo's host API (a bearer token, which a browser cannot put on a WebSocket), so the viewer
 relays it and adds the token on its side; `shared/live-screen.ts` holds the routes and types.
 
@@ -172,13 +188,14 @@ script that opens displays and drops them mid-handshake can still block every di
 - `server/`: the Bun server. `proxy/` forwards and reads MCP, `tasks/` holds the task rule and the
   process lookup, `log/` the JSONL log and the in-memory store, `api/` the routes, `live-screen/`
   the display relay and the takeover routes.
-- `web/`: the page, React and Tailwind as in `apps/claw-app`. `server/page.ts` bundles it in memory
+- `web/`: the page, React and Tailwind as in `apps/claw-app`; `web/screen/` is the designed screen,
+  `web/App.tsx` the plain list, `web/live-screen/` the live-screen panel. `server/page.ts` bundles it in memory
   when the viewer starts (`Bun.build`, about 40 ms), compiling Tailwind with the same
   `@tailwindcss/node` and `oxide` packages claw-app's Vite plugin uses.
 - `shared/api.ts`: the API's types; `shared/live-screen.ts`: the live screen's.
 
 ```sh
-bun run test                     # in this folder: unit tests, the proxy and the relay against a fake Neo
+bun run test                     # in this folder: unit tests, the proxy and the relay against a fake Neo, the screen
 NEO_VIEWER_REAL_UPSTREAM=http://127.0.0.1:9010/mcp bun run test:real-image
 # and the live screen, with the host API on TCP (CLAW_HOST_TCP=0.0.0.0:9300, port published on 127.0.0.1):
 NEO_VIEWER_REAL_UPSTREAM=… NEO_VIEWER_REAL_HOST=http://127.0.0.1:9300 \

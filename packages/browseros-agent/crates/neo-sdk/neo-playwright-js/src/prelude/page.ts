@@ -1,4 +1,6 @@
 import { type CallSite, captureSite, INTERNAL_SITE } from './call-site'
+import type { KeyList } from './upstream-check'
+import type { PickOptions } from './upstream-checks'
 /**
  * Playwright's Page over one tab.
  *
@@ -118,7 +120,7 @@ const PDF_KEYS = [
   'margin',
   'tagged',
   'outline',
-] as const
+] as const satisfies KeyList<PickOptions['page.pdf']>
 
 export class Page extends EventEmitter {
   /** The browser's tab id, which the page's brand carries; null until a fact or result names it. */

@@ -37,6 +37,9 @@ Playwright checkout is a plain `diff -r`. `sync.sh` writes `SHA256SUMS`, and the
   uses to serialize an `evaluate` argument (`serializeValue`) and its server uses to read it back
   (`parseSerializedValue`) before re-serializing it for the page. Neo's prelude runs both steps
   in QuickJS, so an argument reaches the page as upstream's does, with upstream's errors.
+- `packages/playwright-core/src/client/channels.d.ts` and `packages/protocol/src/structs.d.ts`.
+  Upstream's generated protocol declarations, vendored for the prelude's wire check and the
+  engine's typecheck. They are types only and never bundled.
 - `sync.sh`, `VERSION`, `SHA256SUMS` and this README are ours.
 
 ## What the engine build changes
@@ -58,13 +61,14 @@ load both files plain.
   `window.playwright` devtools helper. They sit in `injectedScript.ts`'s import graph, so the
   engine build swaps them for empty stand-ins through module resolution instead of editing
   upstream code.
-- Type-only imports such as `./selectorEngine` and `@protocol/structs`. The bundler erases
-  them, so their files are not needed.
+- Other type-only imports such as `./selectorEngine`. The bundler erases them, so their files
+  are not needed.
 - Upstream tests, assets and test-server implementation. The server's
   `../neo-server/conformance/` materializes test-only inputs from this same commit and keeps
   their original assertions and hooks. See that suite's README for coverage and exclusions.
-- The Playwright client, server and protocol (apart from the two keyboard tables and the value
-  serializers), the test runner,
+- The Playwright client and server runtime code (apart from the two keyboard tables), and the
+  protocol's runtime code (apart from the value serializers). Its two generated type files are
+  vendored for the wire check and never bundled. The test runner,
   reporters, the trace viewer, codegen and the recorder, Playwright MCP, browser downloads, and
   every other injected script (`clock.ts`, `bindingsController.ts`, `webSocketMock.ts`,
   `storageScript.ts`, `webAuthn.ts`, `webMCP.ts`, `bidiInsertText.ts`, `coverageScript.ts`,

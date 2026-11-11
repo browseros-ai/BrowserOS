@@ -10,6 +10,7 @@
  * "Target page, context or browser has been closed", and as another script's argument it fails
  * the channel's check by its guid, which each handle takes at random as upstream's does.
  */
+
 import type { Rect } from '../probe/protocol'
 import { invoke } from './bridge'
 import { type CallSite, captureSite } from './call-site'
@@ -39,6 +40,8 @@ import { saveScreenshot, screenshotType } from './screenshot'
 import { locatorBrand } from './selectors'
 import { signalOf } from './signal'
 import { type TimeoutOption, timeoutMs } from './timeouts'
+import type { KeyList } from './upstream-check'
+import type { PickOptions } from './upstream-checks'
 import type {
   ElementBrand,
   ElementStateName,
@@ -322,7 +325,9 @@ export class ElementHandle extends EventEmitter {
       this.#timeout(options),
       {
         ...selectOptionValues(api, values),
-        ...pick(options, ['force']),
+        ...pick(options, ['force'] satisfies KeyList<
+          PickOptions['locator.selectOption']
+        >),
       },
     )
   }
@@ -336,7 +341,9 @@ export class ElementHandle extends EventEmitter {
       site,
       'elementHandle.selectText',
       this.#timeout(options),
-      pick(options, ['force']),
+      pick(options, ['force'] satisfies KeyList<
+        PickOptions['locator.selectText']
+      >),
     )
   }
 

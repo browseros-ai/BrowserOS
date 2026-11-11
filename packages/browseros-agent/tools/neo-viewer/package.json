@@ -13,6 +13,8 @@
     "lint:fix": "bunx biome check --write --unsafe"
   },
   "dependencies": {
+    "@fontsource-variable/jetbrains-mono": "^5.3.0",
+    "@fontsource/ibm-plex-sans": "^5.3.0",
     "@novnc/novnc": "^1.7.0",
     "react": "^19.3.0",
     "react-dom": "^19.3.0"
@@ -22,6 +24,7 @@
     "@tailwindcss/oxide": "^4.3.3",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
+    "linkedom": "^0.18.13",
     "tailwindcss": "^4.3.3"
   }
 }
