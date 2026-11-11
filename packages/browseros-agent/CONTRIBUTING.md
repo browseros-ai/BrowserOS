@@ -53,7 +53,7 @@ apps/claw-app            bun run dev:web            the web preview
 apps/claw-server         cargo run -p claw-server
 ```
 
-A file watcher also tracks `apps/claw-server/src`, its `Cargo.toml`, and its test fixtures, and restarts the Rust server whenever they change. The first cargo build takes a while; later ones are incremental.
+A file watcher also tracks `apps/claw-server/src`, its `Cargo.toml`, and its test fixtures, and restarts the Rust server whenever they change. The first cargo build takes a while; later ones reuse compiled dependencies.
 
 Stop everything with `bun run dev:stop`.
 
@@ -78,6 +78,66 @@ BROWSERCLAW_DIR=~/.browserclaw-copy-prod bun run dev:claw:watch
 ```
 
 The supervisor logs the selected browser profile and Claw state directory at startup. `dev:cleanup` removes temporary directories, including those created by `:new`, and preserves `~/.browserclaw-dev` and other state outside the temp directories. `--only-temps` also stops watch owners before deleting their directories; it skips explicit port cleanup. Existing state nested inside an older browser profile is left in place; point `BROWSERCLAW_DIR` at it to resume it.
+
+## Rust build storage
+
+Plain Cargo keeps intermediates and executables in this checkout's `target/`.
+Dev incremental compilation is disabled to bound disk growth; set
+`CARGO_INCREMENTAL=1` to opt in. The watch supervisor keeps its explicit private
+`target/dev-watch` directory.
+
+On macOS or Linux with Python 3, optionally install the Cargo pool shim. Put an
+existing bin directory before real Cargo on `PATH` first, then run from this repo:
+
+```bash
+python3 packages/browseros-agent/tools/cargo-pool/cargo-pool.py install --bin-dir "$HOME/.local/bin"
+python3 packages/browseros-agent/tools/cargo-pool/cargo-pool.py status --bin-dir "$HOME/.local/bin"
+python3 packages/browseros-agent/tools/cargo-pool/cargo-pool.py uninstall --bin-dir "$HOME/.local/bin"
+```
+
+Install/uninstall are idempotent. Installation refuses an incorrectly ordered
+`PATH` or an existing unrelated executable. It copies the shim, so it also covers
+old worktrees and the internal mirror without editing them. Uninstall removes
+only that copy; it leaves all build output in place.
+
+The shim pools `build`/`b`, `check`/`c`, `test`/`t`, `clippy`, `rustc`, `rustdoc`,
+and `doc`/`d`, plus `bench --no-run`. It leaves `run`, running benchmarks, custom subcommands/aliases, and other workspaces
+alone. Each checkout prefers its last slot and waits if its other Cargo owns it.
+On a handoff, Cargo cleans all previous local packages, including path dependencies,
+while retaining registry/git dependencies. If the old checkout disappeared or its
+package layout changed, the slot is wiped. Output modes with custom profiles,
+release/cross targets or documentation are wiped on handoff or mode changes. Executables still land in
+the checkout's `target/`; running them does not occupy a slot.
+
+| Environment variable | Default | Meaning |
+|---|---|---|
+| `BROWSEROS_CARGO_POOL_ROOT` | `$CARGO_HOME/build/browseros-pool` (`~/.cargo` by default) | Pool directory |
+| `BROWSEROS_CARGO_POOL_SLOTS` | `8` | Maximum concurrent Cargo commands |
+| `BROWSEROS_CARGO_POOL_MAX_BYTES` | `3758096384` (3.5 GiB) | Per-slot eviction threshold |
+
+A supervisor holds an OS lease until Cargo exits, including when the foreground
+shim is killed. Cargo/test descendants never inherit the lease. Failed or killed Cargo commands
+also terminate their private compiler process group and invalidate partial output. Slots above the
+size limit are wiped before use and on exit, even for the same checkout: at rest,
+the default pool holds at most **28 GiB (30.1 GB)** plus small metadata. Active
+builds can temporarily exceed this by their in-flight output; one invocation's
+peak output is not capped. Final executables in checkout `target/` directories,
+Cargo's download cache, and the watch's private directories are outside this bound.
+Reducing the slot count reclaims idle excess slots and waits for active excess
+slots to finish before starting more work.
+
+An explicit `CARGO_BUILD_BUILD_DIR`, `CARGO_TARGET_DIR`, or `--target-dir` bypasses
+the pool. So do `--config` overrides and help/version requests. The shim passes
+these commands to Cargo unchanged. For an opt-out that also overrides the old
+shared setting in a pre-pool checkout, use:
+
+```bash
+CARGO_BUILD_BUILD_DIR="$PWD/target" cargo build --workspace
+```
+
+The CI test runner still spawns `cargo` with its existing arguments and exit status;
+it needs no pool-specific behavior. CI uses normal checkout-local Cargo output,
+and the Docker release caches its explicit `target/neo-docker` directory.
 
 ## Before you open a PR
 

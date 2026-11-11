@@ -83,6 +83,9 @@ print_stderr = "warn"
 dbg_macro = "warn"
 
 [profile.dev]
+# Dozens of worktrees otherwise accumulate gigabytes of incremental state.
+# CARGO_INCREMENTAL=1 remains available for a local opt-in.
+incremental = false
 # Dependencies are never stepped into, so their DWARF is pure disk cost: a strip
 # probe put debug info at 81% of the largest dependency rlib. Workspace crates
 # keep line tables so panics and backtraces still resolve to file and line.

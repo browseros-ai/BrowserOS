@@ -96,7 +96,6 @@ jobs:
           # cargo fingerprints by rustc version itself, so a toolchain change
           # rebuilds rather than reusing the wrong artifacts.
           add-rust-environment-hash-key: false
-          cache-directories: ~/.cargo/build/browseros
           # Save even though nothing here is a pass/fail gate; warming is the
           # entire point of the job.
           save-if: "true"

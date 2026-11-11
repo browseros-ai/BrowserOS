@@ -1,0 +1,29 @@
+name: Cargo build pool
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/cargo-pool.yml'
+      - 'packages/browseros-agent/tools/cargo-pool/**'
+      - 'packages/browseros-agent/Cargo.toml'
+      - '.cargo/**'
+
+permissions:
+  contents: read
+
+jobs:
+  pool:
+    name: Cargo pool / ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - uses: dtolnay/rust-toolchain@stable
+      # Installs only under TemporaryDirectory; the runner's real Cargo is intact.
+      - run: python3 -m unittest discover -s packages/browseros-agent/tools/cargo-pool -p 'test_*.py' -v
