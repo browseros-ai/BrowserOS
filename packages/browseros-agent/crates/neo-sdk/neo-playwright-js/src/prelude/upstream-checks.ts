@@ -4,6 +4,7 @@
  * deviation describes an intentional difference from upstream rather than a loose declaration.
  */
 import type * as pw from '../../../neo-playwright/third_party/playwright/packages/playwright-core/src/client/channels'
+import type { GeneratedInputs } from './generated'
 import type { OpName } from './generated/ops'
 import type {
   CHECK_KEYS,
@@ -378,26 +379,6 @@ export type UpstreamChecks = {
       'locator.elementHandles',
       OpInputs['locator.elementHandles'],
       pw.FrameQuerySelectorAllParams,
-      never,
-      never,
-      never
-    >
-  >
-  'page.ariaSnapshot': Assert<
-    UpstreamCheck<
-      'page.ariaSnapshot',
-      OpInputs['page.ariaSnapshot'],
-      pw.FrameAriaSnapshotParams,
-      never,
-      never,
-      never
-    >
-  >
-  'locator.ariaSnapshot': Assert<
-    UpstreamCheck<
-      'locator.ariaSnapshot',
-      OpInputs['locator.ariaSnapshot'],
-      pw.FrameAriaSnapshotParams,
       never,
       never,
       never
@@ -935,11 +916,23 @@ type NeoOnlyOps = {
 }
 
 // Exhaustive in both directions: a new op cannot silently miss this file, and a removed op
-// cannot leave a check or a Neo-only reason behind.
+// cannot leave a check or a Neo-only reason behind. A migrated op is checked only by its
+// generated route row, so hand checks must leave in the same change as the hand input.
 export type AllOpsChecked = Assert<
-  Exclude<OpName, keyof UpstreamChecks | keyof NeoOnlyOps> extends never
-    ? Exclude<keyof UpstreamChecks | keyof NeoOnlyOps, OpName> extends never
-      ? Extract<keyof UpstreamChecks, keyof NeoOnlyOps> extends never
+  Exclude<
+    OpName,
+    keyof UpstreamChecks | keyof NeoOnlyOps | keyof GeneratedInputs
+  > extends never
+    ? Exclude<
+        keyof UpstreamChecks | keyof NeoOnlyOps | keyof GeneratedInputs,
+        OpName
+      > extends never
+      ?
+          | Extract<keyof UpstreamChecks, keyof NeoOnlyOps>
+          | Extract<
+              keyof GeneratedInputs,
+              keyof UpstreamChecks | keyof NeoOnlyOps
+            > extends never
         ? true
         : false
       : false
@@ -1031,7 +1024,6 @@ export type PickOptions = {
   'mouse.click': pw.PageMouseClickOptions
   'locator.selectOption': pw.ElementHandleSelectOptionOptions
   'locator.selectText': pw.ElementHandleSelectTextOptions
-  'page.ariaSnapshot': pw.FrameAriaSnapshotOptions
   'page.goto': pw.FrameGotoOptions
   'page.pdf': pw.PagePdfOptions
   // path is read on the Neo host; upstream's client converts it to content before sending.
