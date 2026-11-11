@@ -13,7 +13,7 @@ use crate::probe::{ExpectParams, ProbeFailure, ProbeRequest, ProbeTarget};
 use crate::resolve::{self, Landed, Resolver};
 use crate::target::{PageRef, Target};
 use crate::world::Place;
-use crate::{ErrorCode, Playwright, PlaywrightError};
+use crate::{ErrorCode, Playwright, PlaywrightError, locator_handler};
 
 listed_enum! {
     /// Retrying matchers. Non-retrying value matchers (`toBe`, `toEqual`, ...) run in the
@@ -127,7 +127,14 @@ async fn locator(
     // Upstream snapshots the body of the frame `expect` ran on, the locator's own frame, not
     // the frame its last chunk enters.
     let root_snapshot = || document_op::expect_snapshot(&page, scope, target.frame.as_ref());
-    expect.run(scope, poll, root_snapshot).await
+    expect
+        .run(
+            scope,
+            || locator_handler::checkpoint(scope, &page),
+            poll,
+            root_snapshot,
+        )
+        .await
 }
 
 /// A page matcher, on the main frame's document (upstream's `:root`; the probe matches an aria
@@ -158,6 +165,7 @@ async fn page(
     expect
         .run(
             scope,
+            || locator_handler::checkpoint(scope, &page),
             || main_frame(&page, scope, &expect, &request),
             || document_op::expect_snapshot(&page, scope, None),
         )

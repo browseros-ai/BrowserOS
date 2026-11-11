@@ -485,6 +485,26 @@
       effect: "write",
       target: null,
       lifetime: "operation"
+    },
+    "page.addLocatorHandler": {
+      effect: "read",
+      target: "target",
+      lifetime: "operation"
+    },
+    "page.removeLocatorHandler": {
+      effect: "read",
+      target: null,
+      lifetime: "operation"
+    },
+    "page.locatorHandlerTriggered": {
+      effect: "read",
+      target: null,
+      lifetime: "background"
+    },
+    "page.resolveLocatorHandler": {
+      effect: "read",
+      target: null,
+      lifetime: "operation"
     }
   };
 
@@ -913,6 +933,11 @@
         workers.push({ id, url });
     }
     return workers;
+  }
+  function logError(text) {
+    const log = Reflect.get(globalThis, "__neo_log");
+    if (typeof log === "function")
+      Reflect.apply(log, globalThis, ["error", text]);
   }
   function clock() {
     const sleep = Reflect.get(globalThis, "__neo_sleep");
@@ -8650,6 +8675,7 @@ ${value.stack}`;
     workerPages = new Set;
     pumping = false;
     batch = null;
+    newestSeen = null;
     dialogs = new Map;
     downloads = new Map;
     choosers = new Map;
@@ -8722,6 +8748,7 @@ ${value.stack}`;
       this.listening--;
     }
     async wait(api, page, event, optionsOrPredicate, since, settings) {
+      const seen = this.newestSeen;
       const kind = page === null ? "context" : "page";
       checkReported(api, event, kind);
       if (!isReported(event, kind))
@@ -8734,6 +8761,7 @@ ${value.stack}`;
       const publication = event === "framenavigated" && !options.predicate ? {
         page,
         since,
+        after: seen,
         done: new Promise((resolve) => {
           finish = resolve;
         })
@@ -8744,7 +8772,7 @@ ${value.stack}`;
         return await untilAborted(signal, () => abortedError(api, signal), async () => {
           if (lease)
             await deadline.race(lease.ready);
-          return this.waitFor(api, page, event, options, since, deadline, signal);
+          return this.waitFor(api, page, event, options, { since, after: seen }, deadline, signal);
         });
       } finally {
         if (lease)
@@ -8755,7 +8783,7 @@ ${value.stack}`;
       }
     }
     async publishNavigation(page, cut, api, deadline, signal) {
-      const waits = [...this.navigationWaits].filter((wait) => (wait.page === null || wait.page === page) && wait.since <= cut.at).map((wait) => wait.done);
+      const waits = [...this.navigationWaits].filter((wait) => (wait.page === null || wait.page === page) && wait.since <= cut.at && (wait.after === null || wait.after < cut.seq)).map((wait) => wait.done);
       let finish;
       let fail;
       const delivered = new Promise((resolve, reject) => {
@@ -8786,15 +8814,16 @@ ${value.stack}`;
         }
       }
     }
-    async waitFor(api, page, event, options, since, deadline, signal) {
+    async waitFor(api, page, event, options, from, deadline, signal) {
+      const { since } = from;
       const target = page === null ? null : await page._openedBrand(api);
-      let after = null;
+      let after = from.after;
       for (;; ) {
         const left = deadline.left();
         let record;
         let observed = null;
         try {
-          ({ value: record, observed } = await invokeObserved("events.wait", { api, timeoutMs: left }, { page: target, event, since, after }, undefined, signal));
+          ({ value: record, observed } = await invokeObserved("events.wait", { api, timeoutMs: left }, { page: target, event, since, after }, (received) => this.saw(received.seq), signal));
         } catch (error) {
           throw deadline.named(error);
         }
@@ -8882,7 +8911,13 @@ ${value.stack}`;
         this.pumping = false;
       }
     }
+    saw(seq) {
+      if (this.newestSeen === null || seq > this.newestSeen)
+        this.newestSeen = seq;
+    }
     deliverBatch(events, lost, observed) {
+      for (const event of events)
+        this.saw(event.seq);
       this.stageBatch(events);
       try {
         for (const event of events)
@@ -9105,6 +9140,63 @@ ${value.stack}`;
       const chooser = new FileChooser(page, info);
       this.choosers.set(seq, chooser);
       return chooser;
+    }
+  }
+
+  // crates/neo-sdk/neo-playwright-js/src/prelude/locator-handlers.ts
+  class LocatorHandlers {
+    #byUid = new Map;
+    #pulling = false;
+    async add(api, page, locator, handler, options = {}) {
+      if (!(locator instanceof Locator) || locator._frame !== page._mainFrame)
+        throw plainError(api, "Locator must belong to the main frame of this page");
+      if (options.times === 0)
+        return;
+      const target = await locator._frame._locatorBrand(api, locator._selector);
+      const { uid } = await invoke("page.addLocatorHandler", { api, timeoutMs: 0 }, options.noWaitAfter ? { target, noWaitAfter: true } : { target });
+      this.#byUid.set(uid, { page, locator, handler, times: options.times });
+      if (!this.#pulling) {
+        this.#pulling = true;
+        this.pull();
+      }
+    }
+    async remove(api, page, locator) {
+      for (const [uid, registration] of this.#byUid) {
+        if (registration.page !== page || !(locator instanceof Locator) || registration.locator._frame !== locator._frame || registration.locator._selector !== locator._selector)
+          continue;
+        this.#byUid.delete(uid);
+        await invoke("page.removeLocatorHandler", { api, timeoutMs: 0 }, { uid }).catch(() => {});
+      }
+    }
+    async pull() {
+      try {
+        while (this.#byUid.size > 0) {
+          const { uid } = await invoke("page.locatorHandlerTriggered", { api: "page.locatorHandlerTriggered", timeoutMs: 0 }, {});
+          if (uid !== null)
+            this.#run(uid);
+        }
+      } catch {} finally {
+        this.#pulling = false;
+      }
+    }
+    async#run(uid) {
+      let remove = false;
+      const registration = this.#byUid.get(uid);
+      try {
+        if (registration && registration.times !== 0) {
+          if (registration.times !== undefined)
+            registration.times--;
+          await registration.handler(registration.locator);
+        }
+        remove = registration?.times === 0;
+      } catch (error) {
+        const thrown = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+        logError(`page.addLocatorHandler: the handler for ${String(registration?.locator)} threw: ${thrown}`);
+      } finally {
+        if (remove)
+          this.#byUid.delete(uid);
+        await invoke("page.resolveLocatorHandler", { api: "page.resolveLocatorHandler", timeoutMs: 0 }, remove ? { uid, remove: true } : { uid }).catch(() => {});
+      }
     }
   }
 
@@ -9654,6 +9746,12 @@ ${value.stack}`;
     }
     waitForSelector(selector, options) {
       return this._mainFrame._waitForSelector("page.waitForSelector", selector, options, false);
+    }
+    addLocatorHandler(locator, handler, options) {
+      return this._context._locatorHandlers.add("page.addLocatorHandler", this, locator, handler, options);
+    }
+    removeLocatorHandler(locator) {
+      return this._context._locatorHandlers.remove("page.removeLocatorHandler", this, locator);
     }
     goto(url, options) {
       return this._mainFrame._goto("page.goto", url, options);
@@ -10241,6 +10339,7 @@ ${value.stack}`;
     _timeoutSettings = new TimeoutSettings;
     _events;
     _exposed = new Map;
+    _locatorHandlers = new LocatorHandlers;
     _browser = null;
     #byTab = new Map;
     #unopened = null;
@@ -17640,7 +17739,6 @@ Timeout: ${timeout}ms`);
       tracing: { hint: TRACE, kind: "property" }
     },
     Page: {
-      addLocatorHandler: "locator handlers are not available in Neo; check for the overlay with locator.isVisible() before acting",
       bringToFront: "Neo keeps agent tabs in the background; act on the page directly",
       cancelPickLocator: NO_INSPECTOR,
       clearConsoleMessages: "Neo keeps no console history; hosted BrowserOS emits no console events",
@@ -17651,7 +17749,6 @@ Timeout: ${timeout}ms`);
       pageErrors: "Neo keeps no error history; hosted BrowserOS emits no pageerror events",
       pause: NO_INSPECTOR,
       pickLocator: NO_INSPECTOR,
-      removeLocatorHandler: "locator handlers are not available in Neo",
       requestGC: "garbage collection is not available in Neo",
       requests: "Neo does not record network requests",
       route: NETWORK,

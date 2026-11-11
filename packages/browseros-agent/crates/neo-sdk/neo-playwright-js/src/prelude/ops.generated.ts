@@ -478,6 +478,26 @@ export const OPS = {
     target: null,
     lifetime: 'operation',
   },
+  'page.addLocatorHandler': {
+    effect: 'read',
+    target: 'target',
+    lifetime: 'operation',
+  },
+  'page.removeLocatorHandler': {
+    effect: 'read',
+    target: null,
+    lifetime: 'operation',
+  },
+  'page.locatorHandlerTriggered': {
+    effect: 'read',
+    target: null,
+    lifetime: 'background',
+  },
+  'page.resolveLocatorHandler': {
+    effect: 'read',
+    target: null,
+    lifetime: 'operation',
+  },
 } as const
 
 /** A name `__neo.invoke` accepts for a Playwright operation. */

@@ -26,6 +26,7 @@ use crate::action::attempt_log::AttemptLog;
 use crate::action::subject::Subject;
 use crate::backoff::Backoff;
 use crate::input::{self, Keyboard};
+use crate::locator_handler::Prechecks;
 use crate::op_scope::{OpScope, Sent};
 use crate::page::OpPage;
 use crate::probe::{
@@ -175,7 +176,12 @@ impl<'a> FormRunner<'a> {
             if self.scope.sleep(backoff.wait(pass)).await.is_err() {
                 return Err(self.timed_out());
             }
-            let Ok(located) = self.scope.within(self.subject.locate(pass)).await else {
+            let prechecks = Prechecks::unless(self.force);
+            let Ok(located) = self
+                .scope
+                .within(self.subject.locate(pass, prechecks))
+                .await
+            else {
                 return Err(self.timed_out());
             };
             let Some(located) = located? else {
@@ -218,6 +224,13 @@ impl<'a> FormRunner<'a> {
             }
             if self.scope.sleep(wait).await.is_err() {
                 return Err(self.timed_out());
+            }
+            // The outer pass ran the first attempt's checkpoint just before it.
+            if retry > 0 && !self.force {
+                match self.scope.within(self.subject.run_handlers()).await {
+                    Ok(checked) => checked?,
+                    Err(_expired) => return Err(self.timed_out()),
+                }
             }
             if !self.force {
                 attempt.log(format!("  waiting for element to be {}", row.waits_for));

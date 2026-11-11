@@ -15,6 +15,7 @@ import { EventEmitter } from './emitter'
 import { internalError } from './errors'
 import { checkReported, EventHub, isReported } from './events'
 import { addInitScript, type Disposable } from './init-script'
+import { LocatorHandlers } from './locator-handlers'
 import { markHandle } from './options'
 import { Page } from './page'
 import { TimeoutSettings } from './timeouts'
@@ -34,6 +35,8 @@ export class BrowserContext extends EventEmitter {
   readonly _events: EventHub
   /** The bindings the context exposed, which a page's calls fall back to. */
   readonly _exposed = new Map<string, BindingCallback>()
+  /** The run's locator handlers, on every page: one pull serves them all. */
+  readonly _locatorHandlers = new LocatorHandlers()
   _browser: Browser | null = null
   readonly #byTab = new Map<number, Page>()
   /** The run's `page` while it has no tab; the reply that names its tab clears it. */

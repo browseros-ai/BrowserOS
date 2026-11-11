@@ -65,10 +65,6 @@ const hints = [
     sources: ['neo-playwright-js/src/prelude/unsupported.ts'],
   },
   {
-    hint: 'locator handlers are not available in Neo; check for the overlay with locator.isVisible() before acting',
-    sources: ['neo-playwright-js/src/prelude/unsupported.ts'],
-  },
-  {
     hint: 'adding tags is not available in Neo; change the page with page.evaluate()',
     sources: ['neo-playwright-js/src/prelude/unsupported.ts'],
   },
@@ -110,10 +106,6 @@ const hints = [
   },
   {
     hint: 'Neo keeps no error history; listen with page.on("pageerror") before the page fails',
-    sources: ['neo-playwright-js/src/prelude/unsupported.ts'],
-  },
-  {
-    hint: 'locator handlers are not available in Neo',
     sources: ['neo-playwright-js/src/prelude/unsupported.ts'],
   },
   {

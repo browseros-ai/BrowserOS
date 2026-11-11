@@ -19,7 +19,7 @@ use crate::page::{MediaSessions, PageRegistry, context_op, page_op};
 use crate::read::read_op;
 use crate::snapshot::snapshot_op;
 use crate::world::{Epoch, FrameAttachLog, SessionSetup};
-use crate::{OpEnv, PlaywrightError};
+use crate::{OpEnv, PlaywrightError, locator_handler};
 
 /// How long an op that ends may wait for its events to reach the run's listeners first
 /// ([`Playwright::events_before_reply`]). Both steps are usually immediate; this only bounds a
@@ -187,6 +187,9 @@ impl Playwright {
             OpKind::Input(op) => input_op::invoke(self, &scope, op, args).await,
             OpKind::Page(op) => page_op::invoke(self, &scope, op, args).await,
             OpKind::Context(op) => context_op::invoke(self, &scope, op, args).await,
+            // A trigger is upstream's `locatorHandlerTriggered` event: listeners for what the
+            // page did before it run first, as upstream's one ordered channel runs them.
+            OpKind::LocatorHandler(op) => locator_handler::invoke(&scope, op, args).await,
             // The event ops are the pump and the waits themselves: none waits for the pump.
             OpKind::Event(op) => {
                 return scope.settle(event_op::invoke(self, &scope, op, args).await);
@@ -252,8 +255,12 @@ mod tests {
     #[tokio::test]
     async fn tests_that_an_empty_call_fails_before_it_reaches_the_host()
     -> Result<(), Box<dyn Error>> {
-        const WHOLE_WITHOUT_ARGUMENTS: [&str; 3] =
-            ["context.pages", "context.newPage", "events.next"];
+        const WHOLE_WITHOUT_ARGUMENTS: [&str; 4] = [
+            "context.pages",
+            "context.newPage",
+            "events.next",
+            "page.locatorHandlerTriggered",
+        ];
         let playwright = Playwright::new(test_env::offline_session());
         let env = TestEnv::new();
         let ops = Op::all().filter(|op| !WHOLE_WITHOUT_ARGUMENTS.contains(&op.spec().name));
