@@ -29,14 +29,14 @@ export interface StoredTask {
 
 export interface StoredRunStart {
   id: string
-  seq: number
+  /** The store's arrival ticket: orders runs that reached the viewer in the same millisecond. */
+  arrival: number
   tool: string
   code: string
   timeoutMs: number | null
   taskIdStamped: boolean
   sentAt: string
   proxyMs: number
-  gapMs: number | null
   request: RunDetail['request']
 }
 
@@ -66,7 +66,12 @@ export class TaskLog {
     const tasks: LogLine[][] = []
     for (const name of (await readdir(dir)).sort()) {
       if (!name.endsWith('.jsonl')) continue
-      const lines = parseLines(await readFile(join(dir, name), 'utf8'))
+      const file = join(dir, name)
+      const text = await readFile(file, 'utf8')
+      // A crash mid-write leaves a torn last line. End it, so the next append starts a line of
+      // its own instead of joining the fragment and being lost with it.
+      if (text !== '' && !text.endsWith('\n')) await appendFile(file, '\n')
+      const lines = parseLines(text)
       if (lines[0]?.type === 'task') tasks.push(lines)
     }
     return { log: new TaskLog(dir), tasks }

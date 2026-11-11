@@ -103,6 +103,13 @@ test('the API lists tasks, a task with its runs, one run in full, and streams ea
   expect(
     (await fetch(`${viewer.url}${apiRoutes.taskRuns('nope')}`)).status,
   ).toBe(404)
+  // The page: built at start, its stylesheet compiled by Tailwind from the classes web/ uses.
+  const html = await (await fetch(viewer.url)).text()
+  const css = /href="\.\/([^"]+\.css)"/.exec(html)?.[1]
+  expect(html).toContain('<div id="root"></div>')
+  expect(await (await fetch(`${viewer.url}/${css}`)).text()).toContain(
+    '.max-w-6xl',
+  )
   // A page that rebinds its own domain to 127.0.0.1 cannot read the log.
   const foreign = await fetch(`${viewer.url}${apiRoutes.tasks}`, {
     headers: { host: 'attacker.example' },

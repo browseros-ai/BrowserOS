@@ -12,6 +12,8 @@ import { dirname, join } from 'node:path'
 import { compile } from '@tailwindcss/node'
 import { Scanner } from '@tailwindcss/oxide'
 import type { BunPlugin } from 'bun'
+// Imported (not named by path) so the page's files are part of the module graph tools read.
+import page from '../web/index.html'
 
 const WEB_DIR = join(import.meta.dir, '..', 'web')
 
@@ -23,7 +25,7 @@ export interface PageFile {
 
 export async function buildPage(): Promise<Map<string, PageFile>> {
   const result = await Bun.build({
-    entrypoints: [join(WEB_DIR, 'index.html')],
+    entrypoints: [page.index],
     plugins: [tailwind],
     target: 'browser',
     define: {

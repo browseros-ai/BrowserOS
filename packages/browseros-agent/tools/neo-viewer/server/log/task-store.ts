@@ -44,14 +44,15 @@ interface RunState {
   live: boolean
 }
 
-/** A run as the proxy reports it starting (the store adds `id`, `seq` and the gap). */
-export type RunStart = Omit<StoredRunStart, 'id' | 'seq' | 'gapMs'>
+/** A run as the proxy reports it starting (the store adds its `id`). */
+export type RunStart = Omit<StoredRunStart, 'id'>
 
 export class TaskStore {
   private readonly tasks = new Map<string, TaskState>()
   private readonly runs = new Map<string, RunState>()
   private readonly toolsListByAgent = new Map<string, TextSize>()
   private readonly listeners = new Set<(event: ViewerEvent) => void>()
+  private arrivals = 0
 
   private constructor(private readonly log: TaskLog) {}
 
@@ -122,25 +123,33 @@ export class TaskStore {
     this.emitTask(task.record.id)
   }
 
+  /**
+   * A ticket taken when a call reaches the viewer. A run is recorded once its task is known,
+   * which can be after a later call's (the process lookup), so runs are ordered by when they
+   * arrived, not by when they were recorded.
+   */
+  nextArrival(): number {
+    return ++this.arrivals
+  }
+
   startRun(taskId: string, start: RunStart): string {
     const task = this.tasks.get(taskId)
     if (!task) throw new Error(`no task ${taskId}`)
     const id = `${taskId}-r${task.runs.length + 1}`
     const run: RunState = {
       taskId,
-      start: {
-        ...start,
-        id,
-        seq: task.runs.length + 1,
-        gapMs: gapBefore(task.runs, start.sentAt),
-      },
+      start: { ...start, id },
       end: null,
       live: true,
     }
-    task.runs.push(run)
+    const at = task.runs.findIndex((other) => comesBefore(run, other))
+    const index = at === -1 ? task.runs.length : at
+    task.runs.splice(index, 0, run)
     this.runs.set(id, run)
     this.write(taskId, { type: 'run-start', run: run.start })
-    this.emitRun(run)
+    // A run placed before others renumbers them.
+    const views = runViews(task)
+    for (const view of views.slice(index)) this.emit({ type: 'run', run: view })
     this.emitTask(taskId)
     return id
   }
@@ -164,12 +173,15 @@ export class TaskStore {
   task(taskId: string): { task: TaskSummary; runs: RunSummary[] } | null {
     const task = this.tasks.get(taskId)
     if (!task) return null
-    return { task: summarizeTask(task), runs: task.runs.map(summarizeRun) }
+    return { task: summarizeTask(task), runs: runViews(task) }
   }
 
   run(runId: string): RunDetail | null {
     const run = this.runs.get(runId)
-    return run ? detailRun(run) : null
+    const task = run && this.tasks.get(run.taskId)
+    const view =
+      task && runViews(task).find((candidate) => candidate.id === runId)
+    return run && view ? detailRun(run, view) : null
   }
 
   private restore(lines: LogLine[], rule: TaskRule): void {
@@ -193,6 +205,9 @@ export class TaskStore {
         if (run) run.end = line.end
       }
     }
+    task.runs.sort((a, b) =>
+      comesBefore(a, b) ? -1 : comesBefore(b, a) ? 1 : 0,
+    )
     this.tasks.set(task.record.id, task)
     for (const [id, run] of byId) this.runs.set(id, run)
     if (task.toolsList)
@@ -210,7 +225,10 @@ export class TaskStore {
   }
 
   private emitRun(run: RunState): void {
-    this.emit({ type: 'run', run: summarizeRun(run) })
+    const task = this.tasks.get(run.taskId)
+    const view =
+      task && runViews(task).find((candidate) => candidate.id === run.start.id)
+    if (view) this.emit({ type: 'run', run: view })
   }
 
   private emit(event: ViewerEvent): void {
@@ -218,20 +236,34 @@ export class TaskStore {
   }
 }
 
-/** Time since the latest earlier reply; null for the first run, or while an earlier run is still going. */
-function gapBefore(earlier: RunState[], sentAt: string): number | null {
-  let latest: number | null = null
-  for (const run of earlier) {
-    if (!run.end) {
-      if (run.live) return null
-      continue
+/** Arrival order: when the call reached the viewer, then its arrival ticket. */
+function comesBefore(a: RunState, b: RunState): boolean {
+  if (a.start.sentAt !== b.start.sentAt) return a.start.sentAt < b.start.sentAt
+  return a.start.arrival < b.start.arrival
+}
+
+/**
+ * The task's runs as listed: numbered in arrival order, each with the time since the latest
+ * earlier reply. The gap is null for the first run, and for a run sent while an earlier one was
+ * still going (they overlap; the agent was not waiting on a reply).
+ */
+function runViews(task: TaskState): RunSummary[] {
+  let latestReply: number | null = null
+  let earlierRunning = false
+  return task.runs.map((run, index) => {
+    const sent = Date.parse(run.start.sentAt)
+    const overlaps =
+      earlierRunning || (latestReply !== null && latestReply > sent)
+    const gap = latestReply === null || overlaps ? null : sent - latestReply
+    if (run.end) {
+      const answered = Date.parse(run.end.answeredAt)
+      latestReply =
+        latestReply === null ? answered : Math.max(latestReply, answered)
+    } else if (run.live) {
+      earlierRunning = true
     }
-    const answered = Date.parse(run.end.answeredAt)
-    if (latest === null || answered > latest) latest = answered
-  }
-  if (latest === null) return null
-  const gap = Date.parse(sentAt) - latest
-  return gap >= 0 ? gap : null
+    return summarizeRun(run, index + 1, gap)
+  })
 }
 
 function statusOf(run: RunState): RunStatus {
@@ -239,14 +271,18 @@ function statusOf(run: RunState): RunStatus {
   return run.live ? 'running' : 'lost'
 }
 
-function summarizeRun(run: RunState): RunSummary {
+function summarizeRun(
+  run: RunState,
+  seq: number,
+  gapMs: number | null,
+): RunSummary {
   const { start, end } = run
   const text = end?.reply.text ?? null
   const runMeta = runMetaOf(end?.reply.meta)
   return {
     id: start.id,
     taskId: run.taskId,
-    seq: start.seq,
+    seq,
     tool: start.tool,
     status: statusOf(run),
     code: start.code,
@@ -258,7 +294,7 @@ function summarizeRun(run: RunState): RunSummary {
       ? Date.parse(end.answeredAt) - Date.parse(start.sentAt)
       : null,
     proxyMs: start.proxyMs,
-    gapMs: start.gapMs,
+    gapMs,
     codeSize: textSize(start.code),
     replySize: text === null ? null : textSize(text),
     replyPreview: text === null ? null : text.slice(0, PREVIEW_CHARS),
@@ -268,13 +304,14 @@ function summarizeRun(run: RunState): RunSummary {
   }
 }
 
-function detailRun(run: RunState): RunDetail {
+function detailRun(run: RunState, view: RunSummary): RunDetail {
   return {
-    ...summarizeRun(run),
+    ...view,
     request: run.start.request,
     reply: run.end?.reply ?? {
       httpStatus: null,
       contentType: null,
+      contentEncoding: null,
       raw: null,
       text: null,
       structuredContent: null,
@@ -298,7 +335,7 @@ function summarizeTask(task: TaskState): TaskSummary {
     createdAt: record.createdAt,
     lastCallAt: lastCallAt(task),
     toolsList: task.toolsList,
-    totals: totalsOf(task.runs.map(summarizeRun)),
+    totals: totalsOf(runViews(task)),
   }
 }
 

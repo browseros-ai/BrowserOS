@@ -288,6 +288,67 @@ test('a compressed reply passes through compressed, as Neo sent it', async () =>
   expect(
     Buffer.from(await response.arrayBuffer()).equals(Buffer.from(gzipped)),
   ).toBe(true)
+  // The log reads its own decoded copy.
+  const run = await onlyRun(viewer)
+  expect(run).toMatchObject({
+    status: 'ok',
+    neoRunId: '01a1cc18-ed14-78b3-a30d-2cb4ef81d9f4',
+  })
+  expect(run.reply).toMatchObject({
+    text: '7',
+    structuredContent: { value: 7 },
+    contentEncoding: 'gzip',
+  })
+  expect(run.reply.raw).toBe(sseEvent(runResult(7, '7', { value: 7 })))
+})
+
+test('a sized reply still streams: the first bytes reach the agent before the rest is sent', async () => {
+  // Bun's server always frames a streamed body as chunked, so this Neo writes HTTP by hand.
+  const first = ':\n\n'
+  const rest = sseEvent(runResult(8, '8', { value: 8 }))
+  let restSentAt = 0
+  const neo = Bun.listen({
+    hostname: '127.0.0.1',
+    port: 0,
+    socket: {
+      data(socket) {
+        socket.write(
+          `HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncontent-length: ${first.length + rest.length}\r\n\r\n${first}`,
+        )
+        setTimeout(() => {
+          restSentAt = Date.now()
+          socket.write(rest)
+          socket.end()
+        }, 600)
+      },
+    },
+  })
+  cleanups.push(async () => neo.stop(true))
+  const dataDir = await mkdtemp(join(tmpdir(), 'neo-viewer-test-'))
+  cleanups.push(() => rm(dataDir, { recursive: true, force: true }))
+  const viewer = await startViewer({
+    port: 0,
+    upstream: new URL(`http://127.0.0.1:${neo.port}/mcp`),
+    dataDir,
+  })
+  cleanups.push(() => viewer.stop())
+  const response = await fetch(viewer.mcpUrl, {
+    method: 'POST',
+    headers: MCP_HEADERS,
+    body: runCall(8, 'return 8'),
+  })
+  const reader = response.body?.getReader()
+  const head = await reader?.read()
+  const headAt = Date.now()
+  let body = new TextDecoder().decode(head?.value)
+  for (;;) {
+    const chunk = await reader?.read()
+    if (!chunk || chunk.done) break
+    body += new TextDecoder().decode(chunk.value)
+  }
+  expect(body).toBe(first + rest)
+  expect(restSentAt - headAt).toBeGreaterThan(300)
+  expect((await onlyRun(viewer)).reply.keepAlives).toBe(1)
 })
 
 describe('tasks', () => {

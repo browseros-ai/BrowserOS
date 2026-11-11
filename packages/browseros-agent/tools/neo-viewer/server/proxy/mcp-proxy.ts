@@ -14,19 +14,19 @@
  * is gone, so the proxy must not keep it alive.
  */
 
-import type { ClientInfo, JsonRpcError, TextSize } from '../../shared/api'
-import { textSize } from '../../shared/api'
-import type { StoredRunEnd } from '../log/task-log'
+import type { ClientInfo } from '../../shared/api'
 import type { TaskStore } from '../log/task-store'
 import type { ClientNames } from '../tasks/client-names'
 import type { Peer, ProcessFinder } from '../tasks/peer-process'
 import type { Assignment, ProcessLookup, TaskRule } from '../tasks/task-rule'
 import {
-  JsonReader,
-  type ReplyListener,
-  type ReplyMessage,
-  SseReader,
-} from './reply-reader'
+  type Call,
+  type Ending,
+  ReplyTracker,
+  resultOf,
+  runEnd,
+  toolsListSize,
+} from './calls'
 import {
   agentTaskId,
   applyEdits,
@@ -64,26 +64,6 @@ const HOP_HEADERS = new Set([
   'content-length',
 ])
 
-/** One JSON-RPC request in the body whose reply the log wants: a tool call or `tools/list`. */
-interface Call {
-  message: RequestMessage
-  kind: 'tool-call' | 'tools-list'
-  idKey: string
-  reply: ReplyMessage | null
-  notifications: unknown[]
-  keepAlives: number
-  /** The task, once chosen (tool calls only). */
-  assigned: Promise<Assignment> | null
-  /** The run's id in the store, once recorded (tool calls only). */
-  started: Promise<string> | null
-}
-
-/** How the reply ended, for calls it never answered. */
-type Ending =
-  | { kind: 'ended' }
-  | { kind: 'cancelled' }
-  | { kind: 'failed'; error: string }
-
 export async function handleMcp(
   req: Request,
   peer: Peer | null,
@@ -98,6 +78,7 @@ export async function handleMcp(
 /** One HTTP request through the proxy and its reply, from arrival to the last logged line. */
 class Exchange {
   private readonly sentAt: number
+  private readonly arrival: number
   private readonly connection: string | null
   private readonly userAgent: string | null
   private readonly body: RequestBody
@@ -117,6 +98,7 @@ class Exchange {
     private readonly deps: McpProxyDeps,
   ) {
     this.sentAt = deps.now()
+    this.arrival = deps.store.nextArrival()
     this.connection = peer ? `${peer.address}:${peer.port}` : null
     this.userAgent = req.headers.get('user-agent')
     this.body = bytes ? readRequestBody(bytes) : { text: null, messages: [] }
@@ -292,6 +274,7 @@ class Exchange {
           tool: typeof params.name === 'string' ? params.name : '',
           code: typeof args.code === 'string' ? args.code : '',
           timeoutMs: typeof args.timeout === 'number' ? args.timeout : null,
+          arrival: this.arrival,
           taskIdStamped: stamped,
           sentAt: new Date(this.sentAt).toISOString(),
           proxyMs: forwardedAt - this.sentAt,
@@ -307,7 +290,12 @@ class Exchange {
 
   /** Sends Neo's reply on to the agent, chunk by chunk as it arrives, logging each after it is sent. */
   private async relay(answer: Response): Promise<Response> {
-    this.tracker.contentType(answer.headers.get('content-type'))
+    this.tracker.headers(
+      answer.headers.get('content-type'),
+      answer.headers.get('content-encoding'),
+    )
+    // Every body is streamed, sized or not: a sized SSE reply can still arrive slowly. Bun frames
+    // it chunked on this hop; the bytes are Neo's.
     const init = {
       status: answer.status,
       statusText: answer.statusText,
@@ -316,19 +304,6 @@ class Exchange {
     if (!answer.body) {
       this.finish({ kind: 'ended' })
       return new Response(null, init)
-    }
-    if (answer.headers.has('content-length')) {
-      // A short, sized body (a 202, a refusal): read it whole and keep its length.
-      let whole: Uint8Array<ArrayBuffer>
-      try {
-        whole = new Uint8Array(await answer.arrayBuffer())
-      } catch (error) {
-        this.finish({ kind: 'failed', error: String(error) })
-        return new Response(null, { status: this.agentGone ? 499 : 502 })
-      }
-      this.tracker.push(whole, this.deps.now())
-      this.finish({ kind: 'ended' })
-      return new Response(whole, init)
     }
     const reader = answer.body.getReader()
     const stream = new ReadableStream<Uint8Array>({
@@ -403,72 +378,6 @@ function withoutHopHeaders(headers: Headers): Headers {
   return out
 }
 
-/** Collects the reply's raw bytes and the messages in it, routing each to its call. */
-class ReplyTracker implements ReplyListener {
-  private readonly chunks: Uint8Array[] = []
-  private reader: SseReader | JsonReader | null = null
-  private type: string | null = null
-
-  constructor(private readonly calls: Call[]) {}
-
-  contentType(value: string | null): void {
-    this.type = value
-    const lower = value?.toLowerCase() ?? ''
-    if (lower.startsWith('text/event-stream')) this.reader = new SseReader(this)
-    else if (lower.includes('json')) this.reader = new JsonReader(this)
-  }
-
-  push(chunk: Uint8Array, at: number): void {
-    this.chunks.push(chunk)
-    this.reader?.push(chunk, at)
-  }
-
-  end(at: number): void {
-    this.reader?.end(at)
-    this.reader = null
-  }
-
-  /** The body as the agent got it, or null when no reply arrived. */
-  raw(): string | null {
-    return this.type === null
-      ? null
-      : new TextDecoder().decode(Buffer.concat(this.chunks))
-  }
-
-  contentTypeValue(): string | null {
-    return this.type
-  }
-
-  message(reply: ReplyMessage): void {
-    const message = reply.message
-    if (isResponse(message)) {
-      const key = JSON.stringify(message.id)
-      const call = this.calls.find(
-        (candidate) => candidate.idKey === key && !candidate.reply,
-      )
-      if (call) call.reply = reply
-      return
-    }
-    for (const call of this.calls)
-      if (!call.reply) call.notifications.push(message)
-  }
-
-  comment(): void {
-    for (const call of this.calls) if (!call.reply) call.keepAlives++
-  }
-}
-
-function isResponse(
-  message: unknown,
-): message is { id: unknown; result?: unknown; error?: unknown } {
-  return (
-    typeof message === 'object' &&
-    message !== null &&
-    'id' in message &&
-    ('result' in message || 'error' in message)
-  )
-}
-
 interface SettleContext {
   deps: McpProxyDeps
   lookup: Promise<ProcessLookup>
@@ -509,7 +418,10 @@ function settle(
       call,
       result,
       raw,
-      tracker.contentTypeValue(),
+      {
+        contentType: tracker.contentTypeValue(),
+        contentEncoding: tracker.contentEncodingValue(),
+      },
       upstream,
       ending,
       endedAt,
@@ -526,93 +438,4 @@ function settle(
       )
     })
   }
-}
-
-function runEnd(
-  call: Call,
-  result: Record<string, unknown> | null,
-  raw: string | null,
-  contentType: string | null,
-  upstream: Response | null,
-  ending: Ending,
-  endedAt: number,
-): StoredRunEnd {
-  const message = call.reply?.message as { error?: unknown } | undefined
-  const rpcError =
-    message && 'error' in message ? toRpcError(message.error) : null
-  const content = Array.isArray(result?.content)
-    ? (result.content as unknown[])
-    : null
-  const text = content
-    ? content
-        .filter((part): part is { type: 'text'; text: string } =>
-          isTextPart(part),
-        )
-        .map((part) => part.text)
-        .join('\n')
-    : null
-  const isError = result ? result.isError === true : null
-  let status: StoredRunEnd['status']
-  if (result) status = isError ? 'error' : 'ok'
-  else if (rpcError) status = 'rpc-error'
-  else status = ending.kind === 'cancelled' ? 'cancelled' : 'http-error'
-  return {
-    status,
-    answeredAt: new Date(call.reply?.at ?? endedAt).toISOString(),
-    reply: {
-      httpStatus: upstream?.status ?? null,
-      contentType,
-      raw: raw ?? (ending.kind === 'failed' ? ending.error : null),
-      text,
-      structuredContent: result?.structuredContent ?? null,
-      isError,
-      meta: result?._meta ?? null,
-      rpcError,
-      notifications: call.notifications,
-      keepAlives: call.keepAlives,
-    },
-  }
-}
-
-function resultOf(message: unknown): Record<string, unknown> | null {
-  if (typeof message !== 'object' || message === null || !('result' in message))
-    return null
-  const result = (message as { result: unknown }).result
-  return typeof result === 'object' && result !== null
-    ? (result as Record<string, unknown>)
-    : null
-}
-
-function isTextPart(part: unknown): boolean {
-  return (
-    typeof part === 'object' &&
-    part !== null &&
-    (part as { type?: unknown }).type === 'text' &&
-    typeof (part as { text?: unknown }).text === 'string'
-  )
-}
-
-function toRpcError(error: unknown): JsonRpcError {
-  const value = (
-    typeof error === 'object' && error !== null ? error : {}
-  ) as Record<string, unknown>
-  return {
-    code: typeof value.code === 'number' ? value.code : 0,
-    message:
-      typeof value.message === 'string' ? value.message : JSON.stringify(error),
-    ...('data' in value ? { data: value.data } : {}),
-  }
-}
-
-/**
- * What a `tools/list` puts in the model's context: each tool's name, description and input
- * schema as JSON. Neo's one tool, `run`, is about 6,500 characters.
- */
-function toolsListSize(result: Record<string, unknown>): TextSize | null {
-  if (!Array.isArray(result.tools)) return null
-  let text = ''
-  for (const tool of result.tools as Array<Record<string, unknown>>) {
-    text += `${String(tool.name ?? '')}${String(tool.description ?? '')}${JSON.stringify(tool.inputSchema ?? null)}`
-  }
-  return textSize(text)
 }

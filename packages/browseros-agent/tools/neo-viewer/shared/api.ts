@@ -180,6 +180,8 @@ export interface RunDetail extends RunSummary {
   reply: {
     httpStatus: number | null
     contentType: string | null
+    /** Neo's `Content-Encoding`, if any; the agent got the encoded bytes, `raw` holds them decoded. */
+    contentEncoding: string | null
     /** The HTTP body Neo answered with, byte for byte (UTF-8): SSE framing and keep-alives included. */
     raw: string | null
     /** The text content blocks joined with "\n": what the model read. */

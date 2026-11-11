@@ -12,9 +12,6 @@
 
 import type { ProcessLookup } from './task-rule'
 
-/** Runs a command and returns its stdout; rejects when it cannot run or exits non-zero. */
-export type RunCommand = (command: string, args: string[]) => Promise<string>
-
 export interface Peer {
   address: string
   port: number
@@ -28,11 +25,12 @@ export interface ProcessFinder {
   }
 }
 
-interface PeerProcessOptions {
+export interface PeerProcessOptions {
   /** The viewer's own listening port: the far end of every agent connection. */
   listenPort: number
   platform?: NodeJS.Platform
-  run?: RunCommand
+  /** Runs a command and returns its stdout; rejects when it cannot run or exits non-zero. */
+  run?: (command: string, args: string[]) => Promise<string>
   /** How long a connection's answer is reused after its last call ends. */
   reuseMs?: number
   /** Longest wait for an answer; slower lookups count as not found. */
@@ -57,7 +55,7 @@ export class PeerProcessFinder implements ProcessFinder {
     Promise<{ startedAt: string | null; command: string | null }>
   >()
   private readonly platform: NodeJS.Platform
-  private readonly run: RunCommand
+  private readonly run: NonNullable<PeerProcessOptions['run']>
   private readonly reuseMs: number
   private readonly timeoutMs: number
   private readonly now: () => number
@@ -248,7 +246,10 @@ export function parsePs(output: string): {
     : { startedAt: null, command: null }
 }
 
-const runCommand: RunCommand = async (command, args) => {
+const runCommand: NonNullable<PeerProcessOptions['run']> = async (
+  command,
+  args,
+) => {
   const child = Bun.spawn([command, ...args], {
     stdout: 'pipe',
     stderr: 'ignore',

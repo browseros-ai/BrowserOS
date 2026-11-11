@@ -62,7 +62,7 @@ function containerEnd(text: string, start: number): number | null {
 }
 
 /** Index just past the JSON value starting at `start` (no leading whitespace). */
-export function valueEnd(text: string, start: number): number | null {
+function valueEnd(text: string, start: number): number | null {
   const char = text[start]
   if (char === '"') return stringEnd(text, start)
   if (char === '{' || char === '[') return containerEnd(text, start)
