@@ -808,3 +808,92 @@ it('orders context on/off around async setup and rejects an old pump period', as
   push?.({ events: [load(31, Date.now(), 'https://new.test/')], lost: 0 })
   expect(await pending).toBe('https://new.test/')
 })
+
+it('reuses the original Dialog for page and context closure and delivers each once', async () => {
+  const recordedAt = Date.now()
+  const dialog = {
+    id: 91,
+    type: 'confirm',
+    message: 'Close?',
+    defaultValue: '',
+  }
+  const runtime = loadPrelude({
+    seed: SEED,
+    now: recordedAt,
+    answer: pumpAnswers([
+      [
+        { seq: 1, at: recordedAt, event: 'dialog', page: brand(7), dialog },
+        {
+          seq: 2,
+          at: recordedAt,
+          event: 'dialogclosed',
+          page: brand(7),
+          dialog,
+          context: true,
+        },
+        {
+          seq: 2,
+          at: recordedAt,
+          event: 'dialogclosed',
+          page: brand(7),
+          dialog,
+          context: false,
+        },
+      ],
+    ]),
+  })
+  expect(
+    json(
+      await runtime.run(`
+    let opened
+    const order = []
+    page.once('dialog', dialog => opened = dialog)
+    context.once('dialogclosed', dialog => order.push(dialog === opened ? 'context' : 'wrong'))
+    const closed = await new Promise(resolve => page.once('dialogclosed', resolve))
+    order.push(closed === opened ? 'page' : 'wrong')
+    return { order, message: closed.message(), page: closed.page() === page, listeners: page.listenerCount('dialogclosed') }
+  `),
+    ),
+  ).toEqual({
+    order: ['context', 'page'],
+    message: 'Close?',
+    page: true,
+    listeners: 0,
+  })
+})
+
+it('delivers an automatically closed dialog to waits without answering it again', async () => {
+  const runtime = loadPrelude({
+    seed: SEED,
+    answer: (call) =>
+      call.name === 'events.wait'
+        ? {
+            seq: 3,
+            at: Date.now(),
+            event: 'dialogclosed',
+            page: brand(7),
+            context: call.input.page === null,
+            dialog: {
+              id: 92,
+              type: 'alert',
+              message: 'automatic',
+              defaultValue: '',
+            },
+          }
+        : null,
+  })
+  expect(
+    json(
+      await runtime.run(`
+    const closed = await page.waitForEvent('dialogclosed', dialog => dialog.message() === 'automatic')
+    const mirrored = await context.waitForEvent('dialogclosed')
+    return closed === mirrored && closed.type() === 'alert' && closed.page() === page
+  `),
+    ),
+  ).toBe(true)
+  expect(
+    runtime.calls.some(
+      (call) => call.name === 'dialog.accept' || call.name === 'dialog.dismiss',
+    ),
+  ).toBe(false)
+})

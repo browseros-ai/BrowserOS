@@ -155,6 +155,7 @@ export type EventName =
   | 'popup'
   | 'close'
   | 'dialog'
+  | 'dialogclosed'
   | 'console'
   | 'pageerror'
   | 'download'
@@ -219,6 +220,12 @@ export type EventRecord = { seq: number; at: number } & (
       context: boolean
     }
   | { event: 'dialog'; page: PageBrand; dialog: DialogInfo }
+  | {
+      event: 'dialogclosed'
+      page: PageBrand
+      dialog: DialogInfo
+      context: boolean
+    }
   | { event: 'console'; page: PageBrand; message: ConsoleInfo }
   | { event: 'pageerror'; page: PageBrand; error: PageErrorInfo }
   | { event: 'download'; page: PageBrand; download: DownloadInfo }
