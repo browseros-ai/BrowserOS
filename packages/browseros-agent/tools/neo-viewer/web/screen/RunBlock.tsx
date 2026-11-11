@@ -30,17 +30,18 @@ export function RunBlock({
         <div
           // biome-ignore lint/suspicious/noArrayIndexKey: a script line is its line number.
           key={index}
-          className="flex h-6 shrink-0 items-center px-4"
+          className="flex min-h-6 shrink-0 items-start px-4 py-1"
         >
-          <Rail />
+          <Rail bleed />
           <span className="w-[84px] shrink-0" />
-          <span className="w-[22px] shrink-0 pr-2.5 text-right font-code text-[11px] text-ink-4 leading-[14px]">
+          <span className="w-[22px] shrink-0 pt-px pr-2.5 text-right font-code text-[11px] text-ink-4 leading-[14px]">
             {index + 1}
           </span>
-          <code className="min-w-0 flex-1 overflow-clip whitespace-pre font-code text-ink">
+          {/* Long lines wrap rather than clip: this block is the only place the script is shown. */}
+          <code className="wrap-anywhere min-w-0 flex-1 whitespace-pre-wrap font-code text-ink">
             <LineSpans line={line} />
           </code>
-          <span className="w-[412px] shrink-0 truncate pl-1 text-[11px] text-ink-3 leading-[14px]">
+          <span className="w-[412px] shrink-0 truncate pt-px pl-1 text-[11px] text-ink-3 leading-[14px]">
             {index === 0 &&
               'The methods each line called, and their timing, arrive with the next PR.'}
           </span>
@@ -62,10 +63,15 @@ export function RunBlock({
   )
 }
 
-/** The blue line down the left of an open block, tying its lines to the row above. */
-function Rail() {
+/**
+ * The blue line down the left of an open block, tying its lines to the row above. `bleed` covers
+ * a padded row's padding so the line stays unbroken.
+ */
+function Rail({ bleed = false }: { bleed?: boolean }) {
   return (
-    <span className="flex w-[34px] shrink-0 self-stretch pl-1">
+    <span
+      className={`flex w-[34px] shrink-0 self-stretch pl-1 ${bleed ? '-my-1' : ''}`}
+    >
       <span className="block w-0.5 bg-neo" />
     </span>
   )

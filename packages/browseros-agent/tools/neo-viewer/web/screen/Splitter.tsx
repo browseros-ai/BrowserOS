@@ -3,7 +3,7 @@
  * focus) sets the sidebar's width; the width is remembered in this browser only.
  */
 
-import { useCallback, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 
 const STORAGE_KEY = 'neo-viewer.sidebar-width'
 export const DEFAULT_SIDEBAR = 372
@@ -26,9 +26,17 @@ function storedWidth(): number {
   }
 }
 
-/** The sidebar's width and a setter that keeps it in bounds and remembers it. */
+/**
+ * The sidebar's width and a setter that keeps it in bounds and remembers it. A width saved on a
+ * wider window, or a window made narrower, is clamped again so the runs keep their room.
+ */
 export function useSidebarWidth(): [number, (width: number) => void] {
-  const [width, setWidth] = useState(storedWidth)
+  const [width, setWidth] = useState(() => clampWidth(storedWidth()))
+  useEffect(() => {
+    const fit = () => setWidth((current) => clampWidth(current))
+    window.addEventListener('resize', fit)
+    return () => window.removeEventListener('resize', fit)
+  }, [])
   const update = useCallback((next: number) => {
     const clamped = clampWidth(next)
     setWidth(clamped)
