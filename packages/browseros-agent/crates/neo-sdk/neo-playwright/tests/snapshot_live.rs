@@ -29,7 +29,7 @@ use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 
 use fixture_server::{FixtureServer, Page, nest_pages};
-use live_browser::{LiveBrowser, Swept, TestPage, TestResult};
+use live_browser::{LiveBrowser, TestPage, TestResult};
 use locator::{aria_ref, attr, css, enter_frame, locator, role};
 use neo_playwright::ErrorCode;
 use serde_json::{Value, json};
@@ -762,112 +762,6 @@ async fn tests_that_a_locator_snapshot_is_its_element_with_the_frames_inside_it(
     live.close(&page).await
 }
 
-const MASK_TOP: &str = r#"<!doctype html><title>mask</title><body>
-<input id="code" aria-label="Code" autocomplete="one-time-code">
-<p id="echo">Confirm your code</p><p id="relay">Your password is</p>
-<script>
-const code = document.getElementById('code');
-code.addEventListener('input', () => { document.getElementById('echo').textContent = 'Confirm your code ' + code.value; });
-addEventListener('message', (event) => { document.getElementById('relay').textContent = 'Your password is ' + event.data; });
-const frame = document.createElement('iframe');
-frame.title = 'login';
-frame.src = `http://localhost:${location.port}/mask/login.html`;
-document.body.append(frame);
-</script></body>"#;
-
-/// The login frame fills its own password field, as a password manager would, and posts it to
-/// the main frame. Typing it from the test would need a CDP session of the test's own on the
-/// frame, and core's frame registry adopts every session attached on its connection, so
-/// detaching it would leave the registry a dead session for the frame.
-const MASK_LOGIN: &str = r#"<!doctype html><title>login</title><input id="pw" type="password" aria-label="Password"><script>
-const pw = document.getElementById('pw');
-pw.value = 'hunter2-oopif';
-parent.postMessage(pw.value, '*');
-</script>"#;
-
-#[tokio::test]
-#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT (default 9005)"]
-async fn tests_that_typed_secrets_echoed_in_page_text_come_back_masked() -> TestResult {
-    let _alone = ALONE.acquire().await?;
-    let live = LiveBrowser::connect().await?;
-    let pages = HashMap::from([
-        ("/mask/top.html".to_owned(), Page::html(MASK_TOP)),
-        ("/mask/login.html".to_owned(), Page::html(MASK_LOGIN)),
-    ]);
-    let server = FixtureServer::start(pages).await?;
-    let page = live
-        .open(&server.url("127.0.0.1", "/mask/top.html"))
-        .await?;
-
-    // The owner types a code in the main frame, which echoes it; the cross-site login frame
-    // posts its password to the main frame, which prints it.
-    live.main_world(
-        &page,
-        "const c = document.getElementById('code'); c.value = '482913'; c.dispatchEvent(new Event('input'))",
-    )
-    .await?;
-    let relayed =
-        "document.getElementById('relay').textContent === 'Your password is hunter2-oopif'";
-    let mut done = Value::Null;
-    for _ in 0..100 {
-        done = live.main_world(&page, relayed).await?;
-        if done == json!(true) {
-            break;
-        }
-        time::sleep(Duration::from_millis(50)).await;
-    }
-    assert_eq!(
-        done,
-        json!(true),
-        "the main frame prints the frame's password"
-    );
-
-    // ai mode reads both frames, so each frame's sweep masks the other's echoes too.
-    let snapshot = live
-        .invoke("page.ariaSnapshot", page_snapshot(&page, "ai"))
-        .await??;
-    let ai = strings(&snapshot);
-    for secret in ["482913", "hunter2-oopif"] {
-        assert!(
-            !ai.iter().any(|text| text.contains(secret)),
-            "{secret} never comes back: {ai:?}"
-        );
-    }
-    for echo in ["Confirm your code [private]", "Your password is [private]"] {
-        assert!(
-            ai.iter().any(|text| text == echo),
-            "the echo is masked: {ai:?}"
-        );
-    }
-    // Default mode reads the main frame alone, as upstream's does, and masks its echo with
-    // that frame's sweep.
-    let snapshot = live
-        .invoke("page.ariaSnapshot", page_snapshot(&page, "default"))
-        .await??;
-    let plain = strings(&snapshot);
-    assert!(
-        !plain.iter().any(|text| text.contains("482913")),
-        "{plain:?}"
-    );
-    assert!(
-        plain
-            .iter()
-            .any(|text| text == "Confirm your code [private]"),
-        "the echo is masked: {plain:?}"
-    );
-    let swept = live.hooks.swept();
-    for value in ["482913", "hunter2-oopif"] {
-        assert!(
-            swept.contains(&Swept {
-                page: page.tab,
-                value: value.to_owned(),
-            }),
-            "the host was told of {value} on its page"
-        );
-    }
-    live.close(&page).await
-}
-
 /// The child frame of the late-child tests: text of its own, and a main thread that spins once
 /// the top asks (`postMessage('spin')`), so a test reads it once first and its world is installed
 /// before it stops answering. The spin lasts 10 s, five times the snapshot's budget for the frame,
@@ -941,13 +835,11 @@ async fn type_and_stall_child(live: &LiveBrowser, page: &TestPage) -> TestResult
 }
 
 /// A child of another site that answers past the snapshot's 2 s budget for a frame is reported
-/// partial, and none of its text comes back. Its site is not the page's, so the page's own site
-/// sweep completes without it, and the rest of the snapshot is masked with the sweeps that did
-/// complete: the code the top echoes comes back masked.
+/// partial, and none of its text comes back; the rest of the page does, the code the top echoes
+/// included.
 #[tokio::test]
 #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT (default 9005)"]
-async fn tests_that_a_late_cross_site_child_is_partial_and_the_rest_comes_back_masked() -> TestResult
-{
+async fn tests_that_a_late_cross_site_child_is_partial_and_the_rest_comes_back() -> TestResult {
     let _alone = ALONE.acquire().await?;
     let live = LiveBrowser::connect().await?;
     let top = late_top(&format!(
@@ -989,13 +881,8 @@ async fn tests_that_a_late_cross_site_child_is_partial_and_the_rest_comes_back_m
         "the late child carries no text: {text:?}"
     );
     assert!(
-        !text.iter().any(|text| text.contains("482913")),
-        "the code never comes back: {text:?}"
-    );
-    assert!(
-        text.iter()
-            .any(|text| text == "Confirm your code [private]"),
-        "the rest is masked with the sweeps that completed: {text:?}"
+        text.iter().any(|text| text == "Confirm your code 482913"),
+        "the rest of the page comes back as it reads: {text:?}"
     );
     assert!(
         took < Duration::from_millis(3_000),
@@ -1004,17 +891,15 @@ async fn tests_that_a_late_cross_site_child_is_partial_and_the_rest_comes_back_m
     live.close(&page).await
 }
 
-/// A child of the page's own site that stops answering is one of the frames the page's own site
-/// sweep must cover, and that sweep fails closed: the snapshot is withheld, as for any read of
-/// the site, once the op's timeout leaves no room for another try. Nothing is reported partial,
-/// and no page text comes back.
+/// A child of the page's own site that stops answering is reported partial, as a child of any
+/// other site is, and the rest of the page comes back within the frame's budget.
 #[tokio::test]
 #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT (default 9005)"]
-async fn tests_that_a_late_same_site_child_withholds_the_snapshot() -> TestResult {
+async fn tests_that_a_late_same_site_child_is_partial_like_any_other() -> TestResult {
     let _alone = ALONE.acquire().await?;
     let live = LiveBrowser::connect().await?;
     // Another origin of the page's site, asking for an origin-keyed agent cluster, gets a process
-    // of its own (measured in sweep_scope_live), so its spin stalls it alone.
+    // of its own (measured), so its spin stalls it alone.
     let child = FixtureServer::start(HashMap::from([(
         "/late/child.html".to_owned(),
         Page::html(LATE_CHILD)
@@ -1034,37 +919,32 @@ async fn tests_that_a_late_same_site_child_withholds_the_snapshot() -> TestResul
     type_and_stall_child(&live, &page).await?;
 
     let started = Instant::now();
-    let withheld = live
+    let snapshot = live
         .invoke(
             "page.ariaSnapshot",
-            json!({ "call": { "api": "page.ariaSnapshot", "timeoutMs": 2_500 },
+            json!({ "call": { "api": "page.ariaSnapshot", "timeoutMs": 5_000 },
                     "page": page.brand(), "mode": "ai" }),
         )
-        .await?
-        .err()
-        .ok_or("a late frame of the page's own site withholds the snapshot")?;
+        .await??;
     let took = started.elapsed();
-    assert_eq!(
-        withheld.error_code(),
-        Some(ErrorCode::Unsupported),
-        "{withheld}"
+    let partial = snapshot["partial"]
+        .as_array()
+        .ok_or("partial is a list")?
+        .clone();
+    assert_eq!(partial.len(), 1, "only the late child: {partial:?}");
+    assert_eq!(partial[0]["reason"], json!("timeout after 2000 ms"));
+    let text = strings(&snapshot);
+    assert!(
+        !text.iter().any(|text| text.contains("Late child text")),
+        "the late child carries no text: {text:?}"
     );
     assert!(
-        withheld.message().starts_with(
-            "page.ariaSnapshot: a frame of the page's site did not answer Neo's privacy sweep \
-             within 1000ms, so page text that may hold its values is withheld"
-        ),
-        "{withheld}"
+        text.iter().any(|text| text == "Confirm your code 482913"),
+        "the rest of the page comes back: {text:?}"
     );
-    for text in ["482913", "Late child text", "Confirm your code"] {
-        assert!(
-            !withheld.message().contains(text),
-            "no page text comes back: {withheld}"
-        );
-    }
     assert!(
-        took >= Duration::from_secs(1) && took < Duration::from_millis(3_000),
-        "withheld inside the op's 2.5 s, took {took:?}"
+        took < Duration::from_millis(3_000),
+        "the child's 2 s budget bounds the snapshot, took {took:?}"
     );
     live.close(&page).await
 }

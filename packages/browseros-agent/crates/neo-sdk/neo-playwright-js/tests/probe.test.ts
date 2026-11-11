@@ -254,13 +254,9 @@ it("tests that ref= gets Neo's hint and another unknown engine gets upstream's m
   })
 })
 
-it('tests that sweep and focused answer through the seal, and an unknown request is internal', () => {
+it('tests that focused answers through the seal, and an unknown request is internal', () => {
   const probe = open()
   probe.boot({ frameSeq: 0, epoch: 'a' })
-  expect(probe.call({ op: 'sweep' })).toEqual({
-    kind: 'sweep',
-    values: ['hunter2'],
-  })
   expect(probe.call({ op: 'focused' })).toEqual({
     kind: 'focused',
     sensitive: false,
@@ -296,13 +292,11 @@ it("tests that read resolves and reads one element's textContent, strictly or fi
     kind: 'read',
     value: 'Stop',
     sensitive: null,
-    sweep: ['hunter2'],
   })
   expect(textContent('button', 'firstMatch')).toEqual({
     kind: 'read',
     value: 'Go',
     sensitive: null,
-    sweep: ['hunter2'],
   })
   expect(textContent('button')).toMatchObject({ kind: 'strict' })
   expect(textContent('#missing')).toEqual({ kind: 'none' })
@@ -325,19 +319,16 @@ it('tests that readAll counts every match without failing on a stale ref', () =>
     kind: 'values',
     count: 2,
     values: [],
-    sweep: [],
   })
   expect(count('#missing')).toEqual({
     kind: 'values',
     count: 0,
     values: [],
-    sweep: [],
   })
   expect(count('aria-ref=e404')).toEqual({
     kind: 'values',
     count: 0,
     values: [],
-    sweep: [],
   })
 })
 
@@ -353,7 +344,7 @@ it('tests that a root element scopes the query, as an element handle call does',
   })
 })
 
-it('tests that document reads the title, or the doctype and the markup, with the sweep', () => {
+it('tests that document reads the title, or the doctype and the markup', () => {
   const markup =
     '<html><head><title>Pay</title></head><body><p>hi</p></body></html>'
   page = openProbePage(`<!doctype html>${markup}`)
@@ -361,12 +352,10 @@ it('tests that document reads the title, or the doctype and the markup, with the
   expect(page.call({ op: 'document', part: 'title' })).toEqual({
     kind: 'documentText',
     text: 'Pay',
-    sweep: ['hunter2'],
   })
   expect(page.call({ op: 'document', part: 'content' })).toEqual({
     kind: 'documentText',
     text: `<!DOCTYPE html>${markup}`,
-    sweep: ['hunter2'],
   })
 })
 

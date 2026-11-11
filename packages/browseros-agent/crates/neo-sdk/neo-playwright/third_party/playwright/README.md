@@ -36,17 +36,9 @@ Playwright checkout is a plain `diff -r`. `sync.sh` writes `SHA256SUMS`, and the
 
 ## What the engine build changes
 
-Nothing here is edited, but `crates/neo-sdk/neo-playwright-js/scripts/build.ts` changes what the
-bundle runs in one place. Neo masks field values out of page text before the engine cuts or
-quotes that text for a preview or a locator hint, because a value cut short no longer matches
-a mask of whole values (`crates/neo-sdk/neo-playwright-js/src/probe/page-mask.ts`):
-
-- `injectedScript.ts` and `selectorGenerator.ts` import `@isomorphic/stringUtils` as Neo's
-  `src/probe/masked-strings.ts`, upstream's module with its trim and quote helpers masking
-  their input first.
-- `selectorGenerator.ts` is loaded with `maskPageText` called first in two of its own
-  functions, `suitableTextAlternatives` (its cuts at a word and a number) and `escapeClassName`
-  (its CSS escapes). The build fails when either opening line is not there exactly once.
+Nothing here is edited, and the page's engine bundle builds every upstream module unmodified;
+`crates/neo-sdk/neo-playwright-js/scripts/build.ts` only swaps the inspector overlay and the
+devtools helper for stubs.
 
 The agent runtime, `assets/prelude.js`, runs Playwright's value serializers in QuickJS, which
 has no `URL`, `Buffer`, `atob` or `btoa`. The build loads `isomorphic/utilityScriptSerializers.ts`
