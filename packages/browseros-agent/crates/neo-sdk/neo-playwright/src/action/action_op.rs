@@ -1,7 +1,7 @@
 //! The action ops and their registration metadata.
 
 use serde::Deserialize;
-use serde_json::{Map, Value};
+use serde_json::{Map, Value, json};
 use std::sync::Arc;
 
 use crate::action::actionability::PointerKind;
@@ -373,9 +373,13 @@ async fn run(
             let action = pointer_action(op, &input.options);
             let page = OpPage::admit_handle(pw, scope, input.target.page()).await?;
             let _lease = lease(scope, &page).await?;
-            PointerRunner::new(pw, scope, &page, &input.target, input.strict)
-                .run(&action)
-                .await?;
+            let mut runner = PointerRunner::new(pw, scope, &page, &input.target, input.strict);
+            runner.run(&action).await?;
+            if op == ActionOp::Click
+                && let Some(navigation) = runner.navigation_cut()
+            {
+                return Ok(json!({ "navigation": navigation }));
+            }
         }
         ActionOp::Check | ActionOp::Uncheck => {
             let input: PointerInput = args.decode(scope)?;

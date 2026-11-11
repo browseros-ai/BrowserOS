@@ -27,6 +27,7 @@ use crate::page::document_watch::{
     Arrival, CommitOutcome, DocumentWatch, Expect, FrameTreeReply, WatchError, decode,
 };
 use crate::page::frame_routes::RootAttachment;
+use crate::page::frame_tree::FrameTree;
 use crate::page::{LoadState, frame_tree, subtree_load};
 use crate::target::PageRef;
 use crate::{ErrorCode, Playwright, PlaywrightError};
@@ -96,9 +97,26 @@ pub(crate) enum Navigation {
 
 /// The addressed frame's result; only a main-frame URL also changes `page.url()`.
 #[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub(crate) struct NavigationResult {
     pub(crate) response: Option<Response>,
     pub(crate) url: Option<String>,
+    #[serde(flatten)]
+    frames: Option<FrameTree>,
+    /// A missing optional snapshot must not trigger an unbounded client-side renderer read.
+    frame_snapshot_attempted: bool,
+}
+
+impl NavigationResult {
+    /// A wait supplies its own frame snapshot in the enclosing navigation reply.
+    pub(crate) fn observed(response: Option<Response>, url: String) -> Self {
+        Self {
+            response,
+            url: Some(url),
+            frames: None,
+            frame_snapshot_attempted: true,
+        }
+    }
 }
 
 /// Playwright's `Response` for the selected document, from its navigation timing entry.
@@ -216,9 +234,23 @@ pub(crate) async fn navigate(
             Err(_expired) => return Err(scope.timed_out(ErrorCode::WaitTimeout)),
         }
     }
+    // Frame facts belong to this operation's deadline and observation. Fetching them in
+    // JS after the reply can overtake a later evaluate or stall on a replacement renderer.
+    let frames = scope
+        .within(time::timeout(
+            TIMING_READ,
+            frame_tree::snapshot(pw, scope, page),
+        ))
+        .await
+        .ok()
+        .and_then(Result::ok)
+        .and_then(Result::ok)
+        .flatten();
     let result = NavigationResult {
         response,
         url: watch.url().map(str::to_owned),
+        frames,
+        frame_snapshot_attempted: true,
     };
     to_output(scope, &result)
 }

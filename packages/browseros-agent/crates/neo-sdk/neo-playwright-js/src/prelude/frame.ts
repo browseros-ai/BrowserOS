@@ -23,6 +23,7 @@ import {
   fromPageValue,
   pageCall,
 } from './evaluation'
+import { EventDeadline } from './event-deadline'
 import { dropFiles, inputFiles, withClientErrors } from './files'
 import { FrameLocator, Locator, testIdAttributeName } from './locator'
 import type { OpName } from './ops.generated'
@@ -694,16 +695,40 @@ export class Frame extends EventEmitter {
     selector: string,
     options: ClickOptions = {},
   ): Promise<void> {
-    await this._selectorOp(
+    const wait = this._wait(api, options)
+    const deadline = new EventDeadline(api, null, Date.now(), wait.timeout)
+    const result = await this._selectorOp(
       'locator.click',
       api,
       selector,
       options.strict,
-      this._wait(api, options),
-      {
-        options: pick(options, POINTER_KEYS),
-      },
+      wait,
+      { options: pick(options, POINTER_KEYS) },
     )
+    if (result?.navigation) {
+      try {
+        await this._page._context._events.publishNavigation(
+          this._page,
+          result.navigation,
+          api,
+          deadline,
+          wait.signal,
+        )
+      } catch (error) {
+        // Input already landed. A caught publication failure must never invite replay.
+        // Uncaught local errors remain script_error at the host boundary; RunReply derives
+        // whole-run retryability from recorded writes, so that path is nonretryable too.
+        if (error instanceof Error) {
+          Object.assign(error, { delivery: 'unknown', retryable: false })
+          if (Reflect.get(error, 'code') === 'wait_timeout')
+            Object.assign(error, {
+              code: 'navigation_observation_timeout',
+              owner: 'neo',
+            })
+        }
+        throw error
+      }
+    }
   }
 
   async _dblclick(
@@ -1264,8 +1289,9 @@ export class Frame extends EventEmitter {
       throw clientError(api, `url: expected string, got ${typeof url}`)
     const waitUntil = loadState(api, 'waitUntil', options.waitUntil ?? 'load')
     const signal = signalOf(api, options)
-    return await this._page._navigating(async () => {
+    return await this._page._navigating(async (ready) => {
       const args = await this._frameArgs(api)
+      let completion: Promise<Response | null> | undefined
       const { value: result, observed } = await invokeObserved(
         'page.goto',
         this._call(api, this._navigationTimeout(options)),
@@ -1275,10 +1301,15 @@ export class Frame extends EventEmitter {
           waitUntil,
           ...pick(options, ['referer']),
         },
-        undefined,
+        (result, observed) => {
+          // Decode-time publication precedes a later evaluate's observation. A stale
+          // binding may still need browser work; _navigated marks readiness only after it.
+          completion = this._page._navigated(api, this, result, observed, ready)
+        },
         signal,
       )
-      return await this._page._navigated(api, this, result, observed)
+      return await (completion ??
+        this._page._navigated(api, this, result, observed, ready))
     })
   }
 
@@ -1395,6 +1426,7 @@ export class Frame extends EventEmitter {
         script,
       },
     )
+    await this._page._publishCompleted()
     this._page._evaluated(result.frames, observed)
     return fromPageValue(api, result.value)
   }

@@ -23,7 +23,7 @@ pub(crate) struct EventFrame {
     #[serde(default, skip_serializing)]
     url_fragment: String,
     #[serde(default, skip_serializing)]
-    loader_id: Option<String>,
+    pub(crate) loader_id: Option<String>,
 }
 
 /// One public frame transition, separately from the navigation waiter's loader facts.

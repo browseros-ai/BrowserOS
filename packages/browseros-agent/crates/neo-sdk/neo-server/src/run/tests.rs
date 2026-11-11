@@ -836,3 +836,35 @@ fn a_reply_over_the_limit_names_blobs_already_kept_with_the_run() -> Result<(), 
         Ok(())
     })
 }
+
+/// A client publication can fail after native input completed. Local error fields are not
+/// trusted op failures, but recorded writes still make the entire run unsafe to repeat.
+#[test]
+fn a_local_observation_failure_after_a_completed_write_is_not_retryable() -> Result<(), TestError> {
+    on_neo_runtime(async {
+        let rig = TestRig::new().await?;
+        let code = r#"
+            await context.newPage();
+            throw Object.assign(new Error('Navigation events were lost before click completion'), {
+                delivery: 'unknown', retryable: true, owner: 'neo', operationId: 'forged'
+            });
+        "#;
+        let reply = rig
+            .run_service(GRACE)
+            .run(request(code, meta(None, None)?)?)
+            .await;
+        assert_eq!(reply.effects, ReplyEffects::Done);
+        let error = error_of(&reply)?;
+        assert_eq!(error.code, "script_error");
+        assert!(
+            !error.retryable,
+            "a local error never makes a completed write safe to replay"
+        );
+        assert_eq!(
+            error.operation_id, None,
+            "the realm cannot forge trusted operation provenance"
+        );
+        assert_eq!(error.delivery, None);
+        Ok(())
+    })
+}

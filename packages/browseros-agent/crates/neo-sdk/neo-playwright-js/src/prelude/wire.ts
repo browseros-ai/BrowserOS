@@ -134,7 +134,12 @@ export type NavigationResult = {
   response?: ResponseInfo | null
   url?: string | null
   frames?: FrameInfo[]
+  /** Native navigation already attempted its bounded snapshot; absence means keep cached facts. */
+  frameSnapshotAttempted?: boolean
 }
+
+/** The frame-event journal cut reached by one pointer action's actual navigations. */
+export type NavigationCut = { seq: number; at: number }
 
 /** `page.frames`: every frame of the tab, the main frame first, each parent before its children. */
 export type FrameTree = { frames: FrameInfo[] }
@@ -579,7 +584,7 @@ export type OpInputs = {
  */
 export type OpOutputs = {
   'events.interceptFileChooser': Done
-  'locator.click': null
+  'locator.click': { navigation: NavigationCut } | null
   'locator.dblclick': null
   'locator.hover': null
   'locator.check': null
