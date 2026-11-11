@@ -47,9 +47,9 @@ opens popups as tabs, but suppresses CDP console events that vanilla Playwright'
 - Reference uses vanilla `chromium.connectOverCDP` and upstream contexts.
 - `__claw` opens one real v1 run per worker with a 24-hour deadline. Playwright
   owns test deadlines. `finish()` writes `worker-*/outcome.json`.
-- `browser` and `context` are v1's real objects. `playwright.errors.TimeoutError`
-  is v1's real agent parameter class, placed where upstream checks expect it.
-  No other Playwright namespace members are supplied; those count as lacks.
+- `browser`, `context` and `playwright` are v1's real objects; `playwright` is the
+  run's own parameter (`selectors`, `errors.TimeoutError`). Its other upstream members
+  (browser types, `devices`, `request`) are absent and count as lacks.
 - `_contextFactory` lends the worker's one context on its first call without
   explicit options. Only verified implicit Playwright defaults are omitted.
   Explicit options—even default-valued ones—and second calls reach the real
@@ -77,8 +77,8 @@ opens popups as tabs, but suppresses CDP console events that vanilla Playwright'
   remain unchanged. Product matcher refusals fail rather than skip, so unsupported
   assertions remain visible as product gaps. `run.json.assertions` records which
   assertion engine ran; `--no-curation` disables all curation as before.
-- The implicit `data-testid` selector attribute already matches v1. Explicit
-  overrides reach its absent `playwright.selectors` namespace.
+- Each test sets its `testIdAttribute` through v1's `playwright.selectors`, so a
+  test that changes the attribute does not leave it for the next test in the worker's run.
 - Curation, `_setupArtifacts`, `_browserOptions`, `toImplInWorkerScope` and
   `startRemoteServer` retain v2's seams and explicit internals refusals.
 

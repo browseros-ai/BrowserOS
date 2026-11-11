@@ -324,9 +324,9 @@ const clawTest = sdkTest.extend({
   ],
   _setupContextOptions: [
     async ({ playwright, testIdAttribute }, use, testInfo) => {
-      // v1 already uses data-testid. Only an explicit override asks for its absent namespace.
-      if (!implicitOptions.get(testInfo)?.has('testIdAttribute'))
-        playwright.selectors.setTestIdAttribute(testIdAttribute)
+      // One run spans the worker, so each test sets its attribute again: a test that called
+      // setTestIdAttribute must not leave it for the next one.
+      playwright.selectors.setTestIdAttribute(testIdAttribute)
       testInfo.snapshotSuffix = process.platform
       await use()
     },
@@ -374,8 +374,8 @@ const clawTest = sdkTest.extend({
   ],
   playwright: [
     async ({ __claw }, use) => {
-      // v1 gives agents this real class; only its namespace location is adapted.
-      await use({ errors: { TimeoutError: __claw.params.TimeoutError } })
+      // The run's own `playwright` parameter, as agents get it: `selectors` and `errors`.
+      await use(__claw.params.playwright)
     },
     { scope: 'worker' },
   ],
