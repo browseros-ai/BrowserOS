@@ -8,7 +8,8 @@
     "test": "bun run ../../../scripts/run-bun-test.ts --cwd=./crates/neo-sdk/neo-playwright-js ./crates/neo-sdk/neo-playwright-js",
     "typecheck": "tsc --noEmit",
     "build": "bun scripts/build.ts",
-    "build:check": "bun scripts/build.ts --check"
+    "build:check": "bun scripts/build.ts --check",
+    "gen:probe": "cargo run -p neo-playwright --example probe-gen"
   },
   "devDependencies": {
     "acorn": "^8.17.0",
