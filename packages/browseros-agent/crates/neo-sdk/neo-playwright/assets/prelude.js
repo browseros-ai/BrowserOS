@@ -1009,6 +1009,7 @@
   function markHandle(object) {
     handles.add(object);
   }
+  var inspectCustom = Symbol.for("nodejs.util.inspect.custom");
   function isHandle(value) {
     return typeof value === "object" && value !== null && handles.has(value);
   }
@@ -6602,6 +6603,9 @@ ${value.stack}`;
     toString() {
       return asLocatorDescription("javascript", this._selector);
     }
+    [inspectCustom]() {
+      return this.toString();
+    }
     description() {
       return locatorCustomDescription(this._selector) ?? null;
     }
@@ -8458,6 +8462,9 @@ ${value.stack}`;
     }
     toString() {
       return this.#info.text;
+    }
+    [inspectCustom]() {
+      return this.text();
     }
   }
   function pageError(info) {
