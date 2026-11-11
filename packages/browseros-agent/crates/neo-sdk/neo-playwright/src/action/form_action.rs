@@ -132,6 +132,12 @@ enum Ready {
     Refused(ProbeReply),
 }
 
+/// ①'s outcome, and what the pass's locator resolved to on a reply that says.
+struct Checked {
+    ready: Ready,
+    resolved: Option<Resolution>,
+}
+
 /// Where ② left the attempt.
 enum Applied {
     Done(Value),
@@ -245,7 +251,8 @@ impl<'a> FormRunner<'a> {
             if !self.force {
                 attempt.log(format!("  waiting for element to be {}", row.waits_for));
             }
-            let (ready, resolved) = self.ready(located, pin, row, attempt.is_found()).await?;
+            let Checked { ready, resolved } =
+                self.ready(located, pin, row, attempt.is_found()).await?;
             match &ready {
                 Ready::At(_) | Ready::Missing(_) | Ready::Refused(_) => {
                     let handle_call = matches!(edit, FormEdit::SelectText);
@@ -296,7 +303,7 @@ impl<'a> FormRunner<'a> {
         pin: Option<Pin>,
         row: &Row,
         found: bool,
-    ) -> Result<(Ready, Option<Resolution>), PlaywrightError> {
+    ) -> Result<Checked, PlaywrightError> {
         let target = pin.map_or_else(|| self.subject.first_target(), ProbeTarget::Pin);
         let request = if self.force {
             ProbeRequest::Resolve {
@@ -338,7 +345,7 @@ impl<'a> FormRunner<'a> {
                 Ready::Gone
             }
         };
-        Ok((ready, resolved))
+        Ok(Checked { ready, resolved })
     }
 
     /// ②: the edit itself, after `send_effect`.

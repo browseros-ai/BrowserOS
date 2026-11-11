@@ -27,6 +27,16 @@ use crate::target::{Strictness, Target};
 use crate::world::Pin;
 use crate::{ErrorCode, PlaywrightError, input};
 
+/// Whether a scroll's error log starts over once its element is found.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Restart {
+    /// `scrollIntoViewIfNeeded`, which upstream's client runs as a selector wait and then the
+    /// handle's method: its error shows the handle call's lines alone.
+    AtHandle,
+    /// A screenshot's scroll, whose op logged its own preparation first (fonts), kept.
+    Never,
+}
+
 /// Two measurements this far apart with the same rect make a scrolled element stable.
 const STABLE_GAP: Duration = Duration::from_millis(16);
 
@@ -80,15 +90,11 @@ impl<'a> ElementRunner<'a> {
             };
             let pin = match self.call(&located, &resolve).await? {
                 Some(ProbeReply::Element { pin, resolved, .. }) => {
-                    // What the pass's locator resolved to, as upstream logs it: dispatchEvent's
-                    // selector wait names the element alone.
-                    if let Some(resolved) = resolved {
-                        self.scope
-                            .log(if matches!(edit, Edit::DispatchEvent { .. }) {
-                                resolved.element_line()
-                            } else {
-                                resolved.log_line()
-                            });
+                    // What the pass's locator resolved to, as upstream's focus and blur log it.
+                    // dispatchEvent's selector wait logs its line only once the event went out,
+                    // which ends the op, so no error of it ever shows one.
+                    if let Some(resolved) = resolved.filter(|_| prechecks != Prechecks::Skip) {
+                        self.scope.log(resolved.log_line());
                     }
                     pin
                 }
@@ -136,15 +142,19 @@ impl<'a> ElementRunner<'a> {
     /// the element has a box and holds still. Scrolling inside a frame scrolls every frame
     /// above it too, cross-site ones included (measured).
     pub(crate) async fn scroll_into_view(&self) -> Result<(), PlaywrightError> {
-        self.scroll(&[]).await
+        self.scroll(&[], Restart::AtHandle).await
     }
 
     /// Screenshot handles must be visible as well as stable before their box is captured.
     pub(crate) async fn scroll_for_screenshot(&self) -> Result<(), PlaywrightError> {
-        self.scroll(&[ElementState::Visible]).await
+        self.scroll(&[ElementState::Visible], Restart::Never).await
     }
 
-    async fn scroll(&self, required_states: &[ElementState]) -> Result<(), PlaywrightError> {
+    async fn scroll(
+        &self,
+        required_states: &[ElementState],
+        restart: Restart,
+    ) -> Result<(), PlaywrightError> {
         self.subject.log_waiting();
         let outer = Backoff::outer(self.scope.timeout());
         let mut matched = false;
@@ -194,7 +204,7 @@ impl<'a> ElementRunner<'a> {
                     Measured::Rect(..) | Measured::Hidden => {
                         // Upstream's client finds the element with a selector wait first, then
                         // calls the handle's own method: the error shows that call alone.
-                        if !attempt.is_found() {
+                        if restart == Restart::AtHandle && !attempt.is_found() {
                             self.scope.restart_log();
                         }
                         attempt.found();

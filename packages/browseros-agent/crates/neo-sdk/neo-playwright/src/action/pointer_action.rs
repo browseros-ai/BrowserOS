@@ -594,6 +594,7 @@ impl<'a> PointerRunner<'a> {
                         if action.force {
                             return Err(self.forced("Element is outside of the viewport"));
                         }
+                        self.log_steps_before_hit(&req);
                         self.scope
                             .log("  element is outside of the viewport".to_owned());
                         continue;
@@ -1018,10 +1019,16 @@ impl<'a> PointerRunner<'a> {
     /// states held and the element scrolled (dom.ts `_performPointerAction`), so its log has
     /// those lines first, then whose markup intercepts pointer events.
     fn log_hit_refused(&self, req: &Requirements, by: PageText) {
+        self.log_steps_before_hit(req);
+        self.log_covered(by);
+    }
+
+    /// The lines upstream logs between the states holding and its viewport and hit checks,
+    /// which a refusal at either check follows.
+    fn log_steps_before_hit(&self, req: &Requirements) {
         self.scope.log(format!("  element is {}", req.waits_for()));
         self.scope.log("  scrolling into view if needed".to_owned());
         self.scope.log("  done scrolling".to_owned());
-        self.log_covered(by);
     }
 
     /// Upstream's `<element> intercepts pointer events` line: the element's description, the

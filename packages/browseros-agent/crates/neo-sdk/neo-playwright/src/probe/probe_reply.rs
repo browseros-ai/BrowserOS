@@ -197,11 +197,6 @@ impl Resolution {
             format!("  locator resolved to {preview}")
         }
     }
-
-    /// The line `dispatchEvent`'s selector wait logs, which names the element alone.
-    pub(crate) fn element_line(&self) -> String {
-        format!("  locator resolved to {}", self.preview)
-    }
 }
 
 impl ProbeReply {
