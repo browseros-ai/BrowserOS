@@ -3,12 +3,15 @@
 //! A per-tab guard prepares every frame, captures through core (which hides the agent pointer),
 //! then restores temporary rendering state. Its queue remains held through cancellation cleanup.
 
-use browseros_core::screenshot::{ScreenshotCaptureOptions, ScreenshotFormat, Viewport};
+use browseros_core::screenshot::{ScreenshotCaptureOptions, ScreenshotFormat};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
+use crate::backoff::Backoff;
 use crate::page::OpPage;
+use crate::page::screenshot_geometry::{GeometryOptions, Scale, ScreenshotGeometry};
 use crate::page::screenshot_preparation::ScreenshotPreparation;
+use crate::probe::Rect;
 
 use crate::op_output::{Bytes, to_output};
 use crate::op_scope::OpScope;
@@ -33,16 +36,51 @@ pub(crate) struct ScreenshotInput {
     target: Option<Target>,
     /// How `target` resolves; the prelude sends `strict`, as upstream's element screenshots are.
     #[serde(default, rename = "strict")]
-    _strict: Option<Strictness>,
+    strict: Option<Strictness>,
     #[serde(default)]
     full_page: bool,
     #[serde(default)]
-    clip: Option<Clip>,
+    clip: Option<Rect>,
+    #[serde(default)]
+    scale: Scale,
     #[serde(default, rename = "type")]
     image: ImageType,
     /// JPEG only, 0 to 100.
     #[serde(default)]
     quality: Option<u8>,
+}
+
+impl ScreenshotInput {
+    /// Validate before admission or any temporary rendering changes.
+    fn validate(&self, scope: &OpScope<'_>) -> Result<(), PlaywrightError> {
+        if self.image == ImageType::Png && self.quality.is_some() {
+            return Err(scope.fail(
+                ErrorCode::InvalidInput,
+                "options.quality is unsupported for the png screenshots",
+            ));
+        }
+        if self.quality.is_some_and(|quality| quality > 100) {
+            return Err(scope.fail(
+                ErrorCode::InvalidInput,
+                "options.quality is out of the range 0..100",
+            ));
+        }
+        if let Some(clip) = self.clip {
+            if clip.width <= 0.0 {
+                return Err(scope.fail(
+                    ErrorCode::InvalidInput,
+                    "Expected options.clip.width to be greater than 0.",
+                ));
+            }
+            if clip.height <= 0.0 {
+                return Err(scope.fail(
+                    ErrorCode::InvalidInput,
+                    "Expected options.clip.height to be greater than 0.",
+                ));
+            }
+        }
+        Ok(())
+    }
 }
 
 /// How screenshot preparation treats the document's animations.
@@ -63,16 +101,6 @@ enum Caret {
     Initial,
 }
 
-/// A rectangle of the page in CSS pixels.
-#[derive(Clone, Copy, Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Clip {
-    x: f64,
-    y: f64,
-    width: f64,
-    height: f64,
-}
-
 /// Playwright's two screenshot formats.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -90,66 +118,131 @@ pub(crate) async fn capture(
 ) -> Result<Value, PlaywrightError> {
     // Check the op's declared capability before admitting or preparing its page.
     scope.require(Capability::Capture)?;
-    if input.target.is_some() {
-        return Err(scope.not_built());
-    }
-    if input.image == ImageType::Png && input.quality.is_some() {
-        return Err(scope.fail(
-            ErrorCode::InvalidInput,
-            "options.quality is unsupported for the png screenshots",
-        ));
-    }
-    if input.quality.is_some_and(|quality| quality > 100) {
-        return Err(scope.fail(
-            ErrorCode::InvalidInput,
-            "options.quality is out of the range 0..100",
-        ));
-    }
-    let options = ScreenshotCaptureOptions {
-        format: Some(match input.image {
-            ImageType::Png => ScreenshotFormat::Png,
-            ImageType::Jpeg => ScreenshotFormat::Jpeg,
-        }),
-        quality: input.quality.map(i64::from),
-        full_page: Some(input.full_page),
-        annotate: None,
-        clip: input.clip.map(|clip| Viewport {
-            x: clip.x,
-            y: clip.y,
-            width: clip.width,
-            height: clip.height,
-            scale: 1.0,
-        }),
+    input.validate(scope)?;
+    let format = match input.image {
+        ImageType::Png => ScreenshotFormat::Png,
+        ImageType::Jpeg => ScreenshotFormat::Jpeg,
     };
-    let page = OpPage::admit_handle(pw, scope, &input.page).await?;
     let capture = async {
-        let mut preparation = ScreenshotPreparation::acquire(&page).await;
-        preparation
-            .prepare(
-                &page,
+        let backoff = Backoff::outer(scope.timeout());
+        for attempt in 0.. {
+            let target = ScreenshotGeometry::bind(
+                pw,
                 scope,
-                json!([
-                    input.style.as_deref().unwrap_or_default(),
-                    input.caret == Caret::Hide,
-                    input.animations == Animations::Disabled,
-                    false,
-                ]),
+                input.target.as_ref(),
+                input.strict.unwrap_or(Strictness::Strict),
             )
+            .await?;
+            let page = OpPage::admit_handle(pw, scope, &input.page).await?;
+            let mut preparation = ScreenshotPreparation::acquire(&page).await;
+            preparation
+                .prepare(
+                    &page,
+                    scope,
+                    json!([
+                        input.style.as_deref().unwrap_or_default(),
+                        input.caret == Caret::Hide,
+                        input.animations == Animations::Disabled,
+                        false,
+                    ]),
+                )
+                .await;
+            let captured = async {
+                preparation
+                    .wait_for_fonts(&page, scope, target.as_deref())
+                    .await?;
+                capture_pixels(pw, &page, scope, &input, target.as_deref(), format).await
+            }
             .await;
-        let shot = scope
-            .view()
-            .screenshot(page.core_page().clone(), options)
-            .await;
-        preparation.restore().await;
-        shot.map_err(|error| scope.core_error(&error))
+            preparation.restore().await;
+            match captured {
+                Err(error)
+                    if error.error_code() == Some(ErrorCode::ElementDetached)
+                        && matches!(input.target, Some(Target::Locator(_))) =>
+                {
+                    scope.log("element was detached from the DOM, retrying".to_owned());
+                    scope
+                        .sleep(backoff.wait(attempt + 1))
+                        .await
+                        .map_err(|_expired| scope.timed_out(ErrorCode::WaitTimeout))?;
+                }
+                done => return done,
+            }
+        }
+        Err(scope.timed_out(ErrorCode::WaitTimeout))
     };
-    // Frame installation and preparation have large futures. Keep this leaf boxed so every
-    // caller of Playwright::invoke does not inherit their stack allocation.
-    let shot = scope
+    // Frame resolution and geometry carry large futures; keep their storage at this leaf.
+    let data = scope
         .within(Box::pin(capture))
         .await
         .map_err(|_expired| scope.timed_out(ErrorCode::WaitTimeout))??;
-    to_output(scope, &Bytes::from_base64(shot.data))
+    to_output(scope, &Bytes::from_base64(data))
+}
+
+/// Core owns admission and capture serialization; this layer supplies Playwright's geometry.
+async fn capture_pixels(
+    pw: &Playwright,
+    page: &OpPage<'_>,
+    scope: &OpScope<'_>,
+    input: &ScreenshotInput,
+    target: Option<&Target>,
+    format: ScreenshotFormat,
+) -> Result<String, PlaywrightError> {
+    // Chromium already knows its default viewport and device density. Measure layout
+    // only when an element or an explicit geometry option changes the captured area.
+    if input.target.is_none()
+        && !input.full_page
+        && input.clip.is_none()
+        && input.scale == Scale::Device
+    {
+        return scope
+            .view()
+            .screenshot(
+                page.core_page().clone(),
+                ScreenshotCaptureOptions {
+                    format: Some(format),
+                    quality: input.quality.map(i64::from),
+                    full_page: Some(false),
+                    annotate: None,
+                    clip: None,
+                },
+            )
+            .await
+            .map(|shot| shot.data)
+            .map_err(|error| scope.core_error(&error));
+    }
+    let geometry = Box::pin(ScreenshotGeometry::measure(
+        pw,
+        page,
+        scope,
+        GeometryOptions {
+            target,
+            strict: input.strict.unwrap_or(Strictness::Strict),
+            full_page: input.full_page,
+            clip: input.clip,
+            scale: input.scale,
+        },
+    ))
+    .await?;
+    let clip = geometry.clip;
+    let mut params = json!({ "format": format.as_str(),
+        "clip": { "x": clip.x, "y": clip.y, "width": clip.width, "height": clip.height, "scale": clip.scale },
+        "captureBeyondViewport": geometry.beyond_viewport,
+    });
+    let quality = match input.image {
+        ImageType::Png => None,
+        ImageType::Jpeg => Some(input.quality.unwrap_or(80)),
+    };
+    if let Some(quality) = quality
+        && let Value::Object(fields) = &mut params
+    {
+        fields.insert("quality".to_owned(), json!(quality));
+    }
+    scope
+        .view()
+        .screenshot_cdp(page.core_page().clone(), params)
+        .await
+        .map_err(|error| scope.core_error(&error))
 }
 
 #[cfg(test)]

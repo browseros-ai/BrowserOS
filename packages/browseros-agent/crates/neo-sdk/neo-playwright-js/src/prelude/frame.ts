@@ -1304,7 +1304,6 @@ export type ScreenshotOptionsInput = TimeoutOption &
     mask?: Locator[]
     maskColor?: string
     omitBackground?: boolean
-    scale?: 'css' | 'device'
   }
 
 /** Options that need capture features beyond temporary DOM preparation. */
@@ -1315,8 +1314,6 @@ export function refusedScreenshotOption(
     return 'Neo cannot mask elements in a screenshot; omit mask'
   if (options.omitBackground)
     return 'Neo cannot capture a transparent background; omit omitBackground'
-  if (options.scale === 'css')
-    return 'Neo captures at the device scale; omit scale or pass "device"'
   return undefined
 }
 
