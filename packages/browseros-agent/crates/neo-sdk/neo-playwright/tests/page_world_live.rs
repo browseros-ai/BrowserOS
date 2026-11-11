@@ -949,7 +949,7 @@ async fn tests_that_a_same_site_child_frames_script_reads_its_parents_field() ->
             assert_eq!(
                 run.calls(),
                 [EnvCall::Recheck, EnvCall::MarkSent, EnvCall::Recheck, EnvCall::MarkSent],
-                "compiling the function and calling it each recheck and mark their send"
+                "the rejected cross-context call and direct retry each recheck and mark their send"
             );
             let waited = in_frame(
                 &run,
