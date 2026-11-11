@@ -1,0 +1,6 @@
+@import "tailwindcss";
+
+/* Light theme only (the approved design). */
+:root {
+  color-scheme: light;
+}

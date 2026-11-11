@@ -472,6 +472,21 @@
         "zod": "^4.5.2",
       },
     },
+    "tools/neo-viewer": {
+      "name": "@browseros/neo-viewer",
+      "version": "0.1.0",
+      "dependencies": {
+        "react": "^19.3.0",
+        "react-dom": "^19.3.0",
+      },
+      "devDependencies": {
+        "@tailwindcss/node": "^4.3.3",
+        "@tailwindcss/oxide": "^4.3.3",
+        "@types/react": "^19.3.0",
+        "@types/react-dom": "^19.3.0",
+        "tailwindcss": "^4.3.3",
+      },
+    },
   },
   "trustedDependencies": [
     "esbuild",
@@ -726,6 +741,8 @@
     "@browseros/neo-takeover-rust": ["@browseros/neo-takeover-rust@workspace:crates/neo-sdk/neo-takeover"],
 
     "@browseros/neo-trace-rust": ["@browseros/neo-trace-rust@workspace:crates/neo-sdk/neo-trace"],
+
+    "@browseros/neo-viewer": ["@browseros/neo-viewer@workspace:tools/neo-viewer"],
 
     "@browseros/onboarding-video": ["@browseros/onboarding-video@workspace:packages/onboarding-video"],
 
