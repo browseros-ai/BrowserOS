@@ -9,9 +9,9 @@ use crate::events::{RunDownloads, RunEvents};
 use crate::object_group::ObjectGroup;
 use crate::page::{FrameRoutes, InitScripts};
 
-/// One run's Playwright state: event cursors, discovered frame endpoints, retained element
-/// objects, the downloads it was handed and its init scripts. The host creates it with
-/// `Default`, keeps it in its run slot and drops it with the run; the crate reaches it through
+/// One run's Playwright state: event cursors, navigation publication receipts, discovered
+/// frame endpoints, retained element objects, downloads and init scripts. The host creates it
+/// with `Default`, keeps it in its run slot and drops it with the run; the crate reaches it through
 /// `OpEnv::run_state`. Opaque, so its contents can change without the host noticing.
 ///
 /// The event hub holds runs weakly, so dropping this is how a run's listeners and the dialogs

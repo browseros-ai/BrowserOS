@@ -229,6 +229,8 @@ impl Method for PlaywrightOp {
         // Read once the op ended, failed or not: by then the pump replies that carry the events
         // before it are counted (`Playwright::events_before_reply`).
         op.answer_after_pump(env.run_state().pump_replies());
+        // SDK readiness → method facts → OpReply → runtime; the bridge never reads SDK state.
+        op.report_publications(env.run_state().completed_navigation_loads());
         let result = result?;
         pages.report(op, page, &result);
         let value = result.map_err(|error| leaf_error(&error))?;

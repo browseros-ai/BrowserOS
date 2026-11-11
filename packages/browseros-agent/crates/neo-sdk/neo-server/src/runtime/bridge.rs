@@ -6,7 +6,6 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use futures_util::FutureExt;
 use futures_util::future::{BoxFuture, Shared};
-use neo_playwright::RunState;
 use neo_trace::OperationId;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -239,7 +238,7 @@ impl Bridge {
             .iter_mut()
             .filter_map(|(id, reply)| reply.ready().then_some(*id))
             .collect();
-        completed.extend(self.run.slot::<RunState>().completed_navigation_loads());
+        completed.extend(reply.completed_publications.iter().copied());
         completed.sort_unstable();
         completed.dedup();
         envelope(&reply, &completed)

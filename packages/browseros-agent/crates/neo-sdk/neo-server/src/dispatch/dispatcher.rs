@@ -127,6 +127,8 @@ pub(crate) struct OpReply {
     /// The event-pump replies the script dispatches before it takes this one
     /// ([`OpCtx::answer_after_pump`]); 0 for an op that set none.
     pub(crate) pumped: u64,
+    /// Completion facts supplied by the registered method, opaque to the door and runtime.
+    pub(crate) completed_publications: Vec<u64>,
 }
 
 /// One page as a reply reports it. Deliberately not a page brand (no `$neo`), so the
@@ -912,6 +914,7 @@ impl PendingReply {
                 observed: None,
                 default_page: None,
                 pumped: 0,
+                completed_publications: Vec::new(),
             }
         })
     }
