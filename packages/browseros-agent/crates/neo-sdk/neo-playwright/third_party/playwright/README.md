@@ -32,14 +32,6 @@ Playwright checkout is a plain `diff -r`. `sync.sh` writes `SHA256SUMS`, and the
   uses to serialize an `evaluate` argument (`serializeValue`) and its server uses to read it back
   (`parseSerializedValue`) before re-serializing it for the page. Neo's prelude runs both steps
   in QuickJS, so an argument reaches the page as upstream's does, with upstream's errors.
-- `tests/`. Upstream's own page tests at the same tag, the input of conformance tier 2: the
-  `tests/page/*.spec.ts` files that `crates/neo-sdk/neo-playwright/tests/conformance/tier2/convert.mjs`
-  lifts into case files, `tests/page/pageTest.ts` and `tests/config/utils.ts` for the helpers
-  those specs import, and the static `tests/assets/` files the lifted tests load from upstream's
-  test server (the conformance fixture server serves them under `/upstream/`) or upload with
-  upstream's `asset` fixture. A path with a space is single-quoted in `sync.sh`. They are pinned
-  here so the conversion reruns offline and byte for byte. Nothing under `tests/` is built
-  into the crate or shipped; it is Apache-2.0 under the same `LICENSE` and `NOTICE`.
 - `sync.sh`, `VERSION`, `SHA256SUMS` and this README are ours.
 
 ## What the engine build changes
@@ -71,9 +63,9 @@ load both files plain.
   upstream code.
 - Type-only imports such as `./selectorEngine` and `@protocol/structs`. The bundler erases
   them, so their files are not needed.
-- Upstream's other tests and assets, its test fixtures and its test server. Tier 2 maps the
-  server's `PREFIX`, `CROSS_PROCESS_PREFIX` and `EMPTY_PAGE` onto the fixture server and the
-  `asset` fixture onto these files, and skips every test that needs more of either.
+- Upstream tests, assets and test-server implementation. The server's
+  `../neo-server/conformance/` materializes test-only inputs from this same commit and keeps
+  their original assertions and hooks. See that suite's README for coverage and exclusions.
 - The Playwright client, server and protocol (apart from the two keyboard tables and the value
   serializers), the test runner,
   reporters, the trace viewer, codegen and the recorder, Playwright MCP, browser downloads, and
@@ -98,6 +90,7 @@ load both files plain.
 5. Port the keyboard tables with `bun scripts/port-keyboard-layout.ts` there, and record new
    goldens from the same Playwright release with `scripts/capture-goldens.mjs` (its header says
    how). The crate's keyboard and mouse tests replay those goldens.
-6. Lift the new release's page tests with `node tests/conformance/tier2/convert.mjs` in the
-   crate (its header says what it needs), then run `tests/conformance/run.sh tier2`.
+6. Update the server's three exact Playwright npm pins to the new release, regenerate its
+   conformance inventory, review registration/coverage changes, and run the conformance suite
+   on Linux. See `../neo-server/conformance/README.md`.
 7. Review the diff and keep release notes in the commit message.
