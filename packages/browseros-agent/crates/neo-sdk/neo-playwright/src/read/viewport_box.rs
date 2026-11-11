@@ -192,7 +192,7 @@ mod tests {
             let reply = if detached {
                 json!({ "kind": "detached" })
             } else {
-                json!({ "kind": "read", "value": null, "sensitive": null, "sweep": [] })
+                json!({ "kind": "read", "value": null, "sensitive": null })
             };
             connection.always(
                 "Runtime.callFunctionOn",
