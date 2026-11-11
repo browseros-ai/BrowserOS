@@ -4,6 +4,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { parseArgs } from 'node:util'
+import { scopeForRun, scoreResults, scoreText } from '../scope.mjs'
 import {
   classifyRuns,
   compareBridge,
@@ -102,12 +103,13 @@ function runDetails(label, run) {
   ]
 }
 
-export function renderReport({ neo, reference, bridge, corpus = [] }) {
+export function renderReport({ neo, reference, bridge, corpus = [], scope }) {
   const engine = neo.metadata.engine || neo.metadata.mode || 'neo'
   const label =
     engine === 'claw' ? 'v1' : engine === 'reference' ? 'Vanilla' : 'Neo'
   const refusalList = engine === 'claw' ? clawRefusals : refusals
   const rows = classifyRuns(neo.results, reference.results, corpus, { engine })
+  const scores = scoreResults(neo.results, scope || scopeForRun(neo))
   const counts = countVerdicts(rows)
   const comparison = compareBridge(rows, bridge, corpus)
   const suites = [...new Set(rows.map((row) => row.suite))].sort()
@@ -152,6 +154,39 @@ export function renderReport({ neo, reference, bridge, corpus = [] }) {
           'The run uses failOnFlakyTests: its overall exit can fail even though Playwright marks these individual tests flaky.',
         ]
       : []),
+    '',
+    '## Scores',
+    '',
+    `All tests: **${scoreText(scores.all)}**. In-scope tests: **${scoreText(scores.inScope)}**.`,
+    '',
+    'Scores count Playwright expected/flaky outcomes as passing, including expectLoop passes. Totals include skips and incomplete cases; scope changes only the denominator and matching pass count, never execution or verdicts. Counts below cover this selection.',
+    '',
+    neo.metadata.scope
+      ? `Scope manifest SHA-256: ${neo.metadata.scope.manifestSha256} (recorded with this run).`
+      : 'Scope provenance: current repository policy applied to a legacy run without a recorded scope file.',
+    '',
+    table(
+      ['Scope reason', 'Excluded tests', 'Passing excluded tests'],
+      Object.entries(scores.byReason).map(([reason, count]) => [
+        reason,
+        count.total,
+        count.passed,
+      ]),
+    ),
+    '',
+    `### Passing tests in scope file (${scores.passingExcluded.length})`,
+    '',
+    ...(scores.passingExcluded.length
+      ? [
+          table(
+            ['Test', 'Reason'],
+            scores.passingExcluded.map((row) => [
+              `${row.file}: ${row.title}`,
+              row.reason,
+            ]),
+          ),
+        ]
+      : ['None.']),
     '',
     '## How to run',
     '',
@@ -269,7 +304,7 @@ export function renderReport({ neo, reference, bridge, corpus = [] }) {
     ),
     '',
   ]
-  return { markdown: lines.join('\n'), rows, counts, comparison }
+  return { markdown: lines.join('\n'), rows, counts, comparison, scores }
 }
 
 function readJson(file) {
@@ -323,8 +358,11 @@ export function main(args = process.argv.slice(2)) {
     if (!values[key]) throw new Error(`Missing required --${key}`)
   const inputs = [
     values.bridge,
+    fileURLToPath(new URL('../scope.json', import.meta.url)),
     ...[values.neo, values.reference].flatMap((dir) =>
-      ['results.json', 'run.json'].map((file) => path.join(dir, file)),
+      ['results.json', 'run.json', 'scope.json'].map((file) =>
+        path.join(dir, file),
+      ),
     ),
   ].map((file) => path.resolve(file))
   const outputs = [values.out, values.json]
@@ -367,6 +405,7 @@ export function main(args = process.argv.slice(2)) {
     JSON.stringify({
       cases: report.rows.length,
       counts: report.counts,
+      scores: report.scores,
       report: path.resolve(values.out),
       ...(values.json ? { json: path.resolve(values.json) } : {}),
     }),
