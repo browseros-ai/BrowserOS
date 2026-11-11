@@ -1,73 +1,29 @@
-//! Neo's one screen, shown over RFB: to spectators as view displays, and to the owner as control
-//! displays (design D12). Each display has its own shared RFB connection to Xvnc. Xvnc has no
-//! auth, so a display is the only way a host reaches it, and this module is the gate.
+//! Neo's one screen over RFB: views forward pixels while dropping input, and control displays
+//! forward the owner's keys, clipboard and pointer to Xvnc. Admission reserves the display and
+//! dials Xvnc before the WebSocket upgrade, so failures stay ordinary HTTP errors.
 //!
-//! ```text
-//!  admit ─ a view while the owner has control: DisplayPaused (409)
-//!        ─ register ─ a view while a private tab is in front: DisplayPaused (409)
-//!        ─ dial Xvnc (503) ─ control: Privacy::control_display_opened
-//!  serve ─ viewer bytes ─▶ ClientFramer ─▶ verdict(mode) ─▶ Xvnc
-//!        ◀─ Xvnc bytes, untouched ─────────────────────────────┘
-//!          view: follow runs beside it (follow.rs), and the front-tab watch closes it when a
-//!                private tab is in front (front_tab.rs)
-//! ```
+//! Control admission takes the owner's screen hold before waiting out an agent move already
+//! in flight. The registration owns that hold until forwarding ends, including failed upgrades.
+//! A takeover also holds views off across control reconnects. A control display's first input
+//! closes views and keeps new ones out until it ends; the bytes then go directly to Xvnc.
 //!
-//! **Admission comes before the WebSocket upgrade**, so the host gets a refusal as an HTTP
-//! status and not as a socket that opens and dies: [`Displays::admit`] checks the pause,
-//! registers the display and dials Xvnc; [`Admitted::serve`] runs it.
-//!
-//! **The owner's first input waits.** On a control display, the first key, paste or click is
-//! held while, in this order:
-//! 1. every view display closes, and new views are refused while this display is open;
-//! 2. every open tab is stamped ([`TaintStamps`]), so a reconcile whose listing missed it keeps
-//!    its flag, and then made private, durably (`ControlDisplay::first_input`);
-//! 3. only then does the input go to Xvnc.
-//!
-//! Pixels that show what the owner typed exist only once Xvnc has their input. So a spectator
-//! closed in step 1 never gets them, and no capture of a tab made private in step 2 is kept. A
-//! failed commit drops that input and the next input tries again: the owner sees a lost key,
-//! never a tab that is not private. Later inputs go at once. While an input waits, the display
-//! still sees its viewer leave and Xvnc close, and ends with the input dropped, so a commit that
-//! never returns cannot keep it, and the views it shut out, waiting.
-//!
-//! **Views close; they do not pause** (decision 22). Holding Xvnc's bytes back would break the
-//! Tight encoding's zlib state, which spans rectangles. And noVNC asks for continuous updates,
-//! so a held update request would be answered anyway. A closed view fails closed, and its viewer
-//! comes back once the owner is done. Views are refused while a control display that took input
-//! is open, and while a takeover holds the screen ([`Displays::hold_screen`]); the hold also
-//! covers the gap while zuzu's control relay reconnects (synthesis item 2). A closed view
-//! forwards nothing it reads from Xvnc after its close (decision 46).
-//!
-//! **The owner holds the screen** (decision 44) while a takeover's [`ScreenHold`] lives and while
-//! any control display is open, input or not: each keeps a guard in the holds registry beside
-//! the front turn (`browser_tabs`), and the agent's moves ([`Front`]) and every follower read
-//! the screen rule over it. A control display's admission waits out a move already in flight,
-//! so the owner's display never opens under it.
-//!
-//! **The agent's private tab comes forward only after every view's close** (decision 46). While
-//! [`Front`] brings a private tab to the front, a switch hold closes every view and refuses new
-//! ones, from before the activation is sent until the front reads that tab. It keeps views out
-//! like a `ScreenHold`, but it is not the owner's, so the screen rule ignores it.
-//!
-//! **No view while a private tab is in front** (decision 34), however that tab went private.
-//! Admission refuses a view, and every open view closes when such a tab comes to the front or
-//! the tab in front goes private (front_tab.rs). A private tab stays private until it closes, so
-//! after control ends, views come back only once a tab that is not private is in front.
+//! A bound display runs under its binding's task tracker. Release cancels it and waits for its
+//! forwarding to stop before restoring the fit and lifting the agent's lock. RFB bytes are
+//! framed and judged by mode, never interpreted as field values.
 
 use crate::browser_tabs::ScreenHoldGuard;
 use crate::follow::Follower;
-use crate::limits::{MAX_HELD_INPUT, SERVER_CHUNK, XVNC_DIAL};
+use crate::limits::{SERVER_CHUNK, XVNC_DIAL};
 use crate::rfb_client::{ClientFramer, DisplayMode, Verdict, verdict};
-use crate::{BrowserTabs, Front, Locks, PartError, ScreenHolder, follow, front_tab, screen_rule};
+use crate::{BrowserTabs, Front, Locks, PartError, ScreenHolder, follow, screen_rule};
 use browseros_core::TabId;
 use bytes::{Bytes, BytesMut};
-use futures_util::future::BoxFuture;
 use futures_util::{Sink, SinkExt, Stream, StreamExt};
-use neo_trace::{ControlDisplay, EpochMillis, Privacy, TaskId, TraceSink, TraceStore};
+use neo_trace::{TaskId, TraceSink, TraceStore};
 use std::collections::HashMap;
 use std::io;
 use std::net::SocketAddr;
-use std::pin::{Pin, pin};
+use std::pin::pin;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
@@ -106,8 +62,7 @@ pub enum Follow {
 pub enum DisplayEnd {
     /// The viewer went away, or stopped taking bytes.
     ViewerLeft,
-    /// A view closed because the owner has control, or because a private tab is in front. Its
-    /// viewer may try again later.
+    /// A view closed because the owner has control. Its viewer may try again later.
     Paused,
     /// A bound display closed by its binding: its takeover was released.
     Released,
@@ -167,43 +122,11 @@ impl Drop for ScreenHold {
     }
 }
 
-/// Keeps view displays off while the agent brings a private tab forward (decision 46). On views
-/// it is a [`ScreenHold`]; it is not the owner's, so the screen rule ignores it (counted as the
-/// owner's, the move would refuse itself). Dropping it lets views back: a view's admission then
-/// reads the front itself, and is refused while the private tab is there (decision 34).
-#[must_use = "views are let back in as soon as the switch is dropped"]
-pub(crate) struct SwitchHold {
-    displays: Arc<Displays>,
-}
-
-impl Drop for SwitchHold {
-    fn drop(&mut self) {
-        let mut table = self.displays.table();
-        table.switches = table.switches.saturating_sub(1);
-    }
-}
-
-/// Stamps the tabs a control display's first input is about to make private, before any of their
-/// flags is committed. After a browser reconnect, a reconcile ends what Neo keeps about every tab
-/// its listing lacks, unless the tab was stamped after the reconcile's fence. A tab the input
-/// makes private may have opened after that listing. The service implements this with the stamps
-/// its routes take (`neo-service`'s `tab_stamps`). This crate cannot depend on the service,
-/// so `Displays` takes the stamps as a hook.
-pub trait TaintStamps: Send + Sync {
-    /// Returns once every tab in `tabs` is stamped. It waits while a reconcile is ending tab
-    /// state, and the first input waits with it.
-    fn stamp_all<'a>(&'a self, tabs: &'a [TabId]) -> BoxFuture<'a, ()>;
-}
-
 /// Every display in the process, and who may open one. The service builds one and its route
 /// admits and serves displays; a takeover holds views off and binds its control display.
 pub struct Displays {
     xvnc: SocketAddr,
     pub(crate) browser: BrowserTabs,
-    /// Control displays commit through it; views and follow read which tabs are private.
-    pub(crate) privacy: Arc<Privacy>,
-    /// A control display's first input stamps here every tab it makes private, before it commits.
-    stamps: Arc<dyn TaintStamps>,
     /// Follow pauses while a lock holds the tab it follows.
     pub(crate) locks: Arc<Locks>,
     /// A followed task's operations, as the trace writer commits them.
@@ -217,16 +140,11 @@ pub struct Displays {
 #[derive(Default)]
 struct Table {
     next: u64,
-    /// Each open view's close, cancelled when the owner takes control, a private tab is in
-    /// front, or the agent brings one forward.
+    /// Each open view's close, cancelled when the owner takes control.
     views: HashMap<u64, CancellationToken>,
     controls: HashMap<u64, ControlEntry>,
     /// Live [`ScreenHold`]s: the owner's, through a takeover.
     owner_holds: usize,
-    /// Live [`SwitchHold`]s: the agent's private switch, in progress.
-    switches: usize,
-    /// Stops the front-tab watch, which runs exactly while `views` is not empty.
-    front_watch: Option<CancellationToken>,
 }
 
 struct ControlEntry {
@@ -242,12 +160,9 @@ impl Table {
         self.next
     }
 
-    /// Whether views are kept out: a takeover holds the screen, the agent's private switch is
-    /// running, or the owner typed on a control display.
+    /// Whether a takeover or a control display's input keeps views out.
     fn views_paused(&self) -> bool {
-        self.owner_holds > 0
-            || self.switches > 0
-            || self.controls.values().any(|control| control.input)
+        self.owner_holds > 0 || self.controls.values().any(|control| control.input)
     }
 
     fn close_views(&self) {
@@ -255,28 +170,14 @@ impl Table {
             close.cancel();
         }
     }
-
-    /// The new front-tab watch's stop, when none runs yet; the caller starts the watch.
-    fn start_front_watch(&mut self) -> Option<CancellationToken> {
-        if self.front_watch.is_some() {
-            return None;
-        }
-        let stop = CancellationToken::new();
-        self.front_watch = Some(stop.clone());
-        Some(stop)
-    }
 }
 
 impl Displays {
-    /// No displays yet. `xvnc` is Xvnc's RFB address. Control displays stamp the tabs they make
-    /// private through `stamps`, then commit privacy through `privacy`; follow
-    /// reads `locks`, `sink`'s events and `store`.
+    /// Builds the shared screen endpoint; follow reads the same locks and trace as the service.
     #[must_use]
     pub fn new(
         xvnc: SocketAddr,
         browser: BrowserTabs,
-        privacy: Arc<Privacy>,
-        stamps: Arc<dyn TaintStamps>,
         locks: Arc<Locks>,
         sink: TraceSink,
         store: TraceStore,
@@ -284,8 +185,6 @@ impl Displays {
         Arc::new(Self {
             xvnc,
             browser,
-            privacy,
-            stamps,
             locks,
             sink,
             store,
@@ -293,60 +192,32 @@ impl Displays {
         })
     }
 
-    /// Admits one display before its WebSocket upgrade. A view is refused while the owner has
-    /// control, and while a private tab is in front; a view that follows a tab first starts its
-    /// follower, which brings that tab forward when it would (`follow::admit`). Then the display is
-    /// registered and gets its own connection to Xvnc. A control display also opens `Privacy`'s
-    /// control display, so tabs that open from now on start private.
-    ///
-    /// A view is registered before the tab in front is read and Xvnc is dialed, so a tab that
-    /// goes private or comes to the front after the read, and the owner's input during the
-    /// dial, still close it.
+    /// Registers a display and connects to Xvnc before the WebSocket upgrade. Views are refused
+    /// while a takeover or owner input keeps them out; control waits out a front move in flight.
     ///
     /// # Errors
-    /// `DisplayPaused` for a view while the owner has control or a private tab is in front;
-    /// `Browser` when the browser cannot list its tabs for a view to check the front;
-    /// `Screen` when Xvnc cannot be
-    /// reached.
+    /// `DisplayPaused` for a view while the owner has control; `Screen` if Xvnc cannot be reached.
     pub async fn admit(self: &Arc<Self>, request: DisplayRequest) -> Result<Admitted, PartError> {
         let (registration, role) = match request {
             DisplayRequest::View { follow } => {
                 if self.views_paused() {
                     return Err(PartError::DisplayPaused);
                 }
-                // Before the view is registered: once it is, the front-tab watch may read the
-                // private tab this replaces and close the view, if the task's lookup or the
-                // activation outlasts one of its polls.
                 let follower = match follow {
                     Some(follow) => Some(follow::admit(follow, self).await),
                     None => None,
                 };
                 let close = CancellationToken::new();
-                let (id, front_watch) = {
+                let id = {
                     let mut table = self.table();
                     if table.views_paused() {
                         return Err(PartError::DisplayPaused);
                     }
                     let id = table.next_id();
                     table.views.insert(id, close.clone());
-                    (id, table.start_front_watch())
+                    id
                 };
-                if let Some(stop) = front_watch {
-                    // Subscribed before this view reads the front, so a flag committed after
-                    // that read still wakes the watch, however late its task first runs.
-                    let events = self.sink.subscribe();
-                    tokio::spawn(front_tab::watch(Arc::clone(self), stop, events));
-                }
-                // Dropping it on a refusal takes the view out of the table, and the watch stops
-                // with the last view.
-                let registration = self.registration(id);
-                if front_tab::private_in_front(&self.browser, &self.privacy)
-                    .await?
-                    .is_some()
-                {
-                    return Err(PartError::DisplayPaused);
-                }
-                (registration, Role::View { close, follower })
+                (self.registration(id), Role::View { close, follower })
             }
             DisplayRequest::Control { binding } => {
                 let held = self.browser.hold_screen(ScreenHolder::ControlDisplay);
@@ -361,12 +232,11 @@ impl Displays {
                     id
                 };
                 let registration = self.registration(id);
-                let privacy = self.privacy.control_display_opened();
                 // From the hold on, the screen rule refuses every new agent move. Waiting out the
                 // turn lets a move already past its last check land first, so the owner's display
                 // never opens under a move still in flight.
                 drop(self.browser.front_turn().await);
-                (registration, Role::Control { privacy, binding })
+                (registration, Role::Control { binding })
             }
         };
         let server = self.dial().await?;
@@ -396,34 +266,15 @@ impl Displays {
         }
     }
 
-    /// Closes every view and refuses new ones until dropped, for the agent's move of a private
-    /// tab. Sync: every view's close is cancelled under the table's mutex before this returns,
-    /// so before the activation is sent.
-    pub(crate) fn hold_for_switch(self: &Arc<Self>) -> SwitchHold {
-        let mut table = self.table();
-        table.switches += 1;
-        table.close_views();
-        SwitchHold {
-            displays: Arc::clone(self),
-        }
-    }
-
     /// Whether the owner holds the screen: the screen rule over the holds registry. Follow
     /// pauses while it does.
     pub(crate) fn screen_held(&self) -> bool {
         screen_rule::decide(self.browser.screen_facts()).is_err()
     }
 
-    /// Whether views are kept out: a takeover holds the screen, the agent's private switch is
-    /// running, or the owner typed on a control display.
+    /// Whether a takeover or a control display's input keeps views out.
     pub(crate) fn views_paused(&self) -> bool {
         self.table().views_paused()
-    }
-
-    /// Closes every open view. The front-tab watch calls it when a private tab is in front, or
-    /// when it cannot tell.
-    pub(crate) fn close_views(&self) {
-        self.table().close_views();
     }
 
     fn registration(self: &Arc<Self>, id: u64) -> Registration {
@@ -477,12 +328,6 @@ impl Drop for Registration {
         let control = {
             let mut table = self.displays.table();
             table.views.remove(&self.id);
-            // With the last view gone, the front-tab watch has nothing left to close.
-            if table.views.is_empty()
-                && let Some(stop) = table.front_watch.take()
-            {
-                stop.cancel();
-            }
             table.controls.remove(&self.id)
         };
         // Drop the screen hold outside the table lock so other front movers can read it.
@@ -506,8 +351,6 @@ enum Role {
         follower: Option<Follower>,
     },
     Control {
-        /// Open until the display's end: while it is, every tab that opens starts private.
-        privacy: ControlDisplay,
         binding: Option<DisplayBinding>,
     },
 }
@@ -558,8 +401,12 @@ impl Admitted {
         let end = match role {
             Role::View { close, follower } => {
                 let closing = Closing::Paused(close);
-                let proxy =
-                    Proxy::new(displays, id, None).run(server, from_viewer, to_viewer, &closing);
+                let proxy = Proxy::new(displays, id, DisplayMode::View).run(
+                    server,
+                    from_viewer,
+                    to_viewer,
+                    &closing,
+                );
                 match follower {
                     None => proxy.await,
                     Some(follower) => {
@@ -574,18 +421,18 @@ impl Admitted {
                     }
                 }
             }
-            Role::Control { privacy, binding } => {
+            Role::Control { binding } => {
                 let closing = binding.map_or(Closing::Never, |binding| {
                     Closing::Released(binding.released)
                 });
-                Proxy::new(displays, id, Some(&privacy))
+                Proxy::new(displays, id, DisplayMode::Control)
                     .run(server, from_viewer, to_viewer, &closing)
                     .await
             }
         };
         tracing::info!(display = id, ?end, "a display ended");
         // The registration goes last: until the end above is done, views stay out and follow
-        // stays paused, and `Privacy` (dropped with the role) kept every new tab private.
+        // stays paused. The screen hold outlives every byte this display forwards.
         end
     }
 }
@@ -631,30 +478,29 @@ impl Closing {
 struct Proxy<'a> {
     displays: &'a Displays,
     id: u64,
-    /// A control display's privacy; `None` for a view.
-    control: Option<&'a ControlDisplay>,
+    /// The protocol mode is independent of tab state and persists for the whole connection.
+    mode: DisplayMode,
     framer: ClientFramer,
-    /// Every open tab was made private, durably, for this display's input.
-    tainted: bool,
+    /// The first input has closed views; later inputs need no further transition.
+    input_began: bool,
 }
 
 impl<'a> Proxy<'a> {
-    fn new(displays: &'a Displays, id: u64, control: Option<&'a ControlDisplay>) -> Self {
+    fn new(displays: &'a Displays, id: u64, mode: DisplayMode) -> Self {
         Self {
             displays,
             id,
-            control,
+            mode,
             framer: ClientFramer::default(),
-            tainted: false,
+            input_began: false,
         }
     }
 
     /// Runs until one side ends, the viewer is refused, or `closing` fires.
     ///
     /// The two directions never wait on each other, and `closing` races both: a viewer that
-    /// stopped reading, a stuck Xvnc or a held commit never keeps a display that must close
-    /// forwarding, and a release never waits on them. Xvnc's bytes keep reaching the viewer while
-    /// an input waits for its commit.
+    /// stopped reading, a stuck Xvnc never keeps a display that must close
+    /// forwarding, and a release never waits on them.
     async fn run<I, O>(
         mut self,
         server: TcpStream,
@@ -690,7 +536,7 @@ impl<'a> Proxy<'a> {
                 return DisplayEnd::ViewerLeft;
             };
             self.framer.push(&bytes);
-            if let Err(end) = self.forward(&mut from_viewer, &mut to_server).await {
+            if let Err(end) = self.forward(&mut to_server).await {
                 return end;
             }
         }
@@ -698,24 +544,18 @@ impl<'a> Proxy<'a> {
 
     /// Every whole message the framer holds: each is judged, and the ones that pass go to Xvnc
     /// in order.
-    async fn forward<I>(
-        &mut self,
-        from_viewer: &mut Pin<&mut I>,
-        to_server: &mut OwnedWriteHalf,
-    ) -> Result<(), DisplayEnd>
-    where
-        I: Stream<Item = Bytes>,
-    {
+    async fn forward(&mut self, to_server: &mut OwnedWriteHalf) -> Result<(), DisplayEnd> {
         while let Some((message, bytes)) =
             self.framer.next_message().map_err(DisplayEnd::Refused)?
         {
-            let input = match verdict(self.mode(), message) {
+            let input = match verdict(self.mode, message) {
                 Verdict::Drop => continue,
                 Verdict::Pass => false,
                 Verdict::Input => true,
             };
-            if input && !self.taint(from_viewer).await? {
-                continue;
+            if input && !self.input_began {
+                self.displays.input_began(self.id);
+                self.input_began = true;
             }
             to_server
                 .write_all(&bytes)
@@ -723,102 +563,6 @@ impl<'a> Proxy<'a> {
                 .map_err(|_| DisplayEnd::ScreenClosed)?;
         }
         Ok(())
-    }
-
-    fn mode(&self) -> DisplayMode {
-        match self.control {
-            Some(_) => DisplayMode::Control,
-            None => DisplayMode::View,
-        }
-    }
-
-    /// Whether this input may go to Xvnc. The first time: every view closes, then every open tab
-    /// is stamped and made private, durably, and the input waits for that. When a commit fails it
-    /// may not go, and the next input tries again.
-    ///
-    /// The viewer is still read while the commit is pending, so its leaving ends the display at
-    /// once and drops the commit. A store that never answers cannot keep the display open, nor
-    /// the views it shut out refused. What the viewer sends meanwhile waits in the framer, behind
-    /// this input, up to [`MAX_HELD_INPUT`].
-    async fn taint<I>(&mut self, from_viewer: &mut Pin<&mut I>) -> Result<bool, DisplayEnd>
-    where
-        I: Stream<Item = Bytes>,
-    {
-        if self.tainted {
-            return Ok(true);
-        }
-        // The verdict table marks input only on a control display; a view's input never goes.
-        let Some(control) = self.control else {
-            return Ok(false);
-        };
-        self.displays.input_began(self.id);
-        let mut commit = pin!(make_open_tabs_private(self.displays, self.id, control));
-        let committed = loop {
-            tokio::select! {
-                biased;
-                committed = &mut commit => break committed,
-                bytes = from_viewer.next() => {
-                    let Some(bytes) = bytes else {
-                        return Err(DisplayEnd::ViewerLeft);
-                    };
-                    self.framer.push(&bytes);
-                    if self.framer.buffered() > MAX_HELD_INPUT {
-                        return Err(DisplayEnd::Refused(
-                            "the viewer sent over 2 MiB while its first input waited",
-                        ));
-                    }
-                }
-            }
-        };
-        let Some(tabs) = committed else {
-            return Ok(false);
-        };
-        tracing::info!(
-            display = self.id,
-            tabs,
-            "the owner's first input: every open tab is private; sending it on"
-        );
-        self.tainted = true;
-        Ok(true)
-    }
-}
-
-/// Stamps every open tab, then commits it private, for the first input on control display `id`,
-/// and returns how many there were; `None` when the input must be dropped. It borrows nothing
-/// from the proxy, so the viewer's bytes can still be framed while it waits.
-async fn make_open_tabs_private(
-    displays: &Displays,
-    id: u64,
-    control: &ControlDisplay,
-) -> Option<usize> {
-    let tabs = match displays.browser.open_tabs().await {
-        Ok(tabs) => tabs,
-        Err(error) => {
-            tracing::warn!(
-                display = id,
-                %error,
-                "the owner's input was dropped: the open tabs could not be listed"
-            );
-            return None;
-        }
-    };
-    // Each tab is stamped before any flag is set, as a route stamps its tab before it changes it.
-    // A reconcile that sees one of these flags then sees its stamp too, and keeps the flag though
-    // its listing missed the tab. A reconcile that is already ending tab state holds the stamp
-    // table until it is done, so the stamps, and this commit, wait for it. Committed first, a
-    // flag could be ended as if its tab had closed, and views and screenshots would see a tab
-    // the owner may have typed into.
-    displays.stamps.stamp_all(&tabs).await;
-    match control.first_input(&tabs, EpochMillis::now()).await {
-        Ok(()) => Some(tabs.len()),
-        Err(error) => {
-            tracing::warn!(
-                display = id,
-                %error,
-                "the owner's input was dropped: a tab's private flag was not committed"
-            );
-            None
-        }
     }
 }
 
@@ -829,7 +573,7 @@ async fn make_open_tabs_private(
 /// sends for as long as Xvnc's socket has data, so a chunk read after the close could still go
 /// out. With the check, nothing Xvnc sends after a close reaches the viewer: a close cancelled
 /// before an activation is sent keeps every pixel of the new front off the screen, for every
-/// closer (the agent's private switch, the owner's first input, the front-tab watch). Bytes read
+/// closer (the owner's first input or the takeover's release). Bytes read
 /// before the close show the old front, and may still go out.
 async fn screen_to_viewer<O>(
     mut from_server: OwnedReadHalf,

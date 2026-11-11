@@ -3,7 +3,6 @@
 
 use crate::ScreenSize;
 use browseros_core::{CoreError, TabId};
-use neo_trace::PrivacyError;
 
 /// Why a part could not do what it was asked.
 #[derive(Debug, thiserror::Error)]
@@ -36,14 +35,10 @@ pub enum PartError {
     #[error("no page fits a {0} screen")]
     UnusableViewer(ScreenSize),
     /// View displays are closed while the owner has control (a control display took input, or
-    /// a takeover holds them off), and while a private tab is in front (decision 34). The viewer
-    /// may try again later.
-    #[error("view displays are paused while the owner has control or a private tab is in front")]
+    /// a takeover holds them off). The viewer may try again later.
+    #[error("view displays are paused while the owner has control")]
     DisplayPaused,
     /// The takeover's release has begun, so no display can bind to it any more.
     #[error("the takeover was released")]
     TakeoverReleased,
-    /// A tab's private flag could not be committed, so nothing that needs it was done.
-    #[error(transparent)]
-    Privacy(PrivacyError),
 }

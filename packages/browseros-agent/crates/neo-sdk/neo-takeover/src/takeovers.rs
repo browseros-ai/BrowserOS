@@ -4,7 +4,7 @@
 //! are.
 //!
 //! ```text
-//!  start:    private(tab) ─▶ lock(tab, reads, ttl), its TTL release scheduled
+//!  start:    lock(tab, reads, ttl), its TTL release scheduled
 //!            ─▶ hold the screen ─▶ fit(tab, viewer)? ─▶ active
 //!            (still fitting when the TTL release is due ─▶ given back as a release
 //!            is ─▶ released(expired), never active)
@@ -13,10 +13,8 @@
 //!            or when the tab closes (tab_closed, without the restore)
 //! ```
 //!
-//! **The order is the safety argument.** At start, the tab is private, durably, before anything
-//! else happens, so no capture taken from then on keeps a pixel of what the owner does; a flag
-//! that cannot be committed refuses the start with nothing else done. The agent is locked out
-//! before the owner can reach the tab, spectators and the agent's moves of the front are held
+//! **The order keeps the owner's handoff intact.** The agent is locked out before the owner
+//! can reach the tab, and spectators and agent moves of the front are held
 //! off before the owner's display can open. Release stops the owner's input before restoring
 //! the fit and giving back the screen. The agent's lock lifts last, so the agent never acts on
 //! a half-restored tab. The TTL release starts 10 s before the lock's deadline so the same
@@ -54,7 +52,7 @@ use crate::{
 };
 use browseros_core::TabId;
 use futures_util::future::{self, BoxFuture, FutureExt};
-use neo_trace::{EpochMillis, Privacy, PrivateReason};
+use neo_trace::EpochMillis;
 use std::collections::HashMap;
 use std::future::Future;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
@@ -211,7 +209,6 @@ impl Parts {
 /// Every takeover in the process. Takeovers live in memory only: a Neo restart ends them with
 /// their locks and fits, and `Service::start` puts the screen home (decision 30).
 pub struct Takeovers {
-    privacy: Arc<Privacy>,
     locks: Arc<Locks>,
     fits: Arc<Fits>,
     displays: Arc<Displays>,
@@ -225,19 +222,17 @@ pub struct Takeovers {
 }
 
 impl Takeovers {
-    /// No takeovers. The flow uses the same parts the host's own routes do: `privacy`'s flags,
+    /// No takeovers. The flow uses the same parts the host's own routes do:
     /// `locks`, `fits`, `displays` (the screen hold and the display binding),
     /// and `browser` to check the tab.
     #[must_use]
     pub fn new(
-        privacy: Arc<Privacy>,
         locks: Arc<Locks>,
         fits: Arc<Fits>,
         displays: Arc<Displays>,
         browser: BrowserTabs,
     ) -> Arc<Self> {
         Arc::new(Self {
-            privacy,
             locks,
             fits,
             displays,
@@ -248,11 +243,11 @@ impl Takeovers {
         })
     }
 
-    /// Starts a takeover of the tab, in the order the module doc argues for: private, locked
+    /// Starts a takeover of the tab, in the order the module doc argues for: locked
     /// with its TTL release scheduled, the screen held, then fitted when a viewer
     /// is given. A tab that has an active takeover gets it back as it is. A failed fit gives
-    /// back what was taken, in release order, and is the error; the tab stays private, which
-    /// only over-protects it. A start not done when its TTL release is due gives back what it
+    /// back what was taken, in release order, and is the error.
+    /// A start not done when its TTL release is due gives back what it
     /// took as that release would, and is released (`Expired`) without ever being active.
     ///
     /// The start runs in a task of its own and goes on if the caller stops waiting, as a host
@@ -260,7 +255,7 @@ impl Takeovers {
     /// a fit halfway through its plan. A host that retries gets the takeover it made.
     ///
     /// # Errors
-    /// `TabNotFound`; `Privacy` when the flag is not committed, before anything else is done;
+    /// `TabNotFound`;
     /// the fit's `Screen`, `Browser`, `TimedOut` or `UnusableViewer`; `TimedOut` when the fit
     /// was not done 10 s before the lock's deadline.
     pub async fn start(self: &Arc<Self>, request: TakeoverRequest) -> Result<Takeover, PartError> {
@@ -279,13 +274,9 @@ impl Takeovers {
         if let Some(active) = self.active_on(tab).await {
             return Ok(active);
         }
-        // A flag or a lock on a tab that is not open would protect nothing, and could hold a
+        // A lock on a tab that is not open would protect nothing, and could hold a
         // tab that opens later with the same id.
         self.browser.page(tab).await?;
-        self.privacy
-            .make_private(tab, PrivateReason::Takeover, EpochMillis::now())
-            .await
-            .map_err(PartError::Privacy)?;
         let id = TakeoverId::new();
         // Reckoned before the lock is taken, so the TTL release can only come early, never after
         // the lock's own deadline.
