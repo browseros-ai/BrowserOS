@@ -194,7 +194,7 @@ export function upgradeStamp(checkout, { root = source, pin = corpus } = {}) {
   }
 }
 
-export function prepare(checkout) {
+function prepare(checkout) {
   if (!checkout)
     throw new Error('Usage: bun js/prepare.mjs /path/to/playwright-source')
   if (fs.existsSync(source))
