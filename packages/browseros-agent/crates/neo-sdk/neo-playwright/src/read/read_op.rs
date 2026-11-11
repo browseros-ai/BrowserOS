@@ -490,12 +490,7 @@ async fn all_text_contents(
     scope: &OpScope<'_>,
     input: EveryMatchInput,
 ) -> Result<Vec<String>, PlaywrightError> {
-    let matched = every_match(pw, scope, input, ReadAll::TextContents).await?;
-    matched
-        .values
-        .into_iter()
-        .map(|value| element_read::read_value(scope, value))
-        .collect()
+    read_texts(pw, scope, input, ReadAll::TextContents).await
 }
 
 async fn all_inner_texts(
@@ -503,7 +498,17 @@ async fn all_inner_texts(
     scope: &OpScope<'_>,
     input: EveryMatchInput,
 ) -> Result<Vec<String>, PlaywrightError> {
-    let matched = every_match(pw, scope, input, ReadAll::InnerTexts).await?;
+    read_texts(pw, scope, input, ReadAll::InnerTexts).await
+}
+
+/// Both text-vector reads decode the probe's page values at this shared protocol boundary.
+async fn read_texts(
+    pw: &Playwright,
+    scope: &OpScope<'_>,
+    input: EveryMatchInput,
+    read: ReadAll,
+) -> Result<Vec<String>, PlaywrightError> {
+    let matched = every_match(pw, scope, input, read).await?;
     matched
         .values
         .into_iter()
