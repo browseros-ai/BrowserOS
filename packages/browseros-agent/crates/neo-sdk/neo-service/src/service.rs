@@ -125,7 +125,7 @@ impl Service {
         }
         .spawn(screenshots);
         let browser = BrowserTabs::new(browser, viewports);
-        let fits = Fits::new(browser.clone(), xvnc, Arc::clone(privacy.secrets()));
+        let fits = Fits::new(browser.clone(), xvnc);
         let stamps = Arc::new(TabStamps::default());
         let displays = Displays::new(
             xvnc.addr,
