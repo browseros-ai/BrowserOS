@@ -32,7 +32,14 @@ const options = launchOptionsFrom(process.argv.slice(2), process.env)
 let viewer: RunningViewer | null = null
 let ownsContainer = false
 let currentImage = ''
-let stopping = false
+/** When cleanup began; null until then. */
+let stoppingSince: number | null = null
+/**
+ * Ctrl-C reaches this process more than once: the terminal signals the whole process group, and
+ * each `bun run` above it (`neo:viewer` → `start`) forwards the signal again. Repeats within this
+ * window are those copies and must not cut the cleanup short; a later Ctrl-C quits at once.
+ */
+const REPEATED_SIGNAL_MS = 3000
 
 for (const signal of ['SIGINT', 'SIGTERM'] as const) {
   process.on(signal, () => void stop(0))
@@ -143,8 +150,15 @@ async function readState(path: string): Promise<StartState> {
 
 /** Ctrl-C, or a failed start: stop the viewer, then remove the container and network it started. */
 async function stop(code: number): Promise<never> {
-  if (stopping) process.exit(code)
-  stopping = true
+  if (stoppingSince !== null) {
+    if (Date.now() - stoppingSince < REPEATED_SIGNAL_MS)
+      return new Promise<never>(() => {})
+    console.error(
+      `Quitting without finishing cleanup; remove ${NAMES.container} and ${NAMES.network} with docker rm -f / docker network rm`,
+    )
+    process.exit(code)
+  }
+  stoppingSince = Date.now()
   await viewer?.stop()
   if (ownsContainer) {
     console.log(
