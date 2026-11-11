@@ -302,6 +302,8 @@ export type FilePayload = { name: string; mimeType: string; buffer: string }
 export type FilesInput = { paths: string[] } | { payloads: FilePayload[] }
 export type TargetArgs = { target: Target; strict: Strictness }
 export type EveryMatchArgs = { target: Target }
+/** `locator.normalize`: the locator's own selector rides along for upstream's messages. */
+export type NormalizeArgs = { target: Target; selector: string }
 export type PageArgs = { page: PageHandle }
 /** A page op on one of the page's frames; `frame` is left out for the main frame. */
 export type FrameArgs = PageArgs & { frame?: string }
@@ -358,6 +360,7 @@ export type OpInputs = {
   'locator.isVisible': TargetArgs
   'locator.isHidden': TargetArgs
   'locator.count': EveryMatchArgs
+  'locator.normalize': NormalizeArgs
   'locator.allTextContents': EveryMatchArgs
   'locator.allInnerTexts': EveryMatchArgs
   'locator.boundingBox': TargetArgs
@@ -510,6 +513,7 @@ export type OpOutputs = {
   'locator.isVisible': boolean
   'locator.isHidden': boolean
   'locator.count': number
+  'locator.normalize': { selector: string }
   'locator.allTextContents': string[]
   'locator.allInnerTexts': string[]
   'locator.boundingBox': Rect | null

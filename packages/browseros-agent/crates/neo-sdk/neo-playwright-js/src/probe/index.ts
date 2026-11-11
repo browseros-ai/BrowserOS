@@ -36,7 +36,7 @@ import {
   type ValueOp,
 } from './protocol'
 import { read, readAll } from './read'
-import { pinned, resolve } from './resolve'
+import { generatedSelector, pinned, resolve } from './resolve'
 import { focused, sealIn } from './sensitive'
 import { snapshot } from './snapshot'
 import { matchUrl } from './url'
@@ -72,6 +72,7 @@ const HANDLERS: Handlers = {
   edit,
   read,
   readAll,
+  selector: generatedSelector,
   snapshot,
   expect,
   focused,

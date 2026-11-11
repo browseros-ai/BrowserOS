@@ -47,6 +47,7 @@ const FRAMES = {
 const ANSWERS: Record<string, unknown> = {
   'locator.selectOption': ['a'],
   'locator.count': 0,
+  'locator.normalize': { selector: 'internal:role=button[name="Go"i]' },
   'locator.allTextContents': [],
   'locator.allInnerTexts': [],
   'locator.waitFor': ELEMENT,
@@ -83,7 +84,7 @@ const EVERY_OP = `
   await l.dispatchEvent('click'); await l.scrollIntoViewIfNeeded()
   await l.textContent(); await l.innerText(); await l.innerHTML(); await l.getAttribute('id'); await l.inputValue()
   await l.isEnabled(); await l.isDisabled(); await l.isEditable(); await l.isChecked(); await l.isVisible(); await l.isHidden()
-  await l.count(); await l.allTextContents(); await l.allInnerTexts(); await l.boundingBox(); await l.waitFor()
+  await l.count(); await l.normalize(); await l.allTextContents(); await l.allInnerTexts(); await l.boundingBox(); await l.waitFor()
   const handle = await l.elementHandle(); await handle.click(); await l.elementHandles()
   await handle.$('b'); await handle.$$('b')
   await page.ariaSnapshot(); await l.ariaSnapshot()

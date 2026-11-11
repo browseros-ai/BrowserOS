@@ -178,6 +178,11 @@ export const OPS = {
     target: 'target',
     lifetime: 'operation',
   },
+  'locator.normalize': {
+    effect: 'read',
+    target: 'target',
+    lifetime: 'operation',
+  },
   'page.ariaSnapshot': {
     effect: 'read',
     target: 'page',
