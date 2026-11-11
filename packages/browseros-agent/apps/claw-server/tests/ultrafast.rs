@@ -596,3 +596,29 @@ async fn skill_files_follow_the_switch_and_keep_hand_written_sections() -> anyho
     assert!(fast.body.contains("## Before you start"), "{}", fast.body);
     Ok(())
 }
+
+#[tokio::test]
+async fn skill_files_without_a_running_flow_are_left_as_written() -> anyhow::Result<()> {
+    let app = test_app_with(false).await?;
+    let state = &app.state;
+    create_skill(state, "neo-shop-add").await?;
+    state
+        .skills
+        .put_flow_row(flow::new_row("neo-shop-add", FlowStatus::Off))
+        .await?;
+    let raw = "---\nname: neo-shop-add\ndescription: \"Add to cart\"\ntools: browseros-neo\n---\n\n## Steps\n1. Open the search\n   - Use the India store, never the global one.\n2. Add the first match\n   ```js\n   await page.click('[data-add]')\n   ```\n";
+    let (status, _) = put(
+        &app.router,
+        "/api/v1/skills/neo-shop-add",
+        json!({ "body": raw }),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK);
+    let path = state.skills.get("neo-shop-add").await?.view.model.body_path;
+    let before = tokio::fs::read(&path).await?;
+
+    state.skills.sync_skill_md(false).await?;
+
+    assert_eq!(tokio::fs::read(&path).await?, before);
+    Ok(())
+}
