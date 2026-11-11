@@ -120,6 +120,7 @@ mod tests {
             &mut allowed,
             &claims,
             &[PageFact {
+                task_id: None,
                 viewport_size: None,
                 workers: None,
                 tab,

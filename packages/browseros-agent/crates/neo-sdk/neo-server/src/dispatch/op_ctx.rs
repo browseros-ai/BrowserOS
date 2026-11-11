@@ -18,7 +18,7 @@ use super::{
     Caller, Dispatcher, ErrorCode, LeafError, MethodSpec, OpAbort, OpFailure, OperationError,
     PolicyCheck, RunCtx, StopReason,
 };
-use crate::browser::PageRef;
+use crate::browser::{PageRef, TabRegistry};
 
 /// How many call-log lines one op keeps; later lines are dropped.
 const NOTES_PER_OP: usize = 64;
@@ -58,6 +58,8 @@ pub(crate) enum PageChange {
     Opened,
     /// The result names this tab; report its current fact without changing ownership.
     Linked,
+    /// A newly observed popup carries its opener's ownership before its first fact is sent.
+    Popup { opener: PageRef },
     /// A delivered close names this tab's destroyed target. It contributes reply facts
     /// without changing ownership or treating the event as a close performed by the script.
     Gone { target: TargetId, seq: u64 },
@@ -143,6 +145,11 @@ impl<M> OpCtx<M> {
     #[must_use]
     pub(crate) fn run(&self) -> &RunCtx {
         &self.core.run
+    }
+
+    /// Task records share the tab registry's close lifecycle.
+    pub(crate) fn tabs(&self) -> &TabRegistry {
+        self.core.dispatcher.tabs()
     }
 
     /// The target, resolved and checked by the door. A method that declared no target gets

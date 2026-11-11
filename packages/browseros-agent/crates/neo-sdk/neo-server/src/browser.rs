@@ -9,7 +9,8 @@
 //!     ├─ status() / is_ready() / is_current(epoch) ─▶ health, readiness, the door's gates
 //!     └─ linked() / viewports() / tab_events() / watched_listing() ─▶ the host API, once the
 //!        first connect lands
-//!  TabRegistry ── per-tab facts: origin, idle clock, feature slots, each task's last tab
+//!  TabRegistry ── per-tab facts: origin, idle clock, feature slots, each host task's last tab
+//!     └─ TaskBook: named tasks and ordered tab ownership, retired by the same close hook
 //!  tab_watch ── per epoch: Target.setDiscoverTargets, then each page target's tab, a listing
 //!               after every burst of target events, and a TabEvent for each tab that opened
 //!               or closed, in order; the listing fires core's detach hook promptly
@@ -25,6 +26,7 @@ mod browser_link;
 mod page_ref;
 mod tab_registry;
 mod tab_watch;
+mod task_book;
 #[cfg(test)]
 mod tests;
 
@@ -32,3 +34,4 @@ pub(crate) use browser_link::{BrowserLink, LinkStatus, RunView};
 pub(crate) use page_ref::PageRef;
 pub(crate) use tab_registry::{Seen, TabRegistry};
 pub(crate) use tab_watch::{TabEvent, TabListing, Watched};
+pub(crate) use task_book::{TaskError, TaskRecord};

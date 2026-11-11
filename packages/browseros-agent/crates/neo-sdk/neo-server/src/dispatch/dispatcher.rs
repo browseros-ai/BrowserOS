@@ -9,10 +9,11 @@ use crate::browser::Seen;
 use browseros_core::pages::PageInfo;
 use browseros_core::viewport::Size;
 use browseros_core::{BrowserView, PageId, TabId};
-use neo_trace::{Delivery, Effect, OperationId, PageState, TraceSink};
+use neo_trace::{Delivery, Effect, OperationId, PageState, TaskId, TraceSink};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::sync::{Mutex as AsyncMutex, oneshot};
+use tokio::time;
 use ts_rs::TS;
 
 use super::close_release::close_release;
@@ -24,9 +25,10 @@ use super::registry::DecodedCall;
 use super::{
     ActedTarget, Answer, Claim, ErrorCode, LeafError, MethodSpec, Observation, Observer, OpAbort,
     OpFailure, OperationError, PageScript, PageTarget, Policy, PolicyCheck, Registry, RunCtx,
-    Visibility, operation_error,
+    TabNote, TaskKind, TaskNote, Visibility, operation_error,
 };
-use crate::browser::{BrowserLink, PageRef, TabRegistry};
+use crate::browser::{BrowserLink, PageRef, TabRegistry, TaskRecord};
+use crate::config::Defaults;
 
 /// A tab's refresh bookkeeping, a per-tab slot dropped with the tab: the event seq through which
 /// the door last refreshed its entry in core's page cache, so a navigation the page made itself
@@ -139,6 +141,9 @@ pub(crate) struct OpReply {
 pub(crate) struct PageFact {
     /// The browser's tab id.
     pub(crate) tab: TabId,
+    /// The owning task now; task-less tabs serialize as null.
+    #[serde(rename = "taskId")]
+    pub(crate) task_id: Option<String>,
     /// `None` (null) once closed.
     pub(crate) url: Option<String>,
     /// `None` (null) once closed.
@@ -325,6 +330,8 @@ impl Dispatcher {
         self: &Arc<Self>,
         run: &Arc<RunCtx>,
     ) -> Result<PageRef, OperationError> {
+        let task = run.ambient_task(&self.tabs)?;
+        let task = self.tabs.task(&task)?;
         let opened = self
             .invoke_child(run, None, DEFAULT_PAGE_OPENER, json!({}))
             .await
@@ -332,7 +339,11 @@ impl Dispatcher {
         match serde_json::from_value::<OpenedPage>(opened) {
             Ok(OpenedPage {
                 page: PageTarget(TargetHandle::Page { tab }),
-            }) => Ok(PageRef { tab }),
+            }) => {
+                let page = PageRef { tab };
+                self.tabs.own(&page, &task.id)?;
+                Ok(page)
+            }
             Ok(OpenedPage {
                 page: PageTarget(TargetHandle::RunDefault),
             }) => Err(OperationError::neo(
@@ -363,6 +374,37 @@ impl Dispatcher {
 
     pub(super) fn tabs(&self) -> &TabRegistry {
         &self.tabs
+    }
+
+    /// Gather current task tabs after the run's operations drained; saved replies never re-read them.
+    pub(crate) async fn task_notes(&self, run: &RunCtx) -> Vec<TaskNote> {
+        let mut notes = run.task_notes();
+        if notes.is_empty() {
+            return notes;
+        }
+        // The script has stopped, so its cancellation token is already cancelled. Bound this
+        // final read by the teardown grace and keep cached URLs if the browser is unavailable.
+        let _listing = time::timeout(Defaults::TEARDOWN_GRACE, run.view().list_pages()).await;
+        for note in &mut notes {
+            if note.kind == TaskKind::Closed {
+                continue;
+            }
+            let Ok(id) = TaskId::parse(&note.id) else {
+                continue;
+            };
+            let Ok(task) = self.tabs.task(&id) else {
+                continue;
+            };
+            for tab in task.tabs {
+                if let Some(info) = self.browser.page(tab).await {
+                    note.tabs.push(TabNote {
+                        tab: tab.0,
+                        url: info.url,
+                    });
+                }
+            }
+        }
+        notes
     }
 
     /// The synchronous front of the door: the op id, the method, the decoded input, and the
@@ -506,6 +548,12 @@ impl Dispatcher {
         if let Err(refusal) = self.check(&check) {
             return guard.finish(Ending::Refused(refusal), Vec::new(), default_page, None);
         }
+        let ambient = match self.opening_task(&run, &spec, caller) {
+            Ok(task) => task,
+            Err(error) => {
+                return guard.finish(Ending::Refused(error), Vec::new(), default_page, None);
+            }
+        };
         let op = OpCore {
             run: Arc::clone(&run),
             dispatcher: Arc::clone(&self),
@@ -556,9 +604,26 @@ impl Dispatcher {
                     ..check
                 },
                 &mut ending,
+                ambient.as_ref().map(|task| &task.id),
             )
             .await;
         guard.finish(ending, facts.pages, default_page, facts.observed);
+    }
+
+    /// Reserve the ambient task before a script's opener sends, including at the task limit.
+    /// Its record pins an empty task until ownership is assigned after the open.
+    fn opening_task(
+        &self,
+        run: &RunCtx,
+        spec: &MethodSpec,
+        caller: Caller,
+    ) -> Result<Option<TaskRecord>, OperationError> {
+        if caller == Caller::Script && spec.name == DEFAULT_PAGE_OPENER {
+            run.check_new_page()?;
+            let id = run.ambient_task(&self.tabs)?;
+            return Ok(Some(self.tabs.task(&id)?));
+        }
+        Ok(None)
     }
 
     async fn resolve_target(
@@ -646,6 +711,7 @@ impl Dispatcher {
         state: &OpState,
         check: PolicyCheck<'_>,
         ending: &mut Ending,
+        ambient: Option<&TaskId>,
     ) -> PageFacts {
         let reports = state.take_reports();
         let mut pages: Vec<PageRef> = target.into_iter().cloned().collect();
@@ -659,6 +725,12 @@ impl Dispatcher {
                     let seen = self.tabs.seen();
                     if self.browser.page(page.tab).await.is_some() {
                         self.tabs.opened_by_agent(page, seen, run.task_id());
+                        if let Some(task) = ambient
+                            && let Err(error) = self.tabs.own(page, task)
+                        {
+                            *ending =
+                                Ending::Failed(LeafError::definite(OperationError::from(error)));
+                        }
                     }
                 }
                 PageChange::Navigated if !refreshed.contains(&page.tab) => {
@@ -666,6 +738,12 @@ impl Dispatcher {
                     self.refresh_navigated(run, page).await;
                 }
                 PageChange::Navigated | PageChange::Linked => {}
+                PageChange::Popup { opener } => {
+                    let seen = self.tabs.seen();
+                    if self.browser.page(page.tab).await.is_some() {
+                        self.tabs.popup(page, opener.tab, seen);
+                    }
+                }
                 PageChange::Gone { target, seq } => {
                     claims.entry(page.tab).or_default().push(Claim {
                         target: target.clone(),
@@ -725,6 +803,7 @@ impl Dispatcher {
                 infos.next().flatten()
             };
             let mut fact = PageFact::in_view(&page, info, run.view());
+            fact.task_id = self.tabs.owner(page.tab).map(|id| id.to_string());
             fact.workers = if closed.contains(&page.tab) {
                 Some(Vec::new())
             } else {
@@ -875,6 +954,7 @@ impl PageFact {
         match info {
             Some(info) => Self {
                 tab,
+                task_id: None,
                 url: Some(info.url),
                 title: Some(info.title),
                 closed: false,
@@ -883,6 +963,7 @@ impl PageFact {
             },
             None => Self {
                 tab,
+                task_id: None,
                 url: None,
                 title: None,
                 closed: true,
