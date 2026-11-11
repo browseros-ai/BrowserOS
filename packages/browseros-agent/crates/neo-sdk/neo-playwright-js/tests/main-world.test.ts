@@ -162,3 +162,13 @@ it('tests that busted array methods on the page do not break the transport', asy
   const poll = call('poller', false, '1+2', 1, '{"v":"undefined"}') as Poll
   expect(await poll.first).toEqual([true, '3'])
 })
+
+it("tests that a setter on the page's Object.prototype does not take an argument's members", () => {
+  const { call, realm } = mainWorld()
+  runInContext(
+    'Object.defineProperty(Object.prototype, "a", { set() {}, configurable: true })',
+    realm,
+  )
+  const arg = JSON.stringify({ a: [1, 2], id: 1 })
+  expect(call('evaluate', true, '(x) => x.length', 1, arg)).toBe('2')
+})

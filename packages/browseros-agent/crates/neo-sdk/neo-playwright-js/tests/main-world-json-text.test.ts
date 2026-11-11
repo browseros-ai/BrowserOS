@@ -63,6 +63,18 @@ it('tests that readJson reads back what JSON.stringify wrote', () => {
   })
 })
 
+it('tests that readJson makes every member an own data property, __proto__ too', () => {
+  const read = readJson('{"__proto__":{"x":1},"k":2}') as Record<
+    string,
+    unknown
+  >
+  expect(Object.getPrototypeOf(read)).toBeNull()
+  expect(Object.keys(read)).toEqual(['__proto__', 'k'])
+  expect(Object.getOwnPropertyDescriptor(read, '__proto__')?.value).toEqual({
+    x: 1,
+  })
+})
+
 it('tests that readJson keeps lone surrogates as JSON.parse does', () => {
   const text = JSON.stringify('a\ud800b\udc00')
   expect(readJson(text)).toBe(JSON.parse(text))
@@ -79,7 +91,6 @@ it('tests that readJson refuses text that is not JSON', () => {
     '"\\u12g4"',
     '1 2',
     '-',
-    '{"__proto__":{}}',
     '- 1',
     '1 .5',
     '1.',

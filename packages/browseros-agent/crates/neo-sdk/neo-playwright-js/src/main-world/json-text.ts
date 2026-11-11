@@ -145,15 +145,18 @@ class JsonReader {
     if (this.at !== this.text.length) this.fail()
   }
 
+  /**
+   * An object without a prototype, so every member is an own data property as `JSON.parse`
+   * makes it: an assignment on an ordinary object would run a setter the page put on
+   * `Object.prototype` (or `__proto__`'s own), and lose the member.
+   */
   private object(): Record<string, unknown> {
     this.take('{')
-    const out: Record<string, unknown> = {}
+    const out = { __proto__: null } as unknown as Record<string, unknown>
     if (this.next('}')) return out
     do {
       this.skipSpace()
       const key = this.string()
-      // The format has no such key, and assigning it would set the object's prototype.
-      if (key === '__proto__') this.fail()
       this.skipSpace()
       this.take(':')
       out[key] = this.value()

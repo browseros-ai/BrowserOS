@@ -499,14 +499,12 @@ class JsonReader {
   }
   object() {
     this.take("{");
-    const out = {};
+    const out = { __proto__: null };
     if (this.next("}"))
       return out;
     do {
       this.skipSpace();
       const key = this.string();
-      if (key === "__proto__")
-        this.fail();
       this.skipSpace();
       this.take(":");
       out[key] = this.value();
