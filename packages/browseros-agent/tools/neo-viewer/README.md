@@ -156,6 +156,9 @@ Every call through the proxy is appended to one list, in the order it reached th
 agent sent it (owner, 2026-11-11: an agent that calls the MCP URL from a new curl or Python process
 each time is still one job). Each run shows its client as a quiet label: its `clientInfo`, an older
 client's `initialize`, or its User-Agent's product name, since several agents may share the list.
+An agent that wants to label its runs sends the label in `_meta["com.browseros.neo/run"].taskId`
+(zuzu does), and the run shows it beside the client; a `taskId` tool argument is refused by Neo
+(`unknown field taskId`).
 **Clear** (top bar, or `POST /api/clear`) empties it; the log before it is kept once, as
 `log.prev.jsonl`, in case of a mis-click.
 
