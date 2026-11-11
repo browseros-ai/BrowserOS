@@ -1,5 +1,5 @@
 // The probe's reads through the built asset, on a linkedom page: each read kind's value and
-// upstream's thrown messages, and the seal's verdict on the element a value came from.
+// upstream's thrown messages.
 // linkedom has no layout and does not reflect `type` or `checked` as properties, so boxes,
 // `editable` and `checked` are measured by reads_live.rs on a real page instead.
 import { afterEach, expect, it } from 'bun:test'
@@ -33,32 +33,27 @@ const read = (probe: ProbePage, selector: string, kind: object) =>
     read: kind,
   })
 
-it('tests that the text reads answer with the element and no seal verdict', () => {
+it('tests that the text reads answer with what the element holds', () => {
   const probe = booted()
   expect(read(probe, 'h1', { kind: 'innerHtml' })).toEqual({
     kind: 'read',
     value: 'Hello <b>there</b>',
-    sensitive: null,
   })
   expect(read(probe, 'h1', { kind: 'innerText' })).toEqual({
     kind: 'read',
     value: 'Hello there',
-    sensitive: null,
   })
   expect(read(probe, 'h1', { kind: 'attribute', name: 'title' })).toEqual({
     kind: 'read',
     value: 'Greeting',
-    sensitive: null,
   })
   expect(read(probe, 'h1', { kind: 'attribute', name: 'lang' })).toEqual({
     kind: 'read',
     value: null,
-    sensitive: null,
   })
   expect(read(probe, '#name', { kind: 'inputValue' })).toEqual({
     kind: 'read',
     value: 'Ada',
-    sensitive: null,
   })
 })
 
@@ -76,15 +71,11 @@ it("tests that innerText and inputValue throw upstream's messages as script erro
   })
 })
 
-it('tests that a sensitive field is reported as the element the value came from', () => {
+it('tests that a password field reads its own value', () => {
   const probe = booted()
-  expect(read(probe, '#pw', { kind: 'inputValue' })).toMatchObject({
+  expect(read(probe, '#pw', { kind: 'inputValue' })).toEqual({
     kind: 'read',
-    sensitive: 'password',
-  })
-  expect(read(probe, '#pw-label', { kind: 'textContent' })).toMatchObject({
-    kind: 'read',
-    sensitive: null,
+    value: 'hunter2',
   })
 })
 
@@ -162,7 +153,6 @@ it('tests that located pins the first match and counts the matches of a non-stri
   expect(first).toMatchObject({
     kind: 'read',
     value: { visible: true, count: 2 },
-    sensitive: 'password',
   })
   expect(typeof first.value.pin).toBe('number')
   expect(locate('h1', 'strict')).toMatchObject({ value: { count: 1 } })
@@ -202,7 +192,6 @@ it("tests that a root target is the handle's own node, detached once it leaves",
   expect(readValue()).toEqual({
     kind: 'read',
     value: 'Ada',
-    sensitive: null,
   })
   name?.remove()
   expect(readValue()).toEqual({ kind: 'detached' })
@@ -213,12 +202,10 @@ it('tests that boxes and frame origins are null without a layout box', () => {
   expect(read(probe, 'h1', { kind: 'boundingBox' })).toEqual({
     kind: 'read',
     value: null,
-    sensitive: null,
   })
   expect(read(probe, '#pay', { kind: 'frameOrigin' })).toEqual({
     kind: 'read',
     value: null,
-    sensitive: null,
   })
   expect(read(probe, 'h1', { kind: 'frameOrigin' })).toEqual({
     kind: 'error',

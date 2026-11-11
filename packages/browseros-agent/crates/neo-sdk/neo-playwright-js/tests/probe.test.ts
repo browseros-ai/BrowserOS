@@ -16,8 +16,8 @@ const PAGE = `<html><body>
 let page: ProbePage | undefined
 afterEach(() => page?.close())
 
-const open = (options?: { sealed?: boolean }) => {
-  page = openProbePage(PAGE, options)
+const open = () => {
+  page = openProbePage(PAGE)
   return page
 }
 
@@ -44,13 +44,11 @@ const pinOf = (reply: unknown): number => {
   return pin
 }
 
-it('tests that a world answers uninstalled until boot, and refuses to boot unsealed', () => {
-  const unsealed = open({ sealed: false })
-  expect(unsealed.call({ op: 'describe' })).toEqual({ kind: 'uninstalled' })
-  expect(() => unsealed.boot({ frameSeq: 0, epoch: 'a' })).toThrow(
-    'refusing to boot: this world has no seal (__clawSeal)',
-  )
-  expect(unsealed.call({ op: 'describe' })).toEqual({ kind: 'uninstalled' })
+it('tests that a world answers uninstalled until boot', () => {
+  const probe = open()
+  expect(probe.call({ op: 'describe' })).toEqual({ kind: 'uninstalled' })
+  probe.boot({ frameSeq: 0, epoch: 'a' })
+  expect(probe.call({ op: 'describe' })).toMatchObject({ kind: 'described' })
 })
 
 it('tests that boot rejects options Rust would never send', () => {
@@ -127,14 +125,13 @@ it('tests that resolve pins one element, or reports none, strict or not-a-frame'
   probe.boot({ frameSeq: 0, epoch: 'a' })
   expect(probe.call(resolveRequest('#pw'))).toMatchObject({
     kind: 'element',
-    sensitive: 'password',
+    preview: '<input id="pw" type="password" value="hunter2"/>',
   })
   expect(
     probe.call(resolveRequest('button', { strictness: 'firstMatch' })),
   ).toMatchObject({
     kind: 'element',
     preview: '<button>Go</button>',
-    sensitive: null,
   })
   const strict = probe.call(resolveRequest('button'))
   expect(strict).toMatchObject({ kind: 'strict' })
@@ -254,15 +251,9 @@ it("tests that ref= gets Neo's hint and another unknown engine gets upstream's m
   })
 })
 
-it('tests that focused answers through the seal, and an unknown request is internal', () => {
+it('tests that an unknown request is internal', () => {
   const probe = open()
   probe.boot({ frameSeq: 0, epoch: 'a' })
-  expect(probe.call({ op: 'focused' })).toEqual({
-    kind: 'focused',
-    sensitive: false,
-    iframe: null,
-    host: null,
-  })
   expect(probe.call({ op: 'teleport' })).toEqual({
     kind: 'error',
     class: 'internal',
@@ -291,12 +282,10 @@ it("tests that read resolves and reads one element's textContent, strictly or fi
   expect(textContent('button:nth-of-type(2)')).toEqual({
     kind: 'read',
     value: 'Stop',
-    sensitive: null,
   })
   expect(textContent('button', 'firstMatch')).toEqual({
     kind: 'read',
     value: 'Go',
-    sensitive: null,
   })
   expect(textContent('button')).toMatchObject({ kind: 'strict' })
   expect(textContent('#missing')).toEqual({ kind: 'none' })

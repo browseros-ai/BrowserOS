@@ -1,5 +1,5 @@
-//! Playwright's reads of elements: resolved and read in one sealed-world call, so a sensitive
-//! field's own value comes back through the seal. Reads never mark their op sent.
+//! Playwright's reads of elements: resolved and read in one sealed-world call. Reads never mark
+//! their op sent.
 //!
 //! ```text
 //!  read_op ── decodes the op's input, then

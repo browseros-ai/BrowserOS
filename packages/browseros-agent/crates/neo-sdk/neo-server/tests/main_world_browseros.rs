@@ -374,8 +374,8 @@ const WRITTEN_SECRET: &str = "setc-pw-7Rb3";
 /// `page.setContent`, and `frame.setContent`, which sends it, on a child frame and on the main
 /// frame: each writes its own frame's document, the HTML's inline script runs once, and Neo
 /// refuses `networkidle`, which it cannot observe after a write. A password field the HTML writes
-/// reads masked through the sealed world (`content`, `inputValue`), and raw through a main-world
-/// script, as Playwright's does, a child frame's script reaching its parent included.
+/// reads as the page holds it everywhere (`content`, `inputValue`, a main-world script), as
+/// Playwright's does, a child frame's script reaching its parent included.
 async fn set_content(rig: &Rig) -> TestResult {
     let script = format!(
         r#"
@@ -414,10 +414,9 @@ async fn set_content(rig: &Rig) -> TestResult {
     )
     .await?;
     client.cancel().await?;
-    // The main world reads the field's value as the page holds it, and the sealed world shows it
-    // as `••••`, as an aria snapshot does.
+    // Every world reads the field's value as the page holds it.
     let raw = json!([WRITTEN_SECRET, true]);
-    let sealed = json!(["••••", false]);
+    let field = format!(r#"<input type="password" id="pw" value="{WRITTEN_SECRET}">"#);
     assert_eq!(
         returned(&result)?,
         json!({
@@ -428,8 +427,8 @@ async fn set_content(rig: &Rig) -> TestResult {
             ],
             "written": [true, "Written", "written"],
             "runs": 1,
-            "content": [r#"<input type="password" id="pw" value="••••">"#, false],
-            "inputValue": sealed,
+            "content": [field, true],
+            "inputValue": raw,
             "evaluate": raw,
             "childFrame": raw,
             "mainFrame": "Again",
@@ -438,7 +437,7 @@ async fn set_content(rig: &Rig) -> TestResult {
                 "page.setContent: waitUntil \"networkidle\" cannot be observed after setContent in Neo; use \"load\"",
             ),
         }),
-        "setContent as Playwright runs it, but for networkidle and the sealed world's reads"
+        "setContent as Playwright runs it, but for networkidle"
     );
     set_content_recorded(&run_record(rig, &result).await?)
 }

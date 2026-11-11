@@ -3,21 +3,16 @@
 //!
 //! ```text
 //!  outer loop (locator: re-resolve │ handle: once); the element only has to be attached
-//!    ① resolve { want: element }        ─ pin, and whether it or the control its label names
-//!                                          (which a label's focus goes to) is a sensitive field
+//!    ① resolve { want: element }        ─ pin
 //!    ── the tab's input lock ─────────────────────────────────────────────────────────────
 //!    the burst, built on a copy of the tab's keyboard (an unknown key fails here, unsent)
-//!    a copy or cut into a sensitive target: refused here, unsent
 //!    send_effect()                      ─ Sent
 //!    ② edit { pin, focus { resetSelection } }   (detached: next pass)
-//!    a copy or cut: the focus walk, in case the focus did not move (copy_refusal.rs)
 //!    the burst on the root session; press then waits for the navigations it requested
 //! ```
 
 use std::time::Duration;
 
-use crate::action::copy_refusal::{copy_refused, focus_of, refuse_copy};
-use crate::action::form_action::MASKED;
 use crate::action::requested_navigations::RequestedNavigations;
 use crate::action::subject::Subject;
 use crate::backoff::Backoff;
@@ -52,15 +47,13 @@ impl Keys<'_> {
         }
     }
 
-    /// Upstream's call-log line, `elementHandle.press("Enter")`, with the keys masked in a
-    /// sensitive field.
-    fn log_line(&self, sensitive: bool) -> String {
+    /// Upstream's call-log line, `elementHandle.press("Enter")`.
+    fn log_line(&self) -> String {
         let (method, keys) = match self {
             Self::Press { key, .. } => ("press", *key),
             Self::Type { text, .. } => ("type", *text),
         };
-        let shown = if sensitive { MASKED } else { keys };
-        format!("elementHandle.{method}(\"{shown}\")")
+        format!("elementHandle.{method}(\"{keys}\")")
     }
 
     fn waits_after(&self) -> bool {
@@ -143,15 +136,15 @@ impl<'a> KeyRunner<'a> {
             strictness: self.strictness,
             want: Want::Element,
         };
-        let (pin, sensitive) = match self.call(located, &resolve).await? {
-            Called::Reply(ProbeReply::Element { pin, sensitive, .. }) => (pin, sensitive.is_some()),
+        let pin = match self.call(located, &resolve).await? {
+            Called::Reply(ProbeReply::Element { pin, .. }) => pin,
             Called::Reply(ProbeReply::None { stale_ref: None }) => return Ok(false),
             Called::Reply(ProbeReply::Detached) => return self.subject.detached().map(|()| false),
             Called::Reply(other) => return Err(self.subject.refused(other)),
             Called::Gone => return self.subject.lost(located).map(|()| false),
         };
         self.matched = true;
-        self.scope.log(keys.log_line(sensitive));
+        self.scope.log(keys.log_line());
 
         let mut input = input::hold(self.scope, self.page).await?;
         let mut planned = input.plan();
@@ -159,10 +152,6 @@ impl<'a> KeyRunner<'a> {
             self.scope
                 .fail(ErrorCode::InvalidInput, &unknown.to_string())
         })?;
-        let copies = input::copies(&steps, planned.keyboard.platform());
-        if copies && sensitive {
-            return Err(copy_refused(self.scope));
-        }
         let sent = self.scope.send_effect()?;
         let navigations = keys.waits_after().then(|| {
             let root = self.page.root_session();
@@ -176,13 +165,6 @@ impl<'a> KeyRunner<'a> {
         });
         if !self.focus(&sent, located, pin).await? {
             return Ok(false);
-        }
-        // Focusing an element that takes no focus leaves it where it was, perhaps in a
-        // sensitive field elsewhere: a copy checks where the keys will land.
-        if copies {
-            let walked = self.scope.within(focus_of(self.page, self.scope));
-            let focus = walked.await.map_err(|_expired| self.timed_out())??;
-            refuse_copy(self.scope, focus)?;
         }
         input
             .send_planned(&sent, self.scope, planned, steps)

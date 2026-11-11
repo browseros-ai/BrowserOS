@@ -385,9 +385,6 @@ impl Snapshotter<'_> {
                 Err(ProbeFailure::Broken(_why)) => {
                     return Err(Unread::Failed(ErrorCode::Internal));
                 }
-                Err(ProbeFailure::Late) => {
-                    return Err(Unread::Failed(ErrorCode::Unsupported));
-                }
             }
         }
         Err(Unread::Detached)

@@ -7962,52 +7962,6 @@ ${value.stack}`;
     return typeof src === "string" ? src : "";
   }
 
-  // crates/neo-sdk/neo-playwright-js/src/probe/sensitive.ts
-  var SEAL_METHODS = [
-    "kind",
-    "valueEquals",
-    "attributeEquals",
-    "rawLength",
-    "watch"
-  ];
-  function sealIn(scope) {
-    const seal = Reflect.get(scope, "__clawSeal");
-    return isClawSeal(seal) ? seal : undefined;
-  }
-  function isClawSeal(value) {
-    if (typeof value !== "object" || value === null)
-      return false;
-    return typeof Reflect.get(value, "version") === "number" && SEAL_METHODS.every((name) => typeof Reflect.get(value, name) === "function");
-  }
-  function editedKind(world, element) {
-    return world.seal.kind(world.injected.retarget(element, "follow-label") ?? element);
-  }
-  var MAX_SHADOW_DEPTH = 32;
-  function focused(world) {
-    const element = deepActiveElement(world.injected.document);
-    if (!element)
-      return { kind: "focused", sensitive: false, iframe: null, host: null };
-    const sensitive = world.seal.kind(element) !== null;
-    const iframe = frameSource(element) === undefined ? null : world.pins.add(element);
-    const unseen = !sensitive && iframe === null && !element.shadowRoot;
-    return {
-      kind: "focused",
-      sensitive,
-      iframe,
-      host: unseen ? world.pins.add(element) : null
-    };
-  }
-  function deepActiveElement(document) {
-    let active = document.activeElement;
-    for (let depth = 0;depth < MAX_SHADOW_DEPTH; depth++) {
-      const inner = active?.shadowRoot?.activeElement;
-      if (!inner)
-        break;
-      active = inner;
-    }
-    return active;
-  }
-
   // crates/neo-sdk/neo-playwright-js/src/probe/resolve.ts
   function queryAll(world, target, root) {
     const { injected } = world;
@@ -8078,8 +8032,7 @@ ${value.stack}`;
       return {
         kind: "element",
         pin: world.pins.add(element),
-        preview: world.injected.previewNode(element),
-        sensitive: editedKind(world, element)
+        preview: world.injected.previewNode(element)
       };
     const src = frameSource(element);
     if (src === undefined)
@@ -8159,8 +8112,7 @@ ${value.stack}`;
       rect: box,
       point: place.point,
       inView: place.inView,
-      transformed: isTransformed(element),
-      sensitive: editedKind(world, element)
+      transformed: isTransformed(element)
     };
     if (!arm || !place.inView)
       return measured;
@@ -8368,7 +8320,6 @@ ${value.stack}`;
       document.write(request.html);
     } finally {
       document.close();
-      world.seal.watch(document);
     }
     return { kind: "replaced" };
   }
@@ -8415,11 +8366,7 @@ ${value.stack}`;
     switch (edit.kind) {
       case "fill": {
         const filled = injected.fill(element, edit.value);
-        if (filled === "error:notconnected")
-          return filled;
-        if (filled === "needsinput")
-          selectSensitiveText(world, element);
-        return valueReply(filled);
+        return filled === "error:notconnected" ? filled : valueReply(filled);
       }
       case "selectOptions": {
         const selected = injected.selectOptions(element, edit.options);
@@ -8427,8 +8374,6 @@ ${value.stack}`;
       }
       case "selectText": {
         const selected = injected.selectText(element);
-        if (selected === "done")
-          selectSensitiveText(world, element);
         return selected === "done" ? valueReply(null) : selected;
       }
       case "focus":
@@ -8448,16 +8393,6 @@ ${value.stack}`;
   function doneOf(result) {
     return result === "done" ? valueReply(null) : result;
   }
-  function selectSensitiveText(world, element) {
-    const control = world.injected.retarget(element, "follow-label");
-    if (control?.nodeName.toLowerCase() !== "textarea")
-      return;
-    if (world.seal.kind(control) === null)
-      return;
-    const textarea = control;
-    textarea.selectionStart = 0;
-    textarea.selectionEnd = world.seal.rawLength(textarea);
-  }
   function edit(world, request) {
     const element = request.edit.kind === "setFiles" ? world.pins.held(request.pin) : world.pins.live(request.pin);
     if (!element)
@@ -8467,97 +8402,33 @@ ${value.stack}`;
   }
 
   // crates/neo-sdk/neo-playwright-js/src/probe/expect.ts
-  var REGEX_REFUSED = "a RegExp is not matched against a password, card or one-time-code field, because each match would reveal part of the secret; compare with the exact string";
-  var OPTIONS_REFUSED = "a password, card or one-time-code field is compared only as an exact string, without ignoreCase";
   async function expect(world, request, root) {
     const params = request.params;
     const checks = expectChecks(world.injected);
     if (params.expression === "to.have.count" || params.expression.endsWith(".array")) {
       const elements = queryAll(world, request.target, root);
       const count = `${elements.length} element${elements.length === 1 ? "" : "s"}`;
-      return poll(checks.every(elements, params), count, null);
+      return poll(checks.every(elements, params), count);
     }
     const found = resolveTarget(world, request.target, request.strictness, root);
     if (found.kind !== "one")
       return found;
     const { element } = found;
     const resolved = world.injected.previewNode(element);
-    const sealed = sealedCheck(world, element, params);
-    if (sealed)
-      return poll(sealed.check, resolved, sealed.kind);
     const check = await checks.single(element, params, request.frameVisible);
-    return poll(check, resolved, null);
+    return poll(check, resolved);
   }
-  function poll(check, resolved, sensitive) {
+  function poll(check, resolved) {
     return {
       kind: "expect",
       matches: check.matches,
       resolved,
-      received: check.received,
-      sensitive
+      received: check.received
     };
-  }
-  function sealedCheck(world, element, params) {
-    const { expression } = params;
-    const valueAttribute = expression === "to.have.attribute.value" && String(params.expressionArg).toLowerCase() === "value";
-    if (expression !== "to.have.value" && expression !== "to.have.values" && !valueAttribute)
-      return;
-    const field = valueAttribute ? element : world.injected.retarget(element, "follow-label");
-    const kind = field ? world.seal.kind(field) : null;
-    if (!field || !kind)
-      return;
-    const expected = exactStrings(params);
-    if (expression === "to.have.values")
-      return selectCheck(world, field, expected, kind);
-    const [wanted] = expected;
-    if (expected.length !== 1 || wanted === undefined)
-      throw new ProbeError("internal", `${expression} takes one expected value`);
-    if (valueAttribute)
-      return { check: attributeCheck(world, field, wanted), kind };
-    return {
-      check: {
-        matches: world.seal.valueEquals(field, wanted),
-        received: sealedValue(field)
-      },
-      kind
-    };
-  }
-  function exactStrings(params) {
-    return (params.expectedText ?? []).map((item) => {
-      if (item.regexSource !== undefined)
-        throw new ProbeError("unsupported", REGEX_REFUSED);
-      if (item.ignoreCase || item.matchSubstring || item.normalizeWhiteSpace)
-        throw new ProbeError("unsupported", OPTIONS_REFUSED);
-      return item.string ?? "";
-    });
-  }
-  function attributeCheck(world, field, wanted) {
-    return {
-      matches: world.seal.attributeEquals(field, "value", wanted),
-      received: field.getAttribute("value")
-    };
-  }
-  function selectCheck(world, field, expected, kind) {
-    if (field.nodeName !== "SELECT")
-      return;
-    const select = field;
-    if (!select.multiple)
-      return;
-    const selected = select.selectedOptions.length;
-    if (selected > 1)
-      throw new ProbeError("unsupported", "toHaveValues compares a password, card or one-time-code select only while at most one option is selected");
-    const received = selected === 0 ? [] : [sealedValue(select)];
-    const [wanted] = expected;
-    const matches = selected === expected.length && (wanted === undefined || world.seal.valueEquals(select, wanted));
-    return { check: { matches, received }, kind };
-  }
-  function sealedValue(field) {
-    const value = Reflect.get(field, "value");
-    return typeof value === "string" ? value : "";
   }
 
   // crates/neo-sdk/neo-playwright-js/src/probe/protocol.ts
-  var PROTOCOL = 14;
+  var PROTOCOL = 15;
 
   // crates/neo-sdk/neo-playwright-js/src/probe/read.ts
   var XHTML = "http://www.w3.org/1999/xhtml";
@@ -8565,47 +8436,29 @@ ${value.stack}`;
     const { read, frameVisible } = request;
     switch (read.kind) {
       case "textContent":
-        return (_world, element) => ({
-          value: element.textContent,
-          from: element
-        });
+        return (_world, element) => element.textContent;
       case "innerText":
         return (world, element) => {
           if (element.namespaceURI !== XHTML)
             throw world.injected.createStacklessError("Node is not an HTMLElement");
-          return { value: element.innerText, from: element };
+          return element.innerText;
         };
       case "innerHtml":
-        return (_world, element) => ({ value: element.innerHTML, from: element });
+        return (_world, element) => element.innerHTML;
       case "attribute":
-        return (_world, element) => ({
-          value: element.getAttribute(read.name),
-          from: element
-        });
+        return (_world, element) => element.getAttribute(read.name);
       case "inputValue":
         return inputValue;
       case "state":
-        return (world, element) => ({
-          value: world.injected.elementState(element, read.state, frameVisible).matches,
-          from: element
-        });
+        return (world, element) => world.injected.elementState(element, read.state, frameVisible).matches;
       case "boundingBox":
-        return (_world, element) => ({ value: borderBox(element), from: element });
+        return (_world, element) => borderBox(element);
       case "frameOrigin":
-        return (_world, element) => ({
-          value: frameOrigin(element),
-          from: element
-        });
+        return (_world, element) => frameOrigin(element);
       case "located":
-        return (world, element) => ({
-          value: located(world, request, element, root),
-          from: element
-        });
+        return (world, element) => located(world, request, element, root);
       case "checkable":
-        return (world, element) => ({
-          value: checkable(world, element),
-          from: element
-        });
+        return (world, element) => checkable(world, element);
       case "fileInput":
         return (world, element) => fileInput(world, element, read);
     }
@@ -8623,12 +8476,11 @@ ${value.stack}`;
     if (!read.directory && input.webkitdirectory)
       throw injected.createStacklessError("[webkitdirectory] input requires passing a path to a directory");
     const pin = world.pins.add(input);
-    const value = {
+    return {
       pin,
       target: element === input ? pin : world.pins.add(element),
       takesPaths: input.type === "file"
     };
-    return { value, from: input };
   }
   function checkable(world, element) {
     const { matches, isRadio } = world.injected.elementState(element, "checked");
@@ -8638,7 +8490,7 @@ ${value.stack}`;
     const control = world.injected.retarget(element, "follow-label");
     if (!control || control.nodeName !== "INPUT" && control.nodeName !== "TEXTAREA" && control.nodeName !== "SELECT")
       throw world.injected.createStacklessError("Node is not an <input>, <textarea> or <select> element");
-    return { value: control.value, from: control };
+    return control.value;
   }
   function borderBox(element) {
     if (element.getClientRects().length === 0)
@@ -8714,8 +8566,7 @@ ${value.stack}`;
     const found = request.read.kind === "fileInput" && request.target === "root" && root instanceof Element ? { kind: "one", element: root } : resolveTarget(world, request.target, request.strictness, root);
     if (found.kind !== "one")
       return found;
-    const { value, from } = reader(world, found.element);
-    return { kind: "read", value, sensitive: world.seal.kind(from) };
+    return { kind: "read", value: reader(world, found.element) };
   }
   function readAll(world, request, root) {
     const elements = queryAll(world, request.target, root);
@@ -8964,7 +8815,6 @@ ${value.stack}`;
     readAll,
     snapshot,
     expect,
-    focused,
     matchUrl,
     document: documentText,
     setContent: replaceDocument,
@@ -8999,9 +8849,6 @@ ${value.stack}`;
         const { frameSeq, epoch } = parseBootOptions(options);
         if (world?.epoch === epoch)
           return described2(world);
-        const seal = sealIn(globalThis);
-        if (!seal)
-          throw new ProbeError("internal", "refusing to boot: this world has no seal (__clawSeal)");
         pins.clear();
         refs.forget();
         listenForMoves();
@@ -9009,7 +8856,7 @@ ${value.stack}`;
         injected.onGlobalListenersRemoved.add(listenForMoves);
         refs.install(engineTable(injected), injected.utils);
         const retired = world?.seq;
-        world = { epoch, seq: frameSeq, injected, seal, pins, refs };
+        world = { epoch, seq: frameSeq, injected, pins, refs };
         return retired === undefined ? described2(world) : { ...described2(world), retired };
       },
       call(request, root) {

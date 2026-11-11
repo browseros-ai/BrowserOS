@@ -49,7 +49,7 @@ pub(crate) mod world_call;
 
 pub(crate) use context_op::ContextOp;
 pub(crate) use load_state::LoadState;
-pub(crate) use op_page::{FRAME_BUDGET, OpPage};
+pub(crate) use op_page::OpPage;
 pub(crate) use page_handle::PageHandle;
 pub(crate) use page_op::PageOp;
 pub(crate) use page_registry::PageRegistry;

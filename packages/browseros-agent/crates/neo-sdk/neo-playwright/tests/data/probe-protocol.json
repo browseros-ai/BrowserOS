@@ -1,5 +1,5 @@
 {
-  "protocol": 14,
+  "protocol": 15,
   "callFunction": "function (request, root) { const probe = globalThis.__neoProbe; return probe ? probe.call(request, root ?? this) : { kind: \"uninstalled\" }; }",
   "replyKinds": {
     "describe": [
@@ -61,9 +61,6 @@
       "none",
       "strict",
       "detached"
-    ],
-    "focused": [
-      "focused"
     ],
     "matchUrl": [
       "urlMatch"
@@ -864,9 +861,6 @@
       }
     },
     {
-      "op": "focused"
-    },
-    {
       "op": "matchUrl",
       "pattern": {
         "glob": "**/done"
@@ -909,19 +903,19 @@
   "replies": [
     {
       "kind": "described",
-      "protocol": 14,
+      "protocol": 15,
       "seq": 0,
       "url": "https://example.com/"
     },
     {
       "kind": "described",
-      "protocol": 14,
+      "protocol": 15,
       "seq": 347,
       "url": "https://pay.example/frame"
     },
     {
       "kind": "described",
-      "protocol": 14,
+      "protocol": 15,
       "seq": 512340,
       "url": "https://example.com/",
       "retired": 0
@@ -940,14 +934,7 @@
     {
       "kind": "element",
       "pin": 3,
-      "preview": "<button>Go</button>",
-      "sensitive": null
-    },
-    {
-      "kind": "element",
-      "pin": 5,
-      "preview": "<input id=\"pw\" type=\"password\" value=\"••••\"/>",
-      "sensitive": "password"
+      "preview": "<button>Go</button>"
     },
     {
       "kind": "frame",
@@ -981,8 +968,7 @@
         "y": 18
       },
       "inView": true,
-      "transformed": false,
-      "sensitive": null
+      "transformed": false
     },
     {
       "kind": "covered",
@@ -1035,7 +1021,7 @@
     },
     {
       "kind": "value",
-      "value": "••••"
+      "value": "Ada"
     },
     {
       "kind": "value",
@@ -1077,18 +1063,11 @@
     },
     {
       "kind": "read",
-      "value": "Welcome",
-      "sensitive": null
+      "value": "Welcome"
     },
     {
       "kind": "read",
-      "value": "••••",
-      "sensitive": "password"
-    },
-    {
-      "kind": "read",
-      "value": null,
-      "sensitive": null
+      "value": null
     },
     {
       "kind": "read",
@@ -1097,8 +1076,7 @@
         "y": 8,
         "width": 60,
         "height": 20
-      },
-      "sensitive": null
+      }
     },
     {
       "kind": "read",
@@ -1107,21 +1085,18 @@
         "y": 120,
         "scaleX": 1,
         "scaleY": 1
-      },
-      "sensitive": null
+      }
     },
     {
       "kind": "read",
-      "value": "rotated",
-      "sensitive": null
+      "value": "rotated"
     },
     {
       "kind": "read",
       "value": {
         "checked": true,
         "radio": true
-      },
-      "sensitive": null
+      }
     },
     {
       "kind": "read",
@@ -1129,8 +1104,7 @@
         "pin": 7,
         "target": 8,
         "takesPaths": true
-      },
-      "sensitive": null
+      }
     },
     {
       "kind": "read",
@@ -1139,8 +1113,7 @@
         "preview": "<li>One</li>",
         "visible": true,
         "count": 2
-      },
-      "sensitive": null
+      }
     },
     {
       "kind": "values",
@@ -1200,8 +1173,7 @@
       "kind": "expect",
       "matches": true,
       "resolved": "<h1 id=\"greeting\">Hello</h1>",
-      "received": "Hello",
-      "sensitive": null
+      "received": "Hello"
     },
     {
       "kind": "expect",
@@ -1211,46 +1183,18 @@
         "one",
         "two",
         "three"
-      ],
-      "sensitive": null
+      ]
     },
     {
       "kind": "expect",
       "matches": false,
       "resolved": "<input id=\"name\"/>",
-      "received": null,
-      "sensitive": null
+      "received": null
     },
     {
       "kind": "expect",
       "matches": false,
-      "resolved": "<input type=\"password\" id=\"pw\"/>",
-      "received": "••••",
-      "sensitive": "password"
-    },
-    {
-      "kind": "expect",
-      "matches": false,
-      "resolved": "<div id=\"x\">…</div>",
-      "sensitive": null
-    },
-    {
-      "kind": "focused",
-      "sensitive": true,
-      "iframe": null,
-      "host": null
-    },
-    {
-      "kind": "focused",
-      "sensitive": false,
-      "iframe": 9,
-      "host": null
-    },
-    {
-      "kind": "focused",
-      "sensitive": false,
-      "iframe": null,
-      "host": 4
+      "resolved": "<div id=\"x\">…</div>"
     },
     {
       "kind": "urlMatch",
@@ -1263,7 +1207,7 @@
     },
     {
       "kind": "documentText",
-      "text": "<!DOCTYPE html><html><head></head><body><input type=\"password\" value=\"••••\"></body></html>"
+      "text": "<!DOCTYPE html><html><head></head><body><input type=\"password\" value=\"hunter2\"></body></html>"
     },
     {
       "kind": "replaced"

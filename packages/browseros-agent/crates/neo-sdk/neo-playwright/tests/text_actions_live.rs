@@ -442,146 +442,6 @@ async fn tests_that_the_mouse_moves_presses_clicks_and_scrolls_where_it_was_told
     Ok(())
 }
 
-/// The refusal of a copy in a sensitive field, as `keyboard.press` prints it.
-const SENSITIVE_COPY: &str = "keyboard.press: copying or cutting from a password, card or \
-                              one-time-code field is refused; read what the page shows instead";
-
-/// `ControlOrMeta`'s key on the browser's platform.
-async fn command_key(run: &LiveRun, page: &TestPage) -> TestResult<&'static str> {
-    Ok(if profile(run, page).await? == "mac" {
-        "Meta"
-    } else {
-        "Control"
-    })
-}
-
-/// Focuses `#id`, selects its text and clears the page's log.
-async fn select_in(run: &LiveRun, page: &TestPage, id: &str) -> TestResult {
-    let script = format!(
-        "(() => {{ const f = document.getElementById('{id}'); f.focus(); f.select(); \
-         window.__log = []; }})()"
-    );
-    run.eval(page, &script).await?;
-    Ok(())
-}
-
-#[tokio::test]
-#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
-async fn tests_that_a_copy_from_a_sensitive_field_is_refused_and_sends_nothing() -> TestResult {
-    let run = LiveRun::connect().await?;
-    let server = FixtureServer::start(pages()).await?;
-    let page = agent_tab(&run, &server.url("127.0.0.1", "/actions/form.html")).await?;
-    let command = command_key(&run, &page).await?;
-    let press = |key: &str| ("keyboard.press", json!({ "key": key, "options": {} }));
-    for (field, calls) in [
-        ("card", vec![press("ControlOrMeta+C")]),
-        ("password", vec![press("ControlOrMeta+X")]),
-        // A chord split across calls: the modifier is already down when `c` goes.
-        (
-            "card",
-            vec![("keyboard.down", json!({ "key": command })), press("c")],
-        ),
-    ] {
-        select_in(&run, &page, field).await?;
-        let mut last = Ok(Value::Null);
-        for (op, fields) in calls {
-            run.clear_calls();
-            run.record_input();
-            last = device(&run, op, &page, fields).await;
-        }
-        let refused = last
-            .err()
-            .ok_or(format!("a copy from #{field} must be refused"))?;
-        assert_eq!(
-            (refused.error_code(), refused.message().lines().next()),
-            (Some(ErrorCode::SensitiveCopyRefused), Some(SENSITIVE_COPY)),
-            "{field}: {refused}"
-        );
-        assert!(
-            !run.calls().contains(&EnvCall::MarkSent),
-            "{field}: the refused op was never marked sent"
-        );
-        assert_eq!(
-            run.recorded_input(),
-            Vec::<Value>::new(),
-            "{field}: nothing was sent"
-        );
-        let log = page_log(&run, &page).await?;
-        assert!(
-            !log.iter()
-                .any(|entry| entry.starts_with("copy") || entry.starts_with("cut")),
-            "{field}: the page saw no copy: {log:?}"
-        );
-        device(&run, "keyboard.up", &page, json!({ "key": command })).await?;
-    }
-
-    // The same chord in a plain field goes through, and the browser copies.
-    run.eval(&page, "document.getElementById('field').value = 'plain'")
-        .await?;
-    select_in(&run, &page, "field").await?;
-    let (op, fields) = press("ControlOrMeta+C");
-    device(&run, op, &page, fields).await?;
-    let log = page_log(&run, &page).await?;
-    assert!(
-        log.iter().any(|entry| entry == "keydown field C KeyC")
-            && log.iter().any(|entry| entry == "copy field"),
-        "a plain field gets the keys, and the copy: {log:?}"
-    );
-    run.close_page(&page).await;
-    Ok(())
-}
-
-#[tokio::test]
-#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
-async fn tests_that_a_copy_is_refused_when_the_focused_field_is_in_an_out_of_process_frame()
--> TestResult {
-    let run = LiveRun::connect().await?;
-    let server = FixtureServer::start(pages()).await?;
-    let page = agent_tab(&run, &server.url("127.0.0.1", "/nest/top.html")).await?;
-    let b1 = server.url("localhost", "/nest/b1.html");
-    let field = locator(
-        &page,
-        &[attr("[title=\"b1\"s]"), enter_frame(), css("input")],
-        "frameLocator b1 input",
-    );
-    act(&run, "locator.textContent", &field, json!({}), 10_000).await?;
-    run.frame_eval(
-        &page,
-        &b1,
-        "(() => { const f = document.querySelector('input'); f.type = 'password'; \
-         f.value = 'b1-secret'; return true; })()",
-    )
-    .await?;
-    act(
-        &run,
-        "locator.click",
-        &field,
-        json!({ "options": {} }),
-        5000,
-    )
-    .await?;
-    run.record_input();
-    run.clear_calls();
-    let copy = json!({ "key": "ControlOrMeta+C", "options": {} });
-    let refused = device(&run, "keyboard.press", &page, copy)
-        .await
-        .err()
-        .ok_or("a copy from b1's password field must be refused")?;
-    assert_eq!(
-        (refused.error_code(), refused.message().lines().next()),
-        (Some(ErrorCode::SensitiveCopyRefused), Some(SENSITIVE_COPY)),
-        "the walk found the password field in b1's frame: {refused}"
-    );
-    assert_eq!(
-        run.recorded_input(),
-        Vec::<Value>::new(),
-        "nothing was sent"
-    );
-    assert!(!run.calls().contains(&EnvCall::MarkSent));
-    run.close_page(&page).await;
-    Ok(())
-}
-
 /// `frameLocator('[title=…]')` down `titles`, then `last`.
 fn down(page: &TestPage, titles: &[&str], last: Value) -> Value {
     let mut parts = Vec::new();
@@ -735,14 +595,12 @@ async fn tests_that_fill_types_sets_or_clears_as_upstream() -> TestResult {
     );
     run.clear_calls();
     fill(&run, &at(&page, "#password"), "hunter2-new").await?;
-    let calls = run.calls();
     assert!(
-        !calls
-            .iter()
-            .any(|call| matches!(call, EnvCall::Note(line) if line.contains("hunter2-new"))),
-        "the call log never shows a sensitive field's value: {calls:?}"
+        run.calls()
+            .contains(&EnvCall::Note("  fill(\"hunter2-new\")".to_owned())),
+        "a password field's value shows as upstream's call log shows it: {:?}",
+        run.calls()
     );
-    // The sensitive textarea: its seal-masked value must not shorten the selection.
     fill(&run, &at(&page, "#secret"), "fresh").await?;
     fill(&run, &at(&page, "#number"), " 42 ").await?;
     fill(&run, &at(&page, "#date"), "2026-11-05").await?;
@@ -975,7 +833,7 @@ async fn tests_that_select_option_and_select_text_do_what_upstreams_do() -> Test
         Some("locator.selectOption: Error: Element is not a <select> element")
     );
 
-    // selectText on the sensitive textarea selects its whole raw text, not the mask's length.
+    // selectText on a textarea selects its whole text.
     act(
         &run,
         "locator.selectText",
@@ -1071,11 +929,8 @@ async fn tests_that_press_and_press_sequentially_focus_type_and_wait_for_the_nav
     .await?;
     let calls = run.calls();
     assert!(
-        calls.contains(&EnvCall::Note("elementHandle.type(\"••••\")".to_owned()))
-            && !calls
-                .iter()
-                .any(|call| matches!(call, EnvCall::Note(line) if line.contains("pa55"))),
-        "the call log masks what was typed there: {calls:?}"
+        calls.contains(&EnvCall::Note("elementHandle.type(\"pa55\")".to_owned())),
+        "the call log names what was typed, as upstream's does: {calls:?}"
     );
     let handle = handle_of(&run, &at(&page, "#field")).await?;
     press(&run, &handle, "x").await?;
@@ -1107,52 +962,6 @@ async fn tests_that_press_and_press_sequentially_focus_type_and_wait_for_the_nav
             Some(ErrorCode::InvalidInput),
             Some("locator.press: Unknown key: \"Foo\"")
         )
-    );
-    run.close_page(&page).await;
-    Ok(())
-}
-
-#[tokio::test]
-#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
-async fn tests_that_a_locator_copy_is_refused_on_a_sensitive_field_or_where_the_focus_stays()
--> TestResult {
-    let run = LiveRun::connect().await?;
-    let server = FixtureServer::start(pages()).await?;
-    let page = agent_tab(&run, &server.url("127.0.0.1", "/actions/form.html")).await?;
-    run.clear_calls();
-    run.record_input();
-    let refused = press(&run, &at(&page, "#card"), "ControlOrMeta+C")
-        .await
-        .err()
-        .ok_or("a copy from the card field is refused")?;
-    assert_eq!(
-        refused.error_code(),
-        Some(ErrorCode::SensitiveCopyRefused),
-        "{refused}"
-    );
-    assert!(
-        !run.calls().contains(&EnvCall::MarkSent),
-        "refused before anything was sent"
-    );
-    // A paragraph takes no focus, so the card field keeps it: the walk after the focus
-    // finds it.
-    select_in(&run, &page, "card").await?;
-    run.record_input();
-    let stayed = press(&run, &at(&page, "#note"), "ControlOrMeta+C")
-        .await
-        .err()
-        .ok_or("a copy where the card field kept the focus is refused")?;
-    assert_eq!(
-        stayed.error_code(),
-        Some(ErrorCode::SensitiveCopyRefused),
-        "{stayed}"
-    );
-    assert_eq!(run.recorded_input(), Vec::<Value>::new(), "no key was sent");
-    let log = page_log(&run, &page).await?;
-    assert!(
-        !log.iter()
-            .any(|entry| entry.starts_with("keydown") || entry.starts_with("copy")),
-        "{log:?}"
     );
     run.close_page(&page).await;
     Ok(())
@@ -1740,70 +1549,6 @@ async fn tests_that_keys_type_into_focused_password_and_plain_fields() -> TestRe
 
 #[tokio::test]
 #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
-async fn tests_that_a_copy_is_refused_when_the_focused_field_is_in_a_closed_shadow_root()
--> TestResult {
-    let run = LiveRun::connect().await?;
-    let server = FixtureServer::start(pages()).await?;
-    let page = agent_tab(&run, &server.url("127.0.0.1", "/actions/form.html")).await?;
-    // The sealed world sees only the host of a closed root: there its `shadowRoot` is null and
-    // `document.activeElement` is the host.
-    run.eval(
-        &page,
-        "(() => { const host = document.createElement('div'); host.id = 'otp-host'; \
-         document.body.append(host); const root = host.attachShadow({ mode: 'closed' }); \
-         root.innerHTML = '<input id=\"otp\" autocomplete=\"one-time-code\" value=\"482913\">'; \
-         const field = root.getElementById('otp'); field.focus(); field.select(); \
-         window.__otp = field; window.__log = []; return true; })()",
-    )
-    .await?;
-    run.clear_calls();
-    run.record_input();
-    let copy = json!({ "key": "ControlOrMeta+C", "options": {} });
-    let refused = device(&run, "keyboard.press", &page, copy)
-        .await
-        .err()
-        .ok_or("a copy from a one-time-code field in a closed shadow root must be refused")?;
-    assert_eq!(
-        refused.error_code(),
-        Some(ErrorCode::SensitiveCopyRefused),
-        "a focus Neo cannot classify fails closed: {refused}"
-    );
-    assert!(
-        !run.calls().contains(&EnvCall::MarkSent),
-        "the refused op was never marked sent"
-    );
-    assert_eq!(
-        run.recorded_input(),
-        Vec::<Value>::new(),
-        "nothing was sent"
-    );
-    let log = page_log(&run, &page).await?;
-    assert!(
-        !log.iter().any(|entry| entry.starts_with("keydown")
-            || entry.starts_with("copy")
-            || entry.starts_with("cut")),
-        "the page saw no key and no copy: {log:?}"
-    );
-
-    run.clear_calls();
-    device(
-        &run,
-        "keyboard.type",
-        &page,
-        json!({ "text": "7", "options": {} }),
-    )
-    .await?;
-    assert_eq!(
-        run.eval(&page, "window.__otp.value").await?,
-        json!("7"),
-        "the typing itself still reaches the field"
-    );
-    run.close_page(&page).await;
-    Ok(())
-}
-
-#[tokio::test]
-#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
 async fn tests_that_a_focus_started_during_a_delayed_type_waits_for_its_last_key() -> TestResult {
     let run = LiveRun::connect().await?;
     let server = FixtureServer::start(pages()).await?;
@@ -1896,25 +1641,24 @@ async fn script_on(run: &Arc<LiveRun>, page: &TestPage, script: &str) -> TestRes
     Ok(run_script(&host, &init, script).await?)
 }
 
-/// One edit through a label keeps `hidden` out of every call-log line and trace note.
-fn assert_hidden(run: &LiveRun, script: &str, hidden: &str) {
+/// One edit through a label names `shown` in its call log, as upstream's does.
+fn assert_logged(run: &LiveRun, script: &str, shown: &str) {
     let calls = run.calls();
     assert!(
-        !calls
+        calls
             .iter()
-            .any(|call| matches!(call, EnvCall::Note(line) if line.contains(hidden))),
-        "`{script}` never shows `{hidden}` in the call log: {calls:?}"
+            .any(|call| matches!(call, EnvCall::Note(line) if line.contains(shown))),
+        "`{script}` shows `{shown}` in the call log: {calls:?}"
     );
 }
 
 #[tokio::test]
 #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
-async fn tests_that_an_edit_through_a_label_treats_the_field_it_changes_as_sensitive() -> TestResult
-{
+async fn tests_that_an_edit_through_a_label_reaches_the_field_it_changes() -> TestResult {
     let run = Arc::new(LiveRun::connect().await?);
     let server = FixtureServer::start(pages()).await?;
     let page = agent_tab(&run, &server.url("127.0.0.1", "/actions/labels.html")).await?;
-    // Each script and what must not show. Keys pressed on a label reach its field, because
+    // Each script and what its call log names. Keys pressed on a label reach its field, because
     // Chromium's label hands its focus to the field; then fills through a label naming its
     // password with `for`, through a span inside the label that wraps one, and forced, which
     // skips the states.
@@ -1946,12 +1690,12 @@ async fn tests_that_an_edit_through_a_label_treats_the_field_it_changes_as_sensi
             "s3cret-force",
         ),
     ];
-    for (index, (script, hidden)) in keys.into_iter().chain(fills).enumerate() {
+    for (index, (script, shown)) in keys.into_iter().chain(fills).enumerate() {
         run.clear_calls();
         script_on(&run, &page, script)
             .await
             .map_err(|error| format!("`{script}`: {error}"))?;
-        assert_hidden(&run, script, hidden);
+        assert_logged(&run, script, shown);
         if index + 1 == keys.len() {
             assert_eq!(
                 value_of(&run, &page, "pin").await?,
@@ -1969,8 +1713,7 @@ async fn tests_that_an_edit_through_a_label_treats_the_field_it_changes_as_sensi
         "every fill reached the field its label names"
     );
 
-    // A one-time-code select answers its selected values as upstream's does, and its target
-    // is still marked sensitive for the trace.
+    // A one-time-code select answers its selected values as upstream's does.
     let select = "return await page.locator('#codes-label')\
                   .selectOption([{ label: 'First' }, { label: 'Second' }])";
     run.clear_calls();
@@ -1980,7 +1723,6 @@ async fn tests_that_an_edit_through_a_label_treats_the_field_it_changes_as_sensi
         json!(["code-118204", "code-907316"]),
         "a one-time-code select answers every selected value"
     );
-    assert_hidden(&run, select, "code-");
     run.close_page(&page).await;
     Ok(())
 }

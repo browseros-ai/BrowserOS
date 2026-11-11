@@ -3,13 +3,12 @@
  * Chromium) on BROWSEROS_CDP_PORT (default 9005). It installs the probe the way the crate
  * will, in an isolated world named browseros-sdk:
  *
- *   (() => { <core's seal_source()>; if (!globalThis.__neoProbe) { <assets/injected.js> }
+ *   (() => { if (!globalThis.__neoProbe) { <assets/injected.js> }
  *            return globalThis.__neoProbe.boot({ frameSeq, epoch }) })()
  *
  * then sends requests with the CALL_FUNCTION from tests/data/probe-protocol.json, and checks
  * what the probe must guarantee before Rust builds on it. Chunks are parsed by the prelude
- * asset's vendored selectorParser, as the agent runtime will parse them. The seal source is
- * core's seal.js with rules.json substituted, exactly what seal_source() returns.
+ * asset's vendored selectorParser, as the agent runtime will parse them.
  *
  *   BROWSEROS_CDP_PORT=9361 node scripts/probe-smoke.mjs
  *
@@ -25,16 +24,11 @@ import { runInNewContext } from 'node:vm'
 const here = dirname(fileURLToPath(import.meta.url))
 const agentRoot = resolve(here, '../../../..')
 const crate = resolve(agentRoot, 'crates/neo-sdk/neo-playwright')
-const sealDir = resolve(agentRoot, 'crates/browseros-core/src/sensitive_fields')
 
 const ASSET = readFileSync(resolve(crate, 'assets/injected.js'), 'utf8')
 const PRELUDE = readFileSync(resolve(crate, 'assets/prelude.js'), 'utf8')
 const PROTOCOL = JSON.parse(
   readFileSync(resolve(crate, 'tests/data/probe-protocol.json'), 'utf8'),
-)
-const SEAL = readFileSync(resolve(sealDir, 'seal.js'), 'utf8').replace(
-  '__RULES__',
-  readFileSync(resolve(sealDir, 'rules.json'), 'utf8').trim(),
 )
 const PORT = Number(process.env.BROWSEROS_CDP_PORT ?? 9005)
 const WORLD = 'browseros-sdk'
@@ -49,7 +43,7 @@ const chunk = (selector) => ({
 })
 
 const install = ({ frameSeq, epoch }) =>
-  `(() => { ${SEAL};\n if (!globalThis.__neoProbe) { ${ASSET}\n }\n return globalThis.__neoProbe.boot(${JSON.stringify({ frameSeq, epoch })}) })()`
+  `(() => { if (!globalThis.__neoProbe) { ${ASSET}\n }\n return globalThis.__neoProbe.boot(${JSON.stringify({ frameSeq, epoch })}) })()`
 
 const BODY = `
   <h1>Pay</h1>
@@ -239,26 +233,15 @@ async function plainPage(cdp, server, epoch) {
         described.protocol === PROTOCOL.protocol &&
         described.seq === 0 &&
         described.url === url,
-      'seal, asset and boot install in the browseros-sdk world in one script',
+      'asset and boot install in the browseros-sdk world in one script',
       described,
-    )
-    const sealed = await tab.evaluate(
-      'typeof __clawSeal + " " + typeof __neoProbe',
-      contextId,
-    )
-    check(
-      sealed === 'object object',
-      'the sealed world holds the seal and the probe',
-      sealed,
     )
     const describe = await tab.call(contextId, { op: 'describe' })
     check(describe.seq === 0, 'describe returns the seq', describe)
-    const pageSees = await tab.evaluate(
-      'typeof __neoProbe + " " + typeof __clawSeal',
-    )
+    const pageSees = await tab.evaluate('typeof __neoProbe')
     check(
-      pageSees === 'undefined undefined',
-      "the page's main world cannot see __neoProbe or the seal",
+      pageSees === 'undefined',
+      "the page's main world cannot see __neoProbe",
       pageSees,
     )
 
@@ -274,10 +257,8 @@ async function plainPage(cdp, server, epoch) {
     const resolved = await tab.call(contextId, resolveRequest(chunk('#pw')))
     check(
       resolved.kind === 'element' &&
-        resolved.sensitive === 'password' &&
-        resolved.preview.includes('value="••••"') &&
-        !resolved.preview.includes('hunter2'),
-      'the probe resolves the password field as sensitive and previews it masked',
+        resolved.preview.includes('value="hunter2-attribute"'),
+      "the probe resolves the password field and previews the page's markup",
       resolved,
     )
     const inWorld = await tab.evaluate(
@@ -285,16 +266,9 @@ async function plainPage(cdp, server, epoch) {
       contextId,
     )
     check(
-      inWorld[0] === '••••' && inWorld[1] === 'Ada',
-      "the probe's world reads •••• for the password and the plain field as is",
+      inWorld[0] === 'typed-secret' && inWorld[1] === 'Ada',
+      "the probe's world reads each field's live value, as the page does",
       inWorld,
-    )
-    await tab.evaluate("document.getElementById('pw').focus()")
-    const focused = await tab.call(contextId, { op: 'focused' })
-    check(
-      focused.sensitive === true && focused.iframe === null,
-      'focused reports a focused password field as sensitive',
-      focused,
     )
 
     const frame = await tab.call(
@@ -507,12 +481,9 @@ async function secondConnection(tab, epoch) {
       { frameId: frameTree.frame.id, worldName: WORLD },
       sessionId,
     )
-    const seen = await evaluate(
-      'typeof __neoProbe + " " + typeof __clawSeal',
-      executionContextId,
-    )
+    const seen = await evaluate('typeof __neoProbe', executionContextId)
     console.log(
-      `   measured: a second CDP connection's ${WORLD} world ${seen === 'object object' ? 'is the same world: it already holds the probe and the seal' : `is a new world (${seen})`}`,
+      `   measured: a second CDP connection's ${WORLD} world ${seen === 'object' ? 'is the same world: it already holds the probe' : `is a new world (${seen})`}`,
     )
     const described = await evaluate(
       install({ frameSeq: 512, epoch: `${epoch}-restart` }),

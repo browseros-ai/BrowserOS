@@ -1,8 +1,8 @@
 //! The built page asset against a real browser: evaluated in an isolated world named like the
 //! sealed world (`browseros-sdk`), it defines `__neoProbe` there and not in the page's own
-//! world, and a world without core's seal refuses to boot, so the probe protocol's call
-//! answers `uninstalled` there. The sealed path the crate installs (seal, boot, requests) is
-//! covered by its own live tests in `src/world/live_tests.rs`.
+//! world, and the probe protocol's call answers `uninstalled` until `boot` runs, then
+//! `described`. The install the crate runs (boot, re-key, requests) is covered by its own live
+//! tests in `src/world/live_tests.rs`.
 //!
 //! Needs a BrowserOS (or Chromium) instance with CDP on `BROWSEROS_CDP_PORT` (default 9005):
 //! `cargo test -p neo-playwright --test engine_live -- --ignored`. The test opens and
@@ -22,10 +22,10 @@ const PAGE: &str = "data:text/html,<button>Go</button>";
 /// The probe protocol's examples; `callFunction` is the declaration Rust sends per request.
 const PROTOCOL: &str = include_str!("data/probe-protocol.json");
 
-/// The page asset the crate installs, evaluated here without the seal.
+/// The page asset the crate installs.
 const INJECTED_SCRIPT: &str = include_str!("../assets/injected.js");
 
-const BOOT_UNSEALED: &str = r"(() => {
+const BOOT: &str = r"(() => {
   try {
     __neoProbe.boot({ frameSeq: 0, epoch: 'engine-live' });
     return 'booted';
@@ -36,7 +36,7 @@ const BOOT_UNSEALED: &str = r"(() => {
 
 #[tokio::test]
 #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT (default 9005)"]
-async fn tests_that_the_probe_lives_only_in_its_world_and_needs_the_seal() -> TestResult {
+async fn tests_that_the_probe_lives_only_in_its_world_and_answers_once_booted() -> TestResult {
     let port = env::var("BROWSEROS_CDP_PORT")
         .ok()
         .and_then(|port| port.parse().ok())
@@ -99,19 +99,13 @@ async fn exercise(client: &CdpClient, target_id: &str) -> TestResult {
         .ok_or("no execution context")?;
 
     evaluate(client, session, Some(context_id), INJECTED_SCRIPT).await?;
-    let boot = evaluate(client, session, Some(context_id), BOOT_UNSEALED).await?;
-    assert_eq!(
-        boot,
-        json!("refusing to boot: this world has no seal (__clawSeal)")
-    );
-
     let protocol: Value = serde_json::from_str(PROTOCOL)?;
     let call = protocol
         .get("callFunction")
         .and_then(Value::as_str)
         .ok_or("probe-protocol.json has no callFunction")?;
-    let reply = client
-        .send(
+    let describe = || {
+        client.send(
             "Runtime.callFunctionOn",
             json!({
                 "functionDeclaration": call,
@@ -121,11 +115,25 @@ async fn exercise(client: &CdpClient, target_id: &str) -> TestResult {
             }),
             session,
         )
-        .await?;
+    };
+    let reply = describe().await?;
     assert_eq!(
         reply.pointer("/result/value"),
         Some(&json!({ "kind": "uninstalled" })),
         "an unbooted world must send Rust back to install: {reply}"
+    );
+    let boot = evaluate(client, session, Some(context_id), BOOT).await?;
+    assert_eq!(boot, json!("booted"));
+    let reply = describe().await?;
+    assert_eq!(
+        reply.pointer("/result/value/kind"),
+        Some(&json!("described")),
+        "a booted world answers: {reply}"
+    );
+    assert_eq!(
+        reply.pointer("/result/value/protocol"),
+        protocol.get("protocol"),
+        "with the protocol the asset was built for: {reply}"
     );
 
     let seen_by_page = evaluate(client, session, None, "typeof __neoProbe").await?;

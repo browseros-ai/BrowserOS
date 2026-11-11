@@ -1,14 +1,8 @@
-//! One op's page: the tab it admitted, the tab's state, the endpoints its worlds live on, and how
-//! long the op goes on trying a frame whose world's install missed its budget.
+//! One op's page: the tab it admitted, the tab's state, and the endpoints its worlds live on.
 
-use std::future::Future;
 use std::sync::Arc;
-use std::time::Duration;
 
 use browseros_core::{BrowserSession, FrameId, PageId, ProtocolSession, TabId, TargetId};
-use futures_util::FutureExt;
-use futures_util::future::Either;
-use tokio::time::{self, Instant};
 
 use crate::op_scope::{AdmittedPage, OpScope};
 use crate::page::PageState;
@@ -25,72 +19,6 @@ pub(crate) struct OpPage<'op> {
     pw: &'op Playwright,
     admitted: &'op AdmittedPage,
     state: Arc<PageState>,
-    /// When the op's own Playwright timeout passes (`OpScope::deadline`); `None` without one.
-    deadline: Option<Instant>,
-}
-
-/// How long one frame's world may take to install, its hidden-root scan included, from the
-/// start of the install (`SealedWorld::install`). A healthy frame takes a few milliseconds; one
-/// that misses it is installed again while the op's window has room (`LateRetry`), each try
-/// ending at the window's end at the latest (`TryCut`).
-pub(crate) const FRAME_BUDGET: Duration = Duration::from_secs(1);
-
-/// How long an op without a Playwright timeout (`timeout: 0`) goes on trying a frame that missed
-/// its budget, per stall: from the first try of an install, and a new window only once the last
-/// one completed. It bounds each continuous stall, so a frame that stays late
-/// fails the op when its window ends. It is not one total for the op: an untimed poll (an
-/// `expect` with `timeout: 0`, which upstream waits on forever) would then fail a later short
-/// stall for an earlier one that had already recovered.
-///
-/// Measured under 16 `yes` burners (load average 27 to 299): of 764 frame budgets over 156
-/// conformance cases, every one completed, the p99 in 150 ms and the slowest in 1.0 s, on its
-/// second try. 5 s holds that slowest one and four more late tries; a shorter window would only
-/// refuse a hung frame sooner.
-pub(crate) const UNTIMED_RETRY: Duration = Duration::from_secs(5);
-
-/// How long an op goes on trying a frame that missed its install budget (`FRAME_BUDGET`): until
-/// the op's own deadline, as upstream waits on a slow frame until the op times out, or, when the
-/// op has none, for [`UNTIMED_RETRY`] per stall: from the first try of an install, and a new
-/// window only once the last one completed. Another try
-/// starts only while the window still holds one as long as the last, and none runs past the
-/// window's end ([`LateRetry::cut`]), so a frame late to the end fails the op with Neo's message
-/// on why, by the op's deadline, before the op's own timeout could replace it.
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct LateRetry {
-    until: Instant,
-}
-
-impl LateRetry {
-    /// Whether another try as long as `last` still ends inside the window.
-    pub(crate) fn has_room(self, last: Duration) -> bool {
-        self.until.saturating_duration_since(Instant::now()) >= last
-    }
-
-    /// Where every try after the first is cut: at the window's end. The last try's length is
-    /// no bound on the next one's.
-    pub(crate) fn cut(self) -> TryCut {
-        TryCut(Some(self.until))
-    }
-}
-
-/// Where one try of an install is cut. The first try is not ([`TryCut::default`]): it has its
-/// full frame budget, so a frame late on it missed Neo's budget, and an op timeout that ends
-/// sooner is the op's own, inside `OpScope::within`. Every later try is cut at its
-/// [`LateRetry`] window's end, and a frame cut there is late, as one past its budget is, and the
-/// op fails with Neo's refusal, true to its word since the first try gave the frame its whole
-/// budget.
-#[derive(Clone, Copy, Debug, Default)]
-pub(crate) struct TryCut(Option<Instant>);
-
-impl TryCut {
-    /// `work`'s output, or `None` when the cut came first. Not an `async fn`, whose state would
-    /// hold `work` twice, as its argument and inside the timeout: an install's is large.
-    pub(crate) fn before<F: Future>(self, work: F) -> impl Future<Output = Option<F::Output>> {
-        match self.0 {
-            Some(until) => Either::Left(time::timeout_at(until, work).map(Result::ok)),
-            None => Either::Right(work.map(Some)),
-        }
-    }
 }
 
 impl<'op> OpPage<'op> {
@@ -106,23 +34,17 @@ impl<'op> OpPage<'op> {
             pw,
             admitted,
             state,
-            deadline: scope.deadline(),
         })
     }
 
     /// A page already checked through the run's view, for an event batch's read-only work.
     /// This does not select an action target in the scope; several chooser records can be
     /// adopted by one pump operation without weakening the single-tab write invariant.
-    pub(crate) async fn observed(
-        pw: &'op Playwright,
-        scope: &'op OpScope<'_>,
-        admitted: &'op AdmittedPage,
-    ) -> Self {
+    pub(crate) async fn observed(pw: &'op Playwright, admitted: &'op AdmittedPage) -> Self {
         Self {
             pw,
             admitted,
             state: pw.pages().page(pw.browser(), admitted).await,
-            deadline: scope.deadline(),
         }
     }
 
@@ -202,23 +124,8 @@ impl<'op> OpPage<'op> {
         }
     }
 
-    /// The window in which this op tries a frame that missed its install budget again, from
-    /// now: each install takes its own as it starts its first try, which for an op without a
-    /// timeout opens [`UNTIMED_RETRY`] afresh.
-    pub(crate) fn late_retry(&self) -> LateRetry {
-        LateRetry {
-            until: self
-                .deadline
-                .unwrap_or_else(|| Instant::now() + UNTIMED_RETRY),
-        }
-    }
-
-    /// The world of `endpoint`'s frame, installed on first use. An install whose hidden-root
-    /// scan missed the frame's budget (`ProbeFailure::Late`) left no world behind, so it is
-    /// tried afresh while the op's [`LateRetry`] window has room, each try after the first cut
-    /// at the window's end (an install's steps before its scan have no budget of their own);
-    /// the last one's `Late` is the op's. A cut install leaves its frame's cell empty for the
-    /// next caller.
+    /// The world of `endpoint`'s frame, installed on first use; concurrent first uses share one
+    /// install (`FrameWorlds::world`). The op's own timeout bounds it.
     pub(crate) async fn world(
         &self,
         endpoint: &Endpoint,
@@ -228,22 +135,6 @@ impl<'op> OpPage<'op> {
             sessions: self.pw.sessions(),
             epoch: self.pw.epoch(),
         };
-        let retry = self.late_retry();
-        let mut cut = TryCut::default();
-        loop {
-            let started = Instant::now();
-            let installing = self
-                .state
-                .frames()
-                .world(installer, endpoint, place.clone());
-            match cut
-                .before(installing)
-                .await
-                .unwrap_or(Err(ProbeFailure::Late))
-            {
-                Err(ProbeFailure::Late) if retry.has_room(started.elapsed()) => cut = retry.cut(),
-                installed => return installed,
-            }
-        }
+        self.state.frames().world(installer, endpoint, place).await
     }
 }

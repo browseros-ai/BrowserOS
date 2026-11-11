@@ -1,6 +1,6 @@
 //! Reads through `Playwright::invoke`, against a real browser: each read on a fixture page,
 //! upstream's messages and call logs, a read that waits for a late element, a strict violation,
-//! a password read masked by the seal while the page holds it raw, and a box inside a nested
+//! a password read as the page holds it, and a box inside a nested
 //! out-of-process iframe placed in the main viewport, where real input lands on it.
 //!
 //! The live tests need BrowserOS with CDP on `BROWSEROS_CDP_PORT` (default 9005):
@@ -238,7 +238,7 @@ async fn tests_that_a_strict_read_of_two_elements_fails_at_once() -> TestResult 
 
 #[tokio::test]
 #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT (default 9005)"]
-async fn tests_that_a_password_reads_masked_while_the_page_holds_it_raw() -> TestResult {
+async fn tests_that_a_password_reads_as_the_page_holds_it() -> TestResult {
     let live = LiveBrowser::connect().await?;
     let (_server, page) = reads_page(&live).await?;
     live.main_world(
@@ -248,11 +248,11 @@ async fn tests_that_a_password_reads_masked_while_the_page_holds_it_raw() -> Tes
     .await?;
     assert_eq!(
         read(&live, &page, "locator.inputValue", "#pw").await?,
-        json!("••••")
+        json!("typed-secret")
     );
     assert_eq!(
         read(&live, &page, "locator.inputValue", "#pw-label").await?,
-        json!("••••"),
+        json!("typed-secret"),
         "through its label too"
     );
     let value_attribute = json!({ "call": { "api": "locator.getAttribute", "timeoutMs": 5_000 },
@@ -260,8 +260,8 @@ async fn tests_that_a_password_reads_masked_while_the_page_holds_it_raw() -> Tes
     assert_eq!(
         live.invoke("locator.getAttribute", value_attribute)
             .await??,
-        json!("••••"),
-        "the value attribute is masked at the source too"
+        json!("hunter2"),
+        "the value attribute is the page's markup"
     );
     assert_eq!(
         read(&live, &page, "locator.inputValue", "#name").await?,
@@ -271,7 +271,7 @@ async fn tests_that_a_password_reads_masked_while_the_page_holds_it_raw() -> Tes
         live.main_world(&page, "document.getElementById('pw').value")
             .await?,
         json!("typed-secret"),
-        "the page's own world reads its field raw"
+        "the page's own world reads the same value"
     );
     assert_eq!(
         live.main_world(&page, "document.getElementById('pw').getAttribute('value')")
@@ -556,8 +556,8 @@ async fn tests_that_an_element_handle_reads_its_node_until_the_node_goes() -> Te
     let password = handle_of(&live, &at(&page, "#pw")).await?;
     assert_eq!(
         on_handle(&live, "locator.inputValue", &password).await??,
-        json!("••••"),
-        "a handle reads through the seal too"
+        json!("hunter2"),
+        "a handle reads the field as its locator does"
     );
 
     live.main_world(&page, "document.getElementById('title').remove()")
