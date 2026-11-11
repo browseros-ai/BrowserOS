@@ -2,7 +2,7 @@ import { afterEach, expect, test } from 'bun:test'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { claimStateFolder, liveViewer } from './running-viewer'
+import { claimStateFolder, liveViewer, portFree } from './running-viewer'
 
 const dirs: string[] = []
 afterEach(async () => {
@@ -41,4 +41,31 @@ test('a state folder belongs to one instance: another refuses it before changing
   await expect(claimStateFolder(dir, 'vp-b')).rejects.toThrow(
     "holds instance vp-a's state",
   )
+})
+
+test('two starts claiming one new folder at once: exactly one instance gets it', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'neo-viewer-race-'))
+  dirs.push(dir)
+  const results = await Promise.allSettled([
+    claimStateFolder(dir, 'vp-a'),
+    claimStateFolder(dir, 'vp-b'),
+  ])
+  expect(
+    results.filter((result) => result.status === 'fulfilled'),
+  ).toHaveLength(1)
+  expect(results.filter((result) => result.status === 'rejected')).toHaveLength(
+    1,
+  )
+})
+
+test('a port another server holds is not free; a released one is', () => {
+  const holder = Bun.serve({
+    hostname: '127.0.0.1',
+    port: 0,
+    fetch: () => new Response(null),
+  })
+  const port = holder.port ?? 0
+  expect(portFree(port)).toBe(false)
+  holder.stop(true)
+  expect(portFree(port)).toBe(true)
 })

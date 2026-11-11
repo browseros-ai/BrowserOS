@@ -16,16 +16,41 @@ export async function claimStateFolder(
   instance: string,
 ): Promise<void> {
   const marker = join(dir, 'instance')
-  const owner = await readFile(marker, 'utf8').then(
-    (text) => text.trim(),
-    () => null,
+  // Created exclusively: of two starts claiming a new folder at once, one writes it and the
+  // other reads the winner's name.
+  const created = await writeFile(marker, `${instance}\n`, { flag: 'wx' }).then(
+    () => true,
+    (error: NodeJS.ErrnoException) => {
+      if (error.code === 'EEXIST') return false
+      throw error
+    },
   )
-  if (owner !== null && owner !== instance) {
+  if (created) return
+  const owner = (await readFile(marker, 'utf8')).trim()
+  if (owner !== instance) {
     throw new Error(
       `neo-viewer: ${dir} holds instance ${owner}'s state; give instance ${instance} its own --data-dir (or none)`,
     )
   }
-  if (owner === null) await writeFile(marker, `${instance}\n`)
+}
+
+/**
+ * Whether the viewer's port is free on 127.0.0.1, checked before any Docker work: a start that
+ * cannot listen would otherwise replace a running viewer's container and then fail. Catches a
+ * viewer of the same instance whatever its state folder, and anything else on the port.
+ */
+export function portFree(port: number): boolean {
+  if (port === 0) return true
+  try {
+    Bun.serve({
+      hostname: '127.0.0.1',
+      port,
+      fetch: () => new Response(null),
+    }).stop(true)
+    return true
+  } catch {
+    return false
+  }
 }
 
 export interface ViewerRecord {
