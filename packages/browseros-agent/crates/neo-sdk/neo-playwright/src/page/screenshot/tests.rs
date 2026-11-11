@@ -144,7 +144,9 @@ async fn capture_restarts_after_document_change_without_waiting_for_a_lost_reply
     );
     let data = time::timeout(Duration::from_secs(1), shot)
         .await
-        .map_err(|_elapsed| "screenshot still waits for the old document's lost native reply")???;
+        .map_err(
+            |_elapsed| "screenshot still waits for the old document's lost native reply",
+        )???;
     assert_eq!(
         data["$neo"], "bytes",
         "the replacement capture returns image bytes to the original caller"
