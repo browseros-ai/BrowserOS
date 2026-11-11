@@ -127,16 +127,26 @@ export async function openClaw(cdpPort, options = {}, { onUncaught } = {}) {
   } catch (error) {
     finishing = true
     releaseMain?.()
-    try {
-      await native?.finish()
-      await running
-    } finally {
-      await close()
-    }
+    // `running` rejects again when it was the setup failure, and close() can fail to flush
+    // traces; either must not replace the setup error below.
+    const cleanup = await (async () => {
+      try {
+        await native?.finish()
+        await running
+      } finally {
+        await close()
+      }
+    })().then(
+      () => undefined,
+      (failure) => failure,
+    )
     // Nothing here is a test's own SDK call: connecting to BrowserOS, opening the run or
     // evaluating the three files failed, so the report must count it as the harness's.
+    const also = cleanup
+      ? `; cleanup also failed: ${cleanup?.message ?? cleanup}`
+      : ''
     throw new Error(
-      `harness-error: Claw setup failed: ${error?.message ?? error}`,
+      `harness-error: Claw setup failed: ${error?.message ?? error}${also}`,
       { cause: error },
     )
   }
