@@ -22,8 +22,11 @@
 //!                    world
 //!  page.waitForNavigation ─ journal cursor ─ URL match ─ DocumentWatch lifecycle ─ timing entry
 //!  page.waitForURL ─ wait_for_url: each navigation matched in the sealed world, the load state
+//!  page.addInitScript, context.addInitScript ─ init_script: main-world scripts every new
+//!                    document of a tab runs, registered for the run and removed when it ends
 //! ```
 
+mod add_tag;
 pub(crate) mod context_op;
 mod document_op;
 mod document_watch;
@@ -33,7 +36,10 @@ mod evaluate_guard;
 mod frame_routes;
 pub(crate) mod frame_tree;
 pub(crate) use frame_routes::FrameRoutes;
+pub(crate) mod init_script;
 mod load_state;
+mod media_emulation;
+mod media_sessions;
 mod navigation;
 mod op_page;
 mod page_handle;
@@ -44,6 +50,7 @@ mod page_value;
 mod pdf;
 mod screenshot;
 mod screenshot_geometry;
+mod screenshot_masks;
 mod screenshot_png;
 mod screenshot_preparation;
 mod subtree_load;
@@ -53,8 +60,11 @@ mod wait_for_url;
 pub(crate) mod world_call;
 
 pub(crate) use context_op::ContextOp;
+pub(crate) use init_script::InitScripts;
 pub(crate) use load_state::LoadState;
-pub(crate) use op_page::{FRAME_BUDGET, OpPage};
+pub(crate) use media_emulation::MediaState;
+pub(crate) use media_sessions::MediaSessions;
+pub(crate) use op_page::OpPage;
 pub(crate) use page_handle::PageHandle;
 pub(crate) use page_op::PageOp;
 pub(crate) use page_registry::PageRegistry;

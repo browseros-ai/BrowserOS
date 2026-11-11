@@ -381,9 +381,19 @@ impl LiveRun {
         facts
     }
 
-    /// Runs op `name` with `input`, as claw-sdk's handler does.
+    /// The production wire reply, including metadata the real prelude consumes.
+    pub(crate) async fn invoke_wire(
+        &self,
+        name: &str,
+        input: Value,
+    ) -> Result<Value, PlaywrightError> {
+        self.playwright.invoke(&self.env, op(name)?, input).await
+    }
+
+    /// Direct Rust fixtures inspect the script value. The JS adapter uses `invoke_wire`
+    /// instead so frame metadata and serialized values are unwrapped by the prelude once.
     pub(crate) async fn invoke(&self, name: &str, input: Value) -> Result<Value, PlaywrightError> {
-        let result = self.playwright.invoke(&self.env, op(name)?, input).await?;
+        let result = self.invoke_wire(name, input).await?;
         // The browser tests below inspect the script value. Supplemental frame metadata is
         // consumed by the real prelude and covered by the Node navigation regression suite.
         Ok(if name == "page.evaluate" {

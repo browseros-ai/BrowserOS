@@ -1,6 +1,6 @@
 //! The page ops that need a sealed world or the main world, on a real browser, through
 //! `Playwright::invoke`: `evaluate` and `waitForFunction` in the main world, `title` and
-//! `content` read through the seal, `setContent` with its load states, and `waitForURL`. That `setContent`
+//! `content` read in the sealed world, `setContent` with its load states, and `waitForURL`. That `setContent`
 //! retires the document's seq is checked in `src/world/live_tests.rs`, where seqs are visible.
 //!
 //! Needs a throwaway BrowserOS with CDP on `BROWSEROS_CDP_PORT` (default 9005), for example
@@ -588,7 +588,7 @@ async fn document_text(run: &LiveRun, page: &TestPage, op: &str) -> TestResult<S
 
 #[tokio::test]
 #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
-async fn tests_that_title_and_content_read_through_the_seal() -> TestResult {
+async fn tests_that_title_and_content_read_the_page_as_it_is() -> TestResult {
     on_page("/reflect.html", |run, server, page| async move {
         let result = async {
             run.eval(
@@ -611,17 +611,14 @@ async fn tests_that_title_and_content_read_through_the_seal() -> TestResult {
                 "{content}"
             );
             assert!(
-                content.contains(r#"<input id="pw" type="password" value="••••">"#)
-                    && content.contains(r#"<input id="old" type="password" value="••••">"#),
-                "the seal masks every value attribute it serializes: {content}"
+                content.contains(r#"<input id="pw" type="password" value="typed-secret-2">"#)
+                    && content
+                        .contains(r#"<input id="old" type="password" value="attr-secret-1">"#),
+                "every value attribute serializes as the markup holds it: {content}"
             );
             assert!(
                 content.contains("you typed typed-secret-2"),
                 "the page's own text comes back as the page wrote it: {content}"
-            );
-            assert!(
-                !content.contains("attr-secret-1"),
-                "a value attribute reads through the seal: {content}"
             );
             let raw = run
                 .eval(&page, "document.documentElement.outerHTML")

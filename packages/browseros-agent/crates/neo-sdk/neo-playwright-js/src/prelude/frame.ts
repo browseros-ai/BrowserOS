@@ -87,6 +87,15 @@ import type {
   WaitForState,
 } from './wire'
 
+/** Tag inputs mirror Playwright; paths are read on Neo's host before entering the renderer. */
+export type ScriptTagOptions = {
+  url?: string
+  path?: string
+  content?: string
+  type?: string
+}
+export type StyleTagOptions = Omit<ScriptTagOptions, 'type'>
+
 export type StrictOption = { strict?: boolean }
 export type ClickOptions = PointerOptions &
   TimeoutOption &
@@ -170,6 +179,8 @@ export class Frame extends EventEmitter {
   _url = ''
   _parentFrame: Frame | null
   _detached = false
+  /** An event's synchronous callback sees its metadata without rewinding the live cache. */
+  #eventView: { info: FrameInfo; detached: boolean } | null = null
 
   constructor(page: Page, id: string | null, parent: Frame | null) {
     super()
@@ -184,11 +195,33 @@ export class Frame extends EventEmitter {
   }
 
   name(): string {
-    return this._name
+    return this.#eventView?.info.name ?? this._name
   }
 
   url(): string {
-    return this._id === null ? this._page._url : this._url
+    return (
+      this.#eventView?.info.url ??
+      (this._id === null ? this._page._url : this._url)
+    )
+  }
+
+  /**
+   * Different readers can receive one journal record after a newer transition. Callbacks and
+   * predicate invocation still read that record's fields on the canonical Frame. The view ends
+   * before awaiting an async callback, whose continuation sees live state as in Playwright.
+   */
+  _duringEvent<T>(
+    info: FrameInfo,
+    event: 'frameattached' | 'framenavigated' | 'framedetached',
+    read: () => T,
+  ): T {
+    const previous = this.#eventView
+    this.#eventView = { info, detached: event === 'framedetached' }
+    try {
+      return read()
+    } finally {
+      this.#eventView = previous
+    }
   }
 
   parentFrame(): Frame | null {
@@ -200,7 +233,7 @@ export class Frame extends EventEmitter {
   }
 
   isDetached(): boolean {
-    return this._detached
+    return this.#eventView?.detached ?? this._detached
   }
 
   toJSON(): { name: string; url: string } {
@@ -554,6 +587,14 @@ export class Frame extends EventEmitter {
 
   content(): Promise<string> {
     return this._content('frame.content')
+  }
+
+  addScriptTag(options: ScriptTagOptions = {}): Promise<ElementHandle> {
+    return this._addTag('frame.addScriptTag', 'page.addScriptTag', options)
+  }
+
+  addStyleTag(options: StyleTagOptions = {}): Promise<ElementHandle> {
+    return this._addTag('frame.addStyleTag', 'page.addStyleTag', options)
   }
 
   setContent(html: string, options?: NavigateOptions): Promise<void> {
@@ -1166,9 +1207,7 @@ export class Frame extends EventEmitter {
         api,
         'Neo returns the image instead of writing a file; omit path',
       )
-    const refused = refusedScreenshotOption(options)
-    if (refused !== undefined) throw unsupportedError(api, refused)
-    const wire: ScreenshotOptions = pick(options, SCREENSHOT_KEYS)
+    const wire = await screenshotOptions(api, options)
     const { timeout, signal } = this._wait(api, options)
     const page = await this._page._brand(api)
     if (selector === null)
@@ -1244,6 +1283,54 @@ export class Frame extends EventEmitter {
       this._call(api, 0),
       await this._frameArgs(api),
     )
+  }
+
+  /** Page delegates here so frame routing, errors and returned node ownership stay identical. */
+  async _addTag(
+    api: string,
+    op: 'page.addScriptTag' | 'page.addStyleTag',
+    options: ScriptTagOptions,
+  ): Promise<ElementHandle> {
+    const keys =
+      op === 'page.addScriptTag'
+        ? (['url', 'path', 'content', 'type'] as const)
+        : (['url', 'path', 'content'] as const)
+    const input = pick(options, keys)
+    for (const key of keys) {
+      const value = input[key]
+      if (value !== undefined && typeof value !== 'string')
+        throw clientError(
+          api,
+          `${key}: expected string, got ${value === null ? 'object' : typeof value}`,
+        )
+    }
+    let handle: ElementHandle | null
+    try {
+      const { value: result, observed } = await invokeObserved(
+        op,
+        this._call(api, 0),
+        {
+          ...(await this._frameArgs(api)),
+          ...input,
+        },
+      )
+      this._page._evaluated(result.frames, observed)
+      handle = this._page._handle(result.element)
+    } catch (error) {
+      // File reads are upstream client work, whose errors carry no API prefix.
+      if (
+        error instanceof Error &&
+        error.message.startsWith(`${api}: `) &&
+        /^(?:E[A-Z0-9]+|UNKNOWN): .*?, (?:open|read) '/.test(
+          error.message.slice(api.length + 2),
+        )
+      )
+        error.message = error.message.slice(api.length + 2)
+      throw error
+    }
+    if (!handle)
+      throw plainError(api, 'The inserted tag did not return an element')
+    return handle
   }
 
   async _setContent(
@@ -1335,19 +1422,28 @@ export function frameMatches(
 
 export type ScreenshotOptionsInput = TimeoutOption &
   SignalOption &
-  ScreenshotOptions & {
+  Omit<ScreenshotOptions, 'mask'> & {
     path?: string
     mask?: Locator[]
     maskColor?: string
   }
 
-/** Options that need capture features beyond temporary DOM preparation. */
-export function refusedScreenshotOption(
+/** Locator instances stay in the script realm; only parsed locator brands cross to Rust. */
+export async function screenshotOptions(
+  api: string,
   options: ScreenshotOptionsInput,
-): string | undefined {
-  if (options.mask !== undefined && options.mask.length > 0)
-    return 'Neo cannot mask elements in a screenshot; omit mask'
-  return undefined
+): Promise<ScreenshotOptions> {
+  const wire: ScreenshotOptions = pick(options, SCREENSHOT_KEYS)
+  if (options.mask !== undefined) {
+    wire.mask = await Promise.all(
+      options.mask.map((locator) => {
+        if (!(locator instanceof Locator))
+          throw clientError(api, 'mask: expected a Locator')
+        return locator._frame._locatorBrand(api, locator._selector)
+      }),
+    )
+  }
+  return wire
 }
 
 const HELD_VALUE =

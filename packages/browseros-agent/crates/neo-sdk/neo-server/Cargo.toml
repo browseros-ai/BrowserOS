@@ -90,6 +90,8 @@ test-support = []
 # DOM URL parsing and form encoding for the agent realm; already in the workspace graph.
 url.workspace = true
 axum.workspace = true
+# A result too large to send inline keeps its bytes as blobs: the bootstrap's base64, decoded.
+base64.workspace = true
 # neo.solveCaptcha: detection and the paid providers, one solver per process.
 neo-captcha.workspace = true
 browseros-cdp.workspace = true

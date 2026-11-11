@@ -3,6 +3,15 @@ import { stripVTControlCharacters } from 'node:util'
 import { refusals } from './refusals.mjs'
 import { clawRefusals } from './refusals-claw.mjs'
 
+/** The skip curation writes for a case that needs Playwright internals (`curation.mjs`). */
+export const internalsSkipPrefix = 'needs Playwright internals: '
+/** expectLoop's runtime skip for a check its table does not cover (`expect-loop.mjs`). */
+const uncoveredCheck = /^expectLoop: \w+ is not covered$/
+
+/** A skip this harness made, as opposed to one the upstream spec declares for itself. */
+export const isGeneratedSkip = (reason) =>
+  reason.startsWith(internalsSkipPrefix) || uncoveredCheck.test(reason)
+
 /** Neo: Stable report columns, including every exclusive failure class. */
 export const verdicts = [
   'pass',

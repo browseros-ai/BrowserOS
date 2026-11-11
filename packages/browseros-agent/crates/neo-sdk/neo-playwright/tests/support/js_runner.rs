@@ -101,7 +101,7 @@ impl OpHost for LiveRun {
                 .and_then(|page| page.get("tab"))
                 .and_then(Value::as_i64)
                 .map(TabId);
-            let outcome = LiveRun::invoke(self, name, input).await;
+            let outcome = LiveRun::invoke_wire(self, name, input).await;
             // The production door refreshes navigated tabs before observing their facts.
             // Without that step this test adapter would overwrite a fresh navigation URL
             // with the old cache value on the next reply.

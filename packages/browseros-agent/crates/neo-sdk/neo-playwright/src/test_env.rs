@@ -50,9 +50,14 @@ impl TestEnv {
     }
 
     pub(crate) fn refusing(refusal: Refusal) -> Self {
+        Self::new().with_refusal(refusal)
+    }
+
+    /// The same env, refusing every `recheck` with `refusal`.
+    pub(crate) fn with_refusal(self, refusal: Refusal) -> Self {
         Self {
             refusal: Some(refusal),
-            ..Self::new()
+            ..self
         }
     }
 

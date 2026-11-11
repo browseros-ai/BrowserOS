@@ -2,7 +2,7 @@
 import { createHash } from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
-import { flattenResults, outcome } from './report/classify.mjs'
+import { flattenResults, isGeneratedSkip, outcome } from './report/classify.mjs'
 
 export const scopePath = new URL('./scope.json', import.meta.url)
 export const scopeReasons = ['network', 'handles', 'drift', 'decided-deviation']
@@ -66,19 +66,47 @@ export function scopeForRun(run) {
   return validateScope(JSON.parse(bytes))
 }
 
-/** Use Playwright outcomes, including flaky/expected failures; skips stay in the denominator. */
+/** Whether the harness made this skip (curation's internals list, expectLoop's coverage table). */
+function skippedByHarness(row) {
+  return [
+    ...(row.test.annotations || []),
+    ...(row.test.results || []).flatMap((result) => result.annotations || []),
+  ].some(
+    (annotation) =>
+      annotation.type === 'skip' &&
+      typeof annotation.description === 'string' &&
+      isGeneratedSkip(annotation.description),
+  )
+}
+
+/**
+ * Use Playwright outcomes, including flaky/expected failures. A skipped test ran nothing, so
+ * it counts against neither rate: `skipped` reports it beside the denominator, and
+ * `skippedByHarness` says how many of those the harness made rather than the spec itself.
+ * Incomplete cases stay in the denominator: they started and did not pass.
+ */
 export function scoreResults(results, manifest = loadScope()) {
   validateScope(manifest)
   const cases = flattenResults(results, [], { allowRepeated: true })
-  const all = { passed: 0, total: cases.length }
-  const inScope = { passed: 0, total: 0 }
+  const all = { passed: 0, total: 0, skipped: 0, skippedByHarness: 0 }
+  const inScope = { passed: 0, total: 0, skipped: 0, skippedByHarness: 0 }
   const byReason = Object.fromEntries(
     scopeReasons.map((reason) => [reason, { total: 0, passed: 0 }]),
   )
   const passingExcluded = []
+  const count = (score, row, result) => {
+    if (result === 'skip') {
+      score.skipped++
+      if (skippedByHarness(row)) score.skippedByHarness++
+      return
+    }
+    score.total++
+    if (result === 'pass') score.passed++
+  }
   for (const row of cases) {
-    const passed = outcome(row) === 'pass'
-    if (passed) all.passed++
+    const result = outcome(row)
+    const passed = result === 'pass'
+    count(all, row, result)
     const entry = manifest.entries.find(
       (entry) =>
         entry.file === row.suite &&
@@ -96,8 +124,7 @@ export function scoreResults(results, manifest = loadScope()) {
         })
       }
     } else {
-      inScope.total++
-      if (passed) inScope.passed++
+      count(inScope, row, result)
     }
   }
   return { all, inScope, byReason, passingExcluded }
@@ -107,7 +134,10 @@ export function scoreText(score) {
   const percent = score.total
     ? `${((100 * score.passed) / score.total).toFixed(1)}%`
     : 'n/a'
-  return `${score.passed}/${score.total} (${percent})`
+  const skipped = score.skipped
+    ? `; ${score.skipped} skipped, not counted (${score.skippedByHarness} by the harness)`
+    : ''
+  return `${score.passed}/${score.total} (${percent})${skipped}`
 }
 
 /** The live runner and offline report share the same numerator and denominator. */

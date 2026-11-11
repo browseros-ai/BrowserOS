@@ -1,6 +1,6 @@
 /**
  * What one booted world owns and every handler shares: Playwright's engine for this
- * document, the seal it reads through, the pin table and Neo's ref map.
+ * document, the pin table and Neo's ref map.
  *
  * This is also the one file that reaches into InjectedScript's private fields. Each access
  * checks the shape it expects and fails as `internal` otherwise, so an upgrade that renames
@@ -12,7 +12,6 @@ import {
 } from '../../../neo-playwright/third_party/playwright/packages/injected/src/injectedScript'
 import type { RefMap } from './aria-ref'
 import type { ErrorClass, ErrorReply, Pin } from './protocol'
-import type { ClawSeal } from './sensitive'
 
 /** The state a boot builds. A boot with another epoch builds a new one (see index.ts). */
 export type World = {
@@ -21,7 +20,6 @@ export type World = {
   /** This document's frame seq; ai-mode refs print as `f<seq>e<n>`, or `e<n>` for seq 0. */
   readonly seq: number
   readonly injected: InjectedScript
-  readonly seal: ClawSeal
   readonly pins: Pins
   readonly refs: RefMap
 }
@@ -110,7 +108,7 @@ export class Pins {
   }
 }
 
-/** Playwright's own construction for Chromium (server/dom.ts), in Neo's sealed world. */
+/** Playwright's own construction for Chromium (server/dom.ts), in Neo's isolated world. */
 export function createEngine(frameSeq: number): InjectedScript {
   return new InjectedScript(window, {
     isUnderTest: false,

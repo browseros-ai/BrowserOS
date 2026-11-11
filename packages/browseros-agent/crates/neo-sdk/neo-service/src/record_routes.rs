@@ -11,9 +11,9 @@
 //! Screenshots are served from the operation's stored state: `image/jpeg` when stored, 410
 //! `expired` after retention deletes the file, and 404 when no image was kept.
 //!
-//! A run's downloads are served from the copies claw-sdk kept beside the trace when the run ended
-//! (`neo_trace::RunOutputs`), streamed. Those are written before the run's reply, unlike its
-//! rows, so this read needs no `wait`: a download with no kept bytes is a 404.
+//! A run's downloads and its reply's blobs are served from the files claw-sdk kept beside the
+//! trace when the run ended (`neo_trace::RunOutputs`), streamed. Those are written before the
+//! run's reply, unlike its rows, so these reads need no `wait`: a file not kept is a 404.
 
 use crate::api_error::ApiError;
 use crate::query::Inline;
@@ -29,7 +29,8 @@ use axum::response::{IntoResponse, Response};
 use futures_util::stream;
 use neo_sdk_api as api;
 use neo_trace::{
-    OperationRow, RunDetail, RunId, ShotRead, ShotState, TraceError, TraceRecordEvent, TraceStore,
+    BlobId, KeptFile, OperationRow, RunDetail, RunId, ShotRead, ShotState, TraceError,
+    TraceRecordEvent, TraceStore,
 };
 use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, utf8_percent_encode};
 use std::sync::Arc;
@@ -121,7 +122,7 @@ pub(crate) async fn get_download(
         .parse()
         .map_err(|_| ApiError::not_found("no download has this index"))?;
     let outputs = service.store.outputs();
-    let Some((file, size)) = outputs.open_download(run, index).await? else {
+    let Some(kept) = outputs.open_download(run, index).await? else {
         return Err(ApiError::not_found(
             "this run kept no bytes for this download: it has no such index, or the download had \
              not completed when the run ended (see the run's `downloads`)",
@@ -133,7 +134,22 @@ pub(crate) async fn get_download(
         .into_iter()
         .find(|download| download.index == index)
         .map(|download| download.suggested_filename);
-    Ok(file_response(file, size, &attachment(name.as_deref())))
+    Ok(file_response(kept, &attachment(name.as_deref())))
+}
+
+/// The bytes a run's reply names as `{"$neo":"blob","id":…}` because they did not fit inline.
+pub(crate) async fn get_blob(
+    State(service): State<Arc<ServiceState>>,
+    Path((run, blob)): Path<(String, String)>,
+) -> Result<Response, ApiError> {
+    let run = query::run_id(&run)?;
+    let blob: BlobId = blob
+        .parse()
+        .map_err(|_| ApiError::not_found("no blob has this id"))?;
+    let Some(kept) = service.store.outputs().open_blob(run, blob).await? else {
+        return Err(ApiError::not_found("this run's reply names no such blob"));
+    };
+    Ok(file_response(kept, "attachment"))
 }
 
 /// `Content-Disposition` for a file the host saves, with its name when it has one (RFC 6266).
@@ -149,7 +165,8 @@ fn attachment(name: Option<&str>) -> String {
 
 /// A file a run kept, streamed as `application/octet-stream` in chunks, so a large one never sits
 /// in memory whole.
-fn file_response(file: tokio::fs::File, size: u64, disposition: &str) -> Response {
+fn file_response(kept: KeptFile, disposition: &str) -> Response {
+    let KeptFile { file, size } = kept;
     let chunks = stream::try_unfold(file, |mut file| async move {
         let mut chunk = vec![0; FILE_CHUNK];
         let read = file.read(&mut chunk).await?;

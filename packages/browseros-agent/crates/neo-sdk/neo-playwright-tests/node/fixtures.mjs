@@ -21,11 +21,13 @@ import {
 import { contextOptions } from './context-options.mjs'
 import { skipReason } from './curation.mjs'
 import { createExpect } from './expect-loop.mjs'
+import { productExpect } from './product-expect.mjs'
 
 const require = createRequire(path.join(source, 'package.json'))
 const { expect: realExpect } = require('@playwright/test')
 let neoPage
 let neoLocator
+let neoExpect
 
 export function wrapExpect(original) {
   if (
@@ -33,13 +35,16 @@ export function wrapExpect(original) {
     process.env.NEO_NODE_EXPECT_LOOP === '0'
   )
     return original
-  return createExpect(original, {
+  const options = {
     isNeo: (value) =>
       Boolean(
         neoPage && (value instanceof neoPage || value instanceof neoLocator),
       ),
     info: () => test.info(),
-  })
+  }
+  return process.env.NEO_NODE_MODE === 'claw'
+    ? productExpect(original, { ...options, provider: () => neoExpect })
+    : createExpect(original, options)
 }
 
 export const expect = wrapExpect(realExpect)
@@ -85,6 +90,11 @@ const ownedTest = browserTest.extend({
         file,
         // Worker title paths begin with the file; runner paths also have root/project suites.
         testInfo.titlePath.slice(1),
+        {
+          productExpect:
+            process.env.NEO_NODE_MODE === 'claw' &&
+            process.env.NEO_NODE_EXPECT_LOOP !== '0',
+        },
       )
       if (reason) testInfo.skip(true, reason)
       await use()
@@ -331,6 +341,9 @@ const clawTest = sdkTest.extend({
         executionDir: path.join(__neoWorker.profile, '.browseros'),
         browserosVersion: browserVersion(process.env.NEO_E2E_BROWSER),
       })
+      // Bind the exact parameter supplied to this worker's production run. Specs import
+      // expect before the fixture opens, so their wrappers resolve this binding lazily.
+      neoExpect = sdk.params.expect
       const initialPage = sdk.page || sdk.context.pages()[0]
       if (initialPage) {
         neoPage = initialPage.constructor
@@ -339,6 +352,7 @@ const clawTest = sdkTest.extend({
       try {
         await use(sdk)
       } finally {
+        neoExpect = undefined
         fs.writeFileSync(
           path.join(__neoWorker.output, 'outcome.json'),
           await sdk.finish(),

@@ -35,7 +35,7 @@ use super::op_marks::{self, Hold, OpMarks};
 use crate::browser::PageRef;
 use crate::dispatch::{
     ErrorCode, LeafError, Method, MethodSpec, OpCtx, OperationError, PageChange, PageTarget,
-    RegistryBuilder, RegistryError, StandingRefusal,
+    RegistryBuilder, RegistryError, RunCtx, StandingRefusal,
 };
 
 /// neo-playwright's prelude, which the agent realm evaluates after its bootstrap: the
@@ -75,15 +75,20 @@ const PLAYWRIGHT_API: &str = "Playwright's API on `page`, `context` and `browser
     `locator.waitForFunction`, `elementHandle.evaluate`, \
     and `$eval` and `$$eval` on a page, frame or element handle; a `frame` form runs in its \
     frame, a child frame too) with Playwright's values, arguments, element handles and errors, \
-    `page.setContent` and `frame.setContent`, whose HTML's scripts run there too, `screenshot` and \
-    `pdf`, events (`page.on`, `waitForEvent`), downloads (`download.path()` waits for the file \
-    and returns where the browser saved it, which a later run can upload with `setInputFiles`; \
-    `saveAs(path)` copies it; `failure()`), and `expect`: \
+    `page.emulateMedia` (per page across runs and navigations), \
+    `page.addScriptTag` and `page.addStyleTag` (also on frames), returning element handles, \
+    `page.setContent` and `frame.setContent`, whose HTML's scripts run there too, init scripts \
+    (`page.addInitScript`, `context.addInitScript`) that every new document runs in its main \
+    world, `screenshot` and `pdf`, events (`page.on`, `waitForEvent`), downloads \
+    (`download.path()` waits for the file and returns where the browser saved it, which a later \
+    run can upload with `setInputFiles`; `saveAs(path)` copies it; `failure()`), and `expect`: \
     retrying locator matchers (`toBeVisible`, `toBeChecked`, `toHaveText`, `toContainText`, \
     `toHaveValue`, `toHaveCount`, `toHaveAttribute`, ...) and page matchers (`toHaveTitle`, \
     `toHaveURL`), with `.not`, value matchers (`toBe`, `toEqual`, ...), `expect.poll` and \
     `toPass`; soft assertions, `toBeOK` and screenshot, snapshot and `toMatchAriaSnapshot` \
-    comparisons are not available. A call that waits gives up after 5 s unless given a `timeout`, \
+    comparisons are not available. In hosted BrowserOS, console and pageerror listeners are \
+    accepted but stay silent; `page.waitForEvent` for either fails immediately with \
+    `neo/unsupported`. A call that waits gives up after 5 s unless given a `timeout`, \
     and a navigation after 30 s. Unlike Playwright, `waitForFunction` \
     polls every 100 ms for its default `polling: 'raf'`, since animation frames never fire in \
     Neo's background tabs, and the handle it resolves to holds a snapshot of the value, which \
@@ -97,7 +102,17 @@ const PLAYWRIGHT_API: &str = "Playwright's API on `page`, `context` and `browser
     (a relative path resolves against Neo's working directory), except Neo's own secret files, \
     which fail `neo_secret_upload_refused` with nothing sent: the caller sandboxes the \
     filesystem. `{ name, mimeType, buffer }` payloads need no file and total under 10 MiB a \
-    call. A directory upload needs its tab in front.";
+    call. A directory upload needs its tab in front. An init script stays registered until the \
+    run ends, then its tab no longer runs it; a context's init script reaches each tab before \
+    the run's first write to it, so a popup's first document and cross-site iframes run \
+    without it; `exposeFunctions` is not available.";
+
+/// At a run's end, after its ops drained: removes the init scripts its ops registered from every
+/// tab, awaiting each removal (neo-playwright's `RunState::remove_init_scripts`). The run service
+/// calls it before it answers, so a script ends with the run that registered it.
+pub(crate) async fn remove_init_scripts(run: &RunCtx) {
+    run.slot::<RunState>().remove_init_scripts().await;
+}
 
 /// Schemes shared by goto and reload. Goto additionally passes file and JavaScript URLs to
 /// Chromium; other browser-specific schemes remain unsupported.
@@ -200,7 +215,7 @@ impl Method for PlaywrightOp {
         let pages = self.pages.of_call(&input);
         let input = input.resolved(page);
         let playwright = self.facade.get().await;
-        let env = OpCtxEnv::new(op);
+        let env = OpCtxEnv::new(op, self.facade.hosted_mode());
         let result = op
             .race_classified(playwright.invoke(&env, self.op, input))
             .await;
@@ -517,21 +532,27 @@ impl OpenedPage {
 /// of their own.
 pub(super) struct OpCtxEnv<'a, M> {
     op: &'a OpCtx<M>,
+    hosted: bool,
     /// The run's one `RunState`, shared by all of its ops and dropped when the run ends.
     run_state: Arc<RunState>,
 }
 
 impl<'a, M> OpCtxEnv<'a, M> {
     /// The env for the op that `op` runs.
-    pub(super) fn new(op: &'a OpCtx<M>) -> Self {
+    pub(super) fn new(op: &'a OpCtx<M>, hosted: bool) -> Self {
         Self {
             op,
+            hosted,
             run_state: op.run().slot::<RunState>(),
         }
     }
 }
 
 impl<M> OpEnv for OpCtxEnv<'_, M> {
+    fn hosted_mode(&self) -> bool {
+        self.hosted
+    }
+
     fn view(&self) -> &BrowserView {
         self.op.run().view()
     }
@@ -711,6 +732,14 @@ mod tests {
 
     fn brand(input: &Value) -> Result<PageTarget, serde_json::Error> {
         serde_json::from_value(input.clone())
+    }
+
+    #[test]
+    fn the_run_description_explains_hosted_console_and_pageerror_limits() {
+        let description = PLAYWRIGHT_LINE.as_str();
+        assert!(description.contains("In hosted BrowserOS, console and pageerror listeners"));
+        assert!(description.contains("accepted but stay silent"));
+        assert!(description.contains("fails immediately with `neo/unsupported`"));
     }
 
     #[test]

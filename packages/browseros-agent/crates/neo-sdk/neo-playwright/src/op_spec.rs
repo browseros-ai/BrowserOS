@@ -42,9 +42,10 @@ pub struct OpSpec {
 pub enum Capability {
     /// Runs agent-supplied script, or HTML whose scripts run, in a page's main world. There the
     /// script reads the page's own state and every frame of its site, and no seal masks a
-    /// field. Gateway: the evaluate guard's entries, `EvaluateGuard::open` for a script and
+    /// field. Gateways: the evaluate guard's entries, `EvaluateGuard::open` for a script and
     /// `DocumentWrite::open` for `page.setContent`, whose HTML the sealed world writes and whose
-    /// scripts the main world runs.
+    /// scripts the main world runs; and `page/init_script.rs` for the init scripts every new
+    /// document runs.
     MainWorld,
     /// Returns the page's pixels, which no seal masks: `page.screenshot`, with its element
     /// forms, and `page.pdf`. A host refuses such an op on a private tab, and withholds pixels
@@ -56,7 +57,8 @@ pub enum Capability {
     Screen,
     /// Hands files from Neo's disk to a page whose script can then read them. Relative paths
     /// resolve against Neo's working directory, following Playwright's path handling.
-    /// Gateway: `input_files::set_input_files`, for every form of the op, payloads included.
+    /// Gateways: `input_files::set_input_files`, for every form of the op, payloads included,
+    /// and `page/init_script.rs`, which reads an init script's `{ path }`.
     HostFiles,
 }
 

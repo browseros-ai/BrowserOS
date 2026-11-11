@@ -45,6 +45,7 @@ use tokio::time::{self, Instant, MissedTickBehavior};
 
 use crate::events::dialog_table::{ClosedBy, HeldDialog, Unanswered};
 use crate::events::event_hub::EventWriter;
+use crate::events::frame_lifecycle::FrameLifecycleTracker;
 use crate::events::page_event::{
     ConsoleMessage, ConsoleParams, DialogId, DialogKind, DialogOpened, DownloadStarted,
     ExceptionParams, FileChooserOpened, OpenedPage, PageError, PageEvent, WindowKind,
@@ -108,6 +109,7 @@ struct Watcher {
     writer: EventWriter,
     attach_log: Arc<FrameAttachLog>,
     progress: Arc<WatcherProgress>,
+    lifecycle: FrameLifecycleTracker,
     /// The connection epoch discovery ran for; `None` until it succeeds, and after a lag.
     epoch: Option<u64>,
     /// The tabs the watcher knows.
@@ -116,6 +118,9 @@ struct Watcher {
     closed_early: HashSet<TargetId>,
     /// Which tab each page or OOPIF session belongs to.
     sessions: HashMap<SessionId, TargetId>,
+    /// Core may attach concurrently. One source per native target prevents each CDP session
+    /// from publishing the same lifecycle transition; OOPIFs have their own native target.
+    lifecycle_sources: LifecycleSources,
     /// Which tab each out-of-process frame belongs to (an OOPIF's frame id is its target id).
     frames: HashMap<String, TargetId>,
     /// Dialogs in their grace, oldest first; every grace is as long, so this is by deadline.
@@ -276,10 +281,12 @@ impl Watcher {
             writer,
             attach_log,
             progress,
+            lifecycle: FrameLifecycleTracker::default(),
             epoch: None,
             pages: HashMap::new(),
             closed_early: HashSet::new(),
             sessions: HashMap::new(),
+            lifecycle_sources: LifecycleSources::default(),
             frames: HashMap::new(),
             graces: VecDeque::new(),
             next_reap: Instant::now() + REAP,
@@ -332,6 +339,7 @@ impl Watcher {
                 self.epoch = Some(epoch);
             }
         }
+        self.observe_context().await;
         let now = Instant::now();
         let overdue: Vec<(TargetId, Option<i64>)> = self
             .pages
@@ -391,7 +399,9 @@ impl Watcher {
             });
         }
         if changed {
+            self.lifecycle = FrameLifecycleTracker::default();
             self.sessions.clear();
+            self.lifecycle_sources = LifecycleSources::default();
             self.frames.clear();
             self.writer.hub().dialogs().forget_sessions();
         }
@@ -421,15 +431,17 @@ impl Watcher {
             session_id,
         } = event;
         match method.as_str() {
-            "Page.frameNavigated" | "Page.navigatedWithinDocument" | "Page.frameDetached" => {
-                if let Some(session) = &session_id {
-                    self.frame_lifecycle(&method, session, &params).await;
-                }
-                self.navigated(&method, session_id.as_ref(), params).await;
+            "Page.frameAttached"
+            | "Page.frameNavigated"
+            | "Page.navigatedWithinDocument"
+            | "Page.frameDetached" => {
+                self.frame_changed(&method, session_id.as_ref(), params)
+                    .await;
             }
             "Target.targetCreated" => {
                 if let Some(TargetEvent { target_info }) = parse(params) {
                     self.created(target_info);
+                    self.observe_context().await;
                 }
             }
             "Target.targetInfoChanged" => {
@@ -441,7 +453,6 @@ impl Watcher {
                 if let Some(Destroyed { target_id }) = parse(params) {
                     self.frames.remove(&target_id);
                     let target = TargetId(target_id);
-                    self.attach_log.forget(&target);
                     self.destroyed(&target);
                 }
             }
@@ -453,11 +464,12 @@ impl Watcher {
             "Target.detachedFromTarget" => {
                 if let Some(Detached { session_id }) = parse(params) {
                     self.sessions.remove(&session_id);
+                    self.lifecycle_sources.detach(&session_id);
                 }
             }
-            "Page.frameAttached" => {
-                if let Some(session) = &session_id {
-                    self.frame_lifecycle(&method, session, &params).await;
+            "Page.loadEventFired" | "Page.domContentEventFired" => {
+                if let Some(session) = session_id {
+                    self.page_load(&method, &session).await;
                 }
             }
             "Page.javascriptDialogOpening" => {
@@ -591,6 +603,8 @@ impl Watcher {
     }
 
     fn destroyed(&mut self, target: &TargetId) {
+        self.attach_log.forget(target);
+        self.lifecycle.forget(target);
         let Some(page) = self.pages.remove(target) else {
             return;
         };
@@ -603,6 +617,7 @@ impl Watcher {
         for session in &sessions {
             self.writer.hub().dialogs().closed_on_session(session);
             self.sessions.remove(session);
+            self.lifecycle_sources.detach(session);
         }
         match page.state {
             PageState::Reported => {
@@ -623,15 +638,24 @@ impl Watcher {
         } = attached;
         match target_info.kind.as_str() {
             "page" => {
-                self.sessions
-                    .insert(session_id, TargetId(target_info.target_id));
+                let target = TargetId(target_info.target_id);
+                self.lifecycle_sources.attach(&session_id, &target);
+                self.sessions.insert(session_id.clone(), target.clone());
+                if self.lifecycle_sources.accepts(&session_id) {
+                    self.seed_lifecycle(&target, &session_id).await;
+                }
             }
             "iframe" => {
                 if let Some(parent) = parent
                     && let Some(tab) = self.target_of(parent).await
                 {
+                    self.lifecycle_sources
+                        .attach(&session_id, &TargetId(target_info.target_id.clone()));
                     self.frames.insert(target_info.target_id, tab.clone());
-                    self.sessions.insert(session_id, tab);
+                    self.sessions.insert(session_id.clone(), tab.clone());
+                    if self.lifecycle_sources.accepts(&session_id) {
+                        self.seed_lifecycle(&tab, &session_id).await;
+                    }
                 }
             }
             _ => {}
@@ -668,12 +692,92 @@ impl Watcher {
         let info = self.browser.pages.get_info(page).await?;
         self.sessions
             .insert(session.clone(), info.target_id.clone());
+        self.lifecycle_sources.attach(session, &info.target_id);
+        self.seed_lifecycle(&info.target_id, session).await;
         Some(info.target_id)
+    }
+
+    /// A context subscription also covers newly discovered pages that no SDK action has
+    /// admitted yet. Core owns these sessions and their shutdown, just like action sessions.
+    async fn observe_context(&self) {
+        if !self.writer.hub().wants_context_lifecycle() {
+            return;
+        }
+        if let Ok(Ok(listing)) = time::timeout(Duration::from_secs(1), self.view.list_pages()).await
+        {
+            for page in listing.pages {
+                if !self
+                    .sessions
+                    .values()
+                    .any(|target| *target == page.target_id)
+                {
+                    let _ =
+                        time::timeout(Duration::from_secs(1), self.view.page_session(page.page_id))
+                            .await;
+                }
+            }
+        }
+    }
+
+    /// Sessions can attach to a tab whose documents existed before this watcher. Remember
+    /// those frames silently so their first removal still carries a real Frame payload.
+    async fn seed_lifecycle(&mut self, target: &TargetId, session: &SessionId) {
+        let session = self.browser.protocol_session(session.clone());
+        if let Ok(Ok(tree)) = time::timeout(
+            Duration::from_secs(1),
+            session.send_value("Page.getFrameTree", json!({})),
+        )
+        .await
+        {
+            self.lifecycle.seed(target, tree);
+        }
+    }
+
+    /// Both public callbacks and navigation waits observe the same ordered CDP transition.
+    async fn frame_changed(&mut self, method: &str, session: Option<&SessionId>, params: Value) {
+        if let Some(session) = session {
+            self.target_of(session).await;
+            if !self.lifecycle_sources.accepts(session) {
+                return;
+            }
+            self.frame_lifecycle(method, session, &params).await;
+        }
+        self.navigated(method, session, params).await;
+    }
+
+    /// Load notifications from an OOPIF belong to its Frame, never to the page or context.
+    async fn page_load(&mut self, method: &str, session: &SessionId) {
+        if let Some(target) = self.target_of(session).await
+            && self.lifecycle_sources.accepts(session)
+            // The chosen root session can predate core's most recently attached session.
+            && self.lifecycle_sources.targets.get(session) == Some(&target)
+        {
+            let kind = if method == "Page.loadEventFired" {
+                PageEventKind::Load
+            } else {
+                PageEventKind::DomContentLoaded
+            };
+            if self.lifecycle.main(&target).is_none() {
+                self.seed_lifecycle(&target, session).await;
+            }
+            if let Some(frame) = self.lifecycle.main(&target) {
+                self.writer.record(PageEvent::Load {
+                    target,
+                    kind,
+                    frame,
+                });
+            }
+        }
     }
 
     /// The frame log's part of a frame event: an attached or removed child frame, or the main
     /// frame's commit. Same-document navigations and process swaps change no number.
     async fn frame_lifecycle(&mut self, method: &str, session: &SessionId, params: &Value) {
+        if let Some(target) = self.target_of(session).await {
+            for event in self.lifecycle.record(&target, method, params) {
+                self.writer.record(PageEvent::FrameLifecycle(event));
+            }
+        }
         match method {
             "Page.frameAttached" => {
                 if let Some(FrameAttached { frame_id }) = parse(params.clone()) {
@@ -827,6 +931,42 @@ impl Watcher {
             url: download.url,
             suggested_filename: download.suggested_filename,
         }));
+    }
+}
+
+/// Selects one lifecycle source for each native page or OOPIF target. An action's session and
+/// context observation's session can coexist, but both receive the same Chromium transitions.
+/// Keep the first source until it detaches, then promote a surviving session for that target.
+#[derive(Default)]
+struct LifecycleSources {
+    targets: HashMap<SessionId, TargetId>,
+    primary: HashMap<TargetId, SessionId>,
+}
+
+impl LifecycleSources {
+    fn attach(&mut self, session: &SessionId, target: &TargetId) {
+        self.targets.insert(session.clone(), target.clone());
+        self.primary
+            .entry(target.clone())
+            .or_insert_with(|| session.clone());
+    }
+
+    fn accepts(&self, session: &SessionId) -> bool {
+        self.targets
+            .get(session)
+            .and_then(|target| self.primary.get(target))
+            == Some(session)
+    }
+
+    fn detach(&mut self, session: &SessionId) {
+        if let Some(target) = self.targets.remove(session)
+            && self.primary.get(&target) == Some(session)
+        {
+            self.primary.remove(&target);
+            if let Some((next, _)) = self.targets.iter().find(|(_, known)| **known == target) {
+                self.primary.insert(target, next.clone());
+            }
+        }
     }
 }
 

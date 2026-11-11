@@ -33,7 +33,6 @@ import type {
   VerdictRequest,
 } from './protocol'
 import { resolveTarget } from './resolve'
-import { editedKind } from './sensitive'
 import { ProbeError, type World } from './world'
 
 /** What `setupHitTargetInterceptor` hands back once armed. */
@@ -147,7 +146,6 @@ export function act(
     point: place.point,
     inView: place.inView,
     transformed: isTransformed(element),
-    sensitive: editedKind(world, element),
   } as const
   if (!arm || !place.inView) return measured
   if (arm.expectRect && !sameRect(box, arm.expectRect)) return measured

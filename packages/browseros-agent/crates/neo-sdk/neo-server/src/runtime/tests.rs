@@ -812,6 +812,41 @@ fn bytes_cross_the_bridge_both_ways() -> Result<(), TestError> {
 }
 
 #[test]
+fn image_bytes_have_buffer_identity_and_header_reads_in_quickjs() -> Result<(), TestError> {
+    on_neo_runtime(async {
+        let rig = TestRig::new().await?;
+        let code = r"
+            const { image } = await __neo.invoke('test.echo', {
+              image: Buffer.from([9, 0x89, 0x50, 0x4e, 0x47, 8])
+            });
+            const header = image.subarray(1, 5);
+            return [Buffer.isBuffer(image), image instanceof Buffer,
+              header instanceof Buffer, header.readUInt32BE(), header.readUInt32LE(),
+              header.readInt32BE(),
+              header.readUInt16BE(), header.readUInt16LE(), header.readUInt8(),
+              header.equals(Buffer.from('89504e47', 'hex')), header.toString('base64')];";
+        assert_eq!(
+            returned(script(&rig, code).await?)?,
+            json!([
+                true,
+                true,
+                true,
+                0x8950_4e47_u32,
+                0x474e_5089_u32,
+                -1_991_225_785,
+                0x8950,
+                0x5089,
+                0x89,
+                true,
+                "iVBORw=="
+            ]),
+            "the bytes reviver supplies the run's Buffer, with unsigned reads on its view"
+        );
+        Ok(())
+    })
+}
+
+#[test]
 fn input_the_codec_refuses_is_refused_and_recorded_by_the_door() -> Result<(), TestError> {
     on_neo_runtime(async {
         let rig = TestRig::new().await?;
@@ -884,6 +919,63 @@ fn a_return_value_over_the_limit_is_refused() -> Result<(), TestError> {
         assert_eq!(
             (error.owner(), error.code()),
             (ErrorOwner::Script, ErrorCode::RESULT_TOO_LARGE)
+        );
+        assert!(
+            error.message().contains("Buffer.from(text)"),
+            "text never becomes a blob, and the message says how to return it: {}",
+            error.message()
+        );
+        Ok(())
+    })
+}
+
+#[test]
+fn bytes_over_the_limit_come_back_as_blobs() -> Result<(), TestError> {
+    on_neo_runtime(async {
+        let rig = TestRig::new().await?;
+        let end = script(
+            &rig,
+            "const big = new Uint8Array(400 * 1024).fill(7); \
+             return { big, small: Buffer.from('hi'), note: 'kept' };",
+        )
+        .await?;
+        let blobs: Vec<(String, usize, bool)> = end
+            .blobs
+            .iter()
+            .map(|blob| {
+                (
+                    blob.id.to_string(),
+                    blob.bytes.len(),
+                    blob.bytes.iter().all(|byte| *byte == 7),
+                )
+            })
+            .collect();
+        assert_eq!(blobs, vec![("b0".to_owned(), 400 * 1024, true)]);
+        assert_eq!(
+            returned(end)?,
+            json!({
+                "big": { "$neo": "blob", "id": "b0", "size": 400 * 1024 },
+                "small": { "$neo": "bytes", "base64": "aGk=" },
+                "note": "kept",
+            }),
+            "only what does not fit moves; small bytes stay inline"
+        );
+        // A screenshot-sized value encodes within the realm's heap: the bootstrap uses the
+        // engine's own base64.
+        let end = script(&rig, "return new Uint8Array(6 * 1024 * 1024).fill(1);").await?;
+        assert_eq!(
+            end.blobs.first().map(|blob| blob.bytes.len()),
+            Some(6 * 1024 * 1024)
+        );
+        assert_eq!(
+            returned(end)?,
+            json!({ "$neo": "blob", "id": "b0", "size": 6 * 1024 * 1024 })
+        );
+        let end = script(&rig, "return Buffer.from('fits');").await?;
+        assert!(end.blobs.is_empty());
+        assert_eq!(
+            returned(end)?,
+            json!({ "$neo": "bytes", "base64": "Zml0cw==" })
         );
         Ok(())
     })

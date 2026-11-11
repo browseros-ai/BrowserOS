@@ -142,7 +142,7 @@ impl Tab {
         json!({ "$neo": "page", "tab": self.id.0 })
     }
 
-    /// The page's own main world, which the seal leaves alone.
+    /// An expression in the page's own main world.
     pub(crate) async fn main_world(&self, expression: &str) -> TestResult<Value> {
         let result: Value = self
             .session
@@ -267,7 +267,7 @@ pub(crate) trait TabScript: Send + Sync + 'static {
     }
 
     /// How long the tab takes to answer `method`, any command but a probe request: a renderer
-    /// slow to scan a new world's document, say.
+    /// slow to set up a new page's lifecycle events, say.
     fn delay(&self, _method: &str) -> Duration {
         Duration::ZERO
     }
@@ -321,8 +321,7 @@ static SCRIPTED_SESSIONS: AtomicU64 = AtomicU64::new(0);
 /// A scripted browser with one tab, tab 7 on `https://a.test/`, and a same-site child frame in
 /// its process, or one in a process of its own, when the script asks for one. It answers what
 /// admitting the tab, attaching its out-of-process frame, installing a frame's sealed world and
-/// listing its frames and targets send, as for a page with no closed shadow root, and hands
-/// every probe request to its [`TabScript`].
+/// listing its frames and targets send, and hands every probe request to its [`TabScript`].
 pub(crate) struct ScriptedTab<S> {
     script: S,
     session: String,
@@ -516,7 +515,7 @@ impl<S: TabScript> ScriptedTab<S> {
                 json!({ "result": { "type": "object", "objectId": "g-oopif" } })
             }
             "Runtime.evaluate" => json!({ "result": { "type": "object", "objectId": "g" } }),
-            // The hidden-root scan finds no shadow root.
+            // A document node, with no children.
             "DOM.describeNode" => json!({ "node": { "backendNodeId": 1,
                 "nodeName": "#document", "childNodeCount": 0, "children": [] } }),
             // The document's node in its main world, where a page script runs.
@@ -527,9 +526,8 @@ impl<S: TabScript> ScriptedTab<S> {
         })
     }
 
-    /// One `Runtime.callFunctionOn`: a probe request goes to the script, and the install's
-    /// boot, the seal's watch and the world's document answer as for a page with no closed
-    /// shadow root.
+    /// One `Runtime.callFunctionOn`: a probe request goes to the script, the install's boot
+    /// answers `described`, and any other call answers an object the tab holds.
     async fn call(&self, params: &Value) -> Result<Value, CdpError> {
         let first = &params["arguments"][0]["value"];
         if first.get("op").is_some() {
@@ -558,17 +556,7 @@ impl<S: TabScript> ScriptedTab<S> {
         {
             return answer.map_err(protocol_error);
         }
-        Ok(if function.contains("takeHost") {
-            // The seal reported no shadow host.
-            json!({ "result": { "type": "object", "subtype": "null", "value": null } })
-        } else if function.contains("detachedTops") {
-            // It watches no tree out of the document.
-            json!({ "result": { "type": "object", "subtype": "array", "objectId": "tops",
-                "description": "Array(0)" } })
-        } else {
-            // The world's document, where the scan starts.
-            json!({ "result": { "type": "object", "objectId": "d" } })
-        })
+        Ok(json!({ "result": { "type": "object", "objectId": "d" } }))
     }
 }
 
