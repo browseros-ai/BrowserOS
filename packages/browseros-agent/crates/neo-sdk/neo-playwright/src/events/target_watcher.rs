@@ -1242,12 +1242,14 @@ impl Watcher {
             .at_connection_epoch();
         // No Runtime.enable: console reporting on an unrelated page can execute preview
         // getters used to detect inspection. Target auto-attach needs no renderer domains.
-        // Include OOPIFs for their workers, but exclude page/prerender and service targets:
-        // this observer has no initializer that could safely release their startup pause.
+        // Include OOPIFs for their workers, but exclude page/prerender and service targets.
+        // Nothing is paused: the observer initializes nothing, and Chromium never releases a
+        // paused frame whose session it detaches because another session armed auto-attach
+        // on the same parent while the frame was still navigating; that page never loads.
         let _ = session
             .send_value(
                 "Target.setAutoAttach",
-                json!({"autoAttach": true, "waitForDebuggerOnStart": true, "flatten": true,
+                json!({"autoAttach": true, "waitForDebuggerOnStart": false, "flatten": true,
                     "filter": [{"type":"worker"}, {"type":"iframe"}, {"exclude":true}]}),
             )
             .await;
@@ -1632,6 +1634,11 @@ mod worker_observation_tests {
             json!([
                 {"type":"worker"}, {"type":"iframe"}, {"exclude":true}
             ])
+        );
+        assert_eq!(
+            calls[1].params["waitForDebuggerOnStart"],
+            json!(false),
+            "nothing the observer attaches may wait for it to resume"
         );
         assert!(
             !calls.iter().any(|call| call.method == "Runtime.enable"),
