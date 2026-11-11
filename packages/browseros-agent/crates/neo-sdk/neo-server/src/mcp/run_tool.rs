@@ -7,7 +7,7 @@ use serde_json::{Map, Value, json};
 use super::RunArgs;
 use super::run_description::run_description;
 use crate::config::Defaults;
-use crate::dispatch::Registry;
+use crate::dispatch::{Registry, TaskKind, TaskNote};
 use crate::run::{OpNote, RUN_META_KEY, ReplyError, RunReply};
 use crate::runtime::{LogLevel, LogLine};
 
@@ -78,6 +78,7 @@ fn run_meta(reply: &RunReply) -> Value {
         .map(|note| json!({ "operationId": note.operation_id, "name": note.name }))
         .collect();
     meta.insert("unknown".to_owned(), Value::Array(unknown));
+    meta.insert("tasks".to_owned(), json!(reply.tasks));
     Value::Object(meta)
 }
 
@@ -111,7 +112,42 @@ fn text(reply: &RunReply) -> String {
             op_label(note)
         ));
     }
+    lines.extend(reply.tasks.iter().map(task_line));
     lines.join("\n")
+}
+
+fn task_line(task: &TaskNote) -> String {
+    let id = &task.id;
+    if task.kind == TaskKind::Closed {
+        return format!("[task {id} closed · its tabs were closed]");
+    }
+    let mut tabs: Vec<String> = task
+        .tabs
+        .iter()
+        .take(10)
+        .map(|tab| {
+            let mut url: String = tab.url.chars().take(120).collect();
+            if tab.url.chars().count() > 120 {
+                url.push('…');
+            }
+            format!("{} {url}", tab.tab)
+        })
+        .collect();
+    if task.tabs.len() > 10 {
+        tabs.push(format!("+{} more", task.tabs.len() - 10));
+    }
+    let tabs = if tabs.is_empty() {
+        "none".to_owned()
+    } else {
+        tabs.join(", ")
+    };
+    match task.kind {
+        TaskKind::BuiltinPage => {
+            format!("[new task {id} was created for this script's built-in page · tabs: {tabs}]")
+        }
+        TaskKind::Created | TaskKind::Fetched => format!("[task {id} · tabs: {tabs}]"),
+        TaskKind::Closed => format!("[task {id} closed · its tabs were closed]"),
+    }
 }
 
 /// `script / script_error: TypeError: x is not a function (run:2:5)`, plus the op and its
@@ -159,7 +195,8 @@ mod tests {
     use serde_json::json;
 
     use super::text;
-    use crate::run::RunReply;
+    use crate::run::{RUN_META_KEY, RunReply};
+    use crate::test_rig::{self, TestError, TestRig};
 
     #[test]
     fn a_write_never_confirmed_tells_the_model_to_look_before_repeating_it()
@@ -185,5 +222,68 @@ mod tests {
             "sdk-traces' wording, which zuzu's own warning used"
         );
         Ok(())
+    }
+    #[test]
+    fn task_lines_bound_urls_and_tab_counts_and_closed_tasks_have_no_tabs()
+    -> Result<(), Box<dyn Error>> {
+        let id = RunId::new();
+        let tabs: Vec<_> = (1..=12)
+            .map(|tab| json!({ "tabId": tab, "url": "é".repeat(121) }))
+            .collect();
+        let reply: RunReply = serde_json::from_value(json!({
+            "id": id, "status": "ok", "effects": "none", "value": null,
+            "tasks": [
+                { "id": "one", "name": null, "kind": "fetched", "tabs": tabs },
+                { "id": "two", "name": null, "kind": "closed", "tabs": [] }
+            ]
+        }))?;
+        let text = text(&reply);
+        assert!(text.contains(&format!("1 {}…", "é".repeat(120))));
+        assert!(text.contains(", +2 more]"));
+        assert!(!text.contains("11 é"));
+        assert!(text.ends_with("[task two closed · its tabs were closed]"));
+        let wire = serde_json::to_value(super::RunTool::result(&reply))?;
+        assert_eq!(
+            wire["_meta"][RUN_META_KEY]["tasks"][0]["tabs"]
+                .as_array()
+                .map(Vec::len),
+            Some(12),
+            "only the text is clipped"
+        );
+        Ok(())
+    }
+    #[test]
+    fn an_auto_task_is_named_in_reply_text_metadata_and_replay() -> Result<(), TestError> {
+        use crate::run::{RunMeta, RunRequest, RunTimeout};
+        use neo_trace::RequestId;
+        use std::time::Duration;
+
+        test_rig::on_neo_runtime(async {
+            let rig = TestRig::new().await?;
+            let service = rig.run_service(Duration::from_secs(30));
+            let make_request = || -> Result<RunRequest, TestError> {
+                Ok(RunRequest {
+                    code: "await __neo.invoke('test.touch', { page }); throw new Error('after opening');".to_owned(),
+                    timeout: RunTimeout::from_millis(None)?,
+                    meta: RunMeta { request_id: Some(RequestId::parse("auto-reply")?), ..RunMeta::default() },
+                })
+            };
+            let reply = service.run(make_request()?).await;
+            assert_eq!(reply.tasks.len(), 1);
+            let task = &reply.tasks[0];
+            let mcp = serde_json::to_value(super::RunTool::result(&reply))?;
+            assert!(mcp["content"][0]["text"].as_str().ok_or("text")?.ends_with(&format!(
+                "[new task {} was created for this script's built-in page · tabs: {} about:blank]",
+                task.id, task.tabs[0].tab,
+            )));
+            assert_eq!(
+                mcp["_meta"][RUN_META_KEY]["tasks"],
+                serde_json::to_value(&reply.tasks)?
+            );
+            assert_eq!(mcp["structuredContent"], json!({ "error": reply.error }));
+            let replay = service.run(make_request()?).await;
+            assert_eq!(serde_json::to_value(super::RunTool::result(&replay))?, mcp);
+            Ok(())
+        })
     }
 }

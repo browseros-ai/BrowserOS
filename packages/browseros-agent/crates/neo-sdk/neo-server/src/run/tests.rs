@@ -150,6 +150,7 @@ async fn run_once(
         at: EpochMillis::now(),
     });
     let reply = Arc::new(RunReply {
+        tasks: Vec::new(),
         id: handle.id(),
         status: ReplyStatus::Ok,
         effects: ReplyEffects::None,

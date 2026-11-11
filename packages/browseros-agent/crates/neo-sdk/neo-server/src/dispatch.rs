@@ -38,6 +38,7 @@ mod policy;
 mod refusal_brand;
 mod registry;
 mod run_ctx;
+mod run_tasks;
 #[cfg(test)]
 mod tests;
 
@@ -55,3 +56,5 @@ pub(crate) use page_target::PageTarget;
 pub(crate) use policy::{Policy, PolicyCheck};
 pub(crate) use registry::{Registry, RegistryBuilder, RegistryError};
 pub(crate) use run_ctx::{OpLine, OpsReport, RunCtx, RunEnd, RunGuard, RunStart, StopReason};
+
+pub(crate) use run_tasks::{TabNote, TaskKind, TaskNote};

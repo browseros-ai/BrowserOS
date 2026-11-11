@@ -6,7 +6,9 @@ use neo_trace::{
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::dispatch::{ErrorCode, OpFailure, OpLine, OperationError, RunCtx, RunEnd, StopReason};
+use crate::dispatch::{
+    ErrorCode, OpFailure, OpLine, OperationError, RunCtx, RunEnd, StopReason, TaskNote,
+};
 use crate::runtime::{LogLine, ScriptEnd, ScriptOutcome};
 
 /// What one `run` call answers: the MCP layer renders it, and the trace keeps
@@ -42,6 +44,9 @@ pub(crate) struct RunReply {
     /// Ops still running when the script returned; they were cut short.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) not_awaited: Vec<OpNote>,
+    /// Task recovery information, retained even when the script failed.
+    #[serde(default)]
+    pub(crate) tasks: Vec<TaskNote>,
 }
 
 /// How a run ended, as the caller sees it: the trace's `RunStatus` without the states a reply
@@ -167,6 +172,7 @@ impl RunReply {
             logs_dropped,
             unknown: report.unknown.iter().map(OpNote::from).collect(),
             not_awaited: report.not_awaited.iter().map(OpNote::from).collect(),
+            tasks: Vec::new(),
         }
     }
 
@@ -236,6 +242,7 @@ impl RunReply {
             logs_dropped: 0,
             unknown: Vec::new(),
             not_awaited: Vec::new(),
+            tasks: Vec::new(),
         }
     }
 }
