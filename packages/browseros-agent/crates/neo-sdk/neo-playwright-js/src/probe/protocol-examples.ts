@@ -30,6 +30,19 @@ export const REQUEST_EXAMPLES: { [O in Op]: AtLeastOne<RequestOf<O>> } = {
   describe: [{ op: 'describe' }],
   screenshotMask: [{ op: 'screenshotMask', target: GO_BUTTON, color: '#F0F' }],
   screenshotMaskCleanup: [{ op: 'screenshotMaskCleanup' }],
+  webStorage: [
+    { op: 'webStorage', kind: 'local', action: 'items' },
+    { op: 'webStorage', kind: 'session', action: 'getItem', name: 'token' },
+    {
+      op: 'webStorage',
+      kind: 'local',
+      action: 'setItem',
+      name: 'token',
+      value: 'abc',
+    },
+    { op: 'webStorage', kind: 'local', action: 'removeItem', name: 'token' },
+    { op: 'webStorage', kind: 'session', action: 'clear' },
+  ],
   resolve: [
     { op: 'resolve', target: GO_BUTTON, strictness: 'strict', want: 'element' },
     {
@@ -412,6 +425,7 @@ const REPLY_EXAMPLES: {
     { kind: 'value', value: 'needsinput' },
     { kind: 'value', value: 'error:optionsnotfound' },
     { kind: 'value', value: { threw: 'DOMException' } },
+    { kind: 'value', value: [{ name: 'token', value: 'abc' }] },
     { kind: 'value', value: true },
   ],
   read: [

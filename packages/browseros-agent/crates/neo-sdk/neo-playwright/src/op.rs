@@ -118,7 +118,7 @@ mod tests {
 
     #[test]
     fn tests_that_names_are_playwright_receivers_and_methods() {
-        const RECEIVERS: [&str; 11] = [
+        const RECEIVERS: [&str; 12] = [
             "worker",
             "locator",
             "page",
@@ -130,6 +130,7 @@ mod tests {
             "dialog",
             "disposable",
             "bindingCall",
+            "webStorage",
         ];
         for op in Op::all() {
             let name = op.spec().name;
@@ -250,6 +251,8 @@ mod tests {
             ("page.addInitScript", &[MainWorld, HostFiles], true),
             ("page.exposeBinding", &[MainWorld], true),
             ("bindingCall.resolve", &[MainWorld], true),
+            ("webStorage.read", &[], true),
+            ("webStorage.write", &[], true),
             ("context.pages", &[], true),
             ("context.newPage", &[], true),
             ("context.addInitScript", &[MainWorld, HostFiles], true),
@@ -359,7 +362,7 @@ mod tests {
                     _,
                     Some(
                         "page" | "keyboard" | "mouse" | "dialog" | "expect" | "bindingCall"
-                        | "worker",
+                        | "worker" | "webStorage",
                     ),
                 ) => OpTarget::Field("page"),
                 _ => OpTarget::None,
