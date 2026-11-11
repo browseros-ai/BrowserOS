@@ -2,7 +2,13 @@
 import { describe, expect, it } from 'bun:test'
 import fs from 'node:fs'
 import path from 'node:path'
-import { findBrowser, findNode, resolveSuites, splitArgs } from './spec'
+import {
+  findBrowser,
+  findNode,
+  rerunFlags,
+  resolveSuites,
+  splitArgs,
+} from './spec'
 
 const corpus = JSON.parse(
   fs.readFileSync(path.join(import.meta.dir, 'corpus.json'), 'utf8'),
@@ -67,6 +73,56 @@ describe('splitArgs', () => {
       names: ['page-goto', 'page-fill', 'page-click'],
       flags: ['--grep', 'should work', '--workers=2', '-j', '1', '--reference'],
     })
+  })
+})
+
+describe('flags', () => {
+  it('passes every option that takes a value through with its value', () => {
+    expect(
+      splitArgs([
+        '--global-timeout',
+        '60000',
+        '--project',
+        'browseros-neo',
+        '--engine',
+        'reference',
+        'page-goto',
+      ]),
+    ).toEqual({
+      names: ['page-goto'],
+      flags: [
+        '--global-timeout',
+        '60000',
+        '--project',
+        'browseros-neo',
+        '--engine',
+        'reference',
+      ],
+    })
+  })
+
+  it('keeps how a run ran and drops what chose its tests, for a one-test rerun', () => {
+    expect(
+      rerunFlags([
+        '--reference',
+        '--no-curation',
+        '--hosted-mode',
+        '--grep',
+        'should work',
+        '-G=other',
+        '--shard',
+        '1/2',
+        '--workers',
+        '2',
+        '--last-failed',
+      ]),
+    ).toEqual([
+      '--reference',
+      '--no-curation',
+      '--hosted-mode',
+      '--workers',
+      '2',
+    ])
   })
 })
 
