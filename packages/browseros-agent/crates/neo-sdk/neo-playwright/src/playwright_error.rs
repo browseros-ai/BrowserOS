@@ -297,14 +297,6 @@ impl PlaywrightError {
         self
     }
 
-    /// The same failure, its message passed through `mask`: a failure raised after a main-world
-    /// send leaves only with every value the op's sweeps found masked in its text.
-    #[must_use]
-    pub(crate) fn mask_message(mut self, mask: impl FnOnce(String) -> String) -> Self {
-        self.message = mask(self.message);
-        self
-    }
-
     /// `script / invalid_input`, for inputs that fail before an op's scope exists.
     pub(crate) fn invalid_input(message: String) -> Self {
         Self::new(ErrorCode::InvalidInput, message)

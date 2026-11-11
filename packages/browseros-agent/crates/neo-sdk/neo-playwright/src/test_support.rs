@@ -322,18 +322,6 @@ impl ProbeAnswer {
     }
 }
 
-/// A tab an opener link connects to a [`ScriptedTab`], as the browser lists it.
-#[derive(Clone, Copy)]
-pub(crate) struct ScriptedLink {
-    /// Its page target, which the browser's target list names with the scripted tab as its
-    /// `openerId`.
-    pub(crate) target: &'static str,
-    /// Its URL, which decides whether a sweep of the scripted tab's site reads it.
-    pub(crate) url: &'static str,
-    /// Its tab id in `Browser.getTabs`, `None` when the browser lists no tab for it.
-    pub(crate) tab: Option<i64>,
-}
-
 /// How a test's [`ScriptedTab`] answers the probe.
 pub(crate) trait TabScript: Send + Sync + 'static {
     /// The answer to `request`, one probe request as the crate encoded it (`{"op": ...}`), in
@@ -350,12 +338,6 @@ pub(crate) trait TabScript: Send + Sync + 'static {
     /// own, which the browser lists as a target of its own.
     fn oopif(&self) -> bool {
         false
-    }
-
-    /// A tab an opener link connects to this one, for every list of targets and tabs from now
-    /// on; none by default.
-    fn linked(&self) -> Option<ScriptedLink> {
-        None
     }
 
     /// How long the tab takes to answer `method`, any command but a probe request: a renderer
@@ -502,42 +484,23 @@ impl<S: TabScript> ScriptedTab<S> {
         }
     }
 
-    /// `Browser.getTabs`: the main tab, then the one `Browser.createTab` opened, then the
-    /// linked tab when the browser lists a tab for it.
-    fn tabs(&self, main_tab: Value, linked: Option<ScriptedLink>) -> Value {
+    /// `Browser.getTabs`: the main tab, then the one `Browser.createTab` opened.
+    fn tabs(&self, main_tab: Value) -> Value {
         let mut tabs = vec![main_tab];
         if self.created.load(Ordering::SeqCst) {
             tabs.push(created_tab());
         }
-        if let Some(ScriptedLink {
-            target,
-            url,
-            tab: Some(tab),
-        }) = linked
-        {
-            tabs.push(
-                json!({ "tabId": tab, "targetId": target, "windowId": 1, "url": url,
-                "title": "", "isActive": false, "isLoading": false, "loadProgress": 1.0,
-                "isPinned": false, "isHidden": false }),
-            );
-        }
         json!({ "tabs": tabs })
     }
 
-    /// `Target.getTargets`: the main frame's target, the out-of-process frame's when the tab
-    /// has one, and the linked tab's, opened by the main tab.
-    fn targets(&self, linked: Option<ScriptedLink>) -> Value {
+    /// `Target.getTargets`: the main frame's target, and the out-of-process frame's when the
+    /// tab has one.
+    fn targets(&self) -> Value {
         let mut listed = vec![json!({ "targetId": SCRIPTED_MAIN, "type": "page",
             "url": "https://a.test/" })];
         if self.script.oopif() {
             listed.push(json!({ "targetId": SCRIPTED_OOPIF, "type": "iframe",
                 "url": "https://pay.a.test/", "parentId": SCRIPTED_MAIN }));
-        }
-        if let Some(link) = linked {
-            listed.push(
-                json!({ "targetId": link.target, "type": "page", "url": link.url,
-                "openerId": SCRIPTED_MAIN }),
-            );
         }
         json!({ "targetInfos": listed })
     }
@@ -578,9 +541,8 @@ impl<S: TabScript> ScriptedTab<S> {
         let main_tab = json!({ "tabId": 7, "targetId": SCRIPTED_MAIN, "windowId": 1,
             "url": "https://a.test/", "title": "A", "isActive": true, "isLoading": false,
             "loadProgress": 1.0, "isPinned": false, "isHidden": false });
-        let linked = self.script.linked();
         Ok(match method {
-            "Browser.getTabs" => self.tabs(main_tab, linked),
+            "Browser.getTabs" => self.tabs(main_tab),
             "Browser.createTab" => {
                 self.created.store(true, Ordering::SeqCst);
                 json!({ "tab": created_tab() })
@@ -591,7 +553,7 @@ impl<S: TabScript> ScriptedTab<S> {
                 let target = params["targetId"].as_str().unwrap_or_default();
                 json!({ "sessionId": self.session_of(target) })
             }
-            "Target.getTargets" => self.targets(linked),
+            "Target.getTargets" => self.targets(),
             "Page.getFrameTree" if on_oopif => {
                 json!({ "frameTree": { "frame": { "id": SCRIPTED_OOPIF, "loaderId": "LO",
                     "url": "https://pay.a.test/", "domainAndRegistry": "a.test" } } })

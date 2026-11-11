@@ -1,6 +1,5 @@
 use std::error::Error;
 
-use browseros_core::sensitive_fields::FieldValues;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -12,7 +11,6 @@ type TestResult = Result<(), Box<dyn Error>>;
 /// serializer.
 #[derive(Deserialize)]
 struct Golden {
-    swept: Value,
     values: Vec<GoldenValue>,
 }
 
@@ -21,30 +19,29 @@ struct GoldenValue {
     name: String,
     /// What the page's serializer wrote.
     page: String,
-    /// What the mask must make of it under `swept`.
-    masked: Value,
+    /// What the parse must write back for the prelude to read.
+    result: Value,
 }
 
 fn golden() -> Result<Golden, serde_json::Error> {
     serde_json::from_str(include_str!("../../../tests/data/in-page-values.json"))
 }
 
-fn masked(text: &str, values: &FieldValues) -> Result<Value, String> {
+/// `text` parsed and written back, or why it cannot leave.
+fn read(text: &str) -> Result<Value, String> {
     match PageValue::parse(text) {
-        Ok(value) => Ok(value.masked(values).into_json()),
+        Ok(value) => Ok(value.into_json()),
         Err(Unreadable::TooDeep) => Err("too deep".to_owned()),
         Err(Unreadable::Shape) => Err("not the format".to_owned()),
     }
 }
 
 #[test]
-fn tests_that_every_serialized_value_reads_and_leaves_masked_as_the_golden_says() -> TestResult {
-    let golden = golden()?;
-    let values = FieldValues::from_sweep(&golden.swept);
-    for case in &golden.values {
+fn tests_that_every_serialized_value_reads_and_leaves_as_the_golden_says() -> TestResult {
+    for case in &golden()?.values {
         assert_eq!(
-            masked(&case.page, &values)?,
-            case.masked,
+            read(&case.page)?,
+            case.result,
             "{}: {}",
             case.name,
             case.page
@@ -56,9 +53,7 @@ fn tests_that_every_serialized_value_reads_and_leaves_masked_as_the_golden_says(
 #[test]
 fn tests_that_no_text_is_undefined() {
     assert_eq!(
-        PageValue::undefined()
-            .masked(&FieldValues::default())
-            .into_json(),
+        PageValue::undefined().into_json(),
         json!({ "v": "undefined" })
     );
 }
@@ -91,21 +86,14 @@ fn nested_arrays(depth: usize) -> String {
 #[test]
 fn tests_that_a_value_deeper_than_upstreams_limit_is_too_deep() {
     assert_eq!(depth_of(&nested_objects(99)), MAX_DEPTH);
-    let none = FieldValues::default();
-    assert!(
-        masked(&nested_objects(99), &none).is_ok(),
-        "297 levels come back"
-    );
-    assert!(
-        masked(&nested_arrays(148), &none).is_ok(),
-        "296 levels come back"
-    );
+    assert!(read(&nested_objects(99)).is_ok(), "297 levels come back");
+    assert!(read(&nested_arrays(148)).is_ok(), "296 levels come back");
     for deep in [
         nested_arrays(149),
         nested_objects(100),
         nested_arrays(10_000),
     ] {
-        assert_eq!(masked(&deep, &none), Err("too deep".to_owned()));
+        assert_eq!(read(&deep), Err("too deep".to_owned()));
     }
 }
 
@@ -117,10 +105,9 @@ fn tests_that_depth_counts_brackets_outside_strings_only() {
 }
 
 /// Shapes the serializer never writes for a result, as a page that replaced its globals could:
-/// each fails closed rather than reaching the agent.
+/// each fails rather than reaching the agent.
 #[test]
-fn tests_that_anything_outside_the_format_fails_closed() {
-    let none = FieldValues::default();
+fn tests_that_anything_outside_the_format_fails() {
     for text in [
         "null",
         "[1]",
@@ -148,31 +135,8 @@ fn tests_that_anything_outside_the_format_fails_closed() {
         "1 2",
         "",
     ] {
-        assert_eq!(
-            masked(text, &none),
-            Err("not the format".to_owned()),
-            "{text}"
-        );
+        assert_eq!(read(text), Err("not the format".to_owned()), "{text}");
     }
-}
-
-/// Tags, ids and refs are Playwright's structure, never page text: a value spelled like one is
-/// masked only where the page wrote it.
-#[test]
-fn tests_that_structure_is_never_masked_but_every_page_string_is() -> TestResult {
-    let values = FieldValues::from_sweep(&json!(["id", "ref", "ui8", "undefined"]));
-    let text = r#"{"a":[{"v":"undefined"},{"ref":1},{"ta":{"b":"AQ==","k":"ui8"}},"undefined",{"o":[{"k":"id","v":"ref"}],"id":2}],"id":1}"#;
-    assert_eq!(
-        masked(text, &values)?,
-        json!({ "a": [
-            { "v": "undefined" },
-            { "ref": 1 },
-            { "ta": { "b": "AQ==", "k": "ui8" } },
-            "[private]",
-            { "o": [{ "k": "[private]", "v": "[private]" }], "id": 2 },
-        ], "id": 1 })
-    );
-    Ok(())
 }
 
 #[test]
@@ -190,15 +154,13 @@ fn tests_that_a_number_prints_as_javascript_prints_it() {
     assert_eq!(js_number(f64::from(0.1_f32)), "0.10000000149011612");
 }
 
-/// A page that replaced the serializer's globals chooses its ids, and a sensitive number put
-/// there would leave as structure. So ids are renumbered in order of appearance, as upstream's
-/// server writes them again, and every ref follows: no number the page chose survives.
+/// A page that replaced the serializer's globals chooses its ids. They are renumbered in order of
+/// appearance, as upstream's server writes them again, and every ref follows.
 #[test]
 fn tests_that_ids_and_refs_are_renumbered_in_order_of_appearance() -> TestResult {
-    let none = FieldValues::default();
     let tampered = r#"{"a":[{"o":[{"k":"self","v":{"ref":482913}}],"id":482913},{"ref":482913},{"a":[],"id":7}],"id":99}"#;
     assert_eq!(
-        masked(tampered, &none)?,
+        read(tampered)?,
         json!({ "a": [
             { "o": [{ "k": "self", "v": { "ref": 2 } }], "id": 2 },
             { "ref": 2 },
@@ -206,10 +168,7 @@ fn tests_that_ids_and_refs_are_renumbered_in_order_of_appearance() -> TestResult
         ], "id": 1 })
     );
     assert_eq!(
-        masked(
-            r#"{"a":[{"ab":{"b":"AQI="}},{"o":[],"id":1}],"id":5}"#,
-            &none
-        )?,
+        read(r#"{"a":[{"ab":{"b":"AQI="}},{"o":[],"id":1}],"id":5}"#)?,
         json!({ "a": [{ "o": [], "id": 2 }, { "o": [], "id": 3 }], "id": 1 }),
         "an ArrayBuffer's object takes its place in the count, as upstream's server gives it"
     );
@@ -219,8 +178,7 @@ fn tests_that_ids_and_refs_are_renumbered_in_order_of_appearance() -> TestResult
 /// A ref the page wrote before its object, or to an id two objects claim, or to the id an
 /// `ArrayBuffer` stands in with, names nothing upstream's serializer could have written.
 #[test]
-fn tests_that_a_ref_to_an_id_not_yet_seen_fails_closed() {
-    let none = FieldValues::default();
+fn tests_that_a_ref_to_an_id_not_yet_seen_fails() {
     for text in [
         r#"{"a":[{"ref":2},{"o":[],"id":2}],"id":1}"#,
         r#"{"a":[{"ref":9}],"id":1}"#,
@@ -228,10 +186,6 @@ fn tests_that_a_ref_to_an_id_not_yet_seen_fails_closed() {
         r#"{"a":[{"ab":{"b":""}},{"ref":0}],"id":1}"#,
         r#"{"ref":1}"#,
     ] {
-        assert_eq!(
-            masked(text, &none),
-            Err("not the format".to_owned()),
-            "{text}"
-        );
+        assert_eq!(read(text), Err("not the format".to_owned()), "{text}");
     }
 }

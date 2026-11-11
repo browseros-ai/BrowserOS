@@ -533,33 +533,6 @@ impl SealedWorld {
             .collect())
     }
 
-    /// Hands the nodes `nodes` names (handles in this world) to the seal's `watch`, in one call:
-    /// the elements a main-world script receives, which the seal then sweeps with their tree at
-    /// every sweep they are out of the document (core's `seal.js`). `Gone` when the seal or the
-    /// world is.
-    pub(crate) async fn watch_trees(&self, nodes: &[String]) -> Result<(), ProbeFailure> {
-        let arguments: Vec<Value> = nodes
-            .iter()
-            .map(|node| json!({ "objectId": node }))
-            .collect();
-        let called = self
-            .session
-            .send::<_, Value>(
-                "Runtime.callFunctionOn",
-                json!({ "objectId": self.global, "functionDeclaration": WATCH_ROOTS,
-                        "arguments": arguments, "returnByValue": true }),
-            )
-            .await
-            .map_err(ProbeFailure::from_core)?;
-        match called.pointer("/result/value") {
-            Some(Value::Bool(true)) => Ok(()),
-            Some(Value::Bool(false)) => Err(ProbeFailure::Gone(Ran::No)),
-            _ => Err(ProbeFailure::Broken(
-                "the seal did not take the elements to watch".to_owned(),
-            )),
-        }
-    }
-
     /// Resolves each of `roots` into this world and hands them all to the seal's `watch` in one
     /// call. A root whose node is gone since the scan is skipped: nothing in it can be read now.
     /// One the page only removed from the document still resolves (measured), and is watched.

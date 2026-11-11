@@ -2,21 +2,15 @@
 //! frame a `frame.*` form names. `page.title()` and `page.content()` read it there, so every
 //! field value the serialization touches comes through the seal (`value="••••"`), never through
 //! the page's own getters. `page.setContent()` replaces it from there, through the main-world
-//! gateway, because the HTML's scripts run in the page's main world.
-//!
-//! ```text
-//!  setContent ── EvaluateGuard::open_document: every frame of the site swept ── write: the
-//!     probe's `setContent` from the sealed world, then Page.documentOpened and its waitUntil
-//!     state ── Pending::sweep: the same sweep again ── close: `{}` or a masked failure
-//! ```
+//! gateway (`DocumentWrite`), because the HTML's scripts run in the page's main world.
 
 use browseros_core::FrameId;
 use futures_util::future;
 use serde::Deserialize;
-use serde_json::Value;
+use serde_json::{Value, json};
 
 use crate::op_scope::OpScope;
-use crate::page::evaluate_guard::{self, EvaluateGuard, TreeFrame};
+use crate::page::evaluate_guard::{self, DocumentWrite, TreeFrame};
 use crate::page::site_sweep::SiteSweep;
 use crate::page::world_call::{self, unexpected, with_world};
 use crate::page::{LoadState, OpPage};
@@ -94,16 +88,11 @@ pub(crate) async fn read(
 }
 
 /// Replaces the frame's document with `html` and waits for `waitUntil`, as upstream does,
-/// through the main-world gateway: between two sweeps of every frame of the frame's site.
-///
-/// The probe writes from the sealed world, but the HTML's scripts and event handlers run in the
-/// main world, with the page's origin and whatever the old document's scripts kept: a window or
-/// an element of a same-site frame that `document.open` removed still reads raw (measured). So
-/// nothing is written until every same-site frame was swept, and the frames the new document
-/// holds are swept again once it reached `waitUntil`; the host learns every value either found.
+/// through the main-world gateway: the probe writes from the sealed world, but the HTML's scripts
+/// and event handlers run in the main world.
 ///
 /// Playwright-core never sees `load` on a hosted BrowserOS, because it waits for a console
-/// message after `document.open()`, which a hosted browser never sends; the guard's watch needs
+/// message after `document.open()`, which a hosted browser never sends; the write's watch needs
 /// none. The write runs in the sealed world, so the probe can unboot in the same call, and the
 /// new document takes a new seq before any other op can mint a ref in it.
 pub(crate) async fn set_content(
@@ -125,10 +114,11 @@ pub(crate) async fn set_content(
         "setting frame content, waiting until \"{}\"",
         input.wait_until
     ));
-    let guard = EvaluateGuard::open_document(pw, scope, &input.page, input.frame.as_ref()).await?;
-    let pending = guard.write(scope, &input.html, input.wait_until).await?;
-    let (guard, written) = pending.sweep(scope).await?;
-    guard.close(written)
+    DocumentWrite::open(pw, scope, &input.page, input.frame.as_ref())
+        .await?
+        .write(scope, &input.html, input.wait_until)
+        .await?;
+    Ok(json!({}))
 }
 
 #[cfg(test)]

@@ -1,71 +1,28 @@
-//! Main-world scripts behind sdk-privacy's sweeps (design D14): `page.evaluate`,
-//! `page.waitForFunction`, and the element forms (`locator.evaluate`, `evaluateAll`,
-//! `elementHandle.evaluate`, `$eval`, `$$eval`), and `page.setContent`'s document write, whose
-//! HTML's scripts run in the main world (`document_write`). One of the three files in core's
-//! `tests/page_js_guard.rs` ALLOWED list: the only code that sends script to a page's main
-//! world, and so the gateway of `Capability::MainWorld`.
+//! The main-world gateway: `page.evaluate`, `page.waitForFunction`, the element forms
+//! (`locator.evaluate`, `evaluateAll`, `elementHandle.evaluate`, `$eval`, `$$eval`), their
+//! `frame.*` forms, and `page.setContent`'s document write, whose HTML's scripts run in the main
+//! world (`document_write`). They run as Playwright's do, and their results come back as the page
+//! answered them. One of the three files in core's `tests/page_js_guard.rs` ALLOWED list: the only
+//! code that sends script to a page's main world, and so the gateway of `Capability::MainWorld`.
 //!
 //! ```text
-//!  EvaluateGuard::open    an op whose spec does not declare MainWorld is refused with nothing
-//!                         admitted, and a script the prelude refused is raised; then every
-//!                         element the script receives (its subject, its handle arguments) is
-//!                         bound in its document and handed to the seal's watch, within the
-//!                         op's timeout; then the first sweep: every frame in the script frame's
-//!                         site, of the page and of each tab its opener links connect it to, on
-//!                         every session (sweep_scope), each within FRAME_BUDGET; one that misses
-//!                         it is swept again on a fresh budget while the op's window has room
-//!                         (LateRetry), no try running past the op's deadline, and late on the
-//!                         last try refuses with nothing sent. No timeout runs around a sweep,
-//!                         so none drops what it found
-//!  EvaluateGuard::run     name the main-world document and resolve every bound element in the
-//!                         main world, then OpScope::send_effect_reaching(the group's other
-//!                         tabs, from the last sweep): the host's rules on the op's tab, then on
-//!                         those, ──▶ Sent, then
-//!                         Runtime.callFunctionOn(assets/main-world.js, userGesture)
-//!                         ──▶ Pending, which holds what the send produced
-//!  Pending::sweep         the same sweep ──▶ (EvaluateGuard, Outcome); one late on its last
-//!                         try withholds the result. A frame form's frame found gone, with no
-//!                         answer held, may have moved to another renderer: it is found again
-//!                         by its id and the site it is in now is swept
-//!  EvaluateGuard::finish  the answer read in Playwright's format and masked with every sweep's
-//!                         values (page_value), or the thrown text masked as a page_error
-//!  every sweep            PlaywrightHooks::values_swept with every value found so far, before
-//!                         the next send, and once more on drop when anything was sent
+//!  EvaluateGuard::open  an op whose spec does not declare MainWorld is refused with nothing
+//!                       admitted, and a script the prelude refused is raised; then the page is
+//!                       admitted and every element the script receives (its subject, its handle
+//!                       arguments) is bound in its document, within the op's timeout
+//!  EvaluateGuard::run   name the main-world document (a frame form's frame found gone is found
+//!                       again by its id first) and resolve every bound element in the main
+//!                       world, then OpScope::send_effect: the host's rules on the op's tab
+//!                       ──▶ Sent, then Runtime.callFunctionOn(assets/main-world.js, userGesture)
+//!                       ──▶ Outcome; once per op, or once per waitForFunction poll
+//!  Answer::finish       the answer read in Playwright's format (page_value), or the thrown text
+//!                       as a page_error
 //! ```
 //!
-//! Typestate is the point. `run` consumes a swept guard and returns a [`Pending`], whose one
-//! method is `sweep`, and only the swept [`EvaluateGuard`] has `finish`. What a send produced
-//! stays inside the `Pending` until its sweep hands it out, and the page's text in it is an
-//! opaque [`Answer`] that only `finish` reads. So no script goes out without a sweep since the
-//! last one, and no answer leaves without a sweep after the script that produced it. A
-//! `waitForFunction` that sweeps only before its first poll and after its last, and so returns
-//! raw a field that appeared and left mid-wait, cannot be written against it.
-//!
-//! A script can also act on the tabs of its group (click in a popup, navigate its opener),
-//! while the host's rules (the owner's takeover lock, a CAPTCHA solve's hold) are per tab. So
-//! every send runs them on the group's other tabs too, as the sweep before it found them
-//! (`OpEnv::recheck_reach`), after the op's own tab and before the op is marked sent. A page
-//! with no opener link has none, and its host hears `recheck`, `mark_sent` as before. A tab
-//! that joins the group between that sweep and the send (a popup the page opens then) is not
-//! checked for that send; the sweep after it finds the tab, for the next.
-//!
-//! The host learns every swept value before the next send, not only when the op ends: an alert
-//! or a download the script raises carries page text through the event stream while the op is
-//! still pending, and the host masks those events with the values it was told. A value that
-//! first appears while the script runs, and leaves in such an event before the sweep after the
-//! send, is not known yet: that is the residual.
-//!
-//! A main-world script reads the page's own, unsealed getters, so whatever it returns may hold a
-//! password the page shows. The sweeps hand Rust the raw value of every sensitive field the script
-//! could reach: those of every frame of its site, which it touches through `frames[…]` across any
-//! number of cross-site frames between them, in its own tab and in each tab its opener links
-//! connect it to, through `window.opener` and the windows `window.open` returns. What the script
-//! produced is an [`Answer`] whose only way out of the op is [`EvaluateGuard::finish`]. Results are
-//! always masked; there is no refuse mode (build-design graft 3). A frame of the site that cannot
-//! be swept fails the op closed: before the script nothing is sent, and after it the result is
-//! withheld. A frame that comes back gone is not skipped on that alone: unless the browser no
-//! longer lists its target, the target is read again and every frame it lists now is swept, and a
-//! frame gone a second time fails the op too.
+//! The host's rules (the owner's takeover lock, a CAPTCHA solve's hold) run on the op's own tab
+//! before every send, the document's names first so a takeover while they resolve is seen. A
+//! script also reaches its opener and its popups, through `window.opener` and the windows
+//! `window.open` returns, as Playwright's does; no rule here checks those tabs.
 //!
 //! The script runs on the main-world document node, never on an execution context id: context
 //! ids are per-renderer counters, and after a cross-process navigation a cached one can name a
@@ -75,12 +32,14 @@
 //! objects of the document's own context, which a call on the document takes as arguments.
 //!
 //! Elements are where upstream runs them. One out of the document (a handle's node the page
-//! removed) still runs, as upstream's does: the seal holds every bound element weakly and, at
-//! every sweep from then on, sweeps the tree of each one that is out of the document then, so a
-//! field removed with it is masked (core's `seal.js`, `watch`). A handle argument is adopted
-//! only into its own document: the script frame's, on the op's page. Upstream also adopts one
-//! from a same-origin frame of the same process, through a context id Neo never names, so that
-//! case is a decided deviation with upstream's adoption error.
+//! removed) still runs, as upstream's does. A handle argument is adopted only into its own
+//! document: the script frame's, on the op's page. Upstream also adopts one from a same-origin
+//! frame of the same process, through a context id Neo never names, so that case is a decided
+//! deviation with upstream's adoption error.
+//!
+//! The site sweep at the end of this file (`sweep_site` and what it calls) is not the scripts':
+//! read masking (`site_sweep`) sweeps a read's site with it, and the journal sweeps a reported
+//! world with `sweep_reported`. No main-world send here sweeps or masks anything.
 
 use std::future::Future;
 use std::time::Duration;
@@ -88,7 +47,7 @@ use std::{mem, slice};
 
 use browseros_cdp::CdpError;
 use browseros_core::sensitive_fields::FieldValues;
-use browseros_core::{CoreError, FrameId, ProtocolSession, TabId};
+use browseros_core::{CoreError, FrameId, ProtocolSession};
 use futures_util::future;
 use serde::{Deserialize, Deserializer};
 use serde_json::{Value, json};
@@ -100,24 +59,26 @@ use crate::page::OpPage;
 use crate::page::document_watch::{FrameFields, decode};
 use crate::page::frame_tree::frame_tree;
 use crate::page::op_page::TryCut;
-use crate::page::page_value::{self, MaskedValue, PageValue, TOO_DEEP, Unreadable};
+use crate::page::page_value::{self, PageValue, TOO_DEEP, Unreadable};
 use crate::page::sweep_scope::{self, LinkedTab, Site};
 use crate::page::world_call::{self, unexpected, with_world};
 use crate::probe::{self, NAVIGATED_OR_CLOSED, ProbeFailure, ProbeReply, ProbeRequest, Ran};
 use crate::resolve::{self, HandleSite};
 use crate::target::{ElementTarget, PageRef};
 use crate::world::{BackendNodeId, Endpoint, FrameSeq, Place, Scan, SealedWorld, SeqLookup};
-use crate::{ErrorCode, Playwright, PlaywrightError, op_env};
+use crate::{ErrorCode, Playwright, PlaywrightError};
 
 mod document_write;
+
+pub(crate) use document_write::DocumentWrite;
 
 /// How long one frame may take to be swept, from the start of the work that reaches it to the
 /// end of its sweep: attaching its session, reading its session's frames, a second read after a
 /// lost session, installing its world on first use, and the sweep, all under one deadline
 /// (decisions.md, "Main-world sweep scope"). A healthy frame takes a few milliseconds. A frame
-/// of the script's site that misses it fails that try closed, and the whole sweep goes again on
+/// of a read's site that misses it fails that try closed, and the whole sweep goes again on
 /// fresh budgets while the op's window has room (`LateRetry`), each budget ending at the
-/// window's end at the latest (`TryCut`); late on the last try, it fails the op closed.
+/// window's end at the latest (`TryCut`); late on the last try, it fails the read closed.
 pub(crate) const FRAME_BUDGET: Duration = Duration::from_secs(1);
 
 /// The function every agent script runs in, built by the JS package's `scripts/build.ts` from
@@ -179,7 +140,7 @@ const OUTSIDE_FORMAT: &str = "the page answered with a value outside Playwright'
                               would, so Neo withheld it";
 
 /// The agent's script as the prelude built it (`wire.ts` `PageScript`). No `Debug`: the
-/// argument may hold a password the agent was given.
+/// argument may hold a password the agent was given, and no log line may carry it (STYLE P4).
 pub(crate) enum Script {
     /// Ready to run: upstream's normalized expression (`normalizeEvaluationExpression`, run in
     /// the prelude), whether it is a function, and the argument.
@@ -192,8 +153,8 @@ pub(crate) enum Script {
     },
     /// The first check upstream fails at the script's point, such as "Passed function is not
     /// well-serializable!", or for `locator.evaluate` a client check upstream runs after the
-    /// wait. [`EvaluateGuard::open`] raises it as `<api>: <message>`, before any sweep, with
-    /// nothing sent.
+    /// wait. [`EvaluateGuard::open`] raises it as `<api>: <message>`, with nothing admitted or
+    /// sent.
     Refused(String),
 }
 
@@ -201,11 +162,11 @@ pub(crate) enum Script {
 pub(crate) enum Subject {
     /// `fn(arg)` in a frame of the page: the main frame when `None` (`page.evaluate`,
     /// `waitForFunction`), else the child frame a `frame.*` form names, by its id from
-    /// `page.frames`. Its site is the one every sweep covers.
+    /// `page.frames`.
     Frame(Option<FrameId>),
     /// `fn(element, arg)` in the element's own frame: `locator.evaluate` once its wait found it,
     /// `$eval`'s first match, `elementHandle.evaluate`. The element may be out of its document:
-    /// it still runs, as upstream's does, and its tree is swept.
+    /// it still runs, as upstream's does.
     Element(ElementTarget),
     /// `fn(elements, arg)`: `evaluateAll` and `$$eval`, in the frame the matches are in, or the
     /// query's starting frame when nothing matched (upstream's `queryArrayInMainWorld`, PW:21919,
@@ -214,15 +175,8 @@ pub(crate) enum Subject {
         frame: TreeFrame,
         /// The frame's document, which a handle argument must be in.
         seq: FrameSeq,
-        nodes: Vec<BoundNode>,
+        nodes: Vec<BackendNodeId>,
     },
-}
-
-/// An element a script receives, found in its document's sealed world: its backend node id,
-/// which the main world resolves, and its sealed-world object, which the seal watches.
-pub(crate) struct BoundNode {
-    pub(crate) backend: BackendNodeId,
-    pub(crate) sealed: String,
 }
 
 /// Playwright's in-page serialized argument as JSON text: opaque here, parsed by the page. As
@@ -266,9 +220,9 @@ impl MainWorldCall {
     }
 }
 
-/// What one send produced, handed out by the sweep after it.
+/// What one send produced.
 pub(crate) enum Outcome {
-    /// The script answered; only [`EvaluateGuard::finish`] reads it.
+    /// The script answered; [`Answer::finish`] turns it into the op's output.
     Answered(Answer),
     /// A poll whose predicate was falsy: keep waiting.
     Falsy,
@@ -283,25 +237,19 @@ pub(crate) enum Outcome {
     Navigated,
 }
 
-/// An answer the page gave, unmasked. Opaque outside this file, with no `Serialize` and no
-/// `Debug`: it may hold a password, and [`EvaluateGuard::finish`] is the one reader of its text.
-pub(crate) struct Answer(Answered);
-
-/// What [`Answer`] holds.
-enum Answered {
+/// An answer the page gave. No `Debug`, as for [`Script`]: it is page text, which no log line
+/// carries.
+pub(crate) enum Answer {
     /// `page.evaluate`'s result.
-    Returned(Unmasked),
+    Returned(Serialized),
     /// `waitForFunction`'s truthy value, and upstream's preview of it for `toString()`.
-    Settled {
-        value: Unmasked,
-        preview: UnmaskedText,
-    },
+    Settled { value: Serialized, preview: String },
     /// What the page threw, as upstream's `getExceptionMessage` reads it, stack lines and all.
-    Threw(UnmaskedText),
+    Threw(String),
 }
 
-/// The page's serialized value as it answered it. Its only reader is [`EvaluateGuard::finish`].
-enum Unmasked {
+/// The page's serialized value as it answered it.
+pub(crate) enum Serialized {
     /// Playwright's format, as JSON text.
     Text(String),
     /// No value: the script's `undefined`, which upstream's `jsonValue` reports as none.
@@ -310,10 +258,7 @@ enum Unmasked {
     Unreadable,
 }
 
-/// Page text: a thrown message or a preview. Its only reader is [`EvaluateGuard::finish`].
-struct UnmaskedText(String);
-
-/// A finished script, masked: what the leaves turn into their op's output.
+/// A finished script: what the leaves turn into their op's output.
 pub(crate) struct Finished {
     /// The value in Playwright's format.
     pub(crate) value: Value,
@@ -321,76 +266,33 @@ pub(crate) struct Finished {
     pub(crate) preview: Option<String>,
 }
 
-/// What a guard sends to the main world, chosen when it opens. It decides the guard's one send
-/// and its one exit, what a send leaves inside [`Pending`] until the sweep after it, and how a
-/// refusal says what became of the send. Only the swept state has the send and the exit, so
-/// every kind is bracketed by sweeps alike.
-pub(crate) trait Guarded {
-    /// What one send produced, unmasked; only this kind's exit reads it.
-    type Outcome;
-    /// How a refusal ends when the sweep before the send failed: nothing was sent.
-    const NOT_SENT: &'static str;
-    /// How a refusal ends when the sweep after the send failed: the send happened.
-    const SENT: &'static str;
-
-    /// Lets go of what this kind holds in the script frame's document, for a sweep after
-    /// `outcome` that found the frame gone and is about to find it again in its new renderer
-    /// ([`GuardCore::sweep`]). `false` holds on instead, when `outcome` holds what the page
-    /// answered there: that leaves only masked by a sweep of the site it came from, so the op
-    /// fails closed.
-    fn leave_document(&mut self, outcome: &Self::Outcome) -> bool;
-}
-
-/// The swept state: the guard may send (`run`), and only it lets an answer out (`finish`).
+/// An agent script bound in its frame's document, ready to send: the gateway's one way to the
+/// main world. Only [`EvaluateGuard::open`] makes one, after the op's `MainWorld` declaration
+/// was checked, and every [`EvaluateGuard::run`] runs the host's rules before its send.
 #[must_use]
-pub(crate) struct EvaluateGuard<'op, G: Guarded = BoundScript> {
-    core: GuardCore<'op>,
-    guarded: G,
-}
-
-/// The state after a send and before the next sweep: its one method is `sweep`, which alone
-/// hands out what the send produced. Dropping it, on an error or a cancelled op, still reports
-/// every value swept so far.
-#[must_use]
-pub(crate) struct Pending<'op, G: Guarded = BoundScript> {
-    core: GuardCore<'op>,
-    guarded: G,
-    outcome: G::Outcome,
-}
-
-/// What both states carry, whatever they guard. One `Drop`, so the final report happens once,
-/// whichever state ends the op; every sweep reports before it too.
-struct GuardCore<'op> {
-    pw: &'op Playwright,
+pub(crate) struct EvaluateGuard<'op> {
     page: OpPage<'op>,
-    /// Where the script runs: its site is the site every sweep covers.
+    /// Where the script runs.
     frame: TreeFrame,
     /// The child frame a `frame.*` form names, by its id from `page.frames`. A navigation to
     /// another site moves that frame to another renderer, and so to another session, while it
-    /// stays the same frame, so a sweep that finds `frame` gone finds it again by this id. `None`
+    /// stays the same frame, so a run that finds `frame` gone finds it again by this id. `None`
     /// for the main frame, whose session outlives its navigations, and for an element's
     /// document, which its script cannot outlive.
     follow: Option<FrameId>,
-    /// Every value a sweep found so far.
-    swept: FieldValues,
-    /// The other tabs of the page's opener-linked group, by page target, as the latest sweep
-    /// found them, which the host's rules cover before the next send ([`GuardCore::reach`]).
-    /// Empty for a page with no opener link, whose sends ask the host nothing more.
-    group: Vec<FrameId>,
-    /// Something was sent to the main world.
-    sent: bool,
+    script: BoundScript,
 }
 
 /// An agent script, bound in its frame's document by `open`: what `run` sends, once or once per
 /// poll.
-pub(crate) struct BoundScript {
+struct BoundScript {
     expression: String,
     is_function: bool,
     arg: ArgText,
     mode: CallMode,
     /// What the function receives before its argument, by backend node id. Its elements and the
     /// handles are all of the guard's frame's document, which `open` checked, so one main world
-    /// resolves them all for each run, and the seal of that document watches them.
+    /// resolves them all for each run.
     subject: Bound,
     /// The argument's handles, by backend node id, in `{h: i}` order.
     handles: Vec<BackendNodeId>,
@@ -403,50 +305,20 @@ pub(crate) struct BoundScript {
     poller: Option<String>,
 }
 
-impl Guarded for BoundScript {
-    type Outcome = Outcome;
-    const NOT_SENT: &'static str = "so the script was not run";
-    const SENT: &'static str = "so the result of the script, which ran, is withheld";
-
-    /// The document and the poller go, so the next run names the new document's and builds the
-    /// predicate there, as upstream's wait carries on in the frame's next context. An answer
-    /// stays, and fails the op with the sweep.
-    fn leave_document(&mut self, outcome: &Outcome) -> bool {
-        if matches!(outcome, Outcome::Answered(_)) {
-            return false;
-        }
+impl BoundScript {
+    /// Lets go of the document and the poller, so the next run names the new document's and
+    /// builds the predicate there, as upstream's wait carries on in the frame's next context.
+    fn leave_document(&mut self) {
         self.document = None;
         self.poller = None;
-        true
     }
 }
-
-/// `setContent`'s HTML, which the probe writes into the guard's frame from the sealed world and
-/// whose scripts the main world runs: what `write` sends (`document_write`).
-pub(crate) struct DocumentWrite;
-
-impl Guarded for DocumentWrite {
-    type Outcome = Written;
-    const NOT_SENT: &'static str = "so the content was not set";
-    const SENT: &'static str = "though the content was set";
-
-    /// A write's end leaves only through `close`, after a sweep of the frame it was written in,
-    /// so a write never follows its frame elsewhere (its guard follows none).
-    fn leave_document(&mut self, _written: &Written) -> bool {
-        false
-    }
-}
-
-/// How a document write ended: its load state reached, or the op's failure after the write.
-/// Opaque outside the guard, because such a failure may carry text the page's scripts shaped,
-/// and only `close` lets it out, masked.
-pub(crate) struct Written(Result<(), PlaywrightError>);
 
 impl<'op> EvaluateGuard<'op> {
-    /// Opens the gateway: the declaration, the deferred refusal, the page, the first sweep.
-    /// This is the only way to a guard, so it checks the op's declaration first: a host serves
-    /// an op unheld unless its spec declares `MainWorld`, and such an op must not admit or sweep
-    /// anything here.
+    /// Opens the gateway: the declaration, the deferred refusal, the page, the binding. This is
+    /// the only way to a guard, so it checks the op's declaration first: a host serves an op
+    /// unheld unless its spec declares `MainWorld`, and such an op must not admit anything here.
+    /// The page and the elements are found within the op's timeout.
     pub(crate) async fn open(
         pw: &'op Playwright,
         scope: &'op OpScope<'_>,
@@ -463,8 +335,6 @@ impl<'op> EvaluateGuard<'op> {
             } => (expression, is_function, arg, handles),
             Script::Refused(message) => return Err(scope.fail(ErrorCode::InvalidInput, &message)),
         };
-        // The page and the elements are found within the op's timeout; the sweep after them
-        // runs outside it, to the deadline at the latest (`GuardCore::sweep_once`).
         let found = async {
             let op_page = OpPage::admit_handle(pw, scope, page).await?;
             let binding = bind(&op_page, scope, page, call.subject, &handles).await?;
@@ -474,71 +344,50 @@ impl<'op> EvaluateGuard<'op> {
             Ok(found) => found?,
             Err(_expired) => return Err(scope.timed_out(ErrorCode::WaitTimeout)),
         };
-        let mut core = GuardCore {
-            pw,
+        Ok(Self {
             page: op_page,
             frame: binding.frame,
             follow: binding.follow,
-            swept: FieldValues::default(),
-            group: Vec::new(),
-            sent: false,
-        };
-        // Nothing of a document is held yet, so the frame may be followed.
-        core.sweep(scope, BoundScript::NOT_SENT, || true).await?;
-        let guarded = BoundScript {
-            expression,
-            is_function,
-            arg,
-            mode: call.mode,
-            subject: binding.subject,
-            handles: binding.handles,
-            document: None,
-            poller: None,
-        };
-        Ok(Self { core, guarded })
+            script: BoundScript {
+                expression,
+                is_function,
+                arg,
+                mode: call.mode,
+                subject: binding.subject,
+                handles: binding.handles,
+                document: None,
+                poller: None,
+            },
+        })
     }
 
     /// Sends the script once: one poll for `waitForFunction`. It names the main-world document
-    /// first (three CDP calls on a new document), and only then re-runs the host's policies, on
-    /// the op's tab and on the group's other tabs the last sweep found, and marks the op sent,
-    /// with no await before the script goes out (STYLE P6). Minted before the document, a
-    /// takeover during those calls would go unseen, and a cancel there would leave the op
-    /// marked sent although no script ran.
-    pub(crate) async fn run(
-        mut self,
-        scope: &OpScope<'_>,
-    ) -> Result<Pending<'op>, PlaywrightError> {
-        let core = &mut self.core;
-        let script = &mut self.guarded;
-        let session = core.frame.endpoint.session.clone();
+    /// first (three CDP calls on a new document) and resolves the elements there, and only then
+    /// re-runs the host's policies and marks the op sent, with no await before the script goes
+    /// out (STYLE P6). Minted before the document, a takeover during those calls would go
+    /// unseen, and a cancel there would leave the op marked sent although no script ran.
+    pub(crate) async fn run(&mut self, scope: &OpScope<'_>) -> Result<Outcome, PlaywrightError> {
+        // A poll after the first needs no elements, its predicate holds its argument. A document
+        // or an element gone on the way means nothing ran.
+        let Some(document) = self.document(scope).await? else {
+            self.script.leave_document();
+            return Ok(Outcome::NotRun);
+        };
+        let session = self.frame.endpoint.session.clone();
         let group = scope.object_group(&session).to_owned();
-        // The document and the elements in the main world, before the recheck: a takeover while
-        // they resolve is seen by it. A poll after the first needs no elements, its predicate
-        // holds its argument. A document or an element gone on the way means nothing ran, as
-        // when the frame moved to another renderer and left this session behind; the sweep
-        // after finds the frame again.
-        let named = match script.document(core, scope).await? {
-            None => None,
-            Some(document) if script.mode == CallMode::Poll && script.poller.is_some() => {
-                Some((document, Vec::new()))
-            }
-            Some(document) => main_world_nodes(&session, &group, &script.handles, &script.subject)
+        let script = &mut self.script;
+        let objects = if script.mode == CallMode::Poll && script.poller.is_some() {
+            Some(Vec::new())
+        } else {
+            main_world_nodes(&session, &group, &script.handles, &script.subject)
                 .await
                 .map_err(|error| scope.core_error(&error))?
-                .map(|objects| (document, objects)),
         };
-        let Some((document, objects)) = named else {
-            script.document = None;
-            script.poller = None;
-            return Ok(Pending {
-                core: self.core,
-                guarded: self.guarded,
-                outcome: Outcome::NotRun,
-            });
+        let Some(objects) = objects else {
+            script.leave_document();
+            return Ok(Outcome::NotRun);
         };
-        let reach = core.reach(scope).await?;
-        let sent = scope.send_effect_reaching(&reach)?;
-        core.sent = true;
+        let sent = scope.send_effect()?;
         let call = MainCall {
             session: &session,
             group: &group,
@@ -553,91 +402,24 @@ impl<'op> EvaluateGuard<'op> {
             outcome,
             Outcome::NotRun | Outcome::Destroyed | Outcome::Navigated
         ) {
-            script.document = None;
-            script.poller = None;
+            script.leave_document();
         }
-        Ok(Pending {
-            core: self.core,
-            guarded: self.guarded,
-            outcome,
-        })
+        Ok(outcome)
     }
 
-    /// The answer, masked with every sweep's values: a value in Playwright's format, or a throw
-    /// as `page_error` with its stack lines, as upstream prints it. Answers are read here and
-    /// nowhere else. A value `PageValue::parse` cannot read fails closed: too deep is upstream's
-    /// own failure, and any other shape is the page's.
-    pub(crate) fn finish(
-        self,
-        scope: &OpScope<'_>,
-        answer: Answer,
-    ) -> Result<Finished, PlaywrightError> {
-        let swept = &self.core.swept;
-        match answer.0 {
-            Answered::Returned(value) => Ok(Finished {
-                value: returned(scope, masked(scope, swept, value)?)?,
-                preview: None,
-            }),
-            // A wait hands back a handle, which upstream builds without serializing its value.
-            Answered::Settled { value, preview } => Ok(Finished {
-                value: masked(scope, swept, value)?.into_json(),
-                preview: Some(page_value::mask_text(swept, preview.0)),
-            }),
-            Answered::Threw(thrown) => Err(scope.fail(
-                ErrorCode::PageError,
-                &page_value::mask_text(swept, thrown.0),
-            )),
+    /// The script frame's main-world document, named once per document. A frame form's frame
+    /// whose world came back gone may only have moved to another renderer ([`Self::follow`]):
+    /// it is found again by its id through the page's tree, as `open` found it, and named there.
+    /// A frame the page no longer lists fails `Frame was detached`, as upstream's frame forms
+    /// do. `None` when the world is still gone, as the main frame's is mid-navigation, so
+    /// nothing runs.
+    async fn document(&mut self, scope: &OpScope<'_>) -> Result<Option<String>, PlaywrightError> {
+        if let Some(document) = &self.script.document {
+            return Ok(Some(document.clone()));
         }
-    }
-}
-
-impl<'op, G: Guarded> Pending<'op, G> {
-    /// The sweep after a send, then what the send produced. A frame that misses it withholds
-    /// that.
-    pub(crate) async fn sweep(
-        self,
-        scope: &OpScope<'_>,
-    ) -> Result<(EvaluateGuard<'op, G>, G::Outcome), PlaywrightError> {
-        let Self {
-            mut core,
-            mut guarded,
-            outcome,
-        } = self;
-        core.sweep(scope, G::SENT, || guarded.leave_document(&outcome))
-            .await?;
-        Ok((EvaluateGuard { core, guarded }, outcome))
-    }
-}
-
-impl GuardCore<'_> {
-    /// Sweeps every frame in the script frame's site, of the page and of its opener-linked tabs,
-    /// and adds what it finds, also when a frame could not be swept, so the host still learns
-    /// those values. That is wider than the page's session: a script reaches a same-origin
-    /// frame on another session through `frames[…]`, and one in its opener or its popup
-    /// through `window.opener` or the window `window.open` returned, as easily as one on its
-    /// own.
-    ///
-    /// The host hears the union at once, before the next send can go out: a dialog or a
-    /// download the script raises while it runs carries page text to the host's event stream,
-    /// which the host masks with the values it was told. The host's side takes a repeated report
-    /// as a union, so a report per sweep costs it nothing new.
-    ///
-    /// A frame form's frame that comes back gone may only have moved to another renderer
-    /// ([`GuardCore::follow`]). Once `leave` lets go of the old document, the frame is found
-    /// again by its id through the page's tree, as `open` found it, and the sweep runs once more
-    /// there, of the site the frame is in now, so the next send goes out only after a sweep of
-    /// that site. A frame the page no longer lists fails `Frame was detached`, as upstream's
-    /// frame forms do. `consequence` says what became of the script when a frame stays unswept.
-    async fn sweep(
-        &mut self,
-        scope: &OpScope<'_>,
-        consequence: &str,
-        leave: impl FnOnce() -> bool,
-    ) -> Result<(), PlaywrightError> {
-        let mut swept = self.sweep_once().await;
-        if matches!(swept, Err(Unswept::Gone))
+        let mut named = self.name_document(scope).await;
+        if matches!(named, Err(ProbeFailure::Gone(_)))
             && let Some(frame) = self.follow.clone()
-            && leave()
         {
             let found = world_call::frame_world(&self.page, scope, Some(&frame));
             let world = match scope.within(found).await {
@@ -645,118 +427,68 @@ impl GuardCore<'_> {
                 Err(_expired) => return Err(scope.timed_out(ErrorCode::WaitTimeout)),
             };
             self.frame = frame_endpoint(&self.page, world.session(), world.frame().clone());
-            swept = self.sweep_once().await;
+            named = self.name_document(scope).await;
         }
-        swept.map_err(|unswept| unswept.into_error(scope, consequence))
-    }
-
-    /// One sweep of the script frame's site, its values added and reported, and the group's
-    /// other tabs kept for the next send.
-    async fn sweep_once(&mut self) -> Result<(), Unswept> {
-        // Boxed, as every other caller of `sweep_site` boxes it: its state is large, and a
-        // `waitForFunction` holds it at every poll. Its first try ends at the op's deadline, and
-        // no timeout of the op's runs around it, so what the frames that answered found always
-        // reaches the host.
-        let found = Box::pin(sweep_site_from(
-            &self.page,
-            &self.frame.endpoint,
-            &self.frame.place,
-            self.page.deadline_cut(),
-        ))
-        .await;
-        self.swept = mem::take(&mut self.swept).union(found.values);
-        self.report();
-        self.group = found.group;
-        found.unswept.map_or(Ok(()), Err)
-    }
-
-    /// The group the latest sweep found, as the tab ids the host's rules take, for the send
-    /// right after (`OpScope::send_effect_reaching`). Looked up only for a page with opener
-    /// links, and only before a send, so the sweep after a script's last send asks nothing
-    /// more. A tab of the group the browser lists no tab for cannot be named to the host, so
-    /// the send is refused with nothing sent, with the refusal a host that checks no other tab
-    /// gives (`op_env::unchecked_reach`).
-    async fn reach(&self, scope: &OpScope<'_>) -> Result<Vec<TabId>, PlaywrightError> {
-        if self.group.is_empty() {
-            return Ok(Vec::new());
-        }
-        match self.page.tabs_on(&self.group).await {
-            Ok(Some(tabs)) => Ok(tabs),
-            Ok(None) => Err(op_env::unchecked_reach(self.group.len()).into()),
-            Err(error) => Err(scope.core_error(&error)),
-        }
-    }
-
-    /// Tells the host every value swept so far (`PlaywrightHooks::values_swept`).
-    fn report(&self) {
-        if !self.swept.is_empty() {
-            self.pw.hooks().values_swept(self.page.tab(), &self.swept);
-        }
-    }
-}
-
-impl BoundScript {
-    /// The script frame's main-world document, named once per document; `None` when its world
-    /// came back gone a second time, as a frame's does on the session it left.
-    async fn document(
-        &mut self,
-        core: &GuardCore<'_>,
-        scope: &OpScope<'_>,
-    ) -> Result<Option<String>, PlaywrightError> {
-        if let Some(document) = &self.document {
-            return Ok(Some(document.clone()));
-        }
-        let named = with_world(
-            &core.page,
-            &core.frame.endpoint,
-            &core.frame.place,
-            |world| main_world_document(scope, world),
-        )
-        .await;
         match named {
             Ok(named) => {
-                self.document = Some(named.clone());
+                self.script.document = Some(named.clone());
                 Ok(Some(named))
             }
             Err(ProbeFailure::Gone(_)) => Ok(None),
             Err(failure) => Err(resolve::failed(scope, failure)),
         }
     }
+
+    /// The main-world document of the guard's frame as it stands now, its world installed on
+    /// first use and once more after a replaced document.
+    async fn name_document(&self, scope: &OpScope<'_>) -> Result<String, ProbeFailure> {
+        with_world(
+            &self.page,
+            &self.frame.endpoint,
+            &self.frame.place,
+            |world| main_world_document(scope, world),
+        )
+        .await
+    }
 }
 
-/// The final report, once anything was sent, whichever state ends the op: every sweep has
-/// reported already, so this only repeats the union for an op that ends between a send and its
-/// sweep (an error, a cancel).
-impl Drop for GuardCore<'_> {
-    fn drop(&mut self) {
-        if self.sent {
-            self.report();
+impl Answer {
+    /// The answer as the op returns it: a value in Playwright's format, or a throw as
+    /// `page_error` with its stack lines, as upstream prints it. A value `PageValue::parse`
+    /// cannot read fails: too deep is upstream's own failure, and any other shape is the page's.
+    pub(crate) fn finish(self, scope: &OpScope<'_>) -> Result<Finished, PlaywrightError> {
+        match self {
+            Self::Returned(value) => Ok(Finished {
+                value: returned(scope, parsed(scope, value)?)?,
+                preview: None,
+            }),
+            // A wait hands back a handle, which upstream builds without serializing its value.
+            Self::Settled { value, preview } => Ok(Finished {
+                value: parsed(scope, value)?.into_json(),
+                preview: Some(preview),
+            }),
+            Self::Threw(thrown) => Err(scope.fail(ErrorCode::PageError, &thrown)),
         }
     }
 }
 
-/// `unmasked` in Playwright's format, masked with `swept`, or why it cannot leave.
-fn masked(
-    scope: &OpScope<'_>,
-    swept: &FieldValues,
-    unmasked: Unmasked,
-) -> Result<MaskedValue, PlaywrightError> {
-    let value = match unmasked {
-        Unmasked::Text(text) => PageValue::parse(&text),
-        Unmasked::Undefined => Ok(PageValue::undefined()),
-        Unmasked::Unreadable => Err(Unreadable::Shape),
+/// `serialized` in Playwright's format, or why it cannot leave.
+fn parsed(scope: &OpScope<'_>, serialized: Serialized) -> Result<PageValue, PlaywrightError> {
+    let value = match serialized {
+        Serialized::Text(text) => PageValue::parse(&text),
+        Serialized::Undefined => Ok(PageValue::undefined()),
+        Serialized::Unreadable => Err(Unreadable::Shape),
     };
-    match value {
-        Ok(value) => Ok(value.masked(swept)),
-        Err(Unreadable::TooDeep) => Err(scope.fail(ErrorCode::PageError, TOO_DEEP)),
-        Err(Unreadable::Shape) => Err(scope.fail(ErrorCode::PageError, OUTSIDE_FORMAT)),
-    }
+    value.map_err(|unreadable| match unreadable {
+        Unreadable::TooDeep => scope.fail(ErrorCode::PageError, TOO_DEEP),
+        Unreadable::Shape => scope.fail(ErrorCode::PageError, OUTSIDE_FORMAT),
+    })
 }
 
 /// A result upstream's server cannot send back: one holding a `{fn}`, which it reads as a
 /// binding's caller and then refuses to serialize, with the caller's own source in the message
 /// (measured on BrowserOS neo, spike `__pw_fn_`).
-fn returned(scope: &OpScope<'_>, value: MaskedValue) -> Result<Value, PlaywrightError> {
+fn returned(scope: &OpScope<'_>, value: PageValue) -> Result<Value, PlaywrightError> {
     match value.binding_position() {
         None => Ok(value.into_json()),
         Some(at) => Err(scope.fail(
@@ -793,7 +525,7 @@ async fn sweep_watched(world: &SealedWorld, scan: Scan) -> Result<FieldValues, P
     }
 }
 
-/// Why a sweep left a frame of the script's site unswept.
+/// Why a sweep left a frame of the read's site unswept.
 pub(crate) enum Unswept {
     /// It missed its [`FRAME_BUDGET`] on the last try the op's window had room for, or that try
     /// reached the window's end first, as an unresponsive renderer's calls do.
@@ -802,59 +534,18 @@ pub(crate) enum Unswept {
     /// another target, a missing frame), while the browser still lists that target.
     Lost,
     /// The frame the sweep was taken for came back gone, on a fresh world too: its document,
-    /// its frame or its session went away, as mid-navigation. A script there fails, unless a
-    /// frame form's frame only moved to another renderer, where the guard finds it again
-    /// ([`GuardCore::sweep`]); a read there lands nowhere and polls again, as its own call
-    /// coming back gone would (`SiteSweep::values_or_gone`).
+    /// its frame or its session went away, as mid-navigation. A read there lands nowhere and
+    /// polls again, as its own call coming back gone would (`SiteSweep::values_or_gone`).
     Gone,
-    /// The op's own deadline cut the first try of a guard's sweep before a frame of the site
-    /// answered ([`OpPage::deadline_cut`]): the frame never had its whole budget, so the op
-    /// times out, as upstream's would, rather than refuse.
-    Expired,
     /// It failed for another reason.
     Failed(ProbeFailure),
 }
 
-impl Unswept {
-    /// The op's failure, `consequence` saying what became of the script. A frame that missed
-    /// its budget, or that Neo could not reach again, is `neo / unsupported`: Neo cannot keep
-    /// its privacy rule for this script now and refuses it, as it refuses a `RegExp` value
-    /// matcher on a password field. Neither the script's code nor a Playwright timeout caused
-    /// it, and the answer is definite: before the script nothing was sent, and after it the
-    /// script is known to have finished.
-    fn into_error(self, scope: &OpScope<'_>, consequence: &str) -> PlaywrightError {
-        match self {
-            Self::Late => scope.fail(
-                ErrorCode::Unsupported,
-                &format!(
-                    "a frame of the script's site did not answer Neo's privacy sweep within \
-                     {}ms, {consequence}; try again once the frame responds",
-                    FRAME_BUDGET.as_millis()
-                ),
-            ),
-            Self::Lost => scope.fail(
-                ErrorCode::Unsupported,
-                &format!(
-                    "Neo lost its connection to a frame of the script's site and could not reach \
-                     it again for its privacy sweep, {consequence}; try again"
-                ),
-            ),
-            Self::Gone => resolve::failed(scope, ProbeFailure::Gone(Ran::No)),
-            Self::Expired => scope.timed_out(ErrorCode::WaitTimeout),
-            Self::Failed(failure) => resolve::failed(scope, failure),
-        }
-    }
-}
-
-/// What a sweep found so far, and the first frame of the script's site it could not sweep.
+/// What a sweep found so far, and the first frame of the read's site it could not sweep.
 #[derive(Default)]
 pub(crate) struct Found {
     pub(crate) values: FieldValues,
     pub(crate) unswept: Option<Unswept>,
-    /// The other tabs of the page's opener-linked group, by page target, from the target list
-    /// the sweep read: every one of them, whatever its site, because a script can act on any
-    /// (navigate an opener, click in a popup) even where it cannot read. Reads ignore it.
-    pub(crate) group: Vec<FrameId>,
 }
 
 impl Found {
@@ -872,48 +563,26 @@ impl Found {
     }
 }
 
-/// Every frame in the site of the script's frame at `script`, of the page and of every tab its
-/// opener links connect it to, and that group's other tabs, swept again while a frame missed its
-/// budget and the op's window has room for another try as long as the last
-/// (`OpPage::late_retry`). Each try is a whole sweep on fresh budgets, its frames, targets and
-/// links read anew, so a frame that left meanwhile is not waited for, and the group is the last
-/// try's. A try after the first is cut at the window's end (`LateRetry::cut`): a try can outlast
-/// the one before it, and run past the op's deadline, where the op's own timeout would replace
-/// Neo's refusal, or, outside `OpScope::within`, the op would end late. Every try's values are
-/// kept, a cut one's too, a linked tab's among them, and a late try's go to the host before the
-/// next starts, as every sweep's do: a dialog or a download the script raised can carry page
-/// text while the sweep after it is still trying. A frame still late when the window closes
-/// leaves the sweep `Unswept::Late`, as one late try did before.
+/// Every frame in the site of the read's frame at `script`, of the page and of every tab its
+/// opener links connect it to, swept again while a frame missed its budget and the op's window
+/// has room for another try as long as the last (`OpPage::late_retry`). Each try is a whole
+/// sweep on fresh budgets, its frames, targets and links read anew, so a frame that left
+/// meanwhile is not waited for. A try after the first is cut at the window's end
+/// (`LateRetry::cut`): a try can outlast the one before it, and run past the op's deadline,
+/// where the op's own timeout would replace Neo's refusal. Every try's values are kept, a cut
+/// one's too, a linked tab's among them, and a late try's go to the host before the next
+/// starts. A frame still late when the window closes leaves the sweep `Unswept::Late`, as one
+/// late try did before.
 pub(crate) async fn sweep_site(page: &OpPage<'_>, script: &Endpoint, place: &Place) -> Found {
-    sweep_site_from(page, script, place, TryCut::default()).await
-}
-
-/// [`sweep_site`] with its first try cut at `first`: the guard's, at the op's deadline, so a
-/// timeout never drops a sweep with what the frames that answered found. A first try the cut
-/// ended before a frame of the site answered is [`Unswept::Expired`], the op's own timeout, as
-/// that frame never had its whole budget.
-async fn sweep_site_from(
-    page: &OpPage<'_>,
-    script: &Endpoint,
-    place: &Place,
-    first: TryCut,
-) -> Found {
     let retry = page.late_retry();
     let mut found = Found::default();
-    let mut cut = first;
-    let mut first_try = true;
+    let mut cut = TryCut::default();
     loop {
         let started = Instant::now();
         let tried = sweep_site_once(page, script, place, cut).await;
         found.add(tried.values);
-        found.group = tried.group;
         match tried.unswept {
-            Some(Unswept::Late) if first_try && first.passed() => {
-                found.unswept = Some(Unswept::Expired);
-                return found;
-            }
             Some(Unswept::Late) if retry.has_room(started.elapsed()) => {
-                first_try = false;
                 cut = retry.cut();
                 if !found.values.is_empty() {
                     page.playwright()
@@ -932,14 +601,14 @@ async fn sweep_site_from(
 /// One try of [`sweep_site`], every budget in it ending at `cut` at the latest, a linked tab's
 /// too.
 ///
-/// The script's frame is swept while its session's frames and the browser's list of targets
-/// are read; then the session's other frames, every other target of the page that may be of
-/// the site, and each linked tab's such targets are swept, all at once. The targets come from
+/// The read's frame is swept while its session's frames and the browser's list of targets are
+/// read; then the session's other frames, every other target of the page that may be of the
+/// site, and each linked tab's such targets are swept, all at once. The targets come from
 /// the browser, so one of another site, or of a tab no link connects, is never asked anything,
 /// hung or not (`sweep_scope`). The list is read on every sweep: no renderer-side count finds
 /// every out-of-process frame, and links change as tabs open and close (decisions.md,
 /// "Main-world sweep scope"). A page with no opener link reaches its own targets only, from
-/// the same reply, so it sends nothing more than before the group was swept. The list's read
+/// the same reply. The list's read
 /// has no frame budget, being the browser's, but `cut` ends it too: a try cut before the
 /// browser listed the targets is late.
 async fn sweep_site_once(
@@ -987,7 +656,6 @@ async fn sweep_site_once(
             return found;
         }
     };
-    found.group = reach.linked.iter().map(|tab| tab.main.clone()).collect();
     let site = Site::of(&tree.frame.url, tree.frame.domain_and_registry.as_deref());
     // A session's root frame is its target: the page's main frame, or the OOPIF.
     let own_target = FrameId(tree.frame.id.clone());
@@ -1045,9 +713,8 @@ async fn sweep_linked(page: &OpPage<'_>, tab: LinkedTab, site: &Site, cut: TryCu
     let deadline = cut.budget();
     let missing = match read_within_budget(deadline, page.linked_tab(&tab.main)).await {
         Ok(Some(Some(reached))) => {
-            // A tab's first page state waits on browser-side reads (`PageRegistry::page`), and
-            // no timeout of the op's runs around a guard's sweep, so the tab's deadline ends
-            // that wait as late too. A cut setup leaves no state behind, and the try's other
+            // A tab's first page state waits on browser-side reads (`PageRegistry::page`), so
+            // the tab's deadline ends that wait as late too. A cut setup leaves no state behind, and the try's other
             // sweeps keep what they found.
             let Ok(linked) = time::timeout_at(deadline, page.linked(&reached)).await else {
                 found.fail(Unswept::Late);
@@ -1360,8 +1027,8 @@ enum Polled {
     /// The predicate was falsy.
     Waiting,
     /// It settled truthy: its value's serialized text.
-    Settled(Unmasked),
-    Threw(UnmaskedText),
+    Settled(Serialized),
+    Threw(String),
     /// Not what a poll answers, from a page that tampered with the poller.
     Unreadable,
 }
@@ -1412,10 +1079,10 @@ impl MainCall<'_> {
             Called::Value(reply) => reply,
             Called::Ended(outcome) => return Ok(outcome),
         };
-        Ok(Outcome::Answered(Answer(match reply.thrown() {
-            Some(thrown) => Answered::Threw(thrown),
-            None => Answered::Returned(reply.result.text()),
-        })))
+        Ok(Outcome::Answered(match reply.thrown() {
+            Some(thrown) => Answer::Threw(thrown),
+            None => Answer::Returned(reply.result.text()),
+        }))
     }
 
     /// Builds upstream's predicate in the page and runs its first poll: the poller by reference,
@@ -1439,15 +1106,11 @@ impl MainCall<'_> {
             Called::Ended(outcome) => return Ok(Called::Ended(outcome)),
         };
         if let Some(thrown) = reply.thrown() {
-            return Ok(Called::Ended(Outcome::Answered(Answer(Answered::Threw(
-                thrown,
-            )))));
+            return Ok(Called::Ended(Outcome::Answered(Answer::Threw(thrown))));
         }
         Ok(match reply.result.object_id {
             Some(poller) => Called::Value(poller),
-            None => Called::Ended(Outcome::Answered(Answer(Answered::Returned(
-                Unmasked::Unreadable,
-            )))),
+            None => Called::Ended(Outcome::Answered(Answer::Returned(Serialized::Unreadable))),
         })
     }
 
@@ -1464,9 +1127,9 @@ impl MainCall<'_> {
             Some(Value::Array(answer)) => match answer.as_slice() {
                 [Value::Bool(false)] => Polled::Waiting,
                 [Value::Bool(true), Value::String(text)] => {
-                    Polled::Settled(Unmasked::Text(text.clone()))
+                    Polled::Settled(Serialized::Text(text.clone()))
                 }
-                [Value::Bool(true), Value::Null] => Polled::Settled(Unmasked::Undefined),
+                [Value::Bool(true), Value::Null] => Polled::Settled(Serialized::Undefined),
                 _ => Polled::Unreadable,
             },
             _ => Polled::Unreadable,
@@ -1488,7 +1151,7 @@ impl MainCall<'_> {
 
     /// One `Runtime.callFunctionOn` into the main world, its reply decoded, or the outcome its
     /// protocol error stands for. Never logs its params or result: either may hold a password
-    /// (STYLE P4).
+    /// the agent passed or the page held (STYLE P4).
     async fn send(
         &self,
         object: &str,
@@ -1520,9 +1183,9 @@ impl MainCall<'_> {
 
 impl BoundScript {
     /// One poll. The first builds upstream's predicate and runs it in the same call, so the
-    /// agent's code runs right after the host's recheck on every poll; later polls call the
-    /// predicate the page kept. A settled poll reads its value again by reference, for
-    /// upstream's preview of it.
+    /// agent's code runs right after the host's recheck; later polls call the predicate the page
+    /// kept, each after a recheck of its own. A settled poll reads its value again by reference,
+    /// for upstream's preview of it.
     async fn poll(
         &mut self,
         call: &MainCall<'_>,
@@ -1544,20 +1207,18 @@ impl BoundScript {
             (Called::Ended(outcome), _) => return Ok(outcome),
             (Called::Value(Polled::Waiting), _) => return Ok(Outcome::Falsy),
             (Called::Value(Polled::Threw(thrown)), _) => {
-                return Ok(Outcome::Answered(Answer(Answered::Threw(thrown))));
+                return Ok(Outcome::Answered(Answer::Threw(thrown)));
             }
             (Called::Value(Polled::Settled(value)), Some(poller)) => (value, poller),
             (Called::Value(Polled::Unreadable | Polled::Settled(_)), _) => {
-                return Ok(Outcome::Answered(Answer(Answered::Returned(
-                    Unmasked::Unreadable,
-                ))));
+                return Ok(Outcome::Answered(Answer::Returned(Serialized::Unreadable)));
             }
         };
         Ok(match call.settled(poller).await? {
-            Called::Value(object) => Outcome::Answered(Answer(Answered::Settled {
+            Called::Value(object) => Outcome::Answered(Answer::Settled {
                 value: object.json_value(settled),
-                preview: UnmaskedText(object.preview()),
-            })),
+                preview: object.preview(),
+            }),
             Called::Ended(outcome) => outcome,
         })
     }
@@ -1600,7 +1261,7 @@ fn arguments(mode: &str, script: &BoundScript, objects: &[String]) -> Value {
 /// What a guard binds in `open`: where the script runs and the elements it receives.
 struct Binding {
     frame: TreeFrame,
-    /// The child frame a frame form named, which the guard follows ([`GuardCore::follow`]).
+    /// The child frame a frame form named, which the guard follows ([`EvaluateGuard::follow`]).
     follow: Option<FrameId>,
     subject: Bound,
     handles: Vec<BackendNodeId>,
@@ -1623,19 +1284,14 @@ struct Placed {
     /// That frame's document, which a handle argument must be of; `None` for the page's main
     /// frame when no handle needs it named.
     document: Option<FrameSeq>,
-    /// The document's sealed world, when it was found on the way.
-    world: Option<SealedWorld>,
     /// The subject, by backend node id.
     subject: Bound,
-    /// The subject's elements as sealed-world objects, for the seal to watch.
-    watched: Vec<String>,
 }
 
-/// Binds the subject and every handle argument in the script frame's document, and hands each
-/// element to that world's seal to watch, before the first sweep. Upstream's errors, in its
-/// order: the subject first (its document gone is the navigation's message, as upstream's
-/// evaluate on a handle of a replaced document; its node gone is Neo's detached message), then
-/// each handle as upstream's adoption fails it.
+/// Binds the subject and every handle argument in the script frame's document. Upstream's
+/// errors, in its order: the subject first (its document gone is the navigation's message, as
+/// upstream's evaluate on a handle of a replaced document; its node gone is Neo's detached
+/// message), then each handle as upstream's adoption fails it.
 async fn bind(
     page: &OpPage<'_>,
     scope: &OpScope<'_>,
@@ -1647,9 +1303,7 @@ async fn bind(
         frame,
         follow,
         document,
-        mut world,
         subject,
-        mut watched,
     } = place(page, scope, subject, !handles.is_empty()).await?;
     let mut bound = Vec::with_capacity(handles.len());
     for handle in handles {
@@ -1667,23 +1321,13 @@ async fn bind(
             return Err(retired(lookup));
         }
         // Found first: a world found gone on the way retires its seq, a replaced document.
-        let Some(site) = HandleSite::find(page, scope, handle).await? else {
+        if HandleSite::find(page, scope, handle).await?.is_none() {
             return Err(retired(page.frames().by_seq(handle.seq)));
-        };
+        }
         if document != Some(handle.seq) {
             return Err(scope.fail(ErrorCode::InvalidInput, UNABLE_TO_ADOPT));
         }
-        world.get_or_insert_with(|| site.world().clone());
-        watched.push(site.node().to_owned());
         bound.push(handle.node);
-    }
-    if let Some(world) = world.filter(|_| !watched.is_empty()) {
-        match world.watch_trees(&watched).await {
-            // The document went with its world: nothing the script was given can run now, and
-            // `run` finds its elements gone.
-            Ok(()) | Err(ProbeFailure::Gone(_)) => {}
-            Err(failure) => return Err(resolve::failed(scope, failure)),
-        }
     }
     Ok(Binding {
         frame,
@@ -1725,9 +1369,7 @@ async fn place(
                 frame,
                 follow,
                 document: world.as_ref().map(SealedWorld::seq),
-                world,
                 subject: Bound::Frame,
-                watched: Vec::new(),
             }
         }
         Subject::Element(element) => {
@@ -1741,40 +1383,20 @@ async fn place(
                     SeqLookup::Live { .. } | SeqLookup::Unknown => resolve::handle_detached(scope),
                 });
             };
-            let world = site.world().clone();
-            let frame = frame_endpoint(page, world.session(), world.frame().clone());
+            let world = site.world();
             Placed {
-                frame,
+                frame: frame_endpoint(page, world.session(), world.frame().clone()),
                 follow: None,
                 document: Some(element.seq),
-                world: Some(world),
                 subject: Bound::Element(element.node),
-                watched: vec![site.node().to_owned()],
             }
         }
-        Subject::Elements { frame, seq, nodes } => {
-            let (backends, sealed): (Vec<_>, Vec<_>) = nodes
-                .into_iter()
-                .map(|node| (node.backend, node.sealed))
-                .unzip();
-            let world = if sealed.is_empty() && !with_handles {
-                None
-            } else {
-                Some(
-                    page.world(&frame.endpoint, frame.place.clone())
-                        .await
-                        .map_err(|failure| resolve::failed(scope, failure))?,
-                )
-            };
-            Placed {
-                frame,
-                follow: None,
-                document: Some(seq),
-                world,
-                subject: Bound::Elements(backends),
-                watched: sealed,
-            }
-        }
+        Subject::Elements { frame, seq, nodes } => Placed {
+            frame,
+            follow: None,
+            document: Some(seq),
+            subject: Bound::Elements(nodes),
+        },
     })
 }
 
@@ -1828,10 +1450,9 @@ async fn main_world_nodes(
 /// read as every probe call's is ([`Ran::when_gone`]). A call Chromium cut off while it was
 /// pending may have run: its context destroyed under it (`Destroyed`), or its document left for
 /// another (`Navigated`). `page.evaluate` never sends it again and fails as upstream's does,
-/// and a poll goes on in the next document after a sweep, as upstream's wait does, its
-/// predicate being meant to be free of side effects. A call whose context, session or frame
-/// was gone before it reached the page ran nothing, as one on an object the page no longer
-/// holds.
+/// and a poll goes on in the next document, as upstream's wait does, its predicate being meant
+/// to be free of side effects. A call whose context, session or frame was gone before it
+/// reached the page ran nothing, as one on an object the page no longer holds.
 fn not_run<T>(error: CoreError) -> Result<Called<T>, CoreError> {
     const OBJECT_GONE: &str = "Could not find object with given id";
     let message = match &error {
@@ -1859,15 +1480,15 @@ struct Reply {
 impl Reply {
     /// What the page threw, as upstream's `getExceptionMessage` reads it: the exception's
     /// description, stack lines and all, or a thrown primitive as text.
-    fn thrown(&self) -> Option<UnmaskedText> {
+    fn thrown(&self) -> Option<String> {
         let details = self.exception_details.as_ref()?;
-        Some(UnmaskedText(match &details.exception {
+        Some(match &details.exception {
             Some(exception) => exception
                 .description
                 .clone()
                 .unwrap_or_else(|| js_string(exception.value.as_ref())),
             None => details.text.clone(),
-        }))
+        })
     }
 }
 
@@ -1899,20 +1520,20 @@ struct ExceptionDetails {
 impl RemoteObject {
     /// `assets/main-world.js`'s evaluate answer: the serialized text, or no value for
     /// `undefined`.
-    fn text(self) -> Unmasked {
+    fn text(self) -> Serialized {
         match (self.r#type.as_str(), self.value) {
-            ("string", Some(Value::String(text))) => Unmasked::Text(text),
-            ("undefined", None) => Unmasked::Undefined,
-            _ => Unmasked::Unreadable,
+            ("string", Some(Value::String(text))) => Serialized::Text(text),
+            ("undefined", None) => Serialized::Undefined,
+            _ => Serialized::Unreadable,
         }
     }
 
     /// The value upstream's `JSHandle.jsonValue()` gives for this settled value: an object's is
     /// the page's serialized `text`, and a primitive's is CDP's own, where a `BigInt` is lost
     /// (`parseUnserializableValue`, PW:20628), so it reads `undefined`.
-    fn json_value(&self, text: Unmasked) -> Unmasked {
+    fn json_value(&self, text: Serialized) -> Serialized {
         if self.object_id.is_none() && self.r#type == "bigint" {
-            Unmasked::Undefined
+            Serialized::Undefined
         } else {
             text
         }

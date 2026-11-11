@@ -1,7 +1,6 @@
 // A popup and its opener read each other's password through window.opener and the window
-// window.open returned, each tab's page script having set its own. Upstream returns the raw
-// values. Neo sweeps every tab the opener links connect, so both come back masked, while what
-// each script reads of its own page and of the other tab's text is upstream's.
+// window.open returned, each tab's page script having set its own, and both come back raw, as
+// upstream returns them, with what each script reads of its own page and of the other tab's text.
 await page.goto(fixtures.url('sensitive.html'))
 const opened = page.waitForEvent('popup', { timeout: 5000 })
 await harness.pageEval(page, "(window.popup = window.open('child.html?name=Popup'), true)")

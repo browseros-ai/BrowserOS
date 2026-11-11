@@ -32,39 +32,17 @@ pub trait OpEnv: Send + Sync {
     /// while the op waited.
     fn recheck(&self) -> Result<(), Refusal>;
 
-    /// Re-runs the host's attempt-stage write rules (the owner's takeover lock, a CAPTCHA
-    /// solve's hold) on each of `tabs`, right before a script goes out to the op page's main
-    /// world. `tabs` are the other tabs of that page's opener-linked group: its opener, the
-    /// popups it opened and theirs, followed both ways and through chains, `noopener` popups
-    /// included, whatever their site. The page's script reaches each of them through
-    /// `window.opener`, the windows `window.open` returned and named windows, so it can click
-    /// in, type into and navigate them, while [`OpEnv::recheck`] runs the rules on the op's own
-    /// tab only. A host that implements this runs, for each tab, the rules it runs for a write
-    /// on that tab, and returns the first refusal unchanged.
-    ///
-    /// The crate calls it only from the one place it marks an op sent, right after `recheck`
-    /// and right before `mark_sent`, synchronously, for every main-world send: each script,
-    /// each `waitForFunction` poll, and `setContent`'s write, with the group the privacy sweep
-    /// before that send found. It is never called with the op's own tab, and never with an
-    /// empty list, so an op on a page with no opener link records `recheck`, `mark_sent` as
-    /// before. A refusal reaches the agent unchanged, nothing is marked sent, and the script
-    /// does not run.
-    ///
-    /// The default refuses any tab, as `neo / unsupported`, because a host that has not
-    /// implemented this has not said its rules allow a script to act on tabs they never saw.
-    /// So every main-world script on a page with an opener link is refused until the host
-    /// implements it; one on a page with no link runs. An empty `tabs` reaches no other tab and
-    /// passes.
-    fn recheck_reach(&self, tabs: &[TabId]) -> Result<(), Refusal> {
-        if tabs.is_empty() {
-            return Ok(());
-        }
-        Err(unchecked_reach(tabs.len()))
+    /// The host's write rules for `tabs`, other tabs a main-world script on the op's page can
+    /// reach through `window.opener` and the windows `window.open` returns. The crate never
+    /// calls it: a main-world send runs [`OpEnv::recheck`] on the op's own tab only, as
+    /// Playwright's scripts reach those tabs unchecked. The default passes.
+    fn recheck_reach(&self, _tabs: &[TabId]) -> Result<(), Refusal> {
+        Ok(())
     }
 
     /// The op is about to change the page. Write-once on the host side; delivery is derived
     /// from it. The crate calls it only from the one place it marks an op sent, right after
-    /// `recheck` and, for a main-world send on a linked page, `recheck_reach`.
+    /// `recheck`.
     fn mark_sent(&self);
 
     /// The op's target is a password, card or one-time-code field, so the trace redacts the
@@ -107,22 +85,4 @@ pub struct Refusal {
     pub message: String,
     /// The host's own code, when `code` is `host_error`.
     pub host_code: Option<String>,
-}
-
-/// The refusal of a main-world send that reaches `tabs` other tabs no host rule checked:
-/// [`OpEnv::recheck_reach`]'s default, and the crate's own when a tab of the group has no tab id
-/// to name it to the host by (`GuardCore::reach`), so a script on a linked page meets the one
-/// refusal however its host fell short.
-pub(crate) fn unchecked_reach(tabs: usize) -> Refusal {
-    Refusal {
-        owner: ErrorOwner::Neo,
-        code: "unsupported".to_owned(),
-        message: format!(
-            "Neo refused this call: the page is linked to {tabs} other tab(s) through \
-             window.opener (its opener, or popups it opened), which a script in the page can act \
-             on, and Neo's host does not check its rules on those tabs yet, so nothing was sent \
-             to the page. Run it in a tab with no opener and no popups."
-        ),
-        host_code: None,
-    }
 }

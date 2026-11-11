@@ -1,7 +1,7 @@
 //! `locator.evaluate` and `locator.evaluateAll`, with their element-handle, page and frame forms
 //! (`elementHandle.evaluate`, `$eval`, `$$eval`): the agent's function called with elements, in
-//! the main world of the frame they are in, through the evaluate guard. Both answer in
-//! Playwright's serialized format, masked, which the prelude reads back with the vendored
+//! the main world of the frame they are in, through the main-world gateway (`evaluate_guard`).
+//! Both answer in Playwright's serialized format, which the prelude reads back with the vendored
 //! `parseEvaluationResultValue`.
 //!
 //! ```text
@@ -23,8 +23,7 @@ use serde_json::Value;
 use crate::op_scope::OpScope;
 use crate::page::evaluate::ScriptInput;
 use crate::page::evaluate_guard::{
-    self, BoundNode, DOCUMENT_REPLACED, EvaluateGuard, MainWorldCall, NAVIGATED, Outcome, Subject,
-    TreeFrame,
+    self, DOCUMENT_REPLACED, EvaluateGuard, MainWorldCall, NAVIGATED, Outcome, Subject, TreeFrame,
 };
 use crate::page::{OpPage, world_call};
 use crate::read::{self, Returning, SelectorState};
@@ -106,13 +105,7 @@ pub(crate) async fn evaluate_on_all(
         Some((world, nodes)) if !nodes.is_empty() => Subject::Elements {
             frame: evaluate_guard::frame_endpoint(&page, world.session(), world.frame().clone()),
             seq: world.seq(),
-            nodes: nodes
-                .into_iter()
-                .map(|node| BoundNode {
-                    backend: node.backend,
-                    sealed: node.sealed,
-                })
-                .collect(),
+            nodes,
         },
         Some(_) | None => {
             let (frame, seq) = starting_frame(&page, scope, &locator).await?;
@@ -141,10 +134,9 @@ async fn run_once(
     page: &PageRef,
     call: MainWorldCall,
 ) -> Result<Value, PlaywrightError> {
-    let guard = EvaluateGuard::open(pw, scope, page, call).await?;
-    let (guard, outcome) = guard.run(scope).await?.sweep(scope).await?;
-    match outcome {
-        Outcome::Answered(answer) => Ok(guard.finish(scope, answer)?.value),
+    let mut guard = EvaluateGuard::open(pw, scope, page, call).await?;
+    match guard.run(scope).await? {
+        Outcome::Answered(answer) => Ok(answer.finish(scope)?.value),
         Outcome::NotRun | Outcome::Destroyed => {
             Err(scope.fail(ErrorCode::PageError, DOCUMENT_REPLACED))
         }
