@@ -1,9 +1,9 @@
 //! Sealed-world facts no op can observe, against a real browser: where a page's seqs start,
 //! that concurrent first uses share one install, that a navigation retires a seq, that the
 //! seal masks what the probe reads, that a strict CSP does not stop the install, that a second
-//! `Playwright` re-keys a world, that `page.setContent` retires the seq, and that the install
-//! takes its handle by the new world's unique id in every kind of frame and fails `Gone` when the
-//! document changes renderer inside its window.
+//! `Playwright` re-keys a world, that `page.setContent` keeps the seq while an old ref fails,
+//! and that the install takes its handle by the new world's unique id in every kind of frame
+//! and fails `Gone` when the document changes renderer inside its window.
 //!
 //! Needs BrowserOS with CDP on `BROWSEROS_CDP_PORT` (default 9005):
 //! `cargo test -p neo-playwright --lib world::live_tests -- --ignored`. Each test opens
@@ -693,7 +693,7 @@ async fn tests_that_an_ops_objects_are_released_when_its_scope_drops() -> TestRe
 
 #[tokio::test]
 #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT (default 9005)"]
-async fn tests_that_set_content_retires_the_seq_so_an_old_ref_fails() -> TestResult {
+async fn tests_that_set_content_keeps_the_seq_while_an_old_ref_fails() -> TestResult {
     let live = LiveBrowser::connect().await?;
     let server = fixtures().await?;
     let tab = live
@@ -728,15 +728,14 @@ async fn tests_that_set_content_retires_the_seq_so_an_old_ref_fails() -> TestRes
 
     let page = OpPage::admit(&live.playwright, &scope, tab.id).await?;
     assert!(
-        matches!(page.frames().by_seq(before.seq()), SeqLookup::Retired),
-        "the written document is a new document, so its predecessor's seq retired"
+        matches!(page.frames().by_seq(before.seq()), SeqLookup::Live { .. }),
+        "document.open keeps the Document, so its seq stays live, as upstream's frame keeps its seq"
     );
     let after = page.world(&page.main_endpoint(), Place::Main).await?;
-    assert!(
-        after.seq() > before.seq(),
-        "the new document has its own seq: {:?} after {:?}",
+    assert_eq!(
         after.seq(),
-        before.seq()
+        before.seq(),
+        "the written content keeps the frame's seq and its refs' prefix"
     );
     let old_ref = probe::call(
         &after,

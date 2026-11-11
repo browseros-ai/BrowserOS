@@ -23,11 +23,8 @@
 //! - `--lock-check`: prints what the app's lock policy (`Service::locks().check`) answers for a
 //!   write on that same tab, each time the answer changes: `allowed`, or `refused by <lock>`.
 //!   It stands in for the dispatcher, which would refuse the agent's next click there.
-//! - `--surface-calls`: also serves test-only calls under `/surface`, behind the same auth, for
-//!   what the display and the takeover flow will do with the control journal:
-//!   `POST /surface/journal {"tabs": [..]}` arms it (`{"millis"}`: how long arming took),
-//!   `DELETE /surface/journal` disarms it, `POST /surface/runs <json>` records a run with that
-//!   result (`{"runId"}`, committed when it answers) so a mask can be read back from
+//! - `--surface-calls`: also serves test-only calls under `/surface`, behind the same auth.
+//!   `POST /surface/runs <json>` records a run with that result (`{"runId"}`, committed when it answers) so a mask can be read back from
 //!   `/v1/runs/{id}`, and `GET /surface/secrets` counts the secret set, in all and by source
 //!   (`{"count", "host", "owner", "agent", "page"}`).
 //!   `POST /surface/paint-run {"tab": N, "colors": [[r, g, b], ..], "busyMs": n}` records one
@@ -66,9 +63,7 @@ use browseros_cdp::{CdpClient, ConnectOptions, ReconnectPolicy};
 use browseros_core::viewport::{ViewportMode, ViewportRequest, Viewports};
 use browseros_core::{BrowserSession, BrowserSessionHooks, BrowserView, PageJs, TabId};
 use neo_service::{HostAuth, HostToken, PeerRule, Service, ServiceInputs, host_service};
-use neo_takeover::{
-    ArmedJournal, BrowserTabs, Front, FrontError, Journal, LockTarget, Locks, ScreenSize, Xvnc,
-};
+use neo_takeover::{Front, FrontError, LockTarget, Locks, ScreenSize, Xvnc};
 use neo_trace::{
     Delivery, Effect, EpochMillis, OperationEnded, OperationId, OperationKind, OperationStarted,
     Outcome, PageState, Privacy, RedactionLimits, Redactor, RunEnded, RunId, RunStarted, RunStatus,
@@ -224,11 +219,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
         cdp_port: args.cdp_port,
     });
     let surface = SurfaceCalls {
-        journal: Journal::new(
-            BrowserTabs::new(Arc::clone(&browser), Arc::clone(&viewports)),
-            Arc::clone(&surface_secrets),
-        ),
-        armed: Arc::default(),
         sink: sink.clone(),
         secrets: surface_secrets,
         browser: Arc::clone(&browser),
@@ -293,13 +283,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-/// The test-only calls `--surface-calls` serves: the control journal as the display and the
-/// takeover flow will arm it, a run whose result the writer masks, the secret set's size by
-/// source, and a run of real writes for the camera.
+/// The test-only calls `--surface-calls` serves: trace results, secret-set counts,
+/// front moves and real writes for the camera.
 #[derive(Clone)]
 struct SurfaceCalls {
-    journal: Journal,
-    armed: Arc<tokio::sync::Mutex<Option<ArmedJournal>>>,
     sink: TraceSink,
     secrets: Arc<SecretSet>,
     browser: Arc<BrowserSession>,
@@ -312,7 +299,6 @@ type SurfaceReply = Result<Json<Value>, (StatusCode, String)>;
 impl SurfaceCalls {
     fn routes(self) -> Router {
         Router::new()
-            .route("/surface/journal", post(Self::arm).delete(Self::disarm))
             .route("/surface/runs", post(Self::fake_run))
             .route("/surface/secrets", get(Self::count))
             .route("/surface/paint-run", post(Self::paint_run))
@@ -321,38 +307,6 @@ impl SurfaceCalls {
                 get(Self::front_held).post(Self::bring_to_front),
             )
             .with_state(self)
-    }
-
-    /// Arms the journal on the body's `tabs`, disarming one armed before.
-    async fn arm(State(calls): State<Self>, body: Bytes) -> SurfaceReply {
-        let request: Value = serde_json::from_slice(&body)
-            .map_err(|error| (StatusCode::BAD_REQUEST, error.to_string()))?;
-        let tabs = request["tabs"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter_map(Value::as_i64)
-            .map(TabId)
-            .collect::<Vec<_>>();
-        let mut armed = calls.armed.lock().await;
-        if let Some(previous) = armed.take() {
-            previous.disarm().await;
-        }
-        let started = std::time::Instant::now();
-        *armed = Some(calls.journal.arm(&tabs).await);
-        let millis = started.elapsed().as_secs_f64() * 1000.0;
-        println!("journal armed on {} tab(s) in {millis:.1} ms", tabs.len());
-        Ok(Json(json!({ "millis": millis })))
-    }
-
-    async fn disarm(State(calls): State<Self>) -> SurfaceReply {
-        let armed = calls.armed.lock().await.take();
-        let disarmed = armed.is_some();
-        if let Some(armed) = armed {
-            armed.disarm().await;
-        }
-        println!("journal disarmed: {disarmed}");
-        Ok(Json(json!({ "disarmed": disarmed })))
     }
 
     /// Records a run whose result is the body, as the agent's would be, and answers once the

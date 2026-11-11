@@ -8,9 +8,10 @@
 #
 #   --platform   default: the Docker engine's own architecture. The server is cross-compiled
 #                with zig either way; only the image's apt/dpkg steps run on the target arch.
-#   --tag        default: neo-sdk:<browser version>-<9-char commit>[-dirty], also the image's
-#                org.opencontainers.image.version label. -dirty means uncommitted changes in
-#                packages/browseros-agent or packages/browseros/docker/neo.
+#   --tag        default: neo-sdk:<browser version>-<9-char commit>[-dirty]-<arch>. All but the
+#                arch is also the image's org.opencontainers.image.version label. -dirty means
+#                uncommitted changes in packages/browseros-agent or packages/browseros/docker/neo.
+#                The arch keeps an amd64 build (cells) and an arm64 one (a Mac) apart.
 #   --*-key-file bake a CAPTCHA provider key into the image (the neo-sdk-keyed target). Off by
 #                default: the image is keyless and reads key files a host puts at the paths in
 #                README.md. A baked key is readable by anyone who has the image.
@@ -18,7 +19,7 @@
 # Prints TAG=, IMAGE_ID= and the image's provenance.json last, for scripts to read.
 set -euo pipefail
 
-usage() { sed -n '2,17p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+usage() { sed -n '2,19p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
 
 here=$(cd -- "$(dirname -- "$0")" && pwd)
 agent=$(cd -- "$here/../../../.." && pwd)
@@ -52,7 +53,7 @@ dirty=false
 if [ -n "$(git -C "$repo" status --porcelain -- "$agent" "$neo_docker")" ]; then dirty=true; fi
 version="$NEO_BROWSER_VERSION-${revision:0:9}"
 [ "$dirty" = false ] || version+="-dirty"
-: "${tag:=neo-sdk:$version}"
+: "${tag:=neo-sdk:$version-${platform#linux/}}"
 
 # The keyless target never mounts a secret, so it cannot pick a key up from a cached layer. The
 # keyed one is rebuilt without its cache, so a rotated or removed key never survives either.

@@ -54,11 +54,10 @@ import {
 } from './world'
 
 /**
- * The requests the table routes. `setContent` is not one: it changes the probe's own
- * lifecycle, so `call` handles it, as `boot` handles booting. A handler that must await the
- * page (`expect`'s viewport check) answers with a promise.
+ * The requests the table routes: every request answered by value. A handler that must await
+ * the page (`expect`'s viewport check) answers with a promise.
  */
-type Routed = Exclude<ValueOp, 'setContent'>
+type Routed = ValueOp
 type Handler<O extends Routed> = (
   world: World,
   request: RequestOf<O>,
@@ -84,6 +83,7 @@ const HANDLERS: Handlers = {
   focused,
   matchUrl,
   document: documentText,
+  setContent: replaceDocument,
   armInput,
   inputArrived,
 }
@@ -106,9 +106,6 @@ function createProbe(): NeoProbe {
   const pins = new Pins()
   const refs = new RefMap()
   let world: World | undefined
-  // The seq of the last boot, kept when setContent unboots: whoever booted it may still hold
-  // refs printed under it, so the next boot hands it to Rust to retire.
-  let lastSeq: number | undefined
 
   /**
    * One request's reply in `booted`, the error replies included. A handler that answers with
@@ -122,14 +119,6 @@ function createProbe(): NeoProbe {
   ): unknown {
     try {
       if (request.op === 'pinned') return pinned(booted, request)
-      // document.open() keeps the window, and with it this world and this probe. From the
-      // moment it returns, the engine, the seq, every pin and every ref belong to the old
-      // document, so the probe unboots: the next request answers `uninstalled`, and Rust
-      // boots the new document under a new seq, as for any other new document.
-      if (request.op === 'setContent')
-        return replaceDocument(booted, request, () => {
-          world = undefined
-        })
       const reply = dispatch(booted, request.op, request, scope)
       // CDP's `awaitPromise` settles a promise for Rust, so a handler that throws after
       // its first await is classified here, as a synchronous one is below.
@@ -158,9 +147,8 @@ function createProbe(): NeoProbe {
       const injected = createEngine(frameSeq)
       injected.onGlobalListenersRemoved.add(listenForMoves)
       refs.install(engineTable(injected), injected.utils)
+      const retired = world?.seq
       world = { epoch, seq: frameSeq, injected, seal, pins, refs }
-      const retired = lastSeq
-      lastSeq = frameSeq
       return retired === undefined
         ? described(world)
         : { ...described(world), retired }
@@ -220,8 +208,7 @@ function hasKnownOp(request: unknown): request is ProbeRequest {
   if (typeof request !== 'object' || request === null) return false
   const op: unknown = Reflect.get(request, 'op')
   return (
-    typeof op === 'string' &&
-    (op === 'pinned' || op === 'setContent' || Object.hasOwn(HANDLERS, op))
+    typeof op === 'string' && (op === 'pinned' || Object.hasOwn(HANDLERS, op))
   )
 }
 

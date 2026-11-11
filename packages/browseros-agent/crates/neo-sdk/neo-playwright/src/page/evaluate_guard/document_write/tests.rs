@@ -62,7 +62,7 @@ async fn tests_that_a_write_cut_off_by_a_navigation_is_not_written_again() -> Te
             "writes sent after the first failed with {first:?}"
         );
         match replaced {
-            Ok(_) => assert!(written_again, "after {first:?}, the write went once more"),
+            Ok(()) => assert!(written_again, "after {first:?}, the write went once more"),
             Err(error) => {
                 assert!(!written_again, "after {first:?}: {error}");
                 assert_eq!(

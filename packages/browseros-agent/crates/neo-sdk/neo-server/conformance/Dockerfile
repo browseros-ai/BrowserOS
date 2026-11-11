@@ -17,6 +17,9 @@ RUN CARGO_BUILD_JOBS=4 cargo build --locked -p ${SERVER_PACKAGE} --example confo
 FROM ${NEO_IMAGE} AS rig
 USER root
 RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates && rm -rf /var/lib/apt/lists/*
+# The Neo entrypoint normally fixes home ownership before dropping privileges. This rig
+# bypasses it, so Crashpad needs the image's root-owned .config made writable here.
+RUN chown -R 1000:1000 /home/neo
 COPY --from=node /usr/local/bin/node /usr/local/bin/node
 ENTRYPOINT ["/usr/local/bin/node"]
 FROM rig AS conformance

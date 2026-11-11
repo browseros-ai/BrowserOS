@@ -44,10 +44,15 @@ function doctypeMarkup(doctype: DocumentType): string {
 }
 
 /**
- * Replaces the document with `html` (measured on BrowserOS: the same as Page.setDocumentContent,
- * and Chromium then fires `init`, `DOMContentLoaded` and `load` again under the same loader).
- * `opened` runs as soon as document.open() returned, because from then on this world's engine
- * belongs to a document that is gone, even if the write throws.
+ * Replaces the document's content with `html` (measured on BrowserOS: the same as
+ * Page.setDocumentContent, and Chromium then fires `init`, `DOMContentLoaded` and `load` again
+ * under the same loader).
+ *
+ * document.open() keeps the Document and its window, so this world, its engine and its seq carry
+ * on, as upstream's utility-world InjectedScript does: the frame commits no new document, so
+ * upstream's frame keeps its seq and the next snapshot's refs keep their prefix (`e5`, not
+ * `f1e5`). Every pin and ref from before names an element document.open() removed, so it reads
+ * as detached or stale, never as an element of the new content.
  *
  * document.open() also removes every event listener of the document, the seal's journal
  * listeners among them; `watch` adds them back.
@@ -55,11 +60,9 @@ function doctypeMarkup(doctype: DocumentType): string {
 export function replaceDocument(
   world: World,
   request: SetContentRequest,
-  opened: () => void,
 ): Replaced {
   const { document } = world.injected
   document.open()
-  opened()
   try {
     document.write(request.html)
   } finally {

@@ -1,5 +1,5 @@
 //! `GET /v1/display`: Neo's one screen as RFB over a WebSocket (design D12). The display itself
-//! (admission, the filter, the owner's first input, follow and the close sweep) is
+//! (admission, the filter, the owner's first input, follow and lifecycle) is
 //! `neo_takeover::Displays`; this module is what is HTTP and WebSocket about it.
 //!
 //! 1. The query is parsed: a 400 for a bad or contradictory parameter. `release=` binds a
@@ -10,8 +10,7 @@
 //! 3. `Displays::admit` runs before the upgrade, so a refusal is an HTTP status and not a socket
 //!    that opens and dies: 409 `display_paused` for a view while the owner has control or a
 //!    private tab is in front (decision 34), 503 `browser_unavailable` when the browser cannot
-//!    list its tabs (a view cannot tell which tab is in front, and a control display cannot arm
-//!    the journal on them), 503 `display_unavailable` when Xvnc cannot be reached.
+//!    list its tabs for a view to check the front, 503 `display_unavailable` when Xvnc cannot be reached.
 //! 4. The upgrade takes no subprotocol, and echoes `binary` only when the viewer offers it:
 //!    noVNC 1.3.0 offers none, so requiring one would lock it out (decision 26).
 //! 5. Binary frames carry RFB bytes both ways, and the display ends with a close that says why:
