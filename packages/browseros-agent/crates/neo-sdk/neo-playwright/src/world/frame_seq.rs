@@ -2,6 +2,7 @@
 //! a page it serves, and which node in it.
 
 use serde::{Deserialize, Serialize};
+use ts_rs::TS;
 use uuid::Uuid;
 
 /// The `Playwright` instance a world answers to, random per instance. Worlds are shared by
@@ -29,11 +30,11 @@ impl Epoch {
 /// frame's first document is 0 and prints bare, `e3`). A seq is never reused, and every new
 /// document, of the main frame or a child frame, gets a new one (decisions.md), so a ref can
 /// only ever reach the document that printed it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, TS)]
 pub(crate) struct FrameSeq(pub(crate) u32);
 
 /// CDP's `DOM.BackendNodeId`: a node's id within its document, stable while the node lives.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
 pub(crate) struct BackendNodeId(pub(crate) i64);
 
 /// CDP's `Runtime.ExecutionContextId`: a small per-renderer counter, so it may name another

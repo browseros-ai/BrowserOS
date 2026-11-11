@@ -132,9 +132,7 @@ pub(crate) struct ElementTarget {
     // never be the lazy null brand. Reuse the output-side page type for this stronger promise.
     #[ts(as = "crate::page::PageHandle")]
     pub(crate) page: PageRef,
-    #[ts(as = "u32")]
     pub(crate) seq: FrameSeq,
-    #[ts(as = "i64")]
     pub(crate) node: BackendNodeId,
     /// Playwright's preview of the element, for messages.
     pub(crate) display: String,
