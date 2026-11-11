@@ -3,8 +3,8 @@
 //! ```text
 //!  keyboard.* / mouse.* ── admit the page ── focus lease (tabs core did not create)
 //!    ── the tab's input lock ── the burst, built on a copy of the tab's devices
-//!    ── keys: where they land (copy_refusal.rs); a sensitive field marks the target
-//!       sensitive, and a copy or cut into it is refused
+//!    ── keys: where they land (copy_refusal.rs); a copy or cut from a sensitive field
+//!       is refused
 //!    ── send_effect ── the typing window (keys) ── the burst, on the page's root session
 //! ```
 //!
@@ -20,7 +20,6 @@ use std::time::Duration;
 use serde::Deserialize;
 use serde_json::Value;
 
-use crate::action::{self, Focus};
 use crate::input::{
     self, BurstFailure, ClickOptions, InputDevices, InputStep, Keyboard, MouseButton, PageInput,
     Point, Typed, UnknownKey,
@@ -31,7 +30,7 @@ use crate::op_scope::OpScope;
 use crate::op_spec::{OpSpec, PAGE};
 use crate::page::OpPage;
 use crate::target::PageRef;
-use crate::{ErrorCode, Playwright, PlaywrightError};
+use crate::{ErrorCode, Playwright, PlaywrightError, action};
 
 listed_enum! {
     /// Page-level keyboard and mouse input. `mouse.dblclick` is `mouse.click` with a click
@@ -54,28 +53,23 @@ impl InputOp {
     /// This op's registration metadata.
     pub(crate) const fn spec(self) -> OpSpec {
         match self {
-            Self::KeyboardDown => {
-                OpSpec::write("keyboard.down", PAGE, "hold a key down").sensitive(&["/key"])
-            }
+            Self::KeyboardDown => OpSpec::write("keyboard.down", PAGE, "hold a key down"),
             Self::KeyboardUp => OpSpec::write("keyboard.up", PAGE, "release a held key"),
             Self::KeyboardPress => OpSpec::write(
                 "keyboard.press",
                 PAGE,
                 "press a key or chord on the focused element",
-            )
-            .sensitive(&["/key"]),
+            ),
             Self::KeyboardType => OpSpec::write(
                 "keyboard.type",
                 PAGE,
                 "type text key by key into the focused element",
-            )
-            .sensitive(&["/text"]),
+            ),
             Self::KeyboardInsertText => OpSpec::write(
                 "keyboard.insertText",
                 PAGE,
                 "insert text into the focused element without key events",
-            )
-            .sensitive(&["/text"]),
+            ),
             Self::MouseMove => OpSpec::write("mouse.move", PAGE, "move the mouse to a point"),
             Self::MouseDown => OpSpec::write(
                 "mouse.down",
@@ -211,10 +205,9 @@ fn button(wire: Option<WireButton>) -> MouseButton {
 /// Which device a burst is for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Device {
-    /// Keys and text: the burst first asks where the keys land (a sensitive field marks the
-    /// target sensitive, and refuses a copy), and claims the page's typing.
+    /// Keys and text: the burst first asks where the keys land and refuses a sensitive copy.
     Keys,
-    /// `keyboard.up`, which carries no key a trace must hide and never copies.
+    /// `keyboard.up`, which never copies and needs no focus walk.
     KeyUp,
     Mouse,
 }
@@ -354,10 +347,6 @@ async fn burst(
             .within(action::focus_of(&page, scope))
             .await
             .map_err(|_expired| scope.timed_out(ErrorCode::NotActionable))??;
-        // A field the walk could not see may be sensitive too: redacting is the safe side.
-        if focus != Focus::Plain {
-            scope.mark_sensitive_target();
-        }
         if input::copies(&steps, planned.keyboard.platform()) {
             action::refuse_copy(scope, focus)?;
         }

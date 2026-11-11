@@ -11,6 +11,9 @@
 //!      └─ event_reader: target ids to native tab handles, through the run's own view
 //! ```
 //!
+//! Internal frame navigation facts use the same journal for `waitForNavigation`, retaining
+//! loader identity and renderer swaps across predicate checks without public frame events.
+//!
 //! **One writer.** Only the watcher appends, through the one `EventWriter` the hub hands out,
 //! so the log has a single order and needs nothing beyond a short std mutex and a `Notify`. A
 //! window lookup for a popup runs in its own task and reports back to the watcher, which writes.
@@ -32,6 +35,7 @@ mod event_hub;
 pub(crate) mod event_op;
 mod event_reader;
 mod file_chooser;
+mod navigation_event;
 mod page_event;
 mod run_events;
 mod subscription;
@@ -39,6 +43,8 @@ mod target_watcher;
 
 pub(crate) use event_hub::EventHub;
 pub(crate) use event_op::EventOp;
+pub(crate) use navigation_event::NavigationEvent;
+pub(crate) use page_event::PageEvent;
 pub(crate) use run_events::RunEvents;
 pub(crate) use subscription::{ListenerKey, PageEventKind, Subscription};
 pub(crate) use target_watcher::TargetWatcher;

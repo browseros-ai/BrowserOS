@@ -25,7 +25,7 @@ use bytes::{Bytes, BytesMut};
 pub(crate) enum DisplayMode {
     /// A spectator's: the screen only. Keys, clicks, pastes and resizes are dropped.
     View,
-    /// The owner's: everything goes to Xvnc, and input first waits for the taint.
+    /// The owner's: everything goes to Xvnc, and the first input closes views.
     Control,
 }
 
@@ -79,7 +79,7 @@ pub(crate) enum Verdict {
     Pass,
     /// Swallow it.
     Drop,
-    /// Send it on, as the owner's input: before the first one, every open tab goes private.
+    /// Send owner input after its first message closes view displays.
     Input,
 }
 
@@ -124,8 +124,8 @@ enum Stage {
 }
 
 /// One viewer's bytes so far, cut into whole messages in the order they were sent. It holds at
-/// most one unfinished message, which the caps keep under about 1 MiB, besides what a control
-/// display's viewer sends while its first input waits (`MAX_HELD_INPUT`).
+/// most one unfinished message plus the incoming frame. Message caps are checked as headers
+/// arrive, before the parser waits for the rest of a message.
 #[derive(Default)]
 pub(crate) struct ClientFramer {
     stage: Stage,
@@ -136,11 +136,6 @@ impl ClientFramer {
     /// Takes what one WebSocket frame carried.
     pub(crate) fn push(&mut self, bytes: &[u8]) {
         self.buffer.extend_from_slice(bytes);
-    }
-
-    /// How many bytes it holds that no message has taken yet.
-    pub(crate) fn buffered(&self) -> usize {
-        self.buffer.len()
     }
 
     /// The next whole message and the bytes to send on for it, or `None` until more arrive.

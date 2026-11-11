@@ -15,9 +15,8 @@
 //!
 //! A warm fill is 3 CDP messages (①, ②, the insertText). The probe reports with ① whether the
 //! field the edit changes is a password, card or one-time-code field: the element, or the
-//! control its label names, as upstream's edits follow a label (the forced path too). The op's
-//! target is marked sensitive right then, before the value goes anywhere, so the trace redacts
-//! it. The call log names a fill's value only for a field that is not sensitive.
+//! control its label names, as upstream's edits follow a label (the forced path too).
+//! The call log names a fill's value only for a field that is not sensitive.
 //! `selectOption`'s values are the options' own, page text, so they are masked with the
 //! element's site before the op returns them; a sensitive select's selected values are its
 //! value, and are masked whatever its sweep holds.
@@ -235,9 +234,6 @@ impl<'a> FormRunner<'a> {
             let (pinned, sensitive) = match self.ready(located, pin, row).await? {
                 Ready::At { pin, sensitive } => {
                     self.matched = true;
-                    if sensitive {
-                        self.scope.mark_sensitive_target();
-                    }
                     if !announced {
                         announced = true;
                         self.announce(edit, sensitive);

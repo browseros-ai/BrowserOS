@@ -110,11 +110,6 @@ impl ScriptedBrowser {
         *self.front.lock().unwrap_or_else(PoisonError::into_inner) = Some(tab);
     }
 
-    /// The tab a test or a `Browser.activateTab` last brought to the front.
-    pub(crate) fn front(&self) -> Option<i64> {
-        *self.front.lock().unwrap_or_else(PoisonError::into_inner)
-    }
-
     /// The tab navigated: the browser reports `url` for it from now on.
     pub(crate) fn set_url(&self, tab: i64, url: &str) {
         self.urls

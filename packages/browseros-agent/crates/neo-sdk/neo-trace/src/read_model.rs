@@ -140,7 +140,8 @@ pub struct RunDetail {
     pub code: Option<String>,
     /// Whether `code` was cut.
     pub code_truncated: bool,
-    /// Why the code is withheld (`sensitive_input`), when it is.
+    /// Why code is absent: `unavailable`, or a legacy `sensitive_input` marker. The reader
+    /// preserves older rows even though new runs no longer withhold code for sensitive fields.
     pub code_withheld: Option<String>,
     /// Its return value, masked and bounded.
     pub result: Option<Value>,

@@ -34,7 +34,7 @@ pub(crate) struct RunStartRow<'a> {
 pub(crate) enum RunCode<'a> {
     /// The masked, bounded code.
     Stored { text: &'a str, truncated: bool },
-    /// No code, and why: `sensitive_input`, or `unavailable` when the writer never saw it.
+    /// No code, and why: `unavailable` when the writer never saw it.
     Withheld(&'static str),
 }
 

@@ -274,6 +274,11 @@
       target: "page",
       lifetime: "operation"
     },
+    "page.waitForNavigation": {
+      effect: "read",
+      target: "page",
+      lifetime: "operation"
+    },
     "page.waitForURL": {
       effect: "read",
       target: "page",
@@ -1654,7 +1659,7 @@
       return waitTimeoutError(this.api, this.message());
     }
     message() {
-      return `Timeout ${this.timeout}ms exceeded while waiting for event "${this.event}"`;
+      return this.event === null ? `Timeout ${this.timeout}ms exceeded.` : `Timeout ${this.timeout}ms exceeded while waiting for event "${this.event}"`;
     }
   }
   function isThenable(value) {
@@ -7110,6 +7115,9 @@ ${value.stack}`;
     waitForLoadState(state, options) {
       return this._waitForLoadState("frame.waitForLoadState", state, options);
     }
+    waitForNavigation(options) {
+      return this._page._waitForNavigation("frame.waitForNavigation", this, options);
+    }
     waitForURL(url, options) {
       return this._page._waitForURL("frame.waitForURL", this, url, options);
     }
@@ -8194,6 +8202,9 @@ ${value.stack}`;
     waitForLoadState(state, options) {
       return this._mainFrame._waitForLoadState("page.waitForLoadState", state, options);
     }
+    waitForNavigation(options) {
+      return this._waitForNavigation("page.waitForNavigation", this._mainFrame, options);
+    }
     waitForURL(url, options) {
       return this._waitForURL("page.waitForURL", this._mainFrame, url, options);
     }
@@ -8482,6 +8493,55 @@ ${value.stack}`;
           waitUntil: "commit"
         }, undefined, signal);
         await this._navigated(api, frame, result, observed);
+      }
+    }
+    async _waitForNavigation(api, frame, options = {}) {
+      const signal = signalOf(api, options);
+      return await untilAborted(signal, () => abortedError(api, signal), () => this.#waitForNavigation(api, frame, options, signal));
+    }
+    async#waitForNavigation(api, frame, options, signal) {
+      const since = Date.now();
+      let after = this.#liveHead;
+      const waitUntil = loadState(api, "waitUntil", options.waitUntil ?? "load");
+      const timeout = frame._navigationTimeout(options);
+      const matcher = options.url;
+      const predicate = typeof matcher === "function" ? matcher : undefined;
+      const url = typeof matcher === "string" ? { glob: matcher } : matcher instanceof RegExp ? { regexSource: matcher.source, regexFlags: matcher.flags } : undefined;
+      if (matcher !== undefined && !url && !predicate)
+        throw clientError(api, "url: expected a string, a RegExp or a function");
+      const args = await frame._frameArgs(api);
+      const deadline = new EventDeadline(api, null, since, timeout);
+      const rethrow = (error) => {
+        throw deadline.named(error);
+      };
+      for (;; ) {
+        const { value: result, observed } = await deadline.race(invokeObserved("page.waitForNavigation", frame._call(api, deadline.left()), {
+          ...args,
+          since,
+          after,
+          ...url ? { url } : {},
+          waitUntil: predicate ? "commit" : waitUntil
+        }, undefined, signal)).catch(rethrow);
+        const response = await deadline.race(this._navigated(api, frame, result, observed));
+        if (!predicate) {
+          deadline.left();
+          return response;
+        }
+        after = result.navigationSeq;
+        let matched;
+        try {
+          matched = await deadline.race(predicate(URL.parse(result.url ?? "") ?? result.url));
+        } catch (error) {
+          throw prefixed(api, error);
+        }
+        if (matched) {
+          await deadline.race(frame._waitForLoadState(api, waitUntil, {
+            timeout: deadline.left(),
+            signal
+          }).catch(rethrow));
+          deadline.left();
+          return response;
+        }
       }
     }
     async#history(api, options = {}) {
@@ -9373,7 +9433,6 @@ Timeout: ${timeout}ms`);
       tap: NO_TOUCH,
       unroute: NETWORK,
       unrouteAll: NETWORK,
-      waitForNavigation: "use page.waitForURL() or page.waitForLoadState()",
       waitForRequest: "Neo does not report network events; wait for what the page shows instead",
       waitForResponse: "Neo does not report network events; wait for what the page shows instead",
       clock: {
@@ -9409,7 +9468,6 @@ Timeout: ${timeout}ms`);
       evaluateHandle: NO_HANDLES,
       frameElement: "locate the iframe from its parent instead: page.locator('iframe')",
       tap: NO_TOUCH,
-      waitForNavigation: "use frame.waitForURL() or frame.waitForLoadState()",
       webmcp: { hint: "WebMCP is not available in Neo", kind: "property" }
     },
     Locator: {

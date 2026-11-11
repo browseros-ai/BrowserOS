@@ -2075,6 +2075,26 @@
       },
       {
         "call": {
+          "api": "page.waitForNavigation",
+          "timeoutMs": 0
+        },
+        "page": {
+          "$neo": "page",
+          "tab": 1007
+        }
+      },
+      {
+        "call": {
+          "api": "frame.waitForNavigation",
+          "timeoutMs": 0
+        },
+        "page": {
+          "$neo": "page",
+          "tab": 1007
+        }
+      },
+      {
+        "call": {
           "api": "page.waitForURL",
           "timeoutMs": 0
         },
@@ -2305,6 +2325,38 @@
           "tab": 1007
         },
         "state": "load"
+      }
+    ],
+    "page.waitForNavigation": [
+      {
+        "call": {
+          "api": "page.waitForNavigation",
+          "timeoutMs": 30000
+        },
+        "page": {
+          "$neo": "page",
+          "tab": 1007
+        },
+        "since": 1700000000000,
+        "after": 0,
+        "waitUntil": "load"
+      },
+      {
+        "call": {
+          "api": "frame.waitForNavigation",
+          "timeoutMs": 30000
+        },
+        "page": {
+          "$neo": "page",
+          "tab": 1007
+        },
+        "frame": "F1",
+        "since": 1700000000000,
+        "after": 0,
+        "url": {
+          "glob": "**/pay"
+        },
+        "waitUntil": "load"
       }
     ],
     "page.waitForURL": [

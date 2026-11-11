@@ -11,17 +11,17 @@
 //!   follows the owner's own resizes, reads keyboard boxes and the browser bar for the owner's
 //!   page, and puts the tab, the window and the screen back as they were.
 //! - [`Displays`] shows Neo's one screen over RFB, the only way a host reaches Xvnc: view
-//!   displays to spectators, with no input and never while a private tab is in front; control
-//!   displays to the owner, whose first input waits until every open tab is private. A view can
+//!   displays to spectators, with no input; control displays forward the owner's input and
+//!   close views when it begins. A view can
 //!   keep a tab, or a task's tab, in front.
 //! - [`Front`] is the agent's side of that one screen. The app's door asks [`Front::check`]
 //!   whether the owner holds it (a takeover, a control display or a fit; a lock alone holds only
 //!   its tab), and the agent's `page.bringToFront()` moves it through [`Front::bring_to_front`],
-//!   which closes every view first when the tab is private. Every activation Neo makes takes
+//!   through the same front turn as fits and follow. Every activation Neo makes takes
 //!   one front turn in [`BrowserTabs`], one at a time: the agent's, follow's and a fit's.
 //!
 //! [`Takeovers`] is the v1 flow over them, zuzu's two moments: the owner opens the link (the tab
-//! goes private, the agent is locked out, the screen is held against spectators and the agent's
+//! the agent is locked out, the screen is held against spectators and the agent's
 //! moves, and the tab is fitted), and the owner is done (all of it given back, the lock last).
 //! It holds nothing but what it took from the parts, so a new flow replaces it without touching them (D13).
 //!
@@ -32,22 +32,19 @@
 //!  POST /v1/tabs/{tab}/fit ─▶ Fits::fit ─ surface plan ─▶ Xvnc (RFB), window, viewport
 //!  Xvnc ─ layouts ─▶ the screen watcher ─▶ the fits loop ─▶ refits; owner views every 750 ms
 //!  GET /v1/display ─▶ Displays::admit ─ upgrade ─▶ Admitted::serve ─ RFB, filtered ─▶ Xvnc
-//!    control: first input ─▶ views close ─▶ every open tab stamped, then private ─▶ the input
-//!      goes on
+//!    control: first input ─▶ views close ─▶ the input goes on
 //!    view: follow ─ the task's operations, Neo's front moves ─▶ the front turn ─▶ activateTab
-//!    views: tab.private, a 250 ms poll ─ a private tab in front ─▶ every view closes
 //!  door (app) ─▶ Front::check (sync) ─ the screen rule over the owner's holds
 //!  the agent's page.bringToFront ─▶ Front::bring_to_front ─ the front turn ─ the screen rule
-//!    ─ a private tab: every view closes first ─▶ Browser.activateTab ─▶ followers read the move
-//!  POST /v1/takeovers ─▶ Takeovers::start ─▶ private, lock, screen held, fit
+//!    ─▶ Browser.activateTab ─▶ followers read the move
+//!  POST /v1/takeovers ─▶ Takeovers::start ─▶ lock, screen held, fit
 //!  release, 10 s before the TTL, tab closed ─▶ Takeovers::release ─▶ displays closed,
 //!    fit restored, screen let go, unlock
 //! ```
 //!
 //! The rules live apart from the I/O, as pure functions that test alone: the lock decision,
 //! the screen rule, the fit rule, the surface's plans, the RFB bytes both ways and the display's
-//! verdict table, the owner's address rule, and follow's next activation and memory, private
-//! targets included.
+//! verdict table, the owner's address rule, and follow's next activation and memory.
 
 #![deny(missing_docs)]
 #![deny(
@@ -64,7 +61,6 @@ mod fit_rule;
 mod fits;
 mod follow;
 mod front;
-mod front_tab;
 mod limits;
 mod lock_decision;
 mod locks;
@@ -85,7 +81,7 @@ pub mod testing;
 
 pub use browser_tabs::BrowserTabs;
 pub use displays::{
-    Admitted, DisplayBinding, DisplayEnd, DisplayRequest, Displays, Follow, ScreenHold, TaintStamps,
+    Admitted, DisplayBinding, DisplayEnd, DisplayRequest, Displays, Follow, ScreenHold,
 };
 pub use fit_rule::FitMode;
 pub use fits::{BarAction, BarOutcome, BrowserBar, Fit, FitState, Fits, Fitted, Keyboard};

@@ -5,7 +5,6 @@ use std::collections::hash_map::Entry;
 use std::sync::Arc;
 
 use futures_util::future::BoxFuture;
-use neo_trace::{JsonPointer, PointerError, RedactionPolicy};
 use serde_json::Value;
 use serde_path_to_error::Error as PathError;
 
@@ -18,35 +17,24 @@ pub(crate) struct Registry {
     methods: HashMap<&'static str, Registered>,
 }
 
-/// Collects methods at startup. A duplicate name or a bad redaction pointer fails the start,
+/// Collects methods at startup. A duplicate name fails the start,
 /// so a placeholder and its real replacement can never both be registered.
 #[derive(Default)]
 pub(crate) struct RegistryBuilder {
     methods: HashMap<&'static str, Registered>,
 }
 
-/// Why a method could not be registered. Both are programming errors, caught by the first test
-/// that builds the full set.
+/// A registration error, caught by the first test that builds the full set.
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum RegistryError {
     /// Two methods claim one name.
     #[error("method {0} is registered twice")]
     Duplicate(&'static str),
-    /// A redaction field is not a JSON pointer.
-    #[error("method {method}: bad redaction pointer {pointer:?}")]
-    BadPointer {
-        method: &'static str,
-        pointer: &'static str,
-        #[source]
-        error: PointerError,
-    },
 }
 
-/// One registered method: its spec, its parsed redaction policy (shared by every trace record
-/// it produces) and its erased run step.
+/// One registered method: its spec and its erased run step.
 pub(super) struct Registered {
     spec: MethodSpec,
-    redaction: Arc<RedactionPolicy>,
     method: Arc<dyn ErasedMethod>,
 }
 
@@ -54,16 +42,11 @@ impl RegistryBuilder {
     /// Adds one method.
     pub(crate) fn define<M: Method>(&mut self, method: M) -> Result<(), RegistryError> {
         let spec = method.spec();
-        let redaction = RedactionPolicy {
-            secret: pointers(spec.name, spec.secret_args)?,
-            sensitive: pointers(spec.name, spec.sensitive_args)?,
-        };
         match self.methods.entry(spec.name) {
             Entry::Occupied(_) => Err(RegistryError::Duplicate(spec.name)),
             Entry::Vacant(slot) => {
                 slot.insert(Registered {
                     spec,
-                    redaction: Arc::new(redaction),
                     method: Arc::new(Erased(Arc::new(method))),
                 });
                 Ok(())
@@ -106,10 +89,6 @@ impl Registry {
 impl Registered {
     pub(super) fn spec(&self) -> MethodSpec {
         self.spec
-    }
-
-    pub(super) fn redaction(&self) -> &Arc<RedactionPolicy> {
-        &self.redaction
     }
 
     /// Decodes `input` into the method's typed input, once. A failure names the field path,
@@ -218,22 +197,6 @@ fn invalid_input(name: &str, error: &PathError<serde_json::Error>) -> OperationE
     OperationError::script(ErrorCode::INVALID_INPUT, message)
 }
 
-fn pointers(
-    method: &'static str,
-    fields: &'static [&'static str],
-) -> Result<Vec<JsonPointer>, RegistryError> {
-    fields
-        .iter()
-        .map(|pointer| {
-            JsonPointer::parse(pointer).map_err(|error| RegistryError::BadPointer {
-                method,
-                pointer,
-                error,
-            })
-        })
-        .collect()
-}
-
 #[cfg(test)]
 mod tests {
     use std::future::{self, Future};
@@ -310,24 +273,5 @@ mod tests {
             "a placeholder and its replacement can never both be served"
         );
         Ok(())
-    }
-
-    #[test]
-    fn a_bad_redaction_pointer_fails_the_start() {
-        let mut builder = RegistryBuilder::default();
-        let spec = MethodSpec {
-            secret_args: &["password"],
-            ..MethodSpec::new("page.fill", Effect::Write)
-        };
-        assert!(
-            matches!(
-                builder.define(Named(spec)),
-                Err(RegistryError::BadPointer {
-                    pointer: "password",
-                    ..
-                })
-            ),
-            "a pointer starts with `/`, or the field would never be redacted"
-        );
     }
 }

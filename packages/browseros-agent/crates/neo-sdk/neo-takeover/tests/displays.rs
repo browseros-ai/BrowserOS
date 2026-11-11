@@ -1,9 +1,7 @@
 //! Displays as the service's display route uses them. A test plays the viewer through
 //! `Admitted::serve`; the fake Xvnc records what reaches it; the browser is core's scripted
 //! connection with tabs 3 and 4 open and tab 3 in front;
-//! `Privacy` is real, over a private-flag store the test can hold or fail, which commits through
-//! the trace writer as the service's does, so `tab.private` reaches the front-tab watch; and
-//! follow reads a real trace store and writer. A shared log orders what the test's commit and the
+//! //! follow reads a real trace store and writer. A shared log orders what the test's commit and the
 //! fake browser saw: each activation is logged as it lands. A test can hold activations in
 //! flight, neither landed nor answered, and check a step meanwhile, so what the fake browser
 //! received orders the test, not a delay.
@@ -18,7 +16,7 @@ use browseros_core::{BrowserSession, BrowserSessionHooks, CdpConnection, Session
 use bytes::Bytes;
 use futures_util::FutureExt;
 use futures_util::future::BoxFuture;
-use neo_takeover::testing::{FakeXvnc, NoStamps};
+use neo_takeover::testing::FakeXvnc;
 use neo_takeover::{
     Admitted, BrowserTabs, DisplayBinding, DisplayEnd, DisplayRequest, Displays, Follow, Front,
     FrontError, LockBinding, LockTtl, Locks, OwnerHasScreen, PartError, Reads, ScreenHolder,
@@ -26,20 +24,18 @@ use neo_takeover::{
 };
 use neo_trace::{
     Delivery, Effect, EpochMillis, OperationEnded, OperationId, OperationKind, OperationStarted,
-    Outcome, Privacy, PrivacyRecord, PrivacyStore, PrivateReason, RedactionLimits, Redactor, RunId,
-    RunStarted, SecretSet, SecretSetConfig, TargetSensitivity, TaskId, TraceError, TraceSink,
-    TraceStore, WriterConfig, spawn_writer,
+    Outcome, RedactionLimits, Redactor, RunId, RunStarted, SecretSet, SecretSetConfig, TaskId,
+    TraceSink, TraceStore, WriterConfig, spawn_writer,
 };
 use serde_json::{Value, json};
-use std::collections::HashMap;
 use std::net::SocketAddr;
-use std::pin::{Pin, pin};
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::pin::pin;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 use tokio::sync::{broadcast, mpsc, watch};
 use tokio::task::JoinHandle;
-use tokio::time::{Instant, timeout};
+use tokio::time::timeout;
 
 type BoxError = Box<dyn std::error::Error + Send + Sync>;
 type TestResult = Result<(), BoxError>;
@@ -56,27 +52,15 @@ const WITHIN: Duration = Duration::from_secs(5);
 /// tick, so a paused follower would have acted by then had it not been paused.
 const QUIET: Duration = Duration::from_millis(1500);
 
-/// Longer than two of the front-tab watch's 250 ms polls.
-const POLLS: Duration = Duration::from_millis(600);
-
-/// The front-tab watch polls every 250 ms. A view that closes this soon after a poll was closed by
-/// something other than the next poll.
-const BEFORE_THE_NEXT_POLL: Duration = Duration::from_millis(150);
-
 /// The version, security type 1, and a ClientInit that asks for exclusive access (0).
 const HANDSHAKE: &[u8] = b"RFB 003.008\n\x01\x00";
 /// An update request answered at once (not incremental).
 const UPDATE: [u8; 10] = [3, 0, 0, 0, 0, 0, 0, 1, 0, 1];
-/// An update request Xvnc holds until the screen changes (incremental).
-const INCREMENTAL: [u8; 10] = [3, 1, 0, 0, 0, 0, 0, 1, 0, 1];
 /// What Xvnc sends before any message: its version, security type None, SecurityResult 0, and
 /// ServerInit (1600×1000, 32 bits per pixel, the name "neo").
 const SERVER_HANDSHAKE: usize = 12 + 2 + 4 + 24 + 3;
-/// The pixel the screen shows once the private tab 4 is in front.
-const PRIVATE_PX: [u8; 4] = [0xde, 0xad, 0xbe, 0xef];
 /// Key `a` down, as type 4 and as noVNC's QEMU key event.
 const KEY_A: [u8; 8] = [4, 1, 0, 0, 0, 0, 0, 0x61];
-const KEY_B: [u8; 8] = [4, 1, 0, 0, 0, 0, 0, 0x62];
 const QEMU_A: [u8; 12] = [255, 0, 0, 1, 0, 0, 0, 0x61, 0, 0, 0, 0x1e];
 /// Key `a` up, both ways.
 const KEY_A_UP: [u8; 8] = [4, 0, 0, 0, 0, 0, 0, 0x61];
@@ -165,13 +149,6 @@ impl Log {
     }
 }
 
-/// The screen a tab shows once it is in front.
-struct Paint {
-    tab: i64,
-    pixel: [u8; 4],
-    xvnc: Arc<FakeXvnc>,
-}
-
 /// The scripted browser with activation gates and a shared log for ordering assertions.
 struct Browser {
     script: Arc<TestConnection>,
@@ -185,8 +162,6 @@ struct Browser {
     activations: watch::Sender<bool>,
     /// Logs each activation as it lands.
     log: Log,
-    /// What the screen paints once a tab comes forward, when a test set it.
-    paint: Mutex<Option<Paint>>,
 }
 
 impl Browser {
@@ -196,7 +171,6 @@ impl Browser {
             listed: Mutex::default(),
             activations: watch::channel(true).0,
             log: Log::default(),
-            paint: Mutex::default(),
         }
     }
 
@@ -244,11 +218,6 @@ impl Browser {
         if let Some(tab) = activated {
             let _ = self.activations.subscribe().wait_for(|open| *open).await;
             self.log.push(format!("activate {tab}"));
-            if let Some(paint) = &*self.paint.lock().unwrap_or_else(PoisonError::into_inner)
-                && paint.tab == tab
-            {
-                paint.xvnc.paint(paint.pixel);
-            }
         }
         if let Some(tab) = activated
             && let Some(tabs) = self
@@ -324,75 +293,10 @@ impl CdpConnection for Browser {
     }
 }
 
-/// Private flags, committed by the trace writer, which publishes each as `tab.private`, and
-/// listed in memory. A test can hold commits until it lets them through, or fail them.
-struct Flags {
-    writer: TraceSink,
-    committed: Mutex<Vec<TabId>>,
-    attempts: AtomicUsize,
-    fail: AtomicBool,
-    /// While true, every commit waits.
-    held: watch::Sender<bool>,
-}
-
-impl Flags {
-    fn new(writer: TraceSink) -> Arc<Self> {
-        Arc::new(Self {
-            writer,
-            committed: Mutex::default(),
-            attempts: AtomicUsize::new(0),
-            fail: AtomicBool::new(false),
-            held: watch::channel(false).0,
-        })
-    }
-
-    fn committed(&self) -> Vec<TabId> {
-        self.committed
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clone()
-    }
-
-    async fn attempted(&self, count: usize) -> TestResult {
-        eventually(|| self.attempts.load(Ordering::SeqCst) >= count).await
-    }
-}
-
-impl PrivacyStore for Flags {
-    fn persist_private(
-        &self,
-        tab: TabId,
-        record: PrivacyRecord,
-    ) -> BoxFuture<'_, Result<(), TraceError>> {
-        Box::pin(async move {
-            self.attempts.fetch_add(1, Ordering::SeqCst);
-            let mut held = self.held.subscribe();
-            held.wait_for(|held| !*held)
-                .await
-                .map_err(|_| TraceError::Closed)?;
-            if self.fail.load(Ordering::SeqCst) {
-                return Err(TraceError::Closed);
-            }
-            self.writer.persist_private(tab, record).await?;
-            self.committed
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .push(tab);
-            Ok(())
-        })
-    }
-
-    fn forget_private(&self, _tab: TabId) -> BoxFuture<'_, Result<(), TraceError>> {
-        Box::pin(async { Ok(()) })
-    }
-}
-
 struct Harness {
     _dir: tempfile::TempDir,
     xvnc: Arc<FakeXvnc>,
     browser: Arc<Browser>,
-    flags: Arc<Flags>,
-    privacy: Arc<Privacy>,
     sink: TraceSink,
     locks: Arc<Locks>,
     displays: Arc<Displays>,
@@ -415,12 +319,6 @@ async fn harness_at(xvnc: FakeXvnc, addr: SocketAddr) -> Result<Harness, BoxErro
         WriterConfig::default(),
         None,
     );
-    let flags = Flags::new(sink.clone());
-    let privacy = Privacy::new(
-        Arc::clone(&secrets),
-        Arc::clone(&flags) as Arc<dyn PrivacyStore>,
-        HashMap::new(),
-    );
     let browser = Arc::new(Browser::new(browser(&[3, 4], 3)?));
     let tabs = BrowserTabs::new(
         BrowserSession::new(
@@ -430,21 +328,11 @@ async fn harness_at(xvnc: FakeXvnc, addr: SocketAddr) -> Result<Harness, BoxErro
         Arc::new(Viewports::default()),
     );
     let locks = Locks::new(store.clone(), sink.clone());
-    let displays = Displays::new(
-        addr,
-        tabs,
-        Arc::clone(&privacy),
-        Arc::new(NoStamps),
-        Arc::clone(&locks),
-        sink.clone(),
-        store,
-    );
+    let displays = Displays::new(addr, tabs, Arc::clone(&locks), sink.clone(), store);
     Ok(Harness {
         _dir: dir,
         xvnc: Arc::new(xvnc),
         browser,
-        flags,
-        privacy,
         sink,
         locks,
         displays,
@@ -480,35 +368,9 @@ impl Harness {
             .collect())
     }
 
-    /// How many times anything listed the browser's tabs, the tab in front with them.
-    fn tab_reads(&self) -> Result<usize, BoxError> {
-        Ok(self.calls("Browser.getTabs")?.len())
-    }
-
-    /// Makes `tab` private, durably, as the host's `POST /v1/tabs/{tab}/private` does.
-    async fn make_private(&self, tab: i64) -> TestResult {
-        self.privacy
-            .make_private(TabId(tab), PrivateReason::Host, EpochMillis::now())
-            .await?;
-        Ok(())
-    }
-
     /// What happened so far, in order.
     fn log(&self) -> Vec<String> {
         self.browser.log.entries()
-    }
-
-    /// From now on the screen paints `pixel` once `tab` comes forward.
-    fn paint_when_in_front(&self, tab: i64, pixel: [u8; 4]) {
-        *self
-            .browser
-            .paint
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner) = Some(Paint {
-            tab,
-            pixel,
-            xvnc: Arc::clone(&self.xvnc),
-        });
     }
 
     fn front(&self) -> Front {
@@ -526,36 +388,6 @@ impl Harness {
             .await
     }
 
-    /// Whether a new view is refused now. Admission refuses a paused view before it awaits
-    /// anything, so this answers synchronously, as a commit must.
-    fn views_refused(&self) -> bool {
-        matches!(
-            self.displays
-                .admit(DisplayRequest::View { follow: None })
-                .now_or_never(),
-            Some(Err(PartError::DisplayPaused))
-        )
-    }
-
-    /// Whether a new view is refused once its admission has read what is in front, as with a
-    /// private tab there (decision 34).
-    async fn front_refuses_views(&self) -> bool {
-        matches!(
-            self.displays
-                .admit(DisplayRequest::View { follow: None })
-                .await,
-            Err(PartError::DisplayPaused)
-        )
-    }
-
-    /// From now on `Browser.activateTab` answers an error, as when it gave no answer in time.
-    fn fail_activations(&self) -> TestResult {
-        self.browser
-            .script
-            .always("Browser.activateTab", cdp_error("no answer in time"))?;
-        Ok(())
-    }
-
     /// Waits until the browser holds the activation of `tab`: sent, neither landed nor answered.
     async fn activation_held(&self, tab: i64) -> TestResult {
         eventually(|| {
@@ -563,36 +395,6 @@ impl Harness {
                 && self.activated().is_ok_and(|tabs| tabs.last() == Some(&tab))
         })
         .await
-    }
-
-    /// Polls the agent's move by hand until it is past its activation's answer: it returned, or
-    /// it asked the browser what is in front. Left unpolled, it keeps what it holds, its private
-    /// switch included, until the test polls it again.
-    async fn poll_past_the_activation(&self, mut moving: Pin<&mut impl Future>) -> TestResult {
-        timeout(WITHIN, async {
-            while moving.as_mut().now_or_never().is_none()
-                && !self
-                    .tab_reads_since_activation()
-                    .is_ok_and(|reads| reads > 0)
-            {
-                tokio::time::sleep(Duration::from_millis(5)).await;
-            }
-        })
-        .await?;
-        Ok(())
-    }
-
-    /// How many times the browser listed its tabs since it was last asked to bring one forward.
-    fn tab_reads_since_activation(&self) -> Result<usize, BoxError> {
-        let calls = self.browser.script.calls()?;
-        let since = calls
-            .iter()
-            .rposition(|call| call.method == "Browser.activateTab")
-            .ok_or("no activation yet")?;
-        Ok(calls[since..]
-            .iter()
-            .filter(|call| call.method == "Browser.getTabs")
-            .count())
     }
 
     /// Each tab the browser was asked to bring to the front, in order.
@@ -644,7 +446,6 @@ impl Harness {
             result: None,
             error: None,
             page_after: None,
-            target: TargetSensitivity::Ordinary,
             also_mask: None,
             at,
         });
@@ -714,15 +515,6 @@ impl Viewer {
         self.to_display = None;
     }
 
-    /// Every byte that reaches the viewer until its display ends.
-    async fn until_the_end(&mut self) -> Result<Vec<u8>, BoxError> {
-        let mut bytes = Vec::new();
-        while let Some(chunk) = timeout(WITHIN, self.from_display.recv()).await? {
-            bytes.extend_from_slice(&chunk);
-        }
-        Ok(bytes)
-    }
-
     async fn ended(self) -> Result<DisplayEnd, BoxError> {
         Ok(timeout(WITHIN, self.serving).await??)
     }
@@ -758,7 +550,6 @@ fn first_operation(
         effect,
         tab,
         args: json!({}),
-        policy: Arc::default(),
         also_mask: None,
         at,
     }
@@ -829,10 +620,6 @@ async fn a_view_display_passes_the_screen_and_drops_every_input() -> TestResult 
     server.extend_from_slice(&[0, 0, 0, 3, b'n', b'e', b'o']);
     let read = viewer.read(server.len()).await?;
     assert_eq!(read.get(..server.len()), Some(server.as_slice()));
-    assert!(
-        h.privacy.is_private(TabId(3)).is_none(),
-        "a view taints nothing"
-    );
 
     viewer.leave();
     assert_eq!(viewer.ended().await?, DisplayEnd::ViewerLeft);
@@ -853,74 +640,6 @@ async fn a_viewer_sending_a_message_the_filter_does_not_know_is_refused() -> Tes
         matches!(control.ended().await?, DisplayEnd::Refused(_)),
         "a QEMU message other than the key event"
     );
-    Ok(())
-}
-
-#[tokio::test]
-async fn a_control_display_holds_the_first_key_until_every_open_tab_is_private() -> TestResult {
-    let h = harness().await?;
-    let control = h.control(None).await?;
-    control.send(HANDSHAKE);
-    control.send(&HOVER);
-    assert_eq!(
-        h.received(0, 4).await?[3],
-        HOVER,
-        "a hover move is not input"
-    );
-    assert!(h.privacy.is_private(TabId(3)).is_none());
-
-    h.flags.held.send_replace(true);
-    control.send(&QEMU_A);
-    h.flags.attempted(1).await?;
-    tokio::time::sleep(Duration::from_millis(200)).await;
-    assert_eq!(
-        h.xvnc.received(0).len(),
-        4,
-        "the key waits while the private flag commits"
-    );
-    assert!(
-        h.privacy.is_private(TabId(3)).is_some(),
-        "a tab is private in memory before its commit"
-    );
-
-    h.flags.held.send_replace(false);
-    assert_eq!(h.received(0, 5).await?[4], QEMU_A);
-    assert_eq!(h.flags.committed(), [TabId(3), TabId(4)]);
-    for tab in [3, 4] {
-        let record = h
-            .privacy
-            .is_private(TabId(tab))
-            .ok_or("the tab is not private")?;
-        assert_eq!(record.reason, PrivateReason::DisplayInput);
-    }
-    // Later input goes at once: no new commit.
-    control.send(&KEY_B);
-    assert_eq!(h.received(0, 6).await?[5], KEY_B);
-    assert_eq!(h.flags.attempts.load(Ordering::SeqCst), 2);
-    Ok(())
-}
-
-#[tokio::test]
-async fn a_failed_commit_drops_that_input_and_the_next_input_tries_again() -> TestResult {
-    let h = harness().await?;
-    let control = h.control(None).await?;
-    control.send(HANDSHAKE);
-    h.flags.fail.store(true, Ordering::SeqCst);
-    control.send(&KEY_A);
-    h.flags.attempted(1).await?;
-    tokio::time::sleep(Duration::from_millis(100)).await;
-
-    h.flags.fail.store(false, Ordering::SeqCst);
-    control.send(&KEY_B);
-    let mut expected = handshake_received();
-    expected.push(KEY_B.to_vec());
-    assert_eq!(
-        h.received(0, 4).await?,
-        expected,
-        "key a never reached Xvnc"
-    );
-    assert_eq!(h.flags.committed(), [TabId(3), TabId(4)]);
-
     Ok(())
 }
 
@@ -951,20 +670,12 @@ async fn views_close_at_the_owners_first_input_and_stay_out_while_that_display_i
 
     control.leave();
     assert_eq!(control.ended().await?, DisplayEnd::ViewerLeft);
-    // The first input made every open tab private, for good, and tab 3 is still in front.
-    assert!(matches!(
-        h.displays
-            .admit(DisplayRequest::View { follow: None })
-            .await,
-        Err(PartError::DisplayPaused)
-    ));
-    open_tabs(&h.browser.script, &[3, 4, 5], 5)?;
     let back = h.view(None).await?;
     back.send(HANDSHAKE);
     assert_eq!(
         h.received(2, 3).await?,
         handshake_received(),
-        "views are let in again once a tab that opened after the owner left is in front"
+        "views are let in again once the owner leaves"
     );
     Ok(())
 }
@@ -1143,155 +854,6 @@ async fn follow_keeps_a_tab_in_front() -> TestResult {
 }
 
 #[tokio::test]
-async fn a_view_is_refused_while_a_private_tab_is_in_front() -> TestResult {
-    let h = harness().await?;
-    h.make_private(3).await?;
-    assert!(matches!(
-        h.displays
-            .admit(DisplayRequest::View { follow: None })
-            .await,
-        Err(PartError::DisplayPaused)
-    ));
-    h.browser
-        .script
-        .always("Browser.getTabs", cdp_error("Browser closed"))?;
-    assert!(
-        matches!(
-            h.displays
-                .admit(DisplayRequest::View { follow: None })
-                .await,
-            Err(PartError::Browser(_))
-        ),
-        "what is in front is unknown"
-    );
-    assert_eq!(h.xvnc.connections(), 0, "a refused view never reaches Xvnc");
-
-    open_tabs(&h.browser.script, &[3, 4], 4)?;
-    let view = h.view(None).await?;
-    view.send(HANDSHAKE);
-    assert_eq!(
-        h.received(0, 3).await?,
-        handshake_received(),
-        "a private tab behind the one in front keeps no view out"
-    );
-    Ok(())
-}
-
-#[tokio::test]
-async fn an_open_view_closes_as_soon_as_the_tab_in_front_goes_private() -> TestResult {
-    let h = harness().await?;
-    let view = h.view(None).await?;
-    view.send(HANDSHAKE);
-    h.received(0, 3).await?;
-    // Just after a poll, so only the flag's `tab.private` can close the view this soon.
-    let reads = h.tab_reads()?;
-    eventually(|| h.tab_reads().is_ok_and(|now| now > reads)).await?;
-    h.make_private(3).await?;
-    assert_eq!(
-        timeout(BEFORE_THE_NEXT_POLL, view.ended()).await??,
-        DisplayEnd::Paused
-    );
-    assert!(matches!(
-        h.displays
-            .admit(DisplayRequest::View { follow: None })
-            .await,
-        Err(PartError::DisplayPaused)
-    ));
-    Ok(())
-}
-
-#[tokio::test]
-async fn an_open_view_closes_when_a_private_tab_comes_to_the_front() -> TestResult {
-    let h = harness().await?;
-    h.make_private(4).await?;
-    let view = h.view(None).await?;
-    view.send(HANDSHAKE);
-    h.received(0, 3).await?;
-
-    // The agent activates tab 4. The browser sends no event for that, so the poll finds it.
-    let activated = Instant::now();
-    open_tabs(&h.browser.script, &[3, 4], 4)?;
-    assert_eq!(view.ended().await?, DisplayEnd::Paused);
-    let closed_after = activated.elapsed();
-    assert!(
-        closed_after < Duration::from_secs(1),
-        "closed {closed_after:?} after the activation, more than a poll or so"
-    );
-    assert!(matches!(
-        h.displays
-            .admit(DisplayRequest::View { follow: None })
-            .await,
-        Err(PartError::DisplayPaused)
-    ));
-
-    open_tabs(&h.browser.script, &[3, 4], 3)?;
-    let back = h.view(None).await?;
-    back.send(HANDSHAKE);
-    assert_eq!(
-        h.received(1, 3).await?,
-        handshake_received(),
-        "views are let in again once tab 3 is back in front"
-    );
-    Ok(())
-}
-
-/// sdk-privacy leak test finding 4: a control display's first input makes every open tab
-/// private, and the flag outlives the display. Once the tab the owner worked in closed, a
-/// private tab was left in front, and a view following the agent's next tab was refused before
-/// its follower could bring that tab forward. The screen stayed on the private tab, where a raw
-/// control display's keys then went.
-#[tokio::test]
-async fn a_follow_view_brings_its_tab_forward_over_a_private_tab_left_in_front() -> TestResult {
-    let h = harness().await?;
-    h.browser.list_tabs(&[3, 4], 3)?;
-    h.make_private(3).await?;
-
-    let view = h.view(Some(Follow::Tab(TabId(4)))).await?;
-    view.send(HANDSHAKE);
-    assert_eq!(
-        h.received(0, 3).await?,
-        handshake_received(),
-        "the view shows tab 4"
-    );
-    assert_eq!(h.activated()?.first(), Some(&4), "brought forward first");
-    Ok(())
-}
-
-/// The front-tab watch polls every 250 ms. A view registered before its tab came forward could be
-/// closed by a poll that still saw the private tab it was replacing.
-#[tokio::test]
-async fn a_view_whose_tab_comes_forward_slowly_is_not_closed_by_the_tab_it_replaces() -> TestResult
-{
-    let h = harness().await?;
-    h.browser.list_tabs(&[3, 4], 3)?;
-    h.make_private(3).await?;
-    h.browser.hold_activations();
-    let admitting = tokio::spawn({
-        let displays = Arc::clone(&h.displays);
-        async move {
-            displays
-                .admit(DisplayRequest::View {
-                    follow: Some(Follow::Tab(TabId(4))),
-                })
-                .await
-        }
-    });
-    h.activation_held(4).await?;
-    // In flight for two of the watch's polls, which would close a view already registered.
-    tokio::time::sleep(POLLS).await;
-    h.browser.let_activations_go();
-
-    let view = serve(timeout(WITHIN, admitting).await???);
-    view.send(HANDSHAKE);
-    assert_eq!(
-        h.received(0, 3).await?,
-        handshake_received(),
-        "the view still shows tab 4"
-    );
-    Ok(())
-}
-
-#[tokio::test]
 async fn a_view_admitted_while_views_are_held_brings_nothing_forward() -> TestResult {
     let h = harness().await?;
     h.browser.list_tabs(&[3, 4], 3)?;
@@ -1312,97 +874,6 @@ async fn a_view_admitted_while_views_are_held_brings_nothing_forward() -> TestRe
 }
 
 #[tokio::test]
-async fn a_view_that_cannot_bring_its_tab_forward_is_still_refused_over_a_private_tab() -> TestResult
-{
-    let h = harness().await?;
-    h.browser.list_tabs(&[3, 4], 3)?;
-    h.make_private(3).await?;
-    h.make_private(4).await?;
-    assert!(
-        matches!(
-            h.displays
-                .admit(DisplayRequest::View {
-                    follow: Some(Follow::Tab(TabId(4)))
-                })
-                .await,
-            Err(PartError::DisplayPaused)
-        ),
-        "its own tab is private: follow never brings it forward"
-    );
-    let task = TaskId::parse("checkout")?;
-    assert!(
-        matches!(
-            h.displays
-                .admit(DisplayRequest::View {
-                    follow: Some(Follow::Task(task))
-                })
-                .await,
-            Err(PartError::DisplayPaused)
-        ),
-        "a task with no operation yet names no tab to bring forward"
-    );
-    assert!(h.activated()?.is_empty());
-    assert_eq!(h.xvnc.connections(), 0, "a refused view never reaches Xvnc");
-    Ok(())
-}
-
-#[tokio::test]
-async fn follow_never_brings_a_private_tab_to_the_front() -> TestResult {
-    let h = harness().await?;
-    h.make_private(4).await?;
-    let task = TaskId::parse("checkout")?;
-    let _tab_view = h.view(Some(Follow::Tab(TabId(4)))).await?;
-    let _task_view = h.view(Some(Follow::Task(task.clone()))).await?;
-    h.operation(&task, 4);
-    tokio::time::sleep(QUIET).await;
-    assert!(
-        h.activated()?.is_empty(),
-        "tab 4 is private: neither follower brought it forward"
-    );
-
-    h.operation(&task, 3);
-    eventually(|| h.activated().is_ok_and(|tabs| tabs == [3])).await?;
-    Ok(())
-}
-
-#[tokio::test]
-async fn the_tab_in_front_is_read_only_while_a_view_is_open() -> TestResult {
-    let h = harness().await?;
-    let idle = h.tab_reads()?;
-    tokio::time::sleep(POLLS).await;
-    assert_eq!(h.tab_reads()?, idle, "no view, no reads");
-
-    let mut first = h.view(None).await?;
-    let mut second = h.view(None).await?;
-    let opened = (h.tab_reads()?, Instant::now());
-    tokio::time::sleep(Duration::from_secs(1)).await;
-    let reads = h.tab_reads()? - opened.0;
-    let most = usize::try_from(opened.1.elapsed().as_millis() / 250)? + 1;
-    assert!(
-        (2..=most).contains(&reads),
-        "{reads} reads in {:?}: one 250 ms poll for both views",
-        opened.1.elapsed()
-    );
-
-    first.leave();
-    first.ended().await?;
-    let one_left = h.tab_reads()?;
-    tokio::time::sleep(POLLS).await;
-    assert!(h.tab_reads()? > one_left, "a view is still open");
-
-    second.leave();
-    second.ended().await?;
-    let none_left = h.tab_reads()?;
-    tokio::time::sleep(POLLS).await;
-    assert_eq!(
-        h.tab_reads()?,
-        none_left,
-        "the last view closed: no more reads"
-    );
-    Ok(())
-}
-
-#[tokio::test]
 async fn a_control_display_can_open_when_the_tabs_cannot_be_listed() -> TestResult {
     let h = harness().await?;
     h.browser
@@ -1416,52 +887,6 @@ async fn a_control_display_can_open_when_the_tabs_cannot_be_listed() -> TestResu
     Ok(())
 }
 
-#[tokio::test]
-async fn a_first_input_waiting_on_a_commit_that_never_returns_ends_with_its_display() -> TestResult
-{
-    let h = harness().await?;
-    h.flags.held.send_replace(true);
-    let mut left = h.control(None).await?;
-    left.send(HANDSHAKE);
-    left.send(&KEY_A);
-    h.flags.attempted(1).await?;
-    left.leave();
-    assert_eq!(left.ended().await?, DisplayEnd::ViewerLeft);
-
-    let dropped = h.control(None).await?;
-    dropped.send(HANDSHAKE);
-    dropped.send(&KEY_B);
-    h.flags.attempted(2).await?;
-    h.xvnc.drop_connections();
-    assert_eq!(dropped.ended().await?, DisplayEnd::ScreenClosed);
-
-    for connection in [0, 1] {
-        assert_eq!(
-            h.received(connection, 3).await?,
-            handshake_received(),
-            "the waiting key never reached Xvnc"
-        );
-    }
-    // Neither display stays to keep views out. Tab 3, which the stalled commits made private in
-    // memory, is in front, so a tab that opened since comes forward.
-    open_tabs(&h.browser.script, &[3, 4, 5], 5)?;
-    h.view(None).await?;
-    Ok(())
-}
-
-#[tokio::test]
-async fn a_viewer_that_floods_while_its_first_input_waits_is_refused() -> TestResult {
-    let h = harness().await?;
-    h.flags.held.send_replace(true);
-    let control = h.control(None).await?;
-    control.send(HANDSHAKE);
-    control.send(&KEY_A);
-    h.flags.attempted(1).await?;
-    control.send(&UPDATE.repeat(220_000));
-    assert!(matches!(control.ended().await?, DisplayEnd::Refused(_)));
-    Ok(())
-}
-
 #[test]
 fn the_browser_hands_its_targeted_subscriber_what_its_script_emits() -> TestResult {
     let script = TestConnection::new([]);
@@ -1472,120 +897,8 @@ fn the_browser_hands_its_targeted_subscriber_what_its_script_emits() -> TestResu
     Ok(())
 }
 
-/// The agent brings the private tab 4 forward under a plain view and a follow view. Its commit
-/// (the door's recheck, then mark_sent) already finds new views refused: the switch that refuses
-/// them cancelled every open view's close in the same step. The activation comes after the
-/// commit, and both views end.
 #[tokio::test]
-async fn a_private_tab_comes_forward_only_after_every_views_close() -> TestResult {
-    let h = harness().await?;
-    h.browser.list_tabs(&[3, 4], 3)?;
-    h.make_private(4).await?;
-    let task = TaskId::parse("checkout")?;
-    h.operation(&task, 3);
-    h.sink.flush().await?;
-    let plain = h.view(None).await?;
-    let follower = h.view(Some(Follow::Task(task))).await?;
-
-    let log = &h.browser.log;
-    h.front()
-        .bring_to_front(TabId(4), None, || {
-            if h.views_refused() {
-                log.push("views refused");
-            }
-            log.push("commit");
-            Ok::<_, ()>(())
-        })
-        .await?;
-    assert_eq!(
-        h.log(),
-        ["activate 3", "views refused", "commit", "activate 4"],
-        "the follow view brought 3 forward as it opened; then views were out before the commit, \
-         and the activation came after it"
-    );
-    assert_eq!(plain.ended().await?, DisplayEnd::Paused);
-    assert_eq!(follower.ended().await?, DisplayEnd::Paused);
-    Ok(())
-}
-
-/// The screen paints the private tab as soon as the browser brings it forward, and Xvnc answers
-/// the update request the view holds with it. None of it reaches the viewer.
-#[tokio::test]
-async fn no_byte_xvnc_sends_after_the_switch_reaches_a_viewer() -> TestResult {
-    let h = harness().await?;
-    h.browser.list_tabs(&[3, 4], 3)?;
-    h.make_private(4).await?;
-    h.paint_when_in_front(4, PRIVATE_PX);
-    let mut view = h.view(None).await?;
-    view.send(HANDSHAKE);
-    view.send(&UPDATE);
-    view.read(SERVER_HANDSHAKE + 1).await?;
-    view.send(&INCREMENTAL);
-    h.received(0, 5).await?;
-
-    h.bring_to_front(4, None).await?;
-    let shown = view.until_the_end().await?;
-    assert!(
-        !shown
-            .windows(PRIVATE_PX.len())
-            .any(|pixel| pixel == PRIVATE_PX),
-        "the private tab's pixels reached the viewer"
-    );
-    assert_eq!(view.ended().await?, DisplayEnd::Paused);
-    Ok(())
-}
-
-#[tokio::test]
-async fn no_view_is_admitted_while_a_private_tab_comes_forward() -> TestResult {
-    let h = harness().await?;
-    h.browser.list_tabs(&[3, 4], 3)?;
-    h.make_private(4).await?;
-    h.browser.hold_activations();
-    let moving = tokio::spawn({
-        let front = h.front();
-        async move {
-            front
-                .bring_to_front(TabId(4), None, || Ok::<_, ()>(()))
-                .await
-        }
-    });
-    h.activation_held(4).await?;
-    let dials = h.xvnc.connections();
-    assert!(
-        matches!(
-            h.displays
-                .admit(DisplayRequest::View { follow: None })
-                .await,
-            Err(PartError::DisplayPaused)
-        ),
-        "refused while the activation is in flight"
-    );
-    assert_eq!(h.xvnc.connections(), dials, "and it never reached Xvnc");
-
-    h.browser.let_activations_go();
-    timeout(WITHIN, moving).await???;
-    assert!(
-        matches!(
-            h.displays
-                .admit(DisplayRequest::View { follow: None })
-                .await,
-            Err(PartError::DisplayPaused)
-        ),
-        "refused once the switch is over: the private tab is in front"
-    );
-    let view = h.view(Some(Follow::Tab(TabId(3)))).await?;
-    view.send(HANDSHAKE);
-    assert_eq!(
-        h.received(dials, 3).await?,
-        handshake_received(),
-        "a followTab=3 view brings 3 back, the host's newer request, and is admitted"
-    );
-    assert_eq!(h.log(), ["activate 4", "activate 3"]);
-    Ok(())
-}
-
-#[tokio::test]
-async fn a_tab_that_is_not_private_comes_forward_under_open_views() -> TestResult {
+async fn a_tab_comes_forward_under_open_views() -> TestResult {
     let h = harness().await?;
     h.browser.list_tabs(&[3, 4], 3)?;
     let mut view = h.view(None).await?;
@@ -1607,7 +920,6 @@ async fn a_tab_that_is_not_private_comes_forward_under_open_views() -> TestResul
 async fn the_owner_holding_the_screen_refuses_the_move_and_sends_nothing() -> TestResult {
     let h = harness().await?;
     h.browser.list_tabs(&[3, 4], 3)?;
-    h.make_private(4).await?;
     let mut view = h.view(None).await?;
     view.send(HANDSHAKE);
     view.read(SERVER_HANDSHAKE).await?;
@@ -1663,7 +975,6 @@ async fn the_owner_holding_the_screen_refuses_the_move_and_sends_nothing() -> Te
 async fn a_refused_commit_sends_nothing_and_lets_views_back() -> TestResult {
     let h = harness().await?;
     h.browser.list_tabs(&[3, 4], 3)?;
-    h.make_private(4).await?;
     let refused = h
         .front()
         .bring_to_front(TabId(4), None, || Err::<(), _>("the run was stopped"))
@@ -1679,39 +990,6 @@ async fn a_refused_commit_sends_nothing_and_lets_views_back() -> TestResult {
         h.received(0, 3).await?,
         handshake_received(),
         "views are let back, with 3 still in front"
-    );
-    Ok(())
-}
-
-/// Whether the agent's move ended with its activation's own error, the browser's.
-fn activation_failed(moved: &Result<(), FrontError<()>>) -> bool {
-    matches!(moved, Err(FrontError::Activation(PartError::Browser(_))))
-}
-
-/// `Browser.activateTab` answers an error, as when it gave no answer in time, yet the browser may
-/// still switch to the private tab afterwards. Views stay out past the error, until the browser
-/// reads what is in front, exactly as after an activation that answered. The test polls the move
-/// itself, so while it checks, the move waits in that read whatever the clock does.
-#[tokio::test]
-async fn a_private_move_whose_activation_failed_keeps_views_out_until_the_front_is_read()
--> TestResult {
-    let h = harness().await?;
-    h.make_private(4).await?;
-    h.fail_activations()?;
-    let mut moving = pin!(h.bring_to_front(4, None));
-    h.poll_past_the_activation(moving.as_mut()).await?;
-    assert!(
-        h.views_refused(),
-        "a view asked for before the browser reads the front is refused"
-    );
-
-    // The switch the browser did not confirm lands after all.
-    open_tabs(&h.browser.script, &[3, 4], 4)?;
-    let moved = timeout(WITHIN, moving).await?;
-    assert!(activation_failed(&moved), "the move's error: {moved:?}");
-    assert!(
-        h.front_refuses_views().await,
-        "and with the private tab in front, views stay out (decision 34)"
     );
     Ok(())
 }

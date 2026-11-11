@@ -405,6 +405,12 @@ export type OpInputs = {
   'page.goBack': PageArgs & { waitUntil: LoadState }
   'page.goForward': PageArgs & { waitUntil: LoadState }
   /** Matched in the page with vendored `urlMatches`, so globs and RegExps keep JS semantics. */
+  'page.waitForNavigation': FrameArgs & {
+    url?: UrlPattern
+    waitUntil: LoadState
+    since: number
+    after: number
+  }
   'page.waitForURL': FrameArgs & { url: UrlPattern; waitUntil: LoadState }
   'page.waitForLoadState': FrameArgs & { state: LoadState }
   'page.title': FrameArgs
@@ -527,6 +533,7 @@ export type OpOutputs = {
   'page.reload': NavigationResult | null
   'page.goBack': NavigationResult | null
   'page.goForward': NavigationResult | null
+  'page.waitForNavigation': NavigationResult & { navigationSeq: number }
   'page.waitForURL': NavigationResult | null
   'page.waitForLoadState': NavigationResult | null
   'page.title': string
