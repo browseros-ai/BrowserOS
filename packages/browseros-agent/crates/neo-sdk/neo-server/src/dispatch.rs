@@ -43,13 +43,13 @@ mod tests;
 pub(crate) use dispatcher::{
     Call, CallSite, Caller, Dispatcher, OpReply, PageFact, PageFacts, PendingReply,
 };
-pub(crate) use method::{Lifetime, Listing, Method, MethodSpec, Output, PageScript, Visibility};
+pub(crate) use method::{Lifetime, Listing, Method, MethodSpec, PageScript, Visibility};
 pub(crate) use observation::{ActedTarget, Claim, EventLog, Observation, Observer};
 pub(crate) use op_ctx::{OpCtx, PageChange, StandingRefusal};
 pub(crate) use operation_error::{
     Answer, ErrorCode, LeafError, OpFailure, OperationError, TEXT_CHARS, clip,
 };
 pub(crate) use page_target::PageTarget;
-pub(crate) use policy::{Policy, PolicyCheck, ResultHold};
+pub(crate) use policy::{Policy, PolicyCheck};
 pub(crate) use registry::{Registry, RegistryBuilder, RegistryError};
 pub(crate) use run_ctx::{OpLine, OpsReport, RunCtx, RunEnd, RunGuard, RunStart, StopReason};

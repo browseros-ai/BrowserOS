@@ -11,7 +11,7 @@ use neo_trace::{Privacy, ShotJobs, TraceSink, TraceStore};
 use tokio::fs;
 use tokio_util::sync::CancellationToken;
 
-use super::{FlagRecovery, TakeoverLock, tab_feed};
+use super::{TakeoverLock, tab_feed};
 use crate::browser::BrowserLink;
 use crate::config::HostApiConfig;
 use crate::http::{BindError, HostListener};
@@ -42,7 +42,7 @@ pub(crate) struct HostInputs {
     pub(crate) store: TraceStore,
     /// The trace writer: its committed events feed `/v1/events`, and a lock flushes it.
     pub(crate) sink: TraceSink,
-    /// Tab privacy, over the host API's secret set, which masks neither scripts nor the trace.
+    /// Compatibility input still required by neo-service; the server seeds no private flags.
     pub(crate) privacy: Arc<Privacy>,
     /// The camera's end of the writer's screenshot queue (`spawn_writer` has the other).
     pub(crate) screenshots: ShotJobs,
@@ -53,9 +53,6 @@ pub(crate) struct HostInputs {
     /// views open a connection of their own to it, so their frames never queue behind the
     /// agent's commands.
     pub(crate) cdp_port: u16,
-    /// Pending when a replaced trace store lost the private flags: every open tab is made
-    /// private before the service starts.
-    pub(crate) recovery: Arc<FlagRecovery>,
 }
 
 /// The bound host listener and the auth in front of every request on it.
@@ -101,7 +98,7 @@ impl HostApi {
     /// Starts the service once the browser link's first connect lands, then serves it on the
     /// socket until `shutdown`. `takeover` is armed before the socket serves, so a lock a host
     /// takes refuses the agent from its first moment, and the first reconciliation of tab state
-    /// runs before it serves, so it cannot end a lock or private flag a host just set.
+    /// runs before it serves, so it cannot end a lock a host just set.
     pub(crate) async fn serve(
         self,
         link: Arc<BrowserLink>,
@@ -120,16 +117,7 @@ impl HostApi {
             screenshots,
             xvnc,
             cdp_port,
-            recovery,
         } = inputs;
-        // Before the service's camera and live views can capture a tab whose flag was lost.
-        if recovery.is_pending() {
-            let open = tokio::select! {
-                () = shutdown.cancelled() => return,
-                listing = link.watched_listing() => listing.open,
-            };
-            recovery.recover(&privacy, &open).await;
-        }
         let service = Service::start(ServiceInputs {
             store,
             sink,

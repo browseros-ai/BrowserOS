@@ -7,10 +7,8 @@ use super::{Caller, MethodSpec, OperationError};
 
 /// One rule the door applies to every op: at admission, again when a leaf is about to send
 /// (`OpCtx::recheck`), and once more before a read's result or a main-world script's answer is
-/// released, as a read of its tab and of every other tab the script's sends reached, which is what
-/// keeps a result taken while a rule's state changed, such as a capture whose tab went private,
-/// from reaching the script. A state that can change and change back while the op runs, which
-/// no single check sees, needs a hold taken at admission instead ([`Policy::hold`]). A result
+/// released, as a read of its tab and of every other tab the script's sends reached. This keeps
+/// a result taken while an owner acquired a reads-blocking lock from reaching the script. A result
 /// that carries other tabs' data, such as an event pull's, also goes past the rules once per
 /// tab it names (`OpCtx::check_tab`), and so does a main-world script, once per other tab its
 /// page's opener links let it act on (`OpCtx::recheck_reach`): before it is sent, and again after,
@@ -18,25 +16,12 @@ use super::{Caller, MethodSpec, OperationError};
 ///
 /// Rules read in-memory state only and never await. That is what lets overlapping calls
 /// (`Promise.all`) pass through the door without waiting on each other (skeleton D7 rule 8).
-/// The list is fixed at startup in the order the app writes down once: sdk-traces' takeover
-/// lock, then tab privacy (`PrivacyHooks`), then the CAPTCHA busy rule.
+/// The list is fixed at startup: the takeover lock, then the CAPTCHA busy rule.
 pub(crate) trait Policy: Send + Sync {
     /// `Err` refuses the op with that error. Delivery is then `not_sent`, unless a child op
     /// already sent something.
     fn check(&self, check: &PolicyCheck<'_>) -> Result<(), OperationError>;
-
-    /// What the rule keeps from the op's admission until its read's result is released: a
-    /// capture's claim on its tab, which a tab that went private and then closed fails, though
-    /// no flag is left by then for [`Policy::check`] to see. The door takes it once every rule
-    /// admitted the op. Most rules keep nothing.
-    fn hold(&self, _check: &PolicyCheck<'_>) -> Option<ResultHold> {
-        None
-    }
 }
-
-/// A rule's hold on one op's result ([`Policy::hold`]), asked once before the result goes out.
-/// `Err` withholds it with that error.
-pub(crate) type ResultHold = Box<dyn FnOnce() -> Result<(), OperationError> + Send>;
 
 /// What a rule sees. A plain data bag.
 #[derive(Clone, Copy, Debug)]

@@ -5,16 +5,13 @@
 
 use neo_playwright::{Capability, OpLifetime, OpSpec};
 
-use crate::dispatch::{
-    ErrorCode, Lifetime, Listing, MethodSpec, OperationError, Output, PageScript,
-};
+use crate::dispatch::{ErrorCode, Lifetime, Listing, MethodSpec, OperationError, PageScript};
 
 /// One crate op as the door registers it. A plain data bag, built once per op at startup.
 pub(super) struct OpMarks {
     /// The crate's name, effect, lifetime and sensitive args, plus the marks the door's rules key
-    /// by, derived from the op's capabilities: `output` is `Pixels` for a `Capture` op, and
-    /// `page_script` is `MainWorld` for a `MainWorld` one. Listed under the Playwright line when
-    /// served, unlisted when held.
+    /// by, derived from the op's capabilities: `page_script` is `MainWorld` for a `MainWorld`
+    /// op. Listed under the Playwright line when served, unlisted when held.
     pub(super) spec: MethodSpec,
     /// `Some` when claw-sdk holds the op, which is then registered as its refusal alone.
     pub(super) hold: Option<Hold>,
@@ -35,7 +32,7 @@ pub(super) struct Hold {
 /// every capability the op declares.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Policing {
-    /// A door rule polices every op that declares it, keyed by a `MethodSpec` mark that
+    /// The door supports this capability, applying any required rules through the marks
     /// [`OpMarks::of`] sets from the declaration.
     Ready,
     /// No door rule polices it yet, so every op that declares it is held, for this reason.
@@ -52,8 +49,8 @@ enum Policing {
 )]
 const fn policing(capability: Capability) -> Policing {
     match capability {
-        // `Output::Pixels`: tab privacy refuses a capture of a private tab, and holds sdk-traces'
-        // `CaptureGuard` until the pixels go out (`PrivacyHooks`).
+        // Captures use the ordinary door rules; this capability needs no separate policy mark
+        // and does not hold an otherwise served screenshot or PDF op.
         Capability::Capture => Policing::Ready,
         // Such a script reads fields no seal masks. The crate's evaluate guard sweeps before and
         // after every send and masks the answer with what it swept; the door releases a script's
@@ -193,11 +190,6 @@ impl OpMarks {
                 OpLifetime::Operation => Lifetime::Operation,
                 OpLifetime::Background => Lifetime::Background,
             },
-            output: if spec.uses(Capability::Capture) {
-                Output::Pixels
-            } else {
-                Output::Data
-            },
             page_script: if spec.uses(Capability::MainWorld) {
                 PageScript::MainWorld
             } else {
@@ -255,7 +247,7 @@ mod tests {
     use neo_trace::ErrorOwner;
 
     use super::{Hold, OpMarks, Policing};
-    use crate::dispatch::{ErrorCode, Listing, Output, PageScript};
+    use crate::dispatch::{ErrorCode, Listing, PageScript};
 
     /// The line a served op is listed under, in these tests.
     const LINE: &str = "the Playwright API";
@@ -487,28 +479,6 @@ mod tests {
         Ok(())
     }
 
-    /// Pixels, which no mask reaches, come from the crate's declaration, so the tab-privacy rule
-    /// refuses every capture of a private tab and no list of op names can miss one.
-    #[test]
-    fn a_capture_op_gives_pixels_and_no_other_op_does() {
-        let mut captures = 0;
-        for spec in Op::all().map(Op::spec) {
-            let expected = if spec.uses(Capability::Capture) {
-                captures += 1;
-                Output::Pixels
-            } else {
-                Output::Data
-            };
-            assert_eq!(
-                OpMarks::of(&spec, LINE).spec.output,
-                expected,
-                "{}",
-                spec.name
-            );
-        }
-        assert!(captures > 0, "the crate declares its captures");
-    }
-
     /// The door releases a main-world script's answer as a read of its tab, so the mark comes from
     /// the crate's declaration: no list of op names can miss a script the crate adds.
     #[test]
@@ -596,8 +566,8 @@ mod tests {
         },
     ];
 
-    /// The capabilities whose every op needs a BrowserOS case. A capture is policed by tab
-    /// privacy alone, which the fake browser shows.
+    /// The capabilities whose every op needs a BrowserOS case. Captures use the ordinary
+    /// door rules, which the fake browser shows.
     const ON_BROWSEROS: [Capability; 3] = [
         Capability::MainWorld,
         Capability::HostFiles,
