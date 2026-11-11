@@ -9,10 +9,15 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::events::PageEventKind;
+use crate::events::navigation_event::NavigationEvent;
 
 /// One recorded event.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum PageEvent {
+    /// Internal facts for navigation waiters; never delivered as public page events.
+    Navigation(NavigationEvent),
+    /// Actual frame removal, excluding renderer swaps.
+    FrameDetached(FrameId),
     /// A new tab, recorded once it has a URL (1 to 30 ms after `Target.targetCreated`,
     /// measured) or after 1 s with whatever it has.
     Opened(OpenedPage),

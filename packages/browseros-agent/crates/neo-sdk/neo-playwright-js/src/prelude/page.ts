@@ -12,7 +12,13 @@ import { invoke, invokeObserved, sleep } from './bridge'
 import type { BrowserContext } from './context'
 import { ElementHandle, elementBrand } from './element-handle'
 import { EventEmitter } from './emitter'
-import { clientError, plainError, prefixed, unsupportedError } from './errors'
+import {
+  clientError,
+  plainError,
+  prefixed,
+  unsupportedError,
+  waitTimeoutError,
+} from './errors'
 import {
   assertMaxArguments,
   type EvaluateOptions,
@@ -34,6 +40,7 @@ import {
   type TextMatch,
   type UrlMatcher,
   type WaitForFunctionOptions,
+  type WaitForNavigationOptions,
   type WaitForSelectorOptions,
   type WaitHandle,
 } from './frame'
@@ -556,6 +563,16 @@ export class Page extends EventEmitter {
     )
   }
 
+  waitForNavigation(
+    options?: WaitForNavigationOptions,
+  ): Promise<Response | null> {
+    return this._waitForNavigation(
+      'page.waitForNavigation',
+      this._mainFrame,
+      options,
+    )
+  }
+
   waitForURL(
     url: UrlMatcher,
     options?: TimeoutOption & { waitUntil?: LoadState },
@@ -1004,6 +1021,83 @@ export class Page extends EventEmitter {
         },
       )
       await this._navigated(api, frame, result, observed)
+    }
+  }
+
+  /**
+   * Keep a single call-time fence and journal cursor across predicate checks. A predicate
+   * runs in the agent realm; Rust retains later events while it runs, including synchronous
+   * pushState bursts. Unmatched URLs wait only for commit, never for a stalled load.
+   */
+  async _waitForNavigation(
+    api: string,
+    frame: Frame,
+    options: WaitForNavigationOptions = {},
+  ): Promise<Response | null> {
+    const since = Date.now()
+    let after = this.#liveHead
+    const waitUntil = loadState(api, 'waitUntil', options.waitUntil ?? 'load')
+    const timeout = frame._navigationTimeout(options)
+    const matcher = options.url
+    const predicate = typeof matcher === 'function' ? matcher : undefined
+    const url =
+      typeof matcher === 'string'
+        ? { glob: matcher }
+        : matcher instanceof RegExp
+          ? { regexSource: matcher.source, regexFlags: matcher.flags }
+          : undefined
+    if (matcher !== undefined && !url && !predicate)
+      throw clientError(api, 'url: expected a string, a RegExp or a function')
+    const args = await frame._frameArgs(api)
+    const remaining = () => {
+      if (timeout === 0) return 0
+      const left = timeout - (Date.now() - since)
+      if (left <= 0)
+        throw waitTimeoutError(api, `Timeout ${timeout}ms exceeded.`)
+      return left
+    }
+    // Native calls share one deadline, but Playwright reports the originally requested
+    // timeout rather than the smaller budget of the final bridge call. Preserve the same
+    // error object so the dispatcher's ownership and delivery fields survive.
+    const rethrow = (error: unknown): never => {
+      if (
+        error instanceof Error &&
+        error.name === 'TimeoutError' &&
+        timeout !== 0
+      )
+        error.message = error.message.replace(
+          /Timeout \d+ms exceeded\./,
+          `Timeout ${timeout}ms exceeded.`,
+        )
+      throw error
+    }
+    for (;;) {
+      const { value: result, observed } = await invokeObserved(
+        'page.waitForNavigation',
+        frame._call(api, remaining()),
+        {
+          ...args,
+          since,
+          after,
+          ...(url ? { url } : {}),
+          waitUntil: predicate ? 'commit' : waitUntil,
+        },
+      ).catch(rethrow)
+      const response = await this._navigated(api, frame, result, observed)
+      if (!predicate) return response
+      after = result.navigationSeq
+      let matched: unknown
+      try {
+        matched = await predicate(URL.parse(result.url ?? '') ?? result.url)
+      } catch (error) {
+        throw prefixed(api, error)
+      }
+      if (matched) {
+        await frame
+          ._waitForLoadState(api, waitUntil, { timeout: remaining() })
+          .catch(rethrow)
+        return response
+      }
     }
   }
 

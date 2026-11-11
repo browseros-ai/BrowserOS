@@ -253,6 +253,9 @@ impl DocumentWatch {
             if self.frame.has_reached(state) {
                 return Ok(());
             }
+            if self.frame.left {
+                return Err(WatchError::Left);
+            }
             self.next().await?;
         }
     }

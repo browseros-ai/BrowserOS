@@ -69,7 +69,7 @@ struct UrlResult {
 }
 
 /// Upstream's first log line names a string pattern only.
-fn logged(pattern: &UrlPattern) -> String {
+pub(crate) fn logged(pattern: &UrlPattern) -> String {
     match pattern {
         UrlPattern::Glob { glob } => format!(" to \"{glob}\""),
         UrlPattern::Regex { .. } => String::new(),
@@ -150,9 +150,9 @@ pub(crate) async fn wait_for_url(
 }
 
 /// The waited frame: where its world lives now, and the watch on the session that hosts it.
-struct Watching {
-    frame: TreeFrame,
-    watch: DocumentWatch,
+pub(crate) struct Watching {
+    pub(crate) frame: TreeFrame,
+    pub(crate) watch: DocumentWatch,
 }
 
 /// What looking the frame up again found.
@@ -209,7 +209,7 @@ impl Followed {
 
 /// The waited frame after it left its session: found again, looked up anew while it is still
 /// moving, or upstream's failure once the page no longer lists it. The op's timeout bounds it.
-async fn follow(
+pub(crate) async fn follow(
     pw: &Playwright,
     page: &OpPage<'_>,
     scope: &OpScope<'_>,
@@ -244,7 +244,7 @@ impl Watching {
 
 /// Whether `url` matches `pattern`, as the page's JavaScript decides. A document that went away
 /// under the frame's world is matched in the new document's world.
-async fn matches(
+pub(crate) async fn matches(
     page: &OpPage<'_>,
     frame: &TreeFrame,
     pattern: &UrlPattern,

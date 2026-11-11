@@ -188,6 +188,7 @@ pub(crate) async fn deliver(
         Subscription::ContextPage => None,
     };
     let payload = match (&record.event, listener) {
+        (PageEvent::Navigation(_) | PageEvent::FrameDetached(_), _) => return Ok(None),
         (PageEvent::Opened(opened), Some(page)) => {
             let Some(popup) = popup_tab(scope, opened, tabs, windows).await? else {
                 return Ok(None);

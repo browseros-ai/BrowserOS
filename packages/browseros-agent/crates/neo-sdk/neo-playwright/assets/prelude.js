@@ -6532,6 +6532,9 @@ ${value.stack}`;
     waitForLoadState(state, options) {
       return this._waitForLoadState("frame.waitForLoadState", state, options);
     }
+    waitForNavigation(options) {
+      return this._page._waitForNavigation("frame.waitForNavigation", this, options);
+    }
     waitForURL(url, options) {
       return this._page._waitForURL("frame.waitForURL", this, url, options);
     }
@@ -7625,6 +7628,9 @@ ${value.stack}`;
     waitForLoadState(state, options) {
       return this._mainFrame._waitForLoadState("page.waitForLoadState", state, options);
     }
+    waitForNavigation(options) {
+      return this._waitForNavigation("page.waitForNavigation", this._mainFrame, options);
+    }
     waitForURL(url, options) {
       return this._waitForURL("page.waitForURL", this._mainFrame, url, options);
     }
@@ -7906,6 +7912,54 @@ ${value.stack}`;
           waitUntil: "commit"
         });
         await this._navigated(api, frame, result, observed);
+      }
+    }
+    async _waitForNavigation(api, frame, options = {}) {
+      const since = Date.now();
+      let after = this.#liveHead;
+      const waitUntil = loadState(api, "waitUntil", options.waitUntil ?? "load");
+      const timeout = frame._navigationTimeout(options);
+      const matcher = options.url;
+      const predicate = typeof matcher === "function" ? matcher : undefined;
+      const url = typeof matcher === "string" ? { glob: matcher } : matcher instanceof RegExp ? { regexSource: matcher.source, regexFlags: matcher.flags } : undefined;
+      if (matcher !== undefined && !url && !predicate)
+        throw clientError(api, "url: expected a string, a RegExp or a function");
+      const args = await frame._frameArgs(api);
+      const remaining = () => {
+        if (timeout === 0)
+          return 0;
+        const left = timeout - (Date.now() - since);
+        if (left <= 0)
+          throw waitTimeoutError(api, `Timeout ${timeout}ms exceeded.`);
+        return left;
+      };
+      const rethrow = (error) => {
+        if (error instanceof Error && error.name === "TimeoutError" && timeout !== 0)
+          error.message = error.message.replace(/Timeout \d+ms exceeded\./, `Timeout ${timeout}ms exceeded.`);
+        throw error;
+      };
+      for (;; ) {
+        const { value: result, observed } = await invokeObserved("page.waitForNavigation", frame._call(api, remaining()), {
+          ...args,
+          since,
+          after,
+          ...url ? { url } : {},
+          waitUntil: predicate ? "commit" : waitUntil
+        }).catch(rethrow);
+        const response = await this._navigated(api, frame, result, observed);
+        if (!predicate)
+          return response;
+        after = result.navigationSeq;
+        let matched;
+        try {
+          matched = await predicate(URL.parse(result.url ?? "") ?? result.url);
+        } catch (error) {
+          throw prefixed(api, error);
+        }
+        if (matched) {
+          await frame._waitForLoadState(api, waitUntil, { timeout: remaining() }).catch(rethrow);
+          return response;
+        }
       }
     }
     async#history(api, options = {}) {
@@ -8796,7 +8850,6 @@ Timeout: ${timeout}ms`);
       tap: NO_TOUCH,
       unroute: NETWORK,
       unrouteAll: NETWORK,
-      waitForNavigation: "use page.waitForURL() or page.waitForLoadState()",
       waitForRequest: "Neo does not report network events; wait for what the page shows instead",
       waitForResponse: "Neo does not report network events; wait for what the page shows instead",
       clock: {
@@ -8832,7 +8885,6 @@ Timeout: ${timeout}ms`);
       evaluateHandle: NO_HANDLES,
       frameElement: "locate the iframe from its parent instead: page.locator('iframe')",
       tap: NO_TOUCH,
-      waitForNavigation: "use frame.waitForURL() or frame.waitForLoadState()",
       webmcp: { hint: "WebMCP is not available in Neo", kind: "property" }
     },
     Locator: {

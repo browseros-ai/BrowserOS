@@ -268,6 +268,11 @@ export const OPS = {
     target: 'page',
     lifetime: 'operation',
   },
+  'page.waitForNavigation': {
+    effect: 'read',
+    target: 'page',
+    lifetime: 'operation',
+  },
   'page.waitForURL': {
     effect: 'read',
     target: 'page',

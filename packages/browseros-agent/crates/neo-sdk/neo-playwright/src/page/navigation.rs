@@ -94,15 +94,15 @@ pub(crate) enum Navigation {
 
 /// What a navigation op returns. `url` refreshes the prelude's synchronous `page.url()`.
 #[derive(Debug, Serialize)]
-struct NavigationResult {
-    response: Option<Response>,
-    url: Option<String>,
+pub(crate) struct NavigationResult {
+    pub(crate) response: Option<Response>,
+    pub(crate) url: Option<String>,
 }
 
 /// Playwright's `Response` for the main document, from its navigation timing entry.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct Response {
+pub(crate) struct Response {
     url: String,
     status: u16,
     status_text: &'static str,
@@ -271,7 +271,7 @@ async fn drive(
     }
     watch.reached(wait_until).await.map_err(failed)?;
     Ok(match arrival {
-        Arrival::NewDocument(commit) => read_response(session, &commit.url).await,
+        Arrival::NewDocument(commit) => read_response(session, &commit.url, None).await,
         Arrival::SameDocument => None,
     })
 }
@@ -310,7 +310,7 @@ pub(crate) async fn wait_for_load_state(
 
 /// The session that hosts child frame `frame`: the page's own session for a same-process
 /// frame, else the frame's own, which core's frame registry attaches or already holds.
-async fn frame_host(
+pub(crate) async fn frame_host(
     pw: &Playwright,
     scope: &OpScope<'_>,
     page: TabId,
@@ -448,11 +448,15 @@ struct Timing {
 /// The response for the main document at `url`, or `None` for one that has none (about:blank
 /// and data URLs, for which upstream's goto returns null too: measured by conformance Runner
 /// P) or whose timing entry cannot be read in time.
-async fn read_response(session: &ProtocolSession, url: &str) -> Option<Response> {
+pub(crate) async fn read_response(
+    session: &ProtocolSession,
+    url: &str,
+    frame: Option<&FrameId>,
+) -> Option<Response> {
     if url.starts_with("about:") || url.starts_with("data:") {
         return None;
     }
-    let timing = time::timeout(TIMING_READ, timing_entry(session))
+    let timing = time::timeout(TIMING_READ, timing_entry(session, frame))
         .await
         .ok()?
         .ok()
@@ -470,12 +474,17 @@ async fn read_response(session: &ProtocolSession, url: &str) -> Option<Response>
     clippy::disallowed_methods,
     reason = "the navigation timing entry holds a status code and the document URL, never a form-control value"
 )]
-async fn timing_entry(session: &ProtocolSession) -> Result<Option<Timing>, CoreError> {
+async fn timing_entry(
+    session: &ProtocolSession,
+    frame: Option<&FrameId>,
+) -> Result<Option<Timing>, CoreError> {
     // Core's DOM-only world: the sealed world is for element work, and this read needs none.
-    PageJs::isolated_only(session)
-        .timeout(TIMING_READ)
-        .eval(TIMING_JS)
-        .await
+    let reader = PageJs::isolated_only(session).timeout(TIMING_READ);
+    let reader = match frame {
+        Some(frame) => reader.in_frame(frame),
+        None => reader,
+    };
+    reader.eval(TIMING_JS).await
 }
 
 /// The standard reason phrase for `status`, which Chromium reports as `statusText` for

@@ -94,6 +94,10 @@ export type WaitForSelectorOptions = TimeoutOption &
 export type WaitForFunctionOptions = TimeoutOption & {
   polling?: number | 'raf'
 }
+export type WaitForNavigationOptions = TimeoutOption & {
+  url?: UrlMatcher
+  waitUntil?: LoadState | 'networkidle0'
+}
 export type UrlMatcher = string | RegExp | ((url: unknown) => unknown)
 
 /** Ops that take a selector-built target and a strictness. */
@@ -499,6 +503,16 @@ export class Frame extends EventEmitter {
 
   waitForLoadState(state?: LoadState, options?: TimeoutOption): Promise<void> {
     return this._waitForLoadState('frame.waitForLoadState', state, options)
+  }
+
+  waitForNavigation(
+    options?: WaitForNavigationOptions,
+  ): Promise<Response | null> {
+    return this._page._waitForNavigation(
+      'frame.waitForNavigation',
+      this,
+      options,
+    )
   }
 
   waitForURL(

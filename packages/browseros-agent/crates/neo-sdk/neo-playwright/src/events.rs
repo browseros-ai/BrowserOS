@@ -31,6 +31,7 @@ mod dialog_table;
 mod event_hub;
 pub(crate) mod event_op;
 mod event_reader;
+mod navigation_event;
 mod page_event;
 mod run_events;
 mod subscription;
@@ -38,6 +39,7 @@ mod target_watcher;
 
 pub(crate) use event_hub::EventHub;
 pub(crate) use event_op::EventOp;
+pub(crate) use page_event::PageEvent;
 pub(crate) use run_events::RunEvents;
 pub(crate) use subscription::{ListenerKey, PageEventKind, Subscription};
 pub(crate) use target_watcher::TargetWatcher;

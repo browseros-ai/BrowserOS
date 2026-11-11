@@ -37,13 +37,13 @@ use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use tokio::task::JoinHandle;
 use tokio::time::{self, Instant, MissedTickBehavior};
 
-use crate::events::PageEventKind;
 use crate::events::dialog_table::{ClosedBy, HeldDialog, Unanswered};
 use crate::events::event_hub::EventWriter;
 use crate::events::page_event::{
     ConsoleMessage, ConsoleParams, DialogId, DialogKind, DialogOpened, DownloadStarted,
     ExceptionParams, OpenedPage, PageError, PageEvent, WindowKind,
 };
+use crate::events::{PageEventKind, navigation_event};
 
 /// How long a dialog nobody listens for stays open, for a listener that lands just after the
 /// click that opened it (build-design graft 7).
@@ -338,6 +338,11 @@ impl Watcher {
             session_id,
         } = event;
         match method.as_str() {
+            "Page.frameNavigated" | "Page.navigatedWithinDocument" | "Page.frameDetached" => {
+                if let Some(navigation) = navigation_event::parse(&method, params) {
+                    self.writer.record(navigation);
+                }
+            }
             "Target.targetCreated" => {
                 if let Some(TargetEvent { target_info }) = parse(params) {
                     self.created(target_info);
