@@ -208,19 +208,6 @@ pub(crate) fn unexpected_value(value: Option<&Value>) -> Option<String> {
     Some(format!("  unexpected value \"{}\"", as_js_string(value)))
 }
 
-/// An Expected line with its value hidden, `Expected: not "••••"`, for a matcher that
-/// compared a password, card or one-time-code field: the value is the script's guess at the
-/// secret, and the message reaches the trace.
-pub(crate) fn hidden_expected(line: &str) -> String {
-    let (label, value) = line.split_once(": ").unwrap_or(("Expected", line));
-    let not = if value.starts_with("not ") {
-        "not "
-    } else {
-        ""
-    };
-    format!("{label}: {not}\"••••\"")
-}
-
 /// JavaScript's `String(value)`, as a template literal prints the received value.
 fn as_js_string(value: Option<&Value>) -> String {
     match value {
@@ -281,10 +268,7 @@ mod tests {
 
     use serde_json::{Value, json};
 
-    use super::{
-        MatcherMessage, Receiver, Reported, Shape, TextExpected, hidden_expected, title,
-        unexpected_value,
-    };
+    use super::{MatcherMessage, Receiver, Reported, Shape, TextExpected, title, unexpected_value};
     use crate::call_log::CallLog;
 
     const TIMEOUT: Option<Duration> = Some(Duration::from_millis(300));
@@ -578,18 +562,5 @@ mod tests {
             "Expect \"toHaveURL\"",
             "timeout 0 prints no timeout, as upstream"
         );
-    }
-
-    #[test]
-    fn tests_that_a_hidden_expected_line_keeps_its_label_and_not() {
-        assert_eq!(
-            hidden_expected("Expected: \"hunter2\""),
-            "Expected: \"••••\""
-        );
-        assert_eq!(
-            hidden_expected("Expected pattern: not /^hun/"),
-            "Expected pattern: not \"••••\""
-        );
-        assert_eq!(hidden_expected("Expected: [\"x\"]"), "Expected: \"••••\"");
     }
 }

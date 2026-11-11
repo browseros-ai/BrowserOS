@@ -37,17 +37,15 @@ impl Visibility {
     }
 }
 
-/// What a read got: the value the seal let through, and the parent frames of the element it
-/// was read from, which a box needs to reach the main viewport.
+/// What a read got: the value, and the parent frames of the element it was read from, which a
+/// box needs to reach the main viewport.
 #[derive(Debug)]
 pub(crate) struct Reading {
     pub(crate) value: Value,
     pub(crate) path: FramePath,
 }
 
-/// Reads `target`'s element with `read`, once it is there. When the seal says the element read
-/// is a password, card or one-time-code field, the op's target is marked sensitive for the
-/// trace; its value already came back through the seal. A handle whose node is gone fails
+/// Reads `target`'s element with `read`, once it is there. A handle whose node is gone fails
 /// `element_detached`.
 pub(crate) async fn read_attached(
     pw: &Playwright,

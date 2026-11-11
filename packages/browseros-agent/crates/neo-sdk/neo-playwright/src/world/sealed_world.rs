@@ -1,74 +1,40 @@
 //! One sealed world, and the install that makes it. One of the three files in core's
-//! `tests/page_js_guard.rs` ALLOWED list: it creates the `browseros-sdk` world and runs the
-//! seal and the engine there, and hands the seal the hidden shadow roots it must watch.
-
-use std::collections::HashSet;
-use std::mem;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+//! `tests/page_js_guard.rs` ALLOWED list: it creates the `browseros-engine` world and runs the
+//! engine there, apart from the page's main world.
 
 use browseros_cdp::{CdpError, CdpEvent};
-use browseros_core::sensitive_fields::SEALED_WORLD;
 use browseros_core::{CoreError, FrameId, ProtocolSession, SessionId};
-use futures_util::future;
 use serde::Deserialize;
 use serde_json::{Value, json};
-use tokio::runtime;
 use tokio::sync::broadcast;
 use tokio::sync::broadcast::error::TryRecvError;
-use tokio::time::{self, Instant};
 
-use crate::page::FRAME_BUDGET;
 use crate::probe::{self, PROBE_PROTOCOL, ProbeFailure, ProbeReply, Ran};
 use crate::world::engine_source::install_function;
-use crate::world::hidden_roots::{self, HiddenRoots, WatchedRoots};
-use crate::world::{BackendNodeId, ContextId, Epoch, FrameSeq};
+use crate::world::{ContextId, Epoch, FrameSeq};
+
+/// The name of the isolated world the engine runs in, one per frame document. Distinct from
+/// core's `PageJs` world, so the engine's globals never meet core's helpers. Not `browseros-sdk`:
+/// a world of that name may hold core's seal, installed by an earlier claw-sdk in a document that
+/// is still open, and a document keeps its isolated worlds, their replaced DOM getters included,
+/// for its whole life; the engine reading through them would read `••••` and select a masked
+/// length. A document only an earlier build numbered is therefore not re-keyed here; the random
+/// seq base of pages already open (`PageRegistry`) keeps its old refs from naming a new document.
+pub(crate) const SEALED_WORLD: &str = "browseros-engine";
 
 /// The object group of every world's handles, its global's and its document's. Never released:
 /// they die with their context, and an op's own group (`OpScope`) holds only the objects that
 /// op asked for.
 const WORLD_GROUP: &str = "browseros-sdk-world";
 
-/// Names the world's `document` by handle, for the hidden-root scan's describe.
-const DOCUMENT: &str = "function () { return document; }";
-
-/// Hands hidden shadow roots to the seal, which journals and sweeps each from then on. `false`
-/// when the world holds no seal: it is not the world this handle was for.
-const WATCH_ROOTS: &str = "function (...roots) { const seal = globalThis.__clawSeal; \
-                           if (!seal) return false; for (const root of roots) seal.watch(root); \
-                           return true; }";
-
-/// Takes the oldest shadow host the seal's journal reported (`HIDDEN_ROOT_REPORT`), or null. A
-/// seal that predates reports has no `takeHost` and has reported nothing.
-const TAKE_HOST: &str = "function () { const seal = globalThis.__clawSeal; \
-                         return seal && seal.takeHost ? seal.takeHost() : null; }";
-
-/// How many reported hosts one watch takes at most: the seal holds no more.
-const MAX_TAKEN: usize = 16;
-
-/// The tops of the trees the seal watches out of the document (`detachedTops`), by reference.
-const DETACHED_TOPS: &str = "function () { const seal = globalThis.__clawSeal; \
-                             return seal && seal.detachedTops ? seal.detachedTops() : []; }";
-
-/// The prefix of a watch's own object group ([`WatchHold`]); each watch takes a new number, so
-/// two at once never release each other's handles.
-const WATCH_GROUP: &str = "browseros-sdk-watch";
-
-/// The next watch's number.
-static NEXT_WATCH: AtomicU64 = AtomicU64::new(0);
-
-/// How `DOM.resolveNode` refuses a backend id whose node is gone (measured).
-const NODE_GONE: &str = "No node with given id found";
-
 /// How `Runtime.evaluate` refuses a `uniqueContextId` that names no live context (measured on
 /// BrowserOS: an unknown id, and a world whose document moved to another renderer).
 const UNIQUE_CONTEXT_GONE: &str = "uniqueContextId not found";
 
 /// A live sealed world: where a probe call goes. Only [`SealedWorld::install`] makes one, so
-/// holding one means the seal and the engine ran in that world, and the seal watched every
-/// hidden shadow root the document had then. Cheap to clone; clones share the record of the
-/// roots watched. It may go stale at any time (the document navigates); a call on it then
-/// fails `Gone`.
+/// holding one means the engine ran in that world, an isolated world the page's own scripts
+/// cannot reach. Cheap to clone. It may go stale at any time (the document navigates); a call
+/// on it then fails `Gone`.
 #[derive(Clone, Debug)]
 pub(crate) struct SealedWorld {
     /// A raw session, without per-message admission: the page's own, an OOPIF's, or for a
@@ -84,51 +50,6 @@ pub(crate) struct SealedWorld {
     /// only ever passed as an argument to a call on [`SealedWorld::global`], which V8 refuses
     /// across worlds, so an id another context has since taken carries nothing anywhere.
     context: ContextId,
-    /// The world's `document` (by handle in [`WORLD_GROUP`]), and the hidden roots its seal
-    /// already watches.
-    roots: Arc<WatchedRoots>,
-}
-
-/// One watch's object group: the hosts it took from the seal and the roots it resolved. They
-/// stay alive while it lives, so a root whose host the page removed is still there for the sweep
-/// that follows the watch. Dropping it releases the group on a spawned task, as `OpScope`'s
-/// object group does, so a watch that the frame budget or the host's cancel drops halfway
-/// releases its group too; each retry takes a new one. A release that fails leaves the handles
-/// to die with the document.
-#[must_use = "the watch's handles are released when this drops"]
-#[derive(Debug)]
-pub(crate) struct WatchHold {
-    session: ProtocolSession,
-    /// `browseros-sdk-watch-<n>`: two watches at once never release each other's handles.
-    group: String,
-}
-
-impl WatchHold {
-    fn new(session: ProtocolSession) -> Self {
-        let group = format!(
-            "{WATCH_GROUP}-{}",
-            NEXT_WATCH.fetch_add(1, Ordering::Relaxed)
-        );
-        Self { session, group }
-    }
-}
-
-impl Drop for WatchHold {
-    fn drop(&mut self) {
-        let Ok(spawner) = runtime::Handle::try_current() else {
-            return;
-        };
-        let session = self.session.clone();
-        let group = mem::take(&mut self.group);
-        drop(spawner.spawn(async move {
-            let _released = session
-                .send::<_, Value>(
-                    "Runtime.releaseObjectGroup",
-                    json!({ "objectGroup": group }),
-                )
-                .await;
-        }));
-    }
 }
 
 /// What an install leaves: the world, and the seq its boot took over from, if it did.
@@ -157,7 +78,7 @@ pub(crate) struct ContextWatch {
 /// What a session reported about one numeric context id while a watch ran.
 #[derive(Debug, PartialEq, Eq)]
 enum Reported {
-    /// `executionContextCreated` for this frame's `browseros-sdk` world under the id: the
+    /// `executionContextCreated` for this frame's `browseros-engine` world under the id: the
     /// world the create made, with its system-unique id.
     Created(String),
     /// Nothing about the id: the world already existed, so the create made no context and the
@@ -235,37 +156,9 @@ struct Handle {
     object_id: Option<String>,
 }
 
-/// A list the seal answered by reference, with CDP's description of it (`Array(n)`).
-#[derive(Deserialize)]
-struct Listed {
-    result: ListHandle,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct ListHandle {
-    #[serde(default)]
-    object_id: Option<String>,
-    #[serde(default)]
-    description: Option<String>,
-}
-
-/// `Runtime.getProperties`' answer: a list's indices and their objects.
-#[derive(Deserialize)]
-struct Items {
-    result: Vec<Item>,
-}
-
-#[derive(Deserialize)]
-struct Item {
-    name: String,
-    #[serde(default)]
-    value: Option<Handle>,
-}
-
 impl SealedWorld {
-    /// Creates (or finds, by name) the frame's `browseros-sdk` world and installs the seal and
-    /// the engine there, or re-keys the probe already there. `candidate` is the seq for a new
+    /// Creates (or finds, by name) the frame's `browseros-engine` world and installs the engine
+    /// there, or re-keys the probe already there. `candidate` is the seq for a new
     /// document; the reply's seq wins, because a world this `Playwright` already booted keeps
     /// the one it has, and a re-key reports the seq it replaced. `Runtime` must already be
     /// enabled on the session (`SessionSetup`) so the watch observes context creation.
@@ -274,30 +167,21 @@ impl SealedWorld {
     ///  watch (subscribed by the caller)                       Runtime events of the session
     ///  Page.createIsolatedWorld { frameId, worldName }        → a numeric id N
     ///  read the watch about N:
-    ///    created  { id N, frameId, isolated, browseros-sdk, uniqueId U }   a new world
+    ///    created  { id N, frameId, isolated, browseros-engine, uniqueId U }   a new world
     ///      Runtime.evaluate { uniqueContextId: U, "globalThis", group }
     ///    nothing  (the world already existed: no event)
     ///      Runtime.evaluate { contextId: N, "globalThis", group }, then read again: nothing
     ///    churned  → Gone
-    ///  Runtime.callFunctionOn { handle, install_function,     seal, engine if absent, boot
+    ///  Runtime.callFunctionOn { handle, install_function,     engine if absent, boot
     ///                           [{ frameSeq, epoch }] }       → described { protocol, seq, url }
-    ///  Runtime.callFunctionOn { handle, document }            → the document's handle
-    ///  watch_hidden_roots                                     the seal watches each closed root
     /// ```
     ///
-    /// The last step makes the seal see fields inside closed roots from the world's first
-    /// moment. A scan that fails also fails the install: a world whose closed roots the seal
-    /// cannot see is not sealed. So does
-    /// one that is not done within the frame's budget from the install's start (`FRAME_BUDGET`):
-    /// it fails `Late`, and `OpPage::world` installs again while the op's window has room, as a
-    /// sweep past the budget sweeps again. A first read installs its world outside any sweep, so
-    /// this deadline is the read's; inside a sweep, the sweep's own deadline started first and
-    /// ends it sooner.
+    /// The op's own timeout bounds the install; nothing here waits on a clock.
     ///
     /// N alone is not enough to take the handle. It is a per-renderer counter: measured on
     /// BrowserOS, when the document moves to another renderer between the create and the
-    /// evaluate, N names a child frame's main world there, and the seal, the engine and the
-    /// epoch would run in a world the page controls. A new world's `uniqueId` names it and
+    /// evaluate, N names a child frame's main world there, and the engine and the epoch would
+    /// run in a world the page controls. A new world's `uniqueId` names it and
     /// nothing else, and fails `uniqueContextId not found` once it is gone. A world that
     /// already existed (another session or connection made it, an earlier install failed after
     /// the create) gets no event, so there is no `uniqueId` to take; its numeric evaluate counts
@@ -315,7 +199,6 @@ impl SealedWorld {
         epoch: &Epoch,
         mut watch: ContextWatch,
     ) -> Result<Installed, ProbeFailure> {
-        let deadline = Instant::now() + FRAME_BUDGET;
         let Some(session_id) = session.session_id().cloned() else {
             return Err(ProbeFailure::Broken(
                 "a sealed world needs a target session".to_owned(),
@@ -372,213 +255,22 @@ impl SealedWorld {
             }
             Err(ProbeFailure::Broken(why)) => {
                 return Err(ProbeFailure::Broken(format!(
-                    "the seal or the engine failed to install: {why}"
+                    "the engine failed to install: {why}"
                 )));
             }
             Err(failure) => return Err(failure),
         };
-        // Boxed: every op's future holds an install's, and this step holds a whole world.
-        let watching = Box::pin(Self::watching(session, frame, seq, global, context));
-        let world = match time::timeout_at(deadline, watching).await {
-            Ok(watched) => watched?,
-            Err(_late) => return Err(ProbeFailure::Late),
-        };
         Ok(Installed {
-            world,
+            world: Self {
+                session,
+                frame,
+                seq,
+                global,
+                context,
+            },
             retired,
             url,
         })
-    }
-
-    /// The booted world, once its seal watches every hidden root its document holds now.
-    async fn watching(
-        session: ProtocolSession,
-        frame: FrameId,
-        seq: FrameSeq,
-        global: String,
-        context: ContextId,
-    ) -> Result<Self, ProbeFailure> {
-        let document = document_of(&session, &global).await?;
-        let world = Self {
-            session,
-            frame,
-            seq,
-            global,
-            context,
-            roots: Arc::new(WatchedRoots::new(document)),
-        };
-        drop(world.watch_hidden_roots().await?);
-        Ok(world)
-    }
-
-    /// Has the seal watch every hidden shadow root that `scan` finds and it does not watch yet
-    /// (`hidden_roots`): those in the document now and those of every host the seal reported.
-    /// Run at install and right before every sweep reads, so a sweep reads every root that was
-    /// in the document when it began, and every reported one, removed from it or not. A sweep
-    /// keeps the returned hold until it has read: the hold keeps a removed root alive.
-    ///
-    /// # Errors
-    /// `Gone` when the world's document is gone. Any other failure means a root may be unwatched,
-    /// so the caller's sweep must not count.
-    #[expect(
-        clippy::await_holding_invalid_type,
-        reason = "a lease on this document's watches: the seal hands each reported host out \
-                  once, so a sweep must wait while another watch holds one it has not watched yet"
-    )]
-    pub(crate) async fn watch_hidden_roots(&self) -> Result<WatchHold, ProbeFailure> {
-        let mut watched = self.roots.lock().await;
-        let hold = WatchHold::new(self.session.clone());
-        // Boxed: every op's future holds an install's, inside `Playwright::invoke`'s.
-        Box::pin(self.watch_found(&mut watched, &hold.group)).await?;
-        Ok(hold)
-    }
-
-    /// The body of [`SealedWorld::watch_hidden_roots`], with its handles in `group`.
-    async fn watch_found(
-        &self,
-        watched: &mut HashSet<BackendNodeId>,
-        group: &str,
-    ) -> Result<(), ProbeFailure> {
-        // Detached trees can gain closed roots between sweeps, so scan them alongside the
-        // document and the hosts retained by the seal. The lock covers discovery and watching.
-        let (in_document, hosts, tops) = future::join3(
-            HiddenRoots::scan(&self.session, self.roots.document()),
-            self.take_hosts(group),
-            self.detached_tops(group),
-        )
-        .await;
-        let (in_document, hosts) = (in_document?, [hosts?, tops?].concat());
-        let mut found = in_document;
-        for host in hosts {
-            found.extend(HiddenRoots::scan(&self.session, &host).await?);
-        }
-        hidden_roots::keep_found(watched, &found);
-        let fresh = hidden_roots::unwatched(watched, &found);
-        if fresh.is_empty() {
-            return Ok(());
-        }
-        self.watch_roots(group, &fresh).await?;
-        watched.extend(fresh);
-        Ok(())
-    }
-
-    /// Every host the seal's journal reported that no watch took yet, by handle in `group`.
-    /// The seal hands each out once, and holds it until then, so a host the page removed since
-    /// still has its root and fields.
-    async fn take_hosts(&self, group: &str) -> Result<Vec<String>, ProbeFailure> {
-        let mut hosts = Vec::new();
-        while hosts.len() < MAX_TAKEN {
-            let taken: Evaluated = self
-                .session
-                .send(
-                    "Runtime.callFunctionOn",
-                    json!({ "objectId": self.global, "functionDeclaration": TAKE_HOST,
-                            "objectGroup": group }),
-                )
-                .await
-                .map_err(ProbeFailure::from_core)?;
-            let Some(host) = taken.result.object_id else {
-                break;
-            };
-            hosts.push(host);
-        }
-        Ok(hosts)
-    }
-
-    /// The top of every tree the seal watches out of the document, by handle in `group`: one
-    /// call for the list, and one more for its items when there are any.
-    async fn detached_tops(&self, group: &str) -> Result<Vec<String>, ProbeFailure> {
-        let listed: Listed = self
-            .session
-            .send(
-                "Runtime.callFunctionOn",
-                json!({ "objectId": self.global, "functionDeclaration": DETACHED_TOPS,
-                        "objectGroup": group }),
-            )
-            .await
-            .map_err(ProbeFailure::from_core)?;
-        let Some(list) = listed.result.object_id else {
-            return Err(ProbeFailure::Broken(
-                "the seal listed no detached trees".to_owned(),
-            ));
-        };
-        if listed.result.description.as_deref() == Some("Array(0)") {
-            return Ok(Vec::new());
-        }
-        let items: Items = self
-            .session
-            .send(
-                "Runtime.getProperties",
-                json!({ "objectId": list, "ownProperties": true }),
-            )
-            .await
-            .map_err(ProbeFailure::from_core)?;
-        Ok(items
-            .result
-            .into_iter()
-            .filter(|item| item.name.parse::<usize>().is_ok())
-            .filter_map(|item| item.value.and_then(|value| value.object_id))
-            .collect())
-    }
-
-    /// Resolves each of `roots` into this world and hands them all to the seal's `watch` in one
-    /// call. A root whose node is gone since the scan is skipped: nothing in it can be read now.
-    /// One the page only removed from the document still resolves (measured), and is watched.
-    async fn watch_roots(&self, group: &str, roots: &[BackendNodeId]) -> Result<(), ProbeFailure> {
-        let resolves = roots.iter().map(|root| {
-            self.session.send::<_, Resolved>(
-                "DOM.resolveNode",
-                json!({ "backendNodeId": root.0, "executionContextId": self.context.0,
-                        "objectGroup": group }),
-            )
-        });
-        let mut arguments = Vec::new();
-        for resolved in future::join_all(resolves).await {
-            match resolved {
-                Ok(Resolved {
-                    object:
-                        Handle {
-                            object_id: Some(object),
-                        },
-                }) => arguments.push(json!({ "objectId": object })),
-                Ok(_) => {
-                    return Err(ProbeFailure::Broken(
-                        "DOM.resolveNode returned no handle to a shadow root".to_owned(),
-                    ));
-                }
-                Err(CoreError::Cdp(CdpError::Protocol { message, .. }))
-                    if message.contains(NODE_GONE) => {}
-                Err(error) => return Err(ProbeFailure::from_core(error)),
-            }
-        }
-        if arguments.is_empty() {
-            return Ok(());
-        }
-        // On the global, never on a root: a context id another world has since taken resolves
-        // the roots there, and V8 refuses them as arguments to this world's call.
-        let called = self
-            .session
-            .send::<_, Value>(
-                "Runtime.callFunctionOn",
-                json!({ "objectId": self.global, "functionDeclaration": WATCH_ROOTS,
-                        "arguments": arguments, "returnByValue": true }),
-            )
-            .await
-            .map_err(|error| match ProbeFailure::from_core(error) {
-                ProbeFailure::Cdp(CoreError::Cdp(CdpError::Protocol { message, .. }))
-                    if message.contains("same JavaScript world") =>
-                {
-                    ProbeFailure::Gone(Ran::No)
-                }
-                failure => failure,
-            })?;
-        match called.pointer("/result/value") {
-            Some(Value::Bool(true)) => Ok(()),
-            Some(Value::Bool(false)) => Err(ProbeFailure::Gone(Ran::No)),
-            _ => Err(ProbeFailure::Broken(
-                "the seal did not take the hidden shadow roots to watch".to_owned(),
-            )),
-        }
     }
 
     /// The raw session calls into this world go to.
@@ -662,30 +354,8 @@ impl SealedWorld {
             seq: FrameSeq(seq),
             global: global.to_owned(),
             context: ContextId(0),
-            roots: Arc::new(WatchedRoots::new(String::new())),
         }
     }
-}
-
-/// `DOM.resolveNode`'s result.
-#[derive(Deserialize)]
-struct Resolved {
-    object: Handle,
-}
-
-/// The handle to the `document` of the world whose global is `global`, in [`WORLD_GROUP`].
-async fn document_of(session: &ProtocolSession, global: &str) -> Result<String, ProbeFailure> {
-    let called: Evaluated = session
-        .send(
-            "Runtime.callFunctionOn",
-            json!({ "objectId": global, "functionDeclaration": DOCUMENT,
-                    "objectGroup": WORLD_GROUP }),
-        )
-        .await
-        .map_err(ProbeFailure::from_core)?;
-    called.result.object_id.ok_or_else(|| {
-        ProbeFailure::Broken("the sealed world returned no handle to its document".to_owned())
-    })
 }
 
 /// The handle to the global of the world `named` names, in [`WORLD_GROUP`].
@@ -803,18 +473,15 @@ impl Reported {
 mod tests {
     use std::error::Error;
     use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
-    use std::time::Duration;
 
     use browseros_cdp::{CdpError, CdpEvent};
-    use browseros_core::testing::{TestCall, TestConnection, cdp_error, cdp_pending};
+    use browseros_core::testing::{TestCall, TestConnection, cdp_error};
     use browseros_core::{CdpConnection, FrameId, ProtocolSession, SessionId};
     use futures_util::future::BoxFuture;
     use serde_json::{Value, json};
     use tokio::sync::{broadcast, mpsc};
-    use tokio::{task, time};
 
-    use super::{ContextWatch, Installed, SealedWorld};
-    use crate::page::FRAME_BUDGET;
+    use super::{ContextWatch, Installed, SEALED_WORLD, SealedWorld};
     use crate::probe::{PROBE_PROTOCOL, ProbeFailure};
     use crate::world::{Epoch, FrameSeq};
 
@@ -833,15 +500,11 @@ mod tests {
     struct Browser {
         replies: Arc<TestConnection>,
         caused: Mutex<Vec<Caused>>,
-        /// How long the browser takes to answer `DOM.describeNode`, a page too large or deep to
-        /// scan quickly.
-        describe_takes: Mutex<Duration>,
     }
 
     impl Browser {
         /// Replies to the install's commands: `evaluated` to the evaluate, `booted` as the
-        /// install function's return, then the document's handle, no host the seal reported, no
-        /// tree it watches out of the document, and a scan that finds no shadow root.
+        /// install function's return.
         fn answering(evaluated: Value, booted: Value) -> Arc<Self> {
             let mut called = json!({ "result": { "type": "object" } });
             called["result"]["value"] = booted;
@@ -852,29 +515,10 @@ mod tests {
                 ),
                 ("Runtime.evaluate", evaluated),
                 ("Runtime.callFunctionOn", called),
-                (
-                    "Runtime.callFunctionOn",
-                    json!({ "result": { "type": "object", "objectId": "1.7.2" } }),
-                ),
-                (
-                    "Runtime.callFunctionOn",
-                    json!({ "result": { "type": "object", "subtype": "null", "value": null } }),
-                ),
-                (
-                    "Runtime.callFunctionOn",
-                    json!({ "result": { "type": "object", "subtype": "array",
-                                        "objectId": "1.7.3", "description": "Array(0)" } }),
-                ),
-                (
-                    "DOM.describeNode",
-                    json!({ "node": { "backendNodeId": 1, "nodeName": "#document",
-                                      "childNodeCount": 0, "children": [] } }),
-                ),
             ]);
             Arc::new(Self {
                 replies,
                 caused: Mutex::default(),
-                describe_takes: Mutex::default(),
             })
         }
 
@@ -917,18 +561,7 @@ mod tests {
             for (_, event, event_params) in now {
                 self.replies.emit(event, event_params, session.cloned());
             }
-            let takes = if method == "DOM.describeNode" {
-                *self
-                    .describe_takes
-                    .lock()
-                    .unwrap_or_else(PoisonError::into_inner)
-            } else {
-                Duration::ZERO
-            };
-            Box::pin(async move {
-                time::sleep(takes).await;
-                self.replies.send(method, params, session).await
-            })
+            self.replies.send(method, params, session)
         }
 
         fn send_raw_json<'a>(
@@ -966,7 +599,7 @@ mod tests {
     }
 
     fn our_world() -> Value {
-        created(CONTEXT, "browseros-sdk", "isolated", FRAME)
+        created(CONTEXT, SEALED_WORLD, "isolated", FRAME)
     }
 
     /// `Runtime.evaluate`'s reply: the global's handle.
@@ -1036,8 +669,8 @@ mod tests {
     -> TestResult {
         for (name, kind, frame) in [
             ("", "default", FRAME),
-            ("browseros-sdk", "isolated", "another frame"),
-            ("browseros-sdk", "default", FRAME),
+            (SEALED_WORLD, "isolated", "another frame"),
+            (SEALED_WORLD, "default", FRAME),
             ("another world", "isolated", FRAME),
         ] {
             let browser = Browser::new();
@@ -1174,74 +807,6 @@ mod tests {
                 (FrameSeq(3), retired)
             );
         }
-        Ok(())
-    }
-
-    #[tokio::test(start_paused = true)]
-    async fn tests_that_an_install_whose_scan_misses_the_frame_budget_is_refused() -> TestResult {
-        for (takes, late) in [
-            (FRAME_BUDGET.saturating_sub(Duration::from_millis(1)), false),
-            (FRAME_BUDGET + Duration::from_millis(1), true),
-        ] {
-            let browser = Browser::new();
-            browser.on(
-                "Page.createIsolatedWorld",
-                "Runtime.executionContextCreated",
-                our_world(),
-            );
-            *browser
-                .describe_takes
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner) = takes;
-            let installed = install(&browser).await;
-            assert_eq!(
-                matches!(installed, Err(ProbeFailure::Late)),
-                late,
-                "a scan of {takes:?}: {installed:?}"
-            );
-            assert_eq!(
-                installed.is_ok(),
-                !late,
-                "a first read installs its world, so a scan past the budget refuses it"
-            );
-        }
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn tests_that_a_watch_dropped_mid_way_still_releases_its_object_group() -> TestResult {
-        let connection = TestConnection::new([
-            ("Runtime.callFunctionOn", cdp_pending()),
-            ("DOM.describeNode", cdp_pending()),
-        ]);
-        let session = ProtocolSession::for_session(
-            Arc::clone(&connection) as Arc<dyn CdpConnection>,
-            SessionId::from(SESSION),
-        );
-        let world = SealedWorld::for_tests(session, FRAME, 3, "1.7.1");
-        let watch = world.watch_hidden_roots();
-        assert!(
-            time::timeout(Duration::from_millis(50), watch)
-                .await
-                .is_err(),
-            "the take of a reported host never answers, so the budget drops the watch"
-        );
-        for _ in 0..10 {
-            task::yield_now().await;
-        }
-        let calls = connection.calls()?;
-        let group = calls
-            .iter()
-            .find(|call| call.method == "Runtime.callFunctionOn")
-            .map(|call| call.params["objectGroup"].clone())
-            .ok_or("the watch took no host")?;
-        assert!(
-            calls
-                .iter()
-                .any(|call| call.method == "Runtime.releaseObjectGroup"
-                    && call.params["objectGroup"] == group),
-            "a retry makes a new group, so a dropped watch must release its own: {calls:?}"
-        );
         Ok(())
     }
 
