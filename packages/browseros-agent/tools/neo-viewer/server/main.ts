@@ -52,14 +52,14 @@ if (plan.kind === 'install') {
     process.exit(1)
   }
   // This process looked the packages up before they existed and Bun keeps that answer, so the
-  // viewer runs in a fresh one. Ctrl-C reaches it with the terminal's process group; a SIGTERM
-  // sent to this process alone is passed on.
+  // viewer runs in a fresh one. Signals sent to this process are passed on (Ctrl-C reaches both
+  // through the terminal's process group; the viewer ignores the copy).
   const viewer = Bun.spawn([process.execPath, ...process.argv.slice(1)], {
     stdin: 'inherit',
     stdout: 'inherit',
     stderr: 'inherit',
   })
-  process.on('SIGINT', () => {})
+  process.on('SIGINT', () => viewer.kill('SIGINT'))
   process.on('SIGTERM', () => viewer.kill('SIGTERM'))
   process.exit(await viewer.exited)
 }

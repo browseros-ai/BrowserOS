@@ -30,7 +30,12 @@ import {
   stopContainer,
 } from './neo-container'
 import { buildPage } from './page'
-import { claimStateFolder, liveViewer, readViewerFile } from './running-viewer'
+import {
+  claimStateFolder,
+  liveViewer,
+  portFree,
+  readViewerFile,
+} from './running-viewer'
 import { type RunningViewer, startViewer } from './viewer-server'
 
 const AGENT_DIR = join(import.meta.dir, '..', '..', '..')
@@ -74,6 +79,11 @@ try {
   await mkdir(options.dataDir, { recursive: true })
   await claimStateFolder(options.dataDir, options.instance)
   await checkRunningViewer()
+  if (!portFree(options.port)) {
+    throw new Error(
+      `neo-viewer: port ${options.port} is in use on 127.0.0.1 (another viewer?); stop it, or pick another --port`,
+    )
+  }
   // Before any Docker work: a missing or broken package fails here, in a second.
   const page = await buildPage()
   const neo = options.upstream
