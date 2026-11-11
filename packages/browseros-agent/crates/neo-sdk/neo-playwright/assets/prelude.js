@@ -309,6 +309,16 @@
       target: "page",
       lifetime: "operation"
     },
+    "page.addScriptTag": {
+      effect: "write",
+      target: "page",
+      lifetime: "operation"
+    },
+    "page.addStyleTag": {
+      effect: "write",
+      target: "page",
+      lifetime: "operation"
+    },
     "page.close": {
       effect: "write",
       target: "page",
@@ -7178,6 +7188,12 @@ ${value.stack}`;
     content() {
       return this._content("frame.content");
     }
+    addScriptTag(options = {}) {
+      return this._addTag("frame.addScriptTag", "page.addScriptTag", options);
+    }
+    addStyleTag(options = {}) {
+      return this._addTag("frame.addStyleTag", "page.addStyleTag", options);
+    }
     setContent(html, options) {
       return this._setContent("frame.setContent", html, options);
     }
@@ -7408,6 +7424,31 @@ ${value.stack}`;
     }
     async _content(api) {
       return await invoke("page.content", this._call(api, 0), await this._frameArgs(api));
+    }
+    async _addTag(api, op, options) {
+      const keys = op === "page.addScriptTag" ? ["url", "path", "content", "type"] : ["url", "path", "content"];
+      const input = pick(options, keys);
+      for (const key of keys) {
+        const value = input[key];
+        if (value !== undefined && typeof value !== "string")
+          throw clientError(api, `${key}: expected string, got ${value === null ? "object" : typeof value}`);
+      }
+      let handle;
+      try {
+        const { value: result, observed } = await invokeObserved(op, this._call(api, 0), {
+          ...await this._frameArgs(api),
+          ...input
+        });
+        this._page._evaluated(result.frames, observed);
+        handle = this._page._handle(result.element);
+      } catch (error) {
+        if (error instanceof Error && error.message.startsWith(`${api}: `) && /^(?:E[A-Z0-9]+|UNKNOWN): .*?, (?:open|read) '/.test(error.message.slice(api.length + 2)))
+          error.message = error.message.slice(api.length + 2);
+        throw error;
+      }
+      if (!handle)
+        throw plainError(api, "The inserted tag did not return an element");
+      return handle;
     }
     async _setContent(api, html, options = {}) {
       const waitUntil = loadState(api, "waitUntil", options.waitUntil ?? "load");
@@ -8285,6 +8326,12 @@ ${value.stack}`;
     }
     content() {
       return this._mainFrame._content("page.content");
+    }
+    addScriptTag(options = {}) {
+      return this._mainFrame._addTag("page.addScriptTag", "page.addScriptTag", options);
+    }
+    addStyleTag(options = {}) {
+      return this._mainFrame._addTag("page.addStyleTag", "page.addStyleTag", options);
     }
     setContent(html, options) {
       return this._mainFrame._setContent("page.setContent", html, options);
@@ -9499,8 +9546,6 @@ Timeout: ${timeout}ms`);
     Page: {
       addInitScript: "init scripts are not available in Neo; run page.evaluate() after page.goto()",
       addLocatorHandler: "locator handlers are not available in Neo; check for the overlay with locator.isVisible() before acting",
-      addScriptTag: "adding tags is not available in Neo; change the page with page.evaluate()",
-      addStyleTag: "adding tags is not available in Neo; change the page with page.evaluate()",
       bringToFront: "Neo keeps agent tabs in the background; act on the page directly",
       cancelPickLocator: NO_INSPECTOR,
       clearConsoleMessages: 'Neo keeps no console history; listen with page.on("console")',
@@ -9554,8 +9599,6 @@ Timeout: ${timeout}ms`);
       webmcp: { hint: "WebMCP is not available in Neo", kind: "property" }
     },
     Frame: {
-      addScriptTag: "adding tags is not available in Neo; change the page with frame.evaluate()",
-      addStyleTag: "adding tags is not available in Neo; change the page with frame.evaluate()",
       evaluateHandle: NO_HANDLES,
       frameElement: "locate the iframe from its parent instead: page.locator('iframe')",
       tap: NO_TOUCH,

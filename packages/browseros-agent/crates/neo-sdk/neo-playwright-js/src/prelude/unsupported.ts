@@ -93,10 +93,6 @@ export const UNSUPPORTED = {
       'init scripts are not available in Neo; run page.evaluate() after page.goto()',
     addLocatorHandler:
       'locator handlers are not available in Neo; check for the overlay with locator.isVisible() before acting',
-    addScriptTag:
-      'adding tags is not available in Neo; change the page with page.evaluate()',
-    addStyleTag:
-      'adding tags is not available in Neo; change the page with page.evaluate()',
     bringToFront:
       'Neo keeps agent tabs in the background; act on the page directly',
     cancelPickLocator: NO_INSPECTOR,
@@ -159,10 +155,6 @@ export const UNSUPPORTED = {
     webmcp: { hint: 'WebMCP is not available in Neo', kind: 'property' },
   },
   Frame: {
-    addScriptTag:
-      'adding tags is not available in Neo; change the page with frame.evaluate()',
-    addStyleTag:
-      'adding tags is not available in Neo; change the page with frame.evaluate()',
     evaluateHandle: NO_HANDLES,
     frameElement:
       "locate the iframe from its parent instead: page.locator('iframe')",

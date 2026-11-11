@@ -36,8 +36,10 @@ import {
   loadStateError,
   type NavigateOptions,
   type ScreenshotOptionsInput,
+  type ScriptTagOptions,
   type SnapshotOptions,
   type StrictOption,
+  type StyleTagOptions,
   type TextMatch,
   type UrlMatcher,
   type WaitForFunctionOptions,
@@ -635,6 +637,22 @@ export class Page extends EventEmitter {
 
   content(): Promise<string> {
     return this._mainFrame._content('page.content')
+  }
+
+  addScriptTag(options: ScriptTagOptions = {}): Promise<ElementHandle> {
+    return this._mainFrame._addTag(
+      'page.addScriptTag',
+      'page.addScriptTag',
+      options,
+    )
+  }
+
+  addStyleTag(options: StyleTagOptions = {}): Promise<ElementHandle> {
+    return this._mainFrame._addTag(
+      'page.addStyleTag',
+      'page.addStyleTag',
+      options,
+    )
   }
 
   setContent(html: string, options?: NavigateOptions): Promise<void> {

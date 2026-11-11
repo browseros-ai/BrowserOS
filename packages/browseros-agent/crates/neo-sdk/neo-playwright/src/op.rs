@@ -217,6 +217,8 @@ mod tests {
             ("page.title", &[], true),
             ("page.content", &[], true),
             ("page.setContent", &[MainWorld], true),
+            ("page.addScriptTag", &[MainWorld, HostFiles], true),
+            ("page.addStyleTag", &[MainWorld, HostFiles], true),
             ("page.close", &[], true),
             ("page.opener", &[], true),
             ("page.frames", &[], true),

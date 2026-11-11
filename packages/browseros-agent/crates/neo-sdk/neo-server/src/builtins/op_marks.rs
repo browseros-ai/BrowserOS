@@ -279,6 +279,10 @@ mod tests {
     /// change on either side, the crate's declarations or the door's policing, fails here until
     /// the snapshot is redone on purpose.
     #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one explicit row per capability operation keeps the host contract auditable"
+    )]
     fn claw_sdk_places_every_capability_op() {
         use Capability::{Capture, HostFiles, MainWorld};
         use Placement::{Held, Served};
@@ -306,6 +310,20 @@ mod tests {
                 declared: vec![MainWorld],
                 gated: true,
                 policed: vec![MainWorld],
+                placement: Served,
+            },
+            Row {
+                op: "page.addScriptTag",
+                declared: vec![MainWorld, HostFiles],
+                gated: true,
+                policed: vec![MainWorld, HostFiles],
+                placement: Served,
+            },
+            Row {
+                op: "page.addStyleTag",
+                declared: vec![MainWorld, HostFiles],
+                gated: true,
+                policed: vec![MainWorld, HostFiles],
                 placement: Served,
             },
             Row {
@@ -524,6 +542,18 @@ mod tests {
     /// The BrowserOS cases of the ops that reach past their page's sealed world into the main
     /// world, Neo's files or Neo's screen, where no fake browser shows what a real one does.
     const BROWSEROS_CASES: &[BrowserosCase] = &[
+        BrowserosCase {
+            op: "page.addScriptTag",
+            file: "main_world_browseros.rs",
+            test: "tags_behave_as_playwright_on_browseros",
+            proves: Proves::Served,
+        },
+        BrowserosCase {
+            op: "page.addStyleTag",
+            file: "main_world_browseros.rs",
+            test: "tags_behave_as_playwright_on_browseros",
+            proves: Proves::Served,
+        },
         BrowserosCase {
             op: "page.evaluate",
             file: "main_world_browseros.rs",

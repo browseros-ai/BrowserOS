@@ -24,6 +24,7 @@
 //!  page.waitForURL ─ wait_for_url: each navigation matched in the sealed world, the load state
 //! ```
 
+mod add_tag;
 pub(crate) mod context_op;
 mod document_op;
 mod document_watch;
