@@ -84,7 +84,7 @@ async function withExposedFunctions(
   try {
     serialized = serializeAsCallArgument(arg, (value: unknown) => {
       if (typeof value === 'function') {
-        const name = kFunctionBindingPrefix + guid()
+        const name = callbackName()
         exposing.push(
           owner.expose(name, (_source, ...args) =>
             Reflect.apply(value, undefined, args),
@@ -117,9 +117,13 @@ async function withExposedFunctions(
   })
 }
 
-/** upstream's `createGuid`: 16 random bytes as hex, for a callback binding's name. */
-function guid(): string {
-  let text = ''
+/**
+ * A fresh name for a function `exposeFunctions` passes, `addInitScript`'s or `evaluate`'s:
+ * upstream's `kFunctionBindingPrefix` and `createGuid` (16 random bytes as hex). The page's
+ * controller reads a `{ fn }` with this prefix as a call of that binding.
+ */
+export function callbackName(): string {
+  let text = kFunctionBindingPrefix
   for (let index = 0; index < 16; index++)
     text += Math.floor(Math.random() * 256)
       .toString(16)

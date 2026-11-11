@@ -262,12 +262,16 @@ describe("evaluate's exposeFunctions", () => {
     })
   })
 
-  it('tests that locator.evaluate exposes nothing when its check fails, which it raises after the wait', async () => {
+  it('tests that locator.evaluate exposes nothing when its check fails or its signal already fired', async () => {
     const run = runtime()
-    await run.run(`
+    const aborted = await run.run(`
       await page.locator('div').evaluate(() => 1, { cb: () => 1 }, { exposeFunctions: true, timeout: 5 })
       await page.locator('div').evaluate(() => 1, { cb: () => 1, page }, { exposeFunctions: true })
+      const signal = { aborted: true, reason: 'stop', addEventListener() {}, removeEventListener() {} }
+      return await page.locator('div').evaluate(() => 1, { cb: () => 1 }, { exposeFunctions: true, signal })
+        .then(() => null, (error) => error.name)
     `)
+    expect(aborted).toBe('AbortError')
     const scripts = run
       .sent('locator.evaluate')
       .map((sent) => sent.input.script as { refused?: string })

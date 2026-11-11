@@ -22,7 +22,6 @@
  * in the main world (`run.handles`). Rust adopts a handle only into its own document.
  */
 import {
-  kFunctionBindingPrefix,
   parseEvaluationResultValue,
   serializeAsCallArgument,
 } from '../../../neo-playwright/third_party/playwright/packages/isomorphic/utilityScriptSerializers'
@@ -38,6 +37,7 @@ import {
   unsupportedError,
 } from './errors'
 import { WaitHandle } from './frame'
+import { callbackName } from './init-script'
 import { isHandle } from './options'
 import type { ElementBrand, PageScript, SerializedValue } from './wire'
 
@@ -58,16 +58,6 @@ export type Callbacks = [
   name: string,
   callback: (...args: unknown[]) => unknown,
 ][]
-
-/** upstream's `kFunctionBindingPrefix` and `createGuid`: a callback binding's fresh name. */
-function callbackName(): string {
-  let text = ''
-  for (let index = 0; index < 16; index++)
-    text += Math.floor(Math.random() * 256)
-      .toString(16)
-      .padStart(2, '0')
-  return kFunctionBindingPrefix + text
-}
 
 /** Whether `options` asks for upstream's `exposeFunctions`. */
 export function exposesFunctions(options: unknown): boolean {

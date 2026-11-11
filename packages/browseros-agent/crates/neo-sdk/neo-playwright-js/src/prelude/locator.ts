@@ -22,7 +22,7 @@ import type {
 import { markHandle } from './options'
 import type { Page } from './page'
 import { type LocatorOptions, withLocatorOptions } from './selectors'
-import type { SignalOption } from './signal'
+import { type SignalOption, signalOf } from './signal'
 import type { TimeoutOption } from './timeouts'
 import {
   type AriaSnapshotJSON,
@@ -618,6 +618,9 @@ export class Locator {
     options?: TimeoutOption & EvaluateOptions & SignalOption,
   ): Promise<unknown> {
     const api = 'locator.evaluate'
+    // Read before the first await (`signalOf`): an aborted call sends nothing and exposes no
+    // callback, as upstream's wait rejects before its handle's evaluate exposes any.
+    signalOf(api, options)
     const script = await this._frame._page._evaluationScript(
       api,
       'locator',
