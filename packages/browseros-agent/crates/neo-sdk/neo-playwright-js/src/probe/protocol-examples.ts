@@ -237,6 +237,7 @@ export const REQUEST_EXAMPLES: { [O in Op]: AtLeastOne<RequestOf<O>> } = {
   snapshot: [
     { op: 'snapshot', root: 'document', mode: 'ai' },
     { op: 'snapshot', root: chunk('main'), mode: 'default', depth: 3 },
+    { op: 'snapshot', root: 'document', mode: 'default', boxes: true },
   ],
   expect: [
     {

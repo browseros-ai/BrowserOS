@@ -11,6 +11,9 @@ description = "Playwright-compatible locators and actions for BrowserOS Neo's ru
 browseros-cdp.workspace = true
 browseros-core.workspace = true
 neo-trace.workspace = true
+# Tall native-tab screenshots are joined one PNG row at a time, without a full RGBA bitmap.
+png.workspace = true
+base64.workspace = true
 # Asks frames at once (`join_all`): a snapshot's child frames, an action's parent frames.
 futures-util.workspace = true
 serde.workspace = true

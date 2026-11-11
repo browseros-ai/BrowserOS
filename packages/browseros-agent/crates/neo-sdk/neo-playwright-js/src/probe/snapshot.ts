@@ -41,7 +41,7 @@ export function snapshot(
   const { injected } = world
   const { json, iframeRefs, iframeDepths } = injected.ariaSnapshotJSON(
     found.element,
-    { mode: request.mode, depth: request.depth },
+    { mode: request.mode, depth: request.depth, boxes: request.boxes },
   )
   const iframes: SnapshotIframe[] = []
   if (request.mode === 'ai') {

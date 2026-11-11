@@ -1,4 +1,4 @@
-//! A transparent capture's temporary browser state and ownership of the shared capture queue.
+//! A capture sequence's ownership of the shared queue and optional temporary background.
 //! The queue outlives a cancelled capture until its background reset has been attempted, so
 //! an audit or desktop image cannot run inside an SDK screenshot's transparent interval.
 
@@ -11,46 +11,56 @@ use tokio::{
     time,
 };
 
-/// One temporary override and its exclusive ownership of the session's capture queue.
+/// Exclusive capture ownership, including restoration of an optional background override.
 #[must_use = "the guard retains capture ownership through background restoration"]
-pub(super) struct TransparentBackground {
+pub(super) struct CaptureState {
     session: ProtocolSession,
     queue: Option<OwnedMutexGuard<()>>,
+    transparent: bool,
 }
 
-impl TransparentBackground {
+impl CaptureState {
     pub(super) async fn acquire(
         session: &ProtocolSession,
         queue: Arc<Mutex<()>>,
+        transparent: bool,
     ) -> Result<Self, CoreError> {
         let queue = queue.lock_owned().await;
         // Register before sending: losing the set reply does not mean it had no effect.
         let guard = Self {
             session: session.clone(),
             queue: Some(queue),
+            transparent,
         };
-        session
-            .send::<_, Value>(
-                "Emulation.setDefaultBackgroundColorOverride",
-                json!({
-                    "color": { "r": 0, "g": 0, "b": 0, "a": 0 },
-                }),
-            )
-            .await?;
+        if transparent {
+            session
+                .send::<_, Value>(
+                    "Emulation.setDefaultBackgroundColorOverride",
+                    json!({
+                        "color": { "r": 0, "g": 0, "b": 0, "a": 0 },
+                    }),
+                )
+                .await?;
+        }
         Ok(guard)
     }
 
     pub(super) async fn restore(mut self) {
-        reset(&self.session).await;
+        if self.transparent {
+            reset(&self.session).await;
+        }
         self.queue = None;
     }
 }
 
-impl Drop for TransparentBackground {
+impl Drop for CaptureState {
     fn drop(&mut self) {
         let Some(queue) = self.queue.take() else {
             return;
         };
+        if !self.transparent {
+            return;
+        }
         let Ok(runtime) = Handle::try_current() else {
             return;
         };
@@ -74,7 +84,7 @@ async fn reset(session: &ProtocolSession) {
 
 #[cfg(test)]
 mod tests {
-    use super::super::{ScreenshotBackground, capture_cdp};
+    use super::super::{ScreenshotBackground, ScreenshotCapture, capture_cdp};
     use crate::{
         CdpConnection, ProtocolSession, SessionId,
         testing::{TestConnection, cdp_pending},
@@ -82,6 +92,45 @@ mod tests {
     use serde_json::json;
     use std::{error::Error, sync::Arc, time::Duration};
     use tokio::{task, time};
+
+    /// A sequence retains the queue between protocol calls: an audit image must not capture
+    /// halfway through a tiled image, even when the sequence uses the default background.
+    #[tokio::test]
+    async fn a_sequence_excludes_other_captures_between_its_tiles() -> Result<(), Box<dyn Error>> {
+        let connection = TestConnection::new([]);
+        connection.always("Page.captureScreenshot", json!({ "data": "cG5n" }))?;
+        let session = ProtocolSession::for_session(
+            Arc::clone(&connection) as Arc<dyn CdpConnection>,
+            SessionId::from("tiled-capture-sequence"),
+        );
+        let capture =
+            ScreenshotCapture::acquire(session.clone(), None, ScreenshotBackground::Default)
+                .await?;
+        capture.capture(json!({ "format": "png" })).await?;
+        let audit = tokio::spawn(async move {
+            capture_cdp(
+                &session,
+                json!({ "format": "jpeg" }),
+                ScreenshotBackground::Default,
+            )
+            .await
+        });
+        for _ in 0..20 {
+            task::yield_now().await;
+        }
+        assert!(!audit.is_finished());
+        capture.capture(json!({ "format": "png" })).await?;
+        capture.finish().await;
+        audit.await??;
+        let formats: Vec<_> = connection
+            .calls()?
+            .iter()
+            .filter(|call| call.method == "Page.captureScreenshot")
+            .map(|call| call.params["format"].clone())
+            .collect();
+        assert_eq!(formats, [json!("png"), json!("png"), json!("jpeg")]);
+        Ok(())
+    }
 
     /// Audit JPEGs cannot enter a transparent interval, including while a cancelled capture's
     /// reset acknowledgement is stalled. The reset's bound eventually releases later captures.

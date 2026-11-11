@@ -363,6 +363,11 @@ export const OPS = {
     target: 'page',
     lifetime: 'operation',
   },
+  'page.setViewportSize': {
+    effect: 'write',
+    target: 'page',
+    lifetime: 'operation',
+  },
   'context.pages': {
     effect: 'read',
     target: null,
