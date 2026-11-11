@@ -28,6 +28,8 @@ export async function buildPage(): Promise<Map<string, PageFile>> {
     entrypoints: [page.index],
     plugins: [tailwind],
     target: 'browser',
+    // Keep the bundler's own messages (file, line, the module it could not resolve) for the error.
+    throw: false,
     define: {
       'process.env.NODE_ENV': JSON.stringify(
         process.env.NODE_ENV ?? 'development',

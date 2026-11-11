@@ -42,7 +42,7 @@ export async function startViewer(
   )
   const [store, page] = await Promise.all([
     TaskStore.open(config.dataDir, rule),
-    buildPage(),
+    config.page ?? buildPage(),
     configureHostApi(config.hostApi ?? null),
   ])
   // The proxy needs the bound port (for the process lookup) before the first request.

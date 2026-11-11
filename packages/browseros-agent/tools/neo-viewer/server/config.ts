@@ -8,6 +8,7 @@ import { join, resolve } from 'node:path'
 import { parseArgs } from 'node:util'
 import type { HostApiConfig } from './hostApi'
 import { INSTANCE_PATTERN, type InstanceNames } from './neo-container'
+import type { PageFile } from './page'
 
 /** The port the agent's MCP URL and the UI use (the build contract's `:7310`). */
 const DEFAULT_PORT = 7310
@@ -19,6 +20,8 @@ export interface ViewerConfig {
   /** Neo's `/mcp`. */
   upstream: URL
   dataDir: string
+  /** The page, when the caller built it already (the command builds it before any Docker work). */
+  page?: Map<string, PageFile>
   /** Neo's host API over `CLAW_HOST_TCP`; none when null. */
   hostApi?: HostApiConfig | null
   /** The container `bun run neo:viewer` started, shown read-only on the page; null with `--upstream`. */

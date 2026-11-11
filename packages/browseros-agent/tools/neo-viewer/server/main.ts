@@ -1,13 +1,16 @@
 /**
  * `bun run neo:viewer` starts here. It imports only Bun and Node built-ins: the viewer's own
  * modules import packages (React, Tailwind) a fresh checkout may not have yet, and a missing one
- * would fail at load, before anything could say what to do. So it checks them first
- * (`dependencies.ts`), installs or explains, then loads the viewer (`launch.ts`).
+ * would fail at load, before anything could say what to do; a stale one fails later, in the page
+ * build. So it checks them against the tool's package.json and bun.lock first (`dependencies.ts`),
+ * installs or explains, then loads the viewer (`launch.ts`).
  */
 
 import { join } from 'node:path'
 import {
-  missingDependencies,
+  bunNote,
+  dependencyProblems,
+  describeProblem,
   pinnedBun,
   planDependencies,
 } from './dependencies'
@@ -15,10 +18,13 @@ import {
 const TOOL_DIR = join(import.meta.dir, '..')
 const AGENT_DIR = join(TOOL_DIR, '..', '..')
 
+const pinned = await pinnedBun(AGENT_DIR)
+const note = bunNote(Bun.version, pinned)
+if (note) console.log(note)
 const plan = planDependencies({
-  missing: missingDependencies(TOOL_DIR),
+  problems: await dependencyProblems(TOOL_DIR, AGENT_DIR),
   bunVersion: Bun.version,
-  pinned: await pinnedBun(AGENT_DIR),
+  pinned,
   agentDir: AGENT_DIR,
 })
 if (plan.kind === 'stop') {
@@ -37,7 +43,7 @@ if (plan.kind === 'install') {
   })
   const missing =
     (await install.exited) === 0
-      ? missingDependencies(TOOL_DIR)
+      ? (await dependencyProblems(TOOL_DIR, AGENT_DIR)).map(describeProblem)
       : ['(install failed)']
   if (missing.length > 0) {
     console.error(

@@ -38,9 +38,11 @@ build inputs (this tool, say) reuse the commit's image:
   Claude Code:    claude mcp add --transport http neo-viewer http://127.0.0.1:7310/mcp
 ```
 
-From a fresh checkout it first checks this tool's packages: run with the repo's pinned Bun
-(`packageManager`, 1.4.2) it installs them; with another Bun it stops and prints the one command to
-run (`npx -y bun@1.4.2 install --frozen-lockfile`), since an older Bun's install links nothing here.
+Before anything else it checks this tool's packages against its `package.json` and `bun.lock`
+(missing, or older than the lockfile after a pull) and builds the page, so a bad install fails in a
+second with no Docker work: run with the repo's pinned Bun (`packageManager`, 1.4.2) it installs
+them; with another Bun it says so and prints the one command to run
+(`npx -y bun@1.4.2 install --frozen-lockfile`), since an older Bun's install links nothing here.
 
 Ctrl-C stops the viewer and removes the container and network it started. Each start begins
 clean: it removes what the previous start left (the container, network and data) and, after a new

@@ -10,6 +10,7 @@ import { randomBytes } from 'node:crypto'
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { type LaunchOptions, launchOptionsFrom } from './config'
+import { describeError } from './errors'
 import type { HostApiConfig } from './hostApi'
 import {
   buildScript,
@@ -27,6 +28,7 @@ import {
   startContainer,
   stopContainer,
 } from './neo-container'
+import { buildPage } from './page'
 import { claimStateFolder, liveViewer, readViewerFile } from './running-viewer'
 import { type RunningViewer, startViewer } from './viewer-server'
 
@@ -71,10 +73,13 @@ try {
   await mkdir(options.dataDir, { recursive: true })
   await claimStateFolder(options.dataDir, options.instance)
   await checkRunningViewer()
+  // Before any Docker work: a missing or broken package fails here, in a second.
+  const page = await buildPage()
   const neo = options.upstream
     ? { mcpUrl: options.upstream, hostApi: options.hostApi }
     : await startNeo(options)
   viewer = await startViewer({
+    page,
     hostApi: neo.hostApi,
     port: options.port,
     upstream: neo.mcpUrl,
@@ -98,7 +103,7 @@ try {
 } catch (error) {
   // A start cut short by Ctrl-C is already being cleaned up by `stop`.
   if (!cancelled) {
-    console.error(error instanceof Error ? error.message : String(error))
+    console.error(describeError(error))
     await stop(1)
   }
 }
