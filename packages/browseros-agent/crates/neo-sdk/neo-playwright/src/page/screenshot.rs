@@ -13,7 +13,7 @@ use crate::backoff::Backoff;
 use crate::page::screenshot_geometry::{GeometryOptions, Scale, ScreenshotGeometry};
 use crate::page::screenshot_masks::MaskLocator;
 use crate::page::screenshot_preparation::ScreenshotPreparation;
-use crate::page::{OpPage, screenshot_png};
+use crate::page::{OpPage, screenshot_document, screenshot_png};
 use crate::probe::Rect;
 
 use crate::op_output::{Bytes, to_output};
@@ -171,7 +171,7 @@ pub(crate) async fn capture(
                 preparation
                     .wait_for_fonts(&page, scope, target.as_deref())
                     .await?;
-                capture_pixels(
+                let pixels = capture_pixels(
                     pw,
                     &page,
                     scope,
@@ -179,24 +179,28 @@ pub(crate) async fn capture(
                     target.as_deref(),
                     format,
                     &mut preparation,
-                )
-                .await
+                );
+                screenshot_document::capture(&page, scope, target.as_deref(), pixels).await
             }
             .await;
             preparation.restore().await;
             match captured {
+                Ok(screenshot_document::Attempt::Captured(data)) => return Ok(data),
+                Ok(screenshot_document::Attempt::Navigated) => {
+                    scope.log("document changed during screenshot, retrying".to_owned());
+                }
                 Err(error)
                     if error.error_code() == Some(ErrorCode::ElementDetached)
                         && matches!(input.target, Some(Target::Locator(_))) =>
                 {
                     scope.log("element was detached from the DOM, retrying".to_owned());
-                    scope
-                        .sleep(backoff.wait(attempt + 1))
-                        .await
-                        .map_err(|_expired| scope.timed_out(ErrorCode::WaitTimeout))?;
                 }
-                done => return done,
+                Err(error) => return Err(error),
             }
+            scope
+                .sleep(backoff.wait(attempt + 1))
+                .await
+                .map_err(|_expired| scope.timed_out(ErrorCode::WaitTimeout))?;
         }
         Err(scope.timed_out(ErrorCode::WaitTimeout))
     };
@@ -334,3 +338,6 @@ async fn capture_normalized(
         .await
         .map_err(|error| scope.core_error(&error))
 }
+
+#[cfg(test)]
+mod tests;
