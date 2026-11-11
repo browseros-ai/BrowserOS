@@ -301,6 +301,7 @@ test('skip lookup uses the file and full describe path, retaining its reason', (
 
 test('product assertions retire only the polling shim skips without changing the manifest', () => {
   const options = { productExpect: true }
+  assert.equal(skipReason([], file, [row.title], options), undefined)
   for (const reason of [
     'expectLoop: toMatchAriaSnapshot is not covered',
     'expectLoop: toHaveScreenshot is not covered',
