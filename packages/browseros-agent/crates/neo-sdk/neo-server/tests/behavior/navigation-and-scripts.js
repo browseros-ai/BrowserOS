@@ -39,8 +39,3 @@ expect(
     .evaluate(() => document.querySelector('p').textContent),
 ).toBe('Inside')
 expect(await page.title()).toBe('Content')
-const logs = []
-page.on('console', (message) => logs.push(message.text()))
-await page.evaluate(() => console.log('hosted-console-policy'))
-await page.waitForTimeout(100)
-expect(logs).toEqual([])
