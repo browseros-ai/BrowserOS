@@ -150,7 +150,7 @@ export function useViewer(): ViewerState {
 /** One run in full, refetched whenever its summary changes (it was still running). */
 export function useRunDetail(run: RunSummary, open: boolean): RunDetail | null {
   const [detail, setDetail] = useState<RunDetail | null>(null)
-  // biome-ignore lint/correctness/useExhaustiveDependencies: a new status means a new reply to fetch.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: a new status means a new reply, a new record count or duration means Neo's record joined.
   useEffect(() => {
     if (!open) return
     let current = true
@@ -163,6 +163,6 @@ export function useRunDetail(run: RunSummary, open: boolean): RunDetail | null {
     return () => {
       current = false
     }
-  }, [run.id, run.status, open])
+  }, [run.id, run.status, run.operationCount, run.neoDurationMs, open])
   return detail
 }

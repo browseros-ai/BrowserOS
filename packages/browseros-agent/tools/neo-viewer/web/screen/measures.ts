@@ -2,14 +2,15 @@
  * The numbers behind the run table's bars and totals row. Every value is read from or summed over
  * the API's `RunSummary` fields; nothing is estimated here beyond the API's own chars ÷ 4.
  *
- * "Neo time" is the time Neo took to answer as the viewer measured it: the round trip less the
- * time the viewer held the call before forwarding it (`proxyMs`). Neo's own record
- * (`endedAt − startedAt`) joins the API with PR C; this is the stand-in until then.
+ * "Neo time" is Neo's own record of the run (`endedAt − startedAt`, `RunSummary.neoDurationMs`).
+ * A run whose record is not joined (still running, or no host API) falls back to what the viewer
+ * measured: the round trip less the time the viewer held the call before forwarding (`proxyMs`).
  */
 
 import type { RunSummary } from '../../shared/api'
 
 export function neoMs(run: RunSummary): number | null {
+  if (run.neoDurationMs !== null) return run.neoDurationMs
   return run.roundTripMs === null
     ? null
     : Math.max(0, run.roundTripMs - run.proxyMs)
@@ -62,6 +63,8 @@ export interface RunTotals {
   replyTokens: number
   /** Time between a reply and the next call, summed (the agent's thinking, other tools, waits). */
   gapMs: number
+  /** Operations Neo recorded, over the runs whose record is joined; null when none is. */
+  calls: number | null
 }
 
 export function runTotals(runs: RunSummary[]): RunTotals {
@@ -72,8 +75,12 @@ export function runTotals(runs: RunSummary[]): RunTotals {
     codeTokens: 0,
     replyTokens: 0,
     gapMs: 0,
+    calls: null,
   }
   for (const run of runs) {
+    if (run.operationCount !== null) {
+      totals.calls = (totals.calls ?? 0) + run.operationCount
+    }
     totals.neoMs += neoMs(run) ?? 0
     totals.roundTripMs += run.roundTripMs ?? 0
     totals.codeTokens += run.codeSize.tokens
