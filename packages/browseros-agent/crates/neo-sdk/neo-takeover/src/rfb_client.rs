@@ -25,7 +25,7 @@ use bytes::{Bytes, BytesMut};
 pub(crate) enum DisplayMode {
     /// A spectator's: the screen only. Keys, clicks, pastes and resizes are dropped.
     View,
-    /// The owner's: everything goes to Xvnc, and the first input closes views.
+    /// The owner's: every supported message goes to Xvnc.
     Control,
 }
 
@@ -79,8 +79,6 @@ pub(crate) enum Verdict {
     Pass,
     /// Swallow it.
     Drop,
-    /// Send owner input after its first message closes view displays.
-    Input,
 }
 
 /// The decided table (D12, decision 23), and the only list of what each mode allows. A match on
@@ -100,12 +98,10 @@ pub(crate) const fn verdict(mode: DisplayMode, message: ClientMessage) -> Verdic
             DisplayMode::View,
             Key { .. } | Pointer { .. } | CutText | SetDesktopSize | QemuKey { .. },
         ) => Verdict::Drop,
-        // A hover move reveals nothing, and noVNC sends one on every mouse move. A resize fits
-        // the screen to the owner's viewer; it types nothing.
-        (DisplayMode::Control, Pointer { buttons: 0 } | SetDesktopSize) => Verdict::Pass,
-        (DisplayMode::Control, Key { .. } | Pointer { .. } | CutText | QemuKey { .. }) => {
-            Verdict::Input
-        }
+        (
+            DisplayMode::Control,
+            Key { .. } | Pointer { .. } | CutText | SetDesktopSize | QemuKey { .. },
+        ) => Verdict::Pass,
     }
 }
 
@@ -529,31 +525,23 @@ mod tests {
     }
 
     #[test]
-    fn control_passes_everything_and_marks_keys_pastes_and_clicks_as_input() {
+    fn control_passes_every_supported_message() {
         for (message, _) in every_message() {
-            let input = matches!(
-                message,
-                ClientMessage::Key { .. }
-                    | ClientMessage::QemuKey { .. }
-                    | ClientMessage::CutText
-                    | ClientMessage::Pointer { buttons: 1.. }
-            );
-            let expected = if input { Verdict::Input } else { Verdict::Pass };
             assert_eq!(
                 verdict(DisplayMode::Control, message),
-                expected,
+                Verdict::Pass,
                 "{message:?}"
             );
         }
         assert_eq!(
             verdict(DisplayMode::Control, ClientMessage::Pointer { buttons: 0 }),
             Verdict::Pass,
-            "a hover move is not input"
+            "control forwards hover moves"
         );
         assert_eq!(
             verdict(DisplayMode::Control, ClientMessage::SetDesktopSize),
             Verdict::Pass,
-            "a resize is not input"
+            "control forwards resize requests"
         );
     }
 }

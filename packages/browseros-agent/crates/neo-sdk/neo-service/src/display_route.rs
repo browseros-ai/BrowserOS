@@ -1,5 +1,5 @@
 //! `GET /v1/display`: Neo's one screen as RFB over a WebSocket (design D12). The display itself
-//! (admission, the filter, the owner's first input, follow and lifecycle) is
+//! (admission, the filter, follow and lifecycle) is
 //! `neo_takeover::Displays`; this module is what is HTTP and WebSocket about it.
 //!
 //! 1. The query is parsed: a 400 for a bad or contradictory parameter. `release=` binds a
@@ -8,15 +8,13 @@
 //!    status and not from a socket that opens and closes with 4002.
 //! 2. The request must be a WebSocket upgrade.
 //! 3. `Displays::admit` runs before the upgrade, so a refusal is an HTTP status and not a socket
-//!    that opens and dies: 409 `display_paused` for a view while the owner has control, or
-//!    503 `display_unavailable` when Xvnc cannot be reached.
+//!    that opens and dies: 503 `display_unavailable` when Xvnc cannot be reached.
 //! 4. The upgrade takes no subprotocol, and echoes `binary` only when the viewer offers it:
 //!    noVNC 1.3.0 offers none, so requiring one would lock it out (decision 26).
 //! 5. Binary frames carry RFB bytes both ways, and the display ends with a close that says why:
 //!
 //! | Code | When |
 //! |---|---|
-//! | 4001 `paused` | a view, when the owner takes control: try again later |
 //! | 4002 `released` | a control display, when its takeover is released |
 //! | 1008 | the viewer sent a message the filter refuses (the reason says which) |
 //! | 1003 | the viewer sent a text frame |
@@ -41,9 +39,6 @@ use std::future::ready;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-/// A view closed because the owner has control. RFC 6455 leaves
-/// 4000 to 4999 to applications.
-const PAUSED: u16 = 4001;
 /// A bound control display closed because its takeover was released.
 const RELEASED: u16 = 4002;
 
@@ -51,8 +46,7 @@ const RELEASED: u16 = 4002;
 ///
 /// # Errors
 /// 400 for a bad query, 404 for a `release` that names no takeover, 409 `takeover_released`
-/// for one whose release has begun, 409 `display_paused` for a view while the owner has
-/// control, and 503 `display_unavailable` when Xvnc is unreachable.
+/// for one whose release has begun, and 503 `display_unavailable` when Xvnc is unreachable.
 pub(crate) async fn open_display(
     State(state): State<Arc<ServiceState>>,
     RawQuery(raw): RawQuery,
@@ -134,7 +128,6 @@ async fn relay(admitted: Admitted, socket: WebSocket) {
 fn close_frame(end: DisplayEnd) -> Option<CloseFrame> {
     let (code, reason) = match end {
         DisplayEnd::ViewerLeft => return None,
-        DisplayEnd::Paused => (PAUSED, "paused: the owner has control; try again later"),
         DisplayEnd::Released => (RELEASED, "released: the takeover ended"),
         DisplayEnd::Refused(why) => (close_code::POLICY, why),
         DisplayEnd::ScreenClosed => (close_code::ERROR, "Neo's screen closed the connection"),
