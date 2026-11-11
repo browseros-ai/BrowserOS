@@ -479,8 +479,35 @@ fn client_error(message: String) -> PlaywrightError {
 }
 
 /// upstream's client `fs.promises.stat(path)`, on the path as the script wrote it: whether it
-/// names a directory, or Node's error. Node refuses a NUL byte in a path before the system call.
+/// names a directory, or Node's error.
 async fn client_stat(path: &str) -> Result<bool, PlaywrightError> {
+    refuse_nul(path)?;
+    match fs::metadata(path).await {
+        Ok(metadata) => Ok(metadata.is_dir()),
+        Err(error) => Err(client_error(node_error(&error, "stat", path))),
+    }
+}
+
+/// `addInitScript({ path })`'s source, as upstream's client builds it (`evaluationScript`):
+/// `fs.promises.readFile(path, 'utf8')`, relative to Neo's working directory as to Node's, and
+/// then `addSourceUrlToScript`'s `//# sourceURL=` line naming the path as the script wrote it.
+/// A file that is not UTF-8 reads with replacement characters, as Node's decoder does. A
+/// failure is Node's error, unprefixed, with nothing sent.
+pub(crate) async fn read_script_file(path: &str) -> Result<String, PlaywrightError> {
+    refuse_nul(path)?;
+    let absolute = resolve_like_node(&working_directory()?, path);
+    match fs::read(&absolute).await {
+        Ok(bytes) => Ok(format!(
+            "{}\n//# sourceURL={}",
+            String::from_utf8_lossy(&bytes),
+            path.replace('\n', "")
+        )),
+        Err(error) => Err(client_error(node_error(&error, "open", path))),
+    }
+}
+
+/// Node refuses a NUL byte in a path before the system call.
+fn refuse_nul(path: &str) -> Result<(), PlaywrightError> {
     if path.contains('\0') {
         return Err(client_error(format!(
             "The argument 'path' must be a string, Uint8Array, or URL without null bytes. \
@@ -488,10 +515,7 @@ async fn client_stat(path: &str) -> Result<bool, PlaywrightError> {
             inspect(path)
         )));
     }
-    match fs::metadata(path).await {
-        Ok(metadata) => Ok(metadata.is_dir()),
-        Err(error) => Err(client_error(node_error(&error, "stat", path))),
-    }
+    Ok(())
 }
 
 /// Neo's working directory, which Node's `process.cwd()` gives the client's `path.resolve`.

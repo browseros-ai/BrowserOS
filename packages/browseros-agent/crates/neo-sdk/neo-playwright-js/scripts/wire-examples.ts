@@ -63,6 +63,8 @@ const ANSWERS: Record<string, unknown> = {
     url: 'about:blank',
   },
   'download.path': { path: '/runs/r/f.csv', failure: null },
+  'page.addInitScript': { id: 1 },
+  'context.addInitScript': { id: 2 },
 }
 
 /** A plausible result for each op, so the script runs to its end. The pump idles forever. */
@@ -103,6 +105,10 @@ const EVERY_OP = `
   await handle.evaluate((e) => e.id); await handle.$eval('b', (e) => e.id); await handle.$$eval('b', (es) => es.length)
   await page.$eval('b', (e) => e.id); await page.$$eval('b', (es) => es.length); await page.evaluate((e, h) => h.id, handle)
   await page.screenshot(); await l.screenshot(); await page.pdf()
+  const script = await page.addInitScript((a) => { window.a = a }, 1)
+  // Rust reads a path before any page work, so the offline decode needs a file that exists.
+  await page.addInitScript({ path: 'Cargo.toml' }); await context.addInitScript('window.b = 1')
+  await script.dispose()
   const tab = await context.newPage()
   page.on('console', () => {}); context.on('page', () => {})
   const chooserListener = () => {}

@@ -114,13 +114,21 @@ mod tests {
             None,
             "an unsupported method is no op"
         );
-        assert_eq!(names.len(), 78, "the v1 op list has 78 ops");
+        assert_eq!(names.len(), 81, "the v1 op list has 81 ops");
     }
 
     #[test]
     fn tests_that_names_are_playwright_receivers_and_methods() {
-        const RECEIVERS: [&str; 8] = [
-            "locator", "page", "keyboard", "mouse", "context", "expect", "events", "dialog",
+        const RECEIVERS: [&str; 9] = [
+            "locator",
+            "page",
+            "keyboard",
+            "mouse",
+            "context",
+            "expect",
+            "events",
+            "dialog",
+            "disposable",
         ];
         for op in Op::all() {
             let name = op.spec().name;
@@ -141,7 +149,9 @@ mod tests {
     /// `page.setContent` is gated: its HTML goes out only through the main-world gateway's
     /// document write (`evaluate_guard/document_write.rs`). `locator.setInputFiles` is
     /// gated: its gateway refuses Neo's own secret files and any path into `/dev` or `/proc`
-    /// before it sends a path (`input_files/secrets.rs`).
+    /// before it sends a path (`input_files/secrets.rs`). `page.addInitScript` and
+    /// `context.addInitScript` are gated: their source goes to the page, and a `{ path }` is read
+    /// from Neo's disk, only through `page/init_script.rs`, which requires both capabilities.
     ///
     /// The ops with an empty row send selectors, values or trusted input, or read in the sealed
     /// world. `page.goto` delegates URLs to Chromium, including `javascript:` scripts in the
@@ -156,7 +166,7 @@ mod tests {
     )]
     fn tests_that_every_op_declares_exactly_its_audited_capabilities() {
         use Capability::{Capture, HostFiles, MainWorld};
-        const AUDITED: [(&str, &[Capability], bool); 78] = [
+        const AUDITED: [(&str, &[Capability], bool); 81] = [
             ("locator.click", &[], true),
             ("locator.dblclick", &[], true),
             ("locator.hover", &[], true),
@@ -225,8 +235,11 @@ mod tests {
             ("locator.waitForFunction", &[MainWorld], true),
             ("page.screenshot", &[Capture], true),
             ("page.pdf", &[Capture], true),
+            ("page.addInitScript", &[MainWorld, HostFiles], true),
             ("context.pages", &[], true),
             ("context.newPage", &[], true),
+            ("context.addInitScript", &[MainWorld, HostFiles], true),
+            ("disposable.dispose", &[], true),
             ("events.listen", &[], true),
             ("events.next", &[], true),
             ("events.wait", &[], true),

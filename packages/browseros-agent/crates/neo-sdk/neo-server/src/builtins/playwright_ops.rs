@@ -75,8 +75,9 @@ const PLAYWRIGHT_API: &str = "Playwright's API on `page`, `context` and `browser
     `locator.waitForFunction`, `elementHandle.evaluate`, \
     and `$eval` and `$$eval` on a page, frame or element handle; a `frame` form runs in its \
     frame, a child frame too) with Playwright's values, arguments, element handles and errors, \
-    `page.setContent` and `frame.setContent`, whose HTML's scripts run there too, `screenshot` and \
-    `pdf`, events (`page.on`, `waitForEvent`), and `expect`: \
+    `page.setContent` and `frame.setContent`, whose HTML's scripts run there too, init scripts \
+    (`page.addInitScript`, `context.addInitScript`) that every new document runs in its main \
+    world, `screenshot` and `pdf`, events (`page.on`, `waitForEvent`), and `expect`: \
     retrying locator matchers (`toBeVisible`, `toBeChecked`, `toHaveText`, `toContainText`, \
     `toHaveValue`, `toHaveCount`, `toHaveAttribute`, ...) and page matchers (`toHaveTitle`, \
     `toHaveURL`), with `.not`, value matchers (`toBe`, `toEqual`, ...), `expect.poll` and \
@@ -95,7 +96,10 @@ const PLAYWRIGHT_API: &str = "Playwright's API on `page`, `context` and `browser
     (a relative path resolves against Neo's working directory), except Neo's own secret files, \
     which fail `neo_secret_upload_refused` with nothing sent: the caller sandboxes the \
     filesystem. `{ name, mimeType, buffer }` payloads need no file and total under 10 MiB a \
-    call. A directory upload needs its tab in front.";
+    call. A directory upload needs its tab in front. An init script stays registered until the \
+    run ends, then its tab no longer runs it; a context's init script reaches each tab before \
+    the run's first write to it, so a popup's first document and cross-site iframes run \
+    without it; `exposeFunctions` is not available.";
 
 /// Schemes shared by goto and reload. Goto additionally passes file and JavaScript URLs to
 /// Chromium; other browser-specific schemes remain unsupported.

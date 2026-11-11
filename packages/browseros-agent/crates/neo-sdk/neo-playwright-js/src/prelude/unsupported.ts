@@ -47,8 +47,6 @@ export const UNSUPPORTED = {
   },
   BrowserContext: {
     addCookies: PROFILE,
-    addInitScript:
-      'init scripts are not available in Neo; run page.evaluate() after page.goto()',
     clearCookies: PROFILE,
     clearPermissions: "permissions are the owner's profile settings",
     close: OWNED,
@@ -89,8 +87,6 @@ export const UNSUPPORTED = {
     tracing: { hint: TRACE, kind: 'property' },
   },
   Page: {
-    addInitScript:
-      'init scripts are not available in Neo; run page.evaluate() after page.goto()',
     addLocatorHandler:
       'locator handlers are not available in Neo; check for the overlay with locator.isVisible() before acting',
     addScriptTag:

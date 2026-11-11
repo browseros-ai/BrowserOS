@@ -150,6 +150,14 @@ impl<'env> OpScope<'env> {
                 .observe_page(browser, tab)
                 .await?
                 .ok_or_else(|| self.fail(ErrorCode::TargetClosed, "the tab was closed"))?;
+            // A write may load a document, so the run's context init scripts reach the tab
+            // first (page/init_script.rs). A read loads none and adds nothing.
+            if self.op.spec().effect == Effect::Write {
+                self.run_state()
+                    .init_scripts
+                    .add_context_scripts(self, browser, &admitted)
+                    .await?;
+            }
             let _ = self.page.set(admitted);
         }
         match self.page.get() {
@@ -207,6 +215,14 @@ impl<'env> OpScope<'env> {
                 ),
             ))
         }
+    }
+
+    /// Re-runs the host's attempt-stage policies on the op's tab without marking the op sent:
+    /// for a write's preparation that changes no document the page has now, a context init
+    /// script added at the op's admission. The op's own effect still goes through
+    /// [`OpScope::send_effect`].
+    pub(crate) fn recheck(&self) -> Result<(), PlaywrightError> {
+        self.env.recheck().map_err(PlaywrightError::from)
     }
 
     /// Re-runs the host's attempt-stage policies, then marks the op sent, and returns the

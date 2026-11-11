@@ -45,6 +45,7 @@ import {
   type WaitForSelectorOptions,
   type WaitHandle,
 } from './frame'
+import { checkInitOptions, Disposable, initSource } from './init-script'
 import { Keyboard, Mouse } from './input'
 import type { FrameLocator, Locator } from './locator'
 import { markHandle, pick } from './options'
@@ -629,6 +630,27 @@ export class Page extends EventEmitter {
       arg,
       options,
     )
+  }
+
+  /**
+   * upstream's `page.addInitScript`: the script runs in the main world of every document this
+   * page loads from now on, before the page's own scripts, until the run ends or the returned
+   * disposable is disposed. The document already loaded does not run it.
+   */
+  async addInitScript(
+    script: unknown,
+    arg?: unknown,
+    options?: unknown,
+  ): Promise<Disposable> {
+    const api = 'page.addInitScript'
+    checkInitOptions(api, script, options)
+    const source = initSource(api, script, arg)
+    const { id } = await invoke(
+      'page.addInitScript',
+      { api, timeoutMs: 0 },
+      { page: await this._brand(api), script: source },
+    )
+    return new Disposable(id)
   }
 
   waitForFunction(
