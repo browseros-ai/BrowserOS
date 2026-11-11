@@ -296,10 +296,10 @@ impl SealedWorld {
     /// evaluate, N names a child frame's main world there, and the seal, the engine and the
     /// epoch would run in a world the page controls. A new world's `uniqueId` names it and
     /// nothing else, and fails `uniqueContextId not found` once it is gone. A world that
-    /// already existed (another session or connection made it, `setContent` unbooted it, an
-    /// earlier install failed after the create) gets no event, so there is no `uniqueId` to
-    /// take; its numeric evaluate counts only if the session reported nothing about N from
-    /// before the create to after the evaluate's reply. The context that N names in a new
+    /// already existed (another session or connection made it, an earlier install failed after
+    /// the create) gets no event, so there is no `uniqueId` to take; its numeric evaluate counts
+    /// only if the session reported nothing about N from before the create to after the
+    /// evaluate's reply. The context that N names in a new
     /// renderer has to be reported to the session before a command can run in it (measured:
     /// `executionContextsCleared`, then `executionContextCreated` for N, both ahead of the
     /// evaluate's reply), so a swap in the window reads as churn. That needs `Runtime` enabled

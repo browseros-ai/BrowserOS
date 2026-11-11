@@ -104,8 +104,8 @@ pub(crate) async fn read(
 ///
 /// Playwright-core never sees `load` on a hosted BrowserOS, because it waits for a console
 /// message after `document.open()`, which a hosted browser never sends; the guard's watch needs
-/// none. The write runs in the sealed world, so the probe can unboot in the same call, and the
-/// new document takes a new seq before any other op can mint a ref in it.
+/// none. The write runs in the sealed world, whose engine and seq outlive document.open as
+/// upstream's utility world does, so the refs a later snapshot prints keep the frame's prefix.
 pub(crate) async fn set_content(
     pw: &Playwright,
     scope: &OpScope<'_>,
