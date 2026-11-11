@@ -14,14 +14,6 @@
 //! .locator('tr').filter({ has: frameLocator('#f').getByText('Dana') })`). A chunk string
 //! parsed on its own keeps the prefix, and its nested `enter-frame` then never matches.
 
-#![cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the resolver and the families decode their targets with these"
-    )
-)]
-
 use std::{fmt, iter};
 
 use browseros_core::{FrameId, TabId};
