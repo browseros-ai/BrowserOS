@@ -67,6 +67,7 @@ NEO_VNC_PORT=7080 NEO_MCP_PORT=7010 NEO_DATA=/mnt/neo docker compose up -d --wai
 | Software graphics (see [Graphics](#graphics)) | `-e NEO_SOFTWARE_GRAPHICS=false` | `NEO_SOFTWARE_GRAPHICS` | `true` |
 | Bundled BrowserOS extensions off (see [Bundled extensions](#bundled-extensions)) | `-e NEO_DISABLE_BROWSEROS_EXTENSIONS=false` | `NEO_DISABLE_BROWSEROS_EXTENSIONS` | `true` |
 | Extra Neo command-line flags (see [Browser frame](#browser-frame)) | `-e NEO_ARGS="--lang=de"` | `NEO_ARGS` | empty |
+| MCP from outside the container (see [Security](#security)) | `-e NEO_MCP_REMOTE=false` | `NEO_MCP_REMOTE` | `true` |
 
 Ports inside the container are always 6080 and 9010; change only the host side.
 
@@ -403,6 +404,11 @@ signed in to your accounts.
 
 - **Port 6080** gives full control of Neo's screen, mouse and keyboard.
 - **Port 9010** exposes Neo's whole local API, not only `/mcp`: sessions, recordings and settings.
+- **Port 9011 serves the same API as 9010 over HTTPS** (a self-signed certificate), and it
+  cannot be turned off. It is not published, but any process that can reach the container can
+  reach it, so a host that firewalls 9010 must firewall 9011 the same way.
+- **`NEO_MCP_REMOTE=false`** makes both MCP ports refuse every peer but loopback. Docker's port
+  forwarding arrives from outside the container, so a published 9010 then stops answering.
 - **Keep the `127.0.0.1:` in `-p`.** Without it, Docker publishes the port on every network
   interface, and on Linux that bypasses firewalls such as `ufw`.
 - **To share it,** put your own authenticating reverse proxy in front of both ports.
