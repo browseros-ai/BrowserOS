@@ -1,4 +1,4 @@
-//! Live views of one tab through the `neo-capture` hub: MJPEG at `/screencast` and
+//! Live views of one tab through the `neo-capture` hub serve MJPEG at `/screencast` and
 //! fragmented AV1 MP4 at `/video`.
 //!
 //! Each stream uses its tab id as the hub session id and stays pinned to that tab. The hub

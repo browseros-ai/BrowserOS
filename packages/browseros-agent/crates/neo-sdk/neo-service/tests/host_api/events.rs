@@ -4,7 +4,6 @@
 use crate::support::{
     EventStream, Op, Sse, Start, TestResult, end_run, harness, op_ended, op_started, start_run,
 };
-use axum::http::StatusCode;
 use neo_trace::{Delivery, OperationId};
 use serde_json::json;
 

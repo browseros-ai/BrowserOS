@@ -75,7 +75,6 @@ The body shape is unchanged: `{code, message, requestId}`. The codes are new
 `takeover_released`, …). As before, clients must accept
 codes they do not know.
 
-
 ## Removed privacy endpoints and fields
 
 - Stop calling `POST /v1/tabs/{tabId}/private`, `POST /v1/tabs/{tabId}/sweep` and
