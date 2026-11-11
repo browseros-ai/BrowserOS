@@ -44,6 +44,7 @@ mod run_downloads;
 mod run_events;
 mod subscription;
 mod target_watcher;
+mod watcher_progress;
 pub(crate) mod worker_table;
 
 pub(crate) use event_hub::EventHub;
@@ -53,4 +54,5 @@ pub(crate) use page_event::PageEvent;
 pub(crate) use run_downloads::RunDownloads;
 pub(crate) use run_events::RunEvents;
 pub(crate) use subscription::{ListenerKey, PageEventKind, Subscription};
-pub(crate) use target_watcher::{BINDING_NAME, TargetWatcher};
+pub(crate) use target_watcher::{BINDING_CALLED, BINDING_NAME, TargetWatcher};
+pub(crate) use watcher_progress::{Fence, WatcherProgress};

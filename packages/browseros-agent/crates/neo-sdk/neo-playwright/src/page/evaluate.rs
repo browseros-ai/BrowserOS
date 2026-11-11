@@ -23,6 +23,10 @@ use crate::{ErrorCode, Playwright, PlaywrightError, op_output};
 /// upstream's retry step.
 const RAF_POLL: Duration = Duration::from_millis(100);
 
+/// How long a timed-out wait waits for the page to answer the release of its poller
+/// ([`timed_out_mid_poll`]).
+const POLL_CANCEL: Duration = Duration::from_millis(500);
+
 /// The script as the prelude sends it (`wire.ts` `PageScript`), decoded once.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
@@ -173,7 +177,7 @@ pub(crate) async fn wait_for_function(
         // poll would hold it inside `Playwright::invoke`'s future.
         let outcome = match Box::pin(scope.within(guard.run(scope))).await {
             Ok(outcome) => outcome?,
-            Err(_expired) => return Err(scope.timed_out(ErrorCode::WaitTimeout)),
+            Err(_expired) => return Err(timed_out_mid_poll(scope).await),
         };
         if let Outcome::Answered(answer) = outcome {
             break answer;
@@ -184,6 +188,18 @@ pub(crate) async fn wait_for_function(
     };
     let finished = answer.finish(scope)?;
     Ok(json!({ "value": finished.value, "preview": finished.preview }))
+}
+
+/// The timeout of a wait whose deadline cut a poll short. The poll may already be in the page
+/// and still run there, and upstream's timeout awaits its poller's `cancel` before it throws, so
+/// whatever such a poll logs reaches the listeners first (WA-005). Releasing the op's objects is
+/// Neo's cancel: a round trip on the session the poll went out on, which the renderer answers
+/// only after that poll ran, so its events come before this op's reply
+/// (`Playwright::events_before_reply`), and the poller is gone. Bounded, for a renderer that no
+/// longer answers.
+async fn timed_out_mid_poll(scope: &OpScope<'_>) -> PlaywrightError {
+    let _released = time::timeout(POLL_CANCEL, scope.release_objects()).await;
+    scope.timed_out(ErrorCode::WaitTimeout)
 }
 
 /// The time between polls. Upstream's server refuses an interval that is not positive, before

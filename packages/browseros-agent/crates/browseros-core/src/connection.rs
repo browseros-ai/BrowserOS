@@ -71,6 +71,34 @@ pub trait CdpConnection: Send + Sync {
     /// through a router it owns, so the channel stays open for as long as the transport lives.
     fn events_targeted(&self, method: &str) -> mpsc::UnboundedReceiver<CdpEvent>;
 
+    /// How many events [`Self::events`] has carried so far. Read after a reply, it counts every
+    /// event that arrived before that reply, so a reader that numbers what it took knows when
+    /// it has seen them all. A transport that does not count answers 0, and such a reader never
+    /// waits.
+    fn events_broadcast(&self) -> u64 {
+        0
+    }
+
+    /// A receiver of [`Self::events`] and the [`Self::events_broadcast`] count of the events it
+    /// will never receive, taken together so no event is in both or in neither. A transport
+    /// that does not count answers 0.
+    fn events_counted(&self) -> (broadcast::Receiver<CdpEvent>, u64) {
+        (self.events(), 0)
+    }
+
+    /// [`Self::events_targeted`], with the count of `method`'s events its subscribers took
+    /// before this one, as [`Self::events_targeted_delivered`] numbers them. A transport that
+    /// does not count answers 0.
+    fn events_targeted_counted(&self, method: &str) -> (mpsc::UnboundedReceiver<CdpEvent>, u64) {
+        (self.events_targeted(method), 0)
+    }
+
+    /// How many of `method`'s events the targeted subscribers took so far; read after a reply,
+    /// it covers every one that arrived before it. A transport that does not count answers 0.
+    fn events_targeted_delivered(&self, _method: &str) -> u64 {
+        0
+    }
+
     fn is_connected(&self) -> bool;
     fn connection_epoch(&self) -> u64;
 }
@@ -125,6 +153,22 @@ impl CdpConnection for CdpClient {
 
     fn events_targeted(&self, method: &str) -> mpsc::UnboundedReceiver<CdpEvent> {
         CdpClient::events_targeted(self, method)
+    }
+
+    fn events_broadcast(&self) -> u64 {
+        CdpClient::events_broadcast(self)
+    }
+
+    fn events_counted(&self) -> (broadcast::Receiver<CdpEvent>, u64) {
+        CdpClient::events_counted(self)
+    }
+
+    fn events_targeted_counted(&self, method: &str) -> (mpsc::UnboundedReceiver<CdpEvent>, u64) {
+        CdpClient::events_targeted_counted(self, method)
+    }
+
+    fn events_targeted_delivered(&self, method: &str) -> u64 {
+        CdpClient::events_targeted_delivered(self, method)
     }
 
     fn is_connected(&self) -> bool {

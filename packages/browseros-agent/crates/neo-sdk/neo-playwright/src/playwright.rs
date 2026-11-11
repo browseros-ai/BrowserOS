@@ -2,12 +2,14 @@
 
 use std::fmt;
 use std::sync::Arc;
+use std::time::Duration;
 
 use browseros_core::{BrowserSession, TargetId};
 use serde_json::Value;
+use tokio::time;
 
 use crate::action::action_op;
-use crate::events::{EventHub, TargetWatcher, event_op};
+use crate::events::{BINDING_CALLED, EventHub, Fence, TargetWatcher, WatcherProgress, event_op};
 use crate::expect::expect_op;
 use crate::input::input_op;
 use crate::op::{Op, OpKind};
@@ -18,6 +20,11 @@ use crate::read::read_op;
 use crate::snapshot::snapshot_op;
 use crate::world::{Epoch, FrameAttachLog, SessionSetup};
 use crate::{OpEnv, PlaywrightError};
+
+/// How long an op that ends may wait for its events to reach the run's listeners first
+/// ([`Playwright::events_before_reply`]). Both steps are usually immediate; this only bounds a
+/// watcher or a pump that fell far behind.
+const EVENTS_BEFORE_REPLY: Duration = Duration::from_secs(2);
 
 /// One per browser connection; runs every Playwright operation. The host builds it once at
 /// startup (claw-sdk: next to its browser link) and calls [`Playwright::invoke`] from each
@@ -30,6 +37,8 @@ pub struct Playwright {
     events: Arc<EventHub>,
     /// Records CDP's page events into `events`. Dropping the facade stops it.
     watcher: TargetWatcher,
+    /// How far the watcher has read the connection's events.
+    progress: Arc<WatcherProgress>,
     /// This instance's identity to the worlds it boots.
     epoch: Epoch,
     /// Per-session setup for isolated world installs.
@@ -55,7 +64,13 @@ impl Playwright {
     pub fn new(browser: Arc<BrowserSession>) -> Arc<Self> {
         let (events, writer) = EventHub::new();
         let attach_log = Arc::new(FrameAttachLog::default());
-        let watcher = TargetWatcher::spawn(Arc::clone(&browser), writer, Arc::clone(&attach_log));
+        let progress = Arc::new(WatcherProgress::default());
+        let watcher = TargetWatcher::spawn(
+            Arc::clone(&browser),
+            writer,
+            Arc::clone(&attach_log),
+            Arc::clone(&progress),
+        );
         let sessions = Arc::new(SessionSetup::new(browser.connection()));
         let pages = Arc::new(PageRegistry::new(attach_log));
         let (registry, reader) = (Arc::clone(&pages), Arc::clone(&browser));
@@ -67,6 +82,7 @@ impl Playwright {
             browser,
             events,
             watcher,
+            progress,
             epoch: Epoch::random(),
             sessions,
             pages,
@@ -171,9 +187,48 @@ impl Playwright {
             OpKind::Input(op) => input_op::invoke(self, &scope, op, args).await,
             OpKind::Page(op) => page_op::invoke(self, &scope, op, args).await,
             OpKind::Context(op) => context_op::invoke(self, &scope, op, args).await,
-            OpKind::Event(op) => event_op::invoke(self, &scope, op, args).await,
+            // The event ops are the pump and the waits themselves: none waits for the pump.
+            OpKind::Event(op) => {
+                return scope.settle(event_op::invoke(self, &scope, op, args).await);
+            }
         };
+        self.events_before_reply(&scope).await;
         scope.settle(answered)
+    }
+
+    /// Upstream handles protocol messages in order, so a `page.on('console')` listener has run
+    /// for the message an evaluate logged before that evaluate resolves, and an exposed binding
+    /// has been called for a call the page made, and none runs for it after. Neo's events and
+    /// binding calls reach the script through the run's pump, beside the op, so an op that ends
+    /// waits, within [`EVENTS_BEFORE_REPLY`], until
+    ///
+    /// ```text
+    ///  the watcher handled every CDP event and binding call that came before
+    ///  the op's last reply                                                       (fence)
+    ///  ── the run's pump read every listener past the log's head then, and
+    ///     took every binding call queued for the run                             (taken)
+    /// ```
+    ///
+    /// That pump reply is then counted (`RunState::pump_replies`) before this op's reply leaves,
+    /// whose envelope carries the count (`pumped`), and the prelude holds this op's result until
+    /// it has dispatched that many pump replies. So the listeners run before the script continues
+    /// past this op, whatever order the host's promises settle in (the Node add-on settles each
+    /// on a threadsafe function of its own, in no fixed order). A run with no listener has
+    /// nothing to order and does not wait.
+    async fn events_before_reply(&self, scope: &OpScope<'_>) {
+        let run = scope.run_state();
+        if !run.events.has_listeners() {
+            return;
+        }
+        let fence = Fence {
+            events: self.browser.cdp_events_broadcast(),
+            calls: self.browser.cdp_events_targeted_delivered(BINDING_CALLED),
+        };
+        let ordered = async {
+            self.progress.reached(fence).await;
+            run.events.taken_through(self.events.head()).await;
+        };
+        let _bounded = time::timeout(EVENTS_BEFORE_REPLY, ordered).await;
     }
 }
 

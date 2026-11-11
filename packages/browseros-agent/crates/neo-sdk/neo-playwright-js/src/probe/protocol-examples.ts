@@ -88,6 +88,7 @@ export const REQUEST_EXAMPLES: { [O in Op]: AtLeastOne<RequestOf<O>> } = {
         token: 11,
         expiryMs: 8000,
         expectRect: { x: 8, y: 8, width: 60, height: 20 },
+        browserMapped: true,
       },
     },
   ],
@@ -379,6 +380,7 @@ const REPLY_EXAMPLES: {
       point: POINT,
       inView: true,
       transformed: false,
+      borderOffset: { x: 5, y: 5 },
     },
   ],
   covered: [

@@ -124,6 +124,9 @@ pub(crate) struct OpReply {
     pub(crate) observed: Option<Observation>,
     /// Set when the op resolved the run's default page, so the script's `page` learns its id.
     pub(crate) default_page: Option<PageRef>,
+    /// The event-pump replies the script dispatches before it takes this one
+    /// ([`OpCtx::answer_after_pump`]); 0 for an op that set none.
+    pub(crate) pumped: u64,
 }
 
 /// One page as a reply reports it. Deliberately not a page brand (no `$neo`), so the
@@ -924,6 +927,7 @@ impl PendingReply {
                 pages: Vec::new(),
                 observed: None,
                 default_page: None,
+                pumped: 0,
             }
         })
     }

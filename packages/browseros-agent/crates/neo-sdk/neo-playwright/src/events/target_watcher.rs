@@ -59,11 +59,14 @@ use crate::events::page_event::{
     DownloadStarted, ExceptionParams, FileChooserOpened, OpenedPage, PageError, PageEvent,
     WindowKind,
 };
-use crate::events::{PageEventKind, navigation_event};
+use crate::events::{PageEventKind, WatcherProgress, navigation_event};
 use crate::world::{BackendNodeId, FrameAttachLog, FrameEvent};
 
 /// upstream's `PageBinding.kBindingName`: the CDP binding every exposed binding's stub calls.
 pub(crate) const BINDING_NAME: &str = "__playwright__binding__";
+
+/// The event a call of [`BINDING_NAME`] arrives as, on a targeted channel of its own.
+pub(crate) const BINDING_CALLED: &str = "Runtime.bindingCalled";
 
 /// How long a dialog nobody listens for stays open, for a listener that lands just after the
 /// click that opened it (build-design graft 7).
@@ -111,19 +114,27 @@ impl TargetWatcher {
     }
 
     /// Starts watching `browser`, recording page events through `writer` and frame lifecycles
-    /// into `attach_log`. Outside a tokio runtime there is nothing to run it on, so nothing is
-    /// recorded.
+    /// into `attach_log`, and counting what it handled into `progress`. Outside a tokio runtime
+    /// there is nothing to run it on, so nothing is recorded and no one waits for it.
     pub(crate) fn spawn(
         browser: Arc<BrowserSession>,
         writer: EventWriter,
         attach_log: Arc<FrameAttachLog>,
+        progress: Arc<WatcherProgress>,
     ) -> Self {
         let (requests, pending) = mpsc::unbounded_channel();
-        let task = Handle::try_current().ok().map(|runtime| {
-            let (watcher, found) = Watcher::new(browser, writer, attach_log);
-            runtime.spawn(watcher.run(found, pending))
-        });
-        Self { task, requests }
+        let Ok(runtime) = Handle::try_current() else {
+            progress.stopped();
+            return Self {
+                task: None,
+                requests,
+            };
+        };
+        let (watcher, found) = Watcher::new(browser, writer, attach_log, progress);
+        Self {
+            task: Some(runtime.spawn(watcher.run(found, pending))),
+            requests,
+        }
     }
 }
 
@@ -134,6 +145,7 @@ struct Watcher {
     view: BrowserView,
     writer: EventWriter,
     attach_log: Arc<FrameAttachLog>,
+    progress: Arc<WatcherProgress>,
     lifecycle: FrameLifecycleTracker,
     /// The connection epoch discovery ran for; `None` until it succeeds, and after a lag.
     epoch: Option<u64>,
@@ -339,6 +351,7 @@ impl Watcher {
         browser: Arc<BrowserSession>,
         writer: EventWriter,
         attach_log: Arc<FrameAttachLog>,
+        progress: Arc<WatcherProgress>,
     ) -> (Self, UnboundedReceiver<OpenedPage>) {
         let (found, found_rx) = mpsc::unbounded_channel();
         let watcher = Self {
@@ -346,6 +359,7 @@ impl Watcher {
             browser,
             writer,
             attach_log,
+            progress,
             lifecycle: FrameLifecycleTracker::default(),
             epoch: None,
             connection_epoch: None,
@@ -370,28 +384,38 @@ impl Watcher {
         mut found: UnboundedReceiver<OpenedPage>,
         mut requests: UnboundedReceiver<WatcherRequest>,
     ) {
-        // Subscribed before discovery, so no target is created unseen in between.
-        let mut events = self.browser.cdp_events();
-        let mut bindings = self.browser.cdp_events_targeted("Runtime.bindingCalled");
+        // Counters and subscriptions are captured together: progress excludes messages
+        // that arrived before this watcher subscribed, including the binding stream.
+        let (mut events, before) = self.browser.cdp_events_counted();
+        let (mut bindings, calls_before) = self.browser.cdp_events_targeted_counted(BINDING_CALLED);
+        self.progress.start(before, calls_before);
         let mut tick = time::interval(TICK);
         tick.set_missed_tick_behavior(MissedTickBehavior::Delay);
         loop {
             let grace_ends = self.graces.front().map(|grace| grace.ends);
             tokio::select! {
                 received = events.recv() => match received {
-                    Ok(event) => self.handle(event).await,
+                    Ok(event) => {
+                        self.handle(event).await;
+                        self.progress.handled(1);
+                    }
                     // Events were dropped: rediscover, which records what closed meanwhile, and
                     // tell the frame log that commits may be missing.
-                    Err(RecvError::Lagged(_)) => {
+                    Err(RecvError::Lagged(skipped)) => {
                         self.epoch = None;
                         self.attach_log.lost_events();
+                        self.progress.handled(skipped);
                     }
-                    Err(RecvError::Closed) => return,
+                    Err(RecvError::Closed) => {
+                        self.progress.stopped();
+                        return;
+                    }
                 },
                 Some(call) = bindings.recv() => {
                     // Every event sent before the call, its context's creation among them.
                     self.drain(&mut events).await;
                     self.binding_called(call).await;
+                    self.progress.call_handled();
                 }
                 Some(request) = requests.recv() => {
                     // Initial synchronous page facts need attachments even for tabs the
@@ -462,11 +486,16 @@ impl Watcher {
     /// Handles every broadcast event already queued, without waiting for more.
     async fn drain(&mut self, events: &mut Receiver<CdpEvent>) {
         loop {
+            // Counted as the run loop counts, so ops waiting on `progress` see these too.
             match events.try_recv() {
-                Ok(event) => self.handle(event).await,
-                Err(TryRecvError::Lagged(_)) => {
+                Ok(event) => {
+                    self.handle(event).await;
+                    self.progress.handled(1);
+                }
+                Err(TryRecvError::Lagged(skipped)) => {
                     self.epoch = None;
                     self.attach_log.lost_events();
+                    self.progress.handled(skipped);
                 }
                 Err(TryRecvError::Empty | TryRecvError::Closed) => return,
             }

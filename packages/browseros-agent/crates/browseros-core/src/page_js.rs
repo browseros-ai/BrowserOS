@@ -117,9 +117,8 @@ impl<'a> PageJs<'a> {
         Self::new(session, false)
     }
 
-    /// Scripts that belong to another component's isolated world, such as claw-sdk's sealed world
-    /// (`sensitive_fields::SEALED_WORLD`). Chromium keeps one world per name in a document, so
-    /// they share that world's globals and never see BrowserOS's own. Strict like
+    /// Scripts that belong to another component's isolated world. Chromium keeps one world per
+    /// name in a document, so they share that world's globals and never see BrowserOS's own. Strict like
     /// [`isolated_only`](Self::isolated_only), whatever the rollout switch: a frame that cannot get
     /// the world is an error, never the page world. An empty `name` would make a new world on
     /// every call.

@@ -540,6 +540,127 @@ describe('listeners and the pump', () => {
       download: 'guid-3',
     })
   })
+
+  /** A console message from the seed page. */
+  const consoleEvent = (seq: number, text: string) => ({
+    seq,
+    event: 'console',
+    page: brand(7),
+    message: {
+      type: 'log',
+      text,
+      location: { url: '', lineNumber: 0, columnNumber: 0 },
+      timestamp: 1,
+    },
+  })
+
+  it('tests that an op whose reply counts a pump reply resumes the script only after that reply ran its listeners', async () => {
+    // The host answers the op first and the pump's reply after it, as the Node add-on can.
+    let titled = () => {}
+    const titleAnswered = new Promise<void>((resolve) => {
+      titled = resolve
+    })
+    let pumps = 0
+    const runtime = loadPrelude({
+      seed: SEED,
+      answer: async (call) => {
+        if (call.name === 'page.title') {
+          titled()
+          return { ok: 'T', pumped: 1 }
+        }
+        if (call.name !== 'events.next') return null
+        if (++pumps > 1) return never
+        await titleAnswered
+        await sleep(20)
+        return {
+          ok: { events: [consoleEvent(3, 'logged')], lost: 0 },
+          pumped: 1,
+        }
+      },
+    })
+    const seen = json(
+      await runtime.run(`
+        const seen = []
+        page.on('console', (message) => seen.push(message.text()))
+        await page.title()
+        seen.push('resumed')
+        return seen
+      `),
+    )
+    expect(seen).toEqual(['logged', 'resumed'])
+  })
+
+  it('tests that a failed pump reply Rust never counted does not release a later hold early', async () => {
+    let titled = () => {}
+    const titleAnswered = new Promise<void>((resolve) => {
+      titled = resolve
+    })
+    let pumps = 0
+    const runtime = loadPrelude({
+      seed: SEED,
+      answer: async (call) => {
+        if (call.name === 'page.title') {
+          titled()
+          return { ok: 'T', pumped: 1 }
+        }
+        if (call.name !== 'events.next') return null
+        pumps += 1
+        // The first read failed before Rust counted it; the restarted pump's reply is the first
+        // counted one, and the host settles it after the op's.
+        if (pumps === 1)
+          return {
+            err: {
+              code: 'internal_error',
+              owner: 'neo',
+              delivery: 'not_sent',
+              retryable: false,
+              message: 'the read failed',
+            },
+          }
+        if (pumps > 2) return never
+        await titleAnswered
+        await sleep(20)
+        return {
+          ok: { events: [consoleEvent(3, 'logged')], lost: 0 },
+          pumped: 1,
+        }
+      },
+    })
+    const seen = json(
+      await runtime.run(`
+        const seen = []
+        page.on('dialog', () => {})
+        await new Promise((resolve) => setTimeout(resolve, 10))
+        page.on('console', (message) => seen.push(message.text()))
+        await page.title()
+        seen.push('resumed')
+        return seen
+      `),
+    )
+    expect(pumps).toBeGreaterThanOrEqual(2)
+    expect(seen).toEqual(['logged', 'resumed'])
+  })
+
+  it('tests that a pump reply that never comes holds an op only for its bound', async () => {
+    const runtime = loadPrelude({
+      seed: SEED,
+      answer: (call) => {
+        if (call.name === 'page.title') return { ok: 'T', pumped: 1 }
+        return call.name === 'events.next' ? never : null
+      },
+    })
+    const started = Date.now()
+    const title = json(
+      await runtime.run(`
+        page.on('console', () => {})
+        return await page.title()
+      `),
+    )
+    expect(title).toBe('T')
+    const held = Date.now() - started
+    expect(held).toBeGreaterThanOrEqual(900)
+    expect(held).toBeLessThan(5_000)
+  })
 })
 
 // The wire delivers independent page/context subscriptions. Their payloads must still share
