@@ -76,10 +76,15 @@ struct WatchedFrame {
     navigations: VecDeque<Navigated>,
     /// The frame's URL as last reported, for the prelude's synchronous `page.url()`.
     url: Option<String>,
+    /// Failure URL from the current snapshot, including one read after a renderer swap.
+    unreachable: Option<String>,
     /// The frame left the watched session: `Page.frameDetached` named it there, either reason
     /// (`swap`, `remove`), or the session detached. Only [`DocumentWatch::navigated`] acts on
     /// it.
     left: bool,
+    /// A later navigation has started but not committed. Renderer metadata reads can block
+    /// behind it; a completed navigation must not wait for that replacement's response.
+    pending: bool,
 }
 
 /// A document the frame committed.
@@ -158,6 +163,20 @@ impl DocumentWatch {
         self.frame.current.as_deref()
     }
 
+    /// The current endpoint, which a child navigation can replace when its renderer swaps.
+    pub(crate) fn session(&self) -> &ProtocolSession {
+        &self.session
+    }
+
+    /// Waits for a subsequent navigation intent while preserving all lifecycle events read
+    /// along the way. Used to cancel an optional timing read, never the navigation itself.
+    pub(crate) async fn navigation_started(&mut self) -> Result<(), WatchError> {
+        while !self.frame.pending {
+            self.next().await?;
+        }
+        Ok(())
+    }
+
     /// Turns on the `Page` domain for the session, for a watch whose frame may be an
     /// out-of-process iframe's. Chromium sends an OOPIF's `documentOpened`, `frameNavigated` and
     /// lifecycle events only on a session with `Page` enabled (measured, spike
@@ -193,6 +212,7 @@ impl DocumentWatch {
                 .entry(frame.loader_id.clone())
                 .or_default();
             self.frame.current = Some(frame.loader_id);
+            self.frame.unreachable = frame.unreachable_url;
             self.frame.url = Some(with_fragment(frame.url, frame.url_fragment.as_deref()));
         }
         Ok(())
@@ -207,6 +227,20 @@ impl DocumentWatch {
                 } else {
                     CommitOutcome::Interrupted(first.url.clone())
                 });
+            }
+            // A replacement session may have committed before Page was enabled there.
+            // Its current snapshot is sufficient only for this exact expected loader.
+            if self.frame.current.as_deref() == Some(loader)
+                && let Some(url) = &self.frame.url
+            {
+                return Ok(CommitOutcome::Committed(Commit {
+                    loader: loader.to_owned(),
+                    url: url.clone(),
+                    unreachable: self.frame.unreachable.clone(),
+                }));
+            }
+            if self.frame.left {
+                return Err(WatchError::Left);
             }
             self.next().await?;
         }
@@ -318,6 +352,13 @@ impl DocumentWatch {
 impl WatchedFrame {
     fn apply(&mut self, event: &CdpEvent, frame_id: &FrameId) {
         match event.method.as_str() {
+            "Page.frameRequestedNavigation" | "Page.frameStartedNavigating" => {
+                if let Some(Detached { frame_id: id }) = parse(&event.params)
+                    && id == frame_id.as_str()
+                {
+                    self.pending = true;
+                }
+            }
             "Page.frameNavigated" => {
                 if let Some(FrameNavigated { frame }) = parse(&event.params)
                     && frame.id == frame_id.as_str()
@@ -351,6 +392,7 @@ impl WatchedFrame {
                     && id == frame_id.as_str()
                 {
                     self.same_document += 1;
+                    self.pending = false;
                     self.navigations.push_back(Navigated {
                         url: url.clone(),
                         unreachable: None,
@@ -375,6 +417,8 @@ impl WatchedFrame {
     }
 
     fn commit(&mut self, commit: Commit) {
+        self.pending = false;
+        self.unreachable.clone_from(&commit.unreachable);
         self.reached
             .entry(commit.loader.clone())
             .or_default()

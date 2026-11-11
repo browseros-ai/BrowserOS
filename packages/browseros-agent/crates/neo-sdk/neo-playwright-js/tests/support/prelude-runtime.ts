@@ -131,7 +131,9 @@ export function loadPrelude(
   let newestEventSeq = options.seed?.observed?.events ?? 0
   // Each failed op's error, by op id, as bridge.rs remembers the failures it answered.
   const failures = new Map<unknown, Record<string, unknown>>()
-  const answer = options.answer ?? (() => null)
+  const answer =
+    options.answer ??
+    ((call: Call) => (call.name === 'page.evaluate' ? { value: null } : null))
   // The vm rig supplies neo-sdk's realm contract. Production installation and semantics are
   // tested through the real QuickJS run_script, rather than proved by these host implementations.
   const realm = createContext({

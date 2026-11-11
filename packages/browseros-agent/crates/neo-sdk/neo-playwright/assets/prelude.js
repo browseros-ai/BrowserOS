@@ -7385,11 +7385,12 @@ ${value.stack}`;
     }
     async _evaluate(api, pageFunction, arg, options) {
       const script = pageCall(api, "frame", pageFunction, arg, options);
-      const value = await invoke("page.evaluate", this._call(api, 0), {
+      const { value: result, observed } = await invokeObserved("page.evaluate", this._call(api, 0), {
         ...await this._frameArgs(api),
         script
       });
-      return fromPageValue(api, value);
+      this._page._evaluated(result.frames, observed);
+      return fromPageValue(api, result.value);
     }
     async _waitForFunction(api, pageFunction, arg, options = {}) {
       if (typeof options.polling === "string" && options.polling !== "raf")
@@ -8302,7 +8303,7 @@ ${value.stack}`;
     }
     async close(options = {}) {
       const api = "page.close";
-      if (this._tab === null) {
+      if (this._closed || this._tab === null) {
         this.#close();
         return;
       }
@@ -8313,7 +8314,7 @@ ${value.stack}`;
           ...options.runBeforeUnload ? { runBeforeUnload: true } : {}
         });
       } catch (error) {
-        if (Reflect.get(Object(error), "code") !== "target_closed" || options.runBeforeUnload)
+        if (!["target_closed", "page_closed"].includes(String(Reflect.get(Object(error), "code"))) || options.runBeforeUnload)
           throw error;
       }
     }
@@ -8358,6 +8359,10 @@ ${value.stack}`;
       } finally {
         this._navigationsInFlight--;
       }
+    }
+    _evaluated(frames, at) {
+      if (this.#payloadCurrent(at) && Array.isArray(frames))
+        this._applyFrames(frames);
     }
     async _navigated(api, frame, result, at) {
       if (this.#payloadCurrent(at)) {

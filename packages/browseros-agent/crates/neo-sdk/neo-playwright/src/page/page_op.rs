@@ -279,6 +279,9 @@ async fn close(
             .await
             .map_err(core)?;
     }
+    if !input.run_before_unload {
+        scope.run_state().frames.forget(page);
+    }
     Ok(json!({}))
 }
 
