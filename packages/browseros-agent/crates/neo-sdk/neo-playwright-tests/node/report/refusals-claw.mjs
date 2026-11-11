@@ -334,10 +334,6 @@ const hints = [
     sources: ['neo-playwright-js/src/prelude/evaluation.ts'],
   },
   {
-    hint: 'pages cannot call back into the script in Neo; pass values the page can use instead',
-    sources: ['neo-playwright-js/src/prelude/init-script.ts'],
-  },
-  {
     hint: 'an op cannot be aborted from the script in Neo; pass timeout instead',
     sources: ['neo-playwright-js/src/prelude/evaluation.ts'],
   },

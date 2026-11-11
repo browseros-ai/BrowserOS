@@ -4,7 +4,7 @@
 
 use std::time::Duration;
 
-use browseros_core::TargetId;
+use browseros_core::{FrameId, TargetId};
 use serde::Serialize;
 
 use crate::events::Subscription;
@@ -68,6 +68,16 @@ enum Payload {
     FileChooser {
         page: PageHandle,
         chooser: FileChooser,
+    },
+    /// A call of a binding the run exposed: the stub's JSON `payload`, the execution `context` to
+    /// answer it in (`bindingCall.resolve`), and that context's frame, `null` for the main frame
+    /// or a frame the watcher did not see made.
+    #[serde(rename = "binding")]
+    Binding {
+        page: PageHandle,
+        frame: Option<FrameId>,
+        context: i64,
+        payload: String,
     },
 }
 
@@ -237,40 +247,6 @@ pub(crate) async fn deliver(
             scope.report_close(page.tab(), target, record.seq);
             Payload::Close { page }
         }
-        (PageEvent::Dialog(dialog), Some(page)) => Payload::Dialog {
-            page,
-            dialog: Dialog {
-                id: dialog.id,
-                kind: dialog.kind.as_str(),
-                message: dialog.message.clone(),
-                default_value: dialog.default_value.clone(),
-            },
-        },
-        (PageEvent::Console(message), Some(page)) => Payload::Console {
-            page,
-            message: ConsoleMessage {
-                kind: message.kind.clone(),
-                text: message.text.clone(),
-                location: message.location.clone(),
-                timestamp: message.timestamp,
-            },
-        },
-        (PageEvent::PageError(error), Some(page)) => Payload::PageError {
-            page,
-            error: PageError {
-                name: error.name.clone(),
-                message: error.message.clone(),
-                stack: error.stack.clone(),
-            },
-        },
-        (PageEvent::Download(download), Some(page)) => Payload::Download {
-            page,
-            download: Download {
-                id: download.guid.clone(),
-                url: download.url.clone(),
-                suggested_filename: download.suggested_filename.clone(),
-            },
-        },
         (PageEvent::FileChooser(opened), Some(page)) => {
             // World installation is a large future; keep it off every event reader's stack.
             let Some(chooser) = Box::pin(FileChooser::adopt(pw, scope, &page, opened)).await?
@@ -279,26 +255,71 @@ pub(crate) async fn deliver(
             };
             Payload::FileChooser { page, chooser }
         }
-        // Internal navigation facts are never public events; the context receives only new tabs.
-        (
-            PageEvent::Navigation(_) | PageEvent::FrameDetached(_) | PageEvent::FrameSwapped(_),
-            _,
-        )
-        | (
-            PageEvent::Closed(_)
-            | PageEvent::Dialog(_)
-            | PageEvent::Console(_)
-            | PageEvent::PageError(_)
-            | PageEvent::Download(_)
-            | PageEvent::FileChooser(_),
-            None,
-        ) => return Ok(None),
+        (event, Some(page)) => match plain(event, page) {
+            Some(payload) => payload,
+            None => return Ok(None),
+        },
+        // The context receives only new tabs.
+        (_, None) => return Ok(None),
     };
     Ok(Some(Delivered {
         seq: record.seq,
         at: record.at_ms,
         payload,
     }))
+}
+
+/// The payload of an event a page listener receives as recorded, with nothing to look up:
+/// `None` for the internal navigation facts and the events [`deliver`] builds itself.
+fn plain(event: &PageEvent, page: PageHandle) -> Option<Payload> {
+    Some(match event {
+        PageEvent::Dialog(dialog) => Payload::Dialog {
+            page,
+            dialog: Dialog {
+                id: dialog.id,
+                kind: dialog.kind.as_str(),
+                message: dialog.message.clone(),
+                default_value: dialog.default_value.clone(),
+            },
+        },
+        PageEvent::Console(message) => Payload::Console {
+            page,
+            message: ConsoleMessage {
+                kind: message.kind.clone(),
+                text: message.text.clone(),
+                location: message.location.clone(),
+                timestamp: message.timestamp,
+            },
+        },
+        PageEvent::PageError(error) => Payload::PageError {
+            page,
+            error: PageError {
+                name: error.name.clone(),
+                message: error.message.clone(),
+                stack: error.stack.clone(),
+            },
+        },
+        PageEvent::Download(download) => Payload::Download {
+            page,
+            download: Download {
+                id: download.guid.clone(),
+                url: download.url.clone(),
+                suggested_filename: download.suggested_filename.clone(),
+            },
+        },
+        PageEvent::Binding(call) => Payload::Binding {
+            page,
+            frame: call.frame.clone(),
+            context: call.context,
+            payload: call.payload.clone(),
+        },
+        PageEvent::Navigation(_)
+        | PageEvent::FrameDetached(_)
+        | PageEvent::FrameSwapped(_)
+        | PageEvent::Opened(_)
+        | PageEvent::Closed(_)
+        | PageEvent::FileChooser(_) => return None,
+    })
 }
 
 /// A console/dialog/etc. can follow renderer-initiated navigation. Delivery synchronizes

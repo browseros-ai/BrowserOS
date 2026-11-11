@@ -23,6 +23,11 @@
 //! - **Frames.** `Page.frameAttached`, a removing `Page.frameDetached` and the main frame's
 //!   `Page.frameNavigated` go to the `FrameAttachLog`, on any session of the tab, so frames are
 //!   numbered in the order Playwright numbers them (`world/frame_attach_log.rs`).
+//! - **Binding calls.** `Runtime.bindingCalled` for upstream's `__playwright__binding__` is
+//!   recorded only while some run exposes a binding on that tab. It comes on a channel of its own
+//!   (`events_targeted`), unbounded, so a call is never lost to the broadcast ring's lag and a
+//!   page never waits forever on an answer nobody heard; the broadcast is drained first, so the
+//!   `Runtime.executionContextCreated` that named the caller's frame is already in hand.
 //! - **Console and page errors** are recorded only while some run listens for them on that tab,
 //!   so a chatty page cannot push popups and dialogs out of the ring. BrowserOS in hosted mode
 //!   sends neither (measured: no `Runtime.consoleAPICalled` and no `Runtime.exceptionThrown`
@@ -38,7 +43,8 @@ use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 use tokio::runtime::Handle;
-use tokio::sync::broadcast::error::RecvError;
+use tokio::sync::broadcast::Receiver;
+use tokio::sync::broadcast::error::{RecvError, TryRecvError};
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use tokio::task::JoinHandle;
 use tokio::time::{self, Instant, MissedTickBehavior};
@@ -46,11 +52,15 @@ use tokio::time::{self, Instant, MissedTickBehavior};
 use crate::events::dialog_table::{ClosedBy, HeldDialog, Unanswered};
 use crate::events::event_hub::EventWriter;
 use crate::events::page_event::{
-    ConsoleMessage, ConsoleParams, DialogId, DialogKind, DialogOpened, DownloadStarted,
-    ExceptionParams, FileChooserOpened, OpenedPage, PageError, PageEvent, WindowKind,
+    BindingCalled, ConsoleMessage, ConsoleParams, DialogId, DialogKind, DialogOpened,
+    DownloadStarted, ExceptionParams, FileChooserOpened, OpenedPage, PageError, PageEvent,
+    WindowKind,
 };
 use crate::events::{PageEventKind, navigation_event};
 use crate::world::{BackendNodeId, FrameAttachLog, FrameEvent};
+
+/// upstream's `PageBinding.kBindingName`: the CDP binding every exposed binding's stub calls.
+pub(crate) const BINDING_NAME: &str = "__playwright__binding__";
 
 /// How long a dialog nobody listens for stays open, for a listener that lands just after the
 /// click that opened it (build-design graft 7).
@@ -113,6 +123,9 @@ struct Watcher {
     sessions: HashMap<SessionId, TargetId>,
     /// Which tab each out-of-process frame belongs to (an OOPIF's frame id is its target id).
     frames: HashMap<String, TargetId>,
+    /// The frame of each main-world execution context, by session and context id, from
+    /// `Runtime.executionContextCreated`: where a binding call came from.
+    contexts: HashMap<(SessionId, i64), FrameId>,
     /// Dialogs in their grace, oldest first; every grace is as long, so this is by deadline.
     graces: VecDeque<Grace>,
     next_reap: Instant,
@@ -185,6 +198,35 @@ struct Detached {
 #[serde(rename_all = "camelCase")]
 struct Destroyed {
     target_id: String,
+}
+
+/// `Runtime.executionContextCreated`, for the frame of a page's main-world contexts.
+#[derive(Deserialize)]
+struct ContextCreated {
+    context: ContextDescription,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ContextDescription {
+    id: i64,
+    #[serde(default)]
+    aux_data: ContextAux,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ContextAux {
+    #[serde(default)]
+    is_default: bool,
+    #[serde(default)]
+    frame_id: Option<FrameId>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ContextDestroyed {
+    execution_context_id: i64,
 }
 
 #[derive(Deserialize)]
@@ -274,6 +316,7 @@ impl Watcher {
             closed_early: HashSet::new(),
             sessions: HashMap::new(),
             frames: HashMap::new(),
+            contexts: HashMap::new(),
             graces: VecDeque::new(),
             next_reap: Instant::now() + REAP,
             found,
@@ -284,6 +327,7 @@ impl Watcher {
     async fn run(mut self, mut found: UnboundedReceiver<OpenedPage>) {
         // Subscribed before discovery, so no target is created unseen in between.
         let mut events = self.browser.cdp_events();
+        let mut bindings = self.browser.cdp_events_targeted("Runtime.bindingCalled");
         let mut tick = time::interval(TICK);
         tick.set_missed_tick_behavior(MissedTickBehavior::Delay);
         loop {
@@ -299,12 +343,99 @@ impl Watcher {
                     }
                     Err(RecvError::Closed) => return,
                 },
+                Some(call) = bindings.recv() => {
+                    // Every event sent before the call, its context's creation among them.
+                    self.drain(&mut events).await;
+                    self.binding_called(call).await;
+                }
                 Some(opened) = found.recv() => self.found(opened),
                 _ = tick.tick() => self.tick().await,
                 () = time::sleep_until(grace_ends.unwrap_or_else(Instant::now)), if grace_ends.is_some() => {
                     self.end_graces();
                 }
             }
+        }
+    }
+
+    /// Keeps [`Watcher::contexts`] current: a main-world context made, gone, or every context of
+    /// the session gone (a navigation clears them). Any other event changes nothing.
+    fn context_changed(&mut self, method: &str, session: Option<SessionId>, params: Value) {
+        let Some(session) = session else {
+            return;
+        };
+        match method {
+            "Runtime.executionContextCreated" => {
+                if let Some(ContextCreated { context }) = parse(params)
+                    && context.aux_data.is_default
+                    && let Some(frame) = context.aux_data.frame_id
+                {
+                    self.contexts.insert((session, context.id), frame);
+                }
+            }
+            "Runtime.executionContextDestroyed" => {
+                if let Some(ContextDestroyed {
+                    execution_context_id,
+                }) = parse(params)
+                {
+                    self.contexts.remove(&(session, execution_context_id));
+                }
+            }
+            "Runtime.executionContextsCleared" => {
+                self.contexts.retain(|(known, _), _| *known != session);
+            }
+            _ => {}
+        }
+    }
+
+    /// A session went: its tab and its contexts are forgotten.
+    fn session_detached(&mut self, session: &SessionId) {
+        self.contexts.retain(|(known, _), _| known != session);
+        self.sessions.remove(session);
+    }
+
+    /// Handles every broadcast event already queued, without waiting for more.
+    async fn drain(&mut self, events: &mut Receiver<CdpEvent>) {
+        loop {
+            match events.try_recv() {
+                Ok(event) => self.handle(event).await,
+                Err(TryRecvError::Lagged(_)) => {
+                    self.epoch = None;
+                    self.attach_log.lost_events();
+                }
+                Err(TryRecvError::Empty | TryRecvError::Closed) => return,
+            }
+        }
+    }
+
+    /// Records a call of [`BINDING_NAME`] on a tab where some run exposes a binding.
+    async fn binding_called(&mut self, event: CdpEvent) {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Called {
+            name: String,
+            payload: String,
+            execution_context_id: i64,
+        }
+        let Some(session) = event.session_id else {
+            return;
+        };
+        let Some(called) = parse::<Called>(event.params) else {
+            return;
+        };
+        if called.name != BINDING_NAME {
+            return;
+        }
+        if let Some(target) = self.wanted(&session, PageEventKind::Binding).await {
+            let frame = self
+                .contexts
+                .get(&(session, called.execution_context_id))
+                .cloned();
+            self.writer.record(PageEvent::Binding(BindingCalled {
+                target,
+                context: called.execution_context_id,
+                frame,
+                payload: called.payload,
+            }));
         }
     }
 
@@ -377,6 +508,7 @@ impl Watcher {
         if changed {
             self.sessions.clear();
             self.frames.clear();
+            self.contexts.clear();
             self.writer.hub().dialogs().forget_sessions();
         }
         self.browser
@@ -436,7 +568,7 @@ impl Watcher {
             }
             "Target.detachedFromTarget" => {
                 if let Some(Detached { session_id }) = parse(params) {
-                    self.sessions.remove(&session_id);
+                    self.session_detached(&session_id);
                 }
             }
             "Page.frameAttached" => {
@@ -496,7 +628,7 @@ impl Watcher {
                 }
             }
             "Browser.downloadProgress" => self.download_progress(params),
-            _ => {}
+            _ => self.context_changed(&method, session_id, params),
         }
     }
 

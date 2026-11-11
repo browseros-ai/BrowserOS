@@ -206,7 +206,21 @@ export type EventRecord = { seq: number; at: number } & (
   | { event: 'pageerror'; page: PageBrand; error: PageErrorInfo }
   | { event: 'download'; page: PageBrand; download: DownloadInfo }
   | { event: 'filechooser'; page: PageBrand; chooser: FileChooserInfo }
+  | BindingRecord
 )
+
+/**
+ * A page's call of a binding the run exposed: the stub's JSON `payload` (`{ name, seq,
+ * serializedArgs }`), the execution `context` to answer in (`bindingCall.resolve`), and that
+ * context's frame id, `null` for the main frame.
+ */
+export type BindingRecord = {
+  event: 'binding'
+  page: PageBrand
+  frame: string | null
+  context: number
+  payload: string
+}
 
 /**
  * What the pump gets: the events of every listener that had some, in log order, and how many
@@ -480,9 +494,14 @@ export type OpInputs = {
     viewportSize: { width: number; height: number }
   }
   'page.addInitScript': PageArgs & { script: InitSource }
+  /** `noGlobal`: the controller alone knows the binding (`exposeFunctions` callbacks). */
+  'page.exposeBinding': PageArgs & { name: string; noGlobal?: true }
+  /** `arg`: `{ name, seq, result }` or `{ name, seq, error }` as in-page JSON text. */
+  'bindingCall.resolve': PageArgs & { context: number; arg: string }
   'context.pages': Record<string, never>
   'context.newPage': Record<string, never>
   'context.addInitScript': { script: InitSource }
+  'context.exposeBinding': { name: string; noGlobal?: true }
   /** The id an `addInitScript` returned. */
   'disposable.dispose': { id: number }
   /**
@@ -605,9 +624,12 @@ export type OpOutputs = {
   'page.setViewportSize': Done
   /** The id `disposable.dispose` takes. */
   'page.addInitScript': { id: number }
+  'page.exposeBinding': { id: number }
+  'bindingCall.resolve': Done
   'context.pages': { pages: PageEntry[] }
   'context.newPage': PageEntry
   'context.addInitScript': { id: number }
+  'context.exposeBinding': { id: number }
   'disposable.dispose': Done
   'events.listen': Done
   'events.next': Pumped

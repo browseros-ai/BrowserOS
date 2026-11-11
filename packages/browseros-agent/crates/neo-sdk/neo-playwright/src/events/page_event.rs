@@ -36,6 +36,9 @@ pub(crate) enum PageEvent {
     Download(DownloadStarted),
     /// A native chooser intercepted by core before an agent-created tab is exposed.
     FileChooser(FileChooserOpened),
+    /// A page called a binding a run exposed, recorded only while some run exposes one on that
+    /// page.
+    Binding(BindingCalled),
 }
 
 impl PageEvent {
@@ -51,6 +54,7 @@ impl PageEvent {
                 download.page.as_ref() == Some(target)
             }
             (PageEventKind::FileChooser, Self::FileChooser(chooser)) => chooser.target == *target,
+            (PageEventKind::Binding, Self::Binding(call)) => call.target == *target,
             _ => false,
         }
     }
@@ -64,6 +68,20 @@ pub(crate) struct FileChooserOpened {
     pub(crate) session: SessionId,
     pub(crate) frame: FrameId,
     pub(crate) node: BackendNodeId,
+}
+
+/// One call of upstream's CDP binding `__playwright__binding__` (`Runtime.bindingCalled`):
+/// the stub of a binding a run exposed posted `{ name, seq, serializedArgs }` as JSON. The run
+/// that exposed `name` answers it in `context`, the execution context that made the call.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct BindingCalled {
+    pub(crate) target: TargetId,
+    /// The execution context of the call, on the tab's page session: where the answer goes.
+    pub(crate) context: i64,
+    /// The frame of that context, when the watcher saw the context made; the main frame else.
+    pub(crate) frame: Option<FrameId>,
+    /// The page's JSON text, as the stub wrote it. The prelude parses it.
+    pub(crate) payload: String,
 }
 
 /// A tab that a page, the owner or `context.newPage` opened.

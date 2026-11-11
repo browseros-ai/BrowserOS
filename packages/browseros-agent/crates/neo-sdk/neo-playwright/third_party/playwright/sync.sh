@@ -18,9 +18,9 @@ here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # The runtime import closure of packages/injected/src/injectedScript.ts (type-only imports are
 # erased by the bundler, so their files are not needed), minus highlight.ts, highlight.css and
-# consoleApi.ts, which the engine build replaces with stubs. Then urlMatch.ts and the protocol's
-# value serializers for the agent runtime, and the US keyboard table and macOS editing commands
-# for the Rust keyboard port. An
+# consoleApi.ts, which the engine build replaces with stubs. Then bindingsController.ts, the
+# page side of exposeBinding, urlMatch.ts and the protocol's value serializers for the agent
+# runtime, and the US keyboard table and macOS editing commands for the Rust keyboard port. An
 # upstream import that is not on this list makes the engine build fail, so a missed file cannot
 # ship silently.
 #
@@ -31,6 +31,7 @@ FILES=(
   NOTICE
   packages/injected/src/ariaSnapshot.ts
   packages/injected/src/ariaSnapshotDistiller.ts
+  packages/injected/src/bindingsController.ts
   packages/injected/src/domUtils.ts
   packages/injected/src/injectedScript.ts
   packages/injected/src/layoutSelectorUtils.ts

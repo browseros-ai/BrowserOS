@@ -1,7 +1,8 @@
-//! Init scripts on a real BrowserOS, through MCP `run`: `page.addInitScript` and
+//! Init scripts and bindings on a real BrowserOS, through MCP `run`: `page.addInitScript` and
 //! `context.addInitScript` run in every new document of a tab, before the page's own scripts,
-//! until the run that registered them ends, and the owner's lock refuses a registration on the
-//! tab it holds, as it refuses any other write.
+//! and `exposeBinding` lets the page call the script's functions, each until the run that
+//! registered it ends; the owner's lock refuses a registration on the tab it holds, as it refuses
+//! any other write.
 //!
 //! ```text
 //!  run 1: page script, context script ─ goto, goto ─ dispose the page's ─ goto ─ a new tab
@@ -15,6 +16,8 @@
 pub mod browseros_rig;
 
 use std::error::Error;
+use std::future::Future;
+use std::pin::Pin;
 use std::time::Duration;
 
 use browseros_rig::{CaptchaKey, HOST_TOKEN, Rig, TestResult};
@@ -64,8 +67,70 @@ try {
 }
 ";
 
+/// Run 1 of the bindings: what the page got back from the script's functions.
+const EXPOSE: &str = r"
+await page.goto('data:text/html,<title>Bindings</title><p>loaded</p>');
+let source = null;
+const add = await page.exposeBinding('add', (s, a, b) => {
+  source = [s.page === page, s.frame === page.mainFrame(), s.context === context];
+  return a + b;
+});
+const loaded = await page.evaluate(() => window.add(2, 3));
+await page.exposeFunction('fail', () => { throw new Error('boom'); });
+const failed = await page.evaluate(() => window.fail().then(() => 'resolved', (e) => e.message));
+let duplicate;
+try {
+  await page.exposeFunction('add', () => 0);
+  duplicate = 'registered';
+} catch (error) {
+  duplicate = error.message;
+}
+await context.exposeFunction('twice', (n) => n * 2);
+await page.goto('data:text/html,' + encodeURIComponent('<script>window.early = twice(21)</script>'));
+const early = await page.evaluate(() => window.early);
+const called = [];
+await page.addInitScript(({ cb }) => cb('ran'), { cb: (v) => { called.push(v); } }, { exposeFunctions: true });
+await page.reload();
+for (let i = 0; i < 100 && called.length === 0; i++) await page.waitForTimeout(50);
+const onWindow = await page.evaluate(() => Object.keys(window).filter((key) => key.startsWith('__pw_fn_')));
+await add.dispose();
+const disposed = await page.evaluate(() => typeof window.add);
+return { loaded, source, failed, duplicate, early, called, onWindow, disposed, page };
+";
+
+/// Run 2 of the bindings, on run 1's tab: what is left of them once run 1 ended, in the document
+/// it left loaded and in a new one.
+const EXPOSED_AFTER: &str = r"
+const loaded = await page.evaluate(() => [typeof window.twice, typeof window.fail]);
+await page.goto('data:text/html,<p>next run</p>');
+const fresh = await page.evaluate(() => [typeof window.twice, typeof window.fail]);
+return { page, loaded, fresh };
+";
+
+/// Run 3 of the bindings, on the locked tab.
+const EXPOSE_LOCKED: &str = r"
+try {
+  await page.exposeFunction('locked', () => 1);
+  return { page, met: 'registered' };
+} catch (error) {
+  return { page, met: [error.owner, error.code, error.delivery] };
+}
+";
+
 #[tokio::test(flavor = "multi_thread")]
 async fn init_scripts_run_in_every_new_document_until_the_run_ends() -> TestResult {
+    on_browseros(|rig| Box::pin(drive(rig))).await
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn pages_call_back_into_the_script_until_the_run_ends() -> TestResult {
+    on_browseros(|rig| Box::pin(expose(rig))).await
+}
+
+/// `drive` on a fresh BrowserOS within the test's budget, with both processes' logs on failure.
+async fn on_browseros(
+    drive: impl for<'a> FnOnce(&'a Rig) -> Pin<Box<dyn Future<Output = TestResult> + 'a>>,
+) -> TestResult {
     let Some(browser) = browseros_rig::browser_or_skip() else {
         return Ok(());
     };
@@ -76,6 +141,65 @@ async fn init_scripts_run_in_every_new_document_until_the_run_ends() -> TestResu
         Err(_elapsed) => format!("the drive did not finish within {TEST_BUDGET:?}"),
     };
     Err(format!("{failure}\n{}", rig.logs()).into())
+}
+
+async fn expose(rig: &Rig) -> TestResult {
+    rig.until_ready().await?;
+    let client = rig.client().await?;
+    let meta = json!({ "taskId": "bindings" });
+
+    let exposed = returned(&browseros_rig::run(&client, EXPOSE, &meta).await?)?;
+    let tab = exposed
+        .pointer("/page/tab")
+        .and_then(Value::as_i64)
+        .ok_or_else(|| format!("a page leaves a run as its brand: {exposed}"))?;
+    let expected = json!({
+        "loaded": 5,
+        "source": [true, true, true],
+        "failed": "boom",
+        "duplicate": "page.exposeFunction: Function \"add\" has been already registered",
+        "early": 42,
+        "called": ["ran"],
+        "onWindow": [],
+        "disposed": "undefined",
+        "page": { "$neo": "page", "tab": tab },
+    });
+    assert_eq!(
+        exposed, expected,
+        "a binding answers the loaded document at once and every later one, with its source; an \
+         error reaches the page; a context binding reaches the run's tab; exposeFunctions passes \
+         the script's function off window; dispose takes it from the page"
+    );
+
+    let after = returned(&browseros_rig::run(&client, EXPOSED_AFTER, &meta).await?)?;
+    assert_eq!(
+        after,
+        json!({
+            "page": { "$neo": "page", "tab": tab },
+            "loaded": ["undefined", "undefined"],
+            "fresh": ["undefined", "undefined"],
+        }),
+        "a run's bindings leave the document it left loaded, and later ones, when it ends"
+    );
+
+    let take = json!({ "tabId": tab, "reads": "allow", "ttlSeconds": 600 });
+    let taken = rig
+        .host("POST", "/v1/locks", Some(HOST_TOKEN), Some(&take))
+        .await?;
+    if taken.status != 200 {
+        return Err(format!("the host locks the tab: {}", taken.text()).into());
+    }
+    let locked = returned(&browseros_rig::run(&client, EXPOSE_LOCKED, &meta).await?)?;
+    client.cancel().await?;
+    assert_eq!(
+        locked,
+        json!({
+            "page": { "$neo": "page", "tab": tab },
+            "met": ["host", "owner_has_control", "not_sent"],
+        }),
+        "the owner's lock refuses a binding on its tab as it refuses any write"
+    );
+    Ok(())
 }
 
 async fn drive(rig: &Rig) -> TestResult {
