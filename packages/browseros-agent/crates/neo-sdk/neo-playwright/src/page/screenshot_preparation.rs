@@ -6,7 +6,6 @@ use std::mem;
 use std::sync::Arc;
 use std::time::Duration;
 
-use browseros_core::{CoreError, ProtocolSession};
 use futures_util::future;
 use serde_json::{Value, json};
 use tokio::runtime::Handle;
@@ -24,12 +23,11 @@ const PREPARE: &str = include_str!("../../assets/screenshot-prepare.js");
 const RESTORE: &str = "function() { window.__pwCleanupScreenshot?.(); }";
 
 /// One screenshot's utility-world mutations and exclusive place in the tab's capture queue.
-/// Worlds and background overrides are remembered before sending mutations, because cancellation
-/// can lose a CDP reply after the renderer already changed.
+/// Worlds are remembered before sending preparation, because cancellation can lose the CDP
+/// reply after its script already changed the document.
 #[must_use = "the guard holds the screenshot queue through rendering cleanup"]
 pub(super) struct ScreenshotPreparation {
     worlds: Vec<SealedWorld>,
-    background: Option<ProtocolSession>,
     queue: Option<OwnedMutexGuard<()>>,
 }
 
@@ -38,7 +36,6 @@ impl ScreenshotPreparation {
     pub(super) async fn acquire(page: &OpPage<'_>) -> Self {
         Self {
             worlds: Vec::new(),
-            background: None,
             queue: Some(Arc::clone(page.state().screenshots()).lock_owned().await),
         }
     }
@@ -113,68 +110,34 @@ impl ScreenshotPreparation {
         Ok(())
     }
 
-    /// Change the admitted page's root background only for transparent encodings. Register
-    /// before sending: a cancelled CDP reply may still have changed the renderer.
-    pub(super) async fn omit_background(
-        &mut self,
-        session: ProtocolSession,
-    ) -> Result<(), CoreError> {
-        self.background = Some(session.clone());
-        session
-            .send::<_, Value>(
-                "Emulation.setDefaultBackgroundColorOverride",
-                json!({
-                    "color": { "r": 0, "g": 0, "b": 0, "a": 0 },
-                }),
-            )
-            .await?;
-        Ok(())
-    }
-
     /// Restores before returning bytes, so the caller can immediately inspect animation and
     /// caret state. If this await is cancelled, Drop retries the idempotent cleanup.
     pub(super) async fn restore(mut self) {
-        restore(&self.worlds, self.background.as_ref()).await;
+        restore(&self.worlds).await;
         self.worlds.clear();
-        self.background = None;
     }
 }
 
 impl Drop for ScreenshotPreparation {
     fn drop(&mut self) {
-        if self.worlds.is_empty() && self.background.is_none() {
+        if self.worlds.is_empty() {
             return;
         }
         let Ok(runtime) = Handle::try_current() else {
             return;
         };
         let worlds = mem::take(&mut self.worlds);
-        let background = self.background.take();
         let queue = self.queue.take();
         drop(runtime.spawn(async move {
-            // A later screenshot must not replace temporary rendering state while this
+            // A second screenshot must not replace the first one's cleanup callback while
             // restoration is still pending on a renderer.
             let _queue = queue;
-            restore(&worlds, background.as_ref()).await;
+            restore(&worlds).await;
         }));
     }
 }
 
-async fn restore(worlds: &[SealedWorld], background: Option<&ProtocolSession>) {
-    // A stalled frame must not postpone the root session's background reset.
-    future::join(restore_frames(worlds), async {
-        if let Some(session) = background {
-            let _cleared = time::timeout(
-                Duration::from_secs(5),
-                session.send::<_, Value>("Emulation.setDefaultBackgroundColorOverride", json!({})),
-            )
-            .await;
-        }
-    })
-    .await;
-}
-
-async fn restore_frames(worlds: &[SealedWorld]) {
+async fn restore(worlds: &[SealedWorld]) {
     // Each renderer gets its own bounded attempt. A dead first renderer must not prevent
     // healthy child frames from resuming animations or restoring their caret and styles.
     future::join_all(worlds.iter().map(|world| async {
@@ -195,7 +158,6 @@ mod tests {
 
     use browseros_core::testing::{TestConnection, cdp_pending};
     use browseros_core::{CdpConnection, ProtocolSession, SessionId};
-    use serde_json::json;
     use tokio::sync::Mutex;
     use tokio::{task, time};
 
@@ -221,7 +183,6 @@ mod tests {
         let queue = Arc::new(Mutex::new(()));
         let preparation = ScreenshotPreparation {
             worlds: vec![world(&stalled, "stalled"), world(&healthy, "healthy")],
-            background: None,
             queue: Some(Arc::clone(&queue).lock_owned().await),
         };
         drop(preparation);
@@ -243,50 +204,6 @@ mod tests {
             queue.try_lock().is_ok(),
             "a dead renderer must not hold the queue forever"
         );
-        Ok(())
-    }
-
-    /// A lost acknowledgement does not mean the renderer kept its original background.
-    #[tokio::test(start_paused = true)]
-    async fn cancellation_resets_a_background_whose_set_reply_was_lost()
-    -> Result<(), Box<dyn Error>> {
-        let connection =
-            TestConnection::new([("Emulation.setDefaultBackgroundColorOverride", cdp_pending())]);
-        let session = ProtocolSession::for_session(
-            Arc::clone(&connection) as Arc<dyn CdpConnection>,
-            SessionId::from("background"),
-        );
-        let queue = Arc::new(Mutex::new(()));
-        let mut preparation = ScreenshotPreparation {
-            worlds: Vec::new(),
-            background: None,
-            queue: Some(Arc::clone(&queue).lock_owned().await),
-        };
-        assert!(
-            time::timeout(
-                Duration::from_millis(1),
-                preparation.omit_background(session)
-            )
-            .await
-            .is_err()
-        );
-        drop(preparation);
-        for _ in 0..10 {
-            task::yield_now().await;
-        }
-        let calls = connection.calls()?;
-        assert_eq!(
-            calls.first().ok_or("background was not set")?.params["color"]["a"],
-            0
-        );
-        assert!(
-            calls.iter().any(
-                |call| call.method == "Emulation.setDefaultBackgroundColorOverride"
-                    && call.params == json!({})
-            ),
-            "cancellation must clear an override even when its set reply was lost"
-        );
-        assert!(queue.try_lock().is_ok(), "the queue releases after reset");
         Ok(())
     }
 
