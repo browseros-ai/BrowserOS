@@ -88,6 +88,10 @@ impl Ran {
         if CUT_OFF.iter().any(|cut| message.contains(cut)) {
             Some(Self::Maybe)
         } else if message.contains("No frame for given id found")
+            // Chromium can keep the document's context while retiring its remote handles,
+            // for example across history restoration. Reinstall the probe before a read
+            // retries; the missing receiver guarantees this call ran nothing.
+            || message.contains("Could not find object with given id")
             || is_stale_context(error)
             || matches!(error, CoreError::Cdp(CdpError::SessionGone))
         {
@@ -404,6 +408,10 @@ mod tests {
                 Ran::No,
             ),
             (protocol_error("No frame for given id found"), Ran::No),
+            (
+                protocol_error("Could not find object with given id"),
+                Ran::No,
+            ),
             (CoreError::Cdp(CdpError::SessionGone), Ran::No),
             (
                 protocol_error("Inspected target navigated or closed"),
