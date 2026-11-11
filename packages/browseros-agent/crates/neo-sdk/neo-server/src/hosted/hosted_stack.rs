@@ -3,9 +3,7 @@ use std::time::Duration;
 
 use browseros_core::NativeCapabilities;
 use neo_captcha::CaptchaSolver;
-use neo_trace::{
-    Privacy, RedactionLimits, Redactor, SecretSet, SecretSetConfig, TraceSink, WriterConfig,
-};
+use neo_trace::{RedactionLimits, Redactor, SecretSet, SecretSetConfig, TraceSink, WriterConfig};
 use tokio::time;
 use tokio_util::sync::CancellationToken;
 
@@ -38,11 +36,11 @@ impl HostedStack {
         link: impl FnOnce(NativeCapabilities, Arc<TabRegistry>) -> Arc<BrowserLink>,
     ) -> Result<Arc<Self>, HostedError> {
         let config = options.config()?;
-        let (store, recovery) = App::hosted_trace(&config.env.trace_dir())
+        let store = App::hosted_trace(&config.env.trace_dir())
             .await
             .map_err(HostedError::from_error)?;
         // As the sidecar: the trace writer masks with a set nothing registers into, and the
-        // second set is the one `Privacy` feeds and housekeeping expires. Neither masks a run.
+        // second set is retained for the shared housekeeping schedule. Neither masks a run.
         let unmasked = Arc::new(SecretSet::new(SecretSetConfig::default()));
         let redactor = Redactor::new(unmasked, RedactionLimits::default());
         let trace = neo_trace::spawn_writer(
@@ -55,24 +53,11 @@ impl HostedStack {
             None,
         );
         let secrets = Arc::new(SecretSet::new(SecretSetConfig::default()));
-        let privacy = Privacy::new(
-            Arc::clone(&secrets),
-            Arc::new(trace.clone()),
-            store
-                .private_tabs()
-                .await
-                .map_err(HostedError::from_error)?,
-        );
         let tabs = Arc::new(TabRegistry::new());
         let native =
             NativeCapabilities::from_browseros_version(config.launch.browseros_version.as_deref());
         let browser = link(native, Arc::clone(&tabs));
-        let hooks = Arc::new(PrivacyHooks::new(
-            privacy,
-            Arc::clone(&tabs),
-            recovery,
-            config.secret_files,
-        ));
+        let hooks = Arc::new(PrivacyHooks::new(config.secret_files));
         let playwright = PlaywrightFacade::start(Arc::clone(&browser), Arc::clone(&hooks) as _);
         let solver = CaptchaSolver::new(config.captcha).map(Arc::new);
         let claims = Arc::new(CaptchaClaims::default());
@@ -89,7 +74,7 @@ impl HostedStack {
         let takeover = Arc::new(TakeoverLock::default());
         let dispatcher = Arc::new(Dispatcher::new(
             methods.build(),
-            builtins::door_rules(&takeover, &hooks, &claims),
+            builtins::door_rules(&takeover, &claims),
             trace.clone(),
             Arc::clone(&browser),
             Arc::clone(&tabs),

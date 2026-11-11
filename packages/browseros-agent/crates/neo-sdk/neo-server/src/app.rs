@@ -87,13 +87,10 @@ pub enum StartError {
 }
 
 impl App {
-    /// The hosted stack shares trace recovery with the sidecar, without binding its listeners.
+    /// The hosted stack opens the same trace store as the sidecar, without binding listeners.
     #[cfg(feature = "hosted-run")]
-    pub(crate) async fn hosted_trace(
-        directory: &Path,
-    ) -> Result<(TraceStore, Arc<FlagRecovery>), StartError> {
-        let OpenedTrace { store, recovery } = open_trace(directory).await?;
-        Ok((store, recovery))
+    pub(crate) async fn hosted_trace(directory: &Path) -> Result<TraceStore, StartError> {
+        open_trace(directory).await
     }
 
     /// The same janitor, secret expiration and retention schedule, owned by the hosted runtime.
