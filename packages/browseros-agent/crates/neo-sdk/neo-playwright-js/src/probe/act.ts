@@ -146,13 +146,16 @@ export function act(
     point: place.point,
     inView: place.inView,
     transformed: isTransformed(element),
+    ...(place.borderOffset ? { borderOffset: place.borderOffset } : {}),
   } as const
-  if (!arm || !place.inView) return measured
+  if (!arm || (!arm.browserMapped && !place.inView)) return measured
   if (arm.expectRect && !sameRect(box, arm.expectRect)) return measured
+  // A transformed frame can map a different clipped centroid, or scale a subpixel
+  // local target into view. Rust checked that geometry; events establish its hit.
   const interception = injected.setupHitTargetInterceptor(
     element,
     arm.action,
-    place.point,
+    arm.browserMapped ? undefined : place.point,
     arm.blockAll,
   )
   if (interception === 'error:notconnected') return { kind: 'detached' }
@@ -280,19 +283,21 @@ function scroll(element: Element, plan: ScrollPlan): void {
 function clickPoint(
   element: Element,
   position: Point | undefined,
-): { point: Point; inView: boolean } | undefined {
+): { point: Point; inView: boolean; borderOffset?: Point } | undefined {
   const boxes = Array.from(element.getClientRects())
   const [first] = boxes
   if (!first) return undefined
   if (position) {
     const style = getComputedStyle(element)
     const box = element.getBoundingClientRect()
+    const borderOffset = {
+      x: parseInt(style.borderLeftWidth || '0', 10) + position.x,
+      y: parseInt(style.borderTopWidth || '0', 10) + position.y,
+    }
     return {
-      point: {
-        x: box.x + parseInt(style.borderLeftWidth || '', 10) + position.x,
-        y: box.y + parseInt(style.borderTopWidth || '', 10) + position.y,
-      },
+      point: { x: box.x + borderOffset.x, y: box.y + borderOffset.y },
       inView: true,
+      borderOffset,
     }
   }
   const width = innerWidth

@@ -206,6 +206,123 @@ describe('retrying matchers', () => {
     })
   })
 
+  it("tests that a failed matcher's error carries Playwright's matcherResult from Rust's facts", async () => {
+    // As bridge.rs sends a matcher failure: Rust's facts under `matcher` (expectation.rs
+    // `MatcherFacts`); the prelude adds the name, pass, expected value and timeout.
+    const failure = (
+      message: string,
+      matcher: Record<string, unknown>,
+      timeout = true,
+    ) => ({
+      err: {
+        code: 'assertion_failed',
+        owner: 'website',
+        delivery: 'not_sent',
+        retryable: false,
+        operationId: 'run.2',
+        timeout,
+        message,
+        matcher,
+      },
+    })
+    const answers = [
+      failure('expect(locator).toHaveText(expected) failed', {
+        actual: 'Text content',
+        ariaSnapshot: '- text: Text content',
+        log: [
+          'Expect "toHaveText" with timeout 1ms',
+          "waiting for locator('#node')",
+        ],
+        timedOut: true,
+      }),
+      failure('expect(locator).not.toBeVisible() failed', {
+        actual: 'visible',
+        ariaSnapshot: '- text: Text content',
+        log: [],
+        timedOut: true,
+      }),
+      failure('expect(locator).toHaveCount(expected) failed', {
+        actual: 0,
+        log: [],
+        timedOut: true,
+      }),
+      failure(
+        'expect(locator).toBeChecked() failed',
+        { log: [], timedOut: false },
+        false,
+      ),
+    ]
+    const runtime = loadPrelude({
+      seed: SEED,
+      answer: (call) =>
+        call.name === 'expect.locator' ? (answers.shift() ?? null) : null,
+    })
+    const results = json(
+      await runtime.run(`
+        const loc = page.locator('#node')
+        const caught = []
+        for (const assertion of [
+          () => expect(loc, 'the node reads right').toHaveText(/Text2/, { timeout: 1 }),
+          () => expect(loc).not.toBeVisible({ timeout: 1 }),
+          () => expect(page.locator('#node2')).toHaveCount(1, { timeout: 1 }),
+          () => expect(loc).toBeChecked({ checked: false }),
+        ]) {
+          try { await assertion() } catch (e) {
+            const r = e.matcherResult
+            caught.push({ ...r, expected: String(r.expected), keys: Object.keys(r), message: r.message, full: e.message })
+          }
+        }
+        return caught
+      `),
+    ) as Record<string, unknown>[]
+    expect(results.map(({ keys: _, full: __, ...rest }) => rest)).toEqual([
+      {
+        message: 'expect(locator).toHaveText(expected) failed',
+        pass: false,
+        actual: 'Text content',
+        name: 'toHaveText',
+        expected: '/Text2/',
+        log: [
+          'Expect "toHaveText" with timeout 1ms',
+          "waiting for locator('#node')",
+        ],
+        timeout: 1,
+        ariaSnapshot: '- text: Text content',
+      },
+      {
+        message: 'expect(locator).not.toBeVisible() failed',
+        pass: true,
+        actual: 'visible',
+        name: 'toBeVisible',
+        expected: 'visible',
+        log: [],
+        timeout: 1,
+        ariaSnapshot: '- text: Text content',
+      },
+      {
+        message: 'expect(locator).toHaveCount(expected) failed',
+        pass: false,
+        actual: 0,
+        name: 'toHaveCount',
+        expected: '1',
+        log: [],
+        timeout: 1,
+      },
+      {
+        message: 'expect(locator).toBeChecked() failed',
+        pass: false,
+        name: 'toBeChecked',
+        expected: 'unchecked',
+        log: [],
+      },
+    ])
+    // The custom message prefixes the error, never matcherResult.message, as upstream's
+    // ExpectError does.
+    expect(results[0]?.full).toBe(
+      'the node reads right\n\nexpect(locator).toHaveText(expected) failed',
+    )
+  })
+
   it("tests that an uncaught expect failure or refusal settles the run as that op's failure", async () => {
     // Each as claw-sdk's bridge sends it (runtime/bridge.rs `ErrBody`): Rust's assertion
     // failure, and the dispatcher refusing the op.

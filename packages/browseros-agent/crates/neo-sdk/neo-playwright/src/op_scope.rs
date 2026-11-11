@@ -371,6 +371,11 @@ impl<'env> OpScope<'env> {
         PlaywrightError::new(code, format!("{head}{log}"))
     }
 
+    /// The call log's lines as recorded, for a failed matcher's `matcherResult.log`.
+    pub(crate) fn log_lines(&self) -> Vec<String> {
+        self.lock_log().raw_lines()
+    }
+
     /// A core or CDP failure the leaf could not recover from, as one of the crate's codes.
     pub(crate) fn core_error(&self, error: &CoreError) -> PlaywrightError {
         let code = ErrorCode::from_core(error);

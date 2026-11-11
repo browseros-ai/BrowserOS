@@ -14,7 +14,7 @@ import { createRequire } from 'node:module'
 import { join, resolve } from 'node:path'
 
 const require = createRequire(import.meta.url)
-export const thirdParty = resolve(
+const thirdParty = resolve(
   import.meta.dirname,
   '../../../neo-playwright/third_party/playwright',
 )

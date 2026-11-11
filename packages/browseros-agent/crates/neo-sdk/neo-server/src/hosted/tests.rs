@@ -13,6 +13,7 @@ use tokio::time;
 
 use super::{HostedOptions, HostedRuntime};
 use crate::browser::BrowserLink;
+use crate::config::HostedMode;
 use crate::test_support::FakeCdp;
 
 async fn connect(dir: &TempDir, fake: Arc<FakeCdp>) -> Result<HostedRuntime, Box<dyn Error>> {
@@ -21,6 +22,7 @@ async fn connect(dir: &TempDir, fake: Arc<FakeCdp>) -> Result<HostedRuntime, Box
             state_dir: dir.path().join("state"),
             execution_dir: Some(dir.path().join("profile/.browseros")),
             browseros_version: Some("0.52.1.1".to_owned()),
+            hosted_mode: false,
         },
         move |native, tabs| {
             BrowserLink::start_with(native, tabs, move || future::ready(fake.connect()))
@@ -172,5 +174,23 @@ async fn dropping_the_run_cancels_its_pending_call() -> Result<(), Box<dyn Error
         serde_json::from_str(&time::timeout(Duration::from_secs(5), call).await?)?;
     assert_eq!(envelope["err"]["code"], "cancelled");
     runtime.close().await?;
+    Ok(())
+}
+
+/// A host states the browser's launch mode: the spec runner launches BrowserOS without hosted
+/// mode unless asked, and then Neo must wait for console and page errors as it does there.
+#[test]
+fn tests_that_hosted_mode_follows_the_hosts_launch_fact() -> Result<(), Box<dyn Error>> {
+    let dir = TempDir::new()?;
+    let options = |hosted_mode| HostedOptions {
+        state_dir: dir.path().join("state"),
+        hosted_mode,
+        ..HostedOptions::default()
+    };
+    assert_eq!(
+        options(false).config()?.env.hosted_mode,
+        HostedMode::Off { value: None }
+    );
+    assert_eq!(options(true).config()?.env.hosted_mode, HostedMode::On);
     Ok(())
 }

@@ -61,8 +61,9 @@ enum Started {
 }
 
 /// The JS wire form of an `OpReply`: `{"ok": value, "pages": […]}` or `{"err": {…}, "pages":
-/// […]}`, plus `defaultPage` once the call opened the run's own page. Protocol translation
-/// only: the door decided every value in it.
+/// […]}`, plus `defaultPage` once the call opened the run's own page and `pumped` once an op
+/// ordered its answer after event-pump replies. Protocol translation only: the door decided
+/// every value in it.
 #[derive(Serialize)]
 #[serde(untagged)]
 enum Envelope<'a> {
@@ -73,6 +74,10 @@ enum Envelope<'a> {
         observed: Option<&'a Observation>,
         #[serde(rename = "defaultPage", skip_serializing_if = "Option::is_none")]
         default_page: Option<DefaultPage>,
+        /// `OpReply::pumped`: the prelude dispatches that many event-pump replies before it
+        /// hands the script this one.
+        #[serde(skip_serializing_if = "is_zero")]
+        pumped: u64,
     },
     Err {
         err: ErrBody<'a>,
@@ -81,6 +86,8 @@ enum Envelope<'a> {
         observed: Option<&'a Observation>,
         #[serde(rename = "defaultPage", skip_serializing_if = "Option::is_none")]
         default_page: Option<DefaultPage>,
+        #[serde(skip_serializing_if = "is_zero")]
+        pumped: u64,
     },
 }
 
@@ -96,6 +103,10 @@ struct ErrBody<'a> {
     /// Makes the bootstrap throw a `TimeoutError`.
     timeout: bool,
     message: &'a str,
+    /// A failed `expect` matcher's facts, which the bootstrap puts on the error as
+    /// `matcherResult` for the expect prelude to complete.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    matcher: Option<&'a Value>,
 }
 
 /// The tab of the run's own page, once the call that needed it opened it. Plain ids rather
@@ -161,7 +172,11 @@ impl Bridge {
             if failures.len() == FAILURES_REMEMBERED {
                 failures.pop_front();
             }
-            failures.push_back(failure.clone());
+            // The run's own error needs only the failure's fields; a matcher's snapshot and log
+            // go to the script in the reply below and are not kept for the rest of the run.
+            let mut remembered = failure.clone();
+            remembered.error = remembered.error.without_matcher();
+            failures.push_back(remembered);
         }
         envelope(&reply)
     }
@@ -245,7 +260,16 @@ fn decode_input(input_json: &str) -> Value {
     )
 }
 
+#[expect(
+    clippy::trivially_copy_pass_by_ref,
+    reason = "serde's skip_serializing_if passes the field by reference"
+)]
+fn is_zero(count: &u64) -> bool {
+    *count == 0
+}
+
 fn envelope(reply: &OpReply) -> String {
+    let pumped = reply.pumped;
     let default_page = reply.default_page.as_ref().map(DefaultPage::from);
     let envelope = match &reply.outcome {
         Ok(ok) => Envelope::Ok {
@@ -253,12 +277,14 @@ fn envelope(reply: &OpReply) -> String {
             pages: &reply.pages,
             observed: reply.observed.as_ref(),
             default_page,
+            pumped,
         },
         Err(failure) => Envelope::Err {
             err: ErrBody::from(failure),
             pages: &reply.pages,
             observed: reply.observed.as_ref(),
             default_page,
+            pumped,
         },
     };
     serde_json::to_string(&envelope).unwrap_or_else(|error| {
@@ -285,6 +311,7 @@ impl<'a> From<&'a OpFailure> for ErrBody<'a> {
             operation_id: failure.operation,
             timeout: failure.error.is_timeout(),
             message: failure.error.message(),
+            matcher: failure.error.matcher(),
         }
     }
 }

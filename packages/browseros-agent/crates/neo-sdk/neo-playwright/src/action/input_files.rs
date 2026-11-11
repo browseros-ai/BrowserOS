@@ -62,11 +62,75 @@ pub(crate) struct SetInputFilesInput {
 /// The files after upstream's client checks that need no disk (the prelude's files.ts).
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-enum FilesInput {
+pub(crate) enum FilesInput {
     /// The strings as the script wrote them, in its order.
     Paths(Vec<String>),
     /// In-memory files, `[]` among them, ready for the page.
     Payloads(Vec<FilePayload>),
+}
+
+/// Drop paths carry MIME types from Playwright's vendored table in the prelude.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) enum DropFiles {
+    Paths(Vec<DropPath>),
+    Payloads(Vec<FilePayload>),
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct DropPath {
+    path: String,
+    mime_type: String,
+}
+
+/// Reads drop paths on Neo's host after the same client classification as uploads.
+/// Directories are refused before page work; files retain their MIME type and mtime.
+pub(crate) async fn drop_payloads(files: DropFiles) -> Result<Vec<FilePayload>, PlaywrightError> {
+    use base64::Engine as _;
+    use base64::engine::general_purpose::STANDARD;
+    use std::path::Path;
+    use std::time::UNIX_EPOCH;
+
+    let paths = match files {
+        DropFiles::Payloads(payloads) => return Ok(payloads),
+        DropFiles::Paths(paths) => paths,
+    };
+    let (paths, mime_types): (Vec<_>, Vec<_>) = paths
+        .into_iter()
+        .map(|path| (path.path, path.mime_type))
+        .unzip();
+    let files = FilesInput::Paths(paths);
+    match InputFiles::classify(files).await? {
+        InputFiles::Payloads(payloads) => Ok(payloads),
+        InputFiles::Directory(_) => Err(client_error(
+            "Dropping a directory is not supported — pass individual files.".to_owned(),
+        )),
+        InputFiles::Paths(paths) => {
+            let mut payloads = Vec::with_capacity(paths.len());
+            for (HostPath(path), mime_type) in paths.into_iter().zip(mime_types) {
+                let bytes = fs::read(&path)
+                    .await
+                    .map_err(|error| client_error(node_error(&error, "open", &path)))?;
+                let metadata = fs::metadata(&path)
+                    .await
+                    .map_err(|error| client_error(node_error(&error, "stat", &path)))?;
+                let modified = metadata
+                    .modified()
+                    .ok()
+                    .and_then(|time| time.duration_since(UNIX_EPOCH).ok());
+                payloads.push(FilePayload {
+                    name: Path::new(&path)
+                        .file_name()
+                        .map_or_else(String::new, |name| name.to_string_lossy().into_owned()),
+                    mime_type,
+                    buffer: STANDARD.encode(bytes),
+                    last_modified_ms: modified.map(|time| time.as_secs_f64() * 1000.0),
+                });
+            }
+            Ok(payloads)
+        }
+    }
 }
 
 /// What the input gets, classified on Neo's disk before any page work.

@@ -70,6 +70,11 @@ opens popups as tabs, but suppresses CDP console events that vanilla Playwright'
   assertions and its statics, including extended value matchers. Configured expect
   imports retain the run binding and the generated config's assertion timeout.
   `neoExpect` annotations record this path; these passes count as product passes.
+  `toHaveScreenshot` is the runner-owned exception: Playwright Test owns baseline paths,
+  tolerances, attachments and the pinned stability/comparison loop. A visual receiver
+  supplies only real Neo `screenshot` and `evaluate` calls, including for locators and
+  explicit masks. Its annotation says `playwright-visual/neo-capture`; standalone Neo
+  `expect` retains its clear refusal because it has no TestInfo or baseline store.
   The legacy v2 adapter still uses `expectLoop` and reports its passes separately.
   The historical `--no-expect-loop` flag disables either assertion import adapter.
 - Claw ignores only curation skips whose reason is an uncovered `expectLoop`
@@ -92,7 +97,8 @@ Fidelity costs: Node/V8 replaces QuickJS; one SDK run and profile span a worker;
 These are harness differences, not SDK features.
 
 The 71 previously skipped tests need the following matcher surface. Options and
-expected values are forwarded to Neo, including negative assertion chains.
+expected values are forwarded to Neo, including negative assertion chains, except
+for the runner-owned visual matcher described above.
 
 | Matcher | Tests | Arguments and options used |
 |---|---:|---|

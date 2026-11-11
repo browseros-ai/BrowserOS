@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use serde::Deserialize;
 use serde::de::IgnoredAny;
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 use tokio::time;
 
 use crate::backoff::Backoff;
@@ -26,6 +26,11 @@ use crate::{ErrorCode, PlaywrightError, resolve};
 /// The least time the first poll gets, whatever the script's timeout: a poll takes a few
 /// milliseconds, and an install or a frame hop on the way can take a few hundred.
 const ONE_SHOT_FLOOR: Duration = Duration::from_secs(1);
+
+/// How long a failed matcher that found nothing waits for the body's aria snapshot, after its
+/// timeout has passed: the snapshot only describes the failure, so a page that does not answer
+/// must not hold the error back.
+const ROOT_SNAPSHOT_BUDGET: Duration = Duration::from_secs(1);
 
 /// An upstream expect expression (`FrameExpectParams.expression`), as matchers.ts sends it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
@@ -239,6 +244,8 @@ pub(crate) enum Poll {
         resolved: String,
         /// The compared value; `None` is `undefined`.
         received: Option<Value>,
+        /// The aria snapshot of a poll that failed the matcher, for `matcherResult`.
+        aria_snapshot: Option<String>,
     },
     /// No element matched (or a frame on the way is not there yet).
     Missing,
@@ -333,14 +340,19 @@ impl Expectation {
     /// Polls until the matcher's result differs from `.not`. `poll` runs one probe call and
     /// maps its reply with [`Expectation::poll_of`]; it fails only for what ends the op at
     /// once (a strict violation, an error the engine threw, a stale ref, a gone page).
-    pub(crate) async fn run<F, Fut>(
+    /// `root_snapshot` reads the body's aria snapshot of the frame the matcher started in, for
+    /// a failure that found nothing, as upstream's `Frame._expectInternal` does.
+    pub(crate) async fn run<F, Fut, R, RFut>(
         &self,
         scope: &OpScope<'_>,
         mut poll: F,
+        root_snapshot: R,
     ) -> Result<Value, PlaywrightError>
     where
         F: FnMut() -> Fut,
         Fut: Future<Output = Result<Poll, PlaywrightError>>,
+        R: FnOnce() -> RFut,
+        RFut: Future<Output = Option<String>>,
     {
         let receiver = self.receiver();
         scope.log(matcher_message::title(
@@ -384,7 +396,16 @@ impl Expectation {
             }
             last = Some(polled);
         }
-        Err(self.timed_out(scope, last.as_ref()))
+        // Upstream snapshots the body on each poll that finds nothing; Neo reads it once, for
+        // the failure that reports it.
+        let snapshot = match last.as_ref() {
+            Some(Poll::Missing) => time::timeout(ROOT_SNAPSHOT_BUDGET, root_snapshot())
+                .await
+                .ok()
+                .flatten(),
+            Some(Poll::Ran { .. }) | None => None,
+        };
+        Err(self.timed_out(scope, last.as_ref(), snapshot.as_deref()))
     }
 
     /// One probe reply as a poll, or the failure it ends the op with.
@@ -398,10 +419,12 @@ impl Expectation {
                 matches,
                 resolved,
                 received,
+                aria_snapshot,
             } => Ok(Poll::Ran {
                 matches,
                 resolved: resolved.into_line(),
                 received: received.map(PageText::into_value),
+                aria_snapshot: aria_snapshot.map(PageText::into_line),
             }),
             ProbeReply::None { stale_ref: None } | ProbeReply::Detached => Ok(self.nothing_found()),
             // Upstream throws these from the page, so they end the matcher at once and print
@@ -433,6 +456,7 @@ impl Expectation {
             matches: self.nothing_matches,
             resolved: "0 elements".to_owned(),
             received: Some(received),
+            aria_snapshot: None,
         }
     }
 
@@ -470,22 +494,63 @@ impl Expectation {
     /// website did not reach the state; nothing matched means the script's locator found
     /// nothing. Count and the array forms always read a value, so theirs is the website's. A
     /// page that never answered a poll is the website's too, printed as upstream prints a
-    /// matcher with no result (`Received: undefined`).
-    fn timed_out(&self, scope: &OpScope<'_>, last: Option<&Poll>) -> PlaywrightError {
-        let (code, reported) = match last {
-            Some(Poll::Missing) => (ErrorCode::NoMatch, Reported::Error("element(s) not found")),
-            Some(Poll::Ran { received, .. }) => (
+    /// matcher with no result (`Received: undefined`). `root_snapshot` is the body's snapshot
+    /// [`Expectation::run`] read for a last poll that found nothing.
+    fn timed_out(
+        &self,
+        scope: &OpScope<'_>,
+        last: Option<&Poll>,
+        root_snapshot: Option<&str>,
+    ) -> PlaywrightError {
+        let (code, reported, facts) = match last {
+            Some(Poll::Missing) => (
+                ErrorCode::NoMatch,
+                Reported::Error("element(s) not found"),
+                MatcherFacts {
+                    actual: None,
+                    aria_snapshot: root_snapshot,
+                    timed_out: true,
+                },
+            ),
+            Some(Poll::Ran {
+                received,
+                aria_snapshot,
+                ..
+            }) => (
                 ErrorCode::AssertionFailed,
                 Reported::Received(received.as_ref()),
+                MatcherFacts {
+                    actual: received.as_ref(),
+                    aria_snapshot: aria_snapshot.as_deref(),
+                    timed_out: true,
+                },
             ),
-            None => (ErrorCode::AssertionFailed, Reported::Received(None)),
+            None => (
+                ErrorCode::AssertionFailed,
+                Reported::Received(None),
+                MatcherFacts {
+                    actual: None,
+                    aria_snapshot: None,
+                    timed_out: true,
+                },
+            ),
         };
-        scope.fail_matcher(code, &self.message(reported, scope.timeout()))
+        scope
+            .fail_matcher(code, &self.message(reported, scope.timeout()))
+            .with_matcher(facts.into_value(scope))
     }
 
-    /// A failure that ends the matcher before its timeout, printed as its `Error:` line.
+    /// A failure that ends the matcher before its timeout, printed as its `Error:` line. As
+    /// upstream's, it reports no received value: the engine threw before it compared one.
     fn thrown(&self, scope: &OpScope<'_>, code: ErrorCode, error: &str) -> PlaywrightError {
-        scope.fail_matcher(code, &self.message(Reported::Error(error), None))
+        let facts = MatcherFacts {
+            actual: None,
+            aria_snapshot: None,
+            timed_out: false,
+        };
+        scope
+            .fail_matcher(code, &self.message(Reported::Error(error), None))
+            .with_matcher(facts.into_value(scope))
     }
 
     fn message(&self, reported: Reported<'_>, timed_out: Option<Duration>) -> String {
@@ -504,6 +569,34 @@ impl Expectation {
     }
 }
 
+/// What a failed matcher saw, as the prelude reads it to build Playwright's
+/// `error.matcherResult` (matcherHint.ts at v1.64.1): `actual` is the last compared value
+/// (left out for `undefined`), `ariaSnapshot` the failing poll's snapshot, `log` the call log's
+/// lines, and `timedOut` whether the timeout ended it. The prelude adds what only the script
+/// holds: the matcher's name, `pass`, the expected value and the timeout.
+struct MatcherFacts<'a> {
+    actual: Option<&'a Value>,
+    aria_snapshot: Option<&'a str>,
+    timed_out: bool,
+}
+
+impl MatcherFacts<'_> {
+    fn into_value(self, scope: &OpScope<'_>) -> Value {
+        let mut facts = Map::new();
+        if let Some(actual) = self.actual {
+            facts.insert("actual".to_owned(), actual.clone());
+        }
+        // A poll's snapshot stays as the engine wrote it, `""` included, as upstream's
+        // `received?.ariaSnapshot`; the body fallback arrives already without an empty one.
+        if let Some(snapshot) = self.aria_snapshot {
+            facts.insert("ariaSnapshot".to_owned(), json!(snapshot));
+        }
+        facts.insert("log".to_owned(), json!(scope.log_lines()));
+        facts.insert("timedOut".to_owned(), json!(self.timed_out));
+        Value::Object(facts)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::error::Error;
@@ -516,7 +609,7 @@ mod tests {
     use super::{Expectation, Expression, MatcherArgs, ONE_SHOT_FLOOR, Poll, Subject};
     use crate::op::Op;
     use crate::op_scope::OpScope;
-    use crate::probe::ExpectParams;
+    use crate::probe::{ExpectParams, ProbeReply};
     use crate::target::{CallHeader, Strictness};
     use crate::test_env::TestEnv;
     use crate::{ErrorCode, PlaywrightError};
@@ -632,6 +725,11 @@ mod tests {
         Ok(())
     }
 
+    /// A frame with no body to snapshot.
+    fn no_snapshot() -> future::Ready<Option<String>> {
+        future::ready(None)
+    }
+
     fn visible(scope: &OpScope<'_>) -> Result<Expectation, PlaywrightError> {
         expectation(
             scope,
@@ -659,14 +757,19 @@ mod tests {
         let scope = scope_with_timeout(&env, 1)?;
         let expect = visible(&scope)?;
         let passed = expect
-            .run(&scope, || async {
-                time::sleep(Duration::from_millis(50)).await;
-                Ok(Poll::Ran {
-                    matches: true,
-                    resolved: "<button>Go</button>".to_owned(),
-                    received: Some(json!("visible")),
-                })
-            })
+            .run(
+                &scope,
+                || async {
+                    time::sleep(Duration::from_millis(50)).await;
+                    Ok(Poll::Ran {
+                        matches: true,
+                        resolved: "<button>Go</button>".to_owned(),
+                        received: Some(json!("visible")),
+                        aria_snapshot: None,
+                    })
+                },
+                no_snapshot,
+            )
             .await?;
         assert_eq!(passed, Value::Null);
         Ok(())
@@ -681,7 +784,11 @@ mod tests {
         let expect = visible(&scope)?;
         let started = Instant::now();
         let error = expect
-            .run(&scope, future::pending::<Result<Poll, PlaywrightError>>)
+            .run(
+                &scope,
+                future::pending::<Result<Poll, PlaywrightError>>,
+                no_snapshot,
+            )
             .await
             .err()
             .ok_or("a poll that never answers cannot pass")?;
@@ -697,6 +804,115 @@ mod tests {
                 .contains("\nReceived: undefined\nTimeout:  300ms\n"),
             "{error}"
         );
+        Ok(())
+    }
+
+    /// A failure carries what Playwright's `matcherResult` needs from Rust: the last compared
+    /// value and the failing poll's snapshot; with nothing found, the frame body's snapshot
+    /// instead and no value; and whether the timeout ended it.
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_a_failure_carries_the_matcher_facts() -> Result<(), Box<dyn Error>> {
+        let env = TestEnv::new();
+        let scope = scope_with_timeout(&env, 300)?;
+        let expect = visible(&scope)?;
+        let error = expect
+            .run(
+                &scope,
+                || async {
+                    Ok(Poll::Ran {
+                        matches: false,
+                        resolved: "<div id=\"x\">Hi</div>".to_owned(),
+                        received: Some(json!("hidden")),
+                        aria_snapshot: Some("- text: Hi".to_owned()),
+                    })
+                },
+                || future::ready(Some("- heading \"Page\" [level=1]".to_owned())),
+            )
+            .await
+            .err()
+            .ok_or("a hidden element fails toBeVisible")?;
+        let facts = error.matcher_details().ok_or("the failure carries facts")?;
+        assert_eq!(facts["actual"], json!("hidden"));
+        assert_eq!(
+            facts["ariaSnapshot"],
+            json!("- text: Hi"),
+            "the poll's own snapshot"
+        );
+        assert_eq!(facts["timedOut"], json!(true));
+        assert!(
+            facts["log"].as_array().is_some_and(|log| !log.is_empty()),
+            "{facts}"
+        );
+
+        let missing = expect
+            .run(
+                &scope,
+                || async { Ok(Poll::Missing) },
+                || future::ready(Some("- heading \"Page\" [level=1]".to_owned())),
+            )
+            .await
+            .err()
+            .ok_or("nothing there fails toBeVisible")?;
+        let facts = missing
+            .matcher_details()
+            .ok_or("the failure carries facts")?;
+        assert_eq!(facts.get("actual"), None, "nothing was compared");
+        assert_eq!(facts["ariaSnapshot"], json!("- heading \"Page\" [level=1]"));
+
+        let bare = expect
+            .run(&scope, || async { Ok(Poll::Missing) }, no_snapshot)
+            .await
+            .err()
+            .ok_or("nothing there fails toBeVisible")?;
+        let facts = bare.matcher_details().ok_or("the failure carries facts")?;
+        assert_eq!(
+            facts.get("ariaSnapshot"),
+            None,
+            "a frame without a body adds none"
+        );
+
+        let empty = expect
+            .run(
+                &scope,
+                || async {
+                    Ok(Poll::Ran {
+                        matches: false,
+                        resolved: "<div></div>".to_owned(),
+                        received: Some(json!("hidden")),
+                        aria_snapshot: Some(String::new()),
+                    })
+                },
+                no_snapshot,
+            )
+            .await
+            .err()
+            .ok_or("a hidden element fails toBeVisible")?;
+        let facts = empty.matcher_details().ok_or("the failure carries facts")?;
+        assert_eq!(
+            facts["ariaSnapshot"],
+            json!(""),
+            "a poll's empty snapshot stays"
+        );
+        Ok(())
+    }
+
+    /// The engine throwing ends the matcher before its timeout, with no value compared.
+    #[tokio::test]
+    async fn tests_that_a_thrown_failure_carries_no_value() -> Result<(), Box<dyn Error>> {
+        let env = TestEnv::new();
+        let scope = locator_scope(&env)?;
+        let expect = visible(&scope)?;
+        let reply: ProbeReply = serde_json::from_value(
+            json!({ "kind": "strict", "message": "strict mode violation: 2 elements" }),
+        )?;
+        let error = expect
+            .poll_of(&scope, reply)
+            .err()
+            .ok_or("a strict violation ends the matcher")?;
+        let facts = error.matcher_details().ok_or("the failure carries facts")?;
+        assert_eq!(facts.get("actual"), None);
+        assert_eq!(facts.get("ariaSnapshot"), None);
+        assert_eq!(facts["timedOut"], json!(false));
         Ok(())
     }
 

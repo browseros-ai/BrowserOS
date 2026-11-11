@@ -23,7 +23,7 @@ import {
   fromPageValue,
   pageCall,
 } from './evaluation'
-import { inputFiles, withClientErrors } from './files'
+import { dropFiles, inputFiles, withClientErrors } from './files'
 import { FrameLocator, Locator, testIdAttributeName } from './locator'
 import type { OpName } from './ops.generated'
 import {
@@ -900,6 +900,34 @@ export class Frame extends EventEmitter {
     )
   }
 
+  async _drop(
+    selector: string,
+    payload: { files?: unknown; data?: Record<string, string> },
+    options: TimeoutOption &
+      SignalOption & { position?: { x: number; y: number } },
+  ): Promise<void> {
+    const api = 'locator.drop'
+    const files =
+      payload.files === undefined ? undefined : dropFiles(api, payload.files)
+    await withClientErrors(api, () =>
+      this._selectorOp(
+        'locator.drop',
+        api,
+        selector,
+        true,
+        this._wait(api, options),
+        {
+          files,
+          data: Object.entries(payload.data ?? {}).map(([mimeType, value]) => ({
+            mimeType,
+            value,
+          })),
+          position: options.position,
+        },
+      ),
+    )
+  }
+
   async _setInputFiles(
     api: string,
     selector: string,
@@ -1358,7 +1386,13 @@ export class Frame extends EventEmitter {
     arg: unknown,
     options: EvaluateOptions | undefined,
   ): Promise<unknown> {
-    const script = pageCall(api, 'frame', pageFunction, arg, options)
+    const script = await this._page._evaluationScript(
+      api,
+      'frame',
+      pageFunction,
+      arg,
+      options,
+    )
     const { value: result, observed } = await invokeObserved(
       'page.evaluate',
       this._call(api, 0),

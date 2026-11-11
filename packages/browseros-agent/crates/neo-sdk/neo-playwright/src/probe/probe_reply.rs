@@ -22,7 +22,7 @@ use crate::world::{FrameSeq, Pin};
 /// contract: a world keeps the probe an earlier build installed, and the install replaces that
 /// probe only when its number differs (`engine_source`), so a shape changed under the same
 /// number reaches this build in the old shape. The lock's test catches a change without a bump.
-pub(crate) const PROBE_PROTOCOL: u32 = 18;
+pub(crate) const PROBE_PROTOCOL: u32 = 21;
 
 /// One reply; `kind` is the tag. Any request may also answer `error`, and `uninstalled` when
 /// the world has no booted probe.
@@ -84,6 +84,9 @@ pub(crate) enum ProbeReply {
         point: Point,
         in_view: bool,
         transformed: bool,
+        /// The original element's border width plus explicit position, not a retarget's rect.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        border_offset: Option<Point>,
     },
     /// Upstream's description of what intercepts pointer events: the page's own markup.
     Covered {
@@ -132,12 +135,15 @@ pub(crate) enum ProbeReply {
     },
     /// One `expect` poll: the matcher's own result before `.not`, upstream's call-log text for
     /// what the locator resolved to, the value it compared (`None` is JavaScript's
-    /// `undefined`, which leaves the field out; `null` stays a value).
+    /// `undefined`, which leaves the field out; `null` stays a value), and, on a poll that
+    /// fails the matcher, the aria snapshot upstream puts in `error.matcherResult`.
     Expect {
         matches: bool,
         resolved: PageText,
         #[serde(default, deserialize_with = "present")]
         received: Option<PageText>,
+        #[serde(default)]
+        aria_snapshot: Option<PageText>,
     },
     UrlMatch {
         matches: bool,

@@ -11,7 +11,7 @@ import {
   InjectedScript,
 } from '../../../neo-playwright/third_party/playwright/packages/injected/src/injectedScript'
 import type { RefMap } from './aria-ref'
-import type { ErrorClass, ErrorReply, Pin } from './protocol'
+import type { ErrorClass, Pin } from './protocol'
 
 /** The state a boot builds. A boot with another epoch builds a new one (see index.ts). */
 export type World = {
@@ -23,13 +23,6 @@ export type World = {
   readonly pins: Pins
   readonly refs: RefMap
 }
-
-/** The answer of every request (or request kind) a later unit implements. */
-export const notBuilt = (): ErrorReply => ({
-  kind: 'error',
-  class: 'internal',
-  message: 'not built yet',
-})
 
 /**
  * A failure the probe classifies itself. Probe code throws only these, because index.ts reads
@@ -192,6 +185,32 @@ export function expectChecks(injected: InjectedScript): ExpectChecks {
     every: (elements, params) =>
       Reflect.apply(every, injected, [elements, params]),
   }
+}
+
+/**
+ * The aria snapshot a failing poll of `element` reports (upstream's private
+ * `InjectedScript._ariaSnapshotForExpect` at v1.64.1): the element's subtree for `toHaveText`
+ * and `toContainText`, its own line for the other property matchers, the body when the element
+ * or its frame is hidden or the matcher is a page matcher, and none for count or the arrays.
+ */
+export function expectFailureSnapshot(
+  injected: InjectedScript,
+  element: Element,
+  params: FrameExpectParams,
+  frameVisible: boolean,
+): string | undefined {
+  const snapshot: unknown = Reflect.get(injected, '_ariaSnapshotForExpect')
+  if (typeof snapshot !== 'function')
+    throw new ProbeError(
+      'internal',
+      'the vendored InjectedScript has no _ariaSnapshotForExpect',
+    )
+  const text: unknown = Reflect.apply(snapshot, injected, [
+    element,
+    params,
+    frameVisible,
+  ])
+  return typeof text === 'string' ? text : undefined
 }
 
 /** The `src` of an `<iframe>` or `<frame>`; undefined for any other element. */

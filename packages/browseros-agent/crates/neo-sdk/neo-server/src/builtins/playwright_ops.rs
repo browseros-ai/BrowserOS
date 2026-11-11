@@ -67,19 +67,25 @@ const PLAYWRIGHT_API: &str = "Playwright's API on `page`, `context` and `browser
     `count`, `isVisible`, `page.content()`, `page.title()`), actions that wait until the \
     element is actionable (`click`, `dblclick`, `hover`, `fill`, `clear`, `press`, \
     `pressSequentially`, `check`, `uncheck`, `setChecked`, `selectOption`, `selectText`, \
-    `focus`, `blur`, `dragTo`, `dispatchEvent`, `scrollIntoViewIfNeeded`; no `tap`), \
+    `focus`, `blur`, `dragTo`, `drop`, `dispatchEvent`, `scrollIntoViewIfNeeded`; no `tap`), \
     `page.keyboard` (`press`, `type`, `insertText`, `down`, `up`), `page.mouse` (`move`, \
-    `down`, `up`, `click`, `dblclick`, `wheel`), navigation (`goto`, `reload`, `waitForURL`, \
-    `waitForLoadState`), scripts in the page's main world (`page.evaluate`, \
+    `down`, `up`, `click`, `dblclick`, `wheel`), navigation (`goto`, `reload`, `goBack`, \
+    `goForward`, `waitForURL`, `waitForLoadState`, `waitForNavigation`), scripts in the page's \
+    main world (`page.evaluate`, \
     `page.waitForFunction`, `locator.evaluate`, `locator.evaluateAll`, \
     `locator.waitForFunction`, `elementHandle.evaluate`, \
     and `$eval` and `$$eval` on a page, frame or element handle; a `frame` form runs in its \
     frame, a child frame too) with Playwright's values, arguments, element handles and errors, \
-    `page.emulateMedia` (per page across runs and navigations), \
+    `page.emulateMedia` (per page across runs and navigations), `page.setViewportSize` (the \
+    tab keeps the size in later runs, until it closes), \
     `page.addScriptTag` and `page.addStyleTag` (also on frames), returning element handles, \
     `page.setContent` and `frame.setContent`, whose HTML's scripts run there too, init scripts \
     (`page.addInitScript`, `context.addInitScript`) that every new document runs in its main \
-    world, `screenshot` and `pdf`, events (`page.on`, `waitForEvent`), downloads \
+    world, bindings the page calls back into the script with (`exposeBinding`, \
+    `exposeFunction`, on a page or the context, and the `exposeFunctions` option of \
+    `addInitScript` and of `evaluate`; the prelude answers each call with \
+    `bindingCall.resolve`), \
+    `screenshot` and `pdf`, events (`page.on`, `waitForEvent`), downloads \
     (`download.path()` waits for the file and returns where the browser saved it, which a later \
     run can upload with `setInputFiles`; `saveAs(path)` copies it; `failure()`), and `expect`: \
     retrying locator matchers (`toBeVisible`, `toBeChecked`, `toHaveText`, `toContainText`, \
@@ -101,10 +107,14 @@ const PLAYWRIGHT_API: &str = "Playwright's API on `page`, `context` and `browser
     file Neo's process can read, as Playwright does \
     (a relative path resolves against Neo's working directory): the caller sandboxes the \
     filesystem. `{ name, mimeType, buffer }` payloads need no file and total under 10 MiB a \
-    call. A directory upload needs its tab in front. An init script stays registered until the \
-    run ends, then its tab no longer runs it; a context's init script reaches each tab before \
-    the run's first write to it, so a popup's first document and cross-site iframes run \
-    without it; `exposeFunctions` is not available.";
+    call. A directory upload needs its tab in front, and the tabs Neo opens for an agent stay \
+    in the background (`bringToFront` is refused). An init script or a binding stays \
+    registered until the run ends, then its tab no longer has it; a context's reaches each tab \
+    before the run's first write to it, so a popup's first document and cross-site iframes run \
+    without it. A page's call of a binding reaches the script through the event pump, so a \
+    call the page does not await (from an event handler) may run after the op that caused it \
+    returned. A function `evaluate` passes stays exposed until the run ends; `evaluateHandle` \
+    has no `exposeFunctions`.";
 
 /// At a run's end, after its ops drained: removes the init scripts its ops registered from every
 /// tab, awaiting each removal (neo-playwright's `RunState::remove_init_scripts`). The run service
@@ -217,7 +227,11 @@ impl Method for PlaywrightOp {
         let env = OpCtxEnv::new(op, self.facade.hosted_mode());
         let result = op
             .race_classified(playwright.invoke(&env, self.op, input))
-            .await?;
+            .await;
+        // Read once the op ended, failed or not: by then the pump replies that carry the events
+        // before it are counted (`Playwright::events_before_reply`).
+        op.answer_after_pump(env.run_state().pump_replies());
+        let result = result?;
         pages.report(op, page, &result);
         let value = result.map_err(|error| leaf_error(&error))?;
         self.events.release(op, value)
@@ -637,6 +651,10 @@ pub(super) fn leaf_error(error: &PlaywrightError) -> LeafError {
     let failure = match error.timed_out() {
         TimedOut::Yes => failure.timed_out(),
         TimedOut::No => failure,
+    };
+    let failure = match error.matcher_details() {
+        Some(facts) => failure.with_matcher(facts.clone()),
+        None => failure,
     };
     match error.answer() {
         Answer::Definite => LeafError::definite(failure),

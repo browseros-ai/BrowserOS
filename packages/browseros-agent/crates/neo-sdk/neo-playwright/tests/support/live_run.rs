@@ -44,6 +44,14 @@ pub(crate) enum Intercept {
 /// The host's answer to the next `recheck`, which the [`Tap`] can set; `None` allows.
 type Policy = Arc<Mutex<Option<Refusal>>>;
 
+/// The same owned browser for SDK operations and independent fixture observations.
+fn cdp_port() -> u16 {
+    env::var("BROWSEROS_CDP_PORT")
+        .ok()
+        .and_then(|port| port.parse().ok())
+        .unwrap_or(9005)
+}
+
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
@@ -168,6 +176,24 @@ impl CdpConnection for Tap {
         self.browser.events_targeted(method)
     }
 
+    // The counts the watcher's fence reads: without them every op would skip the wait for
+    // events that came before its reply (`Playwright::events_before_reply`).
+    fn events_broadcast(&self) -> u64 {
+        self.browser.events_broadcast()
+    }
+
+    fn events_counted(&self) -> (broadcast::Receiver<CdpEvent>, u64) {
+        self.browser.events_counted()
+    }
+
+    fn events_targeted_counted(&self, method: &str) -> (mpsc::UnboundedReceiver<CdpEvent>, u64) {
+        self.browser.events_targeted_counted(method)
+    }
+
+    fn events_targeted_delivered(&self, method: &str) -> u64 {
+        self.browser.events_targeted_delivered(method)
+    }
+
     fn is_connected(&self) -> bool {
         self.browser.is_connected()
     }
@@ -254,10 +280,7 @@ impl LiveRun {
     pub(crate) async fn connect_through(
         wrap: impl FnOnce(CdpClient) -> Arc<dyn CdpConnection>,
     ) -> TestResult<Self> {
-        let port = env::var("BROWSEROS_CDP_PORT")
-            .ok()
-            .and_then(|port| port.parse().ok())
-            .unwrap_or(9005);
+        let port = cdp_port();
         let client = CdpClient::connect(ConnectOptions::new(port)).await?;
         let policy = Policy::default();
         // The tap sits above whatever `wrap` built, so a test's interception and its own
@@ -530,39 +553,50 @@ impl LiveRun {
             })
             .and_then(|frame| frame.get("id").cloned())
             .ok_or(format!("no frame on {url_part} in this page"))?;
-        let attached = self
-            .browser
-            .cdp(
-                "Target.attachToTarget",
-                json!({ "targetId": target, "flatten": true }),
-                None,
+        // This is an independent observation of the fixture, not an SDK session. Sharing
+        // the SDK socket makes its frame initializer adopt our temporary attach, then race
+        // its detach; a pending setup reply can stall later iframe startup on that socket.
+        let client = Arc::new(CdpClient::connect(ConnectOptions::new(cdp_port())).await?);
+        let transport: Arc<dyn CdpConnection> = Arc::<CdpClient>::clone(&client);
+        let result: TestResult<Value> = async {
+            let attached = transport
+                .send(
+                    "Target.attachToTarget",
+                    json!({ "targetId": target, "flatten": true }),
+                    None,
+                )
+                .await?;
+            let session = attached
+                .get("sessionId")
+                .and_then(Value::as_str)
+                .ok_or("no session id")?
+                .to_owned();
+            let reply = ProtocolSession::for_session(
+                Arc::clone(&transport),
+                SessionId::from(session.as_str()),
             )
-            .await?;
-        let session = attached
-            .get("sessionId")
-            .and_then(Value::as_str)
-            .ok_or("no session id")?
-            .to_owned();
-        let reply = self
-            .browser
-            .protocol_session(SessionId::from(session.as_str()))
             .send_value(
                 "Runtime.evaluate",
                 json!({ "expression": expression, "returnByValue": true }),
             )
             .await;
-        let _detached = self
-            .browser
-            .cdp(
-                "Target.detachFromTarget",
-                json!({ "sessionId": session }),
-                None,
-            )
-            .await;
-        Ok(reply?
-            .pointer("/result/value")
-            .cloned()
-            .unwrap_or(Value::Null))
+            let _detached = transport
+                .send(
+                    "Target.detachFromTarget",
+                    json!({ "sessionId": session }),
+                    None,
+                )
+                .await;
+            Ok(reply?
+                .pointer("/result/value")
+                .cloned()
+                .unwrap_or(Value::Null))
+        }
+        .await;
+        // Dropping CdpClient does not stop its reader/supervisor tasks. Disconnect on every
+        // result path, including a failed attach, before returning the fixture observation.
+        client.disconnect().await;
+        result
     }
 
     /// What the crate asked of the host so far.
