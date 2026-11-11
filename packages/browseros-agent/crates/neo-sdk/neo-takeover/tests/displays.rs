@@ -1,6 +1,6 @@
 //! Displays as the service's display route uses them. A test plays the viewer through
 //! `Admitted::serve`; the fake Xvnc records what reaches it; the browser is core's scripted
-//! connection with tabs 3 and 4 open and tab 3 in front, whose sweep reads take a moment;
+//! connection with tabs 3 and 4 open and tab 3 in front;
 //! `Privacy` is real, over a private-flag store the test can hold or fail, which commits through
 //! the trace writer as the service's does, so `tab.private` reaches the front-tab watch; and
 //! follow reads a real trace store and writer. A shared log orders what the test's commit and the
@@ -12,24 +12,23 @@
 //! use real time. Follow's pause is re-checked each second, so its test takes a few.
 
 use browseros_cdp::{CdpError, CdpEvent};
-use browseros_core::sensitive_fields::JOURNAL_BINDING;
 use browseros_core::testing::{TestCall, TestConnection, cdp_error};
 use browseros_core::viewport::Viewports;
 use browseros_core::{BrowserSession, BrowserSessionHooks, CdpConnection, SessionId, TabId};
 use bytes::Bytes;
 use futures_util::FutureExt;
 use futures_util::future::BoxFuture;
-use neo_takeover::testing::{FakeXvnc, NoStamps, owner_presses};
+use neo_takeover::testing::{FakeXvnc, NoStamps};
 use neo_takeover::{
     Admitted, BrowserTabs, DisplayBinding, DisplayEnd, DisplayRequest, Displays, Follow, Front,
-    FrontError, Journal, LockBinding, LockTtl, Locks, OwnerHasScreen, PartError, Reads,
-    ScreenHolder, ScreenSize,
+    FrontError, LockBinding, LockTtl, Locks, OwnerHasScreen, PartError, Reads, ScreenHolder,
+    ScreenSize,
 };
 use neo_trace::{
     Delivery, Effect, EpochMillis, OperationEnded, OperationId, OperationKind, OperationStarted,
     Outcome, Privacy, PrivacyRecord, PrivacyStore, PrivateReason, RedactionLimits, Redactor, RunId,
-    RunStarted, SecretSet, SecretSetConfig, SecretSource, TargetSensitivity, TaskId, TraceError,
-    TraceSink, TraceStore, WriterConfig, spawn_writer,
+    RunStarted, SecretSet, SecretSetConfig, TargetSensitivity, TaskId, TraceError, TraceSink,
+    TraceStore, WriterConfig, spawn_writer,
 };
 use serde_json::{Value, json};
 use std::collections::HashMap;
@@ -63,12 +62,6 @@ const POLLS: Duration = Duration::from_millis(600);
 /// The front-tab watch polls every 250 ms. A view that closes this soon after a poll was closed by
 /// something other than the next poll.
 const BEFORE_THE_NEXT_POLL: Duration = Duration::from_millis(150);
-
-/// The seal's read of a frame's sensitive fields, which only a sweep sends.
-const SWEEP_READ: &str = "__clawSeal.sensitiveValues()";
-
-/// How long the browser takes to answer a sweep's read.
-const SWEEP_READ_TIME: Duration = Duration::from_millis(300);
 
 /// The version, security type 1, and a ClientInit that asks for exclusive access (0).
 const HANDSHAKE: &[u8] = b"RFB 003.008\n\x01\x00";
@@ -122,7 +115,7 @@ fn tab(id: i64, front: i64) -> Value {
 }
 
 /// A browser with `tabs` open and `front` in front, answering what core's page attach, the
-/// journal, the sweep and follow send. Every frame seals; a sweep reads no values.
+/// follow send.
 fn browser(tabs: &[i64], front: i64) -> Result<Arc<TestConnection>, BoxError> {
     let connection = TestConnection::new(Vec::new());
     open_tabs(&connection, tabs, front)?;
@@ -133,28 +126,10 @@ fn browser(tabs: &[i64], front: i64) -> Result<Arc<TestConnection>, BoxError> {
         "Accessibility.enable",
         "Runtime.runIfWaitingForDebugger",
         "Target.setAutoAttach",
-        "Runtime.addBinding",
-        "Page.removeScriptToEvaluateOnNewDocument",
         "Browser.activateTab",
     ] {
         connection.always(method, json!({}))?;
     }
-    connection.always(
-        "Page.addScriptToEvaluateOnNewDocument",
-        json!({ "identifier": "journal" }),
-    )?;
-    connection.always(
-        "Page.getFrameTree",
-        json!({ "frameTree": { "frame": { "id": "main" } } }),
-    )?;
-    connection.always(
-        "DOM.getDocument",
-        json!({ "root": { "nodeName": "#document" } }),
-    )?;
-    connection.always(
-        "Page.createIsolatedWorld",
-        json!({ "executionContextId": 11 }),
-    )?;
     connection.always(
         "Runtime.evaluate",
         json!({ "result": { "type": "number", "value": 1 } }),
@@ -197,13 +172,9 @@ struct Paint {
     xvnc: Arc<FakeXvnc>,
 }
 
-/// The scripted browser, with the one reply a canned script cannot give: a sweep's read of a
-/// frame's fields answers what `fields` holds, after a moment, as Chromium does. So a test can
-/// tell a sweep that was waited for from one that was not.
+/// The scripted browser with activation gates and a shared log for ordering assertions.
 struct Browser {
     script: Arc<TestConnection>,
-    /// What every frame's password, card and code fields hold.
-    fields: Mutex<Vec<String>>,
     /// The tabs a test listed with [`Browser::list_tabs`]. Once set, `Browser.activateTab`
     /// brings its tab to the front of them, as Chromium does; until then the front only moves
     /// when a test moves it.
@@ -222,7 +193,6 @@ impl Browser {
     fn new(script: Arc<TestConnection>) -> Self {
         Self {
             script,
-            fields: Mutex::default(),
             listed: Mutex::default(),
             activations: watch::channel(true).0,
             log: Log::default(),
@@ -260,7 +230,6 @@ impl Browser {
         params: Value,
         session: Option<&SessionId>,
     ) -> Result<Value, CdpError> {
-        let sweep_read = method == "Runtime.evaluate" && params["expression"] == SWEEP_READ;
         let activated = (method == "Browser.activateTab")
             .then(|| params["tabId"].as_i64())
             .flatten();
@@ -294,16 +263,7 @@ impl Browser {
                 message: error.to_string(),
             })?;
         }
-        if !sweep_read {
-            return Ok(reply);
-        }
-        tokio::time::sleep(SWEEP_READ_TIME).await;
-        let fields = self
-            .fields
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clone();
-        Ok(json!({ "result": { "type": "object", "value": fields } }))
+        Ok(reply)
     }
 }
 
@@ -435,8 +395,6 @@ struct Harness {
     privacy: Arc<Privacy>,
     sink: TraceSink,
     locks: Arc<Locks>,
-    /// The journal the displays arm, and whose owner presses their control displays count.
-    journal: Journal,
     displays: Arc<Displays>,
 }
 
@@ -472,13 +430,11 @@ async fn harness_at(xvnc: FakeXvnc, addr: SocketAddr) -> Result<Harness, BoxErro
         Arc::new(Viewports::default()),
     );
     let locks = Locks::new(store.clone(), sink.clone());
-    let journal = Journal::new(tabs.clone(), secrets);
     let displays = Displays::new(
         addr,
         tabs,
         Arc::clone(&privacy),
         Arc::new(NoStamps),
-        journal.clone(),
         Arc::clone(&locks),
         sink.clone(),
         store,
@@ -491,7 +447,6 @@ async fn harness_at(xvnc: FakeXvnc, addr: SocketAddr) -> Result<Harness, BoxErro
         privacy,
         sink,
         locks,
-        journal,
         displays,
     })
 }
@@ -536,33 +491,6 @@ impl Harness {
             .make_private(TabId(tab), PrivateReason::Host, EpochMillis::now())
             .await?;
         Ok(())
-    }
-
-    /// A session a journal is armed on: one that got the journal's new-document script.
-    fn armed_session(&self) -> Result<SessionId, BoxError> {
-        self.calls("Page.addScriptToEvaluateOnNewDocument")?
-            .into_iter()
-            .find_map(|call| call.session)
-            .ok_or_else(|| "no journal is armed".into())
-    }
-
-    /// A real key puts `value` in a sensitive field on `session`: the seal's trusted entry.
-    fn key_enters(&self, session: &SessionId, value: &str) {
-        let payload = json!({ "kind": "password", "value": value, "trusted": true }).to_string();
-        self.browser.script.emit(
-            "Runtime.bindingCalled",
-            json!({ "name": JOURNAL_BINDING, "payload": payload, "executionContextId": 11 }),
-            Some(session.clone()),
-        );
-    }
-
-    /// The sweep's reads of a frame's sensitive fields.
-    fn sweeps(&self) -> Result<usize, BoxError> {
-        Ok(self
-            .calls("Runtime.evaluate")?
-            .iter()
-            .filter(|call| call.params["expression"] == SWEEP_READ)
-            .count())
     }
 
     /// What happened so far, in order.
@@ -992,11 +920,7 @@ async fn a_failed_commit_drops_that_input_and_the_next_input_tries_again() -> Te
         "key a never reached Xvnc"
     );
     assert_eq!(h.flags.committed(), [TabId(3), TabId(4)]);
-    assert_eq!(
-        owner_presses(&h.journal),
-        1,
-        "the dropped key is not a press of the owner's"
-    );
+
     Ok(())
 }
 
@@ -1068,38 +992,22 @@ async fn a_screen_hold_closes_open_views_and_refuses_new_ones_until_dropped() ->
 }
 
 #[tokio::test]
-async fn a_closed_binding_ends_its_display_after_the_close_sweep_of_every_tab() -> TestResult {
+async fn a_closed_binding_stops_its_display_without_reading_owner_input() -> TestResult {
     let h = harness().await?;
     let binding = DisplayBinding::new();
     let control = h.control(Some(binding.clone())).await?;
     control.send(HANDSHAKE);
     control.send(&KEY_A);
     h.received(0, 4).await?;
-    assert_eq!(h.sweeps()?, 0);
-    // A value that reached a field with no input event the journal saw, such as autofill.
-    *h.browser
-        .fields
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner) = vec!["FILLED_4b1d".to_owned()];
 
     timeout(WITHIN, binding.close()).await?;
-    assert_eq!(
-        h.sweeps()?,
-        2,
-        "close waits for the sweep of both open tabs"
-    );
-    let mut result = "the field held FILLED_4b1d".to_owned();
-    assert!(
-        h.privacy.secrets().mask_str(&mut result),
-        "the sweep registered what the fields held before close returned"
-    );
-    assert!(
-        !h.calls("Page.removeScriptToEvaluateOnNewDocument")?
-            .is_empty(),
-        "and for the journal's disarm"
-    );
     assert_eq!(control.ended().await?, DisplayEnd::Released);
     assert!(binding.is_closed());
+    assert!(
+        h.calls("Runtime.evaluate")?.is_empty(),
+        "control forwards owner input without installing a recorder or reading fields at close"
+    );
+    assert!(h.calls("Page.addScriptToEvaluateOnNewDocument")?.is_empty());
     Ok(())
 }
 
@@ -1116,50 +1024,9 @@ async fn a_display_bound_after_its_binding_closed_ends_at_once() -> TestResult {
     Ok(())
 }
 
+/// Control forwards both key encodings, clipboard messages and pointer input unchanged.
 #[tokio::test]
-async fn a_control_display_arms_the_journal_on_every_tab_and_on_tabs_that_open() -> TestResult {
-    let h = harness().await?;
-    let mut control = h.control(None).await?;
-    let armed = |h: &Harness| -> Result<Vec<String>, BoxError> {
-        let mut sessions = h
-            .calls("Page.addScriptToEvaluateOnNewDocument")?
-            .into_iter()
-            .filter_map(|call| call.session.map(|session| session.0))
-            .collect::<Vec<_>>();
-        sessions.sort();
-        sessions.dedup();
-        Ok(sessions)
-    };
-    assert_eq!(armed(&h)?.len(), 2, "tabs 3 and 4, each on its own session");
-
-    open_tabs(&h.browser.script, &[3, 4, 5], 3)?;
-    h.displays.tab_opened(TabId(5)).await;
-    assert_eq!(
-        armed(&h)?.len(),
-        3,
-        "and tab 5, which opened while it was open"
-    );
-
-    control.leave();
-    assert_eq!(control.ended().await?, DisplayEnd::ViewerLeft);
-    assert_eq!(
-        h.sweeps()?,
-        0,
-        "a display that took no input does not sweep"
-    );
-    let removed = h.calls("Page.removeScriptToEvaluateOnNewDocument")?.len();
-    assert_eq!(removed, 3, "its end disarmed the journal on every session");
-
-    h.displays.tab_opened(TabId(6)).await;
-    assert_eq!(armed(&h)?.len(), 3, "no display is open to arm a new tab");
-    Ok(())
-}
-
-/// sdk-traces decision 54: Neo counts the owner's presses outside the page, as a control display
-/// sends them on to Xvnc. Each key-down, as either key message, and each paste is one press. A
-/// key-up, a click and a hover move are none.
-#[tokio::test]
-async fn a_control_display_counts_each_key_down_and_paste_it_sends_on() -> TestResult {
+async fn a_control_display_forwards_keys_pastes_and_pointer_input() -> TestResult {
     let h = harness().await?;
     let control = h.control(None).await?;
     control.send(HANDSHAKE);
@@ -1183,17 +1050,13 @@ async fn a_control_display_counts_each_key_down_and_paste_it_sends_on() -> TestR
         expected,
         "all of it reached Xvnc"
     );
-    assert_eq!(
-        owner_presses(&h.journal),
-        4,
-        "2 key-downs and 2 pastes; the key-ups, the click and the hover move are not presses"
-    );
+
     Ok(())
 }
 
-/// A view drops its viewer's keys and pastes, so none of them is a press of the owner's.
+/// A view drops input while forwarding update requests.
 #[tokio::test]
-async fn a_view_display_counts_no_press() -> TestResult {
+async fn a_view_display_drops_keys_and_pastes() -> TestResult {
     let h = harness().await?;
     let view = h.view(None).await?;
     view.send(HANDSHAKE);
@@ -1206,40 +1069,6 @@ async fn a_view_display_counts_no_press() -> TestResult {
         h.received(0, expected.len()).await?,
         expected,
         "the update request passed, so every input before it was judged"
-    );
-    assert_eq!(owner_presses(&h.journal), 0);
-    Ok(())
-}
-
-/// Through a control display, end to end: the trusted entries its own journal takes are the
-/// owner's while the keys the display sent pay for them. The entry past them, such as one an
-/// agent's key over CDP makes, is a page value.
-#[tokio::test]
-async fn a_control_displays_journal_makes_owner_values_only_from_the_keys_it_sent() -> TestResult {
-    let h = harness().await?;
-    let mut control = h.control(None).await?;
-    control.send(HANDSHAKE);
-    let sent = [&QEMU_A[..], &QEMU_A_UP, &KEY_B, &KEY_A_UP];
-    for message in sent {
-        control.send(message);
-    }
-    h.received(0, handshake_received().len() + sent.len())
-        .await?;
-    let session = h.armed_session()?;
-    for value in ["OWNERKEY_1v8q", "OWNERKEY_2j5t", "AGENTKEY_3p6m"] {
-        h.key_enters(&session, value);
-    }
-
-    control.leave();
-    assert_eq!(control.ended().await?, DisplayEnd::ViewerLeft);
-    let secrets = h.privacy.secrets();
-    assert_eq!(
-        (
-            secrets.count_from(SecretSource::Owner),
-            secrets.count_from(SecretSource::Page)
-        ),
-        (2, 1),
-        "two key-downs pay for two owner values (owner, page)"
     );
     Ok(())
 }
@@ -1574,28 +1403,16 @@ async fn the_tab_in_front_is_read_only_while_a_view_is_open() -> TestResult {
 }
 
 #[tokio::test]
-async fn a_control_display_is_refused_when_the_tabs_cannot_be_listed() -> TestResult {
+async fn a_control_display_can_open_when_the_tabs_cannot_be_listed() -> TestResult {
     let h = harness().await?;
     h.browser
         .script
         .always("Browser.getTabs", cdp_error("Browser closed"))?;
-    assert!(
-        matches!(
-            h.displays
-                .admit(DisplayRequest::Control { binding: None })
-                .await,
-            Err(PartError::Browser(_))
-        ),
-        "its journal could not be armed on the open tabs"
-    );
-    h.privacy.tab_opened(TabId(9), EpochMillis::now()).await?;
-    assert!(
-        h.privacy.is_private(TabId(9)).is_none(),
-        "the refused display left no control display open, which would start new tabs private"
-    );
-
-    open_tabs(&h.browser.script, &[3, 4], 3)?;
-    h.control(None).await?;
+    let mut control = h.control(None).await?;
+    control.send(HANDSHAKE);
+    assert_eq!(h.received(0, 3).await?, handshake_received());
+    control.leave();
+    assert_eq!(control.ended().await?, DisplayEnd::ViewerLeft);
     Ok(())
 }
 

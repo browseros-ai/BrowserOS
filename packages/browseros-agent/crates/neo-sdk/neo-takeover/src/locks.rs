@@ -97,8 +97,8 @@ pub enum LockTarget {
 pub enum LockBinding {
     /// The host took it directly (`POST /v1/locks`); the host releases it.
     Host,
-    /// A takeover took it. Only that takeover's release ends it early, after the sweep has read
-    /// what the owner typed (decision 29).
+    /// A takeover took it. Only that takeover's release ends it early, after the owner's
+    /// display stops and the fit is restored (decision 29).
     Takeover(TakeoverId),
 }
 
@@ -301,7 +301,7 @@ impl Locks {
     }
 
     /// Ends `id` for `by`. Only the binding that took a lock ends it before its TTL: a host
-    /// that ended a takeover's lock would let the agent act before that takeover's sweep.
+    /// that ended a takeover's lock would let the agent act before that takeover restores its fit.
     fn unlock(&self, id: LockId, by: LockBinding) -> Result<Lock, PartError> {
         let mut table = self.table();
         let lock = table.get(id).cloned().ok_or(PartError::NotFound)?;

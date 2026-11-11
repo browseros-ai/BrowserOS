@@ -35,7 +35,6 @@ async fn next_takeover_state(stream: &mut EventStream) -> Result<Sse, BoxError> 
 async fn a_takeover_starts_and_is_released_through_the_routes() -> TestResult {
     let h = harness().await?;
     h.browser.open_tab(12);
-    h.browser.type_into_fields(&["OWNER_TYPED_51c2"]);
     let takeover = start(
         &h,
         json!({"tabId": 12, "viewer": {"width": 390, "height": 844}, "ttlSeconds": 600}),
@@ -95,11 +94,6 @@ async fn a_takeover_starts_and_is_released_through_the_routes() -> TestResult {
     );
     assert!(h.get(&lock).await?.body["releasedAt"].is_i64());
     assert!(h.get(&fit).await?.body["restoredAt"].is_i64());
-    let mut result = "the field held OWNER_TYPED_51c2".to_owned();
-    assert!(
-        h.privacy.secrets().mask_str(&mut result),
-        "the release swept the tab"
-    );
     let twice = h.post(&release, r#"{"reason": "idle"}"#).await?;
     assert_eq!(twice.status, StatusCode::OK);
     assert_eq!(
