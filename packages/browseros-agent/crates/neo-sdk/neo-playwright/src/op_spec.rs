@@ -44,8 +44,8 @@ pub enum Capability {
     /// script reads the page's own state and every frame of its site, so claw-sdk's door checks
     /// the op's tab again before it releases what the script answered. Gateways: the evaluate guard's entries, `EvaluateGuard::open` for a script and
     /// `DocumentWrite::open` for `page.setContent`, whose HTML the sealed world writes and whose
-    /// scripts the main world runs; and `page/init_script.rs` for the init scripts every new
-    /// document runs.
+    /// scripts the main world runs; `page/init_script.rs` for the init scripts and binding stubs
+    /// every new document runs; and the guard's `resolve_binding` for a binding call's answer.
     MainWorld,
     /// Changes which tab Neo's one screen shows, a screen the owner's takeovers and the control
     /// displays share. No op declares it yet, and so it has no gateway.

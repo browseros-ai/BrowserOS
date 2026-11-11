@@ -33,7 +33,7 @@
 
 mod dialog_table;
 mod download_table;
-mod event_hub;
+pub(crate) mod event_hub;
 pub(crate) mod event_op;
 mod event_reader;
 mod file_chooser;
@@ -53,5 +53,5 @@ pub(crate) use page_event::PageEvent;
 pub(crate) use run_downloads::RunDownloads;
 pub(crate) use run_events::RunEvents;
 pub(crate) use subscription::{ListenerKey, PageEventKind, Subscription};
-pub(crate) use target_watcher::TargetWatcher;
-pub(crate) use watcher_progress::WatcherProgress;
+pub(crate) use target_watcher::{BINDING_CALLED, BINDING_NAME, TargetWatcher};
+pub(crate) use watcher_progress::{Fence, WatcherProgress};

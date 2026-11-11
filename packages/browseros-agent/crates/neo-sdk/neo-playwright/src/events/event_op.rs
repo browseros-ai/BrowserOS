@@ -16,7 +16,7 @@ use tokio::fs;
 
 use crate::events::dialog_table::{ClosedBy, Unanswerable};
 use crate::events::event_hub::{now_ms, receives};
-use crate::events::event_reader::{Delivered, Tabs, WindowPopup, deliver};
+use crate::events::event_reader::{Delivered, Tabs, WindowPopup, binding_call, deliver};
 use crate::events::page_event::DialogId;
 use crate::events::subscription::Unknown;
 use crate::events::{ListenerKey, PageEvent, PageEventKind, Subscription};
@@ -384,6 +384,10 @@ async fn next(pw: &Playwright, scope: &OpScope<'_>) -> Result<Value, PlaywrightE
             }
             read_up_to.push((subscription, read.head));
         }
+        // Before the advance, which counts this reply when it carries anything.
+        let (calls, dropped) = run.events.take_calls();
+        events.extend(calls.into_iter().map(binding_call));
+        lost += dropped;
         let replying = !events.is_empty() || lost > 0;
         run.events.advance(&read_up_to, replying);
         if replying {

@@ -364,6 +364,24 @@ impl CdpClient {
         self.inner.targeted.subscribe(method)
     }
 
+    /// [`Self::events_targeted`], with the count of `method`'s events subscribers took before
+    /// it, which it will never receive ([`TargetedEvents::subscribe_counted`]).
+    #[must_use]
+    pub fn events_targeted_counted(
+        &self,
+        method: &str,
+    ) -> (mpsc::UnboundedReceiver<CdpEvent>, u64) {
+        self.inner.targeted.subscribe_counted(method)
+    }
+
+    /// How many of `method`'s events the targeted subscribers took. The reader routes each
+    /// message before it reads the next, so read after a reply it covers every such event that
+    /// arrived before that reply ([`TargetedEvents::delivered`]).
+    #[must_use]
+    pub fn events_targeted_delivered(&self, method: &str) -> u64 {
+        self.inner.targeted.delivered(method)
+    }
+
     async fn send_frame(
         &self,
         expected_epoch: Option<u64>,

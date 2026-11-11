@@ -18,12 +18,14 @@ use crate::page::{PageHandle, init_script};
 use crate::{Playwright, PlaywrightError};
 
 listed_enum! {
-    /// The one browser context a run sees: its tabs, opening a new one, and the init scripts it
-    /// gives every tab the run writes to, with the disposable each registration returns.
+    /// The one browser context a run sees: its tabs, opening a new one, and the init scripts and
+    /// bindings it gives every tab the run writes to, with the disposable each registration
+    /// returns.
     pub(crate) enum ContextOp {
         Pages,
         NewPage,
         AddInitScript,
+        ExposeBinding,
         Dispose,
     }
 }
@@ -48,10 +50,17 @@ impl ContextOp {
             )
             .using(&[Capability::MainWorld, Capability::HostFiles])
             .policed(),
+            Self::ExposeBinding => OpSpec::write(
+                "context.exposeBinding",
+                OpTarget::None,
+                "let every tab the run writes to call a function of the script, until the run ends",
+            )
+            .using(&[Capability::MainWorld])
+            .policed(),
             Self::Dispose => OpSpec::write(
                 "disposable.dispose",
                 OpTarget::None,
-                "remove what an addInitScript registered",
+                "remove what an addInitScript or exposeBinding registered",
             ),
         }
     }
@@ -93,6 +102,7 @@ pub(crate) async fn invoke(
             new_page(pw, scope).await
         }
         ContextOp::AddInitScript => init_script::add_to_context(scope, args.decode(scope)?).await,
+        ContextOp::ExposeBinding => init_script::expose_on_context(pw, scope, args.decode(scope)?),
         ContextOp::Dispose => init_script::dispose(scope, args.decode(scope)?).await,
     }
 }

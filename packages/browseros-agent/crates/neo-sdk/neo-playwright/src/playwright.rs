@@ -9,7 +9,7 @@ use serde_json::Value;
 use tokio::time;
 
 use crate::action::action_op;
-use crate::events::{EventHub, TargetWatcher, WatcherProgress, event_op};
+use crate::events::{BINDING_CALLED, EventHub, Fence, TargetWatcher, WatcherProgress, event_op};
 use crate::expect::expect_op;
 use crate::input::input_op;
 use crate::op::{Op, OpKind};
@@ -95,6 +95,12 @@ impl Playwright {
         &self.events
     }
 
+    /// The page event log, shared, for a run that keeps it past one op (its bindings' later
+    /// adds, `page/init_script.rs`).
+    pub(crate) fn event_hub(&self) -> &Arc<EventHub> {
+        &self.events
+    }
+
     /// The newest event recorded for this browser connection.
     #[must_use]
     pub fn event_head(&self) -> u64 {
@@ -174,13 +180,16 @@ impl Playwright {
     }
 
     /// Upstream handles protocol messages in order, so a `page.on('console')` listener has run
-    /// for the message an evaluate logged before that evaluate resolves, and none runs for it
-    /// after. Neo's events reach listeners through the run's pump, beside the op, so an op that
-    /// ends waits, within [`EVENTS_BEFORE_REPLY`], until
+    /// for the message an evaluate logged before that evaluate resolves, and an exposed binding
+    /// has been called for a call the page made, and none runs for it after. Neo's events and
+    /// binding calls reach the script through the run's pump, beside the op, so an op that ends
+    /// waits, within [`EVENTS_BEFORE_REPLY`], until
     ///
     /// ```text
-    ///  the watcher logged every CDP event that came before the op's last reply   (fence)
-    ///  ── the run's pump read every listener past the log's head then            (taken)
+    ///  the watcher handled every CDP event and binding call that came before
+    ///  the op's last reply                                                       (fence)
+    ///  ── the run's pump read every listener past the log's head then, and
+    ///     took every binding call queued for the run                             (taken)
     /// ```
     ///
     /// That pump reply is then counted (`RunState::pump_replies`) before this op's reply leaves,
@@ -194,7 +203,10 @@ impl Playwright {
         if !run.events.has_listeners() {
             return;
         }
-        let fence = self.browser.cdp_events_broadcast();
+        let fence = Fence {
+            events: self.browser.cdp_events_broadcast(),
+            calls: self.browser.cdp_events_targeted_delivered(BINDING_CALLED),
+        };
         let ordered = async {
             self.progress.reached(fence).await;
             run.events.taken_through(self.events.head()).await;

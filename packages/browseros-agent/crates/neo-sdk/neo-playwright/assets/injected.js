@@ -8381,6 +8381,37 @@ ${value.stack}`;
     return { kind: "replaced" };
   }
 
+  // crates/neo-sdk/neo-playwright-js/src/probe/drop.ts
+  function drop(element, edit) {
+    const transfer = new DataTransfer;
+    for (const payload of edit.payloads) {
+      const bytes = Uint8Array.from(atob(payload.buffer), (c) => c.charCodeAt(0));
+      transfer.items.add(new File([bytes], payload.name, {
+        type: payload.mimeType,
+        lastModified: payload.lastModifiedMs
+      }));
+    }
+    for (const { mimeType, value } of edit.data)
+      transfer.setData(mimeType, value);
+    const event = (type) => new DragEvent(type, {
+      bubbles: true,
+      cancelable: true,
+      composed: true,
+      clientX: edit.point.x,
+      clientY: edit.point.y,
+      dataTransfer: transfer
+    });
+    element.dispatchEvent(event("dragenter"));
+    const over = event("dragover");
+    element.dispatchEvent(over);
+    if (!over.defaultPrevented) {
+      element.dispatchEvent(event("dragleave"));
+      return "not-accepted";
+    }
+    element.dispatchEvent(event("drop"));
+    return "accepted";
+  }
+
   // crates/neo-sdk/neo-playwright-js/src/probe/files.ts
   var armed = new WeakMap;
   function setFiles(world, element, payloads) {
@@ -8440,6 +8471,8 @@ ${value.stack}`;
       case "dispatchEvent":
         injected.dispatchEvent(element, edit.type, edit.init);
         return valueReply(null);
+      case "drop":
+        return valueReply(drop(element, edit));
       case "setFiles":
         return valueReply(setFiles(world, element, edit.payloads));
     }
@@ -8485,7 +8518,7 @@ ${value.stack}`;
   }
 
   // crates/neo-sdk/neo-playwright-js/src/probe/protocol.ts
-  var PROTOCOL = 18;
+  var PROTOCOL = 19;
 
   // crates/neo-sdk/neo-playwright-js/src/probe/read.ts
   var XHTML = "http://www.w3.org/1999/xhtml";

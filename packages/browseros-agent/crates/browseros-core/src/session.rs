@@ -321,6 +321,21 @@ impl BrowserSession {
         self.connection.events_counted()
     }
 
+    /// See [`crate::connection::CdpConnection::events_targeted_counted`].
+    #[must_use]
+    pub fn cdp_events_targeted_counted(
+        &self,
+        method: &str,
+    ) -> (mpsc::UnboundedReceiver<CdpEvent>, u64) {
+        self.connection.events_targeted_counted(method)
+    }
+
+    /// See [`crate::connection::CdpConnection::events_targeted_delivered`].
+    #[must_use]
+    pub fn cdp_events_targeted_delivered(&self, method: &str) -> u64 {
+        self.connection.events_targeted_delivered(method)
+    }
+
     /// See [`crate::connection::CdpConnection::events_targeted`].
     #[must_use]
     pub fn cdp_events_targeted(&self, method: &str) -> mpsc::UnboundedReceiver<CdpEvent> {
@@ -502,6 +517,14 @@ impl CdpConnection for EvictingConnection {
 
     fn events_counted(&self) -> (broadcast::Receiver<CdpEvent>, u64) {
         self.inner.events_counted()
+    }
+
+    fn events_targeted_counted(&self, method: &str) -> (mpsc::UnboundedReceiver<CdpEvent>, u64) {
+        self.inner.events_targeted_counted(method)
+    }
+
+    fn events_targeted_delivered(&self, method: &str) -> u64 {
+        self.inner.events_targeted_delivered(method)
     }
 
     fn is_connected(&self) -> bool {

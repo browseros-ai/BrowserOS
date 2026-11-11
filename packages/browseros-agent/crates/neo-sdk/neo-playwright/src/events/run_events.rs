@@ -3,6 +3,7 @@
 //! the run wants an event, to decide what to record and which dialogs to hold.
 
 use std::collections::{HashMap, VecDeque};
+use std::mem;
 use std::pin::pin;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, MutexGuard, PoisonError};
@@ -14,6 +15,7 @@ use tokio::sync::Notify;
 use tokio::time;
 
 use crate::events::event_hub::LOG_CAPACITY;
+use crate::events::page_event::BindingCalled;
 use crate::events::{ListenerKey, PageEventKind, Subscription};
 
 /// How long an op ending with events still unread waits for a pump to start, when none is in
@@ -45,6 +47,12 @@ struct Inner {
     waiting: HashMap<Subscription, usize>,
     /// `events.next` calls in flight.
     pumps: usize,
+    /// Binding calls the watcher handed this run, oldest first, until its pump takes them. Kept
+    /// apart from the bounded log: each is a request the page may be waiting on.
+    calls: VecDeque<QueuedCall>,
+    /// Calls dropped because [`QUEUED_CALLS`] were already waiting, since the pump last took
+    /// them: the pump reports them in its `lost` count.
+    dropped_calls: u64,
     /// View-approved identities remain usable by retained events after the tab disappears.
     known_pages: VecDeque<KnownPage>,
 }
@@ -61,6 +69,22 @@ impl Drop for Pumping<'_> {
         drop(inner);
         self.events.changed.notify_waiters();
     }
+}
+
+/// How many binding calls wait for one run's pump at most. A page calls faster than the realm
+/// answers only in a flood; past this many the oldest unread stay and the rest are counted lost,
+/// so a page cannot grow Neo's memory without bound while the run is busy.
+pub(crate) const QUEUED_CALLS: usize = 4_096;
+
+/// A page's call of a binding this run exposed, as the watcher handed it over.
+#[derive(Clone, Debug)]
+pub(crate) struct QueuedCall {
+    /// The log's head when the call came: the pump orders it after the records before it.
+    pub(crate) seq: u64,
+    pub(crate) at_ms: u64,
+    /// The run's tab for the call's page.
+    pub(crate) tab: TabId,
+    pub(crate) call: BindingCalled,
 }
 
 /// Historical native identity, admitted by this run rather than guessed from a dead target.
@@ -149,6 +173,38 @@ impl RunEvents {
         }
     }
 
+    /// Queues a binding call for the pump, or counts it lost when [`QUEUED_CALLS`] wait already.
+    pub(crate) fn queue_call(&self, call: QueuedCall) {
+        let mut inner = self.lock();
+        if inner.calls.len() < QUEUED_CALLS {
+            inner.calls.push_back(call);
+        } else {
+            inner.dropped_calls += 1;
+        }
+    }
+
+    /// The binding calls queued since the pump last took them, and how many were dropped.
+    pub(crate) fn take_calls(&self) -> (Vec<QueuedCall>, u64) {
+        let mut inner = self.lock();
+        let dropped = mem::take(&mut inner.dropped_calls);
+        (inner.calls.drain(..).collect(), dropped)
+    }
+
+    /// The tab this run exposes bindings on whose target is `target`.
+    pub(crate) fn binding_tab(&self, target: &TargetId) -> Option<TabId> {
+        self.lock()
+            .listening
+            .keys()
+            .find_map(|subscription| match subscription {
+                Subscription::Page {
+                    tab,
+                    target: listened,
+                    event: PageEventKind::Binding,
+                } if listened == target => Some(*tab),
+                _ => None,
+            })
+    }
+
     /// Whether the run listens for, or waits on, `event` on the tab whose target is `target`.
     pub(crate) fn wants(&self, target: &TargetId, event: PageEventKind) -> bool {
         let inner = self.lock();
@@ -235,9 +291,10 @@ impl RunEvents {
         !self.lock().listening.is_empty()
     }
 
-    /// Returns once the pump read every listener past log seq `head`, so whatever it found there
-    /// is on its way to the script ahead of anything that ends later. With no pump in flight it
-    /// waits [`PUMP_GRACE`] for one, then gives up: a stopped pump never holds an op. The caller
+    /// Returns once the pump read every listener past log seq `head` and took every queued
+    /// binding call (calls wait in their own queue, not the log), so whatever it found is on its
+    /// way to the script ahead of anything that ends later. With no pump in flight it waits
+    /// [`PUMP_GRACE`] for one, then gives up: a stopped pump never holds an op. The caller
     /// bounds the whole wait.
     pub(crate) async fn taken_through(&self, head: u64) {
         loop {
@@ -245,10 +302,12 @@ impl RunEvents {
             changed.as_mut().enable();
             let pumping = {
                 let inner = self.lock();
-                if inner
-                    .listening
-                    .values()
-                    .all(|listening| listening.after >= head)
+                if inner.calls.is_empty()
+                    && inner.dropped_calls == 0
+                    && inner
+                        .listening
+                        .values()
+                        .all(|listening| listening.after >= head)
                 {
                     return;
                 }
@@ -275,7 +334,8 @@ mod tests {
     use browseros_core::{TabId, TargetId};
     use tokio::time;
 
-    use super::{PUMP_GRACE, RunEvents};
+    use super::{PUMP_GRACE, QueuedCall, RunEvents};
+    use crate::events::page_event::BindingCalled;
     use crate::events::{ListenerKey, PageEventKind, Subscription};
 
     fn dialogs(page: u32, target: &str) -> Subscription {
@@ -381,5 +441,45 @@ mod tests {
             Duration::ZERO,
             "every listener is past the head"
         );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_an_op_waits_for_the_pump_to_take_the_runs_queued_binding_calls() {
+        let events = Arc::new(RunEvents::default());
+        let binding = Subscription::Page {
+            tab: TabId(1),
+            target: TargetId("T".to_owned()),
+            event: PageEventKind::Binding,
+        };
+        events.listen(binding.clone(), 0, 7);
+        events.queue_call(QueuedCall {
+            seq: 7,
+            at_ms: 0,
+            tab: TabId(1),
+            call: BindingCalled {
+                target: TargetId("T".to_owned()),
+                context: 3,
+                frame: None,
+                payload: "{}".to_owned(),
+            },
+        });
+        let _pumping = events.pumping();
+        let waiter = tokio::spawn({
+            let events = Arc::clone(&events);
+            async move {
+                events.taken_through(7).await;
+                events.pump_replies()
+            }
+        });
+        time::sleep(PUMP_GRACE * 4).await;
+        assert!(
+            !waiter.is_finished(),
+            "every listener is past the head, but a call waits in the queue"
+        );
+        let (calls, dropped) = events.take_calls();
+        assert_eq!((calls.len(), dropped), (1, 0));
+        events.advance(&[(binding, 7)], true);
+        let replies = time::timeout(Duration::from_secs(1), waiter).await;
+        assert!(matches!(replies, Ok(Ok(1))), "{replies:?}");
     }
 }
