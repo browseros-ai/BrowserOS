@@ -537,13 +537,13 @@ func clawServerProcConfig(root string, env []string, p proc.Ports, userDataDir s
 }
 
 // clawServerCargoEnv gives the watch's cargo a build directory no other cargo
-// command uses. The repo's .cargo/config.toml points build-dir at one directory
-// shared by every checkout on the machine, and Cargo locks it for a whole build,
-// so an editor's check on save or a test in another worktree left the server
+// command uses. Cargo locks a build directory for a whole build, so an editor's
+// check on save or a `cargo test` in the same checkout would leave the server
 // (and each rebuild after a save) at "Blocking waiting for file lock on build
-// directory". Building into target/dev-watch, with build-dir following
-// target-dir as it does without that config, costs one cold dependency build
-// per checkout. A CARGO_TARGET_DIR or CARGO_BUILD_BUILD_DIR the caller set wins.
+// directory". Building into target/dev-watch costs one cold dependency build
+// per checkout. Build-dir is pinned to the same place so a build-dir from the
+// developer's own Cargo config cannot move the intermediates somewhere shared.
+// A CARGO_TARGET_DIR or CARGO_BUILD_BUILD_DIR the caller set wins.
 func clawServerCargoEnv(root string, env []string) []string {
 	targetDir := envValue(env, "CARGO_TARGET_DIR")
 	if targetDir == "" {
