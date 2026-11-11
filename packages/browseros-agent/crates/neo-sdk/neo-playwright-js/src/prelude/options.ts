@@ -62,7 +62,15 @@ export const DRAG_KEYS = [
 export const FILL_KEYS = ['force', 'noWaitAfter'] as const
 export const KEY_KEYS = ['delay', 'noWaitAfter'] as const
 /** The screenshot options Rust captures with; frame.ts refuses the rest. */
-export const SCREENSHOT_KEYS = ['type', 'quality', 'fullPage', 'clip'] as const
+export const SCREENSHOT_KEYS = [
+  'type',
+  'quality',
+  'fullPage',
+  'clip',
+  'animations',
+  'caret',
+  'style',
+] as const
 
 /** Objects the prelude hands to scripts (pages, frames, locators, handles), by identity. */
 const handles = new WeakSet<object>()

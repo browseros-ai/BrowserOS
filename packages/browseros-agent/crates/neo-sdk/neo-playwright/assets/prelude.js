@@ -417,7 +417,15 @@
   ];
   var FILL_KEYS = ["force", "noWaitAfter"];
   var KEY_KEYS = ["delay", "noWaitAfter"];
-  var SCREENSHOT_KEYS = ["type", "quality", "fullPage", "clip"];
+  var SCREENSHOT_KEYS = [
+    "type",
+    "quality",
+    "fullPage",
+    "clip",
+    "animations",
+    "caret",
+    "style"
+  ];
   var handles = new WeakSet;
   function markHandle(object) {
     handles.add(object);
@@ -6813,12 +6821,8 @@ ${value.stack}`;
   function refusedScreenshotOption(options) {
     if (options.mask !== undefined && options.mask.length > 0)
       return "Neo cannot mask elements in a screenshot; omit mask";
-    if (options.style !== undefined)
-      return "Neo cannot add a stylesheet to a screenshot; omit style";
     if (options.omitBackground)
       return "Neo cannot capture a transparent background; omit omitBackground";
-    if (options.animations === "disabled")
-      return "Neo does not stop animations for a screenshot; omit animations";
     if (options.scale === "css")
       return 'Neo captures at the device scale; omit scale or pass "device"';
     return;

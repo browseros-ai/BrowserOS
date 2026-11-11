@@ -41,6 +41,7 @@ mod page_state;
 mod page_value;
 mod pdf;
 mod screenshot;
+mod screenshot_preparation;
 pub(crate) mod site_sweep;
 mod sweep_scope;
 mod wait_for_url;
