@@ -153,9 +153,11 @@ test('tests that the first read gets the one-shot floor and later reads end at t
       return options.length === 1 ? 'y' : 'x'
     },
   }).toHaveValue('x', { timeout: 1500 })
+  const [one, ...later] = options
+  assert.ok(one > 100 && one <= 1000, `the one-shot gets the floor: ${one}`)
   assert.ok(
-    options.every((timeout) => timeout > 0 && timeout <= 100),
-    `${options}`,
+    later.length > 0 && later.every((timeout) => timeout > 0 && timeout <= 100),
+    `${later}`,
   )
 })
 
@@ -168,6 +170,14 @@ test('tests that a read slower than an impossible timeout still passes', async (
   await expectLoop({
     count: () => new Promise((done) => setTimeout(() => done(0), 30)),
   }).not.toBeAttached({ timeout: 1 })
+  // A read that enforces its own timeout, as Neo's do, and needs longer than a polling step.
+  await expectLoop({
+    inputValue: ({ timeout }) =>
+      new Promise((done, fail) => {
+        if (timeout < 150) fail(new Error(`timed out after ${timeout}ms`))
+        else setTimeout(() => done('x'), 150)
+      }),
+  }).toHaveValue('x', { timeout: 1 })
 })
 
 test('tests that the default timeout is five seconds and zero permits waiting', async () => {

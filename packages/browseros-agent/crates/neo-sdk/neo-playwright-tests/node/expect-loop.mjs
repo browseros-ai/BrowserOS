@@ -128,16 +128,19 @@ async function poll(actual, name, read, args, options, isNot) {
   let readError
   let first = true
   do {
-    // The first read runs to the floor if the timeout ends sooner; later reads end with it.
+    // The first read is the one-shot: it may take up to the floor, both as the window it runs
+    // in and as its own timeout, which Neo's reads enforce around the whole op. Later reads poll
+    // in steps of at most 100 ms and end at the deadline.
     const until = first
       ? Math.max(deadline, started + ONE_SHOT_FLOOR_MS)
       : deadline
+    const step = first ? ONE_SHOT_FLOOR_MS : 100
     first = false
     try {
       last = await beforeDeadline(
         read(actual, args, {
           ...options,
-          timeout: Math.max(1, Math.min(100, until - performance.now())),
+          timeout: Math.max(1, Math.min(step, until - performance.now())),
         }),
         Math.max(1, until - performance.now()),
       )
