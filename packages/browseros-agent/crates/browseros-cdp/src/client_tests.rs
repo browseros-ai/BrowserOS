@@ -525,3 +525,26 @@ async fn a_websocket_url_on_every_loopback_spelling_resolves_to_a_socket_address
     }
     Ok(())
 }
+
+/// An event broadcast before `events_counted` subscribed is in its count; one after reaches its
+/// receiver. Neo's event watcher waits on that numbering, so an event in both would let an op
+/// resolve before its listener ran.
+#[tokio::test]
+async fn an_event_is_either_counted_before_a_subscription_or_received_by_it() {
+    let browser = LoopbackBrowser::start().await;
+    let client = browser.connect().await;
+    let event = r#"{"method":"Test.ping","params":{}}"#;
+    let start = client.events_broadcast();
+    handle_text_message(&client.inner, event).await;
+    let (mut events, before) = client.events_counted();
+    handle_text_message(&client.inner, event).await;
+    assert_eq!(before, start + 1);
+    assert_eq!(client.events_broadcast(), start + 2);
+    let mut received = 0;
+    while let Ok(received_event) = events.try_recv() {
+        if received_event.method == "Test.ping" {
+            received += 1;
+        }
+    }
+    assert_eq!(received, 1, "only the event after the subscription");
+}
