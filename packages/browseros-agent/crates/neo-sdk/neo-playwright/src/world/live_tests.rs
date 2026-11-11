@@ -383,21 +383,26 @@ async fn tests_that_a_navigation_retires_the_seq_even_across_processes() -> Test
     let page = OpPage::admit(&live.playwright, &scope, tab.id).await?;
     page.frames().invalidate(&first);
     let second = page.world(&page.main_endpoint(), Place::Main).await?;
-    assert_eq!(
-        second.seq(),
-        FrameSeq(1),
-        "the new document takes the next seq"
+    // Which seq is not fixed: every frame that attached before the commit spent one first, as
+    // upstream numbers them (the browser sometimes adds short-lived about:blank frames), and
+    // the watcher may log the commit only after this install. What is fixed is that the old
+    // page's seq is never handed out again.
+    assert_eq!(first.seq(), FrameSeq(0));
+    assert!(
+        second.seq() > first.seq(),
+        "the new document takes a seq after the old page's: {:?}",
+        second.seq()
     );
     assert!(matches!(
-        page.frames().by_seq(FrameSeq(0)),
+        page.frames().by_seq(first.seq()),
         SeqLookup::Retired
     ));
     assert!(matches!(
-        page.frames().by_seq(FrameSeq(1)),
+        page.frames().by_seq(second.seq()),
         SeqLookup::Live { .. }
     ));
-    // Child frames reserve seqs when they attach, even before their worlds install. The
-    // fixture's iframe can already own seq 2; use an unallocated seq for the unknown case.
+    // Child frames reserve seqs when they attach, even before their worlds install, so the
+    // unknown case uses a seq no page reaches.
     assert!(matches!(
         page.frames().by_seq(FrameSeq(u32::MAX)),
         SeqLookup::Unknown

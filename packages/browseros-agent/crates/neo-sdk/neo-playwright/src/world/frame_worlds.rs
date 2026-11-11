@@ -114,6 +114,13 @@ struct WorldKey {
 ///   first document takes the seq its attach reserved (`f1` for the first iframe the page
 ///   attached, however the reads that install them race). Without a log (unit tests), every
 ///   later main document takes the next seq at install instead.
+/// - **A real page proved gone counts as left, logged or not.** The watcher fills the log on a
+///   task of its own, so an op can prove the main document gone and re-install before the
+///   commit away from it is logged (a busy browser, or `location.href = …` and a ref at once).
+///   Upstream renumbers on every commit that leaves a real page, so once a call proves a real
+///   page's world gone, the next main document takes a new seq without waiting for the log.
+///   Keeping the old seq would let `e2` from the old page name whatever a new snapshot calls
+///   `e2`.
 #[derive(Debug)]
 pub(crate) struct FrameWorlds {
     inner: Mutex<WorldsInner>,
@@ -127,6 +134,15 @@ pub(crate) struct FrameWorlds {
 struct AttachLogBinding {
     log: Arc<FrameAttachLog>,
     tab: TargetId,
+}
+
+/// A main-frame document Neo installed a world in.
+#[derive(Debug)]
+struct MainDocument {
+    /// The seq its world reported.
+    seq: FrameSeq,
+    /// Its URL when the world booted.
+    url: String,
 }
 
 #[derive(Debug)]
@@ -157,6 +173,9 @@ struct WorldsInner {
     main_seq: Option<FrameSeq>,
     /// The URL the main frame last committed, as the log reported it; none before the first.
     main_url: Option<String>,
+    /// The main frame's last installed document. Once its seq is no longer live, a call proved
+    /// the document gone.
+    main_doc: Option<MainDocument>,
     /// Whether this tab has a log, so the main frame's seq follows its commits.
     follows_commits: bool,
     /// The log's gap count at the last replay.
@@ -179,6 +198,7 @@ impl FrameWorlds {
                 numbered: HashSet::new(),
                 main_seq: None,
                 main_url: None,
+                main_doc: None,
                 follows_commits: false,
                 seen_gaps: 0,
             }),
@@ -254,7 +274,7 @@ impl FrameWorlds {
                 let mut inner = self.lock();
                 inner.adopt(&key, world.seq(), retired);
                 if main {
-                    inner.main_installed(url);
+                    inner.main_installed(world.seq(), url);
                 }
                 drop(inner);
                 Ok(world)
@@ -342,13 +362,15 @@ impl FrameWorlds {
 
 impl WorldsInner {
     /// The seq a new document would take. The main frame: its seq as its commits left it,
-    /// starting at the page's first; without a log, the first for its first install and the
-    /// next for every later one. A child frame: the seq its attach reserved for its first
-    /// document, else the next one. Never a foreign one; taken even if the install then fails.
+    /// starting at the page's first, or the next one once the real page under it is proved
+    /// gone; without a log, the first for its first install and the next for every later one.
+    /// A child frame: the seq its attach reserved for its first document, else the next one.
+    /// Never a foreign one; taken even if the install then fails.
     fn candidate(&mut self, frame: &FrameId, main: bool) -> FrameSeq {
         if main {
             if self.follows_commits {
                 let seq = match self.main_seq {
+                    Some(seq) if self.left_real_page(seq) => self.next_seq(),
                     Some(seq) => seq,
                     None => self.first_main_seq(),
                 };
@@ -392,7 +414,7 @@ impl WorldsInner {
                 // 'about:blank') frame.seq = this._allocateFrameSeq();`
                 FrameEvent::MainCommitted { url } => {
                     let left = self.main_url.replace(url);
-                    if left.is_some_and(|left| !left.is_empty() && left != "about:blank") {
+                    if left.is_some_and(|left| is_real_page(&left)) {
                         self.main_seq = Some(self.next_seq());
                     }
                 }
@@ -418,11 +440,27 @@ impl WorldsInner {
     /// A main document installed with its world at `url`. With no commit seen since the log
     /// started (a tab loaded before the watcher, or after a gap), that is the page the next
     /// commit leaves, so a real page there renumbers as upstream's frame, which knows its URL
-    /// from the frame tree.
-    fn main_installed(&mut self, url: String) {
+    /// from the frame tree. The document, by seq and URL, is also what a later proof of its
+    /// world's death leaves ([`Self::left_real_page`]).
+    fn main_installed(&mut self, seq: FrameSeq, url: String) {
         if self.main_url.is_none() {
-            self.main_url = Some(url);
+            self.main_url = Some(url.clone());
         }
+        self.main_doc = Some(MainDocument { seq, url });
+    }
+
+    /// Whether `seq` was the main frame's real page and a call proved its world gone since
+    /// (`invalidate` took it out of `live`): the main frame left a real page, logged or not.
+    /// A world gone without a new document (a lost session) re-installs into the same world,
+    /// whose reply keeps the old seq, so moving on costs at most an unused number. When the
+    /// late commit is replayed it moves the main frame on once more, which also only skips a
+    /// number. A blank page left this way keeps its seq, as upstream does.
+    fn left_real_page(&self, seq: FrameSeq) -> bool {
+        !self.live.contains_key(&seq)
+            && self
+                .main_doc
+                .as_ref()
+                .is_some_and(|doc| doc.seq == seq && is_real_page(&doc.url))
     }
 
     /// The page's first seq for the main frame, unless an earlier `Playwright` gave it out.
@@ -471,6 +509,12 @@ impl WorldsInner {
             SeqLookup::Unknown
         }
     }
+}
+
+/// Upstream's test for a page the main frame renumbers on leaving: `previousUrl &&
+/// previousUrl !== 'about:blank'` (server/frames.ts).
+fn is_real_page(url: &str) -> bool {
+    !url.is_empty() && url != "about:blank"
 }
 
 #[cfg(test)]
@@ -751,6 +795,42 @@ mod tests {
             worlds.invalidate(&main);
             let next = install(&worlds, ("S", "main"), Place::Main, &installs).await?;
             seqs.push((main.seq().0, next.seq().0));
+        }
+        assert_eq!(seqs, [(0, 1), (0, 0)]);
+        Ok(())
+    }
+
+    /// Boots the main frame's world in a document at `url`.
+    async fn main_at(
+        worlds: &FrameWorlds,
+        installs: &AtomicU32,
+        url: &str,
+    ) -> Result<IsolatedWorld, ProbeFailure> {
+        boot(worlds, ("S", "main"), Place::Main, installs, None, url).await
+    }
+
+    /// The watcher has not logged the commit yet when an op proves the old page gone and
+    /// re-installs (a busy browser, or `location.href = …` and a ref at once). Leaving a real
+    /// page still takes a new seq, so the old page's `e2` stays retired; leaving a blank one
+    /// keeps it, as upstream does. The late commit then hands out only unused seqs.
+    #[tokio::test]
+    async fn tests_that_a_real_page_proved_gone_moves_the_main_frame_on_before_the_log_does()
+    -> TestResult {
+        let installs = AtomicU32::new(0);
+        let mut seqs = Vec::new();
+        for left in ["https://old.test/", "about:blank"] {
+            let log = Arc::new(FrameAttachLog::default());
+            let worlds = logged(&log);
+            record(&log, [committed(left)]);
+            let old = main_at(&worlds, &installs, left).await?;
+            worlds.invalidate(&old);
+            let new = main_at(&worlds, &installs, "https://new.test/").await?;
+            seqs.push((old.seq().0, new.seq().0));
+
+            record(&log, [committed("https://new.test/"), attached("child")]);
+            let into_new = child_of(new.seq().0, "#1");
+            let child = install(&worlds, ("S", "child"), into_new, &installs).await?;
+            assert!(child.seq() > new.seq(), "{child:?}");
         }
         assert_eq!(seqs, [(0, 1), (0, 0)]);
         Ok(())
