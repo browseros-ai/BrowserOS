@@ -46,10 +46,39 @@ three are optional, and the two ids are at most 128 bytes each:
 
 - `requestId` is your id for the call (zuzu's tool-call id). A repeat of it never runs again,
   within its task when the run has a `taskId`, else across Neo.
-- `taskId` is your label for the calls of one task. It replaces the session for grouping. You
+- `taskId` is your id for the calls of one task. It replaces the session for grouping. You
   list a task's runs, trace and events by it, and the agent's `page` starts on the task's last
-  tab. An unknown `taskId` is fine, and it never expires.
+  tab. An unknown host `taskId` is accepted; it registers a Neo task when it first opens a tab.
 - `hostData` is stored with the run, bounded for storage, and Neo never reads it.
+
+## Tasks
+
+Hosts that send `taskId` keep the same behavior: built-in `page` uses that task's last-used
+tab, or opens one on first use. Host ids and `neo.task(id)` use the same task records.
+Hosts that omit `taskId` no longer share a default tab between clients or runs. First use of
+built-in `page` creates a new unnamed task and a blank tab.
+
+For work across runs, the agent creates a task with `await neo.createTask(name)`, returns
+`task.id`, then starts later runs with `await neo.task(id)`. Tabs come from `task.newPage()`,
+`task.pages()`, and `task.page(tabId)`. `await task.close()` closes them. After fetching a task,
+built-in `page` is refused unless it already has a tab; a local `const page` is allowed.
+The [agent handout](../agent.d.ts) has the full recipe.
+
+Results add `_meta["com.browseros.neo/run"].tasks`, always present, or `[]` when empty:
+
+```ts
+type Tasks = {
+  id: string
+  name: string | null
+  kind: 'created' | 'builtinPage' | 'fetched' | 'closed'
+  tabs: { tabId: number; url: string }[]
+}[]
+```
+
+The list contains each task the script created, auto-created, or fetched, once, in first-touch
+order, even when the script failed. Tabs and URLs reflect reply time; closed tasks have no
+tabs. A host task appears only if the script fetches it with `neo.task`. Reply text ends with
+a line per listed task, so agents retain ids after failures. `structuredContent` is unchanged.
 
 ## Call by call
 
