@@ -4,11 +4,12 @@ use std::sync::Arc;
 
 use browseros_core::TargetId;
 
+use futures_util::future::BoxFuture;
 use neo_playwright::Playwright;
 use tokio::sync::OnceCell;
 
 use crate::browser::BrowserLink;
-use crate::dispatch::EventLog;
+use crate::dispatch::{EventLog, WorkerFact};
 
 /// neo-playwright's `Playwright` for this process. The crate wants one per browser
 /// connection, and Neo has exactly one: the link's session, which exists from the first
@@ -58,6 +59,24 @@ impl PlaywrightFacade {
 }
 
 impl EventLog for PlaywrightFacade {
+    fn synchronize(&self) -> BoxFuture<'_, ()> {
+        Box::pin(async {
+            if let Some(pw) = self.playwright.get() {
+                pw.synchronize_events().await;
+            }
+        })
+    }
+    fn workers(&self, target: &TargetId) -> Option<Vec<WorkerFact>> {
+        self.playwright.get().map(|pw| {
+            pw.workers(target)
+                .into_iter()
+                .map(|worker| WorkerFact {
+                    id: worker.id,
+                    url: worker.url,
+                })
+                .collect()
+        })
+    }
     fn head(&self) -> u64 {
         self.playwright.get().map_or(0, |pw| pw.event_head())
     }

@@ -36,6 +36,7 @@ mod backoff;
 mod call_log;
 mod download_facts;
 mod events;
+pub use events::worker_table::WorkerInfo;
 mod expect;
 mod file_save;
 mod input;

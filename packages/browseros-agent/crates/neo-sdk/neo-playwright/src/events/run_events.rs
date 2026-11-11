@@ -213,7 +213,7 @@ impl RunEvents {
         inner.listening.keys().any(wanted) || inner.waiting.keys().any(wanted)
     }
 
-    /// Context lifecycle interest requires observing tabs the script has never acted on.
+    /// Context lifecycle interest explicitly asks to observe untouched pages too.
     pub(crate) fn wants_context_lifecycle(&self) -> bool {
         let inner = self.lock();
         inner
