@@ -405,8 +405,30 @@ impl FrameRegistry {
         }
     }
 
+    /// Independent observers share the websocket but own different auto-attachment trees.
+    /// Adopting their descendants can replace foreground routes or release startup before
+    /// their owner finishes setup. Browser-scope manual attachments retain their old path.
+    async fn owns_parent_session(&self, parent: &SessionId) -> bool {
+        {
+            let pages = self.page_sessions.lock().await;
+            if pages.values().any(|session| session == parent) {
+                return true;
+            }
+        }
+        self.oopif_sessions
+            .lock()
+            .await
+            .values()
+            .any(|session| session == parent)
+    }
+
     async fn on_attached(&self, params: target::AttachedToTargetEvent, parent: Option<SessionId>) {
         self.clear_sessions_from_prior_connection().await;
+        if let Some(parent) = &parent
+            && !self.owns_parent_session(parent).await
+        {
+            return;
+        }
         if params.target_info.r#type != "iframe" {
             // Media belongs to frame renderers. Auto-attach also pauses workers, which must
             // start immediately rather than waiting for an initializer that never owns them.
@@ -1059,6 +1081,61 @@ mod tests {
         fn connection_epoch(&self) -> u64 {
             1
         }
+    }
+
+    #[tokio::test]
+    async fn observer_attachments_cannot_replace_foreground_frame_routes()
+    -> Result<(), Box<dyn Error>> {
+        let connection = crate::testing::TestConnection::new([]);
+        for method in [
+            "DOM.enable",
+            "Accessibility.enable",
+            "Target.setAutoAttach",
+            "Runtime.runIfWaitingForDebugger",
+        ] {
+            connection.always(method, json!({}))?;
+        }
+        let registry = FrameRegistry::new(connection.clone());
+        registry.clear_sessions_from_prior_connection().await;
+        let parent = SessionId::from("owned-parent");
+        registry
+            .oopif_sessions
+            .lock()
+            .await
+            .insert(FrameId("parent".to_owned()), parent.clone());
+        let attached = |session: &str, kind: &str| {
+            serde_json::from_value::<browseros_cdp::target::AttachedToTargetEvent>(json!({
+                "sessionId": session, "waitingForDebugger": true,
+                "targetInfo": {"targetId":"child", "type":kind, "title":"Child", "url":"https://child.test/", "attached":true, "canAccessOpener":false}
+            }))
+        };
+        registry
+            .on_attached(attached("owned-child", "iframe")?, Some(parent))
+            .await;
+        let calls = connection.calls()?.len();
+        assert!(calls > 0, "the foreground attachment is initialized");
+        for kind in ["iframe", "worker"] {
+            registry
+                .on_attached(
+                    attached("observer-child", kind)?,
+                    Some(SessionId::from("observer-parent")),
+                )
+                .await;
+        }
+        assert_eq!(
+            connection.calls()?.len(),
+            calls,
+            "an observer owns its descendants' setup and resume"
+        );
+        assert_eq!(
+            registry
+                .oopif_sessions
+                .lock()
+                .await
+                .get(&FrameId("child".to_owned())),
+            Some(&SessionId::from("owned-child"))
+        );
+        Ok(())
     }
 
     #[tokio::test]

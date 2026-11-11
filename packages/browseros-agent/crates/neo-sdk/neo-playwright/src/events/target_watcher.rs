@@ -166,6 +166,9 @@ struct Watcher {
     worker_script_events: Option<bool>,
     /// Watcher-owned root sessions only auto-attach descendants; page Runtime stays off.
     root_observers: HashMap<SessionId, RootObserver>,
+    /// Observer descendants belong to this watcher, not core's foreground frame registry.
+    /// Arm their own descendants before releasing the startup pause that this tree requested.
+    observer_frames: HashSet<SessionId>,
     /// Core may attach concurrently. One source per native target prevents each CDP session
     /// from publishing the same lifecycle transition; OOPIFs have their own native target.
     lifecycle_sources: LifecycleSources,
@@ -403,6 +406,7 @@ impl Watcher {
             worker_sessions: HashMap::new(),
             worker_script_events: None,
             root_observers: HashMap::new(),
+            observer_frames: HashSet::new(),
             lifecycle_sources: LifecycleSources::default(),
             frames: HashMap::new(),
             contexts: HashMap::new(),
@@ -512,6 +516,7 @@ impl Watcher {
     /// A session went: its tab and its contexts are forgotten.
     fn session_detached(&mut self, session: &SessionId) {
         self.root_observers.remove(session);
+        self.observer_frames.remove(session);
         if let Some(id) = self.worker_sessions.remove(session) {
             self.close_worker(&id);
         }
@@ -667,6 +672,7 @@ impl Watcher {
             self.worker_sessions.clear();
             self.worker_script_events = None;
             self.root_observers.clear();
+            self.observer_frames.clear();
             self.sessions.clear();
             self.lifecycle_sources = LifecycleSources::default();
             self.frames.clear();
@@ -1124,6 +1130,15 @@ impl Watcher {
                 if let Some(parent) = parent
                     && let Some(tab) = self.target_of(parent).await
                 {
+                    if self.root_observers.contains_key(parent)
+                        || self.observer_frames.contains(parent)
+                    {
+                        self.frames.insert(target_info.target_id, tab.clone());
+                        self.sessions.insert(session_id.clone(), tab);
+                        self.observer_frames.insert(session_id.clone());
+                        self.observe_worker_frame(&session_id).await;
+                        return;
+                    }
                     self.lifecycle_sources
                         .attach(&session_id, &TargetId(target_info.target_id.clone()));
                     self.frames.insert(target_info.target_id, tab.clone());
@@ -1212,6 +1227,22 @@ impl Watcher {
         }
     }
 
+    /// A paused observer frame must discover its workers and nested frames before running
+    /// page script. Core ignores this attachment tree, so this owner always releases the pause
+    /// even when recursive setup fails; it never enables Runtime on the frame itself.
+    async fn observe_worker_frame(&self, id: &SessionId) {
+        let session = self
+            .browser
+            .protocol_session(id.clone())
+            .at_connection_epoch();
+        let _armed = session
+            .send_value("Target.setAutoAttach", worker_auto_attach())
+            .await;
+        let _resumed = session
+            .send_value("Runtime.runIfWaitingForDebugger", json!({}))
+            .await;
+    }
+
     async fn observe_workers(&mut self, target: TargetId) {
         #[derive(Deserialize)]
         #[serde(rename_all = "camelCase")]
@@ -1245,11 +1276,7 @@ impl Watcher {
         // Include OOPIFs for their workers, but exclude page/prerender and service targets:
         // this observer has no initializer that could safely release their startup pause.
         let _ = session
-            .send_value(
-                "Target.setAutoAttach",
-                json!({"autoAttach": true, "waitForDebuggerOnStart": true, "flatten": true,
-                    "filter": [{"type":"worker"}, {"type":"iframe"}, {"exclude":true}]}),
-            )
+            .send_value("Target.setAutoAttach", worker_auto_attach())
             .await;
     }
 
@@ -1578,6 +1605,12 @@ async fn window_kind(
     }
 }
 
+/// A worker observer traverses OOPIFs too, without taking ownership of page/prerender targets.
+fn worker_auto_attach() -> Value {
+    json!({"autoAttach":true, "waitForDebuggerOnStart":true, "flatten":true,
+        "filter":[{"type":"worker"},{"type":"iframe"},{"exclude":true}]})
+}
+
 /// An event's params as `T`; one that does not decode is ignored, like any event the watcher
 /// does not need.
 fn parse<T: DeserializeOwned>(params: Value) -> Option<T> {
@@ -1637,6 +1670,71 @@ mod worker_observation_tests {
             !calls.iter().any(|call| call.method == "Runtime.enable"),
             "page console reporting must stay off on an untouched tab"
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn observer_frames_arm_descendants_before_resuming_and_keep_worker_ownership()
+    -> Result<(), Box<dyn Error>> {
+        let connection = TestConnection::new([]);
+        for method in [
+            "Target.setAutoAttach",
+            "Runtime.runIfWaitingForDebugger",
+            "Runtime.enable",
+        ] {
+            connection.always(method, json!({}))?;
+        }
+        connection.always("Browser.getVersion", json!({"product":"Chrome/143.0"}))?;
+        let browser = BrowserSession::new(
+            Arc::clone(&connection) as Arc<dyn CdpConnection>,
+            BrowserSessionHooks::default(),
+        );
+        let (hub, writer) = EventHub::new();
+        let (mut watcher, _found) = Watcher::new(
+            browser,
+            writer,
+            Arc::new(FrameAttachLog::default()),
+            Arc::new(WatcherProgress::default()),
+        );
+        let page = TargetId("untouched-page".to_owned());
+        watcher.observe_workers(page.clone()).await;
+        let root = watcher
+            .root_observers
+            .keys()
+            .next()
+            .cloned()
+            .ok_or("the observer owns its root")?;
+        let mut parent = root;
+        for (session, target) in [
+            ("observer-child", "child"),
+            ("observer-grandchild", "grandchild"),
+        ] {
+            watcher.attached(Some(&parent), serde_json::from_value(json!({
+                "sessionId":session, "targetInfo":{"targetId":target,"type":"iframe","url":"https://child.test/"}
+            }))?).await;
+            parent = SessionId::from(session);
+            assert!(watcher.observer_frames.contains(&parent));
+            let methods: Vec<_> = connection
+                .calls()?
+                .into_iter()
+                .filter(|call| call.session.as_ref() == Some(&parent))
+                .map(|call| call.method)
+                .collect();
+            assert_eq!(
+                methods,
+                ["Target.setAutoAttach", "Runtime.runIfWaitingForDebugger"],
+                "observation never inspects the frame's document"
+            );
+        }
+        watcher.attached(Some(&parent), serde_json::from_value(json!({
+            "sessionId":"nested-worker", "targetInfo":{"targetId":"worker","type":"worker","url":"worker.js"}
+        }))?).await;
+        assert!(
+            hub.workers.get(&page, "worker").is_some(),
+            "a nested worker still belongs to its owning Page"
+        );
+        watcher.session_detached(&parent);
+        assert!(!watcher.observer_frames.contains(&parent));
         Ok(())
     }
 
