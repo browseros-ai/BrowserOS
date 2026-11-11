@@ -6,8 +6,18 @@
 
 import { hostFetch, hostWebSocketTarget } from '../hostApi'
 
+/**
+ * The codes the host API client answers with, in Neo's error shape, when there is no Neo to ask:
+ * none configured (`503 no_host_api`) or nothing answering (`502 host_api_unreachable`). The live
+ * screen reads both as "no container".
+ */
+export const NO_HOST = new Set(['no_host_api', 'host_api_unreachable'])
+
 export interface LiveHost {
-  /** A host API request; rejects when Neo cannot be reached. */
+  /**
+   * A host API request. When Neo cannot be reached it answers with a `NO_HOST` code, or
+   * rejects; the live screen takes either.
+   */
   fetch(path: string, init?: RequestInit): Promise<Response>
   /**
    * Where to open a host API WebSocket. `headers` carries `Authorization`: Neo refuses a token

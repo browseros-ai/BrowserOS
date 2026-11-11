@@ -18,7 +18,7 @@
  */
 
 import { displayClose } from '../../shared/live-screen'
-import type { LiveHost } from './live-host'
+import { type LiveHost, NO_HOST } from './live-host'
 import type { SessionSocket, SocketSession } from './socket-session'
 
 /** How long Neo has to accept the display before the page is told it is unreachable. */
@@ -156,6 +156,10 @@ export class DisplayRelay implements SocketSession {
       return
     }
     const error = await neoError(response)
+    if (error && NO_HOST.has(error.code)) {
+      this.closePage(displayClose.hostUnreachable, error.message)
+      return
+    }
     if (response.status === 400 || !error) {
       this.closePage(
         displayClose.displayRefused,

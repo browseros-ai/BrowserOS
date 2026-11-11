@@ -29,7 +29,7 @@ import {
 } from '../../shared/live-screen'
 import { isLocalRequest } from '../api/api-routes'
 import { DisplayRelay } from './display-relay'
-import type { LiveHost } from './live-host'
+import { type LiveHost, NO_HOST } from './live-host'
 import type { SocketSession } from './socket-session'
 
 /** Operations read back from the task's trace to find the tab it is on. */
@@ -330,7 +330,9 @@ async function neoJson<T>(
       : `Neo answered HTTP ${response.status}`
   return {
     error: failure(response.ok ? 502 : response.status, code, message),
-    state: { state: 'refused', code, message },
+    state: NO_HOST.has(code)
+      ? { state: 'unreachable', message }
+      : { state: 'refused', code, message },
   }
 }
 

@@ -144,6 +144,21 @@ test('status says plainly when Neo is not there', async () => {
   expect(JSON.stringify(answer)).not.toContain(FAKE_TOKEN)
 })
 
+test('status reads the host API client’s “no Neo” answer as unreachable', async () => {
+  const viewer = await viewerWith({
+    fetch: async () =>
+      Response.json(
+        { code: 'host_api_unreachable', message: 'nothing answered' },
+        { status: 502 },
+      ),
+    socket: (path) => unreachableHost().socket(path),
+  })
+  expect((await status(viewer, 't1')).host).toEqual({
+    state: 'unreachable',
+    message: 'nothing answered',
+  })
+})
+
 test('take over locks the task’s tab, status reports it held, give back releases it', async () => {
   const neo = await neoWithTask()
   const viewer = await viewerWith(neo.host)

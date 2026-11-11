@@ -191,6 +191,23 @@ test('no Neo at all is host-unreachable, and so is a host API that is not set up
   })
 })
 
+test('the host API client’s own “no Neo” answers are host-unreachable too', async () => {
+  for (const [status, code] of [
+    [502, 'host_api_unreachable'],
+    [503, 'no_host_api'],
+  ] as const) {
+    const viewer = await viewerWith({
+      fetch: async () =>
+        Response.json({ code, message: `no Neo (${code})` }, { status }),
+      socket: (path) => unreachableHost().socket(path),
+    })
+    expect(await openPage(viewer, 'mode=view').closed).toEqual({
+      code: displayClose.hostUnreachable,
+      reason: `no Neo (${code})`,
+    })
+  }
+})
+
 test('a connection that drops without a close frame is displayLost', async () => {
   const neo = await fakeNeo()
   const viewer = await viewerWith(neo.host)
