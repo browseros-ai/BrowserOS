@@ -57,7 +57,8 @@ listed_enum! {
 }
 
 impl ActionOp {
-    /// Typed pointer ops describe their handlers; PR 10's remaining rows stay undescribed.
+    /// Typed actions describe their handlers; the rest retain raw decoding and hand-written
+    /// TypeScript contracts until they move onto typed rows.
     pub(crate) fn wire(self) -> Option<OpWire> {
         route(self, Describe)
     }
@@ -149,7 +150,7 @@ impl ActionOp {
 }
 
 /// The same exhaustive rows drive runtime decoding and wire generation. The transitional
-/// rows keep the other action ops on their existing decoder until the second action PR.
+/// rows keep undescribed actions on their existing decoder and hand-written contract.
 fn route<'a, R: Route<'a>>(op: ActionOp, r: R) -> R::Out {
     match op {
         ActionOp::Click => r.op(
