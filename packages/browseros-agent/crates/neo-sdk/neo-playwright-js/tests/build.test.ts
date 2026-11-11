@@ -38,7 +38,7 @@ it('tests that the page asset defines only __neoProbe, and a second evaluation k
 
 // The JS twin of claw-sdk's runtime/tests.rs pin: a run's realm gains only `__neo` and the
 // natives over the web globals installed before bootstrap. The API arrives as parameters.
-it("tests that the prelude asset adds no global and gives the agent's function Playwright's four parameters and Buffer", async () => {
+it("tests that the prelude asset adds no global and gives the agent's function Playwright's five parameters and Buffer", async () => {
   const runtime = loadPrelude()
   await runtime.ready
   const fresh = new Set(
@@ -60,7 +60,7 @@ it("tests that the prelude asset adds no global and gives the agent's function P
     '__neo_sleep',
   ])
   expect(runtime.evaluate('__neo.parameters()')).toBe(
-    'console, setTimeout, clearTimeout, NeoError, TimeoutError, page, context, browser, expect, Buffer',
+    'console, setTimeout, clearTimeout, NeoError, TimeoutError, page, context, browser, expect, playwright, Buffer',
   )
 })
 

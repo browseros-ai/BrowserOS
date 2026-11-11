@@ -40,9 +40,21 @@ import {
 } from './vendored'
 import type { DragOptions, FillOptions, KeyOptions, WaitForState } from './wire'
 
-/** The attribute `getByTestId` matches; upstream's default, which Neo never changes. */
+/**
+ * The attribute `getByTestId` matches: upstream's default until the script's
+ * `playwright.selectors.setTestIdAttribute` changes it for the rest of the run, as upstream's
+ * client keeps it in module state (client/locator.ts at v1.64.1). Each run's realm starts again
+ * at the default.
+ */
+let testIdAttribute = 'data-testid'
+
 export function testIdAttributeName(): string {
-  return 'data-testid'
+  return testIdAttribute
+}
+
+/** Upstream's `setTestIdAttribute`: the attribute every later `getByTestId` builds with. */
+export function setTestIdAttribute(attributeName: string): void {
+  testIdAttribute = attributeName
 }
 
 export class Locator {

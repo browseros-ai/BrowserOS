@@ -6608,8 +6608,12 @@ ${value.stack}`;
   }
 
   // crates/neo-sdk/neo-playwright-js/src/prelude/locator.ts
+  var testIdAttribute = "data-testid";
   function testIdAttributeName() {
-    return "data-testid";
+    return testIdAttribute;
+  }
+  function setTestIdAttribute(attributeName) {
+    testIdAttribute = attributeName;
   }
 
   class Locator {
@@ -10831,6 +10835,9 @@ Timeout: ${timeout}ms`);
   var TRACE = "Neo records its own trace of every run";
   var ROOTED = "element handles cannot root a selector in Neo; use locator.locator(selector) instead";
   var UNSUPPORTED2 = {
+    Selectors: {
+      register: "custom selector engines are not available in Neo; locate with CSS, text, role or test-id selectors"
+    },
     Browser: {
       bind: "Neo does not share its browser",
       browserType: {
@@ -11186,8 +11193,25 @@ Call Log:
     return expect;
   }
 
+  // crates/neo-sdk/neo-playwright-js/src/prelude/playwright.ts
+  class Selectors {
+    setTestIdAttribute(attributeName) {
+      setTestIdAttribute(attributeName);
+    }
+  }
+  function createPlaywright() {
+    const sample = localTimeout("");
+    if (sample === null)
+      throw internalError("playwright", "claw-sdk's bootstrap has no TimeoutError");
+    return {
+      selectors: new Selectors,
+      errors: { TimeoutError: sample.constructor }
+    };
+  }
+
   // crates/neo-sdk/neo-playwright-js/src/prelude/index.ts
   installUnsupported({
+    Selectors,
     Browser,
     BrowserContext,
     Page,
@@ -11219,5 +11243,6 @@ Call Log:
   provide("context", () => context);
   provide("browser", () => browser);
   provide("expect", () => expect);
+  provide("playwright", () => createPlaywright());
   provide("Buffer", () => Buffer);
 })();

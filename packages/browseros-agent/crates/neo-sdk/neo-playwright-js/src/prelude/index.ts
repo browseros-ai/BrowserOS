@@ -4,9 +4,10 @@
  *
  * claw-sdk evaluates this IIFE in each run's fresh QuickJS realm, after its bootstrap and
  * before the agent's function, so every object here lives for one run. It defines no global:
- * it gives the agent's function five parameters through `__neo.provide`, the names
- * Playwright examples use: `page` (the run's own tab), `context`, `browser`, `expect`, and
- * Node's `Buffer` (buffer.ts), which upstream's payload examples build files with.
+ * it gives the agent's function six parameters through `__neo.provide`, the names
+ * Playwright examples use: `page` (the run's own tab), `context`, `browser`, `expect`,
+ * `playwright` (playwright.ts: `selectors` and `errors`), and Node's `Buffer` (buffer.ts),
+ * which upstream's payload examples build files with.
  * Every call they make reaches Rust as one op through bridge.ts, and every selector is built
  * by the vendored Playwright helpers imported in vendored.ts, in this one module graph.
  * neo-sdk installs URL and base64 globals; QuickJS has no Intl or structuredClone.
@@ -24,10 +25,12 @@ import { Frame } from './frame'
 import { Keyboard, Mouse } from './input'
 import { FrameLocator, Locator } from './locator'
 import { Page } from './page'
+import { createPlaywright, Selectors } from './playwright'
 import { Response } from './response'
 import { installUnsupported } from './unsupported'
 
 installUnsupported({
+  Selectors,
   Browser,
   BrowserContext,
   Page,
@@ -78,4 +81,5 @@ provide(
 provide('context', () => context)
 provide('browser', () => browser)
 provide('expect', () => expect)
+provide('playwright', () => createPlaywright())
 provide('Buffer', () => Buffer)

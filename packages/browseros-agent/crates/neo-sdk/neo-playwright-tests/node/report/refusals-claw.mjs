@@ -1,6 +1,10 @@
 /** Audited v1 refusals: prelude hints and the production door's refusal codes. */
 const hints = [
   {
+    hint: 'custom selector engines are not available in Neo; locate with CSS, text, role or test-id selectors',
+    sources: ['neo-playwright-js/src/prelude/unsupported.ts'],
+  },
+  {
     hint: 'Neo does not share its browser',
     sources: ['neo-playwright-js/src/prelude/unsupported.ts'],
   },
@@ -377,7 +381,7 @@ const hints = [
 ]
 
 const escapePattern = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-const api = String.raw`(?:browser|browserContext|page|frame|locator|elementHandle|jsHandle|download|consoleMessage|response|expect|keyboard|mouse)\.[^:\n]+`
+const api = String.raw`(?:browser|browserContext|page|frame|locator|elementHandle|jsHandle|download|consoleMessage|response|expect|keyboard|mouse|selectors)\.[^:\n]+`
 const prefix = `^(?:\\w*Error: )?${api}: `
 
 export const clawRefusals = hints.map(({ hint, sources }) => ({
