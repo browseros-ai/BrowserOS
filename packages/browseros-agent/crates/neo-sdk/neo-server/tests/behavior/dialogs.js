@@ -8,15 +8,19 @@ expect(first.type()).toBe('alert')
 expect(first.message()).toBe('Hello')
 await first.accept()
 const confirm = page.waitForEvent('dialog')
-await page.locator('#confirm').click()
+// A click waits for its dialog to settle. Answer from the concurrent waiter before
+// awaiting the click, as an event listener would, so neither promise waits on the other.
+const confirmClick = page.locator('#confirm').click()
 const second = await confirm
 expect(second.type()).toBe('confirm')
 await second.dismiss()
+await confirmClick
 const prompt = page.waitForEvent('dialog')
-await page.locator('#prompt').click()
+const promptClick = page.locator('#prompt').click()
 const third = await prompt
 expect(third.defaultValue()).toBe('Ada')
 await third.accept('Grace')
+await promptClick
 await expect
   .poll(() => page.evaluate(() => window.__answers))
   .toEqual([null, false, 'Grace'])
