@@ -247,6 +247,16 @@ function readPageFacts(pages: unknown): PageFact[] {
   return facts
 }
 
+/**
+ * One `error` line in the run's log, where the script's own `console.error` writes and the
+ * caller reads it: the bootstrap's `__neo_log` native, read as `__neo_sleep` is. A realm
+ * without it drops the line.
+ */
+export function logError(text: string): void {
+  const log: unknown = Reflect.get(globalThis, '__neo_log')
+  if (typeof log === 'function') Reflect.apply(log, globalThis, ['error', text])
+}
+
 /** The bootstrap's clock, or null in a realm without one. */
 function clock(): ((ms: number) => Promise<unknown>) | null {
   const sleep: unknown = Reflect.get(globalThis, '__neo_sleep')

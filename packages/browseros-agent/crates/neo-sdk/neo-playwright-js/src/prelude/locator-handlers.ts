@@ -18,7 +18,7 @@
  * it quietly when the run ends, as it cuts the event pump. Handlers live as long as the run: the
  * functions they call live in its realm.
  */
-import { invoke } from './bridge'
+import { invoke, logError } from './bridge'
 import { plainError } from './errors'
 import { Locator } from './locator'
 import type { Page } from './page'
@@ -93,8 +93,7 @@ export class LocatorHandlers {
           {},
         )
         // Not awaited: a handler that waits on another tab's action must not hold back a
-        // trigger that action raises. A throwing handler surfaces as an unhandled rejection,
-        // as upstream's does.
+        // trigger that action raises. `#run` never rejects.
         if (uid !== null) void this.#run(uid)
       }
     } catch {
@@ -108,13 +107,24 @@ export class LocatorHandlers {
   /** Upstream's `_onLocatorHandlerTriggered`: always resolves, so the paused action goes on. */
   async #run(uid: number): Promise<void> {
     let remove = false
+    const registration = this.#byUid.get(uid)
     try {
-      const registration = this.#byUid.get(uid)
       if (registration && registration.times !== 0) {
         if (registration.times !== undefined) registration.times--
         await registration.handler(registration.locator)
       }
       remove = registration?.times === 0
+    } catch (error) {
+      // Upstream's rejection goes unhandled, and Node prints it. This realm reports no
+      // unhandled rejection, so the error goes to the run's log, where the caller reads it;
+      // as upstream, the paused action still goes on, and a throw never removes the handler.
+      const thrown =
+        error instanceof Error
+          ? `${error.name}: ${error.message}`
+          : String(error)
+      logError(
+        `page.addLocatorHandler: the handler for ${String(registration?.locator)} threw: ${thrown}`,
+      )
     } finally {
       if (remove) this.#byUid.delete(uid)
       await invoke(

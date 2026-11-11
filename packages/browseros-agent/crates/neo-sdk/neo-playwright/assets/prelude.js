@@ -789,6 +789,11 @@
     }
     return facts;
   }
+  function logError(text) {
+    const log = Reflect.get(globalThis, "__neo_log");
+    if (typeof log === "function")
+      Reflect.apply(log, globalThis, ["error", text]);
+  }
   function clock() {
     const sleep = Reflect.get(globalThis, "__neo_sleep");
     return typeof sleep === "function" ? (ms) => Promise.resolve(Reflect.apply(sleep, globalThis, [ms])) : null;
@@ -8866,14 +8871,17 @@ ${value.stack}`;
     }
     async#run(uid) {
       let remove = false;
+      const registration = this.#byUid.get(uid);
       try {
-        const registration = this.#byUid.get(uid);
         if (registration && registration.times !== 0) {
           if (registration.times !== undefined)
             registration.times--;
           await registration.handler(registration.locator);
         }
         remove = registration?.times === 0;
+      } catch (error) {
+        const thrown = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+        logError(`page.addLocatorHandler: the handler for ${String(registration?.locator)} threw: ${thrown}`);
       } finally {
         if (remove)
           this.#byUid.delete(uid);

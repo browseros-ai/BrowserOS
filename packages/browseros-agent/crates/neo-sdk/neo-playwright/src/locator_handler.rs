@@ -203,28 +203,34 @@ pub(crate) async fn checkpoint(
         scope.log(format!(
             "  found {display}, intercepting action to run the handler"
         ));
-        // Ends when the sender goes: the script resolved or removed the handler, or the run
-        // ended. Nothing is ever sent on it. Upstream races it with the page's scope, so a
-        // page closed meanwhile fails the action at once.
+        let handled = async {
+            // Ends when the sender goes: the script resolved or removed the handler, or the
+            // run ended. Nothing is ever sent on it.
+            let _gone = resolved.changed().await;
+            if handler.no_wait_after {
+                scope.log("  locator handler has finished".to_owned());
+            } else {
+                scope.log(format!(
+                    "  locator handler has finished, waiting for {display} to be hidden"
+                ));
+                // Boxed: the wait's polls are the ones `locator.waitFor` runs, which
+                // themselves run this checkpoint first.
+                Box::pin(read::wait_hidden(scope, page, &handler.target)).await?;
+            }
+            Ok::<(), PlaywrightError>(())
+        };
+        // Upstream races both waits with the page's scope, so a page closed meanwhile fails
+        // the action at once.
         tokio::select! {
             biased;
-            _gone = resolved.changed() => {}
+            handled = handled => handled?,
             closed = closed(scope, page) => return Err(closed),
         }
-        // A handler that closed its own page resolves right after: the action would otherwise
-        // go on looking for its element in a tab that is gone.
+        // A closed tab reads as "nothing there", so the hidden wait passes at once; a handler
+        // that closed its own page, or a close the poll had not seen yet, would leave the
+        // action looking for its element in a tab that is gone.
         if !still_open(scope, page).await? {
             return Err(closed_error(scope));
-        }
-        if handler.no_wait_after {
-            scope.log("  locator handler has finished".to_owned());
-        } else {
-            scope.log(format!(
-                "  locator handler has finished, waiting for {display} to be hidden"
-            ));
-            // Boxed: the wait's polls are the ones `locator.waitFor` runs, which themselves
-            // run this checkpoint first.
-            Box::pin(read::wait_hidden(scope, page, &handler.target)).await?;
         }
         scope.log("  interception handler has finished, continuing".to_owned());
     }

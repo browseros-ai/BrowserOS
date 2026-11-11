@@ -9,6 +9,7 @@
 //!    dragTo    the banner covers the source: the handler's click is not held behind the drag
 //!    handle    elementHandle.focus runs no handler, as upstream's has no retry loop
 //!    timeout   a handler whose locator never hides: the matcher times out waiting for it
+//!    throws    a handler that throws: the action goes on, and the error reaches the run's log
 //!    close     a handler that closes its page, and a page closed while its handler still
 //!              runs, fail the paused action at once instead of hanging
 //! ```
@@ -74,6 +75,13 @@ const stuck = await expect(page.locator('#buy')).toHaveText('Buy', { timeout: 15
   .then(() => 'passed', (error) => error.message);
 await page.removeLocatorHandler(page.locator('#stuck'));
 
+const promo = await context.newPage();
+await promo.goto('data:text/html,' + encodeURIComponent('<p>Promo</p><button>Go</button>'));
+await promo.addLocatorHandler(promo.getByText('Promo'), async () => {
+  throw new Error('no close button');
+}, { noWaitAfter: true, times: 1 });
+await promo.getByRole('button').click();
+
 const signup = '<p>Sign up</p><button>Go</button>';
 const closing = await context.newPage();
 await closing.goto('data:text/html,' + encodeURIComponent(signup));
@@ -132,6 +140,8 @@ async fn drive(rig: &Rig) -> TestResult {
         "{result:?}"
     );
     client.cancel().await?;
+    // The text the model reads: the value, then the run's console lines.
+    let console = serde_json::to_string(&result.content)?;
     let reply = result
         .structured_content
         .ok_or("a run's reply is its structured content")?;
@@ -168,6 +178,13 @@ async fn drive(rig: &Rig) -> TestResult {
             "{name}: a closed page fails the paused action: {reply}"
         );
     }
+    assert!(
+        console.contains(
+            "[error] page.addLocatorHandler: the handler for getByText('Promo') threw: Error: no \
+             close button"
+        ),
+        "a throwing handler's error reaches the console lines the model reads: {console}"
+    );
     let took = value.get("closeTookMs").and_then(Value::as_u64);
     assert!(
         took.is_some_and(|ms| ms < 5_000),
