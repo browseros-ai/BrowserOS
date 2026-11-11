@@ -15,7 +15,7 @@
 //!                             Subject::Element, judged truthy in the page ─▶ done, or try again
 //! ```
 //!
-//! Elements reach the main world by backend node id, never as sealed-world objects: an object
+//! Elements reach the main world by backend node id, never as isolated-world objects: an object
 //! of one world cannot be an argument in another, and the main world resolves its own (the
 //! guard's `run`).
 

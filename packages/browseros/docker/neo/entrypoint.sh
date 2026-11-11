@@ -188,8 +188,8 @@ forget_zoom_levels() {
 #   VIEWER                noVNC on 6080 (websockify, no authentication). claw-sdk
 #                         images must not serve it (sdk-traces R1).
 #   CLIPBOARD_TO_VIEWERS  Xvnc sends the X clipboard to every VNC client. claw-sdk
-#                         turns that off so a copied card number never reaches a
-#                         viewer (sdk-privacy D6.1).
+#                         disables that export; clipboard sharing is a display-wide
+#                         image setting, independent of the targeted tab's lock.
 #   AGENT_SETTINGS        claw-server's human-help switch; claw-sdk has no such
 #                         route. claw-server's call stays strict, which also stops a
 #                         claw-sdk built without its marker. Read as claw-server, it

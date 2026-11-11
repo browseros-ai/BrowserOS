@@ -801,7 +801,7 @@ impl Writer {
                 text: &code.value,
                 truncated: code.truncation == Truncation::Cut,
             },
-            _ => RunCode::Withheld("unavailable"),
+            _ => RunCode::Unavailable,
         };
         let replay_window =
             i64::try_from(self.config.replay_window.as_millis()).unwrap_or(i64::MAX);

@@ -32,7 +32,7 @@ test('tests that claw refusals are selected by engine and preserve error precede
     'neo-lacks',
   )
   assert.equal(
-    classify('Error: page.click: neo / unsupported: cannot act on linked tabs')
+    classify('Error: page.click: neo / unsupported: feature unavailable')
       .verdict,
     'neo-lacks',
   )

@@ -19,8 +19,8 @@ pub struct OpSpec {
     pub target: OpTarget,
     /// `Background` only for the prelude's event pump.
     pub lifetime: OpLifetime,
-    /// What the op reaches beyond its page's sealed world. Empty for an op that only reads and
-    /// acts in the sealed world or sends trusted input, which is most of them. A unit test pins
+    /// What the op reaches beyond its page's isolated world. Empty for an op that only reads and
+    /// acts in the isolated world or sends trusted input, which is most of them. A unit test pins
     /// every op's list to an audit: changing one changes what a host holds or polices.
     pub capabilities: &'static [Capability],
     /// Every capability the op declares is policed at its gateway before the op's first
@@ -29,7 +29,7 @@ pub struct OpSpec {
     pub policed: bool,
 }
 
-/// What an op reaches beyond its page's sealed world, where the crate's own reads and actions
+/// What an op reaches beyond its page's isolated world, where the crate's own reads and actions
 /// run. These are the facts a host holds and polices
 /// ops by, instead of lists of op names, so an op added later that reaches one is held or
 /// policed from its first build rather than served unpoliced until someone lists it.
@@ -43,7 +43,7 @@ pub enum Capability {
     /// Runs agent-supplied script, or HTML whose scripts run, in a page's main world. There the
     /// script reads the page's own state and every frame of its site, so claw-sdk's door checks
     /// the op's tab again before it releases what the script answered. Gateways: the evaluate guard's entries, `EvaluateGuard::open` for a script and
-    /// `DocumentWrite::open` for `page.setContent`, whose HTML the sealed world writes and whose
+    /// `DocumentWrite::open` for `page.setContent`, whose HTML the isolated world writes and whose
     /// scripts the main world runs; `page/init_script.rs` for the init scripts and binding stubs
     /// every new document runs; and the guard's `resolve_binding` for a binding call's answer.
     MainWorld,
@@ -129,7 +129,7 @@ impl OpSpec {
         }
     }
 
-    /// The same op, declaring what it reaches beyond its page's sealed world.
+    /// The same op, declaring what it reaches beyond its page's isolated world.
     pub(crate) const fn using(self, capabilities: &'static [Capability]) -> Self {
         Self {
             capabilities,

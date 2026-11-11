@@ -492,3 +492,11 @@ Maintainers build and publish the image with `browseros release docker`; see
 | `permission denied` writing `/data` on Linux | Set `PUID`/`PGID` to the owner of your data folder. |
 | Viewer shows "Failed to connect" | The container stopped or restarted; the page reconnects by itself once it is back. |
 | `No such image` for a version | Images exist for Neo versions released for both amd64 and arm64 Linux. |
+
+## SDK page access
+
+The SDK follows Playwright for main-world evaluation, local-file navigation and file uploads.
+A takeover blocks agent actions on its targeted tab; live views, screenshots and traces keep
+streaming while the owner types. There is no private-tab state or automatic field/secret mask.
+Playwright's explicit screenshot mask option remains available. The host token and CAPTCHA
+key files remain image configuration; filesystem ownership and permissions still apply.

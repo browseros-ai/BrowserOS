@@ -22,7 +22,7 @@ const EPOCH_CHECK: Duration = Duration::from_secs(1);
 
 /// A change to the browser's tabs, in the order `tab_watch` saw it.
 ///
-/// The host API's parts key their state by tab (locks, private flags), so they learn each close
+/// The host API's parts key their state by tab (locks and fits), so they learn each close
 /// here rather than by comparing listings, which loses a tab that opened and closed between
 /// two of them. A close is final only on its own socket: after a browser restart an old tab id
 /// can name a new tab, so each event names the socket epoch it was seen on.

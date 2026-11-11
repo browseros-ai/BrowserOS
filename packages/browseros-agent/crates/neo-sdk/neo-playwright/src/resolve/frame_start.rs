@@ -4,7 +4,7 @@
 //! ```text
 //!  frame id (the prelude's, from page.frames) ── the page's frame tree ── main, f1, .., frame
 //!  each level: DOM.getFrameOwner(child) in the parent's session ── DOM.resolveNode in the
-//!    parent's sealed world ── probe resolve { root, want: frame } ── the hop's second half
+//!    parent's isolated world ── probe resolve { root, want: frame } ── the hop's second half
 //! ```
 //!
 //! Each level is a hop like a `frameLocator` chunk's, so the frame's parent links are recorded
@@ -24,7 +24,7 @@ use crate::probe::{self, ProbeFailure, ProbeReply, ProbeRequest, ProbeTarget, Wa
 use crate::resolve::resolver::{self, Hopped, Iframe};
 use crate::resolve::{self, FramePath};
 use crate::target::Strictness;
-use crate::world::{BackendNodeId, SealedWorld};
+use crate::world::{BackendNodeId, IsolatedWorld};
 use crate::{ErrorCode, PlaywrightError};
 
 /// One op's way into the child frame its locator was built from.
@@ -42,14 +42,14 @@ pub(crate) enum Started {
     /// The frame's world, the frames above it and whether every iframe on the way is visible.
     Ready {
         /// Boxed: a world is large, and the other variants carry little.
-        world: Box<SealedWorld>,
+        world: Box<IsolatedWorld>,
         path: FramePath,
         visible: bool,
     },
     /// A frame on the way is not there yet.
     Missing,
     /// A world on the way went away; the resolver invalidates it and runs the pass again.
-    Gone(Option<SealedWorld>),
+    Gone(Option<IsolatedWorld>),
     /// The page's frame tree no longer lists the frame: it was detached.
     Detached,
 }
@@ -88,7 +88,7 @@ impl FrameStart {
         &self,
         page: &OpPage<'_>,
         scope: &OpScope<'_>,
-        main: SealedWorld,
+        main: IsolatedWorld,
     ) -> Result<Started, PlaywrightError> {
         let Some(chain) = self.chain(page, scope).await? else {
             return Ok(Started::Detached);
@@ -153,7 +153,7 @@ impl FrameStart {
 async fn enter_child(
     page: &OpPage<'_>,
     scope: &OpScope<'_>,
-    parent: &SealedWorld,
+    parent: &IsolatedWorld,
     child: &FrameId,
 ) -> Result<Hopped, PlaywrightError> {
     let owner = parent

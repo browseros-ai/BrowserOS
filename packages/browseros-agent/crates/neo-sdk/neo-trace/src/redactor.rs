@@ -254,7 +254,7 @@ mod tests {
     }
 
     #[test]
-    fn inputs_keep_typed_values_without_field_redaction() {
+    fn inputs_preserve_field_values() {
         let redactor = redactor(RedactionLimits::default());
         let args = json!({"value": "typed", "token": "t0k3n", "selector": "input[type=password]"});
         assert_eq!(redactor.args(&args).value, args);

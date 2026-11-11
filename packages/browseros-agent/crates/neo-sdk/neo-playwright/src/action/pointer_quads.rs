@@ -13,7 +13,7 @@ use crate::op_scope::OpScope;
 use crate::page::OpPage;
 use crate::probe::{self, Point, ProbeFailure};
 use crate::resolve::Resolved;
-use crate::world::{Pin, SealedWorld};
+use crate::world::{IsolatedWorld, Pin};
 
 #[derive(Deserialize)]
 struct ContentQuads {
@@ -144,7 +144,7 @@ async fn target_origin(located: &Resolved) -> Result<Option<Point>, ProbeFailure
 }
 
 async fn embedding_origin(
-    parent: &SealedWorld,
+    parent: &IsolatedWorld,
     frame: &FrameId,
 ) -> Result<Option<Point>, ProbeFailure> {
     let Some(owner): Option<FrameOwner> = read_geometry(

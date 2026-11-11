@@ -1,7 +1,7 @@
 //! Playwright-compatible locators and actions for BrowserOS Neo's `run` tool (claw-sdk).
 //!
 //! Agent scripts call the Playwright API they already know. Element work (selector resolution,
-//! strict mode, actionability states, hit tests) runs in the page's sealed isolated world
+//! strict mode, actionability states, hit tests) runs in the page's isolated world
 //! (`browseros-engine`), using Playwright's own `InjectedScript` built from the sources vendored
 //! unmodified under `third_party/playwright/`. Retries,
 //! timeouts, frame hops and every decision stay in Rust, which also sends the trusted input.
@@ -15,7 +15,7 @@
 //! (`locator.click`, `page.ariaSnapshot`, ...); a client method may compose steps, such as
 //! screenshot capture followed by a file save. The host registers every op from [`Op::all`]
 //! and hands each step to [`Playwright::invoke`] with an [`OpEnv`] for that call.
-//! Each op's [`OpSpec`] declares the [`Capability`]s it reaches beyond its page's sealed world
+//! Each op's [`OpSpec`] declares the [`Capability`]s it reaches beyond its page's isolated world
 //! (the page's main world, its pixels, Neo's screen, Neo's disk), and the host holds and polices
 //! ops by those declarations, never by op name. Each capability's gateway in the crate refuses
 //! an op whose spec does not declare it.

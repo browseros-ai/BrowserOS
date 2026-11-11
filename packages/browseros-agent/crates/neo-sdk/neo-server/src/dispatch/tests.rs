@@ -758,7 +758,7 @@ async fn a_refusal_brand_cannot_claim_another_owner_or_code() -> Result<(), Box<
     Ok(())
 }
 
-/// FR/RC C4 and risk 1 of the privacy cut. A refusal's reason is the script's own text: the door
+/// A refusal's reason is the script's own text: the door
 /// passes it through whole, and cuts a long one to `TEXT_CHARS`, so a script cannot make a
 /// refusal as large as it likes.
 #[tokio::test]
@@ -816,7 +816,7 @@ async fn the_trace_keeps_typed_values_and_secret_named_fields() -> Result<(), Bo
 
     let fill = |value: &str| json!({ "page": handle(&page), "value": value, "secret": "s3cret" });
     let (ordinary, _) = harness.submit(&run, "test.fill", fill("alice")).await;
-    let (sensitive, _) = harness.submit(&run, "test.fill", fill("hunter2")).await;
+    let (password_fill, _) = harness.submit(&run, "test.fill", fill("hunter2")).await;
 
     let row = harness.row(ordinary).await?;
     assert_eq!(
@@ -824,7 +824,7 @@ async fn the_trace_keeps_typed_values_and_secret_named_fields() -> Result<(), Bo
         Some(json!({ "page": handle(&page), "value": "alice", "secret": "s3cret" })),
         "field names do not redact arguments"
     );
-    let row = harness.row(sensitive).await?;
+    let row = harness.row(password_fill).await?;
     assert_eq!(
         row.args,
         Some(json!({ "page": handle(&page), "value": "hunter2", "secret": "s3cret" })),

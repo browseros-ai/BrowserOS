@@ -3,7 +3,7 @@
 //! ```text
 //!  BrowserLink ── connect loop: the first connect retried 1 s → 30 s, then the CDP client
 //!     │           reconnects by itself (KeepTrying, no retry limit)
-//!     │  on the first success, once: the BrowserSession (sensitive values masked, isolated
+//!     │  on the first success, once: the BrowserSession (isolated
 //!     │  world on), core's detach hook ─▶ TabRegistry::closed, and the tab_watch task
 //!     ├─ view() ─▶ RunView: an unbound BrowserView with the viewports, and its CDP epoch
 //!     ├─ status() / is_ready() / is_current(epoch) ─▶ health, readiness, the door's gates

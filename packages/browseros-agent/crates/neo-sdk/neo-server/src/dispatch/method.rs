@@ -70,7 +70,7 @@ impl MethodSpec {
             visibility: Visibility::Script,
             listing: Listing::Hidden,
             lifetime: Lifetime::Operation,
-            page_script: PageScript::Sealed,
+            page_script: PageScript::Isolated,
         }
     }
 }
@@ -99,8 +99,8 @@ pub(crate) enum Listing {
 /// Where a method runs script in its page (decision 35c).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum PageScript {
-    /// In Neo's sealed world alone, where field values are masked at the source, or nowhere.
-    Sealed,
+    /// In Neo's isolated world alone, or without running a page script.
+    Isolated,
     /// The agent's own script in the page's main world (`page.evaluate`, `waitForFunction` and the
     /// element scripts). What it answers, a value or the error it threw, is what it read of the
     /// page, though the op is a write: the door releases that answer only past the rules again,

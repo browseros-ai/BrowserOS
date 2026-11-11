@@ -1,4 +1,3 @@
-// A local file. Refused: Neo opens only http, https, data and about URLs, since a
-// file in the container could show Neo's own secrets.
-await page.goto('file:///etc/passwd');
+// Navigate to an ordinary local file using Chromium's file URL handling.
+await page.goto('file:///etc/os-release');
 return { content: await page.content() };

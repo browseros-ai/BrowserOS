@@ -1,5 +1,5 @@
 //! The probe protocol: the one contract between this crate and Neo's probe in each frame's
-//! sealed `browseros-engine` world.
+//! isolated `browseros-engine` world.
 //!
 //! ```text
 //!  Runtime.callFunctionOn {

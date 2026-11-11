@@ -152,7 +152,7 @@ export type Done = Record<string, never>
 
 /** A frame Rust could not read within its budget; it keeps its iframe line and gets a comment. */
 export type PartialFrame = { ref: string; frame: string; reason: string }
-/** A stitched, masked aria snapshot. The prelude renders it as YAML. */
+/** A stitched aria snapshot. The prelude renders it as YAML. */
 export type SnapshotResult = { json: AriaSnapshotJSON; partial: PartialFrame[] }
 
 /** The Playwright events Neo reports. `page` is the context's; the rest are a page's. */
@@ -677,12 +677,12 @@ export type OpOutputs = {
   'page.close': Done
   'page.opener': { opener: PageBrand | null }
   'page.frames': Partial<FrameTree>
-  /** The script's result in Playwright's in-page format, masked. */
+  /** The script's result in Playwright's in-page format. */
   'worker.evaluate': { value: SerializedValue }
   'page.evaluate': { value: SerializedValue; frames?: FrameInfo[] }
   'locator.evaluate': SerializedValue
   'locator.evaluateAll': SerializedValue
-  /** The predicate's truthy value, masked, and upstream's preview of it (`toString()`). */
+  /** The predicate's truthy value and upstream's preview of it (`toString()`). */
   'page.waitForFunction': { value: SerializedValue; preview: string }
   'locator.waitForFunction': null
   /** The `{"$neo":"bytes"}` brand, revived as the prelude's Buffer (index.ts). */
