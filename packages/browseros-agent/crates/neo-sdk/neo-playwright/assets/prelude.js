@@ -657,8 +657,16 @@
       const ready = readyChoosers(op);
       if (ready)
         await ready;
-      return await host().invoke(op, { call, ...args }, signal === undefined ? undefined : { signal });
+      countPumps();
+      const value = await host().invoke(op, { call, ...args }, signal === undefined ? undefined : { signal });
+      const held = pumpsCaughtUp(op);
+      if (held)
+        await held;
+      return value;
     } catch (thrown) {
+      const held = pumpsCaughtUp(op);
+      if (held)
+        await held;
       throw withAbortCause(shapeBridgeError(op, call.api, thrown), signal);
     }
   }
@@ -667,18 +675,63 @@
       const ready = readyChoosers(op);
       if (ready)
         await ready;
+      countPumps();
       const reply = await host().invoke(op, { call, ...args }, {
         observed: true,
         signal,
         onResult: onResult && ((value, observed) => onResult(value, readObservation(observed)))
       });
+      const held = pumpsCaughtUp(op);
+      if (held)
+        await held;
       return {
         value: field(reply, "value"),
         observed: readObservation(field(reply, "observed"))
       };
     } catch (thrown) {
+      const held = pumpsCaughtUp(op);
+      if (held)
+        await held;
       throw withAbortCause(shapeBridgeError(op, call.api, thrown), signal);
     }
+  }
+  var PUMP_HOLD_MS = 1000;
+  var pumpsNeeded = 0;
+  var pumpsDispatched = 0;
+  var countingPumps = false;
+  var pumpHolds = [];
+  function countPumps() {
+    if (countingPumps)
+      return;
+    countingPumps = true;
+    host().onReply((envelope) => {
+      const pumped = field(envelope, "pumped");
+      if (typeof pumped === "number" && pumped > pumpsNeeded)
+        pumpsNeeded = pumped;
+    });
+  }
+  function pumpDispatched() {
+    pumpsDispatched = Math.max(pumpsDispatched, pumpsNeeded);
+    for (const hold of pumpHolds.filter((hold) => hold.needed <= pumpsDispatched))
+      hold.release();
+  }
+  function pumpsCaughtUp(op) {
+    const needed = pumpsNeeded;
+    if (op.startsWith("events.") || pumpsDispatched >= needed)
+      return;
+    return new Promise((resolve) => {
+      let cancel = () => {};
+      const release = () => {
+        cancel();
+        const index = pumpHolds.indexOf(hold);
+        if (index >= 0)
+          pumpHolds.splice(index, 1);
+        resolve();
+      };
+      const hold = { needed, release };
+      pumpHolds.push(hold);
+      cancel = startTimer(PUMP_HOLD_MS, release);
+    });
   }
   function registerBrand(brand, fromJson) {
     host().brands.register(brand, fromJson);
@@ -8691,27 +8744,33 @@ ${value.stack}`;
     async pump() {
       try {
         while (this.listening > 0) {
-          const {
-            value: { events, lost },
-            observed
-          } = await invokeObserved("events.next", { api: "events.next", timeoutMs: 0 }, {}, ({ events }) => this.stageBatch(events));
           try {
-            for (const event of events)
-              this.deliver(event, observed);
-          } finally {
-            if (lost > 0)
-              this.navigationLostThrough = Math.max(this.navigationLostThrough, observed?.events ?? Infinity);
-            try {
-              this.settleCloses(observed);
-            } finally {
-              const batch = this.batch;
-              this.batch = null;
-              batch?.finish();
-            }
+            await invokeObserved("events.next", { api: "events.next", timeoutMs: 0 }, {}, ({ events, lost }, observed) => this.deliverBatch(events, lost, observed));
+          } catch (error) {
+            pumpDispatched();
+            throw error;
           }
         }
       } catch {} finally {
         this.pumping = false;
+      }
+    }
+    deliverBatch(events, lost, observed) {
+      this.stageBatch(events);
+      try {
+        for (const event of events)
+          this.deliver(event, observed);
+      } finally {
+        if (lost > 0)
+          this.navigationLostThrough = Math.max(this.navigationLostThrough, observed?.events ?? Infinity);
+        try {
+          this.settleCloses(observed);
+        } finally {
+          const batch = this.batch;
+          this.batch = null;
+          batch?.finish();
+          pumpDispatched();
+        }
       }
     }
     stageBatch(events) {

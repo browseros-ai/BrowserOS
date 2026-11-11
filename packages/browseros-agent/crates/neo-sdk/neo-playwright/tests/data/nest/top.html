@@ -1,2 +1,9 @@
 <!doctype html><html><head><meta charset="utf-8"><title>Top</title><script src="frame.js"></script></head>
-<body data-children="A:a1.html B:b1.html"><h1>Top (A, level 0)</h1><button>Top button</button> <input aria-label="Top field"><script>if (location.search.includes("hang")) document.body.dataset.children += " D:hang.html";</script></body></html>
+<body data-children="A:a1.html B:b1.html"><h1>Top (A, level 0)</h1><button>Top button</button> <input aria-label="Top field"><script>
+// The child announces readiness in a task that returns before the host commands it to spin.
+addEventListener('message', ({data, source}) => {
+  if (data === 'neo-fixture-hang-ready' && source === document.querySelector('iframe[title="hang"]')?.contentWindow)
+    globalThis.__hangReady = true;
+});
+if (location.search.includes("hang")) document.body.dataset.children += " D:hang.html";
+</script></body></html>

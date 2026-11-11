@@ -10,16 +10,14 @@
 
 use super::{
     AxTreeResult, CaptureContext, DescribeNodeResult, GetFrameTreeResult, Observer,
-    clickable::{ClickableDocument, find_clickables, find_form_fields},
+    clickable::{ClickableDocument, find_clickables},
     collect_frame_documents,
 };
 use crate::{
     CoreError, FrameId, PageId, ProtocolSession,
     frames::FrameTarget,
-    sensitive_fields::SensitiveValues,
     snapshot::{
-        AxNode, DocumentId, FrameError, FrameFields, FrameOwner, FrameReadReason, FrameReadStage,
-        IframeStitch,
+        AxNode, DocumentId, FrameError, FrameOwner, FrameReadReason, FrameReadStage, IframeStitch,
     },
 };
 use futures_util::{StreamExt, stream::FuturesUnordered};
@@ -150,8 +148,6 @@ pub(super) struct AcquiredFrame {
     /// Why the clickable scan failed, when it did. The contents were still read.
     pub(super) cursor_error: Option<FrameReadReason>,
     pub(super) document_id: Option<DocumentId>,
-    /// The frame's form controls, read only when the session masks sensitive values.
-    pub(super) fields: Option<FrameFields>,
 }
 
 pub(super) struct AcquiredChild {
@@ -322,7 +318,6 @@ async fn acquire_frame_data(
         dom_snapshots,
         budget,
         trace,
-        sensitive,
     } = context;
     let acquired_frame_id = frame_id.clone();
     let clickable_document = if target.cursor_uses_session_default {
@@ -363,35 +358,13 @@ async fn acquire_frame_data(
         );
         result
     };
-    // The same per-session DOM capture as the clickable scan, so this adds no CDP call. A failed
-    // read degrades to accessibility-only classification, never to raw values.
-    let fields = async {
-        match sensitive {
-            SensitiveValues::Heuristic => None,
-            SensitiveValues::Mask => Some(
-                match find_form_fields(dom_snapshots, &target.session, clickable_document, budget)
-                    .await
-                {
-                    Ok(fields) => FrameFields {
-                        fields,
-                        degraded: false,
-                    },
-                    Err(_reason) => FrameFields {
-                        fields: HashMap::new(),
-                        degraded: true,
-                    },
-                },
-            ),
-        }
-    };
     let document_started = Instant::now();
     let document_id =
         eager_document_id_for_frame(root_session, frame_id.clone(), frame_documents, budget);
     // These stages are independent after target resolution. An AX failure leaves nothing to
     // render; a cursor failure keeps the contents and is reported; document identity falls back
     // to capture-local refs.
-    let (nodes, cursor_hits, document_id, fields) =
-        tokio::join!(ax_tree, cursor_hits, document_id, fields);
+    let (nodes, cursor_hits, document_id) = tokio::join!(ax_tree, cursor_hits, document_id);
     let nodes = nodes?.nodes;
     let (cursor_hits, cursor_error) = match cursor_hits {
         Ok(hits) => (hits, None),
@@ -415,7 +388,6 @@ async fn acquire_frame_data(
         cursor_hits,
         cursor_error,
         document_id,
-        fields,
     })
 }
 
@@ -538,7 +510,7 @@ mod tests {
     use crate::observer::clickable::DomSnapshots;
     use crate::{
         CoreError, FrameId, PageId, ProtocolSession, SessionId, connection::CdpConnection,
-        frames::FrameTarget, sensitive_fields::SensitiveValues,
+        frames::FrameTarget,
     };
     use browseros_cdp::{CdpError, CdpEvent, TargetedEvents};
     use futures_util::future::BoxFuture;
@@ -709,18 +681,6 @@ mod tests {
             dom_snapshots: dom_snapshots.clone(),
             budget: budget.clone(),
             trace: CaptureTrace::new(PageId(1), 0),
-            sensitive: SensitiveValues::Heuristic,
-        }
-    }
-
-    fn masking_context(root_session: &ProtocolSession) -> CaptureContext {
-        CaptureContext {
-            sensitive: SensitiveValues::Mask,
-            ..context(
-                root_session,
-                &DomSnapshots::default(),
-                &SnapshotBudget::new(),
-            )
         }
     }
 
@@ -782,57 +742,6 @@ mod tests {
             acquired.document_id.as_deref(),
             Some("child-frame:child-loader")
         );
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn masking_reads_form_fields_from_the_same_capture() -> Result<(), CoreError> {
-        let connection = Arc::new(CaptureConnection::default());
-        let session = ProtocolSession::root(connection.clone());
-
-        let heuristic = super::acquire_frame_data(
-            target(&session, true),
-            None,
-            None,
-            &context(&session, &DomSnapshots::default(), &SnapshotBudget::new()),
-        )
-        .await?;
-        assert!(heuristic.fields.is_none());
-
-        let before = connection.count("DOMSnapshot.captureSnapshot");
-        let masked = super::acquire_frame_data(
-            target(&session, true),
-            None,
-            None,
-            &masking_context(&session),
-        )
-        .await?;
-        let fields = masked.fields.ok_or(CoreError::DocumentChanged)?;
-        assert!(!fields.degraded);
-        // The clickable scan and the field read share one capture.
-        assert_eq!(connection.count("DOMSnapshot.captureSnapshot") - before, 1);
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn masking_degrades_instead_of_failing_open_when_the_capture_fails()
-    -> Result<(), CoreError> {
-        let connection = Arc::new(CaptureConnection {
-            fail_capture: true,
-            ..CaptureConnection::default()
-        });
-        let session = ProtocolSession::root(connection);
-
-        let masked = super::acquire_frame_data(
-            target(&session, true),
-            None,
-            None,
-            &masking_context(&session),
-        )
-        .await?;
-        let fields = masked.fields.ok_or(CoreError::DocumentChanged)?;
-        assert!(fields.degraded);
-        assert!(fields.fields.is_empty());
         Ok(())
     }
 

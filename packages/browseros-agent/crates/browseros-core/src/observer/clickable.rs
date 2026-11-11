@@ -48,7 +48,6 @@ const INTERACTIVE_ROLES: &[&str] = &[
     "treeitem",
 ];
 const ELEMENT_NODE: i64 = 1;
-const TEXT_NODE: i64 = 3;
 
 /// Which document of a session's capture belongs to the frame being acquired.
 #[derive(Clone, Copy, Debug)]
@@ -340,14 +339,6 @@ impl<'a> View<'a> {
         self.document.nodes.backend_node_id.get(i).copied()
     }
 
-    fn node_value(&self, i: usize) -> Option<&'a str> {
-        self.string(*self.document.nodes.node_value.get(i)?)
-    }
-
-    fn is_text(&self, i: usize) -> bool {
-        self.document.nodes.node_type.get(i) == Some(&TEXT_NODE)
-    }
-
     fn attribute(&self, i: usize, name: &str) -> Option<&'a str> {
         let (pairs, _) = self.document.nodes.attributes.get(i)?.as_chunks::<2>();
         pairs.iter().find_map(|&[key, value]| {
@@ -430,10 +421,6 @@ struct Nodes {
     pseudo_type: RareStrings,
     #[serde(default)]
     is_clickable: RareBooleans,
-    /// Text nodes' contents. Read only for the text of a field's form (`form_fields`); the
-    /// capture's `inputValue` and `textValue` columns, which hold typed values, are never parsed.
-    #[serde(default)]
-    node_value: Vec<i64>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -460,9 +447,6 @@ struct RareBooleans {
     #[serde(default)]
     index: Vec<i64>,
 }
-
-mod form_fields;
-pub(super) use form_fields::find_form_fields;
 
 #[cfg(test)]
 mod tests;

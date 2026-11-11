@@ -344,6 +344,8 @@ async fn next(pw: &Playwright, scope: &OpScope<'_>) -> Result<Value, PlaywrightE
     let run = scope.run_state();
     let hub = pw.events();
     hub.bind(run);
+    // An op that ends waits for a pump in flight to read past its events (RunEvents::taken_through).
+    let _pumping = run.events.pumping();
     loop {
         let mut changed = pin!(hub.changed());
         changed.as_mut().enable();
@@ -382,11 +384,13 @@ async fn next(pw: &Playwright, scope: &OpScope<'_>) -> Result<Value, PlaywrightE
             }
             read_up_to.push((subscription, read.head));
         }
-        run.events.advance(&read_up_to);
+        // Before the advance, which counts this reply when it carries anything.
         let (calls, dropped) = run.events.take_calls();
         events.extend(calls.into_iter().map(binding_call));
         lost += dropped;
-        if !events.is_empty() || lost > 0 {
+        let replying = !events.is_empty() || lost > 0;
+        run.events.advance(&read_up_to, replying);
+        if replying {
             events.sort_by_key(Delivered::order);
             // After the sort, so a run's download index is the order its script receives them.
             hand_downloads(pw, scope, &events);

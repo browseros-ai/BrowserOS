@@ -467,6 +467,22 @@ impl CdpConnection for HoldsOneAnswer {
         CdpConnection::events_targeted(&self.client, method)
     }
 
+    fn events_broadcast(&self) -> u64 {
+        CdpConnection::events_broadcast(&self.client)
+    }
+
+    fn events_counted(&self) -> (broadcast::Receiver<CdpEvent>, u64) {
+        CdpConnection::events_counted(&self.client)
+    }
+
+    fn events_targeted_counted(&self, method: &str) -> (mpsc::UnboundedReceiver<CdpEvent>, u64) {
+        CdpConnection::events_targeted_counted(&self.client, method)
+    }
+
+    fn events_targeted_delivered(&self, method: &str) -> u64 {
+        CdpConnection::events_targeted_delivered(&self.client, method)
+    }
+
     fn is_connected(&self) -> bool {
         CdpConnection::is_connected(&self.client)
     }
@@ -549,6 +565,187 @@ async fn dropped_answers(
         assert_eq!(answer, json!(false), "{closer} dismissed the confirm");
     }
     Ok(())
+}
+
+/// How late [`SlowWatcher`] hands the target watcher each event.
+const WATCHER_LAG: Duration = Duration::from_millis(150);
+
+/// The crate's CDP connection with the target watcher behind the wire: `events_counted`, which
+/// only the watcher calls, gives a receiver a relay feeds each event [`WATCHER_LAG`] after it
+/// arrived. Commands, replies and the client's counts pass unchanged, so an evaluate's reply
+/// comes well before the watcher sees the console event the evaluate caused, and only the
+/// fence (`Playwright::events_before_reply`) can hold the op for it.
+struct SlowWatcher {
+    client: CdpClient,
+}
+
+impl CdpConnection for SlowWatcher {
+    fn send<'a>(
+        &'a self,
+        method: &'a str,
+        params: Value,
+        session: Option<&'a SessionId>,
+    ) -> BoxFuture<'a, Result<Value, CdpError>> {
+        CdpConnection::send(&self.client, method, params, session)
+    }
+
+    fn send_raw_json<'a>(
+        &'a self,
+        method: &'a str,
+        params_json: &'a str,
+        session: Option<&'a SessionId>,
+    ) -> BoxFuture<'a, Result<String, CdpError>> {
+        CdpConnection::send_raw_json(&self.client, method, params_json, session)
+    }
+
+    fn send_at_epoch<'a>(
+        &'a self,
+        expected_epoch: u64,
+        method: &'a str,
+        params: Value,
+        session: Option<&'a SessionId>,
+    ) -> BoxFuture<'a, Result<Value, CdpError>> {
+        CdpConnection::send_at_epoch(&self.client, expected_epoch, method, params, session)
+    }
+
+    fn send_raw_json_at_epoch<'a>(
+        &'a self,
+        expected_epoch: u64,
+        method: &'a str,
+        params_json: &'a str,
+        session: Option<&'a SessionId>,
+    ) -> BoxFuture<'a, Result<String, CdpError>> {
+        CdpConnection::send_raw_json_at_epoch(
+            &self.client,
+            expected_epoch,
+            method,
+            params_json,
+            session,
+        )
+    }
+
+    fn events(&self) -> broadcast::Receiver<CdpEvent> {
+        CdpConnection::events(&self.client)
+    }
+
+    fn events_targeted(&self, method: &str) -> mpsc::UnboundedReceiver<CdpEvent> {
+        CdpConnection::events_targeted(&self.client, method)
+    }
+
+    fn events_broadcast(&self) -> u64 {
+        CdpConnection::events_broadcast(&self.client)
+    }
+
+    fn events_counted(&self) -> (broadcast::Receiver<CdpEvent>, u64) {
+        let (mut wire, before) = CdpConnection::events_counted(&self.client);
+        let (late_tx, late) = broadcast::channel(4096);
+        let (stamped_tx, mut stamped) = mpsc::unbounded_channel();
+        // Two stages, so each event is late by the same lag rather than by the queue before it.
+        tokio::spawn(async move {
+            while let Ok(event) = wire.recv().await {
+                if stamped_tx.send((Instant::now(), event)).is_err() {
+                    return;
+                }
+            }
+        });
+        tokio::spawn(async move {
+            while let Some((arrived, event)) = stamped.recv().await {
+                time::sleep_until((arrived + WATCHER_LAG).into()).await;
+                if late_tx.send(event).is_err() {
+                    return;
+                }
+            }
+        });
+        (late, before)
+    }
+
+    fn events_targeted_counted(&self, method: &str) -> (mpsc::UnboundedReceiver<CdpEvent>, u64) {
+        CdpConnection::events_targeted_counted(&self.client, method)
+    }
+
+    fn events_targeted_delivered(&self, method: &str) -> u64 {
+        CdpConnection::events_targeted_delivered(&self.client, method)
+    }
+
+    fn is_connected(&self) -> bool {
+        CdpConnection::is_connected(&self.client)
+    }
+
+    fn connection_epoch(&self) -> u64 {
+        CdpConnection::connection_epoch(&self.client)
+    }
+}
+
+/// Upstream's listener has run for the message an evaluate logged before the evaluate resolves.
+/// Neo's op answers only once the pump took that message (`Playwright::events_before_reply`):
+/// the pump's reply completes no later than the evaluate's, though the watcher reads the
+/// console event on a task of its own, here [`WATCHER_LAG`] behind the wire.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_an_op_answers_after_the_pump_took_the_console_message_it_caused() -> TestResult
+{
+    if env::var("BROWSERCLAW_HOSTED_MODE").is_ok_and(|mode| mode == "1") {
+        return Ok(());
+    }
+    let run = LiveRun::connect_through(|client| {
+        Arc::new(SlowWatcher { client }) as Arc<dyn CdpConnection>
+    })
+    .await?;
+    let server = PageServer::start().await?;
+    let page = run.new_page().await?;
+    let result = Box::pin(ordered_rounds(&run, &server, &page)).await;
+    run.close_page(&page).await;
+    result
+}
+
+/// [`tests_that_an_op_answers_after_the_pump_took_the_console_message_it_caused`]'s body.
+async fn ordered_rounds(run: &LiveRun, server: &PageServer, page: &TestPage) -> TestResult {
+    {
+        open(run, page, &server.url("/popups.html")).await?;
+        run.invoke(
+            "events.listen",
+            json!({ "page": brand(page), "event": "console", "on": true, "since": now_ms()? }),
+        )
+        .await?;
+        for round in 0..5 {
+            let text = format!("ordered {round}");
+            let pumped = async {
+                let reply = run.invoke("events.next", json!({})).await;
+                (reply, Instant::now())
+            };
+            let evaluated = async {
+                let expression = format!("() => console.log({text:?})");
+                let script = json!({ "run": {
+                    "expression": expression, "isFunction": true, "arg": r#"{"v":"undefined"}"#,
+                } });
+                let reply = run
+                    .invoke(
+                        "page.evaluate",
+                        json!({ "page": brand(page), "script": script }),
+                    )
+                    .await;
+                (reply, Instant::now())
+            };
+            let ((pumped, pumped_at), (evaluated, evaluated_at)) = tokio::join!(pumped, evaluated);
+            evaluated?;
+            let events = pumped?
+                .get("events")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default();
+            assert!(
+                events
+                    .iter()
+                    .any(|event| event.pointer("/message/text") == Some(&json!(text))),
+                "the pump's reply carries the message: {events:?}"
+            );
+            assert!(
+                pumped_at <= evaluated_at,
+                "round {round}: the evaluate answered before the pump took its message"
+            );
+        }
+        Ok(())
+    }
 }
 
 #[tokio::test]
