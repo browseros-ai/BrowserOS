@@ -28,6 +28,7 @@ use crate::{ErrorCode, Playwright, PlaywrightError, resolve};
 
 /// A frame whose document `setContent` replaces, found once its op's `MainWorld` declaration was
 /// checked: the only way to [`DocumentWrite::write`].
+#[must_use]
 pub(crate) struct DocumentWrite<'op> {
     pw: &'op Playwright,
     page: OpPage<'op>,
