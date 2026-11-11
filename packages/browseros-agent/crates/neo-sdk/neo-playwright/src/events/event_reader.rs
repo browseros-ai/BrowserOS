@@ -194,13 +194,7 @@ pub(crate) async fn deliver(
         Subscription::Page { tab, .. } => Some(PageHandle::new(*tab)),
         Subscription::ContextPage => None,
     };
-    // A console/dialog/etc. can follow a renderer-initiated navigation. Its delivery is a
-    // synchronization point for page.url(), even though no navigation op ran in this host.
-    if let Some(page) = &listener
-        && !matches!(record.event, PageEvent::Closed(_))
-    {
-        scope.report_navigation(page.tab());
-    }
+    report_navigation(scope, listener.as_ref(), &record.event);
     let payload = match (&record.event, listener) {
         (PageEvent::Opened(opened), Some(page)) => {
             let Some(popup) = popup_tab(scope, opened, tabs, windows).await? else {
@@ -297,6 +291,16 @@ pub(crate) async fn deliver(
         at: record.at_ms,
         payload,
     }))
+}
+
+/// A console/dialog/etc. can follow renderer-initiated navigation. Delivery synchronizes
+/// page.url() even when no SDK navigation ran, while a close carries its own terminal facts.
+fn report_navigation(scope: &OpScope<'_>, page: Option<&PageHandle>, event: &PageEvent) {
+    if let Some(page) = page
+        && !matches!(event, PageEvent::Closed(_))
+    {
+        scope.report_navigation(page.tab());
+    }
 }
 
 /// The popup's page, or what the read does with a window.
