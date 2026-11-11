@@ -56,6 +56,7 @@ const ANSWERS: Record<string, unknown> = {
   'locator.ariaSnapshot': { json: [], partial: [] },
   'page.frames': FRAMES,
   'page.opener': { opener: null },
+  'page.evaluate': { value: null },
   'page.waitForFunction': { value: true, preview: 'true' },
   'context.newPage': {
     page: { $neo: 'page', tab: 1008 },

@@ -106,7 +106,8 @@ it('tests that every result reads back as upstream reads it', async () => {
   for (const value of golden.values) {
     const runtime = loadPrelude({
       seed: SEED,
-      answer: (call) => (call.name === 'page.evaluate' ? value.result : null),
+      answer: (call) =>
+        call.name === 'page.evaluate' ? { value: value.result } : null,
     })
     const upstream = upstreamResult(value.result)
     const described = json(
@@ -200,7 +201,9 @@ it('tests that one waitForFunction handle twice in an argument reaches the page 
             value: { o: [{ k: 'ready', v: 42 }], id: 1 },
             preview: 'JSHandle@object',
           }
-        : null,
+        : call.name === 'page.evaluate'
+          ? { value: null }
+          : null,
   })
   await runtime.run(`
     const ready = await page.waitForFunction(() => ({ ready: 42 }))
@@ -255,9 +258,11 @@ it('tests that an answer the prelude cannot read fails as the op that answered i
   const runtime = loadPrelude({
     seed: SEED,
     answer: (call) =>
-      call.name === 'page.evaluate' || call.name === 'locator.evaluate'
-        ? unreadable
-        : null,
+      call.name === 'page.evaluate'
+        ? { value: unreadable }
+        : call.name === 'locator.evaluate'
+          ? unreadable
+          : null,
   })
   const outcomes = json(
     await runtime.run(`

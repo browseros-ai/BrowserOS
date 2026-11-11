@@ -1257,11 +1257,16 @@ export class Frame extends EventEmitter {
     options: EvaluateOptions | undefined,
   ): Promise<unknown> {
     const script = pageCall(api, 'frame', pageFunction, arg, options)
-    const value = await invoke('page.evaluate', this._call(api, 0), {
-      ...(await this._frameArgs(api)),
-      script,
-    })
-    return fromPageValue(api, value)
+    const { value: result, observed } = await invokeObserved(
+      'page.evaluate',
+      this._call(api, 0),
+      {
+        ...(await this._frameArgs(api)),
+        script,
+      },
+    )
+    this._page._evaluated(result.frames, observed)
+    return fromPageValue(api, result.value)
   }
 
   /** upstream's `Frame.waitForFunction`: its polling check, unprefixed, comes first. */
