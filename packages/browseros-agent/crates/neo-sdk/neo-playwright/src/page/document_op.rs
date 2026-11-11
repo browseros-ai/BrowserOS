@@ -5,7 +5,7 @@
 
 use browseros_core::FrameId;
 use serde::Deserialize;
-use serde_json::{Value, json};
+use serde_json::Value;
 
 use crate::op_scope::OpScope;
 use crate::page::evaluate_guard::{self, DocumentWrite, TreeFrame};
@@ -130,7 +130,7 @@ pub(crate) async fn set_content(
         .await?
         .write(scope, &input.html, input.wait_until)
         .await?;
-    Ok(json!({}))
+    Ok(Value::Null)
 }
 
 #[cfg(test)]

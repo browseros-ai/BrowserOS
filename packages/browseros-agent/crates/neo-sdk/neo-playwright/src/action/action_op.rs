@@ -182,9 +182,6 @@ struct DragInput {
 struct DragOptions {
     #[serde(default)]
     force: bool,
-    /// Accepted, as upstream's client accepts it; 1.64.1's `dragAndDrop` never waits after.
-    #[serde(default, rename = "noWaitAfter")]
-    _no_wait_after: bool,
     scroll: Option<ScrollOption>,
     source_position: Option<Point>,
     target_position: Option<Point>,
@@ -219,9 +216,6 @@ struct FillInput {
 struct FillOptions {
     #[serde(default)]
     force: bool,
-    /// Accepted, as upstream's client accepts it; 1.64.1's fill never waits after.
-    #[serde(default, rename = "noWaitAfter")]
-    _no_wait_after: bool,
 }
 
 /// `locator.press(key, options)`.

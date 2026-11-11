@@ -395,7 +395,7 @@ async fn close(
         pw.workers_closed(admitted.session.target_id.clone()).await;
         scope.run_state().frames.forget(page);
     }
-    Ok(json!({}))
+    Ok(Value::Null)
 }
 
 /// `Page.close`: the page runs its `beforeunload` handlers and closes unless one cancels.

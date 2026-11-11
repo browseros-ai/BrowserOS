@@ -725,7 +725,7 @@ async fn tests_that_set_content_writes_the_document_and_waits_for_its_load_state
             ] {
                 run.clear_calls();
                 let started = Instant::now();
-                assert_eq!(set_content(wait_until).await?, json!({}));
+                assert_eq!(set_content(wait_until).await?, Value::Null);
                 let took = started.elapsed();
                 assert!(
                     took >= at_least && took < under,

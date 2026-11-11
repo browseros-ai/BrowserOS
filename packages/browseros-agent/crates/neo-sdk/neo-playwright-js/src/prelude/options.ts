@@ -35,33 +35,28 @@ export const POINTER_KEYS = [
   'steps',
   'trial',
 ] as const
-export const DBLCLICK_KEYS = POINTER_KEYS.filter((key) => key !== 'clickCount')
+export const DBLCLICK_KEYS = POINTER_KEYS.filter(
+  (key) => key !== 'clickCount' && key !== 'noWaitAfter',
+)
 export const HOVER_KEYS = [
   'force',
   'modifiers',
-  'noWaitAfter',
   'position',
   'scroll',
   'trial',
 ] as const
-export const CHECK_KEYS = [
-  'force',
-  'noWaitAfter',
-  'position',
-  'scroll',
-  'trial',
-] as const
+export const CHECK_KEYS = ['force', 'position', 'scroll', 'trial'] as const
 export const DRAG_KEYS = [
   'force',
-  'noWaitAfter',
   'scroll',
   'sourcePosition',
   'targetPosition',
   'steps',
   'trial',
 ] as const
-export const FILL_KEYS = ['force', 'noWaitAfter'] as const
-export const KEY_KEYS = ['delay', 'noWaitAfter'] as const
+export const FILL_KEYS = ['force'] as const
+export const PRESS_KEYS = ['delay', 'noWaitAfter'] as const
+export const TYPE_KEYS = ['delay'] as const
 /** The screenshot options Rust captures with; frame.ts refuses the rest. */
 export const SCREENSHOT_KEYS = [
   'type',

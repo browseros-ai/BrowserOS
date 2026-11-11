@@ -86,6 +86,7 @@ import type {
   NavigationPublication,
   NavigationResult,
   Observation,
+  OpInputs,
   PageBrand,
   PageFact,
   PageHandle,
@@ -783,7 +784,8 @@ export class Page extends EventEmitter {
     }
     await invoke('page.emulateMedia', site, this._mainFrame._call(api, 0), {
       page: await this._brand(api),
-      ...input,
+      // The per-key allowlist above proves this; Object.keys loses that key/value correlation.
+      ...(input as Omit<OpInputs['page.emulateMedia'], 'page'>),
     })
   }
 

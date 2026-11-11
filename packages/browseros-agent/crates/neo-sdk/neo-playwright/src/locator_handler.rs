@@ -141,7 +141,7 @@ pub(crate) async fn invoke(
         LocatorHandlerOp::Remove => {
             let RemoveInput { uid } = args.decode(scope)?;
             handlers.unregister(uid);
-            Ok(json!({}))
+            Ok(Value::Null)
         }
         LocatorHandlerOp::Triggered => {
             let TriggeredInput {} = args.decode(scope)?;
@@ -150,7 +150,7 @@ pub(crate) async fn invoke(
         LocatorHandlerOp::Resolve => {
             let ResolveInput { uid, remove } = args.decode(scope)?;
             handlers.resolve(uid, remove);
-            Ok(json!({}))
+            Ok(Value::Null)
         }
     }
 }

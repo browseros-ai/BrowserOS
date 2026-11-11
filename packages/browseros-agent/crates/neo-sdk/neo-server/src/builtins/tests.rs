@@ -352,7 +352,7 @@ async fn a_script_opens_and_closes_a_page_with_the_doors_bookkeeping() -> Result
         .cloned()
         .ok_or("close reports its page")?;
     assert!(fact.closed, "the reply says the page is gone");
-    assert_eq!(value(reply)?, json!({}));
+    assert_eq!(value(reply)?, Value::Null);
     assert!(
         !harness.is_open(page.tab).await?,
         "the browser closed the tab"
@@ -389,7 +389,7 @@ async fn a_close_that_beforeunload_can_veto_leaves_the_page_open_until_the_brows
         .first()
         .cloned()
         .ok_or("close reports its page")?;
-    assert_eq!(value(reply)?, json!({}));
+    assert_eq!(value(reply)?, Value::Null);
     assert_eq!(
         harness.fake.count("Page.close"),
         1,
