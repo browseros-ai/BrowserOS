@@ -87,6 +87,19 @@ impl CdpConnection for Native {
         })
     }
 
+    fn send_at_epoch<'a>(
+        &'a self,
+        expected_epoch: u64,
+        method: &'a str,
+        params: Value,
+        session: Option<&'a SessionId>,
+    ) -> BoxFuture<'a, Result<Value, CdpError>> {
+        if expected_epoch != self.connection_epoch() {
+            return Box::pin(async { Err(CdpError::Transport("fixture epoch changed".into())) });
+        }
+        self.send(method, params, session)
+    }
+
     fn events(&self) -> broadcast::Receiver<CdpEvent> {
         self.events.subscribe()
     }
@@ -143,6 +156,52 @@ async fn fixture() -> Result<(Arc<Native>, BrowserView, PageId, ProtocolSession)
         .page_id;
     let frame = ProtocolSession::for_session(native.clone(), SessionId::from("frame-session"));
     Ok((native, view, page, frame))
+}
+
+#[tokio::test]
+async fn chooser_leases_restore_a_borrowed_page_only_after_the_last_owner() -> TestResult {
+    let (native, view, page, _) = fixture().await?;
+    let mut first = view.files().intercept_choosers(page.clone()).await?;
+    let mut second = view.files().intercept_choosers(page).await?;
+    first.release().await?;
+    assert_eq!(
+        native
+            .calls("Page.setInterceptFileChooserDialog")
+            .iter()
+            .filter(|(p, _)| p["enabled"] == false)
+            .count(),
+        0,
+        "another SDK wait or core upload still owns interception"
+    );
+    second.release().await?;
+    assert_eq!(
+        native
+            .calls("Page.setInterceptFileChooserDialog")
+            .iter()
+            .filter(|(p, _)| p["enabled"] == false)
+            .count(),
+        1,
+        "the last owner restores the adopted tab's native picker exactly once"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_cancelled_chooser_lease_does_not_disable_a_new_owner() -> TestResult {
+    let (native, view, page, _) = fixture().await?;
+    let first = view.files().intercept_choosers(page.clone()).await?;
+    let mut second = view.files().intercept_choosers(page).await?;
+    drop(first);
+    tokio::task::yield_now().await;
+    assert!(
+        native
+            .calls("Page.setInterceptFileChooserDialog")
+            .iter()
+            .all(|(p, _)| p["enabled"] == true),
+        "asynchronous cancellation cleanup cannot restore underneath a live owner"
+    );
+    second.release().await?;
+    Ok(())
 }
 
 #[tokio::test]

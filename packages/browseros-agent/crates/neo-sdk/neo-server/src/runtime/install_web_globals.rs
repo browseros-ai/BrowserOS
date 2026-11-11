@@ -1,12 +1,13 @@
 //! Web globals for the agent's realm: URL parsing and form encoding use Rust's `url` crate;
 //! the JS factory owns `WebIDL` conversion, live search parameters and the base64 arity checks.
 //! These pure string natives carry no bridge, browser or host authority and never become globals.
+//! Abort signals dispatch in JavaScript; their timeout factory reuses the run-bounded clock.
 
 use std::io;
 
 use rquickjs::context::EvalOptions;
 use rquickjs::function::Func;
-use rquickjs::{Ctx, Error, Function, Object};
+use rquickjs::{Ctx, Error, Function, Object, Value};
 use serde::{Serialize, Serializer};
 use url::{Url, form_urlencoded, quirks};
 
@@ -43,7 +44,12 @@ pub(super) fn install_web_globals(ctx: &Ctx<'_>, memory_bytes: usize) -> rquickj
     options.filename = Some("web_globals.js".to_owned());
     let factory: Function<'_> =
         ctx.eval_with_options(include_str!("js/web_globals.js"), options)?;
-    factory.call((natives,))
+    factory.call::<_, ()>((natives,))?;
+    // Cancellation is a realm interface, rather than an agent function parameter, so
+    // standard scripts and libraries can construct signals before calling an SDK wait.
+    let factory: Function<'_> = ctx.eval(include_str!("js/abort_globals.js"))?;
+    let sleep: Value<'_> = ctx.globals().get("__neo_sleep")?;
+    factory.call((sleep,))
 }
 
 /// The array order is shared with `web_globals.js`'s HREF..HASH constants. `quirks` implements

@@ -27,6 +27,8 @@
  * the bundle names no host identifier, which tests/prelude-globals.test.ts checks, and
  * claw-sdk's runtime/tests.rs pins that a run's realm gains only `__neo` and its natives.
  */
+
+import { readyChoosers } from './chooser-setup'
 import { shapeBridgeError, unsupportedError, withAbortCause } from './errors'
 import { host, refuser } from './host'
 import type { OpName } from './ops.generated'
@@ -76,6 +78,8 @@ export async function invoke<Op extends OpName>(
   signal?: SignalLike,
 ): Promise<OpOutputs[Op]> {
   try {
+    const ready = readyChoosers(op)
+    if (ready) await ready
     return (await host().invoke(
       op,
       { call, ...args },
@@ -98,6 +102,8 @@ export async function invokeObserved<Op extends OpName>(
   signal?: SignalLike,
 ): Promise<{ value: OpOutputs[Op]; observed: Observation | null }> {
   try {
+    const ready = readyChoosers(op)
+    if (ready) await ready
     const reply = await host().invoke(
       op,
       { call, ...args },

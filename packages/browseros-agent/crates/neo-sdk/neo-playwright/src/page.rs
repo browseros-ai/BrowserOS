@@ -46,7 +46,7 @@ pub(crate) mod site_sweep;
 mod sweep_scope;
 mod wait_for_navigation;
 mod wait_for_url;
-mod world_call;
+pub(crate) mod world_call;
 
 pub(crate) use context_op::ContextOp;
 pub(crate) use evaluate_guard::FRAME_BUDGET;

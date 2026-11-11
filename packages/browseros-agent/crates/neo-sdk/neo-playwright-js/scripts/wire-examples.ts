@@ -103,6 +103,9 @@ const EVERY_OP = `
   await page.screenshot(); await l.screenshot(); await page.pdf()
   const tab = await context.newPage()
   page.on('console', () => {}); context.on('page', () => {})
+  const chooserListener = () => {}
+  page.on('filechooser', chooserListener)
+  page.off('filechooser', chooserListener)
   const dialog = await page.waitForEvent('dialog'); await dialog.accept(); await dialog.dismiss()
   const download = await page.waitForEvent('download'); await download.path(); await download.saveAs('/out/f.csv')
   await tab.close()
