@@ -187,6 +187,13 @@ pub(crate) async fn deliver(
         Subscription::Page { tab, .. } => Some(PageHandle::new(*tab)),
         Subscription::ContextPage => None,
     };
+    // A console/dialog/etc. can follow a renderer-initiated navigation. Its delivery is a
+    // synchronization point for page.url(), even though no navigation op ran in this host.
+    if let Some(page) = &listener
+        && !matches!(record.event, PageEvent::Closed(_))
+    {
+        scope.report_navigation(page.tab());
+    }
     let payload = match (&record.event, listener) {
         (PageEvent::Opened(opened), Some(page)) => {
             let Some(popup) = popup_tab(scope, opened, tabs, windows).await? else {

@@ -6,13 +6,16 @@
 use std::time::Duration;
 
 use browseros_core::FrameId;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use tokio::time;
 
+use crate::op_output::to_output;
 use crate::op_scope::OpScope;
 use crate::page::evaluate_guard::{
     ArgText, DOCUMENT_REPLACED, EvaluateGuard, MainWorldCall, NAVIGATED, Outcome, Script, Subject,
 };
+use crate::page::frame_tree::{self, FrameTree};
 use crate::target::{ElementTarget, PageRef};
 use crate::{ErrorCode, Playwright, PlaywrightError};
 
@@ -112,7 +115,9 @@ pub(crate) async fn evaluate(
     // once more in the new one, as upstream waits for the new main context.
     for _attempt in 0..2 {
         match guard.run(scope).await? {
-            Outcome::Answered(answer) => return Ok(answer.finish(scope)?.value),
+            Outcome::Answered(answer) => {
+                return evaluated(pw, scope, &input.page, answer.finish(scope)?.value).await;
+            }
             Outcome::NotRun => {}
             Outcome::Destroyed => break,
             Outcome::Navigated => return Err(scope.fail(ErrorCode::PageError, NAVIGATED)),
@@ -122,6 +127,31 @@ pub(crate) async fn evaluate(
         }
     }
     Err(scope.fail(ErrorCode::PageError, DOCUMENT_REPLACED))
+}
+
+/// A script can mutate history or attach frames before it answers. Return a bounded frame
+/// snapshot alongside its value so synchronous accessors observe those effects. Metadata is
+/// best-effort: a stalled replacement renderer must not turn a completed script into a wait
+/// for navigation or discard its result.
+async fn evaluated(
+    pw: &Playwright,
+    scope: &OpScope<'_>,
+    page: &PageRef,
+    value: Value,
+) -> Result<Value, PlaywrightError> {
+    #[derive(Serialize)]
+    struct Evaluated {
+        value: Value,
+        #[serde(flatten)]
+        frames: Option<FrameTree>,
+    }
+    let read = frame_tree::snapshot(pw, scope, page.tab());
+    let frames = time::timeout(Duration::from_secs(2), read)
+        .await
+        .ok()
+        .and_then(Result::ok)
+        .flatten();
+    to_output(scope, &Evaluated { value, frames })
 }
 
 /// Runs `page.waitForFunction`: polls from Rust until the predicate is truthy or throws, because

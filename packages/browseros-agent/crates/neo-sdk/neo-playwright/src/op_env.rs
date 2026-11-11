@@ -80,6 +80,11 @@ pub trait OpEnv: Send + Sync {
     /// the later cache observation before allowing a result payload to refresh page state.
     fn report_target(&self, _tab: TabId, _target: &TargetId) {}
 
+    /// A page event may observe a navigation performed by the page rather than an SDK goto.
+    /// Refresh the host's cached URL before delivering that event's reply. Hosts without
+    /// cached page facts can ignore this observation.
+    fn report_navigation(&self, _tab: TabId) {}
+
     /// The reason the script gave when it aborted this op through Playwright's `signal` option,
     /// as upstream prints it (an `Error` reason's message, else the reason as a string), once it
     /// has. `None` while the op runs unaborted, and always for a host that offers no abort.

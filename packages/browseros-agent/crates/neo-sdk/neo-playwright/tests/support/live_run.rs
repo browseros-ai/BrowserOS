@@ -394,7 +394,14 @@ impl LiveRun {
 
     /// Runs op `name` with `input`, as claw-sdk's handler does.
     pub(crate) async fn invoke(&self, name: &str, input: Value) -> Result<Value, PlaywrightError> {
-        self.playwright.invoke(&self.env, op(name)?, input).await
+        let result = self.playwright.invoke(&self.env, op(name)?, input).await?;
+        // The browser tests below inspect the script value. Supplemental frame metadata is
+        // consumed by the real prelude and covered by the Node navigation regression suite.
+        Ok(if name == "page.evaluate" {
+            result.get("value").cloned().unwrap_or(Value::Null)
+        } else {
+            result
+        })
     }
 
     /// Ends this run and starts the next on the same `Playwright`, as claw-sdk does between

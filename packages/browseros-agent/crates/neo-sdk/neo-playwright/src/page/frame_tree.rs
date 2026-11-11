@@ -13,15 +13,15 @@
 
 use std::collections::HashSet;
 
-use browseros_core::{BrowserSession, CoreError, FrameId, PageId, ProtocolSession};
+use browseros_core::{BrowserSession, CoreError, FrameId, PageId, ProtocolSession, TabId};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::op_output::to_output;
 use crate::op_scope::OpScope;
-use crate::page::document_watch::{FrameTreeNode, FrameTreeReply, decode};
+use crate::page::document_watch::{DocumentWatch, FrameTreeNode, FrameTreeReply, decode};
 use crate::target::PageRef;
-use crate::{Playwright, PlaywrightError};
+use crate::{ErrorCode, Playwright, PlaywrightError};
 
 /// `page.frames()`: `{ page }`.
 #[derive(Debug, Deserialize)]
@@ -46,6 +46,9 @@ struct FrameInfo {
     /// The frame element's `name`, `""` without one.
     name: String,
     url: String,
+    /// Correlates lifecycle snapshots across reads; never exposed as a public Frame field.
+    #[serde(skip)]
+    loader: String,
 }
 
 /// The out-of-process iframes of the browser, as `Target.getTargets` lists them.
@@ -65,6 +68,24 @@ struct IframeTarget {
 }
 
 impl FrameTree {
+    /// The documents under `root`, including itself, in stable identity order. A replacement
+    /// document must reach its own lifecycle state even if its Frame object was retained.
+    pub(crate) fn documents(&self, root: &FrameId) -> Vec<(FrameId, String)> {
+        let main = self.frames.first().is_some_and(|frame| frame.id == *root);
+        let mut documents: Vec<_> = self
+            .frames
+            .iter()
+            .filter(|frame| {
+                main || self
+                    .path_to(&frame.id)
+                    .is_some_and(|path| path.contains(root))
+            })
+            .map(|frame| (frame.id.clone(), frame.loader.clone()))
+            .collect();
+        documents.sort_by(|(a, _), (b, _)| a.as_str().cmp(b.as_str()));
+        documents
+    }
+
     /// Frame identities for page-wide operations; worlds are resolved on each frame's own
     /// CDP session, so the JavaScript never crosses renderer or origin boundaries.
     pub(crate) fn ids(&self) -> impl Iterator<Item = &FrameId> {
@@ -88,6 +109,7 @@ impl FrameTree {
                 parent_id: parent.map(FrameId),
                 name: frame.name.unwrap_or_default(),
                 url,
+                loader: frame.loader_id,
             });
         }
     }
@@ -120,15 +142,49 @@ pub(crate) async fn frames(
     scope: &OpScope<'_>,
     input: FramesInput,
 ) -> Result<Value, PlaywrightError> {
-    let page = input.page.tab();
+    #[derive(Serialize)]
+    struct Snapshot {
+        #[serde(flatten)]
+        frames: Option<FrameTree>,
+    }
+    let frames = match scope.within(snapshot(pw, scope, input.page.tab())).await {
+        Ok(result) => result?,
+        Err(_expired) => return Err(scope.timed_out(ErrorCode::WaitTimeout)),
+    };
+    to_output(scope, &Snapshot { frames })
+}
+
+/// Cache metadata must not become a navigation barrier. Browser-owned loading state catches
+/// an existing pending navigation; a watcher subscribed before that read catches one that
+/// starts in between. The caller retains its previous tree when the renderer is busy.
+pub(crate) async fn snapshot(
+    pw: &Playwright,
+    scope: &OpScope<'_>,
+    page: TabId,
+) -> Result<Option<FrameTree>, PlaywrightError> {
     let admitted = scope.admit(pw.browser(), page).await?;
-    let root = pw
-        .browser()
-        .protocol_session(admitted.session.session_id.clone());
-    let tree = read(pw.browser(), &admitted.core_page, &root)
-        .await
-        .map_err(|error| scope.core_error(&error))?;
-    to_output(scope, &tree)
+    let session_id = admitted.session.session_id.clone();
+    let root = pw.browser().protocol_session(session_id.clone());
+    let frame = FrameId(admitted.session.target_id.as_str().to_owned());
+    let mut watch = DocumentWatch::new(pw.browser(), root.clone(), session_id, frame);
+    let read = async {
+        let shown = scope
+            .view()
+            .page(admitted.core_page.clone())
+            .await
+            .map_err(|error| scope.core_error(&error))?;
+        if shown.is_loading {
+            return Ok(None);
+        }
+        read(pw.browser(), &admitted.core_page, &root)
+            .await
+            .map(Some)
+            .map_err(|error| scope.core_error(&error))
+    };
+    tokio::select! {
+        result = read => result,
+        _ = watch.navigation_started() => Ok(None),
+    }
 }
 
 /// Every frame of `page`, whose main frame's session is `root`: that session's own tree, then

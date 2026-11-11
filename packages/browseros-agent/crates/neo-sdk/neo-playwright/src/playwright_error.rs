@@ -168,6 +168,11 @@ impl ErrorCode {
         match error {
             CoreError::Cdp(cdp) => match cdp {
                 CdpError::SessionGone => Self::TargetClosed,
+                // BrowserOS's tab-domain reply for a close racing another close. Other
+                // protocol failures remain Internal; their text is not proof a tab closed.
+                CdpError::Protocol { message, .. } if message == "No tab with given id" => {
+                    Self::TargetClosed
+                }
                 CdpError::ConnectionLost
                 | CdpError::NotConnected
                 | CdpError::ConnectionEpochChanged { .. }

@@ -534,9 +534,9 @@ export type OpOutputs = {
   'page.setContent': NavigationResult | null
   'page.close': Done
   'page.opener': { opener: PageBrand | null }
-  'page.frames': FrameTree
+  'page.frames': Partial<FrameTree>
   /** The script's result in Playwright's in-page format, masked. */
-  'page.evaluate': SerializedValue
+  'page.evaluate': { value: SerializedValue; frames?: FrameInfo[] }
   'locator.evaluate': SerializedValue
   'locator.evaluateAll': SerializedValue
   /** The predicate's truthy value, masked, and upstream's preview of it (`toString()`). */

@@ -43,6 +43,7 @@ mod pdf;
 mod screenshot;
 mod screenshot_preparation;
 pub(crate) mod site_sweep;
+mod subtree_load;
 mod sweep_scope;
 mod wait_for_navigation;
 mod wait_for_url;

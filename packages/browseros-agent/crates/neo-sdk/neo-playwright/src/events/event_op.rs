@@ -11,7 +11,7 @@ use crate::events::event_hub::{now_ms, receives};
 use crate::events::event_reader::{Delivered, Tabs, WindowPopup, deliver};
 use crate::events::page_event::DialogId;
 use crate::events::subscription::Unknown;
-use crate::events::{ListenerKey, PageEventKind, Subscription};
+use crate::events::{ListenerKey, PageEvent, PageEventKind, Subscription};
 use crate::listed_enum::listed_enum;
 use crate::op_input::OpArgs;
 use crate::op_output::to_output;
@@ -323,6 +323,23 @@ async fn first_event(
         changed.as_mut().enable();
         for record in hub.read_after(after).records {
             after = record.seq;
+            // A close ends every outstanding page wait except the close wait itself.
+            // Match the admitted target, not just the reusable native tab id, and report
+            // the same close identity the dispatcher uses to authorize cached page facts.
+            if record.at_ms >= since
+                && let Some((target, event)) = subscription.page_event()
+                && event != PageEventKind::Close
+                && let PageEvent::Closed(closed) = &record.event
+                && closed == target
+            {
+                if let Subscription::Page { tab, .. } = subscription {
+                    scope.report_close(*tab, target, record.seq);
+                }
+                return Err(scope.fail(
+                    ErrorCode::TargetClosed,
+                    "Target page, context or browser has been closed",
+                ));
+            }
             if receives(subscription, since, &record)
                 && let Some(event) =
                     deliver(scope, subscription, &record, &mut tabs, WindowPopup::Fail).await?

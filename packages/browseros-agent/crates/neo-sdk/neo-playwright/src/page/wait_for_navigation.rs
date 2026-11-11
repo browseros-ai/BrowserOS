@@ -13,7 +13,7 @@ use crate::op_scope::OpScope;
 use crate::page::document_watch::WatchError;
 use crate::page::frame_tree::{self, FrameTree};
 use crate::page::navigation::{self, NavigationResult};
-use crate::page::{LoadState, OpPage, wait_for_url};
+use crate::page::{LoadState, OpPage, subtree_load, wait_for_url};
 use crate::probe::UrlPattern;
 use crate::target::PageRef;
 use crate::{ErrorCode, Playwright, PlaywrightError, resolve};
@@ -171,6 +171,9 @@ async fn complete_navigation(
             }
             Err(error) => return Err(navigation::watch_error(scope, &error)),
         }
+    }
+    if input.wait_until == LoadState::NetworkIdle {
+        subtree_load::network_idle(pw, scope, page.tab(), frame).await?;
     }
     let response = if event.new_document && event.loader.is_some() {
         navigation::read_response(
