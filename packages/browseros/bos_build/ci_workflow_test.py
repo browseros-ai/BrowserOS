@@ -4411,5 +4411,58 @@ class DockerImageWorkflowTest(unittest.TestCase):
         )
 
 
+class NeoSdkImageWorkflowTest(unittest.TestCase):
+    """neo-sdk-image.yml proves the Neo SDK image on native amd64 and nothing more: it runs when
+    dispatched or when a pull request edits it, holds a read-only token, and never logs in to a
+    registry or pushes."""
+
+    def setUp(self):
+        self.text = (WORKFLOW_DIR / "neo-sdk-image.yml").read_text(encoding="utf-8")
+        self.workflow = yaml.safe_load(self.text)
+        self.jobs = self.workflow["jobs"]
+
+    def run_scripts(self) -> str:
+        return "\n".join(
+            step.get("run", "") for job in self.jobs.values() for step in job["steps"]
+        )
+
+    def test_runs_when_dispatched_or_when_a_pull_request_edits_it(self):
+        triggers = self.workflow.get("on", self.workflow.get(True))
+
+        self.assertEqual(set(triggers), {"workflow_dispatch", "pull_request"})
+        # Never on every change: a cold build is minutes of Rust. The edit run is what lets
+        # GitHub dispatch the workflow before it reaches the default branch.
+        self.assertEqual(triggers["pull_request"], {"paths": [".github/workflows/neo-sdk-image.yml"]})
+
+    def test_the_token_is_read_only(self):
+        self.assertEqual(self.workflow["permissions"], {"contents": "read"})
+        for name, job in self.jobs.items():
+            with self.subTest(job=name):
+                self.assertIn(job.get("permissions", {"contents": "read"}), [{"contents": "read"}])
+
+    def test_builds_and_accepts_on_a_native_amd64_runner(self):
+        for name, job in self.jobs.items():
+            with self.subTest(job=name):
+                self.assertEqual(job["runs-on"], "ubuntu-24.04")
+        scripts = self.run_scripts()
+        self.assertIn("neo-server/docker/build.sh --platform linux/amd64", scripts)
+        self.assertIn("neo-server/docker/accept.sh", scripts)
+
+    def test_never_logs_in_or_pushes(self):
+        text = self.text.lower()
+        for forbidden in ("docker login", "login-action", "--push", "push: true", "packages: write"):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, text)
+        self.assertNotIn("secrets.", text)
+
+    def test_changes_trigger_build_system_tests(self):
+        tests = yaml.safe_load(
+            (WORKFLOW_DIR / "bos-build-tests.yml").read_text(encoding="utf-8")
+        )
+        triggers = tests.get("on", tests.get(True))
+
+        self.assertIn(".github/workflows/neo-sdk-image.yml", triggers["pull_request"]["paths"])
+
+
 if __name__ == "__main__":
     unittest.main()
