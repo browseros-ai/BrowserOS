@@ -1,11 +1,14 @@
 //! `page.screenshot()` through core's capture path.
 //!
-//! The capture goes through core's screenshot path, which serializes captures per session and
-//! hides the agent pointer for the shot.
+//! A per-tab guard prepares every frame, captures through core (which hides the agent pointer),
+//! then restores temporary rendering state. Its queue remains held through cancellation cleanup.
 
 use browseros_core::screenshot::{ScreenshotCaptureOptions, ScreenshotFormat, Viewport};
 use serde::Deserialize;
-use serde_json::Value;
+use serde_json::{Value, json};
+
+use crate::page::OpPage;
+use crate::page::screenshot_preparation::ScreenshotPreparation;
 
 use crate::op_output::{Bytes, to_output};
 use crate::op_scope::OpScope;
@@ -13,12 +16,18 @@ use crate::op_spec::Capability;
 use crate::target::{PageRef, Strictness, Target};
 use crate::{ErrorCode, Playwright, PlaywrightError};
 
-/// `page.screenshot({ fullPage, clip, type, quality })`. The prelude writes `path` itself and
-/// refuses the options Neo does not have (`mask`, `style`, `omitBackground`, `scale: 'css'`).
+/// Screenshot options cross the prelude flat; temporary rendering changes are restored
+/// before the bytes return, while core owns the pointer and pixel capture.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub(crate) struct ScreenshotInput {
     page: PageRef,
+    #[serde(default)]
+    animations: Animations,
+    #[serde(default)]
+    caret: Caret,
+    #[serde(default)]
+    style: Option<String>,
     /// `locator.screenshot()` and `elementHandle.screenshot()`: the element to capture.
     #[serde(default)]
     target: Option<Target>,
@@ -34,6 +43,24 @@ pub(crate) struct ScreenshotInput {
     /// JPEG only, 0 to 100.
     #[serde(default)]
     quality: Option<u8>,
+}
+
+/// How screenshot preparation treats the document's animations.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum Animations {
+    #[default]
+    Allow,
+    Disabled,
+}
+
+/// Upstream hides the caret unless the caller explicitly asks for its initial behavior.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum Caret {
+    #[default]
+    Hide,
+    Initial,
 }
 
 /// A rectangle of the page in CSS pixels.
@@ -94,15 +121,34 @@ pub(crate) async fn capture(
             scale: 1.0,
         }),
     };
-    let page = input.page.tab();
+    let page = OpPage::admit_handle(pw, scope, &input.page).await?;
+    let capture = async {
+        let mut preparation = ScreenshotPreparation::acquire(&page).await;
+        preparation
+            .prepare(
+                &page,
+                scope,
+                json!([
+                    input.style.as_deref().unwrap_or_default(),
+                    input.caret == Caret::Hide,
+                    input.animations == Animations::Disabled,
+                    false,
+                ]),
+            )
+            .await;
+        let shot = scope
+            .view()
+            .screenshot(page.core_page().clone(), options)
+            .await;
+        preparation.restore().await;
+        shot.map_err(|error| scope.core_error(&error))
+    };
+    // Frame installation and preparation have large futures. Keep this leaf boxed so every
+    // caller of Playwright::invoke does not inherit their stack allocation.
     let shot = scope
-        .view()
-        .screenshot(
-            scope.admit(pw.browser(), page).await?.core_page.clone(),
-            options,
-        )
+        .within(Box::pin(capture))
         .await
-        .map_err(|error| scope.core_error(&error))?;
+        .map_err(|_expired| scope.timed_out(ErrorCode::WaitTimeout))??;
     to_output(scope, &Bytes::from_base64(shot.data))
 }
 
