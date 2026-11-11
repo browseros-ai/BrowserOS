@@ -65,9 +65,7 @@ pub(crate) struct OpScope<'env> {
 }
 
 /// A page admitted for one op through the run's view: the profile and window scope check ran
-/// once, and the op's calls go to this session. The sweeps hold one, found without admission,
-/// for each tab opener links connect to the op's page (`OpPage::linked_tab`), and never act
-/// on it.
+/// once, and the op's calls go to this session.
 #[derive(Debug)]
 pub(crate) struct AdmittedPage {
     pub(crate) tab: TabId,
@@ -104,6 +102,12 @@ impl<'env> OpScope<'env> {
     /// the session, so the group is released there when the op ends.
     pub(crate) fn object_group(&self, session: &ProtocolSession) -> &str {
         self.objects.on(session)
+    }
+
+    /// Releases the op's remote objects now, keeping its group for later ones
+    /// ([`ObjectGroup::release_now`]). Only for a leaf whose tries share no remote object.
+    pub(crate) async fn release_objects(&self) {
+        self.objects.release_now().await;
     }
 
     /// The op's Playwright timeout; `None` waits until the host drops the op.
@@ -146,7 +150,6 @@ impl<'env> OpScope<'env> {
             Some(admitted) if admitted.tab == tab => {
                 // Navigation and frame-tree reads admit directly, without OpPage. Report at
                 // this common boundary so every payload names its actual source binding.
-                // Opener-linked sweep pages bypass admission and never replace this source.
                 self.env.report_target(tab, &admitted.session.target_id);
                 Ok(admitted)
             }
@@ -773,6 +776,43 @@ mod tests {
             [Some(SessionId::from("A")), Some(SessionId::from("B"))],
             "released once on each session that holds one of the op's objects"
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_releasing_the_objects_frees_the_group_now_and_keeps_it()
+    -> Result<(), Box<dyn Error>> {
+        let recording = Arc::new(Recording::default());
+        let connection: Arc<dyn CdpConnection> = Arc::clone(&recording) as Arc<dyn CdpConnection>;
+        let session = ProtocolSession::for_session(connection, SessionId::from("A"));
+        let env = TestEnv::new();
+        let scope = OpScope::new(&env, op("locator.waitForFunction")?, CallHeader::default());
+        let group = scope.object_group(&session).to_owned();
+        let releases = || {
+            recording
+                .sent
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .iter()
+                .filter(|(method, params, session)| {
+                    method == "Runtime.releaseObjectGroup"
+                        && params["objectGroup"] == group.as_str()
+                        && *session == Some(SessionId::from("A"))
+                })
+                .count()
+        };
+        scope.release_objects().await;
+        assert_eq!(releases(), 1, "released at once, before the op ends");
+        assert_eq!(
+            scope.object_group(&session),
+            group,
+            "the next try's objects join the same group"
+        );
+        drop(scope);
+        for _ in 0..10 {
+            task::yield_now().await;
+        }
+        assert_eq!(releases(), 2, "and the op's end releases them too");
         Ok(())
     }
 

@@ -22,7 +22,7 @@ await page.evaluate(() => {
 })
 expect(
   await popup.evaluate(() => opener.document.querySelector('#private').value),
-).not.toBe(String.fromCharCode(112).repeat(17))
+).toBe(String.fromCharCode(112).repeat(17))
 await popup.evaluate(() => {
   const input = document.createElement('input')
   input.type = 'password'
@@ -34,6 +34,6 @@ expect(
   await page.evaluate(
     () => window.testPopup.document.querySelector('#private').value,
   ),
-).not.toBe(String.fromCharCode(113).repeat(19))
+).toBe(String.fromCharCode(113).repeat(19))
 expect((await popup.opener()) === page).toBe(true)
 await popup.close()

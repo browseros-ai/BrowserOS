@@ -938,6 +938,18 @@ export class Page extends EventEmitter {
     }
   }
 
+  /** Host refreshes preserve the cached object when dimensions agree, as upstream does. */
+  #applyViewport(size: PageFact['viewportSize']): void {
+    if (this.#viewportSet || size === undefined) return
+    if (
+      this.#viewportSize === null ||
+      size === null ||
+      this.#viewportSize.width !== size.width ||
+      this.#viewportSize.height !== size.height
+    )
+      this.#viewportSize = size
+  }
+
   _applyFact(
     fact: PageFact,
     at: Observation | null,
@@ -945,8 +957,7 @@ export class Page extends EventEmitter {
   ): void {
     if (fact.tab !== undefined) this._tab = fact.tab
     if (at === null) {
-      if (!this.#viewportSet && fact.viewportSize !== undefined)
-        this.#viewportSize = fact.viewportSize
+      this.#applyViewport(fact.viewportSize)
       if (fact.url !== undefined && !this.#urlKnown) {
         this._url = fact.url
         this.#urlKnown = true
@@ -955,8 +966,7 @@ export class Page extends EventEmitter {
     }
     if (at.seq < this.#observedSeq) return
     this.#observedSeq = at.seq
-    if (!this.#viewportSet && fact.viewportSize !== undefined)
-      this.#viewportSize = fact.viewportSize
+    this.#applyViewport(fact.viewportSize)
     if (fact.url !== undefined) {
       this._url = fact.url
       this.#urlKnown = true

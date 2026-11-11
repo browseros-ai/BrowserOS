@@ -1,9 +1,9 @@
-//! One run lifecycle, its masked payloads and request replay. List reads use projections
+//! One run lifecycle, its bounded payloads and request replay. List reads use projections
 //! so they never fetch code, results or replay bodies.
 
 use sea_orm::entity::prelude::*;
 
-/// A run's stored lifecycle and masked payloads; domain parsing belongs to record_rows.
+/// A run's stored lifecycle and bounded payloads; domain parsing belongs to record_rows.
 #[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel)]
 #[sea_orm(table_name = "runs")]
 pub struct Model {

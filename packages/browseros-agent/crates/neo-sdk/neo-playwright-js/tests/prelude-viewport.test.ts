@@ -81,3 +81,25 @@ it('normalizes a failed undefined viewport argument to null like upstream', asyn
   `),
   ).toBeNull()
 })
+
+it('preserves a restored viewport object across unrelated host observations', async () => {
+  const size = { width: 640, height: 480 }
+  const runtime = loadPrelude({
+    seed: { ...SEED, pages: [{ tab: 1007, viewportSize: size }] },
+    answer: ({ name }) =>
+      name === 'page.title'
+        ? {
+            ok: 'title',
+            pages: [{ tab: 1007, closed: false, viewportSize: size }],
+            observed: { seq: 10, events: 0 },
+          }
+        : null,
+  })
+  expect(
+    await runtime.run(`
+    const size = page.viewportSize()
+    await page.title()
+    return page.viewportSize() === size
+  `),
+  ).toBe(true)
+})

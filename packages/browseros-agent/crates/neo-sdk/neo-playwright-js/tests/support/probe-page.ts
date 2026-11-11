@@ -39,30 +39,21 @@ const DOM_GLOBALS = [
 
 export type ProbePage = {
   document: Document
-  /**
-   * What Rust's CALL_FUNCTION does: the probe's reply, or `uninstalled`. `mask` is the values
-   * of the site's sensitive fields that Rust sends; the default, none found, lets previews
-   * through. `null` sends no mask, as Rust does with most requests: one whose reply would
-   * preview page text then answers `needsMask`.
-   */
-  call(request: unknown, root?: Node, mask?: string[] | null): unknown
+  /** What Rust's CALL_FUNCTION does: the probe's reply, or `uninstalled`. */
+  call(request: unknown, root?: Node): unknown
   /** `__neoProbe.boot`, as the install expression calls it. */
   boot(options: unknown): unknown
   close(): void
 }
 
-/**
- * `kind` for `type=password` inputs only, like the seal for the fixtures used here, and
- * `sensitiveValues` as the page's fields hold them when the probe asks.
- */
-const sealStandIn = (sensitiveValues: () => string[]) => ({
+/** `kind` for `type=password` inputs only, like the seal for the fixtures used here. */
+const sealStandIn = () => ({
   version: 1,
   kind: (element: Element) =>
     element.getAttribute('type') === 'password' ? 'password' : null,
   valueEquals: () => false,
   attributeEquals: () => false,
   rawLength: () => 0,
-  sensitiveValues,
   watch: () => undefined,
 })
 
@@ -72,10 +63,7 @@ const sealStandIn = (sensitiveValues: () => string[]) => ({
  */
 export function openProbePage(
   html: string,
-  {
-    sealed = true,
-    sensitiveValues = () => ['hunter2'],
-  }: { sealed?: boolean; sensitiveValues?: () => string[] } = {},
+  { sealed = true }: { sealed?: boolean } = {},
 ): ProbePage {
   const { window, document } = parseHTML(html)
   // linkedom computes no styles. The engine reads a missing style as "rendered and visible"
@@ -90,7 +78,7 @@ export function openProbePage(
   }
   for (const name of DOM_GLOBALS) replace(name, Reflect.get(window, name))
   replace('location', { href: 'https://fixture.test/page' })
-  replace('__clawSeal', sealed ? sealStandIn(sensitiveValues) : undefined)
+  replace('__clawSeal', sealed ? sealStandIn() : undefined)
   replace('__neoProbe', undefined)
   new Function(ASSET)()
   const callFunction = new Function(`return (${CALL_FUNCTION})`)()
@@ -98,8 +86,7 @@ export function openProbePage(
   if (!probe) throw new Error('the asset did not define __neoProbe')
   return {
     document,
-    call: (request, root, mask = []) =>
-      callFunction.call(globalThis, request, root, mask ?? undefined),
+    call: (request, root) => callFunction.call(globalThis, request, root),
     // Through Reflect.apply, so tests can hand boot options Rust never would.
     boot: (options) => Reflect.apply(probe.boot, probe, [options]),
     close() {

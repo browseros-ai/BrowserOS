@@ -9,11 +9,9 @@ use axum::http::StatusCode;
 use browseros_core::TabId;
 use neo_trace::{
     Delivery, Effect, OperationEnded, OperationId, OperationKind, OperationStarted, Outcome,
-    PageState, Registration, RunEnded, RunId, RunStarted, RunStatus, SecretSet, SecretSetConfig,
-    SecretSource, SecretValue, TaskId,
+    PageState, RunEnded, RunId, RunStarted, RunStatus, TaskId,
 };
 use serde_json::json;
-use std::sync::Arc;
 use std::{fs, io};
 
 #[tokio::test]
@@ -277,17 +275,9 @@ async fn the_trace_tail_keeps_the_latest_matching_operations_with_their_runs() -
 }
 
 #[tokio::test]
-async fn an_operations_notes_read_back_masked_on_the_operation_and_its_run() -> TestResult {
+async fn an_operations_notes_read_back_as_given_on_the_operation_and_its_run() -> TestResult {
     let h = harness().await?;
-    let secret = "hunter2-swordfish";
-    assert_eq!(
-        h.privacy.secrets().register_from(
-            SecretValue::new(secret.to_owned()),
-            None,
-            SecretSource::Host,
-        ),
-        Registration::Registered
-    );
+    let value = "hunter2-swordfish";
     let run = start_run(&h.sink, Start::default());
     let click = OperationId::new(run, 1);
     let title = OperationId::new(run, 2);
@@ -296,7 +286,7 @@ async fn an_operations_notes_read_back_masked_on_the_operation_and_its_run() -> 
         click,
         vec![
             "waiting for getByRole('button')".to_string(),
-            format!("  typed {secret}"),
+            format!("  typed {value}"),
             "attempting click action".to_string(),
         ],
     );
@@ -316,7 +306,7 @@ async fn an_operations_notes_read_back_masked_on_the_operation_and_its_run() -> 
 
     let notes = json!([
         "waiting for getByRole('button')",
-        "  typed [private]",
+        format!("  typed {value}"),
         "attempting click action"
     ]);
     let operation = h.get(&format!("/v1/operations/{click}")).await?;
@@ -337,20 +327,17 @@ async fn an_operations_notes_read_back_masked_on_the_operation_and_its_run() -> 
 }
 
 #[tokio::test]
-async fn a_value_only_a_records_also_mask_knows_reads_masked_in_every_channel() -> TestResult {
+async fn record_values_read_back_as_given_in_every_channel() -> TestResult {
     let h = harness().await?;
     let mut live = EventStream::open(&h, "/v1/events", None).await?;
-    // What claw-sdk still holds unregistered (sdk-traces decision 32): the record's own set.
-    let held_value = "held-7Qx-swordfish";
-    let held = Some(held_set(held_value));
+    let value = "held-7Qx-swordfish";
     let run = RunId::new();
     h.sink.run_started(RunStarted {
         id: run,
-        code: format!("return '{held_value}'"),
+        code: format!("return '{value}'"),
         request_id: None,
         task_id: Some(TaskId::parse("checkout")?),
-        host_data: Some(json!({"for": held_value})),
-        also_mask: held.clone(),
+        host_data: Some(json!({"for": value})),
         at: at(0),
     });
     let read = OperationId::new(run, 1);
@@ -361,33 +348,30 @@ async fn a_value_only_a_records_also_mask_knows_reads_masked_in_every_channel() 
         kind: OperationKind::Builtin,
         effect: Effect::Read,
         tab: Some(TabId(3)),
-        args: json!({"expected": held_value}),
-        also_mask: held.clone(),
+        args: json!({"expected": value}),
         at: at(1),
     });
-    h.sink.op_notes(read, vec![format!("read {held_value}")]);
+    h.sink.op_notes(read, vec![format!("read {value}")]);
     h.sink.op_ended(OperationEnded {
         id: read,
         outcome: Outcome::Ok,
         delivery: Delivery::Done,
         sent_at: None,
-        result: Some(json!({"title": format!("Welcome {held_value}")})),
+        result: Some(json!({"title": format!("Welcome {value}")})),
         error: None,
         page_after: Some(PageState {
             tab_id: Some(TabId(3)),
-            url: Some(format!("https://b.test/?name={held_value}")),
-            title: Some(format!("Welcome {held_value}")),
+            url: Some(format!("https://b.test/?name={value}")),
+            title: Some(format!("Welcome {value}")),
         }),
-        also_mask: held.clone(),
         at: at(2),
     });
     h.sink.run_ended(RunEnded {
         id: run,
         status: RunStatus::Ok,
         error: None,
-        result: Some(json!({"echo": held_value})),
+        result: Some(json!({"echo": value})),
         replay: None,
-        also_mask: held,
         at: at(3),
     });
     h.flushed().await?;
@@ -419,14 +403,14 @@ async fn a_value_only_a_records_also_mask_knows_reads_masked_in_every_channel() 
             "{channel} exposes legacy identity: {text}"
         );
         assert!(
-            !text.contains(held_value),
-            "{channel} keeps the held value: {text}"
+            !text.contains("[private]"),
+            "{channel} unexpectedly masks the value: {text}"
         );
     }
-    let masked = |channel: &str| {
+    let keeps_value = |channel: &str| {
         channels
             .iter()
-            .any(|(name, body)| name == channel && body.to_string().contains("[private]"))
+            .any(|(name, body)| name == channel && body.to_string().contains(value))
     };
     for channel in [
         format!("/v1/runs/{run}"),
@@ -435,30 +419,28 @@ async fn a_value_only_a_records_also_mask_knows_reads_masked_in_every_channel() 
         "live operation.ended".to_string(),
         "replayed operation.ended".to_string(),
     ] {
-        assert!(masked(&channel), "{channel} does not show the mask");
+        assert!(keeps_value(&channel), "{channel} does not keep the value");
     }
 
     assert!(
-        !store_holds(&h, held_value)?,
-        "trace.db keeps the held value"
+        store_holds(&h, value)?,
+        "trace.db stores the original value"
     );
     Ok(())
 }
 
 #[tokio::test]
-async fn a_value_only_an_ends_set_knows_never_reaches_the_start_events_or_the_file() -> TestResult {
+async fn starts_defer_input_and_ends_publish_the_original_values() -> TestResult {
     let h = harness().await?;
     let mut live = EventStream::open(&h, "/v1/events", None).await?;
-    // A value only the operation's own sweep found: the end's set knows it, the start's does not.
-    let found = "swept-9Qp-cardnumber";
+    let found = "deferred-input-9Qp";
     let run = RunId::new();
     h.sink.run_started(RunStarted {
         id: run,
-        code: "return 1".to_string(),
+        code: format!("return '{found}'"),
         request_id: None,
         task_id: Some(TaskId::parse("checkout")?),
         host_data: Some(json!({"for": found})),
-        also_mask: None,
         at: at(0),
     });
     let fill = OperationId::new(run, 1);
@@ -470,7 +452,6 @@ async fn a_value_only_an_ends_set_knows_never_reaches_the_start_events_or_the_fi
         effect: Effect::Write,
         tab: Some(TabId(3)),
         args: json!({"value": found}),
-        also_mask: None,
         at: at(1),
     });
     h.flushed().await?;
@@ -485,7 +466,7 @@ async fn a_value_only_an_ends_set_knows_never_reaches_the_start_events_or_the_fi
         );
     }
 
-    let held = Some(held_set(found));
+    assert!(!store_holds(&h, found)?, "start input stays off disk");
     h.sink.op_ended(OperationEnded {
         id: fill,
         outcome: Outcome::Ok,
@@ -494,7 +475,6 @@ async fn a_value_only_an_ends_set_knows_never_reaches_the_start_events_or_the_fi
         result: None,
         error: None,
         page_after: None,
-        also_mask: held.clone(),
         at: at(2),
     });
     h.sink.run_ended(RunEnded {
@@ -503,38 +483,32 @@ async fn a_value_only_an_ends_set_knows_never_reaches_the_start_events_or_the_fi
         error: None,
         result: None,
         replay: None,
-        also_mask: held,
         at: at(3),
     });
     h.flushed().await?;
     let ended = live.take(2).await?;
     let detail = h.get(&format!("/v1/runs/{run}")).await?;
-    assert_eq!(detail.body["hostData"], json!({"for": "[private]"}));
+    assert_eq!(detail.body["hostData"], json!({"for": found}));
     assert_eq!(
         detail.body["operations"][0]["args"],
-        json!({"value": "[private]"})
+        json!({"value": found})
     );
-    for body in ended.iter().map(|event| &event.data) {
-        let text = body.to_string();
-        assert!(
-            !text.contains(found),
-            "an end event shows the value: {text}"
-        );
-    }
-    assert!(!store_holds(&h, found)?, "trace.db keeps the value");
+    assert_eq!(detail.body["code"], format!("return '{found}'"));
+    let operation_end = ended
+        .iter()
+        .find(|event| event.kind == "operation.ended")
+        .ok_or("the operation's end event")?;
+    assert!(operation_end.data.to_string().contains(found));
+    let run_end = ended
+        .iter()
+        .find(|event| event.kind == "run.ended")
+        .ok_or("the run's summary event")?;
+    assert_eq!(run_end.data["run"]["id"], run.to_string());
+    assert!(
+        store_holds(&h, found)?,
+        "trace.db stores the original value"
+    );
     Ok(())
-}
-
-/// A set of its own, as claw-sdk passes the values it still holds: the writer masks a record with
-/// it, and the process set never learns them.
-fn held_set(value: &str) -> Arc<SecretSet> {
-    let held = SecretSet::new(SecretSetConfig::default());
-    let _registration = held.register_from(
-        SecretValue::new(value.to_string()),
-        None,
-        SecretSource::Page,
-    );
-    Arc::new(held)
 }
 
 /// Whether the store file or its WAL holds `needle`. Both are read whole, and only the WAL may

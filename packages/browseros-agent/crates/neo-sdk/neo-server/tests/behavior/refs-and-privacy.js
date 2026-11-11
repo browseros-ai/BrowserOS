@@ -39,11 +39,9 @@ expect(
   masked.includes(String.fromCharCode(104, 117, 110, 116, 101, 114, 50, 50)),
 ).toBe(false)
 expect(await page.locator('#user').inputValue()).toBe('ada')
-expect(
-  (await page.locator('#echo').textContent()).includes(
-    String.fromCharCode(52, 56, 50, 57, 49, 51),
-  ),
-).toBe(false)
+expect(await page.locator('#echo').textContent()).toBe(
+  `Confirm your code ${String.fromCharCode(52, 56, 50, 57, 49, 51)}`,
+)
 await page.goto(`${origin}/shadow.html`)
 expect(await page.getByRole('button', { name: 'Closed button' }).count()).toBe(
   0,

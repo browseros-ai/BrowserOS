@@ -19,8 +19,7 @@ use neo_playwright::{
 use neo_takeover::{Lock, LockBinding, LockTtl, Locks, Reads};
 use neo_trace::{
     Delivery, Effect, EpochMillis, ErrorOwner, OperationId, OperationRow, Outcome, RedactionLimits,
-    Redactor, RunId, RunStatus, SecretSet, SecretSetConfig, TraceSink, TraceStore, WriterConfig,
-    spawn_writer,
+    Redactor, RunId, RunStatus, TraceSink, TraceStore, WriterConfig, spawn_writer,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -106,8 +105,7 @@ impl Harness {
         fake.answer("Target.getTargetInfo", json!({ "targetInfo": {} }));
         let dir = tempfile::tempdir()?;
         let store = TraceStore::open(&dir.path().join("trace.db")).await?;
-        let secrets = Arc::new(SecretSet::new(SecretSetConfig::default()));
-        let redactor = Redactor::new(Arc::clone(&secrets), RedactionLimits::default());
+        let redactor = Redactor::new(RedactionLimits::default());
         let sink = spawn_writer(&store, redactor, WriterConfig::default(), None);
         // Armed the way the host API arms it once the service starts.
         let locks = Locks::new(store.clone(), sink.clone());

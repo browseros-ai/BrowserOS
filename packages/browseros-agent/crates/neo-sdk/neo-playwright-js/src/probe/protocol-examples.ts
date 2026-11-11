@@ -274,7 +274,6 @@ export const REQUEST_EXAMPLES: { [O in Op]: AtLeastOne<RequestOf<O>> } = {
       },
     },
   ],
-  sweep: [{ op: 'sweep' }],
   focused: [{ op: 'focused' }],
   matchUrl: [
     {
@@ -405,39 +404,35 @@ const REPLY_EXAMPLES: {
     { kind: 'value', value: true },
   ],
   read: [
-    { kind: 'read', value: 'Welcome', sensitive: null, sweep: ['hunter2'] },
-    { kind: 'read', value: '••••', sensitive: 'password', sweep: ['hunter2'] },
-    { kind: 'read', value: null, sensitive: null, sweep: [] },
-    { kind: 'read', value: RECT, sensitive: null, sweep: [] },
+    { kind: 'read', value: 'Welcome', sensitive: null },
+    { kind: 'read', value: '••••', sensitive: 'password' },
+    { kind: 'read', value: null, sensitive: null },
+    { kind: 'read', value: RECT, sensitive: null },
     {
       kind: 'read',
       value: { x: 8, y: 120, scaleX: 1, scaleY: 1 },
       sensitive: null,
-      sweep: [],
     },
-    { kind: 'read', value: 'rotated', sensitive: null, sweep: [] },
+    { kind: 'read', value: 'rotated', sensitive: null },
     {
       kind: 'read',
       value: { checked: true, radio: true },
       sensitive: null,
-      sweep: [],
     },
     {
       kind: 'read',
       value: { pin: 7, target: 8, takesPaths: true },
       sensitive: null,
-      sweep: [],
     },
     {
       kind: 'read',
       value: { pin: 6, preview: '<li>One</li>', visible: true, count: 2 },
       sensitive: null,
-      sweep: ['hunter2'],
     },
   ],
   values: [
-    { kind: 'values', count: 2, values: ['One', 'Two'], sweep: ['hunter2'] },
-    { kind: 'values', count: 2, values: [], sweep: [] },
+    { kind: 'values', count: 2, values: ['One', 'Two'] },
+    { kind: 'values', count: 2, values: [] },
     {
       kind: 'values',
       count: 2,
@@ -445,7 +440,6 @@ const REPLY_EXAMPLES: {
         { pin: 6, preview: '<li>One</li>' },
         { pin: 7, preview: '<li>Two</li>' },
       ],
-      sweep: [],
     },
   ],
   snapshot: [
@@ -457,7 +451,6 @@ const REPLY_EXAMPLES: {
         { role: 'iframe', ref: 'e3' },
       ],
       iframes: [{ ref: 'e3', depth: 1, src: 'https://pay.example/frame' }],
-      sweep: ['hunter2'],
     },
   ],
   expect: [
@@ -496,10 +489,6 @@ const REPLY_EXAMPLES: {
       sensitive: null,
     },
   ],
-  sweep: [
-    { kind: 'sweep', values: [] },
-    { kind: 'sweep', values: ['hunter2', '482913'] },
-  ],
   focused: [
     { kind: 'focused', sensitive: true, iframe: null, host: null },
     { kind: 'focused', sensitive: false, iframe: 9, host: null },
@@ -509,11 +498,10 @@ const REPLY_EXAMPLES: {
     { kind: 'urlMatch', matches: true, url: 'https://example.com/done' },
   ],
   documentText: [
-    { kind: 'documentText', text: 'Pay', sweep: [] },
+    { kind: 'documentText', text: 'Pay' },
     {
       kind: 'documentText',
       text: '<!DOCTYPE html><html><head></head><body><input type="password" value="••••"></body></html>',
-      sweep: ['hunter2'],
     },
   ],
   replaced: [{ kind: 'replaced' }],
@@ -537,7 +525,6 @@ const REPLY_EXAMPLES: {
     },
     { kind: 'error', class: 'internal', message: 'not built yet' },
   ],
-  needsMask: [{ kind: 'needsMask' }],
   uninstalled: [{ kind: 'uninstalled' }],
 }
 
@@ -548,7 +535,7 @@ export function protocolDocument() {
     callFunction: CALL_FUNCTION,
     replyKinds: REPLY_KINDS,
     byHandle: ['pinned'],
-    anyRequest: ['error', 'uninstalled', 'needsMask'],
+    anyRequest: ['error', 'uninstalled'],
     requests: Object.values(REQUEST_EXAMPLES).flat(),
     replies: Object.values(REPLY_EXAMPLES).flat(),
   }

@@ -144,7 +144,7 @@ async fn frame_origin(scope: &OpScope<'_>, hop: &Hop) -> Result<OriginState, Pla
     };
     match probe::call(&hop.parent, &request).await {
         Ok(ProbeReply::Read { value, .. }) => {
-            let origin: Option<FrameOrigin> = element_read::read_value(scope, value.textless())?;
+            let origin: Option<FrameOrigin> = element_read::read_value(scope, value.into_value())?;
             Ok(origin.map_or(OriginState::Hidden, OriginState::Present))
         }
         Ok(ProbeReply::None { .. } | ProbeReply::Detached) | Err(ProbeFailure::Gone(_)) => {
@@ -192,7 +192,7 @@ mod tests {
             let reply = if detached {
                 json!({ "kind": "detached" })
             } else {
-                json!({ "kind": "read", "value": null, "sensitive": null, "sweep": [] })
+                json!({ "kind": "read", "value": null, "sensitive": null })
             };
             connection.always(
                 "Runtime.callFunctionOn",

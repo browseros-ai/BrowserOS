@@ -25,8 +25,7 @@ use crate::op::Op;
 use crate::op_scope::OpScope;
 use crate::page::OpPage;
 use crate::probe::{
-    self, PROBE_PROTOCOL, ParsedSelector, ProbeFailure, ProbeMask, ProbeReply, ProbeRequest,
-    ProbeTarget, Want,
+    self, PROBE_PROTOCOL, ParsedSelector, ProbeFailure, ProbeReply, ProbeRequest, ProbeTarget, Want,
 };
 use crate::target::{CallHeader, Strictness};
 use crate::test_support::fixture_server::{FixtureServer, Page};
@@ -58,18 +57,12 @@ fn resolve(target: ParsedSelector, want: Want) -> ProbeRequest {
     }
 }
 
-/// `resolve { want: element }` with the world's own sweep as its mask, as an op sends a request
-/// whose reply previews page text: these pages' site holds no other field.
+/// `resolve { want: element }`, as an op sends it.
 async fn resolve_element(
     world: &SealedWorld,
     target: ParsedSelector,
 ) -> TestResult<Result<ProbeReply, ProbeFailure>> {
-    let swept = probe::call(world, &ProbeRequest::Sweep).await;
-    let Ok(ProbeReply::Sweep { values }) = swept else {
-        return Err(format!("no sweep: {swept:?}").into());
-    };
-    let request = resolve(target, Want::Element);
-    Ok(probe::call_masked(world, &request, None, ProbeMask::of(&values)).await)
+    Ok(probe::call(world, &resolve(target, Want::Element)).await)
 }
 
 async fn fixtures() -> TestResult<FixtureServer> {
@@ -445,15 +438,6 @@ async fn tests_that_the_probe_reads_a_password_masked_while_the_page_reads_it_ra
         raw,
         json!("typed-secret"),
         "the page's own world is untouched"
-    );
-    let swept = probe::call(&world, &ProbeRequest::Sweep).await;
-    let Ok(ProbeReply::Sweep { values }) = swept else {
-        return Err(format!("no sweep: {swept:?}").into());
-    };
-    let mut echo = "you typed typed-secret".to_owned();
-    assert!(
-        values.mask_str(&mut echo) && !echo.contains("typed-secret"),
-        "the sweep hands Rust the raw value, for its mask only"
     );
     live.close(&tab).await;
     Ok(())

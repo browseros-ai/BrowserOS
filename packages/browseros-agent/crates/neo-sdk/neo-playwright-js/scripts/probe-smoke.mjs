@@ -289,14 +289,6 @@ async function plainPage(cdp, server, epoch) {
       "the probe's world reads •••• for the password and the plain field as is",
       inWorld,
     )
-    const sweep = await tab.call(contextId, { op: 'sweep' })
-    check(
-      sweep.kind === 'sweep' &&
-        sweep.values.includes('typed-secret') &&
-        !sweep.values.includes('Ada'),
-      "sweep hands Rust the password's raw value for its mask, and only that",
-      { kind: sweep.kind, count: sweep.values.length },
-    )
     await tab.evaluate("document.getElementById('pw').focus()")
     const focused = await tab.call(contextId, { op: 'focused' })
     check(

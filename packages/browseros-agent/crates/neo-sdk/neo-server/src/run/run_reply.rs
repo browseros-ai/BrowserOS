@@ -91,7 +91,7 @@ pub(crate) struct ReplyError {
     pub(crate) owner: ErrorOwner,
     /// The stable code.
     pub(crate) code: String,
-    /// The human message, masked.
+    /// The human message, clipped to the reply's text budget.
     pub(crate) message: String,
     /// Whether repeating the whole run is safe: it changed nothing.
     pub(crate) retryable: bool,

@@ -24,9 +24,8 @@
 //!   write on that same tab, each time the answer changes: `allowed`, or `refused by <lock>`.
 //!   It stands in for the dispatcher, which would refuse the agent's next click there.
 //! - `--surface-calls`: also serves test-only calls under `/surface`, behind the same auth.
-//!   `POST /surface/runs <json>` records a run with that result (`{"runId"}`, committed when it answers) so a mask can be read back from
-//!   `/v1/runs/{id}`, and `GET /surface/secrets` counts the secret set, in all and by source
-//!   (`{"count", "host", "owner", "agent", "page"}`).
+//!   `POST /surface/runs <json>` records a run with that result (`{"runId"}`, committed when it
+//!   answers), which can be read back from `/v1/runs/{id}`.
 //!   `POST /surface/paint-run {"tab": N, "colors": [[r, g, b], ..], "busyMs": n}` records one
 //!   run of real writes on tab N, each repainting the page in its color with its number in
 //!   large type. A write waits for the screenshot of the one before, so no picture can show a
@@ -67,8 +66,7 @@ use neo_takeover::{Front, FrontError, LockTarget, Locks, ScreenSize, Xvnc};
 use neo_trace::{
     Delivery, Effect, EpochMillis, OperationEnded, OperationId, OperationKind, OperationStarted,
     Outcome, PageState, Privacy, RedactionLimits, Redactor, RunEnded, RunId, RunStarted, RunStatus,
-    SecretSet, SecretSetConfig, SecretSource, ShotRead, TaskId, TraceSink, TraceStore,
-    WriterConfig, screenshot_queue, spawn_writer,
+    ShotRead, TaskId, TraceSink, TraceStore, WriterConfig, screenshot_queue, spawn_writer,
 };
 use serde_json::{Value, json};
 use std::convert::Infallible;
@@ -193,17 +191,15 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let browser = BrowserSession::new(Arc::new(client), BrowserSessionHooks::default());
 
     let store = TraceStore::open(&dir.join("trace.db")).await?;
-    let secrets = Arc::new(SecretSet::new(SecretSetConfig::default()));
     let (shots, shot_jobs) = screenshot_queue();
     let sink = spawn_writer(
         &store,
-        Redactor::new(Arc::clone(&secrets), RedactionLimits::default()),
+        Redactor::new(RedactionLimits::default()),
         WriterConfig::default(),
         Some(shots),
     );
-    let privacy = Privacy::new(secrets, Arc::new(sink.clone()), store.private_tabs().await?);
+    let privacy = Privacy::new(Arc::new(sink.clone()), store.private_tabs().await?);
     let viewports = Arc::new(Viewports::default());
-    let surface_secrets = Arc::clone(privacy.secrets());
     let surface_store = store.clone();
     let service = Service::start(ServiceInputs {
         store,
@@ -220,7 +216,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
     });
     let surface = SurfaceCalls {
         sink: sink.clone(),
-        secrets: surface_secrets,
         browser: Arc::clone(&browser),
         store: surface_store,
         front: service.front().clone(),
@@ -283,12 +278,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-/// The test-only calls `--surface-calls` serves: trace results, secret-set counts,
-/// front moves and real writes for the camera.
+/// The test-only calls `--surface-calls` serves: trace results, front moves and real writes
+/// for the camera.
 #[derive(Clone)]
 struct SurfaceCalls {
     sink: TraceSink,
-    secrets: Arc<SecretSet>,
     browser: Arc<BrowserSession>,
     store: TraceStore,
     front: Front,
@@ -300,7 +294,6 @@ impl SurfaceCalls {
     fn routes(self) -> Router {
         Router::new()
             .route("/surface/runs", post(Self::fake_run))
-            .route("/surface/secrets", get(Self::count))
             .route("/surface/paint-run", post(Self::paint_run))
             .route(
                 "/surface/front",
@@ -321,7 +314,6 @@ impl SurfaceCalls {
             request_id: None,
             task_id: TaskId::parse("surface").ok(),
             host_data: None,
-            also_mask: None,
             at: EpochMillis::now(),
         });
         calls.sink.run_ended(RunEnded {
@@ -330,7 +322,6 @@ impl SurfaceCalls {
             error: None,
             result: Some(result),
             replay: None,
-            also_mask: None,
             at: EpochMillis::now(),
         });
         calls
@@ -339,17 +330,6 @@ impl SurfaceCalls {
             .await
             .map_err(|error| (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))?;
         Ok(Json(json!({ "runId": run.to_string() })))
-    }
-
-    async fn count(State(calls): State<Self>) -> SurfaceReply {
-        let secrets = &calls.secrets;
-        Ok(Json(json!({
-            "count": secrets.count(),
-            "host": secrets.count_from(SecretSource::Host),
-            "owner": secrets.count_from(SecretSource::Owner),
-            "agent": secrets.count_from(SecretSource::Agent),
-            "page": secrets.count_from(SecretSource::Page),
-        })))
     }
 
     /// Whether the owner holds the screen, as the app's door asks before a move.
@@ -418,7 +398,6 @@ impl SurfaceCalls {
             request_id: None,
             task_id: TaskId::parse("surface").ok(),
             host_data: None,
-            also_mask: None,
             at: EpochMillis::now(),
         });
         let last = colors.len();
@@ -454,7 +433,6 @@ impl SurfaceCalls {
             error: None,
             result: None,
             replay: None,
-            also_mask: None,
             at: EpochMillis::now(),
         });
         calls
@@ -495,7 +473,6 @@ impl SurfaceCalls {
             effect,
             tab: Some(tab),
             args: Value::Null,
-            also_mask: None,
             at: EpochMillis::now(),
         });
     }
@@ -509,7 +486,6 @@ impl SurfaceCalls {
             result: None,
             error: None,
             page_after: None,
-            also_mask: None,
             at: EpochMillis::now(),
         });
     }
@@ -640,7 +616,6 @@ async fn record_fake_writes(sink: TraceSink, tab: TabId) {
             request_id: None,
             task_id: TaskId::parse("surface").ok(),
             host_data: None,
-            also_mask: None,
             at: EpochMillis::now(),
         });
         sink.op_started(OperationStarted {
@@ -651,7 +626,6 @@ async fn record_fake_writes(sink: TraceSink, tab: TabId) {
             effect: Effect::Write,
             tab: Some(tab),
             args: json!({"selector": "h1"}),
-            also_mask: None,
             at: EpochMillis::now(),
         });
         sink.op_ended(OperationEnded {
@@ -666,7 +640,6 @@ async fn record_fake_writes(sink: TraceSink, tab: TabId) {
                 url: None,
                 title: None,
             }),
-            also_mask: None,
             at: EpochMillis::now(),
         });
         sink.run_ended(RunEnded {
@@ -675,7 +648,6 @@ async fn record_fake_writes(sink: TraceSink, tab: TabId) {
             error: None,
             result: None,
             replay: None,
-            also_mask: None,
             at: EpochMillis::now(),
         });
         println!("fake write: run {run} op {op} tab {}", tab.0);
@@ -712,7 +684,6 @@ async fn record_fake_runs(sink: TraceSink) {
             request_id: None,
             task_id: TaskId::parse("demo").ok(),
             host_data: None,
-            also_mask: None,
             at: EpochMillis::now(),
         });
         for (seq, name, effect) in [
@@ -728,7 +699,6 @@ async fn record_fake_runs(sink: TraceSink) {
                 effect,
                 tab: Some(TabId(1)),
                 args: json!({"page": {"$neo": "page", "id": 1}}),
-                also_mask: None,
                 at: EpochMillis::now(),
             });
             tokio::time::sleep(Duration::from_millis(250)).await;
@@ -744,7 +714,6 @@ async fn record_fake_runs(sink: TraceSink) {
                     url: Some("https://example.com/".into()),
                     title: Some("Example Domain".into()),
                 }),
-                also_mask: None,
                 at: EpochMillis::now(),
             });
         }
@@ -754,7 +723,6 @@ async fn record_fake_runs(sink: TraceSink) {
             error: None,
             result: Some(json!("Example Domain")),
             replay: None,
-            also_mask: None,
             at: EpochMillis::now(),
         });
     }

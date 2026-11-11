@@ -40,6 +40,7 @@ listed_enum! {
         EvaluateOnElement,
         EvaluateOnAll,
         WaitForFunction,
+        WaitForFunctionOnElement,
         Screenshot,
         Pdf,
         SetViewportSize,
@@ -105,7 +106,7 @@ impl PageOp {
             Self::Evaluate => OpSpec::write(
                 "page.evaluate",
                 PAGE,
-                "run a function in the main world, behind the sensitive-value sweep",
+                "run a function in the main world, as Playwright's page.evaluate does",
             )
             .using(&[Capability::MainWorld])
             .policed(),
@@ -127,6 +128,13 @@ impl PageOp {
                 "page.waitForFunction",
                 PAGE,
                 "poll a main-world function from Rust until it returns truthy",
+            )
+            .using(&[Capability::MainWorld])
+            .policed(),
+            Self::WaitForFunctionOnElement => OpSpec::write(
+                "locator.waitForFunction",
+                TARGET,
+                "call a main-world function with the locator's element until it returns truthy",
             )
             .using(&[Capability::MainWorld])
             .policed(),
@@ -187,8 +195,7 @@ pub(crate) async fn invoke(
         PageOp::Content => {
             document_op::read(pw, scope, args.decode(scope)?, DocumentPart::Content).await
         }
-        // Boxed for the same reason: each holds its frame's world install inside its timeout,
-        // and setContent's guard its sweeps too.
+        // Boxed for the same reason: each holds its frame's world install inside its timeout.
         PageOp::SetContent => {
             Box::pin(document_op::set_content(pw, scope, args.decode(scope)?)).await
         }
@@ -213,6 +220,14 @@ pub(crate) async fn invoke(
         }
         PageOp::EvaluateOnAll => {
             Box::pin(element_evaluate::evaluate_on_all(
+                pw,
+                scope,
+                args.decode(scope)?,
+            ))
+            .await
+        }
+        PageOp::WaitForFunctionOnElement => {
+            Box::pin(element_evaluate::wait_for_function_on_element(
                 pw,
                 scope,
                 args.decode(scope)?,

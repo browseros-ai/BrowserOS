@@ -21,8 +21,8 @@ use neo_takeover::testing::FakeXvnc;
 use neo_trace::{
     Delivery, Effect, EpochMillis, OperationEnded, OperationId, OperationKind, OperationStarted,
     Outcome, Privacy, PrivacyStore, RedactionLimits, Redactor, RequestId, RunEnded, RunId,
-    RunStarted, RunStatus, SecretSet, SecretSetConfig, TaskId, TraceSink, TraceStore, WriterConfig,
-    screenshot_queue, spawn_writer,
+    RunStarted, RunStatus, TaskId, TraceSink, TraceStore, WriterConfig, screenshot_queue,
+    spawn_writer,
 };
 use serde_json::Value;
 use std::sync::Arc;
@@ -161,17 +161,16 @@ async fn start(
 ) -> Result<Harness, BoxError> {
     let dir = tempfile::tempdir()?;
     let store = TraceStore::open(&dir.path().join("trace.db")).await?;
-    let secrets = Arc::new(SecretSet::new(SecretSetConfig::default()));
     // Without a camera the writer gets no queue, and the service's end of it sees the writer
     // gone at once.
     let (queue, jobs) = screenshot_queue();
     let sink = spawn_writer(
         &store,
-        Redactor::new(Arc::clone(&secrets), RedactionLimits::default()),
+        Redactor::new(RedactionLimits::default()),
         WriterConfig::default(),
         camera.then_some(queue),
     );
-    let privacy = Privacy::new(secrets, privacy_store(&sink), store.private_tabs().await?);
+    let privacy = Privacy::new(privacy_store(&sink), store.private_tabs().await?);
     let browser = ScriptedBrowser::new();
     browser.set_window(window);
     let xvnc = FakeXvnc::start(screen).await?;
@@ -340,7 +339,6 @@ pub(crate) fn start_known_run(sink: &TraceSink, run: RunId, start: Start<'_>) {
         request_id: start.request.and_then(|id| RequestId::parse(id).ok()),
         task_id: start.task.and_then(|id| TaskId::parse(id).ok()),
         host_data: None,
-        also_mask: None,
         at: at(start.at),
     });
 }
@@ -375,7 +373,6 @@ pub(crate) fn op_started(sink: &TraceSink, id: OperationId, op: Op<'_>) {
         effect: op.effect,
         tab: op.tab.map(TabId),
         args: serde_json::json!({"page": op.tab}),
-        also_mask: None,
         at: at(op.at),
     });
 }
@@ -394,7 +391,6 @@ pub(crate) fn op_ended(
         result,
         error: None,
         page_after: None,
-        also_mask: None,
         at: at(10_000),
     });
 }
@@ -406,7 +402,6 @@ pub(crate) fn end_run(sink: &TraceSink, run: RunId, result: Option<Value>) {
         error: None,
         result,
         replay: None,
-        also_mask: None,
         at: at(20_000),
     });
 }

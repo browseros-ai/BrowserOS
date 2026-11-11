@@ -493,6 +493,14 @@ async fn failed_and_cancelled_playwright_changes_restore_the_previous_host_confi
             );
             fixture.native.lock().fail = None;
         }
+        assert!(
+            fixture
+                .native
+                .calls("Emulation.setDeviceMetricsOverride")
+                .iter()
+                .any(|call| call.params["width"] == 800),
+            "rollback must undo a metrics write that already reached the browser"
+        );
         assert_eq!(
             fixture.view.current_viewport(&page),
             Some(old),

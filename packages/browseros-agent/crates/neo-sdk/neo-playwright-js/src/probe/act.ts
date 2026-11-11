@@ -8,7 +8,7 @@
  *                  after its approach and presses only once the count grew, because the browser
  *                  routes input by layout it may not have yet; forced actions too
  *   verdict        stop that interceptor: did the trusted events reach the element? A miss
- *                  is described again in this call, under its mask (page-mask.ts)
+ *                  is the interceptor's own description of what the events hit
  *   disarm         stop whatever is armed here, for cleanup on every other exit
  *   frameBox       for a parent frame: where its iframe's content box sits, and whether the
  *                  iframe receives events at a point
@@ -40,15 +40,12 @@ import { ProbeError, type World } from './world'
 type Interception = { stop(): Hit }
 
 /**
- * An interceptor's verdict, and what it checked: the element hits must land in (the one the
- * interceptor retargets to) and the point it was armed at, so a miss can be described again.
- * `expired` when its expiry stopped it, not a verdict: events after that went unchecked.
+ * An interceptor's verdict. `expired` when its expiry stopped it, not a verdict: events after
+ * that went unchecked.
  */
 type Stopped = {
   token: number
   hit: Hit
-  target: Element
-  point: Point
   expired: boolean
 }
 
@@ -57,14 +54,10 @@ type Slot = {
     token: number
     interception: Interception
     expiry: ReturnType<typeof setTimeout>
-    target: Element
-    point: Point
   }
   /**
-   * The last interceptor stopped by its verdict or its expiry, until the next arming. Rust may
-   * ask for the same verdict again, with the site's values once a miss answered `needsMask`,
-   * or with newer ones (resolve::masked_call), so a verdict is answered for its token as often
-   * as it is asked.
+   * The last interceptor stopped by its verdict or its expiry, until the next arming, so a
+   * verdict is answered for its token as often as Rust asks for it.
    */
   stopped?: Stopped
 }
@@ -108,12 +101,9 @@ function stopArmed(slot: Slot): Stopped | undefined {
   if (!armed) return undefined
   slot.armed = undefined
   clearTimeout(armed.expiry)
-  const { token, target, point } = armed
   return {
-    token,
+    token: armed.token,
     hit: armed.interception.stop(),
-    target,
-    point,
     expired: false,
   }
 }
@@ -175,8 +165,6 @@ export function act(
   slot.armed = {
     token: arm.token,
     interception,
-    target: injected.retarget(element, 'button-link') ?? element,
-    point: place.point,
     // Only a Rust that lost the page lets this fire: it bounds how long the page's own
     // clicks stay blocked after a lost connection.
     expiry: setTimeout(() => {
@@ -206,19 +194,7 @@ export function verdict(
       'internal',
       `the interceptor armed with token ${request.token} expired before its verdict, so the input's later events went unchecked`,
     )
-  return { kind: 'verdict', hit: describedAgain(world, stopped) }
-}
-
-/**
- * A miss, described again now. The interceptor described what the event hit while the event
- * ran, outside any probe call, where page-mask.ts masks the whole text; here the same check at
- * the armed point runs inside this call, under its mask. A point that hits the element by now
- * keeps the event's own description.
- */
-function describedAgain(world: World, stopped: Stopped): Hit {
-  if (stopped.hit === 'done') return stopped.hit
-  const again = world.injected.expectHitTarget(stopped.point, stopped.target)
-  return again === 'done' ? stopped.hit : again
+  return { kind: 'verdict', hit: stopped.hit }
 }
 
 /**
