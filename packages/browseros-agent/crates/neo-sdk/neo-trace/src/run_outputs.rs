@@ -1,9 +1,11 @@
 //! The files a run keeps beside the trace, other than screenshots: the downloads Neo copied for
-//! it, under `outputs/<run>/` beside `trace.db`.
+//! it and the byte values its reply was too large to carry, under `outputs/<run>/` beside
+//! `trace.db`.
 //!
 //! ```text
 //!  outputs/<run>/downloads.json      the run's downloads (RunDownload), written once at its end
 //!  outputs/<run>/downloads/<index>   the bytes of each completed one
+//!  outputs/<run>/blobs/<id>          each byte value the reply names as {"$neo":"blob","id"}
 //! ```
 //!
 //! claw-sdk writes them when a run ends, before it answers the run, so a host that reads them
@@ -17,7 +19,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use crate::{RunDownload, RunId, TraceError};
+use crate::{BlobId, RunDownload, RunId, TraceError};
 
 /// The outputs directory of one trace file. Cheap to clone.
 #[derive(Clone, Debug)]
@@ -45,6 +47,34 @@ impl RunOutputs {
 
     fn download_path(&self, run: RunId, index: u32) -> PathBuf {
         self.run_dir(run).join("downloads").join(index.to_string())
+    }
+
+    fn blob_path(&self, run: RunId, id: BlobId) -> PathBuf {
+        self.run_dir(run).join("blobs").join(id.to_string())
+    }
+
+    /// Writes blob `id` of `run`: bytes its reply names instead of carrying them.
+    ///
+    /// # Errors
+    /// When the file cannot be written.
+    pub async fn keep_blob(&self, run: RunId, id: BlobId, bytes: &[u8]) -> io::Result<()> {
+        let path = self.blob_path(run, id);
+        if let Some(parent) = path.parent() {
+            tokio::fs::create_dir_all(parent).await?;
+        }
+        tokio::fs::write(path, bytes).await
+    }
+
+    /// Blob `id` of `run`, open for reading, with its length; `None` when the run has none such.
+    ///
+    /// # Errors
+    /// When the file exists but cannot be opened.
+    pub async fn open_blob(
+        &self,
+        run: RunId,
+        id: BlobId,
+    ) -> Result<Option<(tokio::fs::File, u64)>, TraceError> {
+        open(&self.blob_path(run, id)).await
     }
 
     /// Copies the finished download at `source` in as download `index` of `run`, and answers how
@@ -127,7 +157,7 @@ mod tests {
     use tokio::io::AsyncReadExt;
 
     use super::RunOutputs;
-    use crate::{DownloadStatus, RunDownload, RunId};
+    use crate::{BlobId, DownloadStatus, RunDownload, RunId};
 
     #[test]
     fn a_runs_outputs_live_in_its_own_directory_beside_the_trace_file() {
@@ -141,6 +171,27 @@ mod tests {
             outputs.download_path(run, 2),
             PathBuf::from(format!("/data/claw-sdk/outputs/{run}/downloads/2"))
         );
+        assert_eq!(
+            outputs.blob_path(run, BlobId::new(1)),
+            PathBuf::from(format!("/data/claw-sdk/outputs/{run}/blobs/b1"))
+        );
+    }
+
+    #[tokio::test]
+    async fn a_kept_blob_reads_back() -> Result<(), Box<dyn Error>> {
+        let dir = tempfile::tempdir()?;
+        let outputs = RunOutputs::beside(&dir.path().join("trace.db"));
+        let run = RunId::new();
+        assert!(outputs.open_blob(run, BlobId::new(0)).await?.is_none());
+        outputs.keep_blob(run, BlobId::new(0), b"\x89PNG").await?;
+        let (mut file, length) = outputs
+            .open_blob(run, BlobId::new(0))
+            .await?
+            .ok_or("kept")?;
+        let mut bytes = Vec::new();
+        file.read_to_end(&mut bytes).await?;
+        assert_eq!((bytes.as_slice(), length), (&b"\x89PNG"[..], 4));
+        Ok(())
     }
 
     #[tokio::test]

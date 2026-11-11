@@ -8,7 +8,9 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use neo_trace::{EpochMillis, RunEnded, RunId, RunStarted, TaskId, TraceSink, TraceStore};
+use neo_trace::{
+    EpochMillis, RunEnded, RunId, RunOutputs, RunStarted, TaskId, TraceSink, TraceStore,
+};
 use tokio::task::JoinSet;
 use tokio::time::{self, Instant};
 use tokio_util::sync::CancellationToken;
@@ -21,7 +23,7 @@ use crate::config::Defaults;
 use crate::dispatch::{
     Dispatcher, ErrorCode, OperationError, PageFact, PageFacts, RunCtx, RunStart, StopReason,
 };
-use crate::runtime::{Script, run_script};
+use crate::runtime::{Script, ScriptEnd, ScriptOutcome, run_script};
 
 /// Runs `run` calls. One per process, shared by every request. There is no concurrency limit
 /// (design D6): every admitted run executes at once, and a waiting run costs about 0.3 MB and
@@ -253,9 +255,10 @@ impl RunService {
         {
             ops.shutdown().await;
         }
-        // Before the reply, so a host that reads a download right after it finds the file; and
-        // before the end record, which drops the run state that lists the downloads.
+        // Before the reply, so a host that reads a download or a blob right after it finds the
+        // file; and before the end record, which drops the run state that lists the downloads.
         builtins::keep_downloads(&run, self.store.outputs()).await;
+        let end = keep_blobs(run.id(), end, self.store.outputs()).await;
         // The run's end record is built from its reply, so the trace and a `requestId` replay keep
         // exactly what the caller got.
         let reply = Arc::new(RunReply::build(&run, end));
@@ -363,6 +366,24 @@ impl RunService {
             "a test asked this run's task to panic"
         );
     }
+}
+
+/// Writes the blobs `end`'s value names beside the trace (`outputs/<run>/blobs/<id>`), where the
+/// host reads them once it has the reply. One that cannot be written fails the run as Neo's: a
+/// reply must never name bytes the host cannot read.
+async fn keep_blobs(run: RunId, mut end: ScriptEnd, outputs: &RunOutputs) -> ScriptEnd {
+    let blobs = std::mem::take(&mut end.blobs);
+    for blob in &blobs {
+        if let Err(error) = outputs.keep_blob(run, blob.id, &blob.bytes).await {
+            tracing::warn!(%error, %run, blob = %blob.id, "could not keep a result blob");
+            end.outcome = ScriptOutcome::Failed(OperationError::neo(
+                ErrorCode::INTERNAL_ERROR,
+                format_args!("Neo could not keep the result's bytes for the host: {error}"),
+            ));
+            break;
+        }
+    }
+    end
 }
 
 /// Waits for every op. A panicked op already answered and settled through its own guard.
