@@ -127,7 +127,6 @@ impl Service {
         Camera {
             browser: Arc::clone(&browser),
             viewports: Arc::clone(&viewports),
-            privacy: Arc::clone(&privacy),
         }
         .spawn(screenshots);
         let browser = BrowserTabs::new(browser, viewports);
@@ -166,7 +165,7 @@ impl Service {
         });
         let shutdown = CancellationToken::new();
         let live = CaptureHub::new(
-            Arc::new(LiveTabs::new(browser.clone(), Arc::clone(&privacy))),
+            Arc::new(LiveTabs::new(browser.clone())),
             capture,
             shutdown.clone(),
         );

@@ -59,9 +59,7 @@ listed_enum! {
         Unsupported,
         /// Copy or cut in a password, card or one-time-code field.
         SensitiveCopyRefused,
-        /// `setInputFiles` named one of Neo's own secret files (its host token, CAPTCHA keys,
-        /// trace store, the browser profile's credentials), or a directory that holds or sits
-        /// in one. The message never says which.
+        /// Legacy upload refusal code retained for protocol compatibility.
         SecretUploadRefused,
         /// The page or frame closed, or left the run's view, under the op.
         TargetClosed,

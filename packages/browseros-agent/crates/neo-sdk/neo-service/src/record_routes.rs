@@ -9,8 +9,7 @@
 //! appeared.
 //!
 //! Screenshots are served from the operation's stored state: `image/jpeg` when stored, 410
-//! `withheld` when its tab was private, 410 `expired` when retention deleted the file, and 404
-//! when it has none (none was taken, or the job was dropped).
+//! `expired` after retention deletes the file, and 404 when no image was kept.
 
 use crate::api_error::ApiError;
 use crate::query::Inline;
@@ -78,11 +77,11 @@ pub(crate) async fn get_screenshot(
             jpeg,
         )
             .into_response()),
-        ShotRead::Withheld => Err(ApiError::withheld(
-            "the tab was private, so no screenshot was kept",
-        )),
         ShotRead::Expired => Err(ApiError::expired("retention deleted this screenshot")),
-        ShotRead::None => Err(ApiError::not_found("this operation has no screenshot")),
+        // Older traces recorded withheld jobs without a JPEG. They read as missing images.
+        ShotRead::None | ShotRead::Withheld => {
+            Err(ApiError::not_found("this operation has no screenshot"))
+        }
     }
 }
 

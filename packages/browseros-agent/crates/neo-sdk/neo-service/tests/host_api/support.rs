@@ -92,8 +92,6 @@ struct Boot {
     window: &'static str,
     /// What the live views capture over, when not the scripted capture connection.
     capture_transport: Option<Arc<dyn CaptureTransport>>,
-    /// The limits of the secret set the writer and the routes share.
-    secrets: SecretSetConfig,
 }
 
 /// A started service over a fresh store, with no camera: no screenshot is taken, and a run is
@@ -130,16 +128,6 @@ pub(crate) async fn harness_after_a_crash_mid_fit(screen: ScreenSize) -> Result<
     start(|sink| Arc::new(sink.clone()), boot).await
 }
 
-/// A started service with no camera whose secret set has `secrets` for its limits, such as a
-/// cap small enough for a test to flood.
-pub(crate) async fn harness_with_secrets(secrets: SecretSetConfig) -> Result<Harness, BoxError> {
-    let boot = Boot {
-        secrets,
-        ..Boot::default()
-    };
-    start(|sink| Arc::new(sink.clone()), boot).await
-}
-
 /// A started service whose live views capture over `transport` rather than the scripted
 /// capture connection.
 pub(crate) async fn harness_with_capture(
@@ -159,7 +147,6 @@ impl Default for Boot {
             screen: HOME_SCREEN,
             window: "maximized",
             capture_transport: None,
-            secrets: SecretSetConfig::default(),
         }
     }
 }
@@ -171,12 +158,11 @@ async fn start(
         screen,
         window,
         capture_transport,
-        secrets,
     }: Boot,
 ) -> Result<Harness, BoxError> {
     let dir = tempfile::tempdir()?;
     let store = TraceStore::open(&dir.path().join("trace.db")).await?;
-    let secrets = Arc::new(SecretSet::new(secrets));
+    let secrets = Arc::new(SecretSet::new(SecretSetConfig::default()));
     // Without a camera the writer gets no queue, and the service's end of it sees the writer
     // gone at once.
     let (queue, jobs) = screenshot_queue();

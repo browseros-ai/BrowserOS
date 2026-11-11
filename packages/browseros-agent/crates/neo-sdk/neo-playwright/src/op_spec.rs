@@ -58,10 +58,8 @@ pub enum Capability {
     /// Changes which tab Neo's one screen shows, a screen the owner's takeovers and the control
     /// displays share. No op declares it yet, and so it has no gateway.
     Screen,
-    /// Hands files from Neo's own disk, which also holds Neo's secrets, to a page whose script
-    /// can then read them: any path Neo's process can read, relative ones against its working
-    /// directory, except the secret files the host names (`PlaywrightHooks::secret_paths`) and
-    /// any path into `/dev` or `/proc`.
+    /// Hands files from Neo's disk to a page whose script can then read them. Relative paths
+    /// resolve against Neo's working directory, following Playwright's path handling.
     /// Gateway: `input_files::set_input_files`, for every form of the op, payloads included.
     HostFiles,
 }

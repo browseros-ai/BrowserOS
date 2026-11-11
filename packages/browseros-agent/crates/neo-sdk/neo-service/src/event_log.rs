@@ -32,9 +32,7 @@ use crate::wire;
 use browseros_core::TabId;
 use neo_sdk_api as api;
 use neo_takeover::{Lock, Takeover};
-use neo_trace::{
-    EpochMillis, OperationId, PrivacyRecord, RunId, TaskId, TraceRecordEvent, TraceStore,
-};
+use neo_trace::{EpochMillis, OperationId, RunId, TaskId, TraceRecordEvent, TraceStore};
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use tokio::sync::broadcast::error::RecvError;
@@ -48,7 +46,6 @@ pub(crate) enum EventKind {
     RunEnded,
     OperationStarted,
     OperationEnded,
-    TabPrivate,
     TabClosed,
     LockState,
     TakeoverState,
@@ -63,7 +60,6 @@ impl EventKind {
             Self::RunEnded => "run.ended",
             Self::OperationStarted => "operation.started",
             Self::OperationEnded => "operation.ended",
-            Self::TabPrivate => "tab.private",
             Self::TabClosed => "tab.closed",
             Self::LockState => "lock.state",
             Self::TakeoverState => "takeover.state",
@@ -354,15 +350,8 @@ async fn hydrate(store: &TraceStore, event: TraceRecordEvent) -> Option<LogEvent
         TraceRecordEvent::OperationEnded { id, task, at, .. } => {
             operation_event(store, EventKind::OperationEnded, id, task, at).await
         }
-        TraceRecordEvent::TabPrivate { tab, reason, at } => {
-            let record = PrivacyRecord { since: at, reason };
-            LogEvent::new(
-                EventKind::TabPrivate,
-                None,
-                Some(tab),
-                &wire::tab_private_event(tab, record),
-            )
-        }
+        // Flag commits remain internal to takeover and display coordination.
+        TraceRecordEvent::TabPrivate { .. } => return None,
         // It wakes `wait=`; SSE clients read `complete` from the run itself.
         TraceRecordEvent::RunComplete { .. } => return None,
     };
@@ -417,13 +406,13 @@ async fn operation_event(
 mod tests {
     use super::{EventFilter, EventKind, EventLog, LogEvent, Read, number};
     use browseros_core::TabId;
-    use neo_trace::{EpochMillis, PrivateReason, TaskId, TraceRecordEvent, TraceStore};
+    use neo_trace::{EpochMillis, RunId, TaskId, TraceRecordEvent, TraceStore};
     use std::error::Error;
     use std::sync::Arc;
 
     fn tab_event(tab: i64) -> LogEvent {
         LogEvent::reset(EpochMillis::from_millis(tab)).with_keys(
-            EventKind::TabPrivate,
+            EventKind::TabClosed,
             None,
             Some(TabId(tab)),
         )
@@ -498,19 +487,15 @@ mod tests {
         Ok(())
     }
 
-    /// The broadcast holds two events here, so five sent before the task reads lose three: the
-    /// log says so with a reset before the two it still got.
+    /// The broadcast drops three events before the log catches up. A reset is required even
+    /// when the two remaining events are internal run-completion notifications.
     #[tokio::test]
     async fn a_lagged_broadcast_publishes_a_reset() -> Result<(), Box<dyn Error>> {
         let dir = tempfile::tempdir()?;
         let store = TraceStore::open(&dir.path().join("trace.db")).await?;
         let (sender, receiver) = tokio::sync::broadcast::channel(2);
-        for tab in 1..=5 {
-            sender.send(TraceRecordEvent::TabPrivate {
-                tab: TabId(tab),
-                reason: PrivateReason::Host,
-                at: EpochMillis::from_millis(tab),
-            })?;
+        for _ in 1..=5 {
+            sender.send(TraceRecordEvent::RunComplete { run: RunId::new() })?;
         }
         drop(sender);
         let log = Arc::new(EventLog::new(16));
@@ -522,14 +507,7 @@ mod tests {
             .iter()
             .map(|entry| (entry.event.kind, entry.event.tab))
             .collect::<Vec<_>>();
-        assert_eq!(
-            kinds,
-            vec![
-                (EventKind::StreamReset, None),
-                (EventKind::TabPrivate, Some(TabId(4))),
-                (EventKind::TabPrivate, Some(TabId(5))),
-            ]
-        );
+        assert_eq!(kinds, vec![(EventKind::StreamReset, None)]);
         Ok(())
     }
 }

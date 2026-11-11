@@ -55,8 +55,6 @@ pub(crate) struct MethodSpec {
     pub(crate) listing: Listing,
     /// A normal operation, or a background pull that the run's end cuts quietly.
     pub(crate) lifetime: Lifetime,
-    /// Whether the result holds the target tab's pixels, which a private tab never gives.
-    pub(crate) output: Output,
     /// Whether the method runs the agent's own script in its page's main world, which decides
     /// what of its end the door checks against the rules before release.
     pub(crate) page_script: PageScript,
@@ -76,7 +74,6 @@ impl MethodSpec {
             visibility: Visibility::Script,
             listing: Listing::Hidden,
             lifetime: Lifetime::Operation,
-            output: Output::Data,
             page_script: PageScript::Sealed,
             secret_args: &[],
             sensitive_args: &[],
@@ -103,18 +100,6 @@ pub(crate) enum Listing {
     Grouped(&'static str),
     /// Not described, still callable (`neo.solveCaptcha` with no provider key).
     Hidden,
-}
-
-/// What a method's result holds, as far as tab privacy cares (sdk-traces D6).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Output {
-    /// Values and text, which reach the script as the method produced them.
-    Data,
-    /// An image or a print of the target tab (`page.screenshot`, `page.pdf`). No mask reaches
-    /// into pixels, so the tab-privacy rule refuses the method while the tab is private, and
-    /// withholds its result if the tab went private at any point while it ran, closed since or
-    /// not.
-    Pixels,
 }
 
 /// Where a method runs script in its page (decision 35c).
