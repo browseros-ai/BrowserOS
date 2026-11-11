@@ -32,6 +32,8 @@ export interface FakeDisplay {
 export interface FakeNeoHost {
   /** For `startViewer({…}, { liveHost })`. */
   host: LiveHost
+  /** Its base URL, for `startViewer({ hostApi: { url, tokenFile } })`. */
+  url: string
   requests: HostRequest[]
   displays: FakeDisplay[]
   /**
@@ -52,6 +54,7 @@ export function startFakeNeoHost(): FakeNeoHost {
   const closeWaiters: Array<(display: FakeDisplay) => void> = []
   const fake: FakeNeoHost = {
     host: null as unknown as LiveHost,
+    url: '',
     requests,
     displays,
     respond: () => undefined,
@@ -121,6 +124,7 @@ export function startFakeNeoHost(): FakeNeoHost {
   })
 
   const base = `http://127.0.0.1:${server.port}`
+  fake.url = base
   fake.host = {
     fetch: (path, init = {}) => {
       const headers = new Headers(init.headers)

@@ -26,6 +26,8 @@ export interface ViewerConfig {
   hostApi?: HostApiConfig | null
   /** The container `bun run neo:viewer` started, shown read-only on the page; null with `--upstream`. */
   container?: { names: InstanceNames; image: string } | null
+  /** The instance (`--name`): names its export folder, `/tmp/neo-viewer/<instance>/`. */
+  instance?: string
 }
 
 /** What `bun run neo:viewer` was asked to do. */

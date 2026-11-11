@@ -130,17 +130,17 @@ export interface RunRecords {
   hasNeoRun(runId: string): boolean
 }
 
+/** Longest a stopping viewer waits for reads in flight, so Ctrl-C stays quick. */
+const DRAIN_MS = 3000
+
 /**
  * Watches the store for runs that ended with a Neo run id and joins Neo's record to each, one read
  * per run at a time. An incomplete record is attached and read again, up to `MAX_READS`.
  */
-/** Longest a stopping viewer waits for reads in flight, so Ctrl-C stays quick. */
-const DRAIN_MS = 3000
-
 export function joinNeoRuns(
   store: RunRecords,
   read = readNeoRun,
-): { stop: () => Promise<void> } {
+): { settled: (maxMs: number) => Promise<void>; stop: () => Promise<void> } {
   const reading = new Map<string, Promise<void>>()
   const join = async (runId: string, neoRunId: string) => {
     for (let attempt = 1; attempt <= MAX_READS; attempt++) {
@@ -165,17 +165,23 @@ export function joinNeoRuns(
     )
     reading.set(run.id, pending)
   })
+  const inFlight = (maxMs: number) =>
+    Promise.race([Promise.allSettled(reading.values()), Bun.sleep(maxMs)])
   return {
+    /**
+     * Waits (at most `maxMs`) for the reads in flight, and keeps joining: an export taken right
+     * after a run ended then holds Neo's record of it rather than none.
+     */
+    async settled(maxMs) {
+      await inFlight(maxMs)
+    },
     /**
      * Stops joining and waits (at most `DRAIN_MS`) for reads in flight, so a run that ended just
      * before Ctrl-C still gets its record into the log before the final flush.
      */
     async stop() {
       unsubscribe()
-      await Promise.race([
-        Promise.allSettled(reading.values()),
-        Bun.sleep(DRAIN_MS),
-      ])
+      await inFlight(DRAIN_MS)
     },
   }
 }

@@ -286,7 +286,7 @@ function settle(
     const result = resultOf(call.reply?.message)
     if (call.kind === 'tools-list') {
       const size = result ? toolsListSize(result) : null
-      if (size) store.toolsListSeen(size, call.reply?.at ?? endedAt)
+      if (size) store.toolsListSeen(size, call.reply?.at ?? endedAt, result)
       continue
     }
     if (!call.runId) continue

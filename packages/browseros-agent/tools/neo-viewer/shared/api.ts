@@ -11,6 +11,7 @@
  *   GET  /api/runs              RunsResponse        every run since the last Clear, in order
  *   GET  /api/runs/:runId       RunResponse         one run in full
  *   POST /api/clear             RunsResponse        starts an empty log (the previous is kept once)
+ *   POST /api/export            ExportResponse      writes every run since the last Clear to a new folder
  *   GET  /api/events            text/event-stream of ViewerEvent, one JSON object per `data:`
  */
 
@@ -20,8 +21,17 @@ export const apiRoutes = {
   runs: '/api/runs',
   run: (runId: string) => `/api/runs/${encodeURIComponent(runId)}`,
   clear: '/api/clear',
+  export: '/api/export',
   events: '/api/events',
 } as const
+
+/** `POST /api/export`: the folder written, and its files relative to it (`README.md` first). */
+export interface ExportResponse {
+  /** Absolute: `/tmp/neo-viewer/<instance>/export-<YYYYMMDD-HHMMSS>`. */
+  dir: string
+  files: string[]
+  runs: number
+}
 
 /** Tokens are estimates: characters divided by four, always shown with "≈". */
 export interface TextSize {

@@ -1,6 +1,8 @@
 /**
- * The top bar: the viewer's name, the container line, the one MCP URL to give an agent, Clear,
- * which empties the list (the server keeps the previous log once, as `log.prev.jsonl`), and Take
+ * The top bar: the viewer's name, the container line, the one MCP URL to give an agent, Export,
+ * which writes every run since the last Clear to a folder an agent can read (`ExportNotice` shows
+ * where), Clear, which empties the list (the server keeps the previous log once, as
+ * `log.prev.jsonl`), and Take
  * over, which hands the agent's tab to you (PR C2's `TakeOverButton`, on the screen's controller).
  * The container line is read-only (owner, 2026-11-11: the command that starts the viewer is the
  * control): the image tag and whether it is up when the viewer started it; otherwise that the
@@ -8,17 +10,22 @@
  */
 
 import { useEffect, useState } from 'react'
-import type { ViewerInfo } from '../../shared/api'
+import type { ExportResponse, ViewerInfo } from '../../shared/api'
 import { TakeOverButton } from '../live-screen/LiveScreen'
 import type { LiveScreenController } from '../live-screen/use-live-screen'
 
 export function TopBar({
   info,
   onClear,
+  onExport,
+  exporting,
   live,
 }: {
   info: ViewerInfo | null
   onClear: () => void
+  onExport: () => void
+  /** An export is being written: the button waits. */
+  exporting: boolean
   live: LiveScreenController
 }) {
   return (
@@ -48,6 +55,15 @@ export function TopBar({
       <div className="flex-1" />
       <McpUrl url={info?.mcpUrl ?? null} />
       <div className="flex h-7 shrink-0 items-center gap-2 border-line border-l pl-3">
+        <button
+          type="button"
+          onClick={onExport}
+          disabled={exporting}
+          title="Write every run since the last Clear to a folder under /tmp/neo-viewer, for an agent to read: README.md first."
+          className="flex h-[30px] items-center rounded-md border border-control px-3 font-semibold text-ink text-xs leading-4 hover:bg-[#F4F6FA] disabled:opacity-60"
+        >
+          {exporting ? 'Exporting…' : 'Export'}
+        </button>
         <button
           type="button"
           onClick={onClear}
@@ -132,6 +148,61 @@ function ContainerLine({ info }: { info: ViewerInfo | null }) {
           )}
         </>
       )}
+    </div>
+  )
+}
+
+/**
+ * Where the last export went: its folder's absolute path, to hand to an agent, with Copy path.
+ * It stays until dismissed (the server prints the same path in its terminal).
+ */
+export function ExportNotice({
+  exported,
+  onDismiss,
+}: {
+  exported: ExportResponse
+  onDismiss: () => void
+}) {
+  const [copied, setCopied] = useState(false)
+  useEffect(() => {
+    if (!copied) return
+    const timer = setTimeout(() => setCopied(false), 1500)
+    return () => clearTimeout(timer)
+  }, [copied])
+  return (
+    <div
+      role="status"
+      className="flex shrink-0 items-center gap-3 border-line border-b bg-[#F2F6FF] px-5 py-1.5"
+    >
+      <span className="shrink-0 text-ink-2">
+        Exported {exported.runs} {exported.runs === 1 ? 'run' : 'runs'} to
+      </span>
+      <code
+        className="min-w-0 truncate font-code text-ink"
+        title={exported.dir}
+      >
+        {exported.dir}
+      </code>
+      <button
+        type="button"
+        onClick={() =>
+          void navigator.clipboard
+            .writeText(exported.dir)
+            .then(() => setCopied(true))
+        }
+        className="flex h-6 shrink-0 items-center rounded-md bg-neo px-2.5 font-semibold text-white text-xs leading-4 hover:bg-[#1A44BD]"
+      >
+        {copied ? 'Copied' : 'Copy path'}
+      </button>
+      <span className="flex-1" />
+      <button
+        type="button"
+        onClick={onDismiss}
+        aria-label="Dismiss"
+        className="flex size-6 shrink-0 items-center justify-center rounded-md text-ink-3 hover:bg-[#E4EAF7]"
+      >
+        ×
+      </button>
     </div>
   )
 }
