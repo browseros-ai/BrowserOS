@@ -1,19 +1,25 @@
 /**
- * The top bar: the viewer's name, the container line, the one MCP URL to give an agent, and
- * Clear, which empties the list (the server keeps the previous log once, as `log.prev.jsonl`). The container line is read-only (owner, 2026-11-11: the command that starts the
- * viewer is the control); until the API reports the image and its state, it says the image is
- * managed outside the viewer and names where MCP is forwarded.
+ * The top bar: the viewer's name, the container line, the one MCP URL to give an agent, Clear,
+ * which empties the list (the server keeps the previous log once, as `log.prev.jsonl`), and Take
+ * over, which hands the agent's tab to you (PR C2's `TakeOverButton`, on the screen's controller).
+ * The container line is read-only (owner, 2026-11-11: the command that starts the viewer is the
+ * control): the image tag and whether it is up when the viewer started it; otherwise that the
+ * image is managed outside the viewer, and where MCP is forwarded.
  */
 
 import { useEffect, useState } from 'react'
 import type { ViewerInfo } from '../../shared/api'
+import { TakeOverButton } from '../live-screen/LiveScreen'
+import type { LiveScreenController } from '../live-screen/use-live-screen'
 
 export function TopBar({
   info,
   onClear,
+  live,
 }: {
   info: ViewerInfo | null
   onClear: () => void
+  live: LiveScreenController
 }) {
   return (
     <header className="flex h-14 shrink-0 items-center gap-4 border-line border-b bg-white px-5">
@@ -38,23 +44,7 @@ export function TopBar({
           Neo viewer
         </h1>
       </div>
-      <div className="flex h-7 min-w-0 items-center gap-3 border-line border-l pl-5">
-        <span
-          className="size-2 shrink-0 rounded-full border border-ink-4"
-          aria-hidden="true"
-        />
-        <span className="shrink-0 font-medium text-[13px] text-black leading-4">
-          Image managed outside the viewer for now
-        </span>
-        {info && (
-          <span
-            className="truncate font-code text-ink-3 text-xs leading-4"
-            title="Where the viewer forwards MCP: the Neo SDK image's /mcp"
-          >
-            → {info.upstreamUrl}
-          </span>
-        )}
-      </div>
+      <ContainerLine info={info} />
       <div className="flex-1" />
       <McpUrl url={info?.mcpUrl ?? null} />
       <div className="flex h-7 shrink-0 items-center gap-2 border-line border-l pl-3">
@@ -66,6 +56,7 @@ export function TopBar({
         >
           Clear
         </button>
+        <TakeOverButton live={live} />
       </div>
     </header>
   )
@@ -95,6 +86,52 @@ function McpUrl({ url }: { url: string | null }) {
       >
         {copied ? 'Copied' : 'Copy'}
       </button>
+    </div>
+  )
+}
+
+/** Read-only: what the viewer runs, or that it forwards to a Neo it did not start. */
+function ContainerLine({ info }: { info: ViewerInfo | null }) {
+  const container = info?.container ?? null
+  return (
+    <div className="flex h-7 min-w-0 items-center gap-3 border-line border-l pl-5">
+      {container ? (
+        <>
+          <span className="flex shrink-0 items-center gap-1.5">
+            <span
+              className={`size-2 rounded-full ${container.up ? 'bg-ok' : 'bg-bad'}`}
+              aria-hidden="true"
+            />
+            <span className="font-medium text-[13px] text-black leading-4">
+              {container.up ? 'Running' : 'Stopped'}
+            </span>
+          </span>
+          <span
+            className="truncate font-code text-ink-2 text-xs leading-4"
+            title={`Container ${container.name}`}
+          >
+            {container.image}
+          </span>
+        </>
+      ) : (
+        <>
+          <span
+            className="size-2 shrink-0 rounded-full border border-ink-4"
+            aria-hidden="true"
+          />
+          <span className="shrink-0 font-medium text-[13px] text-black leading-4">
+            Image managed outside the viewer
+          </span>
+          {info && (
+            <span
+              className="truncate font-code text-ink-3 text-xs leading-4"
+              title="Where the viewer forwards MCP: the Neo SDK image's /mcp"
+            >
+              → {info.upstreamUrl}
+            </span>
+          )}
+        </>
+      )}
     </div>
   )
 }
