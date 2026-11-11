@@ -303,24 +303,21 @@ paths:
         Binary frames carry RFB 3.8 both ways. No subprotocol is required, and `binary` is echoed
         when the client offers it.
 
-        `view` drops every input message. `control` forwards input. Its first input event makes
-        every open tab private before the event is forwarded. A tab opened during control
-        starts private. The first input closes view displays (`4001`), and new ones are refused
-        (`409 display_paused`) while that control display is open or a takeover is active.
-        View displays also close while a private tab is in front. The flag lasts until the tab
-        closes, so views can stay paused after control ends. Bringing an ordinary tab in front
-        lets views open again. The tab's screencast, video and trace screenshots keep serving.
+        `view` drops every input message. `control` forwards input. Its first input closes
+        view displays (`4001`), and new ones are refused (`409 display_paused`) while that
+        control display is open or a takeover is active. Views can open again when control ends.
+        The tab's screencast, video and trace screenshots keep serving.
         While no owner has control, `followTab` keeps that tab in front, and `followTask` keeps
-        the task's current page in front (the tab its latest operation targeted). Both followers
-        skip private tabs. `followTab` and `followTask` are mutually exclusive, so sending both
-        is `400 invalid_request`. A control
+        the task's current page in front (the tab its latest operation targeted). Both pause
+        while the owner holds the screen or a lock holds their target tab. `followTab` and
+        `followTask` are mutually exclusive; sending both is `400 invalid_request`. A control
         display takes neither, and a view display takes no `release`. `release` ties a control
         display to a takeover: releasing the takeover closes it. A `release` that names no
         takeover is `404 not_found`, and one whose takeover's release has begun is
         `409 takeover_released`.
 
         A display ends with a WebSocket close frame that says why:
-        - `4001` paused because the owner has control or a private tab is in front.
+        - `4001` paused because the owner has control.
         - `4002` released: the display's takeover was released;
         - `1008`: the client sent something the display refuses: an RFB message it does not
           know, a paste over 1 MiB, or a handshake other than RFB 3.8 with no security;
@@ -621,7 +618,7 @@ paths:
         `expiresAt` (`expired`), so the steps run while the agent is still locked out, and when
         its tab closes (`tab_closed`).
 
-        View displays stay paused while the tab is private and in front of the screen. The
+        View displays can open again after the takeover and its control displays end. The
         tab's screencast, video and trace screenshots keep serving.
       parameters:
         - $ref: '#/components/parameters/TakeoverId'

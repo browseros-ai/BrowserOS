@@ -60,7 +60,6 @@ fn authenticated(service: &Service) -> Result<Router, BoxError> {
 
 pub(crate) struct Harness {
     pub(crate) dir: tempfile::TempDir,
-    pub(crate) store: TraceStore,
     pub(crate) sink: TraceSink,
     pub(crate) privacy: Arc<Privacy>,
     pub(crate) browser: Arc<ScriptedBrowser>,
@@ -201,7 +200,6 @@ async fn start(
     .await?;
     Ok(Harness {
         dir,
-        store,
         sink,
         privacy,
         browser,

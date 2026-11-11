@@ -192,14 +192,6 @@ impl From<PartError> for ApiError {
                 ErrorCode::TakeoverReleased,
                 "the takeover was released",
             ),
-            PartError::Privacy(cause) => Self {
-                cause: Some(cause.to_string()),
-                ..Self::new(
-                    StatusCode::SERVICE_UNAVAILABLE,
-                    ErrorCode::InternalError,
-                    "Neo could not start the takeover",
-                )
-            },
         }
     }
 }
