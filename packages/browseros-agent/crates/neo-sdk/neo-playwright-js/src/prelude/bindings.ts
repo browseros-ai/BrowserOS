@@ -156,7 +156,14 @@ export async function answerBindingCall(
         'serializedArgs is not an array. This can happen when Array.prototype.toJSON is defined incorrectly',
       )
     const args = payload.serializedArgs.map(fromInPageArgument)
-    const frame = await page._bindingFrame(record.frame)
+    // Upstream's client calls the function as it dispatches the call (`BindingCall.call` reads
+    // its frame synchronously). With a cached frame, so does this: the callback runs inside the
+    // pump's dispatch, ahead of whatever that dispatch lets resume. An await here would let the
+    // script resume from the op that caused the call first, so a call the page did not await
+    // (from an event handler) could run after that op returned.
+    const frame =
+      page._knownBindingFrame(record.frame) ??
+      (await page._bindingFrame(record.frame))
     const result = await callback(
       { context: page._context, page, frame },
       ...args,
