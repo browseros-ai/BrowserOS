@@ -843,12 +843,12 @@ fn a_reply_over_the_limit_names_blobs_already_kept_with_the_run() -> Result<(), 
 fn a_local_observation_failure_after_a_completed_write_is_not_retryable() -> Result<(), TestError> {
     on_neo_runtime(async {
         let rig = TestRig::new().await?;
-        let code = r#"
+        let code = r"
             await context.newPage();
             throw Object.assign(new Error('Navigation events were lost before click completion'), {
                 delivery: 'unknown', retryable: true, owner: 'neo', operationId: 'forged'
             });
-        "#;
+        ";
         let reply = rig
             .run_service(GRACE)
             .run(request(code, meta(None, None)?)?)
