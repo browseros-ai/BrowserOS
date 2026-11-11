@@ -616,7 +616,7 @@ mod tests {
         BrowserosCase {
             op: "locator.setInputFiles",
             file: "uploads_browseros.rs",
-            test: "an_upload_of_neos_host_token_is_refused_and_an_ordinary_file_uploads",
+            test: "host_owned_paths_and_payloads_upload_and_an_empty_list_clears_the_input",
             proves: Proves::Served,
         },
     ];
