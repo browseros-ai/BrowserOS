@@ -12,9 +12,10 @@ under `tools/`: not shipped, and not part of the image.
                ~/.local/state/neo-viewer/tasks/<task>.jsonl ──▶ /api/* ──▶ the page at /
 ```
 
-This is the viewer's first part (PR B): the proxy, the per-task log, the API and a plain run list.
-Starting and stopping Docker, Neo's host API (operations, tabs), the live screen and the designed
-Viewer C v2 screen come in the next PRs, on the same API.
+The page at `/` is the designed Viewer C v2 screen (PR D1): the time strip, the run table with its
+bars, each run's code and the reply the model read, and the full-output pop-up. `/?plain` keeps
+the plain run list for debugging. Neo's host API (operations, tabs), the live screen and each
+code line's methods come in the next PRs, on the same API.
 
 ## Start it
 
@@ -107,13 +108,14 @@ run record (`GET /v1/runs/{id}`) when the host API arrives.
 
 - `server/`: the Bun server. `proxy/` forwards and reads MCP, `tasks/` holds the task rule and the
   process lookup, `log/` the JSONL log and the in-memory store, `api/` the routes.
-- `web/`: the page, React and Tailwind as in `apps/claw-app`. `server/page.ts` bundles it in memory
+- `web/`: the page, React and Tailwind as in `apps/claw-app`; `web/screen/` is the designed screen,
+  `web/App.tsx` the plain list. `server/page.ts` bundles it in memory
   when the viewer starts (`Bun.build`, about 40 ms), compiling Tailwind with the same
   `@tailwindcss/node` and `oxide` packages claw-app's Vite plugin uses.
 - `shared/api.ts`: the API's types.
 
 ```sh
-bun run test                     # in this folder: unit tests and the proxy against a fake Neo
+bun run test                     # in this folder: unit tests, the proxy against a fake Neo, the screen
 NEO_VIEWER_REAL_UPSTREAM=http://127.0.0.1:9010/mcp bun run test:real-image
 ```
 
