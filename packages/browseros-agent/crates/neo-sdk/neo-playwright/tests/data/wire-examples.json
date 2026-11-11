@@ -2056,6 +2056,23 @@
         }
       }
     ],
+    "page.emulateMedia": [
+      {
+        "call": {
+          "api": "page.emulateMedia",
+          "timeoutMs": 0
+        },
+        "page": {
+          "$neo": "page",
+          "tab": 1007
+        },
+        "media": "print",
+        "colorScheme": "dark",
+        "reducedMotion": "reduce",
+        "forcedColors": "active",
+        "contrast": "more"
+      }
+    ],
     "page.evaluate": [
       {
         "call": {

@@ -71,7 +71,6 @@
   "page.clock",
   "page.consoleMessages",
   "page.coverage",
-  "page.emulateMedia",
   "page.evaluateHandle",
   "page.exposeBinding",
   "page.exposeFunction",

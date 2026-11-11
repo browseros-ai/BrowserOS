@@ -102,7 +102,6 @@ export const UNSUPPORTED = {
       'Neo keeps no error history; listen with page.on("pageerror")',
     consoleMessages:
       'Neo keeps no console history; listen with page.on("console") before the page logs',
-    emulateMedia: 'media emulation is not available in Neo',
     evaluateHandle: NO_HANDLES,
     exposeBinding:
       'pages cannot call back into the script; read state with page.evaluate()',

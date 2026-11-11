@@ -114,7 +114,7 @@ mod tests {
             None,
             "an unsupported method is no op"
         );
-        assert_eq!(names.len(), 81, "the v1 op list has 81 ops");
+        assert_eq!(names.len(), 82, "the v1 op list has 82 ops");
     }
 
     #[test]
@@ -156,7 +156,7 @@ mod tests {
     )]
     fn tests_that_every_op_declares_exactly_its_audited_capabilities() {
         use Capability::{Capture, HostFiles, MainWorld};
-        const AUDITED: [(&str, &[Capability], bool); 81] = [
+        const AUDITED: [(&str, &[Capability], bool); 82] = [
             ("locator.click", &[], true),
             ("locator.dblclick", &[], true),
             ("locator.hover", &[], true),
@@ -218,6 +218,7 @@ mod tests {
             ("page.setContent", &[MainWorld], true),
             ("page.addScriptTag", &[MainWorld, HostFiles], true),
             ("page.addStyleTag", &[MainWorld, HostFiles], true),
+            ("page.emulateMedia", &[], true),
             ("page.close", &[], true),
             ("page.opener", &[], true),
             ("page.frames", &[], true),

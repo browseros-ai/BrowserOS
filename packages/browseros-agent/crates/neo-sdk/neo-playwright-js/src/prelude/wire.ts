@@ -420,6 +420,13 @@ export type OpInputs = {
   'page.waitForLoadState': FrameArgs & { state: LoadState }
   'page.title': FrameArgs
   'page.content': FrameArgs
+  'page.emulateMedia': PageArgs & {
+    media?: string
+    colorScheme?: string
+    reducedMotion?: string
+    forcedColors?: string
+    contrast?: string
+  }
   'page.addScriptTag': FrameArgs & {
     url?: string
     path?: string
@@ -556,6 +563,7 @@ export type OpOutputs = {
   'page.waitForLoadState': NavigationResult | null
   'page.title': string
   'page.content': string
+  'page.emulateMedia': null
   'page.addScriptTag': { element: ElementBrand; frames?: FrameInfo[] }
   'page.addStyleTag': { element: ElementBrand; frames?: FrameInfo[] }
   'page.setContent': NavigationResult | null

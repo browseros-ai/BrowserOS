@@ -313,6 +313,11 @@ export const OPS = {
     target: 'page',
     lifetime: 'operation',
   },
+  'page.emulateMedia': {
+    effect: 'write',
+    target: 'page',
+    lifetime: 'operation',
+  },
   'page.close': {
     effect: 'write',
     target: 'page',
