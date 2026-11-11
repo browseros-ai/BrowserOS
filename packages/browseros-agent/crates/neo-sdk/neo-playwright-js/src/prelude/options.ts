@@ -73,6 +73,7 @@ export const SCREENSHOT_KEYS = [
   'caret',
   'style',
   'scale',
+  'maskColor',
 ] as const
 
 /** Objects the prelude hands to scripts (pages, frames, locators, handles), by identity. */

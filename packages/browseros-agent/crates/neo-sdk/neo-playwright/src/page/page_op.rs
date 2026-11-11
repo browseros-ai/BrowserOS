@@ -13,7 +13,7 @@ use crate::page::document_watch::decode;
 use crate::page::navigation::{GotoInput, NavigateInput, Navigation};
 use crate::page::{
     PageHandle, add_tag, document_op, element_evaluate, evaluate, frame_tree, init_script,
-    navigation, pdf, screenshot, viewport_size, wait_for_navigation, wait_for_url,
+    media_emulation, navigation, pdf, screenshot, viewport_size, wait_for_navigation, wait_for_url,
 };
 use crate::probe::DocumentPart;
 use crate::target::PageRef;
@@ -35,6 +35,7 @@ listed_enum! {
         SetContent,
         AddScriptTag,
         AddStyleTag,
+        EmulateMedia,
         Close,
         Opener,
         Frames,
@@ -113,6 +114,11 @@ impl PageOp {
             )
             .using(&[Capability::MainWorld, Capability::HostFiles])
             .policed(),
+            Self::EmulateMedia => OpSpec::write(
+                "page.emulateMedia",
+                PAGE,
+                "set page media preferences across renderer and run lifetimes",
+            ),
             Self::Close => OpSpec::write("page.close", PAGE, "close the tab"),
             Self::Opener => OpSpec::read("page.opener", PAGE, "the page that opened this one"),
             Self::Frames => OpSpec::read(
@@ -223,6 +229,9 @@ pub(crate) async fn invoke(
                 add_tag::TagKind::Style,
             ))
             .await
+        }
+        PageOp::EmulateMedia => {
+            Box::pin(media_emulation::emulate(pw, scope, args.decode(scope)?)).await
         }
         PageOp::Close => close(pw, scope, args.decode(scope)?).await,
         PageOp::Opener => opener(pw, scope, args.decode(scope)?).await,

@@ -229,6 +229,7 @@ mod tests {
             ("page.setContent", &[MainWorld], true),
             ("page.addScriptTag", &[MainWorld, HostFiles], true),
             ("page.addStyleTag", &[MainWorld, HostFiles], true),
+            ("page.emulateMedia", &[], true),
             ("page.close", &[], true),
             ("page.opener", &[], true),
             ("page.frames", &[], true),

@@ -293,6 +293,9 @@ export type ScreenshotOptions = {
   quality?: number
   fullPage?: boolean
   clip?: Rect
+  /** Only the locators the caller explicitly asks to cover. */
+  mask?: LocatorBrand[]
+  maskColor?: string
 }
 
 /** `page.pdf`'s options with upstream's names, sizes and margins already in CSS units. */
@@ -432,6 +435,13 @@ export type OpInputs = {
   'page.waitForLoadState': FrameArgs & { state: LoadState }
   'page.title': FrameArgs
   'page.content': FrameArgs
+  'page.emulateMedia': PageArgs & {
+    media?: string
+    colorScheme?: string
+    reducedMotion?: string
+    forcedColors?: string
+    contrast?: string
+  }
   'page.addScriptTag': FrameArgs & {
     url?: string
     path?: string
@@ -575,6 +585,7 @@ export type OpOutputs = {
   'page.waitForLoadState': NavigationResult | null
   'page.title': string
   'page.content': string
+  'page.emulateMedia': null
   'page.addScriptTag': { element: ElementBrand; frames?: FrameInfo[] }
   'page.addStyleTag': { element: ElementBrand; frames?: FrameInfo[] }
   'page.setContent': NavigationResult | null
