@@ -18,7 +18,9 @@
 //! Each op's [`OpSpec`] declares the [`Capability`]s it reaches beyond its page's isolated world
 //! (the page's main world, its pixels, Neo's screen, Neo's disk), and the host holds and polices
 //! ops by those declarations, never by op name. Each capability's gateway in the crate refuses
-//! an op whose spec does not declare it.
+//! an op whose spec does not declare it. [`Op::wire`] describes the op's shapes from the same
+//! route rows that run it: its input and result as TypeScript and its place in Playwright's
+//! protocol, from which `tests/wire_generated.rs` writes the prelude's generated types.
 //!
 //! ```text
 //!  agent JS ─ prelude ─ __neo.invoke(op, json) ─ host dispatcher (policy, trace, delivery)
@@ -63,6 +65,17 @@ mod target;
 mod test_env;
 #[cfg(test)]
 mod test_support;
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        unused_imports,
+        unused_macros,
+        reason = "the families move onto route rows one at a time; until each does, only the \
+                  machinery's own tests walk a route"
+    )
+)]
+mod wire;
 mod world;
 
 pub use download_facts::{DownloadFacts, DownloadState};
@@ -73,6 +86,7 @@ pub use playwright::Playwright;
 pub use playwright_error::{Answer, ErrorCode, PlaywrightError, TimedOut};
 pub use prelude_source::PRELUDE_JS;
 pub use run_state::RunState;
+pub use wire::{Command, OpWire, Upstream, WireType};
 
 #[cfg(test)]
 mod tests {

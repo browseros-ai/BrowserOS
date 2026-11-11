@@ -3,7 +3,7 @@
 use neo_trace::Effect;
 
 /// One op's registration metadata. claw-sdk copies it field by field into its `MethodSpec`;
-/// the prelude's `ops.generated.ts` carries the same name, effect, target and lifetime. A host
+/// the prelude's generated `ops.ts` carries the same name, effect, target and lifetime. A host
 /// holds and polices ops by their [`OpSpec::capabilities`], which the prelude has no use for.
 #[derive(Clone, Copy, Debug)]
 pub struct OpSpec {

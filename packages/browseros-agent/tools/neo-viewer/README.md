@@ -83,7 +83,12 @@ A start replaces only an earlier start of the same instance; if that one's viewe
 it says so in one line, and refuses (touching nothing) when that viewer holds the same port.
 Cleanup never touches another instance: each object carries the labels `com.browseros.neo-viewer`
 and `com.browseros.neo-viewer.instance`, a same-named object without them stops the start, and the
-only image removed is the one this instance's own last build recorded in its `start-state.json`.
+only images removed are ones this instance's own builds replaced (recorded in its `start-state.json`).
+Instances on one commit share one image, so even that waits while anything else holds it: any
+container, running or stopped, or another instance's `start-state.json` naming it as its last build.
+The start says in one line what it kept and why, and tries again at its later starts; it never
+forces a removal (Docker refuses a plain one under a container, and a forced one deletes the image
+under a stopped container).
 **Workers and scripts: always pass your own `--name` and port; `default` is the owner's.**
 
 ### The container
@@ -110,13 +115,17 @@ The page at `/` (the approved design, "Viewer C v2"):
   On the left, the total in Neo against the time between calls (the model thinking, the agent's
   other tools, any human wait).
 - **The runs.** One row per `run()` call, in order: when it started, the client that sent it,
-  its first line of code, how many calls Neo recorded, Neo time with a bar, the round trip the
-  agent waited, **Code tok** (the script, what the model wrote) and **Reply tok** (what came back,
+  its first statement, how many calls Neo recorded, Neo time with a bar, the round trip the
+  agent waited, **Code tok** (the script as sent, what the model wrote) and **Reply tok** (what came back,
   what the model read) with a stacked bar, and a totals row. Every bar is a share of its column's
   largest value. Click #, Neo time, Round trip, Code tok or Reply tok to sort by it (again to
   flip). Tokens are estimates, characters ÷ 4, always shown with "≈".
-- **An open run.** Click a row: its script, line by line and numbered, and on each line the
-  methods that line called, from Neo's record of the run: start offset, the name Neo recorded (it
+- **An open run.** Click a row: its script laid out one statement per line, indented by depth,
+  with the line numbers counting those lines. Agents send code minified on one line; only the
+  whitespace between tokens changes (`shared/code-format.ts`, driven by acorn's parse), so every
+  token is as sent, a line still wider than 80 columns breaks at an object, a method chain or an
+  argument list, and code that does not parse is shown as sent. On each line, the methods that
+  line called, from Neo's record of the run: start offset, the name Neo recorded (it
   can differ from what the script wrote: `page.textContent('h1')` is `locator.textContent`), the
   outcome, a bar for when it ran within the run's own time, its duration, and read or write. A line
   that called many (a loop) folds the rest behind one row. Click a method for its arguments (a
@@ -132,7 +141,8 @@ The page at `/` (the approved design, "Viewer C v2"):
   through the matches), copy, and previous / next output. Escape closes it.
 - **The live screen.** The sidebar's upper half: Neo's screen, live. **Follow agent** watches the
   tab the agent's latest run used and moves with it; **Control** lets you click and type (the agent
-  is not held). **Pop out** opens it large over the page; closing it docks it back. **Take over**
+  is not held). Docked, it is as wide as the sidebar (drag the handle to make it bigger) and keeps
+  Neo's screen ratio. **Pop out** opens it large over the page; closing it docks it back. **Take over**
   (top bar, or in the pop-up) gives you the agent's tab: its calls on that tab fail with
   `owner_has_control` until you press **Give back**, or until the takeover expires (Neo's default,
   20 minutes).
@@ -234,6 +244,12 @@ connection dropped. The panel says so and reopens the display on its own, so it 
 container restarts. The display and both POSTs take only requests whose `Origin` is the viewer's own
 page: a WebSocket is not covered by the same-origin policy. The viewer gives back the takeovers it
 holds when it stops.
+
+Docked, the screen is as wide as the sidebar and as tall as Neo's screen ratio makes it (the
+framebuffer size its RFB server reports; 1600×1000 until then), so dragging the sidebar wider zooms
+in, live while dragging. It is never taller than the sidebar's visible height less the panel's
+header row; only then does the picture letterbox. "What the model read" sits below it and the
+sidebar scrolls (`web/live-screen/screen-fit.ts`).
 
 The components are self-contained (`web/live-screen/`): `useLiveScreen()` makes the controller, and
 `<LiveScreen size="docked" | "large">`, `<LiveScreenPopup>` and `<TakeOverButton>` take it. A page

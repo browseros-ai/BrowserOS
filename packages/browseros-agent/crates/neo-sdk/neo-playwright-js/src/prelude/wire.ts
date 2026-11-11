@@ -7,8 +7,13 @@
  * or renamed here must change there in the same commit, or the op fails `script /
  * invalid_input` before it sends anything. Types the probe consumes unchanged (expect params,
  * select options, URL patterns) are imported from the probe protocol, so the three halves
- * cannot drift apart. `OpInputs` and `OpOutputs` must name every op in ops.generated.ts; the
- * `complete` check at the end fails to compile otherwise.
+ * cannot drift apart.
+ *
+ * The op maps are being moved into Rust one family at a time: a family on route rows has its
+ * inputs and results generated from its handlers' types (`./generated`, written by
+ * crates/neo-sdk/neo-playwright/tests/wire_generated.rs), and its hand rows leave
+ * `HandInputs` and `HandOutputs` here in the same change. `_Partition` at the end fails to
+ * compile while an op is described by both, or by neither.
  */
 
 import type { SerializedValue } from '../../../neo-playwright/third_party/playwright/packages/isomorphic/utilityScriptSerializers'
@@ -19,7 +24,8 @@ import type {
   SelectOption,
   UrlPattern,
 } from '../probe/protocol'
-import type { OpName } from './ops.generated'
+import type { GeneratedInputs, GeneratedOutputs } from './generated'
+import type { OpName } from './generated/ops'
 import type { AriaSnapshotJSON, ParsedSelector } from './vendored'
 
 /** Playwright's in-page serialized value (`utilityScriptSerializers.ts`), as JSON. */
@@ -155,7 +161,10 @@ export type FrameTree = { frames: FrameInfo[] }
 /** One tab, with the URL the prelude caches for its synchronous `url()`. */
 export type PageEntry = { page: PageBrand; url: string }
 
-/** What an op that returns nothing answers. */
+/**
+ * The empty object still returned by host bookkeeping and event acknowledgments. Null results
+ * are spelled out per op: changing this alias would misdescribe existing run-record payloads.
+ */
 export type Done = Record<string, never>
 
 /** A frame Rust could not read within its budget; it keeps its iframe line and gets a comment. */
@@ -298,16 +307,25 @@ export type PointerOptions = {
   steps?: number
   trial?: boolean
 }
+/** Only the fields each pointer op actually forwards; click alone can wait after navigation. */
+export type DblclickOptions = Omit<PointerOptions, 'clickCount' | 'noWaitAfter'>
+export type HoverOptions = Pick<
+  PointerOptions,
+  'force' | 'modifiers' | 'position' | 'scroll' | 'trial'
+>
+export type CheckOptions = Pick<
+  PointerOptions,
+  'force' | 'position' | 'scroll' | 'trial'
+>
 export type DragOptions = {
   force?: boolean
-  noWaitAfter?: boolean
   scroll?: ScrollOption
   sourcePosition?: Point
   targetPosition?: Point
   steps?: number
   trial?: boolean
 }
-export type FillOptions = { force?: boolean; noWaitAfter?: boolean }
+export type FillOptions = { force?: boolean }
 export type KeyOptions = { delay?: number; noWaitAfter?: boolean }
 export type LoadState = 'load' | 'domcontentloaded' | 'networkidle' | 'commit'
 export type WaitForState = 'attached' | 'detached' | 'visible' | 'hidden'
@@ -360,8 +378,31 @@ export type ScreenshotOptions = {
   maskColor?: string
 }
 
-/** `page.pdf`'s options with upstream's names, sizes and margins already in CSS units. */
-export type PdfOptions = Record<string, unknown>
+/**
+ * PDF fields accepted by pdf.rs. Rust accepts pixels or CSS lengths; the prelude normalizes
+ * script-supplied numbers to px strings before sending, as Playwright's client does.
+ */
+export type PdfOptions = {
+  scale?: number
+  displayHeaderFooter?: boolean
+  headerTemplate?: string
+  footerTemplate?: string
+  printBackground?: boolean
+  landscape?: boolean
+  pageRanges?: string
+  format?: string
+  width?: number | string
+  height?: number | string
+  margin?: {
+    top?: number | string
+    right?: number | string
+    bottom?: number | string
+    left?: number | string
+  }
+  preferCSSPageSize?: boolean
+  tagged?: boolean
+  outline?: boolean
+}
 
 /**
  * One in-memory file as upstream's injected script takes it: `mimeType` already defaulted from
@@ -388,23 +429,25 @@ export type ExpectArgs = {
   /** Playwright's printed expectation line, `Expected: "Hello"` or `Expected pattern: /x/`. */
   expected: string
   params: ExpectParams
+  /** A malformed aria template, reported by Rust before polling the matcher. */
+  templateError?: string
 }
 
-/** Each op's input after `call`. */
-export type OpInputs = {
+/** Each op's input after `call`, for the ops Rust does not describe yet. */
+export type HandInputs = {
   'events.interceptFileChooser': PageArgs & { lease: number; on: boolean }
   'locator.click': TargetArgs & { options: PointerOptions }
-  'locator.dblclick': TargetArgs & { options: PointerOptions }
-  'locator.hover': TargetArgs & { options: PointerOptions }
-  'locator.check': TargetArgs & { options: PointerOptions }
-  'locator.uncheck': TargetArgs & { options: PointerOptions }
+  'locator.dblclick': TargetArgs & { options: DblclickOptions }
+  'locator.hover': TargetArgs & { options: HoverOptions }
+  'locator.check': TargetArgs & { options: CheckOptions }
+  'locator.uncheck': TargetArgs & { options: CheckOptions }
   /** `to` is resolved in the source's frame, as upstream's `frame.dragAndDrop`. */
   'locator.dragTo': TargetArgs & { to: Target; options: DragOptions }
   'locator.fill': TargetArgs & { value: string; options: FillOptions }
   'locator.press': TargetArgs & { key: string; options: KeyOptions }
   'locator.pressSequentially': TargetArgs & {
     text: string
-    options: KeyOptions
+    options: Pick<KeyOptions, 'delay'>
   }
   'locator.selectOption': TargetArgs & {
     options: SelectOption[]
@@ -516,11 +559,11 @@ export type OpInputs = {
   'page.title': FrameArgs
   'page.content': FrameArgs
   'page.emulateMedia': PageArgs & {
-    media?: string
-    colorScheme?: string
-    reducedMotion?: string
-    forcedColors?: string
-    contrast?: string
+    media?: 'screen' | 'print' | 'no-override'
+    colorScheme?: 'dark' | 'light' | 'no-preference' | 'no-override'
+    reducedMotion?: 'reduce' | 'no-preference' | 'no-override'
+    forcedColors?: 'active' | 'none' | 'no-override'
+    contrast?: 'no-preference' | 'more' | 'no-override'
   }
   'page.addScriptTag': FrameArgs & {
     url?: string
@@ -634,11 +677,8 @@ export type OpInputs = {
   'download.saveAs': { download: string; path: string }
 }
 
-/**
- * Each op's result. Page and element handles arrive revived by the bootstrap
- * (`__neo.brands.register`); the revivers and the classes read the raw brands.
- */
-export type OpOutputs = {
+/** Each op's result, for the ops Rust does not describe yet. */
+export type HandOutputs = {
   'events.interceptFileChooser': Done
   'locator.click': { navigation: NavigationCut } | null
   'locator.dblclick': null
@@ -673,9 +713,9 @@ export type OpOutputs = {
   'locator.allTextContents': string[]
   'locator.allInnerTexts': string[]
   'locator.boundingBox': Rect | null
-  'locator.waitFor': unknown
-  'locator.elementHandle': unknown
-  'locator.elementHandles': unknown[]
+  'locator.waitFor': ElementBrand | null
+  'locator.elementHandle': ElementBrand | null
+  'locator.elementHandles': ElementBrand[]
   'page.ariaSnapshot': SnapshotResult
   'locator.ariaSnapshot': SnapshotResult
   'expect.locator': null
@@ -704,7 +744,7 @@ export type OpOutputs = {
   'page.addScriptTag': { element: ElementBrand; frames?: FrameInfo[] }
   'page.addStyleTag': { element: ElementBrand; frames?: FrameInfo[] }
   'page.setContent': NavigationResult | null
-  'page.close': Done
+  'page.close': null
   'page.opener': { opener: PageBrand | null }
   'page.frames': Partial<FrameTree>
   /** The script's result in Playwright's in-page format. */
@@ -718,7 +758,7 @@ export type OpOutputs = {
   /** The `{"$neo":"bytes"}` brand, revived as the prelude's Buffer (index.ts). */
   'page.screenshot': Uint8Array
   'page.saveScreenshot': null
-  'page.pdf': unknown
+  'page.pdf': Uint8Array
   'page.setViewportSize': Done
   /** The id `disposable.dispose` takes. */
   'page.addInitScript': { id: number }
@@ -728,9 +768,9 @@ export type OpOutputs = {
   'webStorage.read': { name: string; value: string }[] | string | null
   'webStorage.write': null
   'page.addLocatorHandler': { uid: number }
-  'page.removeLocatorHandler': Done
+  'page.removeLocatorHandler': null
   'page.locatorHandlerTriggered': { uid: number | null }
-  'page.resolveLocatorHandler': Done
+  'page.resolveLocatorHandler': null
   'context.pages': { pages: PageEntry[] }
   'context.newPage': PageEntry
   'context.addInitScript': { id: number }
@@ -745,10 +785,24 @@ export type OpOutputs = {
   'download.saveAs': null
 }
 
+/** Each op's input after `call`: Rust's generated type, or the hand row above. */
+export type OpInputs = GeneratedInputs & HandInputs
+
+/**
+ * Each op's result. Page and element handles arrive revived by the bootstrap
+ * (`__neo.brands.register`); the revivers and the classes read the raw brands.
+ */
+export type OpOutputs = GeneratedOutputs & HandOutputs
+
 type Exact<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false
 type Assert<T extends true> = T
-/** Fails to compile when an op in ops.generated.ts lacks an input or a result type here. */
-type _WireCoversEveryOp = [
+/**
+ * Fails to compile when an op is described both by Rust and by hand, or by neither: every op
+ * in `OPS` has exactly one input and one result type.
+ */
+type _Partition = [
+  Assert<Exact<keyof GeneratedInputs & keyof HandInputs, never>>,
+  Assert<Exact<keyof GeneratedOutputs & keyof HandOutputs, never>>,
   Assert<Exact<keyof OpInputs, OpName>>,
   Assert<Exact<keyof OpOutputs, OpName>>,
 ]

@@ -14,6 +14,7 @@ import { Locator } from './locator'
 import { Page } from './page'
 import { type TimeoutOption, timeoutMs } from './timeouts'
 import { normalizeUrl } from './url'
+import type { ExpectArgs } from './wire'
 
 export type Retrying = {
   /** What upstream's `expectTypes` accepts; toMatchAriaSnapshot takes either. */
@@ -524,14 +525,12 @@ export async function retry(
     )
   const timeout = matcher.options?.timeout ?? state.config.timeout
   const call = { api, timeoutMs: timeoutMs(api, timeout) }
-  const shape = {
+  const shape: ExpectArgs = {
     matcher: name,
     expectation: matcher.expectation,
     expected: matcher.expected(state.isNot),
     params: { ...matcher.params, isNot: state.isNot },
-    ...(matcher.templateError === undefined
-      ? {}
-      : { templateError: matcher.templateError }),
+    templateError: matcher.templateError,
   }
   try {
     if (actual instanceof Page)

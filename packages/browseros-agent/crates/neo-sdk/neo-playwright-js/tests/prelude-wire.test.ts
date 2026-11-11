@@ -4,7 +4,7 @@
 // only, over a test host (support/prelude-runtime.ts).
 import { describe, expect, it } from 'bun:test'
 import { recordEveryOp } from '../scripts/wire-examples'
-import { OPS } from '../src/prelude/ops.generated'
+import { OPS } from '../src/prelude/generated/ops'
 import {
   type Call,
   isRefusal,

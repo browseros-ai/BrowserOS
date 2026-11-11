@@ -27,20 +27,21 @@ import {
 } from './evaluation'
 import { EventDeadline } from './event-deadline'
 import { dropFiles, inputFiles, withClientErrors } from './files'
+import type { OpName } from './generated/ops'
 import { FrameLocator, Locator, testIdAttributeName } from './locator'
-import type { OpName } from './ops.generated'
 import {
   CHECK_KEYS,
   DBLCLICK_KEYS,
   DRAG_KEYS,
   FILL_KEYS,
   HOVER_KEYS,
-  KEY_KEYS,
   markHandle,
   POINTER_KEYS,
+  PRESS_KEYS,
   pick,
   SCREENSHOT_KEYS,
   selectOptionValues,
+  TYPE_KEYS,
 } from './options'
 import type { Page } from './page'
 import type { Response } from './response'
@@ -878,7 +879,7 @@ export class Frame extends EventEmitter {
       this._wait(api, options),
       {
         key,
-        options: pick(options, KEY_KEYS),
+        options: pick(options, PRESS_KEYS),
       },
     )
   }
@@ -898,7 +899,7 @@ export class Frame extends EventEmitter {
       selector,
       options.strict,
       this._wait(api, options),
-      { text, options: pick(options, KEY_KEYS) },
+      { text, options: pick(options, TYPE_KEYS) },
     )
   }
 

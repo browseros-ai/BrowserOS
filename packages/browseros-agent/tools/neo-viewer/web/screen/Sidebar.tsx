@@ -1,11 +1,14 @@
 /**
  * The right sidebar. On top, the live screen docked (PR C2's `LiveScreen`: Follow agent / Control,
- * Pop out, a small screen); while it is popped out the dock says where it went. Under it, "What
- * the model read": the selected run's full reply exactly as the proxy captured it, formatted or
- * raw.
+ * Pop out, the screen); while it is popped out the dock says where it went. Under it, "What the
+ * model read": the selected run's full reply exactly as the proxy captured it, formatted or raw.
+ *
+ * The screen is as wide as the sidebar and as tall as Neo's screen ratio makes it, up to the
+ * sidebar's visible height, so a wider sidebar is a bigger picture. The reply keeps a readable
+ * height below it and the sidebar scrolls.
  */
 
-import { useState } from 'react'
+import { type RefObject, useLayoutEffect, useRef, useState } from 'react'
 import type { RunSummary } from '../../shared/api'
 import { LiveScreen } from '../live-screen/LiveScreen'
 import type { LiveScreenController } from '../live-screen/use-live-screen'
@@ -29,17 +32,21 @@ export function Sidebar({
   popped: boolean
   onPopOut: () => void
 }) {
+  const aside = useRef<HTMLElement>(null)
+  const viewHeight = useContentHeight(aside)
   return (
     <aside
+      ref={aside}
       aria-label="Sidebar"
       style={{ width }}
-      className="flex min-h-0 shrink-0 flex-col gap-3 px-4 py-3.5"
+      className="flex min-h-0 shrink-0 flex-col gap-3 overflow-y-auto px-4 py-3.5"
     >
       <LiveScreen
         live={live}
         size="docked"
         popped={popped}
         onPopOut={onPopOut}
+        viewHeight={viewHeight ?? undefined}
       />
       {run ? (
         <ReplyPanel key={run.id} run={run} onOpenFull={() => onOpenFull(run)} />
@@ -76,7 +83,7 @@ function ReplyPanel({
   return (
     <section
       aria-label="What the model read"
-      className="flex min-h-0 flex-1 flex-col gap-2"
+      className="flex min-h-[280px] flex-1 flex-col gap-2"
     >
       <div className="flex items-center gap-2">
         <h2 className="font-semibold text-[13px] text-ink leading-4">
@@ -129,4 +136,28 @@ function ReplyPanel({
       </p>
     </section>
   )
+}
+
+/** The height of `element`'s content box (its visible height less its padding), as it changes. */
+function useContentHeight(
+  element: RefObject<HTMLElement | null>,
+): number | null {
+  const [height, setHeight] = useState<number | null>(null)
+  useLayoutEffect(() => {
+    const target = element.current
+    if (!target) return
+    const measure = () => {
+      const style = getComputedStyle(target)
+      setHeight(
+        target.clientHeight -
+          Number.parseFloat(style.paddingTop) -
+          Number.parseFloat(style.paddingBottom),
+      )
+    }
+    measure()
+    const observer = new ResizeObserver(measure)
+    observer.observe(target)
+    return () => observer.disconnect()
+  }, [element])
+  return height
 }

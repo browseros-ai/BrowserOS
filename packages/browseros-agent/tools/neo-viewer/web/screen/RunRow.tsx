@@ -4,6 +4,7 @@
  */
 
 import type { RunDetail, RunSummary } from '../../shared/api'
+import type { FormattedCode } from '../../shared/code-format'
 import { type BarScale, failed, neoMs, share, tokenBar } from './measures'
 import { errorCode, returnedWhat } from './reply'
 import { codeLines } from './text-lines'
@@ -19,6 +20,7 @@ function rowTone(run: RunSummary, open: boolean, selected: boolean): string {
 
 export function RunRow({
   run,
+  code,
   detail,
   scale,
   open,
@@ -27,6 +29,8 @@ export function RunRow({
   nowMs,
 }: {
   run: RunSummary
+  /** The script laid out (`shared/code-format.ts`), and its first statement on one line. */
+  code: { formatted: FormattedCode; first: string }
   detail: RunDetail | null
   scale: BarScale
   open: boolean
@@ -57,9 +61,17 @@ export function RunRow({
       <span className="flex min-w-0 flex-1 items-baseline gap-[1ch] whitespace-pre pr-3">
         <ClientLabel run={run} />
         {open ? (
-          <OpenSummary run={run} detail={detail} />
+          <OpenSummary
+            run={run}
+            lines={code.formatted.lines.length}
+            detail={detail}
+          />
         ) : (
-          <ClosedSummary run={run} />
+          <ClosedSummary
+            run={run}
+            first={code.first}
+            lines={code.formatted.lines.length}
+          />
         )}
       </span>
       <span
@@ -137,23 +149,18 @@ export function RunRow({
   )
 }
 
-function lineCount(code: string): number {
-  return code.trimEnd().split('\n').length
-}
-
-/** A closed row: the script's first line, its length, and why it failed if it did. */
-function ClosedSummary({ run }: { run: RunSummary }) {
-  const lines = codeLines(run.code.trim())
-  // The first line that does something: a leading comment says less than the code under it.
-  const first =
-    lines.find((line) =>
-      line.some(
-        (segment) => segment.tone !== 'comment' && segment.text.trim() !== '',
-      ),
-    ) ??
-    lines[0] ??
-    []
-  const total = lineCount(run.code)
+/** A closed row: the script's first statement on one line, its length, and why it failed. */
+function ClosedSummary({
+  run,
+  first,
+  lines,
+}: {
+  run: RunSummary
+  first: string
+  /** Display lines: the open block's count. */
+  lines: number
+}) {
+  const statement = codeLines(first)[0] ?? []
   const failure =
     run.status === 'error'
       ? (errorCode(run.replyPreview) ?? 'error')
@@ -164,10 +171,10 @@ function ClosedSummary({ run }: { run: RunSummary }) {
   return (
     <>
       <span className="min-w-0 truncate">
-        <LineSpans line={first} />
+        <LineSpans line={statement} />
       </span>
-      {total > 1 && (
-        <span className="shrink-0 text-ink-3">{plural(total, 'line')}</span>
+      {lines > 1 && (
+        <span className="shrink-0 text-ink-3">{plural(lines, 'line')}</span>
       )}
       {failure && (
         <span className="shrink-0 font-plex text-[11px] text-bad leading-[14px]">
@@ -181,9 +188,11 @@ function ClosedSummary({ run }: { run: RunSummary }) {
 /** An open row: what the block below holds, in words. */
 function OpenSummary({
   run,
+  lines,
   detail,
 }: {
   run: RunSummary
+  lines: number
   detail: RunDetail | null
 }) {
   const returned = detail ? returnedWhat(detail) : null
@@ -191,7 +200,7 @@ function OpenSummary({
     <span className="min-w-0 overflow-clip font-plex">
       <span className="font-semibold">run()</span>{' '}
       <span className="text-ink-2">
-        {plural(lineCount(run.code), 'line')} of code
+        {plural(lines, 'line')} of code
         {run.operationCount !== null &&
           `, ${plural(run.operationCount, 'method call')}`}
         {run.status === 'running'

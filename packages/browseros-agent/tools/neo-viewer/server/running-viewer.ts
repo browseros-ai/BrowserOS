@@ -3,8 +3,9 @@
  * it (`viewer.json`), so a later start can tell it is still running.
  */
 
-import { readFile, writeFile } from 'node:fs/promises'
-import { join } from 'node:path'
+import { readdir, readFile, writeFile } from 'node:fs/promises'
+import { dirname, join, resolve } from 'node:path'
+import type { StartState } from './neo-container'
 
 /**
  * Claims the state folder for `instance`, or refuses before anything in it changes when another
@@ -99,4 +100,38 @@ async function processCommand(pid: number): Promise<string | null> {
     child.exited,
   ])
   return code === 0 ? out.trim() : null
+}
+
+/**
+ * The start states of the other instances: the folders beside this one, and those under the state
+ * root (`~/.local/state/neo-viewer/<name>`), where instances without `--data-dir` live. An image
+ * another instance last built is one its next start would reuse, so it is not this start's to remove.
+ */
+export async function otherInstanceStates(
+  dataDir: string,
+  root: string,
+): Promise<StartState[]> {
+  const own = resolve(dataDir)
+  const folders = new Set<string>()
+  for (const parent of new Set([dirname(own), resolve(root)])) {
+    const entries = await readdir(parent, { withFileTypes: true }).catch(
+      () => [],
+    )
+    for (const entry of entries)
+      if (entry.isDirectory()) folders.add(join(parent, entry.name))
+  }
+  folders.delete(own)
+  const states: StartState[] = []
+  for (const folder of folders) {
+    try {
+      states.push(
+        JSON.parse(
+          await readFile(join(folder, 'start-state.json'), 'utf8'),
+        ) as StartState,
+      )
+    } catch {
+      // not an instance's folder, or it never built
+    }
+  }
+  return states
 }

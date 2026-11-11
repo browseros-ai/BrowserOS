@@ -3,8 +3,9 @@
  * the controller, and these take it.
  *
  * - `<LiveScreen size="docked">`: the sidebar panel ("Viewer C v2: Run blocks with their
- *   methods"): Follow agent / Control and Pop out over a small screen. While popped out it
- *   shows where the screen went.
+ *   methods"): Follow agent / Control and Pop out over the screen. The screen is as wide as the
+ *   sidebar and as tall as Neo's screen ratio makes it (`screen-fit.ts`), so dragging the
+ *   sidebar wider zooms in. While popped out it shows where the screen went.
  * - `<LiveScreenPopup>`: the same panel at `size="large"` in a pop-up over the page
  *   ("Viewer C v2: Live screen popped out"), with Take over and a close button.
  * - `<TakeOverButton>`: Take over / Give back, for a top bar.
@@ -12,7 +13,7 @@
  * Only one view connects at a time: the docked panel stays empty while popped out.
  */
 
-import { type ReactNode, useEffect, useRef } from 'react'
+import { type CSSProperties, type ReactNode, useEffect, useRef } from 'react'
 import type { LiveTab } from '../../shared/live-screen'
 import {
   modeLine,
@@ -20,11 +21,15 @@ import {
   screenNotice,
   takeOverAvailability,
 } from './live-screen-model'
+import { screenRatio, useScreenFit } from './screen-fit'
 import type { LiveScreenController } from './use-live-screen'
 import { VncScreen } from './VncScreen'
 
 const SANS = "font-['IBM_Plex_Sans',system-ui,sans-serif]"
 const MONO = "font-['JetBrains_Mono',ui-monospace,monospace]"
+/** The docked panel's gap between its header row and the screen (`gap-2`), and the box's border. */
+const DOCKED_GAP = 8
+const DOCKED_BORDER = 2
 
 export type LiveScreenSize = 'docked' | 'large'
 
@@ -34,6 +39,7 @@ export function LiveScreen({
   popped = false,
   onPopOut,
   onClose,
+  viewHeight,
 }: {
   live: LiveScreenController
   size: LiveScreenSize
@@ -43,21 +49,29 @@ export function LiveScreen({
   onPopOut?: () => void
   /** Large: shows the close button. */
   onClose?: () => void
+  /**
+   * Docked: the visible height of the scrolling area the panel sits in (the sidebar's). The
+   * screen never grows taller than that less the panel's header row; without it, the window's.
+   */
+  viewHeight?: number
 }) {
   const large = size === 'large'
   const { state } = live
-  const screen = popped ? (
-    <div className="flex h-[200px] items-center justify-center rounded-[6px] border border-[#C9D2E0] border-dashed bg-[#F8F9FB] text-[#4A5365] text-[12px] leading-4">
-      Open in a pop-up. Close it to dock it here again.
-    </div>
-  ) : (
-    <div
-      className={
-        large
-          ? 'relative h-[640px] max-h-[calc(100vh-200px)] w-full overflow-clip bg-white'
-          : 'relative h-[200px] w-full overflow-clip rounded-[6px] border border-[#0D1730]'
-      }
-    >
+  const header = useRef<HTMLDivElement>(null)
+  const box = useRef<HTMLDivElement>(null)
+  const ratio = screenRatio(state.screen)
+  const fit = useScreenFit(
+    box,
+    ratio,
+    viewHeight ?? null,
+    () => (header.current?.offsetHeight ?? 0) + DOCKED_GAP + DOCKED_BORDER,
+  )
+  // Until the box is measured, the screen ratio alone sets its height, so nothing jumps.
+  const boxStyle: CSSProperties = fit
+    ? { height: fit.height }
+    : { aspectRatio: String(ratio) }
+  const vnc = (
+    <>
       <VncScreen
         display={live.display}
         attempt={state.attempt}
@@ -65,16 +79,42 @@ export function LiveScreen({
         onClosed={live.closed}
       />
       <Notice live={live} large={large} />
+    </>
+  )
+  const screen = large ? (
+    <div className="relative h-[640px] max-h-[calc(100vh-200px)] w-full overflow-clip bg-white">
+      {vnc}
+    </div>
+  ) : popped ? (
+    <div className="w-full rounded-[6px] border border-[#C9D2E0] border-dashed bg-[#F8F9FB]">
+      <div
+        ref={box}
+        style={boxStyle}
+        className="flex w-full items-center justify-center text-[#4A5365] text-[12px] leading-4"
+      >
+        Open in a pop-up. Close it to dock it here again.
+      </div>
+    </div>
+  ) : (
+    <div className="w-full overflow-clip rounded-[6px] border border-[#0D1730]">
+      <div
+        ref={box}
+        style={boxStyle}
+        data-fit={fit ? (fit.capped ? 'capped' : 'width') : 'ratio'}
+        className="relative w-full"
+      >
+        {vnc}
+      </div>
     </div>
   )
 
   if (!large)
     return (
       <section
-        className={`flex flex-col gap-2 border-[#E4E7EC] border-b pb-3 text-[12px] leading-4 ${SANS}`}
+        className={`flex shrink-0 flex-col gap-2 border-[#E4E7EC] border-b pb-3 text-[12px] leading-4 ${SANS}`}
         aria-label="Live screen"
       >
-        <div className="flex items-center gap-2">
+        <div ref={header} className="flex items-center gap-2">
           <h2 className="font-semibold text-[#0D1730] text-[13px] leading-4">
             Live screen
           </h2>

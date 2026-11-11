@@ -209,9 +209,22 @@ export async function checkoutImage(
 
 /** What the command remembers between starts, in the viewer's state folder. */
 export interface StartState {
-  /** The image the last build made: the only image this command ever removes. */
+  /** The image the last build made: with `kept`, the only images this instance ever removes. */
   lastBuild: { tag: string; id: string; fingerprint: string | null } | null
+  /**
+   * Images this instance's builds replaced that could not be removed yet (a container, or another
+   * instance, still used them); tried again at each start until nothing does.
+   */
+  kept?: ImageRef[]
 }
+
+export interface ImageRef {
+  tag: string
+  id: string
+}
+
+/** An image left in place, and why (a container uses it, another instance names it, or Docker's refusal). */
+export type KeptImage = ImageRef & { reason: string }
 
 export type ImagePlan =
   | { kind: 'reuse'; tag: string }
@@ -251,14 +264,29 @@ export async function imageId(
   run: Runner,
   tag: string,
 ): Promise<string | null> {
+  const found = await lookUpImage(run, tag)
+  return 'id' in found ? found.id : null
+}
+
+/**
+ * The image's id; `missing` only when Docker says there is no such image, so a Docker that did
+ * not answer is never taken for an image that is gone.
+ */
+async function lookUpImage(
+  run: Runner,
+  ref: string,
+): Promise<{ id: string } | { missing: true } | { error: string }> {
   const result = await run('docker', [
     'image',
     'inspect',
     '--format',
     '{{.Id}}',
-    tag,
+    ref,
   ])
-  return result.code === 0 ? result.stdout.trim() : null
+  if (result.code === 0) return { id: result.stdout.trim() }
+  return /no such (image|object)/i.test(result.stderr)
+    ? { missing: true }
+    : { error: firstLine(result.stderr) }
 }
 
 /** The newest `neo-sdk:*` image on the machine (for `--no-build`). */
@@ -275,17 +303,120 @@ export async function newestImage(run: Runner): Promise<string | null> {
   return first?.trim() ?? null
 }
 
-/** Removes the image the previous build made, once a new build replaced it. Never any other. */
-export async function removeReplacedImage(
+/**
+ * Why an image must stay, or null when nothing holds it. Instances on one commit share one image
+ * tag, so the image one instance's build replaced can be what another instance's container runs:
+ * any container on the machine, running or stopped, holds its image, and so does another
+ * instance's last build, which its next start would reuse. Another instance's `kept` list does
+ * not: those are images it means to remove, and counting them would let two instances that kept
+ * the same image wait on each other forever.
+ */
+async function imageHolder(
   run: Runner,
-  previous: StartState['lastBuild'],
-  newId: string,
+  image: ImageRef,
+  otherStates: StartState[],
 ): Promise<string | null> {
-  if (!previous || previous.id === newId) return null
-  const result = await run('docker', ['image', 'rm', previous.id])
-  return result.code === 0
-    ? `${previous.tag} (${previous.id.slice(7, 19)})`
-    : null
+  const containers = await run('docker', [
+    'ps',
+    '-a',
+    '--filter',
+    `ancestor=${image.id}`,
+    '--format',
+    '{{.Names}}',
+  ])
+  // Unknown is not free: keep it, and try again next start.
+  if (containers.code !== 0)
+    return `docker ps failed (${firstLine(containers.stderr)})`
+  const names = containers.stdout
+    .split('\n')
+    .filter((name) => name.trim() !== '')
+  if (names.length > 0) return `used by container ${names.join(', ')}`
+  const named = otherStates.some((state) => state.lastBuild?.id === image.id)
+  return named ? "another instance's last build" : null
+}
+
+/**
+ * Removes the images this instance's builds replaced, each only when nothing holds it
+ * (`imageHolder`), and never by force: Docker refuses a plain `image rm` of an image a container
+ * uses, but a forced one deletes it under that container. What stays is kept for the next start.
+ */
+export async function retireImages(
+  run: Runner,
+  images: ImageRef[],
+  otherStates: StartState[],
+): Promise<{ removed: ImageRef[]; kept: KeptImage[] }> {
+  const removed: ImageRef[] = []
+  const kept: KeptImage[] = []
+  for (const image of images) {
+    const found = await lookUpImage(run, image.id)
+    if ('missing' in found) continue
+    if ('error' in found) {
+      kept.push({
+        ...image,
+        reason: `docker image inspect failed (${found.error})`,
+      })
+      continue
+    }
+    const holder = await imageHolder(run, image, otherStates)
+    if (holder) {
+      kept.push({ ...image, reason: holder })
+      continue
+    }
+    const result = await run('docker', ['image', 'rm', image.id])
+    if (result.code === 0) removed.push(image)
+    else kept.push({ ...image, reason: firstLine(result.stderr) })
+  }
+  return { removed, kept }
+}
+
+/**
+ * A start's image bookkeeping, once it knows the image it runs: retires what this instance's
+ * builds replaced (its previous build when this start built a new one, and what earlier starts
+ * had to keep) and returns the state to save. The image this start runs is never retired; when it
+ * is one an earlier start kept, it stays on the kept list, so a later start still removes it.
+ */
+export async function settleImages(
+  run: Runner,
+  state: StartState,
+  start: { built: StartState['lastBuild']; running: string },
+  otherStates: StartState[],
+): Promise<{ state: StartState; removed: ImageRef[]; kept: KeptImage[] }> {
+  const replaced = new Map<string, ImageRef>()
+  if (start.built && state.lastBuild)
+    replaced.set(state.lastBuild.id, {
+      tag: state.lastBuild.tag,
+      id: state.lastBuild.id,
+    })
+  for (const image of state.kept ?? [])
+    replaced.set(image.id, { tag: image.tag, id: image.id })
+  const running = replaced.get(start.running)
+  replaced.delete(start.running)
+  const carried =
+    running && state.kept?.some((image) => image.id === running.id)
+      ? [running]
+      : []
+  const { removed, kept } = await retireImages(
+    run,
+    [...replaced.values()],
+    otherStates,
+  )
+  return {
+    state: {
+      lastBuild: start.built ?? state.lastBuild,
+      kept: [...carried, ...kept.map(({ tag, id }) => ({ tag, id }))],
+    },
+    removed,
+    kept,
+  }
+}
+
+function firstLine(text: string): string {
+  return text.trim().split('\n')[0] || 'docker refused'
+}
+
+/** `neo-sdk:… (0123456789ab)`. */
+export function imageLabel(image: ImageRef): string {
+  return `${image.tag} (${image.id.slice(7, 19)})`
 }
 
 type Kind = 'container' | 'network' | 'volume'

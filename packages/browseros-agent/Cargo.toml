@@ -54,6 +54,10 @@ jsonc-parser = { version = "0.33", features = ["cst", "serde_json"] }
 toml_edit = "0.22"
 rmcp = { version = "3.2", features = ["server", "transport-io", "transport-streamable-http-server"] }
 schemars = "1.0"
+# Prints neo-playwright's op input and result types as the prelude's TypeScript
+# (tests/wire_generated.rs). Pinned exactly: a major version changes the `TS` trait (v12 put a
+# `&Config` on every method), and the committed generated files are its text.
+ts-rs = "=12.0.1"
 axum = "0.8"
 http = "1"
 tower = { version = "0.5", features = ["util"] }

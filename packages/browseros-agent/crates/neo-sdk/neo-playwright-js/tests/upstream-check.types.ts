@@ -5,6 +5,7 @@ import type {
   KeyList,
   KeysCheck,
   UpstreamCheck,
+  VoidIsNull,
 } from '../src/prelude/upstream-check'
 
 type Empty = Record<never, never>
@@ -151,4 +152,18 @@ export type GuardChecks = [
     >
   >,
   Assert<Equal<KeyList<{ force?: boolean }>, readonly 'force'[]>>,
+  Assert<VoidIsNull<'void', void, null>>,
+  Assert<
+    Equal<
+      VoidIsNull<'answers', void, Empty>,
+      { op: 'answers'; voidButAnswers: Empty }
+    >
+  >,
+  Assert<VoidIsNull<'valued', { value: string }, string>>,
+  Assert<
+    Equal<
+      VoidIsNull<'any-result', Unresolved, null>,
+      { op: 'any-result'; unresolvedType: 'any' }
+    >
+  >,
 ]

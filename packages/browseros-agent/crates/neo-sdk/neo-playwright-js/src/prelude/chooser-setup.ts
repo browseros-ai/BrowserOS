@@ -3,7 +3,7 @@
  * synchronously; this run-local barrier keeps later browser calls behind their native setup.
  * Event operations bypass it so setup and the event pump cannot wait on themselves.
  */
-import { OPS, type OpName } from './ops.generated'
+import { OPS, type OpName } from './generated/ops'
 
 const pending = new Set<Promise<void>>()
 

@@ -23,17 +23,18 @@ import {
   type ScreenshotOptionsInput,
   screenshotOptions,
 } from './frame'
-import type { OpName } from './ops.generated'
+import type { OpName } from './generated/ops'
 import {
   CHECK_KEYS,
   DBLCLICK_KEYS,
   FILL_KEYS,
   HOVER_KEYS,
-  KEY_KEYS,
   markHandle,
   POINTER_KEYS,
+  PRESS_KEYS,
   pick,
   selectOptionValues,
+  TYPE_KEYS,
 } from './options'
 import type { Page } from './page'
 import { saveScreenshot, screenshotType } from './screenshot'
@@ -290,7 +291,7 @@ export class ElementHandle extends EventEmitter {
       this.#timeout(options),
       {
         key,
-        options: pick(options, KEY_KEYS),
+        options: pick(options, PRESS_KEYS),
       },
     )
   }
@@ -307,7 +308,7 @@ export class ElementHandle extends EventEmitter {
       this.#timeout(options),
       {
         text,
-        options: pick(options, KEY_KEYS),
+        options: pick(options, TYPE_KEYS),
       },
     )
   }
