@@ -19,8 +19,11 @@ use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 
 use super::operation_guard::Settlement;
-use super::{CallSite, Dispatcher, ErrorCode, Lifetime, MethodSpec, OperationError};
-use crate::browser::{PageRef, RunView};
+use super::run_tasks::RunTasks;
+use super::{
+    CallSite, Dispatcher, ErrorCode, Lifetime, MethodSpec, OperationError, TaskKind, TaskNote,
+};
+use crate::browser::{PageRef, RunView, TabRegistry, TaskRecord};
 
 /// One `run` call as the door sees it: its identity, the browser view it captured, its budget,
 /// why it stopped, the ops it started, what they changed, and the state features keep per run.
@@ -45,6 +48,7 @@ pub(crate) struct RunCtx {
     ledger: Mutex<RunLedger>,
     ops: Mutex<OpTasks>,
     slots: Mutex<RunSlots>,
+    tasks: Mutex<RunTasks>,
 }
 
 /// Why a run stopped. Each reason decides who owns the ops it cut short.
@@ -202,6 +206,7 @@ impl RunCtx {
             ledger: Mutex::default(),
             ops: Mutex::default(),
             slots: Mutex::default(),
+            tasks: Mutex::default(),
         });
         let guard = RunGuard {
             run: Some(Arc::clone(&run)),
@@ -220,6 +225,35 @@ impl RunCtx {
     #[must_use]
     pub(crate) fn task_id(&self) -> Option<&TaskId> {
         self.task_id.as_ref()
+    }
+
+    /// Remembers an explicit fetch, independently of the host's default-page task.
+    pub(crate) fn fetched_task(&self, task: &TaskRecord, kind: TaskKind) {
+        self.lock_tasks().fetch(task, kind);
+    }
+
+    /// A closed task retains its first-touch place in the reply.
+    pub(crate) fn closed_task(&self, task: &TaskRecord) {
+        self.lock_tasks().touch(task, TaskKind::Closed);
+    }
+
+    /// One ambient task shared by the lazy page and script context.newPage calls.
+    pub(crate) fn ambient_task(&self, tabs: &TabRegistry) -> Result<TaskId, OperationError> {
+        self.lock_tasks().ambient(tabs, self.task_id())
+    }
+
+    /// A script that fetched a task must name where a new page belongs.
+    pub(super) fn check_new_page(&self) -> Result<(), OperationError> {
+        self.lock_tasks().check_new_page()
+    }
+
+    /// First-touch task metadata, completed with live tabs when the reply is built.
+    pub(super) fn task_notes(&self) -> Vec<TaskNote> {
+        self.lock_tasks().notes()
+    }
+
+    fn lock_tasks(&self) -> MutexGuard<'_, RunTasks> {
+        self.tasks.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
     /// The browser as this run sees it: unbound (every tab), with the process's viewports.
@@ -347,7 +381,14 @@ impl RunCtx {
         match &self.default_page {
             DefaultPage::Known(page) => Ok(page.clone()),
             DefaultPage::Lazy(cell) => cell
-                .get_or_try_init(|| dispatcher.open_default_page(self))
+                .get_or_try_init(|| async {
+                    if let Some(id) = self.lock_tasks().fetched() {
+                        return Err(OperationError::script(ErrorCode::TASK_PAGE_REQUIRED, format!(
+                            "this script uses task {id}, so the built-in `page` is off. Pick a tab from the task (`task.pages()[0]`, `task.page(tabId)`) or open one (`await task.newPage()`), or declare your own `const page = ...`."
+                        )));
+                    }
+                    dispatcher.open_default_page(self).await
+                })
                 .await
                 .cloned(),
         }

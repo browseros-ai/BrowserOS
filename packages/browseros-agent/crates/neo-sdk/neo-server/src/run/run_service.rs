@@ -269,7 +269,9 @@ impl RunService {
         .await;
         // The run's end record is built from its reply, so the trace and a `requestId` replay keep
         // exactly what the caller got.
-        let reply = Arc::new(RunReply::build(&run, end));
+        let mut reply = RunReply::build(&run, end);
+        reply.tasks = self.dispatcher.task_notes(&run).await;
+        let reply = Arc::new(reply);
         guard.finish(reply.trace_end(request_id.as_ref()));
         ticket.finish(reply);
     }
@@ -306,6 +308,7 @@ impl RunService {
                     .zip(observation.workers)
                     .map(|((page, info), workers)| {
                         let mut fact = PageFact::in_view(page, info, run.view());
+                        fact.task_id = self.tabs.owner(page.tab).map(|id| id.to_string());
                         fact.workers = workers;
                         fact
                     })
@@ -344,12 +347,12 @@ impl RunService {
     /// `page` at the start of a run. With a `taskId`: the task's last tab, from memory, or
     /// after a restart from the trace (`task_last_tab`), resolved to a live page; with no
     /// history, `None`, and the run opens a fresh tab on first use, so parallel tasks never
-    /// share one by accident. Without a `taskId`: the last tab any script op touched.
+    /// share one by accident. Without a `taskId`, a fresh tab opens on first use.
     async fn default_page(&self, task: Option<&TaskId>, view: &RunView) -> Option<PageRef> {
+        let task = task?;
         if let Some(page) = self.tabs.default_page(task) {
             return Some(page);
         }
-        let task = task?;
         let tab = match self.store.task_last_tab(task).await {
             Ok(tab) => tab?,
             Err(error) => {
@@ -417,6 +420,7 @@ async fn drain(ops: &mut JoinSet<()>) {
 #[cfg(test)]
 mod observation_tests {
     use crate::test_rig::{TestError, TestRig, on_neo_runtime, within};
+    use serde_json::Value;
     use std::sync::Arc;
     use std::time::Duration;
     use tokio::time;
@@ -486,6 +490,38 @@ mod observation_tests {
                 live.url.as_deref(),
                 Some(listed_url),
                 "the init carries the URL the observation read"
+            );
+            Ok(())
+        })
+    }
+    #[test]
+    fn initial_facts_include_task_ownership_and_null_for_user_tabs() -> Result<(), TestError> {
+        on_neo_runtime(async {
+            let rig = TestRig::new().await?;
+            let owned = rig.owner_tab("https://task.example/").await?;
+            let user = rig.owner_tab("https://user.example/").await?;
+            let task = rig.tabs.create_task(None)?;
+            rig.tabs.touched(&owned, rig.tabs.seen(), None);
+            rig.tabs.own(&owned, &task.id)?;
+            let service = rig.run_service(Duration::ZERO);
+            let (run, _guard) = rig.run(Duration::from_secs(30), None)?;
+            let facts = service.open_pages(&run).await;
+            let owned = facts
+                .pages
+                .iter()
+                .find(|fact| fact.tab == owned.tab)
+                .ok_or("owned fact")?;
+            let user = facts
+                .pages
+                .iter()
+                .find(|fact| fact.tab == user.tab)
+                .ok_or("user fact")?;
+            assert_eq!(owned.task_id.as_deref(), Some(task.id.as_str()));
+            let wire = serde_json::to_value(user)?;
+            assert_eq!(
+                wire.get("taskId"),
+                Some(&Value::Null),
+                "null must be serialized, not omitted"
             );
             Ok(())
         })

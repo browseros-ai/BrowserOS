@@ -57,7 +57,10 @@ impl EventRelease {
         match self {
             Self::None => Ok(result),
             Self::One => match refusal(op, &result) {
-                None => Ok(result),
+                None => {
+                    report_popup(op, &result);
+                    Ok(result)
+                }
                 Some(refused) => {
                     withhold_close(op, &result);
                     Err(LeafError::definite(refused))
@@ -98,7 +101,10 @@ fn release_batch<M>(op: &OpCtx<M>, result: Value) -> Result<Value, LeafError> {
     let mut first_refusal = None;
     for event in events {
         match refusal(op, &event) {
-            None => released.push(event),
+            None => {
+                report_popup(op, &event);
+                released.push(event);
+            }
             Some(refused) => {
                 withhold_close(op, &event);
                 withheld += 1;
@@ -117,6 +123,42 @@ fn release_batch<M>(op: &OpCtx<M>, result: Value) -> Result<Value, LeafError> {
         rest,
     };
     serde_json::to_value(batch).map_err(unreadable)
+}
+
+/// The event path can beat the tab watcher; assign ownership before publishing its facts.
+fn report_popup<M>(op: &OpCtx<M>, event: &Value) {
+    #[derive(Deserialize)]
+    struct Brand {
+        tab: TabId,
+    }
+    #[derive(Deserialize)]
+    struct Opened {
+        page: Brand,
+    }
+    #[derive(Deserialize)]
+    #[serde(tag = "event")]
+    enum Notice {
+        #[serde(rename = "popup")]
+        Popup { page: Brand, popup: Opened },
+        #[serde(rename = "page")]
+        Page { page: Brand, opener: Option<Brand> },
+        #[serde(other)]
+        Other,
+    }
+    let (page, opener) = match Notice::deserialize(event) {
+        Ok(Notice::Popup { page, popup }) => (popup.page, page),
+        Ok(Notice::Page {
+            page,
+            opener: Some(opener),
+        }) => (page, opener),
+        Ok(Notice::Page { opener: None, .. } | Notice::Other) | Err(_) => return,
+    };
+    op.report_page(
+        &PageRef { tab: page.tab },
+        PageChange::Popup {
+            opener: PageRef { tab: opener.tab },
+        },
+    );
 }
 
 /// A withheld close still proves its native binding dead, but must not turn into a
