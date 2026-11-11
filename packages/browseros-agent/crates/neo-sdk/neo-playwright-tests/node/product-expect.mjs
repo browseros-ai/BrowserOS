@@ -16,10 +16,12 @@ export function productExpect(
       if (!isNeo(args[0])) return Reflect.apply(target, thisArg, args)
       const annotation = { type: 'neoExpect', description: 'product' }
       info()?.annotations.push(annotation)
-      const product = provider().configure(config)(...args)
-      if (!visual) return product
+      if (!visual) return provider().configure(config)(...args)
+      let product
       return visualMatchers(
-        product,
+        // Visual assertions never configure Neo: its standalone soft refusal must not
+        // prevent the runner from executing its own soft screenshot matcher.
+        () => (product ??= provider().configure(config)(...args)),
         () =>
           Reflect.apply(target, thisArg, [visual(args[0]), ...args.slice(1)]),
         annotation,
@@ -56,20 +58,23 @@ export function productExpect(
 // Baseline paths, TestInfo, tolerances and attachments belong to the test runner. Keep its
 // matcher chain intact, while the visual receiver directs all browser reads to Neo.
 function visualMatchers(product, runner, annotation) {
-  return new Proxy(product, {
-    get(target, name, receiver) {
-      if (name === 'toHaveScreenshot')
-        return (...args) => {
-          annotation.description = 'playwright-visual/neo-capture'
-          return runner().toHaveScreenshot(...args)
-        }
-      if (['not', 'resolves', 'rejects'].includes(name))
-        return visualMatchers(
-          Reflect.get(target, name, receiver),
-          () => runner()[name],
-          annotation,
-        )
-      return Reflect.get(target, name, receiver)
+  return new Proxy(
+    {},
+    {
+      get(_target, name) {
+        if (name === 'toHaveScreenshot')
+          return (...args) => {
+            annotation.description = 'playwright-visual/neo-capture'
+            return runner().toHaveScreenshot(...args)
+          }
+        if (['not', 'resolves', 'rejects'].includes(name))
+          return visualMatchers(
+            () => product()[name],
+            () => runner()[name],
+            annotation,
+          )
+        return Reflect.get(product(), name)
+      },
     },
-  })
+  )
 }

@@ -108,3 +108,46 @@ test('assertion deadlines and caller cancellation abort the pending Neo capture'
   await assert.rejects(pending, /Assertion aborted: stopped/)
   assert.equal(signal.aborted, true)
 })
+
+test('cancelling a pending page RAF read aborts its real production operation', async () => {
+  const { loadPrelude, SEED } = await import(
+    '../../neo-playwright-js/tests/support/prelude-runtime.ts'
+  )
+  let entered
+  const started = new Promise((resolve) => {
+    entered = resolve
+  })
+  const runtime = loadPrelude({
+    seed: SEED,
+    answer: (call) => {
+      if (call.name === 'page.frames') return { frames: [] }
+      if (['page.evaluate', 'locator.evaluate'].includes(call.name)) {
+        entered(call)
+        return call.abort
+          ? call.abort.aborted.then(() => null)
+          : new Promise(() => {})
+      }
+      return null
+    },
+  })
+  await runtime.ready
+  const page = runtime.evaluate('page')
+  const server = serverWith(async function (progress) {
+    await this.mainFrame().rafrafTimeout(progress, 100)
+  })
+  const caller = new AbortController()
+  const pending = screenshotReceiver(page, server)._expectScreenshot({
+    timeout: 1000,
+    signal: caller.signal,
+  })
+  const call = await started
+  caller.abort('stop RAF')
+  await assert.rejects(pending, /Assertion aborted: stop RAF/)
+  await new Promise((resolve) => setImmediate(resolve))
+  assert.ok(
+    call.input.call.timeoutMs > 0,
+    'the RAF read must carry the remaining native deadline',
+  )
+  assert.ok(call.abort, 'the RAF read must register native cancellation')
+  assert.equal(runtime.aborts.length, 1)
+})

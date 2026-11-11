@@ -95,26 +95,19 @@ async function expectScreenshot(page, options, server) {
     if (!ms) return
     await progress.race(
       Promise.all([
-        subject === page
-          ? page.evaluate(
-              () =>
-                new Promise((resolve) =>
-                  requestAnimationFrame(() => requestAnimationFrame(resolve)),
-                ),
-              undefined,
-              { timeout: remaining(), signal: controller.signal },
-            )
-          : subject.evaluate(
-              (element) =>
-                new Promise((resolve) => {
-                  const view = element.ownerDocument.defaultView
-                  view.requestAnimationFrame(() =>
-                    view.requestAnimationFrame(resolve),
-                  )
-                }),
-              undefined,
-              { timeout: remaining(), signal: controller.signal },
-            ),
+        // Page.evaluate has no cancellable options. A root locator supplies the same
+        // document's RAF while carrying timeout and signal through the native operation.
+        (subject === page ? page.locator(':root') : subject).evaluate(
+          (element) =>
+            new Promise((resolve) => {
+              const view = element.ownerDocument.defaultView
+              view.requestAnimationFrame(() =>
+                view.requestAnimationFrame(resolve),
+              )
+            }),
+          undefined,
+          { timeout: remaining(), signal: controller.signal },
+        ),
         progress.wait(ms),
       ]),
     )
@@ -140,6 +133,7 @@ async function expectScreenshot(page, options, server) {
         'invalid_input',
         'invalid_selector',
         'unsupported',
+        'method_unavailable',
         'target_closed',
       ].includes(error.code),
   }

@@ -143,3 +143,33 @@ test('visual assertions keep runner options and chains while web assertions stay
   assert.equal(wrapped(subject).toBeVisible(), 'product')
   assert.equal(annotations[1].description, 'product')
 })
+
+test('both soft forms route visual assertions before configuring the production Neo provider', async () => {
+  const { loadPrelude, SEED } = await import(
+    '../../neo-playwright-js/tests/support/prelude-runtime.ts'
+  )
+  const runtime = loadPrelude({
+    seed: SEED,
+    answer: (call) => (call.name === 'page.frames' ? { frames: [] } : null),
+  })
+  await runtime.ready
+  const page = runtime.evaluate('page'),
+    neo = runtime.evaluate('expect')
+  let calls = 0
+  const original = () => ({
+    toHaveScreenshot: () => {
+      calls++
+    },
+  })
+  original.configure = () => original
+  original.soft = original
+  const wrapped = productExpect(original, {
+    isNeo: (value) => value === page,
+    provider: () => neo,
+    info: () => undefined,
+    visual: (value) => value,
+  })
+  wrapped.soft(page).toHaveScreenshot('expected.png')
+  wrapped.configure({ soft: true })(page).toHaveScreenshot('expected.png')
+  assert.equal(calls, 2)
+})
