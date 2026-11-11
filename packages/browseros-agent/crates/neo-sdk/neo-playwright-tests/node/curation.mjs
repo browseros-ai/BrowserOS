@@ -13,7 +13,7 @@ import {
   internalsSkipPrefix as skipPrefix,
 } from './report/classify.mjs'
 
-export const manifestPath = fileURLToPath(
+const manifestPath = fileURLToPath(
   new URL('./curation.json', import.meta.url),
 )
 export const patchReason =
@@ -42,7 +42,7 @@ export function summarize(entries) {
 }
 
 /** Collection locations identify callback bodies even when titles are computed in loops. */
-export function testBodies(text, file) {
+function testBodies(text, file) {
   const ts = createRequire(path.join(source, 'package.json'))('typescript')
   const ast = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true)
   if (ast.parseDiagnostics.length)
@@ -445,7 +445,7 @@ export function refreshSkips(manifest, verdictRows) {
   }
 }
 
-export async function main(args = process.argv.slice(2)) {
+async function main(args = process.argv.slice(2)) {
   if (args.length !== 2 || args[0] !== 'skip-from-verdicts')
     throw new Error(
       'Usage: node curation.mjs skip-from-verdicts <verdicts.jsonl>',
