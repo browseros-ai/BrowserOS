@@ -35,10 +35,9 @@
 //!   less depth would silence it;
 //! - `DOMSnapshot.captureSnapshot` costs the same and lists no shadow root nodes at all.
 //!
-//! The seal also retains hosts reported by composed input events. Each operation
-//! takes those hosts and scans their roots even if the page has since removed the host.
-//! Takes and watches of one document run under [`WatchedRoots`]'s lock, so a sweep that
-//! waited for the lock reads every root whose host another watch had taken.
+//! Operation scans also drain host references already retained by the seal and inspect
+//! detached trees. Takes and watches of one document run under [`WatchedRoots`]'s lock,
+//! so a sweep that waited reads every root whose host another watch had taken.
 //!
 //! `describeNode` binds nothing in the DOM agent, so it disturbs no one. A scan costs about
 //! 3.9 µs per element of the document, almost all of it Chromium's walk (a release build of

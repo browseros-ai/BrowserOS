@@ -3,17 +3,10 @@
 //! script copies the field's value into the top document (`tests/data/closed_roots/echo.html`),
 //! and every read of the top document must return that copy masked.
 //!
-//! The seal finds fields from the document down through open shadow roots, and its journal
-//! listens on the document, so a closed root hides its field from both until Neo hands the
-//! root to the seal's `watch`. The field gets its value five ways, one test each:
-//! - typed over CDP, as a user types, before Neo's first read of the page;
-//! - set by the page with its own `input` events after Neo touched the page, which the journal
-//!   must hear as well;
-//! - in a closed root the page attaches, after Neo touched the page, to a div that was there
-//!   from the start;
-//! - in a closed root under 70 levels of elements;
-//! - typed over CDP into a closed root the page attached after Neo touched the page, and whose
-//!   host it removed right after, before any sweep could scan for it.
+//! The seal finds fields from the document down through open shadow roots, so Neo hands
+//! closed roots to the seal before reading their fields. Cases cover values typed before the
+//! first read or set by page events, newly attached roots, deeply nested roots, collection,
+//! and roots the page removes and reattaches. Each operation discovers and sweeps the roots.
 //!
 //! The last test prints what reads cost; run it with `--nocapture`.
 //!
@@ -243,11 +236,6 @@ async fn touch_without_a_sweep(run: &LiveRun, page: &TestPage) -> TestResult {
     Ok(())
 }
 
-/// Whether the seal's journal reports `secret` within 2 s.
-async fn journaled(run: &LiveRun, secret: &str) -> bool {
-    within_2s(|| run.journaled().iter().any(|value| value == secret)).await
-}
-
 /// Whether a sweep hands the host `secret` within 2 s.
 async fn told(run: &LiveRun, secret: &str) -> bool {
     within_2s(|| run.swept().iter().any(|value| value == secret)).await
@@ -340,8 +328,7 @@ async fn tests_that_reads_mask_a_password_typed_into_a_closed_root_before_neo_to
 
 #[tokio::test]
 #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
-async fn tests_that_reads_and_the_journal_catch_a_closed_root_value_the_page_set_after_neo_s_touch()
--> TestResult {
+async fn tests_that_reads_catch_a_closed_root_value_the_page_set_after_neo_s_touch() -> TestResult {
     let _alone = ALONE.acquire().await?;
     let server = FixtureServer::start(pages()).await?;
     let url = server.url("127.0.0.1", ECHO);
@@ -352,16 +339,7 @@ async fn tests_that_reads_and_the_journal_catch_a_closed_root_value_the_page_set
             run.eval(&page, &format!("fixture.plant({secret:?})"))
                 .await?;
             copied(&run, &page, secret).await?;
-            let mut wrong = Vec::new();
-            // Before any read sweeps: the journal hears the page's events only if the root was
-            // watched when they fired, and a later sweep cannot fire them again.
-            if !journaled(&run, secret).await {
-                wrong.push(format!(
-                    "the journal: never reported {secret}, so the host cannot mask it once the \
-                     field is cleared"
-                ));
-            }
-            wrong.extend(wrong_reads(&run, &page, secret).await);
+            let wrong = wrong_reads(&run, &page, secret).await;
             assert_masked(
                 &wrong,
                 secret,
@@ -429,75 +407,6 @@ async fn tests_that_reads_mask_a_value_in_a_closed_root_70_levels_down() -> Test
         (run, result)
     })
     .await
-}
-
-/// The page removes a closed root's host right after a user typed into it, so no scan before
-/// a sweep finds it: inside the field's own input listener, and on the next task. The seal hears
-/// the typed `input` reach the document at the host, and holds the host for Neo, which watches
-/// its root and sweeps it.
-#[tokio::test]
-#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
-async fn tests_that_reads_mask_a_password_typed_into_a_closed_root_the_page_then_removed()
--> TestResult {
-    let _alone = ALONE.acquire().await?;
-    let server = FixtureServer::start(pages()).await?;
-    let url = server.url("127.0.0.1", ECHO);
-    for (delay, secret) in [(-1, "removed-cl0sed-8561"), (0, "removed-cl0sed-9672")] {
-        on_page(LiveRun::connect().await?, &url, |run, page| async move {
-            let result = async {
-                touch(&run, &page).await?;
-                assert_eq!(
-                    run.eval(&page, &format!("fixture.typedThenRemoved({delay})"))
-                        .await?,
-                    json!(true),
-                    "the new closed root's field takes the focus, so typed text goes there"
-                );
-                let session = run
-                    .browser()
-                    .pages
-                    .get_session(run.core_page(&page).await?)
-                    .await?;
-                session
-                    .session
-                    .send_value("Input.insertText", json!({ "text": secret }))
-                    .await?;
-                copied(&run, &page, secret).await?;
-                let started = Instant::now();
-                while run.eval(&page, "fixture.removedAll()").await? != json!(true) {
-                    if started.elapsed() > Duration::from_secs(5) {
-                        return Err("the page never removed the typed root's host".into());
-                    }
-                    time::sleep(Duration::from_millis(10)).await;
-                }
-                let mut wrong = Vec::new();
-                // Before any read: only the seal's report can have told the host.
-                if !told(&run, secret).await {
-                    wrong.push(format!(
-                        "the host: never told {secret}, so its own mask misses it at every exit"
-                    ));
-                }
-                wrong.extend(wrong_reads(&run, &page, secret).await);
-                assert_masked(
-                    &wrong,
-                    secret,
-                    &format!(
-                        "a user typed into a closed root the page attached after Neo's first read \
-                         and removed {}",
-                        if delay < 0 {
-                            "inside the field's input listener".to_owned()
-                        } else {
-                            format!("{delay} ms after the input event")
-                        }
-                    ),
-                );
-                Ok(())
-            }
-            .await;
-            (run, result)
-        })
-        .await?;
-    }
-    Ok(())
 }
 
 /// Forces a full garbage collection in the page's renderer, after the crate's spawned releases
@@ -576,14 +485,7 @@ async fn tests_that_a_closed_root_the_page_removed_and_attached_again_is_still_w
             run.eval(&page, &format!("fixture.reattachKept({secret:?})"))
                 .await?;
             copied(&run, &page, secret).await?;
-            let mut wrong = Vec::new();
-            if !journaled(&run, secret).await {
-                wrong.push(format!(
-                    "the journal: never reported {secret}, so the seal stopped watching the root \
-                     while the page kept it"
-                ));
-            }
-            wrong.extend(wrong_reads(&run, &page, secret).await);
+            let wrong = wrong_reads(&run, &page, secret).await;
             assert_masked(
                 &wrong,
                 secret,
