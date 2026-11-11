@@ -144,7 +144,7 @@ async fn capture_restarts_after_document_change_without_waiting_for_a_lost_reply
     );
     let data = time::timeout(Duration::from_secs(1), shot)
         .await
-        .map_err(|_| "screenshot still waits for the old document's lost native reply")???;
+        .map_err(|_elapsed| "screenshot still waits for the old document's lost native reply")???;
     assert_eq!(
         data["$neo"], "bytes",
         "the replacement capture returns image bytes to the original caller"
@@ -163,7 +163,7 @@ async fn capture_restarts_after_document_change_without_waiting_for_a_lost_reply
         reload_watch.arrived(Expect::NewDocument),
     )
     .await
-    .map_err(|_| "capture observation stole the commit from the concurrent reload")?
+    .map_err(|_elapsed| "capture observation stole the commit from the concurrent reload")?
     .map_err(|error| format!("concurrent reload observation failed: {error:?}"))?;
     Ok(())
 }
