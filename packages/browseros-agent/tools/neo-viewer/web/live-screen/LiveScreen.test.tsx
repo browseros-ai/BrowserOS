@@ -27,21 +27,20 @@ const STATUS_UP: LiveScreenAction = {
   type: 'status',
   status: {
     host: { state: 'up' },
-    tab: { tabId: 12, url: 'https://two.test/', title: 'Statements' },
+    agent: {
+      tab: { tabId: 12, url: 'https://two.test/', title: 'Statements' },
+      taskId: null,
+    },
     takeover: null,
   },
 }
 
-function controller(
-  task: string | null,
-  ...actions: LiveScreenAction[]
-): LiveScreenController {
+function controller(...actions: LiveScreenAction[]): LiveScreenController {
   const state = actions.reduce(liveScreenReducer, initialLiveScreen)
   const noop = () => {}
   return {
-    task,
     state,
-    display: displayRequestFor(state, task),
+    display: displayRequestFor(state),
     setMode: noop,
     takeOver: noop,
     giveBack: noop,
@@ -59,12 +58,12 @@ function text(markup: string): string {
     .trim()
 }
 
-test('docked, following: the screen follows the task’s tab', () => {
-  const live = controller('t1', STATUS_UP, { type: 'connected', screen: null })
+test('docked, following: the screen follows the agent’s tab', () => {
+  const live = controller(STATUS_UP, { type: 'connected', screen: null })
   const html = renderToStaticMarkup(
     <LiveScreen live={live} size="docked" onPopOut={() => {}} />,
   )
-  expect(html).toContain('data-display="mode=view&amp;followTask=t1"')
+  expect(html).toContain('data-display="mode=view&amp;followTab=12"')
   expect(html).toMatch(/aria-pressed="true"[^>]*>Follow agent</)
   expect(text(html)).toContain('Pop out')
   expect(text(html)).toContain('Following the agent’s tab.')
@@ -72,7 +71,7 @@ test('docked, following: the screen follows the task’s tab', () => {
 })
 
 test('docked while popped out: no screen, a note where it went', () => {
-  const live = controller('t1', STATUS_UP)
+  const live = controller(STATUS_UP)
   const html = renderToStaticMarkup(
     <LiveScreen live={live} size="docked" popped onPopOut={() => {}} />,
   )
@@ -83,7 +82,7 @@ test('docked while popped out: no screen, a note where it went', () => {
 })
 
 test('no container: says so and that it reconnects', () => {
-  const live = controller('t1', {
+  const live = controller({
     type: 'closed',
     code: displayClose.hostUnreachable,
     reason: "Neo's host API is not reachable: Unable to connect",
@@ -97,7 +96,7 @@ test('no container: says so and that it reconnects', () => {
 })
 
 test('no display: says Neo did not open its screen and why', () => {
-  const live = controller('t1', STATUS_UP, {
+  const live = controller(STATUS_UP, {
     type: 'closed',
     code: displayClose.displayRefused,
     reason: 'display_unavailable: Neo’s screen did not open',
@@ -110,7 +109,7 @@ test('no display: says Neo did not open its screen and why', () => {
 })
 
 test('control: input reaches the browser, the agent is not held', () => {
-  const live = controller('t1', STATUS_UP, { type: 'mode', mode: 'control' })
+  const live = controller(STATUS_UP, { type: 'mode', mode: 'control' })
   const html = renderToStaticMarkup(<LiveScreen live={live} size="large" />)
   expect(html).toContain('data-display="mode=control"')
   expect(html).toMatch(/aria-pressed="true"[^>]*>Control</)
@@ -119,7 +118,7 @@ test('control: input reaches the browser, the agent is not held', () => {
 })
 
 test('taken over: control display bound to the takeover, Give back, the agent held', () => {
-  const live = controller('t1', STATUS_UP, {
+  const live = controller(STATUS_UP, {
     type: 'taken',
     takeover: TAKEOVER,
   })
@@ -138,17 +137,17 @@ test('taken over: control display bound to the takeover, Give back, the agent he
   expect(text(html)).toContain('Close to dock it back in the sidebar')
 })
 
-test('Take over waits for a task with an open tab', () => {
-  const none = renderToStaticMarkup(<TakeOverButton live={controller(null)} />)
+test('Take over waits for the agent to have an open tab', () => {
+  const none = renderToStaticMarkup(<TakeOverButton live={controller()} />)
   expect(none).toContain('disabled=""')
-  expect(none).toContain('Pick a task to take over its tab.')
+  expect(none).toContain('The agent has no open tab yet')
   const ready = renderToStaticMarkup(
-    <TakeOverButton live={controller('t1', STATUS_UP)} />,
+    <TakeOverButton live={controller(STATUS_UP)} />,
   )
   expect(ready).not.toContain('disabled=""')
   expect(text(ready)).toBe('Take over')
   const busy = renderToStaticMarkup(
-    <TakeOverButton live={controller('t1', STATUS_UP, { type: 'busy' })} />,
+    <TakeOverButton live={controller(STATUS_UP, { type: 'busy' })} />,
   )
   expect(text(busy)).toBe('Taking over…')
 })

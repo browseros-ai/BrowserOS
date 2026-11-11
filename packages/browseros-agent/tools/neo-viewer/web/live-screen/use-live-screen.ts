@@ -23,12 +23,13 @@ import {
   type ScreenMode,
 } from './live-screen-model'
 
-/** How often the panel asks which tab the task is on and whether Neo answers. */
-const STATUS_POLL_MS = 3_000
+/**
+ * How often the panel asks where the agent is and whether Neo answers. Following by tab, a move
+ * to another tab shows on the screen after the next poll.
+ */
+const STATUS_POLL_MS = 1_500
 
 export interface LiveScreenController {
-  /** Neo's task id (`TaskSummary.neoTaskId`) the screen follows; null for none. */
-  task: string | null
   state: LiveScreenState
   /** The display to have open now; `state.attempt` changes when it must be opened again. */
   display: DisplayRequest
@@ -41,15 +42,14 @@ export interface LiveScreenController {
   closed(code: number, reason: string): void
 }
 
-export function useLiveScreen(task: string | null): LiveScreenController {
+export function useLiveScreen(): LiveScreenController {
   const [state, dispatch] = useReducer(liveScreenReducer, initialLiveScreen)
 
   useEffect(() => {
     let current = true
     const poll = async () => {
-      const query = task ? `?task=${encodeURIComponent(task)}` : ''
       try {
-        const response = await fetch(`${liveRoutes.status}${query}`)
+        const response = await fetch(liveRoutes.status)
         if (!response.ok) throw new Error(`HTTP ${response.status}`)
         const status = (await response.json()) as LiveStatus
         if (current) dispatch({ type: 'status', status })
@@ -62,7 +62,7 @@ export function useLiveScreen(task: string | null): LiveScreenController {
                 state: 'unreachable',
                 message: `The viewer did not answer (${String(cause)})`,
               },
-              tab: null,
+              agent: null,
               takeover: null,
             },
           })
@@ -74,7 +74,7 @@ export function useLiveScreen(task: string | null): LiveScreenController {
       current = false
       clearInterval(timer)
     }
-  }, [task])
+  }, [])
 
   const { connection } = state
   useEffect(() => {
@@ -88,13 +88,15 @@ export function useLiveScreen(task: string | null): LiveScreenController {
 
   const takeoverId = state.takeover?.id ?? null
   const { screen } = state
+  // The tab the panel shows as the agent's is the one taken, so the owner gets what they see.
+  const agentTab = state.status?.agent?.tab.tabId ?? null
   const takeOver = useCallback(() => {
-    if (!task) return
+    if (agentTab === null) return
     dispatch({ type: 'busy' })
     // Neo's own screen size: its fit brings the tab to the front and leaves the screen as is.
     const request: TakeoverRequest = screen
-      ? { task, viewer: screen }
-      : { task }
+      ? { tabId: agentTab, viewer: screen }
+      : { tabId: agentTab }
     void post<TakeoverResponse>(liveRoutes.takeovers, request).then((answer) =>
       dispatch(
         'error' in answer
@@ -102,7 +104,7 @@ export function useLiveScreen(task: string | null): LiveScreenController {
           : { type: 'taken', takeover: answer.takeover },
       ),
     )
-  }, [task, screen])
+  }, [agentTab, screen])
 
   const giveBack = useCallback(() => {
     if (!takeoverId) return
@@ -137,10 +139,9 @@ export function useLiveScreen(task: string | null): LiveScreenController {
       dispatch({ type: 'closed', code, reason }),
     [],
   )
-  const display = useMemo(() => displayRequestFor(state, task), [state, task])
+  const display = useMemo(() => displayRequestFor(state), [state])
 
   return {
-    task,
     state,
     display,
     setMode,

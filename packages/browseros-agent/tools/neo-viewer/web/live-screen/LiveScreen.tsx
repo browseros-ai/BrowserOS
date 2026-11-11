@@ -93,7 +93,7 @@ export function LiveScreen({
         </div>
         {screen}
         <p className="text-[#4A5365] text-[11px] leading-[14px]">
-          {modeLine(state, live.task)}
+          {modeLine(state)}
         </p>
         <ActionError live={live} />
       </section>
@@ -108,7 +108,7 @@ export function LiveScreen({
         <h2 className="font-semibold text-[#0D1730] text-[16px] leading-5">
           Live screen
         </h2>
-        {state.status?.tab && <TabChip tab={state.status.tab} />}
+        {state.status?.agent && <TabChip tab={state.status.agent.tab} />}
         <div className="flex-1" />
         <ModeSwitch live={live} large />
         <TakeOverButton live={live} />
@@ -126,7 +126,7 @@ export function LiveScreen({
       {screen}
       <footer className="flex h-10 shrink-0 items-center gap-3 border-[#E4E7EC] border-t px-5 text-[#4A5365]">
         <span className={state.takeover ? 'font-medium text-[#1F4FD8]' : ''}>
-          {modeLine(state, live.task)}
+          {modeLine(state)}
         </span>
         <div className="flex-1" />
         <ActionError live={live} />
@@ -172,7 +172,7 @@ export function LiveScreenPopup({
 }
 
 export function TakeOverButton({ live }: { live: LiveScreenController }) {
-  const action = takeOverAvailability(live.state, live.task)
+  const action = takeOverAvailability(live.state)
   const giving = action.label === 'Give back'
   return (
     <button

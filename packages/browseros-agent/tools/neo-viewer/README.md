@@ -163,9 +163,9 @@ relays it and adds the token on its side; `shared/live-screen.ts` holds the rout
 
 | On the panel | What it opens on Neo |
 |---|---|
-| Follow agent | `GET /v1/display?mode=view`: watch the front tab (with an agent's own task id, `followTask=<id>` keeps its tab in front) |
+| Follow agent | `GET /v1/display?mode=view&followTab=<tab>`: watch; Neo keeps the agent's tab in front, the tab of the most recent run's last operation (from `/v1/trace`; subscriptions act on no tab, `newPage` counts with its new tab). When that run named its own task, `followTask=<taskId>` instead, so Neo follows the task to a new tab by itself; by tab, the panel moves when its status poll (1.5 s) sees the agent on another tab |
 | Control | `GET /v1/display?mode=control`: clicks and keys reach the browser; the front tab stops following; the agent is not held |
-| Take over / Give back | `POST /v1/takeovers {tabId, viewer}` for the agent's current tab: the one Neo's latest operation used (Neo's own rule for a task's tab, over its whole trace), then `display?mode=control&release=<id>`; the agent's calls on that tab fail with `owner_has_control` until `POST /v1/takeovers/{id}/release`. `viewer` is Neo's own screen size, so Neo's fit brings the tab to the front and leaves the screen as it is; Neo puts the window back on release |
+| Take over / Give back | `POST /v1/takeovers {tabId, viewer}` for the agent's tab as the panel shows it, then `display?mode=control&release=<id>`; the agent's calls on that tab fail with `owner_has_control` until `POST /v1/takeovers/{id}/release`. `viewer` is Neo's own screen size, so Neo's fit brings the tab to the front and leaves the screen as it is; Neo puts the window back on release |
 
 The relay passes RFB frames and close codes through unchanged (Neo's `4002 released` ends a
 takeover's display) and closes with its own codes for what Neo cannot say: 4901 the host API is not

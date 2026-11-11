@@ -12,12 +12,9 @@
  *
  * Routes:
  *   GET  /api/live/display?<DisplayRequest>      WebSocket: RFB 3.8 both ways, relayed to Neo
- *   GET  /api/live/status[?task=<taskId>]        LiveStatus
- *   POST /api/live/takeovers {task?, viewer?}    TakeoverResponse | LiveError
+ *   GET  /api/live/status                        LiveStatus
+ *   POST /api/live/takeovers {tabId, viewer?}    TakeoverResponse | LiveError
  *   POST /api/live/takeovers/:id/release         TakeoverResponse | LiveError
- *
- * `task`, when given, is an agent's own task id (`RunSummary.agentTaskId`), the one Neo's runs
- * carry; without one, the agent's tab is the one Neo's latest operation used, across all runs.
  */
 
 export const liveRoutes = {
@@ -32,20 +29,29 @@ export const liveRoutes = {
 const MAX_TASK_ID_BYTES = 128
 
 /**
+ * What a view display keeps in front ("Follow agent"), as Neo's display takes it:
+ * - `taskId`: the task's current tab, wherever the task goes next (`followTask`);
+ * - `tabId`: that one tab (`followTab`).
+ */
+export type Follow = { taskId: string } | { tabId: number }
+
+/**
  * Which display to open, as Neo's `GET /v1/display` takes it:
- * - `view` with `followTask`: watch the screen and keep the task's current tab in front
- *   ("Follow agent"); without it, just watch.
- * - `control`: click and type. It takes no `followTask`, so the front tab stops following.
+ * - `view`: watch the screen; with `follow`, Neo keeps that tab or task in front.
+ * - `control`: click and type. It follows nothing, so the front tab stays where it is.
  * - `control` with `release`: the owner's display of a takeover; releasing the takeover closes it.
  */
 export type DisplayRequest =
-  | { mode: 'view'; followTask?: string }
+  | { mode: 'view'; follow?: Follow }
   | { mode: 'control'; release?: string }
 
 export function displayQuery(request: DisplayRequest): string {
   const params = new URLSearchParams({ mode: request.mode })
-  if (request.mode === 'view' && request.followTask)
-    params.set('followTask', request.followTask)
+  if (request.mode === 'view' && request.follow) {
+    if ('taskId' in request.follow)
+      params.set('followTask', request.follow.taskId)
+    else params.set('followTab', String(request.follow.tabId))
+  }
   if (request.mode === 'control' && request.release)
     params.set('release', request.release)
   return params.toString()
@@ -58,31 +64,48 @@ export function displayQuery(request: DisplayRequest): string {
 export function parseDisplayQuery(
   params: URLSearchParams,
 ): DisplayRequest | { error: string } {
-  const known = new Set(['mode', 'followTask', 'release'])
+  const known = new Set(['mode', 'followTask', 'followTab', 'release'])
   for (const name of params.keys()) {
     if (!known.has(name)) return { error: `unknown parameter \`${name}\`` }
     if (params.getAll(name).length > 1)
       return { error: `\`${name}\` given twice` }
   }
-  const mode = params.get('mode')
   const followTask = params.get('followTask')
+  const followTab = params.get('followTab')
   const release = params.get('release')
-  if (mode === 'view') {
-    if (release !== null) return { error: 'a view display takes no `release`' }
-    if (followTask === null) return { mode }
-    if (followTask === '') return { error: '`followTask` is empty' }
-    if (new TextEncoder().encode(followTask).length > MAX_TASK_ID_BYTES)
-      return { error: `\`followTask\` is over ${MAX_TASK_ID_BYTES} bytes` }
-    return { mode, followTask }
+  switch (params.get('mode')) {
+    case 'view':
+      if (release !== null)
+        return { error: 'a view display takes no `release`' }
+      return parseFollow(followTask, followTab)
+    case 'control':
+      if (followTask !== null || followTab !== null)
+        return { error: 'a control display follows nothing' }
+      if (release === null) return { mode: 'control' }
+      if (release === '') return { error: '`release` is empty' }
+      return { mode: 'control', release }
+    default:
+      return { error: '`mode` must be view or control' }
   }
-  if (mode === 'control') {
-    if (followTask !== null)
-      return { error: 'a control display takes no `followTask`' }
-    if (release === null) return { mode }
-    if (release === '') return { error: '`release` is empty' }
-    return { mode, release }
+}
+
+function parseFollow(
+  followTask: string | null,
+  followTab: string | null,
+): DisplayRequest | { error: string } {
+  if (followTask !== null && followTab !== null)
+    return { error: '`followTab` and `followTask` cannot both be given' }
+  if (followTab !== null) {
+    const tabId = Number(followTab)
+    if (!/^[0-9]+$/.test(followTab) || !Number.isSafeInteger(tabId))
+      return { error: '`followTab` must be a tab id' }
+    return { mode: 'view', follow: { tabId } }
   }
-  return { error: '`mode` must be view or control' }
+  if (followTask === null) return { mode: 'view' }
+  if (followTask === '') return { error: '`followTask` is empty' }
+  if (new TextEncoder().encode(followTask).length > MAX_TASK_ID_BYTES)
+    return { error: `\`followTask\` is over ${MAX_TASK_ID_BYTES} bytes` }
+  return { mode: 'view', follow: { taskId: followTask } }
 }
 
 /**
@@ -131,14 +154,22 @@ export type HostState =
   | { state: 'unreachable'; message: string }
   | { state: 'refused'; code: string; message: string }
 
+/**
+ * Where the agent is: the tab of the most recent run's last operation that acted on a tab, while
+ * that tab is open. "Follow agent" keeps it in front, Take over takes it. `taskId` is that run's
+ * own task id, when the agent sent one: then Neo follows the task, so the screen moves with it to
+ * a new tab without waiting for the next status.
+ */
+export interface AgentFocus {
+  tab: LiveTab
+  taskId: string | null
+}
+
 export interface LiveStatus {
   host: HostState
-  /**
-   * The tab the latest operation targeted (the task's, when a task is named), while it is open:
-   * the tab Take over takes. Null before any operation used a tab.
-   */
-  tab: LiveTab | null
-  /** The takeover this viewer started on that tab, while active. */
+  /** Null before the agent has acted on a tab, or once that tab has closed. */
+  agent: AgentFocus | null
+  /** The takeover this viewer started, while active: on the agent's tab when it has one there. */
   takeover: LiveTakeover | null
 }
 
@@ -149,8 +180,8 @@ export interface ScreenSize {
 }
 
 export interface TakeoverRequest {
-  /** An agent's own task id; without one, the tab the latest operation used. */
-  task?: string | null
+  /** The tab to take: the agent's, as the panel shows it (`LiveStatus.agent.tab`). */
+  tabId: number
   /**
    * Neo's own screen size, as the panel shows it. Sent on as the takeover's `viewer`, so Neo
    * fits the tab, and a fit brings the tab to the front: without one, a takeover locks the tab

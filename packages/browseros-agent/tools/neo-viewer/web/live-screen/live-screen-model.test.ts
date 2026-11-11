@@ -23,9 +23,11 @@ const TAKEOVER: LiveTakeover = {
   createdAt: 1,
   expiresAt: 2,
 }
+const TWO = { tabId: 12, url: 'https://two.test/', title: 'Two' }
+/** The agent named no task; its latest run last acted on tab 12. */
 const UP: LiveStatus = {
   host: { state: 'up' },
-  tab: { tabId: 12, url: 'https://two.test/', title: 'Two' },
+  agent: { tab: TWO, taskId: null },
   takeover: null,
 }
 
@@ -33,18 +35,53 @@ function run(...actions: LiveScreenAction[]): LiveScreenState {
   return actions.reduce(liveScreenReducer, initialLiveScreen)
 }
 
-test('follow watches the task’s tab; control and a takeover open control displays', () => {
-  expect(displayRequestFor(initialLiveScreen, 't1')).toEqual({
+test('follow keeps the agent’s tab in front: by tab, or by task when its run named one', () => {
+  expect(displayRequestFor(initialLiveScreen)).toEqual({ mode: 'view' })
+  const byTab = run({ type: 'status', status: UP })
+  expect(displayRequestFor(byTab)).toEqual({
     mode: 'view',
-    followTask: 't1',
+    follow: { tabId: 12 },
   })
-  expect(displayRequestFor(initialLiveScreen, null)).toEqual({ mode: 'view' })
+  const byTask = liveScreenReducer(byTab, {
+    type: 'status',
+    status: { ...UP, agent: { tab: TWO, taskId: 'zuzu-7' } },
+  })
+  expect(displayRequestFor(byTask)).toEqual({
+    mode: 'view',
+    follow: { taskId: 'zuzu-7' },
+  })
+  expect(displayRequestFor(run({ type: 'mode', mode: 'control' }))).toEqual({
+    mode: 'control',
+  })
+  expect(displayRequestFor(run({ type: 'taken', takeover: TAKEOVER }))).toEqual(
+    { mode: 'control', release: 'tk_1' },
+  )
+})
+
+test('the follow target moves with the agent and survives a status from an unreachable Neo', () => {
+  const onTwo = run({ type: 'status', status: UP })
+  // The same target keeps its object: an unchanged status opens no new display.
+  const again = liveScreenReducer(onTwo, { type: 'status', status: UP })
+  expect(again.follow).toBe(onTwo.follow)
+  const onOne = liveScreenReducer(onTwo, {
+    type: 'status',
+    status: { ...UP, agent: { tab: { ...TWO, tabId: 11 }, taskId: null } },
+  })
+  expect(onOne.follow).toEqual({ tabId: 11 })
+  const down = liveScreenReducer(onOne, {
+    type: 'status',
+    status: {
+      host: { state: 'unreachable', message: 'nothing answered' },
+      agent: null,
+      takeover: null,
+    },
+  })
+  expect(down.follow).toBe(onOne.follow)
+  // Neo answered: the agent's tab closed, so there is nothing to follow.
   expect(
-    displayRequestFor(run({ type: 'mode', mode: 'control' }), 't1'),
-  ).toEqual({ mode: 'control' })
-  expect(
-    displayRequestFor(run({ type: 'taken', takeover: TAKEOVER }), 't1'),
-  ).toEqual({ mode: 'control', release: 'tk_1' })
+    liveScreenReducer(down, { type: 'status', status: { ...UP, agent: null } })
+      .follow,
+  ).toBeNull()
 })
 
 test('each new display is a new attempt', () => {
@@ -155,7 +192,7 @@ test('no container shows even before a display has failed', () => {
     type: 'status',
     status: {
       host: { state: 'unreachable', message: 'Unable to connect' },
-      tab: null,
+      agent: null,
       takeover: null,
     },
   })
@@ -163,30 +200,32 @@ test('no container shows even before a display has failed', () => {
   expect(screenNotice(run({ type: 'connected', screen: null }))).toBeNull()
 })
 
-test('take over is offered only for a task with an open tab', () => {
-  expect(takeOverAvailability(initialLiveScreen, null)).toMatchObject({
+test('take over is offered once the agent has an open tab', () => {
+  expect(takeOverAvailability(initialLiveScreen)).toMatchObject({
     label: 'Take over',
     enabled: false,
   })
-  expect(takeOverAvailability(initialLiveScreen, 't1').enabled).toBe(false)
+  expect(
+    takeOverAvailability(
+      run({ type: 'status', status: { ...UP, agent: null } }),
+    ).enabled,
+  ).toBe(false)
   const ready = run({ type: 'status', status: UP })
-  expect(takeOverAvailability(ready, 't1')).toMatchObject({
+  expect(takeOverAvailability(ready)).toMatchObject({
     label: 'Take over',
     enabled: true,
   })
   expect(
-    takeOverAvailability(liveScreenReducer(ready, { type: 'busy' }), 't1')
-      .enabled,
+    takeOverAvailability(liveScreenReducer(ready, { type: 'busy' })).enabled,
   ).toBe(false)
   expect(
     takeOverAvailability(
       liveScreenReducer(ready, { type: 'taken', takeover: TAKEOVER }),
-      't1',
     ),
   ).toMatchObject({ label: 'Give back', enabled: true })
   const failed = liveScreenReducer(liveScreenReducer(ready, { type: 'busy' }), {
     type: 'action-failed',
-    message: 'This task has no open tab yet: nothing to take over.',
+    message: 'no open tab has this id',
   })
   expect(failed).toMatchObject({ busy: false, actionError: expect.any(String) })
 })

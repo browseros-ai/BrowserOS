@@ -3,7 +3,6 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
-  type LiveError,
   type LiveStatus,
   type LiveTakeover,
   liveRoutes,
@@ -18,7 +17,7 @@ import {
 } from '../test-support/fake-neo-host'
 import { type RunningViewer, startViewer } from '../viewer-server'
 import type { LiveHost } from './live-host'
-import { type TraceOperation, taskLastTab } from './live-routes'
+import { agentFocus, type TraceTail } from './live-routes'
 
 const cleanups: Array<() => Promise<unknown>> = []
 afterEach(async () => {
@@ -66,28 +65,28 @@ function takeover(state: 'active' | 'released'): LiveTakeover {
   } as LiveTakeover
 }
 
-/** Neo with two tabs; task `t1`'s operations targeted tab 11, then tab 12, then no tab. */
-async function neoWithTask(): Promise<FakeNeoHost> {
+/** Neo's latest operations: one run without a task id, on tab 11, then tab 12, then no tab. */
+const UNTASKED: TraceTail = {
+  runs: [{ id: 'r1', startedAt: 1 }],
+  operations: [
+    { id: 'r1.1', runId: 'r1', name: 'page.goto', tabId: 11 },
+    { id: 'r1.2', runId: 'r1', name: 'page.click', tabId: 12 },
+    { id: 'r1.3', runId: 'r1', name: 'neo.sleep' },
+  ],
+}
+
+/** Neo with two tabs, whose trace is `trace` (by default the agent's last act was on tab 12). */
+async function neoWithAgent(
+  trace: { current: TraceTail } = { current: UNTASKED },
+): Promise<FakeNeoHost> {
   const neo = startFakeNeoHost()
   cleanups.push(() => neo.stop())
   let state: 'active' | 'released' = 'active'
   neo.respond = (request: HostRequest) => {
     const path = request.path
     if (path === '/v1/tabs') return Response.json({ items: TABS })
-    // The agent's own task id narrows the trace; without one the viewer reads all of it.
-    if (
-      path === '/v1/trace?taskId=t1&tail=200' ||
-      path === '/v1/trace?tail=200'
-    )
-      return Response.json({
-        runs: [],
-        operations: [
-          { id: 'r1.1', name: 'page.goto', tabId: 11, startedAt: 1 },
-          { id: 'r1.2', name: 'page.click', tabId: 12, startedAt: 2 },
-          { id: 'r1.3', name: 'neo.sleep', startedAt: 3 },
-        ],
-        truncated: false,
-      })
+    if (path === '/v1/trace?tail=100')
+      return Response.json({ ...trace.current, truncated: false })
     if (path === '/v1/takeovers' && request.method === 'POST') {
       state = 'active'
       return Response.json(takeover(state))
@@ -115,37 +114,58 @@ function post(
   })
 }
 
-async function status(
-  viewer: RunningViewer,
-  task?: string,
-): Promise<LiveStatus> {
-  const query = task ? `?task=${task}` : ''
+async function status(viewer: RunningViewer): Promise<LiveStatus> {
   return (await (
-    await fetch(`${viewer.url}${liveRoutes.status}${query}`)
+    await fetch(`${viewer.url}${liveRoutes.status}`)
   ).json()) as LiveStatus
 }
 
-test('status names the tab the latest operation targeted, narrowed to an agent’s task id when given', async () => {
-  const neo = await neoWithTask()
+const TAB_ONE = { tabId: 11, url: 'https://one.test/', title: 'One' }
+const TAB_TWO = { tabId: 12, url: 'https://two.test/', title: 'Two' }
+
+test('an agent that names no task is followed by the tab of its latest run’s last operation', async () => {
+  const neo = await neoWithAgent()
   const viewer = await viewerWith(neo.host)
-  expect(await status(viewer, 't1')).toEqual({
+  expect(await status(viewer)).toEqual({
     host: { state: 'up' },
-    tab: { tabId: 12, url: 'https://two.test/', title: 'Two' },
+    agent: { tab: TAB_TWO, taskId: null },
     takeover: null,
   })
-  // Without a task id: the tab the latest operation used, across every run.
-  expect((await status(viewer)).tab?.tabId).toBe(12)
-  expect((await status(viewer, 'never-ran')).tab).toBeNull()
   expect(
     neo.requests.every((r) => r.authorization === `Bearer ${FAKE_TOKEN}`),
   ).toBe(true)
 })
 
+test('a run that named its own task is followed by that task', async () => {
+  const trace = { current: UNTASKED }
+  const neo = await neoWithAgent(trace)
+  const viewer = await viewerWith(neo.host)
+  trace.current = {
+    runs: [...UNTASKED.runs, { id: 'r2', taskId: 'zuzu-7', startedAt: 2 }],
+    operations: [
+      ...UNTASKED.operations,
+      { id: 'r2.1', runId: 'r2', name: 'page.goto', tabId: 11 },
+    ],
+  }
+  expect((await status(viewer)).agent).toEqual({
+    tab: TAB_ONE,
+    taskId: 'zuzu-7',
+  })
+  // Before the agent acts on a tab, and once its tab has closed, there is nothing to follow.
+  trace.current = { runs: [], operations: [] }
+  expect((await status(viewer)).agent).toBeNull()
+  trace.current = {
+    runs: [{ id: 'r3', startedAt: 3 }],
+    operations: [{ id: 'r3.1', runId: 'r3', name: 'page.goto', tabId: 99 }],
+  }
+  expect((await status(viewer)).agent).toBeNull()
+})
+
 test('status says plainly when Neo is not there', async () => {
   const viewer = await viewerWith(unreachableHost())
-  const answer = await status(viewer, 't1')
+  const answer = await status(viewer)
   expect(answer.host.state).toBe('unreachable')
-  expect(answer.tab).toBeNull()
+  expect(answer.agent).toBeNull()
   expect(JSON.stringify(answer)).not.toContain(FAKE_TOKEN)
 })
 
@@ -158,18 +178,18 @@ test('status reads the host API client’s “no Neo” answer as unreachable', 
       ),
     socket: (path) => unreachableHost().socket(path),
   })
-  expect((await status(viewer, 't1')).host).toEqual({
+  expect((await status(viewer)).host).toEqual({
     state: 'unreachable',
     message: 'nothing answered',
   })
 })
 
-test('take over locks the task’s tab, status reports it held, give back releases it', async () => {
-  const neo = await neoWithTask()
+test('take over locks the agent’s tab, status reports it held, give back releases it', async () => {
+  const neo = await neoWithAgent()
   const viewer = await viewerWith(neo.host)
 
   const taken = await post(viewer, liveRoutes.takeovers, {
-    task: 't1',
+    tabId: 12,
     viewer: { width: 1600, height: 1000 },
   })
   expect(taken.status).toBe(200)
@@ -183,8 +203,7 @@ test('take over locks the task’s tab, status reports it held, give back releas
     viewer: { width: 1600, height: 1000 },
   })
 
-  // A reloaded page learns the takeover from status, even when it shows no task or another one.
-  expect((await status(viewer, 't1')).takeover?.id).toBe('tk_1')
+  // A reloaded page learns the takeover from status.
   expect((await status(viewer)).takeover?.id).toBe('tk_1')
 
   const given = await post(viewer, liveRoutes.release('tk_1'), {})
@@ -195,25 +214,25 @@ test('take over locks the task’s tab, status reports it held, give back releas
   expect(JSON.parse(neo.requests.at(-1)?.body ?? '')).toEqual({
     reason: 'done',
   })
-  expect((await status(viewer, 't1')).takeover).toBeNull()
+  expect((await status(viewer)).takeover).toBeNull()
 })
 
 test('a takeover Neo ended on its own is no longer reported held', async () => {
-  const neo = await neoWithTask()
+  const neo = await neoWithAgent()
   const viewer = await viewerWith(neo.host)
-  await post(viewer, liveRoutes.takeovers, { task: 't1' })
+  await post(viewer, liveRoutes.takeovers, { tabId: 12 })
   const answer = neo.respond
   neo.respond = (request) =>
     request.path === '/v1/takeovers/tk_1'
       ? Response.json({ ...takeover('released'), releaseReason: 'expired' })
       : answer(request)
-  expect((await status(viewer, 't1')).takeover).toBeNull()
+  expect((await status(viewer)).takeover).toBeNull()
 })
 
 test('stopping the viewer gives back the takeovers it holds', async () => {
-  const neo = await neoWithTask()
+  const neo = await neoWithAgent()
   const viewer = await viewerWith(neo.host)
-  await post(viewer, liveRoutes.takeovers, { task: 't1' })
+  await post(viewer, liveRoutes.takeovers, { tabId: 12 })
   await viewer.stop()
   expect(
     neo.requests.some((r) => r.path === '/v1/takeovers/tk_1/release'),
@@ -221,18 +240,16 @@ test('stopping the viewer gives back the takeovers it holds', async () => {
 })
 
 test('take over says why it cannot, with Neo’s own error when Neo refused', async () => {
-  const neo = await neoWithTask()
+  const neo = await neoWithAgent()
   const viewer = await viewerWith(neo.host)
 
-  const noTab = await post(viewer, liveRoutes.takeovers, { task: 'never-ran' })
-  expect(noTab.status).toBe(409)
-  expect(((await noTab.json()) as LiveError).error.code).toBe('no_tab')
-
   for (const body of [
-    { task: '' },
-    { task: 7 },
-    { task: 't1', viewer: { width: 99, height: 1000 } },
-    { task: 't1', viewer: { width: 1600.5, height: 1000 } },
+    { nope: true },
+    { tabId: '12' },
+    { tabId: -1 },
+    { tabId: 1.5 },
+    { tabId: 12, viewer: { width: 99, height: 1000 } },
+    { tabId: 12, viewer: { width: 1600.5, height: 1000 } },
   ])
     expect((await post(viewer, liveRoutes.takeovers, body)).status).toBe(400)
 
@@ -244,7 +261,7 @@ test('take over says why it cannot, with Neo’s own error when Neo refused', as
           { status: 404 },
         )
       : answer(request)
-  const refused = await post(viewer, liveRoutes.takeovers, { task: 't1' })
+  const refused = await post(viewer, liveRoutes.takeovers, { tabId: 12 })
   expect(refused.status).toBe(404)
   expect(await refused.json()).toEqual({
     error: { code: 'tab_not_found', message: 'no open tab has this id' },
@@ -252,11 +269,11 @@ test('take over says why it cannot, with Neo’s own error when Neo refused', as
 })
 
 test('take over and give back refuse another origin before reaching Neo', async () => {
-  const neo = await neoWithTask()
+  const neo = await neoWithAgent()
   const viewer = await viewerWith(neo.host)
   for (const origin of ['http://evil.example', 'null']) {
     expect(
-      (await post(viewer, liveRoutes.takeovers, { task: 't1' }, origin)).status,
+      (await post(viewer, liveRoutes.takeovers, { tabId: 12 }, origin)).status,
     ).toBe(403)
     expect(
       (await post(viewer, liveRoutes.release('tk_1'), {}, origin)).status,
@@ -264,7 +281,7 @@ test('take over and give back refuse another origin before reaching Neo', async 
   }
   const noOrigin = await fetch(`${viewer.url}${liveRoutes.takeovers}`, {
     method: 'POST',
-    body: JSON.stringify({ task: 't1' }),
+    body: JSON.stringify({ tabId: 12 }),
   })
   expect(noOrigin.status).toBe(403)
   const wrongHost = await fetch(`${viewer.url}${liveRoutes.status}`, {
@@ -275,7 +292,7 @@ test('take over and give back refuse another origin before reaching Neo', async 
 })
 
 test('a takeover still starting when the viewer stops is given back too', async () => {
-  const neo = await neoWithTask()
+  const neo = await neoWithAgent()
   const answer = neo.respond
   let startArrived = () => {}
   const arrived = new Promise<void>((resolve) => {
@@ -293,7 +310,7 @@ test('a takeover still starting when the viewer stops is given back too', async 
     return response
   }
   const viewer = await viewerWith(neo.host)
-  const taking = post(viewer, liveRoutes.takeovers, { task: 't1' })
+  const taking = post(viewer, liveRoutes.takeovers, { tabId: 12 })
   await arrived
   await viewer.stop()
   expect((await taking).status).toBe(503)
@@ -301,59 +318,62 @@ test('a takeover still starting when the viewer stops is given back too', async 
     neo.requests.some((r) => r.path === '/v1/takeovers/tk_1/release'),
   ).toBe(true)
   expect(
-    (await post(viewer, liveRoutes.takeovers, { task: 't1' }).catch(() => null))
+    (await post(viewer, liveRoutes.takeovers, { tabId: 12 }).catch(() => null))
       ?.status ?? 'closed',
   ).not.toBe(200)
 })
 
-test('the task’s tab follows Neo’s rule: subscriptions skipped, a new page counts at its end', () => {
-  const op = (
-    id: string,
-    name: string,
-    startedAt: number,
-    tabs: { tabId?: number; page?: number },
-  ): TraceOperation => ({
-    id,
-    name,
-    startedAt,
-    ...(tabs.tabId === undefined ? {} : { tabId: tabs.tabId }),
-    ...(tabs.page === undefined ? {} : { page: { tabId: tabs.page } }),
-  })
-  // An events.listen on another tab after the last act does not move the task.
+test('the agent’s tab: subscriptions act on no tab, a new page counts, a tabless run keeps the last', () => {
+  const trace = (
+    ...ops: Array<
+      [id: string, name: string, tabs?: { tabId?: number; page?: number }]
+    >
+  ): TraceTail => {
+    const runIds = [...new Set(ops.map(([id]) => id.split('.')[0] ?? ''))]
+    return {
+      runs: runIds.map((id, i) => ({
+        id,
+        startedAt: i + 1,
+        ...(id.endsWith('t') ? { taskId: `task-${id}` } : {}),
+      })),
+      operations: ops.map(([id, name, tabs = {}]) => ({
+        id,
+        runId: id.split('.')[0] ?? '',
+        name,
+        ...(tabs.tabId === undefined ? {} : { tabId: tabs.tabId }),
+        ...(tabs.page === undefined ? {} : { page: { tabId: tabs.page } }),
+      })),
+    }
+  }
+  // An events.listen on another tab after the last act does not move the agent.
   expect(
-    taskLastTab([
-      op('r1.1', 'page.goto', 1, { tabId: 11 }),
-      op('r1.2', 'events.listen', 2, { tabId: 12 }),
-      op('r1.3', 'events.next', 3, { tabId: 12 }),
-    ]),
-  ).toBe(11)
+    agentFocus(
+      trace(
+        ['r1.1', 'page.goto', { tabId: 11 }],
+        ['r1.2', 'events.listen', { tabId: 12 }],
+        ['r1.3', 'events.next', { tabId: 12 }],
+      ),
+    ),
+  ).toEqual({ tabId: 11, taskId: null })
   // context.newPage has no target; its new tab arrives as the page it ended on.
   expect(
-    taskLastTab([
-      op('r1.1', 'page.goto', 1, { tabId: 11 }),
-      op('r1.2', 'context.newPage', 2, { page: 13 }),
-    ]),
-  ).toBe(13)
-  // The latest by start wins, whatever order the trace lists them in; then run, then seq.
+    agentFocus(
+      trace(
+        ['r1.1', 'page.goto', { tabId: 11 }],
+        ['r1.2', 'context.newPage', { page: 13 }],
+      ),
+    ),
+  ).toEqual({ tabId: 13, taskId: null })
+  // The most recent run wins, then its last operation; a run on no tab leaves the one before.
   expect(
-    taskLastTab([
-      op('r2.1', 'page.click', 5, { tabId: 12 }),
-      op('r1.9', 'page.click', 9, { tabId: 11 }),
-      op('r1.10', 'page.fill', 9, { tabId: 14 }),
-    ]),
-  ).toBe(14)
-  expect(taskLastTab([op('r1.1', 'neo.sleep', 1, {})])).toBeNull()
-})
-
-test('without a task id, take over takes the tab the latest operation used', async () => {
-  const neo = await neoWithTask()
-  const viewer = await viewerWith(neo.host)
-  const taken = await post(viewer, liveRoutes.takeovers, {})
-  expect(taken.status).toBe(200)
-  expect(
-    neo.requests.some((request) => request.path === '/v1/trace?tail=200'),
-  ).toBe(true)
-  const body =
-    neo.requests.find((request) => request.path === '/v1/takeovers')?.body ?? ''
-  expect(JSON.parse(body)).toMatchObject({ tabId: 12 })
+    agentFocus(
+      trace(
+        ['r1.9', 'page.click', { tabId: 11 }],
+        ['r2t.1', 'page.click', { tabId: 12 }],
+        ['r2t.2', 'page.fill', { tabId: 14 }],
+        ['r3.1', 'neo.sleep'],
+      ),
+    ),
+  ).toEqual({ tabId: 14, taskId: 'task-r2t' })
+  expect(agentFocus(trace(['r1.1', 'neo.sleep']))).toBeNull()
 })

@@ -7,6 +7,9 @@
  * not covered by the same-origin policy and a form POST needs no preflight, so without that
  * check any web page the owner has open could drive the browser through `ws://127.0.0.1:7310`.
  *
+ * Status: where the agent is (the tab of the most recent run's last operation), so "Follow
+ * agent" works whether or not the agent names a task.
+ *
  * Takeovers: `POST /v1/takeovers` locks the agent out of one tab until the takeover is released
  * or its TTL (20 min) runs out. The viewer remembers the takeovers it started, so a reloaded
  * page finds the one it holds, and gives them all back when the viewer stops, including one
@@ -15,6 +18,7 @@
 
 import type { Server } from 'bun'
 import {
+  type AgentFocus,
   displayQuery,
   type HostState,
   type LiveError,
@@ -32,10 +36,10 @@ import { DisplayRelay } from './display-relay'
 import { type LiveHost, NO_HOST } from './live-host'
 import type { SocketSession } from './socket-session'
 
-/** Operations read back from Neo's trace to find the tab the agent is on. */
-const TRACE_TAIL = 200
+/** Neo's latest operations read back to find the tab the agent is on. */
+const TRACE_TAIL = 100
 /**
- * Operations that only subscribe, so they make no tab the task's: Neo's own list
+ * Operations that only subscribe, so they put the agent on no tab: Neo's own list
  * (`neo-trace` `SUBSCRIPTIONS`), which its `followTask` skips too.
  */
 const SUBSCRIPTIONS = new Set([
@@ -78,12 +82,9 @@ export function liveScreen(host: LiveHost) {
       return failure(426, 'invalid_request', 'expected a WebSocket upgrade')
     }),
 
-    [liveRoutes.status]: guarded({ sameOrigin: false }, async (req) => {
-      const task = new URL(req.url).searchParams.get('task') || null
-      return Response.json(
-        (await status(host, held, task)) satisfies LiveStatus,
-      )
-    }),
+    [liveRoutes.status]: guarded({ sameOrigin: false }, async () =>
+      Response.json((await status(host, held)) satisfies LiveStatus),
+    ),
 
     [liveRoutes.takeovers]: {
       POST: guarded({ sameOrigin: true }, async (req) => {
@@ -92,18 +93,17 @@ export function liveScreen(host: LiveHost) {
           .catch(() => null)) as Partial<TakeoverRequest> | null
         if (
           !body ||
-          (body.task !== undefined &&
-            body.task !== null &&
-            (typeof body.task !== 'string' || body.task === '')) ||
+          !Number.isSafeInteger(body.tabId) ||
+          (body.tabId ?? -1) < 0 ||
           (body.viewer !== undefined && !isScreenSize(body.viewer))
         )
           return failure(
             400,
             'invalid_request',
-            'expected {"task"?: "<agent taskId>", "viewer"?: {"width", "height"}}',
+            'expected {"tabId": <tab id>, "viewer"?: {"width", "height"}}',
           )
         if (stopping) return failure(503, 'stopping', 'The viewer is stopping.')
-        const start = takeOver(body.task ?? null, body.viewer)
+        const start = takeOver(body.tabId as number, body.viewer)
         starting.add(start)
         try {
           return await start
@@ -133,25 +133,15 @@ export function liveScreen(host: LiveHost) {
     },
   }
 
+  /** Neo answers a tab that is no longer open with `404 tab_not_found`, passed on as it is. */
   async function takeOver(
-    task: string | null,
+    tabId: number,
     viewer: ScreenSize | undefined,
   ): Promise<Response> {
-    const tabs = await readTabs(host)
-    if ('error' in tabs) return tabs.error
-    const tab = await currentTab(host, task, tabs.items)
-    if (!tab)
-      return failure(
-        409,
-        'no_tab',
-        'The agent has no open tab yet: nothing to take over.',
-      )
     const started = await neoJson<LiveTakeover>(host, '/v1/takeovers', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(
-        viewer ? { tabId: tab.tabId, viewer } : { tabId: tab.tabId },
-      ),
+      body: JSON.stringify(viewer ? { tabId, viewer } : { tabId }),
     })
     if ('error' in started) return started.error
     if (stopping) {
@@ -186,12 +176,12 @@ export function liveScreen(host: LiveHost) {
 async function status(
   host: LiveHost,
   held: Map<string, LiveTakeover>,
-  task: string | null,
 ): Promise<LiveStatus> {
   const tabs = await readTabs(host)
-  if ('error' in tabs) return { host: tabs.state, tab: null, takeover: null }
-  const tab = await currentTab(host, task, tabs.items)
-  // The takeover on the task's tab first; otherwise any the viewer still holds, so a reloaded
+  if ('error' in tabs) return { host: tabs.state, agent: null, takeover: null }
+  const agent = await agentOn(host, tabs.items)
+  const tab = agent?.tab
+  // The takeover on the agent's tab first; otherwise any the viewer still holds, so a reloaded
   // page can give back one whose agent has since worked in another tab.
   const candidates = [...held.values()].sort(
     (a, b) => Number(b.tabId === tab?.tabId) - Number(a.tabId === tab?.tabId),
@@ -212,67 +202,76 @@ async function status(
       continue
     }
     held.set(known.id, fresh.value)
-    return { host: { state: 'up' }, tab, takeover: fresh.value }
+    return { host: { state: 'up' }, agent, takeover: fresh.value }
   }
-  return { host: { state: 'up' }, tab, takeover: null }
+  return { host: { state: 'up' }, agent, takeover: null }
 }
 
-/**
- * The tab the agent is on: the one its latest operation used, by Neo's own rule for a task's
- * tab. The viewer adds no task id, so it reads Neo's whole trace; an agent that sends its own
- * `taskId` can be narrowed to it. Null when that tab has closed or no operation used one.
- */
-async function currentTab(
+/** The agent's tab, read from Neo's latest operations; null when it has acted on no open tab. */
+async function agentOn(
   host: LiveHost,
-  task: string | null,
   open: LiveTab[],
-): Promise<LiveTab | null> {
-  const scope = task ? `taskId=${encodeURIComponent(task)}&` : ''
-  const trace = await neoJson<{ operations: TraceOperation[] }>(
-    host,
-    `/v1/trace?${scope}tail=${TRACE_TAIL}`,
-  )
+): Promise<AgentFocus | null> {
+  const trace = await neoJson<TraceTail>(host, `/v1/trace?tail=${TRACE_TAIL}`)
   if ('error' in trace) return null
-  const tabId = taskLastTab(trace.value.operations)
-  return open.find((tab) => tab.tabId === tabId) ?? null
+  const focus = agentFocus(trace.value)
+  const tab = open.find((candidate) => candidate.tabId === focus?.tabId)
+  return focus && tab ? { tab, taskId: focus.taskId } : null
 }
 
-/** The fields of Neo's `Operation` that place a task on a tab. */
-export interface TraceOperation {
-  /** `<runId>.<seq>`; run ids are UUIDv7, so they sort by creation. */
-  id: string
-  name: string
-  /** The tab it targeted, when it had one. */
-  tabId?: number
-  /** The page after it ended. */
-  page?: { tabId?: number }
-  startedAt: number
+/** The fields of Neo's `TraceTail` (`GET /v1/trace`) that place the agent on a tab. */
+export interface TraceTail {
+  operations: Array<{
+    /** `<runId>.<seq>`, `seq` counting the run's operations in start order. */
+    id: string
+    runId: string
+    name: string
+    /** The tab it targeted, when it had one. */
+    tabId?: number
+    /** The page after it ended. */
+    page?: { tabId?: number }
+  }>
+  runs: Array<{ id: string; taskId?: string; startedAt: number }>
 }
 
 /**
- * Neo's own rule for a task's current tab (`TraceStore::task_last_act`), over its trace: the
- * latest operation by start, skipping subscriptions, counts with its target tab; one without a
- * target counts with the tab of the page it ended on, which is how `context.newPage` makes its
- * new tab the task's.
+ * The agent's tab: the most recent run's last operation that acted on a tab. Subscriptions
+ * (`events.*`) act on none; an operation without a target counts with the tab of the page it
+ * ended on, which is how `context.newPage` puts the agent on its new tab (Neo's own rule for a
+ * task's tab, `TraceStore::task_last_act`). A run that touched no tab (`return 1`) leaves the
+ * agent where the run before it did. `taskId` is that run's own, when the agent sent one.
  */
-export function taskLastTab(operations: TraceOperation[]): number | null {
-  let latest: { op: TraceOperation; tab: number } | null = null
-  for (const op of operations) {
+export function agentFocus(
+  trace: TraceTail,
+): { tabId: number; taskId: string | null } | null {
+  const runs = new Map(trace.runs.map((run) => [run.id, run]))
+  let latest: { order: [number, string, number]; tabId: number } | null = null
+  for (const op of trace.operations) {
     if (SUBSCRIPTIONS.has(op.name)) continue
-    const tab = op.tabId ?? op.page?.tabId
-    if (tab === undefined) continue
-    if (!latest || startsAfter(op, latest.op)) latest = { op, tab }
+    const tabId = op.tabId ?? op.page?.tabId
+    if (tabId === undefined) continue
+    // Runs by start (ids are UUIDv7, so the id breaks a tie by creation), then by sequence.
+    const order: [number, string, number] = [
+      runs.get(op.runId)?.startedAt ?? 0,
+      op.runId,
+      Number(op.id.slice(op.id.lastIndexOf('.') + 1)),
+    ]
+    if (!latest || after(order, latest.order)) latest = { order, tabId }
   }
-  return latest?.tab ?? null
+  if (!latest) return null
+  return {
+    tabId: latest.tabId,
+    taskId: runs.get(latest.order[1])?.taskId ?? null,
+  }
 }
 
-/** Neo's order: start time, then run id, then sequence within the run. */
-function startsAfter(a: TraceOperation, b: TraceOperation): boolean {
-  if (a.startedAt !== b.startedAt) return a.startedAt > b.startedAt
-  const [runA = '', seqA = '0'] = a.id.split('.')
-  const [runB = '', seqB = '0'] = b.id.split('.')
+function after(
+  [startA, runA, seqA]: [number, string, number],
+  [startB, runB, seqB]: [number, string, number],
+): boolean {
+  if (startA !== startB) return startA > startB
   if (runA !== runB) return runA > runB
-  return Number(seqA) > Number(seqB)
+  return seqA > seqB
 }
 
 async function readTabs(
