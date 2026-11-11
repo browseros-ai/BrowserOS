@@ -216,7 +216,7 @@ export function findBrowser({
   )
 }
 
-const isAlive = (pid: number) => {
+const processAlive = (pid: number) => {
   try {
     process.kill(pid, 0)
     return true
@@ -225,38 +225,103 @@ const isAlive = (pid: number) => {
   }
 }
 
+type LockOptions = {
+  pid?: number
+  isAlive?: (pid: number) => boolean
+  wait?: () => void
+  onWait?: () => void
+}
+
 /**
- * Runs `work` while holding `lock`, so two first runs never prepare (and delete) the same cache
- * folder at once. mkdir is the atomic step; the owner's pid lets a later run take over the lock
- * of one that died.
+ * The pid in `lock`: a number, `undefined` while a new owner has not written it yet, or `null`
+ * once the lock is gone (released between two reads).
  */
-function withLock<T>(lock: string, waiting: string, work: () => T): T {
-  for (let announced = false; ; announced = true) {
+function lockOwner(lock: string): number | undefined | null {
+  try {
+    return Number(fs.readFileSync(path.join(lock, 'pid'), 'utf8')) || undefined
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw error
+    return fs.existsSync(lock) ? undefined : null
+  }
+}
+
+/** A lock whose owner died, or that got no owner within a minute of being made. */
+function isStale(
+  lock: string,
+  owner: number | undefined,
+  isAlive: (pid: number) => boolean,
+): boolean {
+  if (owner) return !isAlive(owner)
+  try {
+    return Date.now() - fs.statSync(lock).mtimeMs > 60_000
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw error
+    return false
+  }
+}
+
+/**
+ * Removes `lock` if its owner died, and says whether to try for it again at once. Two waiting
+ * runs can both see the dead owner, so the removal happens under `<lock>.takeover`, after
+ * reading the owner again there: a run acting on what it saw earlier cannot delete the lock
+ * another run has just taken. Every removal goes through the guard, so that reread is final.
+ */
+function reclaim(lock: string, isAlive: (pid: number) => boolean): boolean {
+  const owner = lockOwner(lock)
+  if (owner === null) return true
+  if (!isStale(lock, owner, isAlive)) return false
+  const guard = `${lock}.takeover`
+  try {
+    fs.mkdirSync(guard)
+  } catch (error) {
+    if (error.code !== 'EEXIST') throw error
+    // The guard is held for a few file operations; one this old belongs to a run that died.
+    if (isStale(guard, undefined, isAlive))
+      fs.rmSync(guard, { recursive: true, force: true })
+    return false
+  }
+  try {
+    const current = lockOwner(lock)
+    if (current === owner && isStale(lock, current, isAlive))
+      fs.rmSync(lock, { recursive: true, force: true })
+    return true
+  } finally {
+    fs.rmSync(guard, { recursive: true, force: true })
+  }
+}
+
+/**
+ * Takes `lock` (a directory, so taking it is one atomic mkdir) for this process, waiting while
+ * a live process holds it and taking over from one that died. It keeps two first runs from
+ * preparing, and deleting, the same cache folder at once.
+ */
+export function acquireLock(
+  lock: string,
+  {
+    pid = process.pid,
+    isAlive = processAlive,
+    wait = () => Bun.sleepSync(2_000),
+    onWait = () => {},
+  }: LockOptions = {},
+) {
+  for (let waited = false; ; ) {
     try {
       fs.mkdirSync(lock)
-      break
+      fs.writeFileSync(path.join(lock, 'pid'), String(pid))
+      return
     } catch (error) {
       if (error.code !== 'EEXIST') throw error
     }
-    const pidFile = path.join(lock, 'pid')
-    const owner = fs.existsSync(pidFile)
-      ? Number(fs.readFileSync(pidFile, 'utf8'))
-      : undefined
-    const orphaned = owner
-      ? !isAlive(owner)
-      : Date.now() - fs.statSync(lock).mtimeMs > 60_000
-    if (orphaned) fs.rmSync(lock, { recursive: true, force: true })
-    else {
-      if (!announced) console.log(waiting)
-      Bun.sleepSync(2_000)
-    }
+    if (reclaim(lock, isAlive)) continue
+    if (!waited) onWait()
+    waited = true
+    wait()
   }
-  try {
-    fs.writeFileSync(path.join(lock, 'pid'), String(process.pid))
-    return work()
-  } finally {
-    fs.rmSync(lock, { recursive: true, force: true })
-  }
+}
+
+/** Releases `lock` if `pid` still holds it. */
+export function releaseLock(lock: string, pid = process.pid) {
+  if (lockOwner(lock) === pid) fs.rmSync(lock, { recursive: true, force: true })
 }
 
 /** Shallow-clones the pinned tag and prepares it into `source` with js/prepare.mjs. */
@@ -301,32 +366,37 @@ function prepareSource(node: string, env: NodeJS.ProcessEnv, source: string) {
 }
 
 /**
- * NEO_TESTS_PLAYWRIGHT_SOURCE when set; else a cache folder per pinned release, prepared the
- * first time. The stamp prepare.mjs writes last marks a finished folder, so an interrupted
+ * NEO_TESTS_PLAYWRIGHT_SOURCE when set; else a folder per pinned release in the cache
+ * (NEO_SPEC_CACHE_DIR, default ~/.cache/browseros/neo-spec), prepared the first time. The stamp prepare.mjs writes last marks a finished folder, so an interrupted
  * preparation is redone, not trusted.
  */
 function ensureSource(node: string, env: NodeJS.ProcessEnv): string {
   if (env.NEO_TESTS_PLAYWRIGHT_SOURCE) return env.NEO_TESTS_PLAYWRIGHT_SOURCE
-  const cache = path.join(
-    env.XDG_CACHE_HOME || path.join(os.homedir(), '.cache'),
-    'browseros',
-    'neo-spec',
-  )
+  const cache =
+    env.NEO_SPEC_CACHE_DIR ||
+    path.join(
+      env.XDG_CACHE_HOME || path.join(os.homedir(), '.cache'),
+      'browseros',
+      'neo-spec',
+    )
   const source = path.join(cache, `playwright-${corpus.version}`)
   const ready = () => fs.existsSync(path.join(source, '.neo-source.json'))
   if (ready()) return source
   fs.mkdirSync(cache, { recursive: true })
-  withLock(
-    `${source}.lock`,
-    `Waiting for another run to prepare ${source}.`,
-    () => {
-      if (ready()) return
+  const lock = `${source}.lock`
+  acquireLock(lock, {
+    onWait: () => console.log(`Waiting for another run to prepare ${source}.`),
+  })
+  try {
+    if (!ready()) {
       console.log(
         `Preparing Playwright v${corpus.version} test sources in ${source} (first run only: clone, npm ci, build; a few minutes).`,
       )
       prepareSource(node, env, source)
-    },
-  )
+    }
+  } finally {
+    releaseLock(lock)
+  }
   return source
 }
 
@@ -367,22 +437,44 @@ async function runRunner(
   }
 }
 
-/** The command that reruns the first in-scope failure (or any failure) of a finished run. */
-async function rerunCommand(output: string, flags: string[]): Promise<string> {
+/**
+ * The last closing line: the command that reruns one test. It picks a failure (in scope
+ * first), else a test the run cut off. A stopped run says so first: Playwright reports the test
+ * it interrupted, and every test it never started, as skipped, so the scores alone look clean.
+ */
+export async function rerunLine(
+  output: string,
+  flags: string[],
+): Promise<string> {
   const { flattenResults, outcome } = await import('./node/report/classify.mjs')
   const { excludedBy } = await import('./node/scope.mjs')
-  const scope = JSON.parse(
-    fs.readFileSync(path.join(output, 'scope.json'), 'utf8'),
-  )
+  const read = (file: string) =>
+    JSON.parse(fs.readFileSync(path.join(output, file), 'utf8'))
+  const scope = read('scope.json')
+  const report = read('results.json')
+  const signal = fs.existsSync(path.join(output, 'run.json'))
+    ? read('run.json').signal
+    : undefined
   // `--repeat-each` repeats a case; any failing instance names the test.
-  const failures = flattenResults(
-    JSON.parse(fs.readFileSync(path.join(output, 'results.json'), 'utf8')),
-    corpus.suites,
-    { allowRepeated: true },
-  ).filter((row) => outcome(row) === 'fail')
-  const row =
-    failures.find((failure) => !excludedBy(scope, failure)) ?? failures[0]
-  if (!row) return 'Nothing failed.'
+  type Row = ReturnType<typeof flattenResults>[number]
+  const rows: Row[] = flattenResults(report, corpus.suites, {
+    allowRepeated: true,
+  })
+  const cutOff = (row: Row) =>
+    outcome(row) === 'harness-error' ||
+    (row.test.results ?? []).some(
+      (result: { status: string }) => result.status === 'interrupted',
+    )
+  const pick = (candidates: Row[]) =>
+    candidates.find((row) => !excludedBy(scope, row)) ?? candidates[0]
+  const failed = pick(rows.filter((row) => outcome(row) === 'fail'))
+  const row = failed ?? pick(rows.filter(cutOff))
+  const stopped =
+    signal || report.errors?.length || rows.some(cutOff)
+      ? `Stopped${signal ? ` by ${signal}` : ''} before every test ran.`
+      : ''
+  if (!row)
+    return stopped ? `${stopped} Nothing had failed.` : 'Nothing failed.'
   const outOfScope = excludedBy(scope, row)?.reason
   const escapeRegex = (text: string) =>
     text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
@@ -399,8 +491,8 @@ async function rerunCommand(output: string, flags: string[]): Promise<string> {
       suite.include && path.basename(suite.file, '.spec.ts') === fileName,
   )
   const name = sameName.length === 1 ? fileName : folderName
-  const label = `${row.caseId ?? 'one failure'}${outOfScope ? ` (out of scope: ${outOfScope})` : ''}`
-  return `Rerun ${label}: ${['bun run test:neo-spec', name, ...rerunFlags(flags).map(quote), '--grep', quote(grep)].join(' ')}`
+  const label = `${row.caseId ?? 'one test'}${failed ? '' : ' (interrupted)'}${outOfScope ? ` (out of scope: ${outOfScope})` : ''}`
+  return `${stopped ? `${stopped} ` : ''}Rerun ${label}: ${['bun run test:neo-spec', name, ...rerunFlags(flags).map(quote), '--grep', quote(grep)].join(' ')}`
 }
 
 /** The four closing lines, from the scores and results run.mjs recorded. */
@@ -414,8 +506,51 @@ async function summary(output: string, flags: string[]): Promise<string> {
     `In scope:  ${scoreText(scores.inScope)}`,
     `All tests: ${scoreText(scores.all)}`,
     `Results:   ${output}`,
-    await rerunCommand(output, flags),
+    await rerunLine(output, flags),
   ].join('\n')
+}
+
+/** The environment run.mjs needs: the chosen Node first on PATH and the browser to drive. */
+export function runnerEnv({
+  node,
+  flags,
+  env = process.env,
+  browser = findBrowser,
+}: {
+  node: string
+  flags: string[]
+  env?: NodeJS.ProcessEnv
+  browser?: () => string
+}): NodeJS.ProcessEnv {
+  return {
+    ...env,
+    // npm (for preparing the source) and run.mjs's own children use this same Node.
+    PATH: [path.dirname(node), env.PATH].join(path.delimiter),
+    // run.mjs lists tests without launching a browser.
+    ...(flags.includes('--list') ? {} : { NEO_E2E_BROWSER: browser() }),
+  }
+}
+
+/** Prints how the run ended and returns the wrapper's exit code. */
+export async function finish(
+  code: number,
+  output: string | undefined,
+  flags: string[],
+  print: {
+    log: (text: string) => void
+    error: (text: string) => void
+  } = console,
+): Promise<number> {
+  // A listing has no scores; Playwright's exit code says whether it worked.
+  if (flags.includes('--list')) return code
+  if (!output || !fs.existsSync(path.join(output, 'scores.json'))) {
+    print.error(
+      `\nNo scores: the run stopped before Playwright finished.${output ? ` Results: ${output}` : ''}`,
+    )
+    return code || 1
+  }
+  print.log(await summary(output, flags))
+  return code
 }
 
 async function main(argv: string[]): Promise<number> {
@@ -425,22 +560,10 @@ async function main(argv: string[]): Promise<number> {
     corpus.suites.filter((suite) => suite.include).map((suite) => suite.file),
   )
   const node = findNode()
-  const env: NodeJS.ProcessEnv = {
-    ...process.env,
-    // npm (for preparing the source) and run.mjs's own children use this same Node.
-    PATH: [path.dirname(node), process.env.PATH].join(path.delimiter),
-    NEO_E2E_BROWSER: findBrowser(),
-  }
+  const env = runnerEnv({ node, flags })
   env.NEO_TESTS_PLAYWRIGHT_SOURCE = ensureSource(node, env)
   const { code, output } = await runRunner(node, env, [...flags, ...files])
-  if (!output || !fs.existsSync(path.join(output, 'scores.json'))) {
-    console.error(
-      `\nNo scores: the run stopped before Playwright finished.${output ? ` Results: ${output}` : ''}`,
-    )
-    return code || 1
-  }
-  console.log(await summary(output, flags))
-  return code
+  return finish(code, output, flags)
 }
 
 if (import.meta.main)
