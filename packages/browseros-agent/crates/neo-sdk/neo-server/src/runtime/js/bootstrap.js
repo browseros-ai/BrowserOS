@@ -309,10 +309,10 @@
 
   // "run:LINE:COL" of the innermost frame in the agent's code, or "" for a call from elsewhere.
   // run_script.rs compiles the agent's function under the file name "run", with its body
-  // starting on line 2, so LINE counts from the first line of the agent's code.
+  // starting on line 3, so LINE counts from the first line of the agent's code.
   function callSite() {
     const match = /[ (]run:(\d+):(\d+)/.exec(String(new Error().stack))
-    return match === null ? '' : `run:${Number(match[1]) - 1}:${match[2]}`
+    return match === null ? '' : `run:${Number(match[1]) - 2}:${match[2]}`
   }
 
   // An abortable call (`options.signal`, an AbortSignal) is keyed by the realm, which learns its
@@ -563,7 +563,13 @@
       // Each awaited, in order: a provider may build its parameter with an op before the agent's
       // first statement, as the Playwright prelude's `page` reads its frame tree.
       const args = []
-      for (const build of provided.values()) args.push(await build(init))
+      // Later preludes can use earlier providers without another context or page cache.
+      const built = Object.create(null)
+      for (const [name, build] of provided) {
+        const value = await build(init, built)
+        built[name] = value
+        args.push(value)
+      }
       const value = await main(...args)
       // Before serializing, so a caught refusal returned as the value carries its op id.
       await allAnswered()
