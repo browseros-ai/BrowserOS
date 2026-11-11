@@ -6,26 +6,21 @@ use crate::dispatch::{Listing, Registry};
 /// How a script is written and what it gets, true of every build.
 const USAGE: &str = "Runs JavaScript against the user's browser and returns what the script \
 returns. `code` is the body of an async function: `await` each SDK call and `return` a JSON \
-value. Use one task per user request. On the first run, call `neo.createTask(name)` and return \
-`task.id`; keep that id. Start later runs with `const task = await neo.task(id)`. Open tabs with \
-`await task.newPage()`, list them with `task.pages()` (oldest first), or pick one with \
-`task.page(tabId)`. When done, call `await task.close()`. See SDK methods below.\n\n\
-Without a host task, the first use of built-in `page` opens a background tab in a new unnamed \
-task on every run; the reply names it. After `neo.createTask` or `neo.task`, built-in `page` \
-is refused if it has no tab yet; an existing tab keeps working. Declare your own \
-`const page = task.page(tabId)` or `const page = await task.newPage()`. After fetching a task, \
-`context.newPage()` is refused; use `task.newPage()`. A host's `taskId` keeps its default page \
-rule: that task's last-used tab, or a new tab on first use.\n\n\
-Every reply that ran a script, including a failed one, ends with one line per created or \
-fetched task: `[task <id> · tabs: <tabId> <url>, ...]`, `[task <id> · tabs: none]`, \
-`[new task <id> was created for this script's built-in page · tabs: ...]`, or \
-`[task <id> closed · its tabs were closed]`. Host tasks appear only if fetched with `neo.task`.\n\n\
-The function's parameters are the SDK: Playwright's `page`, `context`, `browser`, `expect` and `playwright` \
-(`selectors.setTestIdAttribute`, `errors.TimeoutError`), Node's `Buffer` (`screenshot` and `pdf` \
-resolve to one, and a `setInputFiles` payload takes one), then `neo` (any \
-`neo.*` method listed below), `console` (its lines come back with the result), `setTimeout`, \
-`clearTimeout`, `NeoError` and `TimeoutError`. Every run gets a fresh JavaScript realm; only the \
-browser's tabs carry over from one run to the next. The realm is QuickJS, which has no `Intl`.";
+value. Each run starts with fresh JavaScript; only browser tabs carry over.\n\n\
+A task is your own set of tabs. Start one per user request and keep its id. First run: \
+`const task = await neo.createTask('hn top 5'); return task.id`. Every later run: \
+`const task = await neo.task('<that id>')`, then `await task.newPage()`, `task.pages()` (oldest \
+first) or `task.page(tabId)`. When finished: `await task.close()`. Every reply ends with one \
+`[task <id> · tabs: <tabId> <url>, …]` line per task the script touched. The built-in `page` \
+without a task opens a tab in a new task, and the reply names that task; in a script that \
+fetched a task it is refused, so take a tab from the task (`const page = task.page(tabId)` is \
+allowed). `neo.tabs()` lists every open tab with `page.tabId` and `page.taskId`.\n\n\
+The function's parameters are the SDK: Playwright's `page`, `context`, `browser`, `expect` and \
+`playwright` (`selectors.setTestIdAttribute`, `errors.TimeoutError`), Node's `Buffer` \
+(`screenshot` and `pdf` resolve to one, and a `setInputFiles` payload takes one), then `neo` \
+(the `neo.*` methods listed below), `console` (its lines come back with the result), \
+`setTimeout`, `clearTimeout`, `NeoError` and `TimeoutError`. The realm is QuickJS, which has no \
+`Intl`.";
 
 /// The error model, which the agent needs before it retries anything.
 const ERRORS: &str = "An SDK call that fails throws a `NeoError` with `code`, `owner` (who must \
@@ -157,43 +152,29 @@ mod tests {
     }
 
     #[test]
-    fn the_usage_explains_how_tasks_keep_tabs_across_runs() {
+    fn the_usage_teaches_tasks_before_the_first_script() {
         let description = run_description(&RegistryBuilder::default().build());
         for sentence in [
-            "Use one task per user request.",
-            "On the first run, call `neo.createTask(name)` and return `task.id`; keep that id.",
-            "Start later runs with `const task = await neo.task(id)`.",
-            "Open tabs with `await task.newPage()`, list them with `task.pages()` (oldest first), or pick one with `task.page(tabId)`.",
-            "When done, call `await task.close()`.",
+            "Each run starts with fresh JavaScript; only browser tabs carry over.",
+            "Start one per user request and keep its id.",
+            "First run: `const task = await neo.createTask('hn top 5'); return task.id`.",
+            "Every later run: `const task = await neo.task('<that id>')`",
+            "When finished: `await task.close()`.",
+            "`[task <id> · tabs: <tabId> <url>, …]` line per task the script touched.",
+            "The built-in `page` without a task opens a tab in a new task, and the reply names that task;",
+            "in a script that fetched a task it is refused",
+            "`neo.tabs()` lists every open tab with `page.tabId` and `page.taskId`.",
         ] {
             assert!(
                 description.contains(sentence),
-                "the agent needs the task lifecycle before writing a script: {sentence}"
+                "the model writes its first script from this text, so it must learn the task \
+                 recipe and the built-in page rule here: {sentence}"
             );
         }
-    }
-
-    #[test]
-    fn the_usage_explains_default_pages_and_task_recovery_on_failure() {
-        let description = run_description(&RegistryBuilder::default().build());
-        for sentence in [
-            "Without a host task, the first use of built-in `page` opens a background tab in a new unnamed task on every run; the reply names it.",
-            "After `neo.createTask` or `neo.task`, built-in `page` is refused if it has no tab yet; an existing tab keeps working.",
-            "Declare your own `const page = task.page(tabId)` or `const page = await task.newPage()`.",
-            "After fetching a task, `context.newPage()` is refused; use `task.newPage()`.",
-            "A host's `taskId` keeps its default page rule: that task's last-used tab, or a new tab on first use.",
-            "Every reply that ran a script, including a failed one, ends with one line per created or fetched task:",
-            "[task <id> · tabs: <tabId> <url>, ...]",
-            "[task <id> · tabs: none]",
-            "[new task <id> was created for this script's built-in page · tabs: ...]",
-            "[task <id> closed · its tabs were closed]",
-            "Host tasks appear only if fetched with `neo.task`.",
-        ] {
-            assert!(
-                description.contains(sentence),
-                "the agent must know which tab it gets and how to recover the task id: {sentence}"
-            );
-        }
+        assert!(
+            !description.contains("this task's tab"),
+            "`page` is no longer a task's tab without a task; the old promise misled agents"
+        );
     }
 
     /// The prose is hand-written, so the realm checks it: a parameter a prelude adds, or an
