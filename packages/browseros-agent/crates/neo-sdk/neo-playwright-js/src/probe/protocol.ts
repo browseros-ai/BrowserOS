@@ -20,7 +20,7 @@ import type { ParsedSelector } from '../../../neo-playwright/third_party/playwri
  * as `Mask`). `boot` reports it, and an install whose number differs from Rust's
  * PROBE_PROTOCOL fails as `neo / internal` (the engine asset is stale).
  */
-export const PROTOCOL = 12
+export const PROTOCOL = 13
 
 /**
  * The function declaration Rust sends with every request. Rust calls it on the world's global
