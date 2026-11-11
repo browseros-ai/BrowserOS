@@ -11,7 +11,7 @@
 
 import { useState } from 'react'
 import type { NeoOperation, RunDetail, RunSummary } from '../../shared/api'
-import { formattedCode } from './formatted-code'
+import type { FormattedCode } from '../../shared/code-format'
 import { MethodDetail, MethodRow, Rail, UnplacedGroup } from './MethodRows'
 import { type PlacedOperations, placeOperations } from './operations'
 import { noReplyReason, replyFacts, valueChip } from './reply'
@@ -27,17 +27,19 @@ const FOLD_AFTER = SHOWN_PER_LINE + 1
 
 export function RunBlock({
   run,
+  formatted,
   detail,
   selected,
   onOpenFull,
 }: {
   run: RunSummary
+  /** The script laid out by `shared/code-format.ts`; sites map to its lines. */
+  formatted: FormattedCode
   detail: RunDetail | null
   selected: boolean
   onOpenFull: () => void
 }) {
   // Laid out one statement per line (whitespace only); sites map to the line that holds them.
-  const formatted = formattedCode(run.code)
   const lines = codeLines(formatted.text)
   const record = detail?.neo ?? null
   const placed = record

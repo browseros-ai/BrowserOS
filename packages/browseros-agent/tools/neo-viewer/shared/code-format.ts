@@ -81,8 +81,10 @@ export function firstStatement(code: string): string {
             ? ' '
             : gap
     }
-    text +=
-      item.kind === 'block-comment' ? '' : item.text.replace(/\n\s*/g, ' ')
+    // Tokens and comments as sent; one that spans lines is cut where its first line ends.
+    const cut = item.text.indexOf('\n')
+    if (cut !== -1) return `${text}${item.text.slice(0, cut)}…`.trim()
+    text += item.text
   }
   return text.trim()
 }
@@ -120,20 +122,25 @@ function layout(code: string, width: number): FormattedCode | null {
   const { items, decisions, candidates } = analysis
   const applied = new Set<Candidate>()
   let rendered = render(code, analysis)
-  // On the first too-wide line that still has something to break, break its outermost
-  // construct (the kinds' order breaks ties), then lay out again.
-  for (let round = 0; round < 200; round++) {
+  // A construct can help a too-wide line when one of its breaks falls inside that line. On the
+  // first such line, break the one that moves the most text off it, then lay out again. Each
+  // construct breaks once, so this ends.
+  for (;;) {
+    const { lines, itemLine } = rendered
+    const helps = (candidate: Candidate, line: number) =>
+      candidate.breaks.some(
+        ([index]) => itemLine[index] === line && itemLine[index - 1] === line,
+      )
     const open = candidates.filter((each) => !applied.has(each))
-    const line = rendered.lines.findIndex(
+    const line = lines.findIndex(
       (text, index) =>
-        text.length > width &&
-        open.some((each) => rendered.itemLine[each.first] === index + 1),
+        text.length > width && open.some((each) => helps(each, index + 1)),
     )
     if (line === -1) break
-    const onLine = open
-      .filter((each) => rendered.itemLine[each.first] === line + 1)
-      .sort((a, b) => b.size - a.size || a.rank - b.rank)
-    applyCandidate(onLine[0] as Candidate, decisions, applied)
+    const best = open
+      .filter((each) => helps(each, line + 1))
+      .sort((a, b) => b.size - a.size || a.rank - b.rank)[0] as Candidate
+    applyCandidate(best, decisions, applied)
     rendered = render(code, analysis)
   }
   const { text, lines, itemLine } = rendered

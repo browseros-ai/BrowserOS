@@ -124,11 +124,49 @@ describe('formatting a run script for reading', () => {
     expect(formatted.lineOfSite({ line: 2, column: 12 })).toBe(2)
   })
 
+  it('never breaks inside a template literal or a for header, even for width', () => {
+    const long = Array.from({ length: 30 }, (_, i) => `'item${i}'`).join(',')
+    const template = `const t=\`\${[${long}].join(',')}\`;`
+    expect(formatCode(template).lines).toHaveLength(1)
+    const header = `for(const x of [${long}]){await f(x)}`
+    expect(formatCode(header).lines[0]).toStartWith('for (const x of [')
+    expect(formatCode(header).lines[0]).toEndWith('{')
+  })
+
+  it("breaks a callback's body in any argument position when its line is too wide", () => {
+    const code =
+      "const text=await page.evaluate(sel=>document.querySelector(sel).textContent.trim().toUpperCase(),'#main h1');"
+    const { lines, text } = formatCode(code)
+    expect(tokensOf(text)).toEqual(tokensOf(code))
+    expect(lines.every((line) => line.length <= FORMAT_WIDTH)).toBe(true)
+  })
+
+  it('breaks a construct on any too-wide line it reaches, not only its first', () => {
+    // An object the agent opened on its own line, with members sharing one long line.
+    const code = `const o = {\n  a: '${'x'.repeat(40)}', b: '${'y'.repeat(40)}'\n};`
+    const { lines } = formatCode(code)
+    expect(lines.every((line) => line.length <= FORMAT_WIDTH)).toBe(true)
+  })
+
+  it('breaks every too-wide line, however many there are', () => {
+    const row = (i: number) =>
+      `const a${i}=[${Array.from({ length: 12 }, (_, j) => `'v${j}'`).join(',')}];`
+    const code = Array.from({ length: 220 }, (_, i) => row(i)).join('')
+    expect(
+      formatCode(code).lines.every((line) => line.length <= FORMAT_WIDTH),
+    ).toBe(true)
+  })
+
   it('gives a closed row the first statement, on one line', () => {
     expect(firstStatement(OWNER)).toBe('const p = await context.newPage();')
     expect(firstStatement("// note\nawait page.goto('x');return 1")).toBe(
       "await page.goto('x');",
     )
     expect(firstStatement('const x = ;\nmore')).toBe('const x = ;')
+    // Comments stay as sent; a token that spans lines is cut where its first line ends.
+    expect(firstStatement('const/*keep*/x=1;return x;')).toBe(
+      'const/*keep*/x = 1;',
+    )
+    expect(firstStatement('const t=`a\nb`;return t;')).toBe('const t = `a…')
   })
 })

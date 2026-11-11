@@ -10,6 +10,7 @@
 import { type Comment, parse, type Token, tokenizer } from 'acorn'
 import {
   type AnyNode,
+  chainDots,
   type Item,
   indentUnit,
   isCallLike,
@@ -45,8 +46,6 @@ export interface Analysis {
 export interface Candidate {
   /** 0 callback body, 1 object or array literal, 2 method chain, 3 call arguments. */
   rank: number
-  /** The item the construct starts at: it is broken when that item's line is too wide. */
-  first: number
   /** How much text breaking it moves off the line: a too-wide line breaks its largest first. */
   size: number
   breaks: [number, Decision][]
@@ -66,10 +65,13 @@ export function analyse(code: string): Analysis | null {
     return null
   }
   const gaps = new Gaps(code, tokens, comments)
-  // Template literals first, so nothing is decided inside them.
+  // Protected ranges first, so nothing is decided inside them.
   walk(program, (node) => {
-    if (node.type === 'TemplateLiteral')
+    if (node.type === 'TemplateLiteral') {
       gaps.templates.push([node.start, node.end])
+    } else if (/^For(In|Of)?Statement$/.test(node.type)) {
+      gaps.headers.push([node.start, (node.body as AnyNode).start])
+    }
   })
   walk(program, (node, parent) => {
     breakStatements(node, gaps)
@@ -80,9 +82,10 @@ export function analyse(code: string): Analysis | null {
     program,
     items: gaps.items,
     decisions: gaps.decisions,
-    candidates: gaps.candidates.filter(
-      (candidate) =>
-        candidate.first >= 0 && candidate.breaks.every(([index]) => index >= 0),
+    candidates: gaps.candidates.filter((candidate) =>
+      candidate.breaks.every(
+        ([index]) => index > 0 && !gaps.protects(index, 'break'),
+      ),
     ),
     unit: indentUnit(code),
   }
@@ -93,7 +96,10 @@ class Gaps {
   readonly items: Item[]
   readonly decisions = new Map<number, Decision>()
   readonly candidates: Candidate[] = []
+  /** Template literals: nothing inside them moves, not even the code in `${}`. */
   readonly templates: [number, number][] = []
+  /** `for (…)` headers: they stay on one line. */
+  readonly headers: [number, number][] = []
   private readonly byStart: Map<number, number>
 
   constructor(code: string, tokens: Token[], comments: Comment[]) {
@@ -135,12 +141,20 @@ class Gaps {
     return -1
   }
 
+  /** Whether a decision of this kind may not touch the gap before item `index`. */
+  protects(index: number, kind: Decision['kind']): boolean {
+    const start = (this.items[index] as Item).start
+    const inside = ([from, to]: [number, number]) => start > from && start < to
+    return (
+      this.templates.some(inside) ||
+      (kind === 'break' && this.headers.some(inside))
+    )
+  }
+
   /** Decide the gap before item `index`; a break is never weakened to a space. */
   decide(index: number, decision: Decision): void {
     if (index <= 0 || index >= this.items.length) return
-    const start = (this.items[index] as Item).start
-    // Inside a template literal nothing moves: not even the code in `${}`.
-    if (this.templates.some(([from, to]) => start > from && start < to)) return
+    if (this.protects(index, decision.kind)) return
     if (
       this.decisions.get(index)?.kind === 'break' &&
       decision.kind === 'space'
@@ -220,7 +234,6 @@ const literalMembers: Rule = (node, _parent, gaps) => {
   breaks.push(gaps.breakAt(close, open, 0))
   gaps.candidates.push({
     rank: 1,
-    first: open,
     size: node.end - node.start - 2,
     breaks,
   })
@@ -228,12 +241,13 @@ const literalMembers: Rule = (node, _parent, gaps) => {
 
 /** A chain before each `.` after its first; then the arguments one per line. */
 const callBreaks: Rule = (node, parent, gaps) => {
-  const dots = chainDots(node, gaps)
+  const dots = chainDots(node, (text: string, from: number, to: number) =>
+    gaps.find(text, from, to),
+  )
   if (dots.length >= 2 && !(parent && isChainLink(parent, node))) {
     const head = gaps.at(node.start)
     gaps.candidates.push({
       rank: 2,
-      first: head,
       size: node.end - (gaps.items[dots[1] as number] as Item).start,
       breaks: dots.slice(1).map((dot) => gaps.breakAt(dot, head, 1)),
     })
@@ -246,7 +260,6 @@ const callBreaks: Rule = (node, parent, gaps) => {
   breaks.push(gaps.breakAt(gaps.at(node.end - 1), open, 0))
   gaps.candidates.push({
     rank: 3,
-    first: open,
     size: (args.at(-1) as AnyNode).end - (args[0] as AnyNode).start,
     breaks,
   })
@@ -276,8 +289,8 @@ const RULES: Record<string, Rule> = {
     )
   },
   /**
-   * `=>` spaced; a callback that is a call's last argument may take its expression body onto
-   * its own indented line, with the call's `)` closing under the call (a block body already
+   * `=>` spaced; a callback passed to a call may take its expression body onto its own indented
+   * line, and as the last argument the call's `)` closes under the call (a block body already
    * breaks, by `breakStatements`).
    */
   ArrowFunctionExpression: (node, parent, gaps) => {
@@ -285,16 +298,17 @@ const RULES: Record<string, Rule> = {
     const arrow = lastBefore(gaps.items, '=>', node.start, body.start)
     gaps.spaceAround(arrow)
     if (!parent || !isCallLike(parent) || body.type === 'BlockStatement') return
-    if ((parent.arguments as AnyNode[]).at(-1) !== node || arrow < 0) return
-    const head = gaps.at(parent.start)
+    if (arrow < 0) return
+    const breaks = [gaps.breakAt(arrow + 1, arrow, 1)]
+    if ((parent.arguments as AnyNode[]).at(-1) === node) {
+      breaks.push(
+        gaps.breakAt(gaps.at(parent.end - 1), gaps.at(parent.start), 0),
+      )
+    }
     gaps.candidates.push({
       rank: 0,
-      first: head,
       size: node.end - (gaps.items[arrow + 1] as Item).start,
-      breaks: [
-        gaps.breakAt(arrow + 1, arrow, 1),
-        gaps.breakAt(gaps.at(parent.end - 1), head, 0),
-      ],
+      breaks,
     })
   },
   Property: (node, _parent, gaps) => {
@@ -373,27 +387,4 @@ function spaceTokens(gaps: Gaps): void {
       gaps.space(i)
     }
   }
-}
-
-/** The `.` (or `?.`) tokens of a call chain, in order: `a.b().c().d()` has three. */
-function chainDots(node: AnyNode, gaps: Gaps): number[] {
-  const dots: number[] = []
-  let current: AnyNode | undefined = node
-  while (current) {
-    if (isCallLike(current)) {
-      current = current.callee as AnyNode
-    } else if (current.type === 'MemberExpression' && !current.computed) {
-      const object = current.object as AnyNode
-      const property = current.property as AnyNode
-      const dot = gaps.find('.', object.end, property.start)
-      const found = dot >= 0 ? dot : gaps.find('?.', object.end, property.start)
-      if (found >= 0) dots.unshift(found)
-      current = object
-    } else if (current.type === 'ChainExpression') {
-      current = current.expression as AnyNode
-    } else {
-      break
-    }
-  }
-  return dots
 }

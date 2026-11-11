@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test'
 import type { RunDetail, RunSummary } from '../../shared/api'
+import { formatCode } from '../../shared/code-format'
 import { fire, installDom, type TestDom } from '../test-support/dom'
 import { operation, record } from '../test-support/operations'
 import { runDetail, runSummary } from '../test-support/runs'
@@ -63,7 +64,13 @@ describe("an open run's methods", () => {
 
   const show = (run: RunSummary, detail: RunDetail | null) =>
     dom.render(
-      <RunBlock run={run} detail={detail} selected onOpenFull={() => {}} />,
+      <RunBlock
+        run={run}
+        formatted={formatCode(run.code)}
+        detail={detail}
+        selected
+        onOpenFull={() => {}}
+      />,
     )
   const methods = () =>
     [...dom.container.querySelectorAll('button[data-operation]')].map((row) =>

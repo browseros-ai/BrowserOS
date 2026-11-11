@@ -112,3 +112,29 @@ export function lastBefore(
   }
   return -1
 }
+
+/** The `.` (or `?.`) tokens of a call chain, in order: `a.b().c().d()` has three. */
+export function chainDots(
+  node: AnyNode,
+  find: (text: string, from: number, to: number) => number,
+): number[] {
+  const dots: number[] = []
+  let current: AnyNode | undefined = node
+  while (current) {
+    if (isCallLike(current)) {
+      current = current.callee as AnyNode
+    } else if (current.type === 'MemberExpression' && !current.computed) {
+      const object = current.object as AnyNode
+      const property = current.property as AnyNode
+      const dot = find('.', object.end, property.start)
+      const found = dot >= 0 ? dot : find('?.', object.end, property.start)
+      if (found >= 0) dots.unshift(found)
+      current = object
+    } else if (current.type === 'ChainExpression') {
+      current = current.expression as AnyNode
+    } else {
+      break
+    }
+  }
+  return dots
+}
