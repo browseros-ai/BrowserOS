@@ -46,5 +46,30 @@ describe("a method's arguments and result", () => {
     expect(text(resultLines(null))).toEqual(['null'])
     expect(handleText({ $neo: 'page', tab: 18 })).toBe('page (tab 18)')
     expect(handleText({ name: 'x' })).toBeNull()
+    // Tagged data is not a handle: a screenshot's bytes stay as recorded.
+    expect(text(resultLines({ $neo: 'bytes', base64: 'iVBORw0K' }))).toEqual([
+      '{',
+      '  "$neo": "bytes",',
+      '  "base64": "iVBORw0K"',
+      '}',
+    ])
+  })
+
+  it('shows handles nested in arrays and objects by their display', () => {
+    // page.screenshot({ mask: [...] }) as Neo records it.
+    const args = {
+      call: { api: 'page.screenshot', timeoutMs: 5000 },
+      mask: [
+        {
+          $neo: 'locator',
+          display: "getByRole('textbox')",
+          chunks: [{ parts: [{ body: 'textbox', name: 'internal:role' }] }],
+        },
+      ],
+    }
+    expect(text(argumentLines('page.screenshot', args))).toEqual([
+      'mask    ["getByRole(\'textbox\')"]',
+      'timeout 5000',
+    ])
   })
 })

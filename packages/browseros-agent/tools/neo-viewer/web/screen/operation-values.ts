@@ -15,21 +15,40 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
-/** A Neo handle in words, or null when the value is not one. */
+/**
+ * A Neo handle in words: a locator or frame by its `display`, a page by its tab. Other tagged
+ * values (`{"$neo":"bytes","base64":…}`, a blob marker) are data, shown as recorded; null then.
+ */
 export function handleText(value: unknown): string | null {
   if (!isRecord(value) || typeof value.$neo !== 'string') return null
   if (typeof value.display === 'string') return value.display
-  if (typeof value.tab === 'number') return `${value.$neo} (tab ${value.tab})`
-  return value.$neo
+  if (value.$neo === 'page' && typeof value.tab === 'number') {
+    return `page (tab ${value.tab})`
+  }
+  return null
+}
+
+/** Handles anywhere inside a value replaced by their words (a screenshot's `mask` locators). */
+function simplified(value: unknown): unknown {
+  const handle = handleText(value)
+  if (handle !== null) return handle
+  if (Array.isArray(value)) return value.map(simplified)
+  if (isRecord(value)) {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, item]) => [key, simplified(item)]),
+    )
+  }
+  return value
 }
 
 function valueSegments(value: unknown, indent: string): Line[] {
   const handle = handleText(value)
   if (handle !== null) return [[{ text: handle, tone: 'plain' }]]
-  const compact = JSON.stringify(value) ?? 'undefined'
+  const data = simplified(value)
+  const compact = JSON.stringify(data) ?? 'undefined'
   if (compact.length <= INLINE_JSON) return [jsonLine(compact)]
   const [first = '', ...rest] = (
-    JSON.stringify(value, null, 2) ?? 'undefined'
+    JSON.stringify(data, null, 2) ?? 'undefined'
   ).split('\n')
   return [jsonLine(first), ...rest.map((line) => jsonLine(indent + line))]
 }
@@ -77,7 +96,7 @@ export function resultLines(result: unknown): Line[] {
   }
   const handle = handleText(result)
   if (handle !== null) return [[{ text: handle, tone: 'plain' }]]
-  return (JSON.stringify(result, null, 2) ?? 'undefined')
+  return (JSON.stringify(simplified(result), null, 2) ?? 'undefined')
     .split('\n')
     .map(jsonLine)
 }

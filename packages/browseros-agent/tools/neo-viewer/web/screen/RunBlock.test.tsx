@@ -108,6 +108,25 @@ describe("an open run's methods", () => {
     expect(methods()).toContain('events.next')
   })
 
+  it('folds a line only past four calls: one folded call would save nothing', async () => {
+    const calls = (count: number) =>
+      Array.from({ length: count }, (_, i) =>
+        operation(20 + i, 'locator.textContent', {
+          line: 3,
+          startOffsetMs: 40 + i,
+        }),
+      )
+    const run = runSummary(3, { code })
+    await show(run, detailWith(run, record(calls(4), 100)))
+    expect(methods()).toHaveLength(4)
+    expect(dom.container.textContent).not.toContain('more call')
+    await show(run, detailWith(run, record(calls(5), 100)))
+    expect(methods()).toHaveLength(3)
+    expect(dom.container.textContent).toContain(
+      '2 more calls on this line: show',
+    )
+  })
+
   it("opens a method's arguments, result and outcome, saying when Neo truncated them", async () => {
     const run = runSummary(3, { code })
     await show(run, detailWith(run, record([fill, failedClick], 100)))

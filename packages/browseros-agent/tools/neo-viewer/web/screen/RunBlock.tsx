@@ -16,8 +16,12 @@ import { noReplyReason, replyFacts, valueChip } from './reply'
 import { codeLines, type Line } from './text-lines'
 import { plural } from './units'
 
-/** A line that called more than this (a loop) shows the first few and folds the rest. */
+/**
+ * A line that called more methods than this (a loop) shows the first `SHOWN_PER_LINE` and folds
+ * the rest behind one row. Up to `FOLD_AFTER` all show: folding a single call would save no room.
+ */
 const SHOWN_PER_LINE = 3
+const FOLD_AFTER = SHOWN_PER_LINE + 1
 
 export function RunBlock({
   run,
@@ -115,7 +119,7 @@ function CodeLine({
   const spanMs = placed?.spanMs ?? 1
   const [first, ...more] = operations
   const shown =
-    unfolded || more.length <= SHOWN_PER_LINE
+    unfolded || operations.length <= FOLD_AFTER
       ? more
       : more.slice(0, SHOWN_PER_LINE - 1)
   const folded = more.length - shown.length
