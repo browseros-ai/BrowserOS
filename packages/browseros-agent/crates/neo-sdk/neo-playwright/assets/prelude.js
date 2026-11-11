@@ -8020,7 +8020,10 @@ ${value.stack}`;
           throw prefixed(api, error);
         }
         if (matched) {
-          await deadline.race(frame._waitForLoadState(api, waitUntil, { timeout: deadline.left(), signal }).catch(rethrow));
+          await deadline.race(frame._waitForLoadState(api, waitUntil, {
+            timeout: deadline.left(),
+            signal
+          }).catch(rethrow));
           deadline.left();
           return response;
         }
