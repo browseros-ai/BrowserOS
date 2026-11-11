@@ -154,7 +154,13 @@ test('dedicated workers preserve identity, values and terminal lifetimes', {
       1,
       'bookkeeping observes workers without user listeners or another host reply',
     )
+    // terminate() requests asynchronous teardown; the page evaluation's reply need not
+    // include the later target-close event, so observe the worker's terminal signal first.
+    const delayedClosed = page
+      .workers()[0]
+      .waitForEvent('close', { timeout: 3000 })
     await page.evaluate(() => window.worker.terminate())
+    await delayedClosed
     assert.deepEqual(page.workers(), [])
 
     const created = page.waitForEvent('worker', { timeout: 3000 })
