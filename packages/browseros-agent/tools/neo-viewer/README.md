@@ -133,6 +133,19 @@ profile, unless given `--keep-data` (or `--upstream`, which starts no container)
 `RunSummary.neoRunId` is the reply's `_meta["com.browseros.neo/run"].id`, the key to join Neo's
 run record (`GET /v1/runs/{id}`) when the host API arrives.
 
+## Neo's host API
+
+`server/hostApi.ts` is the viewer's one client for Neo's host API (`/v1`: runs, operations, tabs,
+the display, takeovers). `bun run neo:viewer` configures it with the container it starts; with
+`--upstream`, pass `--host-token-file` (and `--host-api`, default `http://127.0.0.1:9300`).
+
+- `hostFetch(path, init)`: a request on the host API, bearer token added; Neo's `Response` comes
+  back for `.json()` or `.arrayBuffer()`. With no host API the viewer answers in Neo's error shape:
+  `503 no_host_api`, or `502 host_api_unreachable` when nothing answers.
+- `hostWebSocketTarget(path)`: `{ url, headers }` for an upgrade route such as
+  `/v1/display?mode=view`, opened server-side with `new WebSocket(url, { headers })`. Neo accepts
+  the token only as a header, so it never goes in a URL and never reaches the browser.
+
 ## Layout and checks
 
 - `server/`: the Bun server. `proxy/` forwards and reads MCP, `tasks/` holds the task rule and the
