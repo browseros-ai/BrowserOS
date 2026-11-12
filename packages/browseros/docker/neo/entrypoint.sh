@@ -6,15 +6,8 @@
 #     └── websockify :6080 (noVNC page + WebSocket) ◀── browser tab
 #   openbox keeps Neo maximized and follows viewer-driven screen resizes.
 #
-# Two images run this supervisor: the Neo image here, and the Neo SDK image
-# (packages/browseros-agent/crates/neo-sdk/neo-server/docker), which builds on
-# this file instead of copying it. Images built with claw-sdk instead of
-# claw-server run no websockify, keep the clipboard from VNC viewers, and get a
-# host socket directory; server_policy decides from the installed binary.
-#
 # Only Neo is restarted here, because users can close it. If Xvnc, openbox or
-# websockify (where it runs) exits, the container exits and Docker's restart
-# policy takes over.
+# websockify exits, the container exits and Docker's restart policy takes over.
 set -euo pipefail
 
 : "${NEO_DATA_DIR:=/data}"
@@ -30,21 +23,12 @@ readonly CLAW_DATA="$NEO_DATA_DIR/browserclaw"
 readonly NEO_HOME=/home/neo
 readonly XDG_DIR=/tmp/neo-xdg
 readonly CONFIGURED=/tmp/neo-configured
-# Exists once websockify serves noVNC; neo-healthcheck probes 6080 only then.
-readonly VIEWER_MARK=/tmp/neo-viewer
 readonly MCP_URL=http://127.0.0.1:9010
 # Neo otherwise picks CDP and claw-server ports at launch (default, or the next
 # free one) and can land elsewhere after a restart. Nothing else in the
 # container competes for them, so pin them; neo-quit relies on the CDP port.
 readonly CDP_PORT=9110
 readonly SERVER_PORT=9210
-# The browser also serves the same unauthenticated MCP backend over HTTPS on
-# this port, which cannot be turned off. Hosts firewall it with 9010, so it is
-# pinned too (prepare_data).
-readonly MCP_TLS_PORT=9011
-# claw-sdk's host API socket lives here, off /data: a host's data volume may be
-# private to Neo's uid, and a Docker Desktop share cannot hold a socket.
-readonly HOST_SOCKET_DIR=/run/neo
 
 : "${NEO_SCREEN:=1600x1000}" "${NEO_SANDBOX:=false}" "${NEO_ARGS:=}"
 : "${NEO_SOFTWARE_GRAPHICS:=true}"
@@ -53,20 +37,12 @@ readonly HOST_SOCKET_DIR=/run/neo
 # recordings back (README).
 : "${NEO_DISABLE_BROWSEROS_EXTENSIONS:=true}"
 : "${PUID:=1000}" "${PGID:=1000}"
-# Whether the browser's MCP ports (9010 and MCP_TLS_PORT) accept peers other
-# than loopback. Docker's port forwarding arrives from the bridge address, so
-# the Neo image keeps it on; the Neo SDK image turns it off, because its host
-# reaches Neo from inside the container (README "Security").
-: "${NEO_MCP_REMOTE:=true}"
-# The group allowed to connect to claw-sdk's host socket; empty means neo's own.
-: "${NEO_HOST_GID:=}"
 # Shared browser/server deployment flag (README). Hosted mode hides local-agent
 # MCP tools and enables hosted browser reporting; both processes require exact 1.
 : "${BROWSERCLAW_HOSTED_MODE:=1}"
 
-# tr rather than ${1,,}: the host-side tests run this under macOS's bash 3.2.
 is_true() {
-  case "$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')" in
+  case "${1,,}" in
     true | 1 | yes | on) return 0 ;;
     false | 0 | no | off) return 1 ;;
     *) die "expected true or false, got '$1'" ;;
@@ -91,10 +67,6 @@ case "$BROWSERCLAW_HOSTED_MODE" in
   0 | 1) ;;
   *) die "BROWSERCLAW_HOSTED_MODE must be 0 or 1, got '$BROWSERCLAW_HOSTED_MODE'" ;;
 esac
-# The JSON literal prepare_data writes to Local State.
-MCP_REMOTE=false
-if is_true "$NEO_MCP_REMOTE"; then MCP_REMOTE=true; fi
-readonly MCP_REMOTE
 
 # Starts "$@" as the neo user in the background. The subshell execs, so $! is
 # the program's own pid (setpriv, env and Neo's launcher all exec in turn) and
@@ -143,14 +115,10 @@ prepare_data() {
   chmod 700 "$NEO_DATA_DIR" "$OUTPUTS" "$XDG_DIR"
   ln -sfn "$DOWNLOADS" "$NEO_HOME/Downloads"
 
-  # Neo's two MCP proxies, HTTP on 9010 and HTTPS on MCP_TLS_PORT, drop
-  # connections that are not from loopback unless allow_remote_in_mcp is set.
-  # Docker's port forwarding arrives from the bridge address, so a published
-  # port needs it on (NEO_MCP_REMOTE). The HTTPS port is written on every start:
-  # Chromium saves the port it ended up on, and a profile that saved another
-  # one would move the listener off the port the host firewalls.
-  local server_prefs=".allow_remote_in_mcp = $MCP_REMOTE | .proxy_https_port = $MCP_TLS_PORT"
-  merge_json "$PROFILE/Local State" ".browseros.server |= ($server_prefs)" \
+  # Neo's MCP proxy drops connections that are not from loopback unless this
+  # Local State pref is set, and Docker's port forwarding arrives from the
+  # bridge address.
+  merge_json "$PROFILE/Local State" '.browseros.server.allow_remote_in_mcp = true' \
     || die "Could not update $PROFILE/Local State; if it is not valid JSON, fix or remove it"
 
   # Chromium's profile lock outlives the container that held it. No Neo can be
@@ -178,81 +146,11 @@ forget_zoom_levels() {
     || log "Could not clear saved zoom levels in $prefs"
 }
 
-# What the display offers depends on which server this image runs. The answer
-# comes from the installed binary's version marker (neo-server-info), read at
-# every start and never from a variable, so no build path can pair a server with
-# the other one's display, and hosts that run this script under `env -i` (zuzu's
-# cell) get the same answer. A server that cannot be identified stops the
-# container instead of falling back to the open display. Everything else reads
-# these flags, never the kind:
-#   VIEWER                noVNC on 6080 (websockify, no authentication). claw-sdk
-#                         images must not serve it (sdk-traces R1).
-#   CLIPBOARD_TO_VIEWERS  Xvnc sends the X clipboard to every VNC client. claw-sdk
-#                         disables that export; clipboard sharing is a display-wide
-#                         image setting, independent of the targeted tab's lock.
-#   AGENT_SETTINGS        claw-server's human-help switch; claw-sdk has no such
-#                         route. claw-server's call stays strict, which also stops a
-#                         claw-sdk built without its marker. Read as claw-server, it
-#                         gets a 404 for the PUT and the container exits unhealthy.
-#   HOST_SOCKET           claw-sdk's host API socket directory (prepare_host_socket).
-#                         claw-server serves its /v1 on 9010 and has no socket.
-#   BACK_FORWARD_CACHE    Chromium's back-forward cache (start_neo). claw-sdk serves
-#                         Playwright's API, and Playwright launches every Chromium
-#                         with the cache off: a page restored from it fires no load
-#                         or DOMContentLoaded, so goBack() and goForward() waiting
-#                         for either would time out with their outcome unknown.
-server_policy() {
-  local kind
-  kind=$(neo-server-info kind) || die "Could not identify the installed Neo server"
-  case "$kind" in
-    claw-server) VIEWER=1 CLIPBOARD_TO_VIEWERS=1 AGENT_SETTINGS=1 HOST_SOCKET=0 BACK_FORWARD_CACHE=1 ;;
-    claw-sdk) VIEWER=0 CLIPBOARD_TO_VIEWERS=0 AGENT_SETTINGS=0 HOST_SOCKET=1 BACK_FORWARD_CACHE=0 ;;
-    *) die "Unknown Neo server '$kind'" ;;
-  esac
-  readonly VIEWER CLIPBOARD_TO_VIEWERS AGENT_SETTINGS HOST_SOCKET BACK_FORWARD_CACHE
-  log "Server: $kind"
-}
-
-# claw-sdk serves its host API (run records, live view, takeover) on a Unix
-# socket with mode 0660, and refuses a peer outside the socket's group before it
-# reads the bearer token. This directory is setgid to NEO_HOST_GID, so the
-# socket claw-sdk creates in it belongs to the host's group: a host process in
-# that group connects, any other uid gets EACCES at connect. Owner and mode are
-# set on every start, because /run survives `docker restart` and apply_ids may
-# have renumbered neo; claw-sdk removes a stale socket file itself. A caller's
-# own CLAW_HOST_SOCKET wins over the default path.
-prepare_host_socket() {
-  [ "$HOST_SOCKET" = 1 ] || return 0
-  local gid=$NEO_HOST_GID
-  [ -n "$gid" ] || gid=$(id -g neo)
-  [[ "$gid" =~ ^[0-9]+$ ]] || die "NEO_HOST_GID must be numeric"
-  mkdir -p "$HOST_SOCKET_DIR"
-  # chown first: a change of owner can clear the setgid bit. Then chmod as a
-  # member of the group: without CAP_FSETID, which zuzu's cells do not grant,
-  # Linux silently drops a setgid bit set by a process outside the directory's
-  # group, and the socket would get neo's group instead of the host's.
-  chown "neo:$gid" "$HOST_SOCKET_DIR"
-  setpriv --regid "$gid" --clear-groups chmod 2750 "$HOST_SOCKET_DIR"
-  # spawn_as_neo keeps the environment, and Chromium passes it on to claw-sdk.
-  export CLAW_HOST_SOCKET="${CLAW_HOST_SOCKET:-$HOST_SOCKET_DIR/host.sock}"
-}
-
-# The arrays built here are never empty, because the host-side tests run this
-# function under bash 3.2, where expanding an empty array trips `set -u`.
 start_display() {
   # X servers expect a root-owned, sticky socket directory.
   mkdir -p /tmp/.X11-unix && chmod 1777 /tmp/.X11-unix
-  # An Xvnc killed with the rest of the container's processes (zuzu's OOM path
-  # kills them all at once and restarts this script) leaves its socket and lock
-  # behind, and the wait below would then pass before the new one listens, so
-  # vncconfig and openbox lose the display. Nothing else starts an X server
-  # here, so any :1 left at this point is stale.
-  rm -f /tmp/.X11-unix/X1 /tmp/.X1-lock
-  local xvnc_argv=(Xvnc :1 -geometry "$NEO_SCREEN" -depth 24 -SecurityTypes None
-    -localhost -rfbport 5900 -AlwaysShared -nolisten tcp)
-  # Viewers can still paste into Neo; only copying out stops.
-  [ "$CLIPBOARD_TO_VIEWERS" = 1 ] || xvnc_argv+=(-SendCutText=0 -SendPrimary=0)
-  spawn_as_neo "${xvnc_argv[@]}"
+  spawn_as_neo Xvnc :1 -geometry "$NEO_SCREEN" -depth 24 -SecurityTypes None \
+    -localhost -rfbport 5900 -AlwaysShared -nolisten tcp
   xvnc_pid=$!
   for _ in $(seq 1 100); do
     [ -S /tmp/.X11-unix/X1 ] && break
@@ -267,15 +165,8 @@ start_display() {
   vncconfig_pid=$!
   spawn_as_neo openbox --config-file /etc/neo/openbox-rc.xml
   openbox_pid=$!
-  # The supervisor loop stops the container when one of these exits.
-  supervised=(xvnc openbox)
-  websockify_pid=""
-  if [ "$VIEWER" = 1 ]; then
-    spawn_as_neo websockify --web /usr/share/novnc 6080 localhost:5900 >/dev/null 2>&1
-    websockify_pid=$!
-    supervised+=(websockify)
-    touch "$VIEWER_MARK"
-  fi
+  spawn_as_neo websockify --web /usr/share/novnc 6080 localhost:5900 >/dev/null 2>&1
+  websockify_pid=$!
 }
 
 # Chromium's sandbox needs user namespaces, which Docker's default seccomp
@@ -381,8 +272,6 @@ apply_minimal_ui() {
 # DevTools emulation, not browser zoom, and still works.
 start_neo() {
   forget_zoom_levels
-  local history_flag=""
-  [ "$BACK_FORWARD_CACHE" = 1 ] || history_flag=--disable-back-forward-cache
   # Releases verify the packaged/overlaid server, so pin it for the image's
   # lifetime. Keep this outside NEO_ARGS, which Compose/callers may replace.
   # NEO_ARGS goes last so a caller's value for a repeated switch wins.
@@ -391,7 +280,6 @@ start_neo() {
     "${sandbox_flags[@]}" \
     "${browseros_extension_flags[@]}" \
     "${gpu_flags[@]}" \
-    ${history_flag:+"$history_flag"} \
     --user-data-dir="$PROFILE" \
     --no-first-run \
     --no-default-browser-check \
@@ -409,27 +297,22 @@ start_neo() {
   neo_signaled=0
 }
 
-# Applies container-level agent settings once the server answers, then marks
+# Applies container-level agent settings once claw-server answers, then marks
 # the container configured; the healthcheck waits for that marker so agents
 # never connect before the settings hold. Hosted mode already keeps human help
 # off, but a claw-server older than hosted-mode support ignores the flag and
 # defaults human help on, so it is switched off here too on every start.
-# claw-sdk has no settings to apply (server_policy).
 configure_neo() {
   for _ in $(seq 1 240); do
     curl -fsS "$MCP_URL/system/ready" >/dev/null 2>&1 && break
     sleep 0.5
   done
   curl -fsS "$MCP_URL/system/ready" >/dev/null 2>&1 || { log "Neo did not become ready"; return 1; }
-  if [ "$AGENT_SETTINGS" = 1 ]; then
-    curl -fsS -X PUT "$MCP_URL/api/v1/settings/agent" -H 'Content-Type: application/json' \
-      -d '{"humanHelpEnabled":false}' >/dev/null || { log "Could not apply agent settings"; return 1; }
-  fi
+  curl -fsS -X PUT "$MCP_URL/api/v1/settings/agent" -H 'Content-Type: application/json' \
+    -d '{"humanHelpEnabled":false}' >/dev/null || { log "Could not apply agent settings"; return 1; }
   touch "$CONFIGURED"
   log "Ready. These are the container's ports; use the host ports you mapped with -p."
-  if [ "$VIEWER" = 1 ]; then
-    log "  Viewer: http://localhost:6080"
-  fi
+  log "  Viewer: http://localhost:6080"
   log "  MCP:    http://localhost:9010/mcp"
   log "  Add to Claude Code: claude mcp add --transport http neo http://localhost:9010/mcp"
 }
@@ -464,19 +347,16 @@ shutdown() {
     kill -KILL "$neo_pid" 2>/dev/null || true
   fi
   [ -n "$configure_pid" ] && kill -TERM "$configure_pid" 2>/dev/null || true
-  kill -TERM ${websockify_pid:+"$websockify_pid"} "$openbox_pid" "$vncconfig_pid" "$xvnc_pid" 2>/dev/null || true
+  kill -TERM "$websockify_pid" "$openbox_pid" "$vncconfig_pid" "$xvnc_pid" 2>/dev/null || true
   wait 2>/dev/null || true
   exit "$code"
 }
 
 trap on_term TERM INT
 
-# Both markers describe this run only, and /tmp survives `docker restart`.
-rm -f "$CONFIGURED" "$VIEWER_MARK"
-server_policy
+rm -f "$CONFIGURED"
 apply_ids
 prepare_data
-prepare_host_socket
 apply_policies
 apply_minimal_ui
 start_display
@@ -495,7 +375,7 @@ while [ "$stopping" = 0 ]; do
       shutdown 1
     fi
   fi
-  for name in "${supervised[@]}"; do
+  for name in xvnc openbox websockify; do
     pid_var="${name}_pid"
     if ! kill -0 "${!pid_var}" 2>/dev/null; then
       log "$name exited; stopping the container"

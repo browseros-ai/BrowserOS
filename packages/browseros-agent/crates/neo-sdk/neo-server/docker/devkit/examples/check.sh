@@ -5,7 +5,7 @@
 # Neo's own trace over the host API. Prints ok or FAIL per step and exits 1 if
 # any step failed.
 #
-#   ../../dev.sh up --server claw-sdk && ./check.sh
+#   ../../dev.sh up && ./check.sh
 #
 # Rerunnable: the lock and takeover steps use fresh task ids each time, so an
 # earlier run's lock or tab never decides this one. The takeover step releases its

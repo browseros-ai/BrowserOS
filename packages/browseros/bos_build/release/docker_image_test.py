@@ -11,7 +11,6 @@ from bos_build.release.docker_image import (
     ImageError,
     ImageRequest,
     ImageResult,
-    ServerKind,
     build_image,
     publish_index,
 )
@@ -21,16 +20,13 @@ REVISION = "169e41f5a0eb9a507a5b976c65ee644733cdc900"
 
 
 @contextmanager
-def _servers(
-    *arches: str, version: str = "0.0.77", kind: ServerKind = ServerKind.CLAW_SERVER
-) -> Iterator[Path]:
-    """A --server-dir holding fake <arch>/neo-server binaries that embed `kind`'s version marker."""
+def _servers(*arches: str, version: str = "0.0.77") -> Iterator[Path]:
+    """A --server-dir holding fake binaries that embed claw-server's version marker."""
     with tempfile.TemporaryDirectory() as directory:
         for arch in arches:
-            binary = Path(directory) / arch / "neo-server"
+            binary = Path(directory) / arch / "browseros-claw-server-rs"
             binary.parent.mkdir()
-            marker = f"browseros-{kind.value}-version={version};".encode()
-            binary.write_bytes(b"\x7fELF..." + marker + b"...")
+            binary.write_bytes(b"\x7fELF...browseros-claw-server-version=" + version.encode() + b";...")
         yield Path(directory)
 
 
@@ -61,10 +57,7 @@ class FakeOperations:
         self.published = {
             "digest": "sha256:" + "f" * 64,
             "configs": {
-                platform: {"config": {"Labels": {
-                    "org.opencontainers.image.revision": REVISION,
-                    "com.browseros.claw-server.version": "0.0.77",
-                }}}
+                platform: {"config": {"Labels": {"org.opencontainers.image.revision": REVISION}}}
                 for platform in ("linux/amd64", "linux/arm64")
             },
         }
@@ -92,12 +85,9 @@ class FakeOperations:
         if reference in self.images:
             return self.images[reference]
         if "@sha256:" in reference:
-            # A pushed architecture is its own one-platform claw-server image from this commit.
+            # A pushed architecture is its own one-platform image from this commit.
             platform = "linux/amd64" if reference.endswith(AMD64) else "linux/arm64"
-            labels = {
-                "org.opencontainers.image.revision": REVISION,
-                "com.browseros.claw-server.version": "0.0.77",
-            }
+            labels = {"org.opencontainers.image.revision": REVISION}
             return {"digest": reference.split("@")[1],
                     "configs": {platform: {"config": {"Labels": labels}}}}
         return self.published
@@ -366,7 +356,7 @@ class ImageContentsTest(unittest.TestCase):
     def test_server_without_a_version_marker_is_rejected(self):
         ops = FakeOperations(release=_release("arm64_deb"))
         with tempfile.TemporaryDirectory() as directory:
-            binary = Path(directory) / "arm64/neo-server"
+            binary = Path(directory) / "arm64/browseros-claw-server-rs"
             binary.parent.mkdir()
             binary.write_bytes(b"not a claw-server")
 
@@ -377,7 +367,7 @@ class ImageContentsTest(unittest.TestCase):
     def test_architectures_must_carry_the_same_server_version(self):
         ops = FakeOperations(release=_release("x64_deb", "arm64_deb"))
         with _servers("amd64") as servers:
-            arm64 = servers / "arm64/neo-server"
+            arm64 = servers / "arm64/browseros-claw-server-rs"
             arm64.parent.mkdir()
             arm64.write_bytes(b"browseros-claw-server-version=0.0.78;")
 
@@ -388,107 +378,6 @@ class ImageContentsTest(unittest.TestCase):
                     ops, CONTEXT,
                 )
         self.assertEqual(ops.builds, [])
-
-
-class ServerKindTest(unittest.TestCase):
-    """--server-dir holds one claw-server or claw-sdk build, named by its version marker."""
-
-    def test_a_claw_sdk_build_carries_only_the_claw_sdk_label(self):
-        # The verify job's build: this commit's server, loaded for the smoke tests.
-        ops = FakeOperations(release=_release("x64_deb", "arm64_deb"))
-        with _servers("arm64", version="0.1.0", kind=ServerKind.CLAW_SDK) as servers:
-            result = build_image(
-                ImageRequest(version="0.52.0.1", platforms=("linux/arm64",), server_dir=servers,
-                             revision=REVISION),
-                ops, CONTEXT,
-            )
-
-        self.assertEqual(
-            ops.builds,
-            [
-                [
-                    "--platform", "linux/arm64",
-                    "--build-arg", "NEO_VERSION=0.52.0.1",
-                    "--tag", "ghcr.io/browseros-ai/neo:0.52.0.1-169e41f",
-                    "--tag", "ghcr.io/browseros-ai/neo:0.52.0.1",
-                    "--label", "org.opencontainers.image.version=0.52.0.1-169e41f",
-                    "--label", f"org.opencontainers.image.revision={REVISION}",
-                    "--label", "com.browseros.claw-sdk.version=0.1.0",
-                    "--load",
-                    "--build-context", f"neo-server={servers}",
-                    "--no-cache-filter", "neo",
-                    str(CONTEXT),
-                ]
-            ],
-        )
-        self.assertEqual(result.digest, "")
-
-    def test_claw_sdk_is_never_pushed(self):
-        # A pushed claw-sdk image could take the release tags before it is the default server.
-        for publish in ({"push": True}, {"push_by_digest": True, "platforms": ("linux/arm64",)}):
-            ops = FakeOperations(release=_release("x64_deb", "arm64_deb"))
-            with self.subTest(**publish), _servers("amd64", "arm64", kind=ServerKind.CLAW_SDK) as servers:
-                with self.assertRaisesRegex(ImageError, "claw-sdk is built and smoke-tested only"):
-                    build_image(
-                        ImageRequest(version="0.52.0.1", server_dir=servers, revision=REVISION,
-                                     **publish),
-                        ops, CONTEXT,
-                    )
-                self.assertEqual(ops.builds, [])
-
-    def test_architectures_must_run_the_same_server(self):
-        ops = FakeOperations(release=_release("x64_deb", "arm64_deb"))
-        with _servers("amd64") as servers:
-            arm64 = servers / "arm64/neo-server"
-            arm64.parent.mkdir()
-            arm64.write_bytes(b"browseros-claw-sdk-version=0.0.77;")
-
-            with self.assertRaisesRegex(ImageError, "amd64 claw-server.*arm64 claw-sdk"):
-                build_image(
-                    ImageRequest(version="0.52.0.1", push=True, server_dir=servers,
-                                 revision=REVISION),
-                    ops, CONTEXT,
-                )
-        self.assertEqual(ops.builds, [])
-
-    def test_a_binary_must_declare_one_server_build(self):
-        conflicts = {
-            b"browseros-claw-server-version=0.0.77;...browseros-claw-sdk-version=0.1.0;":
-                "claw-server 0.0.77.*claw-sdk 0.1.0",
-            b"browseros-claw-server-version=0.0.77;...browseros-claw-server-version=0.0.78;":
-                "claw-server 0.0.77.*claw-server 0.0.78",
-        }
-        for contents, found in conflicts.items():
-            ops = FakeOperations(release=_release("arm64_deb"))
-            with self.subTest(found=found), _servers("arm64") as servers:
-                (servers / "arm64/neo-server").write_bytes(contents)
-
-                with self.assertRaisesRegex(ImageError, found):
-                    build_image(ImageRequest(version="0.52.0.1", server_dir=servers), ops, CONTEXT)
-                self.assertEqual(ops.builds, [])
-
-    def test_a_repeated_marker_is_one_declaration(self):
-        ops = FakeOperations(release=_release("arm64_deb"))
-        with _servers("arm64") as servers:
-            (servers / "arm64/neo-server").write_bytes(
-                b"browseros-claw-server-version=0.0.77;...browseros-claw-server-version=0.0.77;"
-            )
-
-            build_image(ImageRequest(version="0.52.0.1", server_dir=servers), ops, CONTEXT)
-
-        self.assertIn("com.browseros.claw-server.version=0.0.77", ops.builds[0])
-
-    def test_the_old_server_file_name_is_reported_as_renamed(self):
-        ops = FakeOperations(release=_release("arm64_deb"))
-        with tempfile.TemporaryDirectory() as directory:
-            old = Path(directory) / "arm64/browseros-claw-server-rs"
-            old.parent.mkdir()
-            old.write_bytes(b"browseros-claw-server-version=0.0.77;")
-
-            with self.assertRaisesRegex(ImageError, "browseros-claw-server-rs.*renamed to neo-server"):
-                build_image(ImageRequest(version="0.52.0.1", server_dir=Path(directory)), ops, CONTEXT)
-        self.assertEqual(ops.builds, [])
-
 
 AMD64 = "sha256:" + "a" * 64
 ARM64 = "sha256:" + "b" * 64
@@ -641,24 +530,6 @@ class PublishIndexTest(unittest.TestCase):
         with self.assertRaisesRegex(ImageError, "linux/arm64"):
             self._publish(ops, {"linux/amd64": AMD64, "linux/arm64": ARM64}, latest=True)
         self.assertEqual(ops.indexes, [])
-
-    def test_refuses_a_source_that_does_not_run_a_released_server(self):
-        # However it was pushed, a claw-sdk image must never take the release tags.
-        for server_labels in (
-            {"com.browseros.claw-sdk.version": "0.1.0"},
-            {},
-            {"com.browseros.claw-server.version": "0.0.77", "com.browseros.claw-sdk.version": "0.1.0"},
-        ):
-            ops = FakeOperations()
-            ops.images[f"ghcr.io/browseros-ai/neo@{ARM64}"] = {
-                "digest": ARM64,
-                "configs": {"linux/arm64": {"config": {"Labels": {
-                    "org.opencontainers.image.revision": REVISION, **server_labels}}}},
-            }
-            with self.subTest(labels=server_labels):
-                with self.assertRaisesRegex(ImageError, f"{ARM64}.*released server"):
-                    self._publish(ops, {"linux/amd64": AMD64, "linux/arm64": ARM64}, latest=True)
-                self.assertEqual(ops.indexes, [])
 
     def test_checks_each_source_is_its_own_architecture(self):
         ops = FakeOperations()

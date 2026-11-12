@@ -98,16 +98,18 @@ export function imageTag(parts: {
   return `neo-sdk:${parts.browserVersion}-${parts.commit.slice(0, 9)}${parts.dirty ? '-dirty' : ''}-${parts.arch}`
 }
 
-/** Where `build.sh` lives and the trees whose changes it calls dirty. */
+/**
+ * Where `build.sh` lives and the tree whose changes it calls dirty: `packages/browseros-agent`,
+ * which holds every input of the Neo SDK image (its supervisor too, since it stopped sharing the
+ * default image's folder).
+ */
 export interface Checkout {
   /** `packages/browseros-agent`. */
   agent: string
-  /** `packages/browseros/docker/neo`. */
-  neoDocker: string
 }
 
 export function checkoutAt(agent: string): Checkout {
-  return { agent, neoDocker: join(agent, '..', 'browseros', 'docker', 'neo') }
+  return { agent }
 }
 
 export function buildScript(checkout: Checkout): string {
@@ -123,7 +125,7 @@ export function buildScript(checkout: Checkout): string {
 
 /**
  * The paths whose changes reach the image: the build context `Dockerfile.dockerignore` keeps
- * (manifests, crates, claw-server) and the image's own folders. A change elsewhere (this tool,
+ * (manifests, crates with the image's own folder, claw-server). A change elsewhere (this tool,
  * say) still makes the tag `-dirty`, as build.sh decides, but needs no rebuild.
  */
 function buildInputs(checkout: Checkout): string[] {
@@ -132,7 +134,6 @@ function buildInputs(checkout: Checkout): string[] {
     join(checkout.agent, 'Cargo.lock'),
     join(checkout.agent, 'crates'),
     join(checkout.agent, 'apps', 'claw-server'),
-    checkout.neoDocker,
   ]
 }
 
@@ -158,13 +159,7 @@ export async function checkoutImage(
   const commit = (await git(['rev-parse', 'HEAD'])).stdout.trim()
   const dirty =
     (
-      await git([
-        'status',
-        '--porcelain',
-        '--',
-        checkout.agent,
-        checkout.neoDocker,
-      ])
+      await git(['status', '--porcelain', '--', checkout.agent])
     ).stdout.trim() !== ''
   const arch = (
     await run('docker', ['version', '--format', '{{.Server.Arch}}'])

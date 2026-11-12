@@ -491,7 +491,7 @@ function renderDetail() {
     return h(
       "div",
       { class: "empty" },
-      state.runs.size ? "Pick a run on the left." : "No runs yet. Make one from packages/browseros/docker/neo:",
+      state.runs.size ? "Pick a run on the left." : "No runs yet. Make one from packages/browseros-agent/crates/neo-sdk/neo-server/docker:",
       state.runs.size ? null : h("pre", null, MAKE_ONE),
     );
   }

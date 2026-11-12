@@ -5,10 +5,8 @@ import json
 import os
 import re
 import subprocess
-import sys
 import tempfile
 import unittest
-from dataclasses import dataclass
 from pathlib import Path
 from unittest import mock
 
@@ -2884,6 +2882,7 @@ class MacOSChromiumWorkspaceHelperTest(unittest.TestCase):
         self.tmp.cleanup()
 
     def _write_fake_uv(self):
+        import sys
 
         # Exercise the shell-to-CLI handoff on Linux CI, replacing only the
         # macOS platform/device facts and external git/gclient/cp executables.
@@ -3882,79 +3881,6 @@ class RepairUpdateFeedWorkflowTest(unittest.TestCase):
 
 
 
-NEO_DOCKER_DIR = REPO_ROOT / "packages" / "browseros" / "docker" / "neo"
-
-# Stands in for the commands a release-docker.yml step runs, so the step's own
-# shell runs without Docker, cargo or a network. Every call appends its argv to
-# FAKE_CALLS as one JSON line, and a docker/neo script streamed on stdin, as in
-# `docker exec -i NAME python3 - < check_zoom.py`, is recorded by file name.
-# cargo, install and sha256sum do their real work on files. Any other command
-# prints the first FAKE_ANSWERS rule whose needle occurs in its arguments (or in
-# "< script" for a streamed one) and exits with that rule's code, and without a
-# matching rule it succeeds silently.
-FAKE_RELEASE_TOOL = r"""
-import hashlib
-import json
-import os
-import sys
-from pathlib import Path
-
-tool, args = sys.argv[1], sys.argv[2:]
-call = {"argv": [tool, *args]}
-if (tool == "docker" and "-i" in args) or (tool == "python3" and "-" in args):
-    streamed = sys.stdin.read()
-    scripts = sorted(Path(os.environ["FAKE_SCRIPTS"]).glob("*.py"))
-    call["stdin"] = next(
-        (script.name for script in scripts if script.read_text(encoding="utf-8") == streamed),
-        "<unknown script>",
-    )
-with open(os.environ["FAKE_CALLS"], "a", encoding="utf-8") as log:
-    log.write(json.dumps(call) + "\n")
-
-if tool == "cargo":
-    # cargo-zigbuild leaves the glibc version out of the target directory.
-    target = args[args.index("--target") + 1].removesuffix(".2.17")
-    binary = Path(os.environ["CARGO_TARGET_DIR"], target, "release", args[args.index("--bin") + 1])
-    binary.parent.mkdir(parents=True, exist_ok=True)
-    binary.write_text(os.environ["FAKE_CARGO_OUTPUT"], encoding="utf-8")
-elif tool == "install":
-    # GNU install, as on the Linux runners; macOS's install has no -D.
-    if len(args) != 5 or args[:2] != ["-D", "-m"]:
-        sys.exit(f"fake install takes only -D -m MODE SOURCE DEST, not {args}")
-    source, dest = Path(args[3]), Path(args[4])
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    dest.write_bytes(source.read_bytes())
-    dest.chmod(int(args[2], 8))
-elif tool == "sha256sum":
-    for name in args:
-        print(f"{hashlib.sha256(Path(name).read_bytes()).hexdigest()}  {name}")
-else:
-    seen = " ".join(args) + (f" < {call['stdin']}" if "stdin" in call else "")
-    for needle, stdout, code in json.loads(os.environ["FAKE_ANSWERS"]):
-        if needle in seen:
-            sys.stdout.write(stdout)
-            sys.exit(code)
-"""
-
-
-@dataclass(frozen=True)
-class StepRun:
-    """What one dry-run workflow step did."""
-
-    returncode: int
-    stdout: str
-    stderr: str
-    # Every stubbed command in order: {"argv": [tool, *args], "stdin": script}.
-    calls: list[dict]
-    # What the step wrote to GITHUB_OUTPUT.
-    outputs: dict[str, str]
-    runner_temp: Path
-
-    def argv(self, tool: str) -> list[list[str]]:
-        """The arguments of every call to `tool`, in order."""
-        return [call["argv"][1:] for call in self.calls if call["argv"][0] == tool]
-
-
 class DockerImageWorkflowTest(unittest.TestCase):
     def setUp(self):
         self.workflow = yaml.safe_load(
@@ -4066,65 +3992,110 @@ class DockerImageWorkflowTest(unittest.TestCase):
                 self.assertNotIn("${{ inputs.", step.get("run", ""))
 
 
+
 class NeoSdkImageWorkflowTest(unittest.TestCase):
-    """neo-sdk-image.yml proves the Neo SDK image on native amd64 and nothing more: it runs when
-    dispatched or when a pull request edits it, holds a read-only token, and never logs in to a
-    registry or pushes."""
+    """The Neo SDK image's workflow: build and accept on every input change, publish only when
+    asked, and only to the SDK's own image, never production's (ghcr.io/browseros-ai/neo)."""
 
     def setUp(self):
-        self.text = (WORKFLOW_DIR / "neo-sdk-image.yml").read_text(encoding="utf-8")
+        self.path = WORKFLOW_DIR / "neo-sdk-image.yml"
+        self.text = self.path.read_text(encoding="utf-8")
         self.workflow = yaml.safe_load(self.text)
+        # PyYAML reads the bare `on` key as the boolean True.
+        self.on = self.workflow.get("on", self.workflow.get(True))
         self.jobs = self.workflow["jobs"]
 
-    def run_scripts(self) -> str:
-        return "\n".join(
-            step.get("run", "") for job in self.jobs.values() for step in job["steps"]
-        )
+    def decide(self, **env: str) -> subprocess.CompletedProcess:
+        """Runs the preflight's decision script as GitHub would, with these event values."""
+        step = next(s for s in self.jobs["preflight"]["steps"] if s.get("id") == "decide")
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp) / "output"
+            output.touch()
+            values = {"EVENT": "", "REF": "", "PUBLISH": "", "CONFIRM": "", **env}
+            result = subprocess.run(
+                ["bash", "-c", step["run"]],
+                env={**os.environ, **values, "GITHUB_OUTPUT": str(output)},
+                capture_output=True,
+                text=True,
+            )
+            result.stdout = output.read_text()
+        return result
 
-    def test_runs_when_dispatched_or_when_a_pull_request_edits_it(self):
-        triggers = self.workflow.get("on", self.workflow.get(True))
+    def test_builds_and_tests_on_every_change_to_the_images_inputs(self):
+        expected = {
+            "packages/browseros-agent/Cargo.toml",
+            "packages/browseros-agent/Cargo.lock",
+            "packages/browseros-agent/crates/**",
+            "packages/browseros-agent/apps/claw-server/**",
+            ".github/workflows/neo-sdk-image.yml",
+        }
+        self.assertEqual(set(self.on["pull_request"]["paths"]), expected)
+        self.assertEqual(set(self.on["push"]["paths"]), expected)
+        self.assertEqual(self.on["push"]["tags"], ["neo-sdk-v*"])
 
-        self.assertEqual(set(triggers), {"workflow_dispatch", "pull_request"})
-        # Never on every change: a cold build is minutes of Rust. The edit run is what lets
-        # GitHub dispatch the workflow before it reaches the default branch.
-        self.assertEqual(triggers["pull_request"], {"paths": [".github/workflows/neo-sdk-image.yml"]})
+    def test_publishes_only_on_a_confirmed_manual_run_or_a_neo_sdk_tag(self):
+        cases = [
+            ({"EVENT": "pull_request", "REF": "refs/pull/1/merge"}, "publish=false"),
+            ({"EVENT": "push", "REF": "refs/heads/main"}, "publish=false"),
+            ({"EVENT": "push", "REF": "refs/heads/feat/claw-sdk"}, "publish=false"),
+            ({"EVENT": "push", "REF": "refs/tags/v0.52.1"}, "publish=false"),
+            ({"EVENT": "workflow_dispatch", "REF": "refs/heads/main", "PUBLISH": "false"}, "publish=false"),
+            ({"EVENT": "push", "REF": "refs/tags/neo-sdk-v0.1.0"}, "publish=true"),
+            (
+                {"EVENT": "workflow_dispatch", "REF": "refs/heads/main", "PUBLISH": "true", "CONFIRM": "neo-sdk"},
+                "publish=true",
+            ),
+        ]
+        for env, expected in cases:
+            with self.subTest(env=env):
+                result = self.decide(**env)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stdout.strip(), expected)
+        refused = self.decide(EVENT="workflow_dispatch", REF="refs/heads/main", PUBLISH="true", CONFIRM="yes")
+        self.assertNotEqual(refused.returncode, 0)
+        self.assertEqual(refused.stdout.strip(), "")
 
-    def test_the_token_is_read_only(self):
-        self.assertEqual(self.workflow["permissions"], {"contents": "read"})
+    def test_nothing_is_pushed_before_every_check_passed(self):
+        self.assertEqual(set(self.jobs["image"]["needs"]), {"preflight", "scripts"})
+        self.assertEqual(set(self.jobs["publish"]["needs"]), {"preflight", "image"})
+
+    def test_every_registry_step_waits_for_the_publish_decision(self):
         for name, job in self.jobs.items():
-            with self.subTest(job=name):
-                self.assertIn(job.get("permissions", {"contents": "read"}), [{"contents": "read"}])
-
-    def test_builds_and_accepts_on_a_native_amd64_runner(self):
-        for name, job in self.jobs.items():
-            with self.subTest(job=name):
-                self.assertEqual(job["runs-on"], "ubuntu-24.04")
-        scripts = self.run_scripts()
-        self.assertIn("neo-server/docker/build.sh --platform linux/amd64", scripts)
-        self.assertIn("neo-server/docker/accept.sh", scripts)
-
-    def test_a_failing_check_fails_its_step_through_tee(self):
-        # Only an explicit `shell: bash` gets -o pipefail; the implicit default is bash -e.
-        self.assertEqual(self.workflow["defaults"], {"run": {"shell": "bash"}})
-        for name, job in self.jobs.items():
-            for step in job["steps"]:
+            for step in job.get("steps", []):
+                touches_registry = "docker/login-action" in step.get("uses", "") or re.search(
+                    r"docker (push|buildx imagetools create)", step.get("run", "")
+                )
+                if not touches_registry:
+                    continue
                 with self.subTest(job=name, step=step.get("name", step.get("uses"))):
-                    self.assertIn(step.get("shell", "bash"), ["bash"])
+                    guard = step.get("if") or job.get("if")
+                    self.assertEqual(guard, "needs.preflight.outputs.publish == 'true'")
 
-    def test_never_logs_in_or_pushes(self):
-        text = self.text.lower()
-        for forbidden in ("docker login", "login-action", "--push", "push: true", "packages: write"):
-            with self.subTest(forbidden=forbidden):
-                self.assertNotIn(forbidden, text)
-        self.assertNotIn("secrets.", text)
+    def test_pushes_only_the_sdk_image_never_productions(self):
+        self.assertEqual(self.workflow["env"]["IMAGE"], "ghcr.io/browseros-ai/neo-sdk")
+        # The comments name production's image to say this is not it; the steps may not.
+        code = "\n".join(line for line in self.text.splitlines() if not line.lstrip().startswith("#"))
+        names = set(re.findall(r"ghcr\.io/[a-z0-9/_-]+", code))
+        self.assertEqual(names, {"ghcr.io/browseros-ai/neo-sdk"})
+        self.assertNotIn("latest", re.findall(r"\$IMAGE:([A-Za-z0-9_${}.-]+)", self.text))
+
+    def test_builds_and_accepts_each_architecture_natively_and_runs_the_scripts_tests(self):
+        matrix = self.jobs["image"]["strategy"]["matrix"]["include"]
+        self.assertEqual(
+            {(entry["arch"], entry["runner"]) for entry in matrix},
+            {("amd64", "ubuntu-24.04"), ("arm64", "ubuntu-24.04-arm")},
+        )
+        runs = "\n".join(step.get("run", "") for step in self.jobs["image"]["steps"])
+        self.assertIn('docker/build.sh --platform "linux/$ARCH"', runs)
+        self.assertIn("docker/accept.sh", runs)
+        scripts = "\n".join(step.get("run", "") for step in self.jobs["scripts"]["steps"])
+        self.assertIn('discover -s supervisor -p "*_test.py"', scripts)
+        self.assertIn("ruff check", scripts)
 
     def test_changes_trigger_build_system_tests(self):
-        tests = yaml.safe_load(
-            (WORKFLOW_DIR / "bos-build-tests.yml").read_text(encoding="utf-8")
-        )
-        triggers = tests.get("on", tests.get(True))
-
-        self.assertIn(".github/workflows/neo-sdk-image.yml", triggers["pull_request"]["paths"])
+        build_tests = yaml.safe_load((WORKFLOW_DIR / "bos-build-tests.yml").read_text(encoding="utf-8"))
+        on = build_tests.get("on", build_tests.get(True))
+        self.assertIn(".github/workflows/neo-sdk-image.yml", on["pull_request"]["paths"])
 
 
 if __name__ == "__main__":

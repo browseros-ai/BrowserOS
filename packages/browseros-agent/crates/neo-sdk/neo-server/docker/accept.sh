@@ -45,8 +45,6 @@ set -uo pipefail
 usage() { sed -n '2,10p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
 
 here=$(cd -- "$(dirname -- "$0")" && pwd)
-repo=$(git -C "$here" rev-parse --show-toplevel)
-neo_docker="$repo/packages/browseros/docker/neo"
 
 image="" data_dir="" logs_dir="" name_prefix=neo-sdk-accept
 while [ $# -gt 0 ]; do
@@ -145,7 +143,7 @@ wait_ready() { # name seconds: /system/ready through the browser's proxy, from i
 install_client() { # name: the probes, beside smoke.py whose MCP client they reuse
   docker exec "$1" mkdir -p /opt/neo-accept
   local file
-  for file in "$neo_docker/smoke.py" "$neo_docker/smoke_sdk.py" "$here/accept_client.py"; do
+  for file in "$here/smoke.py" "$here/smoke_sdk.py" "$here/accept_client.py"; do
     docker cp -q "$file" "$1:/opt/neo-accept/" || return 1
   done
 }

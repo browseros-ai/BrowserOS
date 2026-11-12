@@ -196,7 +196,7 @@ def main() -> None:
     except urllib.error.HTTPError as error:
         sys.exit(f"host API answered HTTP {error.code} for {error.url}: {error.read().decode(errors='replace')[:300]}")
     except urllib.error.URLError as error:
-        sys.exit(f"can't reach the host API at {args.host_url} ({error.reason}); is `dev.sh up --server claw-sdk` running?")
+        sys.exit(f"can't reach the host API at {args.host_url} ({error.reason}); is `dev.sh up` running?")
 
 
 if __name__ == "__main__":
