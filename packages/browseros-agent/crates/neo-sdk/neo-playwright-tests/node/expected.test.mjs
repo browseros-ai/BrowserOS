@@ -222,18 +222,45 @@ test('a filtered run judges only its own tests and keeps the entries it did not 
   )
 })
 
-test('a rerun that throws counts as not passing', async () => {
-  const verdict = compare(
-    run([['tests/page/a.spec.ts', 'x', 'unexpected']]),
-    new Map(),
-    { complete: true },
-  )
-  await settle(verdict, async () => {
-    throw new Error('browser did not start')
+test('a rerun that broke proves nothing: the test is inconclusive and the run fails', async () => {
+  const tests = run([
+    ['tests/page/a.spec.ts', 'expected pass', 'unexpected'],
+    ['tests/page/a.spec.ts', 'listed', 'expected'],
+    ['tests/page/a.spec.ts', 'listed, fails later', 'expected'],
+  ])
+  const expected = list([
+    ['tests/page/a.spec.ts', 'listed', 'fail'],
+    ['tests/page/a.spec.ts', 'listed, fails later', 'fail'],
+  ])
+  const verdict = compare(tests, expected, { complete: true })
+  await settle(verdict, async (t, attempt) => {
+    if (t.title === 'expected pass') throw new Error('browser did not start')
+    if (t.title === 'listed, fails later')
+      return { outcome: attempt === 1 ? 'not-run' : 'fail' }
+    return { outcome: attempt === 1 ? 'pass' : 'not-run' }
   })
   assert.deepEqual(
-    verdict.regressions[0].reruns.map((r) => r.outcome),
-    ['error', 'error'],
+    verdict.inconclusive.map((i) => [
+      i.test.title,
+      i.reruns.map((r) => r.outcome),
+    ]),
+    [
+      ['expected pass', ['error', 'error']],
+      ['listed', ['pass', 'not-run']],
+      ['listed, fails later', ['not-run']],
+    ],
+  )
+  assert.equal(
+    verdict.regressions.length +
+      verdict.flaky.length +
+      verdict.newlyPassing.length,
+    0,
+  )
+  assert.ok(!passed(verdict))
+  const next = nextExpected(tests, expected, verdict, { complete: true })
+  assert.deepEqual(
+    [...next.values()].map((e) => e.title),
+    ['listed', 'listed, fails later'],
   )
 })
 

@@ -139,6 +139,10 @@ export async function ciVerdict({
         stripVTControlCharacters(String(error.message ?? error)).split('\n')[0],
     ),
     ...(run.signal ? [`the run was stopped by ${run.signal}`] : []),
+    // run.mjs's own failures: a launcher error, or browsers it owned that survived cleanup.
+    ...[run.error, run.cleanupError]
+      .filter(Boolean)
+      .map((error: string) => String(error).split('\n')[0]),
   ]
   const actions = process.env.GITHUB_ACTIONS === 'true'
   const markdown = expected.summaryMarkdown({

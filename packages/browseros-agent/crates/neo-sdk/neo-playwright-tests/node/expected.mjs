@@ -152,6 +152,7 @@ export function compare(tests, expected, { complete }) {
     flaky: [],
     changed: [],
     stale: [],
+    inconclusive: [],
     rerun: [],
   }
   for (const test of tests.values()) {
@@ -172,12 +173,16 @@ export function compare(tests, expected, { complete }) {
   return verdict
 }
 
+/** Rerun outcomes that are a test's own; anything else (`not-run`, `error`) says the rerun broke. */
+const TEST_OUTCOMES = ['pass', 'fail', 'skip']
+
 /**
  * Reruns every unsettled test alone, `concurrency` at a time; `rerun(test, attempt)` resolves to
  * `{ outcome }`. An expected pass that passes a rerun is flaky, one that fails all
  * RERUN_ATTEMPTS is a regression. A listed test is newly passing only if it passes every rerun as
  * well; one that fails a rerun is flaky and stays listed, so the list never drops a test that
- * still fails sometimes.
+ * still fails sometimes. A rerun that broke (no result for the test) proves neither, so a test
+ * left without a verdict is inconclusive, which fails the run instead of passing it as flaky.
  */
 export async function settle(
   verdict,
@@ -199,17 +204,24 @@ export async function settle(
         const passed = result.outcome === 'pass'
         if (item.listed ? !passed : passed) break
       }
-      const passes = reruns.filter((result) => result.outcome === 'pass')
-      if (item.listed)
-        (passes.length === reruns.length
-          ? verdict.newlyPassing
-          : verdict.flaky
-        ).push({ ...item, reruns })
-      else
-        (passes.length ? verdict.flaky : verdict.regressions).push({
-          ...item,
-          reruns,
-        })
+      const count = (test) => reruns.filter((result) => test(result.outcome))
+      const passes = count((outcome) => outcome === 'pass').length
+      const failures = count(
+        (outcome) => outcome !== 'pass' && TEST_OUTCOMES.includes(outcome),
+      ).length
+      const broken = reruns.length - passes - failures
+      const settled = item.listed
+        ? failures
+          ? verdict.flaky
+          : broken
+            ? verdict.inconclusive
+            : verdict.newlyPassing
+        : passes
+          ? verdict.flaky
+          : broken
+            ? verdict.inconclusive
+            : verdict.regressions
+      settled.push({ ...item, reruns })
     }
   }
   await Promise.all(
@@ -224,7 +236,7 @@ export async function settle(
 }
 
 export const passed = (verdict) =>
-  ['regressions', 'newlyPassing', 'changed', 'stale'].every(
+  ['regressions', 'newlyPassing', 'changed', 'stale', 'inconclusive'].every(
     (name) => !verdict[name].length,
   )
 
@@ -308,11 +320,12 @@ export function summaryMarkdown({ verdict, scores, run, committed, next }) {
     [verdict.newlyPassing.length, 'newly passing', 'newly passing'],
     [verdict.changed.length, 'changed outcome', 'changed outcomes'],
     [verdict.stale.length, 'stale entry', 'stale entries'],
+    [verdict.inconclusive.length, 'inconclusive', 'inconclusive'],
   ]
     .filter(([count]) => count)
     .map(([count, one, many]) => `${count} ${count === 1 ? one : many}`)
   const lines = [
-    `## Neo spec suite, ${run.platform}: ${ok ? '✅ matches its expected list' : `❌ ${[...(committed ? counts : ['no committed expected list']), ...(run.errors?.length ? ['Playwright error'] : [])].join(', ')}`}`,
+    `## Neo spec suite, ${run.platform}: ${ok ? '✅ matches its expected list' : `❌ ${[...(committed ? counts : ['no committed expected list']), ...(run.errors?.length ? ['run error'] : [])].join(', ')}`}`,
     '',
     '| Tests | Passed | Counted | Rate | Skipped (not counted) |',
     '|---|--:|--:|--:|--:|',
@@ -328,7 +341,7 @@ export function summaryMarkdown({ verdict, scores, run, committed, next }) {
       `No \`expected/${run.platform}.tsv\` is committed, so every test that did not pass counts as a regression below. Commit this run's list: ${update}.`,
     )
   for (const error of run.errors ?? [])
-    lines.push('', `**Playwright stopped with an error:** ${markdown(error)}`)
+    lines.push('', `**The run reported an error:** ${markdown(error)}`)
   const section = (title, intro, items, line) => {
     if (!items.length) return
     lines.push(
@@ -365,6 +378,13 @@ export function summaryMarkdown({ verdict, scores, run, committed, next }) {
     `Listed, but not in the corpus any more. Update the list: ${update}.`,
     verdict.stale,
     (entry) => `- ${name(entry)}`,
+  )
+  section(
+    'Inconclusive',
+    'A rerun alone produced no result for the test (see its log in the report), so neither its full-run result nor the list can be confirmed.',
+    verdict.inconclusive,
+    (item) =>
+      `- ${name(item.test)}: ${item.listed ? 'listed' : 'expected to pass'}; full run ${item.test.outcome}, ${item.reruns.map((result) => `${result.outcome}${result.note ? ` (${markdown(result.note)})` : ''}`).join(', ')}`,
   )
   section(
     'Flaky',
