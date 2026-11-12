@@ -44,6 +44,9 @@ listed_enum! {
         AssertionFailed,
         /// A ref whose element or document is gone, or a detached element handle. Never waits.
         ElementDetached,
+        /// An element an action focused to type into did not keep the focus (the page moved it
+        /// on, or the element cannot take it), so nothing was typed. Never waits.
+        NotFocused,
         /// A main-world script threw (`evaluate`, `waitForFunction`).
         PageError,
         /// A navigation failed with a net error.
@@ -123,6 +126,7 @@ impl ErrorCode {
             Self::NotActionable => row("not_actionable", Website, Yes, Ambiguous),
             Self::AssertionFailed => row("assertion_failed", Website, Yes, Ambiguous),
             Self::ElementDetached => row("element_detached", Website, No, Definite),
+            Self::NotFocused => row("not_focused", Website, No, Definite),
             Self::PageError => row("page_error", Website, No, Definite),
             Self::NavigationFailed => row("navigation_failed", Website, No, Definite),
             Self::DownloadFailed => row("download_failed", Website, No, Definite),
@@ -374,7 +378,7 @@ mod tests {
 
     /// The error table as the sdk-playwright design states it, plus `wait_timeout`, written
     /// out apart from the code so a wrong row there fails here.
-    const TABLE: [(&str, ErrorOwner, TimedOut, Answer); 16] = [
+    const TABLE: [(&str, ErrorOwner, TimedOut, Answer); 17] = [
         (
             "strict_mode_violation",
             ErrorOwner::Script,
@@ -401,6 +405,12 @@ mod tests {
         ),
         (
             "element_detached",
+            ErrorOwner::Website,
+            TimedOut::No,
+            Answer::Definite,
+        ),
+        (
+            "not_focused",
             ErrorOwner::Website,
             TimedOut::No,
             Answer::Definite,

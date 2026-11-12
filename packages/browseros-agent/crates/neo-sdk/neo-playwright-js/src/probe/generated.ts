@@ -45,7 +45,7 @@ export type DropEntry = { mimeType: string, value: string, };
 /**
  * An edit of a pinned element.
  */
-export type Edit = { "kind": "fill", value: FillValue, } | { "kind": "selectOptions", options: Array<SelectOption>, } | { "kind": "selectText" } | { "kind": "focus", resetSelection: boolean, } | { "kind": "blur" } | { "kind": "dispatchEvent", type: string, init: Record<string, unknown>, } | { "kind": "setFiles", payloads: Array<FilePayload>, } | { "kind": "drop", payloads: Array<FilePayload>, data: Array<DropEntry>, point: Point, };
+export type Edit = { "kind": "fill", value: FillValue, } | { "kind": "selectOptions", options: Array<SelectOption>, } | { "kind": "selectText" } | { "kind": "focus", resetSelection: boolean, } | { "kind": "focusToType" } | { "kind": "blur" } | { "kind": "dispatchEvent", type: string, init: Record<string, unknown>, } | { "kind": "setFiles", payloads: Array<FilePayload>, } | { "kind": "drop", payloads: Array<FilePayload>, data: Array<DropEntry>, point: Point, };
 
 /**
  * States the probe checks. `stable` is not one: Rust compares two measurements in time.
@@ -189,7 +189,7 @@ retired?: FrameSeq, } | { "kind": "none", staleRef?: string, } | { "kind": "stri
 /**
  * The original element's border width plus explicit position, not a retarget's rect.
  */
-borderOffset?: Point, resolved?: Resolution, } | { "kind": "covered", by: string, } | { "kind": "armed", rect: Rect, point: Point, token: number, } | { "kind": "verdict", hit: Hit, } | { "kind": "moves", moves: number, } | { "kind": "frameBox", origin: Point | null, hit: Hit | null, } | { "kind": "value", value: PageText, } | { "kind": "read", value: PageText, resolved?: Resolution, } | { "kind": "values", count: number, values: Array<PageText>, } | { "kind": "selector", selector: string, } | { "kind": "snapshot", json: import('../../../neo-playwright/third_party/playwright/packages/isomorphic/ariaSnapshot').AriaSnapshotJSON, iframes: Array<SnapshotIframe>, 
+borderOffset?: Point, resolved?: Resolution, } | { "kind": "covered", by: string, } | { "kind": "armed", rect: Rect, point: Point, token: number, } | { "kind": "verdict", hit: Hit, } | { "kind": "moves", moves: number, } | { "kind": "frameBox", origin: Point | null, hit: Hit | null, } | { "kind": "value", value: PageText, } | { "kind": "notFocused", holder?: string, } | { "kind": "read", value: PageText, resolved?: Resolution, } | { "kind": "values", count: number, values: Array<PageText>, } | { "kind": "selector", selector: string, } | { "kind": "snapshot", json: import('../../../neo-playwright/third_party/playwright/packages/isomorphic/ariaSnapshot').AriaSnapshotJSON, iframes: Array<SnapshotIframe>, 
 /**
  * Clickable marking threw on this page and the snapshot was taken again without it;
  * the op's call log says so.

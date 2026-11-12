@@ -128,6 +128,7 @@ export const REQUEST_EXAMPLES: { [O in Op]: AtLeastOne<RequestOf<O>> } = {
     },
     { op: 'edit', pin: 3, edit: { kind: 'selectText' } },
     { op: 'edit', pin: 3, edit: { kind: 'focus', resetSelection: true } },
+    { op: 'edit', pin: 3, edit: { kind: 'focusToType' } },
     { op: 'edit', pin: 3, edit: { kind: 'blur' } },
     {
       op: 'edit',
@@ -391,6 +392,10 @@ const REPLY_EXAMPLES: {
   ],
   notFrame: [{ kind: 'notFrame', preview: '<div id="pay">…</div>' }],
   detached: [{ kind: 'detached' }],
+  notFocused: [
+    { kind: 'notFocused', holder: '<input id="user" aria-label="Email"/>' },
+    { kind: 'notFocused' },
+  ],
   state: [
     { kind: 'state', missing: 'visible' },
     {

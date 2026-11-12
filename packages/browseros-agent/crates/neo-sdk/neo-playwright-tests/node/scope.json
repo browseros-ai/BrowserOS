@@ -862,6 +862,12 @@
       "decision": "Owner Runtime policy (#3147/#3480, 2026-11-11): no history outside an active listener lease; these tests read events emitted without one."
     },
     {
+      "file": "tests/page/page-keyboard.spec.ts",
+      "ids": ["KB-049"],
+      "reason": "decided-deviation",
+      "decision": "Owner's standing rule that Neo must not act on an element other than the one asked for (lead, 2026-11-12, to be confirmed by the owner at #3526): pressSequentially and type fail not_focused when their target does not keep the focus. This test types into a non-focusable element while another holds the focus, where upstream sends the keys to that other element."
+    },
+    {
       "file": "tests/page/page-network-idle.spec.ts",
       "ids": ["NE-080"],
       "reason": "network",

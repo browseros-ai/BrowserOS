@@ -564,9 +564,13 @@ fn upstream_checks(family: &Family, screaming: &str) -> Checks {
                 omits,
                 retypes,
                 result,
+                behaves,
             }) => {
                 let stem = command_stem(command);
                 let _ = writeln!(out, "// {op}: {command}");
+                if let Some(why) = behaves {
+                    let _ = writeln!(out, "//   behaves: {}", reason(why));
+                }
                 for (list, keys) in [("adds", adds), ("omits", omits), ("retypes", retypes)] {
                     for (key, why) in keys {
                         let _ = writeln!(out, "//   {list} {key}: {}", reason(why));
@@ -866,6 +870,7 @@ mod layout {
             omits: &[],
             retypes: &[],
             result: None,
+            behaves: None,
         }
     }
 
@@ -1002,6 +1007,7 @@ mod layout {
                     ("streams", "no client streams"),
                 ],
                 result: Some("the drop's navigation cut"),
+                behaves: Some("drops only   on its target"),
                 ..command("Frame.drop")
             }),
         );
@@ -1022,6 +1028,7 @@ mod layout {
         let files = render(&families).map_err(|refusals| refusals.join("\n"))?;
         let action = file(&files, "action.ts");
         for line in [
+            "// locator.drop: Frame.drop\n//   behaves: drops only on its target\n//   adds files",
             "//   adds files: paths or payloads Rust resolves on Neo's disk",
             "type _locator_drop = Assert<UpstreamCheck<'locator.drop', DropInput, pw.FrameDropParams, \
              'files', 'localPaths' | 'streams', never>>",

@@ -9,7 +9,9 @@
 //! lines (the first 8 and the latest 40), so a log that never repeats stays bounded and keeps
 //! both its context (the locator, what it resolved to, the step) and its latest state.
 //!
-//! The lines are mirrored into the op's trace record (`OpEnv::note`).
+//! The lines are mirrored into the op's trace record (`OpEnv::note`), and a failed op's error
+//! carries them, so they reach the agent and the trace: text an action enters never appears in
+//! them by its own letters ([`entered_text`]).
 
 /// Rendered lines kept in an error: the first `HEAD_LINES` and the latest `MAX_LINES -
 /// HEAD_LINES`. Upstream's logs fit whole, so its lines read the same here.
@@ -24,6 +26,22 @@ const MAX_RAW_LINES: usize = 1000;
 /// lines; the bound keeps compression linear in the log's length on the minutes-long waits a
 /// `timeout: 0` op can run, where upstream's unbounded search grows with its cube.
 const MAX_BLOCK: usize = 32;
+
+/// How the call log, and so the failure text and the trace's note for the operation, names
+/// text an action enters into the page: by its length, `<12 characters>`.
+///
+/// The rule goes by the kind of argument, not by the method: any action whose argument is text
+/// to enter into the page (`fill`, `pressSequentially`, `type`, and `insertText` if a failure can
+/// name it) prints `<N characters>` in the failure text, the call log and the trace's note for
+/// the failed operation; a key name (`press('Enter')`), a selector, an option label or a file
+/// path stays as it is. Upstream quotes the text (`fill("hunter2")`), which is often a password
+/// or a code (lead, 2026-11-12). The count is of Unicode characters.
+pub(crate) fn entered_text(text: &str) -> String {
+    match text.chars().count() {
+        1 => "<1 character>".to_owned(),
+        count => format!("<{count} characters>"),
+    }
+}
 
 /// One op's log, in the order its lines were recorded.
 #[derive(Debug, Default)]
@@ -152,7 +170,21 @@ fn copies(rest: &[String], length: usize) -> usize {
 
 #[cfg(test)]
 mod tests {
-    use super::{Block, CallLog, repeated_blocks};
+    use super::{Block, CallLog, entered_text, repeated_blocks};
+
+    #[test]
+    fn tests_that_entered_text_shows_only_its_length() {
+        assert_eq!(
+            ["", "x", "hunter2", "pässwörd", "👹 key"].map(entered_text),
+            [
+                "<0 characters>",
+                "<1 character>",
+                "<7 characters>",
+                "<8 characters>",
+                "<5 characters>",
+            ]
+        );
+    }
 
     fn lines(text: &[&str]) -> Vec<String> {
         text.iter().map(|line| (*line).to_owned()).collect()

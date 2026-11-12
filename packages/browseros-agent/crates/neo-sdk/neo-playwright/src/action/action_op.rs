@@ -167,6 +167,22 @@ const DROP_FILES: (&str, &str) = (
                      script's in-memory payloads",
 );
 
+/// Why `fill` (and `clear`) behaves differently from upstream's on purpose.
+const FILL_BEHAVES: &str = "a deliberate deviation, by decision (the owner's standing rule that \
+     Neo never acts on an element other than the one asked for; lead, 2026-11-12): fill types \
+     only into its target. A field the page replaces as it takes the focus is found again, and a \
+     focus that ends elsewhere fails not_focused, where upstream types into the box typed into \
+     before or the one that took the focus. A failure names the value by its length \
+     (call_log::entered_text), where upstream quotes it";
+
+/// Why `pressSequentially` (and `type`) behaves differently from upstream's on purpose.
+const TYPE_BEHAVES: &str = "a deliberate deviation, by decision (the owner's standing rule that \
+     Neo never acts on an element other than the one asked for; lead, 2026-11-12): the keys type \
+     only into the target. A box the page replaces as it takes the focus is found again, and a \
+     focus that ends elsewhere, or a target that cannot take it, fails not_focused, where \
+     upstream types into nothing or into whatever has the focus. The call log names the text by \
+     its length (call_log::entered_text)";
+
 /// The same exhaustive rows drive runtime decoding, generated senders and upstream checks.
 fn route<'a, R: Route<'a>>(op: ActionOp, r: R) -> R::Out {
     match op {
@@ -212,9 +228,12 @@ fn route<'a, R: Route<'a>>(op: ActionOp, r: R) -> R::Out {
                 ]),
             drop,
         ),
-        ActionOp::Fill => r.op(wire::command("ElementHandle.fill"), fill),
+        ActionOp::Fill => r.op(wire::command("ElementHandle.fill").behaves(FILL_BEHAVES), fill),
         ActionOp::Press => r.op(wire::command("ElementHandle.press"), press),
-        ActionOp::PressSequentially => r.op(wire::command("ElementHandle.type"), type_text),
+        ActionOp::PressSequentially => r.op(
+            wire::command("ElementHandle.type").behaves(TYPE_BEHAVES),
+            type_text,
+        ),
         ActionOp::SelectOption => r.op(
             wire::command("ElementHandle.selectOption").retypes(&[(
                 "elements",

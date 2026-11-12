@@ -1,0 +1,40 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Focus moves</title>
+<style>body { margin: 0; font: 14px sans-serif } input, div[contenteditable] { display: block; margin: 6px }</style></head>
+<body>
+<input id="user" aria-label="Email">
+<input id="pw" type="password" aria-label="Password">
+<input id="code" aria-label="Code">
+<input id="note" aria-label="Note">
+<div id="editor" contenteditable="true"><p id="para">Edit me</p></div>
+<div id="wrapper" tabindex="0"><input id="inner" aria-label="Inner"></div>
+<div id="plain">Not focusable</div>
+<label id="pair">Pair <input id="paired"><span id="side" contenteditable="true"></span></label>
+<input id="when" type="date" aria-label="When">
+<script>
+  // Pages that move the focus while an action focuses a box. The test arms one per box:
+  //   swapOnFocus(id)    the box is replaced by a fresh copy (same id, same attributes) the
+  //                      moment it gets the focus, as a framework re-rendering it does; the copy
+  //                      keeps the focus nowhere, so the document's active element is <body>
+  //   stealFocus(id, to) every focus of the box moves the focus on to box `to`
+  //   blurOnFocus(id)    every focus of the box drops the focus again, to <body>
+  //   delegateFocus(id, to) focusing the box moves the focus into its own child `to`
+  // The copy a swap leaves has no listener, so the box the next attempt finds is ordinary.
+  window.swapOnFocus = (id) => {
+    const box = document.getElementById(id);
+    box.addEventListener('focus', () => box.replaceWith(box.cloneNode(true)), { once: true });
+  };
+  window.stealFocus = (id, to) => {
+    document.getElementById(id).addEventListener('focus', () => document.getElementById(to).focus());
+  };
+  window.blurOnFocus = (id) => {
+    const box = document.getElementById(id);
+    box.addEventListener('focus', () => box.blur());
+  };
+  window.delegateFocus = (id, to) => {
+    document.getElementById(id).addEventListener('focus', () => document.getElementById(to).focus());
+  };
+  // Every box's value (a contenteditable's text), read raw by the tests.
+  window.values = () => Object.fromEntries(
+    [...document.querySelectorAll('input, [contenteditable]')].map((e) => [e.id, e.value ?? e.textContent]));
+</script>
+</body></html>

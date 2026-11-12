@@ -55,6 +55,7 @@ fn pages() -> HashMap<String, Page> {
         ("form", include_str!("data/actions/form.html")),
         ("next", include_str!("data/actions/next.html")),
         ("labels", include_str!("data/actions/labels.html")),
+        ("focus", include_str!("data/actions/focus.html")),
         // The authored file-input fixture retained for the live action tests.
         ("files", include_str!("data/actions/files.html")),
     ] {
@@ -575,16 +576,16 @@ async fn tests_that_fill_types_sets_or_clears_as_upstream() -> TestResult {
     fill(&run, &at(&page, "#field"), "plain words").await?;
     assert!(
         run.calls()
-            .contains(&EnvCall::Note("  fill(\"plain words\")".to_owned())),
-        "a plain field's value shows in the call log: {:?}",
+            .contains(&EnvCall::Note("  fill(<11 characters>)".to_owned())),
+        "the call log names a plain field's value by its length: {:?}",
         run.calls()
     );
     run.clear_calls();
     fill(&run, &at(&page, "#password"), "hunter2-new").await?;
     assert!(
         run.calls()
-            .contains(&EnvCall::Note("  fill(\"hunter2-new\")".to_owned())),
-        "a password field's value shows as upstream's call log shows it: {:?}",
+            .contains(&EnvCall::Note("  fill(<11 characters>)".to_owned())),
+        "and a password field's the same way: {:?}",
         run.calls()
     );
     fill(&run, &at(&page, "#secret"), "fresh").await?;
@@ -910,8 +911,10 @@ async fn tests_that_press_and_press_sequentially_focus_type_and_wait_for_the_nav
     .await?;
     let calls = run.calls();
     assert!(
-        calls.contains(&EnvCall::Note("elementHandle.type(\"pa55\")".to_owned())),
-        "the call log names what was typed, as upstream's does: {calls:?}"
+        calls.contains(&EnvCall::Note(
+            "elementHandle.type(<4 characters>)".to_owned()
+        )),
+        "the call log names what was typed by its length: {calls:?}"
     );
     let handle = handle_of(&run, &at(&page, "#field")).await?;
     press(&run, &handle, "x").await?;
@@ -1622,7 +1625,7 @@ async fn script_on(run: &Arc<LiveRun>, page: &TestPage, script: &str) -> TestRes
     Ok(run_script(&host, &init, script).await?)
 }
 
-/// One edit through a label names `shown` in its call log, as upstream's does.
+/// One edit through a label names `shown` in its call log.
 fn assert_logged(run: &LiveRun, script: &str, shown: &str) {
     let calls = run.calls();
     assert!(
@@ -1639,14 +1642,14 @@ async fn tests_that_an_edit_through_a_label_reaches_the_field_it_changes() -> Te
     let run = Arc::new(LiveRun::connect().await?);
     let server = FixtureServer::start(pages()).await?;
     let page = agent_tab(&run, &server.url("127.0.0.1", "/actions/labels.html")).await?;
-    // Each script and what its call log names. Keys pressed on a label reach its field, because
-    // Chromium's label hands its focus to the field; then fills through a label naming its
-    // password with `for`, through a span inside the label that wraps one, and forced, which
-    // skips the states.
+    // Each script and what its call log names: typed text by its length, a key by its name.
+    // Keys pressed on a label reach its field, because Chromium's label hands its focus to the
+    // field; then fills through a label naming its password with `for`, through a span inside
+    // the label that wraps one, and forced, which skips the states.
     let keys = [
         (
             "await page.locator('#pin-label').pressSequentially('s3cret-typed')",
-            "s3cret-typed",
+            "elementHandle.type(<12 characters>)",
         ),
         (
             "await page.locator('#pin-label').press('x')",
@@ -1656,19 +1659,19 @@ async fn tests_that_an_edit_through_a_label_reaches_the_field_it_changes() -> Te
     let fills = [
         (
             "await page.getByLabel('Password').fill('s3cret-label')",
-            "s3cret-label",
+            "fill(<12 characters>)",
         ),
         (
             "await page.locator('#login-label').fill('s3cret-for')",
-            "s3cret-for",
+            "fill(<10 characters>)",
         ),
         (
             "await page.locator('#pin-text').fill('s3cret-span')",
-            "s3cret-span",
+            "fill(<11 characters>)",
         ),
         (
             "await page.locator('#login-label').fill('s3cret-force', { force: true })",
-            "s3cret-force",
+            "fill(<12 characters>)",
         ),
     ];
     for (index, (script, shown)) in keys.into_iter().chain(fills).enumerate() {
@@ -1703,6 +1706,227 @@ async fn tests_that_an_edit_through_a_label_reaches_the_field_it_changes() -> Te
         selected,
         json!(["code-118204", "code-907316"]),
         "a one-time-code select answers every selected value"
+    );
+    run.close_page(&page).await;
+    Ok(())
+}
+
+/// Every box on the focus page and what it holds, read raw from the page's own world.
+async fn boxes(run: &LiveRun, page: &TestPage) -> TestResult<Value> {
+    run.eval(page, "window.values()").await
+}
+
+/// How one op ended, for a test's single assertion: `ok`, or its error's code.
+fn outcome(result: Result<Value, PlaywrightError>) -> String {
+    match result {
+        Ok(_) => "ok".to_owned(),
+        Err(error) => error.code().to_owned(),
+    }
+}
+
+/// `focus.html`'s boxes as the page starts them, with `changed` laid over.
+fn boxes_with(changed: Value) -> Value {
+    let mut boxes = json!({ "user": "", "pw": "", "code": "", "note": "", "editor": "Edit me",
+                            "inner": "", "paired": "", "side": "", "when": "" });
+    if let (Some(boxes), Value::Object(changed)) = (boxes.as_object_mut(), changed) {
+        boxes.extend(changed);
+    }
+    boxes
+}
+
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_fill_types_only_into_its_target_when_the_page_moves_the_focus() -> TestResult {
+    let run = LiveRun::connect().await?;
+    let server = FixtureServer::start(pages()).await?;
+    let page = agent_tab(&run, &server.url("127.0.0.1", "/actions/focus.html")).await?;
+    fill(&run, &at(&page, "#user"), "owner@example.com").await?;
+    // A box the page replaces with a copy as it takes the focus, as a framework re-rendering
+    // it does: the locator finds the copy, which takes the text. Upstream's fill does not
+    // notice, and Input.insertText lands in #user, the box typed into before.
+    run.eval(&page, "swapOnFocus('pw')").await?;
+    let swapped = outcome(fill(&run, &at(&page, "#pw"), "into-the-copy").await);
+    // clear() is fill(''): the copy keeps the attribute's value, and Delete clears it.
+    run.eval(
+        &page,
+        "document.getElementById('code').setAttribute('value', 'old-code'); swapOnFocus('code')",
+    )
+    .await?;
+    let cleared = outcome(fill(&run, &at(&page, "#code"), "").await);
+    // The page moves the focus on to another box, or drops it: fill fails and types nothing.
+    run.eval(&page, "stealFocus('note', 'user'); blurOnFocus('inner')")
+        .await?;
+    let stolen = outcome(fill(&run, &at(&page, "#note"), "never-typed").await);
+    let dropped = outcome(fill(&run, &at(&page, "#inner"), "never-typed").await);
+    // Through a label, the check is on the field it names: the label's other child taking the
+    // focus does not pass for it.
+    run.eval(&page, "stealFocus('paired', 'side')").await?;
+    let labelled = outcome(fill(&run, &at(&page, "#pair"), "never-typed").await);
+    // A value set directly (a date) needs no focus, but a copy still gets it.
+    run.eval(&page, "swapOnFocus('when')").await?;
+    let dated = outcome(fill(&run, &at(&page, "#when"), "2026-11-12").await);
+    // A contenteditable's child still fills: its editing host takes the focus.
+    let child = outcome(fill(&run, &at(&page, "#para"), "para text").await);
+    assert_eq!(
+        (
+            [swapped, cleared, stolen, dropped, labelled, dated, child],
+            boxes(&run, &page).await?
+        ),
+        (
+            [
+                "ok",
+                "ok",
+                "not_focused",
+                "not_focused",
+                "not_focused",
+                "ok",
+                "ok"
+            ]
+            .map(str::to_owned),
+            boxes_with(json!({ "user": "owner@example.com", "pw": "into-the-copy",
+                               "when": "2026-11-12", "editor": "para text" })),
+        ),
+        "each fill typed into its own box or failed; none typed into another"
+    );
+    run.close_page(&page).await;
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_press_sequentially_types_only_into_its_target_when_the_page_moves_the_focus()
+-> TestResult {
+    let run = LiveRun::connect().await?;
+    let server = FixtureServer::start(pages()).await?;
+    let page = agent_tab(&run, &server.url("127.0.0.1", "/actions/focus.html")).await?;
+    let keys = |text: &str| json!({ "text": text });
+    let typed = |selector: &'static str, text: &'static str| {
+        let target = at(&page, selector);
+        let run = &run;
+        async move { outcome(act(run, "locator.pressSequentially", &target, keys(text), 5000).await) }
+    };
+    fill(&run, &at(&page, "#user"), "owner@example.com").await?;
+    // A box swapped out as it takes the focus: upstream types into nothing, without an error;
+    // the locator finds the copy and types there.
+    run.eval(&page, "swapOnFocus('pw')").await?;
+    let swapped = typed("#pw", "keys-in-copy").await;
+    // The page moves the focus on to #user: the keys would type there.
+    run.eval(&page, "stealFocus('note', 'user')").await?;
+    let stolen = typed("#note", "never-typed").await;
+    // A disabled box takes no focus, and #user still has it: upstream types into #user.
+    run.eval(&page, "document.getElementById('code').disabled = true")
+        .await?;
+    let disabled = typed("#code", "never-typed").await;
+    // Focus the page hands into the target's own child is still the target's; through a label,
+    // only the field it names counts.
+    run.eval(
+        &page,
+        "delegateFocus('wrapper', 'inner'); stealFocus('paired', 'side')",
+    )
+    .await?;
+    let delegated = typed("#wrapper", "into-child").await;
+    let labelled = typed("#pair", "never-typed").await;
+    // keyboard.type with nothing focused stays as Playwright has it: no error, no box changes.
+    run.eval(&page, "document.activeElement.blur()").await?;
+    let nowhere = outcome(device(&run, "keyboard.type", &page, keys("nowhere")).await);
+    assert_eq!(
+        (
+            [swapped, stolen, disabled, delegated, labelled, nowhere],
+            boxes(&run, &page).await?
+        ),
+        (
+            [
+                "ok",
+                "not_focused",
+                "not_focused",
+                "ok",
+                "not_focused",
+                "ok"
+            ]
+            .map(str::to_owned),
+            boxes_with(json!({ "user": "owner@example.com", "pw": "keys-in-copy",
+                               "inner": "into-child" })),
+        ),
+        "each typing went into its own box or failed; none typed into another"
+    );
+    run.close_page(&page).await;
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_failed_fill_names_its_value_by_length_never_by_its_text() -> TestResult {
+    let run = LiveRun::connect().await?;
+    let server = FixtureServer::start(pages()).await?;
+    let page = agent_tab(&run, &server.url("127.0.0.1", "/actions/focus.html")).await?;
+    run.eval(
+        &page,
+        "document.getElementById('pw').disabled = true; stealFocus('note', 'user')",
+    )
+    .await?;
+    run.clear_calls();
+    let disabled = act(
+        &run,
+        "locator.fill",
+        &at(&page, "#pw"),
+        json!({ "value": "CANARY-disabled" }),
+        600,
+    )
+    .await;
+    let stolen = fill(&run, &at(&page, "#note"), "CANARY-stolen").await;
+    let notes: Vec<String> = run
+        .calls()
+        .into_iter()
+        .filter_map(|call| match call {
+            EnvCall::Note(line) => Some(line),
+            EnvCall::Recheck | EnvCall::MarkSent => None,
+        })
+        .collect();
+    // Each failure's code, first line, whether it shows the value's length, and whether it
+    // quotes the value; then whether any of the trace's notes does.
+    let seen = |result: &Result<Value, PlaywrightError>, length: &str| match result {
+        Ok(_) => ("ok".to_owned(), String::new(), false, false),
+        Err(error) => (
+            error.code().to_owned(),
+            error
+                .message()
+                .lines()
+                .next()
+                .unwrap_or_default()
+                .to_owned(),
+            error
+                .message()
+                .contains(&format!("    - fill(<{length} characters>)\n")),
+            error.message().contains("CANARY"),
+        ),
+    };
+    assert_eq!(
+        (
+            seen(&disabled, "15"),
+            seen(&stolen, "13"),
+            notes.iter().any(|note| note.contains("CANARY")),
+            notes.contains(&"  fill(<15 characters>)".to_owned()),
+        ),
+        (
+            (
+                "not_actionable".to_owned(),
+                "locator.fill: Timeout 600ms exceeded.".to_owned(),
+                true,
+                false
+            ),
+            (
+                "not_focused".to_owned(),
+                "locator.fill: Element did not keep the focus; <input id=\"user\" \
+                 aria-label=\"Email\"/> has it now, so nothing was typed"
+                    .to_owned(),
+                true,
+                false
+            ),
+            false,
+            true,
+        ),
+        "neither failure nor any trace note quotes the value; each names its length: \
+         {disabled:?}\n{stolen:?}\n{notes:?}"
     );
     run.close_page(&page).await;
     Ok(())

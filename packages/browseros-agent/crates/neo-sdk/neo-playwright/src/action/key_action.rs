@@ -7,9 +7,18 @@
 //!    ── the tab's input lock ─────────────────────────────────────────────────────────────
 //!    the burst, built on a copy of the tab's keyboard (an unknown key fails here, unsent)
 //!    send_effect()                      ─ Sent
-//!    ② edit { pin, focus { resetSelection } }   (detached: next pass)
+//!    ② edit { pin, focus { resetSelection } }   press           (detached: next pass)
+//!      edit { pin, focusToType }               pressSequentially (detached: next pass │
+//!                                              notFocused: fails, nothing typed)
 //!    the burst on the root session; press then waits for the navigations it requested
 //! ```
+//!
+//! Keys go to whatever has the focus. Upstream's `_type` focuses and types without looking, so
+//! a page that replaces the box as it takes the focus gets the keys nowhere, and one that moves
+//! the focus on (or a box that cannot take it) gets them in another element. Neo's
+//! `focusToType` checks first: a deliberate deviation, on the route row. `press` keeps
+//! upstream's plain focus: a key name is not text typed into an element, and pressing into the
+//! page (`locator('canvas').press('ArrowLeft')`) stays as upstream has it.
 
 use std::time::Duration;
 
@@ -24,7 +33,7 @@ use crate::probe::{Edit, ProbeFailure, ProbeReply, ProbeRequest, Want};
 use crate::resolve::{self, Resolved};
 use crate::target::{Strictness, Target};
 use crate::world::Pin;
-use crate::{ErrorCode, Playwright, PlaywrightError};
+use crate::{ErrorCode, Playwright, PlaywrightError, call_log};
 
 /// What the keyboard does once the element has the focus.
 pub(crate) enum Keys<'k> {
@@ -48,13 +57,25 @@ impl Keys<'_> {
         }
     }
 
-    /// Upstream's call-log line, `elementHandle.press("Enter")`.
+    /// Upstream's call-log line, `elementHandle.press("Enter")`; typed text shows as its length,
+    /// `elementHandle.type(<5 characters>)` (`call_log::entered_text`), and a key name as it is.
     fn log_line(&self) -> String {
-        let (method, keys) = match self {
-            Self::Press { key, .. } => ("press", *key),
-            Self::Type { text, .. } => ("type", *text),
-        };
-        format!("elementHandle.{method}(\"{keys}\")")
+        match self {
+            Self::Press { key, .. } => format!("elementHandle.press(\"{key}\")"),
+            Self::Type { text, .. } => {
+                format!("elementHandle.type({})", call_log::entered_text(text))
+            }
+        }
+    }
+
+    /// The edit that gives the element the focus before the keys.
+    const fn focus_edit(&self) -> Edit {
+        match self {
+            Self::Press { .. } => Edit::Focus {
+                reset_selection: true,
+            },
+            Self::Type { .. } => Edit::FocusToType,
+        }
     }
 
     fn waits_after(&self) -> bool {
@@ -171,7 +192,7 @@ impl<'a> KeyRunner<'a> {
                 .collect();
             RequestedNavigations::watch(self.pw.browser().cdp_events(), sessions)
         });
-        if !self.focus(&sent, located, pin).await? {
+        if !self.focus(&sent, located, pin, keys.focus_edit()).await? {
             return Ok(false);
         }
         input
@@ -187,23 +208,25 @@ impl<'a> KeyRunner<'a> {
         Ok(true)
     }
 
-    /// Upstream's `_focus(resetSelectionIfNotFocused: true)`; `false` once the element or
-    /// its world went away. It changes the page, so it takes the op's [`Sent`].
+    /// Upstream's `_focus(resetSelectionIfNotFocused: true)`, as `edit` (`Keys::focus_edit`);
+    /// `false` once the element or its world went away. It changes the page, so it takes the
+    /// op's [`Sent`].
     async fn focus(
         &self,
         _sent: &Sent<'_>,
         located: &Resolved,
         pin: Pin,
+        edit: Edit,
     ) -> Result<bool, PlaywrightError> {
-        let edit = Edit::Focus {
-            reset_selection: true,
-        };
         match self
             .call(located, &ProbeRequest::Edit { pin, edit })
             .await?
         {
             Called::Reply(ProbeReply::Value { .. }) => Ok(true),
             Called::Reply(ProbeReply::Detached) => self.subject.detached().map(|()| false),
+            Called::Reply(ProbeReply::NotFocused { holder }) => {
+                Err(self.subject.not_focused(holder.as_deref()))
+            }
             Called::Reply(other) => Err(self.subject.refused(other)),
             Called::Gone => self.subject.lost(located).map(|()| false),
         }

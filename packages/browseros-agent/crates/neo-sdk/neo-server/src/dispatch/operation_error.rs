@@ -243,6 +243,9 @@ error_codes! {
     ASSERTION_FAILED = "assertion_failed";
     /// A ref or element handle whose element or document is gone. Never waits.
     ELEMENT_DETACHED = "element_detached";
+    /// An element an action focused to type into did not keep the focus, so nothing was typed.
+    /// Never waits.
+    NOT_FOCUSED = "not_focused";
     /// A script the agent ran in the page threw (`evaluate`, `waitForFunction`).
     PAGE_ERROR = "page_error";
     /// The page never reached a state the op waited for: a load state, a URL, an event.
