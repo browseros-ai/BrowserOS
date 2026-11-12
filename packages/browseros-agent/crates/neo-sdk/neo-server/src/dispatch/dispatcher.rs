@@ -4,6 +4,7 @@ use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Instant;
 
 use crate::browser::Seen;
 use browseros_core::pages::PageInfo;
@@ -575,11 +576,13 @@ impl Dispatcher {
         // Biased: when the method and the stop are ready together, the stop wins, so an answer
         // that raced a cancel is never read as definite. The token fires only after `stop`
         // recorded its reason.
+        let started = Instant::now();
         let ending = tokio::select! {
             biased;
             () = run.cancel_token().cancelled() => run.stop_reason().map_or(Ending::Lost, Ending::Stopped),
             result = decoded.run(op) => ending_of(&run, &state, result),
         };
+        let handled = started.elapsed();
         // A takeover that blocks reads may have begun while the op ran, so what the page
         // answered is released only past the rules again. The rules see it as a read of the
         // op's tab: a main-world script is a write, and any lock refuses
@@ -615,6 +618,14 @@ impl Dispatcher {
                 opening_task.as_ref().map(|task| &task.id),
             )
             .await;
+        // With the observation's own line (`observation.rs`), this splits a slow reply into the
+        // op's work and the wait for its page facts.
+        tracing::debug!(
+            op = spec.name,
+            handler_ms = handled.as_millis(),
+            facts_ms = started.elapsed().saturating_sub(handled).as_millis(),
+            "operation timing"
+        );
         guard.finish(ending, facts.pages, default_page, facts.observed);
     }
 

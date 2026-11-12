@@ -10,7 +10,8 @@ use tokio::time;
 
 use crate::action::action_op;
 use crate::events::{
-    BINDING_CALLED, EventHub, Fence, TargetWatcher, WatcherHandle, WatcherProgress, event_op,
+    BINDING_CALLED, EventFence, EventHub, Fence, TargetWatcher, WatcherHandle, WatcherProgress,
+    event_op,
 };
 use crate::expect::expect_op;
 use crate::input::input_op;
@@ -112,9 +113,26 @@ impl Playwright {
         self.events.workers.list(target)
     }
 
-    /// Bring the independent event watcher up to the CDP events received so far.
-    pub async fn synchronize_events(&self) {
-        self.watcher.synchronize(None).await;
+    /// Every CDP event received until now, as a fence for [`Playwright::synchronize_events`].
+    /// A host takes it when an op's last reply is in, before it queues for its turn to
+    /// observe, so what it waits for is fixed then and not stretched by what arrives later.
+    #[must_use]
+    pub fn event_fence(&self) -> EventFence {
+        self.watcher.fence()
+    }
+
+    /// Brings the independent event watcher up to `fence` (every event received before it was
+    /// taken) and the leases in line with who listens, waiting at most 2 s. Whether the watcher
+    /// answered in time: `false` means it is still behind `fence`.
+    pub async fn synchronize_events(&self, fence: EventFence) -> bool {
+        self.watcher.synchronize(None, fence).await
+    }
+
+    /// Whether every event before `fence` is in the log, without waiting: read by the watcher
+    /// and none of them held back in a tab's line.
+    #[must_use]
+    pub fn events_handled_through(&self, fence: EventFence) -> bool {
+        self.progress.applied_through() >= fence.0
     }
 
     /// A handle on the event watcher for what outlives an op (`events::log_lease`).
@@ -125,7 +143,9 @@ impl Playwright {
     /// Retire workers after a successful explicit page close; their outstanding promises
     /// must reject before the native renderer's eventual protocol shutdown.
     pub(crate) async fn workers_closed(&self, target: TargetId) {
-        self.watcher.synchronize(Some(target)).await;
+        self.watcher
+            .synchronize(Some(target), self.watcher.fence())
+            .await;
     }
 
     /// The newest event recorded for this browser connection.

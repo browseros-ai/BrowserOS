@@ -750,7 +750,7 @@ async fn wait(
         let _runtime = lease_runtime(pw, scope, &subscription, input.since).await?;
         // The watcher leases the tab's workers when it next reconciles; asking now keeps a short
         // wait from expiring before its workers report (`target_watcher.rs`, `WorkerRuntime`).
-        pw.synchronize_events().await;
+        pw.synchronize_events(pw.event_fence()).await;
         first_event(
             pw,
             scope,

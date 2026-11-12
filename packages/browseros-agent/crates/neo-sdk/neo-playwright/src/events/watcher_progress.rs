@@ -35,6 +35,10 @@ pub(crate) struct WatcherProgress {
     /// Binding calls handled, on the router's numbering for `Runtime.bindingCalled`: its count
     /// when the watcher subscribed, then one per call handled. `u64::MAX` once stopped.
     calls: AtomicU64,
+    /// One past the position of the oldest broadcast event the watcher read but holds back (a
+    /// tab's frame event waiting behind a frame-tree read, `target_watcher.rs`), or 0 when it
+    /// holds none. `handled` counts a held event; the log does not have it yet.
+    held: AtomicU64,
     changed: Notify,
 }
 
@@ -45,6 +49,31 @@ impl WatcherProgress {
     pub(crate) fn start(&self, events: u64, calls: u64) {
         self.handled.store(events, Ordering::Release);
         self.calls.store(calls, Ordering::Release);
+        self.changed.notify_waiters();
+    }
+
+    /// Broadcast events read so far, held ones included, on the client's numbering (`u64::MAX`
+    /// once stopped): how far the watcher's own reading got.
+    pub(crate) fn events_handled(&self) -> u64 {
+        self.handled.load(Ordering::Acquire)
+    }
+
+    /// How many broadcast events are in the log, counted from the first: every event before
+    /// this position was handled and none of them is held back.
+    pub(crate) fn applied_through(&self) -> u64 {
+        let handled = self.handled.load(Ordering::Acquire);
+        match self.held.load(Ordering::Acquire) {
+            0 => handled,
+            held => handled.min(held - 1),
+        }
+    }
+
+    /// The watcher now holds back events from `position` on (the oldest it holds), or none.
+    pub(crate) fn hold_from(&self, position: Option<u64>) {
+        self.held.store(
+            position.map_or(0, |position| position.saturating_add(1)),
+            Ordering::Release,
+        );
         self.changed.notify_waiters();
     }
 
@@ -64,6 +93,7 @@ impl WatcherProgress {
     pub(crate) fn stopped(&self) {
         self.handled.store(u64::MAX, Ordering::Release);
         self.calls.store(u64::MAX, Ordering::Release);
+        self.held.store(0, Ordering::Release);
         self.changed.notify_waiters();
     }
 
@@ -73,7 +103,7 @@ impl WatcherProgress {
         loop {
             let mut changed = pin!(self.changed.notified());
             changed.as_mut().enable();
-            if self.handled.load(Ordering::Acquire) >= fence.events
+            if self.applied_through() >= fence.events
                 && self.calls.load(Ordering::Acquire) >= fence.calls
             {
                 return;
@@ -125,6 +155,34 @@ mod tests {
                 .is_ok(),
             "an earlier fence is reached already"
         );
+    }
+
+    /// An event the watcher read but holds back is not in the log yet: a fence past it waits
+    /// until the watcher lets it go, though it counted the event as read.
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_a_held_event_keeps_a_fence_past_it_waiting() {
+        let progress = Arc::new(WatcherProgress::default());
+        progress.start(0, 0);
+        progress.handled(5);
+        progress.hold_from(Some(2));
+        assert_eq!(progress.events_handled(), 5);
+        assert_eq!(
+            progress.applied_through(),
+            2,
+            "events 0 and 1 are in the log"
+        );
+        let fence = Fence {
+            events: 3,
+            calls: 0,
+        };
+        let waiter = tokio::spawn({
+            let progress = Arc::clone(&progress);
+            async move { progress.reached(fence).await }
+        });
+        time::sleep(Duration::from_millis(1)).await;
+        assert!(!waiter.is_finished(), "event 2 is held");
+        progress.hold_from(None);
+        assert!(time::timeout(Duration::from_secs(1), waiter).await.is_ok());
     }
 
     #[tokio::test(start_paused = true)]
