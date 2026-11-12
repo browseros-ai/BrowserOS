@@ -4,7 +4,10 @@
 //!   or the script caused. Both are moments a host wants to see the page.
 //! - When a run ends: each tab the run touched whose last operation got none, so every tab the
 //!   run acted on has a picture of how the run left it. The shot belongs to that operation, so
-//!   it never shares a file with an operation's own shot.
+//!   it never shares a file with an operation's own shot. "Touched" is the run's tabs as its
+//!   record names them: a tab the script acted on, read or opened. Neo's own subscriptions (its
+//!   listeners and event pump, on every known tab) touch none, so they neither add a tab nor
+//!   become a tab's last operation; the writer admits only what the record links.
 //! - Except a tab with one of the run's jobs still out (decision 37). That job is answered only
 //!   after the run's end reached the writer, so its picture shows the tab as the run left it,
 //!   and a second capture would only repeat it. The run-end shot folds into it.
