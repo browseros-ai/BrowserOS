@@ -21,7 +21,7 @@ use crate::probe::{self, Point, ProbeFailure, ProbeReply, ProbeRequest, Read, Re
 use crate::read::element_read;
 use crate::resolve::{self, FramePath, Hop};
 use crate::target::Strictness;
-use crate::{ErrorCode, PlaywrightError, op_output};
+use crate::{ErrorCode, PlaywrightError};
 
 /// The box `local` (a `Rect` in the element's own frame, or null) in the main viewport. Null
 /// when the element has no layout box, and when a frame on the way is no longer rendered or no
@@ -34,18 +34,14 @@ pub(crate) async fn in_main_viewport(
     project(scope, path, local, Projection::BoundingBox).await
 }
 
-/// Temporary JSON boundary for `page/screenshot_geometry.rs` only; it goes away when the
-/// page families (PRs 12 and 13) use the typed projection. Screenshots distinguish a vanished
-/// ancestor (retry preparation) from a hidden frame (no capturable layout).
+/// Screenshot projection keeps a vanished ancestor distinct from a hidden layout box, so
+/// capture can retry its preparation while an existing hidden frame remains uncapturable.
 pub(crate) async fn for_screenshot(
     scope: &OpScope<'_>,
     path: &FramePath,
     local: Value,
-) -> Result<Value, PlaywrightError> {
-    op_output::to_output(
-        scope,
-        &project(scope, path, local, Projection::Screenshot).await?,
-    )
+) -> Result<Option<Rect>, PlaywrightError> {
+    project(scope, path, local, Projection::Screenshot).await
 }
 
 #[derive(Clone, Copy)]
@@ -173,7 +169,7 @@ mod tests {
 
     use browseros_core::testing::TestConnection;
     use browseros_core::{CdpConnection, ProtocolSession, SessionId};
-    use serde_json::{Value, json};
+    use serde_json::json;
 
     use super::{for_screenshot, in_main_viewport};
     use crate::op_scope::OpScope;
@@ -227,7 +223,7 @@ mod tests {
                     Some(ErrorCode::ElementDetached)
                 );
             } else {
-                assert_eq!(screenshot?, Value::Null);
+                assert_eq!(screenshot?, None);
             }
         }
         Ok(())

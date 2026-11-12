@@ -72,9 +72,8 @@ impl SelectorState {
     }
 }
 
-/// Temporary JSON boundary for `page/element_evaluate.rs` and
-/// `page/screenshot_geometry.rs`. It goes away when the page families (PRs 12 and 13) use
-/// the typed core; Read handlers call `wait_for_match` directly.
+/// Temporary JSON boundary for `page/element_evaluate.rs` until page scripts move in PR 12.
+/// Read handlers and screenshot geometry call `wait_for_match` directly.
 pub(crate) async fn wait_for_selector(
     pw: &Playwright,
     scope: &OpScope<'_>,

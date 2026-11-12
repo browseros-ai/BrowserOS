@@ -3,12 +3,10 @@
 
 use serde_json::{Value, json};
 
-use super::{element_handle, selector_wait, viewport_box};
+use super::{element_handle, selector_wait};
 use crate::op_scope::OpScope;
 use crate::page::OpPage;
-use crate::resolve::FramePath;
 use crate::target::{CallHeader, LocatorTarget, Strictness};
-use crate::test_env::TestEnv;
 use crate::test_support::{ProbeAnswer, ScriptedRun, ScriptedTab, TabScript, TestResult};
 use crate::world::Place;
 use crate::{ErrorCode, Op};
@@ -144,29 +142,6 @@ async fn wait_for_selector_wrapper_preserves_found_missing_and_timeout() -> Test
             );
             assert!(error.message().contains("waiting for locator('#go')"));
         }
-    }
-    Ok(())
-}
-
-#[tokio::test]
-async fn screenshot_wrapper_preserves_rect_and_null_values() -> TestResult {
-    let env = TestEnv::new();
-    let op = Op::from_name("page.screenshot").ok_or("screenshot op missing")?;
-    let scope = OpScope::new(&env, op, CallHeader::default());
-    let old_rect = json!({ "x": 1.25, "y": 2.5, "width": 3.0, "height": 4.0 });
-    for old in [old_rect, Value::Null] {
-        let value =
-            viewport_box::for_screenshot(&scope, &FramePath::default(), old.clone()).await?;
-        assert_eq!(value, old);
-        assert_eq!(value.to_string(), old.to_string());
-        assert_eq!(
-            value.to_string(),
-            if old.is_null() {
-                "null"
-            } else {
-                r#"{"height":4.0,"width":3.0,"x":1.25,"y":2.5}"#
-            }
-        );
     }
     Ok(())
 }
