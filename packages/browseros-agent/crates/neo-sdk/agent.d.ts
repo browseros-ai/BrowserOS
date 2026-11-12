@@ -12,6 +12,8 @@
  * After `neo.createTask()` or `neo.task()`, built-in `page` uses that task's last-used
  * open tab, else another open tab, else a new one. `context.newPage()` opens in the task.
  * The latest task pick wins. Popups join their opener's task. You may declare `const page`.
+ * Built-in `page` picks its tab at its first action: before that, `page.tabId` and
+ * `page.taskId` are null and `page.url()` is 'about:blank'. `task.pages()` has them at once.
  * Tab ids here are short for reading; real ones are large numbers, e.g. 1157427185.
  *
  * The reply is what you return, plus console lines and existing notes. Return `task.id`
@@ -30,9 +32,10 @@ declare module 'playwright-core' {
   /** Playwright's Page, plus: */
   interface Page {
     /** The tab's id. It stays the same across runs. `null` only for the built-in `page`
-     * before its tab opens. */
+     * before its first action picks its tab. */
     readonly tabId: number | null
-    /** The tab's task; `null` when it has no task. */
+    /** The tab's task; `null` when it has no task (or for the built-in `page` before its
+     * first action). */
     readonly taskId: string | null
   }
 }
@@ -79,8 +82,8 @@ declare global {
   }
 
   const neo: Neo
-  /** The picked task's last-used open tab, else another open tab, else a new one.
-   * Without a task: a NEW tab with no task, opened on first use. */
+  /** Picked at its first action: the picked task's last-used open tab, else another open
+   * tab, else a new one. Without a task: a NEW tab with no task. */
   const page: Page
   /** `pages()` lists every tab. `newPage()` opens in the picked task, or with no task. */
   const context: pw.BrowserContext
