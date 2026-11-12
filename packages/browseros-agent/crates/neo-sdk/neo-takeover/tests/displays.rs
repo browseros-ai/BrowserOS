@@ -1153,6 +1153,38 @@ async fn bring_forward_activates_only_when_no_owner_hold_or_other_view_shows_the
     Ok(())
 }
 
+/// The agent's op gives up (its timeout, or a stop) while the activation its `bring_forward`
+/// sent is in flight. The browser applies that activation anyway, so the turn stays held until it
+/// answers: an owner's display asked for meanwhile opens only once the move has landed, and the
+/// front never moves under it.
+#[tokio::test]
+async fn a_control_display_waits_for_a_move_whose_op_gave_up() -> TestResult {
+    let h = harness().await?;
+    h.browser.list_tabs(&[3, 4], 3)?;
+    h.browser.hold_activations();
+    let moving = tokio::spawn({
+        let front = h.front();
+        async move { front.bring_forward(TabId(4), None).await }
+    });
+    h.activation_held(4).await?;
+    moving.abort();
+    assert!(
+        timeout(WITHIN, moving).await?.is_err_and(|gone| gone.is_cancelled()),
+        "the op is gone"
+    );
+    let mut control = pin!(h.control(None));
+    assert!(
+        timeout(QUIET, control.as_mut()).await.is_err(),
+        "the owner's display waits while the move the op sent is in flight"
+    );
+
+    h.browser.let_activations_go();
+    let _control = timeout(WITHIN, control).await??;
+    h.browser.log.push("control admitted");
+    assert_eq!(h.log(), ["activate 4", "control admitted"]);
+    Ok(())
+}
+
 #[tokio::test]
 async fn a_task_follower_adopts_its_own_tasks_move() -> TestResult {
     let h = harness().await?;

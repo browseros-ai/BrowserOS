@@ -57,10 +57,11 @@ pub struct BrowserTabs {
 struct FrontState {
     /// Held from a mover's last check to its activation's reply, so no other Neo activation
     /// lands between a mover's decision and its send. A tokio mutex: fair, so movers
-    /// activate in the order they asked, and held across the CDP round trip. A fit takes it inside its claim's `Step::Activate`, under the
-    /// surface lock; nothing takes the turn and then waits for the surface, so the two cannot
-    /// deadlock.
-    turn: tokio::sync::Mutex<()>,
+    /// activate in the order they asked, and held across the CDP round trip, even when the
+    /// mover is dropped mid-flight ([`FrontTurn::activate`]). A fit takes it inside its claim's
+    /// `Step::Activate`, under the surface lock; nothing takes the turn and then waits for the
+    /// surface, so the two cannot deadlock.
+    turn: Arc<tokio::sync::Mutex<()>>,
     /// The owner's live holds, counted by kind. A std mutex, never held across an await: the
     /// app's door reads it synchronously. One registry for every part, so no part reads
     /// another's table (D13).
@@ -152,28 +153,46 @@ impl Drop for ScreenHoldGuard {
 /// The front turn: while it is held, no other Neo activation runs. Every mover takes it, then
 /// decides again, then activates through it.
 #[must_use = "the turn orders Neo's activations; dropping it lets the next one run"]
-pub(crate) struct FrontTurn<'a> {
-    browser: &'a BrowserTabs,
-    _turn: tokio::sync::MutexGuard<'a, ()>,
+pub(crate) struct FrontTurn {
+    browser: BrowserTabs,
+    /// Shared with an activation in flight: the turn ends when both the mover and its
+    /// activation have let go of it.
+    turn: Arc<tokio::sync::OwnedMutexGuard<()>>,
 }
 
-impl FrontTurn<'_> {
+impl FrontTurn {
     /// Brings `tab` to the front, bounded by `ACTIVATE_TIMEOUT`, and on success records the move
     /// for followers. The caller decided to activate after it took this turn, so nothing
     /// Neo does lands between that decision and this send.
+    ///
+    /// The send runs as a task of its own that keeps the turn until the browser answers. Once
+    /// sent, the browser applies the move whether or not its mover still waits: an op that times
+    /// out or stops drops this future, and if the turn went with it, a control display or a view
+    /// admitted next (each waits out the turn) would see the front move under it. The task ends
+    /// within `ACTIVATE_TIMEOUT`.
     ///
     /// # Errors
     /// `Browser` when the browser refused or the link failed; `TimedOut` with no answer in 5 s.
     pub(crate) async fn activate(&self, tab: TabId, by: Mover) -> Result<(), PartError> {
         let at = EpochMillis::now();
-        tokio::time::timeout(ACTIVATE_TIMEOUT, self.browser.send_activate(tab))
-            .await
-            .unwrap_or(Err(PartError::TimedOut("bringing a tab to the front")))?;
-        self.browser
-            .front
-            .last
-            .send_replace(Some(FrontMove { tab, by, at }));
-        Ok(())
+        let browser = self.browser.clone();
+        let turn = Arc::clone(&self.turn);
+        let landing = tokio::spawn(async move {
+            tokio::time::timeout(ACTIVATE_TIMEOUT, browser.send_activate(tab))
+                .await
+                .unwrap_or(Err(PartError::TimedOut("bringing a tab to the front")))?;
+            browser
+                .front
+                .last
+                .send_replace(Some(FrontMove { tab, by, at }));
+            drop(turn);
+            Ok(())
+        });
+        landing.await.unwrap_or_else(|stopped| {
+            Err(browser_error(format!(
+                "bringing a tab to the front stopped: {stopped}"
+            )))
+        })
     }
 }
 
@@ -186,7 +205,7 @@ impl BrowserTabs {
             session,
             viewports,
             front: Arc::new(FrontState {
-                turn: tokio::sync::Mutex::default(),
+                turn: Arc::default(),
                 holds: Mutex::default(),
                 last: watch::channel(None).0,
                 views: Mutex::default(),
@@ -196,10 +215,10 @@ impl BrowserTabs {
     }
 
     /// Waits for the front turn, behind the movers that asked first.
-    pub(crate) async fn front_turn(&self) -> FrontTurn<'_> {
+    pub(crate) async fn front_turn(&self) -> FrontTurn {
         FrontTurn {
-            browser: self,
-            _turn: self.front.turn.lock().await,
+            browser: self.clone(),
+            turn: Arc::new(Arc::clone(&self.front.turn).lock_owned().await),
         }
     }
 

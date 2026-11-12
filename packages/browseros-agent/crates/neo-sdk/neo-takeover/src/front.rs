@@ -117,7 +117,8 @@ impl Front {
     ///   last check is caught by `commit` (the door's recheck reads the same holds), or finds
     ///   the move already landed: a control display's admission waits out the turn.
     /// - Bringing the front tab forward again sends the same activation. A dropped future drops
-    ///   its turn, allowing the next mover through.
+    ///   its turn, allowing the next mover through, except that an activation already sent keeps
+    ///   the turn until the browser answers it.
     ///
     /// # Errors
     /// See [`FrontError`].
@@ -173,7 +174,8 @@ impl Front {
         }
         // Once more after that read: a hold or a view that began while it was in flight wins.
         // Nothing awaits between this check and the send; a control display or a view admitted
-        // after it waits out this turn before it serves.
+        // after it waits out this turn before it serves, even when this op gives up while the
+        // activation is in flight (`FrontTurn::activate` keeps the turn until its reply).
         if let Some(stays) = self.stays_behind(tab, task.as_ref()) {
             return Ok(stays);
         }
