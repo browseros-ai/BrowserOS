@@ -251,11 +251,11 @@ impl RunEvents {
             })
     }
 
-    /// Whether the run listens for, or waits on, `event` on the tab whose target is `target`.
+    /// Whether the run listens for, or waits on, `event` on the tab whose target is `target`,
+    /// on that page or on the context ([`Subscription::wants`]).
     pub(crate) fn wants(&self, target: &TargetId, event: PageEventKind) -> bool {
         let inner = self.lock();
-        let wanted =
-            |subscription: &Subscription| subscription.page_event() == Some((target, event));
+        let wanted = |subscription: &Subscription| subscription.wants(target, event);
         inner.listening.keys().any(wanted) || inner.waiting.keys().any(wanted)
     }
 
@@ -439,6 +439,26 @@ mod tests {
         drop(second);
         assert!(!events.wants(&target, PageEventKind::Dialog));
         assert!(!events.wants(&target, PageEventKind::Popup));
+    }
+
+    /// `context.waitForEvent('dialog')` and `context.on('dialog')` hold a dialog of every tab
+    /// open for the script (`EventHub::listeners`), as a page's own listener holds its own.
+    #[test]
+    fn tests_that_a_context_dialog_wait_or_listener_wants_every_tabs_dialogs() {
+        let events = RunEvents::default();
+        let target = TargetId("T".to_owned());
+        let wait = events.waiting(Subscription::Context(PageEventKind::Dialog), 10);
+        assert!(events.wants(&target, PageEventKind::Dialog));
+        assert!(
+            !events.wants(&target, PageEventKind::DialogClosed),
+            "only the event it names"
+        );
+        drop(wait);
+        assert!(!events.wants(&target, PageEventKind::Dialog));
+        events.listen(Subscription::Context(PageEventKind::Dialog), 10, 0);
+        assert!(events.wants(&TargetId("U".to_owned()), PageEventKind::Dialog));
+        events.unlisten(&ListenerKey::Context(PageEventKind::Dialog));
+        assert!(!events.wants(&target, PageEventKind::Dialog));
     }
 
     #[test]

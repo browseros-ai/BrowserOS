@@ -42,6 +42,8 @@ pub(crate) enum PageEvent {
     Opened(OpenedPage),
     /// A tab that was reported opened, or that existed when the watcher started, closed.
     Closed(TargetId),
+    /// The renderer of such a tab crashed. The tab stays open until it is closed.
+    Crashed(TargetId),
     /// A JavaScript dialog opened.
     Dialog(DialogOpened),
     /// The same dialog closed, by a script, the browser, or automatic handling.
@@ -87,7 +89,8 @@ impl PageEvent {
                 },
             ) => page == target && *load == kind,
             (PageEventKind::Popup, Self::Opened(opened)) => opened.opener.as_ref() == Some(target),
-            (PageEventKind::Close, Self::Closed(closed)) => closed == target,
+            (PageEventKind::Close, Self::Closed(page))
+            | (PageEventKind::Crash, Self::Crashed(page)) => page == target,
             (PageEventKind::Dialog, Self::Dialog(dialog))
             | (PageEventKind::DialogClosed, Self::DialogClosed(dialog)) => dialog.target == *target,
             (PageEventKind::Console, Self::Console(message)) => message.target == *target,

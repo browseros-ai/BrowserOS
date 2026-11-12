@@ -342,7 +342,7 @@ describe('waitForEvent', () => {
       await runtime.run(`
         const errors = []
         try { await page.waitForEvent('request') } catch (e) { errors.push([e.code, e.message]) }
-        try { context.on('dialog', () => {}) } catch (e) { errors.push([e.code, e.message]) }
+        try { context.on('console', () => {}) } catch (e) { errors.push([e.code, e.message]) }
         return errors
       `),
     )
@@ -353,12 +353,12 @@ describe('waitForEvent', () => {
       ],
       [
         'method_unavailable',
-        'browserContext.on(\'dialog\'): Neo reports "dialog" on pages: page.on("dialog")',
+        'browserContext.on(\'console\'): Neo reports "console" on pages: page.on("console")',
       ],
     ])
     expect(runtime.calls.map((call) => [call.name, call.input.$neo])).toEqual([
       ["page.waitForEvent('request')", 'refused'],
-      ["browserContext.on('dialog')", 'refused'],
+      ["browserContext.on('console')", 'refused'],
     ])
   })
 })
@@ -413,6 +413,7 @@ describe('listeners and the pump', () => {
               message: 'Your name?',
               defaultValue: 'Ann',
             },
+            context: false,
           },
         ],
       ]),
@@ -451,6 +452,7 @@ describe('listeners and the pump', () => {
               message: 'Sure?',
               defaultValue: '',
             },
+            context: false,
           },
         ],
       ]),
@@ -515,6 +517,7 @@ describe('listeners and the pump', () => {
               message: 'one',
               defaultValue: '',
             },
+            context: false,
           },
           {
             seq: 2,
@@ -527,6 +530,7 @@ describe('listeners and the pump', () => {
               message: 'two',
               defaultValue: '',
             },
+            context: false,
           },
           {
             seq: 3,
@@ -539,6 +543,7 @@ describe('listeners and the pump', () => {
               message: '',
               defaultValue: '',
             },
+            context: false,
           },
         ],
       ]),
@@ -1129,7 +1134,14 @@ it('reuses the original Dialog for page and context closure and delivers each on
     now: recordedAt,
     answer: pumpAnswers([
       [
-        { seq: 1, at: recordedAt, event: 'dialog', page: brand(7), dialog },
+        {
+          seq: 1,
+          at: recordedAt,
+          event: 'dialog',
+          page: brand(7),
+          dialog,
+          context: false,
+        },
         {
           seq: 2,
           at: recordedAt,
@@ -1321,4 +1333,210 @@ it('releases internal worker bookkeeping once when a page closes', async () => {
     .find((call) => call.input.enabled === false)
   expect(cleanup?.input.page).toBeNull()
   expect(cleanup?.input.retiredTab).toBe(1007)
+})
+
+describe('removeAllListeners with a behavior', () => {
+  /** A console listener that is still running, as page-listeners.spec.ts sets one up. */
+  const running = (fails: string | null) => `
+    let release
+    const released = new Promise(resolve => { release = resolve })
+    let value = 0
+    await new Promise(resolve => page.on('console', async () => {
+      resolve()
+      await released
+      value = 42
+      ${fails === null ? '' : `throw new Error(${JSON.stringify(fails)})`}
+    }))
+  `
+
+  it("tests that 'wait' settles once the running listener has, and rejects with its error", async () => {
+    const runtime = loadPrelude({
+      seed: SEED,
+      answer: pumpAnswers([[consoleRecord(3)]]),
+    })
+    const result = json(
+      await runtime.run(`
+      ${running('Error in handler')}
+      const removed = page.removeAllListeners('console', { behavior: 'wait' })
+      const left = page.listenerCount('console')
+      release()
+      const error = await removed.then(() => null, (e) => e.message)
+      return { left, error, value }
+    `),
+    )
+    expect(result).toEqual({ left: 0, error: 'Error in handler', value: 42 })
+    expect(
+      runtime.sent('events.listen').map((call) => call.input.enabled),
+    ).toEqual([true, false])
+  })
+
+  it("tests that 'wait' resolves after a listener that succeeds, and no options keep Node's chaining", async () => {
+    const runtime = loadPrelude({
+      seed: SEED,
+      answer: pumpAnswers([[consoleRecord(3)]]),
+    })
+    const result = json(
+      await runtime.run(`
+      ${running(null)}
+      const removed = page.removeAllListeners('console', { behavior: 'wait' })
+      release()
+      await removed
+      const settled = value
+      const plain = page.removeAllListeners('console') === page
+      const others = await page.removeAllListeners(undefined, { behavior: 'default' })
+      return { settled, plain, others: String(others) }
+    `),
+    )
+    expect(result).toEqual({ settled: 42, plain: true, others: 'undefined' })
+  })
+
+  // Bun fails a test on an unhandled rejection, from the vm realm too (measured: the same
+  // script with `behavior: 'default'` fails with the listener's error), so passing is the proof.
+  it("tests that 'ignoreErrors' silences a removed listener's later failure", async () => {
+    const runtime = loadPrelude({
+      seed: SEED,
+      answer: pumpAnswers([[consoleRecord(3)]]),
+    })
+    const result = await runtime.run(`
+      ${running('Error in console handler')}
+      const removed = page.removeAllListeners('console', { behavior: 'ignoreErrors' })
+      release()
+      return String(await removed)
+    `)
+    await sleep(20)
+    expect(result).toBe('undefined')
+  })
+})
+
+describe('dialogs on the context, dialog waits, crashes', () => {
+  const dialogRecord = (
+    seq: number,
+    tab: number,
+    context: boolean,
+    id = 51,
+  ): EventRecord => ({
+    seq,
+    at: RECORDED_AT,
+    event: 'dialog',
+    page: brand(tab),
+    dialog: { id, type: 'confirm', message: 'hello', defaultValue: '' },
+    context,
+  })
+
+  it("tests that the context's dialog wait and listener get a popup's dialog on the popup, and the pump leaves it to them", async () => {
+    const runtime = loadPrelude({
+      seed: SEED,
+      answer: pumpAnswers([[dialogRecord(5, 8, true)]], (call) => {
+        if (call.name !== 'events.wait') return null
+        return call.input.event === 'popup'
+          ? popup(4, 8, 'about:blank')
+          : dialogRecord(5, 8, true)
+      }),
+    })
+    const result = json(
+      await runtime.run(`
+      const heard = new Promise(resolve => context.once('dialog', resolve))
+      const [popup, dialog] = await Promise.all([
+        page.waitForEvent('popup'),
+        context.waitForEvent('dialog'),
+      ])
+      return {
+        message: dialog.message(),
+        onPopup: dialog.page() === popup,
+        same: (await heard) === dialog,
+      }
+    `),
+    )
+    expect(result).toEqual({ message: 'hello', onPopup: true, same: true })
+    // The context's wait needs no page brand, so it may go out first.
+    expect(
+      runtime
+        .sent('events.wait')
+        .map((call) => [call.input.page, call.input.event])
+        .sort((a, b) => String(a[1]).localeCompare(String(b[1]))),
+    ).toEqual([
+      [null, 'dialog'],
+      [{ $neo: 'page', tab: 1007 }, 'popup'],
+    ])
+    expect(
+      runtime
+        .sent('events.listen')
+        .map((call) => [call.input.page, call.input.event, call.input.enabled]),
+    ).toEqual([
+      [null, 'dialog', true],
+      [null, 'dialog', false],
+    ])
+    await sleep(20)
+    expect(
+      runtime.calls.some(
+        (call) =>
+          call.name === 'dialog.accept' || call.name === 'dialog.dismiss',
+      ),
+    ).toBe(false)
+  })
+
+  it('tests that a dialog a wait takes is never answered by the pump, though its listener left', async () => {
+    let answerWait: ((record: EventRecord) => void) | undefined
+    const runtime = loadPrelude({
+      seed: SEED,
+      answer: pumpAnswers([[dialogRecord(3, 7, false, 61)]], (call) =>
+        call.name === 'events.wait'
+          ? new Promise((resolve) => {
+              answerWait = resolve
+            })
+          : null,
+      ),
+    })
+    const pending = runtime.run(`
+      const waited = page.waitForEvent('dialog')
+      const listener = () => {}
+      page.on('dialog', listener)
+      page.off('dialog', listener)
+      const dialog = await waited
+      await dialog.accept()
+      return dialog.message()
+    `)
+    await eventually(
+      () =>
+        answerWait !== undefined && runtime.sent('events.next').length === 1,
+    )
+    // The pump delivered the dialog to a page with no listener while the wait was in flight;
+    // without the wait it dismisses it (the test of a dialog nobody listens for any more).
+    await sleep(20)
+    expect(runtime.sent('dialog.dismiss')).toHaveLength(0)
+    answerWait?.(dialogRecord(3, 7, false, 61))
+    expect(await pending).toBe('hello')
+    expect(
+      runtime.sent('dialog.accept').map((call) => call.input.dialog),
+    ).toEqual([61])
+    expect(runtime.sent('dialog.dismiss')).toHaveLength(0)
+  })
+
+  it("tests that page.on('crash') hears its page crash and waitForEvent('crash') resolves with the page", async () => {
+    const crash: EventRecord = {
+      seq: 3,
+      at: RECORDED_AT,
+      event: 'crash',
+      page: brand(7),
+    }
+    const runtime = loadPrelude({
+      seed: SEED,
+      answer: pumpAnswers([[crash]], (call) =>
+        call.name === 'events.wait' ? crash : null,
+      ),
+    })
+    const result = json(
+      await runtime.run(`
+      const heard = new Promise(resolve => page.once('crash', resolve))
+      const waited = await page.waitForEvent('crash')
+      return [(await heard) === page, waited === page, page.isClosed()]
+    `),
+    )
+    expect(result).toEqual([true, true, false])
+    expect(runtime.sent('events.listen')[0]?.input).toMatchObject({
+      page: { $neo: 'page', tab: 1007 },
+      event: 'crash',
+      enabled: true,
+    })
+  })
 })

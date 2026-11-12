@@ -997,6 +997,8 @@
   class EventEmitter {
     #registered = new Map;
     #maxListeners = 10;
+    #pending = new Map;
+    #rejectionHandler;
     _checkEvent(_event) {}
     _listenersChanged(_event, _listening) {}
     addListener(event, listener) {
@@ -1031,14 +1033,26 @@
     off(event, listener) {
       return this.removeListener(event, listener);
     }
-    removeAllListeners(event) {
+    removeAllListeners(event, options) {
       const events = event === undefined ? [...this.#registered.keys()] : [event];
       for (const name of events) {
         if (!this.#registered.delete(name))
           continue;
         this._listenersChanged(name, false);
       }
-      return this;
+      if (!options)
+        return this;
+      if (options.behavior === "wait") {
+        const errors = [];
+        this.#rejectionHandler = (error) => errors.push(error);
+        return this.#settled(event).then(() => {
+          if (errors.length > 0)
+            throw errors[0];
+        });
+      }
+      if (options.behavior === "ignoreErrors")
+        this.#rejectionHandler = () => {};
+      return Promise.resolve();
     }
     emit(event, ...args) {
       const list = this.#registered.get(event);
@@ -1047,13 +1061,40 @@
       for (const entry of [...list]) {
         if (entry.once)
           this.removeListener(event, entry.listener);
+        let returned;
         try {
-          Reflect.apply(entry.listener, this, args);
+          returned = Reflect.apply(entry.listener, this, args);
         } catch (error) {
           Promise.reject(error);
+          continue;
         }
+        if (returned instanceof Promise)
+          this.#track(event, returned);
       }
       return true;
+    }
+    #track(event, call) {
+      let calls = this.#pending.get(event);
+      if (!calls) {
+        calls = new Set;
+        this.#pending.set(event, calls);
+      }
+      const pending = calls;
+      pending.add(call);
+      call.catch((error) => {
+        const handler = this.#rejectionHandler;
+        if (!handler)
+          throw error;
+        handler(error);
+      }).finally(() => {
+        pending.delete(call);
+        if (pending.size === 0 && this.#pending.get(event) === pending)
+          this.#pending.delete(event);
+      });
+    }
+    async#settled(event) {
+      const calls = event === undefined ? [...this.#pending.values()].flatMap((pending) => [...pending]) : [...this.#pending.get(event) ?? []];
+      await Promise.all(calls);
     }
     listeners(event) {
       return (this.#registered.get(event) ?? []).map((entry) => entry.listener);
@@ -9088,11 +9129,13 @@ ${value.stack}`;
     "domcontentloaded",
     "frameattached",
     "framenavigated",
-    "framedetached"
+    "framedetached",
+    "crash"
   ]);
   var CONTEXT_EVENTS = new Set([
     "page",
     "pageload",
+    "dialog",
     "dialogclosed",
     "frameattached",
     "framenavigated",
@@ -9106,7 +9149,6 @@ ${value.stack}`;
     websocket: "Neo does not report WebSockets",
     serviceworker: "Neo does not report service workers",
     backgroundpage: "Neo does not report extension background pages",
-    crash: "Neo does not report crashes; a crashed page fails its next call",
     pageclose: 'listen for close on the page itself: page.on("close")',
     weberror: "the context reports no weberror events; pageerror listeners are silent in hosted BrowserOS"
   };
@@ -9133,6 +9175,8 @@ ${value.stack}`;
     batch = null;
     newestSeen = null;
     dialogs = new Map;
+    takenDialogs = new WeakSet;
+    dialogWaits = new Map;
     downloads = new Map;
     choosers = new Map;
     nextChooserLease = 0;
@@ -9224,17 +9268,30 @@ ${value.stack}`;
       } : null;
       if (publication)
         this.navigationWaits.add(publication);
+      const dialogWait = event === "dialog";
+      if (dialogWait)
+        this.dialogWaits.set(page, (this.dialogWaits.get(page) ?? 0) + 1);
       try {
-        return await untilAborted(signal, () => abortedError(api, signal), async () => {
+        const value = await untilAborted(signal, () => abortedError(api, signal), async () => {
           if (lease)
             await deadline.race(lease.ready);
           return this.waitFor(api, site, page, event, options, { since, after: seen }, deadline, signal);
         });
+        if (dialogWait && value instanceof Dialog)
+          this.takenDialogs.add(value);
+        return value;
       } finally {
         if (lease)
           lease.release().catch(() => {});
         if (publication)
           this.navigationWaits.delete(publication);
+        if (dialogWait) {
+          const left = (this.dialogWaits.get(page) ?? 1) - 1;
+          if (left > 0)
+            this.dialogWaits.set(page, left);
+          else
+            this.dialogWaits.delete(page);
+        }
         finish();
       }
     }
@@ -9491,8 +9548,16 @@ ${value.stack}`;
         case "dialog": {
           const page = this.page(record.page);
           const dialog = this.dialog(page, record.dialog);
-          if (!page.emit("dialog", dialog))
+          const emitter = record.context ? this.owner : page;
+          if (emitter.emit("dialog", dialog))
+            this.takenDialogs.add(dialog);
+          if (!this.dialogHeld(page, dialog, record.context))
             (dialog.type() === "beforeunload" ? dialog.accept() : dialog.dismiss()).catch(() => {});
+          return;
+        }
+        case "crash": {
+          const page = this.page(record.page);
+          page.emit("crash", page);
           return;
         }
         case "console": {
@@ -9562,6 +9627,8 @@ ${value.stack}`;
           page._closeEvent(record.seq, observed);
           return page;
         }
+        case "crash":
+          return this.page(record.page);
         case "dialog":
         case "dialogclosed":
           return this.dialog(this.page(record.page), record.dialog);
@@ -9576,6 +9643,10 @@ ${value.stack}`;
         case "binding":
           return;
       }
+    }
+    dialogHeld(page, dialog, context) {
+      const other = context ? page : this.owner;
+      return this.takenDialogs.has(dialog) || this.dialogWaits.has(page) || this.dialogWaits.has(null) || other.listenerCount("dialog") > 0;
     }
     dialog(page, info) {
       const known = this.dialogs.get(info.id);
