@@ -5,7 +5,7 @@ use std::sync::Arc;
 use browseros_core::TargetId;
 
 use futures_util::future::BoxFuture;
-use neo_playwright::Playwright;
+use neo_playwright::{EventFence, Playwright};
 use tokio::sync::OnceCell;
 
 use crate::browser::BrowserLink;
@@ -68,12 +68,24 @@ impl PlaywrightFacade {
 }
 
 impl EventLog for PlaywrightFacade {
-    fn synchronize(&self) -> BoxFuture<'_, ()> {
-        Box::pin(async {
-            if let Some(pw) = self.playwright.get() {
-                pw.synchronize_events().await;
+    fn fence(&self) -> EventFence {
+        self.playwright
+            .get()
+            .map_or_else(EventFence::default, |pw| pw.event_fence())
+    }
+    fn synchronize(&self, fence: EventFence) -> BoxFuture<'_, bool> {
+        Box::pin(async move {
+            match self.playwright.get() {
+                Some(pw) => pw.synchronize_events(fence).await,
+                // No facade yet: no watcher, so no event it could still owe.
+                None => true,
             }
         })
+    }
+    fn handled_through(&self, fence: EventFence) -> bool {
+        self.playwright
+            .get()
+            .is_none_or(|pw| pw.events_handled_through(fence))
     }
     fn workers(&self, target: &TargetId) -> Option<Vec<WorkerFact>> {
         self.playwright.get().map(|pw| {

@@ -69,6 +69,7 @@ mod wire;
 mod world;
 
 pub use download_facts::{DownloadFacts, DownloadState};
+pub use events::EventFence;
 pub use op::Op;
 pub use op_env::{OpEnv, Refusal};
 pub use op_spec::{Capability, OpLifetime, OpSpec, OpTarget};

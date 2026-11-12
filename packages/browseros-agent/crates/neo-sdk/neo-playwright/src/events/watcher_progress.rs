@@ -48,6 +48,11 @@ impl WatcherProgress {
         self.changed.notify_waiters();
     }
 
+    /// Broadcast events handled so far, on the client's numbering (`u64::MAX` once stopped).
+    pub(crate) fn events_handled(&self) -> u64 {
+        self.handled.load(Ordering::Acquire)
+    }
+
     /// The watcher handled, or a lag skipped, `count` more broadcast events.
     pub(crate) fn handled(&self, count: u64) {
         self.handled.fetch_add(count, Ordering::AcqRel);

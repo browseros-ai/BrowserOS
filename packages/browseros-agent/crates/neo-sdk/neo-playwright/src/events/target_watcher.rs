@@ -46,9 +46,9 @@
 //!   tab (`event_op.rs`, `lease_runtime`, says why).
 
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::mem;
 use std::sync::Arc;
 use std::time::Duration;
+use std::{fmt, mem};
 
 use browseros_cdp::CdpEvent;
 use browseros_core::{
@@ -100,11 +100,29 @@ const REAP: Duration = Duration::from_secs(1);
 /// The watcher's clock for discovery retries and URL deadlines.
 const TICK: Duration = Duration::from_millis(250);
 
+/// How long a synchronize waits for the watcher's answer before the asker goes on without it.
+const SYNCHRONIZE_BOUND: Duration = Duration::from_secs(2);
+
+/// A position in the connection's broadcast event stream: how many events the CDP client had
+/// broadcast when it was taken (`BrowserSession::cdp_events_broadcast`), on the numbering
+/// [`WatcherProgress`] counts the watcher's work in. A synchronize to a fence waits for exactly
+/// the events received before it, never for the ones a busy page keeps sending after.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
+pub struct EventFence(pub(crate) u64);
+
+impl EventFence {
+    /// The fence at the `count`th broadcast event, for a host's tests of its own waiting.
+    #[must_use]
+    pub const fn at(count: u64) -> Self {
+        Self(count)
+    }
+}
+
 /// The running watcher. Dropping it (with its `Playwright`) stops the task.
 #[derive(Debug)]
 pub(crate) struct TargetWatcher {
     task: Option<JoinHandle<()>>,
-    requests: UnboundedSender<WatcherRequest>,
+    requests: Requests,
 }
 
 impl Drop for TargetWatcher {
@@ -118,14 +136,62 @@ impl Drop for TargetWatcher {
 #[derive(Debug)]
 struct WatcherRequest {
     closed: Option<TargetId>,
+    /// The events this request needs handled: those broadcast before it was asked.
+    fence: EventFence,
     done: oneshot::Sender<()>,
+}
+
+/// The asking side of the watcher's request channel, shared by [`TargetWatcher`] and every
+/// [`WatcherHandle`]. It reads fences from the same session the watcher reads events from.
+#[derive(Clone)]
+struct Requests {
+    sender: UnboundedSender<WatcherRequest>,
+    /// `None` only for a test handle no watcher answers.
+    browser: Option<Arc<BrowserSession>>,
+}
+
+// A hand-written `Debug`: the session is not worth printing.
+impl fmt::Debug for Requests {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Requests").finish_non_exhaustive()
+    }
+}
+
+impl Requests {
+    /// The fence for "every event received until now".
+    fn fence(&self) -> EventFence {
+        EventFence(
+            self.browser
+                .as_ref()
+                .map_or(0, |browser| browser.cdp_events_broadcast()),
+        )
+    }
+
+    /// Asks the watcher to handle the events before `fence`, retire `closed`'s workers and
+    /// bring the leases in line, and waits at most [`SYNCHRONIZE_BOUND`]. Whether it answered:
+    /// a watcher that is gone answers at once, as there is nothing left to wait for.
+    async fn ask(&self, closed: Option<TargetId>, fence: EventFence) -> bool {
+        let (done, wait) = oneshot::channel();
+        if self
+            .sender
+            .send(WatcherRequest {
+                closed,
+                fence,
+                done,
+            })
+            .is_err()
+        {
+            return true;
+        }
+        time::timeout(SYNCHRONIZE_BOUND, wait).await.is_ok()
+    }
 }
 
 /// A handle on the running watcher for what outlives an op: a console lease's release has it
 /// take the frames' `Log` off before `Runtime` goes (`log_lease.rs`).
 #[derive(Clone, Debug)]
 pub(crate) struct WatcherHandle {
-    requests: UnboundedSender<WatcherRequest>,
+    requests: Requests,
 }
 
 impl WatcherHandle {
@@ -133,21 +199,20 @@ impl WatcherHandle {
     /// every worker's `Runtime` and frame's `Log` in line with who listens now. A watcher that
     /// is gone answers at once.
     pub(crate) async fn synchronize(&self) {
-        let (done, wait) = oneshot::channel();
-        if self
-            .requests
-            .send(WatcherRequest { closed: None, done })
-            .is_ok()
-        {
-            let _ = time::timeout(Duration::from_secs(2), wait).await;
-        }
+        let fence = self.requests.fence();
+        self.requests.ask(None, fence).await;
     }
 
     /// A handle no watcher answers, for tests.
     #[cfg(test)]
     pub(crate) fn detached() -> Self {
-        let (requests, _gone) = mpsc::unbounded_channel();
-        Self { requests }
+        let (sender, _gone) = mpsc::unbounded_channel();
+        Self {
+            requests: Requests {
+                sender,
+                browser: None,
+            },
+        }
     }
 }
 
@@ -159,14 +224,19 @@ impl TargetWatcher {
         }
     }
 
-    /// Foreground replies must see every CDP fact received before their command replied.
+    /// The fence for "every event received until now", for a caller that takes it before it
+    /// queues for its turn to synchronize (`Playwright::event_fence`).
+    pub(crate) fn fence(&self) -> EventFence {
+        self.requests.fence()
+    }
+
+    /// Foreground replies must see every CDP fact received before their command replied:
+    /// waits, at most 2 s, until the watcher handled every event before `fence` (later ones are
+    /// another reply's) and brought the leases in line. Whether it answered in time.
     /// A confirmed explicit close also retires workers before Chromium finishes tearing
     /// down a renderer with unresolved promises (Playwright issue 43204).
-    pub(crate) async fn synchronize(&self, closed: Option<TargetId>) {
-        let (done, wait) = oneshot::channel();
-        if self.requests.send(WatcherRequest { closed, done }).is_ok() {
-            let _ = time::timeout(Duration::from_secs(2), wait).await;
-        }
+    pub(crate) async fn synchronize(&self, closed: Option<TargetId>, fence: EventFence) -> bool {
+        self.requests.ask(closed, fence).await
     }
 
     /// Starts watching `browser`, recording page events through `writer` and frame lifecycles
@@ -180,7 +250,11 @@ impl TargetWatcher {
         progress: Arc<WatcherProgress>,
         baselines: Arc<SnapshotBaselines>,
     ) -> Self {
-        let (requests, pending) = mpsc::unbounded_channel();
+        let (sender, pending) = mpsc::unbounded_channel();
+        let requests = Requests {
+            sender,
+            browser: Some(Arc::clone(&browser)),
+        };
         let Ok(runtime) = Handle::try_current() else {
             progress.stopped();
             return Self {
@@ -251,6 +325,27 @@ struct Watcher {
     /// Window lookups report their popup back on this channel, so only this task writes the
     /// log. The receiving end is a local of the task's loop.
     found: UnboundedSender<OpenedPage>,
+    /// Frame-tree reads in flight for new out-of-process frame sessions ([`Seeding`]).
+    seeding: HashMap<SessionId, Seeding>,
+    /// Where those reads send their answers back, so only this task writes the tracker; set by
+    /// the run loop. Without it (a test driving `handle` alone) a read is awaited in place.
+    seeded: Option<UnboundedSender<SeededTree>>,
+}
+
+/// A new frame session's tree read, in flight off the watcher's loop. A busy frame answers
+/// only between its script's tasks (100 ms each under an ad's busy loop, measured), so a page
+/// that churns frames kept the loop waiting on one read after another, and every reply's
+/// synchronize behind it. While the read is out, the loop records which of the tab's frames
+/// went or got a new document: the answer leaves those out when it lands.
+struct Seeding {
+    tab: TargetId,
+    stale: HashSet<FrameId>,
+}
+
+/// A tree read's answer, for the session it was asked on; `None` when it failed or timed out.
+struct SeededTree {
+    session: SessionId,
+    tree: Option<Value>,
 }
 
 /// A worker session's `Runtime` reporting, which its console messages and uncaught errors need.
@@ -515,6 +610,8 @@ impl Watcher {
             pending_dialogs: HashMap::new(),
             next_reap: Instant::now() + REAP,
             found,
+            seeding: HashMap::new(),
+            seeded: None,
         };
         (watcher, found_rx)
     }
@@ -528,6 +625,8 @@ impl Watcher {
         // that arrived before this watcher subscribed, including the binding stream.
         let (mut events, before) = self.browser.cdp_events_counted();
         let (mut bindings, calls_before) = self.browser.cdp_events_targeted_counted(BINDING_CALLED);
+        let (seeded, mut trees) = mpsc::unbounded_channel();
+        self.seeded = Some(seeded);
         self.progress.start(before, calls_before);
         let mut tick = time::interval(TICK);
         tick.set_missed_tick_behavior(MissedTickBehavior::Delay);
@@ -549,26 +648,40 @@ impl Watcher {
                     }
                 },
                 Some(call) = bindings.recv() => {
-                    // Every event sent before the call, its context's creation among them.
-                    self.drain(&mut events).await;
+                    // Every event sent before the call, its context's creation among them: the
+                    // broadcast count now covers them (the call was routed before it was read).
+                    let fence = EventFence(self.browser.cdp_events_broadcast());
+                    self.drain_through(&mut events, fence).await;
                     self.binding_called(call).await;
                     self.progress.call_handled();
                 }
                 Some(request) = requests.recv() => {
+                    // Requests that queued meanwhile share this pass: one drain to the newest
+                    // of their fences, one lease pass, every one answered.
+                    let mut batch = vec![request];
+                    while let Ok(more) = requests.try_recv() {
+                        batch.push(more);
+                    }
                     // Initial synchronous page facts need attachments even for tabs the
                     // run has never acted on; otherwise their pre-existing workers vanish.
                     if self.epoch.is_none() { self.tick().await; }
-                    self.drain(&mut events).await;
-                    if let Some(target) = request.closed {
-                        for worker in self.writer.hub().workers.list(&target) { self.close_worker(&worker.id); }
+                    let fence = batch.iter().map(|request| request.fence).max().unwrap_or_default();
+                    self.drain_through(&mut events, fence).await;
+                    for request in &batch {
+                        if let Some(target) = &request.closed {
+                            for worker in self.writer.hub().workers.list(target) { self.close_worker(&worker.id); }
+                        }
                     }
                     // Every op synchronizes before it replies, so a listener the op added has
                     // its tab's workers and frames reporting before the script's next call.
                     self.lease_worker_runtime().await;
                     self.lease_frame_logs().await;
-                    let _ = request.done.send(());
+                    for request in batch {
+                        let _ = request.done.send(());
+                    }
                 }
                 Some(opened) = found.recv() => self.found(opened),
+                Some(seeded) = trees.recv() => self.seeded_tree(seeded),
                 _ = tick.tick() => self.tick().await,
                 () = time::sleep_until(grace_ends.unwrap_or_else(Instant::now)), if grace_ends.is_some() => {
                     self.end_graces();
@@ -620,6 +733,7 @@ impl Watcher {
         self.contexts.retain(|(known, _), _| known != session);
         self.sessions.remove(session);
         self.page_sessions.remove(session);
+        self.seeding.remove(session);
     }
 
     /// Events were dropped: rediscover, which records what closed meanwhile, and tell the frame
@@ -629,11 +743,16 @@ impl Watcher {
         self.epoch = None;
         self.attach_log.lost_events();
         self.baselines.events_lost();
+        // A removal this loop never saw cannot be marked stale; the reads in flight are dropped.
+        self.seeding.clear();
     }
 
-    /// Handles every broadcast event already queued, without waiting for more.
-    async fn drain(&mut self, events: &mut Receiver<CdpEvent>) {
-        loop {
+    /// Handles the queued broadcast events up to `fence`: every event broadcast before whoever
+    /// asked took it. It stops there even while more are queued, so a page that keeps sending
+    /// events (frames that attach and detach all the time) cannot hold a request past the
+    /// events it is owed, and stops sooner if nothing more is queued.
+    async fn drain_through(&mut self, events: &mut Receiver<CdpEvent>, fence: EventFence) {
+        while self.progress.events_handled() < fence.0 {
             // Counted as the run loop counts, so ops waiting on `progress` see these too.
             match events.try_recv() {
                 Ok(event) => {
@@ -829,8 +948,14 @@ impl Watcher {
             }
             "Target.targetCreated" => {
                 if let Some(TargetEvent { target_info }) = parse(params) {
+                    let tab = is_tab(&target_info);
                     self.created(target_info);
-                    self.observe_context().await;
+                    // Only a new tab can need an observer of its own: frames and workers attach
+                    // through their tab's session. A tab listing per frame was most of what a
+                    // page that churns frames cost the watcher (every ad frame lists every tab).
+                    if tab {
+                        self.observe_context().await;
+                    }
                 }
             }
             "Target.targetInfoChanged" => {
@@ -1397,7 +1522,7 @@ impl Watcher {
                     self.sessions.insert(session_id.clone(), tab.clone());
                     self.frame_logs.insert(session_id.clone(), FrameLog::Off);
                     if self.lifecycle_sources.accepts(&session_id) {
-                        self.seed_lifecycle(&tab, &session_id).await;
+                        self.seed_frame_session(&tab, &session_id).await;
                     }
                     self.lease_frame_log(&session_id).await;
                 }
@@ -1538,6 +1663,68 @@ impl Watcher {
         }
     }
 
+    /// [`Self::seed_lifecycle`] for a new out-of-process frame session, off the loop: the read
+    /// goes out now and its answer is applied when it comes back ([`Seeding`]).
+    async fn seed_frame_session(&mut self, tab: &TargetId, session: &SessionId) {
+        let Some(seeded) = self.seeded.clone() else {
+            self.seed_lifecycle(tab, session).await;
+            return;
+        };
+        self.seeding.insert(
+            session.clone(),
+            Seeding {
+                tab: tab.clone(),
+                stale: HashSet::new(),
+            },
+        );
+        let protocol = self.browser.protocol_session(session.clone());
+        let session = session.clone();
+        drop(tokio::spawn(async move {
+            let tree = time::timeout(
+                Duration::from_secs(1),
+                protocol.send_value("Page.getFrameTree", json!({})),
+            )
+            .await
+            .ok()
+            .and_then(Result::ok);
+            let _ = seeded.send(SeededTree { session, tree });
+        }));
+    }
+
+    /// A frame session's tree came back: its frames join the tab's, less those removed or
+    /// renewed since it was asked. Nothing if the session detached or events were lost since.
+    fn seeded_tree(&mut self, SeededTree { session, tree }: SeededTree) {
+        if let (Some(seeding), Some(tree)) = (self.seeding.remove(&session), tree) {
+            self.lifecycle
+                .seed_except(&seeding.tab, tree, &seeding.stale);
+        }
+    }
+
+    /// Marks, for the tree reads in flight on `tab`, a frame this event removes or gives a new
+    /// document: a tree read before it holds that frame's old subtree.
+    fn mark_stale(&mut self, tab: &TargetId, method: &str, params: &Value) {
+        if self.seeding.is_empty() {
+            return;
+        }
+        let frame = match method {
+            "Page.frameDetached" => parse::<FrameDetached>(params.clone())
+                .filter(|detached| detached.reason != "swap")
+                .map(|detached| detached.frame_id),
+            "Page.frameNavigated" => {
+                parse::<FrameNavigated>(params.clone()).map(|navigated| navigated.frame.id)
+            }
+            _ => None,
+        };
+        let Some(frame) = frame.map(FrameId) else {
+            return;
+        };
+        for seeding in self.seeding.values_mut() {
+            if seeding.tab == *tab {
+                seeding.stale.insert(frame.clone());
+            }
+        }
+    }
+
     /// Both public callbacks and navigation waits observe the same ordered CDP transition.
     async fn frame_changed(&mut self, method: &str, session: Option<&SessionId>, params: Value) {
         if let Some(session) = session {
@@ -1579,6 +1766,7 @@ impl Watcher {
     /// frame's commit. Same-document navigations and process swaps change no number.
     async fn frame_lifecycle(&mut self, method: &str, session: &SessionId, params: &Value) {
         if let Some(target) = self.target_of(session).await {
+            self.mark_stale(&target, method, params);
             for event in self.lifecycle.record(&target, method, params) {
                 self.writer.record(PageEvent::FrameLifecycle(event));
             }
@@ -1985,14 +2173,57 @@ mod worker_observation_tests {
         BrowserSession, BrowserSessionHooks, CdpConnection, SessionId, TabId, TargetId,
     };
     use serde_json::json;
+    use tokio::sync::broadcast;
     use tokio::task;
 
-    use super::{Watcher, WatcherHandle};
+    use super::{EventFence, Watcher, WatcherHandle};
     use crate::events::worker_table::WorkerInfo;
     use crate::events::{EventHub, PageEvent, PageEventKind, Subscription, WatcherProgress};
     use crate::run_state::RunState;
     use crate::snapshot::{Baseline, SnapshotBaselines, SnapshotForm, TextForm};
     use crate::world::FrameAttachLog;
+
+    /// A request is owed only the events broadcast before its fence: the watcher stops there
+    /// with later ones still queued, so a page that keeps sending (frames that attach and
+    /// detach all the time) cannot hold a reply past the events it is owed.
+    #[tokio::test]
+    async fn a_drain_stops_at_its_fence_while_later_events_wait() -> Result<(), Box<dyn Error>> {
+        let connection = TestConnection::new([]);
+        let browser = BrowserSession::new(
+            Arc::clone(&connection) as Arc<dyn CdpConnection>,
+            BrowserSessionHooks::default(),
+        );
+        let (_hub, writer) = EventHub::new();
+        let progress = Arc::new(WatcherProgress::default());
+        let (mut watcher, _found) = Watcher::new(
+            browser,
+            writer,
+            Arc::new(FrameAttachLog::default()),
+            Arc::clone(&progress),
+            Arc::new(SnapshotBaselines::default()),
+        );
+        let (sender, mut events) = broadcast::channel(16);
+        progress.start(0, 0);
+        for n in 0..10 {
+            sender
+                .send(CdpEvent {
+                    method: "Page.lifecycleEvent".to_owned(),
+                    params: json!({ "n": n }),
+                    session_id: None,
+                })
+                .map_err(|error| error.to_string())?;
+        }
+        watcher.drain_through(&mut events, EventFence(3)).await;
+        assert_eq!(progress.events_handled(), 3, "every event before the fence");
+        assert_eq!(events.len(), 7, "the later ones wait for the run loop");
+        watcher.drain_through(&mut events, EventFence(100)).await;
+        assert_eq!(
+            progress.events_handled(),
+            10,
+            "short of its fence, a drain ends when nothing more is queued"
+        );
+        Ok(())
+    }
 
     /// A tab's snapshot baseline names its main frame's document: a new document or a closed tab
     /// drops it, and nothing else does (a same-document navigation, a child frame's commit,
