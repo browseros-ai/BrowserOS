@@ -149,7 +149,7 @@ pub fn router(state: AppState) -> Router<AppState> {
         .route("/api/v1/skills/{name}/flow", get(skills::flow))
         .route(
             "/api/v1/skills/{name}/ultrafast/approve-write",
-            post(skills::approve_write),
+            post(skills::approve_write).delete(skills::revoke_write),
         )
         .nest_service(
             "/mcp",

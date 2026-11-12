@@ -28,6 +28,10 @@ struct TestApp {
 }
 
 async fn test_app() -> anyhow::Result<TestApp> {
+    test_app_with(true).await
+}
+
+async fn test_app_with(ultrafast: bool) -> anyhow::Result<TestApp> {
     let dir = tempfile::tempdir()?;
     let config = Arc::new(Config {
         server_port: 9200,
@@ -46,6 +50,7 @@ async fn test_app() -> anyhow::Result<TestApp> {
         behavior_ignored: Vec::new(),
     });
     let state = AppState::new_with_home(config, dir.path().join("home")).await?;
+    state.ultrafast.set(ultrafast);
     Ok(TestApp {
         router: build_router(state.clone()),
         _dir: dir,
@@ -486,5 +491,131 @@ async fn a_repair_keeps_handover_inputs_added_while_it_was_verified() -> anyhow:
         .await?;
     let saved = flow::store::read(&dir)?.ok_or_else(|| anyhow::anyhow!("no flow"))?;
     assert_eq!(saved.meta.examples.len(), 1);
+    Ok(())
+}
+
+async fn post(router: &Router, uri: &str) -> anyhow::Result<StatusCode> {
+    let request = Request::builder()
+        .method("POST")
+        .uri(uri)
+        .header(header::HOST, "localhost")
+        .body(Body::empty())?;
+    Ok(router.clone().oneshot(request).await?.status())
+}
+
+async fn verified_write_flow(state: &AppState) -> anyhow::Result<()> {
+    create_skill(state, "neo-shop-add").await?;
+    flow::store::write(&state.skills.skill_dir("neo-shop-add"), &two_step_flow())?;
+    let mut row = flow::new_row("neo-shop-add", FlowStatus::Verified);
+    row.effects = Some("write".to_string());
+    state.skills.put_flow_row(row).await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn skills_carry_no_ultrafast_state_while_it_is_off() -> anyhow::Result<()> {
+    let app = test_app_with(false).await?;
+    verified_write_flow(&app.state).await?;
+
+    let (status, list) = get(&app.router, "/api/v1/skills").await?;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(list["items"][0]["name"], "neo-shop-add");
+    assert!(list["items"][0].get("ultrafast").is_none(), "{list}");
+    let (status, detail) = get(&app.router, "/api/v1/skills/neo-shop-add").await?;
+    assert_eq!(status, StatusCode::OK);
+    assert!(detail["skill"].get("ultrafast").is_none(), "{detail}");
+
+    let row = app.state.skills.flow_row("neo-shop-add").await?;
+    assert_eq!(
+        row.map(|row| row.status),
+        Some(FlowStatus::Verified.as_str().to_string())
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn flow_routes_answer_not_found_while_ultrafast_is_off() -> anyhow::Result<()> {
+    let app = test_app_with(false).await?;
+    verified_write_flow(&app.state).await?;
+
+    let (status, body) = get(&app.router, "/api/v1/skills/neo-shop-add/flow").await?;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(body["code"], "skill_not_found", "{body}");
+    let status = post(
+        &app.router,
+        "/api/v1/skills/neo-shop-add/ultrafast/approve-write",
+    )
+    .await?;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
+    let row = app.state.skills.flow_row("neo-shop-add").await?;
+    assert_eq!(row.map(|row| row.write_approved), Some(false));
+    Ok(())
+}
+
+#[tokio::test]
+async fn skill_files_follow_the_switch_and_keep_hand_written_sections() -> anyhow::Result<()> {
+    let app = test_app().await?;
+    let state = &app.state;
+    verified_write_flow(state).await?;
+    let raw = "---\nname: neo-shop-add\ndescription: \"Add to cart\"\ntools: browseros-neo\n---\n\n## Steps\n1. Open the search\n2. Add the first match\n\n## Before you start\n- Sign in to the India store.\n";
+    let (_, detail) = put(
+        &app.router,
+        "/api/v1/skills/neo-shop-add",
+        json!({ "body": raw }),
+    )
+    .await?;
+    assert!(
+        detail["body"]
+            .as_str()
+            .is_some_and(|body| body.contains("## Run it fast"))
+    );
+
+    state.skills.sync_skill_md(false).await?;
+    let plain = state.skills.get("neo-shop-add").await?;
+    assert!(!plain.body.contains("Run it fast"), "{}", plain.body);
+    assert!(!plain.body.contains("run_skill"), "{}", plain.body);
+    assert!(
+        plain
+            .body
+            .contains("## Before you start\n- Sign in to the India store.\n"),
+        "{}",
+        plain.body
+    );
+    state.skills.sync_skill_md(false).await?;
+    let again = state.skills.get("neo-shop-add").await?;
+    assert_eq!(again.view.model.version, plain.view.model.version);
+    assert!(flow::store::read(&state.skills.skill_dir("neo-shop-add"))?.is_some());
+
+    state.skills.sync_skill_md(true).await?;
+    let fast = state.skills.get("neo-shop-add").await?;
+    assert!(fast.body.contains("## Run it fast"), "{}", fast.body);
+    assert!(fast.body.contains("## Before you start"), "{}", fast.body);
+    Ok(())
+}
+
+#[tokio::test]
+async fn skill_files_without_a_running_flow_are_left_as_written() -> anyhow::Result<()> {
+    let app = test_app_with(false).await?;
+    let state = &app.state;
+    create_skill(state, "neo-shop-add").await?;
+    state
+        .skills
+        .put_flow_row(flow::new_row("neo-shop-add", FlowStatus::Off))
+        .await?;
+    let raw = "---\nname: neo-shop-add\ndescription: \"Add to cart\"\ntools: browseros-neo\n---\n\n## Steps\n1. Open the search\n   - Use the India store, never the global one.\n2. Add the first match\n   ```js\n   await page.click('[data-add]')\n   ```\n";
+    let (status, _) = put(
+        &app.router,
+        "/api/v1/skills/neo-shop-add",
+        json!({ "body": raw }),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK);
+    let path = state.skills.get("neo-shop-add").await?.view.model.body_path;
+    let before = tokio::fs::read(&path).await?;
+
+    state.skills.sync_skill_md(false).await?;
+
+    assert_eq!(tokio::fs::read(&path).await?, before);
     Ok(())
 }

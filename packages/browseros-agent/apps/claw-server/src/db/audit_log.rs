@@ -8,6 +8,7 @@ use crate::{
             tasks, tool_dispatches,
         },
         session_efficiency_stats::ELIGIBLE_TOKEN_ESTIMATOR_VERSION,
+        ultrafast_runs::{UltrafastRunStats, finished_without_agent, ultrafast_run_stats},
     },
     error::AppResult,
     ids::DispatchId,
@@ -766,6 +767,47 @@ impl AuditLog {
             start_event,
             end_event,
         }))
+    }
+
+    /// Ultrafast stats for each listed session that had a skill run without the agent; sessions
+    /// without one are missing from the map.
+    pub async fn ultrafast_run_stats(
+        &self,
+        session_ids: &[String],
+    ) -> AppResult<HashMap<String, UltrafastRunStats>> {
+        let mut by_session = HashMap::new();
+        if session_ids.is_empty() {
+            return Ok(by_session);
+        }
+        let conn = self.db.connection();
+        let with_skill_runs = ToolDispatches::find()
+            .filter(tool_dispatches::Column::SessionId.is_in(session_ids.iter().cloned()))
+            .filter(tool_dispatches::Column::ToolName.eq("run_skill"))
+            .all(conn)
+            .await?
+            .into_iter()
+            .filter(finished_without_agent)
+            .map(|row| row.session_id)
+            .collect::<std::collections::HashSet<_>>();
+        if with_skill_runs.is_empty() {
+            return Ok(by_session);
+        }
+        let rows = ToolDispatches::find()
+            .filter(tool_dispatches::Column::SessionId.is_in(with_skill_runs))
+            .order_by_asc(tool_dispatches::Column::CreatedAt)
+            .order_by_asc(tool_dispatches::Column::Id)
+            .all(conn)
+            .await?;
+        let mut grouped: HashMap<String, Vec<ToolDispatchRow>> = HashMap::new();
+        for row in rows {
+            grouped.entry(row.session_id.clone()).or_default().push(row);
+        }
+        for (session_id, dispatches) in grouped {
+            if let Some(stats) = ultrafast_run_stats(&dispatches) {
+                by_session.insert(session_id, stats);
+            }
+        }
+        Ok(by_session)
     }
 
     pub async fn list_session_screenshots(

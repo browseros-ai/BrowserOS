@@ -48,10 +48,15 @@ pub struct AppState {
     pub harness: Arc<HarnessService>,
     pub skills: Arc<SkillService>,
     pub skill_runs: Arc<SkillRunService>,
+    /// Read through `ultrafast_enabled`, which also keeps hosted servers out.
+    pub ultrafast: Arc<crate::services::flow::switch::UltrafastSwitch>,
+    /// Single-use answers to the "with your agent or without" question, minted per write flow.
+    pub consent_tokens: Arc<crate::services::flow::consent::ConsentTokens>,
     pub analytics: Arc<AnalyticsService>,
     pub error_reporter: Arc<crate::services::error_reporting::ErrorReporter>,
     pub feedback_cohort: Arc<crate::services::feedback_cohort::FeedbackCohort>,
     pub feedback_invites: Arc<crate::db::feedback_invite::FeedbackInviteRepository>,
+    pub tool_calls_daily: Arc<crate::db::tool_calls_daily::ToolCallsDailyRepository>,
     pub profiles: Arc<ProfileService>,
     pub sessions: Arc<Sessions>,
     /// Saved native-profile intent is separate from agent profiles and live browser state.
@@ -76,6 +81,9 @@ pub struct AppState {
     /// `/system/info` so the app can prompt an update when the database is ahead of the server.
     pub migration: MigrationOutcome,
 }
+
+/// The plan feature that turns ultrafast skills on.
+pub const ULTRAFAST_FEATURE: &str = "claw.ultrafast";
 
 /// Overall cap on how long a human-help request stays open before it is reaped, so a crashed or
 /// non-looping agent never leaves a stale "needs you" request behind.
@@ -127,6 +135,9 @@ impl AppState {
         let feedback_invites = Arc::new(crate::db::feedback_invite::FeedbackInviteRepository::new(
             database.clone(),
         ));
+        let tool_calls_daily = Arc::new(
+            crate::db::tool_calls_daily::ToolCallsDailyRepository::new(database.clone()),
+        );
         let skill = load_browserclaw_skill(&config.resources_dir, config.behavior.tab_grouping)?;
         let claude_desktop = Arc::new(crate::services::claude_desktop::ClaudeDesktop::new(
             &home_dir,
@@ -259,10 +270,13 @@ impl AppState {
             harness,
             skills,
             skill_runs,
+            ultrafast: Arc::default(),
+            consent_tokens: Arc::default(),
             analytics,
             error_reporter,
             feedback_cohort,
             feedback_invites,
+            tool_calls_daily,
             profiles,
             sessions,
             targets,
@@ -280,6 +294,27 @@ impl AppState {
             shutdown,
             migration,
         })
+    }
+
+    /// Whether saved skills compile into ultrafast flows. Off by default, so skills save and run
+    /// the regular way; hosted servers never offer them.
+    #[must_use]
+    pub fn ultrafast_enabled(&self) -> bool {
+        self.ultrafast.is_on() && !self.config.mode.is_hosted()
+    }
+
+    /// Follows the plan: ultrafast skills are on while it includes them. When that changes,
+    /// SKILL.md files follow, and connected agents hear about it through their tool list.
+    /// Returns whether it changed.
+    pub async fn sync_ultrafast_with_plan(&self) -> bool {
+        let on = !self.config.mode.is_hosted() && self.billing.has_feature(ULTRAFAST_FEATURE).await;
+        if !self.ultrafast.set(on) {
+            return false;
+        }
+        if let Err(error) = self.skills.sync_skill_md(self.ultrafast_enabled()).await {
+            tracing::warn!(error = %error, "skill file sync failed");
+        }
+        true
     }
 
     pub async fn live_tab_activity(&self) -> Vec<TabActivityRecord> {

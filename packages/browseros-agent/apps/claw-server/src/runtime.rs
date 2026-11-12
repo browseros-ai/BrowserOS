@@ -10,6 +10,8 @@ use tracing::{error, info, warn};
 const TASK_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 const SESSION_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 const AUDIT_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
+/// How often the ultrafast switch re-reads the plan. Buying or ending a plan shows up within this.
+const ULTRAFAST_GATE_EVERY: Duration = Duration::from_secs(10);
 
 #[derive(Clone, Debug, Default)]
 pub struct ShutdownHandle {
@@ -139,6 +141,34 @@ impl AppRuntime {
                 }),
             },
             BackgroundTask {
+                name: "daily tool usage report",
+                handle: tokio::spawn({
+                    let state = state.clone();
+                    let cancel = shutdown.child_token();
+                    async move {
+                        let mut ticker = tokio::time::interval(Duration::from_secs(60 * 60));
+                        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+                        loop {
+                            tokio::select! {
+                                () = cancel.cancelled() => return,
+                                _ = ticker.tick() => {
+                                    if let Err(error) =
+                                        crate::services::tool_usage::flush_finished_days(
+                                            &state.tool_calls_daily,
+                                            &state.analytics,
+                                            crate::clock::now_epoch_ms(),
+                                        )
+                                        .await
+                                    {
+                                        warn!(error = %error, "daily tool usage report failed");
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }),
+            },
+            BackgroundTask {
                 name: "recording payload migration",
                 handle: state
                     .recordings
@@ -158,6 +188,34 @@ impl AppRuntime {
                             Ok(_) => {}
                             Err(error) => {
                                 warn!(error = %error, "session efficiency reconciliation failed");
+                            }
+                        }
+                    }
+                }),
+            },
+            BackgroundTask {
+                name: "ultrafast plan gate",
+                handle: tokio::spawn({
+                    let state = state.clone();
+                    let cancel = shutdown.child_token();
+                    async move {
+                        // The first pass always brings SKILL.md in line, even when the plan
+                        // leaves the switch where it started.
+                        if !state.sync_ultrafast_with_plan().await
+                            && let Err(error) =
+                                state.skills.sync_skill_md(state.ultrafast_enabled()).await
+                        {
+                            warn!(error = %error, "skill file sync failed");
+                        }
+                        // Polled rather than pushed: a plan also ends by the clock alone.
+                        let mut ticker = tokio::time::interval(ULTRAFAST_GATE_EVERY);
+                        ticker.tick().await;
+                        loop {
+                            tokio::select! {
+                                () = cancel.cancelled() => return,
+                                _ = ticker.tick() => {
+                                    state.sync_ultrafast_with_plan().await;
+                                }
                             }
                         }
                     }

@@ -4,7 +4,11 @@ use crate::{
     db::entities::{skill_flows, skill_runs},
     error::{AppError, AppResult, CanonicalError, RequestId},
     services::{
-        flow::{self, FlowStatus, ULTRAFAST_ENABLED},
+        flow::{
+            FlowStatus,
+            consent::{self, Decision},
+            prose, store,
+        },
         skills::{CreateSkill, SkillDetailView, SkillOrigin, SkillView, UpdateSkill},
     },
 };
@@ -45,7 +49,7 @@ pub(super) async fn list(
             .or_default()
             .push(run);
     }
-    let mut flows: HashMap<String, skill_flows::Model> = if ULTRAFAST_ENABLED {
+    let mut flows: HashMap<String, skill_flows::Model> = if shows_ultrafast(&state) {
         state
             .skills
             .flow_rows()
@@ -69,8 +73,8 @@ pub(super) async fn list(
             .map_err(|source| map_error(&request_id, source))?;
         let mut dto = skill_to_dto(view);
         dto.token_savings = Some(Box::new(token_savings));
-        if ULTRAFAST_ENABLED {
-            dto.ultrafast = Some(Box::new(ultrafast_to_dto(flow.as_ref())));
+        if shows_ultrafast(&state) {
+            dto.ultrafast = Some(Box::new(ultrafast_to_dto(&state, flow.as_ref(), None)));
         }
         items.push(dto);
     }
@@ -114,8 +118,8 @@ pub(super) async fn create(
         .await
         .map_err(|source| map_error(&request_id, source))?;
     let mut skill = skill_to_dto(view);
-    if ULTRAFAST_ENABLED {
-        skill.ultrafast = Some(Box::new(ultrafast_to_dto(None)));
+    if shows_ultrafast(&state) {
+        skill.ultrafast = Some(Box::new(ultrafast_to_dto(&state, None, None)));
     }
     Ok((StatusCode::CREATED, Json(skill)))
 }
@@ -140,7 +144,7 @@ pub(super) async fn update(
         )
         .await
         .map_err(|source| map_error(&request_id, source))?;
-    let detail = if ULTRAFAST_ENABLED {
+    let detail = if state.ultrafast_enabled() {
         state
             .skills
             .reconcile_flow_after_edit(&name)
@@ -196,6 +200,12 @@ pub(super) async fn flow(
     State(state): State<AppState>,
     Path(name): Path<String>,
 ) -> Result<Json<models::SkillFlowSource>, CanonicalError> {
+    if !state.ultrafast_enabled() {
+        return Err(map_error(
+            &request_id,
+            AppError::not_found("this skill has no ultrafast flow"),
+        ));
+    }
     let path = crate::services::flow::store::flow_path(&state.skills.skill_dir(&name));
     match tokio::fs::read_to_string(&path).await {
         Ok(source) => Ok(Json(models::SkillFlowSource::new(source))),
@@ -213,38 +223,94 @@ pub(super) async fn flow(
     }
 }
 
-/// Lets a skill's write flow run without asking again. Only a flow that writes needs it.
+/// Runs the skill without the agent: neo does it by itself, including its one click that changes
+/// something. Chosen in the app, for the skill's current click.
 pub(super) async fn approve_write(
     Extension(request_id): Extension<RequestId>,
     State(state): State<AppState>,
     Path(name): Path<String>,
 ) -> Result<Json<Skill>, CanonicalError> {
+    choose(&state, &request_id, &name, true).await.map(Json)
+}
+
+/// Runs the skill with the agent again, so it reads each page as it goes.
+pub(super) async fn revoke_write(
+    Extension(request_id): Extension<RequestId>,
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+) -> Result<Json<Skill>, CanonicalError> {
+    choose(&state, &request_id, &name, false).await.map(Json)
+}
+
+async fn choose(
+    state: &AppState,
+    request_id: &RequestId,
+    name: &str,
+    without_agent: bool,
+) -> Result<Skill, CanonicalError> {
+    if !state.ultrafast_enabled() {
+        return Err(map_error(
+            request_id,
+            AppError::not_found("this skill has no ultrafast flow"),
+        ));
+    }
+    let detail = state
+        .skills
+        .get(name)
+        .await
+        .map_err(|source| map_error(request_id, source))?;
     let row = state
         .skills
-        .flow_row(&name)
+        .flow_row(name)
         .await
-        .map_err(|source| map_error(&request_id, source))?;
-    let Some(mut row) = row.filter(|row| row.effects.as_deref() == Some("write")) else {
+        .map_err(|source| map_error(request_id, source))?;
+    let doc = store::read(&state.skills.skill_dir(name)).ok().flatten();
+    let labels = prose::prose_steps(&detail.body);
+    let (Some(mut row), Some(doc)) = (row, doc) else {
         return Err(map_error(
-            &request_id,
-            AppError::conflict("this skill has no write flow to approve"),
+            request_id,
+            AppError::conflict("this skill has no write flow to choose for"),
         ));
     };
-    row.write_approved = true;
-    row.updated_at = crate::clock::now_epoch_ms();
+    let Some(fingerprint) = consent::commit_fingerprint(&doc, &labels) else {
+        return Err(map_error(
+            request_id,
+            AppError::conflict("this skill has no write flow to choose for"),
+        ));
+    };
+    if without_agent && let Some(kind) = consent::always_with_agent(&doc, &labels) {
+        return Err(map_error(
+            request_id,
+            AppError::conflict(format!(
+                "{} Skills like this always run with your agent.",
+                kind.reason()
+            )),
+        ));
+    }
+    let now = crate::clock::now_epoch_ms();
+    row.write_approved = without_agent;
+    row.approved_commit = without_agent.then(|| fingerprint.clone());
+    row.with_agent_commit = (!without_agent).then_some(fingerprint);
+    row.approved_via = Some("app".to_string());
+    row.approved_at = Some(now);
+    row.approved_answer = None;
+    row.approved_client = None;
+    row.updated_at = now;
     state
         .skills
         .put_flow_row(row.clone())
         .await
-        .map_err(|source| map_error(&request_id, source))?;
-    let detail = state
+        .map_err(|source| map_error(request_id, source))?;
+    // SKILL.md follows: "Run it fast" while neo runs it alone, plain steps while the agent does.
+    state
         .skills
-        .get(&name)
+        .reconcile_flow_after_edit(name)
         .await
-        .map_err(|source| map_error(&request_id, source))?;
+        .map_err(|source| map_error(request_id, source))?;
+    let runs = runs_view(Some(&row), &doc, &labels, detail.view.model.site.as_deref());
     let mut skill = skill_to_dto(detail.view);
-    skill.ultrafast = Some(Box::new(ultrafast_to_dto(Some(&row))));
-    Ok(Json(skill))
+    skill.ultrafast = Some(Box::new(ultrafast_to_dto(state, Some(&row), runs)));
+    Ok(skill)
 }
 
 fn map_error(request_id: &RequestId, source: AppError) -> CanonicalError {
@@ -296,26 +362,98 @@ fn skill_to_dto(view: SkillView) -> Skill {
     skill
 }
 
-/// Fills the detail's ultrafast state, only while ultrafast skills are enabled.
+/// Whether skill views carry their ultrafast state: while it is on, and on a computer that can
+/// buy it, so a skill whose plan ended still shows what it would do.
+fn shows_ultrafast(state: &AppState) -> bool {
+    state.ultrafast_enabled() || (state.billing.is_available() && !state.config.mode.is_hosted())
+}
+
+/// Fills the detail's ultrafast state.
 async fn with_ultrafast(
     state: &AppState,
     request_id: &RequestId,
     mut detail: SkillDetail,
 ) -> Result<SkillDetail, CanonicalError> {
-    if ULTRAFAST_ENABLED {
+    if shows_ultrafast(state) {
         let flow = state
             .skills
             .flow_row(&detail.skill.name)
             .await
             .map_err(|source| map_error(request_id, source))?;
-        detail.skill.ultrafast = Some(Box::new(ultrafast_to_dto(flow.as_ref())));
+        let runs = store::read(&state.skills.skill_dir(&detail.skill.name))
+            .ok()
+            .flatten()
+            .and_then(|doc| {
+                let labels = prose::prose_steps(&detail.body);
+                runs_view(flow.as_ref(), &doc, &labels, detail.skill.site.as_deref())
+            });
+        detail.skill.ultrafast = Some(Box::new(ultrafast_to_dto(state, flow.as_ref(), runs)));
     }
     Ok(detail)
 }
 
-pub(super) fn ultrafast_to_dto(flow: Option<&skill_flows::Model>) -> models::SkillUltrafast {
+/// How a write skill runs and who chose that; `None` for a skill that only reads pages.
+fn runs_view(
+    row: Option<&skill_flows::Model>,
+    doc: &store::FlowDoc,
+    labels: &[String],
+    skill_site: Option<&str>,
+) -> Option<models::SkillUltrafastRuns> {
+    let fingerprint = consent::commit_fingerprint(doc, labels)?;
+    let decision = consent::decision(row, doc, labels);
+    let mode = match decision {
+        Decision::WithoutAgent => models::SkillUltrafastRunsMode::WithoutAgent,
+        _ => models::SkillUltrafastRunsMode::WithAgent,
+    };
+    let chosen = match decision {
+        Decision::WithoutAgent => {
+            row.and_then(|row| row.approved_commit.as_deref()) == Some(fingerprint.as_str())
+        }
+        Decision::WithAgent => true,
+        Decision::Undecided | Decision::AlwaysWith(_) => false,
+    };
+    let mut runs =
+        models::SkillUltrafastRuns::new(mode, chosen, consent::is_reask(row, doc, labels));
+    if let Decision::AlwaysWith(kind) = decision {
+        runs.always_with_agent = Some(match kind {
+            consent::AlwaysWith::Pay => models::SkillUltrafastAlwaysWith::Pay,
+            consent::AlwaysWith::Order => models::SkillUltrafastAlwaysWith::Order,
+            consent::AlwaysWith::Send => models::SkillUltrafastAlwaysWith::Send,
+            consent::AlwaysWith::Delete => models::SkillUltrafastAlwaysWith::Delete,
+        });
+    }
+    runs.click = consent::commit_label(doc, labels);
+    runs.site = Some(consent::site_label(doc, skill_site));
+    if chosen && let Some(row) = row {
+        runs.via = match row.approved_via.as_deref() {
+            Some("chat") => Some(models::SkillUltrafastChoiceVia::Chat),
+            Some("app") => Some(models::SkillUltrafastChoiceVia::App),
+            _ => None,
+        };
+        runs.chosen_at = row.approved_at;
+        runs.answer = row.approved_answer.clone();
+        runs.client = row.approved_client.clone();
+    }
+    Some(runs)
+}
+
+pub(super) fn ultrafast_to_dto(
+    state: &AppState,
+    flow: Option<&skill_flows::Model>,
+    runs: Option<models::SkillUltrafastRuns>,
+) -> models::SkillUltrafast {
+    let locked = !state.ultrafast_enabled();
+    // While locked every skill runs with the agent; the stored choice waits for the plan.
+    let runs = runs.map(|mut runs| {
+        if locked {
+            runs.mode = models::SkillUltrafastRunsMode::WithAgent;
+        }
+        runs
+    });
     let Some(flow) = flow else {
-        return models::SkillUltrafast::new(models::SkillUltrafastStatus::None, 0, false);
+        let mut dto = models::SkillUltrafast::new(models::SkillUltrafastStatus::None, 0, false);
+        dto.locked = Some(locked);
+        return dto;
     };
     let status = match FlowStatus::parse(&flow.status) {
         FlowStatus::None => models::SkillUltrafastStatus::None,
@@ -325,8 +463,10 @@ pub(super) fn ultrafast_to_dto(flow: Option<&skill_flows::Model>) -> models::Ski
         FlowStatus::Broken => models::SkillUltrafastStatus::Broken,
         FlowStatus::Off => models::SkillUltrafastStatus::Off,
     };
-    let mut dto =
-        models::SkillUltrafast::new(status, flow.flow_version, flow::writes_allowed(flow));
+    let without_agent = runs
+        .as_ref()
+        .is_some_and(|runs| runs.mode == models::SkillUltrafastRunsMode::WithoutAgent);
+    let mut dto = models::SkillUltrafast::new(status, flow.flow_version, without_agent);
     dto.reason = flow.status_reason.clone();
     dto.effects = match flow.effects.as_deref() {
         Some("read") => Some(models::SkillUltrafastEffects::Read),
@@ -336,6 +476,8 @@ pub(super) fn ultrafast_to_dto(flow: Option<&skill_flows::Model>) -> models::Ski
     dto.p50_ms = flow.p50_ms;
     dto.verified_at = flow.verified_at;
     dto.repaired_at = flow.repaired_at;
+    dto.locked = Some(locked);
+    dto.runs = runs.map(Box::new);
     dto
 }
 

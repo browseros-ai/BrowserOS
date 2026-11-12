@@ -193,9 +193,27 @@ flow:
       '500':
         $ref: ../responses.yaml#/InternalError
 approveWrite:
+  delete:
+    operationId: revokeSkillWrite
+    description: Run the skill with the agent again, so it reads each page as it goes.
+    parameters:
+      - $ref: ../parameters.yaml#/SkillName
+    responses:
+      '200':
+        description: The skill with its updated ultrafast state.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/skills.yaml#/Skill
+      '404':
+        $ref: ../responses.yaml#/NotFound
+      '409':
+        $ref: ../responses.yaml#/Conflict
+      '500':
+        $ref: ../responses.yaml#/InternalError
   post:
     operationId: approveSkillWrite
-    description: Let the skill's write flow run without asking again.
+    description: Run the skill without the agent, so neo does it by itself, including its one click that changes something.
     parameters:
       - $ref: ../parameters.yaml#/SkillName
     responses:

@@ -148,3 +148,26 @@ export function taskDayAndTime(startedAt: number, now: number): string {
   const day = days <= 0 ? 'Today' : taskWhen(startedAt, now)
   return `${day} at ${taskTime(startedAt)}`
 }
+
+/** "15 sec" under a minute, then "2 min" to the nearest minute. */
+export function ultrafastTime(durationMs: number): string {
+  const seconds = Math.max(1, Math.round(Math.max(0, durationMs) / 1_000))
+  if (seconds < 60) return `${seconds} sec`
+  return `${Math.round(seconds / 60)} min`
+}
+
+/** "1 page", "9 pages". */
+export function pagesLabel(pages: number): string {
+  return pages === 1 ? '1 page' : `${pages.toLocaleString('en-US')} pages`
+}
+
+/** Compact for a chip: "640", "4.2k", "62k". */
+export function chipTokens(tokens: number): string {
+  const value = Math.max(0, Math.round(tokens))
+  if (value < 1_000) return String(value)
+  if (value < 10_000) {
+    const thousands = Math.round(value / 100) / 10
+    return thousands >= 10 ? '10k' : `${thousands}k`
+  }
+  return `${Math.round(value / 1_000).toLocaleString('en-US')}k`
+}
