@@ -2,6 +2,8 @@
  * The CI gate around a finished `bun run test:neo-spec --ci` run: holds it to the platform's
  * committed list, reruns what one run cannot settle, and writes the verdict, the job summary and
  * the list the run supports; and `--expected-from`, which takes a CI run's list into the checkout.
+ * Explicit decisions in the run's scope manifest are also enforced as negative tests, apart
+ * from the positive expected list, so a passing refusal cannot be accepted by updating that list.
  * The rules live in node/expected.mjs; this file runs tests and moves files. spec.ts owns the
  * command line and hands in how to start run.mjs.
  */
@@ -163,6 +165,9 @@ export async function ciVerdict({
 }): Promise<number> {
   const expected = await import('./node/expected.mjs')
   const { loadScope } = await import('./node/scope.mjs')
+  const { judgeDecisions, decisionErrors } = await import(
+    './node/decisions.mjs'
+  )
   const read = (file: string) =>
     JSON.parse(fs.readFileSync(path.join(output, file), 'utf8'))
   const report = read('results.json')
@@ -173,10 +178,11 @@ export async function ciVerdict({
   const committed = expected.readExpected(listFile)
   const listed = committed ?? new Map()
   // The run's own copy of scope.json: the policy it was scored with.
-  const tests = expected.inScopeTests(
-    report,
-    loadScope(path.join(output, 'scope.json')),
-  )
+  const scope = loadScope(path.join(output, 'scope.json'))
+  const tests = expected.inScopeTests(report, scope)
+  // Positive expectations omit excluded tests. Decisions are a separate, unwaivable
+  // negative contract over the same raw report, including cases on known-flaky.tsv.
+  const decisions = judgeDecisions(report, scope, { complete })
   const { readKnownFlaky } = await import('./node/known-flaky.mjs')
   const knownFlaky = readKnownFlaky(knownFlakyFile)
   const verdict = expected.compare(tests, listed, { complete, knownFlaky })
@@ -223,6 +229,7 @@ export async function ciVerdict({
     // A rerun that broke the harness leaves its test's result unproven, even when another
     // attempt matched: a browser that survived cleanup can disturb the reruns after it.
     ...rerunErrors,
+    ...decisionErrors(decisions),
   ]
   // The update command lets a test leave the list only with this evidence from the same job;
   // the job's errors travel with it, so a broken run proves no pass.
@@ -245,6 +252,7 @@ export async function ciVerdict({
     scores,
     committed,
     next,
+    decisions,
     run: {
       platform,
       workers: run.workers,
@@ -269,6 +277,7 @@ export async function ciVerdict({
         platform,
         complete,
         committed: !!committed,
+        decisions,
         ...verdict,
       },
       null,

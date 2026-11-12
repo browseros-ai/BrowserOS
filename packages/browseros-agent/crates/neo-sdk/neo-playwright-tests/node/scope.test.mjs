@@ -18,6 +18,25 @@ function policy(entries) {
   return { ...loadScope(), entries }
 }
 
+test('a decision is optional for legacy exclusions, but must name a nonempty decision when present', () => {
+  const entry = {
+    file: 'tests/page/example.spec.ts',
+    ids: ['EX-901'],
+    reason: 'decided-deviation',
+  }
+  assert.doesNotThrow(() => validateScope(policy([entry])))
+  assert.doesNotThrow(() =>
+    validateScope(
+      policy([{ ...entry, decision: 'Owner isolated-world decision' }]),
+    ),
+  )
+  for (const decision of ['', ' ', null, 42])
+    assert.throws(
+      () => validateScope(policy([{ ...entry, decision }])),
+      /Invalid scope entry/,
+    )
+})
+
 function results(statuses) {
   return {
     suites: [
