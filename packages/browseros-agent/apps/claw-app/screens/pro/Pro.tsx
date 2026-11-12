@@ -228,7 +228,11 @@ function ProQuestions({ prices }: { prices: ProPrices | null }) {
       : []),
     {
       q: 'How do I cancel?',
-      a: 'Come back to this page and choose Cancel ultrafast. You keep ultrafast until the end of the month you already paid for, and you are not charged again.',
+      a: 'Come back to this page and choose Cancel ultrafast. You keep ultrafast until the end of the month you already paid for, and you are not charged again. After that, your skills still work, with your agent at normal speed.',
+    },
+    {
+      q: 'Does neo change things on sites without asking?',
+      a: 'No. When a skill adds to a cart or changes anything else on a site, you choose how it runs: with your agent checking each page, or without it. Your agent asks you the first time. You can change it on the skill’s page.',
     },
     {
       q: 'I reinstalled neo or got a new computer.',
