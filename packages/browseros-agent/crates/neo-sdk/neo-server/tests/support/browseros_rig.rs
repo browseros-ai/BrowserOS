@@ -426,8 +426,21 @@ pub fn outcome(result: &CallToolResult) -> Result<&Value, Box<dyn Error>> {
 /// remote-debugging HTTP server ignores `Connection: close` and keeps the socket open, so
 /// reading to EOF would never end.
 pub async fn get(port: u16, path: &str) -> Result<String, Box<dyn Error>> {
+    request(port, "GET", path).await
+}
+
+/// One plain HTTP/1.1 PUT with no body, as [`get`] reads its answer. Chromium's
+/// `/json/new?<url>` takes only PUT: a test opens a tab outside any script with it, as the owner
+/// would.
+pub async fn put(port: u16, path: &str) -> Result<String, Box<dyn Error>> {
+    request(port, "PUT", path).await
+}
+
+async fn request(port: u16, method: &str, path: &str) -> Result<String, Box<dyn Error>> {
     let mut stream = TcpStream::connect((Ipv4Addr::LOCALHOST, port)).await?;
-    let request = format!("GET {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n");
+    let request = format!(
+        "{method} {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+    );
     stream.write_all(request.as_bytes()).await?;
     let mut response = Vec::new();
     let mut chunk = [0_u8; 8192];
