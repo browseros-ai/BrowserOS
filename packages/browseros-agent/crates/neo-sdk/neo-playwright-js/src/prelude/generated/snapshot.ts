@@ -11,6 +11,7 @@ import type { Assert, UpstreamCheck } from '../upstream-check'
 import type { CallHeader } from '../wire'
 import type { LocatorSnapshotInput } from './types/LocatorSnapshotInput'
 import type { PageSnapshotInput } from './types/PageSnapshotInput'
+import type { SnapshotBaseline } from './types/SnapshotBaseline'
 import type { SnapshotBaselineInput } from './types/SnapshotBaselineInput'
 import type { SnapshotPendingInput } from './types/SnapshotPendingInput'
 import type { SnapshotResult } from './types/SnapshotResult'
@@ -18,9 +19,12 @@ import type { SnapshotResult } from './types/SnapshotResult'
 export type { LocatorSnapshotInput } from './types/LocatorSnapshotInput'
 export type { PageSnapshotInput } from './types/PageSnapshotInput'
 export type { PartialFrame } from './types/PartialFrame'
+export type { SnapshotBaseline } from './types/SnapshotBaseline'
 export type { SnapshotBaselineInput } from './types/SnapshotBaselineInput'
+export type { SnapshotForm } from './types/SnapshotForm'
 export type { SnapshotPendingInput } from './types/SnapshotPendingInput'
 export type { SnapshotResult } from './types/SnapshotResult'
+export type { TextForm } from './types/TextForm'
 
 /** Each snapshot op's input, after the `call` header every op shares. */
 export type SnapshotInputs = {
@@ -34,7 +38,7 @@ export type SnapshotInputs = {
 export type SnapshotOutputs = {
   'page.ariaSnapshot': SnapshotResult
   'locator.ariaSnapshot': SnapshotResult
-  'page.snapshotBaseline': string | null
+  'page.snapshotBaseline': SnapshotBaseline | null
   'page.snapshotPending': null
 }
 
@@ -67,7 +71,7 @@ export const SNAPSHOT_SEND = {
     call: CallHeader,
     input: SnapshotBaselineInput,
     signal?: SignalLike,
-  ): Promise<string | null> => invoke('page.snapshotBaseline', site, call, input, signal),
+  ): Promise<SnapshotBaseline | null> => invoke('page.snapshotBaseline', site, call, input, signal),
   'page.snapshotPending': (
     site: CallSite,
     call: CallHeader,
@@ -86,5 +90,5 @@ type _page_ariaSnapshot = Assert<UpstreamCheck<'page.ariaSnapshot', PageSnapshot
 //   adds clickable: Neo also marks elements Chromium reports clickable without a pointer cursor, so the condensed snapshot keeps their refs; read over CDP, never a script in the page
 type _locator_ariaSnapshot = Assert<UpstreamCheck<'locator.ariaSnapshot', LocatorSnapshotInput, pw.FrameAriaSnapshotParams, 'clickable', never, never>>
 //   result: Rust stitches the child frames and answers the JSON tree plus the frames it could not read, with `clickable` also marking `cursor: 'pointer'` on the elements Chromium reports clickable; the prelude renders the text, upstream's YAML for mode 'default' and Neo's condensed list of actionable lines for 'ai', each line upstream's own, and annotates the partial frames; a whole page's answer also names the document it read, for the delta baseline (no void check: Neo answers more than null on purpose)
-// page.snapshotBaseline: Neo only: Playwright keeps no snapshot between calls; Neo keeps the last whole-page v1 text per tab on the host for ariaSnapshot({ delta: true }), since each run is a fresh realm and the page's world must not hold cross-site frames' text
-// page.snapshotPending: Neo only: the delta baseline is the text the caller was given, which only the host knows when the run ends, so each whole-page v1 snapshot's text waits on the run's state until then
+// page.snapshotBaseline: Neo only: Playwright keeps no snapshot between calls; Neo keeps the last whole-page v1 text per tab on the host for ariaSnapshot({ delta: true }), since each run is a fresh realm and the page's world must not hold cross-site frames' text; it answers how that text was rendered too (its text option, urls and cap), since a delta takes the options it does not pass from it and the text alone does not say them
+// page.snapshotPending: Neo only: the delta baseline is the text the caller was given, which only the host knows when the run ends, so each whole-page v1 snapshot's text waits on the run's state until then, with how the prelude rendered it, which the baseline keeps for the next delta

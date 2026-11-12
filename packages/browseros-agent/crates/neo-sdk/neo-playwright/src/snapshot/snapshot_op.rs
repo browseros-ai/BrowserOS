@@ -37,6 +37,7 @@ use ts_rs::TS;
 
 use super::aria_snapshot::{self, AriaNode, ChildFrame, FrameSnapshot, PartialFrame};
 use super::clickable_targets::Marking;
+use super::{Baseline, SnapshotForm};
 use crate::backoff::Backoff;
 use crate::listed_enum::listed_enum;
 use crate::op_input::OpArgs;
@@ -89,13 +90,13 @@ impl SnapshotOp {
                 "page.snapshotBaseline",
                 PAGE,
                 "the tab's delta baseline: the last whole-page v1 snapshot text of that \
-                 document its caller was given, or null",
+                 document its caller was given, with its form, or null",
             ),
             Self::Pending => OpSpec::read(
                 "page.snapshotPending",
                 PAGE,
-                "records a whole-page v1 snapshot's text, and the string the call returned, \
-                 as the run's pending baseline for its tab",
+                "records a whole-page v1 snapshot's text, its form, and the string the call \
+                 returned, as the run's pending baseline for its tab",
             ),
         }
     }
@@ -125,7 +126,10 @@ fn route<'a, R: Route<'a>>(op: SnapshotOp, r: R) -> R::Out {
             wire::neo_only(
                 "Playwright keeps no snapshot between calls; Neo keeps the last whole-page v1 \
                  text per tab on the host for ariaSnapshot({ delta: true }), since each run is \
-                 a fresh realm and the page's world must not hold cross-site frames' text",
+                 a fresh realm and the page's world must not hold cross-site frames' text; it \
+                 answers how that text was rendered too (its text option, urls and cap), since a \
+                 delta takes the options it does not pass from it and the text alone does not \
+                 say them",
             ),
             read_baseline,
         ),
@@ -133,7 +137,8 @@ fn route<'a, R: Route<'a>>(op: SnapshotOp, r: R) -> R::Out {
             wire::neo_only(
                 "the delta baseline is the text the caller was given, which only the host \
                  knows when the run ends, so each whole-page v1 snapshot's text waits on the \
-                 run's state until then",
+                 run's state until then, with how the prelude rendered it, which the baseline \
+                 keeps for the next delta",
             ),
             record_pending,
         ),
@@ -219,6 +224,9 @@ struct PendingInput {
     document: Option<u32>,
     /// The whole page's v1 text, after the notice and the cap: what the baseline becomes.
     text: String,
+    /// How `text` was rendered, which the baseline keeps beside it: the form a later delta
+    /// takes the options it does not pass from.
+    form: SnapshotForm,
     /// The script passed `delta: true`. Without it, a stored baseline found means a delta was
     /// possible, which the run's reply turns into a tip.
     delta: bool,
@@ -381,7 +389,7 @@ async fn read_baseline(
     pw: &Playwright,
     scope: &OpScope<'_>,
     input: BaselineInput,
-) -> Result<Option<String>, PlaywrightError> {
+) -> Result<Option<Baseline>, PlaywrightError> {
     let page = OpPage::admit(pw, scope, input.page.tab()).await?;
     Ok(input
         .document
@@ -409,6 +417,7 @@ async fn record_pending(
         page.target_id().clone(),
         document,
         input.text,
+        input.form,
         input.returned,
     );
     Ok(())

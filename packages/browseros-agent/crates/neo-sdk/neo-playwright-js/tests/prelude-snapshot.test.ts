@@ -92,6 +92,8 @@ it('tests that page and locator snapshots send their mode and depth, the text pa
       call: { api: 'page.ariaSnapshot', timeoutMs: expect.any(Number) },
       page: { $neo: 'page', tab: 1007 },
       text: expect.any(String),
+      // How that text was rendered, which the baseline keeps beside it.
+      form: { text: 'kept', urls: false, maxTokens: 8000 },
       delta: false,
       target: undefined,
     },
@@ -261,7 +263,7 @@ it('tests that text, urls and maxTokens never reach the wire, and mode default i
   ).toEqual([
     // The v1 text asks for clickable marking; mode default sends what it always did.
     ['call', 'page', 'mode', 'clickable'],
-    ['call', 'page', 'text', 'delta'],
+    ['call', 'page', 'text', 'form', 'delta'],
     ['call', 'strict', 'mode', 'clickable'],
     ['call', 'page', 'mode'],
   ])

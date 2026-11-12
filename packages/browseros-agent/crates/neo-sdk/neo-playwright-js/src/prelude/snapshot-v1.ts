@@ -30,7 +30,12 @@ import {
 } from './snapshot-cap'
 import type { AriaNodeJSON } from './vendored'
 import { renderAriaSnapshotAsYaml } from './vendored'
-import type { PartialFrame, SnapshotResult } from './wire'
+import type {
+  PartialFrame,
+  SnapshotForm,
+  SnapshotResult,
+  TextForm,
+} from './wire'
 
 /** Roles an agent acts on: the list desktop Neo's clickable observer uses. */
 const INTERACTIVE = new Set<string>([
@@ -104,20 +109,72 @@ export type SnapshotV1Options = {
   maxTokens: number
 }
 
-/** The v1 text for one snapshot op's `{ json, partial }`. */
+/**
+ * The v1 options as the script passed them, each `undefined` when left out. A delta takes the
+ * ones left out from its baseline's form, so "left out" has to survive until then.
+ */
+export type PassedV1Options = {
+  text?: boolean
+  urls?: boolean
+  maxTokens?: number
+}
+
+/** `passed` with Neo's defaults for what the script left out; `text` stays to the length rule. */
+export function withDefaults(passed: PassedV1Options): SnapshotV1Options {
+  return {
+    text: passed.text,
+    urls: passed.urls ?? false,
+    maxTokens: passed.maxTokens ?? DEFAULT_MAX_TOKENS,
+  }
+}
+
+/**
+ * One v1 text and how it was rendered. They travel together because a delta baseline is stored
+ * with the form of the very text the caller was given (snapshot-delta.ts).
+ */
+export type RenderedV1 = { text: string; form: SnapshotForm }
+
+/** The v1 text for one snapshot op's `{ json, partial }`, and how it was rendered. */
 export function renderSnapshotV1(
   result: SnapshotResult,
   options: SnapshotV1Options,
+): RenderedV1 {
+  const { urls, maxTokens } = options
+  const textForm = options.text === false ? null : walk(result, urls, true)
+  let text: TextForm
+  if (textForm === null) text = 'never'
+  else if (options.text === true) text = 'always'
+  else text = joinedLength(textForm) <= TEXT_LIMIT_CHARS ? 'kept' : 'leftOut'
+  const form = { text, urls, maxTokens }
+  return { text: renderForm(result, form, textForm), form }
+}
+
+/**
+ * The v1 text rendered exactly as `form` says, the length rule not asked again: `kept` and
+ * `always` with the page's text whatever its length, `leftOut` under the notice whatever its
+ * length, `never` without either. A delta compares a new snapshot rendered so with its
+ * baseline, so the two differ only where the page does. Not an option a script can pass.
+ */
+export function renderSnapshotV1As(
+  result: SnapshotResult,
+  form: SnapshotForm,
 ): string {
-  const limit = options.maxTokens * CHARS_PER_TOKEN
-  if (options.text === false)
-    return cap(null, walk(result, options.urls, false), limit)
-  const textForm = walk(result, options.urls, true)
-  const textLength = joinedLength(textForm)
-  if (options.text === true || textLength <= TEXT_LIMIT_CHARS)
-    return cap(null, textForm, limit)
-  const interactiveForm = walk(result, options.urls, false)
-  const left = textLength - joinedLength(interactiveForm)
+  return renderForm(result, form, null)
+}
+
+/** `form`'s text, reusing the text-form walk when the caller already made it. */
+function renderForm(
+  result: SnapshotResult,
+  form: SnapshotForm,
+  walked: Printed[] | null,
+): string {
+  const limit = form.maxTokens * CHARS_PER_TOKEN
+  if (form.text === 'never')
+    return cap(null, walk(result, form.urls, false), limit)
+  const textForm = walked ?? walk(result, form.urls, true)
+  if (form.text !== 'leftOut') return cap(null, textForm, limit)
+  const interactiveForm = walk(result, form.urls, false)
+  const left = joinedLength(textForm) - joinedLength(interactiveForm)
   const about = aboutTokens(left)
   const notice = `# text left out: about ${about} tokens. Pass { text: true } to include it.`
   return cap(notice, interactiveForm, limit)

@@ -1978,7 +1978,7 @@ mod worker_observation_tests {
     use crate::events::worker_table::WorkerInfo;
     use crate::events::{EventHub, PageEvent, PageEventKind, Subscription, WatcherProgress};
     use crate::run_state::RunState;
-    use crate::snapshot::SnapshotBaselines;
+    use crate::snapshot::{Baseline, SnapshotBaselines, SnapshotForm, TextForm};
     use crate::world::FrameAttachLog;
 
     /// A tab's snapshot baseline names its main frame's document: a new document or a closed tab
@@ -2009,8 +2009,16 @@ mod worker_observation_tests {
         let snapshot = |target: &TargetId, text: &str| {
             let document = baselines.generation(target);
             let previous = baselines.stored(target, document);
-            baselines.commit(target, document, text.to_owned());
-            previous
+            let baseline = Baseline {
+                text: text.to_owned(),
+                form: SnapshotForm {
+                    text: TextForm::LeftOut,
+                    urls: false,
+                    max_tokens: 8000.0,
+                },
+            };
+            baselines.commit(target, document, baseline);
+            previous.map(|baseline| baseline.text)
         };
         snapshot(&tab, "tab text");
         snapshot(&other, "other text");

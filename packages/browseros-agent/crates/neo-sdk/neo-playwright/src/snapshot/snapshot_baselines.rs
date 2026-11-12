@@ -20,11 +20,16 @@
 //! the text in the caller's hands (`PendingBaselines`), so a delta is only ever relative to text
 //! the caller holds: a run that threw, or that only inspected the snapshot in code, leaves the
 //! older baseline in place.
+//!
+//! Each text is kept with its form ([`SnapshotForm`]), as the prelude rendered the string the
+//! caller was given, so a later delta can render the new snapshot the way the caller's copy was.
 
 use std::collections::HashMap;
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use browseros_core::TargetId;
+use serde::{Deserialize, Serialize};
+use ts_rs::TS;
 
 /// The longest text kept for one tab, in UTF-8 bytes. The v1 text is cut at `maxTokens` (8,000
 /// by default: 32,000 characters), so an ordinary snapshot is far below it; a longer one is not
@@ -32,6 +37,46 @@ use browseros_core::TargetId;
 /// `Defaults::MAX_RESULT_BYTES`): a longer text could not reach the caller as a run's value
 /// anyway.
 pub(crate) const MAX_BASELINE_BYTES: usize = 256 * 1024;
+
+/// How a whole page's v1 text was rendered (`prelude/snapshot-v1.ts`), kept beside it as its
+/// baseline's form. A delta takes every option it does not pass from this form and renders the
+/// new snapshot exactly so, because two texts rendered differently differ on lines that did not
+/// change: the page's text, every link's url, the cut.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct SnapshotForm {
+    /// How the page's text was decided, and what that came to.
+    pub(crate) text: TextForm,
+    /// `urls`, as the call resolved it.
+    pub(crate) urls: bool,
+    /// `maxTokens`, as the call resolved it: the cap the text was cut at.
+    pub(crate) max_tokens: f64,
+}
+
+/// The `text` option of the call that rendered a text, and, when the call left it out, what the
+/// length rule decided.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub(crate) enum TextForm {
+    /// `text` left out, and the page short enough that its text was kept.
+    Kept,
+    /// `text` left out, and the page's text left out under the notice line.
+    LeftOut,
+    /// `text: true`.
+    Always,
+    /// `text: false`.
+    Never,
+}
+
+/// A tab's stored baseline: the text its caller was given, and the form of that text.
+#[derive(Clone, Debug, PartialEq, Serialize, TS)]
+#[ts(rename = "SnapshotBaseline")]
+pub(crate) struct Baseline {
+    /// The whole page's v1 text, after the notice and the cap.
+    pub(crate) text: String,
+    /// How `text` was rendered.
+    pub(crate) form: SnapshotForm,
+}
 
 /// Every tab's baseline, by the tab's target (a tab's main frame keeps its target's id across
 /// navigations). Shared by the `Playwright` facade, whose ops read the generation and the
@@ -62,8 +107,8 @@ struct TabBaseline {
     /// The tab's main document, as counted here: a fresh generation when the entry is made,
     /// and another at each commit seen.
     generation: u32,
-    /// The last text of that document the tab's caller was given.
-    text: Option<String>,
+    /// The last text of that document the tab's caller was given, with its form.
+    baseline: Option<Baseline>,
 }
 
 impl SnapshotBaselines {
@@ -78,7 +123,7 @@ impl SnapshotBaselines {
                 tab.clone(),
                 TabBaseline {
                     generation,
-                    text: None,
+                    baseline: None,
                 },
             );
         }
@@ -86,12 +131,12 @@ impl SnapshotBaselines {
     }
 
     /// The tab's stored baseline, if it is of the document generation `document` names.
-    pub(crate) fn stored(&self, tab: &TargetId, document: u32) -> Option<String> {
+    pub(crate) fn stored(&self, tab: &TargetId, document: u32) -> Option<Baseline> {
         let inner = self.lock();
         if inner.current(tab) != document {
             return None;
         }
-        inner.tabs.get(tab).and_then(|entry| entry.text.clone())
+        inner.tabs.get(tab).and_then(|entry| entry.baseline.clone())
     }
 
     /// Whether [`SnapshotBaselines::stored`] would answer a text, without copying it.
@@ -101,19 +146,20 @@ impl SnapshotBaselines {
             && inner
                 .tabs
                 .get(tab)
-                .is_some_and(|entry| entry.text.is_some())
+                .is_some_and(|entry| entry.baseline.is_some())
     }
 
-    /// `text` becomes the tab's baseline: its run ended with it in the caller's hands. Kept only
-    /// while the tab is still on the document `document` names, and only up to
-    /// [`MAX_BASELINE_BYTES`]; otherwise the tab keeps what it had, which the caller also holds.
-    pub(crate) fn commit(&self, tab: &TargetId, document: u32, text: String) {
+    /// `baseline` becomes the tab's: its run ended with its text in the caller's hands. Kept
+    /// only while the tab is still on the document `document` names, and only up to
+    /// [`MAX_BASELINE_BYTES`] of text; otherwise the tab keeps what it had, which the caller also
+    /// holds.
+    pub(crate) fn commit(&self, tab: &TargetId, document: u32, baseline: Baseline) {
         let mut inner = self.lock();
-        if inner.current(tab) != document || text.len() > MAX_BASELINE_BYTES {
+        if inner.current(tab) != document || baseline.text.len() > MAX_BASELINE_BYTES {
             return;
         }
         if let Some(entry) = inner.tabs.get_mut(tab) {
-            entry.text = Some(text);
+            entry.baseline = Some(baseline);
         }
     }
 
@@ -127,7 +173,7 @@ impl SnapshotBaselines {
             return;
         }
         if let Some(entry) = inner.tabs.get_mut(tab) {
-            entry.text = None;
+            entry.baseline = None;
         }
     }
 
@@ -139,7 +185,7 @@ impl SnapshotBaselines {
         let generation = inner.next();
         let entry = inner.tabs.entry(tab.clone()).or_default();
         entry.generation = generation;
-        entry.text = None;
+        entry.baseline = None;
     }
 
     /// The tab closed.
@@ -153,7 +199,7 @@ impl SnapshotBaselines {
         let mut inner = self.lock();
         inner.floor = inner.next();
         for entry in inner.tabs.values_mut() {
-            entry.text = None;
+            entry.baseline = None;
         }
     }
 
@@ -180,20 +226,38 @@ impl Baselines {
 mod tests {
     use browseros_core::TargetId;
 
-    use super::{MAX_BASELINE_BYTES, SnapshotBaselines};
+    use super::{Baseline, MAX_BASELINE_BYTES, SnapshotBaselines, SnapshotForm, TextForm};
 
     fn tab(id: &str) -> TargetId {
         TargetId(id.to_owned())
     }
 
+    /// The form of a default snapshot that kept its text.
+    const KEPT: SnapshotForm = SnapshotForm {
+        text: TextForm::Kept,
+        urls: false,
+        max_tokens: 8000.0,
+    };
+
+    /// `text`, rendered as a default snapshot that kept its text.
+    fn text_form(text: &str) -> Baseline {
+        Baseline {
+            text: text.to_owned(),
+            form: KEPT,
+        }
+    }
+
     /// A snapshot of `id` whose run ended with its text given to the caller.
     fn given(baselines: &SnapshotBaselines, id: &str, text: &str) {
         let read = baselines.generation(&tab(id));
-        baselines.commit(&tab(id), read, text.to_owned());
+        baselines.commit(&tab(id), read, text_form(text));
     }
 
+    /// The stored text alone.
     fn stored(baselines: &SnapshotBaselines, id: &str) -> Option<String> {
-        baselines.stored(&tab(id), baselines.generation(&tab(id)))
+        baselines
+            .stored(&tab(id), baselines.generation(&tab(id)))
+            .map(|baseline| baseline.text)
     }
 
     #[test]
@@ -237,10 +301,10 @@ mod tests {
         let baselines = SnapshotBaselines::default();
         given(&baselines, "A", "first");
         let read = baselines.generation(&tab("A"));
-        assert_eq!(baselines.stored(&tab("A"), read).as_deref(), Some("first"));
+        assert_eq!(baselines.stored(&tab("A"), read), Some(text_form("first")));
         // The tree read happens, then the main frame commits before the run ends.
         baselines.document_changed(&tab("A"));
-        baselines.commit(&tab("A"), read, "old page".to_owned());
+        baselines.commit(&tab("A"), read, text_form("old page"));
         assert_eq!(stored(&baselines, "A"), None, "the new document has none");
         assert_eq!(
             baselines.stored(&tab("A"), read),
@@ -250,7 +314,7 @@ mod tests {
         // The same after lost events, on a tab that never committed before.
         let read = baselines.generation(&tab("B"));
         baselines.events_lost();
-        baselines.commit(&tab("B"), read, "b".to_owned());
+        baselines.commit(&tab("B"), read, text_form("b"));
         assert_eq!(stored(&baselines, "B"), None);
     }
 
@@ -259,7 +323,7 @@ mod tests {
         let baselines = SnapshotBaselines::default();
         let read = baselines.generation(&tab("A"));
         baselines.tab_closed(&tab("A"));
-        baselines.commit(&tab("A"), read, "of a closed tab".to_owned());
+        baselines.commit(&tab("A"), read, text_form("of a closed tab"));
         assert_eq!(baselines.lock().tabs.len(), 0, "no entry was made again");
     }
 
@@ -283,5 +347,52 @@ mod tests {
         let exact = "x".repeat(MAX_BASELINE_BYTES);
         given(&baselines, "A", &exact);
         assert_eq!(stored(&baselines, "A"), Some(exact));
+    }
+
+    #[test]
+    fn tests_that_a_baseline_keeps_its_form_until_it_is_replaced_or_dropped() {
+        let baselines = SnapshotBaselines::default();
+        let read = baselines.generation(&tab("A"));
+        let never = Baseline {
+            text: "- button \"Go\" [ref=e2]".to_owned(),
+            form: SnapshotForm {
+                text: TextForm::Never,
+                urls: true,
+                max_tokens: 20000.0,
+            },
+        };
+        baselines.commit(&tab("A"), read, never.clone());
+        assert_eq!(baselines.stored(&tab("A"), read), Some(never));
+        given(&baselines, "A", "a");
+        assert_eq!(
+            baselines.stored(&tab("A"), read),
+            Some(text_form("a")),
+            "the next text comes with its own form"
+        );
+        // A new document drops the text and its form together.
+        baselines.document_changed(&tab("A"));
+        let read = baselines.generation(&tab("A"));
+        assert_eq!(baselines.stored(&tab("A"), read), None);
+    }
+
+    #[test]
+    fn tests_that_a_baseline_answers_its_form_as_the_prelude_names_it()
+    -> Result<(), serde_json::Error> {
+        let baseline = Baseline {
+            text: "t".to_owned(),
+            form: SnapshotForm {
+                text: TextForm::LeftOut,
+                urls: false,
+                max_tokens: 8000.0,
+            },
+        };
+        assert_eq!(
+            serde_json::to_value(&baseline)?,
+            serde_json::json!({
+                "text": "t",
+                "form": { "text": "leftOut", "urls": false, "maxTokens": 8000.0 },
+            })
+        );
+        Ok(())
     }
 }

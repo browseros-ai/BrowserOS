@@ -30,9 +30,10 @@ it('tests that the blind page prints its expected text by default and with text:
       "return await page.ariaSnapshot({ mode: 'ai', text: false })",
     ),
   ).toBe(blindData('blind.v1-interactive.txt'))
-  expect(renderSnapshotV1(blind, { urls: false, maxTokens: 8_000 })).toBe(
-    blindData('blind.v1-default.txt'),
-  )
+  expect(renderSnapshotV1(blind, { urls: false, maxTokens: 8_000 })).toEqual({
+    text: blindData('blind.v1-default.txt'),
+    form: { text: 'kept', urls: false, maxTokens: 8000 },
+  })
 })
 
 type Node = SnapshotResult['json'][number]
@@ -46,7 +47,7 @@ const render = (
   renderSnapshotV1(
     { json, partial },
     { urls: false, maxTokens: 8_000, ...options },
-  )
+  ).text
 const both = (json: Node[]): [string, string] => [
   render(json, { text: true }),
   render(json, { text: false }),

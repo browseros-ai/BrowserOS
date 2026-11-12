@@ -5,7 +5,7 @@
 // bound) are tested in Rust, and live in tests/prelude_live.rs and playwright_browseros.rs.
 import { describe, expect, it } from 'bun:test'
 import { NO_BASELINE, NO_CHANGE } from '../src/prelude/snapshot-delta'
-import type { SnapshotResult } from '../src/prelude/wire'
+import type { SnapshotForm, SnapshotResult } from '../src/prelude/wire'
 import {
   type Call,
   loadPrelude,
@@ -50,8 +50,15 @@ const page = (label: string) =>
 type PendingInput = {
   page: { tab: number }
   text: string
+  form: SnapshotForm
   returned?: string
 }
+
+/** How a default snapshot that kept its text was rendered. */
+const KEPT: SnapshotForm = { text: 'kept', urls: false, maxTokens: 8000 }
+
+/** What the host keeps per tab, as Rust's `Baseline` answers it. */
+type Stored = { text: string; form: SnapshotForm }
 
 /** Every string inside a returned value, as the run service looks for a snapshot in it. */
 function strings(value: unknown): string[] {
@@ -67,7 +74,7 @@ function strings(value: unknown): string[] {
  * button turns it to `Close`), and each run's pending texts, settled when the run ends.
  */
 class Host {
-  readonly stored = new Map<number, string>()
+  readonly stored = new Map<number, Stored>()
   label = 'Open'
   private pending: PendingInput[] = []
 
@@ -93,7 +100,10 @@ class Host {
         if (committed.has(entry.page.tab)) continue
         const returned = entry.returned ?? entry.text
         if (given.some((string) => string.includes(returned))) {
-          this.stored.set(entry.page.tab, entry.text)
+          this.stored.set(entry.page.tab, {
+            text: entry.text,
+            form: entry.form,
+          })
           committed.add(entry.page.tab)
         }
       }
@@ -147,7 +157,7 @@ describe('the baseline is the last text the caller was given', () => {
     await host.run(
       "const snap = await page.ariaSnapshot(); return snap.includes('Close')",
     )
-    expect(host.stored.get(1007)).toBe(page('Open'))
+    expect(host.stored.get(1007)?.text).toBe(page('Open'))
     expect(
       await host.run('return await page.ariaSnapshot({ delta: true })'),
     ).toBe(changed)
@@ -157,7 +167,7 @@ describe('the baseline is the last text the caller was given', () => {
     const host = new Host()
     // Console lines count too: that half is RunReply::shows, tested in neo-server.
     await host.run('return { snap: [await page.ariaSnapshot()] }')
-    expect(host.stored.get(1007)).toBe(page('Open'))
+    expect(host.stored.get(1007)).toEqual({ text: page('Open'), form: KEPT })
   })
 
   it("tests that a delta in one run compares against the baseline from the run's start", async () => {
@@ -172,7 +182,7 @@ describe('the baseline is the last text the caller was given', () => {
     expect(full).toBe(page('Middle'))
     // Against the text stored when the run started, not the run's own pending one.
     expect(delta).toBe(changed)
-    expect(host.stored.get(1007)).toBe(page('Close'))
+    expect(host.stored.get(1007)?.text).toBe(page('Close'))
   })
 
   it('tests that a locator snapshot with delta returns its ordinary text and sends no baseline op', async () => {
@@ -250,8 +260,10 @@ describe('what the baseline ops are sent', () => {
     expect(input).toEqual({
       page: { $neo: 'page', tab: 1007 },
       document: 1,
-      // The text after the notice and the cap: what the caller receives.
+      // The text after the notice and the cap: what the caller receives, and how it was
+      // rendered, at the cap the call passed.
       text,
+      form: { ...KEPT, maxTokens: 5 },
       delta: false,
     })
     // What is left of the script's 900 ms, never 0, which would mean no deadline.
@@ -264,7 +276,8 @@ describe('what the baseline ops are sent', () => {
       seed: SEED,
       answer: (call) => {
         if (call.name === 'page.ariaSnapshot') return tree('Close')
-        if (call.name === 'page.snapshotBaseline') return page('Open')
+        if (call.name === 'page.snapshotBaseline')
+          return { text: page('Open'), form: KEPT }
         return null
       },
     })
@@ -293,6 +306,7 @@ describe('what the baseline ops are sent', () => {
         page: { $neo: 'page', tab: 1007 },
         document: 1,
         text: page('Close'),
+        form: KEPT,
         delta: true,
         returned: changed,
       },

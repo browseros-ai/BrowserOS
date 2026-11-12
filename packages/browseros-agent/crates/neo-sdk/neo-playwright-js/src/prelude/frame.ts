@@ -54,9 +54,10 @@ import {
 import { renderSnapshot, upstreamSnapshots } from './snapshot'
 import { renderDelta } from './snapshot-delta'
 import {
-  DEFAULT_MAX_TOKENS,
+  type PassedV1Options,
+  type RenderedV1,
   renderSnapshotV1,
-  type SnapshotV1Options,
+  withDefaults,
 } from './snapshot-v1'
 import { type TimeoutOption, timeoutMs } from './timeouts'
 import type { KeyList } from './upstream-check'
@@ -193,12 +194,14 @@ export function loadState(
 
 /**
  * The v1 format's options, read at once (the script may change its object while a locator's
- * page opens) and refused for a wrong type before any op is sent.
+ * page opens) and refused for a wrong type before any op is sent. Each stays `undefined` when
+ * left out: a delta takes those from its baseline's form, and everything else from Neo's
+ * defaults (`withDefaults`).
  */
 function snapshotV1Options(
   api: string,
   options: AriaSnapshotOptions,
-): SnapshotV1Options & { delta: boolean } {
+): PassedV1Options & { delta: boolean } {
   const { text, urls, maxTokens, delta } = options
   for (const [name, value] of [
     ['text', text],
@@ -219,12 +222,7 @@ function snapshotV1Options(
       api,
       `maxTokens: expected a positive number, got ${String(maxTokens)}`,
     )
-  return {
-    text,
-    urls: urls ?? false,
-    maxTokens: maxTokens ?? DEFAULT_MAX_TOKENS,
-    delta: delta ?? false,
-  }
+  return { text, urls, maxTokens, delta: delta ?? false }
 }
 
 /** The grouped reads share an identical target/strict input; each sender retains its result. */
@@ -1433,10 +1431,13 @@ export class Frame extends EventEmitter {
    *
    * A whole page's v1 text may then become the tab's delta baseline:
    *
-   *   page.ariaSnapshot      → { json, partial, document } → v1 text, capped
-   *   delta: true            page.snapshotBaseline → the tab's STORED baseline
-   *                            → renderDelta(stored, text)
-   *   page.snapshotPending   the text, and what the call returns, pending on the run's state
+   *   page.ariaSnapshot      → { json, partial, document }
+   *   no delta               → v1 text by the call's options, capped, and how it was rendered
+   *   delta: true            page.snapshotBaseline → the tab's STORED text and its form
+   *                            → renderDelta(stored, tree, options passed): rendered only now,
+   *                              since what the call leaves out comes from that form
+   *   page.snapshotPending   the whole text, its form, and what the call returns, pending on
+   *                          the run's state
    *
    * The host stores a pending text when the run ends, and only if the run ended ok and what
    * the call returned reached the caller (snapshot_baselines.rs, pending_baselines.rs). So a
@@ -1454,32 +1455,43 @@ export class Frame extends EventEmitter {
     const mode = options.mode ?? (upstreamSnapshots ? 'default' : 'ai')
     if (mode !== 'ai' || upstreamSnapshots)
       return renderSnapshot(await this._snapshot(api, selector, options, mode))
-    const { delta, ...format } = snapshotV1Options(api, options)
+    const { delta, ...passed } = snapshotV1Options(api, options)
     // The script's timeout and signal cover the whole call, the baseline ops included.
     const wait = this._wait(api, options)
     const deadline = new EventDeadline(api, null, Date.now(), wait.timeout)
     const result = await this._snapshot(api, selector, options, mode, true)
-    const text = renderSnapshotV1(result, format)
-    if (selector !== null) return text
+    if (selector !== null)
+      return renderSnapshotV1(result, withDefaults(passed)).text
     const { document } = result
     try {
       const page = await this._page._brand(api)
-      const returned = delta
-        ? renderDelta(
-            await send['page.snapshotBaseline'](
-              site,
-              this._call(api, deadline.left()),
-              { page, document },
-              wait.signal,
-            ),
-            text,
-          )
-        : text
+      let returned: string
+      let baseline: RenderedV1
+      if (delta) {
+        const stored = await send['page.snapshotBaseline'](
+          site,
+          this._call(api, deadline.left()),
+          { page, document },
+          wait.signal,
+        )
+        ;({ returned, baseline } = renderDelta(stored, result, passed))
+      } else {
+        baseline = renderSnapshotV1(result, withDefaults(passed))
+        returned = baseline.text
+      }
       await send['page.snapshotPending'](
         site,
         this._call(api, deadline.left()),
-        // A full call returns the text itself, which need not cross twice.
-        { page, document, text, delta, returned: delta ? returned : undefined },
+        // A full call returns the text itself, which need not cross twice. The form is set
+        // with the text it describes, so a baseline always says how the caller's copy was made.
+        {
+          page,
+          document,
+          text: baseline.text,
+          form: baseline.form,
+          delta,
+          returned: delta ? returned : undefined,
+        },
         wait.signal,
       )
       return returned

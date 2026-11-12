@@ -15,8 +15,9 @@
 //!  a selector with `:scope` inside `:has()`: its deep parsed brand reaches `$$eval` and `count`
 //!  page.ariaSnapshot({ delta: true }) across runs: the baseline is the last snapshot a run gave
 //!    its caller (not one a failed run took, one only inspected, nor one earlier in the run);
-//!    and the reply's tip after a full snapshot found a stored one: at most three per task, or
-//!    per tab for runs with no task
+//!    a delta after { text: true } on a page whose default leaves text out lists only the change,
+//!    in the text form; and the reply's tip after a full snapshot found a stored one: at most
+//!    three per task, or per tab for runs with no task
 //! ```
 //!
 //! Like `e2e_browseros.rs`, it runs only when `CLAW_SDK_E2E_BROWSER` names a BrowserOS binary.
@@ -243,6 +244,7 @@ async fn delta_and_tip(rig: &Rig) -> TestResult {
     rig.until_ready().await?;
     let client = rig.client().await?;
     delta_baselines(&client).await?;
+    delta_after_text(&client).await?;
     delta_tips(&client).await?;
     client.cancel().await?;
     Ok(())
@@ -324,6 +326,84 @@ async fn delta_baselines(client: &Client) -> TestResult {
         one_run.contains("\n-  - button \"Logged\" [ref=")
             && one_run.contains("\n+  - button \"Last\" [ref="),
         "against the run's starting baseline: {one_run}"
+    );
+    Ok(())
+}
+
+/// A page whose default snapshot leaves its text out (160 paragraphs, well over the 3,000-token
+/// limit), with a button that renames itself and shows a note when clicked.
+const TEXT_PAGE: &str = r##"
+const paragraphs = Array.from({ length: 160 }, (_, n) => `<p>Paragraph ${n} of the article, with words enough to fill a line.</p><a href="#p${n}">Link ${n}</a>`).join('');
+const html = '<title>Delta form</title><main><button onclick="this.textContent=\'Close\'; document.getElementById(\'note\').hidden=false">Open</button><p id="note" hidden>A new note</p>' + paragraphs + '</main>';
+const url = 'data:text/html,' + encodeURIComponent(html);
+const tab = context.pages().find((tab) => tab.url() === url);
+const p = tab ?? page;
+if (!tab) await p.goto(url);
+"##;
+
+/// The owner's flow (design section 7, the form of a delta): `{ text: true }` is given, a click,
+/// then `{ delta: true }`, which takes the text option from the baseline and so lists only what
+/// the click changed, with the page's text, instead of the whole page again.
+async fn delta_after_text(client: &Client) -> TestResult {
+    let task = json!({ "taskId": "delta-text-form" });
+    let first_line = delta_of(
+        client,
+        &format!("{TEXT_PAGE}\nreturn (await p.ariaSnapshot()).split('\\n')[0]"),
+        &task,
+    )
+    .await?;
+    assert!(
+        first_line.starts_with("# text left out: about "),
+        "the default leaves this page's text out: {first_line}"
+    );
+    let with_text = delta_of(
+        client,
+        &format!("{TEXT_PAGE}\nreturn await p.ariaSnapshot({{ text: true }})"),
+        &task,
+    )
+    .await?;
+    assert!(with_text.contains("\n  - text: Paragraph 159 of the article"));
+    let clicked = delta_of(
+        client,
+        &format!(
+            "{TEXT_PAGE}\nawait p.getByRole('button', {{ name: 'Open' }}).click()\n\
+             return await p.ariaSnapshot({{ delta: true }})"
+        ),
+        &task,
+    )
+    .await?;
+    assert!(
+        clicked.starts_with("# changes since your last snapshot of this tab: ")
+            && clicked.contains("\n+  - button \"Close\" ")
+            && clicked.contains("\n+  - text: A new note")
+            && !clicked.contains("Paragraph 40 "),
+        "only the click's change, in the text form: {clicked}"
+    );
+    assert!(clicked.len() < 2_000, "{} characters", clicked.len());
+    let unchanged = delta_of(
+        client,
+        &format!("{TEXT_PAGE}\nreturn await p.ariaSnapshot({{ delta: true }})"),
+        &task,
+    )
+    .await?;
+    assert_eq!(
+        unchanged,
+        "# no change since your last snapshot of this tab"
+    );
+    // A text option that disagrees with the baseline's is never compared: the whole page, as
+    // asked, without the page's text and without the notice.
+    let without = delta_of(
+        client,
+        &format!("{TEXT_PAGE}\nreturn await p.ariaSnapshot({{ delta: true, text: false }})"),
+        &task,
+    )
+    .await?;
+    assert!(
+        without.starts_with(
+            "# full snapshot: too much differs from your last snapshot to list as changes\n\
+             - main [ref="
+        ) && !without.contains("- text: Paragraph"),
+        "{without}"
     );
     Ok(())
 }

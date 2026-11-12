@@ -72,7 +72,10 @@ const ANSWERS = {
   'locator.elementHandles': [ELEMENT],
   'page.ariaSnapshot': { json: [], partial: [], document: 3 },
   'locator.ariaSnapshot': { json: [], partial: [] },
-  'page.snapshotBaseline': '- button "Go" [ref=e1]',
+  'page.snapshotBaseline': {
+    text: '- button "Go" [ref=e1]',
+    form: { text: 'kept', urls: false, maxTokens: 8000 },
+  },
   'page.frames': FRAMES,
   'page.opener': { opener: null },
   'page.evaluate': { value: { v: 'null' } },

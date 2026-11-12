@@ -1,14 +1,23 @@
 // `ariaSnapshot({ delta: true })`'s text (src/prelude/snapshot-delta.ts): the diff of two v1
-// texts. Which text a delta compares against, as scripts see it, is snapshot-baseline.test.ts.
+// texts rendered the same way (`listChanges`). How a delta renders the new snapshot from its
+// baseline's form is snapshot-delta-form.test.ts; which text it compares against, as scripts see
+// it, is snapshot-baseline.test.ts.
 import { describe, expect, it } from 'bun:test'
 import {
+  listChanges,
   NO_BASELINE,
   NO_CHANGE,
-  renderDelta,
   TOO_MUCH,
 } from '../src/prelude/snapshot-delta'
 
 const lines = (...text: string[]): string => text.join('\n')
+
+/** The changes from `previous` to `current`, which must be few enough to list. */
+const changed = (previous: string, current: string): string => {
+  const listed = listChanges(previous, current)
+  if (listed === null) throw new Error('too much to list')
+  return listed
+}
 
 /**
  * Thirty lines of a sidebar before the page proper, so that one change and its context are well
@@ -48,25 +57,24 @@ const page = (cart = 'Add to cart', extra: string[] = []): string =>
 
 describe('the delta text', () => {
   it('tests the four first lines: no baseline, no change, too much differs, changes', () => {
-    expect(renderDelta(null, page())).toBe(`${NO_BASELINE}\n${page()}`)
     expect(NO_BASELINE).toBe(
       '# full snapshot: no earlier snapshot of this page',
     )
-    expect(renderDelta(page(), page())).toBe(NO_CHANGE)
+    expect(listChanges(page(), page())).toBe(NO_CHANGE)
     expect(NO_CHANGE).toBe('# no change since your last snapshot of this tab')
     expect(TOO_MUCH).toBe(
       '# full snapshot: too much differs from your last snapshot to list as changes',
     )
     const other = lines('- button "Sign in" [ref=e1]', '- link "Help" [ref=e2]')
     // Everything differs: the changes would be longer than the page itself.
-    expect(renderDelta(page(), other)).toBe(`${TOO_MUCH}\n${other}`)
-    expect(renderDelta(page(), page('Remove from cart')).split('\n')[0]).toBe(
+    expect(listChanges(page(), other)).toBeNull()
+    expect(changed(page(), page('Remove from cart')).split('\n')[0]).toBe(
       '# changes since your last snapshot of this tab: 1 added, 1 removed',
     )
   })
 
   it('tests that a changed line inside a nested block names that block and keeps 3 lines of context on each side', () => {
-    expect(renderDelta(page(), page('Remove from cart'))).toBe(
+    expect(listChanges(page(), page('Remove from cart'))).toBe(
       lines(
         '# changes since your last snapshot of this tab: 1 added, 1 removed',
         '@@ main [ref=e6]',
@@ -84,7 +92,7 @@ describe('the delta text', () => {
 
   it('tests the hunk of a change two levels deep: the form is its block', () => {
     const coupon = page('Add to cart', ['    - alert: Code expired'])
-    expect(renderDelta(page(), coupon)).toBe(
+    expect(listChanges(page(), coupon)).toBe(
       lines(
         '# changes since your last snapshot of this tab: 1 added, 0 removed',
         '@@ form [ref=e8]',
@@ -102,7 +110,7 @@ describe('the delta text', () => {
   it('tests that a change at the top level has a bare @@ line', () => {
     const before = page()
     const after = `${before}\n- link "Cookies" [ref=e15]`
-    expect(renderDelta(before, after)).toBe(
+    expect(listChanges(before, after)).toBe(
       lines(
         '# changes since your last snapshot of this tab: 1 added, 0 removed',
         '@@',
@@ -117,7 +125,7 @@ describe('the delta text', () => {
   it('tests that a hunk which only removes lines finds its block in the old text', () => {
     const before = page('Add to cart', ['    - alert: Code expired'])
     // The old text's form holds the removed line; the new text has no line at that place.
-    expect(renderDelta(before, page())).toBe(
+    expect(listChanges(before, page())).toBe(
       lines(
         '# changes since your last snapshot of this tab: 0 added, 1 removed',
         '@@ form [ref=e8]',
@@ -140,7 +148,7 @@ describe('the delta text', () => {
         '- link "Terms" [ref=e14]',
         '- link "Terms" [ref=e14]\n- link "Jobs" [ref=e16]',
       )
-    expect(renderDelta(before, after)).toBe(
+    expect(listChanges(before, after)).toBe(
       lines(
         '# changes since your last snapshot of this tab: 1 added, 1 removed',
         '@@ navigation [ref=e2]',
@@ -169,11 +177,11 @@ describe('the delta text', () => {
       base
         .map((line, n) => (rows.includes(n) ? `${line} [active]` : line))
         .join('\n')
-    const near = renderDelta(base.join('\n'), at([40, 47]))
+    const near = changed(base.join('\n'), at([40, 47]))
     expect(
       near.split('\n').filter((line) => line.startsWith('@@')),
     ).toHaveLength(1)
-    const far = renderDelta(base.join('\n'), at([40, 48]))
+    const far = changed(base.join('\n'), at([40, 48]))
     expect(
       far.split('\n').filter((line) => line.startsWith('@@')),
     ).toHaveLength(2)
@@ -191,7 +199,7 @@ describe('the delta text', () => {
       '  - link "Help" [ref=e5]',
     )
     const after = `${before.replace(`${nav}\n`, '')}\n${nav}`
-    const delta = renderDelta(before, after)
+    const delta = changed(before, after)
     expect(delta.split('\n')[0]).toBe(
       '# changes since your last snapshot of this tab: 4 added, 4 removed',
     )
@@ -207,13 +215,13 @@ describe('the delta text', () => {
     const before = page()
     // Every link renamed: the changes would be about twice the page.
     const after = before.replace(/link "([^"]+)"/g, 'link "$1 now"')
-    expect(renderDelta(before, after)).toBe(`${TOO_MUCH}\n${after}`)
+    expect(listChanges(before, after)).toBeNull()
     // Every third sidebar link renamed: about half of the page's characters changed, so the
     // changes and their context pass half of the output.
     const third = before.replace(/"Story (\d*[0369])"/g, '"Story $1 now"')
-    expect(renderDelta(before, third)).toBe(`${TOO_MUCH}\n${third}`)
+    expect(listChanges(before, third)).toBeNull()
     // One line changed is listed.
-    expect(renderDelta(before, page('Buy')).startsWith('# changes')).toBe(true)
+    expect(listChanges(before, page('Buy'))?.startsWith('# changes')).toBe(true)
   })
 
   it('tests that the notice and cut lines are not compared and not repeated', () => {
@@ -222,23 +230,21 @@ describe('the delta text', () => {
     const cut = (more: number) =>
       `# cut: ${more} more lines (3 with refs); the whole snapshot is about 9000 tokens. Pass a larger maxTokens.`
     expect(
-      renderDelta(
+      listChanges(
         `${notice(2900)}\n${page()}\n${cut(40)}`,
         `${notice(3100)}\n${page()}\n${cut(41)}`,
       ),
     ).toBe(NO_CHANGE)
-    expect(renderDelta(page(), `${notice(2900)}\n${page()}`)).toBe(NO_CHANGE)
-    const delta = renderDelta(
-      `${notice(2900)}\n${page()}\n${cut(40)}`,
-      `${notice(3100)}\n${page('Buy')}\n${cut(41)}`,
+    expect(listChanges(page(), `${notice(2900)}\n${page()}`)).toBe(NO_CHANGE)
+    const delta = String(
+      listChanges(
+        `${notice(2900)}\n${page()}\n${cut(40)}`,
+        `${notice(3100)}\n${page('Buy')}\n${cut(41)}`,
+      ),
     )
     expect(delta.startsWith('# changes since')).toBe(true)
     expect(delta).not.toContain('# text left out')
     expect(delta).not.toContain('# cut:')
-    // A full output is the text as the agent receives it, notice included.
-    expect(renderDelta(null, `${notice(2900)}\n${page()}`)).toBe(
-      `${NO_BASELINE}\n${notice(2900)}\n${page()}`,
-    )
   })
 
   it('tests on random pages that the listed changes are a shortest edit script', () => {
@@ -281,7 +287,8 @@ describe('the delta text', () => {
       const after = before.flatMap((line) =>
         next(40) === 0 ? [] : next(40) === 0 ? [line, make()[0]] : [line],
       )
-      const delta = renderDelta(before.join('\n'), after.join('\n'))
+      // Too much to list, or no change: nothing to check this round.
+      const delta = listChanges(before.join('\n'), after.join('\n')) ?? ''
       const header =
         /^# changes since your last snapshot of this tab: (\d+) added, (\d+) removed$/.exec(
           delta.split('\n')[0],
@@ -318,7 +325,7 @@ describe('the delta text', () => {
       '"Story 2000" [ref=e2010] [expanded]',
     )
     const started = Date.now()
-    const delta = renderDelta(before, after)
+    const delta = changed(before, after)
     expect(Date.now() - started).toBeLessThan(1000)
     expect(delta.split('\n')).toHaveLength(10)
     expect(delta.split('\n')[1]).toBe('@@ main [ref=e2]')
@@ -334,7 +341,7 @@ describe('the delta text', () => {
       (_, n) => `- link "B${n}" [ref=f${n}]`,
     ).join('\n')
     const started = Date.now()
-    expect(renderDelta(before, after)).toBe(`${TOO_MUCH}\n${after}`)
+    expect(listChanges(before, after)).toBeNull()
     expect(Date.now() - started).toBeLessThan(2000)
   })
 })

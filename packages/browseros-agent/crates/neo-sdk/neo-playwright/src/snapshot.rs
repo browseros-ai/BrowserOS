@@ -20,5 +20,7 @@ pub(crate) mod snapshot_op;
 mod snapshot_rules;
 
 pub(crate) use pending_baselines::PendingBaselines;
-pub(crate) use snapshot_baselines::SnapshotBaselines;
+#[cfg(test)]
+pub(crate) use snapshot_baselines::TextForm;
+pub(crate) use snapshot_baselines::{Baseline, SnapshotBaselines, SnapshotForm};
 pub(crate) use snapshot_op::SnapshotOp;

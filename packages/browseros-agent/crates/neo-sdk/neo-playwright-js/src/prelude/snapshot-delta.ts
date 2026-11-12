@@ -2,22 +2,43 @@
  * `page.ariaSnapshot({ delta: true })`: what changed since the last whole-page v1 snapshot of
  * the tab that the caller was given, as a line diff of the two texts.
  *
- *   frame.ts   renders the v1 text (snapshot-v1.ts, capped), reads the tab's stored baseline
- *              (`page.snapshotBaseline`, kept by Rust on the host across runs), and records the
- *              text as pending; the host stores it once the run ends with it in the caller's
- *              hands (neo-playwright's snapshot_baselines.rs and pending_baselines.rs)
- *   here       stored text + current text → one of four first lines, then the hunks
+ *   frame.ts   reads the tab's stored baseline (`page.snapshotBaseline`: its text and how that
+ *              text was rendered, kept by Rust on the host across runs), then records what the
+ *              call gave as pending; the host stores it once the run ends with it in the
+ *              caller's hands (neo-playwright's snapshot_baselines.rs and pending_baselines.rs)
+ *   here       stored baseline + the snapshot's tree + the options the call passed
+ *                → one of four first lines, then the hunks or the whole page
+ *
+ * The form rule (design section 7, "The form of a delta"): a baseline's form is how its text was
+ * rendered (the `text` option and what the length rule chose, `urls`, `maxTokens`). A delta call
+ * takes every option it leaves out from that form, and renders the new snapshot exactly as the
+ * baseline was rendered, so the two texts differ only where the page does. An option it passes
+ * that disagrees with the form means no comparison: two forms are never diffed, since every line
+ * they render differently would be listed as a change that did not happen.
  *
  * Both texts are what the caller received (after the notice and the cap), so a delta only ever
  * prints lines the caller has seen or is seeing now. The notice line and the cut line are left
  * out of the comparison and of the result: they describe the snapshot's size, not the page.
  */
+import {
+  type PassedV1Options,
+  type RenderedV1,
+  renderSnapshotV1,
+  renderSnapshotV1As,
+  withDefaults,
+} from './snapshot-v1'
+import type {
+  SnapshotBaseline,
+  SnapshotForm,
+  SnapshotResult,
+  TextForm,
+} from './wire'
 
 export const NO_BASELINE = '# full snapshot: no earlier snapshot of this page'
 export const NO_CHANGE = '# no change since your last snapshot of this tab'
 /**
- * Not "the page changed": the same case arises when one snapshot has the page's text and the
- * other does not, and the line must be true either way.
+ * Not "the page changed": the same line answers a call whose options disagree with the
+ * baseline's form, and it must be true either way.
  */
 export const TOO_MUCH =
   '# full snapshot: too much differs from your last snapshot to list as changes'
@@ -32,24 +53,86 @@ const CONTEXT = 3
  */
 const MAX_CHANGED_LINES = 1000
 
+/**
+ * What a delta call returns, and the whole text, with its form, that becomes the tab's baseline
+ * if the caller is given `returned`. After `# no change` or `# changes` that is the new snapshot
+ * in the baseline's form, with the same form; after a whole page, that page with its own.
+ */
+export type DeltaResult = { returned: string; baseline: RenderedV1 }
+
+/**
+ * The delta call's answer, from the tab's stored baseline (`null`: none for this document), the
+ * snapshot's tree and the v1 options the call passed.
+ */
+export function renderDelta(
+  stored: SnapshotBaseline | null,
+  result: SnapshotResult,
+  passed: PassedV1Options,
+): DeltaResult {
+  if (stored === null) {
+    const whole = renderSnapshotV1(result, withDefaults(passed))
+    return { returned: `${NO_BASELINE}\n${whole.text}`, baseline: whole }
+  }
+  const { form } = stored
+  if (agrees(passed, form)) {
+    const current = renderSnapshotV1As(result, form)
+    const changes = listChanges(stored.text, current)
+    if (changes !== null)
+      return { returned: changes, baseline: { text: current, form } }
+  }
+  // The whole page: what the call passed, the rest from the baseline's form. A `text` neither
+  // call passed goes back to the length rule, since a whole page is a new snapshot and that rule
+  // exists so a big page's text is not paid for unasked.
+  const whole = renderSnapshotV1(result, {
+    text: passed.text ?? passedText(form.text),
+    urls: passed.urls ?? form.urls,
+    maxTokens: passed.maxTokens ?? form.maxTokens,
+  })
+  return { returned: `${TOO_MUCH}\n${whole.text}`, baseline: whole }
+}
+
+/**
+ * Whether every option the call passed agrees with `form`: `text: true` with a form that shows
+ * the page's text, `text: false` with one that does not, `urls` and `maxTokens` when equal.
+ */
+function agrees(passed: PassedV1Options, form: SnapshotForm): boolean {
+  return (
+    (passed.text === undefined || passed.text === showsText(form.text)) &&
+    (passed.urls === undefined || passed.urls === form.urls) &&
+    (passed.maxTokens === undefined || passed.maxTokens === form.maxTokens)
+  )
+}
+
+/** Whether a text of this form prints the page's text. */
+function showsText(text: TextForm): boolean {
+  return text === 'kept' || text === 'always'
+}
+
+/** The `text` option the call that rendered this form passed, `undefined` when it left it out. */
+function passedText(text: TextForm): boolean | undefined {
+  if (text === 'always') return true
+  if (text === 'never') return false
+  return undefined
+}
+
 /** The lines that describe the snapshot's size: the notice and the cut line (snapshot-cap.ts). */
 function sizeLine(line: string): boolean {
   return line.startsWith('# text left out: ') || line.startsWith('# cut: ')
 }
 
 /**
- * The text `delta: true` returns, from the tab's previous baseline (`null` when there was
- * none for this document) and the snapshot just rendered in full.
+ * The changes from `previous` to `current`, two texts rendered the same way: `NO_CHANGE`, or
+ * the changes' first line and hunks; `null` when the changes would be longer than half of
+ * `current`, too much to list.
  */
-export function renderDelta(previous: string | null, current: string): string {
-  if (previous === null) return `${NO_BASELINE}\n${current}`
+export function listChanges(previous: string, current: string): string | null {
   const before = previous.split('\n').filter((line) => !sizeLine(line))
   const after = current.split('\n').filter((line) => !sizeLine(line))
   const edits = diff(before, after, current.length)
-  if (edits === null) return `${TOO_MUCH}\n${current}`
+  if (edits === null) return null
   if (edits.every((edit) => edit.kind === ' ')) return NO_CHANGE
   const changes = hunks(edits, before, after).join('\n')
-  if (changes.length > current.length / 2) return `${TOO_MUCH}\n${current}`
+  if (changes.length > current.length / 2) return null
   const added = edits.filter((edit) => edit.kind === '+').length
   const removed = edits.filter((edit) => edit.kind === '-').length
   return `# changes since your last snapshot of this tab: ${added} added, ${removed} removed\n${changes}`
