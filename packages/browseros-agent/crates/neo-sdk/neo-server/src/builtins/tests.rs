@@ -1833,6 +1833,49 @@ async fn an_op_on_a_tab_that_shows_a_file_page_is_refused_with_nothing_sent()
     Ok(())
 }
 
+/// The owner's web tab moves onto a local file while an op on it waits for the browser (as a page's
+/// own `history.back()` onto a `file:` entry does): the door reads the tab again when the op
+/// ends, and withholds whatever the op took there.
+#[tokio::test]
+async fn an_op_whose_tab_moves_to_a_file_page_while_it_runs_is_withheld()
+-> Result<(), Box<dyn Error>> {
+    let harness = Harness::new().await?;
+    let owners = harness.owner_tab("https://bank.example/").await?;
+    let (run, _guard) = harness.run()?;
+    // `page.title` makes its world after admission; its reply waits until the tab has moved.
+    harness.fake.hold_next("Page.createIsolatedWorld");
+    let title =
+        json!({ "call": { "api": "page.title", "timeoutMs": 5000 }, "page": handle(&owners) });
+    let (reply, moved) = tokio::join!(harness.submit(&run, "page.title", title), async {
+        within(async {
+            while harness.fake.count("Page.createIsolatedWorld") == 0 {
+                task::yield_now().await;
+            }
+        })
+        .await?;
+        let moved = harness
+            .fake
+            .navigate_tab(owners.tab, "file:///etc/hosts", "hosts");
+        harness.fake.release_held();
+        Ok::<_, Box<dyn Error>>(moved)
+    });
+    assert!(moved?, "the fake has the owner's tab");
+    let withheld = failure(reply)?;
+    assert_eq!(
+        (withheld.error.owner(), withheld.error.code()),
+        (ErrorOwner::Script, ErrorCode::INVALID_INPUT),
+        "{}",
+        withheld.error
+    );
+    assert!(
+        withheld.error.message().contains(FILE_PAGES)
+            && withheld.error.message().contains("withholds"),
+        "the op's own answer never reaches the script: {}",
+        withheld.error
+    );
+    Ok(())
+}
+
 /// A tab's history can hold a local file behind a web page, from the owner's own browsing; a step
 /// back or forward onto it is refused before the crate steps, and a step onto a web entry goes
 /// to the crate as before.

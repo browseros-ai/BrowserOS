@@ -110,8 +110,9 @@ const PLAYWRIGHT_API: &str = "Playwright's API on `page`, `context` and `browser
     `javascript:` URL before reporting `net::ERR_ABORTED`. `reload` opens only `http`, `https`, \
     `data` and `about` URLs. A script cannot open `file:` pages: `goto` refuses a `file:` URL, \
     `goBack` and `goForward` a `file:` history entry, and every call on a tab that shows a \
-    `file:` page (one the owner opened) is refused, with nothing sent; write a local page with \
-    `page.setContent` instead. `setInputFiles` uploads any \
+    `file:` page (one the owner opened) is refused, with nothing sent; a call whose tab moves \
+    onto one while it runs gets no answer from it. Write a local page with `page.setContent` \
+    instead. `setInputFiles` uploads any \
     file Neo's process can read, as Playwright does \
     (a relative path resolves against Neo's working directory): the caller sandboxes the \
     filesystem. `{ name, mimeType, buffer }` payloads need no file and total under 10 MiB a \
@@ -229,11 +230,10 @@ impl Method for PlaywrightOp {
         // a page raised rather than the page, and whose long polls would pay a browser round
         // trip each; and a close, which reads and opens nothing, so a script can always clean
         // up a tab.
-        if page.is_some()
+        let ruled = page.is_some()
             && self.spec.lifetime == Lifetime::Operation
-            && self.pages != PageEffect::Closes
-            && let Some(refusal) = refused_page(op, self.spec.name, self.pages).await?
-        {
+            && self.pages != PageEffect::Closes;
+        if ruled && let Some(refusal) = refused_page(op, self.spec.name, self.pages).await? {
             return Err(LeafError::definite(refusal));
         }
         let input = input.resolved(page);
@@ -253,6 +253,15 @@ impl Method for PlaywrightOp {
         op.report_publications(env.run_state().completed_navigation_loads());
         let result = result?;
         self.pages.report(op, page, &result);
+        // A page can step itself onto a `file:` entry of its tab's history while an op waits on
+        // it (its own `history.back()`, measured), and the op then reads the new document. What
+        // it took there, a value or a call log that previews elements, never reaches the script.
+        if ruled && moved_to_file(op).await? {
+            return Err(LeafError::definite(file_page(
+                "Neo withholds this call's answer, since its tab moved to a `file:` page while it \
+                 ran",
+            )));
+        }
         let value = result.map_err(|error| leaf_error(&error))?;
         self.events.release(op, value)
     }
@@ -374,29 +383,20 @@ impl OpInput {
 /// - A step through history never opens a `file:` entry, which the owner's own browsing can
 ///   leave behind a web page in a tab.
 ///
-/// Core's cached URL trails a navigation the page or the owner made, so the tab is read fresh
-/// through `Browser.getTabInfo`: the one browser read the door makes per page op. Any other
-/// failure of that read refuses the op, since the door cannot tell what the tab shows.
+/// The tab is read fresh ([`shown_url`]) before the op, and again once it ends
+/// ([`moved_to_file`]): the door's two browser reads per page op.
 async fn refused_page<M>(
     op: &OpCtx<M>,
     name: &str,
     effect: PageEffect,
 ) -> Result<Option<OperationError>, LeafError> {
-    let page = op.core_page()?.clone();
-    let shown = match op.race_answer(op.run().view().page(page.clone())).await? {
-        Ok(shown) => shown,
-        // The tab closed since the door resolved it, so it shows nothing to read; the crate's
-        // own admission fails the op as Playwright fails one on a closed page, as it did before
-        // this read (an op racing the script's own `page.close`).
-        Err(CoreError::UnknownPage(_) | CoreError::UnknownPageShort(_)) => return Ok(None),
-        Err(error) => {
-            return Err(LeafError::definite(OperationError::neo(
-                ErrorCode::CDP_ERROR,
-                error,
-            )));
-        }
+    // The tab closed since the door resolved it, so it shows nothing to read; the crate's own
+    // admission fails the op as Playwright fails one on a closed page, as it did before this
+    // read (an op racing the script's own `page.close`).
+    let Some(url) = shown_url(op).await? else {
+        return Ok(None);
     };
-    let scheme = url_scheme(&shown.url);
+    let scheme = url_scheme(&url);
     if scheme.as_deref() == Some("file") {
         return Ok(Some(file_page(
             "Neo does not act on this tab, which shows a `file:` page",
@@ -419,11 +419,11 @@ async fn refused_page<M>(
         _ => return Ok(None),
     };
     let reply = op
-        .race(
-            op.run()
-                .view()
-                .cdp_json_for_page(page, "Page.getNavigationHistory", "{}"),
-        )
+        .race(op.run().view().cdp_json_for_page(
+            op.core_page()?.clone(),
+            "Page.getNavigationHistory",
+            "{}",
+        ))
         .await?;
     let history: History = serde_json::from_str(&reply).map_err(|error| {
         LeafError::definite(OperationError::neo(
@@ -439,6 +439,31 @@ async fn refused_page<M>(
     Ok(opens
         .filter(|entry| url_scheme(&entry.url).as_deref() == Some("file"))
         .map(|_| file_page("Neo does not take this step, whose history entry is a `file:` page")))
+}
+
+/// The URL the op's tab shows now, read through `Browser.getTabInfo`: core's cached URL trails a
+/// navigation the page or the owner made. `None` once the browser no longer has the tab. Any
+/// other failure of the read fails the op, since the door cannot tell what the tab shows.
+async fn shown_url<M>(op: &OpCtx<M>) -> Result<Option<String>, LeafError> {
+    match op
+        .race_answer(op.run().view().page(op.core_page()?.clone()))
+        .await?
+    {
+        Ok(shown) => Ok(Some(shown.url)),
+        Err(CoreError::UnknownPage(_) | CoreError::UnknownPageShort(_)) => Ok(None),
+        Err(error) => Err(LeafError::definite(OperationError::neo(
+            ErrorCode::CDP_ERROR,
+            error,
+        ))),
+    }
+}
+
+/// Whether the op's tab shows a `file:` page now that the op ended. The rule before the op
+/// cannot see a navigation the page makes while the op waits on it.
+async fn moved_to_file<M>(op: &OpCtx<M>) -> Result<bool, LeafError> {
+    Ok(shown_url(op)
+        .await?
+        .is_some_and(|url| url_scheme(&url).as_deref() == Some("file")))
 }
 
 /// `Page.getNavigationHistory`'s reply, as much of it as [`refused_page`] reads: the crate's own

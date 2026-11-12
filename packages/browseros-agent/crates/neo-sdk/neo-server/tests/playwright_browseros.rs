@@ -97,11 +97,12 @@ await new Promise((resolve) => setTimeout(resolve, 1000));
 return { heard, title: await page.title() };
 "#;
 
-/// Every way a script could get a tab onto a local file, and the browser's web-to-file boundary.
-/// `LOCAL` (the files), `SERVER` (a web server on loopback) and `VIEW_SOURCE` are defined ahead of
-/// it. Each route is also tried with a web URL (`allowed`), proving the route itself works, so a
-/// file that did not load was refused rather than never tried.
-const LOCAL_READS: &str = r#"
+/// What the two route scripts share: reads that clip, catch a refusal, and look into every tab
+/// and frame where a loaded file would show. `LOCAL` (the files), `SERVER` (a web server on
+/// loopback) and `VIEW_SOURCE` are defined ahead of it. Each route is also tried with a web URL
+/// (`allowed`), proving the route itself works, so a file that did not load was refused rather
+/// than never tried. The routes take two runs, each well inside the MCP client's patience.
+const READ_HELPERS: &str = r"
 const tried = { gotos: {}, scripted: {}, local: {}, allowed: {} };
 // A run returns at most 256 KiB. A loaded file's text leads its document, so a clipped read
 // still shows it.
@@ -139,6 +140,11 @@ const before = new Set(context.pages());
 const closeOpened = async () => {
   for (const tab of context.pages()) if (!before.has(tab) && tab !== page) await tab.close().catch(() => {});
 };
+";
+
+/// Every way a script could get a tab onto a local file by itself, and a web page's own
+/// navigations from a `data:` page and a web load's redirect.
+const LOCAL_READS: &str = r#"
 for (const url of [...LOCAL, 'chrome://version', VIEW_SOURCE, 'about:version']) {
   tried.gotos[url] = await loads(page, url);
 }
@@ -186,6 +192,15 @@ for (const [route, [html, allowed]] of Object.entries(routes)) {
     await closeOpened();
   }
 }
+// A load the door allows, redirected by its server: Chromium follows the redirect, not the door.
+for (const [path, into] of [['/to-hosts', tried.local], ['/to-secret', tried.local], ['/to-page', tried.allowed]]) {
+  into[`redirect ${path}`] = { load: await loads(page, SERVER + path), tabs: await everything() };
+}
+return tried;
+"#;
+
+/// A web page's ways to a local file through the script's own click or the HTML it writes.
+const WEB_PAGE_READS: &str = r#"
 // The same from a web page, through the script's own click (a user gesture, so the popup blocker
 // lets a new tab through) or HTML the script writes with setContent: on the web page, and on the
 // blank page context.newPage opens.
@@ -203,7 +218,7 @@ for (const [route, html] of Object.entries(clicked)) {
     if (route === 'link') {
       await page.locator('a').click();
     } else if (route !== 'written iframe') {
-      const popup = page.waitForEvent('popup', { timeout: 3000 }).catch(() => null);
+      const popup = page.waitForEvent('popup', { timeout: 2000 }).catch(() => null);
       await page.locator('a, button').click();
       opened = await popup;
       if (opened) await opened.waitForLoadState().catch(() => {});
@@ -219,10 +234,6 @@ for (const [to, into] of [...LOCAL.map((to) => [to, tried.local]), ['data:text/h
   await pause(1500);
   into[`written iframe on a new page to ${to}`] = await everything();
   await opened.close();
-}
-// A load the door allows, redirected by its server: Chromium follows the redirect, not the door.
-for (const [path, into] of [['/to-hosts', tried.local], ['/to-secret', tried.local], ['/to-page', tried.allowed]]) {
-  into[`redirect ${path}`] = { load: await loads(page, SERVER + path), tabs: await everything() };
 }
 return tried;
 "#;
@@ -1132,44 +1143,26 @@ async fn local_navigations(rig: &Rig) -> TestResult {
         format!("file://{}", secret.display()),
     ];
     let view_source = format!("view-source:{server}/page");
-    let code = format!(
-        "const LOCAL = {};\nconst SERVER = {};\nconst VIEW_SOURCE = {};\n{LOCAL_READS}",
-        json!(local),
-        json!(server),
-        json!(view_source),
-    );
-    let reply = reply_of(rig, &code, "local-reads").await?;
-    let tried = reply
-        .get("value")
-        .ok_or("the script returns what it tried")?;
+    let mut tried = Value::Null;
+    for (script, task) in [
+        (LOCAL_READS, "local-reads"),
+        (WEB_PAGE_READS, "web-page-reads"),
+    ] {
+        let code = format!(
+            "const LOCAL = {};\nconst SERVER = {};\nconst VIEW_SOURCE = {};\n{READ_HELPERS}\n{script}",
+            json!(local),
+            json!(server),
+            json!(view_source),
+        );
+        let reply = reply_of(rig, &code, task).await?;
+        let value = reply
+            .get("value")
+            .ok_or("the script returns what it tried")?;
+        merge(&mut tried, value);
+    }
+    let tried = &tried;
 
-    let refused = json!({ "owner": "script", "code": "invalid_input", "delivery": "not_sent" });
-    for url in ["chrome://version", view_source.as_str()] {
-        let tried_url = tried.get("gotos").and_then(|gotos| gotos.get(url));
-        assert_eq!(
-            tried_url.map(without_message),
-            Some(refused.clone()),
-            "other unsupported schemes retain their refusal: {tried}"
-        );
-    }
-    for url in &local {
-        assert_file_refusal(
-            tried.get("gotos").and_then(|gotos| gotos.get(url)),
-            &format!("page.goto to {url}"),
-        );
-    }
-    let scripted = tried
-        .get("scripted")
-        .and_then(Value::as_object)
-        .ok_or_else(|| format!("the script's other navigations: {tried}"))?;
-    assert_eq!(
-        scripted.len(),
-        4,
-        "frame.goto and newPage, each to both files: {tried}"
-    );
-    for (route, result) in scripted {
-        assert_file_refusal(Some(result), route);
-    }
+    assert_script_routes_refused(tried, &local, &view_source)?;
     assert_javascript_navigation(tried);
     assert_eq!(
         tried.pointer("/gotos/about:version/url"),
@@ -1220,6 +1213,17 @@ async fn local_navigations(rig: &Rig) -> TestResult {
     Ok(())
 }
 
+/// A local page that shows `marker` and moves on to `to` once loaded and a moment later, so the
+/// `file:` page stays in its tab's history as an entry of its own rather than one the next load
+/// replaces.
+fn hop_page(marker: &str, to: &str) -> String {
+    format!(
+        "<title>hop</title><p>{marker} behind the web page</p><script>addEventListener('load', () \
+         => setTimeout(() => {{ location.href = {}; }}, 300))</script>",
+        json!(to)
+    )
+}
+
 /// Opens `urls` as the owner's own tabs, outside any script, and waits until the browser lists
 /// the owner's file page at `owner_url` and both hop pages on the web page they move on to.
 /// Returns the browser's listing.
@@ -1238,6 +1242,7 @@ async fn open_owner_tabs(
                 && listed.contains("owner file")
                 && listed.contains("/page?back")
                 && listed.contains("/page?history")
+                && listed.contains("/page?midop")
             {
                 return Ok::<_, Box<dyn Error>>(listed);
             }
@@ -1248,6 +1253,38 @@ async fn open_owner_tabs(
     .map_err(|_elapsed| "the owner's file tabs did not load and move on")?
 }
 
+/// The script's own routes to a local file are refused, as other unsupported schemes are.
+fn assert_script_routes_refused(tried: &Value, local: &[String], view_source: &str) -> TestResult {
+    let refused = json!({ "owner": "script", "code": "invalid_input", "delivery": "not_sent" });
+    for url in ["chrome://version", view_source] {
+        let tried_url = tried.get("gotos").and_then(|gotos| gotos.get(url));
+        assert_eq!(
+            tried_url.map(without_message),
+            Some(refused.clone()),
+            "other unsupported schemes retain their refusal: {tried}"
+        );
+    }
+    for url in local {
+        assert_file_refusal(
+            tried.get("gotos").and_then(|gotos| gotos.get(url)),
+            &format!("page.goto to {url}"),
+        );
+    }
+    let scripted = tried
+        .get("scripted")
+        .and_then(Value::as_object)
+        .ok_or_else(|| format!("the script's other navigations: {tried}"))?;
+    assert_eq!(
+        scripted.len(),
+        4,
+        "frame.goto and newPage, each to both files: {tried}"
+    );
+    for (route, result) in scripted {
+        assert_file_refusal(Some(result), route);
+    }
+    Ok(())
+}
+
 /// The door's refusal of a `file:` page, as a script catches it: the script's to fix, nothing
 /// sent, and a message that says what is blocked and what to use instead.
 fn assert_file_refusal(result: Option<&Value>, route: &str) {
@@ -1256,6 +1293,24 @@ fn assert_file_refusal(result: Option<&Value>, route: &str) {
         without_message(result),
         json!({ "owner": "script", "code": "invalid_input", "delivery": "not_sent" }),
         "{route} is refused before anything reaches the tab: {result}"
+    );
+    assert!(
+        result
+            .get("message")
+            .and_then(Value::as_str)
+            .is_some_and(|message| message.contains(FILE_REFUSAL)),
+        "{route}'s refusal says what is blocked: {result}"
+    );
+}
+
+/// The door's answer to an op whose tab moved onto a `file:` page while it ran: whatever the op
+/// read there is withheld. Its delivery is the op's own, since it may have acted before the move.
+fn assert_withheld(result: Option<&Value>, route: &str) {
+    let result = result.unwrap_or(&Value::Null);
+    assert_eq!(
+        (result.get("owner"), result.get("code")),
+        (Some(&json!("script")), Some(&json!("invalid_input"))),
+        "{route} is withheld: {result}"
     );
     assert!(
         result
@@ -1299,8 +1354,9 @@ const listed = context.pages().map((tab) => tab.url());
 const owner = context.pages().find((tab) => tab.url() === OWNER_URL);
 const back = context.pages().find((tab) => tab.url() === SERVER + '/page?back');
 const historyBack = context.pages().find((tab) => tab.url() === SERVER + '/page?history');
-if (!owner || !back || !historyBack) return { listed };
-const seen = { listed, owner: { url: owner.url() }, back: {}, historyBack: {} };
+const midOp = context.pages().find((tab) => tab.url() === SERVER + '/page?midop');
+if (!owner || !back || !historyBack || !midOp) return { listed };
+const seen = { listed, owner: { url: owner.url() }, back: {}, historyBack: {}, midOp: {} };
 seen.owner.content = await attempt(() => owner.content());
 seen.owner.title = await attempt(() => owner.title());
 seen.owner.text = await attempt(() => owner.locator('body').textContent({ timeout: 2000 }));
@@ -1330,6 +1386,13 @@ seen.back.goBack = await attempt(async () => {
   return { url: back.url(), content: clip(await back.content()) };
 });
 seen.back.after = await attempt(async () => ({ url: back.url(), content: clip(await back.content()) }));
+// A read already waiting when the page steps itself back onto the file: entry (here from a
+// clicked button): the locator re-resolves in the new document, so the door checks the tab
+// again when the read ends.
+await midOp.setContent('<button onclick=history.back()>back</button>');
+const waiting = attempt(() => midOp.locator('p', { hasText: 'behind' }).textContent({ timeout: 6000 }));
+seen.midOp.click = await attempt(() => midOp.locator('button').click());
+seen.midOp.read = await waiting;
 seen.historyBack.step = await attempt(async () => {
   await historyBack.evaluate(() => history.back());
   await pause(1500);
@@ -1349,26 +1412,27 @@ async fn owner_file_tab(rig: &Rig) -> TestResult {
         &owner,
         format!("<title>owner file</title><p>{marker} in the owner's page</p>"),
     )?;
-    // Each moves on to the web page once loaded and a moment later, so the file: page stays in
-    // the tab's history as an entry of its own rather than one the next load replaces.
-    let hop = |to: &str| {
-        format!(
-            "<title>hop</title><p>{marker} behind the web page</p><script>addEventListener('load', \
-             () => setTimeout(() => {{ location.href = {}; }}, 300))</script>",
-            json!(format!("{server}/page?{to}"))
-        )
-    };
-    let back = dir.path().join("back.html");
-    fs::write(&back, hop("back"))?;
-    let history_back = dir.path().join("history.html");
-    fs::write(&history_back, hop("history"))?;
+    let [back, history_back, mid_op] =
+        ["back", "history", "midop"].map(|to| dir.path().join(format!("{to}.html")));
+    for (path, to) in [
+        (&back, "back"),
+        (&history_back, "history"),
+        (&mid_op, "midop"),
+    ] {
+        fs::write(path, hop_page(&marker, &format!("{server}/page?{to}")))?;
+    }
     let file_url = |path: &Path| format!("file://{}", path.display());
 
     rig.until_ready().await?;
     let owner_url = file_url(&owner);
     let opened = open_owner_tabs(
         rig,
-        &[owner_url.clone(), file_url(&back), file_url(&history_back)],
+        &[
+            owner_url.clone(),
+            file_url(&back),
+            file_url(&history_back),
+            file_url(&mid_op),
+        ],
         &owner_url,
     )
     .await?;
@@ -1416,6 +1480,10 @@ async fn owner_file_tab(rig: &Rig) -> TestResult {
         );
     }
     assert_file_refusal(seen.pointer("/back/goBack"), "goBack to a file: entry");
+    assert_withheld(
+        seen.pointer("/midOp/read"),
+        "a read that the page's own step back moved onto a file: page",
+    );
     assert_eq!(
         seen.pointer("/back/after/value/url"),
         Some(&json!(format!("{server}/page?back"))),
@@ -1433,6 +1501,18 @@ async fn owner_file_tab(rig: &Rig) -> TestResult {
         "the owner's file: tab still shows its file: {listed}"
     );
     Ok(())
+}
+
+/// `from`'s fields into `into`, object fields merged however deep.
+fn merge(into: &mut Value, from: &Value) {
+    match (into, from) {
+        (Value::Object(into), Value::Object(from)) => {
+            for (key, value) in from {
+                merge(into.entry(key.clone()).or_insert(Value::Null), value);
+            }
+        }
+        (into, from) => from.clone_into(into),
+    }
 }
 
 /// Every string in `value`, however deep.
