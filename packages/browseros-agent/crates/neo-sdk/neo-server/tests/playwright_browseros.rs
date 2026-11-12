@@ -1224,8 +1224,38 @@ fn hop_page(marker: &str, to: &str) -> String {
     )
 }
 
+/// Every read of the owner's file: tab is refused, the step back onto a file: entry too, and
+/// whatever an op took after its tab stepped onto one is withheld.
+fn assert_owner_reads_refused(seen: &Value) {
+    for read in [
+        "content",
+        "title",
+        "text",
+        "evaluate",
+        "snapshot",
+        "screenshot",
+        "fetch",
+        "iframe",
+        "listing",
+    ] {
+        assert_file_refusal(
+            seen.pointer(&format!("/owner/{read}")),
+            &format!("the owner's file: tab, {read}"),
+        );
+    }
+    assert_file_refusal(seen.pointer("/back/goBack"), "goBack to a file: entry");
+    assert_withheld(
+        seen.pointer("/midOp/read"),
+        "a read that the page's own step back moved onto a file: page",
+    );
+    assert_withheld(
+        seen.pointer("/callback/evaluate"),
+        "a callback whose element turned up in a file: page",
+    );
+}
+
 /// Opens `urls` as the owner's own tabs, outside any script, and waits until the browser lists
-/// the owner's file page at `owner_url` and both hop pages on the web page they move on to.
+/// the owner's file page at `owner_url` and every hop page on the web page it moves on to.
 /// Returns the browser's listing.
 async fn open_owner_tabs(
     rig: &Rig,
@@ -1243,6 +1273,7 @@ async fn open_owner_tabs(
                 && listed.contains("/page?back")
                 && listed.contains("/page?history")
                 && listed.contains("/page?midop")
+                && listed.contains("/page?callback")
             {
                 return Ok::<_, Box<dyn Error>>(listed);
             }
@@ -1355,8 +1386,9 @@ const owner = context.pages().find((tab) => tab.url() === OWNER_URL);
 const back = context.pages().find((tab) => tab.url() === SERVER + '/page?back');
 const historyBack = context.pages().find((tab) => tab.url() === SERVER + '/page?history');
 const midOp = context.pages().find((tab) => tab.url() === SERVER + '/page?midop');
-if (!owner || !back || !historyBack || !midOp) return { listed };
-const seen = { listed, owner: { url: owner.url() }, back: {}, historyBack: {}, midOp: {} };
+const callback = context.pages().find((tab) => tab.url() === SERVER + '/page?callback');
+if (!owner || !back || !historyBack || !midOp || !callback) return { listed };
+const seen = { listed, owner: { url: owner.url() }, back: {}, historyBack: {}, midOp: {}, callback: {} };
 seen.owner.content = await attempt(() => owner.content());
 seen.owner.title = await attempt(() => owner.title());
 seen.owner.text = await attempt(() => owner.locator('body').textContent({ timeout: 2000 }));
@@ -1393,6 +1425,13 @@ await midOp.setContent('<button onclick=history.back()>back</button>');
 const waiting = attempt(() => midOp.locator('p', { hasText: 'behind' }).textContent({ timeout: 6000 }));
 seen.midOp.click = await attempt(() => midOp.locator('button').click());
 seen.midOp.read = await waiting;
+// The same for a main-world callback: it would mark the page's title, but the guard refuses to
+// run it in the file: document its element turned up in.
+await callback.setContent('<button onclick=history.back()>back</button>');
+const marking = attempt(() => callback.locator('p', { hasText: 'behind' })
+  .evaluate((element) => { document.title = 'callback ran'; return element.textContent; }, null, { timeout: 6000 }));
+seen.callback.click = await attempt(() => callback.locator('button').click());
+seen.callback.evaluate = await marking;
 seen.historyBack.step = await attempt(async () => {
   await historyBack.evaluate(() => history.back());
   await pause(1500);
@@ -1412,13 +1451,13 @@ async fn owner_file_tab(rig: &Rig) -> TestResult {
         &owner,
         format!("<title>owner file</title><p>{marker} in the owner's page</p>"),
     )?;
-    let [back, history_back, mid_op] =
-        ["back", "history", "midop"].map(|to| dir.path().join(format!("{to}.html")));
-    for (path, to) in [
-        (&back, "back"),
-        (&history_back, "history"),
-        (&mid_op, "midop"),
-    ] {
+    let hops = ["back", "history", "midop", "callback"];
+    let [back, history_back, mid_op, callback] =
+        hops.map(|to| dir.path().join(format!("{to}.html")));
+    for (path, to) in [&back, &history_back, &mid_op, &callback]
+        .into_iter()
+        .zip(hops)
+    {
         fs::write(path, hop_page(&marker, &format!("{server}/page?{to}")))?;
     }
     let file_url = |path: &Path| format!("file://{}", path.display());
@@ -1432,6 +1471,7 @@ async fn owner_file_tab(rig: &Rig) -> TestResult {
             file_url(&back),
             file_url(&history_back),
             file_url(&mid_op),
+            file_url(&callback),
         ],
         &owner_url,
     )
@@ -1463,27 +1503,7 @@ async fn owner_file_tab(rig: &Rig) -> TestResult {
         Some(&json!(owner_url)),
         "{seen}"
     );
-    for read in [
-        "content",
-        "title",
-        "text",
-        "evaluate",
-        "snapshot",
-        "screenshot",
-        "fetch",
-        "iframe",
-        "listing",
-    ] {
-        assert_file_refusal(
-            seen.pointer(&format!("/owner/{read}")),
-            &format!("the owner's file: tab, {read}"),
-        );
-    }
-    assert_file_refusal(seen.pointer("/back/goBack"), "goBack to a file: entry");
-    assert_withheld(
-        seen.pointer("/midOp/read"),
-        "a read that the page's own step back moved onto a file: page",
-    );
+    assert_owner_reads_refused(seen);
     assert_eq!(
         seen.pointer("/back/after/value/url"),
         Some(&json!(format!("{server}/page?back"))),
@@ -1499,6 +1519,11 @@ async fn owner_file_tab(rig: &Rig) -> TestResult {
     assert!(
         listed.contains(&format!("\"url\": \"{owner_url}\"")),
         "the owner's file: tab still shows its file: {listed}"
+    );
+    // Read outside any script: the callback never ran in the file: page it reached.
+    assert!(
+        !listed.contains("callback ran"),
+        "the callback never ran in the file: page: {listed}"
     );
     Ok(())
 }

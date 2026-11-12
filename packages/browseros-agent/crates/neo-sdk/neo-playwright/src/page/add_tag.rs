@@ -174,7 +174,9 @@ pub(crate) async fn insert(
     // Once insertion is sent below, a script may have run and must never be sent twice.
     let (world, document) =
         world_call::with_world(&page, &frame.endpoint, &frame.place, |world| async move {
-            let document = evaluate_guard::main_world_document(scope, world.clone()).await?;
+            let document = evaluate_guard::main_world_document(scope, world.clone())
+                .await?
+                .object;
             Ok((world, document))
         })
         .await
