@@ -6,6 +6,9 @@ it('derives bag keys and flat optional fields without treating selectOption data
   const { optionalKeys, samples } = await inputExamples()
   expect(optionalKeys['locator.fill']).toContain('force')
   expect(optionalKeys['locator.selectOption']).toEqual(['force'])
+  expect(optionalKeys['locator.fill']).toEqual(
+    optionalKeys['locator.selectOption'],
+  )
   expect(optionalKeys['page.goto']).toContain('referer')
   expect(optionalKeys['page.ariaSnapshot']).toContain('boxes')
   for (const keys of Object.values(optionalKeys))

@@ -9,7 +9,7 @@ use neo_playwright::{Op, OpWire, OptionNesting};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-/// Upstream's shared Frame.expect params include fields Page's public matchers cannot send.
+/// Shared command/handler params include fields an op's public callers cannot send.
 /// Each exception is checked both ways: it must remain optional and must remain unrecorded.
 const UNREACHABLE: &[(&str, &str, &str)] = &[
     (
