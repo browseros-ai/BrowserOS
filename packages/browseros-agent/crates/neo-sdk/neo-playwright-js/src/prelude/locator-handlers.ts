@@ -18,9 +18,10 @@
  * it quietly when the run ends, as it cuts the event pump. Handlers live as long as the run: the
  * functions they call live in its realm.
  */
-import { invoke, logError } from './bridge'
+import { logError } from './bridge'
 import { captureSite, INTERNAL_SITE } from './call-site'
 import { plainError } from './errors'
+import { send } from './generated'
 import { Locator } from './locator'
 import type { Page } from './page'
 
@@ -55,11 +56,10 @@ export class LocatorHandlers {
       )
     if (options.times === 0) return
     const target = await locator._frame._locatorBrand(api, locator._selector)
-    const { uid } = await invoke(
-      'page.addLocatorHandler',
+    const { uid } = await send['page.addLocatorHandler'](
       site,
       { api, timeoutMs: 0 },
-      options.noWaitAfter ? { target, noWaitAfter: true } : { target },
+      { target, noWaitAfter: options.noWaitAfter ? true : undefined },
     )
     this.#byUid.set(uid, { page, locator, handler, times: options.times })
     if (!this.#pulling) {
@@ -80,8 +80,7 @@ export class LocatorHandlers {
       )
         continue
       this.#byUid.delete(uid)
-      await invoke(
-        'page.removeLocatorHandler',
+      await send['page.removeLocatorHandler'](
         site,
         { api, timeoutMs: 0 },
         { uid },
@@ -93,8 +92,7 @@ export class LocatorHandlers {
     const site = INTERNAL_SITE
     try {
       while (this.#byUid.size > 0) {
-        const { uid } = await invoke(
-          'page.locatorHandlerTriggered',
+        const { uid } = await send['page.locatorHandlerTriggered'](
           site,
           { api: 'page.locatorHandlerTriggered', timeoutMs: 0 },
           {},
@@ -135,11 +133,10 @@ export class LocatorHandlers {
       )
     } finally {
       if (remove) this.#byUid.delete(uid)
-      await invoke(
-        'page.resolveLocatorHandler',
+      await send['page.resolveLocatorHandler'](
         site,
         { api: 'page.resolveLocatorHandler', timeoutMs: 0 },
-        remove ? { uid, remove: true } : { uid },
+        { uid, remove: remove ? true : undefined },
       ).catch(() => {})
     }
   }

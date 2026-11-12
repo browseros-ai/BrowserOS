@@ -3,11 +3,41 @@
 // route row in Rust, then run `cargo test -p neo-playwright --test wire_generated`, which
 // rewrites this folder.
 
+import type * as pw from '../../../../neo-playwright/third_party/playwright/packages/playwright-core/src/client/channels'
+import { invoke } from '../bridge'
+import type { CallSite } from '../call-site'
+import type { SignalLike } from '../signal'
+import type { Assert, UpstreamCheck, VoidIsNull } from '../upstream-check'
+import type { CallHeader } from '../wire'
+import type { LocatorHandlerAddInput } from './types/LocatorHandlerAddInput'
+import type { LocatorHandlerAdded } from './types/LocatorHandlerAdded'
+import type { LocatorHandlerRemoveInput } from './types/LocatorHandlerRemoveInput'
+import type { LocatorHandlerResolveInput } from './types/LocatorHandlerResolveInput'
+import type { LocatorHandlerTriggered } from './types/LocatorHandlerTriggered'
+import type { LocatorHandlerTriggeredInput } from './types/LocatorHandlerTriggeredInput'
+
+export type { LocatorHandlerAddInput } from './types/LocatorHandlerAddInput'
+export type { LocatorHandlerAdded } from './types/LocatorHandlerAdded'
+export type { LocatorHandlerRemoveInput } from './types/LocatorHandlerRemoveInput'
+export type { LocatorHandlerResolveInput } from './types/LocatorHandlerResolveInput'
+export type { LocatorHandlerTriggered } from './types/LocatorHandlerTriggered'
+export type { LocatorHandlerTriggeredInput } from './types/LocatorHandlerTriggeredInput'
+
 /** Each locator-handler op's input, after the `call` header every op shares. */
-export type LocatorHandlerInputs = {}
+export type LocatorHandlerInputs = {
+  'page.addLocatorHandler': LocatorHandlerAddInput
+  'page.removeLocatorHandler': LocatorHandlerRemoveInput
+  'page.locatorHandlerTriggered': LocatorHandlerTriggeredInput
+  'page.resolveLocatorHandler': LocatorHandlerResolveInput
+}
 
 /** Each locator-handler op's result. */
-export type LocatorHandlerOutputs = {}
+export type LocatorHandlerOutputs = {
+  'page.addLocatorHandler': LocatorHandlerAdded
+  'page.removeLocatorHandler': null
+  'page.locatorHandlerTriggered': LocatorHandlerTriggered
+  'page.resolveLocatorHandler': null
+}
 
 /**
  * The script's option keys of each locator-handler op that takes an `options` bag: the fields of its
@@ -20,4 +50,42 @@ export const LOCATOR_HANDLER_OPTION_KEYS = {} as const
  * One typed sender per locator-handler op. A class passes its input as an object literal, so every
  * field is checked against Rust's input type and the result is Rust's result type.
  */
-export const LOCATOR_HANDLER_SEND = {}
+export const LOCATOR_HANDLER_SEND = {
+  'page.addLocatorHandler': (
+    site: CallSite,
+    call: CallHeader,
+    input: LocatorHandlerAddInput,
+    signal?: SignalLike,
+  ): Promise<LocatorHandlerAdded> => invoke('page.addLocatorHandler', site, call, input, signal),
+  'page.removeLocatorHandler': (
+    site: CallSite,
+    call: CallHeader,
+    input: LocatorHandlerRemoveInput,
+    signal?: SignalLike,
+  ): Promise<null> => invoke('page.removeLocatorHandler', site, call, input, signal),
+  'page.locatorHandlerTriggered': (
+    site: CallSite,
+    call: CallHeader,
+    input: LocatorHandlerTriggeredInput,
+    signal?: SignalLike,
+  ): Promise<LocatorHandlerTriggered> => invoke('page.locatorHandlerTriggered', site, call, input, signal),
+  'page.resolveLocatorHandler': (
+    site: CallSite,
+    call: CallHeader,
+    input: LocatorHandlerResolveInput,
+    signal?: SignalLike,
+  ): Promise<null> => invoke('page.resolveLocatorHandler', site, call, input, signal),
+}
+
+// Each route row against Playwright's own protocol at the pin (upstream-check.ts): tsc
+// names the op and every key that differs without a reason, or whose reason went stale.
+// page.addLocatorHandler: Page.registerLocatorHandler
+type _page_addLocatorHandler = Assert<UpstreamCheck<'page.addLocatorHandler', LocatorHandlerAddInput, pw.PageRegisterLocatorHandlerParams, never, never, never>>
+type _page_addLocatorHandler_result = Assert<VoidIsNull<'page.addLocatorHandler', pw.PageRegisterLocatorHandlerResult, LocatorHandlerAdded>>
+// page.removeLocatorHandler: Page.unregisterLocatorHandler
+type _page_removeLocatorHandler = Assert<UpstreamCheck<'page.removeLocatorHandler', LocatorHandlerRemoveInput, pw.PageUnregisterLocatorHandlerParams, never, never, never>>
+type _page_removeLocatorHandler_result = Assert<VoidIsNull<'page.removeLocatorHandler', pw.PageUnregisterLocatorHandlerResult, null>>
+// page.locatorHandlerTriggered: Neo only: Neo background pull replacing upstream locatorHandlerTriggered events.
+// page.resolveLocatorHandler: Page.resolveLocatorHandlerNoReply
+type _page_resolveLocatorHandler = Assert<UpstreamCheck<'page.resolveLocatorHandler', LocatorHandlerResolveInput, pw.PageResolveLocatorHandlerNoReplyParams, never, never, never>>
+type _page_resolveLocatorHandler_result = Assert<VoidIsNull<'page.resolveLocatorHandler', pw.PageResolveLocatorHandlerNoReplyResult, null>>

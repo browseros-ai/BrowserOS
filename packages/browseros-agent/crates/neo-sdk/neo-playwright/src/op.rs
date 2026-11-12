@@ -101,7 +101,8 @@ impl Op {
             OpKind::Input(op) => op.wire(),
             OpKind::Read(op) => op.wire(),
             OpKind::Context(op) => op.wire(),
-            OpKind::Event(_) | OpKind::LocatorHandler(_) => None,
+            OpKind::LocatorHandler(op) => op.wire(),
+            OpKind::Event(_) => None,
         }
     }
 

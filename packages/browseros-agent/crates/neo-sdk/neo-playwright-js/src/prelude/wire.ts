@@ -327,16 +327,6 @@ export type HandInputs = {
   'page.exposeBinding': PageArgs & { name: string; noGlobal?: true }
   /** `arg`: `{ name, seq, result }` or `{ name, seq, error }` as in-page JSON text. */
   'bindingCall.resolve': PageArgs & { context: number; arg: string }
-  /** A handler's locator, on the main frame of its page; `uid` names the registration. */
-  'page.addLocatorHandler': { target: LocatorBrand; noWaitAfter?: true }
-  'page.removeLocatorHandler': { uid: number }
-  /**
-   * The background pull for locator handlers: answers the uid of the next handler an action
-   * paused for, or null once the run has none left (locator-handlers.ts).
-   */
-  'page.locatorHandlerTriggered': Record<string, never>
-  /** The script ran the handler; `remove` once its `times` ran out. The paused action goes on. */
-  'page.resolveLocatorHandler': { uid: number; remove?: true }
   'context.addInitScript': { script: InitSource }
   'context.exposeBinding': { name: string; noGlobal?: true }
   /** The id an `addInitScript` returned. */
@@ -406,10 +396,6 @@ export type HandOutputs = {
   'page.addInitScript': { id: number }
   'page.exposeBinding': { id: number }
   'bindingCall.resolve': Done
-  'page.addLocatorHandler': { uid: number }
-  'page.removeLocatorHandler': null
-  'page.locatorHandlerTriggered': { uid: number | null }
-  'page.resolveLocatorHandler': null
   'context.addInitScript': { id: number }
   'context.exposeBinding': { id: number }
   'disposable.dispose': Done
