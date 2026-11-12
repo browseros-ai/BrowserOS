@@ -720,10 +720,12 @@ async fn tests_that_the_blind_page_prints_the_v1_text_on_a_live_browser() -> Tes
 /// has only a click listener and the default cursor; its twin under `pointers` has a real
 /// `cursor: pointer` and no listener. The cases: a `div` with text, an empty tile, a `div`
 /// around a named icon, a shadow `div` whose named icon is slotted into it (CSS inheritance
-/// follows the slot), a `div` wrapped in another together with a note, and a `div` that is its
-/// wrapper's only child (which upstream's distiller inlines into the wrapper, real cursor or not;
-/// design.md section 4, what the engine still loses). A container whose listener only relays its buttons' clicks
-/// follows. The listeners are the page's own script.
+/// follows the slot), a `<label>` around a named icon (its real cursor is the browser
+/// stylesheet's `default`, which the icon inherits), a `div` around a paragraph, a `div` wrapped
+/// in another together with a note, and a `div` that is its wrapper's only child (which
+/// upstream's distiller inlines into the wrapper, real cursor or not; design.md section 4, what
+/// the engine still loses). A container whose listener only relays its buttons' clicks follows.
+/// The listeners are the page's own script.
 const CLICKABLE_PAGE: &str = r#"<!doctype html><html><head><title>Clickable</title></head><body>
 <main>
 <nav aria-label="listeners">
@@ -731,6 +733,8 @@ const CLICKABLE_PAGE: &str = r#"<!doctype html><html><head><title>Clickable</tit
 <div class="tile" style="width: 40px; height: 40px"></div>
 <div class="icon"><img alt="Settings" width="16" height="16" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16'/%3E"></div>
 <icon-box data-hit><img alt="Slotted" width="16" height="16" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16'/%3E"></icon-box>
+<label class="label"><img alt="Labelled" width="16" height="16" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16'/%3E"></label>
+<div class="para"><p>Para text</p></div>
 <div><div class="inner">Wrapped with</div><span>a note</span></div>
 <div><div class="inner">Wrapped</div></div>
 </nav>
@@ -739,6 +743,8 @@ const CLICKABLE_PAGE: &str = r#"<!doctype html><html><head><title>Clickable</tit
 <div style="width: 40px; height: 40px; cursor: pointer"></div>
 <div style="cursor: pointer"><img alt="Settings" width="16" height="16" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16'/%3E"></div>
 <icon-box data-pointer><img alt="Slotted" width="16" height="16" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16'/%3E"></icon-box>
+<label style="cursor: pointer"><img alt="Labelled" width="16" height="16" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16'/%3E"></label>
+<div style="cursor: pointer"><p>Para text</p></div>
 <div><div style="cursor: pointer">Wrapped with</div><span>a note</span></div>
 <div><div style="cursor: pointer">Wrapped</div></div>
 </nav>
@@ -756,7 +762,7 @@ customElements.define('icon-box', class extends HTMLElement {
   }
 })
 const listeners = document.querySelector('nav[aria-label="listeners"]')
-for (const element of listeners.querySelectorAll('.menu, .tile, .icon, .inner'))
+for (const element of listeners.querySelectorAll('.menu, .tile, .icon, .label, .para, .inner'))
   element.addEventListener('click', () => {})
 listeners.querySelector('.menu').addEventListener('click', (event) => { event.currentTarget.textContent = 'Menu open' })
 document.getElementById('relay').addEventListener('click', () => {})
@@ -799,41 +805,57 @@ fn block(text: &str, name: &str) -> Vec<String> {
 
 /// A `div` with only a click listener and the default cursor keeps its ref, printed with
 /// `[cursor=pointer]`, and a click through that ref reaches its listener; every listener-only
-/// element prints exactly as its twin with a real `cursor: pointer` does, and a container that
-/// relays its buttons' clicks prints no line of its own. Under the spec harness's conformance
-/// switch the same page prints Playwright's own text: the listener-only elements have no mark.
+/// element prints exactly as its twin with a real `cursor: pointer` does, also on the same page
+/// under `body { cursor: default }`, and a container that relays its buttons' clicks prints no
+/// line of its own. Under the spec harness's conformance switch the same page prints
+/// Playwright's own text: the listener-only elements have no mark.
 #[tokio::test]
 #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
 async fn tests_that_listener_only_elements_print_as_their_pointer_twins_and_the_switch_leaves_them()
 -> TestResult {
     let _alone = ALONE.acquire().await?;
-    let page = Page::html(CLICKABLE_PAGE).with_header("cache-control", "no-store");
-    let server =
-        FixtureServer::start(HashMap::from([("/clickable.html".to_owned(), page)])).await?;
+    let page = |html: &str| Page::html(html).with_header("cache-control", "no-store");
+    // Every element of this copy reads `default` as its real cursor, a target included, so what
+    // a target holds inherits `default`, not `auto`.
+    let default_cursor =
+        CLICKABLE_PAGE.replace("</head>", "<style>body { cursor: default }</style></head>");
+    let server = FixtureServer::start(HashMap::from([
+        ("/clickable.html".to_owned(), page(CLICKABLE_PAGE)),
+        ("/clickable-default.html".to_owned(), page(&default_cursor)),
+    ]))
+    .await?;
     let url = server.url("127.0.0.1", "/clickable.html");
     let run = Arc::new(LiveRun::connect().await?);
     let host: Arc<dyn OpHost> = Arc::clone(&run) as Arc<dyn OpHost>;
     let init = json!({ "page": null });
-    let v1 = js_runner::run_script(&host, &init, &clickable_script(&url)).await?;
-    let plain = v1["plain"].as_str().ok_or("the v1 text")?;
     let twins = [
         "- generic [ref] [cursor=pointer]: Open menu",
         "- generic [ref] [cursor=pointer]",
         "- img \"Settings\" [ref] [cursor=pointer]",
         "- img \"Slotted\" [ref] [cursor=pointer]",
+        "- img \"Labelled\" [ref] [cursor=pointer]",
+        "- paragraph [ref] [cursor=pointer]: Para text",
         "- generic [ref] [cursor=pointer]: Wrapped with",
         "- text: a note Wrapped",
     ];
-    assert_eq!(block(plain, "listeners"), twins, "{plain}");
-    assert_eq!(block(plain, "pointers"), twins, "{plain}");
-    assert!(
-        plain.ends_with(
-            "  - button \"Archive\" [ref]\n  - button \"Delete\" [ref]\n  - text: Plain text"
-        ),
-        "the relaying container prints no line of its own: {plain}"
-    );
-    assert_eq!(v1["plain"], v1["ai"], "no mode is mode 'ai'");
-    assert_eq!(v1["after"], "Menu open", "a click through the printed ref");
+    for path in ["/clickable.html", "/clickable-default.html"] {
+        let script = clickable_script(&server.url("127.0.0.1", path));
+        let v1 = js_runner::run_script(&host, &init, &script).await?;
+        let plain = v1["plain"].as_str().ok_or("the v1 text")?;
+        assert_eq!(block(plain, "listeners"), twins, "{path}: {plain}");
+        assert_eq!(block(plain, "pointers"), twins, "{path}: {plain}");
+        assert!(
+            plain.ends_with(
+                "  - button \"Archive\" [ref]\n  - button \"Delete\" [ref]\n  - text: Plain text"
+            ),
+            "{path}: the relaying container prints no line of its own: {plain}"
+        );
+        assert_eq!(v1["plain"], v1["ai"], "{path}: no mode is mode 'ai'");
+        assert_eq!(
+            v1["after"], "Menu open",
+            "{path}: a click through the printed ref"
+        );
+    }
 
     let upstream: Arc<dyn OpHost> = Arc::new(Upstream(Arc::clone(&run)));
     let upstream = js_runner::run_script(&upstream, &init, &clickable_script(&url)).await?;
@@ -881,6 +903,90 @@ impl OpHost for Upstream {
     fn upstream_snapshots(&self) -> bool {
         true
     }
+}
+
+/// A page with two iframes, each holding a listener-only `div`: one on the page's own site,
+/// which shares the page's renderer and CDP session (its document is found inside the session's
+/// capture through its `<iframe>`), and one on `localhost`, another site, which runs out of
+/// process with a session of its own. The cross-site frame's address names the page's own port.
+const FRAMED_PAGE: &str = r#"<!doctype html><html><head><title>Framed</title></head><body>
+<main>
+<iframe title="same" src="/frame-same.html"></iframe>
+<iframe title="cross" id="cross"></iframe>
+</main>
+<script>
+document.getElementById('cross').src = `http://localhost:${location.port}/frame-cross.html`
+</script>
+</body></html>"#;
+
+/// One frame's page: a listener-only `div` named `menu` beside its twin with a real
+/// `cursor: pointer`. Not alone: the engine inlines a frame body's only child into the frame's
+/// line whatever its cursor (design.md section 11, what the engine still loses).
+fn frame_page(menu: &str) -> String {
+    format!(
+        "<!doctype html><html><body><div class=\"menu\">{menu}</div>\n\
+         <div style=\"cursor: pointer\">{menu} twin</div>\n\
+         <script>document.querySelector('.menu').addEventListener('click', () => {{}})</script>\n\
+         </body></html>"
+    )
+}
+
+/// Marking reads every frame the snapshot does: a listener-only element in a same-site iframe,
+/// and one in a cross-site iframe, both print with a ref and `[cursor=pointer]`, as their
+/// real-pointer twins beside them do. A frame whose
+/// read fails is snapshotted without its marks and the snapshot still succeeds, so only the
+/// marks show that each frame's document was found.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_listener_only_elements_in_same_and_cross_site_frames_are_marked() -> TestResult
+{
+    let _alone = ALONE.acquire().await?;
+    let page = |html: &str| Page::html(html).with_header("cache-control", "no-store");
+    let server = FixtureServer::start(HashMap::from([
+        ("/framed.html".to_owned(), page(FRAMED_PAGE)),
+        (
+            "/frame-same.html".to_owned(),
+            page(&frame_page("Same-site menu")),
+        ),
+        (
+            "/frame-cross.html".to_owned(),
+            page(&frame_page("Cross-site menu")),
+        ),
+    ]))
+    .await?;
+    let script = format!(
+        "try {{\n\
+           await page.goto({url})\n\
+           const frames = page.frames().map((frame) => frame.url())\n\
+           const text = (await page.ariaSnapshot()).replace(/\\[ref=[^\\]]+\\]/g, '[ref]')\n\
+           return {{ frames, text }}\n\
+         }} finally {{\n\
+           await page.close()\n\
+         }}",
+        url = json!(server.url("127.0.0.1", "/framed.html")),
+    );
+    let run: Arc<dyn OpHost> = Arc::new(LiveRun::connect().await?);
+    let framed = js_runner::run_script(&run, &json!({ "page": null }), &script).await?;
+    assert_eq!(
+        framed["frames"],
+        json!([
+            server.url("127.0.0.1", "/framed.html"),
+            server.url("127.0.0.1", "/frame-same.html"),
+            server.url("localhost", "/frame-cross.html"),
+        ]),
+        "both frames loaded"
+    );
+    let text = framed["text"].as_str().ok_or("the v1 text")?;
+    for menu in ["Same-site menu", "Cross-site menu"] {
+        for name in [menu.to_owned(), format!("{menu} twin")] {
+            let line = format!("- generic [ref] [cursor=pointer]: {name}");
+            assert!(
+                text.lines().any(|printed| printed.trim() == line),
+                "{name} is marked: {text}"
+            );
+        }
+    }
+    Ok(())
 }
 
 /// Containers clickable marking must never pass as targets, as the v1 text prints them: a

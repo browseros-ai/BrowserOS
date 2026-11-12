@@ -8830,8 +8830,8 @@ ${value.stack}`;
     "article"
   ]);
   var FRAME_TAGS = new Set(["iframe", "frame"]);
-  var pointerTargets = new Set;
-  var insideTargets = new Map;
+  var pointerTargets = new Map;
+  var nearestTargets = new Map;
   function leafTargets(targets, roleOf) {
     const all = new Set(targets);
     return targets.filter((target) => !holdsTarget(target, all, roleOf));
@@ -8890,8 +8890,12 @@ ${value.stack}`;
     if (typeof read !== "function")
       return snapshot();
     const own = Object.getOwnPropertyDescriptor(globalThis, "getComputedStyle");
-    for (const target of targets)
-      pointerTargets.add(target);
+    for (const target of targets) {
+      const style = Reflect.apply(read, globalThis, [
+        target
+      ]);
+      pointerTargets.set(target, style?.cursor ?? "");
+    }
     Object.defineProperty(globalThis, "getComputedStyle", {
       configurable: true,
       enumerable: own?.enumerable ?? true,
@@ -8905,7 +8909,8 @@ ${value.stack}`;
           return style;
         if (pointerTargets.has(element))
           return pointerStyle(style);
-        return style.cursor === "auto" && insideTarget(element) ? pointerStyle(style) : style;
+        const target = nearestTarget(element);
+        return target && style.cursor === pointerTargets.get(target) ? pointerStyle(style) : style;
       }
     });
     try {
@@ -8916,27 +8921,27 @@ ${value.stack}`;
       else
         Reflect.deleteProperty(globalThis, "getComputedStyle");
       pointerTargets.clear();
-      insideTargets.clear();
+      nearestTargets.clear();
     }
   }
-  function insideTarget(element) {
+  function nearestTarget(element) {
     const chain = [];
-    let found = false;
+    let found = null;
     for (let node = parentOrHost(element);node; node = parentOrHost(node)) {
-      const known = insideTargets.get(node);
-      if (known !== undefined) {
-        found = known || pointerTargets.has(node);
+      if (pointerTargets.has(node)) {
+        found = node;
         break;
       }
-      if (pointerTargets.has(node)) {
-        found = true;
+      const known = nearestTargets.get(node);
+      if (known !== undefined) {
+        found = known;
         break;
       }
       chain.push(node);
     }
-    insideTargets.set(element, found);
+    nearestTargets.set(element, found);
     for (const node of chain)
-      insideTargets.set(node, found);
+      nearestTargets.set(node, found);
     return found;
   }
   function parentOrHost(element) {

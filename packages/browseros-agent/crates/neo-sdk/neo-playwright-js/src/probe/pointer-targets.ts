@@ -14,11 +14,13 @@
  * is installed only around the one snapshot call that has targets and removed in `finally`, so
  * every other read in that world, at any other time, goes to the world's own function. It
  * answers `pointer` only for that call's elements, a set filled just before the engine call and
- * emptied in the same `finally`, and for their descendants as CSS inheritance would:
- * a descendant whose own computed cursor is the initial `auto`, never one with a cursor of its
- * own (a field's `text`). Every other read, at any other time, is the real one. The engine relies
- * on that inheritance: a target that wraps a single control is folded into it, and the control
- * keeps the mark only because it inherited the cursor.
+ * emptied in the same `finally`, and for their descendants as CSS inheritance would: a
+ * descendant whose own real cursor equals the real cursor of the target it sits in, so it set
+ * none of its own, never one with a cursor of its own (a field's `text`). A target's real cursor
+ * is often not `auto`: every `<label>` reads `default` from the browser's own stylesheet, and so
+ * does everything on a page that sets `body { cursor: default }`. The engine relies on that
+ * inheritance: a target that wraps a single control is folded into it, and the control keeps the
+ * mark only because it inherited the cursor.
  *
  * Because the engine folds everything inside a pointer target into it, and the v1 text prints
  * what is inside an actionable node with its text left out, a target that holds a line of its
@@ -83,11 +85,15 @@ const FRAME_TAGS: ReadonlySet<string> = new Set(['iframe', 'frame'])
 /** The engine's own role of an element (roleUtils `getAriaRole`, on `InjectedScript.utils`). */
 export type RoleOf = (element: Element) => string | null
 
-/** The elements that read as `cursor: pointer`, only while one snapshot call runs. */
-const pointerTargets = new Set<Element>()
+/**
+ * The elements that read as `cursor: pointer`, only while one snapshot call runs, each with its
+ * own real cursor, read before the override is in place: what an element inside it reads when it
+ * set no cursor of its own.
+ */
+const pointerTargets = new Map<Element, string>()
 
-/** Whether an element sits inside one of `pointerTargets`, learned during the same call. */
-const insideTargets = new Map<Element, boolean>()
+/** The target an element sits inside, the nearest in the flat tree, learned during the same call. */
+const nearestTargets = new Map<Element, Element | null>()
 
 /**
  * The targets that hold no target of their own. Desktop's rules already leave out a listener that
@@ -178,7 +184,12 @@ export function asPointerTargets<T>(
   const read = globalThis.getComputedStyle
   if (typeof read !== 'function') return snapshot()
   const own = Object.getOwnPropertyDescriptor(globalThis, 'getComputedStyle')
-  for (const target of targets) pointerTargets.add(target)
+  for (const target of targets) {
+    const style: CSSStyleDeclaration | null = Reflect.apply(read, globalThis, [
+      target,
+    ])
+    pointerTargets.set(target, style?.cursor ?? '')
+  }
   Object.defineProperty(globalThis, 'getComputedStyle', {
     configurable: true,
     enumerable: own?.enumerable ?? true,
@@ -194,7 +205,8 @@ export function asPointerTargets<T>(
       ])
       if (pseudo) return style
       if (pointerTargets.has(element)) return pointerStyle(style)
-      return style.cursor === 'auto' && insideTarget(element)
+      const target = nearestTarget(element)
+      return target && style.cursor === pointerTargets.get(target)
         ? pointerStyle(style)
         : style
     },
@@ -206,33 +218,34 @@ export function asPointerTargets<T>(
     if (own) Object.defineProperty(globalThis, 'getComputedStyle', own)
     else Reflect.deleteProperty(globalThis, 'getComputedStyle')
     pointerTargets.clear()
-    insideTargets.clear()
+    nearestTargets.clear()
   }
 }
 
 /**
- * Whether one of `element`'s ancestors in the flat tree, the tree CSS inheritance follows, is a
- * target. Walked once per element and remembered for the call, since the engine asks for every
- * element of the page.
+ * The nearest of `element`'s ancestors in the flat tree, the tree CSS inheritance follows, that
+ * is a target, or `null`. Walked once per element and remembered for the call, since the engine
+ * asks for every element of the page. `leafTargets` leaves no target inside another, so the
+ * nearest is the only one.
  */
-function insideTarget(element: Element): boolean {
+function nearestTarget(element: Element): Element | null {
   const chain: Element[] = []
-  let found = false
+  let found: Element | null = null
   for (let node = parentOrHost(element); node; node = parentOrHost(node)) {
-    const known = insideTargets.get(node)
-    if (known !== undefined) {
-      found = known || pointerTargets.has(node)
+    if (pointerTargets.has(node)) {
+      found = node
       break
     }
-    if (pointerTargets.has(node)) {
-      found = true
+    const known = nearestTargets.get(node)
+    if (known !== undefined) {
+      found = known
       break
     }
     chain.push(node)
   }
-  insideTargets.set(element, found)
-  // Every element walked past lies under the same answer, unless it is a target itself.
-  for (const node of chain) insideTargets.set(node, found)
+  nearestTargets.set(element, found)
+  // Every element walked past sits under the same target: none of them is a target itself.
+  for (const node of chain) nearestTargets.set(node, found)
   return found
 }
 
