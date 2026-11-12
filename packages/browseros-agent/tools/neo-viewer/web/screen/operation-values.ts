@@ -1,15 +1,19 @@
 /**
- * An operation's arguments and result as its detail panel shows them. Neo records arguments as
+ * An operation's arguments as its detail under the row shows them. Neo records arguments as
  * structured JSON: a locator or page is a handle (`{"$neo":"locator","display":"getByRole('button')"}`)
  * and the call's own settings sit under `call` (`{api, timeoutMs}`). The panel shows a handle by
  * its `display`, the timeout as `timeout`, and, when the script called the method by another name
  * (`page.waitForEvent` recorded as `events.wait`), that name as `called as`. Everything else is
- * the recorded JSON.
+ * the recorded JSON, with any long string cut to its start: the viewer asks Neo to keep values
+ * whole (`CLAW_TRACE_VALUE_BYTES`), so one argument can hold a whole snapshot's text, which the
+ * right panel shows in full.
  */
 
-import { jsonLine, type Line, type Segment, snapshotLine } from './text-lines'
+import { jsonLine, type Line, type Segment } from './text-lines'
 
 const INLINE_JSON = 60
+/** A string argument longer than this shows its start and how much more there is. */
+const ARGUMENT_TEXT = 200
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -28,10 +32,16 @@ export function handleText(value: unknown): string | null {
   return null
 }
 
-/** Handles anywhere inside a value replaced by their words (a screenshot's `mask` locators). */
+/**
+ * Handles anywhere inside a value replaced by their words (a screenshot's `mask` locators), and
+ * long strings by their start.
+ */
 function simplified(value: unknown): unknown {
   const handle = handleText(value)
   if (handle !== null) return handle
+  if (typeof value === 'string' && value.length > ARGUMENT_TEXT) {
+    return `${value.slice(0, ARGUMENT_TEXT)}… (${value.length - ARGUMENT_TEXT} more chars)`
+  }
   if (Array.isArray(value)) return value.map(simplified)
   if (isRecord(value)) {
     return Object.fromEntries(
@@ -86,17 +96,4 @@ export function argumentLines(name: string, args: unknown): Line[] {
   }
   if (typeof timeout === 'number') entries.push(['timeout', timeout])
   return keyed(entries)
-}
-
-/** The recorded result: text line by line, anything else as pretty JSON. */
-export function resultLines(result: unknown): Line[] {
-  if (result === undefined) return []
-  if (typeof result === 'string' && result.includes('\n')) {
-    return result.split('\n').map(snapshotLine)
-  }
-  const handle = handleText(result)
-  if (handle !== null) return [[{ text: handle, tone: 'plain' }]]
-  return (JSON.stringify(simplified(result), null, 2) ?? 'undefined')
-    .split('\n')
-    .map(jsonLine)
 }

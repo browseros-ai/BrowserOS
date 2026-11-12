@@ -100,7 +100,9 @@ under a stopped container).
 It is started as [the image's README](../../crates/neo-sdk/neo-server/docker/README.md) shows for
 a standalone start: its own Docker network, `NEO_MCP_REMOTE=true`, and the host API over the
 development option `CLAW_HOST_TCP` with a token file the command writes (mode 0600) in the state
-folder; both ports are published on 127.0.0.1 at ports Docker picks. Inside the container
+folder; both ports are published on 127.0.0.1 at ports Docker picks. It also sets the development
+option `CLAW_TRACE_VALUE_BYTES=262144`, so Neo's trace keeps each call's arguments and result whole
+up to Neo's own reply limit rather than its 2 KiB default: the right panel shows them whole. Inside the container
 `CLAW_HOST_TCP` binds `0.0.0.0:9300`: bound to `127.0.0.1` the published port answers nothing,
 since Docker's port forward arrives from outside the container's loopback. When Docker's address
 pools are used up it names a /24 itself and says so. The command is the only control: the page
@@ -131,18 +133,33 @@ The page at `/` (the approved design, "Viewer C v2"):
   argument list, and code that does not parse is shown as sent. On each line, the methods that
   line called, from Neo's record of the run: start offset, the name Neo recorded (it
   can differ from what the script wrote: `page.textContent('h1')` is `locator.textContent`), the
-  outcome, a bar for when it ran within the run's own time, its duration, and read or write. A line
-  that called many (a loop) folds the rest behind one row. Click a method for its arguments (a
-  locator by its text, the timeout, the name the script used when it differs), call log, result,
-  outcome and error; Neo keeps arguments up to 4 KiB and results up to 2 KiB, and the panel says so
-  when it cut one. Neo's own work for the run (opening the page, listening for events) folds into
-  one quiet row under the code. Under it, **Model read**: the reply in one line, its size, and
-  **Open full**. A run still running, or one without Neo's record, shows its code alone.
-- **What the model read.** The sidebar's lower half: the selected run's whole reply, exactly as
-  the agent got it, formatted (keys aligned, a snapshot line by line) or raw. Until you click a
-  row it follows the newest run. Drag the handle between the runs and the sidebar to resize it.
-- **Open full.** The reply in a large pop-up with line numbers, find (Enter and Shift+Enter step
-  through the matches), copy, and previous / next output. Escape closes it.
+  outcome, a bar for when it ran within the run's own time, its duration, and read or write. The
+  **Start** column is when the call started, measured from the run's start (its header and each
+  value say so on hover). A line in a loop runs more than once: its first row counts the calls
+  (`×3`) and each later row says which call it is (`2nd call`) where the code would be; a line
+  that called many folds the rest behind one row. Calls are counted by their place in the script,
+  and Neo's record does not mark where one call ends, so a call that makes several operations
+  from one place (`page.waitForURL` checking again) counts each, as a loop's passes would. Neo's own bookkeeping (`page.snapshotPending`,
+  `events.listen`, the row of operations not on a line) says **Neo internal**, so it is not taken
+  for the script's calls. Click a method to select it: its arguments (a locator by its text, the
+  timeout, the name the script used when it differs, a long string by its start), call log and
+  outcome open under it, and what it returned shows on the right. Under the code, **Model read**:
+  the reply in one line, its size, and **Open full**; clicking **Model read** shows the reply on
+  the right again. A run still running, or one without Neo's record, shows its code alone.
+- **The right panel.** The sidebar's lower half shows the selection. A selected call shows what
+  it returned, titled where it sits (`page.ariaSnapshot · run 8 · line 7 · call 2 of 3`), with
+  its size. **Formatted** is what the script's `await` got wherever that can be recovered: a
+  whole-page snapshot's text (recorded by the `page.snapshotPending` after it), an `evaluate`
+  value decoded from the page's serialized form, a string as lines, and `mode: 'default'`'s
+  YAML rebuilt from the recorded tree as the run builds it; a locator's v1 snapshot (its options
+  never reach the wire) shows the recorded tree, and any other result Neo's record of it, and the
+  panel says which. **Raw** is Neo's record of the result, as JSON. Otherwise the panel is
+  **What the model read**: the selected run's whole reply, exactly as the agent got it,
+  formatted (keys aligned, a snapshot line by line) or raw. Until you click a row it follows the
+  newest run. Drag the handle between the runs and the sidebar to resize it.
+- **Open full.** The selection in a large pop-up with line numbers, find (Enter and Shift+Enter
+  step through the matches), copy, and previous / next: the run's other calls for a call, the
+  other runs' outputs for a reply. Escape closes it.
 - **The live screen.** The sidebar's upper half: Neo's screen, live. **Follow agent** watches the
   tab the agent's latest run used and moves with it; **Control** lets you click and type (the agent
   is not held). Docked, it is as wide as the sidebar (drag the handle to make it bigger) and keeps

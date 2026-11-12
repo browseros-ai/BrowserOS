@@ -12,7 +12,9 @@ import {
   retireImages,
   type StartState,
   settleImages,
+  startContainer,
   stopContainer,
+  TRACE_VALUE_BYTES,
 } from './neo-container'
 
 const ok = (stdout = ''): CommandResult => ({ code: 0, stdout, stderr: '' })
@@ -495,6 +497,29 @@ describe('cleanup touches only what the viewer created', () => {
       (await retireImages(docker.run, [image], [])).kept[0]?.reason,
     ).toContain('must be forced')
   })
+})
+
+test("the container keeps a call's arguments and result whole up to Neo's reply limit", async () => {
+  // docker run fails here, after its arguments are recorded: they are what this checks.
+  const docker = fakeDocker((args) =>
+    args[0] === 'run'
+      ? { code: 1, stdout: '', stderr: 'stopped by the test' }
+      : ok(),
+  )
+  await expect(
+    startContainer(docker.run, {
+      names: NAMES,
+      image: 'neo-sdk:test',
+      tokenFile: '/tmp/token',
+      launch: 'launch-a',
+    }),
+  ).rejects.toThrow()
+  const run = docker.calls.find((call) => call[1] === 'run') ?? []
+  expect(TRACE_VALUE_BYTES).toBe(256 * 1024)
+  expect(run).toContain(`CLAW_TRACE_VALUE_BYTES=${TRACE_VALUE_BYTES}`)
+  expect(
+    run[run.indexOf(`CLAW_TRACE_VALUE_BYTES=${TRACE_VALUE_BYTES}`) - 1],
+  ).toBe('-e')
 })
 
 test('a machine whose Docker address pools are used up still gets a network, on an explicit subnet', async () => {

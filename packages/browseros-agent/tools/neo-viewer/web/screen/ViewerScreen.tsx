@@ -19,7 +19,10 @@
  * It follows the agent: the tab its latest run used, the one Take over takes (`LiveStatus.tab`).
  *
  * Selection: until a row is clicked, the sidebar follows the latest run, so a new run
- * shows up there as it arrives; clicking a row opens it and pins the sidebar to it.
+ * shows up there as it arrives; clicking a row opens it and pins the sidebar to it. Inside an
+ * open run, clicking a call selects it, and the sidebar shows what that call returned until the
+ * run's "Model read" row, another run, or Clear selects a reply again. "Open full" opens
+ * whichever the sidebar shows.
  */
 
 import { useEffect, useState } from 'react'
@@ -29,6 +32,7 @@ import { useLiveScreen } from '../live-screen/use-live-screen'
 import { useViewer } from '../use-viewer'
 import { FullOutput } from './FullOutput'
 import { runTotals } from './measures'
+import type { OperationSelection } from './operations'
 import { RunTable } from './RunTable'
 import { Sidebar } from './Sidebar'
 import { Splitter, useSidebarWidth } from './Splitter'
@@ -59,6 +63,10 @@ export function ViewerScreen() {
   const [openIds, setOpenIds] = useState<ReadonlySet<string>>(new Set())
   const [sort, setSort] = useState<RunSort>(DEFAULT_SORT)
   const [fullId, setFullId] = useState<string | null>(null)
+  const [operation, setOperation] = useState<OperationSelection | null>(null)
+  const [fullOperation, setFullOperation] = useState<OperationSelection | null>(
+    null,
+  )
   const [sidebarWidth, setSidebarWidth] = useSidebarWidth()
   const live = useLiveScreen()
   const container = useContainer(info)
@@ -70,11 +78,16 @@ export function ViewerScreen() {
     runs.find((run) => run.id === chosenId) ?? runs.at(-1) ?? null
   const fullRun = runs.find((run) => run.id === fullId) ?? null
   const totals = runTotals(runs)
+  // A call is shown only while its run is the selected one.
+  const selectedOperation =
+    operation && operation.runId === selected?.id ? operation : null
 
   const onClear = () => {
     setChosenId(null)
     setOpenIds(new Set())
     setFullId(null)
+    setOperation(null)
+    setFullOperation(null)
     void clear()
   }
 
@@ -94,14 +107,32 @@ export function ViewerScreen() {
       next.delete(run.id)
     } else {
       next.add(run.id)
+      if (run.id !== selected?.id) setOperation(null)
       setChosenId(run.id)
     }
     setOpenIds(next)
   }
 
+  const onSelectOperation = (
+    run: RunSummary,
+    selection: OperationSelection | null,
+  ) => {
+    setChosenId(run.id)
+    setOperation(selection)
+  }
+
+  // A reply in the pop-up is the selection too: the panel shows that reply, not an older call.
   const openFull = (run: RunSummary) => {
     setChosenId(run.id)
     setFullId(run.id)
+    setFullOperation(null)
+    setOperation(null)
+  }
+
+  const openFullOperation = (selection: OperationSelection) => {
+    setChosenId(selection.runId)
+    setFullId(selection.runId)
+    setFullOperation(selection)
   }
 
   return (
@@ -140,7 +171,9 @@ export function ViewerScreen() {
             onSort={setSort}
             openIds={openIds}
             selectedId={selected?.id ?? null}
+            selectedOperation={selectedOperation}
             onRow={onRow}
+            onSelectOperation={onSelectOperation}
             onOpenFull={openFull}
             nowMs={nowMs}
           />
@@ -149,7 +182,10 @@ export function ViewerScreen() {
         <Sidebar
           width={sidebarWidth}
           run={selected}
+          operation={selectedOperation}
+          onShowReply={() => setOperation(null)}
           onOpenFull={openFull}
+          onOpenFullOperation={openFullOperation}
           live={live}
           popped={popped}
           onPopOut={() => setPopped(true)}
@@ -163,7 +199,15 @@ export function ViewerScreen() {
           run={fullRun}
           runs={runs}
           onRun={openFull}
-          onClose={() => setFullId(null)}
+          operation={fullOperation?.runId === fullRun.id ? fullOperation : null}
+          onOperation={(selection) => {
+            setFullOperation(selection)
+            setOperation(selection)
+          }}
+          onClose={() => {
+            setFullId(null)
+            setFullOperation(null)
+          }}
         />
       )}
     </div>

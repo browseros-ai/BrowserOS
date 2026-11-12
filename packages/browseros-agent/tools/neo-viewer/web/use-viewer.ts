@@ -137,22 +137,50 @@ export function useViewer(): ViewerState {
   return { info, runs: state.runs, log: state.log, clear, exportRuns, error }
 }
 
+/**
+ * The last detail read for each recent run, keyed by its id and the time it was sent (ids start
+ * again after a Clear). A second view of a run (the right panel, Open full) starts from what its
+ * block already read, and keeps it when a refetch fails.
+ */
+const readDetails = new Map<string, RunDetail>()
+const READ_DETAILS = 50
+
+function detailKey(run: RunSummary): string {
+  return `${run.id}@${run.sentAt}`
+}
+
+function remember(run: RunSummary, detail: RunDetail): void {
+  readDetails.delete(detailKey(run))
+  readDetails.set(detailKey(run), detail)
+  const oldest = readDetails.keys().next().value
+  if (readDetails.size > READ_DETAILS && oldest !== undefined)
+    readDetails.delete(oldest)
+}
+
 /** One run in full, refetched whenever its summary changes (it was still running). */
 export function useRunDetail(run: RunSummary, open: boolean): RunDetail | null {
-  const [detail, setDetail] = useState<RunDetail | null>(null)
+  const [detail, setDetail] = useState<RunDetail | null>(
+    () => readDetails.get(detailKey(run)) ?? null,
+  )
   // biome-ignore lint/correctness/useExhaustiveDependencies: a new status means a new reply, a new record count or duration means Neo's record joined.
   useEffect(() => {
     if (!open) return
     let current = true
     getJson<RunResponse>(apiRoutes.run(run.id)).then(
       (found) => {
-        if (current) setDetail(found.run)
+        // A newer read replaced this one: it must not overwrite the cache or the view.
+        if (!current) return
+        remember(run, found.run)
+        setDetail(found.run)
       },
+      // The last detail read stays: a failed read leaves the view as it was.
       () => {},
     )
     return () => {
       current = false
     }
   }, [run.id, run.status, run.operationCount, run.neoDurationMs, open])
-  return detail
+  return detail?.id === run.id
+    ? detail
+    : (readDetails.get(detailKey(run)) ?? detail)
 }

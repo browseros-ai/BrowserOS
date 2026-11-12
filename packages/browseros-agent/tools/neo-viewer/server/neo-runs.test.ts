@@ -86,7 +86,10 @@ test("Neo's run record keeps each operation's name, site, timing, args, result, 
     durationMs: 900,
     complete: true,
     tabs: [7],
+    traceGaps: 0,
   })
+  // Neo sends traceGaps only when it dropped records.
+  expect(toNeoRunRecord({ ...RUN, traceGaps: 2 }).traceGaps).toBe(2)
   expect(record.error).toMatchObject({
     owner: 'script',
     code: 'no_match',

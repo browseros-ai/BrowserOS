@@ -46,7 +46,9 @@ describe('Copy on a run row', () => {
         onSort={() => {}}
         openIds={openIds}
         selectedId={null}
+        selectedOperation={null}
         onRow={(run) => toggles.push(run.seq)}
+        onSelectOperation={() => {}}
         onOpenFull={() => {}}
         nowMs={Date.now()}
       />

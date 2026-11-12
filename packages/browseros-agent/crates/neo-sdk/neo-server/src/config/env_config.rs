@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use std::str::FromStr;
 
 use neo_takeover::Xvnc;
+use neo_trace::RedactionLimits;
 
 use super::{ConfigError, Defaults};
 
@@ -32,6 +33,10 @@ pub(crate) struct EnvConfig {
     /// - `home`: `NEO_SCREEN`, the image's own `WxH` for Xvnc's geometry, read rather than
     ///   duplicated, else `Defaults::SCREEN`.
     pub(crate) xvnc: Xvnc,
+    /// `CLAW_TRACE_VALUE_BYTES`: a development option that keeps an operation's arguments and
+    /// result whole in the trace up to this many bytes (the Neo viewer asks for its reply limit,
+    /// 256 KiB). Unset, the trace keeps neo-trace's defaults (2 KiB results, 4 KiB arguments).
+    pub(crate) trace_value_bytes: Option<usize>,
 }
 
 /// Whether Chromium runs in hosted mode, where popups open as tabs Neo can drive.
@@ -104,6 +109,11 @@ impl EnvConfig {
                 .unwrap_or(Defaults::SCREEN),
         };
         Ok(Self {
+            trace_value_bytes: parse(
+                &read,
+                "CLAW_TRACE_VALUE_BYTES",
+                "a size in bytes like 262144",
+            )?,
             log_filter: read("CLAW_LOG").unwrap_or_else(|| Defaults::LOG_FILTER.to_owned()),
             hosted_mode,
             native_version: read("CLAW_NATIVE_BROWSEROS_VERSION"),
@@ -112,6 +122,16 @@ impl EnvConfig {
             xvnc,
             state_dir,
         })
+    }
+
+    /// The trace's size limits: neo-trace's defaults, or with whole values up to
+    /// `CLAW_TRACE_VALUE_BYTES` when it is set.
+    #[must_use]
+    pub(crate) fn redaction_limits(&self) -> RedactionLimits {
+        self.trace_value_bytes.map_or_else(
+            RedactionLimits::default,
+            RedactionLimits::new_with_value_bytes,
+        )
     }
 
     /// `$BROWSERCLAW_DIR/claw-sdk`, where `open_trace` keeps the store.
@@ -155,6 +175,7 @@ mod tests {
     use std::path::{Path, PathBuf};
 
     use neo_takeover::{ScreenSize, Xvnc};
+    use neo_trace::RedactionLimits;
 
     use super::{EnvConfig, HostApiConfig, HostedMode};
     use crate::config::{ConfigError, Defaults};
@@ -190,6 +211,7 @@ mod tests {
                         height: 1000
                     },
                 },
+                trace_value_bytes: None,
             },
             "an image that sets nothing gets the documented defaults"
         );
@@ -291,8 +313,14 @@ mod tests {
             ("CLAW_HOST_TCP", "127.0.0.1:9300"),
             ("CLAW_XVNC_ADDR", " 127.0.0.1:5901 "),
             ("NEO_SCREEN", "1280x800"),
+            ("CLAW_TRACE_VALUE_BYTES", "262144"),
         ])?;
         assert_eq!(config.log_filter, "debug", "CLAW_LOG");
+        assert_eq!(
+            config.redaction_limits(),
+            RedactionLimits::new_with_value_bytes(262_144),
+            "the Neo viewer's whole values"
+        );
         assert_eq!(
             config.native_version.as_deref(),
             Some("0.52.0.1"),
@@ -324,6 +352,24 @@ mod tests {
                 },
             },
             "an image that moves Xvnc or resizes its screen"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn the_trace_keeps_its_defaults_unless_asked() -> Result<(), Box<dyn Error>> {
+        let config = env(&[("HOME", "/h")])?;
+        assert_eq!(config.trace_value_bytes, None);
+        assert_eq!(config.redaction_limits(), RedactionLimits::default());
+        assert!(
+            matches!(
+                env(&[("HOME", "/h"), ("CLAW_TRACE_VALUE_BYTES", "256KiB")]),
+                Err(ConfigError::Env {
+                    name: "CLAW_TRACE_VALUE_BYTES",
+                    ..
+                })
+            ),
+            "a size that cannot be read must fail the start, not keep values cut"
         );
         Ok(())
     }

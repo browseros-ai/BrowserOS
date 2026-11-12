@@ -9,7 +9,11 @@
     "noEmit": true,
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
-    "noImplicitReturns": true,
+    // The operation panel runs two vendored Playwright modules (the snapshot YAML renderer and the
+    // evaluate decoder) so it shows exactly what the run computed; like neo-playwright-js, which
+    // imports the same sources, it compiles them without noImplicitReturns, which upstream does
+    // not use.
+    "noImplicitReturns": false,
     "noImplicitOverride": true,
     "noFallthroughCasesInSwitch": true,
     "allowImportingTsExtensions": true,

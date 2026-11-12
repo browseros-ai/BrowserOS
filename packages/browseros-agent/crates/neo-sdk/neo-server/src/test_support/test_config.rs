@@ -34,6 +34,7 @@ pub fn test_config(state_dir: &Path) -> AppConfig {
             tcp: None,
         },
         xvnc: CLOSED_XVNC,
+        trace_value_bytes: None,
     };
     AppConfig {
         launch,

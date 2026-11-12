@@ -4,6 +4,10 @@
  * (`MethodRows`), Neo's own operations folded under the code, then "Model
  * read", the reply the model got back.
  *
+ * Selecting: a method row selects that call, and the right panel shows what it returned; the
+ * "Model read" row selects the reply again. The selection lives on the screen
+ * (`ViewerScreen`), so the panel and "Open full" follow it; here it opens the call's detail.
+ *
  * The methods come from Neo's record of the run (`RunDetail.neo`), read once the reply is in. A
  * run still running, or one whose record could not be read (no host API, image stopped), shows
  * its code alone with a note saying why.
@@ -12,8 +16,23 @@
 import { useState } from 'react'
 import type { NeoOperation, RunDetail, RunSummary } from '../../shared/api'
 import type { FormattedCode } from '../../shared/code-format'
-import { MethodDetail, MethodRow, Rail, UnplacedGroup } from './MethodRows'
-import { type PlacedOperations, placeOperations } from './operations'
+import {
+  MethodDetail,
+  MethodHeader,
+  MethodRow,
+  Rail,
+  UnplacedGroup,
+} from './MethodRows'
+import { type OperationOutput, operationOutput } from './operation-output'
+import {
+  type CallPlace,
+  callPlaces,
+  isNeoInternal,
+  type OperationSelection,
+  ordinal,
+  type PlacedOperations,
+  placeOperations,
+} from './operations'
 import { noReplyReason, replyFacts, valueChip } from './reply'
 import { codeLines, type Line } from './text-lines'
 import { plural } from './units'
@@ -30,6 +49,8 @@ export function RunBlock({
   formatted,
   detail,
   selected,
+  selectedOperationId,
+  onSelect,
   onOpenFull,
 }: {
   run: RunSummary
@@ -37,6 +58,10 @@ export function RunBlock({
   formatted: FormattedCode
   detail: RunDetail | null
   selected: boolean
+  /** The call the right panel shows, when it is one of this run's. */
+  selectedOperationId: string | null
+  /** Select a call, or null for the run's reply. */
+  onSelect: (selection: OperationSelection | null) => void
   onOpenFull: () => void
 }) {
   // Laid out one statement per line (whitespace only); sites map to the line that holds them.
@@ -45,16 +70,29 @@ export function RunBlock({
   const placed = record
     ? placeOperations(record, lines.length, formatted.lineOfSite)
     : null
-  const [openId, setOpenId] = useState<string | null>(null)
+  const places = placed ? callPlaces(placed) : new Map<string, CallPlace>()
+  const operations = record?.operations ?? []
+  const outputOf = (operation: NeoOperation) =>
+    operationOutput(operation, operations, record?.traceGaps ?? 0)
+  const openId = selectedOperationId
   const [unfolded, setUnfolded] = useState<ReadonlySet<number>>(new Set())
   const [showUnplaced, setShowUnplaced] = useState(false)
   const toggle = (id: string) =>
-    setOpenId((current) => (current === id ? null : id))
+    onSelect(
+      id === openId
+        ? null
+        : {
+            runId: run.id,
+            operationId: id,
+            place: places.get(id) ?? { line: null, call: 1, calls: 1 },
+          },
+    )
 
   return (
     <div
       className={`flex flex-col border-neo-edge border-b pt-1 pb-1.5 text-xs leading-4 ${selected ? 'bg-neo-tint-2' : 'bg-neo-tint-3'}`}
     >
+      {placed && <MethodHeader />}
       {lines.map((line, index) => (
         <CodeLine
           // biome-ignore lint/suspicious/noArrayIndexKey: a script line is its line number.
@@ -62,6 +100,8 @@ export function RunBlock({
           number={index + 1}
           line={line}
           placed={placed}
+          places={places}
+          outputOf={outputOf}
           note={index === 0 && !placed ? missingRecord(run, detail) : null}
           openId={openId}
           onToggle={toggle}
@@ -77,17 +117,26 @@ export function RunBlock({
           onExpand={() => setShowUnplaced(!showUnplaced)}
           openId={openId}
           onToggle={toggle}
+          outputOf={outputOf}
         />
       )}
-      <div className="flex h-7 shrink-0 items-center px-4">
+      <div
+        className={`flex h-7 shrink-0 items-center px-4 ${selected && openId === null ? 'bg-[#DCE6FB]' : ''}`}
+      >
         <Rail />
-        <span className="w-[106px] shrink-0 font-semibold text-black">
+        <button
+          type="button"
+          onClick={() => onSelect(null)}
+          title="Show the reply in the right panel"
+          className="w-[106px] shrink-0 text-left font-semibold text-black hover:text-neo"
+        >
           Model read
-        </span>
+        </button>
         <ModelRead
           run={run}
           detail={detail}
-          selected={selected}
+          selected={selected && openId === null}
+          onSelect={() => onSelect(null)}
           onOpenFull={onOpenFull}
         />
       </div>
@@ -103,11 +152,17 @@ function missingRecord(run: RunSummary, detail: RunDetail | null): string {
   return 'No record from Neo for this run (no host API, or not read yet), so no methods.'
 }
 
-/** One script line: its first method beside the code, more methods on rows under it. */
+/**
+ * One script line: its first method beside the code, more methods on rows under it. When the
+ * line called its first method more than once (a loop), that row counts the calls and each
+ * later call of a method says which it is; Neo's own bookkeeping says so instead.
+ */
 function CodeLine({
   number,
   line,
   placed,
+  places,
+  outputOf,
   note,
   openId,
   onToggle,
@@ -117,6 +172,8 @@ function CodeLine({
   number: number
   line: Line
   placed: PlacedOperations | null
+  places: Map<string, CallPlace>
+  outputOf: (operation: NeoOperation) => OperationOutput
   note: string | null
   openId: string | null
   onToggle: (id: string) => void
@@ -125,23 +182,34 @@ function CodeLine({
 }) {
   const operations = placed?.byLine.get(number) ?? []
   const spanMs = placed?.spanMs ?? 1
+  // How many times the line ran: the most any one call on it was made.
+  const runs = Math.max(
+    1,
+    ...operations.map((operation) => places.get(operation.id)?.calls ?? 1),
+  )
   const [first, ...more] = operations
   const shown =
     unfolded || operations.length <= FOLD_AFTER
       ? more
       : more.slice(0, SHOWN_PER_LINE - 1)
   const folded = more.length - shown.length
-  const row = (operation: NeoOperation, isFirst: boolean) => (
-    <MethodOnLine
-      key={operation.id}
-      operation={operation}
-      number={isFirst ? number : undefined}
-      code={isFirst ? line : undefined}
-      spanMs={spanMs}
-      open={operation.id === openId}
-      onToggle={() => onToggle(operation.id)}
-    />
-  )
+  const row = (operation: NeoOperation, isFirst: boolean) => {
+    const place = places.get(operation.id)
+    return (
+      <MethodOnLine
+        key={operation.id}
+        operation={operation}
+        outputOf={outputOf}
+        number={isFirst ? number : undefined}
+        code={isFirst ? line : undefined}
+        calls={isFirst ? runs : undefined}
+        label={isFirst ? undefined : rowLabel(operation, place)}
+        spanMs={spanMs}
+        open={operation.id === openId}
+        onToggle={() => onToggle(operation.id)}
+      />
+    )
+  }
   return (
     <>
       {first ? (
@@ -174,17 +242,33 @@ function CodeLine({
   )
 }
 
+/** A later row's words: Neo's bookkeeping, or which call of its method it is (`2nd call`). */
+function rowLabel(
+  operation: NeoOperation,
+  place: CallPlace | undefined,
+): string | undefined {
+  if (isNeoInternal(operation)) return 'Neo internal'
+  return place && place.call > 1 ? `${ordinal(place.call)} call` : undefined
+}
+
 function MethodOnLine({
   operation,
+  outputOf,
   number,
   code,
+  calls,
+  label,
   spanMs,
   open,
   onToggle,
 }: {
   operation: NeoOperation
+  /** Its output, worked out only while the row is open. */
+  outputOf: (operation: NeoOperation) => OperationOutput
   number?: number
   code?: Line
+  calls?: number
+  label?: string
   spanMs: number
   open: boolean
   onToggle: () => void
@@ -194,25 +278,32 @@ function MethodOnLine({
       <MethodRow
         number={number}
         code={code}
+        calls={calls}
+        label={label}
         operation={operation}
         spanMs={spanMs}
         open={open}
         onToggle={onToggle}
       />
-      {open && <MethodDetail operation={operation} />}
+      {open && (
+        <MethodDetail operation={operation} output={outputOf(operation)} />
+      )}
     </>
   )
 }
 
+/** The reply in one line; clicking it (or the row's label) shows it on the right. */
 function ModelRead({
   run,
   detail,
   selected,
+  onSelect,
   onOpenFull,
 }: {
   run: RunSummary
   detail: RunDetail | null
   selected: boolean
+  onSelect: () => void
   onOpenFull: () => void
 }) {
   if (run.status === 'running') {
@@ -230,15 +321,22 @@ function ModelRead({
   const chip = valueChip(text)
   return (
     <span className="flex min-w-0 flex-1 items-center gap-2.5">
-      <code
-        className={`min-w-0 max-w-[60%] truncate rounded border border-neo-edge bg-white px-2 py-0.5 font-code ${chip.failed ? 'text-bad' : 'text-ink'}`}
+      <button
+        type="button"
+        onClick={onSelect}
+        title="Show the reply in the right panel"
+        className="flex min-w-0 items-center gap-2.5 text-left"
       >
-        {chip.text}
-      </code>
-      <span className="shrink-0 whitespace-pre text-[11px] text-ink-2 leading-[14px]">
-        {replyFacts(text, run.replySize)}
-        {selected && ', shown in full on the right'}
-      </span>
+        <code
+          className={`min-w-0 max-w-[60%] truncate rounded border border-neo-edge bg-white px-2 py-0.5 font-code ${chip.failed ? 'text-bad' : 'text-ink'}`}
+        >
+          {chip.text}
+        </code>
+        <span className="shrink-0 whitespace-pre text-[11px] text-ink-2 leading-[14px]">
+          {replyFacts(text, run.replySize)}
+          {selected && ', shown in full on the right'}
+        </span>
+      </button>
       <button
         type="button"
         onClick={onOpenFull}

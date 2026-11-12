@@ -103,3 +103,91 @@ export function namesWithCounts(operations: NeoOperation[]): string {
     .map(([name, count]) => (count > 1 ? `${name} ×${count}` : name))
     .join(', ')
 }
+
+/**
+ * Neo's own bookkeeping, which no line of the script calls: the snapshot baseline's two
+ * operations (the prelude records the text a snapshot returned, and reads the stored one for a
+ * delta) and the event pump's. Named, because Neo records them as ordinary built-ins; its
+ * `neo_only` rows (neo-playwright's op table) also hold Neo's own versions of script calls,
+ * such as `context.pages`, so that mark would say too much.
+ */
+const NEO_BOOKKEEPING = new Set([
+  'page.snapshotPending',
+  'page.snapshotBaseline',
+  'events.listen',
+  'events.next',
+])
+
+export function isNeoInternal(operation: NeoOperation): boolean {
+  return NEO_BOOKKEEPING.has(operation.name)
+}
+
+/**
+ * Where a call sits: its display line (null for one not on a line) and, among the calls made
+ * from the same place in the script, which one it is. A line in a loop runs again for each pass,
+ * so its second `context.newPage` is call 2 of 3; two calls written side by side on one line
+ * (`[await page.title(), await page.title()]`) are two places, each called once.
+ */
+export interface CallPlace {
+  line: number | null
+  call: number
+  calls: number
+}
+
+export function callPlaces(placed: PlacedOperations): Map<string, CallPlace> {
+  const places = new Map<string, CallPlace>()
+  const number = (operations: NeoOperation[], line: number | null) => {
+    const totals = new Map<string, number>()
+    for (const operation of operations) {
+      const key = callSite(operation)
+      totals.set(key, (totals.get(key) ?? 0) + 1)
+    }
+    const seen = new Map<string, number>()
+    for (const operation of operations) {
+      const key = callSite(operation)
+      const call = (seen.get(key) ?? 0) + 1
+      seen.set(key, call)
+      places.set(operation.id, { line, call, calls: totals.get(key) ?? 1 })
+    }
+  }
+  for (const [line, operations] of placed.byLine) number(operations, line)
+  number(placed.unplaced, null)
+  return places
+}
+
+/**
+ * The script place a call came from, which a loop pass calls again: by its line and column
+ * alone, since one place can call a different method each pass (`locator[method]()`). Neo's
+ * bookkeeping records the site of the call it serves (`page.snapshotPending` that of its
+ * `ariaSnapshot()`), so it is counted on its own; a call with no site, by its name. Neo's record
+ * does not mark where one script call ends, so a call that makes several operations from one
+ * place (`page.waitForURL` checking again) counts each, as a loop's passes would.
+ */
+function callSite(operation: NeoOperation): string {
+  const site = operation.site
+  if (!site) return `${operation.name}@none`
+  const place = `${site.line}:${site.column}`
+  return isNeoInternal(operation) ? `${operation.name}@${place}` : place
+}
+
+/** `2nd`, `3rd`, `11th`, `21st`. */
+export function ordinal(n: number): string {
+  const teen = n % 100 >= 11 && n % 100 <= 13
+  const suffix = teen ? 'th' : (['th', 'st', 'nd', 'rd'][n % 10] ?? 'th')
+  return `${n}${suffix}`
+}
+
+/** `line 7 · call 2 of 3`, `line 7`, `not on a line`. */
+export function placeText(place: CallPlace): string {
+  const where = place.line === null ? 'not on a line' : `line ${place.line}`
+  return place.calls > 1
+    ? `${where} · call ${place.call} of ${place.calls}`
+    : where
+}
+
+/** The operation the right panel shows: which run, which operation, and where it sits. */
+export interface OperationSelection {
+  runId: string
+  operationId: string
+  place: CallPlace
+}

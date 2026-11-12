@@ -13,6 +13,7 @@ import { firstStatement, formatCode } from '../../shared/code-format'
 import { useRunDetail } from '../use-viewer'
 import { CopyRunButton } from './CopyRun'
 import { type BarScale, barScale, type RunTotals } from './measures'
+import type { OperationSelection } from './operations'
 import { RunBlock } from './RunBlock'
 import { RunRow } from './RunRow'
 import { nextSort, type RunSort, type SortKey, sortRuns } from './sort'
@@ -27,7 +28,14 @@ export interface RunTableProps {
   onSort: (sort: RunSort) => void
   openIds: ReadonlySet<string>
   selectedId: string | null
+  /** The call the right panel shows, if any. */
+  selectedOperation: OperationSelection | null
   onRow: (run: RunSummary) => void
+  /** A call selected in a run's block, or null for that run's reply. */
+  onSelectOperation: (
+    run: RunSummary,
+    selection: OperationSelection | null,
+  ) => void
   onOpenFull: (run: RunSummary) => void
   nowMs: number
 }
@@ -54,7 +62,13 @@ export function RunTable(props: RunTableProps) {
             scale={scale}
             open={props.openIds.has(run.id)}
             selected={run.id === props.selectedId}
+            selectedOperationId={
+              props.selectedOperation?.runId === run.id
+                ? props.selectedOperation.operationId
+                : null
+            }
             onRow={props.onRow}
+            onSelectOperation={props.onSelectOperation}
             onOpenFull={props.onOpenFull}
             nowMs={props.nowMs}
           />
@@ -149,7 +163,9 @@ function RunEntry({
   scale,
   open,
   selected,
+  selectedOperationId,
   onRow,
+  onSelectOperation,
   onOpenFull,
   nowMs,
 }: {
@@ -157,7 +173,9 @@ function RunEntry({
   scale: BarScale
   open: boolean
   selected: boolean
+  selectedOperationId: string | null
   onRow: (run: RunSummary) => void
+  onSelectOperation: RunTableProps['onSelectOperation']
   onOpenFull: (run: RunSummary) => void
   nowMs: number
 }) {
@@ -194,6 +212,8 @@ function RunEntry({
           formatted={code.formatted}
           detail={detail}
           selected={selected}
+          selectedOperationId={selectedOperationId}
+          onSelect={(selection) => onSelectOperation(run, selection)}
           onOpenFull={() => onOpenFull(run)}
         />
       )}

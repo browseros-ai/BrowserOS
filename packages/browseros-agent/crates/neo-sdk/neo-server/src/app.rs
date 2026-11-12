@@ -11,8 +11,7 @@ use browseros_core::NativeCapabilities;
 use neo_captcha::CaptchaSolver;
 use neo_captcha::config::{CAPSOLVER_KEY_FILE_ENV, TWOCAPTCHA_KEY_FILE_ENV};
 use neo_trace::{
-    EpochMillis, RedactionLimits, Redactor, RetentionPolicy, TraceError, TraceSink, TraceStore,
-    WriterConfig,
+    EpochMillis, Redactor, RetentionPolicy, TraceError, TraceSink, TraceStore, WriterConfig,
 };
 use tokio::net::TcpListener;
 use tokio::runtime::{Builder, Runtime};
@@ -156,7 +155,7 @@ impl App {
         log_startup(&config, address);
 
         let store = open_trace(&config.env.trace_dir()).await?;
-        let redactor = Redactor::new(RedactionLimits::default());
+        let redactor = Redactor::new(config.env.redaction_limits());
         let writer = WriterConfig {
             replay_window: Defaults::REPLAY_WINDOW,
             ..WriterConfig::default()

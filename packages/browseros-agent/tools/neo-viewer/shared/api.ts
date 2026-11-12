@@ -176,6 +176,11 @@ export interface NeoRunRecord {
   error: NeoOperationError | null
   /** In start order. */
   operations: NeoOperation[]
+  /**
+   * Operation records Neo dropped for this run (`traceGaps`, 0 when none): what is missing cannot
+   * be paired with what is there, so the viewer does not guess across a gap.
+   */
+  traceGaps: number
 }
 
 /** One SDK call the script made (or one made inside it), as Neo recorded it (openapi.yaml `Operation`). */
