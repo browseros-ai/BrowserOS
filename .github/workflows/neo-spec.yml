@@ -32,6 +32,12 @@ on:
       - packages/browseros-agent/Cargo.lock
       - packages/browseros-agent/package.json
   workflow_dispatch:
+    inputs:
+      mode:
+        description: "placement: background tabs (the product) vs own windows (this fix), seven tests x12, plus the background-tab live test"
+        type: choice
+        options: [placement]
+        default: placement
 
 permissions:
   contents: read
@@ -49,7 +55,7 @@ jobs:
       github.event_name != 'pull_request' ||
       github.event.pull_request.head.repo.full_name == github.repository
     runs-on: warp-custom-browseros-ubuntu-2204-x64-32x
-    timeout-minutes: 45
+    timeout-minutes: 90
     defaults:
       run:
         working-directory: packages/browseros-agent
@@ -127,41 +133,63 @@ jobs:
           path: ~/.cache/browseros/neo-spec
           key: neo-spec-playwright-${{ hashFiles('packages/browseros-agent/crates/neo-sdk/neo-playwright-tests/corpus.json', 'packages/browseros-agent/crates/neo-sdk/neo-playwright-tests/js/prepare.mjs') }}-node26
 
-      - name: Run the spec suite
-        id: spec
+      # DIAGNOSTIC branch diag/ss054-own-window (never to land): the same seven tests 12 times
+      # with Neo's pages as background tabs of the launch window (`--background-tabs`, the
+      # product's placement: before) and as the only tab of a window of their own (this branch's
+      # Linux default: after). Groups run one after another on this runner.
+      - name: Run the seven tests repeatedly, per placement
         env:
-          NEO_NODE_OUTPUT_DIR: ${{ runner.temp }}/neo-spec
-        # Sets the step output `results` to the run's results folder.
-        run: bun run test:neo-spec --ci --workers "$NEO_SPEC_WORKERS"
-
-      - name: Leave the copied Playwright tree out of the report
-        if: always() && steps.spec.outputs.results != ''
-        env:
-          RESULTS: ${{ steps.spec.outputs.results }}
-        # Each run's `upstream/` holds a 240 MB copy of the tests and links to the cached source,
-        # which upload-artifact would follow. Its test-results/ (failure screenshots and diffs)
-        # stays.
+          GREP: >-
+            (?:^| )page/page-add-locator-handler\.spec\.ts should work(?: @\S+)*$|(?:^| )page/page-add-locator-handler\.spec\.ts should work with toHaveScreenshot(?: @\S+)*$|(?:^| )page/elementhandle-screenshot\.spec\.ts element screenshot should wait for visible(?: @\S+)*$|(?:^| )page/elementhandle-screenshot\.spec\.ts element screenshot should wait for element to stop moving(?: @\S+)*$|(?:^| )page/page-screenshot\.spec\.ts page screenshot animations should not capture css animations in shadow DOM(?: @\S+)*$|(?:^| )page/page-screenshot\.spec\.ts page screenshot should capture canvas changes(?: @\S+)*$|(?:^| )page/page-screenshot\.spec\.ts page screenshot animations should not capture infinite css animation(?: @\S+)*$
         run: |
-          set -euo pipefail
-          find "$RESULTS" -type d -name upstream -prune -print | while read -r tree; do
+          set -u
+          build=""
+          run_group() {
+            group=$1; placement=$2
+            mkdir -p "$RUNNER_TEMP/neo-spec/$group"
+            echo "=== $group: $placement"
+            NEO_NODE_OUTPUT_DIR="$RUNNER_TEMP/neo-spec/$group" \
+              bun run test:neo-spec page-add-locator-handler page-screenshot elementhandle-screenshot \
+              $placement --workers 8 --repeat-each 12 --grep "$GREP" $build > "$RUNNER_TEMP/neo-spec/$group.log" 2>&1 || true
+            tail -4 "$RUNNER_TEMP/neo-spec/$group.log"
+            build=--skip-build
+          }
+          run_group B --background-tabs
+          run_group W --own-window-pages
+          python3 crates/neo-sdk/neo-playwright-tests/diag-lh001-summary.py "$RUNNER_TEMP/neo-spec" | tee -a "$GITHUB_STEP_SUMMARY"
+          find "$RUNNER_TEMP/neo-spec" -type d -name upstream -prune -print | while read -r tree; do
             rm -rf "$tree/tests" "$tree/packages" "$tree/node_modules"
           done
-          du -sh "$RESULTS"
+          du -sh "$RUNNER_TEMP/neo-spec"
 
-      - name: Upload the report
-        if: always() && steps.spec.outputs.results != ''
+      # The product fact as a live test: a background agent tab on Linux, through neo-playwright
+      # on a headless browser launched with the harness's flags. Expected to fail on Linux, which
+      # its should_panic mark turns into a pass; --nocapture prints the measured times.
+      - name: Background-tab live test on Linux
+        env:
+          CARGO_PROFILE_DEV_DEBUG: "0"
+          CARGO_PROFILE_TEST_DEBUG: "0"
+        run: |
+          set -u
+          profile=$(mktemp -d)
+          port=19555
+          /usr/bin/browserclaw --headless=new --disable-browseros-server --disable-browseros-extensions \
+            --remote-debugging-port=$port --user-data-dir="$profile" --no-first-run --lang=en-US \
+            --window-size=1520,801 --force-device-scale-factor=1 about:blank > "$RUNNER_TEMP/live-browser.log" 2>&1 &
+          browser=$!
+          for _ in $(seq 1 60); do curl -fsS -o /dev/null "http://127.0.0.1:$port/json/version" && break; sleep 0.5; done
+          BROWSEROS_CDP_PORT=$port cargo test -p neo-playwright --test background_tab_live -- --ignored --nocapture 2>&1 \
+            | tee "$RUNNER_TEMP/neo-spec/live-background-tab.log" | tail -60
+          echo "## background_tab_live on Linux" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          grep -E "got slow|^ ?[0-9]+ (locator|page)|test result|^test " "$RUNNER_TEMP/neo-spec/live-background-tab.log" | head -40 >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          kill $browser || true
+
+      - name: Upload the diagnostic results
+        if: always()
         uses: actions/upload-artifact@v7
         with:
-          # Names match ARTIFACTS in neo-playwright-tests/node/expected.mjs.
-          name: neo-spec-report
-          path: ${{ steps.spec.outputs.results }}
-          retention-days: 14
-
-      - name: Upload the list this run supports
-        if: always() && steps.spec.outputs.results != ''
-        uses: actions/upload-artifact@v7
-        with:
-          name: neo-spec-expected
-          path: ${{ steps.spec.outputs.results }}/expected/
-          if-no-files-found: ignore
-          retention-days: 30
+          name: neo-spec-ss054-diag-${{ inputs.mode }}
+          path: ${{ runner.temp }}/neo-spec
+          retention-days: 7
