@@ -38,15 +38,12 @@ export type { DropInput } from './types/DropInput'
 export type { DropPath } from './types/DropPath'
 export type { FilesInput } from './types/FilesInput'
 export type { FillInput } from './types/FillInput'
-export type { FillOptions } from './types/FillOptions'
 export type { HoverInput } from './types/HoverInput'
-export type { KeyOptions } from './types/KeyOptions'
 export type { NavigationCut } from './types/NavigationCut'
 export type { PressInput } from './types/PressInput'
 export type { ScrollOption } from './types/ScrollOption'
 export type { SelectOptionInput } from './types/SelectOptionInput'
 export type { SelectTextInput } from './types/SelectTextInput'
-export type { SequentialOptions } from './types/SequentialOptions'
 export type { SetInputFilesInput } from './types/SetInputFilesInput'
 export type { TypeInput } from './types/TypeInput'
 export type { UncheckInput } from './types/UncheckInput'
@@ -258,15 +255,15 @@ type _locator_dragTo_result = Assert<VoidIsNull<'locator.dragTo', pw.FrameDragAn
 type _locator_drop = Assert<UpstreamCheck<'locator.drop', DropInput, pw.FrameDropParams, 'files', 'localPaths' | 'payloads' | 'streams', never>>
 type _locator_drop_result = Assert<VoidIsNull<'locator.drop', pw.FrameDropResult, null>>
 // locator.fill: ElementHandle.fill
-type _locator_fill = Assert<UpstreamCheck<'locator.fill', FillInput, pw.ElementHandleFillParams, never, never, never>>
+type _locator_fill = Assert<ExactUpstreamCheck<'locator.fill', FillInput, pw.ElementHandleFillParams, never, never, never>>
 type _locator_fill_keys = Assert<KeysCheck<'locator.fill', (typeof ACTION_OPTION_KEYS)['locator.fill'][number], pw.ElementHandleFillOptions>>
 type _locator_fill_result = Assert<VoidIsNull<'locator.fill', pw.ElementHandleFillResult, null>>
 // locator.press: ElementHandle.press
-type _locator_press = Assert<UpstreamCheck<'locator.press', PressInput, pw.ElementHandlePressParams, never, never, never>>
+type _locator_press = Assert<ExactUpstreamCheck<'locator.press', PressInput, pw.ElementHandlePressParams, never, never, never>>
 type _locator_press_keys = Assert<KeysCheck<'locator.press', (typeof ACTION_OPTION_KEYS)['locator.press'][number], pw.ElementHandlePressOptions>>
 type _locator_press_result = Assert<VoidIsNull<'locator.press', pw.ElementHandlePressResult, null>>
 // locator.pressSequentially: ElementHandle.type
-type _locator_pressSequentially = Assert<UpstreamCheck<'locator.pressSequentially', TypeInput, pw.ElementHandleTypeParams, never, never, never>>
+type _locator_pressSequentially = Assert<ExactUpstreamCheck<'locator.pressSequentially', TypeInput, pw.ElementHandleTypeParams, never, never, never>>
 type _locator_pressSequentially_keys = Assert<KeysCheck<'locator.pressSequentially', (typeof ACTION_OPTION_KEYS)['locator.pressSequentially'][number], pw.ElementHandleTypeOptions>>
 type _locator_pressSequentially_result = Assert<VoidIsNull<'locator.pressSequentially', pw.ElementHandleTypeResult, null>>
 // locator.selectOption: ElementHandle.selectOption

@@ -286,11 +286,11 @@ async fn replay(run: &LiveRun, page: &TestPage, call: &CaseCall) -> Result<Value
             .await
         }
         (Some(selector), "press") => {
-            let fields = json!({ "key": argument, "options": {} });
+            let fields = json!({ "key": argument });
             act(run, "locator.press", &at(page, selector), fields, 5000).await
         }
         (Some(selector), "pressSequentially") => {
-            let fields = json!({ "text": argument, "options": {} });
+            let fields = json!({ "text": argument });
             act(
                 run,
                 "locator.pressSequentially",
@@ -301,7 +301,7 @@ async fn replay(run: &LiveRun, page: &TestPage, call: &CaseCall) -> Result<Value
             .await
         }
         (Some(selector), "fill") => {
-            let fields = json!({ "value": argument, "options": {} });
+            let fields = json!({ "value": argument });
             act(run, "locator.fill", &at(page, selector), fields, 5000).await
         }
         (_, other) => Err(PlaywrightError::new(
@@ -523,7 +523,7 @@ async fn nest_values(
 
 /// `fill(value)` on `target`.
 async fn fill(run: &LiveRun, target: &Value, value: &str) -> Result<Value, PlaywrightError> {
-    let fields = json!({ "value": value, "options": {} });
+    let fields = json!({ "value": value });
     act(run, "locator.fill", target, fields, 5000).await
 }
 
@@ -655,7 +655,7 @@ async fn tests_that_fill_refuses_what_upstream_refuses_and_waits_where_upstream_
             "locator.fill: Timeout 600ms exceeded.",
         ),
     ] {
-        let fields = json!({ "value": "x", "options": {} });
+        let fields = json!({ "value": "x" });
         let error = act(&run, "locator.fill", &at(&page, selector), fields, timeout)
             .await
             .err()
@@ -670,7 +670,7 @@ async fn tests_that_fill_refuses_what_upstream_refuses_and_waits_where_upstream_
         &run,
         "locator.fill",
         &at(&page, "#number"),
-        json!({ "value": "abc", "options": {} }),
+        json!({ "value": "abc" }),
         5000,
     )
     .await
@@ -887,7 +887,7 @@ async fn tests_that_an_element_handle_fills_its_own_field() -> TestResult {
 
 /// `press(key)` on `target`.
 async fn press(run: &LiveRun, target: &Value, key: &str) -> Result<Value, PlaywrightError> {
-    let fields = json!({ "key": key, "options": {} });
+    let fields = json!({ "key": key });
     act(run, "locator.press", target, fields, 5000).await
 }
 
@@ -899,7 +899,7 @@ async fn tests_that_press_and_press_sequentially_focus_type_and_wait_for_the_nav
     let server = FixtureServer::start(pages()).await?;
     let page = agent_tab(&run, &server.url("127.0.0.1", "/actions/form.html")).await?;
     run.clear_calls();
-    let typed = json!({ "text": "pa55", "options": { "delay": 5 } });
+    let typed = json!({ "text": "pa55", "delay": 5 });
     act(
         &run,
         "locator.pressSequentially",
@@ -1535,7 +1535,7 @@ async fn tests_that_a_focus_started_during_a_delayed_type_waits_for_its_last_key
     let server = FixtureServer::start(pages()).await?;
     let page = agent_tab(&run, &server.url("127.0.0.1", "/actions/form.html")).await?;
     let (field, area) = (at(&page, "#field"), at(&page, "#area"));
-    let typed = json!({ "text": "abcdef", "options": { "delay": 60 } });
+    let typed = json!({ "text": "abcdef", "delay": 60 });
     let typing = act(&run, "locator.pressSequentially", &field, typed, 10_000);
     // Started once the first keys are out, as `Promise.all` would run the two ops.
     let focusing = async {

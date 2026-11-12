@@ -1,4 +1,4 @@
-/** The engine-facing form, key and file contract captured before typed route migration, byte for byte. */
+/** Aligned form requests with the original recorded replies and script results, byte for byte. */
 import { expect, it } from 'bun:test'
 import fixture from '../../neo-playwright/tests/data/form-wire.json'
 import { recordWireBytes } from './support/wire-byte-runtime'
@@ -52,5 +52,8 @@ it('records only delay when a script passes pressSequentially noWaitAfter', () =
     (e) => e.op === 'locator.pressSequentially',
   )
   expect(exchange).toBeDefined()
-  expect(JSON.parse(exchange?.args ?? '{}').options).toEqual({ delay: 7 })
+  const args = JSON.parse(exchange?.args ?? '{}')
+  expect(args.delay).toBe(7)
+  expect(args).not.toHaveProperty('options')
+  expect(args).not.toHaveProperty('noWaitAfter')
 })
