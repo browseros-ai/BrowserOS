@@ -1244,6 +1244,14 @@ pub fn result_meta(
     {
         summary["fileChooserOpen"] = json!(true);
     }
+    // pursue's ending, so the task timeline can tell a hand back from a finish.
+    if let Some(outcome) = structured_content
+        .get("outcome")
+        .and_then(serde_json::Value::as_str)
+        .filter(|outcome| matches!(*outcome, "completed" | "handed_back" | "cancelled"))
+    {
+        summary["outcome"] = json!(outcome);
+    }
     let serialized = summary.to_string();
     debug_assert!(serialized.len() <= RESULT_META_MAX);
     serialized
@@ -1482,6 +1490,18 @@ mod tests {
 
         assert!(meta.len() <= 4096);
         serde_json::from_str::<serde_json::Value>(&meta)?;
+        Ok(())
+    }
+
+    #[test]
+    fn result_metadata_keeps_only_a_known_pursue_outcome() -> anyhow::Result<()> {
+        let handed_back = result_meta(false, false, &json!({ "outcome": "handed_back" }), 1);
+        let free_text = result_meta(false, false, &json!({ "outcome": "anything else" }), 1);
+
+        let handed_back: serde_json::Value = serde_json::from_str(&handed_back)?;
+        let free_text: serde_json::Value = serde_json::from_str(&free_text)?;
+        assert_eq!(handed_back["outcome"], "handed_back");
+        assert!(free_text.get("outcome").is_none());
         Ok(())
     }
 
