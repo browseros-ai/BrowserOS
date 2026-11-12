@@ -100,6 +100,30 @@ it('tests rule 2: a kept block prints its text whatever the form, a lone piece i
   expect(both(json)).toEqual([printed, printed])
 })
 
+it('tests rule 2: an actionable alert or status prints its ref and marker, a dialog always its ref', () => {
+  const json = [
+    {
+      role: 'status',
+      ref: 'e19',
+      cursor: 'pointer',
+      text: 'Saved 2 minutes ago',
+    },
+    {
+      role: 'alert',
+      ref: 'e20',
+      cursor: 'pointer',
+      children: [generic(['Card declined']), button('Retry', 'e21')],
+    },
+    { role: 'dialog', ref: 'e22', text: 'Uploading…' },
+    { role: 'alert', ref: 'e23', text: 'Not clickable' },
+  ] as Node[]
+  const printed =
+    '- status [ref=e19] [cursor=pointer]: Saved 2 minutes ago\n' +
+    '- alert [ref=e20] [cursor=pointer]:\n  - text: Card declined\n  - button "Retry" [ref=e21]\n' +
+    '- dialog [ref=e22]: Uploading…\n- alert: Not clickable'
+  expect(both(json)).toEqual([printed, printed])
+})
+
 it('tests rule 3: a section prints its ref and indents its content; an empty one goes, an iframe stays', () => {
   const json = [
     {

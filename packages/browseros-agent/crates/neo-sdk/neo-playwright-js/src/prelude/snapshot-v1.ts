@@ -8,7 +8,8 @@
  * keys, attribute order, quoting and escaping stay Playwright's. This module only decides which
  * nodes print, which refs and markers they keep, and where the page's text goes:
  *
- *   kept block   dialog, alertdialog, alert, status   its line, then all of its text
+ *   kept block   dialog, alertdialog, alert, status   its line, then all of its text; a dialog's
+ *                                                     ref, an alert's only when clickable
  *   section      main, navigation, form, iframe, ...  its line with its ref, content indented
  *   heading                                           its line, no ref
  *   actionable   a ref, and an interactive role or a pointer cursor     one line with its ref
@@ -72,6 +73,14 @@ const SECTION = new Set<string>([
  */
 const KEPT = new Set<string>(['dialog', 'alertdialog', 'alert', 'status'])
 const KEPT_WITH_REF = new Set<string>(['dialog', 'alertdialog'])
+
+/**
+ * Whether a kept block's line prints its ref: always for a dialog, which an agent scopes to; for
+ * an alert or status only when it is actionable (a toast the user can click), with its marker.
+ */
+function keptRef(node: AriaNodeJSON): boolean {
+  return KEPT_WITH_REF.has(node.role) || actionable(node)
+}
 
 /** 3,000 tokens: the longest text form returned when the script did not choose. */
 export const TEXT_LIMIT_CHARS = 3_000 * CHARS_PER_TOKEN
@@ -240,7 +249,7 @@ class Printer {
   }
 
   private kept(node: AriaNodeJSON, level: number): void {
-    const header = this.header(node, level, KEPT_WITH_REF.has(node.role))
+    const header = this.header(node, level, keptRef(node))
     this.steps.push({ kind: 'kept', node, header, level })
     // Its text is what tells the agent what its buttons do, so it prints whatever the form.
     this.content(node, level + 1, true)
@@ -253,7 +262,7 @@ class Printer {
       // All of its content is one piece of text: the leaf form, `- alert: Invalid password.`
       this.lines.length = header
       this.element(
-        copy(node, { ref: false, urls: false, text: inside[0].body }),
+        copy(node, { ref: keptRef(node), urls: false, text: inside[0].body }),
         level,
       )
     } else if (!this.close(header, Boolean(node.name))) return

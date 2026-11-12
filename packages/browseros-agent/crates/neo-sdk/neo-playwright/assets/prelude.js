@@ -7519,6 +7519,9 @@ ${value.stack}`;
   ]);
   var KEPT = new Set(["dialog", "alertdialog", "alert", "status"]);
   var KEPT_WITH_REF = new Set(["dialog", "alertdialog"]);
+  function keptRef(node) {
+    return KEPT_WITH_REF.has(node.role) || actionable(node);
+  }
   var TEXT_LIMIT_CHARS = 3000 * CHARS_PER_TOKEN;
   var DEFAULT_MAX_TOKENS = 8000;
   var OWN_TEXT_CLIP = 80;
@@ -7621,7 +7624,7 @@ ${value.stack}`;
         });
     }
     kept(node, level) {
-      const header = this.header(node, level, KEPT_WITH_REF.has(node.role));
+      const header = this.header(node, level, keptRef(node));
       this.steps.push({ kind: "kept", node, header, level });
       this.content(node, level + 1, true);
     }
@@ -7629,7 +7632,7 @@ ${value.stack}`;
       const inside = this.lines.slice(header + 1);
       if (inside.length === 1 && inside[0].textLine) {
         this.lines.length = header;
-        this.element(copy(node, { ref: false, urls: false, text: inside[0].body }), level);
+        this.element(copy(node, { ref: keptRef(node), urls: false, text: inside[0].body }), level);
       } else if (!this.close(header, Boolean(node.name)))
         return;
       this.lines[header].keptEnd = this.lines.length;
