@@ -12,7 +12,7 @@
 import { Buffer } from 'node:buffer'
 import type { ElementBrand, OpOutputs } from '../src/prelude/wire'
 import { type Call, loadPrelude, SEED } from '../tests/support/prelude-runtime'
-import { inputExamples } from './input-examples'
+import { type InputExamples, inputExamples } from './input-examples'
 
 /** The clock the recording runs on, so `since` stamps are the same on every build. */
 const RECORDED_AT = 1_700_000_000_000
@@ -245,7 +245,7 @@ const EVERY_OP = `
 
 /** Runs `EVERY_OP` and returns every op the prelude sent, in order. */
 export async function recordEveryOp(prelude?: string): Promise<Call[]> {
-  const { samples } = await inputExamples()
+  const { samples }: InputExamples = await inputExamples()
   const runtime = loadPrelude({
     seed: SEED,
     answer: everyOpAnswer(),

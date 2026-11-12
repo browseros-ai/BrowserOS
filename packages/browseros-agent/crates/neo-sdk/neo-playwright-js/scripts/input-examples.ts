@@ -20,6 +20,7 @@ type Enums = Pick<
 >
 type Field = { types: Type[]; optional: boolean }
 
+/** Logical key coverage and call samples derived together in one compiler pass. */
 export type InputExamples = {
   optionalKeys: Record<string, string[]>
   samples: Record<string, Record<string, unknown>>

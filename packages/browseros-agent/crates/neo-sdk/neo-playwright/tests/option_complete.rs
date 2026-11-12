@@ -25,7 +25,12 @@ const UNREACHABLE: &[(&str, &str, &str)] = &[
     (
         "expect.page",
         "expectedNumber",
-        "only locator.toHaveCount supplies expectedNumber; Page receiver validation rejects that matcher",
+        "only locator count/viewport matchers supply expectedNumber; Page receiver validation rejects them",
+    ),
+    (
+        "dialog.dismiss",
+        "promptText",
+        "dismiss shares accept's decoder, but its public method takes no text and always sends only page/dialog",
     ),
 ];
 
