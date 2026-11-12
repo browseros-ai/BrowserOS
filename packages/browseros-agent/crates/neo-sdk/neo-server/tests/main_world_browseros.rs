@@ -6,7 +6,8 @@
 //! ```text
 //!  page.evaluate, frame.evaluate ──────────────────────────────────▶ page.evaluate
 //!  page.waitForFunction, frame.waitForFunction ────────────────────▶ page.waitForFunction
-//!  locator.evaluate, elementHandle.evaluate, $eval (page, frame, handle) ─▶ locator.evaluate
+//!  locator.evaluate, elementHandle.evaluate ───────────────────────▶ locator.evaluate
+//!  $eval (page, frame, handle) ────────────────────────────────────▶ page.evalOnSelector
 //!  locator.evaluateAll, $$eval (page, frame, handle) ──────────────▶ locator.evaluateAll
 //!  locator.waitForFunction ─────────────────────────────────────────▶ locator.waitForFunction
 //!  page.setContent, frame.setContent ──────────────────────────────▶ page.setContent
@@ -70,11 +71,17 @@ async fn worker_evaluate_behaves_as_playwright_on_browseros() -> TestResult {
             const values = await worker.evaluate(arg => ({ answer: arg + 1, big: 12n, nan: NaN }), 41);
             let closed = false;
             worker.once('close', () => closed = true);
+            // Native code, which upstream's server cannot normalize: refused, with nothing sent.
+            const refused = await failed(() => worker.evaluate(Math.max));
             const pending = worker.evaluate(() => new Promise(() => {})).catch(error => error.message);
             await page.close();
-            return { initial, answer: values.answer, big: values.big === 12n, nan: Number.isNaN(values.nan), closed, empty: page.workers().length === 0, rejected: (await pending).includes('worker.evaluate') };
+            return { initial, answer: values.answer, big: values.big === 12n, nan: Number.isNaN(values.nan), closed, empty: page.workers().length === 0, rejected: (await pending).includes('worker.evaluate'), refused };
         ").await?;
-        assert_eq!(value, json!({ "initial": 42, "answer": 42, "big": true, "nan": true, "closed": true, "empty": true, "rejected": true }));
+        assert_eq!(value, json!({ "initial": 42, "answer": 42, "big": true, "nan": true, "closed": true, "empty": true, "rejected": true,
+            "refused": threw(
+                "Error", "website", "page_error", "not_sent",
+                "worker.evaluate: Passed function is not well-serializable!",
+            ) }));
         Ok(())
     })).await
 }

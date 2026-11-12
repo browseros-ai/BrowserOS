@@ -111,19 +111,25 @@ fn route<'a, R: Route<'a>>(op: ContextOp, r: R) -> R::Out {
         ContextOp::AddInitScript => r.op(
             wire::command("BrowserContext.addInitScript")
                 .adds(&[(
-                    "script",
-                    "the source, or a path Rust reads on Neo's disk as upstream's client reads it",
+                    "path",
+                    "the prelude has no filesystem, so Rust reads the file as upstream's client \
+                     does (UTF-8, //# sourceURL appended)",
                 )])
-                .omits(&[("source", "folded into script")]),
+                .retypes(&[("source", "absent when path names the file Rust reads")])
+                .result(init_script::REGISTRATION),
             |_pw, scope, input| init_script::add_to_context(scope, input),
         ),
         ContextOp::ExposeBinding => r.op(
-            wire::command("BrowserContext.exposeBinding"),
+            wire::command("BrowserContext.exposeBinding").result(init_script::REGISTRATION),
             // The registration keeps the binding for the run's later writes and awaits nothing.
             |pw, scope, input| future::ready(init_script::expose_on_context(pw, scope, input)),
         ),
         ContextOp::Dispose => r.op(
-            wire::neo_only("Neo disposes a host-owned registration rather than a channel object"),
+            wire::command("Disposable.dispose").adds(&[(
+                "id",
+                "the registration's id, standing for upstream's Disposable channel, as \
+                 worker.evaluate's worker does for its worker",
+            )]),
             |_pw, scope, input| init_script::dispose(scope, input),
         ),
     }

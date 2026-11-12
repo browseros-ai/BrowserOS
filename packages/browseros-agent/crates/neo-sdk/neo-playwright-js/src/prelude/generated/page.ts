@@ -11,9 +11,9 @@ import type { Assert, ExactUpstreamCheck, KeysCheck, UpstreamCheck, VoidIsNull }
 import type { CallHeader } from '../wire'
 import type { AddStyleTagInput } from './types/AddStyleTagInput'
 import type { AddTagInput } from './types/AddTagInput'
-import type { BindingResolved } from './types/BindingResolved'
 import type { Bytes } from './types/Bytes'
 import type { DocumentInput } from './types/DocumentInput'
+import type { EvalOnSelectorInput } from './types/EvalOnSelectorInput'
 import type { EvaluateInput } from './types/EvaluateInput'
 import type { EvaluateOnAllInput } from './types/EvaluateOnAllInput'
 import type { EvaluateOnElementInput } from './types/EvaluateOnElementInput'
@@ -51,16 +51,15 @@ import type { WaitForNavigationInput } from './types/WaitForNavigationInput'
 import type { WaitForUrlInput } from './types/WaitForUrlInput'
 import type { WaitedFunction } from './types/WaitedFunction'
 import type { WorkerEvaluateInput } from './types/WorkerEvaluateInput'
-import type { WorkerEvaluated } from './types/WorkerEvaluated'
 
 export type { AddStyleTagInput } from './types/AddStyleTagInput'
 export type { AddTagInput } from './types/AddTagInput'
 export type { Animations } from './types/Animations'
-export type { BindingResolved } from './types/BindingResolved'
 export type { Bytes } from './types/Bytes'
 export type { Caret } from './types/Caret'
 export type { Dimensions } from './types/Dimensions'
 export type { DocumentInput } from './types/DocumentInput'
+export type { EvalOnSelectorInput } from './types/EvalOnSelectorInput'
 export type { EvaluateInput } from './types/EvaluateInput'
 export type { EvaluateOnAllInput } from './types/EvaluateOnAllInput'
 export type { EvaluateOnElementInput } from './types/EvaluateOnElementInput'
@@ -84,15 +83,14 @@ export type { OpenerResult } from './types/OpenerResult'
 export type { PageBindingInput } from './types/PageBindingInput'
 export type { PageFrames } from './types/PageFrames'
 export type { PageOnlyInput } from './types/PageOnlyInput'
-export type { PageScript } from './types/PageScript'
 export type { PageScriptInput } from './types/PageScriptInput'
 export type { PdfInput } from './types/PdfInput'
 export type { ResolveBindingInput } from './types/ResolveBindingInput'
 export type { ResponseInfo } from './types/ResponseInfo'
-export type { RunInput } from './types/RunInput'
 export type { SaveScreenshotInput } from './types/SaveScreenshotInput'
 export type { Scale } from './types/Scale'
 export type { ScreenshotInput } from './types/ScreenshotInput'
+export type { ScriptArg } from './types/ScriptArg'
 export type { SerializedValue } from './types/SerializedValue'
 export type { SetContentInput } from './types/SetContentInput'
 export type { StorageInput } from './types/StorageInput'
@@ -109,7 +107,6 @@ export type { WaitForNavigationInput } from './types/WaitForNavigationInput'
 export type { WaitForUrlInput } from './types/WaitForUrlInput'
 export type { WaitedFunction } from './types/WaitedFunction'
 export type { WorkerEvaluateInput } from './types/WorkerEvaluateInput'
-export type { WorkerEvaluated } from './types/WorkerEvaluated'
 
 /** Each page op's input, after the `call` header every op shares. */
 export type PageInputs = {
@@ -134,6 +131,7 @@ export type PageInputs = {
   'page.evaluate': EvaluateInput
   'worker.evaluate': WorkerEvaluateInput
   'locator.evaluate': EvaluateOnElementInput
+  'page.evalOnSelector': EvalOnSelectorInput
   'locator.evaluateAll': EvaluateOnAllInput
   'page.waitForFunction': WaitForFunctionInput
   'locator.waitForFunction': WaitForFunctionOnElementInput
@@ -172,8 +170,9 @@ export type PageOutputs = {
   'page.opener': OpenerResult
   'page.frames': PageFrames
   'page.evaluate': Evaluated
-  'worker.evaluate': WorkerEvaluated
+  'worker.evaluate': SerializedValue
   'locator.evaluate': SerializedValue
+  'page.evalOnSelector': SerializedValue
   'locator.evaluateAll': SerializedValue
   'page.waitForFunction': WaitedFunction
   'locator.waitForFunction': null
@@ -183,7 +182,7 @@ export type PageOutputs = {
   'page.setViewportSize': null
   'page.addInitScript': Registered
   'page.exposeBinding': Registered
-  'bindingCall.resolve': BindingResolved
+  'bindingCall.resolve': null
   'webStorage.items': Array<StorageItem>
   'webStorage.getItem': string | null
   'webStorage.setItem': null
@@ -325,13 +324,19 @@ export const PAGE_SEND = {
     call: CallHeader,
     input: WorkerEvaluateInput,
     signal?: SignalLike,
-  ): Promise<WorkerEvaluated> => invoke('worker.evaluate', site, call, input, signal),
+  ): Promise<SerializedValue> => invoke('worker.evaluate', site, call, input, signal),
   'locator.evaluate': (
     site: CallSite,
     call: CallHeader,
     input: EvaluateOnElementInput,
     signal?: SignalLike,
   ): Promise<SerializedValue> => invoke('locator.evaluate', site, call, input, signal),
+  'page.evalOnSelector': (
+    site: CallSite,
+    call: CallHeader,
+    input: EvalOnSelectorInput,
+    signal?: SignalLike,
+  ): Promise<SerializedValue> => invoke('page.evalOnSelector', site, call, input, signal),
   'locator.evaluateAll': (
     site: CallSite,
     call: CallHeader,
@@ -391,7 +396,7 @@ export const PAGE_SEND = {
     call: CallHeader,
     input: ResolveBindingInput,
     signal?: SignalLike,
-  ): Promise<BindingResolved> => invoke('bindingCall.resolve', site, call, input, signal),
+  ): Promise<null> => invoke('bindingCall.resolve', site, call, input, signal),
   'webStorage.items': (
     site: CallSite,
     call: CallHeader,
@@ -479,46 +484,43 @@ type _page_runBeforeUnload_result = Assert<VoidIsNull<'page.runBeforeUnload', pw
 // page.opener: Neo only: upstream reads its initializer state; Neo asks its tab bookkeeping
 // page.frames: Neo only: upstream keeps client-side frame objects; Neo reads the tree for the prelude's synchronous frames()
 // page.evaluate: Frame.evaluateExpression
-//   adds script: the script as one value: upstream's expression, isFunction and argument after its client normalized them, or the refusal of upstream's first server-side check, which Rust raises at its point with nothing sent
-//   omits arg: carried in script
-//   omits expression: carried in script
-//   omits isFunction: carried in script
-type _page_evaluate = Assert<UpstreamCheck<'page.evaluate', EvaluateInput, pw.FrameEvaluateExpressionParams, 'script', 'arg' | 'expression' | 'isFunction', never>>
-type _page_evaluate_result = Assert<VoidIsNull<'page.evaluate', pw.FrameEvaluateExpressionResult, Evaluated>>
+//   adds refused: a check upstream runs only after its command starts (its server's normalization of the expression, or its client's argument checks after a locator's wait), which the prelude decides because only it runs JavaScript; Rust raises it at that point with nothing sent
+//   retypes arg: the argument in the page's serialized form as JSON text, which the main world parses itself so the page's own globals cannot alter it, with Neo's element brands for its handles; absent beside refused
+type _page_evaluate = Assert<UpstreamCheck<'page.evaluate', EvaluateInput, pw.FrameEvaluateExpressionParams, 'refused', never, 'arg'>>
+//   result: the frames as the script left them ride beside its value: a main-world script can navigate or add frames, and the prelude's synchronous frames() reads them (no void check: Neo answers more than null on purpose)
 // worker.evaluate: Worker.evaluateExpression
-//   adds script: the script as one value: upstream's expression, isFunction and argument after its client normalized them, or the refusal of upstream's first server-side check, which Rust raises at its point with nothing sent
+//   adds refused: a check upstream runs only after its command starts (its server's normalization of the expression, or its client's argument checks after a locator's wait), which the prelude decides because only it runs JavaScript; Rust raises it at that point with nothing sent
 //   adds worker: the host-owned worker's id, standing for upstream's worker channel
-//   omits arg: carried in script
-//   omits expression: carried in script
-//   omits isFunction: carried in script
-type _worker_evaluate = Assert<UpstreamCheck<'worker.evaluate', WorkerEvaluateInput, pw.WorkerEvaluateExpressionParams, 'script' | 'worker', 'arg' | 'expression' | 'isFunction', never>>
-type _worker_evaluate_result = Assert<VoidIsNull<'worker.evaluate', pw.WorkerEvaluateExpressionResult, WorkerEvaluated>>
-// locator.evaluate: Frame.evalOnSelector
-//   adds noWait: `$eval`: the first match now instead of waiting for one
-//   adds script: the script as one value: upstream's expression, isFunction and argument after its client normalized them, or the refusal of upstream's first server-side check, which Rust raises at its point with nothing sent
-//   adds selector: `$eval`'s selector as the script wrote it, for upstream's no-match message
-//   omits arg: carried in script
-//   omits expression: carried in script
-//   omits isFunction: carried in script
-type _locator_evaluate = Assert<UpstreamCheck<'locator.evaluate', EvaluateOnElementInput, pw.FrameEvalOnSelectorParams, 'noWait' | 'script' | 'selector', 'arg' | 'expression' | 'isFunction', never>>
-type _locator_evaluate_result = Assert<VoidIsNull<'locator.evaluate', pw.FrameEvalOnSelectorResult, SerializedValue>>
+//   retypes arg: the argument in the page's serialized form as JSON text, which the main world parses itself so the page's own globals cannot alter it, with Neo's element brands for its handles; absent beside refused
+type _worker_evaluate = Assert<UpstreamCheck<'worker.evaluate', WorkerEvaluateInput, pw.WorkerEvaluateExpressionParams, 'refused' | 'worker', never, 'arg'>>
+type _worker_evaluate_result = Assert<VoidIsNull<'worker.evaluate', pw.WorkerEvaluateExpressionResult, SerializedValue>>
+// locator.evaluate: JSHandle.evaluateExpression
+//   adds refused: a check upstream runs only after its command starts (its server's normalization of the expression, or its client's argument checks after a locator's wait), which the prelude decides because only it runs JavaScript; Rust raises it at that point with nothing sent
+//   retypes arg: the argument in the page's serialized form as JSON text, which the main world parses itself so the page's own globals cannot alter it, with Neo's element brands for its handles; absent beside refused
+type _locator_evaluate = Assert<UpstreamCheck<'locator.evaluate', EvaluateOnElementInput, pw.JSHandleEvaluateExpressionParams, 'refused', never, 'arg'>>
+type _locator_evaluate_result = Assert<VoidIsNull<'locator.evaluate', pw.JSHandleEvaluateExpressionResult, SerializedValue>>
+// page.evalOnSelector: Frame.evalOnSelector
+//   adds refused: a check upstream runs only after its command starts (its server's normalization of the expression, or its client's argument checks after a locator's wait), which the prelude decides because only it runs JavaScript; Rust raises it at that point with nothing sent
+//   adds selector: the selector as the script wrote it, which upstream's no-match error quotes; target carries it parsed, since Rust never parses selectors
+//   retypes arg: the argument in the page's serialized form as JSON text, which the main world parses itself so the page's own globals cannot alter it, with Neo's element brands for its handles; absent beside refused
+type _page_evalOnSelector = Assert<UpstreamCheck<'page.evalOnSelector', EvalOnSelectorInput, pw.FrameEvalOnSelectorParams, 'refused' | 'selector', never, 'arg'>>
+type _page_evalOnSelector_result = Assert<VoidIsNull<'page.evalOnSelector', pw.FrameEvalOnSelectorResult, SerializedValue>>
 // locator.evaluateAll: Frame.evalOnSelectorAll
-//   adds script: the script as one value: upstream's expression, isFunction and argument after its client normalized them, or the refusal of upstream's first server-side check, which Rust raises at its point with nothing sent
-//   omits arg: carried in script
-//   omits expression: carried in script
-//   omits isFunction: carried in script
-type _locator_evaluateAll = Assert<UpstreamCheck<'locator.evaluateAll', EvaluateOnAllInput, pw.FrameEvalOnSelectorAllParams, 'script', 'arg' | 'expression' | 'isFunction', never>>
+//   adds refused: a check upstream runs only after its command starts (its server's normalization of the expression, or its client's argument checks after a locator's wait), which the prelude decides because only it runs JavaScript; Rust raises it at that point with nothing sent
+//   retypes arg: the argument in the page's serialized form as JSON text, which the main world parses itself so the page's own globals cannot alter it, with Neo's element brands for its handles; absent beside refused
+type _locator_evaluateAll = Assert<UpstreamCheck<'locator.evaluateAll', EvaluateOnAllInput, pw.FrameEvalOnSelectorAllParams, 'refused', never, 'arg'>>
 type _locator_evaluateAll_result = Assert<VoidIsNull<'locator.evaluateAll', pw.FrameEvalOnSelectorAllResult, SerializedValue>>
 // page.waitForFunction: Frame.waitForFunction
-//   adds polling: milliseconds between polls, absent for 'raf', in place of pollingInterval
-//   adds script: the script as one value: upstream's expression, isFunction and argument after its client normalized them, or the refusal of upstream's first server-side check, which Rust raises at its point with nothing sent
-//   omits arg: carried in script
-//   omits expression: carried in script
-//   omits isFunction: carried in script
-//   omits pollingInterval: sent as polling
-type _page_waitForFunction = Assert<UpstreamCheck<'page.waitForFunction', WaitForFunctionInput, pw.FrameWaitForFunctionParams, 'polling' | 'script', 'arg' | 'expression' | 'isFunction' | 'pollingInterval', never>>
-type _page_waitForFunction_result = Assert<VoidIsNull<'page.waitForFunction', pw.FrameWaitForFunctionResult, WaitedFunction>>
-// locator.waitForFunction: Neo only: Neo probes the element predicate; upstream composes evaluation and waiting
+//   adds refused: a check upstream runs only after its command starts (its server's normalization of the expression, or its client's argument checks after a locator's wait), which the prelude decides because only it runs JavaScript; Rust raises it at that point with nothing sent
+//   retypes arg: the argument in the page's serialized form as JSON text, which the main world parses itself so the page's own globals cannot alter it, with Neo's element brands for its handles; absent beside refused
+type _page_waitForFunction = Assert<UpstreamCheck<'page.waitForFunction', WaitForFunctionInput, pw.FrameWaitForFunctionParams, 'refused', never, 'arg'>>
+//   result: Neo keeps no page objects, so the handle holds the value Rust read and upstream's preview of it, which jsonValue() and toString() answer (no void check: Neo answers more than null on purpose)
+// locator.waitForFunction: Frame.waitForFunction
+//   adds refused: a check upstream runs only after its command starts (its server's normalization of the expression, or its client's argument checks after a locator's wait), which the prelude decides because only it runs JavaScript; Rust raises it at that point with nothing sent
+//   omits pollingInterval: upstream's Locator.waitForFunction takes no polling option; its client never sends one
+//   retypes arg: the argument in the page's serialized form as JSON text, which the main world parses itself so the page's own globals cannot alter it, with Neo's element brands for its handles; absent beside refused
+type _locator_waitForFunction = Assert<UpstreamCheck<'locator.waitForFunction', WaitForFunctionOnElementInput, pw.FrameWaitForFunctionParams, 'refused', 'pollingInterval', 'arg'>>
+type _locator_waitForFunction_result = Assert<VoidIsNull<'locator.waitForFunction', pw.FrameWaitForFunctionResult, null>>
 // page.screenshot: Page.screenshot
 //   retypes mask: mask locators travel as Neo brands instead of frame channels and selectors
 type _page_screenshot = Assert<ExactUpstreamCheck<'page.screenshot', ScreenshotInput, pw.PageScreenshotParams, never, never, 'mask'>>
@@ -533,19 +535,19 @@ type _page_pdf_result = Assert<VoidIsNull<'page.pdf', pw.PagePdfResult, Bytes>>
 type _page_setViewportSize = Assert<UpstreamCheck<'page.setViewportSize', ViewportSizeInput, pw.PageSetViewportSizeParams, never, never, never>>
 type _page_setViewportSize_result = Assert<VoidIsNull<'page.setViewportSize', pw.PageSetViewportSizeResult, null>>
 // page.addInitScript: Page.addInitScript
-//   adds script: the source, or a path Rust reads on Neo's disk as upstream's client reads it
-//   omits source: folded into script
-type _page_addInitScript = Assert<UpstreamCheck<'page.addInitScript', PageScriptInput, pw.PageAddInitScriptParams, 'script', 'source', never>>
-type _page_addInitScript_result = Assert<VoidIsNull<'page.addInitScript', pw.PageAddInitScriptResult, Registered>>
+//   adds path: the prelude has no filesystem, so Rust reads the file as upstream's client does (UTF-8, //# sourceURL appended)
+//   retypes source: absent when path names the file Rust reads
+type _page_addInitScript = Assert<UpstreamCheck<'page.addInitScript', PageScriptInput, pw.PageAddInitScriptParams, 'path', never, 'source'>>
+//   result: the registration's id, standing for upstream's Disposable channel; disposable.dispose takes it (no void check: Neo answers more than null on purpose)
 // page.exposeBinding: Page.exposeBinding
 type _page_exposeBinding = Assert<UpstreamCheck<'page.exposeBinding', PageBindingInput, pw.PageExposeBindingParams, never, never, never>>
-type _page_exposeBinding_result = Assert<VoidIsNull<'page.exposeBinding', pw.PageExposeBindingResult, Registered>>
+//   result: the registration's id, standing for upstream's Disposable channel; disposable.dispose takes it (no void check: Neo answers more than null on purpose)
 // bindingCall.resolve: BindingCall.resolve
 //   adds arg: the binding's JSON completion upstream's server builds for the page's stub, as text, which serves resolve and reject
 //   adds context: Neo keeps no BindingCall object, so the execution context that called is named
 //   omits result: carried in arg
 type _bindingCall_resolve = Assert<UpstreamCheck<'bindingCall.resolve', ResolveBindingInput, pw.BindingCallResolveParams, 'arg' | 'context', 'result', never>>
-//   result: answers {} as it always has; the prelude reads nothing from it (no void check: Neo answers more than null on purpose)
+type _bindingCall_resolve_result = Assert<VoidIsNull<'bindingCall.resolve', pw.BindingCallResolveResult, null>>
 // webStorage.items: Page.webStorageItems
 type _webStorage_items = Assert<UpstreamCheck<'webStorage.items', StorageInput, pw.PageWebStorageItemsParams, never, never, never>>
 type _webStorage_items_result = Assert<VoidIsNull<'webStorage.items', pw.PageWebStorageItemsResult, Array<StorageItem>>>

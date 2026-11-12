@@ -157,23 +157,23 @@
       "exchanges": [
         {
           "op": "context.addInitScript",
-          "args": "{\"call\":{\"api\":\"browserContext.addInitScript\",\"timeoutMs\":0},\"script\":{\"source\":\"window.x=1\"}}",
-          "reply": "{\"pages\":[],\"ok\":{\"id\":1},\"observed\":{\"seq\":2,\"events\":0,\"payloadCurrent\":true}}"
+          "args": "{\"call\":{\"api\":\"browserContext.addInitScript\",\"timeoutMs\":0},\"source\":\"window.x=1\"}",
+          "reply": "{\"pages\":[],\"ok\":1,\"observed\":{\"seq\":2,\"events\":0,\"payloadCurrent\":true}}"
         },
         {
           "op": "context.addInitScript",
-          "args": "{\"call\":{\"api\":\"browserContext.addInitScript\",\"timeoutMs\":0},\"script\":{\"path\":\"init.js\"}}",
-          "reply": "{\"pages\":[],\"ok\":{\"id\":2},\"observed\":{\"seq\":3,\"events\":0,\"payloadCurrent\":true}}"
+          "args": "{\"call\":{\"api\":\"browserContext.addInitScript\",\"timeoutMs\":0},\"path\":\"init.js\"}",
+          "reply": "{\"pages\":[],\"ok\":2,\"observed\":{\"seq\":3,\"events\":0,\"payloadCurrent\":true}}"
         },
         {
           "op": "disposable.dispose",
           "args": "{\"call\":{\"api\":\"disposable.dispose\",\"timeoutMs\":0},\"id\":1}",
-          "reply": "{\"pages\":[],\"ok\":{},\"observed\":{\"seq\":4,\"events\":0,\"payloadCurrent\":true}}"
+          "reply": "{\"pages\":[],\"ok\":null,\"observed\":{\"seq\":4,\"events\":0,\"payloadCurrent\":true}}"
         },
         {
           "op": "disposable.dispose",
           "args": "{\"call\":{\"api\":\"disposable.dispose\",\"timeoutMs\":0},\"id\":2}",
-          "reply": "{\"pages\":[],\"ok\":{},\"observed\":{\"seq\":5,\"events\":0,\"payloadCurrent\":true}}"
+          "reply": "{\"pages\":[],\"ok\":null,\"observed\":{\"seq\":5,\"events\":0,\"payloadCurrent\":true}}"
         },
         {
           "op": "context.newPage",
@@ -190,12 +190,12 @@
         {
           "op": "context.exposeBinding",
           "args": "{\"call\":{\"api\":\"browserContext.exposeBinding\",\"timeoutMs\":0},\"name\":\"echo\"}",
-          "reply": "{\"pages\":[],\"ok\":{\"id\":3},\"observed\":{\"seq\":2,\"events\":0,\"payloadCurrent\":true}}"
+          "reply": "{\"pages\":[],\"ok\":3,\"observed\":{\"seq\":2,\"events\":0,\"payloadCurrent\":true}}"
         },
         {
           "op": "disposable.dispose",
           "args": "{\"call\":{\"api\":\"disposable.dispose\",\"timeoutMs\":0},\"id\":3}",
-          "reply": "{\"pages\":[],\"ok\":{},\"observed\":{\"seq\":3,\"events\":0,\"payloadCurrent\":true}}"
+          "reply": "{\"pages\":[],\"ok\":null,\"observed\":{\"seq\":3,\"events\":0,\"payloadCurrent\":true}}"
         }
       ],
       "result": "null"

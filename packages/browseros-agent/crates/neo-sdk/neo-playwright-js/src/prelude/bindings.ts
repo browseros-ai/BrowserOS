@@ -69,7 +69,7 @@ export async function exposeOnPage(
   })
   try {
     // `noGlobal` is absent unless set: the codec drops an undefined field.
-    const { id } = await send['page.exposeBinding'](
+    const id = await send['page.exposeBinding'](
       site,
       { api, timeoutMs: 0 },
       {
@@ -108,7 +108,7 @@ export async function exposeOnContext(
     context._events.bindingRemoved()
   })
   try {
-    const { id } = await send['context.exposeBinding'](
+    const id = await send['context.exposeBinding'](
       site,
       { api, timeoutMs: 0 },
       { name, noGlobal: noGlobal ? true : undefined },

@@ -85,7 +85,7 @@ test('lifecycle events preserve existing and new frame identity', {
           call: { api: 'browserContext.on', timeoutMs: 3000 },
           page: null,
           event: 'pageload',
-          on: true,
+          enabled: true,
           since: Date.now(),
         }),
         'lifecycle setup',

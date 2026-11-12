@@ -35,6 +35,14 @@ export interface ExportResponse {
   runs: number
 }
 
+/** A task a run's script created or picked (`neo.createTask`, `neo.task`), as Neo's reply names it. */
+export interface RunTask {
+  /** `hn-top-5-3f9a`: the name's slug and 4 hex, or `t-` and 4 hex. */
+  id: string
+  /** The name given to `neo.createTask`, when the reply carries one. */
+  name: string | null
+}
+
 /** Tokens are estimates: characters divided by four, always shown with "≈". */
 export interface TextSize {
   chars: number
@@ -106,12 +114,16 @@ export interface RunSummary {
   /** The agent that sent it (its `clientInfo`, or its User-Agent's product); several may share the log. */
   client: ClientInfo | null
   /**
-   * The request's `_meta["com.browseros.neo/run"].taskId`, when it named one: a host's task, which
-   * picks the run's tab. The viewer never adds one: Neo sees each call exactly as it was sent. A
-   * task a script picks itself (`neo.task`) is not here; the reply's `_meta` lists the tasks a run
-   * touched (`RunDetail.reply.meta["com.browseros.neo/run"].tasks`).
+   * The request's `_meta["com.browseros.neo/run"].taskId`, when it named one: the host's task,
+   * which picks the run's tab. The viewer never adds one: Neo sees each call exactly as it was
+   * sent. The tasks the script itself created or picked (`neo.createTask`, `neo.task`) are `tasks`.
    */
   agentTaskId: string | null
+  /**
+   * The tasks the run's script created or picked, in Neo's order, from the reply's
+   * `_meta["com.browseros.neo/run"].tasks` (#3452); empty when it touched none or has not ended.
+   */
+  tasks: RunTask[]
   /** The tool called; Neo serves one, `run`. */
   tool: string
   status: RunStatus

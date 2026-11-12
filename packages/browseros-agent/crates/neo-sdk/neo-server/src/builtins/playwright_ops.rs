@@ -74,7 +74,8 @@ const PLAYWRIGHT_API: &str = "Playwright's API on `page`, `context` and `browser
     main world (`page.evaluate`, \
     `page.waitForFunction`, `locator.evaluate`, `locator.evaluateAll`, \
     `locator.waitForFunction`, `elementHandle.evaluate`, \
-    and `$eval` and `$$eval` on a page, frame or element handle; a `frame` form runs in its \
+    and `$eval` (`evalOnSelector`) and `$$eval` on a page, frame or element handle; a `frame` \
+    form runs in its \
     frame, a child frame too) with Playwright's values, arguments, element handles and errors, \
     `page.requestGC` (its main renderer's garbage collection), \
     `page.emulateMedia` (per page across runs and navigations), `page.setViewportSize` (the \
@@ -697,7 +698,8 @@ mod tests {
 
     use super::{Hold, OpInput, PLAYWRIGHT_LINE, PageEffect, error_code, leaf_error, op_marks};
     use crate::browser::PageRef;
-    use crate::dispatch::{ErrorCode, PageTarget};
+    use crate::builtins::event_release::EventRelease;
+    use crate::dispatch::{ErrorCode, MethodSpec, PageTarget};
 
     fn decoded(input: Value) -> Result<OpInput, serde_json::Error> {
         serde_json::from_value(input)
@@ -1148,5 +1150,50 @@ mod tests {
             (ErrorOwner::Neo, ErrorCode::INTERNAL_ERROR),
             "the host did not make that code, so it is not the host's to fix"
         );
+    }
+
+    /// `$eval` (`page.evalOnSelector`) and `locator.evaluate` both run the agent's function on an
+    /// element in the main world: the door derives the same method from both declarations
+    /// (effect, lifetime, main-world script, listing) and the same hold, and its name tables treat
+    /// both alike.
+    #[test]
+    fn tests_that_eval_on_selector_has_the_door_policy_of_locator_evaluate()
+    -> Result<(), Box<dyn Error>> {
+        let spec = |name: &str| {
+            Op::from_name(name)
+                .map(Op::spec)
+                .ok_or(format!("{name} is an op"))
+        };
+        let (dollar_eval, evaluate) = (spec("page.evalOnSelector")?, spec("locator.evaluate")?);
+        let line = "the run description's line";
+        let (marked, as_evaluate) = (
+            op_marks::OpMarks::of(&dollar_eval, line),
+            op_marks::OpMarks::of(&evaluate, line),
+        );
+        assert_eq!(
+            marked.spec,
+            MethodSpec {
+                name: dollar_eval.name,
+                ..as_evaluate.spec
+            }
+        );
+        assert_eq!(marked.hold, as_evaluate.hold);
+        assert_eq!(
+            (
+                dollar_eval.target,
+                dollar_eval.capabilities,
+                dollar_eval.policed
+            ),
+            (evaluate.target, evaluate.capabilities, evaluate.policed)
+        );
+        assert_eq!(
+            PageEffect::of(dollar_eval.name),
+            PageEffect::of(evaluate.name)
+        );
+        assert_eq!(
+            EventRelease::of(dollar_eval.name),
+            EventRelease::of(evaluate.name)
+        );
+        Ok(())
     }
 }

@@ -348,8 +348,8 @@ async fn tests_that_an_evaluate_a_navigation_cut_off_is_not_sent_again() -> Test
     let run = ScriptedRun::over(&tab).await?;
     let op = Op::from_name("page.evaluate").ok_or("page.evaluate is an op")?;
     let input = json!({ "page": serde_json::to_value(&run.page)?,
-                        "script": { "run": { "expression": "() => window.ran = true",
-                                             "isFunction": true, "arg": r#"{"v":"undefined"}"# } } });
+                        "expression": "() => window.ran = true", "isFunction": true,
+                        "arg": { "value": r#"{"v":"undefined"}"#, "handles": [] } });
     let error = run
         .playwright
         .invoke(&run.env, op, input)
@@ -433,8 +433,8 @@ async fn tests_that_a_wait_a_navigation_cut_off_polls_again_in_the_next_document
     let run = ScriptedRun::over(&tab).await?;
     let op = Op::from_name("page.waitForFunction").ok_or("page.waitForFunction is an op")?;
     let input = json!({ "call": { "timeoutMs": 5_000 }, "page": serde_json::to_value(&run.page)?,
-                        "script": { "run": { "expression": "() => true", "isFunction": true,
-                                             "arg": r#"{"v":"undefined"}"# } } });
+                        "expression": "() => true", "isFunction": true,
+                        "arg": { "value": r#"{"v":"undefined"}"#, "handles": [] } });
     let waited = run.playwright.invoke(&run.env, op, input).await?;
     assert_eq!(
         waited,
@@ -487,8 +487,8 @@ impl TabScript for OtherWorld {
 
 fn evaluate_input(run: &ScriptedRun) -> Result<Value, serde_json::Error> {
     Ok(json!({ "page": serde_json::to_value(&run.page)?,
-               "script": { "run": { "expression": "() => 7", "isFunction": true,
-                                    "arg": r#"{"v":"undefined"}"# } } }))
+               "expression": "() => 7", "isFunction": true,
+                        "arg": { "value": r#"{"v":"undefined"}"#, "handles": [] } }))
 }
 
 /// A refused evaluator ran nothing, so the direct call goes out, and only after a recheck of

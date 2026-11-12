@@ -45,8 +45,6 @@ async fn tests_that_an_op_ends_at_its_timeout_while_its_frames_world_never_insta
     )?;
     let playwright = Playwright::new(Arc::clone(&browser));
     let brand = json!({ "$neo": "page", "tab": 7 });
-    let script = json!({ "run": { "expression": "() => true", "isFunction": true,
-                                  "arg": r#"{"v":"undefined"}"# } });
     let millis = TIMEOUT.as_millis();
     let cases: [(&str, &str, Value); 3] = [
         (
@@ -57,7 +55,8 @@ async fn tests_that_an_op_ends_at_its_timeout_while_its_frames_world_never_insta
         (
             "page.waitForFunction",
             "frame.waitForFunction",
-            json!({ "page": brand, "frame": "child-frame", "script": script }),
+            json!({ "page": brand, "frame": "child-frame", "expression": "() => true",
+                    "isFunction": true, "arg": { "value": r#"{"v":"undefined"}"#, "handles": [] } }),
         ),
         (
             "page.waitForURL",

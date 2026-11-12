@@ -74,7 +74,7 @@ const ANSWERS = {
   'page.frames': FRAMES,
   'page.opener': { opener: null },
   'page.evaluate': { value: { v: 'null' } },
-  'worker.evaluate': { value: 1 },
+  'worker.evaluate': { v: 'null' },
   'page.addScriptTag': { element: ELEMENT },
   'page.addStyleTag': { element: ELEMENT },
   'page.waitForFunction': { value: true, preview: 'true' },
@@ -84,10 +84,10 @@ const ANSWERS = {
     url: 'about:blank',
   },
   'download.path': { path: '/runs/r/f.csv', failure: null },
-  'page.addInitScript': { id: 1 },
-  'context.addInitScript': { id: 2 },
-  'page.exposeBinding': { id: 3 },
-  'context.exposeBinding': { id: 4 },
+  'page.addInitScript': 1,
+  'context.addInitScript': 2,
+  'page.exposeBinding': 3,
+  'context.exposeBinding': 4,
   'page.addLocatorHandler': 1,
 } satisfies Partial<OpOutputs>
 

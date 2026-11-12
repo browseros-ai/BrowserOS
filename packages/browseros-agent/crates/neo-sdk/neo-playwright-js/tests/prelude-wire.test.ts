@@ -192,7 +192,7 @@ describe('locator targets', () => {
     ).toEqual([
       ['locator.dblclick', { button: 'right' }],
       ['locator.check', { force: true }],
-      ['locator.press', { key: 'Control+A', options: { delay: 10 } }],
+      ['locator.press', { key: 'Control+A', delay: 10 }],
     ])
     expect(runtime.calls[1]?.input.call).toEqual({
       api: 'locator.check',
@@ -611,14 +611,12 @@ describe('errors', () => {
     ) as { disposed: { message: string; code: string }; called: string }
     const sent = runtime.calls.find((call) => call.name === 'page.evaluate')
     expect(sent?.input).toMatchObject({
-      script: {
-        run: {
-          arg: '{"a":[{"h":0},{"h":1}],"id":1}',
-          handles: [
-            { $neo: 'element', seq: 2, node: 41 },
-            { $neo: 'element', seq: 2, node: 41 },
-          ],
-        },
+      arg: {
+        value: '{"a":[{"h":0},{"h":1}],"id":1}',
+        handles: [
+          { $neo: 'element', seq: 2, node: 41 },
+          { $neo: 'element', seq: 2, node: 41 },
+        ],
       },
     })
     expect(result.disposed.code).toBe('invalid_input')

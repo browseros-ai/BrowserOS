@@ -67,7 +67,7 @@ use crate::events::{BINDING_NAME, EventHub, PageEventKind, Subscription};
 use crate::op_scope::{AdmittedPage, OpScope, Sent};
 use crate::op_spec::Capability;
 use crate::target::PageRef;
-use crate::wire::options;
+use crate::wire::{Nothing, options};
 use crate::{ErrorCode, Playwright, PlaywrightError};
 
 /// The page side of every binding: upstream's `BindingsController`, which installs itself at
@@ -257,8 +257,6 @@ async fn run_in_loaded_documents(session: &ProtocolSession, source: &str) {
 
 /// The script's source as the prelude built it (upstream's client `evaluationScript`), or the
 /// path of a file to read it from. No `Debug`: the source may hold a value the agent was given.
-#[derive(Deserialize, TS)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub(crate) enum InitSource {
     /// A function call with its argument, a string, or `{ content }`.
     Source(String),
@@ -267,35 +265,61 @@ pub(crate) enum InitSource {
     Path(String),
 }
 
-/// `page.addInitScript`'s input.
+impl InitSource {
+    /// The one of `source` and `path` an input carries: upstream's `source`, or the path Rust
+    /// reads it from, since the prelude has no filesystem. Exactly one travels.
+    fn of(
+        scope: &OpScope<'_>,
+        source: Option<String>,
+        path: Option<String>,
+    ) -> Result<Self, PlaywrightError> {
+        match (source, path) {
+            (Some(source), None) => Ok(Self::Source(source)),
+            (None, Some(path)) => Ok(Self::Path(path)),
+            (Some(_), Some(_)) => Err(scope.fail(
+                ErrorCode::InvalidInput,
+                "source and path: an init script is one or the other",
+            )),
+            (None, None) => Err(scope.fail(ErrorCode::InvalidInput, "missing field `source`")),
+        }
+    }
+}
+
+/// `page.addInitScript`'s input: upstream's `source`, or Neo's `path` in its place.
 #[derive(Deserialize, TS)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct PageScriptInput {
     page: PageRef,
-    script: InitSource,
+    #[serde(default)]
+    #[ts(optional)]
+    source: Option<String>,
+    #[serde(default)]
+    #[ts(optional)]
+    path: Option<String>,
 }
 options!(PageScriptInput);
 
-/// `context.addInitScript`'s input.
+/// `context.addInitScript`'s input: upstream's `source`, or Neo's `path` in its place.
 #[derive(Deserialize, TS)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct ContextScriptInput {
-    script: InitSource,
+    #[serde(default)]
+    #[ts(optional)]
+    source: Option<String>,
+    #[serde(default)]
+    #[ts(optional)]
+    path: Option<String>,
 }
 options!(ContextScriptInput);
 
-/// `disposable.dispose`'s input: the id an `addInitScript` returned.
+/// `disposable.dispose`'s input: the id an `addInitScript` or `exposeBinding` returned, which
+/// stands for upstream's `Disposable` channel.
 #[derive(Debug, Deserialize, TS)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct DisposeInput {
     id: u64,
 }
 options!(DisposeInput);
-
-/// `disposable.dispose`'s answer: `{}`, as it has always been; the prelude reads nothing from
-/// it, and an empty object rather than `Nothing` keeps the reply's bytes.
-#[derive(Debug, Serialize, TS)]
-pub(crate) struct Disposed {}
 
 /// `page.exposeBinding`'s input: `exposeFunction` sends it too.
 #[derive(Debug, Deserialize, TS)]
@@ -322,11 +346,14 @@ pub(crate) struct ContextBindingInput {
 }
 options!(ContextBindingInput);
 
-/// What `addInitScript` and `exposeBinding` return: the id their disposable disposes.
+/// What `addInitScript` and `exposeBinding` return: the id their disposable disposes, standing
+/// for upstream's `Disposable` channel, upstream's one result field unwrapped.
 #[derive(Debug, Serialize, TS)]
-pub(crate) struct Registered {
-    id: u64,
-}
+pub(crate) struct Registered(u64);
+
+/// The page and context route rows' reason for [`Registered`], where upstream answers its
+/// disposable channel.
+pub(crate) const REGISTRATION: &str = "the registration's id, standing for upstream's Disposable channel; disposable.dispose takes it";
 
 /// `page.addInitScript`: the script added to the page's session now, after the door's rules on
 /// the page. Every later document of the tab runs it until the run ends or it is disposed.
@@ -335,7 +362,8 @@ pub(crate) async fn add_to_page(
     scope: &OpScope<'_>,
     input: PageScriptInput,
 ) -> Result<Registered, PlaywrightError> {
-    let source = gate(scope, input.script).await?;
+    let script = InitSource::of(scope, input.source, input.path)?;
+    let source = gate(scope, script).await?;
     let admitted = scope.admit(pw.browser(), input.page.tab()).await?;
     let session = pw
         .browser()
@@ -345,7 +373,7 @@ pub(crate) async fn add_to_page(
         .await
         .map_err(|error| scope.core_error(&error))?;
     let id = scope.run_state().init_scripts.keep(registration);
-    Ok(Registered { id })
+    Ok(Registered(id))
 }
 
 /// `page.exposeBinding`: the binding's stub added to the page's session, after the door's rules
@@ -376,7 +404,7 @@ pub(crate) async fn expose_on_page(
         .entry(id)
         .or_default()
         .push((admitted.session.target_id.clone(), binding.name));
-    Ok(Registered { id })
+    Ok(Registered(id))
 }
 
 /// `context.exposeBinding`: the binding kept for every tab the run writes to from now on, as
@@ -395,7 +423,7 @@ pub(crate) fn expose_on_context(
         no_global: input.no_global,
     };
     let id = scripts.keep_for_context(Reach::Binding(Arc::new(binding)));
-    Ok(Registered { id })
+    Ok(Registered(id))
 }
 
 /// `context.addInitScript`: the script kept for every tab the run writes to from now on. Marked
@@ -404,13 +432,14 @@ pub(crate) async fn add_to_context(
     scope: &OpScope<'_>,
     input: ContextScriptInput,
 ) -> Result<Registered, PlaywrightError> {
-    let source = gate(scope, input.script).await?;
+    let script = InitSource::of(scope, input.source, input.path)?;
+    let source = gate(scope, script).await?;
     let _sent = scope.send_effect()?;
     let id = scope
         .run_state()
         .init_scripts
         .keep_for_context(Reach::Script(source.into()));
-    Ok(Registered { id })
+    Ok(Registered(id))
 }
 
 /// `disposable.dispose`: removes every registration of `id`, page or context, and awaits each
@@ -422,7 +451,7 @@ pub(crate) async fn add_to_context(
 pub(crate) async fn dispose(
     scope: &OpScope<'_>,
     input: DisposeInput,
-) -> Result<Disposed, PlaywrightError> {
+) -> Result<Nothing, PlaywrightError> {
     let _sent = scope.send_effect()?;
     let run = scope.run_state();
     let (removed, in_flight) = {
@@ -454,7 +483,7 @@ pub(crate) async fn dispose(
         // Waits out an add in progress; with none, this closure runs and initializes nothing.
         let _settled = cell.get_or_try_init(|| async { Err(()) }).await;
     }
-    Ok(Disposed {})
+    Ok(())
 }
 
 impl InitScripts {

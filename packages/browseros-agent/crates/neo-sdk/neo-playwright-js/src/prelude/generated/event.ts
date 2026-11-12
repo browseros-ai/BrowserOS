@@ -9,11 +9,11 @@ import type { CallSite } from '../call-site'
 import type { SignalLike } from '../signal'
 import type { Assert, UpstreamCheck, VoidIsNull } from '../upstream-check'
 import type { CallHeader } from '../wire'
-import type { DialogInput } from './types/DialogInput'
+import type { DialogAcceptInput } from './types/DialogAcceptInput'
+import type { DialogDismissInput } from './types/DialogDismissInput'
 import type { DownloadFinished } from './types/DownloadFinished'
 import type { DownloadPathInput } from './types/DownloadPathInput'
 import type { DownloadSaveAsInput } from './types/DownloadSaveAsInput'
-import type { EventAcknowledged } from './types/EventAcknowledged'
 import type { EventListenInput } from './types/EventListenInput'
 import type { EventNextInput } from './types/EventNextInput'
 import type { EventRecord } from './types/EventRecord'
@@ -23,15 +23,15 @@ import type { Pumped } from './types/Pumped'
 
 export type { ConsoleInfo } from './types/ConsoleInfo'
 export type { ConsoleLocation } from './types/ConsoleLocation'
+export type { DialogAcceptInput } from './types/DialogAcceptInput'
+export type { DialogDismissInput } from './types/DialogDismissInput'
 export type { DialogId } from './types/DialogId'
 export type { DialogInfo } from './types/DialogInfo'
-export type { DialogInput } from './types/DialogInput'
 export type { DialogType } from './types/DialogType'
 export type { DownloadFinished } from './types/DownloadFinished'
 export type { DownloadInfo } from './types/DownloadInfo'
 export type { DownloadPathInput } from './types/DownloadPathInput'
 export type { DownloadSaveAsInput } from './types/DownloadSaveAsInput'
-export type { EventAcknowledged } from './types/EventAcknowledged'
 export type { EventFrame } from './types/EventFrame'
 export type { EventListenInput } from './types/EventListenInput'
 export type { EventListenInterest } from './types/EventListenInterest'
@@ -41,6 +41,7 @@ export type { EventRecord } from './types/EventRecord'
 export type { EventWaitInput } from './types/EventWaitInput'
 export type { FileChooserInfo } from './types/FileChooserInfo'
 export type { InterceptFileChooserInput } from './types/InterceptFileChooserInput'
+export type { InterceptedEvent } from './types/InterceptedEvent'
 export type { PageErrorInfo } from './types/PageErrorInfo'
 export type { PopupTab } from './types/PopupTab'
 export type { Pumped } from './types/Pumped'
@@ -52,20 +53,20 @@ export type EventInputs = {
   'events.next': EventNextInput
   'events.wait': EventWaitInput
   'events.interceptFileChooser': InterceptFileChooserInput
-  'dialog.accept': DialogInput
-  'dialog.dismiss': DialogInput
+  'dialog.accept': DialogAcceptInput
+  'dialog.dismiss': DialogDismissInput
   'download.path': DownloadPathInput
   'download.saveAs': DownloadSaveAsInput
 }
 
 /** Each event op's result. */
 export type EventOutputs = {
-  'events.listen': EventAcknowledged
+  'events.listen': null
   'events.next': Pumped
   'events.wait': EventRecord
-  'events.interceptFileChooser': EventAcknowledged
-  'dialog.accept': EventAcknowledged
-  'dialog.dismiss': EventAcknowledged
+  'events.interceptFileChooser': null
+  'dialog.accept': null
+  'dialog.dismiss': null
   'download.path': DownloadFinished
   'download.saveAs': null
 }
@@ -87,7 +88,7 @@ export const EVENT_SEND = {
     call: CallHeader,
     input: EventListenInput,
     signal?: SignalLike,
-  ): Promise<EventAcknowledged> => invoke('events.listen', site, call, input, signal),
+  ): Promise<null> => invoke('events.listen', site, call, input, signal),
   'events.next': (
     site: CallSite,
     call: CallHeader,
@@ -105,19 +106,19 @@ export const EVENT_SEND = {
     call: CallHeader,
     input: InterceptFileChooserInput,
     signal?: SignalLike,
-  ): Promise<EventAcknowledged> => invoke('events.interceptFileChooser', site, call, input, signal),
+  ): Promise<null> => invoke('events.interceptFileChooser', site, call, input, signal),
   'dialog.accept': (
     site: CallSite,
     call: CallHeader,
-    input: DialogInput,
+    input: DialogAcceptInput,
     signal?: SignalLike,
-  ): Promise<EventAcknowledged> => invoke('dialog.accept', site, call, input, signal),
+  ): Promise<null> => invoke('dialog.accept', site, call, input, signal),
   'dialog.dismiss': (
     site: CallSite,
     call: CallHeader,
-    input: DialogInput,
+    input: DialogDismissInput,
     signal?: SignalLike,
-  ): Promise<EventAcknowledged> => invoke('dialog.dismiss', site, call, input, signal),
+  ): Promise<null> => invoke('dialog.dismiss', site, call, input, signal),
   'download.path': (
     site: CallSite,
     call: CallHeader,
@@ -134,24 +135,30 @@ export const EVENT_SEND = {
 
 // Each route row against Playwright's own protocol at the pin (upstream-check.ts): tsc
 // names the op and every key that differs without a reason, or whose reason went stale.
-// events.listen: Neo only: run-scoped listener bookkeeping, including cleanup after a tab closed; upstream subscribes per channel
+// events.listen: Page.updateSubscription
+//   adds since: the script's Date.now() at on(): the run's event log replays what was recorded from then, where upstream's channel pushes only what follows the subscription
+//   adds retiredTab: releases a closed page's worker interest by its tab id, which can no longer be admitted; upstream's subscription goes with its page's channel
+//   retypes event: Playwright's name of every event Neo reports, not only the protocol names upstream gates behind a subscription; Rust refuses an event it does not report
+type _events_listen = Assert<UpstreamCheck<'events.listen', EventListenInput, pw.PageUpdateSubscriptionParams, 'since' | 'retiredTab', never, 'event'>>
+type _events_listen_result = Assert<VoidIsNull<'events.listen', pw.PageUpdateSubscriptionResult, null>>
 // events.next: Neo only: the prelude's background event pump, one cursor per listener
 // events.wait: Neo only: a journal wait by event and time; upstream waits on channel events
-// events.interceptFileChooser replaces Page.updateSubscription: Neo leases chooser interception per run, so the run's end releases it; upstream subscribes by event name and an enabled flag
-type _events_interceptFileChooser_replaces = pw.PageUpdateSubscriptionParams
+// events.interceptFileChooser: Page.updateSubscription
+//   adds lease: interception is leased per run so the run's end releases it; upstream subscribes per connection
+type _events_interceptFileChooser = Assert<UpstreamCheck<'events.interceptFileChooser', InterceptFileChooserInput, pw.PageUpdateSubscriptionParams, 'lease', never, never>>
+type _events_interceptFileChooser_result = Assert<VoidIsNull<'events.interceptFileChooser', pw.PageUpdateSubscriptionResult, null>>
 // dialog.accept: Dialog.accept
 //   adds dialog: the host-owned dialog's id, instead of an upstream Dialog channel
-type _dialog_accept = Assert<UpstreamCheck<'dialog.accept', DialogInput, pw.DialogAcceptParams, 'dialog', never, never>>
-//   result: a dialog's answer has always been {}; the prelude reads nothing from it (no void check: Neo answers more than null on purpose)
+type _dialog_accept = Assert<UpstreamCheck<'dialog.accept', DialogAcceptInput, pw.DialogAcceptParams, 'dialog', never, never>>
+type _dialog_accept_result = Assert<VoidIsNull<'dialog.accept', pw.DialogAcceptResult, null>>
 // dialog.dismiss: Dialog.dismiss
 //   adds dialog: the host-owned dialog's id, instead of an upstream Dialog channel
-//   adds promptText: dialog.accept's input, shared: dismiss accepts it and ignores it
-type _dialog_dismiss = Assert<UpstreamCheck<'dialog.dismiss', DialogInput, pw.DialogDismissParams, 'dialog' | 'promptText', never, never>>
-//   result: a dialog's answer has always been {}; the prelude reads nothing from it (no void check: Neo answers more than null on purpose)
+type _dialog_dismiss = Assert<UpstreamCheck<'dialog.dismiss', DialogDismissInput, pw.DialogDismissParams, 'dialog', never, never>>
+type _dialog_dismiss_result = Assert<VoidIsNull<'dialog.dismiss', pw.DialogDismissResult, null>>
 // download.path: Artifact.pathAfterFinished
 //   adds download: the host-owned download's id, instead of an upstream Artifact channel
 type _download_path = Assert<UpstreamCheck<'download.path', DownloadPathInput, pw.ArtifactPathAfterFinishedParams, 'download', never, never>>
-type _download_path_result = Assert<VoidIsNull<'download.path', pw.ArtifactPathAfterFinishedResult, DownloadFinished>>
+//   result: one finished download answers its path and its failure together, which download.failure() reads; upstream asks Artifact.failure separately (no void check: Neo answers more than null on purpose)
 // download.saveAs: Artifact.saveAs
 //   adds download: the host-owned download's id, instead of an upstream Artifact channel
 type _download_saveAs = Assert<UpstreamCheck<'download.saveAs', DownloadSaveAsInput, pw.ArtifactSaveAsParams, 'download', never, never>>

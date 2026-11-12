@@ -15,6 +15,12 @@ type Unresolved = any
 
 type Equal<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false
 
+/** An op with two shapes, as `events.listen` has: `retired` is only in the second. */
+type TwoShapes =
+  | { event: string; enabled: boolean }
+  | { retired: number; event: string; enabled: false }
+type Subscription = { event: string; enabled: boolean }
+
 export type GuardChecks = [
   Assert<
     UpstreamCheck<
@@ -175,6 +181,21 @@ export type GuardChecks = [
     Equal<
       ExactUpstreamCheck<'any-exact', Unresolved, Empty>,
       { op: 'any-exact'; unresolvedType: 'any' }
+    >
+  >,
+  // A union input counts the keys of every variant: a variant-only key with no entry fails,
+  // its `adds` entry passes, and an entry for a key no variant has is still stale.
+  Assert<
+    Equal<
+      UpstreamCheck<'union-unlisted', TwoShapes, Subscription>,
+      { op: 'union-unlisted'; neoOnly: 'retired' }
+    >
+  >,
+  Assert<UpstreamCheck<'union-listed', TwoShapes, Subscription, 'retired'>>,
+  Assert<
+    Equal<
+      UpstreamCheck<'union-stale', TwoShapes, Subscription, 'retired' | 'gone'>,
+      { op: 'union-stale'; staleAdds: 'gone' }
     >
   >,
   Assert<VoidIsNull<'void', void, null>>,

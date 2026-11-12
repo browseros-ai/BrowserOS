@@ -381,14 +381,14 @@ describe('listeners and the pump', () => {
         call: { api: 'page.on', timeoutMs: 0 },
         page: { $neo: 'page', tab: 1007 },
         event: 'console',
-        on: true,
+        enabled: true,
         since: 2_000,
       },
       {
         call: { api: 'page.off', timeoutMs: 0 },
         page: { $neo: 'page', tab: 1007 },
         event: 'console',
-        on: false,
+        enabled: false,
         since: 3_000,
       },
     ])
@@ -433,6 +433,70 @@ describe('listeners and the pump', () => {
       promptText: 'Bo',
     })
     expect(runtime.sent('events.next')).toHaveLength(2)
+  })
+
+  it("tests that a dismissal sends only Dialog.dismiss's params and both answers resolve to nothing", async () => {
+    const runtime = loadPrelude({
+      seed: SEED,
+      answer: pumpAnswers([
+        [
+          {
+            seq: 3,
+            at: RECORDED_AT,
+            event: 'dialog',
+            page: brand(7),
+            dialog: {
+              id: 42,
+              type: 'confirm',
+              message: 'Sure?',
+              defaultValue: '',
+            },
+          },
+        ],
+      ]),
+    })
+    // Both answers are void on the wire (`null`) and resolve to `undefined` in the script; an
+    // argument passed to dismiss() never reaches the wire, as upstream.
+    const answered = await runtime.run(`
+      return await new Promise((resolve) => page.on('dialog', async (dialog) => {
+        resolve(String(await dialog.dismiss('ignored')))
+      }))
+    `)
+    expect(answered).toBe('undefined')
+    expect(runtime.sent('dialog.dismiss')[0]?.input).toEqual({
+      call: { api: 'dialog.dismiss', timeoutMs: 0 },
+      page: { $neo: 'page', tab: 1007 },
+      dialog: 42,
+    })
+  })
+
+  it("tests that a filechooser listener leases interception with Page.updateSubscription's params", async () => {
+    const runtime = loadPrelude({ seed: SEED, answer: () => null })
+    await runtime.run(`
+      const chooser = () => {}
+      page.on('filechooser', chooser)
+      page.off('filechooser', chooser)
+      // A write waits for interception's setup and release (chooser-setup.ts).
+      await page.getByText('Upload').click()
+    `)
+    expect(
+      runtime.sent('events.interceptFileChooser').map((call) => call.input),
+    ).toEqual([
+      {
+        call: { api: 'page.filechooser', timeoutMs: 0 },
+        page: { $neo: 'page', tab: 1007 },
+        event: 'fileChooser',
+        enabled: true,
+        lease: 1,
+      },
+      {
+        call: { api: 'page.filechooser', timeoutMs: 0 },
+        page: { $neo: 'page', tab: 1007 },
+        event: 'fileChooser',
+        enabled: false,
+        lease: 1,
+      },
+    ])
   })
 
   it('tests that a dialog nobody listens for any more is dismissed, and beforeunload accepted, as upstream', async () => {
@@ -490,10 +554,9 @@ describe('listeners and the pump', () => {
     )
     expect(runtime.sent('dialog.dismiss')[0]?.input.dialog).toBe(2)
     expect(runtime.sent('dialog.accept')[0]?.input.dialog).toBe(3)
-    expect(runtime.sent('events.listen').map((call) => call.input.on)).toEqual([
-      true,
-      false,
-    ])
+    expect(
+      runtime.sent('events.listen').map((call) => call.input.enabled),
+    ).toEqual([true, false])
   })
 
   it("tests that one opened tab reaches the opener's popup and the context's page as the same Page", async () => {
@@ -1004,7 +1067,7 @@ it('orders context on/off around async setup and rejects an old pump period', as
     seed: SEED,
     answer: (call) => {
       if (call.name === 'events.listen') {
-        changes.push(call.input.on)
+        changes.push(call.input.enabled)
         if (changes.length === 1)
           return new Promise<void>((resolve) => {
             finishSetup = resolve
@@ -1241,7 +1304,8 @@ it('releases internal worker bookkeeping once when a page closes', async () => {
     runtime
       .sent('events.listen')
       .some(
-        (call) => call.input.event === 'workerstate' && call.input.on === false,
+        (call) =>
+          call.input.event === 'workerstate' && call.input.enabled === false,
       ),
   )
   expect(
@@ -1250,11 +1314,11 @@ it('releases internal worker bookkeeping once when a page closes', async () => {
         (call) =>
           call.name === 'events.listen' && call.input.event === 'workerstate',
       )
-      .map((call) => call.input.on),
+      .map((call) => call.input.enabled),
   ).toEqual([true, false])
   const cleanup = runtime
     .sent('events.listen')
-    .find((call) => call.input.on === false)
+    .find((call) => call.input.enabled === false)
   expect(cleanup?.input.page).toBeNull()
   expect(cleanup?.input.retiredTab).toBe(1007)
 })

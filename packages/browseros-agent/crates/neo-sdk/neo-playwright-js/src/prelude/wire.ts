@@ -19,12 +19,9 @@ export type {
   EventRecord,
   FileChooserInfo,
   FilesInput,
-  FillOptions,
   FrameInfo,
   GeneratedInputs as OpInputs,
   GeneratedOutputs as OpOutputs,
-  InitSource,
-  KeyOptions,
   LoadState,
   MouseButton,
   NavigationCut,
@@ -33,7 +30,6 @@ export type {
   PageBrand,
   PageErrorInfo,
   PageHandle,
-  PageScript,
   PartialFrame,
   ResponseInfo,
   ScrollOption,
@@ -53,6 +49,14 @@ export type PointerOptions = Omit<
 export type DragOptions = Omit<
   GeneratedInputs['locator.dragTo'],
   'target' | 'strict' | 'to'
+>
+export type FillOptions = Omit<
+  GeneratedInputs['locator.fill'],
+  'target' | 'strict' | 'value'
+>
+export type KeyOptions = Omit<
+  GeneratedInputs['locator.press'],
+  'target' | 'strict' | 'key'
 >
 
 export type LocatorBrand = Extract<Target, { $neo: 'locator' }>

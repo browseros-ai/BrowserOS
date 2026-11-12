@@ -204,7 +204,7 @@ describe('an export', () => {
       const run = session.runs[index]
       expect(row[0]).toBe(`[${run.number}](${run.files.markdown})`)
       expect(row[2]).toBe(run.client.name)
-      expect(row[3]).toBe(run.agentTaskId ?? '–')
+      expect(row[3]).toBe(run.agentTaskId ? `${run.agentTaskId} (host)` : '–')
       expect(row[4]).toBe(run.outcome)
       expect(row[7]).toBe(String(run.operationCount ?? '–'))
       expect(row[10]).toBe(`\`${run.firstStatement}\``)

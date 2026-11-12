@@ -101,13 +101,11 @@ export class BrowserContext extends EventEmitter {
       api,
       {
         register: async (source) =>
-          (
-            await send['context.addInitScript'](
-              site,
-              { api, timeoutMs: 0 },
-              { script: source },
-            )
-          ).id,
+          await send['context.addInitScript'](
+            site,
+            { api, timeoutMs: 0 },
+            source,
+          ),
         expose: (name, callback) =>
           exposeOnContext(this, site, api, name, callback, true),
       },

@@ -6,4 +6,4 @@ import type { Target } from "./Target";
  * `locator.selectOption(values)`. `options` contains selected values, not a script option
  * bag: force stays flat on the wire. `elements` are the `<option>` handles among the values.
  */
-export type SelectOptionInput = { target: Target, strict: Strictness, options: Array<import('../../../probe/protocol').SelectOption>, elements: Array<Target>, force?: boolean, };
+export type SelectOptionInput = { target: Target, strict: Strictness, options?: Array<import('../../../probe/protocol').SelectOption>, elements?: Array<Target>, force?: boolean, };

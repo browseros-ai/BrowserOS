@@ -26,7 +26,7 @@ use tokio::task;
 use tokio::time::{self, Instant};
 
 use super::event_release::EventRelease;
-use super::op_marks::Hold;
+use super::op_marks::{Hold, OpMarks};
 use super::playwright_ops::{self, OpCtxEnv, leaf_error};
 use super::{BuiltinDeps, CaptchaClaims, PlaywrightFacade, TabJanitor};
 use crate::browser::{BrowserLink, PageRef, TabRegistry};
@@ -1084,7 +1084,7 @@ async fn a_listener_gets_no_events_from_a_tab_whose_lock_blocks_reads() -> Resul
             "call": { "api": "page.on", "timeoutMs": 0 },
             "page": handle(&owners),
             "event": event,
-            "on": true,
+            "enabled": true,
             "since": 0,
         });
         value(harness.submit(&run, "events.listen", listen).await)?;
@@ -2000,7 +2000,7 @@ async fn prelude_listener_setup_is_cancelled_without_a_not_awaited_notice()
             "events.listen".to_owned(),
             json!({
                 "call":{"api":"page.on","timeoutMs":0}, "page":handle(&page),
-                "event":"workerstate", "on":true, "since":0,
+                "event":"workerstate", "enabled":true, "since":0,
             }),
             None,
         ),
@@ -2054,7 +2054,7 @@ async fn the_crate_gets_the_page_the_door_resolved_never_the_lazy_one() -> Resul
         "call": { "api": "page.on", "timeoutMs": 0 },
         "page": { "$neo": "page", "tab": null },
         "event": "dialog",
-        "on": true,
+        "enabled": true,
         "since": 0,
     });
     let (operation, reply) = harness.submit_op(&run, "events.listen", listen).await;
@@ -2064,7 +2064,7 @@ async fn the_crate_gets_the_page_the_door_resolved_never_the_lazy_one() -> Resul
         .ok_or("the door opened the run's page for the listener")?;
     assert_eq!(
         value(reply)?,
-        json!({}),
+        Value::Null,
         "the crate admitted a real page: it refuses the lazy page's `id: null`"
     );
     assert_eq!(
@@ -2406,7 +2406,7 @@ async fn prepare_event_tabs(
                 "events.listen",
                 json!({
                     "call":{"api":"page.on","timeoutMs":0}, "page":handle(tab),
-                    "event":event, "on":true, "since":0
+                    "event":event, "enabled":true, "since":0
                 }),
             )
             .await;
@@ -2780,7 +2780,7 @@ async fn a_native_pump_retains_both_target_bound_subscriptions_after_eviction()
                 "events.listen",
                 json!({
                     "call":{"api":"page.on","timeoutMs":0}, "page":handle(&page),
-                    "event":"close", "on":true, "since":0
+                    "event":"close", "enabled":true, "since":0
                 }),
             )
             .await,
@@ -3003,7 +3003,7 @@ async fn explicit_close_cleans_a_replacement_with_delivered_dead_evidence()
                 "events.listen",
                 json!({
                     "call":{"api":"page.on","timeoutMs":0}, "page":handle(&page),
-                    "event":"close", "on":true, "since":0
+                    "event":"close", "enabled":true, "since":0
                 }),
             )
             .await,
@@ -3214,10 +3214,10 @@ async fn hosted_console_and_pageerror_waits_refuse_without_changing_listeners()
     let (run, _guard) = harness.run()?;
     for event in ["console", "pageerror"] {
         let listen = json!({"call":{"api":"page.on","timeoutMs":0},
-            "page":handle(&page),"event":event,"on":true,"since":0});
+            "page":handle(&page),"event":event,"enabled":true,"since":0});
         assert_eq!(
             value(harness.submit(&run, "events.listen", listen).await)?,
-            json!({})
+            Value::Null
         );
         let wait = json!({"call":{"api":"page.waitForEvent","timeoutMs":30000},
             "page":handle(&page),"event":event,"since":0});
@@ -3247,7 +3247,7 @@ async fn a_nonhosted_console_wait_still_receives_native_messages() -> Result<(),
     let page = harness.owner_tab("https://example.com/events").await?;
     let (run, _guard) = harness.run()?;
     let listen = json!({"call":{"api":"page.on","timeoutMs":0},
-        "page":handle(&page),"event":"console","on":true,"since":0});
+        "page":handle(&page),"event":"console","enabled":true,"since":0});
     value(harness.submit(&run, "events.listen", listen).await)?;
     harness.fake.page_event(
         page.tab,
@@ -3273,7 +3273,7 @@ async fn worker_bookkeeping_can_unsubscribe_after_its_page_closed() -> Result<()
                 "events.listen",
                 json!({
                     "call":{"api":"page.on","timeoutMs":0},
-                    "page":handle(&page),"event":"workerstate","on":true,"since":0
+                    "page":handle(&page),"event":"workerstate","enabled":true,"since":0
                 }),
             )
             .await,
@@ -3295,12 +3295,12 @@ async fn worker_bookkeeping_can_unsubscribe_after_its_page_closed() -> Result<()
             "events.listen",
             json!({
                 "call":{"api":"page.off","timeoutMs":0},
-                "page":null,"retiredTab":page.tab,"event":"workerstate","on":false,"since":0
+                "page":null,"retiredTab":page.tab,"event":"workerstate","enabled":false,"since":0
             }),
         )
         .await;
     assert!(reply.default_page.is_none(), "cleanup must not open a tab");
-    assert_eq!(value(reply)?, json!({}));
+    assert_eq!(value(reply)?, Value::Null);
     let refused = failure(
         harness
             .submit(
@@ -3308,7 +3308,7 @@ async fn worker_bookkeeping_can_unsubscribe_after_its_page_closed() -> Result<()
                 "events.listen",
                 json!({
                     "call":{"api":"page.on","timeoutMs":0},
-                    "page":null,"retiredTab":page.tab,"event":"workerstate","on":true,"since":0
+                    "page":null,"retiredTab":page.tab,"event":"workerstate","enabled":true,"since":0
                 }),
             )
             .await,
@@ -3930,5 +3930,126 @@ async fn an_evicted_pick_and_a_full_task_book_never_block_plain_opens() -> Resul
         value(reply)?;
     }
     assert_eq!(harness.fake.count("Browser.createTab"), 2);
+    Ok(())
+}
+
+/// The op `$eval` (`page.$eval`, `frame.$eval`, `elementHandle.$eval`) sends, and its input on
+/// `page`: a script that names the first heading, matched now.
+const DOLLAR_EVAL: &str = "page.evalOnSelector";
+
+fn dollar_eval(page: &PageRef) -> Value {
+    json!({
+        "target": {
+            "$neo": "locator",
+            "page": handle(page),
+            "frame": null,
+            "chunks": [{ "parts": [{ "name": "internal:role", "body": "heading", "source": "heading" }] }],
+            "display": "getByRole('heading')",
+        },
+        "strict": "firstMatch",
+        "selector": "h1",
+        "expression": "(el) => el.textContent",
+        "isFunction": true,
+        "arg": { "value": "{\"v\":\"undefined\"}", "handles": [] },
+    })
+}
+
+/// How the door answered one call: the value, or who failed, with what code and delivery, and the
+/// message with the op's own name and the lock's random id left out.
+fn door_outcome(reply: OpReply) -> String {
+    match reply.outcome {
+        Ok(value) => format!("value {value}"),
+        Err(failure) => {
+            let message = failure.error.message();
+            let message = message.strip_prefix(DOLLAR_EVAL).unwrap_or(message);
+            let message = message.split(" (lock ").next().unwrap_or(message);
+            format!(
+                "{:?} {:?} {:?} retryable={}: {message}",
+                failure.error.owner(),
+                failure.error.code(),
+                failure.delivery,
+                failure.retryable,
+            )
+        }
+    }
+}
+
+/// `$eval` meets the door as the main-world script it is: with no lock the door lets it through
+/// (and the fake browser's reply ends it in the crate), and an owner's lock refuses it with
+/// nothing sent, whether it lets reads through or blocks them.
+#[tokio::test]
+async fn tests_that_dollar_eval_meets_the_door_as_a_main_world_script() -> Result<(), Box<dyn Error>>
+{
+    let harness = Harness::new().await?;
+    let owners = harness.owner_tab("https://bank.example/").await?;
+    let (run, _guard) = harness.run()?;
+    let mut seen = Vec::new();
+    for reads in [None, Some(Reads::Allow), Some(Reads::Block)] {
+        let lock = match reads {
+            Some(reads) => Some(harness.lock(owners.tab, reads).await?),
+            None => None,
+        };
+        let reply = harness
+            .submit(&run, DOLLAR_EVAL, dollar_eval(&owners))
+            .await;
+        seen.push(format!("{reads:?}: {}", door_outcome(reply)));
+        if let Some(lock) = lock {
+            harness.locks.unlock_host(lock.id)?;
+        }
+    }
+    let owner_has_control = "Host ErrorCode(\"owner_has_control\") NotSent retryable=true: The \
+                             owner has control of this tab. Nothing was done. Wait for them to give \
+                             control back.";
+    assert_eq!(
+        seen,
+        [
+            "None: Neo ErrorCode(\"internal_error\") NotSent retryable=true: : missing field \
+             `executionContextId`"
+                .to_owned(),
+            format!("Some(Allow): {owner_has_control}"),
+            format!("Some(Block): {owner_has_control}"),
+        ]
+    );
+    Ok(())
+}
+
+/// What a running `$eval` read reaches the script as a running `locator.evaluate`'s would once the
+/// owner takes the tab: the door decides by the op's main-world mark, and both ops derive the same
+/// one. A lock that blocks reads withholds the value and the page's error alike; one that lets
+/// reads through releases the value.
+#[tokio::test]
+async fn tests_that_a_takeover_while_dollar_eval_runs_decides_as_for_locator_evaluate()
+-> Result<(), Box<dyn Error>> {
+    let harness = Harness::new().await?;
+    let owners = harness.owner_tab("https://bank.example/").await?;
+    let page_script = |name: &str| {
+        Op::from_name(name)
+            .map(|op| {
+                OpMarks::of(&op.spec(), "the run description's line")
+                    .spec
+                    .page_script
+            })
+            .ok_or(format!("{name} is an op"))
+    };
+    let dollar_eval = page_script("page.evalOnSelector")?;
+    assert_eq!(dollar_eval, page_script("locator.evaluate")?);
+    for answers in [Answers::Read, Answers::Throws] {
+        let (operation, reply) = answer_after_a_takeover(
+            &harness,
+            Takeover::of(&owners, Reads::Block),
+            dollar_eval,
+            answers,
+        )
+        .await?;
+        assert_withheld_by_the_lock(&harness, operation, reply, answers).await?;
+    }
+    let (_, reply) = answer_after_a_takeover(
+        &harness,
+        Takeover::of(&owners, Reads::Allow),
+        dollar_eval,
+        Answers::Read,
+    )
+    .await?;
+    assert_eq!(value(reply)?, json!({ "read": OWNERS_TEXT }));
     Ok(())
 }

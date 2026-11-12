@@ -163,8 +163,7 @@ own (plain Playwright), a script picks a task with `neo.createTask`/`neo.task(id
 `_meta["com.browseros.neo/run"].taskId` (a host's task; zuzu sends one) keeps that task's tab (#3452).
 That `_meta` taskId passes through untouched and the run shows it beside the client
 (`RunSummary.agentTaskId`). The tasks a run touched come back in the reply's
-`_meta["com.browseros.neo/run"].tasks`, kept in the log and in `GET /api/runs/:id` (`reply.meta`);
-the page does not show them. Headers that belong to one HTTP hop (`connection`,
+`_meta["com.browseros.neo/run"].tasks`; the viewer reads them into `RunSummary.tasks`. Headers that belong to one HTTP hop (`connection`,
 `transfer-encoding`, `content-length`, `host`) are set by each hop, as for any proxy. When the agent
 goes away mid-reply the viewer closes its request to Neo, which is how Neo's stateless MCP learns to
 stop the run.
@@ -175,9 +174,11 @@ Every call through the proxy is appended to one list, in the order it reached th
 agent sent it (owner, 2026-11-11: an agent that calls the MCP URL from a new curl or Python process
 each time is still one job). Each run shows its client as a quiet label: its `clientInfo`, an older
 client's `initialize`, or its User-Agent's product name, since several agents may share the list.
-A request's `_meta["com.browseros.neo/run"].taskId` shows beside the client too: it is a host's task
-for the run (it picks the run's tab), not a label. Tasks a script picks itself (`neo.task`) are not
-shown. A `taskId` tool argument is refused by Neo (`unknown field taskId`).
+The tasks a run touched show beside it as quiet chips, one hue per task so a task's runs stand out
+down the list: the ones its script created or picked (`neo.createTask`, `neo.task`, from the
+reply's `_meta`), and the host's task (the request's `_meta["com.browseros.neo/run"].taskId`, which
+picks the run's tab) marked "host". A closed row shows the first and "+N"; open, all of them. No
+menu or filter: one list on purpose. A `taskId` tool argument is refused by Neo (`unknown field taskId`).
 **Clear** (top bar, or `POST /api/clear`) empties it; the log before it is kept once, as
 `log.prev.jsonl`, in case of a mis-click. Clear leaves Neo's tabs as they are: each run that names
 no task leaves a tab, which Neo closes after 30 minutes idle. Stopping the viewer removes them only

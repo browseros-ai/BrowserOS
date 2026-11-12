@@ -36,10 +36,10 @@ export class Worker extends EventEmitter {
     const script = pageCall(api, 'frame', pageFunction, arg)
     if (this._closed)
       throw clientError(api, 'Target page, context or browser has been closed')
-    const { value } = await send['worker.evaluate'](
+    const value = await send['worker.evaluate'](
       site,
       { api, timeoutMs: 0 },
-      { page: await this.#page._brand(api), worker: this.#info.id, script },
+      { page: await this.#page._brand(api), worker: this.#info.id, ...script },
     )
     return fromPageValue(api, value)
   }

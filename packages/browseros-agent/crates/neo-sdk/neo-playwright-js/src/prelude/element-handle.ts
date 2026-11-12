@@ -295,7 +295,7 @@ export class ElementHandle extends EventEmitter {
     await send['locator.fill'](
       site,
       { api, timeoutMs: timeoutMs(api, timeout) },
-      { target: this._brand, strict: 'strict', value, options: picked },
+      { target: this._brand, strict: 'strict', value, ...picked },
     )
   }
 
@@ -311,7 +311,7 @@ export class ElementHandle extends EventEmitter {
     await send['locator.press'](
       site,
       { api, timeoutMs: timeoutMs(api, timeout) },
-      { target: this._brand, strict: 'strict', key, options: picked },
+      { target: this._brand, strict: 'strict', key, ...picked },
     )
   }
 
@@ -327,7 +327,7 @@ export class ElementHandle extends EventEmitter {
     await send['locator.pressSequentially'](
       site,
       { api, timeoutMs: timeoutMs(api, timeout) },
-      { target: this._brand, strict: 'strict', text, options: picked },
+      { target: this._brand, strict: 'strict', text, ...picked },
     )
   }
 
@@ -349,8 +349,8 @@ export class ElementHandle extends EventEmitter {
       {
         target: this._brand,
         strict: 'strict',
-        options: converted.options,
-        elements: converted.elements,
+        options: converted.options.length ? converted.options : undefined,
+        elements: converted.elements.length ? converted.elements : undefined,
         ...picked,
       },
     )
@@ -533,12 +533,15 @@ export class ElementHandle extends EventEmitter {
       await send['locator.evaluate'](
         site,
         { api, timeoutMs: timeoutMs(api, 0) },
-        { target: this._brand, strict: 'strict', script },
+        { target: this._brand, strict: 'strict', ...script },
       ),
     )
   }
 
-  /** `pageFunction(element, arg)` on the first match under this handle's node now, or upstream's failure. */
+  /**
+   * `pageFunction(element, arg)` on the first match under this handle's node now, or upstream's
+   * failure: upstream's `ElementHandle.evalOnSelector`, whose params `page.evalOnSelector` carries.
+   */
   async $eval(
     selector: string,
     pageFunction: unknown,
@@ -547,15 +550,14 @@ export class ElementHandle extends EventEmitter {
     const site = captureSite()
     const api = 'elementHandle.$eval'
     const script = pageCall(api, 'query', pageFunction, arg)
-    const value = await send['locator.evaluate'](
+    const value = await send['page.evalOnSelector'](
       site,
       { api, timeoutMs: timeoutMs(api, 0) },
       {
         target: this.#rooted(api, selector),
         strict: 'firstMatch',
-        noWait: true,
         selector,
-        script,
+        ...script,
       },
     )
     return fromPageValue(api, value)
@@ -573,7 +575,7 @@ export class ElementHandle extends EventEmitter {
     const value = await send['locator.evaluateAll'](
       site,
       { api, timeoutMs: timeoutMs(api, 0) },
-      { target: this.#rooted(api, selector), script },
+      { target: this.#rooted(api, selector), ...script },
     )
     return fromPageValue(api, value)
   }

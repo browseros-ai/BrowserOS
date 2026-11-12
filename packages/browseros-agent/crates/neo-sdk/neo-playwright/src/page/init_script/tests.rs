@@ -53,7 +53,7 @@ fn sent(connection: &TestConnection, method: &str) -> Result<Vec<Value>, Box<dyn
 }
 
 fn page_input(source: &str) -> Value {
-    json!({ "call": {}, "page": { "$neo": "page", "tab": 7 }, "script": { "source": source } })
+    json!({ "call": {}, "page": { "$neo": "page", "tab": 7 }, "source": source })
 }
 
 /// A context script reaches a tab at the run's first write to it, once however many writes
@@ -71,10 +71,14 @@ async fn tests_that_a_context_script_reaches_a_written_tab_once_and_leaves_with_
         &playwright,
         &env,
         "context.addInitScript",
-        json!({ "call": {}, "script": { "source": "window.c = 1" } }),
+        json!({ "call": {}, "source": "window.c = 1" }),
     )
     .await?;
-    assert_eq!(context, json!({ "id": 1 }));
+    assert_eq!(
+        context,
+        json!(1),
+        "the id, upstream's one result field unwrapped"
+    );
     assert!(sent(&connection, ADD)?.is_empty(), "no tab is touched yet");
 
     invoke(
@@ -100,7 +104,7 @@ async fn tests_that_a_context_script_reaches_a_written_tab_once_and_leaves_with_
         page_input("window.q = 1"),
     )
     .await?;
-    assert_eq!((first, second), (json!({ "id": 2 }), json!({ "id": 3 })));
+    assert_eq!((first, second), (json!(2), json!(3)));
     assert_eq!(
         sent(&connection, ADD)?,
         vec![
@@ -168,7 +172,7 @@ async fn tests_that_a_refused_tab_gets_no_script() -> TestResult {
         &playwright,
         &env,
         "context.addInitScript",
-        json!({ "call": {}, "script": { "source": "window.c = 1" } }),
+        json!({ "call": {}, "source": "window.c = 1" }),
     )
     .await;
     assert!(context.is_err(), "the run's own recheck refuses it too");
@@ -205,7 +209,7 @@ async fn tests_that_a_script_disposed_after_a_writes_snapshot_is_not_added() -> 
             &playwright,
             &env,
             "context.addInitScript",
-            json!({ "call": {}, "script": { "source": source } }),
+            json!({ "call": {}, "source": source }),
         )
         .await?;
     }

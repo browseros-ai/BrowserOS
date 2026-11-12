@@ -1,4 +1,4 @@
-//! The saved before-build boundary fixture exercises typed decoders and reply encoding. The
+//! The saved boundary fixture pins the aligned requests and the original reply bytes. The
 //! prelude test checks full JSON strings and option getter order; live suites cover effects.
 
 use std::collections::BTreeSet;
@@ -66,8 +66,8 @@ fn input(exchange: &Exchange) -> Result<Value, Box<dyn Error>> {
 }
 
 #[tokio::test]
-async fn tests_that_form_inputs_and_reply_bytes_match_the_before_recording()
--> Result<(), Box<dyn Error>> {
+async fn tests_that_form_inputs_and_reply_bytes_match_the_recording() -> Result<(), Box<dyn Error>>
+{
     let recording: Recording =
         serde_json::from_str(include_str!("../../tests/data/form-wire.json"))?;
     let mut seen = BTreeSet::new();
@@ -112,11 +112,11 @@ async fn tests_that_form_inputs_and_reply_bytes_match_the_before_recording()
 fn tests_that_defaulted_form_flags_reject_null_and_allow_omission() -> Result<(), Box<dyn Error>> {
     let recording: Recording =
         serde_json::from_str(include_str!("../../tests/data/form-wire.json"))?;
-    for (op, bag, flag) in [
-        (ActionOp::Fill, Some("options"), "force"),
-        (ActionOp::Press, Some("options"), "noWaitAfter"),
-        (ActionOp::SelectOption, None, "force"),
-        (ActionOp::SelectText, None, "force"),
+    for (op, flag) in [
+        (ActionOp::Fill, "force"),
+        (ActionOp::Press, "noWaitAfter"),
+        (ActionOp::SelectOption, "force"),
+        (ActionOp::SelectText, "force"),
     ] {
         let exchange = recording
             .scenarios
@@ -125,26 +125,73 @@ fn tests_that_defaulted_form_flags_reject_null_and_allow_omission() -> Result<()
             .find(|e| e.op == op.spec().name)
             .ok_or("missing recorded op")?;
         let mut args = input(exchange)?;
-        let fields = match bag {
-            Some(key) => args.get_mut(key).ok_or("missing bag")?,
-            None => &mut args,
-        }
-        .as_object_mut()
-        .ok_or("object fields")?;
+        let fields = args.as_object_mut().ok_or("object fields")?;
         fields.insert(flag.to_owned(), Value::Null);
         assert!(
             decode_form(op, args.clone()).is_err(),
             "{} accepted null for {flag}",
             op.spec().name
         );
-        let fields = match bag {
-            Some(key) => args.get_mut(key).ok_or("missing bag")?,
-            None => &mut args,
-        }
-        .as_object_mut()
-        .ok_or("object fields")?;
+        let fields = args.as_object_mut().ok_or("object fields")?;
         fields.remove(flag);
         decode_form(op, args)?;
+    }
+    Ok(())
+}
+
+#[test]
+fn tests_that_flat_form_inputs_reject_the_old_bag() -> Result<(), Box<dyn Error>> {
+    let recording: Recording =
+        serde_json::from_str(include_str!("../../tests/data/form-wire.json"))?;
+    for op in [ActionOp::Fill, ActionOp::Press, ActionOp::PressSequentially] {
+        let exchange = recording
+            .scenarios
+            .iter()
+            .flat_map(|s| &s.exchanges)
+            .find(|e| e.op == op.spec().name)
+            .ok_or("missing recorded op")?;
+        let mut args = input(exchange)?;
+        decode_form(op, args.clone())?;
+        args.as_object_mut()
+            .ok_or("object args")?
+            .insert("options".to_owned(), serde_json::json!({}));
+        assert!(
+            decode_form(op, args).is_err(),
+            "{} accepted a bag",
+            op.spec().name
+        );
+    }
+    Ok(())
+}
+
+/// Empty-list omission clears the selection, but null remains an invalid request. Pin both
+/// lists independently so a future optional decoder cannot silently turn null into a clear.
+#[test]
+fn tests_that_selection_lists_default_only_when_absent() -> Result<(), Box<dyn Error>> {
+    let recording: Recording =
+        serde_json::from_str(include_str!("../../tests/data/form-wire.json"))?;
+    let exchange = recording
+        .scenarios
+        .iter()
+        .flat_map(|s| &s.exchanges)
+        .find(|e| e.op == ActionOp::SelectOption.spec().name)
+        .ok_or("missing selection recording")?;
+    let mut args = input(exchange)?;
+    for key in ["options", "elements"] {
+        args.as_object_mut().ok_or("object args")?.remove(key);
+    }
+    let empty: SelectOptionInput = serde_json::from_value(args.clone())?;
+    assert!(empty.options.unwrap_or_default().is_empty());
+    assert!(empty.elements.unwrap_or_default().is_empty());
+    for key in ["options", "elements"] {
+        let mut present = args.clone();
+        present[key] = serde_json::json!([]);
+        decode_form(ActionOp::SelectOption, present.clone())?;
+        present[key] = Value::Null;
+        assert!(
+            decode_form(ActionOp::SelectOption, present).is_err(),
+            "{key} accepted null"
+        );
     }
     Ok(())
 }
