@@ -200,6 +200,8 @@ components:
       $ref: ./schemas/sessions.yaml#/SessionBrowserTab
     SessionTokenUsage:
       $ref: ./schemas/sessions.yaml#/SessionTokenUsage
+    SessionUltrafastRun:
+      $ref: ./schemas/sessions.yaml#/SessionUltrafastRun
     SessionSummary:
       $ref: ./schemas/sessions.yaml#/SessionSummary
     SessionList:

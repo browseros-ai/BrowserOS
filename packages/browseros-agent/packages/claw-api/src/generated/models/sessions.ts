@@ -435,6 +435,12 @@ export interface SessionSummary {
      */
     tokenUsage?: SessionTokenUsage;
     /**
+     * Present only when an ultrafast skill ran to the end without the agent in this session.
+     * @type {SessionUltrafastRun}
+     * @memberof SessionSummary
+     */
+    ultrafast?: SessionUltrafastRun;
+    /**
      * Present only on summaries returned by an explicit `status=live` list query.
      * @type {LiveSessionState}
      * @memberof SessionSummary
@@ -466,6 +472,32 @@ export interface SessionTokenUsage {
      * @memberof SessionTokenUsage
      */
     totalTokenEstimate: number;
+}
+
+/**
+ * What neo did on its own while ultrafast skills ran without the agent in this session, summed across every such run.
+ * @export
+ * @interface SessionUltrafastRun
+ */
+export interface SessionUltrafastRun {
+    /**
+     * Time the ultrafast skill runs took, in milliseconds.
+     * @type {number}
+     * @memberof SessionUltrafastRun
+     */
+    durationMs: number;
+    /**
+     * Pages neo read itself during those runs.
+     * @type {number}
+     * @memberof SessionUltrafastRun
+     */
+    pagesRead: number;
+    /**
+     * Estimated tokens of page text neo read itself that never went to the agent.
+     * @type {number}
+     * @memberof SessionUltrafastRun
+     */
+    tokensSaved: number;
 }
 
 /**

@@ -8,6 +8,7 @@ pub mod session_efficiency_stats;
 pub mod session_tabs;
 pub mod skills;
 pub mod tool_calls_daily;
+pub mod ultrafast_runs;
 
 pub use audit_log::AuditLog;
 pub use recording_index::{

@@ -360,6 +360,9 @@ pub struct SessionSummary {
     /// Estimated token consumption of this session's tool traffic, summed across all dispatches and refreshed live as they land. Present only when the session has dispatches and every one carries token-estimator v1; absent for legacy or otherwise unmeasured sessions.
     #[serde(rename = "tokenUsage", skip_serializing_if = "Option::is_none")]
     pub token_usage: Option<Box<models::SessionTokenUsage>>,
+    /// Present only when an ultrafast skill ran to the end without the agent in this session.
+    #[serde(rename = "ultrafast", skip_serializing_if = "Option::is_none")]
+    pub ultrafast: Option<Box<models::SessionUltrafastRun>>,
     /// Present only on summaries returned by an explicit `status=live` list query.
     #[serde(rename = "live", skip_serializing_if = "Option::is_none")]
     pub live: Option<Box<models::LiveSessionState>>,
@@ -397,6 +400,7 @@ impl SessionSummary {
             error_count,
             latest_screenshot_id: None,
             token_usage: None,
+            ultrafast: None,
             live: None,
         }
     }
@@ -427,6 +431,31 @@ impl SessionTokenUsage {
             input_token_estimate,
             output_token_estimate,
             total_token_estimate,
+        }
+    }
+}
+
+/// SessionUltrafastRun : What neo did on its own while ultrafast skills ran without the agent in this session, summed across every such run.
+#[derive(Clone, Default, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SessionUltrafastRun {
+    /// Time the ultrafast skill runs took, in milliseconds.
+    #[serde(rename = "durationMs")]
+    pub duration_ms: i64,
+    /// Pages neo read itself during those runs.
+    #[serde(rename = "pagesRead")]
+    pub pages_read: i64,
+    /// Estimated tokens of page text neo read itself that never went to the agent.
+    #[serde(rename = "tokensSaved")]
+    pub tokens_saved: i64,
+}
+
+impl SessionUltrafastRun {
+    /// What neo did on its own while ultrafast skills ran without the agent in this session, summed across every such run.
+    pub fn new(duration_ms: i64, pages_read: i64, tokens_saved: i64) -> SessionUltrafastRun {
+        SessionUltrafastRun {
+            duration_ms,
+            pages_read,
+            tokens_saved,
         }
     }
 }

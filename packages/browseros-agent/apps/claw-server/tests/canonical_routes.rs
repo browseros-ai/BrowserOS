@@ -620,6 +620,120 @@ async fn seed_dispatch_with_estimates(
         .await?)
 }
 
+fn ultrafast_dispatch(
+    tool_name: &str,
+    created_at: i64,
+    duration_ms: i64,
+    structured: &Value,
+    dispatch_id: DispatchId,
+    parent_dispatch_id: Option<DispatchId>,
+    output_tokens: i64,
+) -> RecordToolDispatchInput {
+    RecordToolDispatchInput {
+        agent_id: "claude-ultrafast".to_string(),
+        slug: "claude".to_string(),
+        agent_label: "claude".to_string(),
+        session_id: "ultrafast-session".to_string(),
+        tool_name: tool_name.to_string(),
+        page_id: None,
+        tab_id: None,
+        target_id: None,
+        url: None,
+        title: None,
+        args_json: bounded_args_json(&json!({})),
+        result_meta: result_meta(false, false, structured, 1),
+        duration_ms,
+        dispatch_id,
+        created_at: Some(created_at),
+        parent_dispatch_id,
+        tool_input_token_estimate: 5,
+        tool_output_token_estimate: output_tokens,
+        token_estimator_version: 1,
+    }
+}
+
+#[tokio::test]
+async fn sessions_say_what_an_ultrafast_skill_run_did() -> anyhow::Result<()> {
+    let app = test_app().await?;
+    let done = json!({ "status": "done", "output": {}, "steps": 3, "durationMs": 15_000 });
+    let script = DispatchId::new();
+    let rows = [
+        ultrafast_dispatch(
+            "run_skill",
+            1_000,
+            15_354,
+            &done,
+            DispatchId::new(),
+            None,
+            1_701,
+        ),
+        ultrafast_dispatch(
+            "run",
+            1_002,
+            15_349,
+            &json!({ "ok": true, "value": {}, "logs": [] }),
+            script.clone(),
+            None,
+            1_861,
+        ),
+        ultrafast_dispatch(
+            "read",
+            3_000,
+            10,
+            &json!({}),
+            DispatchId::new(),
+            Some(script.clone()),
+            6_778,
+        ),
+        ultrafast_dispatch(
+            "read",
+            5_000,
+            10,
+            &json!({}),
+            DispatchId::new(),
+            Some(script),
+            7_001,
+        ),
+    ];
+    for row in rows {
+        app.state.audit_log.record_tool_dispatch(row).await?;
+    }
+    app.state
+        .audit_log
+        .record_session_end("ultrafast-session", "closed", None)
+        .await?;
+    seed_dispatch(&app, "ordinary-session").await?;
+
+    let expected = json!({ "durationMs": 15_354, "pagesRead": 2, "tokensSaved": 13_779 });
+    let (status, _, bytes) = request(
+        &app.router,
+        "GET",
+        "/api/v1/sessions/ultrafast-session",
+        None,
+        Body::empty(),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(json_body(&bytes)?["session"]["ultrafast"], expected);
+
+    let (status, _, bytes) =
+        request(&app.router, "GET", "/api/v1/sessions", None, Body::empty()).await?;
+    assert_eq!(status, StatusCode::OK);
+    let body = json_body(&bytes)?;
+    let items = body["items"]
+        .as_array()
+        .ok_or_else(|| anyhow::anyhow!("items missing"))?;
+    let ultrafast = |id: &str| {
+        items
+            .iter()
+            .find(|item| item["sessionId"] == id)
+            .map(|item| item.get("ultrafast").cloned())
+    };
+    assert_eq!(ultrafast("ultrafast-session"), Some(Some(expected)));
+    assert_eq!(ultrafast("ordinary-session"), Some(None));
+    Ok(())
+}
+
 #[tokio::test]
 async fn retired_rest_routes_are_unmounted() -> anyhow::Result<()> {
     let app = test_app().await?;

@@ -5,7 +5,10 @@
 use super::{error, internal};
 use crate::{
     AppState,
-    db::audit_log::{ListTasksQuery, TaskDetail, TaskStatus, TaskSummary, ToolDispatchRow},
+    db::{
+        audit_log::{ListTasksQuery, TaskDetail, TaskStatus, TaskSummary, ToolDispatchRow},
+        ultrafast_runs::{UltrafastRunStats, ultrafast_run_stats},
+    },
     error::{CanonicalError, RequestId},
     ids::SessionId,
     services::{
@@ -24,6 +27,7 @@ use axum::{
 use claw_api::models::{
     CancelSessionResponse, Dispatch, ResolveHelpRequest, ResolveHelpResponse, SessionBrowserTab,
     SessionDetail, SessionList, SessionStatus, SessionSummary, SessionTokenUsage,
+    SessionUltrafastRun,
 };
 use std::{collections::HashMap, sync::Arc};
 
@@ -104,13 +108,25 @@ pub(super) async fn list(
         .await
         .map_err(|source| internal(&request_id, source))?;
     let live = live_sessions(&state).await;
+    let session_ids = result
+        .tasks
+        .iter()
+        .map(|task| task.session_id.clone())
+        .collect::<Vec<_>>();
+    let ultrafast = state
+        .audit_log
+        .ultrafast_run_stats(&session_ids)
+        .await
+        .map_err(|source| internal(&request_id, source))?;
     // profile_id lives on the live session's agent, and a done filter
     // must reconcile persisted-live rows. Both apply after pagination,
     // so a filtered page may come back short rather than backfilled.
     let mut items = Vec::with_capacity(result.tasks.len());
     for task in result.tasks {
         let session = live.get(task.session_id.as_str());
-        let summary = contract_summary(task, session).await;
+        let stats = ultrafast.get(task.session_id.as_str()).copied();
+        let mut summary = contract_summary(task, session).await;
+        summary.ultrafast = stats.map(contract_ultrafast);
         if response_status_filter
             .is_none_or(|status| summary.status == contract_status(status, true))
             && query
@@ -225,12 +241,15 @@ async fn contract_detail(task: TaskDetail, live: Option<&Arc<Session>>) -> Sessi
     let profile_id = live
         .and_then(|session| session.agent().profile_id())
         .map(|profile_id| profile_id.as_str().to_string());
+    let ultrafast = ultrafast_run_stats(&task.dispatches).map(contract_ultrafast);
     let dispatches = task
         .dispatches
         .into_iter()
         .map(|row| contract_dispatch(row, &screenshots, profile_id.as_ref()))
         .collect();
-    SessionDetail::new(contract_summary(task.summary, live).await, dispatches)
+    let mut summary = contract_summary(task.summary, live).await;
+    summary.ultrafast = ultrafast;
+    SessionDetail::new(summary, dispatches)
 }
 
 async fn contract_summary(task: TaskSummary, live: Option<&Arc<Session>>) -> SessionSummary {
@@ -308,6 +327,14 @@ fn contract_token_usage(task: &TaskSummary) -> Option<Box<SessionTokenUsage>> {
     let output = js_safe_token_estimate(task.tool_output_token_estimate);
     let total = js_safe_token_estimate(input.saturating_add(output));
     Some(Box::new(SessionTokenUsage::new(input, output, total)))
+}
+
+fn contract_ultrafast(stats: UltrafastRunStats) -> Box<SessionUltrafastRun> {
+    Box::new(SessionUltrafastRun::new(
+        stats.duration_ms.max(0),
+        stats.pages_read.max(0),
+        js_safe_token_estimate(stats.tokens_saved),
+    ))
 }
 
 /// Clamps a token total into `[0, 2^53-1]` so it survives a round trip through a JavaScript client.

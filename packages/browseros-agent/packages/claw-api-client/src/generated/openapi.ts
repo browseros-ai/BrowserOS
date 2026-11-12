@@ -1080,6 +1080,24 @@ export interface components {
        */
       totalTokenEstimate: number
     }
+    /** @description What neo did on its own while ultrafast skills ran without the agent in this session, summed across every such run. */
+    SessionUltrafastRun: {
+      /**
+       * Format: int64
+       * @description Time the ultrafast skill runs took, in milliseconds.
+       */
+      durationMs: number
+      /**
+       * Format: int64
+       * @description Pages neo read itself during those runs.
+       */
+      pagesRead: number
+      /**
+       * Format: int64
+       * @description Estimated tokens of page text neo read itself that never went to the agent.
+       */
+      tokensSaved: number
+    }
     SessionSummary: {
       sessionId: string
       profileId?: string
@@ -1107,6 +1125,8 @@ export interface components {
       latestScreenshotId?: number
       /** @description Estimated token consumption of this session's tool traffic, summed across all dispatches and refreshed live as they land. Present only when the session has dispatches and every one carries token-estimator v1; absent for legacy or otherwise unmeasured sessions. */
       tokenUsage?: components['schemas']['SessionTokenUsage']
+      /** @description Present only when an ultrafast skill ran to the end without the agent in this session. */
+      ultrafast?: components['schemas']['SessionUltrafastRun']
       /** @description Present only on summaries returned by an explicit `status=live` list query. */
       live?: components['schemas']['LiveSessionState']
     }
