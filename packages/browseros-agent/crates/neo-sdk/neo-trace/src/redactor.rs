@@ -42,6 +42,24 @@ impl Default for RedactionLimits {
     }
 }
 
+impl RedactionLimits {
+    /// The defaults, with an operation's arguments and result, and any one string inside them,
+    /// raised to `bytes` where that is larger. A development setting (`CLAW_TRACE_VALUE_BYTES`
+    /// on the server): a tool that shows whole values, such as the Neo viewer, asks for one;
+    /// production leaves it unset, so its trace stays at the defaults. Nothing else changes:
+    /// host data, text, notes and code keep their own limits.
+    #[must_use]
+    pub fn with_value_bytes(bytes: usize) -> Self {
+        let base = Self::default();
+        Self {
+            string: base.string.max(bytes),
+            args: base.args.max(bytes),
+            result: base.result.max(bytes),
+            ..base
+        }
+    }
+}
+
 /// Whether a value had to be cut to fit.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Truncation {
@@ -246,7 +264,7 @@ fn clip(text: &str, limit: usize) -> (String, bool) {
 
 #[cfg(test)]
 mod tests {
-    use super::{RedactionLimits, Redactor, Truncation};
+    use super::{Bounded, RedactionLimits, Redactor, Truncation};
     use serde_json::{Value, json};
 
     fn redactor(limits: RedactionLimits) -> Redactor {
@@ -323,6 +341,37 @@ mod tests {
         let text = bounded.value.to_string();
         assert!(text.len() <= 2048 + 64, "{} bytes", text.len());
         assert!(serde_json::from_str::<Value>(&text).is_ok());
+    }
+
+    #[test]
+    fn a_value_setting_keeps_a_snapshot_whole_and_leaves_everything_else_alone() {
+        // A whole-page snapshot's text, as `page.snapshotPending` records it: one long string.
+        let text = "- link \"Story\" [ref=e1]\n".repeat(1_000);
+        let args = json!({ "text": text, "form": "text" });
+        let defaults = redactor(RedactionLimits::default());
+        assert_eq!(defaults.args(&args).truncation, Truncation::Cut);
+
+        let limits = RedactionLimits::with_value_bytes(256 * 1024);
+        let raised = redactor(limits);
+        assert_eq!(
+            raised.args(&args),
+            Bounded {
+                value: args.clone(),
+                truncation: Truncation::Whole,
+            }
+        );
+        assert_eq!(raised.result(&json!(text)).truncation, Truncation::Whole);
+        assert_eq!(
+            raised.result(&json!("x".repeat(300 * 1024))).truncation,
+            Truncation::Cut
+        );
+        assert_eq!(limits.text, RedactionLimits::default().text);
+        assert_eq!(limits.host_data, RedactionLimits::default().host_data);
+        // Never below the defaults.
+        assert_eq!(
+            RedactionLimits::with_value_bytes(16),
+            RedactionLimits::default()
+        );
     }
 
     #[test]

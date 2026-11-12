@@ -43,7 +43,9 @@ function Table() {
       onSort={setSort}
       openIds={new Set()}
       selectedId={null}
+      selectedOperation={null}
       onRow={() => {}}
+      onSelectOperation={() => {}}
       onOpenFull={() => {}}
       nowMs={Date.parse(runs[3]?.sentAt ?? '') + 1_300}
     />

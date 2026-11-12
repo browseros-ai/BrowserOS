@@ -85,6 +85,7 @@ viewer and a trace UI over the host API, and `dev.sh run` to send scripts. `smok
 | `CLAW_HOST_TOKEN_FILE` | unset | The host API's bearer token, 32 or more visible ASCII bytes, readable by Neo's uid. Unset: no host API; `run` still works. |
 | `CLAW_HOST_SOCKET` | `/run/neo/host.sock` | Moves the socket. Keep it off a Docker Desktop file share, which cannot hold a socket. |
 | `CLAW_HOST_TCP` | unset | Development only: also serves the host API on this TCP address, token only. |
+| `CLAW_TRACE_VALUE_BYTES` | unset | Development only: the trace keeps an operation's arguments and result whole up to this many bytes (the Neo viewer sets 262144). Unset: results up to 2 KiB and arguments up to 4 KiB, as production keeps them. |
 | `NEO_MCP_REMOTE` | `false` | `false`: the browser's MCP ports refuse every peer but loopback. `true` is needed to publish 9010, and admits every peer that can route to the container. |
 | `BROWSEROS_CAPSOLVER_API_KEY_FILE`, `BROWSEROS_2CAPTCHA_API_KEY_FILE` | `/home/neo/.config/browseros/captcha/capsolver-api-key`, `…/2captcha-api-key` | CAPTCHA provider keys, read if the files exist. The image ships none ([CAPTCHA keys](#captcha-keys)). |
 | `NEO_SCREEN`, `NEO_SANDBOX`, `NEO_SOFTWARE_GRAPHICS`, `NEO_DISABLE_BROWSEROS_EXTENSIONS`, `NEO_ARGS`, `NEO_DOWNLOAD_DIR`, `TZ` | as the Neo image | The same meaning as in [the Neo image's README](../../../../../browseros/docker/neo/README.md). The browser always runs with `--disable-back-forward-cache`, as Playwright launches Chromium; `NEO_ARGS` adds to it. |

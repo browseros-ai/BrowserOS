@@ -103,3 +103,77 @@ export function namesWithCounts(operations: NeoOperation[]): string {
     .map(([name, count]) => (count > 1 ? `${name} ×${count}` : name))
     .join(', ')
 }
+
+/**
+ * Neo's own bookkeeping, which no line of the script calls: the snapshot baseline's two
+ * operations (the prelude records the text a snapshot returned, and reads the stored one for a
+ * delta) and the event pump's. Named, because Neo records them as ordinary built-ins; its
+ * `neo_only` rows (neo-playwright's op table) also hold Neo's own versions of script calls,
+ * such as `context.pages`, so that mark would say too much.
+ */
+const NEO_BOOKKEEPING = new Set([
+  'page.snapshotPending',
+  'page.snapshotBaseline',
+  'events.listen',
+  'events.next',
+])
+
+export function isNeoInternal(operation: NeoOperation): boolean {
+  return NEO_BOOKKEEPING.has(operation.name)
+}
+
+/**
+ * Where a call sits: its display line (null for one not on a line) and, among the calls of the
+ * same name there, which one it is. A line in a loop runs again for each pass, so its second
+ * `context.newPage` is call 2 of 3.
+ */
+export interface CallPlace {
+  line: number | null
+  call: number
+  calls: number
+}
+
+export function callPlaces(placed: PlacedOperations): Map<string, CallPlace> {
+  const places = new Map<string, CallPlace>()
+  const number = (operations: NeoOperation[], line: number | null) => {
+    const totals = new Map<string, number>()
+    for (const operation of operations) {
+      totals.set(operation.name, (totals.get(operation.name) ?? 0) + 1)
+    }
+    const seen = new Map<string, number>()
+    for (const operation of operations) {
+      const call = (seen.get(operation.name) ?? 0) + 1
+      seen.set(operation.name, call)
+      places.set(operation.id, {
+        line,
+        call,
+        calls: totals.get(operation.name) ?? 1,
+      })
+    }
+  }
+  for (const [line, operations] of placed.byLine) number(operations, line)
+  number(placed.unplaced, null)
+  return places
+}
+
+/** `2nd`, `3rd`, `11th`, `21st`. */
+export function ordinal(n: number): string {
+  const teen = n % 100 >= 11 && n % 100 <= 13
+  const suffix = teen ? 'th' : (['th', 'st', 'nd', 'rd'][n % 10] ?? 'th')
+  return `${n}${suffix}`
+}
+
+/** `line 7 · call 2 of 3`, `line 7`, `not on a line`. */
+export function placeText(place: CallPlace): string {
+  const where = place.line === null ? 'not on a line' : `line ${place.line}`
+  return place.calls > 1
+    ? `${where} · call ${place.call} of ${place.calls}`
+    : where
+}
+
+/** The operation the right panel shows: which run, which operation, and where it sits. */
+export interface OperationSelection {
+  runId: string
+  operationId: string
+  place: CallPlace
+}

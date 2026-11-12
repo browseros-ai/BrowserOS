@@ -1,9 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test'
+import { useState } from 'react'
 import type { RunDetail, RunSummary } from '../../shared/api'
 import { formatCode } from '../../shared/code-format'
 import { fire, installDom, type TestDom } from '../test-support/dom'
 import { operation, record } from '../test-support/operations'
 import { runDetail, runSummary } from '../test-support/runs'
+import type { OperationSelection } from './operations'
 import { RunBlock } from './RunBlock'
 
 const code = [
@@ -55,23 +57,38 @@ function detailWith(run: RunSummary, neo: RunDetail['neo']): RunDetail {
   return { ...runDetail(run), neo }
 }
 
+/** Every selection the block made, newest last: what the screen would show on the right. */
+let selections: Array<OperationSelection | null> = []
+
+/** The block with its selection held as the screen holds it. */
+function Block({ run, detail }: { run: RunSummary; detail: RunDetail | null }) {
+  const [selection, setSelection] = useState<OperationSelection | null>(null)
+  return (
+    <RunBlock
+      run={run}
+      formatted={formatCode(run.code)}
+      detail={detail}
+      selected
+      selectedOperationId={selection?.operationId ?? null}
+      onSelect={(next) => {
+        selections.push(next)
+        setSelection(next)
+      }}
+      onOpenFull={() => {}}
+    />
+  )
+}
+
 describe("an open run's methods", () => {
   let dom: TestDom
   beforeEach(async () => {
     dom = await installDom()
+    selections = []
   })
   afterEach(() => dom.restore())
 
   const show = (run: RunSummary, detail: RunDetail | null) =>
-    dom.render(
-      <RunBlock
-        run={run}
-        formatted={formatCode(run.code)}
-        detail={detail}
-        selected
-        onOpenFull={() => {}}
-      />,
-    )
+    dom.render(<Block run={run} detail={detail} />)
   const methods = () =>
     [...dom.container.querySelectorAll('button[data-operation]')].map((row) =>
       row.getAttribute('aria-label'),
@@ -91,9 +108,10 @@ describe("an open run's methods", () => {
       'locator.fill on line 1',
       'locator.click on line 2',
       'locator.count on line 3',
-      // Further calls on the same line have rows of their own, without the code.
+      // Further calls on the same line have rows of their own, without the code; a method the
+      // line calls again says which call it is.
       'locator.textContent',
-      'locator.textContent',
+      'locator.textContent, 2nd call',
     ])
     expect(dom.container.textContent).toContain(
       '2 more calls on this line: show',
@@ -109,10 +127,12 @@ describe("an open run's methods", () => {
     expect(dom.container.textContent).toContain('+24 ms')
 
     const group = button(/not on a line/)
-    expect(group.textContent).toContain('2 operations not on a line')
+    expect(group.textContent).toContain(
+      'Neo internal: 2 operations not on a line',
+    )
     expect(group.textContent).toContain('events.next, page.frames')
     await dom.interact(() => fire(group, 'click'))
-    expect(methods()).toContain('events.next')
+    expect(methods()).toContain('events.next, Neo internal')
   })
 
   it('folds a line only past four calls: one folded call would save nothing', async () => {
@@ -134,22 +154,26 @@ describe("an open run's methods", () => {
     )
   })
 
-  it("opens a method's arguments, result and outcome, saying when Neo truncated them", async () => {
+  it("selects a method: its arguments and outcome open under it, its result's size points right", async () => {
     const run = runSummary(3, { code })
     await show(run, detailWith(run, record([fill, failedClick], 100)))
     const row = dom.container.querySelector('[data-operation="5"]') as Element
     await dom.interact(() => fire(row, 'click'))
     expect(row.getAttribute('aria-expanded')).toBe('true')
+    expect(selections.at(-1)).toEqual({
+      runId: run.id,
+      operationId: 'neo-run.5',
+      place: { line: 1, call: 1, calls: 1 },
+    })
     const text = dom.container.textContent ?? ''
     expect(text).toContain("target  locator('aria-ref=e5')")
     expect(text).toContain('value   "Grace Hopper"')
     expect(text).toContain('timeout 5000')
     expect(text).toContain(
-      "Truncated: Neo keeps an operation's arguments up to 4 KiB",
+      "Truncated: Neo kept only the start of this operation's arguments.",
     )
-    expect(text).toContain(
-      "Truncated: Neo keeps an operation's result up to 2 KiB",
-    )
+    expect(text).toContain('10 chars, ≈2 tok, shown on the right')
+    expect(text).toContain('Truncated: Neo kept only the start of this result.')
     expect(text).toContain('ok, delivery done')
 
     await dom.interact(() =>
@@ -163,6 +187,91 @@ describe("an open run's methods", () => {
     expect(error).toContain("getByRole('button') resolved to 2 elements")
     // One method open at a time.
     expect(row.getAttribute('aria-expanded')).toBe('false')
+  })
+
+  it('a line in a loop counts its calls, and each later call says which it is', async () => {
+    // The owner's loop: three pages, each opened, loaded and read on lines 2 to 4.
+    const loopCode = [
+      'for (const url of urls) {',
+      '  const p = await context.newPage();',
+      '  await p.goto(url);',
+      '  values.push(await p.evaluate(() => document.title));',
+      '}',
+    ].join('\n')
+    const calls = [0, 1, 2].flatMap((pass) => [
+      operation(10 + pass * 3, 'context.newPage', {
+        line: 2,
+        startOffsetMs: 100 + pass * 400,
+      }),
+      operation(11 + pass * 3, 'page.goto', {
+        line: 3,
+        startOffsetMs: 110 + pass * 400,
+      }),
+      operation(12 + pass * 3, 'page.evaluate', {
+        line: 4,
+        startOffsetMs: 300 + pass * 400,
+      }),
+    ])
+    const run = runSummary(8, { code: loopCode })
+    await show(run, detailWith(run, record(calls, 1300)))
+    expect(methods()).toEqual([
+      'context.newPage on line 2',
+      'context.newPage, 2nd call',
+      'context.newPage, 3rd call',
+      'page.goto on line 3',
+      'page.goto, 2nd call',
+      'page.goto, 3rd call',
+      'page.evaluate on line 4',
+      'page.evaluate, 2nd call',
+      'page.evaluate, 3rd call',
+    ])
+    const counts = [
+      ...dom.container.querySelectorAll('[title^="This line ran"]'),
+    ]
+    expect(counts.map((badge) => badge.textContent)).toEqual(['×3', '×3', '×3'])
+    // Start is the start, measured from the run's start: the header says so, and each offset.
+    const start = dom.container.querySelector(
+      '[title^="When the call started"]',
+    )
+    expect(start?.textContent).toContain('Start')
+    const second = dom.container.querySelector(
+      '[data-operation="13"]',
+    ) as Element
+    expect(second.textContent).toContain('+500 ms')
+    expect(
+      second.querySelector('[title^="Started"]')?.getAttribute('title'),
+    ).toBe('Started 500 ms after the run started.')
+    await dom.interact(() => fire(second, 'click'))
+    expect(selections.at(-1)?.place).toEqual({ line: 2, call: 2, calls: 3 })
+  })
+
+  it("labels Neo's own bookkeeping on a line, and the Model read row selects the reply again", async () => {
+    const snapshotCode = 'return await page.ariaSnapshot({ text: true })'
+    const operations = [
+      operation(4, 'page.ariaSnapshot', { line: 1, startOffsetMs: 20 }),
+      operation(5, 'page.snapshotPending', { line: 1, startOffsetMs: 80 }),
+    ]
+    const run = runSummary(9, { code: snapshotCode, reply: '"x"' })
+    await show(run, detailWith(run, record(operations, 100)))
+    expect(methods()).toEqual([
+      'page.ariaSnapshot on line 1',
+      'page.snapshotPending, Neo internal',
+    ])
+    await dom.interact(() =>
+      fire(
+        dom.container.querySelector('[data-operation="4"]') as Element,
+        'click',
+      ),
+    )
+    await dom.interact(() => fire(button(/^Model read$/), 'click'))
+    expect(selections).toEqual([
+      {
+        runId: run.id,
+        operationId: 'neo-run.4',
+        place: { line: 1, call: 1, calls: 1 },
+      },
+      null,
+    ])
   })
 
   it('lays a one-line minified script out by statement, each with its own methods', async () => {

@@ -1,15 +1,25 @@
 /**
- * "Open full": one run's reply in a large pop-up, with line numbers, find, copy, and previous /
- * next output across the finished runs. It is a native modal `<dialog>`: the page behind
+ * "Open full": one run's reply, or one call's output (`operation-output.ts`), in a large pop-up,
+ * with line numbers, find, copy, and previous / next: across the finished runs for a reply,
+ * through the run's calls in order for a call. It is a native modal `<dialog>`: the page behind
  * it is inert, focus stays inside, Escape closes it, and focus returns to what opened it.
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react'
-import type { RunSummary } from '../../shared/api'
+import type { NeoOperation, RunDetail, RunSummary } from '../../shared/api'
+import { formatCode } from '../../shared/code-format'
 import { useRunDetail } from '../use-viewer'
 import { findMatches, markLine, rangesByLine, stepMatch } from './find'
+import { operationOutput } from './operation-output'
+import {
+  callPlaces,
+  isNeoInternal,
+  type OperationSelection,
+  placeOperations,
+  placeText,
+} from './operations'
 import { formattedLines, noReplyReason, rawLines, replyParts } from './reply'
-import { lineText } from './text-lines'
+import { codeLines, lineText } from './text-lines'
 import { LineSpans, REPLY_VIEWS, type ReplyView, Switch } from './ui'
 import { clock, count, plural } from './units'
 
@@ -31,11 +41,16 @@ export function FullOutput({
   run,
   runs,
   onRun,
+  operation,
+  onOperation,
   onClose,
 }: {
   run: RunSummary
   runs: RunSummary[]
   onRun: (run: RunSummary) => void
+  /** A call of `run` to show instead of its reply. */
+  operation: OperationSelection | null
+  onOperation: (selection: OperationSelection) => void
   onClose: () => void
 }) {
   const dialog = useRef<HTMLDialogElement>(null)
@@ -48,14 +63,22 @@ export function FullOutput({
 
   const fetched = useRunDetail(run, true)
   const detail = fetched?.id === run.id ? fetched : null
+  const call = useMemo(
+    () => (operation && detail ? callIn(run, detail.neo, operation) : null),
+    [run, detail, operation],
+  )
   const lines = useMemo(
     () =>
-      detail
-        ? view === 'formatted'
-          ? formattedLines(detail)
-          : rawLines(detail)
-        : [],
-    [detail, view],
+      !detail
+        ? []
+        : call
+          ? view === 'formatted'
+            ? call.output.formatted
+            : call.output.raw
+          : view === 'formatted'
+            ? formattedLines(detail)
+            : rawLines(detail),
+    [detail, view, call],
   )
   const texts = useMemo(() => lines.map(lineText), [lines])
   const matches = useMemo(() => findMatches(texts, query), [texts, query])
@@ -73,7 +96,7 @@ export function FullOutput({
 
   // A new query, view or output starts again at its first match.
   // biome-ignore lint/correctness/useExhaustiveDependencies: these are the triggers, not inputs.
-  useEffect(() => setCurrent(0), [query, view, run.id])
+  useEffect(() => setCurrent(0), [query, view, run.id, operation?.operationId])
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: scroll whenever the current match moves.
   useEffect(() => {
@@ -93,11 +116,19 @@ export function FullOutput({
 
   const text = detail?.reply.text ?? null
   const consoleLines = text === null ? 0 : replyParts(text).console.length
+  const frame = framing(run, call, view)
+  const toPrevious = call
+    ? call.previous && (() => call.previous && onOperation(call.previous))
+    : previous && (() => onRun(previous))
+  const toNext = call
+    ? call.next && (() => call.next && onOperation(call.next))
+    : next && (() => onRun(next))
+  const { title } = frame
 
   return (
     <dialog
       ref={dialog}
-      aria-label={`What the model read, run ${run.seq}`}
+      aria-label={`${title}, run ${run.seq}`}
       onClose={onClose}
       onKeyDown={(event) => {
         if ((event.metaKey || event.ctrlKey) && event.key === 'f') {
@@ -109,12 +140,8 @@ export function FullOutput({
       className="m-auto h-[min(760px,calc(100vh-40px))] w-[min(1000px,calc(100vw-40px))] max-w-none flex-col overflow-clip rounded-[10px] bg-white p-0 font-plex text-ink text-xs leading-4 shadow-[0_24px_60px_#0D173047] backdrop:bg-[#0D173052] open:flex"
     >
       <header className="flex h-[54px] shrink-0 items-center gap-3 border-line border-b pr-4 pl-5">
-        <h2 className="font-semibold text-base leading-5">
-          What the model read
-        </h2>
-        <span className="text-[13px] text-ink-2 leading-4">
-          run {run.seq}, {clock(run.sentAt, true)}
-        </span>
+        <h2 className="font-semibold text-base leading-5">{title}</h2>
+        <span className="text-[13px] text-ink-2 leading-4">{frame.where}</span>
         <span className="flex-1" />
         <Switch
           label="Output view"
@@ -184,7 +211,18 @@ export function FullOutput({
         </button>
       </header>
       <div className="flex h-9 shrink-0 items-center gap-[18px] border-line-2 border-b bg-panel-2 px-5 text-ink-2">
-        {run.replySize ? (
+        {call ? (
+          <>
+            <span className="text-ink">
+              <span className="font-code text-neo">
+                ≈{count(Math.floor(frame.shownText.length / 4))}
+              </span>{' '}
+              tok
+            </span>
+            <span>{count(frame.shownText.length)} chars</span>
+            <span>{plural(lines.length, 'line')}</span>
+          </>
+        ) : run.replySize ? (
           <>
             <span className="text-ink">
               <span className="font-code text-neo">
@@ -232,28 +270,92 @@ export function FullOutput({
         </div>
       </div>
       <footer className="flex h-[46px] shrink-0 items-center gap-3 border-line border-t px-5">
-        <p className="min-w-0 truncate text-ink-2">
-          The exact reply, captured by the viewer. Neo's own record keeps only
-          the first 2 KiB.
+        <p className="min-w-0 truncate text-ink-2" title={frame.footer}>
+          {frame.footer}
         </p>
         <span className="flex-1" />
         <button
           type="button"
-          disabled={!previous}
-          onClick={() => previous && onRun(previous)}
+          disabled={!toPrevious}
+          onClick={() => toPrevious?.()}
           className="shrink-0 rounded-md border border-control px-2.5 py-[5px] font-medium hover:bg-panel disabled:opacity-40"
         >
-          Previous output
+          Previous {frame.unit}
         </button>
         <button
           type="button"
-          disabled={!next}
-          onClick={() => next && onRun(next)}
+          disabled={!toNext}
+          onClick={() => toNext?.()}
           className="shrink-0 rounded-md border border-control px-2.5 py-[5px] font-medium hover:bg-panel disabled:opacity-40"
         >
-          Next output
+          Next {frame.unit}
         </button>
       </footer>
     </dialog>
   )
+}
+
+type Call = NonNullable<ReturnType<typeof callIn>>
+
+/** What the pop-up says: a call's name, place, size and source, or the reply's. */
+function framing(run: RunSummary, call: Call | null, view: ReplyView) {
+  if (!call) {
+    return {
+      title: 'What the model read',
+      where: `run ${run.seq}, ${clock(run.sentAt, true)}`,
+      shownText: '',
+      footer: 'The exact reply, captured by the viewer.',
+      unit: 'output',
+    }
+  }
+  const formatted = view === 'formatted'
+  const internal = isNeoInternal(call.operation) ? ['Neo internal'] : []
+  return {
+    title: call.operation.name,
+    where: [`run ${run.seq}`, placeText(call.place), ...internal].join(' · '),
+    shownText: formatted ? call.output.formattedText : call.output.rawText,
+    footer: `${formatted ? call.output.source : "Neo's record of the result, as JSON."}${call.output.cut ? ' Neo kept only the start of it.' : ''}`,
+    unit: 'call',
+  }
+}
+
+/**
+ * The selected call in the run's record, with its output, where it sits, and the calls before
+ * and after it in the order they started. Places are worked out as the run's block does.
+ */
+function callIn(
+  run: RunSummary,
+  record: RunDetail['neo'],
+  selection: OperationSelection,
+) {
+  if (!record) return null
+  const operation = record.operations.find(
+    (candidate) => candidate.id === selection.operationId,
+  )
+  if (!operation) return null
+  const formatted = formatCode(run.code)
+  const places = callPlaces(
+    placeOperations(
+      record,
+      codeLines(formatted.text).length,
+      formatted.lineOfSite,
+    ),
+  )
+  const ordered = [...record.operations].sort((a, b) => a.seq - b.seq)
+  const at = ordered.indexOf(operation)
+  const selectionOf = (candidate: NeoOperation | undefined) =>
+    candidate
+      ? {
+          runId: run.id,
+          operationId: candidate.id,
+          place: places.get(candidate.id) ?? { line: null, call: 1, calls: 1 },
+        }
+      : null
+  return {
+    operation,
+    output: operationOutput(operation, record.operations),
+    place: places.get(operation.id) ?? selection.place,
+    previous: selectionOf(ordered[at - 1]),
+    next: selectionOf(ordered[at + 1]),
+  }
 }

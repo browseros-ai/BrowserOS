@@ -46,6 +46,13 @@ const LABEL = 'com.browseros.neo-viewer'
 const MCP_PORT = 9010
 const HOST_API_PORT = 9300
 const TOKEN_PATH = '/run/neo-viewer/host-token'
+/**
+ * `CLAW_TRACE_VALUE_BYTES`: how much of an operation's arguments and result Neo's trace keeps
+ * whole. Its default is 2 KiB (results) and 4 KiB (arguments), so a snapshot's text, the very
+ * thing the operation panel shows, was cut. The viewer asks for Neo's own reply limit, 256 KiB,
+ * so an operation is kept as whole as a reply. An image older than the setting ignores it.
+ */
+export const TRACE_VALUE_BYTES = 256 * 1024
 const READY_TIMEOUT_MS = 180_000
 
 export interface CommandResult {
@@ -562,6 +569,8 @@ export async function startContainer(
     `CLAW_HOST_TCP=0.0.0.0:${HOST_API_PORT}`,
     '-e',
     `CLAW_HOST_TOKEN_FILE=${TOKEN_PATH}`,
+    '-e',
+    `CLAW_TRACE_VALUE_BYTES=${TRACE_VALUE_BYTES}`,
     '-v',
     `${options.tokenFile}:${TOKEN_PATH}:ro`,
     '-v',

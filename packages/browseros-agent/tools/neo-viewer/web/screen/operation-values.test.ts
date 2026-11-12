@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'bun:test'
-import { argumentLines, handleText, resultLines } from './operation-values'
+import { argumentLines, handleText } from './operation-values'
 import { lineText } from './text-lines'
 
-const text = (lines: ReturnType<typeof resultLines>) => lines.map(lineText)
+const text = (lines: ReturnType<typeof argumentLines>) => lines.map(lineText)
 
 describe("a method's arguments and result", () => {
   it('shows a locator by its display, the timeout as timeout, the rest as recorded', () => {
@@ -38,21 +38,11 @@ describe("a method's arguments and result", () => {
     expect(argumentLines('context.newPage', {})).toEqual([])
   })
 
-  it('shows a result as JSON, text line by line, and a handle in words', () => {
-    expect(text(resultLines(['us']))).toEqual(['[', '  "us"', ']'])
-    expect(
-      text(resultLines('- heading "Shipping"\n- button "Place order"')),
-    ).toEqual(['- heading "Shipping"', '- button "Place order"'])
-    expect(text(resultLines(null))).toEqual(['null'])
+  it('names a handle in words, and nothing else', () => {
     expect(handleText({ $neo: 'page', tab: 18 })).toBe('page (tab 18)')
     expect(handleText({ name: 'x' })).toBeNull()
     // Tagged data is not a handle: a screenshot's bytes stay as recorded.
-    expect(text(resultLines({ $neo: 'bytes', base64: 'iVBORw0K' }))).toEqual([
-      '{',
-      '  "$neo": "bytes",',
-      '  "base64": "iVBORw0K"',
-      '}',
-    ])
+    expect(handleText({ $neo: 'bytes', base64: 'iVBORw0K' })).toBeNull()
   })
 
   it('shows handles nested in arrays and objects by their display', () => {
