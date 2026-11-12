@@ -360,7 +360,7 @@ async fn drive(rig: &Rig) -> TestResult {
         Some(
             "- heading \"Orders\" [level=1]\n- text: Two buttons, one frame.\n\
              - button \"Save order\" [ref]\n- button \"Cancel\" [ref]\n\
-             - iframe \"Details\" [ref]:\n  - text: Inside the frame\n  \
+             - iframe [ref]:\n  - text: Inside the frame\n  \
              - button \"Frame action\" [ref]"
         ),
         "the default snapshot is the v1 text: {value}"

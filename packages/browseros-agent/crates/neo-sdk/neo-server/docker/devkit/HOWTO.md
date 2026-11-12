@@ -83,7 +83,7 @@ run 01a1acf4-cf1f-7102-8a53-f7b39569a66e ok effects=done 73ms tabs=[1276814799]
 - heading "Orders" [level=1]
 - button "Save order" [ref=e3]
 - button "Cancel" [ref=e4]
-- iframe "Details" [ref=e5]:
+- iframe [ref=e5]:
   - text: Inside the frame
   - button "Frame action" [ref=f1e3]
 ```
