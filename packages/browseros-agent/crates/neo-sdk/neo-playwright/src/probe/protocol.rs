@@ -134,7 +134,10 @@ mod tests {
             .finish()
             .err()
             .ok_or("two Rust types under one TypeScript name must be refused")?;
-        assert!(collision.to_string().contains("Collision"));
+        assert!(
+            collision.to_string().contains("Collision"),
+            "collision diagnostics must identify the conflicting TypeScript name: {collision}"
+        );
         Ok(())
     }
 
