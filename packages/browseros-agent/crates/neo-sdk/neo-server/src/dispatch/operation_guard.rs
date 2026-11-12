@@ -351,6 +351,7 @@ fn settle(
         pages,
         observed,
         default_page,
+        picked_page: state.bound_page(),
         pumped,
         completed_publications: state.take_publications(),
     });

@@ -3491,7 +3491,7 @@ async fn a_picked_task_reuses_its_last_used_tab_then_newest_then_opens_one()
             .submit(&run, "neo.task", json!({ "id": task["id"] }))
             .await;
         assert_eq!(
-            picked.default_page.as_ref(),
+            picked.picked_page.as_ref(),
             Some(expected),
             "the pick binds `page` to the tab its first action would take"
         );
@@ -3511,7 +3511,7 @@ async fn a_picked_task_reuses_its_last_used_tab_then_newest_then_opens_one()
         .submit(&empty, "neo.task", json!({ "id": task["id"] }))
         .await;
     assert_eq!(
-        picked.default_page, None,
+        picked.picked_page, None,
         "a task with no open tab leaves `page` to open one at its first action"
     );
     value(picked)?;
@@ -3523,23 +3523,30 @@ async fn a_picked_task_reuses_its_last_used_tab_then_newest_then_opens_one()
     Ok(())
 }
 
+/// An earlier run's task and its one tab. A plain data bag.
+struct TaskTab {
+    /// `neo.createTask`'s value, `{ id, pages }`.
+    task: Value,
+    page: PageRef,
+}
+
 /// An earlier run's task with one tab showing `url`, as core's cache now lists it.
-async fn task_on(harness: &Harness, url: &str) -> Result<(Value, PageRef), Box<dyn Error>> {
+async fn task_on(harness: &Harness, url: &str) -> Result<TaskTab, Box<dyn Error>> {
     let (creator, _guard) = harness.run()?;
     let task = value(harness.submit(&creator, "neo.createTask", json!({})).await)?;
-    let tab = page_of(&value(
+    let page = page_of(&value(
         harness.submit(&creator, "context.newPage", json!({})).await,
     )?)?;
-    assert!(harness.fake.navigate_tab(tab.tab, url, "Task"));
-    harness.listed(tab.tab).await?;
-    Ok((task, tab))
+    assert!(harness.fake.navigate_tab(page.tab, url, "Task"));
+    harness.listed(page.tab).await?;
+    Ok(TaskTab { task, page })
 }
 
 #[tokio::test]
 async fn a_task_pick_binds_the_runs_page_and_its_fact_passes_the_read_rules()
 -> Result<(), Box<dyn Error>> {
     let harness = Harness::new().await?;
-    let (task, tab) = task_on(&harness, "https://task.example/held").await?;
+    let TaskTab { task, page: tab } = task_on(&harness, "https://task.example/held").await?;
     let opened = harness.fake.count("Browser.createTab");
     // Reads blocked: `page` still becomes the task's tab, with nothing of it to read.
     let lock = harness.lock(tab.tab, Reads::Block).await?;
@@ -3547,7 +3554,7 @@ async fn a_task_pick_binds_the_runs_page_and_its_fact_passes_the_read_rules()
     let picked = harness
         .submit(&blocked, "neo.task", json!({ "id": task["id"] }))
         .await;
-    assert_eq!(picked.default_page.as_ref(), Some(&tab));
+    assert_eq!(picked.picked_page.as_ref(), Some(&tab));
     assert!(
         picked.pages.iter().all(|fact| fact.tab != tab.tab),
         "a tab held with blocked reads gives no fact: {:?}",
@@ -3561,7 +3568,7 @@ async fn a_task_pick_binds_the_runs_page_and_its_fact_passes_the_read_rules()
     let picked = harness
         .submit(&allowed, "neo.task", json!({ "id": task["id"] }))
         .await;
-    assert_eq!(picked.default_page.as_ref(), Some(&tab));
+    assert_eq!(picked.picked_page.as_ref(), Some(&tab));
     let fact = picked
         .pages
         .iter()
@@ -3588,8 +3595,11 @@ async fn a_task_pick_binds_the_runs_page_and_its_fact_passes_the_read_rules()
 #[tokio::test]
 async fn the_first_tab_a_runs_page_gets_holds_for_the_run() -> Result<(), Box<dyn Error>> {
     let harness = Harness::new().await?;
-    let (first, first_tab) = task_on(&harness, "https://first.example/").await?;
-    let (second, _second_tab) = task_on(&harness, "https://second.example/").await?;
+    let TaskTab {
+        task: first,
+        page: first_tab,
+    } = task_on(&harness, "https://first.example/").await?;
+    let second = task_on(&harness, "https://second.example/").await?.task;
     let lazy = json!({ "page": { "$neo": "page", "tab": null } });
     let (run, _guard) = harness.run()?;
     let empty = value(harness.submit(&run, "neo.createTask", json!({})).await)?;
@@ -3597,18 +3607,18 @@ async fn the_first_tab_a_runs_page_gets_holds_for_the_run() -> Result<(), Box<dy
     let none = harness
         .submit(&run, "neo.task", json!({ "id": empty["id"] }))
         .await;
-    assert_eq!(none.default_page, None);
+    assert_eq!(none.picked_page, None);
     value(none)?;
     let bound = harness
         .submit(&run, "neo.task", json!({ "id": first["id"] }))
         .await;
-    assert_eq!(bound.default_page.as_ref(), Some(&first_tab));
+    assert_eq!(bound.picked_page.as_ref(), Some(&first_tab));
     value(bound)?;
     // Later picks steer new tabs, never the bound `page`.
     let later = harness
         .submit(&run, "neo.task", json!({ "id": second["id"] }))
         .await;
-    assert_eq!(later.default_page, None);
+    assert_eq!(later.picked_page, None);
     value(later)?;
     let created = value(harness.submit(&run, "neo.createTask", json!({})).await)?;
     let acted = harness.submit(&run, "page.opener", lazy.clone()).await;
@@ -3625,7 +3635,7 @@ async fn the_first_tab_a_runs_page_gets_holds_for_the_run() -> Result<(), Box<dy
     let picked = harness
         .submit(&resolved, "neo.task", json!({ "id": first["id"] }))
         .await;
-    assert_eq!(picked.default_page, None);
+    assert_eq!(picked.picked_page, None);
     value(picked)?;
     let again = harness.submit(&resolved, "page.opener", lazy).await;
     assert_eq!(again.default_page, Some(fresh_tab));
@@ -3640,7 +3650,7 @@ async fn the_first_tab_a_runs_page_gets_holds_for_the_run() -> Result<(), Box<dy
 fn a_task_picks_page_getters_are_its_tabs_before_any_action() -> Result<(), TestError> {
     on_neo_runtime(async {
         let harness = Harness::new().await.map_err(|error| error.to_string())?;
-        let (task, tab) = task_on(&harness, "https://task.example/at-once")
+        let TaskTab { task, page: tab } = task_on(&harness, "https://task.example/at-once")
             .await
             .map_err(|error| error.to_string())?;
         let id = task["id"].as_str().ok_or("a task id")?;

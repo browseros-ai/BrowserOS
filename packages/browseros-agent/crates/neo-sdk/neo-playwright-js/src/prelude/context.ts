@@ -47,13 +47,13 @@ export class BrowserContext extends EventEmitter {
   /** The run's `page` while it has no tab; the reply that names its tab clears it. */
   #unopened: Page | null = null
   /**
-   * The Page the run's `page` replaced as its tab's entry, when that reply named a tab the
-   * realm already had an object for: the init lists every tab, and the script may hold that
-   * object (from `context.newPage()` or `context.pages()`) when `neo.task` binds `page` to
-   * it. Lookups by tab, results and events name the run's `page` from then on, but the old
-   * object keeps its tab's facts, so its `url()` and `isClosed()` do not freeze.
+   * The Page objects that reached the script: listed by `pages()`, or named by an op result,
+   * an event or an element handle. Binding the run's `page` to a tab replaces that tab's entry,
+   * and events, binding calls and worker facts reach the entry alone, so a replaced object the
+   * script holds would lose its listeners, exposed bindings and workers. A task pick therefore
+   * binds `page` only to a tab whose object is not among these (`_applyReply`).
    */
-  #displaced: Page | null = null
+  readonly #handed = new WeakSet<Page>()
   /** Set once the run's page exists: a page first seen after it is working (`Page._working`). */
   #started = false
 
@@ -64,6 +64,13 @@ export class BrowserContext extends EventEmitter {
   }
 
   pages(): Page[] {
+    const pages = this._knownPages()
+    for (const page of pages) this.#handed.add(page)
+    return pages
+  }
+
+  /** `pages()` for the prelude's own reads, which hand no Page to the script. */
+  _knownPages(): Page[] {
     return [...this.#byTab.values()].filter((page) => !page.isClosed())
   }
 
@@ -176,7 +183,7 @@ export class BrowserContext extends EventEmitter {
   }
 
   toJSON(): { pages: number } {
-    return { pages: this.pages().length }
+    return { pages: this._knownPages().length }
   }
 
   protected override _checkEvent(event: string | symbol): void {
@@ -204,21 +211,24 @@ export class BrowserContext extends EventEmitter {
       this.#byTab.set(fact.tab, page)
     }
     page._applyFact(fact, at, approved)
-    const displaced = this.#displaced
-    if (displaced?._tab === fact.tab && displaced !== page) {
-      // Worker facts start worker monitoring for the object they reach: the tab's entry only.
-      const { workers: _workers, ...shared } = fact
-      displaced._applyFact(shared, at, approved)
-    }
     return page
   }
 
-  /** Results and historical events contribute identity and initial metadata. */
+  /**
+   * Results and historical events contribute identity and initial metadata. The Page goes to
+   * the script, as a result's value or an event's argument.
+   */
   _pageFromResult(value: unknown, url?: string): Page | null {
     const fact = pageFact(value)
     if (!fact) return null
     if (url !== undefined) fact.url = url
-    return this._pageFor(fact)
+    return this._handOut(this._pageFor(fact))
+  }
+
+  /** Records that `page` reached the script (`#handed`). */
+  _handOut(page: Page): Page {
+    this.#handed.add(page)
+    return page
   }
 
   /**
@@ -246,7 +256,7 @@ export class BrowserContext extends EventEmitter {
    * navigation ends (`Page._navigationsInFlight`).
    */
   async _refreshWorkingFrames(api: string): Promise<void> {
-    const working = this.pages().filter(
+    const working = this._knownPages().filter(
       (page) =>
         page._working && page._tab !== null && page._navigationsInFlight === 0,
     )
@@ -255,23 +265,27 @@ export class BrowserContext extends EventEmitter {
     )
   }
 
-  /**
-   * One reply, before its value is revived. The run's page takes its tab first, so the facts
-   * and a result that name that tab find the script's `page` object instead of making a
-   * second one.
-   */
   _settleWorkerFacts(at: Observation | null): void {
     for (const page of this.#byTab.values()) page._settleWorkerFacts(at)
   }
 
-  _applyReply({ pages, defaultPage, observed }: Reply): void {
+  /**
+   * One reply, before its value is revived. The run's page takes its tab first, so the facts
+   * and a result that name that tab find the script's `page` object instead of making a
+   * second one. `defaultPage` always binds it: the door ran one of `page`'s own ops on that
+   * tab. `pickedPage` (a task pick) binds it only while that tab's object has not reached the
+   * script; otherwise `page` stays unopened until its first action, whose `defaultPage` names
+   * the same tab, so the object the script holds keeps working until the script uses `page`.
+   */
+  _applyReply({ pages, defaultPage, pickedPage, observed }: Reply): void {
     const page = this.#unopened
-    if (defaultPage && page) {
+    const held = pickedPage ? this.#byTab.get(pickedPage.tab) : undefined
+    const bind =
+      defaultPage ?? (held && this.#handed.has(held) ? null : pickedPage)
+    if (bind && page) {
       this.#unopened = null
-      page._tab = defaultPage.tab
-      const held = this.#byTab.get(defaultPage.tab)
-      if (held && held !== page) this.#displaced = held
-      this.#byTab.set(defaultPage.tab, page)
+      page._tab = bind.tab
+      this.#byTab.set(bind.tab, page)
     }
     const approved = new Map<number, number>()
     for (const close of observed?.closes ?? [])

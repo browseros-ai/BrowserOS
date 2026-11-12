@@ -96,7 +96,7 @@ export async function exposeOnContext(
 ): Promise<Disposable> {
   if (context._exposed.has(name))
     throw clientError(api, `Function "${name}" has been already registered`)
-  if (context.pages().some((page) => page._exposed.has(name)))
+  if (context._knownPages().some((page) => page._exposed.has(name)))
     throw clientError(
       api,
       `Function "${name}" has been already registered in one of the pages`,

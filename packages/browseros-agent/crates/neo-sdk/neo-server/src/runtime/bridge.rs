@@ -95,8 +95,8 @@ impl NavigationReceipt {
 }
 
 /// The JS wire form of an `OpReply`: `{"ok": value, "pages": […]}` or `{"err": {…}, "pages":
-/// […]}`, plus `defaultPage` once the call opened or bound the run's own page and `pumped` once
-/// an op ordered its answer after event-pump replies. Protocol translation only: the door decided
+/// […]}`, plus `defaultPage` once the call opened the run's own page, `pickedPage` once a task
+/// pick bound it, and `pumped` once an op ordered its answer after event-pump replies. Protocol translation only: the door decided
 /// every value in it. Every field after `ok`/`err` is the same in both shapes.
 //
 // The bootstrap reads `ok` and `err`; bridge.ts reads the rest (`onReply`). Each optional
@@ -116,11 +116,15 @@ pub(crate) enum Envelope<'a> {
         #[serde(skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
         observed: Option<&'a Observation>,
-        /// The run's own page, on the reply of the call that opened it or bound it to a tab
-        /// (`neo.task`'s pick).
+        /// The run's own page, on the reply of the call that opened it.
         #[serde(rename = "defaultPage", skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
         default_page: Option<DefaultPage>,
+        /// The tab a task pick bound the run's own page to (`OpReply::picked_page`): the
+        /// prelude's `page` takes it unless the script already holds another Page for it.
+        #[serde(rename = "pickedPage", skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        picked_page: Option<DefaultPage>,
         /// `OpReply::pumped`: the prelude dispatches that many event-pump replies before it
         /// hands the script this one. Absent for none.
         #[serde(skip_serializing_if = "is_zero")]
@@ -149,6 +153,10 @@ pub(crate) enum Envelope<'a> {
         #[serde(rename = "defaultPage", skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
         default_page: Option<DefaultPage>,
+        /// As for `Ok`.
+        #[serde(rename = "pickedPage", skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        picked_page: Option<DefaultPage>,
         /// As for `Ok`.
         #[serde(skip_serializing_if = "is_zero")]
         #[ts(optional = nullable)]
@@ -398,12 +406,14 @@ fn navigation_publication(name: &str, input: &Value) -> Option<NavigationPublica
 pub(crate) fn envelope(reply: &OpReply, completed_navigations: &[u64]) -> String {
     let pumped = reply.pumped;
     let default_page = reply.default_page.as_ref().map(DefaultPage::from);
+    let picked_page = reply.picked_page.as_ref().map(DefaultPage::from);
     let envelope = match &reply.outcome {
         Ok(ok) => Envelope::Ok {
             ok,
             pages: &reply.pages,
             observed: reply.observed.as_ref(),
             default_page,
+            picked_page,
             pumped,
             completed_navigations,
         },
@@ -412,6 +422,7 @@ pub(crate) fn envelope(reply: &OpReply, completed_navigations: &[u64]) -> String
             pages: &reply.pages,
             observed: reply.observed.as_ref(),
             default_page,
+            picked_page,
             pumped,
             completed_navigations,
         },

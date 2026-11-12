@@ -71,6 +71,7 @@ fn reply_ok() -> String {
             }],
         }),
         default_page: Some(page(3)),
+        picked_page: Some(page(3)),
         pumped: 2,
         ..bare(Ok(json!("Facts")))
     };
@@ -95,6 +96,7 @@ fn reply_err(operation: OperationId) -> String {
             closes: Vec::new(),
         }),
         default_page: Some(page(3)),
+        picked_page: Some(page(3)),
         pumped: 1,
         ..bare(Err(OpFailure {
             error,
@@ -127,6 +129,7 @@ fn bare(outcome: Result<Value, OpFailure>) -> OpReply {
         pages: Vec::new(),
         observed: None,
         default_page: None,
+        picked_page: None,
         pumped: 0,
         completed_publications: Vec::new(),
     }

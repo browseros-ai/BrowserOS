@@ -13,9 +13,10 @@
  * open tab, else another open tab, else a new one. `context.newPage()` opens in the task.
  * The latest task pick wins. Popups join their opener's task. You may declare `const page`.
  * Built-in `page` keeps the first tab it gets for the whole run. `await neo.task(id)` gives it
- * the task's open tab at once, so `page.url()` is that tab's on the next line. Otherwise
- * (no task, or none of its tabs open) it picks its tab at its first action: before that,
- * `page.tabId` and `page.taskId` are null and `page.url()` is 'about:blank'.
+ * the task's open tab at once, so `page.url()` is that tab's on the next line. Otherwise (no
+ * task, none of its tabs open, or this run already holds that tab's Page, say from
+ * `context.pages()`) it takes its tab at its first action: before that, `page.tabId` and
+ * `page.taskId` are null and `page.url()` is 'about:blank'.
  * Tab ids here are short for reading; real ones are large numbers, e.g. 1157427185.
  *
  * The reply is what you return, plus console lines and existing notes. Return `task.id`
@@ -85,8 +86,9 @@ declare global {
 
   const neo: Neo
   /** The picked task's last-used open tab, else another open tab, else a new one; without a
-   * task, a NEW tab with no task. `neo.task(id)` binds it to an open tab of the task at once;
-   * otherwise it picks at its first action. Once it has a tab, it keeps it for the run. */
+   * task, a NEW tab with no task. `neo.task(id)` binds it to an open tab of the task at once,
+   * unless this run already holds that tab's Page; otherwise it picks at its first action.
+   * Once it has a tab, it keeps it for the run. */
   const page: Page
   /** `pages()` lists every tab. `newPage()` opens in the picked task, or with no task. */
   const context: pw.BrowserContext

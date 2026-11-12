@@ -30,7 +30,7 @@
         const pages = new Map()
         for (const listed of [
           ...this.#ordered,
-          ...context.pages().filter((page) => page.taskId === this.#id),
+          ...context._knownPages().filter((page) => page.taskId === this.#id),
           ...this.#added,
         ]) {
           const page = context._pageFromResult(listed) ?? listed

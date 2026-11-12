@@ -111,8 +111,8 @@ pub(super) struct OpState {
     after_pump: AtomicU64,
     /// Run-local completion identities reported by a method, carried as reply metadata only.
     completed_publications: Mutex<Vec<u64>>,
-    /// The run's lazy page, when this op bound it ([`OpCtx::bind_run_page`]). The reply names
-    /// it as `defaultPage`, as it does for an op that opened the page.
+    /// The run's lazy page, when this op bound it ([`OpCtx::bind_run_page`]). The reply offers
+    /// it to the prelude as `pickedPage` (`OpReply::picked_page`).
     bound_page: OnceLock<PageRef>,
 }
 
@@ -237,7 +237,7 @@ impl<M> OpCtx<M> {
     }
 
     /// Makes `page` the run's built-in page if nothing gave it a tab yet
-    /// ([`RunCtx::bind_default_page`]); the reply then names it as `defaultPage`, which binds the
+    /// ([`RunCtx::bind_default_page`]); the reply then offers it as `pickedPage`, which binds the
     /// prelude's `page` object before the script's next statement. The page's URL and title reach
     /// the script only as a reported page's fact (`report_page`), past the read rules like
     /// every reply's, so a tab whose reads are blocked binds with nothing to read.
