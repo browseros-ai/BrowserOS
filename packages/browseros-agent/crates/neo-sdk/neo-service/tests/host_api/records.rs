@@ -568,3 +568,69 @@ async fn operation_routes_return_script_sites_and_omit_missing_sites() -> TestRe
     assert_eq!(tail.body["operations"][0]["site"], operation.body["site"]);
     Ok(())
 }
+
+/// Every operation route says whether an ended operation ran script in the page's main world,
+/// true or false, and leaves `mainWorld` out while one runs, rather than guessing.
+#[tokio::test]
+async fn operation_routes_say_which_operations_ran_in_the_main_world() -> TestResult {
+    let h = harness().await?;
+    let run = start_run(&h.sink, Start::default());
+    let evaluate = OperationId::new(run, 1);
+    let click = OperationId::new(run, 2);
+    let running = OperationId::new(run, 3);
+    for (id, name) in [
+        (evaluate, "page.evaluate"),
+        (click, "locator.click"),
+        (running, "page.goto"),
+    ] {
+        op_started(
+            &h.sink,
+            id,
+            Op {
+                name,
+                ..Op::write(3, 1)
+            },
+        );
+    }
+    for (id, main_world) in [(evaluate, true), (click, false)] {
+        h.sink.op_ended(OperationEnded {
+            id,
+            outcome: Outcome::Ok,
+            delivery: Delivery::Done,
+            sent_at: Some(at(2)),
+            result: None,
+            error: None,
+            page_after: None,
+            main_world,
+            at: at(3),
+        });
+    }
+    h.flushed().await?;
+    let detail = h.get(&format!("/v1/runs/{run}")).await?;
+    assert_eq!(detail.status, StatusCode::OK, "{}", detail.body);
+    let in_run: Vec<_> = detail.body["operations"]
+        .as_array()
+        .ok_or("the run's operations")?
+        .iter()
+        .map(|op| (op["name"].clone(), op.get("mainWorld").cloned()))
+        .collect();
+    assert_eq!(
+        in_run,
+        [
+            (json!("page.evaluate"), Some(json!(true))),
+            (json!("locator.click"), Some(json!(false))),
+            (json!("page.goto"), None),
+        ]
+    );
+    let operation = h.get(&format!("/v1/operations/{evaluate}")).await?;
+    assert_eq!(operation.body["mainWorld"], json!(true));
+    let tail = h.get("/v1/trace").await?;
+    let in_tail: Vec<_> = tail.body["operations"]
+        .as_array()
+        .ok_or("the tail's operations")?
+        .iter()
+        .map(|op| op.get("mainWorld").cloned())
+        .collect();
+    assert_eq!(in_tail, [Some(json!(true)), Some(json!(false)), None]);
+    Ok(())
+}

@@ -1227,6 +1227,13 @@ components:
           type: boolean
         screenshot:
           $ref: '#/components/schemas/Screenshot'
+        mainWorld:
+          type: boolean
+          description: >-
+            True when the operation ran script in the page's main world, the page's own
+            JavaScript world, rather than Neo's isolated world. Present once the operation has
+            ended, so an operation still running, one whose end Neo never recorded, or one
+            recorded before this field has none.
     OperationSite:
       type: object
       description: The call location in the agent script, with 1-based line and column numbers.

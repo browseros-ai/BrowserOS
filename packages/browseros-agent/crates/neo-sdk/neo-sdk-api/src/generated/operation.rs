@@ -81,6 +81,9 @@ pub struct Operation {
     pub has_screenshot: bool,
     #[serde(rename = "screenshot", skip_serializing_if = "Option::is_none")]
     pub screenshot: Option<Box<models::Screenshot>>,
+    /// True when the operation ran script in the page's main world, the page's own JavaScript world, rather than Neo's isolated world. Present once the operation has ended, so an operation still running, one whose end Neo never recorded, or one recorded before this field has none.
+    #[serde(rename = "mainWorld", skip_serializing_if = "Option::is_none")]
+    pub main_world: Option<bool>,
 }
 
 impl Operation {
@@ -118,6 +121,7 @@ impl Operation {
             duration_ms: None,
             has_screenshot,
             screenshot: None,
+            main_world: None,
         }
     }
 }

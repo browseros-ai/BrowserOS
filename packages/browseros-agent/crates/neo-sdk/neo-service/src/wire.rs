@@ -184,6 +184,7 @@ pub(crate) fn operation(op: &OperationRow, inlined: &Inlined) -> api::Operation 
             .map(|ended| ended.millis().saturating_sub(op.started_at.millis())),
         has_screenshot: op.screenshot == Some(ShotState::Stored),
         screenshot: inlined.screenshot(op.id).map(Box::new),
+        main_world: op.main_world,
     }
 }
 
