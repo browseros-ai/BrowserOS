@@ -1056,6 +1056,47 @@ fn printed_refs(text: &str) -> HashSet<String> {
         .collect()
 }
 
+/// The v1 text of a fresh copy of the page at `url` in both forms, first with marking switched
+/// off and then with it on, and fails when marking removed a ref: every ref the unmarked text
+/// prints, in either form, must be printed by the marked text of the same form. A fresh copy
+/// mints the same refs, since marking changes no element's ref, only which ones print.
+async fn unmarked_then_marked(url: &str) -> TestResult<(Value, Value)> {
+    let script = format!(
+        "try {{\n\
+           await page.goto({url})\n\
+           return {{ plain: await page.ariaSnapshot(), interactive: await page.ariaSnapshot({{ text: false }}) }}\n\
+         }} finally {{\n\
+           await page.close()\n\
+         }}",
+        url = json!(url),
+    );
+    let run = Arc::new(LiveRun::connect().await?);
+    let init = json!({ "page": null });
+    let unmarked: Arc<dyn OpHost> = Arc::new(Unmarked(Arc::clone(&run)));
+    let unmarked = js_runner::run_script(&unmarked, &init, &script).await?;
+    let marked: Arc<dyn OpHost> = run;
+    let marked = js_runner::run_script(&marked, &init, &script).await?;
+    for form in ["plain", "interactive"] {
+        let before = unmarked
+            .get(form)
+            .and_then(Value::as_str)
+            .ok_or("the unmarked text")?;
+        let after = marked
+            .get(form)
+            .and_then(Value::as_str)
+            .ok_or("the marked text")?;
+        let lost: Vec<_> = printed_refs(before)
+            .difference(&printed_refs(after))
+            .cloned()
+            .collect();
+        assert!(
+            lost.is_empty(),
+            "{form}: marking removed {lost:?}\n--- unmarked\n{before}\n--- marked\n{after}"
+        );
+    }
+    Ok((unmarked, marked))
+}
+
 /// Marking never removes a ref the v1 text prints: on a fresh copy of the same page, every ref
 /// the unmarked text prints, in both forms, is printed by the marked text too. The article's
 /// section line survives, the containers stay unmarked, and the listener items, the menu and the
@@ -1066,33 +1107,7 @@ async fn tests_that_marking_never_removes_a_ref_the_v1_text_prints() -> TestResu
     let _alone = ALONE.acquire().await?;
     let page = Page::html(MARKING_PAGE).with_header("cache-control", "no-store");
     let server = FixtureServer::start(HashMap::from([("/marking.html".to_owned(), page)])).await?;
-    let script = format!(
-        "try {{\n\
-           await page.goto({url})\n\
-           return {{ plain: await page.ariaSnapshot(), interactive: await page.ariaSnapshot({{ text: false }}) }}\n\
-         }} finally {{\n\
-           await page.close()\n\
-         }}",
-        url = json!(server.url("127.0.0.1", "/marking.html")),
-    );
-    let run = Arc::new(LiveRun::connect().await?);
-    let init = json!({ "page": null });
-    let unmarked: Arc<dyn OpHost> = Arc::new(Unmarked(Arc::clone(&run)));
-    let unmarked = js_runner::run_script(&unmarked, &init, &script).await?;
-    let marked: Arc<dyn OpHost> = run;
-    let marked = js_runner::run_script(&marked, &init, &script).await?;
-    for form in ["plain", "interactive"] {
-        let before = unmarked[form].as_str().ok_or("the unmarked text")?;
-        let after = marked[form].as_str().ok_or("the marked text")?;
-        let lost: Vec<_> = printed_refs(before)
-            .difference(&printed_refs(after))
-            .cloned()
-            .collect();
-        assert!(
-            lost.is_empty(),
-            "{form}: marking removed {lost:?}\n--- unmarked\n{before}\n--- marked\n{after}"
-        );
-    }
+    let (_, marked) = unmarked_then_marked(&server.url("127.0.0.1", "/marking.html")).await?;
     let plain = marked["plain"].as_str().ok_or("the marked text")?;
     assert!(
         plain.contains("- article [ref="),
@@ -1110,5 +1125,66 @@ async fn tests_that_marking_never_removes_a_ref_the_v1_text_prints() -> TestResu
         plain.contains("] [cursor=pointer]: Card text"),
         "the shadow card whose slot holds text is a leaf: {plain}"
     );
+    Ok(())
+}
+
+/// `tabindex` wrappers, each in a navigation of its own so its lines read alone (design.md
+/// section 4, "A hidden control does not make a container"). The first four hold a control the
+/// engine does not draw (`display: none`, a drop zone's hidden file input, a zero-size checkbox,
+/// a hidden `nav`), so the wrapper is the only thing to click. The last three hold one it does
+/// draw: a button, a 1-pixel screen-reader checkbox, and an `aria-hidden` button, which ai mode
+/// prints with its ref.
+const HIDDEN_CONTROLS_PAGE: &str = r##"<!doctype html><html><head><title>Hidden controls</title></head><body>
+<main>
+<nav aria-label="display none"><div tabindex="0">Open menu<button style="display: none">Hidden</button></div></nav>
+<nav aria-label="drop zone"><div tabindex="0">Drop files here<input type="file" style="display: none"></div></nav>
+<nav aria-label="zero size"><div tabindex="0"><input type="checkbox" style="opacity: 0; width: 0; height: 0; margin: 0; padding: 0; border: 0"><span>Notifications</span></div></nav>
+<nav aria-label="hidden nav"><div tabindex="0">Hidden section<nav style="display: none"><a href="#docs">Docs</a></nav></div></nav>
+<nav aria-label="drawn control"><div tabindex="0">Visible control <button>Save</button></div></nav>
+<nav aria-label="screen reader"><div tabindex="0"><input type="checkbox" style="position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0)"><span>Subscribe</span></div></nav>
+<nav aria-label="aria hidden"><div tabindex="0">Card text <button aria-hidden="true" tabindex="-1">x</button></div></nav>
+</main>
+</body></html>"##;
+
+/// Marking's guard counts only what the engine draws: a wrapper whose only control is not drawn
+/// goes from a text line to a marked line, and a wrapper around a drawn control, a 1-pixel
+/// checkbox or a drawn `aria-hidden` button stays exactly as unmarked. No ref is lost either way.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_control_the_engine_does_not_draw_does_not_make_a_container() -> TestResult {
+    let _alone = ALONE.acquire().await?;
+    let page = Page::html(HIDDEN_CONTROLS_PAGE).with_header("cache-control", "no-store");
+    let server = FixtureServer::start(HashMap::from([("/hidden.html".to_owned(), page)])).await?;
+    let (unmarked, marked) = unmarked_then_marked(&server.url("127.0.0.1", "/hidden.html")).await?;
+    let unmarked = without_refs(unmarked["plain"].as_str().ok_or("the unmarked text")?);
+    let marked = without_refs(marked["plain"].as_str().ok_or("the marked text")?);
+    for (name, text) in [
+        ("display none", "Open menu"),
+        ("drop zone", "Drop files here"),
+        ("zero size", "Notifications"),
+        ("hidden nav", "Hidden section"),
+    ] {
+        assert_eq!(
+            block(&unmarked, name),
+            [format!("- text: {text}")],
+            "{name}, unmarked: {unmarked}"
+        );
+        assert_eq!(
+            block(&marked, name),
+            [format!("- generic [ref] [cursor=pointer]: {text}")],
+            "{name}, marked: {marked}"
+        );
+    }
+    for name in ["drawn control", "screen reader", "aria hidden"] {
+        let lines = block(&marked, name);
+        assert!(
+            !lines.is_empty() && lines == block(&unmarked, name),
+            "{name} stays as unmarked:\n--- unmarked\n{unmarked}\n--- marked\n{marked}"
+        );
+        assert!(
+            lines.iter().all(|line| !line.contains("[cursor=pointer]")),
+            "{name}: {marked}"
+        );
+    }
     Ok(())
 }

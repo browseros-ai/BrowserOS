@@ -25,7 +25,8 @@
  * Because the engine folds everything inside a pointer target into it, and the v1 text prints
  * what is inside an actionable node with its text left out, a target that holds a line of its
  * own (a control, a section, an element the page gives a pointer cursor, or another target) is
- * left out (`leafTargets`): marking may add refs and marks, never take a printed one away.
+ * left out (`leafTargets`): marking may add refs and marks, never take a printed one away. Only
+ * what the engine draws counts: what it does not draw prints nothing.
  */
 
 /**
@@ -82,8 +83,16 @@ export const SECTION_ROLES: ReadonlySet<string> = new Set([
 /** The engine prints a frame as an `iframe` node whatever role it would compute. */
 const FRAME_TAGS: ReadonlySet<string> = new Set(['iframe', 'frame'])
 
-/** The engine's own role of an element (roleUtils `getAriaRole`, on `InjectedScript.utils`). */
-export type RoleOf = (element: Element) => string | null
+/**
+ * What the guard asks the engine (both on `InjectedScript.utils`), so that it judges an element
+ * as the snapshot does.
+ */
+export type EngineReads = {
+  /** roleUtils `getAriaRole`: the role the snapshot computes. */
+  roleOf: (element: Element) => string | null
+  /** domUtils `isElementVisible`: the test an element must pass for the engine to give it a ref. */
+  isVisible: (element: Element) => boolean
+}
 
 /**
  * The elements that read as `cursor: pointer`, only while one snapshot call runs, each with its
@@ -104,28 +113,42 @@ const nearestTargets = new Map<Element, Element | null>()
  */
 export function leafTargets(
   targets: readonly Element[],
-  roleOf: RoleOf,
+  engine: EngineReads,
 ): Element[] {
   const all = new Set(targets)
-  return targets.filter((target) => !holdsTarget(target, all, roleOf))
+  return targets.filter((target) => !holdsTarget(target, all, engine))
 }
 
 /**
- * Whether an element below `target` in the engine's own tree is a target of its own or another
- * of `targets`. The walk is the engine's (ariaSnapshot.ts `processElement`): a slot's assigned
- * nodes, else the light children no slot took and the shadow root's, then the `aria-owns`
- * elements; each element once, so an ownership cycle ends.
+ * Whether a drawn element below `target` in the engine's own tree is a target of its own or
+ * another of `targets`. The walk is the engine's (ariaSnapshot.ts `processElement`): a slot's
+ * assigned nodes, else the light children no slot took and the shadow root's, then the
+ * `aria-owns` elements; each element once, so an ownership cycle ends.
+ *
+ * Drawn is the engine's own `isElementVisible`, the test its refs depend on. A control or a
+ * target with `display: none`, a zero-size box or `visibility: hidden` gets no ref and prints
+ * nothing, so nothing of it needs protecting, and the wrapper is the only thing left to click (a
+ * drop zone around its hidden file input, a row around a hidden listener `div`). Every element
+ * the engine gives a ref passes this test, so the guard still sees every one that prints with a
+ * ref, and marking still never removes one. A drawn `aria-hidden` control passes too: in ai mode
+ * the engine prints it with its ref, so it counts. The walk goes on below an element that is not
+ * drawn, as the engine does: a child can be drawn where its parent is not (`visibility: visible`
+ * under `hidden`, content overflowing a zero-size box).
  */
 function holdsTarget(
   target: Element,
   targets: ReadonlySet<Element>,
-  roleOf: RoleOf,
+  engine: EngineReads,
 ): boolean {
   const seen = new Set<Element>([target])
   const pending: Element[] = []
   pushChildren(pending, seen, target)
   for (let element = pending.pop(); element; element = pending.pop()) {
-    if (targets.has(element) || isOwnTarget(element, roleOf)) return true
+    if (
+      engine.isVisible(element) &&
+      (targets.has(element) || isOwnTarget(element, engine))
+    )
+      return true
     pushChildren(pending, seen, element)
   }
   return false
@@ -166,10 +189,10 @@ function pushChildren(
  * role, a section or a frame, or an element with a pointer cursor. The role is the engine's own
  * reading (role tokens, implicit roles in context), so the guard sees what the snapshot sees.
  */
-function isOwnTarget(element: Element, roleOf: RoleOf): boolean {
+function isOwnTarget(element: Element, engine: EngineReads): boolean {
   const tag = element.localName
   if (INTERACTIVE_TAGS.has(tag) || FRAME_TAGS.has(tag)) return true
-  const role = roleOf(element)
+  const role = engine.roleOf(element)
   if (role !== null && (INTERACTIVE_ROLES.has(role) || SECTION_ROLES.has(role)))
     return true
   return getComputedStyle(element)?.cursor === 'pointer'
@@ -225,8 +248,9 @@ export function asPointerTargets<T>(
 /**
  * The nearest of `element`'s ancestors in the flat tree, the tree CSS inheritance follows, that
  * is a target, or `null`. Walked once per element and remembered for the call, since the engine
- * asks for every element of the page. `leafTargets` leaves no target inside another, so the
- * nearest is the only one.
+ * asks for every element of the page. `leafTargets` leaves no drawn target inside another; one
+ * the engine does not draw can sit inside a target, and is then the nearest for what it holds,
+ * as CSS inheritance would have it.
  */
 function nearestTarget(element: Element): Element | null {
   const chain: Element[] = []

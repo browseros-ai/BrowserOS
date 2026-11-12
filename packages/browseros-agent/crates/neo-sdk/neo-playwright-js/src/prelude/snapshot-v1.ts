@@ -495,25 +495,49 @@ function separatorsOnly(line: Line): boolean {
 }
 
 /**
- * The name of a node that holds nothing else, which is then its content. The engine names a
- * table cell, a list item or a group from its text and drops the text child that repeats the
- * name: `<td>$7.49</td>` is `cell "$7.49"` with no children, so without this the price would
- * print nowhere, even with text on. An image's alt text arrives the same way, and is the only
- * label a link around a badge has. A node with children keeps their own lines instead (a cell
- * holding a link), so its name, derived from them, is never printed twice. A node with a `text`
- * field has that text as its content instead. A heading's name is never content: the heading
- * prints its own line (rule 4), just below the control whose own text would repeat it. In the
- * walk an image prints its own line (rule 6) before this is asked.
+ * The name of a node under which nothing prints text, which is then its content. The engine
+ * names a table cell, a list item or a group from its text and drops the text child that
+ * repeats the name: `<td>$7.49</td>` is `cell "$7.49"` with no children, so without this the
+ * price would print nowhere, even with text on. An image's alt text arrives the same way, and is
+ * the only label a link around a badge has. Children that say nothing do not change that: a
+ * grid's `columnheader "Full name"` around an empty clickable `div`, or a figure named by its
+ * caption around a link with no name, has its words only in its name. A node with a child that
+ * prints text keeps that child's lines instead (a cell holding a link), so its name, derived from
+ * them, is never printed twice. A node with a `text` field has that text as its content instead.
+ * A heading's name is never content: the heading prints its own line (rule 4), just below the
+ * control whose own text would repeat it. In the walk an image prints its own line (rule 6)
+ * before this is asked.
  */
 function nameAsContent(node: AriaNodeJSON): string | undefined {
   if (!node.name || node.text !== undefined || node.role === 'heading')
     return undefined
-  return node.children?.length ? undefined : node.name
+  return saysNothing(node.children) ? node.name : undefined
+}
+
+/**
+ * Whether nothing under `children` prints text: no string, and no node with a `text` field or a
+ * name, at any depth (an empty one prints nothing, as in the walk). Stops at the first one, and
+ * walks an explicit stack, as the walk does, for trees deeper than the call stack.
+ */
+function saysNothing(children: AriaNodeJSON['children']): boolean {
+  const pending: (AriaNodeJSON | string)[] = []
+  const add = (nodes: AriaNodeJSON['children']) => {
+    for (const node of nodes ?? []) pending.push(node)
+  }
+  add(children)
+  for (let item = pending.pop(); item !== undefined; item = pending.pop()) {
+    if (typeof item === 'string') {
+      if (item !== '') return false
+    } else if (item.text || item.name) return false
+    else add(item.children)
+  }
+  return true
 }
 
 /**
  * Every text piece under `node` that is not inside a nested actionable node, space-joined. The
- * name of a node that holds nothing else counts as a piece (an image's alt text, a cell's text).
+ * name of a node under which nothing prints text counts as a piece (an image's alt text, a
+ * cell's text).
  */
 function ownText(node: AriaNodeJSON): string {
   const pieces: string[] = []
