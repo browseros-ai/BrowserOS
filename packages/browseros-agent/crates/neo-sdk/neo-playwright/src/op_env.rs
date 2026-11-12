@@ -103,6 +103,15 @@ pub trait OpEnv: Send + Sync {
     fn aborted(&self) -> BoxFuture<'_, ()> {
         Box::pin(future::pending())
     }
+
+    /// The op is about to send trusted input to `tab` or capture it, both of which wait for
+    /// the tab's next frame. A host may make it its window's active tab first, where Chromium
+    /// draws it (on Linux a background tab gets one frame a second). Best effort: the op goes
+    /// on however this ends, and the crate bounds it by the op's timeout. The default does
+    /// nothing.
+    fn bring_forward(&self, _tab: TabId) -> BoxFuture<'_, ()> {
+        Box::pin(future::ready(()))
+    }
 }
 
 /// A host policy refused the op (`owner_has_control`, `page_private`, ...). It reaches the

@@ -82,7 +82,7 @@ pub use browser_tabs::BrowserTabs;
 pub use displays::{Admitted, DisplayBinding, DisplayEnd, DisplayRequest, Displays, Follow};
 pub use fit_rule::FitMode;
 pub use fits::{BarAction, BarOutcome, BrowserBar, Fit, FitState, Fits, Fitted, Keyboard};
-pub use front::{Front, FrontError};
+pub use front::{Forward, Front, FrontError};
 pub use locks::{
     Lock, LockBinding, LockEnd, LockEnded, LockTarget, LockTtl, Locks, OwnerHasControl, Reads,
 };

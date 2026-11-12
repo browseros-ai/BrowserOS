@@ -1,6 +1,7 @@
 //! The host side of an op for unit tests: an [`OpEnv`] that records what the crate asked of
 //! it, over a browser view whose CDP connection is never there.
 
+use std::future;
 use std::sync::{Arc, Mutex, PoisonError};
 
 use browseros_cdp::{CdpError, CdpEvent, TargetedEvents};
@@ -35,6 +36,9 @@ pub(crate) struct TestEnv {
     /// How many `recheck`s pass before `refusal` applies; 0 refuses from the first.
     passing_rechecks: usize,
     calls: Mutex<Vec<EnvCall>>,
+    /// Each tab an op asked to bring forward (`OpEnv::bring_forward`), in order. Apart from
+    /// `calls`, which tests compare whole.
+    forwarded: Mutex<Vec<TabId>>,
 }
 
 impl TestEnv {
@@ -51,6 +55,7 @@ impl TestEnv {
             refusal: None,
             passing_rechecks: 0,
             calls: Mutex::default(),
+            forwarded: Mutex::default(),
         }
     }
 
@@ -79,6 +84,14 @@ impl TestEnv {
     /// What the crate asked of the host so far.
     pub(crate) fn calls(&self) -> Vec<EnvCall> {
         self.calls
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
+    /// Each tab an op asked the host to bring forward, in order.
+    pub(crate) fn forwarded(&self) -> Vec<TabId> {
+        self.forwarded
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .clone()
@@ -128,6 +141,14 @@ impl OpEnv for TestEnv {
 
     fn note(&self, line: String) {
         self.record(EnvCall::Note(line));
+    }
+
+    fn bring_forward(&self, tab: TabId) -> BoxFuture<'_, ()> {
+        self.forwarded
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(tab);
+        Box::pin(future::ready(()))
     }
 }
 

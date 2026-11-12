@@ -6,12 +6,13 @@
 //!  the link's first connect ─▶ HostApi::serve ─▶ Service::start
 //!        (store, sink, session, viewports, screenshot jobs,
 //!        xvnc, cdp port)
-//!        ─▶ TakeoverLock armed with Service::locks
+//!        ─▶ TakeoverLock armed with Service::locks, AgentFront with Service::front
 //!        ─▶ Service::retain_tabs(a listing taken then, Service::tab_fence from before it)
 //!        ─▶ tab_feed
 //!        ─▶ host_service(service.router(), auth) on the socket
 //!  door (every op, every recheck) ─▶ TakeoverLock::check ─▶ Locks::check
 //!  idle-tab janitor ─▶ TakeoverLock::is_locked
+//!  an op's input or capture ─▶ AgentFront::bring_forward ─▶ Front::bring_forward (agent_front.rs)
 //!  tab_watch's events, in order ─▶ tab_feed ─▶ Service::tab_closed, and on a
 //!        new watch start Service::retain_tabs(a listing taken then, never a queued one, and
 //!        the fence taken before it)
@@ -21,11 +22,13 @@
 //! socket, hands the service what it already holds, and adapts the service's locks and the
 //! browser link's tab listings to its own door. Nothing here implements a trait for the service.
 
+mod agent_front;
 mod host_api;
 mod tab_feed;
 mod takeover_lock;
 #[cfg(test)]
 mod tests;
 
+pub(crate) use agent_front::AgentFront;
 pub(crate) use host_api::{HostApi, HostInputs};
 pub(crate) use takeover_lock::TakeoverLock;

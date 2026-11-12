@@ -11,7 +11,7 @@
 //! forwarding to stop before restoring the fit and lifting the agent's lock. RFB bytes are
 //! framed and judged by mode, never interpreted as field values.
 
-use crate::browser_tabs::ScreenHoldGuard;
+use crate::browser_tabs::{ScreenHoldGuard, ViewWatchGuard};
 use crate::follow::Follower;
 use crate::limits::{SERVER_CHUNK, XVNC_DIAL};
 use crate::rfb_client::{ClientFramer, DisplayMode, Verdict, verdict};
@@ -146,11 +146,19 @@ impl Displays {
     pub async fn admit(self: &Arc<Self>, request: DisplayRequest) -> Result<Admitted, PartError> {
         let role = match request {
             DisplayRequest::View { follow } => {
+                // In the registry before the follower looks up its target, so an implicit agent
+                // move that decides after this sees the viewer; then a move already past its last
+                // check lands before the view is admitted, as a control display waits it out.
+                let watch = self.browser.watch_screen(follow.clone());
+                drop(self.browser.front_turn().await);
                 let follower = match follow {
                     Some(follow) => Some(follow::admit(follow, self).await),
                     None => None,
                 };
-                Role::View { follower }
+                Role::View {
+                    follower,
+                    _watch: watch,
+                }
             }
             DisplayRequest::Control { binding } => {
                 let held = self.browser.hold_screen(ScreenHolder::ControlDisplay);
@@ -217,6 +225,8 @@ enum Role {
         /// The view's follower as its admission left it: subscribed to what it follows from
         /// before its look-up, so it misses nothing that happens before the view is served.
         follower: Option<Follower>,
+        /// The view in the registry the agent's implicit moves read, until the display ends.
+        _watch: ViewWatchGuard,
     },
     Control {
         binding: Option<DisplayBinding>,
@@ -267,7 +277,11 @@ impl Admitted {
             server,
         } = self;
         let end = match role {
-            Role::View { follower } => {
+            Role::View {
+                follower,
+                _watch: watch,
+            } => {
+                let _watch = watch;
                 let closing = Closing::Never;
                 let proxy =
                     Proxy::new(DisplayMode::View).run(server, from_viewer, to_viewer, &closing);

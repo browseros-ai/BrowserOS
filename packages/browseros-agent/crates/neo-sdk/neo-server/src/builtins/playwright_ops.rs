@@ -37,6 +37,7 @@ use crate::dispatch::{
     ErrorCode, LeafError, Method, MethodSpec, OpCtx, OperationError, PageChange, PageTarget,
     RegistryBuilder, RegistryError, RunCtx,
 };
+use crate::host::AgentFront;
 
 /// neo-playwright's prelude, which the agent realm evaluates after its bootstrap: the
 /// `page`, `context`, `browser` and `expect` parameters of the agent's function, over these ops.
@@ -227,7 +228,11 @@ impl Method for PlaywrightOp {
         }
         let input = input.resolved(page);
         let playwright = self.facade.get().await;
-        let env = OpCtxEnv::new(op, self.facade.hosted_mode());
+        let env = OpCtxEnv::new(
+            op,
+            self.facade.hosted_mode(),
+            Arc::clone(self.facade.front()),
+        );
         let result = op
             .race_classified(playwright.invoke(&env, self.op, input))
             .await;
@@ -536,16 +541,18 @@ impl OpenedPage {
 pub(super) struct OpCtxEnv<'a, M> {
     op: &'a OpCtx<M>,
     hosted: bool,
+    front: Arc<AgentFront>,
     /// The run's one `RunState`, shared by all of its ops and dropped when the run ends.
     run_state: Arc<RunState>,
 }
 
 impl<'a, M> OpCtxEnv<'a, M> {
     /// The env for the op that `op` runs.
-    pub(super) fn new(op: &'a OpCtx<M>, hosted: bool) -> Self {
+    pub(super) fn new(op: &'a OpCtx<M>, hosted: bool, front: Arc<AgentFront>) -> Self {
         Self {
             op,
             hosted,
+            front,
             run_state: op.run().slot::<RunState>(),
         }
     }
@@ -613,6 +620,15 @@ impl<M> OpEnv for OpCtxEnv<'_, M> {
 
     fn aborted(&self) -> BoxFuture<'_, ()> {
         Box::pin(self.op.aborted())
+    }
+
+    fn bring_forward(&self, tab: TabId) -> BoxFuture<'_, ()> {
+        let run = self.op.run();
+        Box::pin(Arc::clone(&self.front).bring_forward(
+            run.view().clone(),
+            tab,
+            run.task_id().cloned(),
+        ))
     }
 }
 

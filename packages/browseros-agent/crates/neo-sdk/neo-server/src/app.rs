@@ -25,7 +25,7 @@ use crate::browser::{BrowserLink, TabRegistry};
 use crate::builtins::{self, BuiltinDeps, CaptchaClaims, PlaywrightFacade, TabJanitor};
 use crate::config::{AppConfig, Defaults, HostedMode};
 use crate::dispatch::{Dispatcher, Observer, RegistryBuilder};
-use crate::host::{HostApi, HostInputs, TakeoverLock};
+use crate::host::{AgentFront, HostApi, HostInputs, TakeoverLock};
 use crate::http::agent_router;
 use crate::mcp::McpServer;
 use crate::run::{RunService, RunServiceParts};
@@ -180,9 +180,12 @@ impl App {
         let tabs = Arc::new(TabRegistry::new());
         let native = NativeCapabilities::from_browseros_version(config.browseros_version());
         let browser = link(native, Arc::clone(&tabs));
+        // Armed by the host API with the owner's screen and views, beside the takeover lock.
+        let front = Arc::new(AgentFront::default());
         let playwright = PlaywrightFacade::start(
             Arc::clone(&browser),
             matches!(&config.env.hosted_mode, HostedMode::On),
+            Arc::clone(&front),
         );
 
         // One solver for the process: its paid-task budget and page reservations are its own.
@@ -220,6 +223,7 @@ impl App {
         tokio::spawn(host.serve(
             Arc::clone(&browser),
             Arc::clone(&takeover),
+            front,
             shutdown.clone(),
         ));
         tokio::spawn(housekeeping(

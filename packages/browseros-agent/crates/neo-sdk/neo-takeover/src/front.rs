@@ -6,6 +6,9 @@
 //!  op env (app) ── Front::bring_to_front(tab, task, commit):
 //!    check ─ the front turn ─ check again
 //!      ─ commit (the door's recheck, then mark_sent) ─ Browser.activateTab ─ followers read it
+//!  op env (app), before input or a capture ── Front::bring_forward(tab, task):
+//!    owner holds the screen? a viewer watches something else? ─ stays where it is
+//!    ─ the front turn ─ the same again ─ already active? ─ Browser.activateTab ─ followers
 //! ```
 
 use crate::browser_tabs::Mover;
@@ -70,6 +73,21 @@ impl<E: fmt::Debug> Error for FrontError<E> {
     }
 }
 
+/// What [`Front::bring_forward`] did. Every outcome lets the op go on: an agent tab that stays
+/// behind is only slower on Linux, never wrong.
+#[derive(Debug)]
+pub enum Forward {
+    /// The tab was already its window's active tab; nothing was sent.
+    AlreadyInFront,
+    /// Neo made it the active tab, as a move followers read.
+    Brought,
+    /// The owner holds the screen (a takeover, a control display or a fit); nothing was sent.
+    OwnerHasScreen(OwnerHasScreen),
+    /// A view display shows the screen and does not watch this tab or task; nothing was sent,
+    /// so the viewer keeps what they watch.
+    ViewerElsewhere,
+}
+
 impl Front {
     /// Built by [`Displays::front`]; the service keeps one.
     pub(crate) fn new(displays: Arc<Displays>) -> Self {
@@ -99,7 +117,8 @@ impl Front {
     ///   last check is caught by `commit` (the door's recheck reads the same holds), or finds
     ///   the move already landed: a control display's admission waits out the turn.
     /// - Bringing the front tab forward again sends the same activation. A dropped future drops
-    ///   its turn, allowing the next mover through.
+    ///   its turn, allowing the next mover through, except that an activation already sent keeps
+    ///   the turn until the browser answers it.
     ///
     /// # Errors
     /// See [`FrontError`].
@@ -124,5 +143,53 @@ impl Front {
         activated.map_err(FrontError::Activation)?;
         tracing::info!(tab = tab.0, "the agent brought a tab to the front");
         Ok(())
+    }
+
+    /// Makes `tab` its window's active tab before the agent sends it input or captures it,
+    /// unless that would move what the owner sees: the owner holds the screen, or an open view
+    /// display does not watch this tab or `task`. `task` is the run's task: a `followTask`
+    /// view on it adopts the move, as it adopts the agent's `bringToFront`.
+    ///
+    /// Unlike [`Front::bring_to_front`] it is not an op of its own and commits nothing: the op
+    /// that asked goes on whatever this returns. The checks run before the front turn and again
+    /// under it, with the activation, like every other mover's.
+    ///
+    /// # Errors
+    /// `Browser` or `TimedOut` when reading the tab or activating it failed; the tab may or may
+    /// not be in front.
+    pub async fn bring_forward(
+        &self,
+        tab: TabId,
+        task: Option<TaskId>,
+    ) -> Result<Forward, PartError> {
+        if let Some(stays) = self.stays_behind(tab, task.as_ref()) {
+            return Ok(stays);
+        }
+        let turn = self.displays.browser.front_turn().await;
+        if let Some(stays) = self.stays_behind(tab, task.as_ref()) {
+            return Ok(stays);
+        }
+        if self.displays.browser.is_active(tab).await? {
+            return Ok(Forward::AlreadyInFront);
+        }
+        // Once more after that read: a hold or a view that began while it was in flight wins.
+        // Nothing awaits between this check and the send; a control display or a view admitted
+        // after it waits out this turn before it serves, even when this op gives up while the
+        // activation is in flight (`FrontTurn::activate` keeps the turn until its reply).
+        if let Some(stays) = self.stays_behind(tab, task.as_ref()) {
+            return Ok(stays);
+        }
+        let activated = turn.activate(tab, Mover::Agent { task }).await;
+        drop(turn);
+        activated?;
+        Ok(Forward::Brought)
+    }
+
+    /// Why the agent may not move the front to `tab` now, if it may not.
+    fn stays_behind(&self, tab: TabId, task: Option<&TaskId>) -> Option<Forward> {
+        if let Err(held) = self.check() {
+            return Some(Forward::OwnerHasScreen(held));
+        }
+        (!self.displays.browser.views_watch(tab, task)).then_some(Forward::ViewerElsewhere)
     }
 }

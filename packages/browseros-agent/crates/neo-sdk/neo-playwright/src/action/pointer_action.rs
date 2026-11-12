@@ -859,8 +859,10 @@ impl<'a> PointerRunner<'a> {
         Err(self.timed_out())
     }
 
-    /// The tab's input lock, in arrival order, within the op's timeout.
+    /// The tab's input lock, in arrival order, within the op's timeout, with the tab brought
+    /// forward first: a mouse move is acked at the tab's next frame.
     async fn hold(&self) -> Result<PageInput, PlaywrightError> {
+        self.scope.bring_forward(self.page.tab()).await;
         let scale = self.scope.view().pointer_scale(self.page.core_page());
         let input = Arc::clone(self.page.state().input());
         let held = PageInput::hold(input, self.page.root_session(), scale);

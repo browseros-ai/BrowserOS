@@ -1,0 +1,118 @@
+//! The agent's tab in front before Neo sends it input or captures it, so Linux draws it.
+//!
+//! ```text
+//!  neo-playwright op ─ input lock / capture ─▶ OpEnv::bring_forward(tab) ─▶ AgentFront
+//!    armed (the host API runs: an owner, views)  ─▶ neo_takeover::Front::bring_forward(tab, task)
+//!        owner holds the screen, or a view watches another tab or task ─▶ stays behind
+//!        else, under the front turn: already active, or Browser.activateTab (a move followers read)
+//!    the app before its host API serves ─▶ stays behind (an owner may arrive at once)
+//!    without_host (no host API in this process: no owner screen, no views) ─▶ the run's view:
+//!        Browser.getTabInfo ─ not active ─▶ Browser.activateTab
+//! ```
+//!
+//! Only the SDK reaches this: desktop's server never runs neo-playwright, and its rule that an
+//! agent never switches the user's tab stands. A tab that stays behind is as slow as before on
+//! Linux, never wrong, so nothing here fails or refuses an op.
+
+use std::sync::Arc;
+
+use browseros_core::{BrowserView, TabId};
+use neo_takeover::{Forward, Front};
+use neo_trace::TaskId;
+use serde_json::{Value, json};
+use tokio::sync::SetOnce;
+use tracing::debug;
+
+/// Brings an agent tab forward for one op (`OpEnv::bring_forward`). In the app it is armed with
+/// the service's [`Front`] when the host API starts, together with the takeover lock, so with an
+/// owner around every move goes through the one front turn and the screen rule; until then it
+/// moves nothing, since an owner may arrive the moment the API serves. A process with no host
+/// API at all ([`AgentFront::without_host`]) activates directly.
+#[derive(Default)]
+pub(crate) struct AgentFront {
+    front: SetOnce<Front>,
+    /// No host API will ever arm this process: there is no owner's screen or view to respect.
+    without_host: bool,
+}
+
+impl AgentFront {
+    /// For a process that serves no host API (the hosted sidecar, the spec harness).
+    #[cfg(feature = "hosted-run")]
+    pub(crate) fn without_host() -> Self {
+        Self {
+            front: SetOnce::new(),
+            without_host: true,
+        }
+    }
+
+    /// The host API started: from now on its front decides. Called once per process; a second
+    /// call changes nothing.
+    pub(crate) fn arm(&self, front: Front) {
+        let _ = self.front.set(front);
+    }
+
+    /// Makes `tab` its window's active tab if nothing of the owner's says otherwise. Never fails:
+    /// what happened is logged.
+    // TODO(remove): on Linux no display draws a background agent tab, and without this two
+    // things are slow there (SS-054, LH-001):
+    // - Input and frames: the focus emulation core gives the tab keeps it rendering frames that
+    //   viz throttles to one BeginFrame a second (ThrottleUndrawnFrames), so every mouse move
+    //   waits ~1 s for its ack.
+    // - Captures: a screenshot waits for the presentation of a forced frame, ~1.2 s headed and
+    //   possibly forever headless. This is not the throttle (1.2 s with zero throttled
+    //   BeginFrames); its cause is not yet found. The first lead is Chromium's
+    //   CDPScreenshotNewSurface feature, not yet measured.
+    // Remove it only when BOTH are fast for a background agent tab on Linux, i.e.
+    // `neo-playwright/tests/background_tab_live.rs` passes there. The planned focus-emulation
+    // patch (claw-sdk `lead/verify/ss054/BROWSER-PATCH-DESIGN.md`) lifts the throttle only, so
+    // it is not enough alone.
+    pub(crate) async fn bring_forward(
+        self: Arc<Self>,
+        view: BrowserView,
+        tab: TabId,
+        task: Option<TaskId>,
+    ) {
+        let outcome = match self.front.get() {
+            Some(front) => front
+                .bring_forward(tab, task)
+                .await
+                .map(|forward| describe(&forward))
+                .map_err(|error| error.to_string()),
+            None if self.without_host => activate(&view, tab).await,
+            None => Ok("stays behind: the host API is not serving yet"),
+        };
+        match outcome {
+            Ok(what) => debug!(tab = tab.0, what, "agent tab forward"),
+            Err(error) => debug!(tab = tab.0, error, "agent tab not brought forward"),
+        }
+    }
+}
+
+/// With no host API there is no owner's screen or view to respect: activate the tab unless it
+/// already is its window's active tab.
+async fn activate(view: &BrowserView, tab: TabId) -> Result<&'static str, String> {
+    let info = view
+        .cdp("Browser.getTabInfo", json!({ "tabId": tab.0 }), None)
+        .await
+        .map_err(|error| error.to_string())?;
+    let active = info
+        .get("tab")
+        .and_then(|tab| tab.get("isActive"))
+        .and_then(Value::as_bool);
+    if active == Some(true) {
+        return Ok("already in front");
+    }
+    view.cdp("Browser.activateTab", json!({ "tabId": tab.0 }), None)
+        .await
+        .map_err(|error| error.to_string())?;
+    Ok("brought")
+}
+
+fn describe(forward: &Forward) -> &'static str {
+    match forward {
+        Forward::AlreadyInFront => "already in front",
+        Forward::Brought => "brought",
+        Forward::OwnerHasScreen(_) => "stays behind: the owner holds the screen",
+        Forward::ViewerElsewhere => "stays behind: a viewer watches another tab",
+    }
+}

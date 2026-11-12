@@ -11,7 +11,7 @@ use neo_trace::{ShotJobs, TraceSink, TraceStore};
 use tokio::fs;
 use tokio_util::sync::CancellationToken;
 
-use super::{TakeoverLock, tab_feed};
+use super::{AgentFront, TakeoverLock, tab_feed};
 use crate::browser::BrowserLink;
 use crate::config::HostApiConfig;
 use crate::http::{BindError, HostListener};
@@ -101,6 +101,7 @@ impl HostApi {
         self,
         link: Arc<BrowserLink>,
         takeover: Arc<TakeoverLock>,
+        front: Arc<AgentFront>,
         shutdown: CancellationToken,
     ) {
         let Self { inputs, socket } = self;
@@ -125,6 +126,9 @@ impl HostApi {
             cdp_port,
         });
         takeover.arm(Arc::clone(service.locks()));
+        // The owner's two claims, the tab and the screen, from the same moment: no implicit
+        // agent move runs past a viewer or a takeover once a host can open one.
+        front.arm(service.front().clone());
         // Subscribed before the reconciling listing is taken, which happens while tab_watch
         // follows the socket: every tab that closes after that listing reaches the feed as an
         // event, so no close falls between the two.
