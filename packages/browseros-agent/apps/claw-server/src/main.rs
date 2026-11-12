@@ -93,6 +93,12 @@ async fn async_main() -> anyhow::Result<()> {
         }
     };
     record_startup(&logs_dir, "initialized", None);
+    // Debug builds only, so the MCP conformance suite can drive compiled flows end to end.
+    if cfg!(debug_assertions) && std::env::var_os("CLAW_SERVER_ULTRAFAST").is_some() {
+        state
+            .ultrafast
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+    }
     // Report one-time startup conditions worth seeing remotely, such as a database migrated by a
     // newer BrowserOS neo (read-forward). Consent-gated and drawn from the shared daily budget.
     state.report_startup_state().await;
@@ -277,13 +283,6 @@ async fn serve(
         async move {
             // Only the HTTP process that acquired the listener owns provisioning.
             // Keep repair off request handling and stop it with this runtime.
-            if heal_state.config.dev_mode {
-                info!(
-                    "dev mode: automatic harness provisioning is off; agent configs stay with \
-                     the installed BrowserOS neo, connect from the app to link one"
-                );
-                return;
-            }
             heal_state
                 .harness
                 .maintain_integrations(

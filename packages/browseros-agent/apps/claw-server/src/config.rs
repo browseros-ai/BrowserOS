@@ -81,8 +81,8 @@ pub struct Config {
     pub replay_retention_days: u64,
     /// A dev server is a guest beside the installed BrowserOS neo, which owns the shared
     /// agent configs (MCP entries and skills under `$HOME`, all named `browseros-neo`). It
-    /// keeps its own default state dir and never provisions those configs on its own; an
-    /// explicit Connect still does. Set by the sidecar's `flags.devMode`, else debug builds.
+    /// keeps its own default state dir and never changes those configs, even on explicit
+    /// Connect/Disconnect. Set by the sidecar's `flags.devMode`, else debug builds.
     pub dev_mode: bool,
     /// Read once per process. Every discovery and execution path gates native features on
     /// this one value, which `BrowserService` copies into each browser session.

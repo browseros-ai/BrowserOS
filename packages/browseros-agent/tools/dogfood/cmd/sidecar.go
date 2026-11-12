@@ -29,8 +29,8 @@ type dogfoodSidecarDirectories struct {
 
 type dogfoodSidecarFlags struct {
 	AllowRemoteInMCP bool `json:"allow_remote_in_mcp"`
-	// DevMode is always written false: dogfood runs claw-server from a debug build, which
-	// would otherwise count as dev mode and stop provisioning agent harnesses.
+	// Dogfood shares the user's agent configs with the installed app. This must stay true
+	// regardless of build profile or NODE_ENV so dogfood cannot take over their MCP URLs.
 	DevMode bool `json:"devMode"`
 }
 
@@ -64,6 +64,7 @@ func writeDogfoodSidecarConfig(path string, cfg config.Config, resourcesDir stri
 		},
 		Flags: dogfoodSidecarFlags{
 			AllowRemoteInMCP: false,
+			DevMode:          true,
 		},
 		// The server gates native features on this; only the launched app's release stamp
 		// counts, never the dogfood mode itself.

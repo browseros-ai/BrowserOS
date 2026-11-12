@@ -4140,7 +4140,13 @@ class DockerImageWorkflowTest(unittest.TestCase):
         cache = next(step for step in server["steps"]
                      if step.get("uses", "").startswith("Swatinem/rust-cache@"))
         self.assertEqual(cache["with"]["cache-provider"], "warpbuild")
-        self.assertIn("~/.cargo/build/browseros", cache["with"]["cache-directories"])
+        # With no shared build-dir, CARGO_TARGET_DIR holds everything worth caching.
+        self.assertEqual(
+            cache["with"]["workspaces"],
+            "packages/browseros-agent -> ../../target/neo-docker",
+        )
+        self.assertEqual(cache["with"]["prefix-key"], "browseros-target-v1")
+        self.assertNotIn("cache-directories", cache["with"])
         self.assertEqual(cache["with"]["shared-key"], "neo-docker-${{ matrix.rust_target }}")
         # Without the environment hash the key ignores Cargo.lock and never refreshes.
         self.assertNotIn("add-rust-environment-hash-key", cache["with"])

@@ -10,6 +10,7 @@ from unittest import mock
 from . import universal
 from .universal import UNIVERSAL_ARCHITECTURES, MergeUniversalModule
 from ...core.context import Context
+from ...lib.testing import MockBrowserOSRoot
 from ...core.resume import ResumeState, checkpoint_path, write_step_checkpoint
 from ...core.step import Step, ValidationError, all_steps
 
@@ -27,8 +28,12 @@ class _SignStep(Step):
 
 
 def _universal_ctx(chromium_src: Path) -> Context:
+    package = MockBrowserOSRoot(
+        chromium_src / "patches", chromium_version="158.0.8127.18"
+    ).with_patch_store()
     return Context(
         chromium_src=chromium_src,
+        patch_root=package.root,
         architecture="universal",
         build_type="release",
     )
@@ -38,6 +43,7 @@ def _arch_app(ctx: Context, arch: str) -> Path:
     """Expected input path, derived independently via the Context contract."""
     return Context(
         root_dir=ctx.root_dir,
+        patch_root=ctx.patch_root,
         chromium_src=ctx.chromium_src,
         architecture=arch,
         build_type=ctx.build_type,
@@ -64,6 +70,7 @@ class ValidateTest(MergeUniversalTestBase):
     def test_rejects_non_universal_context(self):
         arch_ctx = Context(
             chromium_src=self.ctx.chromium_src,
+            patch_root=self.ctx.patch_root,
             architecture="arm64",
             build_type="release",
         )
@@ -92,6 +99,7 @@ class ProvenanceTest(MergeUniversalTestBase):
     def _arch_ctx(self, arch: str, state: ResumeState) -> Context:
         ctx = Context(
             root_dir=self.ctx.root_dir,
+            patch_root=self.ctx.patch_root,
             chromium_src=self.ctx.chromium_src,
             architecture=arch,
             build_type=self.ctx.build_type,

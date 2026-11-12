@@ -4,15 +4,20 @@ use super::{
     events::{self, EventDefinition},
     state::{AnalyticsState, TelemetryState, load_or_create_state, persist_state, state_path},
 };
-use crate::error::{AppError, AppResult};
+use crate::{
+    config::ServerMode,
+    error::{AppError, AppResult},
+};
 use posthog_rs::{Client, ClientOptionsBuilder, Event};
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 use std::{
     env,
     path::{Path, PathBuf},
     sync::{Arc, RwLock},
 };
 use tokio::sync::Mutex;
+use uuid::Uuid;
 
 #[cfg(test)]
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -38,28 +43,31 @@ const SURFACE_SERVER: &str = "server";
 struct AnalyticsConfig {
     project_key: Option<String>,
     host: String,
-    environment_enabled: bool,
+    delivery_enabled: bool,
 }
 
 impl AnalyticsConfig {
-    fn from_env() -> Self {
+    fn from_env(mode: ServerMode) -> Self {
         let runtime_project_key = env::var("CLAW_POSTHOG_KEY").ok();
         let runtime_host = env::var("CLAW_POSTHOG_HOST").ok();
         let project_key = configured_value(runtime_project_key.as_deref(), BUILD_POSTHOG_KEY);
         let host = configured_value(runtime_host.as_deref(), BUILD_POSTHOG_HOST)
             .unwrap_or_else(|| DEFAULT_POSTHOG_HOST.to_string());
-        let environment_enabled = env::var("CLAW_ANALYTICS_ENABLED").ok().is_none_or(|value| {
-            !matches!(value.trim().to_ascii_lowercase().as_str(), "0" | "false")
-        });
+        // Hosted instances must stay out of the desktop PostHog project. Gate delivery here
+        // so an inherited key or a later consent update cannot enable it for this process.
+        let delivery_enabled = !mode.is_hosted()
+            && env::var("CLAW_ANALYTICS_ENABLED").ok().is_none_or(|value| {
+                !matches!(value.trim().to_ascii_lowercase().as_str(), "0" | "false")
+            });
         Self {
             project_key,
             host,
-            environment_enabled,
+            delivery_enabled,
         }
     }
 
     fn is_configured(&self) -> bool {
-        self.project_key.is_some() && self.environment_enabled
+        self.project_key.is_some() && self.delivery_enabled
     }
 }
 
@@ -78,6 +86,17 @@ fn non_empty_value(value: &str) -> Option<String> {
     (!value.is_empty()).then(|| value.to_string())
 }
 
+/// What became of an event sent with [`AnalyticsService::send_once`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Delivery {
+    /// PostHog accepted it.
+    Sent,
+    /// It can never be sent: no consent or project key, or its properties were rejected.
+    Dropped,
+    /// The request failed and may succeed later.
+    Failed,
+}
+
 #[derive(Clone)]
 struct ActiveClient {
     client: Arc<Client>,
@@ -87,6 +106,7 @@ struct ActiveClient {
 
 /// Owns the persisted analytics identity shared with the cockpit and the
 /// consent-gated clients for product events and historical identity links.
+/// Hosted mode disables delivery without changing the saved desktop consent.
 pub struct AnalyticsService {
     path: PathBuf,
     distinct_id: Option<String>,
@@ -98,8 +118,8 @@ pub struct AnalyticsService {
 }
 
 impl AnalyticsService {
-    pub async fn new(browserclaw_dir: impl AsRef<Path>) -> AppResult<Self> {
-        Self::new_with_config(browserclaw_dir.as_ref(), AnalyticsConfig::from_env()).await
+    pub async fn new(browserclaw_dir: impl AsRef<Path>, mode: ServerMode) -> AppResult<Self> {
+        Self::new_with_config(browserclaw_dir.as_ref(), AnalyticsConfig::from_env(mode)).await
     }
 
     async fn new_with_config(browserclaw_dir: &Path, config: AnalyticsConfig) -> AppResult<Self> {
@@ -130,14 +150,14 @@ impl AnalyticsService {
         browserclaw_dir: &Path,
         project_key: Option<&str>,
         host: String,
-        environment_enabled: bool,
+        delivery_enabled: bool,
     ) -> AppResult<Self> {
         Self::new_with_config(
             browserclaw_dir,
             AnalyticsConfig {
                 project_key: project_key.map(str::to_string),
                 host,
-                environment_enabled,
+                delivery_enabled,
             },
         )
         .await
@@ -207,43 +227,53 @@ impl AnalyticsService {
     }
 
     pub fn capture(&self, definition: EventDefinition, properties: Value) {
-        let active = self
-            .active
-            .read()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let Some(active) = active.as_ref() else {
+        let Some(active) = self.active_client() else {
             return;
         };
-        let Some(Value::Object(properties)) = definition.sanitize(&properties) else {
-            return;
-        };
+        if let Some(event) = build_event(&active, definition, properties) {
+            active.client.capture(event);
+        }
+    }
 
-        let mut event = Event::new(definition.name(), active.distinct_id.as_str());
-        for (key, value) in properties {
-            if event.insert_prop(key, value).is_err() {
-                return;
+    /// Whether events leave this process right now: consent given, a project key, desktop.
+    #[must_use]
+    pub fn delivers(&self) -> bool {
+        self.active_client().is_some()
+    }
+
+    /// Sends an event that describes a finished period and waits for PostHog to accept it. The
+    /// event is stamped at `timestamp_ms` and given an id derived from the install and
+    /// `dedupe_key`, so sending the same key again yields the same id and PostHog keeps one copy.
+    pub async fn send_once(
+        &self,
+        definition: EventDefinition,
+        properties: Value,
+        timestamp_ms: i64,
+        dedupe_key: &str,
+    ) -> Delivery {
+        let Some(active) = self.active_client() else {
+            return Delivery::Dropped;
+        };
+        let Some(mut event) = build_event(&active, definition, properties) else {
+            return Delivery::Dropped;
+        };
+        let Some(timestamp) = chrono::DateTime::from_timestamp_millis(timestamp_ms) else {
+            return Delivery::Dropped;
+        };
+        if event.set_timestamp(timestamp).is_err() {
+            return Delivery::Dropped;
+        }
+        event.set_uuid(dedupe_uuid(&active.distinct_id, definition, dedupe_key));
+        match active.client.capture_immediate(event).await {
+            Ok(summary) if summary.submitted() == 1 && summary.not_persisted() == 0 => {
+                Delivery::Sent
+            }
+            Ok(_) => Delivery::Dropped,
+            Err(error) => {
+                tracing::debug!(%error, event = definition.name(), "analytics send failed");
+                Delivery::Failed
             }
         }
-        for (key, value) in [
-            (
-                SERVER_VERSION,
-                Value::String(env!("CARGO_PKG_VERSION").to_string()),
-            ),
-            (
-                OS_PLATFORM,
-                Value::String(events::platform_token().to_string()),
-            ),
-            (INSTALL_ID, Value::String(active.distinct_id.clone())),
-            (PRODUCT, Value::String(PRODUCT_BROWSERCLAW.to_string())),
-            (SURFACE, Value::String(SURFACE_SERVER.to_string())),
-            (PROCESS_PERSON_PROFILE, Value::Bool(false)),
-            (IS_SERVER, Value::Bool(true)),
-        ] {
-            if event.insert_prop(key, value).is_err() {
-                return;
-            }
-        }
-        active.client.capture(event);
     }
 
     pub async fn shutdown(&self) {
@@ -300,6 +330,45 @@ impl AnalyticsSink for AnalyticsService {
     fn capture(&self, event: EventDefinition, properties: Value) {
         Self::capture(self, event, properties);
     }
+}
+
+fn build_event(
+    active: &ActiveClient,
+    definition: EventDefinition,
+    properties: Value,
+) -> Option<Event> {
+    let Some(Value::Object(properties)) = definition.sanitize(&properties) else {
+        return None;
+    };
+    let mut event = Event::new(definition.name(), active.distinct_id.as_str());
+    for (key, value) in properties {
+        event.insert_prop(key, value).ok()?;
+    }
+    for (key, value) in [
+        (
+            SERVER_VERSION,
+            Value::String(env!("CARGO_PKG_VERSION").to_string()),
+        ),
+        (
+            OS_PLATFORM,
+            Value::String(events::platform_token().to_string()),
+        ),
+        (INSTALL_ID, Value::String(active.distinct_id.clone())),
+        (PRODUCT, Value::String(PRODUCT_BROWSERCLAW.to_string())),
+        (SURFACE, Value::String(SURFACE_SERVER.to_string())),
+        (PROCESS_PERSON_PROFILE, Value::Bool(false)),
+        (IS_SERVER, Value::Bool(true)),
+    ] {
+        event.insert_prop(key, value).ok()?;
+    }
+    Some(event)
+}
+
+fn dedupe_uuid(distinct_id: &str, definition: EventDefinition, dedupe_key: &str) -> Uuid {
+    let digest = Sha256::digest(format!("{distinct_id}:{}:{dedupe_key}", definition.name()));
+    let mut bytes = [0_u8; 16];
+    bytes.copy_from_slice(&digest[..16]);
+    uuid::Builder::from_custom_bytes(bytes).into_uuid()
 }
 
 async fn build_client(
@@ -417,7 +486,7 @@ mod tests {
         AnalyticsConfig {
             project_key: Some("test-project-key".to_string()),
             host,
-            environment_enabled: enabled,
+            delivery_enabled: enabled,
         }
     }
 
@@ -625,7 +694,7 @@ mod tests {
         let no_key = AnalyticsConfig {
             project_key: None,
             host: DEFAULT_POSTHOG_HOST.to_string(),
-            environment_enabled: true,
+            delivery_enabled: true,
         };
         let gated = AnalyticsService::new_with_config(directory.path(), no_key).await?;
         let state = gated.get_state().await;
@@ -831,7 +900,7 @@ mod tests {
             let config = AnalyticsConfig {
                 project_key: (!missing_key).then(|| "test-project-key".to_owned()),
                 host,
-                environment_enabled: missing_key,
+                delivery_enabled: missing_key,
             };
             let service = AnalyticsService::new_with_config(directory.path(), config).await?;
             assert!(!service.set_consent(true).await?.enabled);

@@ -78,7 +78,6 @@ func clawBackendProcConfig(backend clawBackend, root string, env []string, p pro
 				ResourcesDir:  filepath.Join(root, backend.ResourcesDir),
 				ExecutionDir:  backend.ExecutionDir(userDataDir),
 				BrowserBinary: envValue(env, "BROWSEROS_BINARY"),
-				DevMode:       true,
 			}); err != nil {
 				return err
 			}
