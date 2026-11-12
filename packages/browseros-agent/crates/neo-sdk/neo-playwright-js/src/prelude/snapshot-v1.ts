@@ -116,7 +116,7 @@ function walk(result: SnapshotResult, urls: boolean, text: boolean): Printed[] {
   const printer = new Printer(urls, partials)
   // A virtual root over the json array, so a locator's root node goes through the same rules:
   // a locator on `main` prints `- main [ref=e2]:` and its content.
-  printer.children(result.json, 0, text)
+  printer.walk(result.json, 0, text)
   for (const unplaced of partials.values())
     for (const partial of unplaced) printer.comment(partialComment(partial), 0)
   return printer.lines.map((line) => ({
@@ -142,8 +142,21 @@ type Line = {
   keptEnd?: number
 }
 
+/**
+ * One step of the walk. The steps wait on an explicit stack rather than the call stack: real
+ * pages nest deeper than QuickJS's 512 KiB stack allows a recursive walk (an Amazon product
+ * page overflowed it), and a block's closing step must run after all of its content.
+ */
+type Step =
+  | { kind: 'node'; child: AriaNodeJSON | string; level: number; text: boolean }
+  | { kind: 'piece'; raw: string; level: number; text: boolean }
+  | { kind: 'kept'; node: AriaNodeJSON; header: number; level: number }
+  | { kind: 'section'; node: AriaNodeJSON; header: number }
+
 class Printer {
   readonly lines: Line[] = []
+  /** The walk's pending steps; the next one is last. */
+  private readonly steps: Step[] = []
 
   constructor(
     private readonly urls: boolean,
@@ -151,16 +164,33 @@ class Printer {
     private readonly partials: Map<string, PartialFrame[]>,
   ) {}
 
-  children(
-    children: readonly (AriaNodeJSON | string)[] | undefined,
+  /** Prints `children` at `level`, depth first in document order. */
+  walk(
+    children: readonly (AriaNodeJSON | string)[],
     level: number,
     text: boolean,
   ): void {
-    for (const child of children ?? []) this.node(child, level, text)
+    this.content({ children: [...children] }, level, text)
+    for (let step = this.steps.pop(); step; step = this.steps.pop()) {
+      if (step.kind === 'node') this.node(step.child, step.level, step.text)
+      else if (step.kind === 'piece')
+        this.piece(step.raw, step.level, step.text)
+      else if (step.kind === 'kept')
+        this.closeKept(step.node, step.header, step.level)
+      else this.closeSection(step.node, step.header)
+    }
+  }
+
+  comment(body: string, level: number): void {
+    this.lines.push({ level, body, textLine: false, comment: true, ref: false })
   }
 
   /** One child of the node being walked, by the first rule that matches it. */
-  node(child: AriaNodeJSON | string, level: number, text: boolean): void {
+  private node(
+    child: AriaNodeJSON | string,
+    level: number,
+    text: boolean,
+  ): void {
     if (typeof child === 'string') this.piece(child, level, text)
     else if (child.role === 'text') this.piece(child.text ?? '', level, text)
     else if (KEPT.has(child.role)) this.kept(child, level)
@@ -175,14 +205,20 @@ class Printer {
     }
   }
 
-  comment(body: string, level: number): void {
-    this.lines.push({ level, body, textLine: false, comment: true, ref: false })
-  }
-
-  /** A node's own `text` field, then its children. */
-  private content(node: AriaNodeJSON, level: number, text: boolean): void {
-    if (node.text !== undefined) this.piece(node.text, level, text)
-    this.children(node.children, level, text)
+  /**
+   * Schedules a node's own `text` field, then its children, as the next steps. Children go on
+   * in reverse so they come off in document order, ahead of the siblings already waiting.
+   */
+  private content(
+    node: AriaNodeJSON | { children: (AriaNodeJSON | string)[] },
+    level: number,
+    text: boolean,
+  ): void {
+    const children = node.children ?? []
+    for (let index = children.length - 1; index >= 0; index--)
+      this.steps.push({ kind: 'node', child: children[index], level, text })
+    if ('text' in node && node.text !== undefined)
+      this.steps.push({ kind: 'piece', raw: node.text, level, text })
   }
 
   /**
@@ -205,8 +241,13 @@ class Printer {
 
   private kept(node: AriaNodeJSON, level: number): void {
     const header = this.header(node, level, KEPT_WITH_REF.has(node.role))
+    this.steps.push({ kind: 'kept', node, header, level })
     // Its text is what tells the agent what its buttons do, so it prints whatever the form.
     this.content(node, level + 1, true)
+  }
+
+  /** After a kept block's content: the leaf form, a colon, or no line at all. */
+  private closeKept(node: AriaNodeJSON, header: number, level: number): void {
     const inside = this.lines.slice(header + 1)
     if (inside.length === 1 && inside[0].textLine) {
       // All of its content is one piece of text: the leaf form, `- alert: Invalid password.`
@@ -221,17 +262,21 @@ class Printer {
 
   private section(node: AriaNodeJSON, level: number, text: boolean): void {
     const header = this.header(node, level, true)
-    const iframe = node.role === 'iframe'
-    if (iframe && node.ref !== undefined) {
+    if (node.role === 'iframe' && node.ref !== undefined) {
       // Under its iframe line, as snapshot.ts prints it for Playwright's text.
       for (const partial of this.partials.get(node.ref) ?? [])
         this.comment(partialComment(partial), level + 1)
       this.partials.delete(node.ref)
     }
+    this.steps.push({ kind: 'section', node, header })
     this.content(node, level + 1, text)
+  }
+
+  /** After a section's content: its colon, or no line when nothing printed inside it. */
+  private closeSection(node: AriaNodeJSON, header: number): void {
     // An iframe keeps its line with nothing inside: its `# partial` comment hangs under it.
     if (
-      this.close(header, iframe) &&
+      this.close(header, node.role === 'iframe') &&
       this.lines[header].body.endsWith(':') &&
       node.ref !== undefined
     )
@@ -255,7 +300,7 @@ class Printer {
       level,
     )
     // A link inside the heading gets its own line; the heading's text is not repeated.
-    this.children(node.children, level, false)
+    this.content(node, level, false)
   }
 
   private actionable(node: AriaNodeJSON, level: number, text: boolean): void {
@@ -295,7 +340,7 @@ class Printer {
         })
     }
     // Nested controls get lines of their own; the control's own text is not printed again.
-    this.children(node.children, level, false)
+    this.content(node, level, false)
   }
 
   /** The vendored renderer's lines for one childless node copy, at `level`. */
@@ -396,15 +441,25 @@ function nativeOptions(select: AriaNodeJSON): AriaNodeJSON[] {
 /** Every text piece under `node` that is not inside a nested actionable node, space-joined. */
 function ownText(node: AriaNodeJSON): string {
   const pieces: string[] = []
-  const visit = (parent: AriaNodeJSON): void => {
-    if (parent.text !== undefined) pieces.push(parent.text)
-    for (const child of parent.children ?? []) {
-      if (typeof child === 'string') pieces.push(child)
-      else if (child.role === 'text') pieces.push(child.text ?? '')
-      else if (!actionable(child)) visit(child)
+  // Depth first in document order on an explicit stack, as the walk is, for deep trees.
+  const stack: (AriaNodeJSON | string)[] = [node]
+  for (let item = stack.pop(); item !== undefined; item = stack.pop()) {
+    if (typeof item === 'string') {
+      pieces.push(item)
+      continue
+    }
+    if (item.text !== undefined) pieces.push(item.text)
+    const children = item.children ?? []
+    for (let index = children.length - 1; index >= 0; index--) {
+      const child = children[index]
+      if (
+        typeof child === 'string' ||
+        child.role === 'text' ||
+        !actionable(child)
+      )
+        stack.push(child)
     }
   }
-  visit(node)
   return pieces.filter((piece) => piece !== '').join(' ')
 }
 

@@ -243,6 +243,18 @@ it('tests rule 7: other roles print no line and lose their refs; their content m
   ])
 })
 
+it('tests that a tree far deeper than any call stack renders: the walk keeps its own stack', () => {
+  let deep: Node = button('Deep', 'e1')
+  for (let level = 0; level < 100_000; level++)
+    deep = generic(
+      [level === 0 ? 'Bottom' : '', deep].filter(Boolean) as Child[],
+    )
+  expect(both([deep])).toEqual([
+    '- text: Bottom\n- button "Deep" [ref=e1]',
+    '- button "Deep" [ref=e1]',
+  ])
+})
+
 it("tests that a locator's root node goes through the same rules", () => {
   expect(
     render([{ role: 'main', ref: 'e2', children: [button('Go', 'e3')] }]),
