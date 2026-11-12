@@ -3,9 +3,13 @@ import type { TaskStatus, TaskSummary } from '@/modules/api/audit.hooks'
 import {
   agentOptionsFor,
   agentsInTasks,
+  bannerTokens,
+  chipTokens,
   groupByDay,
+  pagesLabel,
   taskWhen,
   tookLabel,
+  ultrafastTime,
 } from './audit.helpers'
 import { filtersToParams, paramsToFilters } from './audit.search-params'
 
@@ -144,5 +148,37 @@ describe('tookLabel', () => {
     expect(tookLabel(20_000)).toBe('took under a minute')
     expect(tookLabel(4 * 60_000)).toBe('took 4 min')
     expect(tookLabel(125 * 60_000)).toBe('took 2 h 5 min')
+  })
+})
+
+describe('ultrafast run numbers', () => {
+  it('says whole seconds under a minute and rounds to minutes after', () => {
+    expect(ultrafastTime(15_354)).toBe('15 sec')
+    expect(ultrafastTime(8_000)).toBe('8 sec')
+    expect(ultrafastTime(200)).toBe('1 sec')
+    expect(ultrafastTime(59_400)).toBe('59 sec')
+    expect(ultrafastTime(59_600)).toBe('1 min')
+    expect(ultrafastTime(125_000)).toBe('2 min')
+  })
+
+  it('counts pages, singular for one', () => {
+    expect(pagesLabel(1)).toBe('1 page')
+    expect(pagesLabel(9)).toBe('9 pages')
+  })
+
+  it('keeps chip tokens short', () => {
+    expect(chipTokens(640)).toBe('640')
+    expect(chipTokens(4_231)).toBe('4.2k')
+    expect(chipTokens(2_000)).toBe('2k')
+    expect(chipTokens(9_990)).toBe('10k')
+    expect(chipTokens(61_942)).toBe('62k')
+    expect(chipTokens(180_400)).toBe('180k')
+  })
+
+  it('rounds banner tokens to hundreds, then thousands', () => {
+    expect(bannerTokens(42)).toBe('42')
+    expect(bannerTokens(4_231)).toBe('4,200')
+    expect(bannerTokens(61_942)).toBe('62,000')
+    expect(bannerTokens(185_618)).toBe('186,000')
   })
 })

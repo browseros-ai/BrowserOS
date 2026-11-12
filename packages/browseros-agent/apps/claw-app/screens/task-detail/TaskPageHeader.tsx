@@ -2,10 +2,16 @@ import type { SessionSummary } from '@browseros/claw-api'
 import { ExternalLink } from 'lucide-react'
 import { useLocation } from 'react-router'
 import { SessionStatusBadge } from '@/components/audit/SessionStatusBadge'
+import { UltrafastRunBadge } from '@/components/audit/UltrafastRunBadge'
 import { AgentMark } from '@/components/harness/AgentMark'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { ButtonLink } from '@/components/motion/button/base'
-import { taskDayAndTime, tookLabel } from '@/screens/audit/audit.helpers'
+import {
+  chipTokens,
+  pagesLabel,
+  taskDayAndTime,
+  tookLabel,
+} from '@/screens/audit/audit.helpers'
 
 interface TaskPageHeaderProps {
   session: SessionSummary
@@ -37,6 +43,12 @@ export function TaskPageHeader({ session, lastPageUrl }: TaskPageHeaderProps) {
             sessionId={session.sessionId}
             size="md"
           />
+          {session.ultrafast ? (
+            <UltrafastRunBadge size="md">
+              {pagesLabel(session.ultrafast.pagesRead)},{' '}
+              {chipTokens(session.ultrafast.tokensSaved)} tokens saved
+            </UltrafastRunBadge>
+          ) : null}
           <span className="flex flex-wrap items-center gap-2 text-[13.5px] text-ink-3">
             <AgentMark
               harness={session.harness}
