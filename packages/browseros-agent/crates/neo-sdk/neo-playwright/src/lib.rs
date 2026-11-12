@@ -82,6 +82,7 @@ pub use op_spec::{Capability, OpLifetime, OpSpec, OpTarget};
 pub use playwright::Playwright;
 pub use playwright_error::{Answer, ErrorCode, PlaywrightError, TimedOut};
 pub use prelude_source::PRELUDE_JS;
+pub use probe::protocol::render as render_probe_protocol;
 pub use run_state::RunState;
 pub use wire::{Command, OpWire, OptionNesting, Upstream, WireType};
 

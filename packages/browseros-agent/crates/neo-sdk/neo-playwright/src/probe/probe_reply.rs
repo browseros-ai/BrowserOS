@@ -1,4 +1,5 @@
-//! What the probe answers, as `protocol.ts` types it (`ProbeReply` and its parts).
+//! What the probe answers. These decoded types also generate the page-side declarations
+//! (`generated.ts`), keeping reply fields and serde spellings in one place.
 //!
 //! Replies are parsed here, at the boundary, into these variants. A shape this build cannot
 //! read means the page asset and the crate disagree, which is `neo / internal`, never a guess
@@ -6,13 +7,14 @@
 
 #![expect(
     dead_code,
-    reason = "the protocol is mirrored whole, and each op family reads its own replies"
+    reason = "the protocol is generated whole, and each op family reads its own replies"
 )]
 
 use std::fmt;
 
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
+use ts_rs::TS;
 
 use crate::probe::probe_request::ElementState;
 use crate::world::{FrameSeq, Pin};
@@ -26,7 +28,7 @@ pub(crate) const PROBE_PROTOCOL: u32 = 25;
 
 /// One reply; `kind` is the tag. Any request may also answer `error`, and `uninstalled` when
 /// the world has no booted probe.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, TS)]
 #[serde(
     tag = "kind",
     rename_all = "camelCase",
@@ -42,12 +44,14 @@ pub(crate) enum ProbeReply {
         /// Only from a boot that replaced the world's numbering: the seq it held before. Under
         /// another epoch that is a seq an earlier `Playwright` printed refs under.
         #[serde(default)]
+        #[ts(optional)]
         retired: Option<FrameSeq>,
     },
     /// Zero matches. `stale_ref` names a ref that can never match in this document again, so
     /// the op fails at once instead of waiting for it.
     None {
         #[serde(default)]
+        #[ts(optional)]
         stale_ref: Option<String>,
     },
     /// Upstream's `strict mode violation: <locator> resolved to N elements: ...`.
@@ -59,6 +63,7 @@ pub(crate) enum ProbeReply {
         pin: Pin,
         preview: String,
         #[serde(default)]
+        #[ts(optional)]
         resolved: Option<Resolution>,
     },
     /// An `<iframe>` or `<frame>`, pinned. `key` names it in this world's ref map, for the
@@ -79,6 +84,7 @@ pub(crate) enum ProbeReply {
     State {
         missing: ElementState,
         #[serde(default)]
+        #[ts(optional)]
         resolved: Option<Resolution>,
     },
     /// Measured, not armed: frame-local CSS pixels.
@@ -90,12 +96,15 @@ pub(crate) enum ProbeReply {
         transformed: bool,
         /// The original element's border width plus explicit position, not a retarget's rect.
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
         border_offset: Option<Point>,
         #[serde(default)]
+        #[ts(optional)]
         resolved: Option<Resolution>,
     },
     /// Upstream's description of what intercepts pointer events: the page's own markup.
     Covered {
+        #[ts(type = "string")]
         by: PageText,
     },
     /// The interceptor is armed with `token`.
@@ -125,6 +134,7 @@ pub(crate) enum ProbeReply {
     Read {
         value: PageText,
         #[serde(default)]
+        #[ts(optional)]
         resolved: Option<Resolution>,
     },
     /// A `readAll`: how many matched, and one value per match where the read has values.
@@ -138,6 +148,9 @@ pub(crate) enum ProbeReply {
     },
     /// One frame's `ariaSnapshotJSON` and its rendered iframes.
     Snapshot {
+        #[ts(
+            type = "import('../../../neo-playwright/third_party/playwright/packages/isomorphic/ariaSnapshot').AriaSnapshotJSON"
+        )]
         json: Value,
         iframes: Vec<SnapshotIframe>,
     },
@@ -147,10 +160,13 @@ pub(crate) enum ProbeReply {
     /// fails the matcher, the aria snapshot upstream puts in `error.matcherResult`.
     Expect {
         matches: bool,
+        #[ts(type = "string")]
         resolved: PageText,
         #[serde(default, deserialize_with = "present")]
+        #[ts(optional)]
         received: Option<PageText>,
         #[serde(default)]
+        #[ts(optional, as = "Option<String>")]
         aria_snapshot: Option<PageText>,
     },
     UrlMatch {
@@ -169,6 +185,7 @@ pub(crate) enum ProbeReply {
         class: ErrorClass,
         /// Only from a file input that refused the files: what its chunk resolved to.
         #[serde(default)]
+        #[ts(optional)]
         resolved: Option<Resolution>,
     },
     /// The world has no booted probe (its document was replaced, or nothing installed it).
@@ -177,7 +194,7 @@ pub(crate) enum ProbeReply {
 
 /// What a request's selector chunk resolved to: the first match's preview and how many
 /// matched. Only a reply to a request that targets a chunk carries one.
-#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, TS)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Resolution {
     preview: String,
@@ -246,7 +263,7 @@ impl ProbeReply {
 }
 
 /// How the probe classified an error thrown in the page.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub(crate) enum ErrorClass {
     /// One of Playwright's own errors about the element the script chose, such as "Not a
@@ -261,7 +278,7 @@ pub(crate) enum ErrorClass {
 }
 
 /// A point in one frame's CSS pixels.
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize, TS)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Point {
     pub(crate) x: f64,
@@ -269,9 +286,8 @@ pub(crate) struct Point {
 }
 
 /// A rect in one frame's CSS pixels.
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize, ts_rs::TS)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize, TS)]
 #[serde(deny_unknown_fields)]
-#[ts(type = "import('../../../probe/protocol').Rect")]
 pub(crate) struct Rect {
     pub(crate) x: f64,
     pub(crate) y: f64,
@@ -281,25 +297,26 @@ pub(crate) struct Rect {
 
 /// `"done"`, or upstream's description of the element the pointer events reached instead,
 /// which is the page's own markup.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, TS)]
 #[serde(untagged)]
 pub(crate) enum Hit {
     Done(HitDone),
     Missed {
         #[serde(rename = "hitTargetDescription")]
+        #[ts(type = "string")]
         by: PageText,
     },
 }
 
 /// The string `"done"`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, TS)]
 pub(crate) enum HitDone {
     #[serde(rename = "done")]
     Done,
 }
 
 /// A rendered `<iframe>` in one frame's snapshot, for Rust to hop into.
-#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, TS)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct SnapshotIframe {
     pub(crate) r#ref: String,
@@ -310,9 +327,9 @@ pub(crate) struct SnapshotIframe {
 /// A value as the probe sent it: the page's own text. It prints as `[page text]`, so no log line carries a value the page
 /// shows (STYLE P4); [`PageText::into_value`] hands it to the op's output, and [`PageText::pin`]
 /// takes only the probe's pin and drops the text unread.
-#[derive(Deserialize)]
+#[derive(Deserialize, TS)]
 #[serde(transparent)]
-pub(crate) struct PageText(Value);
+pub(crate) struct PageText(#[ts(type = "unknown")] Value);
 
 impl PageText {
     /// The value, for the op's output.

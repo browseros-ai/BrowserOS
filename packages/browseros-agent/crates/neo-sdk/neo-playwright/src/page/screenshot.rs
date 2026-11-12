@@ -50,7 +50,7 @@ pub(crate) struct ScreenshotInput {
     #[ts(optional, as = "Option<bool>")]
     full_page: bool,
     #[serde(default)]
-    #[ts(optional, type = "import('../../../probe/protocol').Rect")]
+    #[ts(optional)]
     clip: Option<Rect>,
     #[serde(default)]
     #[ts(optional, as = "Option<Animations>")]

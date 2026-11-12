@@ -321,9 +321,10 @@ mod tests {
     const DRIFT: &[&str] = &[];
 
     /// What the prelude sends decodes here. Offline, a built op that decodes fails at its page's
-    /// admission or waits past the test's clock, an unbuilt one answers `not built yet`, and
-    /// only an input Rust cannot decode is `script / invalid_input`. So a field renamed in
-    /// wire.ts or in a family's input alone fails this test.
+    /// admission or waits past the test's clock. A recorded `refused` script can intentionally
+    /// answer `invalid_input`: only its exact message on that recorded op/example qualifies,
+    /// and a poisoned copy must still fail schema validation. All other `invalid_input`
+    /// replies remain decode drift, so a field renamed on one side alone fails this test.
     #[tokio::test(start_paused = true)]
     async fn tests_that_every_prelude_example_decodes() -> Result<(), Box<dyn Error>> {
         let examples: Value = serde_json::from_str(WIRE_EXAMPLES)?;
@@ -353,6 +354,46 @@ mod tests {
                 if let Ok(Err(error)) = time::timeout(Duration::from_secs(60), invoked).await
                     && error.error_code() == Some(ErrorCode::InvalidInput)
                 {
+                    let expected_refusal =
+                        input.get("refused").and_then(Value::as_str).map(|text| {
+                            // OpScope decorates every leaf error with the recorded API name.
+                            // Compare the complete message, including that exact decoration.
+                            let api = input
+                                .get("call")
+                                .and_then(|call| call.get("api"))
+                                .and_then(Value::as_str)
+                                .unwrap_or(name);
+                            format!("{api}: {text}")
+                        });
+                    if expected_refusal.as_deref() == Some(error.message()) {
+                        // `op` and this exact refused text belong to the same recorded input
+                        // just invoked above. No op-wide exemption or message prefix matches.
+                        const UNKNOWN: &str = "__wire_example_unknown_field";
+                        let mut poisoned = input.clone();
+                        poisoned
+                            .as_object_mut()
+                            .ok_or("a refused example is an object")?
+                            .insert(UNKNOWN.to_owned(), Value::Bool(true));
+                        let rejected = time::timeout(
+                            Duration::from_secs(60),
+                            playwright.invoke(&env, op, poisoned),
+                        )
+                        .await?
+                        .err()
+                        .ok_or("the poisoned refused example must be rejected")?;
+                        assert_eq!(
+                            rejected.error_code(),
+                            Some(ErrorCode::InvalidInput),
+                            "{name}: an unknown field must fail input decoding"
+                        );
+                        assert!(
+                            rejected.message().contains("unknown field")
+                                && rejected.message().contains(UNKNOWN),
+                            "{name}: the poisoned copy must fail its schema, not replay its refusal: {}",
+                            rejected.message()
+                        );
+                        continue;
+                    }
                     refused.insert(name.as_str());
                     messages.push(error.message().to_owned());
                 }

@@ -1,4 +1,5 @@
-//! What Rust asks the probe, as `protocol.ts` types it (`ProbeRequest` and its parts).
+//! What Rust asks the probe. These types also generate the page-side declarations
+//! (`generated.ts`), so request fields and serde spellings have one source.
 //!
 //! Field names are camelCase on the wire, and an optional TypeScript field (`position?`) is
 //! left out when it is `None`, never sent as `null`. The types also decode, so the tests can
@@ -10,16 +11,22 @@ use std::fmt;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::value::{self, RawValue};
 use serde_json::{Map, Value, json};
+use ts_rs::TS;
 
 use crate::probe::probe_reply::{Point, Rect};
 use crate::target::{Chunk, Strictness};
-use crate::world::Pin;
+use crate::world::{FrameSeq, Pin};
 
 /// A vendored `ParsedSelector` as the page receives it. Rust never reads or builds selector
 /// syntax in it, with one exception: the key of an iframe a frame hop went through
 /// ([`ParsedSelector::frame_key`]).
-#[derive(Clone, Debug)]
-pub(crate) struct ParsedSelector(Box<RawValue>);
+#[derive(Clone, Debug, TS)]
+pub(crate) struct ParsedSelector(
+    #[ts(
+        type = "import('../../../neo-playwright/third_party/playwright/packages/isomorphic/selectorParser').ParsedSelector"
+    )]
+    Box<RawValue>,
+);
 
 impl ParsedSelector {
     /// The chunk exactly as the prelude parsed it.
@@ -56,7 +63,7 @@ impl<'de> Deserialize<'de> for ParsedSelector {
 }
 
 /// What a request runs on inside the world.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) enum ProbeTarget {
     /// One frame's part of a locator; queried from the document (or from the call's root
@@ -71,8 +78,17 @@ pub(crate) enum ProbeTarget {
     Root,
 }
 
+/// The install's boot argument. The same shape is generated for the page's parser; epochs
+/// and document sequences retain their existing runtime validation on both sides.
+#[derive(Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct BootOptions<'a> {
+    pub(crate) frame_seq: FrameSeq,
+    pub(crate) epoch: &'a str,
+}
+
 /// One request; `op` is the tag.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, TS)]
 #[serde(
     tag = "op",
     rename_all = "camelCase",
@@ -99,8 +115,10 @@ pub(crate) enum ProbeRequest {
         frame_visible: bool,
         scroll: ScrollPlan,
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
         position: Option<Point>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
         arm: Option<ArmPlan>,
     },
     /// Stops the interceptor armed with `token` and reports whether the trusted events hit.
@@ -116,6 +134,7 @@ pub(crate) enum ProbeRequest {
     FrameBox {
         iframe: ProbeTarget,
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
         point: Option<Point>,
     },
     /// `fill`, `selectOptions`, `selectText`, `focus`, `blur` or `dispatchEvent` on a pin.
@@ -144,9 +163,11 @@ pub(crate) enum ProbeRequest {
         /// Any integer, as upstream passes it: a child frame's depth can come out zero or
         /// negative, and the engine reads those differently from no depth.
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
         depth: Option<i64>,
         /// Upstream's `boxes`: each node's box in this frame's own viewport.
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        #[ts(optional, as = "Option<bool>")]
         boxes: bool,
     },
     /// One poll of one retrying matcher; Rust's loop owns the timing, `.not` and the failure.
@@ -177,14 +198,16 @@ pub(crate) enum ProbeRequest {
         kind: StorageKind,
         action: StorageAction,
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
         name: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
         value: Option<String>,
     },
 }
 
 /// Which Storage a `webStorage` request uses.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub(crate) enum StorageKind {
     /// `page.localStorage`.
@@ -194,7 +217,7 @@ pub(crate) enum StorageKind {
 }
 
 /// Upstream's `WebStorage` methods, the call a `webStorage` request makes.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub(crate) enum StorageAction {
     Items,
@@ -212,7 +235,7 @@ impl StorageAction {
 }
 
 /// Which text of the document a `document` request reads.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub(crate) enum DocumentPart {
     /// `page.title()`.
@@ -225,7 +248,7 @@ pub(crate) enum DocumentPart {
 }
 
 /// What a `resolve` must find.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub(crate) enum Want {
     Element,
@@ -234,7 +257,7 @@ pub(crate) enum Want {
 }
 
 /// Upstream's retarget behaviors (`InjectedScript.retarget`).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "kebab-case")]
 pub(crate) enum Retarget {
     None,
@@ -244,7 +267,7 @@ pub(crate) enum Retarget {
 }
 
 /// States the probe checks. `stable` is not one: Rust compares two measurements in time.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub(crate) enum ElementState {
     Visible,
@@ -254,7 +277,7 @@ pub(crate) enum ElementState {
 
 /// Upstream's scroll rotation by attempt. `AlreadyProtocol`: Rust scrolled with
 /// `DOM.scrollIntoViewIfNeeded`, and the probe only measures.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub(crate) enum ScrollPlan {
     None,
@@ -266,7 +289,7 @@ pub(crate) enum ScrollPlan {
 }
 
 /// Which hit-target interceptor to arm.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub(crate) enum HitAction {
     Mouse,
@@ -275,7 +298,7 @@ pub(crate) enum HitAction {
 }
 
 /// Arms the hit-target interceptor. `block_all` is Playwright's `trial`.
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct ArmPlan {
     pub(crate) action: HitAction,
@@ -286,30 +309,36 @@ pub(crate) struct ArmPlan {
     pub(crate) expiry_ms: u64,
     /// The stability baseline: the probe arms only while the element still has this rect.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub(crate) expect_rect: Option<Rect>,
     /// Root quads own area/viewport checks; the interceptor checks actual event coordinates.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[ts(optional, as = "Option<bool>")]
     pub(crate) browser_mapped: bool,
 }
 
 /// One `selectOptions` option, as upstream's client sends it: an option matches when every
 /// attribute named here does (injected `selectOptions`), so `{ value, label }` picks the option
 /// with both, and one that names none matches any option, as upstream's does.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct SelectOption {
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub(crate) value_or_label: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub(crate) value: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub(crate) label: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub(crate) index: Option<u32>,
 }
 
 /// An edit of a pinned element.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, TS)]
 #[serde(
     tag = "kind",
     rename_all = "camelCase",
@@ -331,6 +360,7 @@ pub(crate) enum Edit {
     Blur,
     DispatchEvent {
         r#type: String,
+        #[ts(type = "Record<string, unknown>")]
         init: Map<String, Value>,
     },
     /// Upstream's injected `setInputFiles` with `payloads`: `null`, or `{ threw }` with what it
@@ -347,7 +377,7 @@ pub(crate) enum Edit {
 }
 
 /// MIME data in the caller's insertion order, matching DataTransfer.types ordering.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct DropEntry {
     pub(crate) mime_type: String,
@@ -360,13 +390,14 @@ pub(crate) struct DropEntry {
 /// decodes with `atob`. Local drop files also preserve their modification time; payloads use
 /// the browser's current time when it is absent. A file's bytes may be large or
 /// private, so they never print.
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct FilePayload {
     pub(crate) name: String,
     pub(crate) mime_type: String,
     pub(crate) buffer: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub(crate) last_modified_ms: Option<f64>,
 }
 
@@ -386,7 +417,7 @@ impl fmt::Debug for FilePayload {
 
 /// The text a fill puts into a field, which may be a password. It travels to the page in the
 /// request, and never prints (STYLE P4).
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize, TS)]
 #[serde(transparent)]
 pub(crate) struct FillValue(pub(crate) String);
 
@@ -397,7 +428,7 @@ impl fmt::Debug for FillValue {
 }
 
 /// A state `read` checks, as `injected.elementState` names it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub(crate) enum QueryState {
     Visible,
@@ -410,7 +441,7 @@ pub(crate) enum QueryState {
 }
 
 /// What a `read` reads from its element.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) enum Read {
     TextContent,
@@ -445,7 +476,7 @@ pub(crate) enum Read {
 }
 
 /// What a `readAll` reads from every match.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub(crate) enum ReadAll {
     Count,
@@ -455,7 +486,7 @@ pub(crate) enum ReadAll {
 }
 
 /// `ariaSnapshot`'s mode.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub(crate) enum SnapshotMode {
     Ai,
@@ -465,9 +496,14 @@ pub(crate) enum SnapshotMode {
 /// Upstream's per-poll expect parameters minus the selector, passed through as the prelude
 /// built them. They hold the script's expected value, which for `toHaveValue` on a password
 /// field is the password, so they never print (STYLE P4).
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize, TS)]
 #[serde(transparent)]
-pub(crate) struct ExpectParams(pub(crate) Map<String, Value>);
+pub(crate) struct ExpectParams(
+    #[ts(
+        type = "Omit<import('../../../neo-playwright/third_party/playwright/packages/injected/src/injectedScript').FrameExpectParams, 'selector'>"
+    )]
+    pub(crate) Map<String, Value>,
+);
 
 impl fmt::Debug for ExpectParams {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -476,7 +512,7 @@ impl fmt::Debug for ExpectParams {
 }
 
 /// A `waitForURL` pattern: a glob, or a `RegExp`'s source and flags.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(untagged, rename_all_fields = "camelCase", deny_unknown_fields)]
 pub(crate) enum UrlPattern {
     Glob {

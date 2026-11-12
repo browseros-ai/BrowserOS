@@ -248,9 +248,9 @@ type _locator_dragTo = Assert<ExactUpstreamCheck<'locator.dragTo', DragInput, pw
 type _locator_dragTo_keys = Assert<KeysCheck<'locator.dragTo', (typeof ACTION_OPTION_KEYS)['locator.dragTo'][number], pw.FrameDragAndDropOptions>>
 type _locator_dragTo_result = Assert<VoidIsNull<'locator.dragTo', pw.FrameDragAndDropResult, null>>
 // locator.drop: Frame.drop
-//   adds files: Neo resolves paths or prepared payloads on its host
-//   omits localPaths: folded into Neo's files paths variant
-//   omits payloads: folded into Neo's files payloads variant
+//   adds files: the prelude has no filesystem: either the script's paths, each with the MIME type the prelude's vendored table gives it, which Rust reads into payloads on Neo's host under the HostFiles capability (a directory refused), or the script's in-memory payloads
+//   omits localPaths: upstream's client sends local paths after resolving and stat'ing them; Neo's host does that from files.paths and reads the files into payloads
+//   omits payloads: carried as files.payloads, or built on Neo's host from files.paths
 //   omits streams: no client file streams in a stateless run
 type _locator_drop = Assert<UpstreamCheck<'locator.drop', DropInput, pw.FrameDropParams, 'files', 'localPaths' | 'payloads' | 'streams', never>>
 type _locator_drop_result = Assert<VoidIsNull<'locator.drop', pw.FrameDropResult, null>>
@@ -280,11 +280,11 @@ type _locator_focus_result = Assert<VoidIsNull<'locator.focus', pw.ElementHandle
 type _locator_blur = Assert<UpstreamCheck<'locator.blur', ActionTargetInput, pw.FrameBlurParams, never, never, never>>
 type _locator_blur_result = Assert<VoidIsNull<'locator.blur', pw.FrameBlurResult, null>>
 // locator.setInputFiles: ElementHandle.setInputFiles
-//   adds files: Neo resolves paths or prepared payloads on its host
-//   omits directoryStream: host directories use Neo's files paths variant
-//   omits localDirectory: host directories use Neo's files paths variant
-//   omits localPaths: folded into Neo's files paths variant
-//   omits payloads: folded into Neo's files payloads variant
+//   adds files: the prelude has no filesystem, so it cannot stat a path to choose localPaths or localDirectory as upstream's client does: either the script's path strings, which Rust resolves and stats on Neo's host under the HostFiles capability (files, or one directory), or the script's in-memory payloads
+//   omits directoryStream: a remote client's upload of a directory it read; Neo's host reads the directory named in files.paths itself
+//   omits localDirectory: chosen by upstream's client when a path stats as a directory; Neo's host makes that choice from files.paths
+//   omits localPaths: chosen by upstream's client after it stats each path; Neo's host makes that choice from files.paths
+//   omits payloads: carried as files.payloads, the script's in-memory files
 //   omits streams: no client file streams in a stateless run
 type _locator_setInputFiles = Assert<UpstreamCheck<'locator.setInputFiles', SetInputFilesInput, pw.ElementHandleSetInputFilesParams, 'files', 'directoryStream' | 'localDirectory' | 'localPaths' | 'payloads' | 'streams', never>>
 type _locator_setInputFiles_result = Assert<VoidIsNull<'locator.setInputFiles', pw.ElementHandleSetInputFilesResult, null>>

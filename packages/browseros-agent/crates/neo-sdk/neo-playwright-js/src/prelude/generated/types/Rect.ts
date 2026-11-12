@@ -3,4 +3,4 @@
 /**
  * A rect in one frame's CSS pixels.
  */
-export type Rect = import('../../../probe/protocol').Rect;
+export type Rect = { x: number, y: number, width: number, height: number, };

@@ -20,6 +20,7 @@ use std::time::Duration;
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
+use ts_rs::TS;
 
 use crate::action::actionability::state_name;
 use crate::action::attempt_log::AttemptLog;
@@ -93,8 +94,8 @@ impl FormEdit<'_> {
 }
 
 /// A fill's answer (protocol.ts `Filled`).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
-enum Filled {
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, TS)]
+pub(crate) enum Filled {
     #[serde(rename = "done")]
     Done,
     #[serde(rename = "needsinput")]
@@ -102,16 +103,16 @@ enum Filled {
 }
 
 /// A selectOptions' answer (protocol.ts `Selected`).
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, TS)]
 #[serde(untagged)]
-enum Selected {
+pub(crate) enum Selected {
     Values(Vec<String>),
     Retry(SelectRetry),
 }
 
 /// Why upstream's selectOptions asks for another attempt.
-#[derive(Clone, Copy, Debug, Deserialize)]
-enum SelectRetry {
+#[derive(Clone, Copy, Debug, Deserialize, TS)]
+pub(crate) enum SelectRetry {
     #[serde(rename = "error:optionsnotfound")]
     OptionsNotFound,
     #[serde(rename = "error:optionnotenabled")]

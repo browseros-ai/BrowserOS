@@ -3,6 +3,7 @@
 
 use serde::Deserialize;
 use serde_json::json;
+use ts_rs::TS;
 
 use crate::op_scope::OpScope;
 use crate::page::OpPage;
@@ -15,7 +16,7 @@ use crate::{ErrorCode, Playwright, PlaywrightError};
 
 /// A `located` read's value: the first match, pinned, and what `waitForSelector` checks and
 /// logs on each poll.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, TS)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Located {
     pub(crate) pin: Pin,
@@ -46,9 +47,9 @@ impl Located {
 }
 
 /// One value of a `readAll` `pins`.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, TS)]
 #[serde(deny_unknown_fields)]
-struct PinnedMatch {
+pub(crate) struct PinnedMatch {
     pin: Pin,
     preview: String,
 }

@@ -25,7 +25,6 @@ import {
   type Described,
   type ErrorClass,
   type ErrorReply,
-  type NeoProbe,
   PROTOCOL,
   type ProbeRequest,
   type ReplyTo,
@@ -96,7 +95,7 @@ function described(world: World): Described {
   }
 }
 
-function createProbe(): NeoProbe {
+function createProbe() {
   // One table and one map per document, across re-keys: their numbers never restart, so a
   // pin or frame key handed out under another epoch can only fail here, never alias.
   const pins = new Pins()
@@ -121,7 +120,7 @@ function createProbe(): NeoProbe {
   }
 
   return {
-    boot(options) {
+    boot(options: BootOptions) {
       const { frameSeq, epoch } = parseBootOptions(options)
       if (world?.epoch === epoch) return described(world)
       // Another epoch is another claw-sdk process, or this one after a restart. Nothing it
@@ -141,7 +140,7 @@ function createProbe(): NeoProbe {
         : { ...described(world), retired }
     },
 
-    call(request, root) {
+    call(request: unknown, root?: unknown) {
       const booted = world
       if (!booted) return UNINSTALLED
       if (!hasKnownOp(request))
@@ -244,6 +243,9 @@ function errorReply(errorClass: ErrorClass, message: string): ErrorReply {
 // The install expression skips this bundle when the global exists; `??=` keeps a second
 // evaluation harmless too, because the first probe and its engine stay in charge.
 globalThis.__neoProbe ??= createProbe()
+
+/** The probe ABI follows its actual implementation; its data comes from generated types. */
+type NeoProbe = ReturnType<typeof createProbe>
 
 declare global {
   var __neoProbe: NeoProbe | undefined

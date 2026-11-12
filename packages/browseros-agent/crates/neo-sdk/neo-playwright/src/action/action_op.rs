@@ -148,6 +148,25 @@ impl ActionOp {
     }
 }
 
+/// `locator.setInputFiles`'s one field for upstream's `localPaths`, `localDirectory` and
+/// `payloads` (a difference the owner names as needed), with why it exists.
+const UPLOAD_FILES: (&str, &str) = (
+    "files",
+    "the prelude has no filesystem, so it cannot stat a path to choose localPaths \
+                     or localDirectory as upstream's client does: either the script's path \
+                     strings, which Rust resolves and stats on Neo's host under the HostFiles \
+                     capability (files, or one directory), or the script's in-memory payloads",
+);
+
+/// `locator.drop`'s one field for upstream's `localPaths` and `payloads`, with why it exists.
+const DROP_FILES: (&str, &str) = (
+    "files",
+    "the prelude has no filesystem: either the script's paths, each with the MIME \
+                     type the prelude's vendored table gives it, which Rust reads into payloads on \
+                     Neo's host under the HostFiles capability (a directory refused), or the \
+                     script's in-memory payloads",
+);
+
 /// The same exhaustive rows drive runtime decoding, generated senders and upstream checks.
 fn route<'a, R: Route<'a>>(op: ActionOp, r: R) -> R::Out {
     match op {
@@ -178,13 +197,17 @@ fn route<'a, R: Route<'a>>(op: ActionOp, r: R) -> R::Out {
         ),
         ActionOp::Drop => r.op(
             wire::command("Frame.drop")
-                .adds(&[(
-                    "files",
-                    "Neo resolves paths or prepared payloads on its host",
-                )])
+                .adds(&[DROP_FILES])
                 .omits(&[
-                    ("localPaths", "folded into Neo's files paths variant"),
-                    ("payloads", "folded into Neo's files payloads variant"),
+                    (
+                        "localPaths",
+                        "upstream's client sends local paths after resolving and stat'ing them; \
+                         Neo's host does that from files.paths and reads the files into payloads",
+                    ),
+                    (
+                        "payloads",
+                        "carried as files.payloads, or built on Neo's host from files.paths",
+                    ),
                     ("streams", "no client file streams in a stateless run"),
                 ]),
             drop,
@@ -204,21 +227,24 @@ fn route<'a, R: Route<'a>>(op: ActionOp, r: R) -> R::Out {
         ActionOp::Blur => r.op(wire::command("Frame.blur"), blur),
         ActionOp::SetInputFiles => r.op(
             wire::command("ElementHandle.setInputFiles")
-                .adds(&[(
-                    "files",
-                    "Neo resolves paths or prepared payloads on its host",
-                )])
+                .adds(&[UPLOAD_FILES])
                 .omits(&[
                     (
                         "directoryStream",
-                        "host directories use Neo's files paths variant",
+                        "a remote client's upload of a directory it read; Neo's host reads the \
+                         directory named in files.paths itself",
                     ),
                     (
                         "localDirectory",
-                        "host directories use Neo's files paths variant",
+                        "chosen by upstream's client when a path stats as a directory; Neo's host \
+                         makes that choice from files.paths",
                     ),
-                    ("localPaths", "folded into Neo's files paths variant"),
-                    ("payloads", "folded into Neo's files payloads variant"),
+                    (
+                        "localPaths",
+                        "chosen by upstream's client after it stats each path; Neo's host makes \
+                         that choice from files.paths",
+                    ),
+                    ("payloads", "carried as files.payloads, the script's in-memory files"),
                     ("streams", "no client file streams in a stateless run"),
                 ]),
             set_input_files,

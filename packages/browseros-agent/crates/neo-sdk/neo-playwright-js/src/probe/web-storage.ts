@@ -6,7 +6,12 @@
  * document that may not use storage (an opaque origin) throws Chromium's `SecurityError`,
  * which reaches the script as upstream's does.
  */
-import type { Value, WebStorageRequest } from './protocol'
+import type {
+  StorageItem,
+  StorageValue,
+  Value,
+  WebStorageRequest,
+} from './protocol'
 import { ProbeError, type World } from './world'
 
 export function webStorage(world: World, request: WebStorageRequest): Value {
@@ -21,14 +26,19 @@ export function webStorage(world: World, request: WebStorageRequest): Value {
   }
 }
 
-function call(world: World, request: WebStorageRequest): Value {
+// Specialize the opaque value envelope without repeating either Rust-owned field layout.
+type StorageReply = {
+  [K in keyof Value]: K extends 'value' ? StorageValue : Value[K]
+}
+
+function call(world: World, request: WebStorageRequest): StorageReply {
   const { window } = world.injected
   const storage =
     request.kind === 'local' ? window.localStorage : window.sessionStorage
   switch (request.action) {
     case 'items': {
       // Upstream's loop: by index, skipping a key that went away under it.
-      const items: { name: string; value: string }[] = []
+      const items: StorageItem[] = []
       for (let index = 0; index < storage.length; index++) {
         const name = storage.key(index)
         if (name !== null)
