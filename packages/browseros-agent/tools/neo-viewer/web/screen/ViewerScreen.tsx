@@ -121,10 +121,12 @@ export function ViewerScreen() {
     setOperation(selection)
   }
 
+  // A reply in the pop-up is the selection too: the panel shows that reply, not an older call.
   const openFull = (run: RunSummary) => {
     setChosenId(run.id)
     setFullId(run.id)
     setFullOperation(null)
+    setOperation(null)
   }
 
   const openFullOperation = (selection: OperationSelection) => {

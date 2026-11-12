@@ -125,6 +125,54 @@ describe('what a call gave the script', () => {
     ])
   })
 
+  it('pairs a later snapshot again once overlapping ones are done, and skips calls that record no text', () => {
+    const tree = { document: 4, json: [] }
+    const snap = (seq: number, extra: Partial<NeoOperation> = {}) =>
+      operation(seq, 'page.ariaSnapshot', {
+        line: 1,
+        tabId: 1,
+        result: tree,
+        ...extra,
+      })
+    const pend = (seq: number, text: string) =>
+      operation(seq, 'page.snapshotPending', {
+        line: 1,
+        tabId: 1,
+        args: { document: 4, text, form: 'text', delta: false },
+      })
+    // Two overlapped, then a third ran alone.
+    const all = [
+      snap(1),
+      snap(2),
+      pend(3, 'a or b'),
+      pend(4, 'b or a'),
+      snap(5),
+      pend(6, 'third'),
+    ]
+    expect(shown(all[0] as NeoOperation, all).source).toContain('overlapped')
+    expect(shown(all[1] as NeoOperation, all).source).toContain('overlapped')
+    expect(shown(all[4] as NeoOperation, all).lines).toEqual(['third'])
+    // ariaSnapshotJSON({ mode: 'ai' }) and a failed snapshot never record text, so neither
+    // makes the next one look overlapped.
+    const json = snap(1, {
+      args: {
+        mode: 'ai',
+        call: { api: 'page.ariaSnapshotJSON', timeoutMs: 0 },
+      },
+    })
+    const failedSnap = snap(2, {
+      outcome: 'error',
+      error: {
+        owner: 'website',
+        code: 'timeout',
+        message: 'snapshot timed out',
+        retryable: true,
+      },
+    })
+    const after = [json, failedSnap, snap(3), pend(4, 'mine')]
+    expect(shown(after[2] as NeoOperation, after).lines).toEqual(['mine'])
+  })
+
   it('says which view Neo cut: a whole text from a cut tree', () => {
     const all = [
       operation(3, 'page.ariaSnapshot', {

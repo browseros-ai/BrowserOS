@@ -200,22 +200,36 @@ function pendingOf(
     .filter((operation) => sameCall(operation, snapshot))
     .sort((a, b) => a.seq - b.seq)
   let open: NeoOperation[] = []
+  // Snapshots whose text could be either of two pending records. They stay ambiguous, and leave
+  // `open` one per record, so a later snapshot from the same line is paired again.
+  const overlapped = new Set<NeoOperation>()
   for (const operation of call) {
-    if (operation.name === 'page.ariaSnapshot') {
-      // `mode: 'default'` never records its text, so it never closes.
-      if (modeOf(operation) !== 'default') open.push(operation)
-      continue
-    }
+    if (recordsText(operation)) open.push(operation)
     if (operation.name !== 'page.snapshotPending') continue
     const owners = open.filter(
       (candidate) => documentOf(candidate) === argsOf(operation).document,
     )
-    if (owners.length > 1 && owners.includes(snapshot)) return 'overlapped'
-    if (owners.length !== 1) continue
-    if (owners[0] === snapshot) return operation
-    open = open.filter((candidate) => candidate !== owners[0])
+    if (owners.length > 1) for (const owner of owners) overlapped.add(owner)
+    const [closed] = owners
+    if (!closed) continue
+    if (owners.length === 1 && closed === snapshot && !overlapped.has(snapshot))
+      return operation
+    open = open.filter((candidate) => candidate !== closed)
   }
-  return null
+  return overlapped.has(snapshot) ? 'overlapped' : null
+}
+
+/**
+ * A snapshot that records its text with a `page.snapshotPending`: a whole page's v1 text that the
+ * engine answered. `mode: 'default'`, `ariaSnapshotJSON()` and a failed call never do.
+ */
+function recordsText(operation: NeoOperation): boolean {
+  return (
+    operation.name === 'page.ariaSnapshot' &&
+    operation.outcome === 'ok' &&
+    modeOf(operation) !== 'default' &&
+    !apiOf(operation).endsWith('ariaSnapshotJSON')
+  )
 }
 
 function modeOf(operation: NeoOperation): unknown {
