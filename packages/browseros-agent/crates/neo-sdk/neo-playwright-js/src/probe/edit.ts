@@ -36,13 +36,13 @@ function apply(
   switch (edit.kind) {
     case 'fill': {
       // The field the text goes into: injected.fill follows a label to its control. It is
-      // taken before the fill, which can make the page replace it.
+      // taken before the fill, which can make the page replace it. A value set on it directly
+      // (`done`: a date, a color) needs no focus, only the field still in the document.
       const field = injected.retarget(element, 'follow-label') ?? element
       const filled = injected.fill(element, edit.value)
       if (filled === 'error:notconnected') return filled
-      return filled === 'needsinput'
-        ? keptFocus(world, [element, field], valueReply(filled))
-        : valueReply(filled)
+      const typed = filled === 'needsinput' ? field : undefined
+      return keptFocus(world, [element, field], typed, valueReply(filled))
     }
     case 'selectOptions': {
       const selected = injected.selectOptions(element, edit.options)
@@ -56,10 +56,10 @@ function apply(
       return doneOf(injected.focusNode(element, edit.resetSelection))
     case 'focusToType': {
       // Chromium's label hands its focus to its control, which then takes the keys.
-      const control = injected.retarget(element, 'follow-label') ?? element
+      const typed = labelControl(element) ?? element
       const focused = injected.focusNode(element, true)
       if (focused === 'error:notconnected') return focused
-      return keptFocus(world, [element, control], valueReply(null))
+      return keptFocus(world, [element, typed], typed, valueReply(null))
     }
     case 'blur':
       return doneOf(injected.blurNode(element))
@@ -81,10 +81,14 @@ function apply(
  * re-rendering it) leaves the selection in the box typed into before, and a page that moves the
  * focus on hands the text to the box that took it (measured on upstream 1.64.1 too).
  *
- *   one of `targets` left the document   `error:notconnected`: Rust's locator resolves again
- *                                        and finds what it matches now (the copy)
- *   none of them holds the focus         `notFocused`, with what holds it: Rust fails the op
- *   else                                 `kept`: Rust types
+ *   one of `connected` left the document  `error:notconnected`: Rust's locator resolves
+ *                                         again and finds what it matches now (the copy)
+ *   `typed` does not hold the focus       `notFocused`, with what holds it: Rust fails the op
+ *   else                                  `kept`: Rust types
+ *
+ * `typed` is the one element the text is for: the field a label names, never the label, so a
+ * label's other focusable child cannot pass for it. A fill that set its value directly has
+ * none, and is checked only for the field still being in the document.
  *
  * It looks after one microtask turn, so a swap a framework schedules from the focus event as a
  * microtask (React flushes a discrete event's update that way) is seen. A swap from a later
@@ -92,14 +96,22 @@ function apply(
  */
 async function keptFocus(
   world: World,
-  targets: readonly Element[],
+  connected: readonly Element[],
+  typed: Element | undefined,
   kept: Value,
 ): Promise<Edited> {
   await Promise.resolve()
-  if (targets.some((target) => !target.isConnected)) return 'error:notconnected'
-  if (targets.some(holdsFocus)) return kept
-  const [first] = targets
-  return { kind: 'notFocused', ...holderOf(world, first?.ownerDocument) }
+  if (connected.some((element) => !element.isConnected))
+    return 'error:notconnected'
+  if (!typed || holdsFocus(typed)) return kept
+  return { kind: 'notFocused', ...holderOf(world, typed.ownerDocument) }
+}
+
+/** A `<label>`'s control, which takes the label's focus; none for any other element. */
+function labelControl(element: Element): Element | null {
+  if (element.localName !== 'label') return null
+  const control: unknown = Reflect.get(element, 'control')
+  return isElement(control) ? control : null
 }
 
 /**

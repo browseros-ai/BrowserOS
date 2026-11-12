@@ -8527,7 +8527,8 @@ ${value.stack}`;
         const filled = injected.fill(element, edit.value);
         if (filled === "error:notconnected")
           return filled;
-        return filled === "needsinput" ? keptFocus(world, [element, field], valueReply(filled)) : valueReply(filled);
+        const typed = filled === "needsinput" ? field : undefined;
+        return keptFocus(world, [element, field], typed, valueReply(filled));
       }
       case "selectOptions": {
         const selected = injected.selectOptions(element, edit.options);
@@ -8540,11 +8541,11 @@ ${value.stack}`;
       case "focus":
         return doneOf(injected.focusNode(element, edit.resetSelection));
       case "focusToType": {
-        const control = injected.retarget(element, "follow-label") ?? element;
+        const typed = labelControl(element) ?? element;
         const focused = injected.focusNode(element, true);
         if (focused === "error:notconnected")
           return focused;
-        return keptFocus(world, [element, control], valueReply(null));
+        return keptFocus(world, [element, typed], typed, valueReply(null));
       }
       case "blur":
         return doneOf(injected.blurNode(element));
@@ -8557,14 +8558,19 @@ ${value.stack}`;
         return valueReply(setFiles(world, element, edit.payloads));
     }
   }
-  async function keptFocus(world, targets, kept) {
+  async function keptFocus(world, connected, typed, kept) {
     await Promise.resolve();
-    if (targets.some((target) => !target.isConnected))
+    if (connected.some((element) => !element.isConnected))
       return "error:notconnected";
-    if (targets.some(holdsFocus))
+    if (!typed || holdsFocus(typed))
       return kept;
-    const [first] = targets;
-    return { kind: "notFocused", ...holderOf(world, first?.ownerDocument) };
+    return { kind: "notFocused", ...holderOf(world, typed.ownerDocument) };
+  }
+  function labelControl(element) {
+    if (element.localName !== "label")
+      return null;
+    const control = Reflect.get(element, "control");
+    return isElement(control) ? control : null;
   }
   function holdsFocus(target) {
     const found = Reflect.get(target.getRootNode(), "activeElement");

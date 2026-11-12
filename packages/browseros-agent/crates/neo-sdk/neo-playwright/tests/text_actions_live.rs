@@ -1727,7 +1727,7 @@ fn outcome(result: Result<Value, PlaywrightError>) -> String {
 /// `focus.html`'s boxes as the page starts them, with `changed` laid over.
 fn boxes_with(changed: Value) -> Value {
     let mut boxes = json!({ "user": "", "pw": "", "code": "", "note": "", "editor": "Edit me",
-                            "inner": "" });
+                            "inner": "", "paired": "", "side": "", "when": "" });
     if let (Some(boxes), Value::Object(changed)) = (boxes.as_object_mut(), changed) {
         boxes.extend(changed);
     }
@@ -1758,17 +1758,33 @@ async fn tests_that_fill_types_only_into_its_target_when_the_page_moves_the_focu
         .await?;
     let stolen = outcome(fill(&run, &at(&page, "#note"), "never-typed").await);
     let dropped = outcome(fill(&run, &at(&page, "#inner"), "never-typed").await);
+    // Through a label, the check is on the field it names: the label's other child taking the
+    // focus does not pass for it.
+    run.eval(&page, "stealFocus('paired', 'side')").await?;
+    let labelled = outcome(fill(&run, &at(&page, "#pair"), "never-typed").await);
+    // A value set directly (a date) needs no focus, but a copy still gets it.
+    run.eval(&page, "swapOnFocus('when')").await?;
+    let dated = outcome(fill(&run, &at(&page, "#when"), "2026-11-12").await);
     // A contenteditable's child still fills: its editing host takes the focus.
     let child = outcome(fill(&run, &at(&page, "#para"), "para text").await);
     assert_eq!(
         (
-            [swapped, cleared, stolen, dropped, child],
+            [swapped, cleared, stolen, dropped, labelled, dated, child],
             boxes(&run, &page).await?
         ),
         (
-            ["ok", "ok", "not_focused", "not_focused", "ok"].map(str::to_owned),
+            [
+                "ok",
+                "ok",
+                "not_focused",
+                "not_focused",
+                "not_focused",
+                "ok",
+                "ok"
+            ]
+            .map(str::to_owned),
             boxes_with(json!({ "user": "owner@example.com", "pw": "into-the-copy",
-                               "editor": "para text" })),
+                               "when": "2026-11-12", "editor": "para text" })),
         ),
         "each fill typed into its own box or failed; none typed into another"
     );
@@ -1801,19 +1817,33 @@ async fn tests_that_press_sequentially_types_only_into_its_target_when_the_page_
     run.eval(&page, "document.getElementById('code').disabled = true")
         .await?;
     let disabled = typed("#code", "never-typed").await;
-    // Focus the page hands into the target's own child is still the target's.
-    run.eval(&page, "delegateFocus('wrapper', 'inner')").await?;
+    // Focus the page hands into the target's own child is still the target's; through a label,
+    // only the field it names counts.
+    run.eval(
+        &page,
+        "delegateFocus('wrapper', 'inner'); stealFocus('paired', 'side')",
+    )
+    .await?;
     let delegated = typed("#wrapper", "into-child").await;
+    let labelled = typed("#pair", "never-typed").await;
     // keyboard.type with nothing focused stays as Playwright has it: no error, no box changes.
     run.eval(&page, "document.activeElement.blur()").await?;
     let nowhere = outcome(device(&run, "keyboard.type", &page, keys("nowhere")).await);
     assert_eq!(
         (
-            [swapped, stolen, disabled, delegated, nowhere],
+            [swapped, stolen, disabled, delegated, labelled, nowhere],
             boxes(&run, &page).await?
         ),
         (
-            ["ok", "not_focused", "not_focused", "ok", "ok"].map(str::to_owned),
+            [
+                "ok",
+                "not_focused",
+                "not_focused",
+                "ok",
+                "not_focused",
+                "ok"
+            ]
+            .map(str::to_owned),
             boxes_with(json!({ "user": "owner@example.com", "pw": "keys-in-copy",
                                "inner": "into-child" })),
         ),

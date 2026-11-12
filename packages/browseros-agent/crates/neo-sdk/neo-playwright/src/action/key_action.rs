@@ -25,7 +25,6 @@ use std::time::Duration;
 use crate::action::requested_navigations::RequestedNavigations;
 use crate::action::subject::Subject;
 use crate::backoff::Backoff;
-use crate::call_log::entered_text;
 use crate::input::{self, InputDevices, InputStep, UnknownKey};
 use crate::locator_handler::Prechecks;
 use crate::op_scope::{OpScope, Sent};
@@ -34,7 +33,7 @@ use crate::probe::{Edit, ProbeFailure, ProbeReply, ProbeRequest, Want};
 use crate::resolve::{self, Resolved};
 use crate::target::{Strictness, Target};
 use crate::world::Pin;
-use crate::{ErrorCode, Playwright, PlaywrightError};
+use crate::{ErrorCode, Playwright, PlaywrightError, call_log};
 
 /// What the keyboard does once the element has the focus.
 pub(crate) enum Keys<'k> {
@@ -63,7 +62,9 @@ impl Keys<'_> {
     fn log_line(&self) -> String {
         match self {
             Self::Press { key, .. } => format!("elementHandle.press(\"{key}\")"),
-            Self::Type { text, .. } => format!("elementHandle.type({})", entered_text(text)),
+            Self::Type { text, .. } => {
+                format!("elementHandle.type({})", call_log::entered_text(text))
+            }
         }
     }
 

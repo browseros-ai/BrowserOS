@@ -28,7 +28,6 @@ use crate::action::actionability::state_name;
 use crate::action::attempt_log::AttemptLog;
 use crate::action::subject::Subject;
 use crate::backoff::Backoff;
-use crate::call_log::entered_text;
 use crate::input::{self, Keyboard};
 use crate::locator_handler::Prechecks;
 use crate::op_scope::{OpScope, Sent};
@@ -40,7 +39,7 @@ use crate::probe::{
 use crate::resolve::{self, Resolved};
 use crate::target::{Strictness, Target};
 use crate::world::Pin;
-use crate::{ErrorCode, PlaywrightError};
+use crate::{ErrorCode, PlaywrightError, call_log};
 
 /// One form edit and what it carries.
 pub(crate) enum FormEdit<'v> {
@@ -67,7 +66,7 @@ impl FormEdit<'_> {
     /// with the value's length in place of its text (`call_log::entered_text`).
     fn announcement(&self) -> Option<String> {
         match self {
-            Self::Fill(value) => Some(format!("  fill({})", entered_text(&value.0))),
+            Self::Fill(value) => Some(format!("  fill({})", call_log::entered_text(&value.0))),
             Self::SelectOptions(_) | Self::SelectText => None,
         }
     }
