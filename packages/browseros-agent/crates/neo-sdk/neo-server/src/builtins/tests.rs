@@ -1084,7 +1084,7 @@ async fn a_listener_gets_no_events_from_a_tab_whose_lock_blocks_reads() -> Resul
             "call": { "api": "page.on", "timeoutMs": 0 },
             "page": handle(&owners),
             "event": event,
-            "on": true,
+            "enabled": true,
             "since": 0,
         });
         value(harness.submit(&run, "events.listen", listen).await)?;
@@ -2000,7 +2000,7 @@ async fn prelude_listener_setup_is_cancelled_without_a_not_awaited_notice()
             "events.listen".to_owned(),
             json!({
                 "call":{"api":"page.on","timeoutMs":0}, "page":handle(&page),
-                "event":"workerstate", "on":true, "since":0,
+                "event":"workerstate", "enabled":true, "since":0,
             }),
             None,
         ),
@@ -2054,7 +2054,7 @@ async fn the_crate_gets_the_page_the_door_resolved_never_the_lazy_one() -> Resul
         "call": { "api": "page.on", "timeoutMs": 0 },
         "page": { "$neo": "page", "tab": null },
         "event": "dialog",
-        "on": true,
+        "enabled": true,
         "since": 0,
     });
     let (operation, reply) = harness.submit_op(&run, "events.listen", listen).await;
@@ -2064,7 +2064,7 @@ async fn the_crate_gets_the_page_the_door_resolved_never_the_lazy_one() -> Resul
         .ok_or("the door opened the run's page for the listener")?;
     assert_eq!(
         value(reply)?,
-        json!({}),
+        Value::Null,
         "the crate admitted a real page: it refuses the lazy page's `id: null`"
     );
     assert_eq!(
@@ -2406,7 +2406,7 @@ async fn prepare_event_tabs(
                 "events.listen",
                 json!({
                     "call":{"api":"page.on","timeoutMs":0}, "page":handle(tab),
-                    "event":event, "on":true, "since":0
+                    "event":event, "enabled":true, "since":0
                 }),
             )
             .await;
@@ -2780,7 +2780,7 @@ async fn a_native_pump_retains_both_target_bound_subscriptions_after_eviction()
                 "events.listen",
                 json!({
                     "call":{"api":"page.on","timeoutMs":0}, "page":handle(&page),
-                    "event":"close", "on":true, "since":0
+                    "event":"close", "enabled":true, "since":0
                 }),
             )
             .await,
@@ -3003,7 +3003,7 @@ async fn explicit_close_cleans_a_replacement_with_delivered_dead_evidence()
                 "events.listen",
                 json!({
                     "call":{"api":"page.on","timeoutMs":0}, "page":handle(&page),
-                    "event":"close", "on":true, "since":0
+                    "event":"close", "enabled":true, "since":0
                 }),
             )
             .await,
@@ -3214,10 +3214,10 @@ async fn hosted_console_and_pageerror_waits_refuse_without_changing_listeners()
     let (run, _guard) = harness.run()?;
     for event in ["console", "pageerror"] {
         let listen = json!({"call":{"api":"page.on","timeoutMs":0},
-            "page":handle(&page),"event":event,"on":true,"since":0});
+            "page":handle(&page),"event":event,"enabled":true,"since":0});
         assert_eq!(
             value(harness.submit(&run, "events.listen", listen).await)?,
-            json!({})
+            Value::Null
         );
         let wait = json!({"call":{"api":"page.waitForEvent","timeoutMs":30000},
             "page":handle(&page),"event":event,"since":0});
@@ -3247,7 +3247,7 @@ async fn a_nonhosted_console_wait_still_receives_native_messages() -> Result<(),
     let page = harness.owner_tab("https://example.com/events").await?;
     let (run, _guard) = harness.run()?;
     let listen = json!({"call":{"api":"page.on","timeoutMs":0},
-        "page":handle(&page),"event":"console","on":true,"since":0});
+        "page":handle(&page),"event":"console","enabled":true,"since":0});
     value(harness.submit(&run, "events.listen", listen).await)?;
     harness.fake.page_event(
         page.tab,
@@ -3273,7 +3273,7 @@ async fn worker_bookkeeping_can_unsubscribe_after_its_page_closed() -> Result<()
                 "events.listen",
                 json!({
                     "call":{"api":"page.on","timeoutMs":0},
-                    "page":handle(&page),"event":"workerstate","on":true,"since":0
+                    "page":handle(&page),"event":"workerstate","enabled":true,"since":0
                 }),
             )
             .await,
@@ -3295,12 +3295,12 @@ async fn worker_bookkeeping_can_unsubscribe_after_its_page_closed() -> Result<()
             "events.listen",
             json!({
                 "call":{"api":"page.off","timeoutMs":0},
-                "page":null,"retiredTab":page.tab,"event":"workerstate","on":false,"since":0
+                "page":null,"retiredTab":page.tab,"event":"workerstate","enabled":false,"since":0
             }),
         )
         .await;
     assert!(reply.default_page.is_none(), "cleanup must not open a tab");
-    assert_eq!(value(reply)?, json!({}));
+    assert_eq!(value(reply)?, Value::Null);
     let refused = failure(
         harness
             .submit(
@@ -3308,7 +3308,7 @@ async fn worker_bookkeeping_can_unsubscribe_after_its_page_closed() -> Result<()
                 "events.listen",
                 json!({
                     "call":{"api":"page.on","timeoutMs":0},
-                    "page":null,"retiredTab":page.tab,"event":"workerstate","on":true,"since":0
+                    "page":null,"retiredTab":page.tab,"event":"workerstate","enabled":true,"since":0
                 }),
             )
             .await,

@@ -60,12 +60,12 @@ fn worker_event_target(name: &str, args: Option<&Value>, tab: Option<i64>) -> bo
     match name {
         "events.next" => tab.is_none(),
         "events.listen" => args.is_some_and(|args| {
-            let on = args.get("on").and_then(Value::as_bool);
+            let enabled = args.get("enabled").and_then(Value::as_bool);
             let target = args
                 .pointer("/page/tab")
                 .and_then(Value::as_i64)
                 .or_else(|| {
-                    if on == Some(false) {
+                    if enabled == Some(false) {
                         args.get("retiredTab").and_then(Value::as_i64)
                     } else {
                         None
@@ -76,7 +76,7 @@ fn worker_event_target(name: &str, args: Option<&Value>, tab: Option<i64>) -> bo
                 && (target == tab
                     // Unsubscribing after close has no live native tab to annotate. It
                     // remains a known read, and cannot authorize another run trace tab.
-                    || (tab.is_none() && on == Some(false)))
+                    || (tab.is_none() && enabled == Some(false)))
         }),
         _ => false,
     }

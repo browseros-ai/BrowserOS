@@ -102,7 +102,9 @@ impl EventOp {
     }
 }
 
-/// `events.listen`, in either of its two shapes: a script's interest, or the prelude's cleanup.
+/// `events.listen`, upstream's `<Page|BrowserContext>.updateSubscription`, sent where upstream's
+/// client sends it (`channelOwner.ts`): on the first listener for an event and after the last.
+/// Either a script's interest, or the prelude's cleanup.
 // Both arrive as one flat object (`ListenWire`) and are told apart once, at the decode, so the
 // handler matches on the shape instead of checking field combinations; ts-rs prints the enum
 // as the union of the two.
@@ -116,17 +118,17 @@ enum ListenInput {
 }
 options!(ListenInput);
 
-/// `page.on(event)` (`on: true`) and `page.off(event)` once its last listener goes
-/// (`on: false`); without `page`, the context's event. `since` is the script's `Date.now()` when
-/// it attached the listener (or removed it). The event ops name no target the door resolves, so
-/// their page always has its tab: the prelude opens the run's lazy page first.
+/// `page.on(event)` (`enabled: true`) and `page.off(event)` once its last listener goes
+/// (`enabled: false`); without `page`, the context's event. `since` is the script's `Date.now()`
+/// when it attached the listener (or removed it). The event ops name no target the door
+/// resolves, so their page always has its tab: the prelude opens the run's lazy page first.
 #[derive(Debug, TS)]
 #[ts(rename = "EventListenInterest")]
 struct ListenInterest {
     #[ts(optional = nullable)]
     page: Option<PageRef>,
     event: String,
-    on: bool,
+    enabled: bool,
     #[ts(optional)]
     since: Option<u64>,
 }
@@ -145,8 +147,8 @@ struct ListenRetired {
     tab: TabId,
     #[ts(rename = "event", type = "'workerstate'")]
     _event: (),
-    #[ts(rename = "on", type = "false")]
-    _on: (),
+    #[ts(rename = "enabled", type = "false")]
+    _enabled: (),
     #[ts(rename = "since", optional)]
     _since: Option<u64>,
 }
@@ -160,7 +162,7 @@ struct ListenWire {
     #[serde(default)]
     page: Option<PageRef>,
     event: String,
-    on: bool,
+    enabled: bool,
     #[serde(default)]
     since: Option<u64>,
     #[serde(default)]
@@ -172,7 +174,7 @@ impl<'de> Deserialize<'de> for ListenInput {
         let ListenWire {
             page,
             event,
-            on,
+            enabled,
             since,
             retired_tab,
         } = ListenWire::deserialize(deserializer)?;
@@ -180,11 +182,11 @@ impl<'de> Deserialize<'de> for ListenInput {
             return Ok(Self::Interest(ListenInterest {
                 page,
                 event,
-                on,
+                enabled,
                 since,
             }));
         };
-        if on || page.is_some() || event != "workerstate" {
+        if enabled || page.is_some() || event != "workerstate" {
             return Err(de::Error::custom(
                 "retiredTab only removes internal worker bookkeeping without a page target",
             ));
@@ -193,7 +195,7 @@ impl<'de> Deserialize<'de> for ListenInput {
             _page: (),
             tab,
             _event: (),
-            _on: (),
+            _enabled: (),
             _since: since,
         }))
     }
@@ -229,31 +231,52 @@ options!(WaitInput);
 struct NextInput {}
 options!(NextInput);
 
-/// A synchronous JS interest owns one lease before an activation can be dispatched.
+/// `events.interceptFileChooser { page, event: 'fileChooser', enabled, lease }`: upstream's
+/// `Page.updateSubscription` for the one subscription Neo serves, with the run's lease id. A
+/// synchronous JS interest owns one lease before an activation can be dispatched: `enabled`
+/// acquires it, and `enabled: false` releases that same lease.
 #[derive(Debug, Deserialize, TS)]
 #[serde(deny_unknown_fields)]
 #[ts(rename = "InterceptFileChooserInput")]
 struct InterceptInput {
     page: PageRef,
+    event: Intercepted,
+    enabled: bool,
     lease: u64,
-    on: bool,
 }
 options!(InterceptInput);
 
-/// `dialog.accept { page, dialog, promptText? }` and `dialog.dismiss { page, dialog }`. One
-/// input for both, so `dialog.dismiss` accepts a `promptText` it never sends and ignores it
-/// (its row names it); one input per op would be a later clean-up.
+/// The one event of upstream's `Page.updateSubscription` Neo intercepts natively; the others
+/// (console, dialog, network) reach a run through its listeners, never a subscription.
+#[derive(Clone, Copy, Debug, Deserialize, TS)]
+#[ts(rename = "InterceptedEvent")]
+enum Intercepted {
+    #[serde(rename = "fileChooser")]
+    FileChooser,
+}
+
+/// `dialog.accept { page, dialog, promptText? }`.
 #[derive(Debug, Deserialize, TS)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
-#[ts(rename = "DialogInput")]
-struct DialogInput {
+#[ts(rename = "DialogAcceptInput")]
+struct AcceptInput {
     page: PageRef,
     dialog: DialogId,
     #[serde(default)]
     #[ts(optional)]
     prompt_text: Option<String>,
 }
-options!(DialogInput);
+options!(AcceptInput);
+
+/// `dialog.dismiss { page, dialog }`.
+#[derive(Debug, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+#[ts(rename = "DialogDismissInput")]
+struct DismissInput {
+    page: PageRef,
+    dialog: DialogId,
+}
+options!(DismissInput);
 
 /// `download.path { download }`, behind `download.path()` and `download.failure()`. `download`
 /// is the browser's guid, which the `download` event handed the script.
@@ -275,13 +298,6 @@ struct SaveAsInput {
     path: String,
 }
 options!(SaveAsInput);
-
-/// `{}`: what interception, listening and a dialog's answer have always answered. Upstream's
-/// commands answer nothing and the prelude reads nothing from it; an empty object rather than
-/// `Nothing` keeps the reply's bytes.
-#[derive(Debug, Serialize, TS)]
-#[ts(rename = "EventAcknowledged")]
-struct Acknowledged {}
 
 /// What `download.path` answers: exactly one of the two is set.
 #[derive(Debug, Serialize, TS)]
@@ -309,8 +325,33 @@ const DOWNLOAD: (&str, &str) = (
     "download",
     "the host-owned download's id, instead of an upstream Artifact channel",
 );
-/// Why a dialog's answer is `{}` where upstream's is void.
-const ANSWERED: &str = "a dialog's answer has always been {}; the prelude reads nothing from it";
+/// Why listening names Playwright's event names, not upstream's subscription names.
+const EVENT_NAME: (&str, &str) = (
+    "event",
+    "Playwright's name of every event Neo reports, not only the protocol names upstream gates \
+     behind a subscription; Rust refuses an event it does not report",
+);
+/// Why listening carries the time the script attached the listener.
+const SINCE: (&str, &str) = (
+    "since",
+    "the script's Date.now() at on(): the run's event log replays what was recorded from then, \
+     where upstream's channel pushes only what follows the subscription",
+);
+/// Why the prelude's cleanup names a tab instead of a page.
+const RETIRED_TAB: (&str, &str) = (
+    "retiredTab",
+    "releases a closed page's worker interest by its tab id, which can no longer be admitted; \
+     upstream's subscription goes with its page's channel",
+);
+/// Why interception carries a lease id `Page.updateSubscription` lacks.
+const LEASE: (&str, &str) = (
+    "lease",
+    "interception is leased per run so the run's end releases it; upstream subscribes per \
+     connection",
+);
+/// Why `download.path` answers two fields where upstream answers `{ value }`.
+const FINISHED: &str = "one finished download answers its path and its failure together, which \
+                        download.failure() reads; upstream asks Artifact.failure separately";
 
 /// Runs one event op through the shared decode/call/encode boundary.
 pub(crate) async fn invoke(
@@ -327,18 +368,13 @@ pub(crate) async fn invoke(
 fn route<'a, R: Route<'a>>(op: EventOp, r: R) -> R::Out {
     match op {
         EventOp::FileChooserIntercept => r.op(
-            wire::replaces(
-                "Page.updateSubscription",
-                "Neo leases chooser interception per run, so the run's end releases it; \
-                 upstream subscribes by event name and an enabled flag",
-            ),
+            wire::command("Page.updateSubscription").adds(&[LEASE]),
             intercept,
         ),
         EventOp::Listen => r.op(
-            wire::neo_only(
-                "run-scoped listener bookkeeping, including cleanup after a tab closed; \
-                 upstream subscribes per channel",
-            ),
+            wire::command("Page.updateSubscription")
+                .adds(&[SINCE, RETIRED_TAB])
+                .retypes(&[EVENT_NAME]),
             listen,
         ),
         EventOp::Next => r.op(
@@ -349,26 +385,12 @@ fn route<'a, R: Route<'a>>(op: EventOp, r: R) -> R::Out {
             wire::neo_only("a journal wait by event and time; upstream waits on channel events"),
             wait,
         ),
-        EventOp::DialogAccept => r.op(
-            wire::command("Dialog.accept")
-                .adds(&[DIALOG])
-                .result(ANSWERED),
-            accept,
-        ),
-        EventOp::DialogDismiss => r.op(
-            wire::command("Dialog.dismiss")
-                .adds(&[
-                    DIALOG,
-                    (
-                        "promptText",
-                        "dialog.accept's input, shared: dismiss accepts it and ignores it",
-                    ),
-                ])
-                .result(ANSWERED),
-            dismiss,
-        ),
+        EventOp::DialogAccept => r.op(wire::command("Dialog.accept").adds(&[DIALOG]), accept),
+        EventOp::DialogDismiss => r.op(wire::command("Dialog.dismiss").adds(&[DIALOG]), dismiss),
         EventOp::DownloadPath => r.op(
-            wire::command("Artifact.pathAfterFinished").adds(&[DOWNLOAD]),
+            wire::command("Artifact.pathAfterFinished")
+                .adds(&[DOWNLOAD])
+                .result(FINISHED),
             download_path,
         ),
         EventOp::DownloadSaveAs => {
@@ -381,9 +403,15 @@ async fn intercept(
     pw: &Playwright,
     scope: &OpScope<'_>,
     input: InterceptInput,
-) -> Result<Acknowledged, PlaywrightError> {
-    let tab = input.page.tab();
-    if input.on {
+) -> Result<Nothing, PlaywrightError> {
+    let InterceptInput {
+        page,
+        event: Intercepted::FileChooser,
+        enabled,
+        lease: lease_id,
+    } = input;
+    let tab = page.tab();
+    if enabled {
         let admitted = scope.admit(pw.browser(), tab).await?;
         let lease = scope
             .view()
@@ -394,15 +422,15 @@ async fn intercept(
         scope
             .run_state()
             .events
-            .keep_interception(input.lease, tab, lease);
-    } else if let Some(mut lease) = scope.run_state().events.take_interception(input.lease, tab) {
+            .keep_interception(lease_id, tab, lease);
+    } else if let Some(mut lease) = scope.run_state().events.take_interception(lease_id, tab) {
         // Cleanup uses its original epoch/session binding, even if the page closed or moved.
         lease
             .release()
             .await
             .map_err(|error| scope.core_error(&error))?;
     }
-    Ok(Acknowledged {})
+    Ok(())
 }
 
 /// The page event `name`, or the failure a script gets for it.
@@ -490,17 +518,17 @@ async fn listen(
     pw: &Playwright,
     scope: &OpScope<'_>,
     input: ListenInput,
-) -> Result<Acknowledged, PlaywrightError> {
+) -> Result<Nothing, PlaywrightError> {
     let run = scope.run_state();
     let input = match input {
         ListenInput::Retired(retired) => {
             run.events
                 .unlisten(&ListenerKey::Page(retired.tab, PageEventKind::WorkerState));
-            return Ok(Acknowledged {});
+            return Ok(());
         }
         ListenInput::Interest(interest) => interest,
     };
-    if !input.on {
+    if !input.enabled {
         let key = match &input.page {
             Some(page) => ListenerKey::Page(page.tab(), page_event(scope, &input.event)?),
             None if input.event == "page" => ListenerKey::ContextPage,
@@ -511,7 +539,7 @@ async fn listen(
             None => return Err(context_event(scope, &input.event)),
         };
         run.events.unlisten(&key);
-        return Ok(Acknowledged {});
+        return Ok(());
     }
     let subscription = subscription(pw, scope, input.page, &input.event).await?;
     let since = input.since.unwrap_or_else(now_ms);
@@ -527,7 +555,7 @@ async fn listen(
     }
     // A pump that already read past an event this listener should get reads again.
     hub.wake();
-    Ok(Acknowledged {})
+    Ok(())
 }
 
 /// `events.next`: the pump. Waits until some listener of the run has events, and returns them.
@@ -817,47 +845,56 @@ async fn copy_to(_sent: &Sent<'_>, source: &Path, target: &Path) -> io::Result<(
     fs::copy(source, target).await.map(drop)
 }
 
-/// Which answer a dialog op gives.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// Which answer a dialog op gives: accept carries the prompt's text, if the script gave one.
+#[derive(Debug)]
 enum Answer {
-    Accept,
+    Accept(Option<String>),
     Dismiss,
 }
 
 async fn accept(
     pw: &Playwright,
     scope: &OpScope<'_>,
-    input: DialogInput,
-) -> Result<Acknowledged, PlaywrightError> {
-    answer(pw, scope, input, Answer::Accept).await
+    input: AcceptInput,
+) -> Result<Nothing, PlaywrightError> {
+    let AcceptInput {
+        page,
+        dialog,
+        prompt_text,
+    } = input;
+    answer(pw, scope, &page, dialog, Answer::Accept(prompt_text)).await
 }
 
 async fn dismiss(
     pw: &Playwright,
     scope: &OpScope<'_>,
-    input: DialogInput,
-) -> Result<Acknowledged, PlaywrightError> {
-    answer(pw, scope, input, Answer::Dismiss).await
+    input: DismissInput,
+) -> Result<Nothing, PlaywrightError> {
+    answer(pw, scope, &input.page, input.dialog, Answer::Dismiss).await
 }
 
+/// Answers `dialog` on `page` for both ops. A dialog Core already closed answers as answered
+/// (the script's answer is moot); one the script, Neo or the browser closed is refused in
+/// upstream's words.
 async fn answer(
     pw: &Playwright,
     scope: &OpScope<'_>,
-    input: DialogInput,
+    page: &PageRef,
+    dialog: DialogId,
     answer: Answer,
-) -> Result<Acknowledged, PlaywrightError> {
+) -> Result<Nothing, PlaywrightError> {
     let verb = match answer {
-        Answer::Accept => "accept",
+        Answer::Accept(_) => "accept",
         Answer::Dismiss => "dismiss",
     };
-    let admitted = scope.admit(pw.browser(), input.page.tab()).await?;
+    let admitted = scope.admit(pw.browser(), page.tab()).await?;
     let target = admitted.session.target_id.clone();
     // From here the dialog is the script's: the grace and the reap leave it to this answer, and
     // `answering` reopens it for them unless the browser acknowledges the answer.
-    let answering = match pw.events().answer_dialog(input.dialog, &target) {
+    let answering = match pw.events().answer_dialog(dialog, &target) {
         Ok(answering) => answering,
         // Core accepted the alert before any listener saw it: the script's answer is moot.
-        Err(Unanswerable::Closed(ClosedBy::Core)) => return Ok(Acknowledged {}),
+        Err(Unanswerable::Closed(ClosedBy::Core)) => return Ok(()),
         Err(
             Unanswerable::Answering
             | Unanswerable::Closed(ClosedBy::Script | ClosedBy::Neo | ClosedBy::Browser),
@@ -872,16 +909,16 @@ async fn answer(
         }
     };
     let session = pw.browser().protocol_session(answering.session().clone());
-    let prompt = match answer {
-        Answer::Accept => input.prompt_text,
-        Answer::Dismiss => None,
+    let (accept, prompt) = match answer {
+        Answer::Accept(prompt) => (true, prompt),
+        Answer::Dismiss => (false, None),
     };
     let sent = scope.send_effect()?;
-    send_answer(&session, &sent, answer == Answer::Accept, prompt.as_deref())
+    send_answer(&session, &sent, accept, prompt.as_deref())
         .await
         .map_err(|error| scope.core_error(&error))?;
     answering.answered();
-    Ok(Acknowledged {})
+    Ok(())
 }
 
 /// `Page.handleJavaScriptDialog` on the session the dialog opened on.
@@ -909,7 +946,7 @@ mod tests {
     use serde::Serialize;
     use serde_json::{Value, json};
 
-    use super::{Acknowledged, EventOp, Finished, ListenInput, Pumped};
+    use super::{EventOp, Finished, ListenInput, Pumped};
     use crate::op::Op;
     use crate::op_output::to_output;
     use crate::op_scope::OpScope;
@@ -935,20 +972,23 @@ mod tests {
     #[test]
     fn tests_that_listen_decodes_the_two_shapes_the_prelude_sends() -> Result<(), Box<dyn Error>> {
         let interest: ListenInput = serde_json::from_value(json!({
-            "page": { "$neo": "page", "tab": 1007 }, "event": "dialog", "on": true, "since": 111,
+            "page": { "$neo": "page", "tab": 1007 }, "event": "dialog", "enabled": true, "since": 111,
         }))?;
         let ListenInput::Interest(interest) = interest else {
             return Err("a page listener is an interest".into());
         };
         assert_eq!(interest.page.map(|page| page.tab()), Some(TabId(1007)));
-        assert_eq!((interest.event.as_str(), interest.on), ("dialog", true));
+        assert_eq!(
+            (interest.event.as_str(), interest.enabled),
+            ("dialog", true)
+        );
         assert_eq!(interest.since, Some(111));
         let context: ListenInput = serde_json::from_value(
-            json!({ "page": null, "event": "page", "on": false, "since": 5 }),
+            json!({ "page": null, "event": "page", "enabled": false, "since": 5 }),
         )?;
         assert!(matches!(context, ListenInput::Interest(ref i) if i.page.is_none()));
         let retired: ListenInput = serde_json::from_value(json!({
-            "page": null, "retiredTab": 1007, "event": "workerstate", "on": false, "since": 9,
+            "page": null, "retiredTab": 1007, "event": "workerstate", "enabled": false, "since": 9,
         }))?;
         let ListenInput::Retired(retired) = retired else {
             return Err("a cleanup with retiredTab is retired".into());
@@ -962,10 +1002,10 @@ mod tests {
     #[test]
     fn tests_that_a_mixed_cleanup_is_refused_in_the_old_words() {
         for mixed in [
-            json!({ "page": null, "retiredTab": 7, "event": "workerstate", "on": true, "since": 0 }),
+            json!({ "page": null, "retiredTab": 7, "event": "workerstate", "enabled": true, "since": 0 }),
             json!({ "page": { "$neo": "page", "tab": 7 }, "retiredTab": 7, "event": "workerstate",
-                    "on": false, "since": 0 }),
-            json!({ "page": null, "retiredTab": 7, "event": "console", "on": false, "since": 0 }),
+                    "enabled": false, "since": 0 }),
+            json!({ "page": null, "retiredTab": 7, "event": "console", "enabled": false, "since": 0 }),
         ] {
             let refused = serde_json::from_value::<ListenInput>(mixed).map(|_| ());
             assert_eq!(
@@ -974,13 +1014,13 @@ mod tests {
             );
         }
         let unknown = serde_json::from_value::<ListenInput>(
-            json!({ "event": "page", "on": true, "since": 0, "lease": 1 }),
+            json!({ "event": "page", "enabled": true, "since": 0, "lease": 1 }),
         );
         assert!(unknown.is_err_and(|error| error.to_string().contains("unknown field `lease`")));
     }
 
     /// Through the op boundary the refusal reads `<api>: ...` and is `script / invalid_input`,
-    /// as when the handler raised it; a valid cleanup answers `{}` without admitting a page.
+    /// as when the handler raised it; a valid cleanup answers `null` without admitting a page.
     #[tokio::test(start_paused = true)]
     async fn tests_that_listen_answers_and_refuses_through_the_op_as_before()
     -> Result<(), Box<dyn Error>> {
@@ -992,16 +1032,16 @@ mod tests {
                 &env,
                 op,
                 json!({ "call": { "api": "page.off", "timeoutMs": 0 }, "page": null,
-                        "retiredTab": 1007, "event": "workerstate", "on": false, "since": 0 }),
+                        "retiredTab": 1007, "event": "workerstate", "enabled": false, "since": 0 }),
             )
             .await?;
-        assert_eq!(wire(&cleaned)?, "{}");
+        assert_eq!(wire(&cleaned)?, "null");
         let refused = playwright
             .invoke(
                 &env,
                 op,
                 json!({ "call": { "api": "page.on", "timeoutMs": 0 }, "page": null,
-                        "retiredTab": 1007, "event": "workerstate", "on": true, "since": 0 }),
+                        "retiredTab": 1007, "event": "workerstate", "enabled": true, "since": 0 }),
             )
             .await
             .err()
@@ -1011,11 +1051,10 @@ mod tests {
         Ok(())
     }
 
-    /// The answers' bytes: `{}` stays `{}` (listen, interception, both dialog answers),
-    /// `saveAs` stays `null`, `download.path` names both fields, the pump its two.
+    /// The answers' bytes: listening, interception and both dialog answers are `null`, as their
+    /// void commands are, as is `saveAs`; `download.path` names both fields, the pump its two.
     #[tokio::test]
-    async fn tests_that_every_event_answer_keeps_its_bytes() -> Result<(), Box<dyn Error>> {
-        assert_eq!(wire(&Acknowledged {})?, "{}");
+    async fn tests_that_every_event_answer_has_its_bytes() -> Result<(), Box<dyn Error>> {
         let saved: Nothing = ();
         assert_eq!(wire(&saved)?, "null");
         let done = Finished {
@@ -1036,22 +1075,22 @@ mod tests {
         for op in EventOp::ALL {
             let output = op.wire().output;
             let expected = match op {
-                EventOp::Listen
-                | EventOp::FileChooserIntercept
-                | EventOp::DialogAccept
-                | EventOp::DialogDismiss => "EventAcknowledged",
                 EventOp::Next => "Pumped",
                 EventOp::Wait => "EventRecord",
                 EventOp::DownloadPath => "DownloadFinished",
-                EventOp::DownloadSaveAs => "null",
+                EventOp::Listen
+                | EventOp::FileChooserIntercept
+                | EventOp::DialogAccept
+                | EventOp::DialogDismiss
+                | EventOp::DownloadSaveAs => "null",
             };
             assert_eq!(output, expected, "{}", op.spec().name);
         }
         Ok(())
     }
 
-    /// The recorded prelude inputs (wire-examples.json) leave out listen, wait and
-    /// interception, which run on the internal site; these are the literals the prelude sends.
+    /// The recorded prelude inputs (wire-examples.json) leave out listen and wait; these are the
+    /// literals the prelude sends, beside interception's and the dialog answers' shapes.
     #[test]
     fn tests_that_the_preludes_internal_event_inputs_decode() -> Result<(), Box<dyn Error>> {
         let page = json!({ "$neo": "page", "tab": 1007 });
@@ -1063,16 +1102,30 @@ mod tests {
             json!({ "page": null, "event": "page", "since": 500, "after": 5 }),
         )?;
         assert_eq!((rewait.page.is_none(), rewait.after), (true, Some(5)));
-        let leased: super::InterceptInput =
-            serde_json::from_value(json!({ "page": page, "lease": 1, "on": true }))?;
-        assert_eq!((leased.lease, leased.on), (1, true));
+        let leased: super::InterceptInput = serde_json::from_value(
+            json!({ "page": page, "event": "fileChooser", "enabled": true, "lease": 1 }),
+        )?;
+        assert_eq!((leased.lease, leased.enabled), (1, true));
+        // Upstream's other subscriptions, and the shape before alignment, are refused.
+        for refused in [
+            json!({ "page": page, "event": "dialog", "enabled": true, "lease": 1 }),
+            json!({ "page": page, "lease": 1, "on": true }),
+        ] {
+            assert!(serde_json::from_value::<super::InterceptInput>(refused).is_err());
+        }
         let next: Value = json!({});
         let super::NextInput {} = serde_json::from_value(next)?;
-        // `dialog.dismiss` shares `dialog.accept`'s input: a `promptText` decodes and is ignored.
-        let dismissed: super::DialogInput = serde_json::from_value(
-            json!({ "page": page, "dialog": 4, "promptText": "ignored by dismiss" }),
-        )?;
-        assert_eq!(dismissed.prompt_text.as_deref(), Some("ignored by dismiss"));
+        let accepted: super::AcceptInput =
+            serde_json::from_value(json!({ "page": page, "dialog": 4, "promptText": "Bo" }))?;
+        assert_eq!(accepted.prompt_text.as_deref(), Some("Bo"));
+        // Each answer takes its own command's params: dismiss has no prompt.
+        let dismissed: super::DismissInput =
+            serde_json::from_value(json!({ "page": page, "dialog": 4 }))?;
+        assert_eq!(dismissed.dialog, super::DialogId(4));
+        let prompted = serde_json::from_value::<super::DismissInput>(
+            json!({ "page": page, "dialog": 4, "promptText": "Bo" }),
+        );
+        assert!(prompted.is_err_and(|error| error.to_string().contains("promptText")));
         Ok(())
     }
 }
