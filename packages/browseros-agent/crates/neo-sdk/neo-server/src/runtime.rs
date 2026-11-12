@@ -30,6 +30,7 @@
 mod bridge;
 mod fit_result;
 mod install_web_globals;
+mod run_init;
 mod run_logs;
 mod run_script;
 #[cfg(test)]
@@ -39,5 +40,8 @@ mod tests;
 use bridge::Bridge;
 #[cfg(feature = "hosted-run")]
 pub(crate) use bridge::Bridge;
+#[cfg(feature = "test-support")]
+pub(crate) use bridge::{Envelope, envelope};
+pub(crate) use run_init::RunInit;
 pub(crate) use run_logs::{LogLevel, LogLine, RunLogs};
 pub(crate) use run_script::{Script, ScriptEnd, ScriptOutcome, run_script};

@@ -1,6 +1,6 @@
 /** One dedicated worker target. Page facts and event records share this object; a close is
  * terminal even when an older worker-created record arrives after a newer host observation. */
-import { invoke } from './bridge'
+import { invoke, type WorkerInfo } from './bridge'
 import { captureSite } from './call-site'
 import { EventEmitter } from './emitter'
 import { clientError, unsupportedError } from './errors'
@@ -10,7 +10,6 @@ import type { ConsoleMessage } from './event-values'
 import { markHandle } from './options'
 import type { Page } from './page'
 import { timeoutMs } from './timeouts'
-import type { WorkerInfo } from './wire'
 
 export class Worker extends EventEmitter {
   readonly #page: Page

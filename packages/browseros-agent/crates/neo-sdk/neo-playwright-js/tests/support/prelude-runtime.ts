@@ -12,6 +12,7 @@
 // ended, as claw-sdk's run_script.rs `settle` reports it.
 import { readFileSync } from 'node:fs'
 import { createContext, runInContext } from 'node:vm'
+import type { Observation } from '../../src/prelude/generated/envelope'
 
 export type Call = {
   name: string
@@ -21,14 +22,6 @@ export type Call = {
    * bootstrap aborted it, as bridge.rs registers the key and answers `$neo.abort`.
    */
   abort?: { key: string; aborted: Promise<string> }
-}
-
-/** Internal host evidence accompanying a reply's page facts and payload. */
-type Observation = {
-  seq: number
-  events: number
-  payloadCurrent?: boolean
-  closes?: { tab: number; seq: number }[]
 }
 
 /** An op's answer: a value, or an envelope (`{ ok }`, `{ err }`, with `pages`, `defaultPage`). */

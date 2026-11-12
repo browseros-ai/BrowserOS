@@ -19,6 +19,9 @@
 import type { SerializedValue } from '../../../neo-playwright/third_party/playwright/packages/isomorphic/utilityScriptSerializers'
 import type { SelectOption } from '../probe/protocol'
 import type { GeneratedInputs, GeneratedOutputs } from './generated'
+// The run envelope's types (Observation, PageFact, WorkerInfo) are neo-server's, in bridge.ts.
+// The event records below name the same worker identity.
+import type { WorkerInfo } from './generated/envelope'
 import type { OpName } from './generated/ops'
 
 // Rust owns these shared shapes now. LocatorBrand is a projection of the tagged Target
@@ -71,31 +74,6 @@ export type UnopenedPageBrand = PageHandle & { tab: null }
  * Playwright timeout the prelude resolved; 0 means none, and the run deadline bounds the op.
  */
 export type CallHeader = { api: string; timeoutMs: number }
-
-/** The host read serial and the event-log head before that read. */
-export type Observation = {
-  /** An event reply applies worker closure after its journal records are dispatched. */
-  deferWorkers?: boolean
-  seq: number
-  events: number
-  payloadCurrent?: boolean
-  closes?: { tab: number; seq: number }[]
-}
-
-/**
- * What the host knows about a tab: the run's init, every reply's `pages`, results, events.
- * `tab` is the browser's tab id, which the page's brand carries.
- */
-export type WorkerInfo = { id: string; url: string }
-
-export type PageFact = {
-  workers?: WorkerInfo[]
-  tab: number
-  url?: string
-  title?: string
-  closed?: boolean
-  viewportSize?: { width: number; height: number } | null
-}
 
 /** One tab, with the URL the prelude caches for its synchronous `url()`. */
 export type PageEntry = { page: PageBrand; url: string }

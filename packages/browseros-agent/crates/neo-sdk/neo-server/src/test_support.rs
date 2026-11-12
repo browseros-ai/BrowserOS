@@ -10,9 +10,17 @@
 //!
 //! [`test_config`] is a process config for `App::start_with_fake_browser`, which runs the real
 //! router and wiring over a `FakeCdp`.
+//!
+//! [`envelope_examples`] renders the run envelope (a run's init, op replies) through the code a
+//! real run uses, for `tests/envelope_generated.rs` to pin byte for byte; [`envelope_types`] is
+//! the TypeScript of the same types, which that test writes for the prelude.
 
+mod envelope_examples;
+mod envelope_types;
 mod fake_cdp;
 mod test_config;
 
+pub use envelope_examples::{EnvelopeExample, envelope_examples};
+pub use envelope_types::{EnvelopeType, envelope_types};
 pub use fake_cdp::{FakeCall, FakeCdp};
 pub use test_config::{CLOSED_XVNC, test_config};

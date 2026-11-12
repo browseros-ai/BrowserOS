@@ -13,6 +13,7 @@ use neo_trace::{Delivery, Effect, OperationId, PageState, TraceSink};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::sync::{Mutex as AsyncMutex, oneshot};
+use ts_rs::TS;
 
 use super::close_release::close_release;
 use super::op_ctx::{OpCore, OpState, PageChange, PageReport};
@@ -134,21 +135,23 @@ pub(crate) struct OpReply {
 /// One page as a reply reports it. Deliberately not a page brand (no `$neo`), so the
 /// bootstrap never revives a fact into a `Page` object. Its viewport configuration initializes
 /// synchronous accessors in each new agent realm, independently of the owner's temporary fit.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, TS)]
 pub(crate) struct PageFact {
     /// The browser's tab id.
     pub(crate) tab: TabId,
-    /// `None` once closed.
+    /// `None` (null) once closed.
     pub(crate) url: Option<String>,
-    /// `None` once closed.
+    /// `None` (null) once closed.
     pub(crate) title: Option<String>,
     /// Whether the tab is gone.
     pub(crate) closed: bool,
     /// Script configuration, carried to each fresh realm; owner fits never replace it.
     #[serde(rename = "viewportSize", skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub(crate) viewport_size: Option<Size>,
     /// Captured under the same observation serial as the page cache read.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub(crate) workers: Option<Vec<super::observation::WorkerFact>>,
 }
 

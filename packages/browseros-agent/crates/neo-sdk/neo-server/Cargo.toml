@@ -95,13 +95,15 @@ base64.workspace = true
 # neo.solveCaptcha: detection and the paid providers, one solver per process.
 neo-captcha.workspace = true
 browseros-cdp.workspace = true
-browseros-core.workspace = true
+# `ts-rs`: the tab id and viewport size in the run envelope print as TypeScript.
+browseros-core = { workspace = true, features = ["ts-rs"] }
 # The Playwright API agent scripts call: its op table and the facade that runs each op.
 neo-playwright.workspace = true
 # The host API: its routes, auth and event log, and the takeover locks the door asks.
 neo-service.workspace = true
 neo-takeover.workspace = true
-neo-trace.workspace = true
+# `ts-rs`: an error's owner, delivery and operation id in the run envelope print as TypeScript.
+neo-trace = { workspace = true, features = ["ts-rs"] }
 clap.workspace = true
 futures-util.workspace = true
 # Stateless streamable HTTP for the one `run` tool; the server features only.
@@ -120,6 +122,10 @@ tower.workspace = true
 tracing.workspace = true
 tracing-appender.workspace = true
 tracing-subscriber.workspace = true
+# The run envelope's types (runtime/bridge.rs, runtime/run_init.rs and the facts they carry)
+# derive `TS`; tests/envelope_generated.rs prints them as the prelude's
+# `generated/envelope.ts`. Outside that test the impls are never called. Default features only.
+ts-rs.workspace = true
 
 [dev-dependencies]
 neo-server = { path = ".", features = ["test-support"] }

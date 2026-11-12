@@ -12,7 +12,14 @@ import { type CallSite, captureSite, INTERNAL_SITE } from './call-site'
 
 import type { UrlPattern } from '../probe/protocol'
 import { type BindingCallback, exposeOnPage } from './bindings'
-import { invoke, invokeObserved, sleep } from './bridge'
+import {
+  invoke,
+  invokeObserved,
+  type Observation,
+  type PageFact,
+  sleep,
+  type WorkerInfo,
+} from './bridge'
 import type { BrowserContext } from './context'
 import { ElementHandle, elementBrand } from './element-handle'
 import { EventEmitter } from './emitter'
@@ -84,13 +91,10 @@ import type {
   LoadState,
   NavigationPublication,
   NavigationResult,
-  Observation,
   PageBrand,
-  PageFact,
   PageHandle,
   PageScript,
   PdfOptions,
-  WorkerInfo,
 } from './wire'
 import { Worker } from './worker'
 

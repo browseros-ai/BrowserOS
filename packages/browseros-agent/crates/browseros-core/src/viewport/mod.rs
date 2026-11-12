@@ -185,7 +185,10 @@ pub struct PageMetrics {
     pub mobile: Option<bool>,
 }
 
+/// A width and height, as a page's viewport size is reported. neo-server's run envelope carries
+/// it, and prints it as TypeScript under the `ts-rs` feature.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "ts-rs", derive(ts_rs::TS))]
 #[serde(rename_all = "camelCase")]
 pub struct Size {
     pub width: i64,

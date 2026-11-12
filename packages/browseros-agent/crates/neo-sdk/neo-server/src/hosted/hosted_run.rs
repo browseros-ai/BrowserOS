@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use neo_trace::RunId;
-use serde_json::{Value, json};
+use serde_json::Value;
 use tokio::runtime::Handle;
 use tokio::sync::watch;
 use tokio::time::{self, Instant};
@@ -15,7 +15,7 @@ use crate::browser::{BrowserLink, PageRef, TabRegistry};
 use crate::config::Defaults;
 use crate::dispatch::{Dispatcher, RunCtx, RunGuard, RunStart, StopReason};
 use crate::run::{RunReply, RunService};
-use crate::runtime::{Bridge, ScriptEnd, ScriptOutcome};
+use crate::runtime::{Bridge, RunInit, ScriptEnd, ScriptOutcome};
 
 /// One external JS execution. The host keeps it alive until `finish`; dropping it cancels it.
 pub struct HostedRun {
@@ -119,12 +119,12 @@ impl HostedRun {
             }
         }
         let facts = service.hosted_open_pages(&self.context).await;
-        self.init = json!({
-            "page": self.initial_page,
-            "pages": facts.pages,
-            "observed": facts.observed,
-        })
-        .to_string();
+        self.init = RunInit::new(
+            self.initial_page.as_ref(),
+            &facts.pages,
+            facts.observed.as_ref(),
+        )
+        .to_json();
     }
 
     /// The run's trace identity.

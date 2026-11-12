@@ -14,6 +14,7 @@ use serde::Serialize;
 use tokio::sync::Mutex;
 #[cfg(test)]
 use tokio::sync::MutexGuard;
+use ts_rs::TS;
 
 use crate::browser::{BrowserLink, TabRegistry};
 
@@ -38,29 +39,39 @@ pub(crate) trait EventLog: Send + Sync {
     }
 }
 
-/// A worker identity in the host protocol, independent of the browser adapter.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+/// A worker identity in the host protocol, independent of the browser adapter. The prelude's
+/// `Worker` objects are keyed by `id`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, TS)]
+#[ts(rename = "WorkerInfo")]
 pub(crate) struct WorkerFact {
     pub(crate) id: String,
     pub(crate) url: String,
 }
 
 /// Freshness of a batch of page facts. Neither counter is a page identity.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+//
+// The `#[ts(..)]` lines keep the generated type's optional fields in step with the
+// `skip_serializing_if` lines: ts-rs reads those as optional only next to `serde(default)`.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct Observation {
+    /// The host's read serial: a later batch of facts replaces an earlier one, never the reverse.
     pub(crate) seq: u64,
+    /// The page-event log's head before this read.
     pub(crate) events: u64,
     /// Whether the operation's payload describes the binding read by this observation.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub(crate) payload_current: Option<bool>,
     /// Close records applied by this observation, consumed in event order by the prelude.
+    /// Absent when there are none.
     #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[ts(optional = nullable)]
     pub(crate) closes: Vec<ApprovedClose>,
 }
 
 /// One delivered close selected for the current binding, named by its existing event position.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, TS)]
 pub(crate) struct ApprovedClose {
     pub(crate) tab: TabId,
     pub(crate) seq: u64,

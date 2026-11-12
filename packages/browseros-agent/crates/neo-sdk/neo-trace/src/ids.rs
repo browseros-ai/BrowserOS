@@ -19,8 +19,10 @@ const MAX_HOST_ID_BYTES: usize = 128;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct RunId(Uuid);
 
-/// One SDK operation: the run it belongs to and its admission order within that run.
+/// One SDK operation: the run it belongs to and its admission order within that run. On the wire
+/// it is the string `{run}.{seq}`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[cfg_attr(feature = "ts-rs", derive(ts_rs::TS), ts(type = "string"))]
 pub struct OperationId {
     /// The run this operation belongs to.
     pub run: RunId,

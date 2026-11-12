@@ -3,10 +3,13 @@
 use browseros_core::TabId;
 use browseros_core::pages::PageInfo;
 use serde::{Serialize, Serializer};
+use ts_rs::TS;
 
 /// A live browser tab resolved by the dispatcher before policies run. This is the only page
-/// identity on the wire; core's private cache id is held separately for one operation.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+/// identity on the wire, where it is the page brand `{"$neo": "page", "tab": …}`; core's private
+/// cache id is held separately for one operation.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, TS)]
+#[ts(as = "PageBrand")]
 pub(crate) struct PageRef {
     /// The browser's tab id.
     pub(crate) tab: TabId,
@@ -20,11 +23,27 @@ impl From<&PageInfo> for PageRef {
 
 impl Serialize for PageRef {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        use serde::ser::SerializeStruct;
-
-        let mut brand = serializer.serialize_struct("PageRef", 2)?;
-        brand.serialize_field("$neo", "page")?;
-        brand.serialize_field("tab", &self.tab.0)?;
-        brand.end()
+        PageBrand {
+            brand: Brand::Page,
+            tab: self.tab,
+        }
+        .serialize(serializer)
     }
+}
+
+/// A [`PageRef`] on the wire: the page brand the bootstrap revives into the prelude's `Page`
+/// for that tab.
+#[derive(Serialize, TS)]
+pub(crate) struct PageBrand {
+    #[serde(rename = "$neo")]
+    #[ts(type = "'page'")]
+    brand: Brand,
+    tab: TabId,
+}
+
+/// The only brand a page carries.
+#[derive(Clone, Copy, Serialize)]
+enum Brand {
+    #[serde(rename = "page")]
+    Page,
 }

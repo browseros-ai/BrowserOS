@@ -11,7 +11,13 @@ import { send } from './generated'
  */
 
 import { type BindingCallback, exposeOnContext } from './bindings'
-import { invoke, type Reply, type RunInit } from './bridge'
+import {
+  invoke,
+  type Observation,
+  type PageFact,
+  type Reply,
+  type RunInit,
+} from './bridge'
 import type { Browser } from './browser'
 import { EventEmitter } from './emitter'
 import { internalError } from './errors'
@@ -21,7 +27,6 @@ import { LocatorHandlers } from './locator-handlers'
 import { markHandle } from './options'
 import { Page } from './page'
 import { TimeoutSettings } from './timeouts'
-import type { Observation, PageFact } from './wire'
 
 /** The page an op result names: a revived Page, or a raw `{"$neo":"page","tab":1}` brand. */
 function pageFact(value: unknown): PageFact | null {

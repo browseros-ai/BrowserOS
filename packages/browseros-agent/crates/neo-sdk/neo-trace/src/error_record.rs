@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 
 /// Whose behavior must change to fix a failure.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-rs", derive(ts_rs::TS))]
 #[serde(rename_all = "lowercase")]
 pub enum ErrorOwner {
     /// Neo itself, the browser or the OS: a lost connection, a closed target, a limit.
@@ -51,4 +52,22 @@ pub struct ErrorRecord {
     /// On a run's error, the operation it came from.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub operation_id: Option<OperationId>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ErrorOwner;
+
+    #[test]
+    fn an_owner_serializes_as_its_stored_name() -> Result<(), serde_json::Error> {
+        for owner in [
+            ErrorOwner::Neo,
+            ErrorOwner::Script,
+            ErrorOwner::Website,
+            ErrorOwner::Host,
+        ] {
+            assert_eq!(serde_json::to_value(owner)?, owner.as_str());
+        }
+        Ok(())
+    }
 }

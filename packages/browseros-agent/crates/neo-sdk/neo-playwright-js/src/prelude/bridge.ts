@@ -33,40 +33,49 @@
 import type { CallSite } from './call-site'
 import { readyChoosers } from './chooser-setup'
 import { shapeBridgeError, unsupportedError, withAbortCause } from './errors'
+import type * as Wire from './generated/envelope'
 import type { OpName } from './generated/ops'
 import { host, refuser } from './host'
 import { completedPublications } from './publication'
 import type { SignalLike } from './signal'
-import type {
-  CallHeader,
-  Observation,
-  OpInputs,
-  OpOutputs,
-  PageBrand,
-  PageFact,
-  WorkerInfo,
-} from './wire'
+import type { CallHeader, OpInputs, OpOutputs } from './wire'
 
-/** What a run starts with (claw-sdk's run_script.rs `init`). */
-export type RunInit = {
-  /** The task's tab when the run service knows one; null opens one on the first op. */
-  page: PageBrand | null
-  /**
-   * Every tab in the browser, as facts like a reply's, when the run service lists them
-   * (`init.pages`); empty when it does not, and replies alone then name the other tabs.
-   */
+// The run envelope's shapes are neo-server's Rust types (runtime/bridge.rs `Envelope`,
+// runtime/run_init.rs `RunInit`), generated into ./generated/envelope.ts. The readers below take
+// the envelope as untrusted JSON and keep what they validate; the types here say how that view
+// differs from the wire, and name no field of their own.
+export type { WorkerInfo } from './generated/envelope'
+
+/**
+ * A reply's or the init's observation as the prelude keeps it: Rust's `Observation`, and one flag
+ * of the prelude's own (`onReply`): an event reply applies worker closure only after its
+ * journal records are dispatched.
+ */
+export type Observation = Wire.Observation & { deferWorkers?: boolean }
+
+/**
+ * What the host knows about a tab, as `Page._applyFact` applies it: Rust's `PageFact` with only
+ * `tab` certain. A reply's or the init's fact keeps the fields `readPageFacts` validated, a
+ * closed tab's null `url` and `title` left out so the page keeps the last ones it had; a result,
+ * an event or a page brand names its tab alone, or with a `url`.
+ */
+export type PageFact = Pick<Wire.PageFact, 'tab'> & {
+  [Field in Exclude<keyof Wire.PageFact, 'tab'>]?: NonNullable<
+    Wire.PageFact[Field]
+  >
+}
+
+/** What a run starts with: Rust's `RunInit`, its facts as the readers keep them. */
+export type RunInit = Omit<Wire.RunInit, 'pages' | 'observed'> & {
   pages: PageFact[]
   observed: Observation | null
 }
 
-/** What one reply says about pages. */
+/** What one reply envelope says about pages, as `onReply` reads it: an absent field is none. */
 export type Reply = {
-  /** The host observation that produced these facts. */
   observed: Observation | null
-  /** Fresh facts about the pages the op touched, its target first. */
   pages: PageFact[]
-  /** The tab of the run's own page, on the reply of an op the door opened it for. */
-  defaultPage: { tab: number } | null
+  defaultPage: Wire.DefaultPage | null
 }
 
 /**
@@ -170,8 +179,10 @@ function countPumps(): void {
   if (countingPumps) return
   countingPumps = true
   host().onReply((envelope) => {
-    completedPublications(field(envelope, 'completedNavigations'))
-    const pumped = field(envelope, 'pumped')
+    completedPublications(
+      field<Wire.Envelope>(envelope, 'completedNavigations'),
+    )
+    const pumped = field<Wire.Envelope>(envelope, 'pumped')
     if (typeof pumped === 'number' && pumped > pumpsNeeded) pumpsNeeded = pumped
   })
 }
@@ -218,8 +229,8 @@ export function registerBrand(
 
 export function onReply(listener: (reply: Reply) => void): void {
   host().onReply((envelope) => {
-    const observed = readObservation(field(envelope, 'observed'))
-    const result = field(envelope, 'ok')
+    const observed = readObservation(field<Wire.Envelope>(envelope, 'observed'))
+    const result = field<Wire.Envelope>(envelope, 'ok')
     if (
       observed &&
       (Array.isArray(field(result, 'events')) ||
@@ -228,11 +239,12 @@ export function onReply(listener: (reply: Reply) => void): void {
       observed.deferWorkers = true
     // A failed event read returns no records for the hub to deliver. Its closed facts
     // must settle now, even if the host copied a close before the operation failed.
-    if (observed && field(envelope, 'err') !== undefined) observed.closes = []
+    if (observed && field<Wire.Envelope>(envelope, 'err') !== undefined)
+      observed.closes = []
     listener({
       observed,
-      pages: readPageFacts(field(envelope, 'pages')),
-      defaultPage: readTab(field(envelope, 'defaultPage')),
+      pages: readPageFacts(field<Wire.Envelope>(envelope, 'pages')),
+      defaultPage: readTab(field<Wire.Envelope>(envelope, 'defaultPage')),
     })
   })
 }
@@ -244,11 +256,11 @@ export function onReply(listener: (reply: Reply) => void): void {
  */
 export function provide(name: string, build: (init: RunInit) => unknown): void {
   host().provide(name, (init) => {
-    const page = readTab(field(init, 'page'))
+    const page = readTab(field<Wire.RunInit>(init, 'page'))
     return build({
       page: page ? { $neo: 'page', ...page } : null,
-      pages: readPageFacts(field(init, 'pages')),
-      observed: readObservation(field(init, 'observed')),
+      pages: readPageFacts(field<Wire.RunInit>(init, 'pages')),
+      observed: readObservation(field<Wire.RunInit>(init, 'observed')),
     })
   })
 }
@@ -261,22 +273,34 @@ export function awaitsProviders(): boolean {
   return refuser() !== null
 }
 
-function field(value: unknown, name: string): unknown {
+/**
+ * `name` read from a value whose shape is not trusted. Given the generated type of a run
+ * envelope value (`field<Wire.PageFact>(page, 'url')`), `name` must be a field Rust declares on
+ * it, so a field Rust renames or drops fails to compile here.
+ */
+function field<Shape = never>(value: unknown, name: FieldName<Shape>): unknown {
   return typeof value === 'object' && value !== null
     ? Reflect.get(value, name)
     : undefined
 }
 
+/** Any name for an untyped read; for a generated type, a field one of its variants declares. */
+type FieldName<Shape> = [Shape] extends [never]
+  ? string
+  : Shape extends unknown
+    ? Extract<keyof Shape, string>
+    : never
+
 /** A tab-only identity from a page brand or a default-page reply. */
-function readTab(value: unknown): { tab: number } | null {
-  const tab = field(value, 'tab')
+function readTab(value: unknown): Wire.DefaultPage | null {
+  const tab = field<Wire.DefaultPage | Wire.PageRef>(value, 'tab')
   return typeof tab === 'number' ? { tab } : null
 }
 
 /** Invalid or absent stamps confer identity only, without changing cached lifecycle. */
 function readObservation(value: unknown): Observation | null {
-  const seq = field(value, 'seq')
-  const events = field(value, 'events')
+  const seq = field<Wire.Observation>(value, 'seq')
+  const events = field<Wire.Observation>(value, 'events')
   if (
     typeof seq !== 'number' ||
     !Number.isFinite(seq) ||
@@ -285,15 +309,15 @@ function readObservation(value: unknown): Observation | null {
   )
     return null
   const result: Observation = { seq, events }
-  const payloadCurrent = field(value, 'payloadCurrent')
+  const payloadCurrent = field<Wire.Observation>(value, 'payloadCurrent')
   if (typeof payloadCurrent === 'boolean')
     result.payloadCurrent = payloadCurrent
-  const closes = field(value, 'closes')
+  const closes = field<Wire.Observation>(value, 'closes')
   if (Array.isArray(closes)) {
     result.closes = []
     for (const close of closes) {
-      const tab = field(close, 'tab')
-      const at = field(close, 'seq')
+      const tab = field<Wire.ApprovedClose>(close, 'tab')
+      const at = field<Wire.ApprovedClose>(close, 'seq')
       if (
         typeof tab === 'number' &&
         Number.isFinite(tab) &&
@@ -306,30 +330,29 @@ function readObservation(value: unknown): Observation | null {
   return result
 }
 
-/** Page facts from the host, dropping anything without a numeric tab. */
+/**
+ * Page facts from the host, dropping anything without a numeric tab. A closed tab's null `url`
+ * and `title` are left out (see `PageFact`).
+ */
 function readPageFacts(pages: unknown): PageFact[] {
   if (!Array.isArray(pages)) return []
   const facts: PageFact[] = []
   for (const page of pages) {
-    if (typeof page !== 'object' || page === null) continue
-    const tab: unknown = Reflect.get(page, 'tab')
+    const tab = field<Wire.PageFact>(page, 'tab')
     if (typeof tab !== 'number') continue
     const fact: PageFact = { tab }
-    const url: unknown = Reflect.get(page, 'url')
-    const title: unknown = Reflect.get(page, 'title')
-    const closed: unknown = Reflect.get(page, 'closed')
-    const viewport: unknown = Reflect.get(page, 'viewportSize')
+    const url = field<Wire.PageFact>(page, 'url')
+    const title = field<Wire.PageFact>(page, 'title')
+    const closed = field<Wire.PageFact>(page, 'closed')
+    const viewport = field<Wire.PageFact>(page, 'viewportSize')
     if (typeof url === 'string') fact.url = url
     if (typeof title === 'string') fact.title = title
     if (typeof closed === 'boolean') fact.closed = closed
-    if (viewport === null) fact.viewportSize = null
-    else if (typeof viewport === 'object' && viewport !== null) {
-      const width: unknown = Reflect.get(viewport, 'width')
-      const height: unknown = Reflect.get(viewport, 'height')
-      if (typeof width === 'number' && typeof height === 'number')
-        fact.viewportSize = { width, height }
-    }
-    const workers = readWorkers(field(page, 'workers'))
+    const width = field<Wire.Size>(viewport, 'width')
+    const height = field<Wire.Size>(viewport, 'height')
+    if (typeof width === 'number' && typeof height === 'number')
+      fact.viewportSize = { width, height }
+    const workers = readWorkers(field<Wire.PageFact>(page, 'workers'))
     if (workers) fact.workers = workers
     facts.push(fact)
   }
@@ -337,12 +360,12 @@ function readPageFacts(pages: unknown): PageFact[] {
 }
 
 /** Worker metadata is validated once at the reply boundary, independently of page facts. */
-function readWorkers(value: unknown): WorkerInfo[] | null {
+function readWorkers(value: unknown): Wire.WorkerInfo[] | null {
   if (!Array.isArray(value)) return null
-  const workers: WorkerInfo[] = []
+  const workers: Wire.WorkerInfo[] = []
   for (const worker of value) {
-    const id = field(worker, 'id')
-    const url = field(worker, 'url')
+    const id = field<Wire.WorkerInfo>(worker, 'id')
+    const url = field<Wire.WorkerInfo>(worker, 'url')
     if (typeof id === 'string' && typeof url === 'string')
       workers.push({ id, url })
   }

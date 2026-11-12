@@ -94,8 +94,11 @@ impl Outcome {
     }
 }
 
-/// Whether an operation's side effect happened, as far as Neo can know.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// Whether an operation's side effect happened, as far as Neo can know. It serializes as its
+/// stored name, `as_str`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "ts-rs", derive(ts_rs::TS))]
+#[serde(rename_all = "snake_case")]
 pub enum Delivery {
     /// No side effect was attempted: safe to retry.
     NotSent,
@@ -194,4 +197,17 @@ pub struct OperationReached {
     pub tabs: Vec<TabId>,
     /// When the door saw the reach.
     pub at: EpochMillis,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Delivery;
+
+    #[test]
+    fn delivery_serializes_as_its_stored_name() -> Result<(), serde_json::Error> {
+        for delivery in [Delivery::NotSent, Delivery::Done, Delivery::Unknown] {
+            assert_eq!(serde_json::to_value(delivery)?, delivery.as_str());
+        }
+        Ok(())
+    }
 }
