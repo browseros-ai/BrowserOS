@@ -754,7 +754,7 @@ async fn ordered_rounds(run: &LiveRun, server: &PageServer, page: &TestPage) -> 
 }
 
 /// Core attaches pages with `Runtime` off, since a site can time the inspector's console work
-/// to detect an inspector. A run that listens for nothing sends no `Runtime.enable`; a console
+/// to tell it is being inspected. A run that listens for nothing sends no `Runtime.enable`; a console
 /// listener leases it on (`browseros_core::runtime_lease`), and the run's end switches it off.
 #[tokio::test]
 #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
@@ -774,7 +774,7 @@ async fn tests_that_runtime_is_on_only_while_a_run_listens_for_it() -> TestResul
             );
             run.invoke(
                 "events.listen",
-                json!({ "page": brand(&page), "event": "console", "on": true, "since": now_ms()? }),
+                json!({ "page": brand(&page), "event": "console", "enabled": true, "since": now_ms()? }),
             )
             .await?;
             let listening = run.recorded_methods();
