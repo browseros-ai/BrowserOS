@@ -45,7 +45,7 @@ binary="target/$target/release/browseros-claw-sdk"
 
 # Every workspace crate in the server's graph was compiled now, none reused from the cache.
 python3 - /tmp/cargo-messages.jsonl <<'PY'
-import json, sys
+import json, os, sys
 compiled, reused = set(), set()
 for line in open(sys.argv[1]):
     if not line.startswith("{"):
@@ -53,10 +53,12 @@ for line in open(sys.argv[1]):
     message = json.loads(line)
     if message.get("reason") != "compiler-artifact" or "path+file://" not in message["package_id"]:
         continue
-    (reused if message["fresh"] else compiled).add(message["target"]["name"])
+    package = os.path.basename(os.path.dirname(message["manifest_path"]))
+    unit = package + (" (build script)" if "custom-build" in message["target"]["kind"] else "")
+    (reused if message["fresh"] else compiled).add(unit)
 if reused or not compiled:
-    sys.exit(f"build-server.sh: workspace crates reused from the shared cache, not compiled from these sources: {sorted(reused) or 'none compiled'}")
-print(f"build-server.sh: compiled {len(compiled)} workspace crates from these sources", file=sys.stderr)
+    sys.exit(f"build-server.sh: workspace crates reused from the shared cache, not compiled from these sources: {', '.join(sorted(reused)) or 'none compiled'}")
+print(f"build-server.sh: compiled the {len(compiled)} workspace units from these sources", file=sys.stderr)
 PY
 
 built=$(LC_ALL=C grep -aoE 'browseros-claw-sdk-source=[0-9a-f]{64};' "$binary" | head -1 || true)

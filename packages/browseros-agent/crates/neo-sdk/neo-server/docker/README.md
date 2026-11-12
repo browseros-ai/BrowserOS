@@ -27,7 +27,16 @@ The tag is `neo-sdk:<browser>-<commit>-<arch>`, with `-dirty` before the arch wh
 `packages/browseros-agent` or `packages/browseros/docker/neo` has uncommitted changes. `build.sh` prints `TAG=`, `IMAGE_ID=` and the
 image's `provenance.json`. The server is cross-compiled with zig, so an amd64 image builds on an Apple
 silicon Mac without emulating rustc. The first build takes about 7 minutes; Cargo's cache is kept per
-architecture after that.
+architecture after that, shared by every checkout built on the Docker daemon.
+
+That cache never decides which server an image gets. Cargo judges freshness by file mtimes, so a
+checkout whose sources were older than the cache's last build once shipped that build's server under
+its own revision. `build-server.sh` (the Dockerfile's server step) therefore cleans the workspace's own
+crates from the cache before each build, keeping the registry and the third-party crates' output, and
+fails unless Cargo compiled every workspace crate in that step and the binary carries the digest of the
+sources the step copied. `build.sh` then copies the server out of the new image and tags the image only
+if that binary's source digest, sha256 and the revision match `provenance.json`; otherwise it exits 1
+and leaves the image untagged. `NEO_SDK_BUILD_JOBS=N` caps Cargo's parallel jobs on a busy machine.
 
 ## Check it
 
@@ -67,7 +76,7 @@ It never logs in to a registry or pushes; the accept log and `provenance.json` a
 | Agent MCP (`run`), `/system/health`, `/system/ready` | `http://127.0.0.1:9010/mcp`, and the same over TLS (self-signed) on `https://127.0.0.1:9011/mcp`. No auth on either. |
 | Host API `/v1`: runs, operations and their screenshots, each run's downloads (`/v1/runs/{runId}/downloads/{index}`) and the bytes too large for its reply (`/v1/runs/{runId}/blobs/{blobId}`), the trace, events, the live view (`/v1/tabs/{tabId}/screencast`, `/video`), the VNC display, locks, fits and takeovers ([openapi.yaml](../../neo-sdk-api/openapi.yaml)) | `/run/neo/host.sock`, mode 0660, group `NEO_HOST_GID`, plus `Authorization: Bearer <token>` |
 | Health | the image's `HEALTHCHECK`: the entrypoint finished and `/system/ready` answers through 9010 |
-| Provenance | `/usr/share/neo-sdk/provenance.json` (commit, browser, server sha256 and version, toolchain), `/usr/share/neo-sdk/browser.lock`, and the OCI `revision` and `version` labels |
+| Provenance | `/usr/share/neo-sdk/provenance.json` (commit, the digest of the server's build sources, browser, the server's path, sha256, version and the source digest compiled into it, toolchain), `/usr/share/neo-sdk/browser.lock`, and the OCI `revision` and `version` labels |
 
 ### Ports
 
