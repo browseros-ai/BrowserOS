@@ -181,6 +181,7 @@ const EVERY_OP = `
   await l.isEnabled(); await l.isDisabled(); await l.isEditable(); await l.isChecked(); await l.isVisible(); await l.isHidden()
   await l.count(); await l.normalize(); await l.allTextContents(); await l.allInnerTexts(); await l.boundingBox(); await l.waitFor(sample('locator.waitFor'))
   const handle = await l.elementHandle(); await handle.click(); await l.elementHandles()
+  await l.selectOption(['a', handle], sample('locator.selectOption'))
   await handle.$('b'); await handle.$$('b')
   await page.ariaSnapshot(sample('page.ariaSnapshot')); await l.ariaSnapshot(sample('locator.ariaSnapshot'))
   await page.ariaSnapshotJSON(sample('page.ariaSnapshot')); await l.ariaSnapshotJSON(sample('locator.ariaSnapshot'))

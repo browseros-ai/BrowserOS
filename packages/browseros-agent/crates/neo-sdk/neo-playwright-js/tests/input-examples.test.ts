@@ -5,9 +5,14 @@ import { recordEveryOp } from '../scripts/wire-examples'
 it('derives bag keys and flat optional fields without treating selectOption data as a bag', async () => {
   const { optionalKeys, samples } = await inputExamples()
   expect(optionalKeys['locator.fill']).toContain('force')
-  expect(optionalKeys['locator.selectOption']).toEqual(['force'])
+  expect(optionalKeys['locator.selectOption']).toEqual([
+    'elements',
+    'force',
+    'options',
+  ])
+  expect(optionalKeys['locator.selectText']).toEqual(['force'])
   expect(optionalKeys['locator.fill']).toEqual(
-    optionalKeys['locator.selectOption'],
+    optionalKeys['locator.selectText'],
   )
   expect(optionalKeys['page.goto']).toContain('referer')
   expect(optionalKeys['page.ariaSnapshot']).toContain('boxes')
