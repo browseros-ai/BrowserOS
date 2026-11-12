@@ -812,12 +812,17 @@ impl PageManager {
         let session = ProtocolSession::for_session(self.cdp.clone(), session_id.clone())
             .with_epoch_guard(guard.clone());
         let _: Value = session.send("Page.enable", json!({})).await?;
-        let _: Value = session.send("DOM.enable", json!({})).await?;
+        // DIAGNOSTIC v8 (diag/ss054-fonts only): NEO_DIAG_NODOM / NEO_DIAG_NOAX / NEO_DIAG_NOCHOOSER.
+        if std::env::var_os("NEO_DIAG_NODOM").is_none() {
+            let _: Value = session.send("DOM.enable", json!({})).await?;
+        }
         // No `Runtime.enable`: with it on, every console call the page makes serializes its
         // arguments for the inspector, and sites time that to detect DevTools and blank or
         // close themselves. Runtime commands work without it; `PageSignals::harvest_console`
         // turns it on only for the instant it takes to collect the console history.
-        let _: Value = session.send("Accessibility.enable", json!({})).await?;
+        if std::env::var_os("NEO_DIAG_NOAX").is_none() {
+            let _: Value = session.send("Accessibility.enable", json!({})).await?;
+        }
         let _ = session
             .send::<_, Value>("Runtime.runIfWaitingForDebugger", json!({}))
             .await;
@@ -829,7 +834,10 @@ impl PageManager {
         let is_agent_created = self.is_agent_created(&page_id).await;
         // Intercept before the page is exposed to any caller. Adopted user tabs retain their
         // native picker; explicit upload on one borrows interception for that operation only.
-        if is_agent_created && let Some(transfers) = &self.file_transfers {
+        if is_agent_created
+            && std::env::var_os("NEO_DIAG_NOCHOOSER").is_none()
+            && let Some(transfers) = &self.file_transfers
+        {
             transfers.intercept(&session).await?;
         }
         if is_agent_created
