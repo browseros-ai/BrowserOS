@@ -18,5 +18,13 @@ import type { PartialFrame } from "./PartialFrame";
  * applied. The prelude renders it, as upstream's YAML (the vendored `renderAriaSnapshotAsYaml`)
  * or as the condensed v1 text (`prelude/snapshot-v1.ts`), and adds a `# partial` line under each
  * partial iframe. `tests/data/snapshot-output.json` is one recorded from real frames.
+ *
+ * A whole page's snapshot also carries `document`, the tab's document generation read before
+ * the tree, which the prelude hands back with the rendered text so the delta baseline is only
+ * ever stored for the document it was read from (`snapshot_baselines.rs`).
  */
-export type SnapshotResult = { json: import('../../vendored').AriaSnapshotJSON, partial: Array<PartialFrame>, };
+export type SnapshotResult = { json: import('../../vendored').AriaSnapshotJSON, partial: Array<PartialFrame>, 
+/**
+ * Set on `page.ariaSnapshot` only; a locator's snapshot never becomes a baseline.
+ */
+document?: number, };

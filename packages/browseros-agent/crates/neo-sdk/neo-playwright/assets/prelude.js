@@ -206,6 +206,16 @@
       target: "target",
       lifetime: "operation"
     },
+    "page.snapshotBaseline": {
+      effect: "read",
+      target: "page",
+      lifetime: "operation"
+    },
+    "page.snapshotPending": {
+      effect: "read",
+      target: "page",
+      lifetime: "operation"
+    },
     "expect.locator": {
       effect: "read",
       target: "target",
@@ -2020,7 +2030,9 @@
   var SNAPSHOT_OPTION_KEYS = {};
   var SNAPSHOT_SEND = {
     "page.ariaSnapshot": (site, call, input, signal) => invoke("page.ariaSnapshot", site, call, input, signal),
-    "locator.ariaSnapshot": (site, call, input, signal) => invoke("locator.ariaSnapshot", site, call, input, signal)
+    "locator.ariaSnapshot": (site, call, input, signal) => invoke("locator.ariaSnapshot", site, call, input, signal),
+    "page.snapshotBaseline": (site, call, input, signal) => invoke("page.snapshotBaseline", site, call, input, signal),
+    "page.snapshotPending": (site, call, input, signal) => invoke("page.snapshotPending", site, call, input, signal)
   };
 
   // crates/neo-sdk/neo-playwright-js/src/prelude/generated/expect.ts
@@ -7460,6 +7472,192 @@ ${value.stack}`;
 `);
   }
 
+  // crates/neo-sdk/neo-playwright-js/src/prelude/snapshot-delta.ts
+  var NO_BASELINE = "# full snapshot: no earlier snapshot of this page";
+  var NO_CHANGE = "# no change since your last snapshot of this tab";
+  var TOO_MUCH = "# full snapshot: too much differs from your last snapshot to list as changes";
+  var CONTEXT = 3;
+  var MAX_CHANGED_LINES = 1000;
+  function sizeLine(line) {
+    return line.startsWith("# text left out: ") || line.startsWith("# cut: ");
+  }
+  function renderDelta(previous, current) {
+    if (previous === null)
+      return `${NO_BASELINE}
+${current}`;
+    const before = previous.split(`
+`).filter((line) => !sizeLine(line));
+    const after = current.split(`
+`).filter((line) => !sizeLine(line));
+    const edits = diff(before, after, current.length);
+    if (edits === null)
+      return `${TOO_MUCH}
+${current}`;
+    if (edits.every((edit) => edit.kind === " "))
+      return NO_CHANGE;
+    const changes = hunks(edits, before, after).join(`
+`);
+    if (changes.length > current.length / 2)
+      return `${TOO_MUCH}
+${current}`;
+    const added = edits.filter((edit) => edit.kind === "+").length;
+    const removed = edits.filter((edit) => edit.kind === "-").length;
+    return `# changes since your last snapshot of this tab: ${added} added, ${removed} removed
+${changes}`;
+  }
+  function diff(before, after, limit) {
+    let head = 0;
+    while (head < before.length && head < after.length && before[head] === after[head])
+      head += 1;
+    let tail = 0;
+    while (tail < before.length - head && tail < after.length - head && before[before.length - 1 - tail] === after[after.length - 1 - tail])
+      tail += 1;
+    const n = before.length - head - tail;
+    const m = after.length - head - tail;
+    if (unmatchedCost(before, after, head, n, m) > limit / 2)
+      return null;
+    let shortest = Number.POSITIVE_INFINITY;
+    for (let index = head;index < head + n; index++)
+      shortest = Math.min(shortest, before[index].length);
+    for (let index = head;index < head + m; index++)
+      shortest = Math.min(shortest, after[index].length);
+    const most = Math.min(MAX_CHANGED_LINES, n + m, n + m === 0 ? 0 : Math.floor(limit / 2 / (shortest + 2)));
+    const middle = middleScript(before, after, head, n, m, most);
+    if (middle === null)
+      return null;
+    const edits = [];
+    for (let index = 0;index < head; index++)
+      edits.push({ kind: " ", before: index, after: index });
+    edits.push(...middle);
+    for (let index = 0;index < tail; index++)
+      edits.push({
+        kind: " ",
+        before: head + n + index,
+        after: head + m + index
+      });
+    return edits;
+  }
+  function unmatchedCost(before, after, offset, n, m) {
+    const spare = new Map;
+    for (let index = offset;index < offset + m; index++)
+      spare.set(after[index], (spare.get(after[index]) ?? 0) + 1);
+    let cost = 0;
+    for (let index = offset;index < offset + n; index++) {
+      const left = spare.get(before[index]) ?? 0;
+      if (left > 0)
+        spare.set(before[index], left - 1);
+      else
+        cost += before[index].length + 2;
+    }
+    for (const [line, left] of spare)
+      cost += left * (line.length + 2);
+    return cost;
+  }
+  function middleScript(before, after, offset, n, m, most) {
+    const width = 2 * most + 3;
+    const reach = new Int32Array(width);
+    const rounds = [];
+    const at = (k) => k + most + 1;
+    for (let d = 0;d <= most; d++) {
+      for (let k = -d;k <= d; k += 2) {
+        const down = k === -d || k !== d && reach[at(k - 1)] < reach[at(k + 1)];
+        let x = down ? reach[at(k + 1)] : reach[at(k - 1)] + 1;
+        let y = x - k;
+        while (x < n && y < m && before[offset + x] === after[offset + y]) {
+          x += 1;
+          y += 1;
+        }
+        reach[at(k)] = x;
+        if (x >= n && y >= m) {
+          rounds.push(reach.slice(at(-d), at(d) + 1));
+          return walkBack(rounds, n, m, offset);
+        }
+      }
+      rounds.push(reach.slice(at(-d), at(d) + 1));
+    }
+    return null;
+  }
+  function walkBack(rounds, n, m, offset) {
+    const reversed = [];
+    let x = n;
+    let y = m;
+    for (let d = rounds.length - 1;d > 0; d--) {
+      const k = x - y;
+      const previous = rounds[d - 1];
+      const at = (diagonal) => diagonal + d - 1;
+      const down = k === -d || k !== d && previous[at(k - 1)] < previous[at(k + 1)];
+      const fromK = down ? k + 1 : k - 1;
+      const fromX = previous[at(fromK)];
+      const fromY = fromX - fromK;
+      while (x > (down ? fromX : fromX + 1) && y > (down ? fromY + 1 : fromY)) {
+        x -= 1;
+        y -= 1;
+        reversed.push({ kind: " ", before: offset + x, after: offset + y });
+      }
+      if (down) {
+        y -= 1;
+        reversed.push({ kind: "+", before: offset + x, after: offset + y });
+      } else {
+        x -= 1;
+        reversed.push({ kind: "-", before: offset + x, after: offset + y });
+      }
+    }
+    while (x > 0 && y > 0) {
+      x -= 1;
+      y -= 1;
+      reversed.push({ kind: " ", before: offset + x, after: offset + y });
+    }
+    return reversed.reverse();
+  }
+  function hunks(edits, before, after) {
+    const out = [];
+    let index = 0;
+    while (index < edits.length) {
+      if (edits[index].kind === " ") {
+        index += 1;
+        continue;
+      }
+      const start = Math.max(0, index - CONTEXT);
+      let end = index;
+      let quiet = 0;
+      for (let next = index;next < edits.length; next++) {
+        if (edits[next].kind === " ") {
+          quiet += 1;
+          if (quiet > 2 * CONTEXT)
+            break;
+        } else {
+          quiet = 0;
+          end = next;
+        }
+      }
+      const stop = Math.min(edits.length, end + 1 + CONTEXT);
+      const lines = edits.slice(start, stop);
+      out.push(blockLine(lines, before, after));
+      for (const edit of lines)
+        out.push(edit.kind + (edit.kind === "+" ? after[edit.after] : before[edit.before]));
+      index = stop;
+    }
+    return out;
+  }
+  function blockLine(lines, before, after) {
+    const first = lines.find((edit) => edit.kind !== " ");
+    if (first === undefined)
+      return "@@";
+    const removesOnly = lines.every((edit) => edit.kind !== "+");
+    const text = removesOnly ? before : after;
+    const position = removesOnly ? first.before : first.after;
+    const changed = first.kind === "+" ? after[first.after] : before[first.before];
+    const depth = indentOf(changed);
+    for (let index = position - 1;index >= 0; index--) {
+      if (indentOf(text[index]) < depth)
+        return `@@ ${text[index].trimStart().replace(/^- /, "").replace(/:$/, "")}`;
+    }
+    return "@@";
+  }
+  function indentOf(line) {
+    return line.length - line.trimStart().length;
+  }
+
   // crates/neo-sdk/neo-playwright-js/src/prelude/snapshot-cap.ts
   var CHARS_PER_TOKEN = 4;
   function aboutTokens(chars) {
@@ -7919,10 +8117,11 @@ ${value.stack}`;
     return known;
   }
   function snapshotV1Options(api, options) {
-    const { text, urls, maxTokens } = options;
+    const { text, urls, maxTokens, delta } = options;
     for (const [name, value] of [
       ["text", text],
-      ["urls", urls]
+      ["urls", urls],
+      ["delta", delta]
     ])
       if (value !== undefined && typeof value !== "boolean")
         throw clientError(api, `${name}: expected boolean, got ${typeof value}`);
@@ -7931,7 +8130,8 @@ ${value.stack}`;
     return {
       text,
       urls: urls ?? false,
-      maxTokens: maxTokens ?? DEFAULT_MAX_TOKENS
+      maxTokens: maxTokens ?? DEFAULT_MAX_TOKENS,
+      delta: delta ?? false
     };
   }
 
@@ -8453,11 +8653,26 @@ ${value.stack}`;
       }, wait.signal);
     }
     async _ariaSnapshot(api, selector, options = {}) {
+      const site = captureSite();
       const mode = options.mode ?? (upstreamSnapshots ? "default" : "ai");
       if (mode !== "ai" || upstreamSnapshots)
         return renderSnapshot(await this._snapshot(api, selector, options, mode));
-      const format = snapshotV1Options(api, options);
-      return renderSnapshotV1(await this._snapshot(api, selector, options, mode), format);
+      const { delta, ...format } = snapshotV1Options(api, options);
+      const wait = this._wait(api, options);
+      const deadline = new EventDeadline(api, null, Date.now(), wait.timeout);
+      const result = await this._snapshot(api, selector, options, mode);
+      const text = renderSnapshotV1(result, format);
+      if (selector !== null)
+        return text;
+      const { document } = result;
+      try {
+        const page = await this._page._brand(api);
+        const returned = delta ? renderDelta(await send["page.snapshotBaseline"](site, this._call(api, deadline.left()), { page, document }, wait.signal), text) : text;
+        await send["page.snapshotPending"](site, this._call(api, deadline.left()), { page, document, text, delta, returned: delta ? returned : undefined }, wait.signal);
+        return returned;
+      } catch (error) {
+        throw deadline.named(error);
+      }
     }
     async _ariaSnapshotJSON(api, selector, options = {}) {
       return (await this._snapshot(api, selector, options, options.mode ?? "default")).json;

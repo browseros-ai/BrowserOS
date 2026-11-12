@@ -11,6 +11,8 @@ use crate::dispatch::{
 };
 use crate::runtime::{LogLine, ScriptEnd, ScriptOutcome};
 
+use super::ReplyTip;
+
 /// What one `run` call answers: the MCP layer renders it, and the trace keeps
 /// it as the run's replay, so a repeat of its `requestId` gets back exactly this, `id`
 /// included, and renders the same way. A plain data bag.
@@ -47,6 +49,10 @@ pub(crate) struct RunReply {
     /// Task recovery information, retained even when the script failed.
     #[serde(default)]
     pub(crate) tasks: Vec<TaskNote>,
+    /// Hints for the model, decided once as the run ended (never on a failed run), so a replay
+    /// renders them as the first reply did.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) tips: Vec<ReplyTip>,
 }
 
 /// How a run ended, as the caller sees it: the trace's `RunStatus` without the states a reply
@@ -173,7 +179,26 @@ impl RunReply {
             unknown: report.unknown.iter().map(OpNote::from).collect(),
             not_awaited: report.not_awaited.iter().map(OpNote::from).collect(),
             tasks: Vec::new(),
+            tips: Vec::new(),
         }
+    }
+
+    /// Whether the caller was given `text` whole: inside one string of the returned value, or
+    /// one console line the reply kept. What decides whether a run's snapshot becomes its tab's
+    /// delta baseline (`neo_playwright::RunState::settle_snapshot_baselines`): a slice, a length
+    /// or a value the script computed from the text does not count, nor a line past the console
+    /// limits.
+    #[must_use]
+    pub(crate) fn shows(&self, text: &str) -> bool {
+        fn within(value: &Value, text: &str) -> bool {
+            match value {
+                Value::String(string) => string.contains(text),
+                Value::Array(items) => items.iter().any(|item| within(item, text)),
+                Value::Object(fields) => fields.values().any(|field| within(field, text)),
+                Value::Null | Value::Bool(_) | Value::Number(_) => false,
+            }
+        }
+        within(&self.value, text) || self.logs.iter().any(|line| line.text.contains(text))
     }
 
     /// A call refused before it ran: nothing happened, so repeating it is safe.
@@ -243,6 +268,7 @@ impl RunReply {
             unknown: Vec::new(),
             not_awaited: Vec::new(),
             tasks: Vec::new(),
+            tips: Vec::new(),
         }
     }
 }
@@ -390,6 +416,34 @@ mod tests {
             serde_json::from_value::<RunReply>(stored)?,
             reply,
             "a repeat of the requestId renders exactly what the first call got"
+        );
+        Ok(())
+    }
+
+    /// What decides whether a run's snapshot text becomes its tab's delta baseline: the text
+    /// whole, in one returned string or one kept console line.
+    #[test]
+    fn a_reply_shows_a_text_only_whole_in_its_value_or_its_console() -> Result<(), Box<dyn Error>> {
+        let reply: RunReply = serde_json::from_value(serde_json::json!({
+            "id": RunId::new(),
+            "status": "ok",
+            "effects": "none",
+            "value": { "page": ["intro", "- button \"Go\" [ref=e2]\n- link \"Help\""], "n": 42 },
+            "logs": [{ "level": "log", "text": "seen: - heading \"Cart\"" }],
+        }))?;
+        assert!(reply.shows("- button \"Go\" [ref=e2]\n- link \"Help\""));
+        assert!(reply.shows("- heading \"Cart\""), "a console line counts");
+        assert!(
+            !reply.shows("- button \"Go\" [ref=e2]\n- link \"Help\"\n- link \"More\""),
+            "the returned string holds only part of the text"
+        );
+        assert!(
+            !reply.shows("42"),
+            "a number is not a string the caller read"
+        );
+        assert!(
+            !reply.shows("intro- button"),
+            "two strings are not joined into one"
         );
         Ok(())
     }

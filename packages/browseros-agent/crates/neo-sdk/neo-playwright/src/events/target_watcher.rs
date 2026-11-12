@@ -22,7 +22,10 @@
 //!   closes held dialogs whose runs all ended (`dialog_table.rs`).
 //! - **Frames.** `Page.frameAttached`, a removing `Page.frameDetached` and the main frame's
 //!   `Page.frameNavigated` go to the `FrameAttachLog`, from one session per native target, so frames are
-//!   numbered in the order Playwright numbers them (`world/frame_attach_log.rs`).
+//!   numbered in the order Playwright numbers them (`world/frame_attach_log.rs`). That commit
+//!   and a closed tab also drop the tab's snapshot baseline, and a lag or a new connection drops
+//!   all of them (`SnapshotBaselines`), so a delta never diffs a new document against the one it
+//!   replaced.
 //! - **Binding calls.** `Runtime.bindingCalled` for upstream's `__playwright__binding__` goes,
 //!   while some run exposes a binding on that tab, to each such run's own queue, never the
 //!   bounded log, so no call the page awaits is evicted unread. It comes on a channel of its own
@@ -70,6 +73,7 @@ use crate::events::page_event::{
 };
 use crate::events::worker_table::WorkerContext;
 use crate::events::{PageEventKind, WatcherProgress, navigation_event};
+use crate::snapshot::SnapshotBaselines;
 use crate::world::{BackendNodeId, FrameAttachLog, FrameEvent};
 
 /// upstream's `PageBinding.kBindingName`: the CDP binding every exposed binding's stub calls.
@@ -124,13 +128,15 @@ impl TargetWatcher {
     }
 
     /// Starts watching `browser`, recording page events through `writer` and frame lifecycles
-    /// into `attach_log`, and counting what it handled into `progress`. Outside a tokio runtime
+    /// into `attach_log`, dropping a tab's entry in `baselines` when its document goes, and
+    /// counting what it handled into `progress`. Outside a tokio runtime
     /// there is nothing to run it on, so nothing is recorded and no one waits for it.
     pub(crate) fn spawn(
         browser: Arc<BrowserSession>,
         writer: EventWriter,
         attach_log: Arc<FrameAttachLog>,
         progress: Arc<WatcherProgress>,
+        baselines: Arc<SnapshotBaselines>,
     ) -> Self {
         let (requests, pending) = mpsc::unbounded_channel();
         let Ok(runtime) = Handle::try_current() else {
@@ -140,7 +146,7 @@ impl TargetWatcher {
                 requests,
             };
         };
-        let (watcher, found) = Watcher::new(browser, writer, attach_log, progress);
+        let (watcher, found) = Watcher::new(browser, writer, attach_log, progress, baselines);
         Self {
             task: Some(runtime.spawn(watcher.run(found, pending))),
             requests,
@@ -155,6 +161,9 @@ struct Watcher {
     view: BrowserView,
     writer: EventWriter,
     attach_log: Arc<FrameAttachLog>,
+    /// Each tab's snapshot baseline: forgotten when the tab's main frame commits a new
+    /// document or the tab closes, all of them after a lag.
+    baselines: Arc<SnapshotBaselines>,
     progress: Arc<WatcherProgress>,
     lifecycle: FrameLifecycleTracker,
     /// The connection epoch discovery ran for; `None` until it succeeds, and after a lag.
@@ -410,6 +419,7 @@ impl Watcher {
         writer: EventWriter,
         attach_log: Arc<FrameAttachLog>,
         progress: Arc<WatcherProgress>,
+        baselines: Arc<SnapshotBaselines>,
     ) -> (Self, UnboundedReceiver<OpenedPage>) {
         let (found, found_rx) = mpsc::unbounded_channel();
         let watcher = Self {
@@ -417,6 +427,7 @@ impl Watcher {
             browser,
             writer,
             attach_log,
+            baselines,
             progress,
             lifecycle: FrameLifecycleTracker::default(),
             epoch: None,
@@ -460,11 +471,8 @@ impl Watcher {
                         self.handle(event).await;
                         self.progress.handled(1);
                     }
-                    // Events were dropped: rediscover, which records what closed meanwhile, and
-                    // tell the frame log that commits may be missing.
                     Err(RecvError::Lagged(skipped)) => {
-                        self.epoch = None;
-                        self.attach_log.lost_events();
+                        self.lost_events();
                         self.progress.handled(skipped);
                     }
                     Err(RecvError::Closed) => {
@@ -543,6 +551,15 @@ impl Watcher {
         self.page_sessions.remove(session);
     }
 
+    /// Events were dropped: rediscover, which records what closed meanwhile, and tell the frame
+    /// log that commits may be missing, and the snapshot baselines that any tab's document may
+    /// have changed unseen.
+    fn lost_events(&mut self) {
+        self.epoch = None;
+        self.attach_log.lost_events();
+        self.baselines.events_lost();
+    }
+
     /// Handles every broadcast event already queued, without waiting for more.
     async fn drain(&mut self, events: &mut Receiver<CdpEvent>) {
         loop {
@@ -553,8 +570,7 @@ impl Watcher {
                     self.progress.handled(1);
                 }
                 Err(TryRecvError::Lagged(skipped)) => {
-                    self.epoch = None;
-                    self.attach_log.lost_events();
+                    self.lost_events();
                     self.progress.handled(skipped);
                 }
                 Err(TryRecvError::Empty | TryRecvError::Closed) => return,
@@ -686,6 +702,8 @@ impl Watcher {
             });
         }
         if changed {
+            // Whatever the tabs did while the old socket was down went unseen.
+            self.baselines.events_lost();
             self.lifecycle = FrameLifecycleTracker::default();
             for id in self.worker_sessions.values().cloned().collect::<Vec<_>>() {
                 self.close_worker(&id);
@@ -899,6 +917,7 @@ impl Watcher {
         }
         self.frames.remove(target.as_str());
         self.attach_log.forget(target);
+        self.baselines.tab_closed(target);
         self.lifecycle.forget(target);
         let Some(page) = self.pages.remove(target) else {
             return;
@@ -1432,6 +1451,10 @@ impl Watcher {
                 {
                     // Upstream's frame URL: `framePayload.url + (framePayload.urlFragment || '')`.
                     let url = format!("{}{}", frame.url, frame.url_fragment.unwrap_or_default());
+                    // A cross-document commit (same-document ones are
+                    // `Page.navigatedWithinDocument`): the text the agent last saw is of a
+                    // document that is gone.
+                    self.baselines.document_changed(&tab);
                     self.attach_log
                         .record(&tab, FrameEvent::MainCommitted { url });
                 }
@@ -1726,6 +1749,7 @@ mod worker_observation_tests {
     use std::error::Error;
     use std::sync::Arc;
 
+    use browseros_cdp::CdpEvent;
     use browseros_core::testing::{TestCall, TestConnection};
     use browseros_core::{
         BrowserSession, BrowserSessionHooks, CdpConnection, SessionId, TabId, TargetId,
@@ -1737,7 +1761,97 @@ mod worker_observation_tests {
     use crate::events::worker_table::WorkerInfo;
     use crate::events::{EventHub, PageEventKind, Subscription, WatcherProgress};
     use crate::run_state::RunState;
+    use crate::snapshot::SnapshotBaselines;
     use crate::world::FrameAttachLog;
+
+    /// A tab's snapshot baseline names its main frame's document: a new document or a closed tab
+    /// drops it, and nothing else does (a same-document navigation, a child frame's commit,
+    /// another tab's events).
+    #[tokio::test]
+    async fn a_new_main_document_and_a_closed_tab_drop_the_tab_s_snapshot_baseline()
+    -> Result<(), Box<dyn Error>> {
+        let connection = TestConnection::new([]);
+        let browser = BrowserSession::new(
+            Arc::clone(&connection) as Arc<dyn CdpConnection>,
+            BrowserSessionHooks::default(),
+        );
+        let (_hub, writer) = EventHub::new();
+        let baselines = Arc::new(SnapshotBaselines::default());
+        let (mut watcher, _found) = Watcher::new(
+            browser,
+            writer,
+            Arc::new(FrameAttachLog::default()),
+            Arc::new(WatcherProgress::default()),
+            Arc::clone(&baselines),
+        );
+        let (tab, other) = (TargetId("tab".to_owned()), TargetId("other".to_owned()));
+        let session = SessionId::from("tab-session");
+        watcher.sessions.insert(session.clone(), tab.clone());
+        watcher.lifecycle_sources.attach(&session, &tab);
+        // A snapshot whose run ended with its text given: the stored text it replaces, then it.
+        let snapshot = |target: &TargetId, text: &str| {
+            let document = baselines.generation(target);
+            let previous = baselines.stored(target, document);
+            baselines.commit(target, document, text.to_owned());
+            previous
+        };
+        snapshot(&tab, "tab text");
+        snapshot(&other, "other text");
+        let on_tab = |method: &str, params: serde_json::Value| CdpEvent {
+            method: method.to_owned(),
+            params,
+            session_id: Some(session.clone()),
+        };
+
+        watcher
+            .handle(on_tab(
+                "Page.navigatedWithinDocument",
+                json!({ "frameId": "tab", "url": "https://a.test/#more" }),
+            ))
+            .await;
+        watcher
+            .handle(on_tab(
+                "Page.frameNavigated",
+                json!({ "frame": { "id": "child", "parentId": "tab", "url": "https://b.test/" } }),
+            ))
+            .await;
+        assert_eq!(
+            snapshot(&tab, "tab text").as_deref(),
+            Some("tab text"),
+            "the main document is still the one the agent saw"
+        );
+
+        watcher
+            .handle(on_tab(
+                "Page.frameNavigated",
+                json!({ "frame": { "id": "tab", "url": "https://a.test/next" } }),
+            ))
+            .await;
+        assert_eq!(
+            snapshot(&tab, "next text"),
+            None,
+            "a new main document starts over"
+        );
+
+        watcher
+            .handle(CdpEvent {
+                method: "Target.targetDestroyed".to_owned(),
+                params: json!({ "targetId": "other" }),
+                session_id: None,
+            })
+            .await;
+        assert_eq!(
+            snapshot(&other, "again"),
+            None,
+            "a closed tab keeps nothing"
+        );
+        assert_eq!(
+            snapshot(&tab, "next text").as_deref(),
+            Some("next text"),
+            "another tab's close leaves this one's"
+        );
+        Ok(())
+    }
 
     #[tokio::test]
     async fn observing_an_untouched_page_never_enables_its_runtime() -> Result<(), Box<dyn Error>> {
@@ -1752,6 +1866,7 @@ mod worker_observation_tests {
             writer,
             Arc::new(FrameAttachLog::default()),
             Arc::new(WatcherProgress::default()),
+            Arc::new(SnapshotBaselines::default()),
         );
         watcher
             .observe_workers(TargetId("untouched-page".to_owned()))
@@ -1794,6 +1909,7 @@ mod worker_observation_tests {
             writer,
             Arc::new(FrameAttachLog::default()),
             Arc::new(WatcherProgress::default()),
+            Arc::new(SnapshotBaselines::default()),
         );
         (hub, watcher)
     }

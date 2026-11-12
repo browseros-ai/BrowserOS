@@ -135,6 +135,10 @@ pub(crate) struct PartialFrame {
 /// applied. The prelude renders it, as upstream's YAML (the vendored `renderAriaSnapshotAsYaml`)
 /// or as the condensed v1 text (`prelude/snapshot-v1.ts`), and adds a `# partial` line under each
 /// partial iframe. `tests/data/snapshot-output.json` is one recorded from real frames.
+///
+/// A whole page's snapshot also carries `document`, the tab's document generation read before
+/// the tree, which the prelude hands back with the rendered text so the delta baseline is only
+/// ever stored for the document it was read from (`snapshot_baselines.rs`).
 #[derive(Debug, PartialEq, Serialize, TS)]
 pub(crate) struct SnapshotResult {
     // The probe and the renderer already share upstream's recursive node format, pinned by
@@ -142,6 +146,10 @@ pub(crate) struct SnapshotResult {
     #[ts(type = "import('../../vendored').AriaSnapshotJSON")]
     pub(crate) json: Vec<AriaNode>,
     pub(crate) partial: Vec<PartialFrame>,
+    /// Set on `page.ariaSnapshot` only; a locator's snapshot never becomes a baseline.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub(crate) document: Option<u32>,
 }
 
 /// The page's snapshot from the root frame's tree: every read child stitched in and the name
@@ -152,7 +160,11 @@ pub(crate) fn stitch(root: FrameSnapshot) -> SnapshotResult {
     for node in &mut json {
         snapshot_rules::drop_prohibited_names(node);
     }
-    SnapshotResult { json, partial }
+    SnapshotResult {
+        json,
+        partial,
+        document: None,
+    }
 }
 
 /// Upstream's merge, bottom-up: each read child is stitched first, then set under the iframe

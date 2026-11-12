@@ -9,13 +9,6 @@
 //! It starts no listeners and queues no trace screenshots.
 
 mod app;
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "tab slots, tab lookups and close events serve methods and rules still to land"
-    )
-)]
 mod browser;
 mod builtins;
 mod config;

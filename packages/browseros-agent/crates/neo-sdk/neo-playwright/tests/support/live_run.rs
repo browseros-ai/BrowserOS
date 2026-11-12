@@ -319,6 +319,31 @@ impl LiveRun {
         })
     }
 
+    /// The tabs this host's scripts snapshotted in full while a stored baseline was there: what
+    /// the server's tip reads (`RunState::full_snapshot_repeats`). Every script on this host
+    /// shares one run state.
+    pub(crate) fn full_snapshot_repeats(&self) -> Vec<TabId> {
+        self.env.run_state.full_snapshot_repeats()
+    }
+
+    /// Ends one script as neo-server's run service ends a run for its snapshot baselines: with
+    /// `value`, what the script returned (`None` when it threw), each tab's last whole-page text
+    /// whose returned string is inside one string of the value becomes its delta baseline.
+    pub(crate) fn end_run(&self, value: Option<&Value>) {
+        fn within(value: &Value, text: &str) -> bool {
+            match value {
+                Value::String(string) => string.contains(text),
+                Value::Array(items) => items.iter().any(|item| within(item, text)),
+                Value::Object(fields) => fields.values().any(|field| within(field, text)),
+                Value::Null | Value::Bool(_) | Value::Number(_) => false,
+            }
+        }
+        let given = |text: &str| value.is_some_and(|value| within(value, text));
+        self.env
+            .run_state
+            .settle_snapshot_baselines(value.is_some(), &given);
+    }
+
     /// The browser session the crate runs over, for a test that reads core's registries.
     pub(crate) fn browser(&self) -> &BrowserSession {
         &self.browser

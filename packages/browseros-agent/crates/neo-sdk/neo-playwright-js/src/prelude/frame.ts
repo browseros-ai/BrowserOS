@@ -52,6 +52,7 @@ import {
   untilAborted,
 } from './signal'
 import { renderSnapshot, upstreamSnapshots } from './snapshot'
+import { renderDelta } from './snapshot-delta'
 import {
   DEFAULT_MAX_TOKENS,
   renderSnapshotV1,
@@ -119,12 +120,14 @@ export type SnapshotOptions = TimeoutOption &
   }
 /**
  * `ariaSnapshot()`'s options: the engine's, plus the v1 format's own (snapshot-v1.ts). Those
- * never reach the wire, since the prelude renders, and `mode: 'default'` ignores them.
+ * never reach the snapshot op, since the prelude renders, and `mode: 'default'` ignores them.
+ * `delta` (snapshot-delta.ts) applies to a whole page's v1 text only; a locator ignores it.
  */
 export type AriaSnapshotOptions = SnapshotOptions & {
   text?: boolean
   urls?: boolean
   maxTokens?: number
+  delta?: boolean
 }
 export type NavigateOptions = TimeoutOption &
   SignalOption & {
@@ -195,11 +198,12 @@ export function loadState(
 function snapshotV1Options(
   api: string,
   options: AriaSnapshotOptions,
-): SnapshotV1Options {
-  const { text, urls, maxTokens } = options
+): SnapshotV1Options & { delta: boolean } {
+  const { text, urls, maxTokens, delta } = options
   for (const [name, value] of [
     ['text', text],
     ['urls', urls],
+    ['delta', delta],
   ] as const)
     if (value !== undefined && typeof value !== 'boolean')
       throw clientError(api, `${name}: expected boolean, got ${typeof value}`)
@@ -219,6 +223,7 @@ function snapshotV1Options(
     text,
     urls: urls ?? false,
     maxTokens: maxTokens ?? DEFAULT_MAX_TOKENS,
+    delta: delta ?? false,
   }
 }
 
@@ -1418,20 +1423,62 @@ export class Frame extends EventEmitter {
    * The text: the v1 format (snapshot-v1.ts) for `mode: 'ai'` or no mode, which asks the engine
    * for its `'ai'` tree, refs included; Playwright's YAML for `mode: 'default'`, and for every
    * mode under the conformance switch, where no mode means `'default'` as upstream's does.
+   *
+   * A whole page's v1 text may then become the tab's delta baseline:
+   *
+   *   page.ariaSnapshot      → { json, partial, document } → v1 text, capped
+   *   delta: true            page.snapshotBaseline → the tab's STORED baseline
+   *                            → renderDelta(stored, text)
+   *   page.snapshotPending   the text, and what the call returns, pending on the run's state
+   *
+   * The host stores a pending text when the run ends, and only if the run ended ok and what
+   * the call returned reached the caller (snapshot_baselines.rs, pending_baselines.rs). So a
+   * delta always compares against text the caller holds, never against a snapshot taken
+   * earlier in the same run. A locator's text is one section, so it never touches the
+   * baseline, and Playwright's YAML is another format, so neither does `mode: 'default'` or the
+   * switch.
    */
   async _ariaSnapshot(
     api: string,
     selector: string | null,
     options: AriaSnapshotOptions = {},
   ): Promise<string> {
+    const site = captureSite()
     const mode = options.mode ?? (upstreamSnapshots ? 'default' : 'ai')
     if (mode !== 'ai' || upstreamSnapshots)
       return renderSnapshot(await this._snapshot(api, selector, options, mode))
-    const format = snapshotV1Options(api, options)
-    return renderSnapshotV1(
-      await this._snapshot(api, selector, options, mode),
-      format,
-    )
+    const { delta, ...format } = snapshotV1Options(api, options)
+    // The script's timeout and signal cover the whole call, the baseline ops included.
+    const wait = this._wait(api, options)
+    const deadline = new EventDeadline(api, null, Date.now(), wait.timeout)
+    const result = await this._snapshot(api, selector, options, mode)
+    const text = renderSnapshotV1(result, format)
+    if (selector !== null) return text
+    const { document } = result
+    try {
+      const page = await this._page._brand(api)
+      const returned = delta
+        ? renderDelta(
+            await send['page.snapshotBaseline'](
+              site,
+              this._call(api, deadline.left()),
+              { page, document },
+              wait.signal,
+            ),
+            text,
+          )
+        : text
+      await send['page.snapshotPending'](
+        site,
+        this._call(api, deadline.left()),
+        // A full call returns the text itself, which need not cross twice.
+        { page, document, text, delta, returned: delta ? returned : undefined },
+        wait.signal,
+      )
+      return returned
+    } catch (error) {
+      throw deadline.named(error)
+    }
   }
 
   /** The tree itself, in upstream's default mode when the script names none. */

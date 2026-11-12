@@ -336,6 +336,8 @@ mod tests {
             ("locator.normalize", &[], true),
             ("page.ariaSnapshot", &[], true),
             ("locator.ariaSnapshot", &[], true),
+            ("page.snapshotBaseline", &[], true),
+            ("page.snapshotPending", &[], true),
             ("expect.locator", &[], true),
             ("expect.page", &[], true),
             ("keyboard.down", &[], true),

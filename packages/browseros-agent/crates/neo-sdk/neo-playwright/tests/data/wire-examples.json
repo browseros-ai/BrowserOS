@@ -289,6 +289,13 @@
     ],
     "page.setContent": [],
     "page.setViewportSize": [],
+    "page.snapshotBaseline": [
+      "document"
+    ],
+    "page.snapshotPending": [
+      "document",
+      "returned"
+    ],
     "page.title": [],
     "page.waitForFunction": [
       "arg",
@@ -3004,6 +3011,17 @@
       },
       {
         "call": {
+          "api": "page.ariaSnapshot",
+          "timeoutMs": 5000
+        },
+        "page": {
+          "$neo": "page",
+          "tab": 1007
+        },
+        "mode": "ai"
+      },
+      {
+        "call": {
           "api": "page.ariaSnapshotJSON",
           "timeoutMs": 5000
         },
@@ -3785,6 +3803,48 @@
           "width": 640,
           "height": 480
         }
+      }
+    ],
+    "page.snapshotBaseline": [
+      {
+        "call": {
+          "api": "page.ariaSnapshot",
+          "timeoutMs": 5000
+        },
+        "page": {
+          "$neo": "page",
+          "tab": 1007
+        },
+        "document": 3
+      }
+    ],
+    "page.snapshotPending": [
+      {
+        "call": {
+          "api": "page.ariaSnapshot",
+          "timeoutMs": 5000
+        },
+        "page": {
+          "$neo": "page",
+          "tab": 1007
+        },
+        "document": 3,
+        "text": "",
+        "delta": false
+      },
+      {
+        "call": {
+          "api": "page.ariaSnapshot",
+          "timeoutMs": 5000
+        },
+        "page": {
+          "$neo": "page",
+          "tab": 1007
+        },
+        "document": 3,
+        "text": "",
+        "delta": true,
+        "returned": "# full snapshot: too much differs from your last snapshot to list as changes\n"
       }
     ],
     "page.title": [

@@ -85,6 +85,16 @@ it('tests that page and locator snapshots send their mode and depth, the text pa
       target: undefined,
     },
     {
+      // A whole page's v1 text is recorded as the run's pending baseline; a locator's never is.
+      name: 'page.snapshotPending',
+      // What is left of the snapshot's own 5 s.
+      call: { api: 'page.ariaSnapshot', timeoutMs: expect.any(Number) },
+      page: { $neo: 'page', tab: 1007 },
+      text: expect.any(String),
+      delta: false,
+      target: undefined,
+    },
+    {
       name: 'locator.ariaSnapshot',
       call: { api: 'locator.ariaSnapshot', timeoutMs: 900 },
       strict: 'strict',
@@ -199,6 +209,7 @@ it('tests that text, urls and maxTokens never reach the wire, and mode default i
     ),
   ).toEqual([
     ['call', 'page', 'mode'],
+    ['call', 'page', 'text', 'delta'],
     ['call', 'strict', 'mode'],
     ['call', 'page', 'mode'],
   ])
