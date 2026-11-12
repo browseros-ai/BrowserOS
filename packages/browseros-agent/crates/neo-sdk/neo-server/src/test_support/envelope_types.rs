@@ -34,8 +34,8 @@ fn ts_config() -> Config {
     Config::new().with_large_int("number")
 }
 
-/// Every named type of the envelope, roots first, then each type's dependencies in the order
-/// its fields name them.
+/// Every named type of the envelope, each once. The order is the walk's, which follows ts-rs's
+/// dependency lists and is not stable from one build to the next; a layout sorts them.
 #[must_use]
 pub fn envelope_types() -> Vec<EnvelopeType> {
     let cfg = ts_config();

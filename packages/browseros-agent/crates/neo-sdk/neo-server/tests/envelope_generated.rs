@@ -39,8 +39,8 @@ const HEADER: &str = "\
 // `cargo test -p neo-server --test envelope_generated`, which rewrites this file.
 ";
 
-/// The file's text, or why it cannot be laid out: two Rust types under one TypeScript name, or a
-/// type that names a module outside the file.
+/// The file's text, every declaration once and in name order, or why it cannot be laid out: two
+/// Rust types under one TypeScript name, or a type that names a module outside the file.
 fn render(types: &[EnvelopeType]) -> Result<String, Vec<String>> {
     let mut refusals = Vec::new();
     let mut by_name: BTreeMap<&str, &EnvelopeType> = BTreeMap::new();
@@ -63,8 +63,10 @@ fn render(types: &[EnvelopeType]) -> Result<String, Vec<String>> {
     if !refusals.is_empty() {
         return Err(refusals);
     }
-    let declarations: Vec<&str> = types
-        .iter()
+    // By name: ts-rs's derive gathers each type's dependencies in a hash set, so the walk's
+    // order changes from one build to the next.
+    let declarations: Vec<&str> = by_name
+        .values()
         .map(|named| named.declaration.as_str())
         .collect();
     Ok(format!("{HEADER}\n{}\n", declarations.join("\n\n")))

@@ -4,6 +4,24 @@
 // `cargo test -p neo-server --test envelope_generated`, which rewrites this file.
 
 /**
+ * One delivered close selected for the current binding, named by its existing event position.
+ */
+export type ApprovedClose = { tab: TabId, seq: number, };
+
+/**
+ * The tab of the run's own page, once the call that needed it opened it. Plain ids rather
+ * than the page brand, so the page prelude can give the script's existing `page` its tab
+ * instead of reviving a second object for it.
+ */
+export type DefaultPage = { tab: number, };
+
+/**
+ * Whether an operation's side effect happened, as far as Neo can know. It serializes as its
+ * stored name, `as_str`.
+ */
+export type Delivery = "not_sent" | "done" | "unknown";
+
+/**
  * The JS wire form of an `OpReply`: `{"ok": value, "pages": […]}` or `{"err": {…}, "pages":
  * […]}`, plus `defaultPage` once the call opened the run's own page and `pumped` once an op
  * ordered its answer after event-pump replies. Protocol translation only: the door decided
@@ -62,85 +80,6 @@ pumped?: number,
 completedNavigations?: Array<number>, };
 
 /**
- * The tab of the run's own page, once the call that needed it opened it. Plain ids rather
- * than the page brand, so the page prelude can give the script's existing `page` its tab
- * instead of reviving a second object for it.
- */
-export type DefaultPage = { tab: number, };
-
-/**
- * One page as a reply reports it. Deliberately not a page brand (no `$neo`), so the
- * bootstrap never revives a fact into a `Page` object. Its viewport configuration initializes
- * synchronous accessors in each new agent realm, independently of the owner's temporary fit.
- */
-export type PageFact = { 
-/**
- * The browser's tab id.
- */
-tab: TabId, 
-/**
- * `None` (null) once closed.
- */
-url: string | null, 
-/**
- * `None` (null) once closed.
- */
-title: string | null, 
-/**
- * Whether the tab is gone.
- */
-closed: boolean, 
-/**
- * Script configuration, carried to each fresh realm; owner fits never replace it.
- */
-viewportSize?: Size, 
-/**
- * Captured under the same observation serial as the page cache read.
- */
-workers?: Array<WorkerInfo>, };
-
-/**
- * A worker identity in the host protocol, independent of the browser adapter. The prelude's
- * `Worker` objects are keyed by `id`.
- */
-export type WorkerInfo = { id: string, url: string, };
-
-/**
- * A width and height, as a page's viewport size is reported. neo-server's run envelope carries
- * it, and prints it as TypeScript under the `ts-rs` feature.
- */
-export type Size = { width: number, height: number, };
-
-export type TabId = number;
-
-/**
- * Freshness of a batch of page facts. Neither counter is a page identity.
- */
-export type Observation = { 
-/**
- * The host's read serial: a later batch of facts replaces an earlier one, never the reverse.
- */
-seq: number, 
-/**
- * The page-event log's head before this read.
- */
-events: number, 
-/**
- * Whether the operation's payload describes the binding read by this observation.
- */
-payloadCurrent?: boolean, 
-/**
- * Close records applied by this observation, consumed in event order by the prelude.
- * Absent when there are none.
- */
-closes?: Array<ApprovedClose>, };
-
-/**
- * One delivered close selected for the current binding, named by its existing event position.
- */
-export type ApprovedClose = { tab: TabId, seq: number, };
-
-/**
  * The fields of the script's `NeoError`, named as the trace names them. errors.ts copies all
  * but `message` and `matcher` onto the error the script catches.
  */
@@ -185,16 +124,70 @@ matcher?: unknown, };
 export type ErrorOwner = "neo" | "script" | "website" | "host";
 
 /**
+ * Freshness of a batch of page facts. Neither counter is a page identity.
+ */
+export type Observation = { 
+/**
+ * The host's read serial: a later batch of facts replaces an earlier one, never the reverse.
+ */
+seq: number, 
+/**
+ * The page-event log's head before this read.
+ */
+events: number, 
+/**
+ * Whether the operation's payload describes the binding read by this observation.
+ */
+payloadCurrent?: boolean, 
+/**
+ * Close records applied by this observation, consumed in event order by the prelude.
+ * Absent when there are none.
+ */
+closes?: Array<ApprovedClose>, };
+
+/**
  * One SDK operation: the run it belongs to and its admission order within that run. On the wire
  * it is the string `{run}.{seq}`.
  */
 export type OperationId = string;
 
 /**
- * Whether an operation's side effect happened, as far as Neo can know. It serializes as its
- * stored name, `as_str`.
+ * One page as a reply reports it. Deliberately not a page brand (no `$neo`), so the
+ * bootstrap never revives a fact into a `Page` object. Its viewport configuration initializes
+ * synchronous accessors in each new agent realm, independently of the owner's temporary fit.
  */
-export type Delivery = "not_sent" | "done" | "unknown";
+export type PageFact = { 
+/**
+ * The browser's tab id.
+ */
+tab: TabId, 
+/**
+ * `None` (null) once closed.
+ */
+url: string | null, 
+/**
+ * `None` (null) once closed.
+ */
+title: string | null, 
+/**
+ * Whether the tab is gone.
+ */
+closed: boolean, 
+/**
+ * Script configuration, carried to each fresh realm; owner fits never replace it.
+ */
+viewportSize?: Size, 
+/**
+ * Captured under the same observation serial as the page cache read.
+ */
+workers?: Array<WorkerInfo>, };
+
+/**
+ * A live browser tab resolved by the dispatcher before policies run. This is the only page
+ * identity on the wire, where it is the page brand `{"$neo": "page", "tab": …}`; core's private
+ * cache id is held separately for one operation.
+ */
+export type PageRef = { $neo: 'page', tab: TabId, };
 
 /**
  * The run's init: the bootstrap's `__neo.run` hands it to each parameter's build
@@ -218,8 +211,15 @@ pages: Array<PageFact>,
 observed: Observation | null, };
 
 /**
- * A live browser tab resolved by the dispatcher before policies run. This is the only page
- * identity on the wire, where it is the page brand `{"$neo": "page", "tab": …}`; core's private
- * cache id is held separately for one operation.
+ * A width and height, as a page's viewport size is reported. neo-server's run envelope carries
+ * it, and prints it as TypeScript under the `ts-rs` feature.
  */
-export type PageRef = { $neo: 'page', tab: TabId, };
+export type Size = { width: number, height: number, };
+
+export type TabId = number;
+
+/**
+ * A worker identity in the host protocol, independent of the browser adapter. The prelude's
+ * `Worker` objects are keyed by `id`.
+ */
+export type WorkerInfo = { id: string, url: string, };
