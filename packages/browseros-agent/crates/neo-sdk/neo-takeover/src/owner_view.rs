@@ -322,13 +322,14 @@ async fn pull_in(
 /// which cannot lay out a page); these read real layout and hit tests.
 #[cfg(test)]
 mod live_tests {
-    use super::{PageReading, script};
+    use super::PageReading;
     use crate::BrowserTabs;
     use crate::fit_rule::FitMode;
     use browseros_cdp::{CdpClient, ConnectOptions};
+    use browseros_core::pages::PageInfo;
     use browseros_core::viewport::Viewports;
-    use browseros_core::{BrowserSession, BrowserSessionHooks, PageJs, TargetId};
-    use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
+    use browseros_core::{BrowserSession, BrowserSessionHooks, PageJs, ProtocolSession, TargetId};
+    use percent_encoding::NON_ALPHANUMERIC;
     use serde_json::{Value, json};
     use std::sync::Arc;
     use std::time::Duration;
@@ -386,15 +387,15 @@ mod live_tests {
     /// elements `expected` selects, measured the same way: a phone's page fills the screen from
     /// its top-left at one screen px per page px (DPR 2 over the phone's device scale of 2).
     async fn boxes_on(html: &str, expected: &[&str]) -> Result<[Vec<[f64; 4]>; 2], BoxError> {
-        let port = std::env::var("BROWSEROS_CDP_PORT")
-            .ok()
-            .and_then(|port| port.parse().ok())
-            .unwrap_or(9005);
+        let port: u16 = match std::env::var("BROWSEROS_CDP_PORT") {
+            Ok(port) => port.parse()?,
+            Err(_) => 9005,
+        };
         let client = CdpClient::connect(ConnectOptions::new(port)).await?;
         let session = BrowserSession::new(Arc::new(client), BrowserSessionHooks::default());
         let url = format!(
             "data:text/html,{}",
-            utf8_percent_encode(html, NON_ALPHANUMERIC)
+            percent_encoding::utf8_percent_encode(html, NON_ALPHANUMERIC)
         );
         let created = session
             .cdp("Target.createTarget", json!({ "url": url }), None)
@@ -407,13 +408,8 @@ mod live_tests {
         );
         let tabs = BrowserTabs::new(Arc::clone(&session), Arc::new(Viewports::default()));
         let read = read_page(&tabs, &target, expected).await;
-        session
-            .cdp(
-                "Target.closeTarget",
-                json!({ "targetId": target.as_str() }),
-                None,
-            )
-            .await?;
+        let close = json!({ "targetId": target.as_str() });
+        session.cdp("Target.closeTarget", close, None).await?;
         read
     }
 
@@ -422,46 +418,10 @@ mod live_tests {
         target: &TargetId,
         expected: &[&str],
     ) -> Result<[Vec<[f64; 4]>; 2], BoxError> {
-        let mut page = None;
-        for _ in 0..50 {
-            page = tabs
-                .pages()
-                .await?
-                .into_iter()
-                .find(|page| &page.target_id == target);
-            if page.is_some() {
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(100)).await;
-        }
-        let page = page.ok_or("the new tab is listed")?;
-        let session = tabs.session_for(&page).await?;
-        // A fit's phone: mobile emulation at its size, DPR 2. The headless window never has
-        // the focus a real one has, which the script requires.
-        let _: Value = session
-            .send(
-                "Emulation.setDeviceMetricsOverride",
-                json!({ "width": 390, "height": 844, "deviceScaleFactor": 2, "mobile": true }),
-            )
-            .await?;
-        let _: Value = session
-            .send(
-                "Emulation.setFocusEmulationEnabled",
-                json!({ "enabled": true }),
-            )
-            .await?;
-        for _ in 0..50 {
-            let loaded = PageJs::isolated_only(&session)
-                .eval::<bool>("document.readyState === 'complete'")
-                .await
-                .unwrap_or(false);
-            if loaded {
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(100)).await;
-        }
+        let session = tabs.session_for(&listed(tabs, target).await?).await?;
+        as_a_phone(&session).await?;
         let reading: PageReading = PageJs::isolated_only(&session)
-            .eval(&script(FitMode::Mobile))
+            .eval(&super::script(FitMode::Mobile))
             .await?;
         let want = PageJs::isolated_only(&session)
             .eval(&format!(
@@ -471,6 +431,41 @@ mod live_tests {
             ))
             .await?;
         Ok([reading.boxes, want])
+    }
+
+    /// The page of the tab `target` names, once the browser lists it.
+    async fn listed(tabs: &BrowserTabs, target: &TargetId) -> Result<PageInfo, BoxError> {
+        for _ in 0..50 {
+            let pages = tabs.pages().await?;
+            if let Some(page) = pages.into_iter().find(|page| &page.target_id == target) {
+                return Ok(page);
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        Err("the new tab is never listed".into())
+    }
+
+    /// Shows the loaded page as a fit's phone does: mobile emulation at its size, DPR 2. The
+    /// headless window never has the focus a real one has, which the script requires.
+    async fn as_a_phone(session: &ProtocolSession) -> TestResult {
+        let phone = json!({ "width": 390, "height": 844, "deviceScaleFactor": 2, "mobile": true });
+        let _: Value = session
+            .send("Emulation.setDeviceMetricsOverride", phone)
+            .await?;
+        let focus = json!({ "enabled": true });
+        let _: Value = session
+            .send("Emulation.setFocusEmulationEnabled", focus)
+            .await?;
+        for _ in 0..50 {
+            let loaded = PageJs::isolated_only(session)
+                .eval::<bool>("document.readyState === 'complete'")
+                .await;
+            if loaded.unwrap_or(false) {
+                return Ok(());
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        Err("the page never loads".into())
     }
 
     #[tokio::test]
