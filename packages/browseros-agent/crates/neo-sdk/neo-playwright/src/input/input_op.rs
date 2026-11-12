@@ -445,12 +445,11 @@ mod tests {
 
     use super::InputOp;
     use crate::op::Op;
-    use crate::op_output;
     use crate::op_scope::OpScope;
     use crate::target::CallHeader;
     use crate::test_env::{self, TestEnv};
     use crate::wire::Nothing;
-    use crate::{ErrorCode, Playwright};
+    use crate::{ErrorCode, Playwright, op_output};
 
     #[tokio::test]
     async fn tests_that_bad_options_name_the_flat_parameter() -> Result<(), Box<dyn Error>> {
