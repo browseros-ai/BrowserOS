@@ -315,8 +315,7 @@
           "$neo": "page",
           "tab": 1007
         },
-        "key": "a",
-        "options": {}
+        "key": "a"
       }
     ],
     "keyboard.type": [
@@ -329,8 +328,7 @@
           "$neo": "page",
           "tab": 1007
         },
-        "text": "ab",
-        "options": {}
+        "text": "ab"
       }
     ],
     "keyboard.up": [
@@ -2013,8 +2011,7 @@
           "tab": 1007
         },
         "x": 1,
-        "y": 2,
-        "options": {}
+        "y": 2
       }
     ],
     "mouse.down": [
@@ -2026,8 +2023,7 @@
         "page": {
           "$neo": "page",
           "tab": 1007
-        },
-        "options": {}
+        }
       }
     ],
     "mouse.move": [
@@ -2041,8 +2037,7 @@
           "tab": 1007
         },
         "x": 1,
-        "y": 2,
-        "options": {}
+        "y": 2
       }
     ],
     "mouse.up": [
@@ -2054,8 +2049,7 @@
         "page": {
           "$neo": "page",
           "tab": 1007
-        },
-        "options": {}
+        }
       }
     ],
     "mouse.wheel": [

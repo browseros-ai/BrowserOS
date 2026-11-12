@@ -7,7 +7,7 @@ import type * as pw from '../../../../neo-playwright/third_party/playwright/pack
 import { invoke } from '../bridge'
 import type { CallSite } from '../call-site'
 import type { SignalLike } from '../signal'
-import type { Assert, KeysCheck, UpstreamCheck, VoidIsNull } from '../upstream-check'
+import type { Assert, ExactUpstreamCheck, KeysCheck, UpstreamCheck, VoidIsNull } from '../upstream-check'
 import type { CallHeader } from '../wire'
 import type { KeyboardInsertTextInput } from './types/KeyboardInsertTextInput'
 import type { KeyboardKeyInput } from './types/KeyboardKeyInput'
@@ -18,18 +18,14 @@ import type { MouseClickInput } from './types/MouseClickInput'
 import type { MouseMoveInput } from './types/MouseMoveInput'
 import type { MouseWheelInput } from './types/MouseWheelInput'
 
-export type { KeyboardDelayOptions } from './types/KeyboardDelayOptions'
 export type { KeyboardInsertTextInput } from './types/KeyboardInsertTextInput'
 export type { KeyboardKeyInput } from './types/KeyboardKeyInput'
 export type { KeyboardPressInput } from './types/KeyboardPressInput'
 export type { KeyboardTypeInput } from './types/KeyboardTypeInput'
 export type { MouseButton } from './types/MouseButton'
 export type { MouseButtonInput } from './types/MouseButtonInput'
-export type { MouseButtonOptions } from './types/MouseButtonOptions'
 export type { MouseClickInput } from './types/MouseClickInput'
-export type { MouseClickOptions } from './types/MouseClickOptions'
 export type { MouseMoveInput } from './types/MouseMoveInput'
-export type { MouseStepOptions } from './types/MouseStepOptions'
 export type { MouseWheelInput } from './types/MouseWheelInput'
 export type { Typed } from './types/Typed'
 
@@ -151,30 +147,30 @@ type _keyboard_down_result = Assert<VoidIsNull<'keyboard.down', pw.PageKeyboardD
 type _keyboard_up = Assert<UpstreamCheck<'keyboard.up', KeyboardKeyInput, pw.PageKeyboardUpParams, never, never, never>>
 type _keyboard_up_result = Assert<VoidIsNull<'keyboard.up', pw.PageKeyboardUpResult, null>>
 // keyboard.press: Page.keyboardPress
-type _keyboard_press = Assert<UpstreamCheck<'keyboard.press', KeyboardPressInput, pw.PageKeyboardPressParams, never, never, never>>
+type _keyboard_press = Assert<ExactUpstreamCheck<'keyboard.press', KeyboardPressInput, pw.PageKeyboardPressParams, never, never, never>>
 type _keyboard_press_keys = Assert<KeysCheck<'keyboard.press', (typeof INPUT_OPTION_KEYS)['keyboard.press'][number], pw.PageKeyboardPressOptions>>
 type _keyboard_press_result = Assert<VoidIsNull<'keyboard.press', pw.PageKeyboardPressResult, null>>
 // keyboard.type: Page.keyboardType
-type _keyboard_type = Assert<UpstreamCheck<'keyboard.type', KeyboardTypeInput, pw.PageKeyboardTypeParams, never, never, never>>
+type _keyboard_type = Assert<ExactUpstreamCheck<'keyboard.type', KeyboardTypeInput, pw.PageKeyboardTypeParams, never, never, never>>
 type _keyboard_type_keys = Assert<KeysCheck<'keyboard.type', (typeof INPUT_OPTION_KEYS)['keyboard.type'][number], pw.PageKeyboardTypeOptions>>
 type _keyboard_type_result = Assert<VoidIsNull<'keyboard.type', pw.PageKeyboardTypeResult, null>>
 // keyboard.insertText: Page.keyboardInsertText
 type _keyboard_insertText = Assert<UpstreamCheck<'keyboard.insertText', KeyboardInsertTextInput, pw.PageKeyboardInsertTextParams, never, never, never>>
 type _keyboard_insertText_result = Assert<VoidIsNull<'keyboard.insertText', pw.PageKeyboardInsertTextResult, null>>
 // mouse.move: Page.mouseMove
-type _mouse_move = Assert<UpstreamCheck<'mouse.move', MouseMoveInput, pw.PageMouseMoveParams, never, never, never>>
+type _mouse_move = Assert<ExactUpstreamCheck<'mouse.move', MouseMoveInput, pw.PageMouseMoveParams, never, never, never>>
 type _mouse_move_keys = Assert<KeysCheck<'mouse.move', (typeof INPUT_OPTION_KEYS)['mouse.move'][number], pw.PageMouseMoveOptions>>
 type _mouse_move_result = Assert<VoidIsNull<'mouse.move', pw.PageMouseMoveResult, null>>
 // mouse.down: Page.mouseDown
-type _mouse_down = Assert<UpstreamCheck<'mouse.down', MouseButtonInput, pw.PageMouseDownParams, never, never, never>>
+type _mouse_down = Assert<ExactUpstreamCheck<'mouse.down', MouseButtonInput, pw.PageMouseDownParams, never, never, never>>
 type _mouse_down_keys = Assert<KeysCheck<'mouse.down', (typeof INPUT_OPTION_KEYS)['mouse.down'][number], pw.PageMouseDownOptions>>
 type _mouse_down_result = Assert<VoidIsNull<'mouse.down', pw.PageMouseDownResult, null>>
 // mouse.up: Page.mouseUp
-type _mouse_up = Assert<UpstreamCheck<'mouse.up', MouseButtonInput, pw.PageMouseUpParams, never, never, never>>
+type _mouse_up = Assert<ExactUpstreamCheck<'mouse.up', MouseButtonInput, pw.PageMouseUpParams, never, never, never>>
 type _mouse_up_keys = Assert<KeysCheck<'mouse.up', (typeof INPUT_OPTION_KEYS)['mouse.up'][number], pw.PageMouseUpOptions>>
 type _mouse_up_result = Assert<VoidIsNull<'mouse.up', pw.PageMouseUpResult, null>>
 // mouse.click: Page.mouseClick
-type _mouse_click = Assert<UpstreamCheck<'mouse.click', MouseClickInput, pw.PageMouseClickParams, never, never, never>>
+type _mouse_click = Assert<ExactUpstreamCheck<'mouse.click', MouseClickInput, pw.PageMouseClickParams, never, never, never>>
 type _mouse_click_keys = Assert<KeysCheck<'mouse.click', (typeof INPUT_OPTION_KEYS)['mouse.click'][number], pw.PageMouseClickOptions>>
 type _mouse_click_result = Assert<VoidIsNull<'mouse.click', pw.PageMouseClickResult, null>>
 // mouse.wheel: Page.mouseWheel
