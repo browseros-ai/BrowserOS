@@ -116,6 +116,9 @@ async fn release(entry: Arc<SessionLeases>, session: ProtocolSession) {
 /// while no lease is held (`PageSignals::harvest_console`'s enable + disable pair).
 pub(crate) struct UnleasedTurn {
     _turn: OwnedMutexGuard<()>,
+    /// Prevents pruning from replacing this session's turn lock during a harvest. Declared
+    /// after the guard so the turn unlocks before the session entry can become idle.
+    _entry: Arc<SessionLeases>,
 }
 
 impl RuntimeLeases {
@@ -199,7 +202,11 @@ impl RuntimeLeases {
     pub(crate) async fn unleased_turn(&self, session: &SessionId) -> Option<UnleasedTurn> {
         let entry = self.entry(session);
         let turn = Arc::clone(&entry.turn).lock_owned().await;
-        (entry.held().count == 0).then_some(UnleasedTurn { _turn: turn })
+        let unleased = entry.held().count == 0;
+        unleased.then_some(UnleasedTurn {
+            _turn: turn,
+            _entry: entry,
+        })
     }
 }
 
@@ -207,7 +214,9 @@ impl RuntimeLeases {
 mod tests {
     use super::RuntimeLeases;
     use crate::{ProtocolSession, SessionId, testing::TestConnection};
+    use futures_util::poll;
     use serde_json::json;
+    use std::{pin::pin, time::Duration};
 
     fn runtime_calls(connection: &TestConnection) -> Vec<String> {
         connection
@@ -217,6 +226,58 @@ mod tests {
             .filter(|call| call.method.starts_with("Runtime."))
             .map(|call| call.method)
             .collect()
+    }
+
+    #[tokio::test]
+    async fn an_acquire_waits_for_an_unleased_turn_across_pruning()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let connection = TestConnection::new(Vec::<(&'static str, serde_json::Value)>::new());
+        connection.always("Runtime.enable", json!({}))?;
+        connection.always("Runtime.disable", json!({}))?;
+        let id = SessionId::from("a");
+        let session = ProtocolSession::for_session(connection.clone(), id.clone());
+        let leases = RuntimeLeases::new();
+        let harvest = leases.unleased_turn(&id).await.ok_or("idle session")?;
+
+        // Looking up another session prunes idle entries. A harvest must keep its own
+        // entry alive, or the next acquire gets a different turn lock and bypasses it.
+        drop(leases.unleased_turn(&SessionId::from("b")).await);
+        let mut acquire = pin!(leases.acquire(&session, 10.0));
+        let pending = poll!(acquire.as_mut()).is_pending();
+        assert!(
+            runtime_calls(&connection).is_empty(),
+            "Runtime.enable must wait until the harvest finishes"
+        );
+        assert!(pending, "the acquire must wait for the harvest's turn");
+
+        drop(harvest);
+        let lease = tokio::time::timeout(Duration::from_secs(5), acquire).await??;
+        assert_eq!(runtime_calls(&connection), vec!["Runtime.enable"]);
+        drop(lease);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn unleased_turns_remain_serialized_across_pruning()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let leases = RuntimeLeases::new();
+        let id = SessionId::from("a");
+        let first = leases.unleased_turn(&id).await.ok_or("idle session")?;
+
+        drop(leases.unleased_turn(&SessionId::from("b")).await);
+        let mut second = pin!(leases.unleased_turn(&id));
+        // Poll directly: lock exclusion must hold even without a scheduler delay.
+        assert!(
+            poll!(second.as_mut()).is_pending(),
+            "the second harvest must wait for the first harvest's turn"
+        );
+
+        drop(first);
+        let second = tokio::time::timeout(Duration::from_secs(5), second)
+            .await?
+            .ok_or("idle session after harvest")?;
+        drop(second);
+        Ok(())
     }
 
     #[tokio::test]

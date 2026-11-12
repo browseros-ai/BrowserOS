@@ -3,7 +3,7 @@
   "reasons": {
     "network": "Owner decision: network interception, network events, request tracking and response bodies are outside Neo support.",
     "handles": "Owner decision: evaluateHandle and JSHandle are outside Neo support.",
-    "decided-deviation": "Owner decision D20: roles that may not have a name must not expose one (AR-089)."
+    "decided-deviation": "Owner decisions and explicit Neo limits: isolated-world reads, listener-scoped history, one profile, no private test hooks/custom selectors/inspector, and unnamed roles (D20)."
   },
   "entries": [
     {
@@ -698,6 +698,306 @@
       "file": "tests/page/workers.spec.ts",
       "ids": ["WO-016", "WO-017", "WO-022", "WO-023", "WO-025"],
       "reason": "network"
+    },
+    {
+      "file": "tests/library/browsercontext-pages.spec.ts",
+      "ids": ["BC-054"],
+      "reason": "decided-deviation",
+      "decision": "Owner one-profile decision: browser.newContext({javaScriptEnabled:false}) is refused."
+    },
+    {
+      "file": "tests/library/browsercontext-pages.spec.ts",
+      "ids": ["BC-055"],
+      "reason": "decided-deviation",
+      "decision": "Owner one-profile decision (#3392): devices are omitted and browser.newContext({viewport,hasTouch}) is refused."
+    },
+    {
+      "file": "tests/library/browsercontext-pages.spec.ts",
+      "ids": ["BC-056"],
+      "reason": "decided-deviation",
+      "decision": "Owner one-profile decision: browser.newContext with deviceScaleFactor is refused."
+    },
+    {
+      "file": "tests/library/browsercontext-pages.spec.ts",
+      "ids": ["BC-057"],
+      "reason": "decided-deviation",
+      "decision": "Owner one-profile decision: browser.newContext with a mobile viewport is refused."
+    },
+    {
+      "file": "tests/library/browsercontext-pages.spec.ts",
+      "ids": ["BC-058"],
+      "reason": "decided-deviation",
+      "decision": "Owner one-profile decision: browser.newContext with a mobile viewport is refused."
+    },
+    {
+      "file": "tests/library/headful.spec.ts",
+      "ids": ["HE-012"],
+      "reason": "decided-deviation",
+      "decision": "Owner one-profile/background-tab decisions: browser.newPage and page.bringToFront are refused."
+    },
+    {
+      "file": "tests/page/expect-misc.spec.ts",
+      "ids": ["EX-188"],
+      "reason": "decided-deviation",
+      "decision": "Owner isolated-world decision (2026-11-11 18:15): this test reads a page-world expando that Neo matchers cannot observe."
+    },
+    {
+      "file": "tests/page/expect-misc.spec.ts",
+      "ids": ["EX-190"],
+      "reason": "decided-deviation",
+      "decision": "Owner isolated-world decision (2026-11-11 18:15): this test reads a page-world expando that Neo matchers cannot observe."
+    },
+    {
+      "file": "tests/page/expect-misc.spec.ts",
+      "ids": ["EX-192"],
+      "reason": "decided-deviation",
+      "decision": "Owner isolated-world decision (2026-11-11 18:15): this test reads a page-world expando that Neo matchers cannot observe."
+    },
+    {
+      "file": "tests/page/expect-misc.spec.ts",
+      "ids": ["EX-194"],
+      "reason": "decided-deviation",
+      "decision": "Owner isolated-world decision (2026-11-11 18:15): this test reads a page-world expando that Neo matchers cannot observe."
+    },
+    {
+      "file": "tests/page/expect-misc.spec.ts",
+      "ids": ["EX-196"],
+      "reason": "decided-deviation",
+      "decision": "Owner isolated-world decision (2026-11-11 18:15): this test reads a page-world expando that Neo matchers cannot observe."
+    },
+    {
+      "file": "tests/page/expect-misc.spec.ts",
+      "ids": ["EX-199"],
+      "reason": "decided-deviation",
+      "decision": "Owner isolated-world decision (2026-11-11 18:15): this test reads a page-world expando that Neo matchers cannot observe."
+    },
+    {
+      "file": "tests/page/expect-misc.spec.ts",
+      "ids": ["EX-200"],
+      "reason": "decided-deviation",
+      "decision": "Owner isolated-world decision (2026-11-11 18:15): this test reads a page-world expando that Neo matchers cannot observe."
+    },
+    {
+      "file": "tests/page/locator-highlight.spec.ts",
+      "ids": ["LO-114"],
+      "reason": "decided-deviation",
+      "decision": "Neo inspector limit: locator.highlight is refused because Neo has no Playwright inspector overlay."
+    },
+    {
+      "file": "tests/page/locator-query.spec.ts",
+      "ids": ["LO-182"],
+      "reason": "decided-deviation",
+      "decision": "Decided refusal (#3392): selectors.register custom engines are outside Neo support."
+    },
+    {
+      "file": "tests/page/page-click-timeout-1.spec.ts",
+      "ids": ["CL-110"],
+      "reason": "decided-deviation",
+      "decision": "Playwright internal-hook limit: __testHookBeforePointerAction cannot delay the click past its deadline."
+    },
+    {
+      "file": "tests/page/page-click-timeout-3.spec.ts",
+      "ids": ["CL-116"],
+      "reason": "decided-deviation",
+      "decision": "Playwright internal-hook limit: __testHookBeforeHitTarget cannot move the element during hit testing."
+    },
+    {
+      "file": "tests/page/page-click-timeout-4.spec.ts",
+      "ids": ["CL-121"],
+      "reason": "decided-deviation",
+      "decision": "Playwright internal-hook limit: __testHookBeforePointerAction cannot delay the first click past its deadline."
+    },
+    {
+      "file": "tests/page/page-click.spec.ts",
+      "ids": ["CL-068"],
+      "reason": "decided-deviation",
+      "decision": "Playwright internal-hook limit: __testHookBeforeStable cannot trigger the mid-click navigation."
+    },
+    {
+      "file": "tests/page/page-dispatchevent.spec.ts",
+      "ids": ["DE-009"],
+      "reason": "decided-deviation",
+      "decision": "Decided refusal (#3392): selectors.register custom engines are outside Neo support."
+    },
+    {
+      "file": "tests/page/page-event-console.spec.ts",
+      "ids": ["CM-016"],
+      "reason": "decided-deviation",
+      "decision": "Owner Runtime policy (#3147/#3480, 2026-11-11): no history outside an active listener lease; these tests read events emitted without one."
+    },
+    {
+      "file": "tests/page/page-event-console.spec.ts",
+      "ids": ["CM-017"],
+      "reason": "decided-deviation",
+      "decision": "Owner Runtime policy (#3147/#3480, 2026-11-11): no history outside an active listener lease; these tests read events emitted without one."
+    },
+    {
+      "file": "tests/page/page-event-console.spec.ts",
+      "ids": ["CM-018"],
+      "reason": "decided-deviation",
+      "decision": "Owner Runtime policy (#3147/#3480, 2026-11-11): no history outside an active listener lease; these tests read events emitted without one."
+    },
+    {
+      "file": "tests/page/page-event-console.spec.ts",
+      "ids": ["CM-019"],
+      "reason": "decided-deviation",
+      "decision": "Owner Runtime policy (#3147/#3480, 2026-11-11): no history outside an active listener lease; these tests read events emitted without one."
+    },
+    {
+      "file": "tests/page/page-event-console.spec.ts",
+      "ids": ["CM-020"],
+      "reason": "decided-deviation",
+      "decision": "Owner Runtime policy (#3147/#3480, 2026-11-11): no history outside an active listener lease; these tests read events emitted without one."
+    },
+    {
+      "file": "tests/page/page-event-pageerror.spec.ts",
+      "ids": ["ER-011"],
+      "reason": "decided-deviation",
+      "decision": "Owner Runtime policy (#3147/#3480, 2026-11-11): no history outside an active listener lease; these tests read events emitted without one."
+    },
+    {
+      "file": "tests/page/page-event-pageerror.spec.ts",
+      "ids": ["ER-012"],
+      "reason": "decided-deviation",
+      "decision": "Owner Runtime policy (#3147/#3480, 2026-11-11): no history outside an active listener lease; these tests read events emitted without one."
+    },
+    {
+      "file": "tests/page/page-network-idle.spec.ts",
+      "ids": ["NE-080"],
+      "reason": "network",
+      "decision": "Owner no-Network decision: setContent cannot observe networkIdle again, and Neo has no request tracker to compute it."
+    },
+    {
+      "file": "tests/page/page-network-idle.spec.ts",
+      "ids": ["NE-083"],
+      "reason": "network",
+      "decision": "Owner no-Network decision: setContent cannot observe networkIdle again, and Neo has no request tracker to compute it."
+    },
+    {
+      "file": "tests/page/page-network-response.spec.ts",
+      "ids": ["NE-030"],
+      "reason": "network",
+      "decision": "Owner no-Network decision: response.allHeaders returns no custom response headers."
+    },
+    {
+      "file": "tests/page/page-network-response.spec.ts",
+      "ids": ["NE-031"],
+      "reason": "network",
+      "decision": "Owner no-Network decision: response.headers cannot return captured multivalue headers."
+    },
+    {
+      "file": "tests/page/page-network-response.spec.ts",
+      "ids": ["NE-033"],
+      "reason": "network",
+      "decision": "Owner no-Network decision: content-encoding headers and response.text body reads are unavailable."
+    },
+    {
+      "file": "tests/page/page-network-response.spec.ts",
+      "ids": ["NE-034"],
+      "reason": "network",
+      "decision": "Owner no-Network decision: content-encoding headers and response.text body reads are unavailable."
+    },
+    {
+      "file": "tests/page/page-network-response.spec.ts",
+      "ids": ["NE-035"],
+      "reason": "network",
+      "decision": "Owner no-Network decision: content-encoding headers and response.text body reads are unavailable."
+    },
+    {
+      "file": "tests/page/page-network-response.spec.ts",
+      "ids": ["NE-042"],
+      "reason": "network",
+      "decision": "Owner no-Network decision: Neo synthesizes statusText and cannot observe the custom reason phrase cool!."
+    },
+    {
+      "file": "tests/page/page-route.spec.ts",
+      "ids": ["RO-008"],
+      "reason": "decided-deviation",
+      "decision": "Owner profile/no-Network decisions: context.addCookies and page.route are refused."
+    },
+    {
+      "file": "tests/page/page-wait-for-request.spec.ts",
+      "ids": ["WA-123"],
+      "reason": "network",
+      "decision": "Owner no-Network decision: request event waits are refused immediately rather than timing out."
+    },
+    {
+      "file": "tests/page/page-wait-for-request.spec.ts",
+      "ids": ["WA-124"],
+      "reason": "network",
+      "decision": "Owner no-Network decision: request event waits are refused immediately rather than timing out."
+    },
+    {
+      "file": "tests/page/page-wait-for-response.spec.ts",
+      "ids": ["WA-130"],
+      "reason": "network",
+      "decision": "Owner no-Network decision: response event waits are refused immediately rather than timing out."
+    },
+    {
+      "file": "tests/page/page-wait-for-response.spec.ts",
+      "ids": ["WA-131"],
+      "reason": "network",
+      "decision": "Owner no-Network decision: waitForResponse is refused immediately rather than timing out."
+    },
+    {
+      "file": "tests/page/page-wait-for-selector-1.spec.ts",
+      "ids": ["WA-032"],
+      "reason": "handles",
+      "decision": "Decided rooted-handle refusal: elementHandle.waitForSelector is unsupported; use locator.locator instead."
+    },
+    {
+      "file": "tests/page/page-wait-for-selector-2.spec.ts",
+      "ids": ["WA-072"],
+      "reason": "decided-deviation",
+      "decision": "Playwright internal-hook limit: __testHookBeforeAdoptNode cannot trigger navigation before adoption."
+    },
+    {
+      "file": "tests/page/retarget.spec.ts",
+      "ids": ["RE-013"],
+      "reason": "decided-deviation",
+      "decision": "Owner isolated-world decision (2026-11-11 18:15): this test reads a page-world expando that Neo matchers cannot observe."
+    },
+    {
+      "file": "tests/page/selectors-register.spec.ts",
+      "ids": ["SE-154"],
+      "reason": "decided-deviation",
+      "decision": "Decided refusal (#3392): selectors.register custom engines are outside Neo support."
+    },
+    {
+      "file": "tests/page/selectors-register.spec.ts",
+      "ids": ["SE-155"],
+      "reason": "decided-deviation",
+      "decision": "Decided refusal (#3392): selectors.register custom engines are outside Neo support."
+    },
+    {
+      "file": "tests/page/selectors-register.spec.ts",
+      "ids": ["SE-156"],
+      "reason": "decided-deviation",
+      "decision": "Decided refusal (#3392): selectors.register custom engines are outside Neo support."
+    },
+    {
+      "file": "tests/page/selectors-register.spec.ts",
+      "ids": ["SE-157"],
+      "reason": "decided-deviation",
+      "decision": "Decided refusal (#3392): selectors.register custom engines are outside Neo support."
+    },
+    {
+      "file": "tests/page/selectors-register.spec.ts",
+      "ids": ["SE-158"],
+      "reason": "decided-deviation",
+      "decision": "Decided refusal (#3392): selectors.register custom engines are outside Neo support."
+    },
+    {
+      "file": "tests/page/selectors-register.spec.ts",
+      "ids": ["SE-159"],
+      "reason": "decided-deviation",
+      "decision": "Decided refusal (#3392): selectors.register custom engines are outside Neo support."
+    },
+    {
+      "file": "tests/page/workers.spec.ts",
+      "ids": ["WO-007"],
+      "reason": "handles",
+      "decision": "Owner no-JSHandle decision: worker console arguments require live getProperty access to the worker global."
     }
   ]
 }

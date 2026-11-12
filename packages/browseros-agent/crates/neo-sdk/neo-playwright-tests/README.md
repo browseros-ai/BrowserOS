@@ -51,15 +51,27 @@ Claw builds `node/claw-addon` with `cargo build --release --locked`, then instal
 32-vCPU Linux runner for every pull request and push to `main` that touches `crates/`, the
 workspace manifest or this command, with the browser `neo-server/docker/browser.lock` pins
 (headless, the SDK image's fonts). `--ci` is the same run plus a verdict (`ci.ts`, rules in
-`node/expected.mjs`). Two lists steer it, and neither changes scope: every test still counts in
-the scores.
+`node/expected.mjs`). Two lists steer the positive expectations without changing scope:
 
 - `node/expected/<platform>.tsv` (`linux-x64` in CI) lists the in-scope tests that do not pass
   there, each `fail` or `skip`. The runner writes it; nobody edits it by hand.
 - `node/known-flaky.tsv` lists tests that flake, each with why and where its fix is tracked.
-  They are never judged, in either direction: the summary shows each one's outcome on that run,
+  Their positive expectations are never judged, in either direction: the summary shows each one's outcome on that run,
   so a test that has stopped flaking is visible. Adding or removing an entry is a deliberate
   edit to that file in a pull request; no command does it.
+
+Separately, an excluded `scope.json` entry with a nonempty `decision` is a **negative test**.
+Its original assertions still run, but its result leaves the in-scope score. `node/decisions.mjs`
+judges the raw report against the run's copied scope manifest: every selected decision case
+must fail. A pass, even one successful retry, fails CI immediately and names the test and
+decision: “X passed although decision D says it cannot: the design changed, or this entry is
+wrong”. Skips, incomplete results and decision selectors missing from a complete run also fail
+the gate: they prove no failure. Filtered runs judge only the cases they select.
+
+These negative expectations cannot be waived by reruns, `known-flaky.tsv` or
+`--write-expected`. Legacy exclusions without a `decision` remain reporting-only, so their
+existing passes do not fail the gate. The job summary says `fails by decision: K of K still fail`;
+`verdict.json` records the total, failed count and any violations under `decisions`.
 
 The rules for every other in-scope test:
 
@@ -106,7 +118,7 @@ Neo spec suite, linux-x64: ❌ 1 regression, 2 newly passing
 ```
 
 Under it are the totals (in scope and all tests, passed of counted, skips beside them), the
-size of the list, how many tests were flaky this run, the suite's wall time and the reruns. Then
+negative-test count, size of the list, how many tests were flaky this run, the suite's wall time and the reruns. Then
 one section per kind of finding, each test with its ID, file and title:
 
 | Section | Meaning | What to do |
@@ -117,6 +129,7 @@ one section per kind of finding, each test with its ID, file and title:
 | Inconclusive, or "The run reported an error" | The run or a rerun broke: no result, an unreadable report, browsers left behind, a runner killed before it finished; a broken rerun fails the job even when another attempt matched | Read the logs in the report; rerun the job once. If it repeats, it is a harness bug. |
 | Flaky | The full run disagreed with the expectation; a rerun alone agreed, or the reruns disagreed among themselves | Nothing; it does not fail the job. |
 | Known flaky | On `known-flaky.tsv`; this run's outcome for each | Nothing. A test that passes run after run here can come off that file once its fix lands. |
+| "passed although decision … says it cannot" | An excluded negative test passed | Review the named design decision and its scope entry; updating the positive expected list cannot waive it. |
 
 **A flake or a regression?** Read the test's rerun results after `alone:`. A flake is under
 **Flaky**, which never fails the job: at least one rerun agrees with its expectation, or the
@@ -331,7 +344,9 @@ a corpus-relative spec `file`, optionally narrowed with `ids`; omitting `ids` co
 that whole spec. Each has one of the reasons the manifest declares: `network`, `handles`
 or `decided-deviation`. (`drift`, for specs newer than the engine, ended when the corpus
 moved to the engine's own release; runs recorded before that keep it in their copied
-manifest.) Network/handle entries identify explicit refusal evidence;
+manifest.) An optional nonempty `decision` names the design constraint and makes that exclusion
+a negative test in `--ci`, as described above. Entries without it retain their reporting-only
+behavior. Network/handle entries identify explicit refusal evidence;
 ordinary failures stay in scope. The initial evidence is the lead's parity gap
 list and the corresponding per-test errors from the full run (mixed event groups
 also contain supported events, so the entire group is not excluded).

@@ -18,7 +18,10 @@ const digest = (bytes) => createHash('sha256').update(bytes).digest('hex')
  */
 const reasonsOf = (manifest) => Object.keys(manifest.reasons)
 
-/** A selector is a corpus-relative spec file, optionally narrowed to stable corpus test IDs. */
+/**
+ * A selector is a corpus-relative spec file, optionally narrowed to stable corpus test IDs.
+ * A nonempty decision opts it into CI's must-fail contract; older selectors only affect scores.
+ */
 export function validateScope(manifest) {
   if (
     manifest?.schemaVersion !== 1 ||
@@ -38,6 +41,8 @@ export function validateScope(manifest) {
       !Object.hasOwn(manifest.reasons, entry.reason) ||
       typeof entry.file !== 'string' ||
       !/^tests\/(page|library)\/[^/]+\.spec\.ts$/.test(entry.file) ||
+      (entry.decision !== undefined &&
+        (typeof entry.decision !== 'string' || !entry.decision.trim())) ||
       (entry.ids !== undefined &&
         (!Array.isArray(entry.ids) ||
           !entry.ids.length ||
