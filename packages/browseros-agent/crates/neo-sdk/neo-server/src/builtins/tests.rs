@@ -27,7 +27,7 @@ use tokio::time::{self, Instant};
 
 use super::event_release::EventRelease;
 use super::op_marks::{Hold, OpMarks};
-use super::playwright_ops::{self, OpCtxEnv, leaf_error};
+use super::playwright_ops::{self, FILE_PAGES, OpCtxEnv, leaf_error};
 use super::{BuiltinDeps, CaptchaClaims, PlaywrightFacade, TabJanitor};
 use crate::browser::{BrowserLink, PageRef, TabRegistry};
 use crate::config::Defaults;
@@ -1603,26 +1603,30 @@ async fn every_playwright_op_is_one_listed_script_method_with_the_crates_spec()
     Ok(())
 }
 
+/// A `page.goto` to `url` on `page`, as the prelude sends it.
+fn goto_input(page: &PageRef, url: &str) -> Value {
+    json!({
+        "call": { "api": "page.goto", "timeoutMs": 30000 },
+        "page": handle(page),
+        "url": url,
+        "waitUntil": "load",
+    })
+}
+
 #[tokio::test]
-async fn a_goto_sends_web_file_and_javascript_urls_to_the_browser() -> Result<(), Box<dyn Error>> {
+async fn a_goto_never_sends_a_file_url_or_another_unsupported_scheme() -> Result<(), Box<dyn Error>>
+{
     let harness = Harness::new().await?;
     let owners = harness.owner_tab("https://bank.example/").await?;
     let (run, _guard) = harness.run()?;
-    // The browser fails every load it is sent, so a URL the door let through answers at once.
-    harness.fake.answer(
-        "Page.navigate",
-        json!({ "frameId": "frame", "errorText": "net::ERR_ABORTED" }),
-    );
-    let goto = |url: &str| {
-        json!({
-            "call": { "api": "page.goto", "timeoutMs": 30000 },
-            "page": handle(&owners),
-            "url": url,
-            "waitUntil": "load",
-        })
-    };
-    // Other unsupported schemes keep their existing refusal.
-    for url in [
+    // A script cannot open file: pages, however the scheme is spelled (owner's decision,
+    // 2026-11-12), and other unsupported schemes keep their existing refusal.
+    let files = [
+        "file:///tmp/local.html",
+        " FILE:///tmp/local.html",
+        "fi\tle:///tmp/local.html",
+    ];
+    let others = [
         "view-source:https://bank.example/",
         "chrome://version",
         "devtools://devtools/bundled/inspector.html",
@@ -1631,8 +1635,15 @@ async fn a_goto_sends_web_file_and_javascript_urls_to_the_browser() -> Result<()
         "filesystem:https://bank.example/temporary/x",
         // No scheme the URL Standard reads, so none to allow.
         "bank.example/login",
-    ] {
-        let (operation, reply) = harness.submit_op(&run, "page.goto", goto(url)).await;
+    ];
+    for (url, says) in files
+        .map(|url| (url, FILE_PAGES))
+        .into_iter()
+        .chain(others.map(|url| (url, "Neo does not open this URL")))
+    {
+        let (operation, reply) = harness
+            .submit_op(&run, "page.goto", goto_input(&owners, url))
+            .await;
         let refused = failure(reply)?;
         assert_eq!(
             (
@@ -1648,6 +1659,11 @@ async fn a_goto_sends_web_file_and_javascript_urls_to_the_browser() -> Result<()
             "{url:?}: {}",
             refused.error
         );
+        assert!(
+            refused.error.message().contains(says),
+            "{url:?} says why: {}",
+            refused.error
+        );
         assert_eq!(
             harness.row(operation).await?.error.map(|error| error.code),
             Some("invalid_input".to_owned()),
@@ -1659,7 +1675,19 @@ async fn a_goto_sends_web_file_and_javascript_urls_to_the_browser() -> Result<()
         0,
         "no refused URL reached the tab"
     );
+    Ok(())
+}
 
+#[tokio::test]
+async fn a_goto_sends_web_and_javascript_urls_to_the_browser() -> Result<(), Box<dyn Error>> {
+    let harness = Harness::new().await?;
+    let owners = harness.owner_tab("https://bank.example/").await?;
+    let (run, _guard) = harness.run()?;
+    // The browser fails every load it is sent, so a URL the door let through answers at once.
+    harness.fake.answer(
+        "Page.navigate",
+        json!({ "frameId": "frame", "errorText": "net::ERR_ABORTED" }),
+    );
     for url in [
         "localhost:3000/",
         "127.0.0.1:3000/",
@@ -1667,14 +1695,15 @@ async fn a_goto_sends_web_file_and_javascript_urls_to_the_browser() -> Result<()
         "HTTPS://bank.example/login",
         "data:text/html,<p>made in the script</p>",
         "about:blank",
-        "file:///tmp/local.html",
-        " FILE:///tmp/local.html",
-        "fi\tle:///tmp/local.html",
         "javascript:void(document.title = 'ran')",
         " JavaScript:void(0)",
         "java\tscript:void(0)",
     ] {
-        let failed = failure(harness.submit(&run, "page.goto", goto(url)).await)?;
+        let failed = failure(
+            harness
+                .submit(&run, "page.goto", goto_input(&owners, url))
+                .await,
+        )?;
         assert_eq!(
             (failed.error.code(), failed.delivery),
             (ErrorCode::NAVIGATION_FAILED, Delivery::Done),
@@ -1698,9 +1727,6 @@ async fn a_goto_sends_web_file_and_javascript_urls_to_the_browser() -> Result<()
             "https://bank.example/login",
             "data:text/html,<p>made in the script</p>",
             "about:blank",
-            "file:///tmp/local.html",
-            "file:///tmp/local.html",
-            "file:///tmp/local.html",
             "javascript:void(document.title = 'ran')",
             "javascript:void(0)",
             "javascript:void(0)",
@@ -1711,12 +1737,256 @@ async fn a_goto_sends_web_file_and_javascript_urls_to_the_browser() -> Result<()
     Ok(())
 }
 
+/// The owner opened a web page in a tab and then went to a local file in it, which core's cached
+/// URL has not followed. Every op on that tab is refused, a read or a write, with nothing sent to
+/// it: the door reads what the tab shows now from the browser before the crate admits the page.
+#[tokio::test]
+async fn an_op_on_a_tab_that_shows_a_file_page_is_refused_with_nothing_sent()
+-> Result<(), Box<dyn Error>> {
+    let harness = Harness::new().await?;
+    let owners = harness.owner_tab("https://bank.example/").await?;
+    let (run, _guard) = harness.run()?;
+    assert!(
+        harness
+            .fake
+            .navigate_tab(owners.tab, "file:///etc/hosts", "hosts"),
+        "the fake has the owner's tab"
+    );
+    let before = harness.fake.calls().len();
+    let page = handle(&owners);
+    let locator =
+        json!({ "$neo": "locator", "page": page, "frame": null, "chunks": [], "display": "body" });
+    for (name, input) in [
+        ("page.content", json!({ "page": page })),
+        ("page.title", json!({ "page": page })),
+        (
+            "page.goto",
+            json!({ "page": page, "url": "https://bank.example/", "waitUntil": "load" }),
+        ),
+        ("locator.click", json!({ "target": locator })),
+    ] {
+        let mut input = input;
+        input["call"] = json!({ "api": name, "timeoutMs": 500 });
+        let (operation, reply) = harness.submit_op(&run, name, input).await;
+        let refused = failure(reply)?;
+        assert_eq!(
+            (
+                refused.error.owner(),
+                refused.error.code(),
+                refused.delivery
+            ),
+            (
+                ErrorOwner::Script,
+                ErrorCode::INVALID_INPUT,
+                Delivery::NotSent
+            ),
+            "{name}: {}",
+            refused.error
+        );
+        assert!(
+            refused.error.message().contains(FILE_PAGES),
+            "{name} says what is blocked and what to use: {}",
+            refused.error
+        );
+        assert_eq!(
+            harness.row(operation).await?.error.map(|error| error.code),
+            Some("invalid_input".to_owned()),
+            "{name}: the trace records the attempt"
+        );
+    }
+    // The door's tab reads and the browser-level listings go on; no call reached a page domain.
+    let reached: Vec<String> = harness.fake.calls()[before..]
+        .iter()
+        .map(|call| call.method.clone())
+        .filter(|method| {
+            [
+                "Page.",
+                "Runtime.",
+                "DOM.",
+                "Input.",
+                "Emulation.",
+                "Accessibility.",
+            ]
+            .iter()
+            .any(|domain| method.starts_with(domain))
+        })
+        .collect();
+    assert!(
+        reached.is_empty(),
+        "nothing reached the tab's page: {reached:?}"
+    );
+    assert!(
+        harness.is_open(owners.tab).await?,
+        "the owner's tab stays open"
+    );
+    // A close reads and opens nothing, so a script can still close the tab.
+    value(
+        harness
+            .submit(&run, "page.close", json!({ "page": page }))
+            .await,
+    )
+    .map_err(|error| format!("a close is not refused: {error}"))?;
+    assert!(
+        !harness.is_open(owners.tab).await?,
+        "the script closed the tab"
+    );
+    Ok(())
+}
+
+/// The owner's web tab moves onto a local file while an op on it waits for the browser (as a page's
+/// own `history.back()` onto a `file:` entry does): the door reads the tab again when the op
+/// ends, and withholds whatever the op took there.
+#[tokio::test]
+async fn an_op_whose_tab_moves_to_a_file_page_while_it_runs_is_withheld()
+-> Result<(), Box<dyn Error>> {
+    let harness = Harness::new().await?;
+    let owners = harness.owner_tab("https://bank.example/").await?;
+    let (run, _guard) = harness.run()?;
+    // `page.title` makes its world after admission; its reply waits until the tab has moved.
+    harness.fake.hold_next("Page.createIsolatedWorld");
+    let title =
+        json!({ "call": { "api": "page.title", "timeoutMs": 5000 }, "page": handle(&owners) });
+    let (reply, moved) = tokio::join!(harness.submit(&run, "page.title", title), async {
+        within(async {
+            while harness.fake.count("Page.createIsolatedWorld") == 0 {
+                task::yield_now().await;
+            }
+        })
+        .await?;
+        let moved = harness
+            .fake
+            .navigate_tab(owners.tab, "file:///etc/hosts", "hosts");
+        harness.fake.release_held();
+        Ok::<_, Box<dyn Error>>(moved)
+    });
+    assert!(moved?, "the fake has the owner's tab");
+    let withheld = failure(reply)?;
+    assert_eq!(
+        (withheld.error.owner(), withheld.error.code()),
+        (ErrorOwner::Script, ErrorCode::INVALID_INPUT),
+        "{}",
+        withheld.error
+    );
+    assert!(
+        withheld.error.message().contains(FILE_PAGES)
+            && withheld.error.message().contains("withholds"),
+        "the op's own answer never reaches the script: {}",
+        withheld.error
+    );
+    Ok(())
+}
+
+/// A tab's history can hold a local file behind a web page, from the owner's own browsing; a step
+/// back or forward onto it is refused before the crate steps, and a step onto a web entry goes
+/// to the crate as before.
+#[tokio::test]
+async fn a_history_step_never_opens_a_file_entry() -> Result<(), Box<dyn Error>> {
+    let harness = Harness::new().await?;
+    let owners = harness.owner_tab("https://bank.example/").await?;
+    let (run, _guard) = harness.run()?;
+    let step = |name: &str| {
+        json!({
+            "call": { "api": name, "timeoutMs": 500 },
+            "page": handle(&owners),
+            "waitUntil": "load",
+        })
+    };
+    let history = |entries: [&str; 3]| {
+        json!({
+            "currentIndex": 1,
+            "entries": entries
+                .iter()
+                .enumerate()
+                .map(|(id, url)| json!({ "id": id, "url": url, "title": "" }))
+                .collect::<Vec<_>>(),
+        })
+    };
+    for (name, entries) in [
+        (
+            "page.goBack",
+            [
+                "file:///etc/hosts",
+                "https://bank.example/",
+                "https://bank.example/next",
+            ],
+        ),
+        (
+            "page.goForward",
+            [
+                "https://bank.example/before",
+                "https://bank.example/",
+                " FILE:///etc/hosts",
+            ],
+        ),
+    ] {
+        harness
+            .fake
+            .answer("Page.getNavigationHistory", history(entries));
+        let (operation, reply) = harness.submit_op(&run, name, step(name)).await;
+        let refused = failure(reply)?;
+        assert_eq!(
+            (
+                refused.error.owner(),
+                refused.error.code(),
+                refused.delivery
+            ),
+            (
+                ErrorOwner::Script,
+                ErrorCode::INVALID_INPUT,
+                Delivery::NotSent
+            ),
+            "{name}: {}",
+            refused.error
+        );
+        assert!(
+            refused.error.message().contains(FILE_PAGES),
+            "{name}: {}",
+            refused.error
+        );
+        assert_eq!(
+            harness.row(operation).await?.delivery,
+            Some(Delivery::NotSent),
+            "{name}: the trace records the attempt"
+        );
+    }
+    assert_eq!(
+        harness.fake.count("Page.navigateToHistoryEntry"),
+        0,
+        "no step onto a file: entry reached the tab"
+    );
+
+    harness.fake.answer(
+        "Page.getNavigationHistory",
+        history([
+            "https://bank.example/before",
+            "https://bank.example/",
+            "https://bank.example/next",
+        ]),
+    );
+    // The fake models no frame tree, so the crate's own step fails after it starts; its call log
+    // shows the door let it through.
+    for name in ["page.goBack", "page.goForward"] {
+        let reply = harness.submit(&run, name, step(name)).await;
+        let error = reply
+            .outcome
+            .err()
+            .map(|failure| failure.error.to_string())
+            .unwrap_or_default();
+        assert!(
+            !error.contains(FILE_PAGES) && error.contains("waiting for navigation"),
+            "{name} onto a web entry reaches the crate's step: {error}"
+        );
+    }
+    Ok(())
+}
+
 #[tokio::test]
 async fn a_reload_reloads_only_a_page_on_an_allowed_scheme() -> Result<(), Box<dyn Error>> {
     let harness = Harness::new().await?;
-    // The owner opened a local file in a tab. The agent never navigated it, but a reload would
-    // load the file again for its next read.
-    let local = harness.owner_tab("file:///etc/hosts").await?;
+    // The owner opened a browser page in a tab. The agent never navigated it, but a reload would
+    // load it again for its next read. (A tab on a `file:` page is refused for every op:
+    // an_op_on_a_tab_that_shows_a_file_page_is_refused_with_nothing_sent.)
+    let local = harness.owner_tab("chrome://version/").await?;
     let web = harness.owner_tab("https://bank.example/").await?;
     let (run, _guard) = harness.run()?;
     // The browser never finishes a reload, so one the door lets through times out once sent.

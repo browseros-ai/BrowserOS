@@ -3,7 +3,7 @@
   "reasons": {
     "network": "Owner decision: network interception, network events, request tracking and response bodies are outside Neo support.",
     "handles": "Owner decision: evaluateHandle and JSHandle are outside Neo support.",
-    "decided-deviation": "Owner decisions and explicit Neo limits: isolated-world reads, listener-scoped history, one profile, no private test hooks/custom selectors/inspector, and unnamed roles (D20)."
+    "decided-deviation": "Owner decisions and explicit Neo limits: isolated-world reads, listener-scoped history, one profile, no private test hooks/custom selectors/inspector, unnamed roles (D20), and no file: pages for scripts (2026-11-12)."
   },
   "entries": [
     {
@@ -862,6 +862,30 @@
       "decision": "Owner Runtime policy (#3147/#3480, 2026-11-11): no history outside an active listener lease; these tests read events emitted without one."
     },
     {
+      "file": "tests/page/page-goto.spec.ts",
+      "ids": ["NA-002"],
+      "reason": "decided-deviation",
+      "decision": "Owner decision (2026-11-12, zuzu design): a script cannot open file: pages, so Neo refuses this test's goto to a file: URL."
+    },
+    {
+      "file": "tests/page/page-goto.spec.ts",
+      "ids": ["NA-003"],
+      "reason": "decided-deviation",
+      "decision": "Owner decision (2026-11-12, zuzu design): a script cannot open file: pages, so Neo refuses this test's goto to a file: URL."
+    },
+    {
+      "file": "tests/page/page-goto.spec.ts",
+      "ids": ["NA-004"],
+      "reason": "decided-deviation",
+      "decision": "Owner decision (2026-11-12, zuzu design): a script cannot open file: pages, so Neo refuses this test's goto to a file: URL."
+    },
+    {
+      "file": "tests/page/page-history.spec.ts",
+      "ids": ["NA-073"],
+      "reason": "decided-deviation",
+      "decision": "Owner decision (2026-11-12, zuzu design): a script cannot open file: pages, so Neo refuses this test's goto to a file: URL."
+    },
+    {
       "file": "tests/page/page-keyboard.spec.ts",
       "ids": ["KB-049"],
       "reason": "decided-deviation",
@@ -914,6 +938,12 @@
       "ids": ["NE-042"],
       "reason": "network",
       "decision": "Owner no-Network decision: Neo synthesizes statusText and cannot observe the custom reason phrase cool!."
+    },
+    {
+      "file": "tests/page/page-network-response.spec.ts",
+      "ids": ["NE-046"],
+      "reason": "decided-deviation",
+      "decision": "Owner decision (2026-11-12, zuzu design): a script cannot open file: pages, so Neo refuses this test's goto to a file: URL."
     },
     {
       "file": "tests/page/page-route.spec.ts",

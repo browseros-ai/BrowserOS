@@ -564,9 +564,18 @@ impl<'op> EvaluateGuard<'op> {
             named = self.name_document(scope).await;
         }
         match named {
-            Ok(named) => {
-                self.script.document = Some(named.clone());
-                Ok(Some(named))
+            // The owner's decision of 2026-11-12: a script never runs in a local file's page.
+            // The door refuses every op on a tab that shows one, but a page can step itself onto
+            // a `file:` entry of its history while an op waits, so the guard checks the very
+            // document it would run in, before anything is sent there.
+            Ok(MainDocument { local: true, .. }) => Err(scope.fail(
+                ErrorCode::InvalidInput,
+                "Neo does not run this script in a `file:` page: a script cannot open file: \
+                 pages; use a URL, or page.setContent.",
+            )),
+            Ok(MainDocument { object, .. }) => {
+                self.script.document = Some(object.clone());
+                Ok(Some(object))
             }
             Err(ProbeFailure::Gone(_)) => Ok(None),
             Err(failure) => Err(resolve::failed(scope, failure)),
@@ -575,7 +584,7 @@ impl<'op> EvaluateGuard<'op> {
 
     /// The main-world document of the guard's frame as it stands now, its world installed on
     /// first use and once more after a replaced document.
-    async fn name_document(&self, scope: &OpScope<'_>) -> Result<String, ProbeFailure> {
+    async fn name_document(&self, scope: &OpScope<'_>) -> Result<MainDocument, ProbeFailure> {
         with_world(
             &self.page,
             &self.frame.endpoint,
@@ -698,6 +707,16 @@ struct Described {
 #[serde(rename_all = "camelCase")]
 struct DescribedNode {
     backend_node_id: i64,
+    /// A document node's URL, as `DOM.describeNode` names it.
+    #[serde(default, rename = "documentURL")]
+    document_url: Option<String>,
+}
+
+/// A frame's main-world document, by its object in the op's group, and whether it is a local
+/// file's page, which no script runs in.
+pub(super) struct MainDocument {
+    pub(super) object: String,
+    pub(super) local: bool,
 }
 
 #[derive(Deserialize)]
@@ -709,7 +728,7 @@ struct Resolved {
 pub(super) async fn main_world_document(
     scope: &OpScope<'_>,
     world: IsolatedWorld,
-) -> Result<String, ProbeFailure> {
+) -> Result<MainDocument, ProbeFailure> {
     let session = world.session();
     let group = scope.object_group(session).to_owned();
     let named: Named = session
@@ -735,10 +754,17 @@ pub(super) async fn main_world_document(
         )
         .await
         .map_err(ProbeFailure::from_core)?;
-    resolved
+    let local = described
+        .node
+        .document_url
+        .as_deref()
+        .and_then(|url| url::Url::parse(url).ok())
+        .is_some_and(|url| url.scheme() == "file");
+    let object = resolved
         .object
         .object_id
-        .ok_or_else(|| ProbeFailure::Broken("the main world returned no document".to_owned()))
+        .ok_or_else(|| ProbeFailure::Broken("the main world returned no document".to_owned()))?;
+    Ok(MainDocument { object, local })
 }
 
 /// The main-world calls of one send, all on the script frame's session and in the op's object

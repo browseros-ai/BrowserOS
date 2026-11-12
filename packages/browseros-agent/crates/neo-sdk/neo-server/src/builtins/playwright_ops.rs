@@ -20,10 +20,11 @@
 use std::future::{self, Future};
 use std::sync::{Arc, LazyLock};
 
-use browseros_core::{BrowserView, TabId, TargetId};
+use browseros_core::{BrowserView, CoreError, TabId, TargetId};
 use futures_util::future::BoxFuture;
 use neo_playwright::{
-    Answer, ErrorCode as PlaywrightCode, Op, OpEnv, PlaywrightError, Refusal, RunState, TimedOut,
+    Answer, ErrorCode as PlaywrightCode, Op, OpEnv, OpTarget, PlaywrightError, Refusal, RunState,
+    TimedOut,
 };
 use neo_trace::ErrorOwner;
 use serde::{Deserialize, Deserializer};
@@ -106,9 +107,13 @@ const PLAYWRIGHT_API: &str = "Playwright's API on `page`, `context` and `browser
     `jsonValue()` reads; `setContent` refuses `waitUntil: 'networkidle'`, which Neo cannot \
     observe after a write, with nothing sent; and a result nested more than about 50 objects \
     deep can fail `Maximum call stack size exceeded`, where Playwright allows 98. `goto` opens \
-    `http`, `https`, `data`, `about`, `file` and `javascript` URLs; Chromium executes a \
+    `http`, `https`, `data`, `about` and `javascript` URLs; Chromium executes a \
     `javascript:` URL before reporting `net::ERR_ABORTED`. `reload` opens only `http`, `https`, \
-    `data` and `about` URLs. `setInputFiles` uploads any \
+    `data` and `about` URLs. A script cannot open `file:` pages: `goto` refuses a `file:` URL, \
+    `goBack` and `goForward` a `file:` history entry, and every call on a tab that shows a \
+    `file:` page (one the owner opened) is refused, with nothing sent; a call whose tab moves \
+    onto one while it runs gets no answer from it. Write a local page with `page.setContent` \
+    instead. `setInputFiles` uploads any \
     file Neo's process can read, as Playwright does \
     (a relative path resolves against Neo's working directory): the caller sandboxes the \
     filesystem. `{ name, mimeType, buffer }` payloads need no file and total under 10 MiB a \
@@ -128,8 +133,9 @@ pub(crate) async fn remove_init_scripts(run: &RunCtx) {
     run.slot::<RunState>().remove_init_scripts().await;
 }
 
-/// Schemes shared by goto and reload. Goto additionally passes file and JavaScript URLs to
-/// Chromium; other browser-specific schemes remain unsupported.
+/// Schemes shared by goto and reload. Goto additionally passes JavaScript URLs to Chromium; a
+/// `file:` URL is refused by decision ([`refused_page`]), and other browser-specific schemes
+/// remain unsupported.
 const NAVIGABLE_SCHEMES: [&str; 4] = ["http", "https", "data", "about"];
 
 /// Registers every neo-playwright op as a script method, as [`OpMarks`] decides from its
@@ -221,9 +227,15 @@ impl Method for PlaywrightOp {
             Some(_) => Some(op.page()?),
             None => None,
         };
-        if let (PageEffect::Reloads, Some(page)) = (self.pages, page)
-            && let Some(refusal) = refused_reload(op, page).await?
-        {
+        // The page rules cover the ops the crate declares as acting on a page. Two kinds skip
+        // them: the event and locator-handler ops, which name a page the door resolves but read
+        // the events it raised (and must answer once it closed, as `waitForEvent('close')`
+        // racing `page.close()` does); and a close, which reads and opens nothing, so a script
+        // can always clean up a tab.
+        let ruled = page.is_some()
+            && matches!(self.op.spec().target, OpTarget::Field(_))
+            && self.pages != PageEffect::Closes;
+        if ruled && let Some(refusal) = refused_page(op, self.spec.name, self.pages).await? {
             return Err(LeafError::definite(refusal));
         }
         let input = input.resolved(page);
@@ -243,6 +255,15 @@ impl Method for PlaywrightOp {
         op.report_publications(env.run_state().completed_navigation_loads());
         let result = result?;
         self.pages.report(op, page, &result);
+        // A page can step itself onto a `file:` entry of its tab's history while an op waits on
+        // it (its own `history.back()`, measured), and the op then reads the new document. What
+        // it took there, a value or a call log that previews elements, never reaches the script.
+        if ruled && moved_to_file(op).await? {
+            return Err(LeafError::definite(file_page(
+                "Neo withholds this call's answer, since its tab moved to a `file:` page while it \
+                 ran",
+            )));
+        }
         let value = result.map_err(|error| leaf_error(&error))?;
         self.events.release(op, value)
     }
@@ -304,8 +325,9 @@ impl<'de> Deserialize<'de> for OpInput {
 }
 
 impl OpInput {
-    /// Rejects unsupported URL schemes before sending a navigation. `frame.goto` uses the
-    /// same op; reload checks the current URL instead, and history follows a previous entry.
+    /// Rejects unsupported URL schemes, `file:` among them, before sending a navigation.
+    /// `frame.goto` uses the same op; reload checks the current URL instead, and a history step
+    /// the entry it opens ([`refused_page`]).
     fn refused_navigation(&self) -> Option<OperationError> {
         let url = self.json.get("url")?.as_str()?;
         // The engine's completeUserURL supplies http:// for bare local addresses.
@@ -314,9 +336,11 @@ impl OpInput {
             return None;
         }
         let which = match url_scheme(url) {
+            Some(scheme) if scheme == "file" => {
+                return Some(file_page("Neo does not open this URL, a `file:` one"));
+            }
             Some(scheme)
-                if NAVIGABLE_SCHEMES.contains(&scheme.as_str())
-                    || matches!(scheme.as_str(), "file" | "javascript") =>
+                if NAVIGABLE_SCHEMES.contains(&scheme.as_str()) || scheme == "javascript" =>
             {
                 return None;
             }
@@ -349,24 +373,113 @@ impl OpInput {
     }
 }
 
-/// Checks the tab's current scheme before reload. Core's cached URL can trail a navigation
-/// the page made on its own, so refresh once through `Browser.getTabInfo` first.
-async fn refused_reload<M>(
+/// The door's rules on the page an op acts on, by what the tab shows now (owner's decision,
+/// 2026-11-12: a script must not read Neo's own disk, so it never opens or reads a `file:` page).
+///
+/// - A tab showing a `file:` page is refused for every op. It can only be one the owner opened
+///   (or a page reached from one), since [`OpInput::refused_navigation`] refuses a script's goto
+///   and Chromium refuses a web page's own navigation, redirect, popup or iframe to a local file.
+///   A read there is a read of the owner's disk, and an act could step it to another file (a
+///   `file:` page can show other files in iframes, and directory listings).
+/// - A reload reloads only a navigable scheme.
+/// - A step through history never opens a `file:` entry, which the owner's own browsing can
+///   leave behind a web page in a tab.
+///
+/// The tab is read fresh ([`shown_url`]) before the op, and again once it ends
+/// ([`moved_to_file`]): the door's two browser reads per page op.
+async fn refused_page<M>(
     op: &OpCtx<M>,
-    _page: &PageRef,
+    name: &str,
+    effect: PageEffect,
 ) -> Result<Option<OperationError>, LeafError> {
-    let shown = op
-        .race(op.run().view().page(op.core_page()?.clone()))
+    // The tab closed since the door resolved it, so it shows nothing to read; the crate's own
+    // admission fails the op as Playwright fails one on a closed page, as it did before this
+    // read (an op racing the script's own `page.close`).
+    let Some(url) = shown_url(op).await? else {
+        return Ok(None);
+    };
+    let scheme = url_scheme(&url);
+    if scheme.as_deref() == Some("file") {
+        return Ok(Some(file_page(
+            "Neo does not act on this tab, which shows a `file:` page",
+        )));
+    }
+    if effect == PageEffect::Reloads {
+        return Ok(match scheme {
+            Some(scheme) if NAVIGABLE_SCHEMES.contains(&scheme.as_str()) => None,
+            Some(scheme) => Some(not_navigable(&format!(
+                "this page is on a `{scheme}:` one, so Neo does not reload it"
+            ))),
+            None => Some(not_navigable(
+                "this page's URL has no scheme Neo can read, so Neo does not reload it",
+            )),
+        });
+    }
+    let step = match name {
+        "page.goBack" => -1,
+        "page.goForward" => 1,
+        _ => return Ok(None),
+    };
+    let reply = op
+        .race(op.run().view().cdp_json_for_page(
+            op.core_page()?.clone(),
+            "Page.getNavigationHistory",
+            "{}",
+        ))
         .await?;
-    Ok(match url_scheme(&shown.url) {
-        Some(scheme) if NAVIGABLE_SCHEMES.contains(&scheme.as_str()) => None,
-        Some(scheme) => Some(not_navigable(&format!(
-            "this page is on a `{scheme}:` one, so Neo does not reload it"
+    let history: History = serde_json::from_str(&reply).map_err(|error| {
+        LeafError::definite(OperationError::neo(
+            ErrorCode::INTERNAL_ERROR,
+            format_args!("the tab's history did not read as CDP's: {error}"),
+        ))
+    })?;
+    let opens = history
+        .current_index
+        .checked_add(step)
+        .and_then(|index| usize::try_from(index).ok())
+        .and_then(|index| history.entries.get(index));
+    Ok(opens
+        .filter(|entry| url_scheme(&entry.url).as_deref() == Some("file"))
+        .map(|_| file_page("Neo does not take this step, whose history entry is a `file:` page")))
+}
+
+/// The URL the op's tab shows now, read through `Browser.getTabInfo`: core's cached URL trails a
+/// navigation the page or the owner made. `None` once the browser no longer has the tab. Any
+/// other failure of the read fails the op, since the door cannot tell what the tab shows.
+async fn shown_url<M>(op: &OpCtx<M>) -> Result<Option<String>, LeafError> {
+    match op
+        .race_answer(op.run().view().page(op.core_page()?.clone()))
+        .await?
+    {
+        Ok(shown) => Ok(Some(shown.url)),
+        Err(CoreError::UnknownPage(_) | CoreError::UnknownPageShort(_)) => Ok(None),
+        Err(error) => Err(LeafError::definite(OperationError::neo(
+            ErrorCode::CDP_ERROR,
+            error,
         ))),
-        None => Some(not_navigable(
-            "this page's URL has no scheme Neo can read, so Neo does not reload it",
-        )),
-    })
+    }
+}
+
+/// Whether the op's tab shows a `file:` page now that the op ended. The rule before the op
+/// cannot see a navigation the page makes while the op waits on it.
+async fn moved_to_file<M>(op: &OpCtx<M>) -> Result<bool, LeafError> {
+    Ok(shown_url(op)
+        .await?
+        .is_some_and(|url| url_scheme(&url).as_deref() == Some("file")))
+}
+
+/// `Page.getNavigationHistory`'s reply, as much of it as [`refused_page`] reads: the crate's own
+/// step (`navigation.rs`) picks its entry the same way, by the current index and the step.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct History {
+    current_index: i64,
+    entries: Vec<HistoryEntry>,
+}
+
+#[derive(Deserialize)]
+struct HistoryEntry {
+    url: String,
 }
 
 /// A navigation the door does not send: `script / invalid_input`, delivery `not_sent`.
@@ -374,6 +487,20 @@ fn not_navigable(which: &str) -> OperationError {
     OperationError::script(
         ErrorCode::INVALID_INPUT,
         format_args!("Neo does not open this URL: {which}."),
+    )
+}
+
+/// What every refusal of a `file:` page says after its `which`, whatever the route: what is
+/// blocked, and what a script uses instead.
+pub(super) const FILE_PAGES: &str =
+    "a script cannot open file: pages; use a URL, or page.setContent";
+
+/// A `file:` page the door does not open or act on: `script / invalid_input`, delivery
+/// `not_sent`, as for the other schemes Neo does not open.
+fn file_page(which: &str) -> OperationError {
+    OperationError::script(
+        ErrorCode::INVALID_INPUT,
+        format_args!("{which}: {FILE_PAGES}."),
     )
 }
 
@@ -436,7 +563,7 @@ enum PageEffect {
     /// A navigation: the target's URL may have changed, whatever the outcome.
     Navigates,
     /// `page.reload`: a navigation too, to the URL the target is on, which the door checks
-    /// first ([`refused_reload`]).
+    /// first ([`refused_page`]).
     Reloads,
     /// `page.close` with nothing that can veto it: once it succeeds, the target is gone by this
     /// run's hand.
@@ -961,10 +1088,13 @@ mod tests {
             ("HTTP://bank.example/", true),
             ("data:text/html,<script>document.title = 'x'</script>", true),
             ("about:blank", true),
-            ("file:///etc/hosts", true),
+            // A script cannot open file: pages, however the scheme is spelled (decision of
+            // 2026-11-12).
+            ("file:///etc/hosts", false),
+            ("FILE:///etc/hosts", false),
             ("JavaScript:void(0)", true),
             // The browser drops what surrounds a URL, and tabs and newlines inside it.
-            (" \u{1}fi\tl\ne:///etc/hosts", true),
+            (" \u{1}fi\tl\ne:///etc/hosts", false),
             (" \u{1}java\tscr\nipt:void(0)", true),
             ("view-source:https://bank.example/", false),
             // No scheme the URL Standard reads, so none to allow.
@@ -977,7 +1107,7 @@ mod tests {
         let reload = decoded(json!({ "page": page, "waitUntil": "load" }))?;
         assert!(
             reload.refused_navigation().is_none(),
-            "a reload names no URL: the door checks the one the page is on (refused_reload)"
+            "a reload names no URL: the door checks the one the page is on (refused_page)"
         );
         Ok(())
     }
