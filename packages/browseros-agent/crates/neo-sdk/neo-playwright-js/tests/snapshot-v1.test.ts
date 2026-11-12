@@ -525,6 +525,92 @@ it('tests rule 7: a cell gives its name as text, a row with children does not re
   expect(both(json)).toEqual(['- text: Toothpaste $7.49', ''])
 })
 
+it('tests rule 7: a name is the text when nothing under the node prints any, so a child that says nothing loses no words', () => {
+  // MUI's data grid, as the engine returns it: unmarked, the header has no children; marked, the
+  // empty clickable `div` inside it is its child. Either way "Full name" prints once.
+  const header = (children?: Child[]): Node[] =>
+    [
+      {
+        role: 'columnheader',
+        name: 'Full name',
+        ref: 'e410',
+        ...(children ? { children } : {}),
+      },
+    ] as Node[]
+  expect(both(header())).toEqual(['- text: Full name', ''])
+  expect(
+    both(header([generic([], { ref: 'e413', cursor: 'pointer' })])),
+  ).toEqual([
+    '- text: Full name\n- generic [ref=e413] [cursor=pointer]',
+    '- generic [ref=e413] [cursor=pointer]',
+  ])
+  // A Wikipedia figure named by its caption around a link with no name: the caption is its
+  // only text, and the link still says its url. An empty string or wrapper says nothing.
+  const figure = [
+    {
+      role: 'figure',
+      name: 'The life cycle of the monarch butterfly',
+      ref: 'e619',
+      children: [
+        '',
+        generic([
+          {
+            role: 'link',
+            ref: 'e620',
+            cursor: 'pointer',
+            url: 'https://en.wikipedia.org/wiki/File:Life_cycle.svg',
+          },
+        ]),
+      ],
+    },
+  ] as Node[]
+  expect(both(figure)).toEqual([
+    '- text: The life cycle of the monarch butterfly\n- link [ref=e620]: https://en.wikipedia.org/wiki/File:Life_cycle.svg',
+    '- link [ref=e620]: https://en.wikipedia.org/wiki/File:Life_cycle.svg',
+  ])
+})
+
+it('tests rule 7: a node with anything under it that prints text, at any depth, does not add its name', () => {
+  const json = [
+    // A cell around a named link: the link's name is the cell's, printed once.
+    {
+      role: 'cell',
+      name: 'Toothbrush',
+      children: [{ role: 'link', name: 'Toothbrush', ref: 'e21' }],
+    },
+    // The text sits deep under wrappers: a string, a `text` field and a named image.
+    {
+      role: 'listitem',
+      name: 'Apples',
+      children: [generic([generic(['Apples'])])],
+    },
+    {
+      role: 'listitem',
+      name: 'Pears',
+      children: [generic([], { text: 'Pears' })],
+    },
+    {
+      role: 'group',
+      name: 'Logo',
+      children: [generic([{ role: 'img', name: 'Logo' }])],
+    },
+  ] as Node[]
+  expect(both(json)).toEqual([
+    '- link "Toothbrush" [ref=e21]\n- text: Apples Pears\n- img "Logo"',
+    '- link "Toothbrush" [ref=e21]',
+  ])
+})
+
+it('tests rule 7: a named node over a chain far deeper than any call stack is judged on its own stack', () => {
+  const chain = (bottom: Child[]): Node => {
+    let deep: Node = generic(bottom)
+    for (let level = 0; level < 100_000; level++) deep = generic([deep])
+    return { role: 'group', name: 'Deep group', children: [deep] }
+  }
+  expect(both([chain([])])).toEqual(['- text: Deep group', ''])
+  expect(both([chain(['Bottom'])])).toEqual(['- text: Bottom', ''])
+})
+
 it('tests rule 6: a named image prints with text on only', () => {
   const json = [
     { role: 'img', name: 'Logo', ref: 'e1' },

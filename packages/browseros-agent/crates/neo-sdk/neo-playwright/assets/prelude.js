@@ -8037,7 +8037,25 @@ ${changes}`;
   function nameAsContent(node) {
     if (!node.name || node.text !== undefined || node.role === "heading")
       return;
-    return node.children?.length ? undefined : node.name;
+    return saysNothing(node.children) ? node.name : undefined;
+  }
+  function saysNothing(children) {
+    const pending = [];
+    const add = (nodes) => {
+      for (const node of nodes ?? [])
+        pending.push(node);
+    };
+    add(children);
+    for (let item = pending.pop();item !== undefined; item = pending.pop()) {
+      if (typeof item === "string") {
+        if (item !== "")
+          return false;
+      } else if (item.text || item.name)
+        return false;
+      else
+        add(item.children);
+    }
+    return true;
   }
   function ownText(node) {
     const pieces = [];
