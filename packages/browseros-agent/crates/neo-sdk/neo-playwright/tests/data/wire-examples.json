@@ -1,5 +1,315 @@
 {
   "about": "Every op input the prelude sends, recorded by crates/neo-sdk/neo-playwright-js/scripts/wire-examples.ts. Do not edit: run bun run build in crates/neo-sdk/neo-playwright-js.",
+  "optionalKeys": {
+    "bindingCall.resolve": [],
+    "context.addInitScript": [
+      "path",
+      "source"
+    ],
+    "context.exposeBinding": [
+      "noGlobal"
+    ],
+    "context.newPage": [],
+    "context.pages": [],
+    "dialog.accept": [
+      "promptText"
+    ],
+    "dialog.dismiss": [],
+    "disposable.dispose": [],
+    "download.path": [],
+    "download.saveAs": [],
+    "events.interceptFileChooser": [],
+    "events.listen": [
+      "retiredTab",
+      "since"
+    ],
+    "events.next": [],
+    "events.wait": [
+      "after"
+    ],
+    "expect.locator": [
+      "expectedNumber",
+      "expectedText",
+      "expectedValue",
+      "expressionArg",
+      "pseudo",
+      "templateError",
+      "useInnerText"
+    ],
+    "expect.page": [
+      "expectedNumber",
+      "expectedText",
+      "expectedValue",
+      "expressionArg",
+      "pseudo",
+      "templateError",
+      "useInnerText"
+    ],
+    "keyboard.down": [],
+    "keyboard.insertText": [],
+    "keyboard.press": [
+      "delay"
+    ],
+    "keyboard.type": [
+      "delay"
+    ],
+    "keyboard.up": [],
+    "locator.allInnerTexts": [],
+    "locator.allTextContents": [],
+    "locator.ariaSnapshot": [
+      "boxes",
+      "depth"
+    ],
+    "locator.blur": [],
+    "locator.boundingBox": [],
+    "locator.check": [
+      "force",
+      "position",
+      "scroll",
+      "trial"
+    ],
+    "locator.click": [
+      "button",
+      "clickCount",
+      "delay",
+      "force",
+      "modifiers",
+      "noWaitAfter",
+      "position",
+      "scroll",
+      "steps",
+      "trial"
+    ],
+    "locator.count": [],
+    "locator.dblclick": [
+      "button",
+      "delay",
+      "force",
+      "modifiers",
+      "position",
+      "scroll",
+      "steps",
+      "trial"
+    ],
+    "locator.dispatchEvent": [],
+    "locator.dragTo": [
+      "force",
+      "scroll",
+      "sourcePosition",
+      "steps",
+      "targetPosition",
+      "trial"
+    ],
+    "locator.drop": [
+      "data",
+      "files",
+      "position"
+    ],
+    "locator.elementHandle": [],
+    "locator.elementHandles": [],
+    "locator.evaluate": [
+      "arg",
+      "isFunction",
+      "refused"
+    ],
+    "locator.evaluateAll": [
+      "arg",
+      "isFunction",
+      "refused"
+    ],
+    "locator.fill": [
+      "force"
+    ],
+    "locator.focus": [],
+    "locator.getAttribute": [],
+    "locator.hover": [
+      "force",
+      "modifiers",
+      "position",
+      "scroll",
+      "trial"
+    ],
+    "locator.innerHTML": [],
+    "locator.innerText": [],
+    "locator.inputValue": [],
+    "locator.isChecked": [],
+    "locator.isDisabled": [],
+    "locator.isEditable": [],
+    "locator.isEnabled": [],
+    "locator.isHidden": [],
+    "locator.isVisible": [],
+    "locator.normalize": [],
+    "locator.press": [
+      "delay",
+      "noWaitAfter"
+    ],
+    "locator.pressSequentially": [
+      "delay"
+    ],
+    "locator.scrollIntoViewIfNeeded": [],
+    "locator.selectOption": [
+      "elements",
+      "force",
+      "options"
+    ],
+    "locator.selectText": [
+      "force"
+    ],
+    "locator.setInputFiles": [],
+    "locator.textContent": [],
+    "locator.uncheck": [
+      "force",
+      "position",
+      "scroll",
+      "trial"
+    ],
+    "locator.waitFor": [
+      "omitReturnValue",
+      "state"
+    ],
+    "locator.waitForFunction": [
+      "arg",
+      "isFunction",
+      "refused"
+    ],
+    "mouse.click": [
+      "button",
+      "clickCount",
+      "delay"
+    ],
+    "mouse.down": [
+      "button",
+      "clickCount"
+    ],
+    "mouse.move": [
+      "steps"
+    ],
+    "mouse.up": [
+      "button",
+      "clickCount"
+    ],
+    "mouse.wheel": [],
+    "page.addInitScript": [
+      "path",
+      "source"
+    ],
+    "page.addLocatorHandler": [
+      "noWaitAfter"
+    ],
+    "page.addScriptTag": [
+      "content",
+      "path",
+      "type",
+      "url"
+    ],
+    "page.addStyleTag": [
+      "content",
+      "path",
+      "url"
+    ],
+    "page.ariaSnapshot": [
+      "boxes",
+      "depth"
+    ],
+    "page.close": [],
+    "page.content": [],
+    "page.emulateMedia": [
+      "colorScheme",
+      "contrast",
+      "forcedColors",
+      "media",
+      "reducedMotion"
+    ],
+    "page.evalOnSelector": [
+      "arg",
+      "isFunction",
+      "refused"
+    ],
+    "page.evaluate": [
+      "arg",
+      "isFunction",
+      "refused"
+    ],
+    "page.exposeBinding": [
+      "noGlobal"
+    ],
+    "page.frames": [],
+    "page.goBack": [
+      "publication"
+    ],
+    "page.goForward": [
+      "publication"
+    ],
+    "page.goto": [
+      "publication",
+      "referer"
+    ],
+    "page.locatorHandlerTriggered": [],
+    "page.opener": [],
+    "page.pdf": [
+      "displayHeaderFooter",
+      "footerTemplate",
+      "format",
+      "headerTemplate",
+      "height",
+      "landscape",
+      "margin",
+      "outline",
+      "pageRanges",
+      "preferCSSPageSize",
+      "printBackground",
+      "scale",
+      "tagged",
+      "width"
+    ],
+    "page.reload": [
+      "publication"
+    ],
+    "page.removeLocatorHandler": [],
+    "page.requestGC": [],
+    "page.resolveLocatorHandler": [
+      "remove"
+    ],
+    "page.runBeforeUnload": [],
+    "page.saveScreenshot": [],
+    "page.screenshot": [
+      "animations",
+      "caret",
+      "clip",
+      "fullPage",
+      "mask",
+      "maskColor",
+      "omitBackground",
+      "quality",
+      "scale",
+      "style",
+      "type"
+    ],
+    "page.setContent": [],
+    "page.setViewportSize": [],
+    "page.title": [],
+    "page.waitForFunction": [
+      "arg",
+      "isFunction",
+      "pollingInterval",
+      "refused"
+    ],
+    "page.waitForLoadState": [],
+    "page.waitForNavigation": [
+      "url"
+    ],
+    "page.waitForURL": [],
+    "webStorage.clear": [],
+    "webStorage.getItem": [],
+    "webStorage.items": [],
+    "webStorage.removeItem": [],
+    "webStorage.setItem": [],
+    "worker.evaluate": [
+      "arg",
+      "isFunction",
+      "refused"
+    ]
+  },
   "ops": {
     "bindingCall.resolve": [
       {
@@ -22,6 +332,20 @@
           "timeoutMs": 0
         },
         "source": "window.b = 1"
+      },
+      {
+        "call": {
+          "api": "browserContext.addInitScript",
+          "timeoutMs": 0
+        },
+        "path": "Cargo.toml"
+      },
+      {
+        "call": {
+          "api": "browserContext.addInitScript",
+          "timeoutMs": 0
+        },
+        "source": "(({ cb }) => cb(1))(globalThis['__playwright__binding__controller__'].parseInitScriptArg({\"o\":[{\"k\":\"cb\",\"v\":{\"fn\":\"__pw_fn_80808080808080808080808080808080\"}}],\"id\":1}))"
       }
     ],
     "context.exposeBinding": [
@@ -31,6 +355,14 @@
           "timeoutMs": 0
         },
         "name": "c"
+      },
+      {
+        "call": {
+          "api": "browserContext.addInitScript",
+          "timeoutMs": 0
+        },
+        "name": "__pw_fn_80808080808080808080808080808080",
+        "noGlobal": true
       }
     ],
     "context.newPage": [
@@ -51,7 +383,8 @@
           "$neo": "page",
           "tab": 1007
         },
-        "dialog": 4
+        "dialog": 4,
+        "promptText": "sample"
       }
     ],
     "dialog.dismiss": [
@@ -172,6 +505,17 @@
         "event": "filechooser",
         "enabled": false,
         "since": 1700000000000
+      },
+      {
+        "call": {
+          "api": "page.off",
+          "timeoutMs": 0
+        },
+        "page": null,
+        "retiredTab": 1007,
+        "event": "workerstate",
+        "enabled": false,
+        "since": 1700000000000
       }
     ],
     "events.next": [
@@ -254,6 +598,216 @@
         "matcher": "toBeVisible",
         "expectation": "",
         "expected": "Expected: visible"
+      },
+      {
+        "call": {
+          "api": "expect.toHaveCount",
+          "timeoutMs": 5000
+        },
+        "target": {
+          "$neo": "locator",
+          "page": {
+            "$neo": "page",
+            "tab": 1007
+          },
+          "frame": null,
+          "chunks": [
+            {
+              "parts": [
+                {
+                  "name": "internal:role",
+                  "body": "button",
+                  "source": "button"
+                }
+              ]
+            }
+          ],
+          "display": "getByRole('button')"
+        },
+        "expression": "to.have.count",
+        "expectedNumber": 1,
+        "isNot": false,
+        "matcher": "toHaveCount",
+        "expectation": "expected",
+        "expected": "Expected: 1"
+      },
+      {
+        "call": {
+          "api": "expect.toHaveAttribute",
+          "timeoutMs": 5000
+        },
+        "target": {
+          "$neo": "locator",
+          "page": {
+            "$neo": "page",
+            "tab": 1007
+          },
+          "frame": null,
+          "chunks": [
+            {
+              "parts": [
+                {
+                  "name": "internal:role",
+                  "body": "button",
+                  "source": "button"
+                }
+              ]
+            }
+          ],
+          "display": "getByRole('button')"
+        },
+        "expression": "to.have.attribute.value",
+        "expectedText": [
+          {
+            "string": "ready"
+          }
+        ],
+        "expressionArg": "data-state",
+        "isNot": false,
+        "matcher": "toHaveAttribute",
+        "expectation": "expected",
+        "expected": "Expected: \"ready\""
+      },
+      {
+        "call": {
+          "api": "expect.toHaveCSS",
+          "timeoutMs": 5000
+        },
+        "target": {
+          "$neo": "locator",
+          "page": {
+            "$neo": "page",
+            "tab": 1007
+          },
+          "frame": null,
+          "chunks": [
+            {
+              "parts": [
+                {
+                  "name": "internal:role",
+                  "body": "button",
+                  "source": "button"
+                }
+              ]
+            }
+          ],
+          "display": "getByRole('button')"
+        },
+        "expression": "to.have.css",
+        "expectedText": [
+          {
+            "string": "red"
+          }
+        ],
+        "expressionArg": "color",
+        "pseudo": "after",
+        "isNot": false,
+        "matcher": "toHaveCSS",
+        "expectation": "expected",
+        "expected": "Expected: \"red\""
+      },
+      {
+        "call": {
+          "api": "expect.toHaveJSProperty",
+          "timeoutMs": 5000
+        },
+        "target": {
+          "$neo": "locator",
+          "page": {
+            "$neo": "page",
+            "tab": 1007
+          },
+          "frame": null,
+          "chunks": [
+            {
+              "parts": [
+                {
+                  "name": "internal:role",
+                  "body": "button",
+                  "source": "button"
+                }
+              ]
+            }
+          ],
+          "display": "getByRole('button')"
+        },
+        "expression": "to.have.property",
+        "expressionArg": "state",
+        "expectedValue": {},
+        "isNot": false,
+        "matcher": "toHaveJSProperty",
+        "expectation": "expected",
+        "expected": "Expected: {}"
+      },
+      {
+        "call": {
+          "api": "expect.toHaveText",
+          "timeoutMs": 5000
+        },
+        "target": {
+          "$neo": "locator",
+          "page": {
+            "$neo": "page",
+            "tab": 1007
+          },
+          "frame": null,
+          "chunks": [
+            {
+              "parts": [
+                {
+                  "name": "internal:role",
+                  "body": "button",
+                  "source": "button"
+                }
+              ]
+            }
+          ],
+          "display": "getByRole('button')"
+        },
+        "expression": "to.have.text",
+        "expectedText": [
+          {
+            "string": "sample",
+            "normalizeWhiteSpace": true
+          }
+        ],
+        "useInnerText": false,
+        "isNot": false,
+        "matcher": "toHaveText",
+        "expectation": "expected",
+        "expected": "Expected: \"sample\""
+      },
+      {
+        "call": {
+          "api": "expect.toMatchAriaSnapshot",
+          "timeoutMs": 5000
+        },
+        "target": {
+          "$neo": "locator",
+          "page": {
+            "$neo": "page",
+            "tab": 1007
+          },
+          "frame": null,
+          "chunks": [
+            {
+              "parts": [
+                {
+                  "name": "internal:role",
+                  "body": "button",
+                  "source": "button"
+                }
+              ]
+            }
+          ],
+          "display": "getByRole('button')"
+        },
+        "expression": "to.match.aria",
+        "isNot": false,
+        "matcher": "toMatchAriaSnapshot",
+        "expectation": "expected",
+        "expected": "Expected: \"[\"",
+        "templateError": "Flow sequence must end with a ] at line 1, column 2:\n\n[\n ^\n"
       }
     ],
     "expect.page": [
@@ -277,6 +831,64 @@
         "matcher": "toHaveTitle",
         "expectation": "expected",
         "expected": "Expected: \"x\""
+      },
+      {
+        "call": {
+          "api": "expect.toHaveTitle",
+          "timeoutMs": 5000
+        },
+        "page": {
+          "$neo": "page",
+          "tab": 1007
+        },
+        "expression": "to.have.title",
+        "expectedText": [
+          {
+            "string": "sample",
+            "normalizeWhiteSpace": true
+          }
+        ],
+        "useInnerText": false,
+        "isNot": false,
+        "matcher": "toHaveTitle",
+        "expectation": "expected",
+        "expected": "Expected: \"sample\""
+      },
+      {
+        "call": {
+          "api": "expect.toMatchAriaSnapshot",
+          "timeoutMs": 5000
+        },
+        "page": {
+          "$neo": "page",
+          "tab": 1007
+        },
+        "expression": "to.match.aria",
+        "expectedValue": {
+          "kind": "role",
+          "role": "button",
+          "name": "Go"
+        },
+        "isNot": false,
+        "matcher": "toMatchAriaSnapshot",
+        "expectation": "expected",
+        "expected": "Expected: \"- button \\\"Go\\\"\""
+      },
+      {
+        "call": {
+          "api": "expect.toMatchAriaSnapshot",
+          "timeoutMs": 5000
+        },
+        "page": {
+          "$neo": "page",
+          "tab": 1007
+        },
+        "expression": "to.match.aria",
+        "isNot": false,
+        "matcher": "toMatchAriaSnapshot",
+        "expectation": "expected",
+        "expected": "Expected: \"[\"",
+        "templateError": "Flow sequence must end with a ] at line 1, column 2:\n\n[\n ^\n"
       }
     ],
     "keyboard.down": [
@@ -315,7 +927,8 @@
           "$neo": "page",
           "tab": 1007
         },
-        "key": "a"
+        "key": "a",
+        "delay": 1
       }
     ],
     "keyboard.type": [
@@ -328,7 +941,8 @@
           "$neo": "page",
           "tab": 1007
         },
-        "text": "ab"
+        "text": "ab",
+        "delay": 1
       }
     ],
     "keyboard.up": [
@@ -427,7 +1041,39 @@
           "display": "getByRole('button')"
         },
         "strict": "strict",
-        "mode": "default"
+        "mode": "default",
+        "depth": 1,
+        "boxes": false
+      },
+      {
+        "call": {
+          "api": "locator.ariaSnapshotJSON",
+          "timeoutMs": 5000
+        },
+        "target": {
+          "$neo": "locator",
+          "page": {
+            "$neo": "page",
+            "tab": 1007
+          },
+          "frame": null,
+          "chunks": [
+            {
+              "parts": [
+                {
+                  "name": "internal:role",
+                  "body": "button",
+                  "source": "button"
+                }
+              ]
+            }
+          ],
+          "display": "getByRole('button')"
+        },
+        "strict": "strict",
+        "mode": "default",
+        "depth": 1,
+        "boxes": false
       }
     ],
     "locator.blur": [
@@ -514,7 +1160,14 @@
           ],
           "display": "getByRole('button')"
         },
-        "strict": "strict"
+        "strict": "strict",
+        "force": false,
+        "position": {
+          "x": 1,
+          "y": 1
+        },
+        "scroll": "auto",
+        "trial": false
       }
     ],
     "locator.click": [
@@ -543,7 +1196,22 @@
           ],
           "display": "getByRole('button')"
         },
-        "strict": "strict"
+        "strict": "strict",
+        "button": "left",
+        "clickCount": 1,
+        "delay": 1,
+        "force": false,
+        "modifiers": [
+          "Alt"
+        ],
+        "noWaitAfter": false,
+        "position": {
+          "x": 1,
+          "y": 1
+        },
+        "scroll": "auto",
+        "steps": 1,
+        "trial": false
       },
       {
         "call": {
@@ -655,7 +1323,20 @@
           ],
           "display": "getByRole('button')"
         },
-        "strict": "strict"
+        "strict": "strict",
+        "button": "left",
+        "delay": 1,
+        "force": false,
+        "modifiers": [
+          "Alt"
+        ],
+        "position": {
+          "x": 1,
+          "y": 1
+        },
+        "scroll": "auto",
+        "steps": 1,
+        "trial": false
       }
     ],
     "locator.dispatchEvent": [
@@ -747,7 +1428,19 @@
             }
           ],
           "display": "locator('#b')"
-        }
+        },
+        "force": false,
+        "scroll": "auto",
+        "sourcePosition": {
+          "x": 1,
+          "y": 1
+        },
+        "targetPosition": {
+          "x": 1,
+          "y": 1
+        },
+        "steps": 1,
+        "trial": false
       }
     ],
     "locator.drop": [
@@ -777,12 +1470,25 @@
           "display": "getByRole('button')"
         },
         "strict": "strict",
+        "files": {
+          "payloads": [
+            {
+              "name": "option.txt",
+              "mimeType": "text/plain",
+              "buffer": "YQ=="
+            }
+          ]
+        },
         "data": [
           {
             "mimeType": "text/plain",
             "value": "external"
           }
-        ]
+        ],
+        "position": {
+          "x": 1,
+          "y": 1
+        }
       }
     ],
     "locator.elementHandle": [
@@ -948,6 +1654,36 @@
       },
       {
         "call": {
+          "api": "locator.evaluate",
+          "timeoutMs": 5000
+        },
+        "target": {
+          "$neo": "locator",
+          "page": {
+            "$neo": "page",
+            "tab": 1007
+          },
+          "frame": null,
+          "chunks": [
+            {
+              "parts": [
+                {
+                  "name": "internal:role",
+                  "body": "button",
+                  "source": "button"
+                }
+              ]
+            }
+          ],
+          "display": "getByRole('button')"
+        },
+        "strict": "strict",
+        "expression": "function (",
+        "isFunction": true,
+        "refused": "Passed function is not well-serializable!"
+      },
+      {
+        "call": {
           "api": "elementHandle.evaluate",
           "timeoutMs": 0
         },
@@ -1002,6 +1738,35 @@
           "value": "{\"v\":\"undefined\"}",
           "handles": []
         }
+      },
+      {
+        "call": {
+          "api": "locator.evaluateAll",
+          "timeoutMs": 0
+        },
+        "target": {
+          "$neo": "locator",
+          "page": {
+            "$neo": "page",
+            "tab": 1007
+          },
+          "frame": null,
+          "chunks": [
+            {
+              "parts": [
+                {
+                  "name": "internal:role",
+                  "body": "button",
+                  "source": "button"
+                }
+              ]
+            }
+          ],
+          "display": "getByRole('button')"
+        },
+        "expression": "function (",
+        "isFunction": true,
+        "refused": "Passed function is not well-serializable!"
       },
       {
         "call": {
@@ -1129,7 +1894,8 @@
           "display": "getByRole('button')"
         },
         "strict": "strict",
-        "value": "x"
+        "value": "x",
+        "force": false
       }
     ],
     "locator.focus": [
@@ -1217,7 +1983,17 @@
           ],
           "display": "getByRole('button')"
         },
-        "strict": "strict"
+        "strict": "strict",
+        "force": false,
+        "modifiers": [
+          "Alt"
+        ],
+        "position": {
+          "x": 1,
+          "y": 1
+        },
+        "scroll": "auto",
+        "trial": false
       }
     ],
     "locator.innerHTML": [
@@ -1537,7 +2313,9 @@
           "display": "getByRole('button')"
         },
         "strict": "strict",
-        "key": "a"
+        "key": "a",
+        "delay": 1,
+        "noWaitAfter": false
       }
     ],
     "locator.pressSequentially": [
@@ -1567,7 +2345,8 @@
           "display": "getByRole('button')"
         },
         "strict": "strict",
-        "text": "ab"
+        "text": "ab",
+        "delay": 1
       }
     ],
     "locator.scrollIntoViewIfNeeded": [
@@ -1630,7 +2409,53 @@
           {
             "valueOrLabel": "a"
           }
-        ]
+        ],
+        "force": false
+      },
+      {
+        "call": {
+          "api": "locator.selectOption",
+          "timeoutMs": 5000
+        },
+        "target": {
+          "$neo": "locator",
+          "page": {
+            "$neo": "page",
+            "tab": 1007
+          },
+          "frame": null,
+          "chunks": [
+            {
+              "parts": [
+                {
+                  "name": "internal:role",
+                  "body": "button",
+                  "source": "button"
+                }
+              ]
+            }
+          ],
+          "display": "getByRole('button')"
+        },
+        "strict": "strict",
+        "options": [
+          {
+            "valueOrLabel": "a"
+          }
+        ],
+        "elements": [
+          {
+            "$neo": "element",
+            "page": {
+              "$neo": "page",
+              "tab": 1007
+            },
+            "seq": 0,
+            "node": 9,
+            "display": "<button>Go</button>"
+          }
+        ],
+        "force": false
       }
     ],
     "locator.selectText": [
@@ -1659,7 +2484,8 @@
           ],
           "display": "getByRole('button')"
         },
-        "strict": "strict"
+        "strict": "strict",
+        "force": false
       }
     ],
     "locator.setInputFiles": [
@@ -1787,7 +2613,14 @@
           ],
           "display": "getByRole('button')"
         },
-        "strict": "strict"
+        "strict": "strict",
+        "force": false,
+        "position": {
+          "x": 1,
+          "y": 1
+        },
+        "scroll": "auto",
+        "trial": false
       }
     ],
     "locator.waitFor": [
@@ -1817,7 +2650,7 @@
           "display": "getByRole('button')"
         },
         "strict": "strict",
-        "state": "visible",
+        "state": "attached",
         "omitReturnValue": true
       },
       {
@@ -1883,6 +2716,36 @@
           "value": "{\"v\":\"undefined\"}",
           "handles": []
         }
+      },
+      {
+        "call": {
+          "api": "locator.waitForFunction",
+          "timeoutMs": 5000
+        },
+        "target": {
+          "$neo": "locator",
+          "page": {
+            "$neo": "page",
+            "tab": 1007
+          },
+          "frame": null,
+          "chunks": [
+            {
+              "parts": [
+                {
+                  "name": "internal:role",
+                  "body": "button",
+                  "source": "button"
+                }
+              ]
+            }
+          ],
+          "display": "getByRole('button')"
+        },
+        "strict": "strict",
+        "expression": "function (",
+        "isFunction": true,
+        "refused": "Passed function is not well-serializable!"
       }
     ],
     "mouse.click": [
@@ -1896,7 +2759,10 @@
           "tab": 1007
         },
         "x": 1,
-        "y": 2
+        "y": 2,
+        "button": "left",
+        "clickCount": 1,
+        "delay": 1
       }
     ],
     "mouse.down": [
@@ -1908,7 +2774,9 @@
         "page": {
           "$neo": "page",
           "tab": 1007
-        }
+        },
+        "button": "left",
+        "clickCount": 1
       }
     ],
     "mouse.move": [
@@ -1922,7 +2790,8 @@
           "tab": 1007
         },
         "x": 1,
-        "y": 2
+        "y": 2,
+        "steps": 1
       }
     ],
     "mouse.up": [
@@ -1934,7 +2803,9 @@
         "page": {
           "$neo": "page",
           "tab": 1007
-        }
+        },
+        "button": "left",
+        "clickCount": 1
       }
     ],
     "mouse.wheel": [
@@ -2013,6 +2884,32 @@
           "display": "getByText('Accept cookies')"
         },
         "noWaitAfter": true
+      },
+      {
+        "call": {
+          "api": "page.addLocatorHandler",
+          "timeoutMs": 0
+        },
+        "target": {
+          "$neo": "locator",
+          "page": {
+            "$neo": "page",
+            "tab": 1007
+          },
+          "frame": null,
+          "chunks": [
+            {
+              "parts": [
+                {
+                  "name": "internal:text",
+                  "body": "\"Later\"i",
+                  "source": "\"Later\"i"
+                }
+              ]
+            }
+          ],
+          "display": "getByText('Later')"
+        }
       }
     ],
     "page.addScriptTag": [
@@ -2025,7 +2922,32 @@
           "$neo": "page",
           "tab": 1007
         },
-        "content": "window.injected = true"
+        "content": "sample",
+        "type": "sample"
+      },
+      {
+        "call": {
+          "api": "page.addScriptTag",
+          "timeoutMs": 0
+        },
+        "page": {
+          "$neo": "page",
+          "tab": 1007
+        },
+        "url": "https://a.example/script.js",
+        "type": "sample"
+      },
+      {
+        "call": {
+          "api": "page.addScriptTag",
+          "timeoutMs": 0
+        },
+        "page": {
+          "$neo": "page",
+          "tab": 1007
+        },
+        "path": "Cargo.toml",
+        "type": "sample"
       }
     ],
     "page.addStyleTag": [
@@ -2039,7 +2961,29 @@
           "tab": 1007
         },
         "frame": "F1",
-        "content": "body { color: red }"
+        "content": "sample"
+      },
+      {
+        "call": {
+          "api": "page.addStyleTag",
+          "timeoutMs": 0
+        },
+        "page": {
+          "$neo": "page",
+          "tab": 1007
+        },
+        "url": "https://a.example/script.js"
+      },
+      {
+        "call": {
+          "api": "page.addStyleTag",
+          "timeoutMs": 0
+        },
+        "page": {
+          "$neo": "page",
+          "tab": 1007
+        },
+        "path": "Cargo.toml"
       }
     ],
     "page.ariaSnapshot": [
@@ -2052,7 +2996,9 @@
           "$neo": "page",
           "tab": 1007
         },
-        "mode": "default"
+        "mode": "default",
+        "depth": 1,
+        "boxes": false
       },
       {
         "call": {
@@ -2064,7 +3010,8 @@
           "tab": 1007
         },
         "mode": "default",
-        "boxes": true
+        "depth": 1,
+        "boxes": false
       }
     ],
     "page.close": [
@@ -2076,6 +3023,16 @@
         "page": {
           "$neo": "page",
           "tab": 1008
+        }
+      },
+      {
+        "call": {
+          "api": "page.close",
+          "timeoutMs": 0
+        },
+        "page": {
+          "$neo": "page",
+          "tab": 1007
         }
       }
     ],
@@ -2109,6 +3066,49 @@
       }
     ],
     "page.evalOnSelector": [
+      {
+        "call": {
+          "api": "page.$eval",
+          "timeoutMs": 0
+        },
+        "target": {
+          "$neo": "locator",
+          "page": {
+            "$neo": "page",
+            "tab": 1007
+          },
+          "frame": null,
+          "chunks": [
+            {
+              "parts": [
+                {
+                  "name": "css",
+                  "body": [
+                    {
+                      "simples": [
+                        {
+                          "selector": {
+                            "css": "b",
+                            "functions": []
+                          },
+                          "combinator": ""
+                        }
+                      ]
+                    }
+                  ],
+                  "source": "b"
+                }
+              ]
+            }
+          ],
+          "display": "locator('b')"
+        },
+        "strict": "firstMatch",
+        "selector": "b",
+        "expression": "function (",
+        "isFunction": true,
+        "refused": "Passed function is not well-serializable!"
+      },
       {
         "call": {
           "api": "elementHandle.$eval",
@@ -2228,6 +3228,19 @@
           "value": "{\"v\":\"undefined\"}",
           "handles": []
         }
+      },
+      {
+        "call": {
+          "api": "page.evaluate",
+          "timeoutMs": 0
+        },
+        "page": {
+          "$neo": "page",
+          "tab": 1007
+        },
+        "expression": "function (",
+        "isFunction": true,
+        "refused": "Passed function is not well-serializable!"
       },
       {
         "call": {
@@ -2454,7 +3467,8 @@
         "publication": {
           "id": 1,
           "acknowledged": []
-        }
+        },
+        "referer": "sample"
       },
       {
         "call": {
@@ -2503,7 +3517,26 @@
         "page": {
           "$neo": "page",
           "tab": 1007
-        }
+        },
+        "scale": 1,
+        "displayHeaderFooter": false,
+        "headerTemplate": "sample",
+        "footerTemplate": "sample",
+        "printBackground": false,
+        "landscape": false,
+        "pageRanges": "1",
+        "format": "A4",
+        "width": "10px",
+        "height": "10px",
+        "preferCSSPageSize": false,
+        "margin": {
+          "top": "1px",
+          "right": "1px",
+          "bottom": "1px",
+          "left": "1px"
+        },
+        "tagged": false,
+        "outline": false
       }
     ],
     "page.reload": [
@@ -2530,6 +3563,13 @@
           "timeoutMs": 0
         },
         "uid": 1
+      },
+      {
+        "call": {
+          "api": "page.removeLocatorHandler",
+          "timeoutMs": 0
+        },
+        "uid": 2
       }
     ],
     "page.requestGC": [
@@ -2550,7 +3590,8 @@
           "api": "page.resolveLocatorHandler",
           "timeoutMs": 0
         },
-        "uid": 1
+        "uid": 1,
+        "remove": true
       }
     ],
     "page.runBeforeUnload": [
@@ -2584,7 +3625,44 @@
         "page": {
           "$neo": "page",
           "tab": 1007
-        }
+        },
+        "type": "jpeg",
+        "quality": 1,
+        "omitBackground": false,
+        "fullPage": false,
+        "clip": {
+          "x": 1,
+          "y": 1,
+          "width": 1,
+          "height": 1
+        },
+        "animations": "allow",
+        "caret": "hide",
+        "style": "sample",
+        "scale": "css",
+        "maskColor": "#00ff00",
+        "mask": [
+          {
+            "$neo": "locator",
+            "page": {
+              "$neo": "page",
+              "tab": 1007
+            },
+            "frame": null,
+            "chunks": [
+              {
+                "parts": [
+                  {
+                    "name": "internal:role",
+                    "body": "button",
+                    "source": "button"
+                  }
+                ]
+              }
+            ],
+            "display": "getByRole('button')"
+          }
+        ]
       },
       {
         "call": {
@@ -2615,7 +3693,44 @@
           ],
           "display": "getByRole('button')"
         },
-        "strict": "strict"
+        "strict": "strict",
+        "type": "jpeg",
+        "quality": 1,
+        "omitBackground": false,
+        "fullPage": false,
+        "clip": {
+          "x": 1,
+          "y": 1,
+          "width": 1,
+          "height": 1
+        },
+        "animations": "allow",
+        "caret": "hide",
+        "style": "sample",
+        "scale": "css",
+        "maskColor": "#00ff00",
+        "mask": [
+          {
+            "$neo": "locator",
+            "page": {
+              "$neo": "page",
+              "tab": 1007
+            },
+            "frame": null,
+            "chunks": [
+              {
+                "parts": [
+                  {
+                    "name": "internal:role",
+                    "body": "button",
+                    "source": "button"
+                  }
+                ]
+              }
+            ],
+            "display": "getByRole('button')"
+          }
+        ]
       },
       {
         "call": {
@@ -2686,7 +3801,21 @@
         "arg": {
           "value": "{\"v\":\"undefined\"}",
           "handles": []
-        }
+        },
+        "pollingInterval": 1
+      },
+      {
+        "call": {
+          "api": "page.waitForFunction",
+          "timeoutMs": 5000
+        },
+        "page": {
+          "$neo": "page",
+          "tab": 1007
+        },
+        "expression": "function (",
+        "isFunction": true,
+        "refused": "Passed function is not well-serializable!"
       }
     ],
     "page.waitForLoadState": [
@@ -2848,6 +3977,20 @@
           "value": "{\"v\":\"undefined\"}",
           "handles": []
         }
+      },
+      {
+        "call": {
+          "api": "worker.evaluate",
+          "timeoutMs": 0
+        },
+        "page": {
+          "$neo": "page",
+          "tab": 1007
+        },
+        "worker": "worker-1",
+        "expression": "function (",
+        "isFunction": true,
+        "refused": "Passed function is not well-serializable!"
       }
     ]
   }

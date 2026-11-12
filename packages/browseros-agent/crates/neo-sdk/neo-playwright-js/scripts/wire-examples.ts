@@ -158,6 +158,7 @@ const EVERY_OP = `
     if ('maskColor' in value) value.maskColor = '#00ff00'
     if ('format' in value) value.format = 'A4'
     if ('pageRanges' in value) value.pageRanges = '1'
+    if ('pollingInterval' in value) value.polling = value.pollingInterval
     for (const key of ['width', 'height'])
       if (typeof value[key] === 'string') value[key] = '10px'
     if ('margin' in value) value.margin = Object.fromEntries(Object.keys(value.margin).map(side => [side, '1px']))
@@ -217,6 +218,10 @@ const EVERY_OP = `
   await page.setContent('<p>hi</p>'); await page.opener(); await page.evaluate(() => 1)
   await l.evaluate((e) => e.id); await l.evaluateAll((es) => es.length); await page.waitForFunction(() => true, undefined, sample('page.waitForFunction'))
   await l.waitForFunction((e) => e.id)
+  // Function normalization refusals are valid inputs too; they travel on the op.
+  const refused = () => {}; refused.toString = () => 'function ('
+  await page.evaluate(refused); await l.evaluate(refused); await l.evaluateAll(refused)
+  await page.waitForFunction(refused); await l.waitForFunction(refused); await page.$eval('b', refused)
   await handle.evaluate((e) => e.id); await handle.$eval('b', (e) => e.id); await handle.$$eval('b', (es) => es.length)
   await page.$eval('b', (e) => e.id); await page.$$eval('b', (es) => es.length); await page.evaluate((e, h) => h.id, handle)
   await page.screenshot(sample('page.screenshot')); await l.screenshot(sample('page.screenshot')); await page.pdf(sample('page.pdf'))
@@ -225,6 +230,7 @@ const EVERY_OP = `
   const script = await page.addInitScript((a) => { window.a = a }, 1)
   // Rust reads a path before any page work, so the offline decode needs a file that exists.
   await page.addInitScript({ path: 'Cargo.toml' }); await context.addInitScript('window.b = 1')
+  await context.addInitScript({ path: 'Cargo.toml' })
   await page.addInitScript(({ cb }) => cb(1), { cb: () => 2 }, { exposeFunctions: true })
   Math.random = () => 0.5
   await context.addInitScript(({ cb }) => cb(1), { cb: () => 2 }, { exposeFunctions: true })
@@ -245,6 +251,7 @@ const EVERY_OP = `
   const dialog = await page.waitForEvent('dialog'); await dialog.accept(sample('dialog.accept').promptText); await dialog.dismiss()
   const download = await page.waitForEvent('download'); await download.path(); await download.saveAs('/out/f.csv')
   const worker = await page.waitForEvent('worker'); await worker.evaluate(() => 1)
+  await worker.evaluate(refused)
   await tab.close({ runBeforeUnload: true }); await tab.close()
 `
 
