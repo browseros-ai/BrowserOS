@@ -26,20 +26,6 @@ export function pick<T extends object, K extends keyof T>(
 export const FILL_KEYS = ['force'] as const
 export const PRESS_KEYS = ['delay', 'noWaitAfter'] as const
 export const TYPE_KEYS = ['delay'] as const
-/** The screenshot options Rust captures with; frame.ts refuses the rest. */
-export const SCREENSHOT_KEYS = [
-  'type',
-  'quality',
-  'omitBackground',
-  'fullPage',
-  'clip',
-  'animations',
-  'caret',
-  'style',
-  'scale',
-  'maskColor',
-] as const
-
 /** Objects the prelude hands to scripts (pages, frames, locators, handles), by identity. */
 const handles = new WeakSet<object>()
 

@@ -2,13 +2,16 @@
 
 use serde::Serialize;
 use serde_json::Value;
+use ts_rs::TS;
 
 use crate::op_scope::OpScope;
 use crate::{ErrorCode, PlaywrightError};
 
 /// `{"$neo":"bytes","base64":"..."}`: binary results (screenshots, PDFs), which the bootstrap
 /// turns into a `Uint8Array`.
-#[derive(Debug, Serialize)]
+// The bootstrap revives this brand to a Uint8Array before the prelude sees it.
+#[derive(Debug, Serialize, TS)]
+#[ts(type = "Uint8Array")]
 pub(crate) struct Bytes {
     #[serde(rename = "$neo")]
     brand: BytesBrand,

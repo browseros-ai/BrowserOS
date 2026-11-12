@@ -253,46 +253,16 @@ export type PageScript =
   | { refused: string }
 
 /** The screenshot options Neo captures with; the prelude refuses the others before sending. */
-export type ScreenshotOptions = {
-  scale?: 'css' | 'device'
-  animations?: 'disabled' | 'allow'
-  caret?: 'hide' | 'initial'
-  style?: string
-  type?: 'png' | 'jpeg' | 'webp'
-  omitBackground?: boolean
-  quality?: number
-  fullPage?: boolean
-  clip?: Rect
-  /** Only the locators the caller explicitly asks to cover. */
-  mask?: LocatorBrand[]
-  maskColor?: string
-}
+export type ScreenshotOptions = Omit<
+  GeneratedInputs['page.screenshot'],
+  'page' | 'target' | 'strict'
+>
 
 /**
  * PDF fields accepted by pdf.rs. Rust accepts pixels or CSS lengths; the prelude normalizes
  * script-supplied numbers to px strings before sending, as Playwright's client does.
  */
-export type PdfOptions = {
-  scale?: number
-  displayHeaderFooter?: boolean
-  headerTemplate?: string
-  footerTemplate?: string
-  printBackground?: boolean
-  landscape?: boolean
-  pageRanges?: string
-  format?: string
-  width?: number | string
-  height?: number | string
-  margin?: {
-    top?: number | string
-    right?: number | string
-    bottom?: number | string
-    left?: number | string
-  }
-  preferCSSPageSize?: boolean
-  tagged?: boolean
-  outline?: boolean
-}
+export type PdfOptions = Omit<GeneratedInputs['page.pdf'], 'page'>
 
 /**
  * One in-memory file as upstream's injected script takes it: `mimeType` already defaulted from
@@ -329,25 +299,15 @@ export type HandInputs = {
   'locator.setInputFiles': TargetArgs & { files: FilesInput }
   'locator.dispatchEvent': TargetArgs & { type: string; eventInit: unknown }
   'locator.scrollIntoViewIfNeeded': TargetArgs
-  'page.requestGC': PageArgs
-  'page.emulateMedia': PageArgs & {
-    media?: 'screen' | 'print' | 'no-override'
-    colorScheme?: 'dark' | 'light' | 'no-preference' | 'no-override'
-    reducedMotion?: 'reduce' | 'no-preference' | 'no-override'
-    forcedColors?: 'active' | 'none' | 'no-override'
-    contrast?: 'no-preference' | 'more' | 'no-override'
-  }
-  'page.addScriptTag': FrameArgs & {
-    url?: string
-    path?: string
-    content?: string
-    type?: string
-  }
-  'page.addStyleTag': FrameArgs & {
-    url?: string
-    path?: string
-    content?: string
-  }
+  /**
+   * The reads below wait for a locator's element, as upstream's do; an element handle's
+   * target needs no waiting, so no flag says it.
+   */
+  /**
+   * `locator.waitFor`, `page.waitForSelector` and `elementHandle.waitForElementState` (whose
+   * states are the element-state names). `omitReturnValue` skips pinning a handle.
+   */
+  /** `noWait` is `page.$`: the first match now, or null, instead of waiting for one. */
   'worker.evaluate': { page: PageHandle; worker: string; script: PageScript }
   'page.evaluate': FrameArgs & { script: PageScript }
   /** `noWait` is `$eval`: no waiting for the element, as `locator.evaluate` does. */
@@ -362,33 +322,11 @@ export type HandInputs = {
   /** `polling` in milliseconds; absent is `'raf'`. */
   'page.waitForFunction': FrameArgs & { script: PageScript; polling?: number }
   'locator.waitForFunction': TargetArgs & { script: PageScript }
-  /** With `target`, a screenshot of one element (`locator.screenshot`). */
-  'page.screenshot': PageArgs & {
-    target?: Target
-    strict?: Strictness
-  } & ScreenshotOptions
-  'page.pdf': PageArgs & PdfOptions
-  /** The client-side save step, on Neo's filesystem and without a browser target. */
-  'page.saveScreenshot': { path: string; base64: string }
-  'page.setViewportSize': PageArgs & {
-    viewportSize: { width: number; height: number }
-  }
   'page.addInitScript': PageArgs & { script: InitSource }
   /** `noGlobal`: the controller alone knows the binding (`exposeFunctions` callbacks). */
   'page.exposeBinding': PageArgs & { name: string; noGlobal?: true }
   /** `arg`: `{ name, seq, result }` or `{ name, seq, error }` as in-page JSON text. */
   'bindingCall.resolve': PageArgs & { context: number; arg: string }
-  'webStorage.read': PageArgs & {
-    kind: 'local' | 'session'
-    action: 'items' | 'getItem'
-    name?: string
-  }
-  'webStorage.write': PageArgs & {
-    kind: 'local' | 'session'
-    action: 'setItem' | 'removeItem' | 'clear'
-    name?: string
-    value?: string
-  }
   /** A handler's locator, on the main frame of its page; `uid` names the registration. */
   'page.addLocatorHandler': { target: LocatorBrand; noWaitAfter?: true }
   'page.removeLocatorHandler': { uid: number }
@@ -399,8 +337,6 @@ export type HandInputs = {
   'page.locatorHandlerTriggered': Record<string, never>
   /** The script ran the handler; `remove` once its `times` ran out. The paused action goes on. */
   'page.resolveLocatorHandler': { uid: number; remove?: true }
-  'context.pages': Record<string, never>
-  'context.newPage': Record<string, never>
   'context.addInitScript': { script: InitSource }
   'context.exposeBinding': { name: string; noGlobal?: true }
   /** The id an `addInitScript` returned. */
@@ -458,10 +394,6 @@ export type HandOutputs = {
   'locator.setInputFiles': null
   'locator.dispatchEvent': null
   'locator.scrollIntoViewIfNeeded': null
-  'page.requestGC': null
-  'page.emulateMedia': null
-  'page.addScriptTag': { element: ElementBrand; frames?: FrameInfo[] }
-  'page.addStyleTag': { element: ElementBrand; frames?: FrameInfo[] }
   /** The script's result in Playwright's in-page format. */
   'worker.evaluate': { value: SerializedValue }
   'page.evaluate': { value: SerializedValue; frames?: FrameInfo[] }
@@ -470,24 +402,14 @@ export type HandOutputs = {
   /** The predicate's truthy value and upstream's preview of it (`toString()`). */
   'page.waitForFunction': { value: SerializedValue; preview: string }
   'locator.waitForFunction': null
-  /** The `{"$neo":"bytes"}` brand, revived as the prelude's Buffer (index.ts). */
-  'page.screenshot': Uint8Array
-  'page.saveScreenshot': null
-  'page.pdf': Uint8Array
-  'page.setViewportSize': Done
   /** The id `disposable.dispose` takes. */
   'page.addInitScript': { id: number }
   'page.exposeBinding': { id: number }
   'bindingCall.resolve': Done
-  /** `items`'s name/value pairs, or `getItem`'s string, null when absent. */
-  'webStorage.read': { name: string; value: string }[] | string | null
-  'webStorage.write': null
   'page.addLocatorHandler': { uid: number }
   'page.removeLocatorHandler': null
   'page.locatorHandlerTriggered': { uid: number | null }
   'page.resolveLocatorHandler': null
-  'context.pages': { pages: PageEntry[] }
-  'context.newPage': PageEntry
   'context.addInitScript': { id: number }
   'context.exposeBinding': { id: number }
   'disposable.dispose': Done

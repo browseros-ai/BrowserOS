@@ -7,12 +7,13 @@ use std::time::Duration;
 use futures_util::future;
 use serde::Deserialize;
 use tokio::time;
+use ts_rs::TS;
 
 use crate::PlaywrightError;
 
 /// The prelude's locator brand, including its `$neo` discriminant. Element handles are not
 /// accepted as mask options; the caller names locators that resolve all current matches.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, TS)]
 #[serde(tag = "$neo")]
 pub(super) enum MaskLocator {
     #[serde(rename = "locator")]

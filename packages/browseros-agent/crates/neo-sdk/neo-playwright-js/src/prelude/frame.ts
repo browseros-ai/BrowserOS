@@ -35,7 +35,6 @@ import {
   markHandle,
   PRESS_KEYS,
   pick,
-  SCREENSHOT_KEYS,
   selectOptionValues,
   TYPE_KEYS,
 } from './options'
@@ -1369,20 +1368,27 @@ export class Frame extends EventEmitter {
       wire.type = screenshotType({ api, path: options.path })
     const { timeout, signal } = this._wait(api, options)
     const page = await this._page._brand(api)
-    const input: OpInputs['page.screenshot'] =
-      selector === null
-        ? { page, ...wire }
-        : {
-            page,
-            target: await this._locatorBrand(api, selector),
-            strict: 'strict',
-            ...wire,
-          }
-    const image = await invoke(
-      'page.screenshot',
+    const target =
+      selector === null ? undefined : await this._locatorBrand(api, selector)
+    const image = await send['page.screenshot'](
       site,
       this._call(api, timeout),
-      input,
+      {
+        page,
+        target,
+        strict: selector === null ? undefined : 'strict',
+        type: wire.type,
+        quality: wire.quality,
+        omitBackground: wire.omitBackground,
+        fullPage: wire.fullPage,
+        clip: wire.clip,
+        animations: wire.animations,
+        caret: wire.caret,
+        style: wire.style,
+        scale: wire.scale,
+        maskColor: wire.maskColor,
+        mask: wire.mask,
+      },
       signal,
     )
     await saveScreenshot({
@@ -1491,13 +1497,18 @@ export class Frame extends EventEmitter {
     }
     let handle: ElementHandle | null
     try {
+      const { page, frame } = await this._frameArgs(api)
       const { value: result, observed } = await invokeObserved(
         op,
         site,
         this._call(api, 0),
         {
-          ...(await this._frameArgs(api)),
-          ...input,
+          page,
+          frame,
+          url: input.url,
+          path: input.path,
+          content: input.content,
+          type: op === 'page.addScriptTag' ? input.type : undefined,
         },
       )
       this._page._evaluated(result.frames, observed)
@@ -1633,7 +1644,10 @@ export async function screenshotOptions(
   api: string,
   options: ScreenshotOptionsInput,
 ): Promise<ScreenshotOptions> {
-  const wire: ScreenshotOptions = pick(options, SCREENSHOT_KEYS)
+  const wire: ScreenshotOptions = pick(
+    options,
+    OPTION_KEYS['page.screenshot'].filter((key) => key !== 'mask'),
+  )
   if (options.mask !== undefined) {
     wire.mask = await Promise.all(
       options.mask.map((locator) => {

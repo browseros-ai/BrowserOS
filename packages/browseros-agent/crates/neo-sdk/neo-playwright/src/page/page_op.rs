@@ -243,6 +243,10 @@ const PUBLICATION: &[(&str, &str)] = &[(
 /// `Describe` walk the same rows, and the policy in `spec()` stays independent of the shapes.
 /// The family moves in three changes: the ops not moved yet go through the untyped row to
 /// `run_untyped`, and keep their hand-written TypeScript in `wire.ts` until theirs lands.
+#[expect(
+    clippy::too_many_lines,
+    reason = "one exhaustive row per page operation keeps the wire contract together"
+)]
 fn route<'a, R: Route<'a>>(op: PageOp, r: R) -> R::Out {
     match op {
         PageOp::Goto => r.op(wire::command("Frame.goto").adds(PUBLICATION), goto),
@@ -302,25 +306,54 @@ fn route<'a, R: Route<'a>>(op: PageOp, r: R) -> R::Out {
             ),
             frame_tree::frames,
         ),
-        op @ (PageOp::AddScriptTag
-        | PageOp::AddStyleTag
-        | PageOp::EmulateMedia
-        | PageOp::RequestGc
-        | PageOp::Evaluate
+        PageOp::AddScriptTag => r.op(
+            wire::command("Frame.addScriptTag").adds(&[("path", "the Neo host reads the client's source file before insertion")]),
+            add_tag::script,
+        ),
+        PageOp::AddStyleTag => r.op(
+            wire::command("Frame.addStyleTag").adds(&[("path", "the Neo host reads the client's stylesheet before insertion")]),
+            add_tag::style,
+        ),
+        PageOp::EmulateMedia => r.op(wire::command("Page.emulateMedia"), media_emulation::emulate),
+        PageOp::RequestGc => r.op(wire::command("Page.requestGC"), request_gc),
+        PageOp::SetViewportSize => r.op(
+            wire::command("Page.setViewportSize").result("the existing empty object receipt, preserved until the wire alignment"),
+            viewport_size::set,
+        ),
+        PageOp::Screenshot => r.op(
+            wire::command("Page.screenshot").retypes(&[("mask", "mask locators travel as Neo brands instead of frame channels and selectors")]),
+            screenshot::capture,
+        ),
+        PageOp::SaveScreenshot => r.op(
+            wire::neo_only("the screenshot client's path step writes captured bytes on Neo's disk"),
+            save_screenshot,
+        ),
+        PageOp::Pdf => r.op(
+            wire::command("Page.pdf").retypes(&[("width", "Rust accepts numeric pixels as well as the client's normalized CSS strings"),
+                ("height", "Rust accepts numeric pixels as well as the client's normalized CSS strings"),
+                ("margin", "Rust accepts numeric pixels on every margin side as well as normalized CSS strings")]),
+            pdf::print,
+        ),
+        PageOp::WebStorageRead => r.op(
+            wire::command("Page.webStorageGetItem").adds(&[("action", "one Neo op implements getItem and items")])
+                .retypes(&[("name", "items reads all names, so only getItem supplies one")]),
+            web_storage::read,
+        ),
+        PageOp::WebStorageWrite => r.op(
+            wire::command("Page.webStorageSetItem").adds(&[("action", "one Neo op implements setItem, removeItem and clear")])
+                .retypes(&[("name", "clear needs no item name"), ("value", "only setItem supplies a value")]),
+            web_storage::write_value,
+        ),
+        op @ (PageOp::Evaluate
         | PageOp::WorkerEvaluate
         | PageOp::EvaluateOnElement
         | PageOp::EvaluateOnAll
         | PageOp::WaitForFunction
         | PageOp::WaitForFunctionOnElement
-        | PageOp::Screenshot
-        | PageOp::SaveScreenshot
-        | PageOp::Pdf
-        | PageOp::SetViewportSize
         | PageOp::AddInitScript
         | PageOp::ExposeBinding
         | PageOp::ResolveBinding
-        | PageOp::WebStorageRead
-        | PageOp::WebStorageWrite) => {
+        ) => {
             r.untyped(move |pw, scope, args| run_untyped(pw, scope, op, args))
         }
     }
@@ -345,34 +378,6 @@ async fn run_untyped(
     args: OpArgs,
 ) -> Result<Value, PlaywrightError> {
     match op {
-        PageOp::SetViewportSize => viewport_size::set(pw, scope, args.decode(scope)?).await,
-        PageOp::AddScriptTag => {
-            Box::pin(add_tag::insert(
-                pw,
-                scope,
-                args.decode(scope)?,
-                add_tag::TagKind::Script,
-            ))
-            .await
-        }
-        PageOp::AddStyleTag => {
-            Box::pin(add_tag::insert(
-                pw,
-                scope,
-                args.decode(scope)?,
-                add_tag::TagKind::Style,
-            ))
-            .await
-        }
-        PageOp::EmulateMedia => {
-            Box::pin(media_emulation::emulate(pw, scope, args.decode(scope)?)).await
-        }
-        PageOp::RequestGc => request_gc(pw, scope, args.decode(scope)?).await,
-        PageOp::Screenshot => screenshot::capture(pw, scope, args.decode(scope)?).await,
-        PageOp::SaveScreenshot => save_screenshot::save(scope, args.decode(scope)?).await,
-        PageOp::WebStorageRead => web_storage::call(pw, scope, args.decode(scope)?, false).await,
-        PageOp::WebStorageWrite => web_storage::call(pw, scope, args.decode(scope)?, true).await,
-        PageOp::Pdf => pdf::print(pw, scope, args.decode(scope)?).await,
         PageOp::AddInitScript => init_script::add_to_page(pw, scope, args.decode(scope)?).await,
         PageOp::ExposeBinding => {
             Box::pin(init_script::expose_on_page(pw, scope, args.decode(scope)?)).await
@@ -426,7 +431,17 @@ async fn run_untyped(
         | PageOp::SetContent
         | PageOp::Close
         | PageOp::Opener
-        | PageOp::Frames => Err(scope.not_built()),
+        | PageOp::Frames
+        | PageOp::SetViewportSize
+        | PageOp::AddScriptTag
+        | PageOp::AddStyleTag
+        | PageOp::EmulateMedia
+        | PageOp::RequestGc
+        | PageOp::Screenshot
+        | PageOp::SaveScreenshot
+        | PageOp::Pdf
+        | PageOp::WebStorageRead
+        | PageOp::WebStorageWrite => Err(scope.not_built()),
     }
 }
 
@@ -549,13 +564,22 @@ struct PageInput {
 }
 options!(PageInput);
 
+/// The disk write has no page target; capture has already passed the tab's read policies.
+async fn save_screenshot(
+    _pw: &Playwright,
+    scope: &OpScope<'_>,
+    input: save_screenshot::SaveScreenshotInput,
+) -> Result<Nothing, PlaywrightError> {
+    save_screenshot::save(scope, input).await
+}
+
 /// Upstream collects on the main renderer session. Treat collection as a write because
 /// finalizers can execute page code; recheck the host immediately before the CDP command.
 async fn request_gc(
     pw: &Playwright,
     scope: &OpScope<'_>,
     input: PageInput,
-) -> Result<Value, PlaywrightError> {
+) -> Result<Nothing, PlaywrightError> {
     let admitted = scope.admit(pw.browser(), input.page.tab()).await?;
     let session = pw
         .browser()
@@ -566,7 +590,7 @@ async fn request_gc(
         .await
         .map_err(|_expired| scope.timed_out(ErrorCode::BrowserDisconnected))?
         .map_err(|error| scope.core_error(&error))?;
-    Ok(Value::Null)
+    Ok(())
 }
 
 /// The tab that opened this one while it is still open, as upstream: `{ opener: page | null }`.
@@ -617,4 +641,70 @@ async fn opener(
 #[derive(Debug, Serialize, TS)]
 struct OpenerResult {
     opener: Option<PageHandle>,
+}
+
+#[cfg(test)]
+mod wire_tests {
+    use std::error::Error;
+
+    use serde::Deserialize;
+
+    use super::PageInput;
+    use crate::Op;
+    use crate::op_input::OpInput;
+    use crate::op_scope::OpScope;
+    use crate::page::{
+        add_tag, media_emulation, pdf, save_screenshot, screenshot, viewport_size, web_storage,
+    };
+    use crate::test_env::TestEnv;
+
+    #[derive(Deserialize)]
+    struct Fixture {
+        scenarios: Vec<Scenario>,
+    }
+    #[derive(Deserialize)]
+    struct Scenario {
+        exchanges: Vec<Exchange>,
+    }
+    #[derive(Deserialize)]
+    struct Exchange {
+        op: String,
+        args: String,
+    }
+
+    #[tokio::test]
+    async fn moved_inputs_decode_every_before_recording() -> Result<(), Box<dyn Error>> {
+        let fixture: Fixture =
+            serde_json::from_str(include_str!("../../tests/data/page-c-wire.json"))?;
+        let env = TestEnv::new();
+        for exchange in fixture
+            .scenarios
+            .into_iter()
+            .flat_map(|scenario| scenario.exchanges)
+        {
+            let op = Op::from_name(&exchange.op).ok_or("recorded op exists")?;
+            let OpInput { call, args } =
+                OpInput::decode(op, serde_json::from_str(&exchange.args)?)?;
+            let scope = OpScope::new(&env, op, call);
+            macro_rules! decodes {
+                ($ty:ty) => {{
+                    let _: $ty = args.decode(&scope)?;
+                }};
+            }
+            match exchange.op.as_str() {
+                "page.requestGC" => decodes!(PageInput),
+                "page.emulateMedia" => decodes!(media_emulation::MediaInput),
+                "page.setViewportSize" => decodes!(viewport_size::ViewportSizeInput),
+                "page.addScriptTag" => decodes!(add_tag::AddTagInput),
+                "page.addStyleTag" => decodes!(add_tag::AddStyleTagInput),
+                "page.screenshot" => decodes!(screenshot::ScreenshotInput),
+                "page.saveScreenshot" => decodes!(save_screenshot::SaveScreenshotInput),
+                "page.pdf" => decodes!(pdf::PdfInput),
+                "webStorage.read" => decodes!(web_storage::StorageReadInput),
+                "webStorage.write" => decodes!(web_storage::StorageWriteInput),
+                _ => {}
+            }
+        }
+        Ok(())
+    }
 }

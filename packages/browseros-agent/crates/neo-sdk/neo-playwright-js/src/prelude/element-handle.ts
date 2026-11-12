@@ -578,15 +578,24 @@ export class ElementHandle extends EventEmitter {
     if (!wire.type && options.path)
       wire.type = screenshotType({ api, path: options.path })
     const signal = signalOf(api, options)
-    const image = await invoke(
-      'page.screenshot',
+    const image = await send['page.screenshot'](
       site,
       { api, timeoutMs: timeoutMs(api, this.#timeout(options)) },
       {
         page: await this._page._brand(api),
         target: this._brand,
         strict: 'strict',
-        ...wire,
+        type: wire.type,
+        quality: wire.quality,
+        omitBackground: wire.omitBackground,
+        fullPage: wire.fullPage,
+        clip: wire.clip,
+        animations: wire.animations,
+        caret: wire.caret,
+        style: wire.style,
+        scale: wire.scale,
+        maskColor: wire.maskColor,
+        mask: wire.mask,
       },
       signal,
     )

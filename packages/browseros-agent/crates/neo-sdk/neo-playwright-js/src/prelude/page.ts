@@ -1,6 +1,4 @@
 import { type CallSite, captureSite, INTERNAL_SITE } from './call-site'
-import type { KeyList } from './upstream-check'
-import type { PickOptions } from './upstream-checks'
 /**
  * Playwright's Page over one tab.
  *
@@ -56,7 +54,7 @@ import {
   type WaitForSelectorOptions,
   type WaitHandle,
 } from './frame'
-import { send } from './generated'
+import { OPTION_KEYS, send } from './generated'
 import { addInitScript, type Disposable } from './init-script'
 import { Keyboard, Mouse } from './input'
 import type { FrameLocator, Locator } from './locator'
@@ -87,11 +85,11 @@ import type {
   NavigationPublication,
   NavigationResult,
   Observation,
-  OpInputs,
   PageBrand,
   PageFact,
   PageHandle,
   PageScript,
+  PdfOptions,
   WorkerInfo,
 } from './wire'
 import { Worker } from './worker'
@@ -106,23 +104,6 @@ export type MediaOptions = {
 }
 
 export type CloseOptions = { runBeforeUnload?: boolean; reason?: string }
-
-const PDF_KEYS = [
-  'scale',
-  'displayHeaderFooter',
-  'headerTemplate',
-  'footerTemplate',
-  'printBackground',
-  'landscape',
-  'pageRanges',
-  'format',
-  'width',
-  'height',
-  'preferCSSPageSize',
-  'margin',
-  'tagged',
-  'outline',
-] as const satisfies KeyList<PickOptions['page.pdf']>
 
 export class Page extends EventEmitter {
   /** The browser's tab id, which the page's brand carries; null until a fact or result names it. */
@@ -261,8 +242,7 @@ export class Page extends EventEmitter {
         )
     }
     const size = { width: viewportSize.width, height: viewportSize.height }
-    await invoke(
-      'page.setViewportSize',
+    await send['page.setViewportSize'](
       site,
       { api: 'page.setViewportSize', timeoutMs: 0 },
       { page: await this._brand('page.setViewportSize'), viewportSize: size },
@@ -737,8 +717,7 @@ export class Page extends EventEmitter {
   async requestGC(): Promise<void> {
     const site = captureSite()
     const api = 'page.requestGC'
-    await invoke(
-      'page.requestGC',
+    await send['page.requestGC'](
       site,
       { api, timeoutMs: 0 },
       { page: await this._brand(api) },
@@ -770,22 +749,34 @@ export class Page extends EventEmitter {
       reducedMotion: ['reduce', 'no-preference', 'no-override'],
       forcedColors: ['active', 'none', 'no-override'],
       contrast: ['no-preference', 'more', 'no-override'],
-    }
+    } as const
     const input: Partial<Record<keyof MediaOptions, string>> = {}
     for (const key of Object.keys(allowed) as (keyof MediaOptions)[]) {
       const value = options[key] === null ? 'no-override' : options[key]
       if (value === undefined) continue
-      if (typeof value !== 'string' || !allowed[key].includes(value))
+      if (
+        typeof value !== 'string' ||
+        !allowed[key].some((candidate) => candidate === value)
+      )
         throw clientError(
           api,
           `${key}: expected one of (${allowed[key].join('|')})`,
         )
       input[key] = value
     }
-    await invoke('page.emulateMedia', site, this._mainFrame._call(api, 0), {
+    await send['page.emulateMedia'](site, this._mainFrame._call(api, 0), {
       page: await this._brand(api),
-      // The per-key allowlist above proves this; Object.keys loses that key/value correlation.
-      ...(input as Omit<OpInputs['page.emulateMedia'], 'page'>),
+      media: allowed.media.find((value) => value === input.media),
+      colorScheme: allowed.colorScheme.find(
+        (value) => value === input.colorScheme,
+      ),
+      reducedMotion: allowed.reducedMotion.find(
+        (value) => value === input.reducedMotion,
+      ),
+      forcedColors: allowed.forcedColors.find(
+        (value) => value === input.forcedColors,
+      ),
+      contrast: allowed.contrast.find((value) => value === input.contrast),
     })
   }
 
@@ -992,9 +983,7 @@ export class Page extends EventEmitter {
   }
 
   /** upstream's client turns numeric sizes and margins into CSS pixel strings. */
-  async pdf(
-    options: Record<string, unknown> & { path?: string } = {},
-  ): Promise<unknown> {
+  async pdf(options: PdfOptions & { path?: string } = {}): Promise<unknown> {
     const site = captureSite()
     const api = 'page.pdf'
     if (options.path !== undefined)
@@ -1002,20 +991,35 @@ export class Page extends EventEmitter {
         api,
         'Neo returns the PDF instead of writing a file; omit path',
       )
-    const wire: Record<string, unknown> = pick(options, PDF_KEYS)
+    const wire = pick(options, OPTION_KEYS['page.pdf'])
     for (const size of ['width', 'height'] as const)
       if (typeof wire[size] === 'number') wire[size] = `${wire[size]}px`
     if (typeof wire.margin === 'object' && wire.margin !== null) {
-      const margin: Record<string, unknown> = { ...wire.margin }
-      for (const side of ['top', 'right', 'bottom', 'left'])
+      const margin = { ...wire.margin }
+      for (const side of ['top', 'right', 'bottom', 'left'] as const)
         if (typeof margin[side] === 'number') margin[side] = `${margin[side]}px`
       wire.margin = margin
     }
-    return await invoke(
-      'page.pdf',
+    return await send['page.pdf'](
       site,
       { api, timeoutMs: 0 },
-      { page: await this._brand(api), ...wire },
+      {
+        page: await this._brand(api),
+        scale: wire.scale,
+        displayHeaderFooter: wire.displayHeaderFooter,
+        headerTemplate: wire.headerTemplate,
+        footerTemplate: wire.footerTemplate,
+        printBackground: wire.printBackground,
+        landscape: wire.landscape,
+        pageRanges: wire.pageRanges,
+        format: wire.format,
+        width: wire.width,
+        height: wire.height,
+        preferCSSPageSize: wire.preferCSSPageSize,
+        margin: wire.margin,
+        tagged: wire.tagged,
+        outline: wire.outline,
+      },
     )
   }
 

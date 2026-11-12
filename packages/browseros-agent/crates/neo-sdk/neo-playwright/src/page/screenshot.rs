@@ -16,48 +16,63 @@ use crate::page::screenshot_preparation::ScreenshotPreparation;
 use crate::page::{OpPage, screenshot_document, screenshot_png};
 use crate::probe::Rect;
 
-use crate::op_output::{Bytes, to_output};
+use crate::op_output::Bytes;
 use crate::op_scope::OpScope;
 use crate::target::{PageRef, Strictness, Target};
 use crate::{ErrorCode, Playwright, PlaywrightError};
+use ts_rs::TS;
 
 /// Screenshot options cross the prelude flat; temporary rendering changes are restored
 /// before the bytes return, while core owns the pointer and pixel capture.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, TS)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub(crate) struct ScreenshotInput {
     page: PageRef,
+    /// Element capture is an addressing choice, not a script option.
     #[serde(default)]
-    animations: Animations,
-    #[serde(default)]
-    caret: Caret,
-    #[serde(default)]
-    style: Option<String>,
-    /// `locator.screenshot()` and `elementHandle.screenshot()`: the element to capture.
-    #[serde(default)]
+    #[ts(optional)]
     target: Option<Target>,
-    /// How `target` resolves; the prelude sends `strict`, as upstream's element screenshots are.
     #[serde(default, rename = "strict")]
+    #[ts(optional)]
     strict: Option<Strictness>,
-    #[serde(default)]
-    full_page: bool,
-    #[serde(default)]
-    clip: Option<Rect>,
-    #[serde(default)]
-    scale: Scale,
+    // Keep the client's original pick order: generated OPTION_KEYS follows these fields.
     #[serde(default, rename = "type")]
+    #[ts(optional, as = "Option<ImageType>")]
     image: ImageType,
-    #[serde(default)]
-    omit_background: bool,
     /// JPEG and WebP, 0 to 100.
     #[serde(default)]
+    #[ts(optional)]
     quality: Option<u8>,
-    /// Only caller-selected locators; unrelated page captures never inherit these overlays.
     #[serde(default)]
-    mask: Vec<MaskLocator>,
+    #[ts(optional, as = "Option<bool>")]
+    omit_background: bool,
     #[serde(default)]
+    #[ts(optional, as = "Option<bool>")]
+    full_page: bool,
+    #[serde(default)]
+    #[ts(optional, type = "import('../../../probe/protocol').Rect")]
+    clip: Option<Rect>,
+    #[serde(default)]
+    #[ts(optional, as = "Option<Animations>")]
+    animations: Animations,
+    #[serde(default)]
+    #[ts(optional, as = "Option<Caret>")]
+    caret: Caret,
+    #[serde(default)]
+    #[ts(optional)]
+    style: Option<String>,
+    #[serde(default)]
+    #[ts(optional, as = "Option<Scale>")]
+    scale: Scale,
+    #[serde(default)]
+    #[ts(optional)]
     mask_color: Option<String>,
+    /// Locator objects are converted to brands after the other options have been captured.
+    #[serde(default)]
+    #[ts(optional, as = "Option<Vec<MaskLocator>>")]
+    mask: Vec<MaskLocator>,
 }
+crate::wire::options!(ScreenshotInput, flat);
 
 impl ScreenshotInput {
     /// Validate before admission or any temporary rendering changes.
@@ -104,7 +119,7 @@ impl ScreenshotInput {
 }
 
 /// How screenshot preparation treats the document's animations.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, TS)]
 #[serde(rename_all = "lowercase")]
 enum Animations {
     #[default]
@@ -113,7 +128,7 @@ enum Animations {
 }
 
 /// Upstream hides the caret unless the caller explicitly asks for its initial behavior.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, TS)]
 #[serde(rename_all = "lowercase")]
 enum Caret {
     #[default]
@@ -122,7 +137,7 @@ enum Caret {
 }
 
 /// Playwright's screenshot formats; PNG and WebP support transparency.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, TS)]
 #[serde(rename_all = "lowercase")]
 enum ImageType {
     #[default]
@@ -136,7 +151,7 @@ pub(crate) async fn capture(
     pw: &Playwright,
     scope: &OpScope<'_>,
     input: ScreenshotInput,
-) -> Result<Value, PlaywrightError> {
+) -> Result<Bytes, PlaywrightError> {
     input.validate(scope)?;
     let format = match input.image {
         ImageType::Png => ScreenshotFormat::Png,
@@ -227,7 +242,7 @@ pub(crate) async fn capture(
         .within(Box::pin(capture))
         .await
         .map_err(|_expired| scope.timed_out(ErrorCode::WaitTimeout))??;
-    to_output(scope, &Bytes::from_base64(data))
+    Ok(Bytes::from_base64(data))
 }
 
 /// Core owns admission and capture serialization; this layer supplies Playwright's geometry.

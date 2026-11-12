@@ -2,10 +2,10 @@
  * Screenshot client work around capture: infer the format first, then persist the returned
  * bytes. Saving is a separate targetless write so capture remains readable during takeover.
  */
-import { invoke } from './bridge'
 import type { CallSite } from './call-site'
 import { decode } from './encodings'
 import { plainError } from './errors'
+import { send } from './generated'
 import type { SignalLike } from './signal'
 import { getMimeTypeForPath } from './vendored'
 import type { ScreenshotOptions } from './wire'
@@ -43,8 +43,7 @@ export async function saveScreenshot({
   if (!path) return
   // Upstream writes after the channel's capture timeout has ended. This step keeps the
   // run budget and cancellation, without starting another screenshot timeout for disk I/O.
-  await invoke(
-    'page.saveScreenshot',
+  await send['page.saveScreenshot'](
     site,
     { api, timeoutMs: 0 },
     { path, base64: decode(bytes, 'base64') },

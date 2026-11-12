@@ -3,11 +3,31 @@
 // route row in Rust, then run `cargo test -p neo-playwright --test wire_generated`, which
 // rewrites this folder.
 
+import type * as pw from '../../../../neo-playwright/third_party/playwright/packages/playwright-core/src/client/channels'
+import { invoke } from '../bridge'
+import type { CallSite } from '../call-site'
+import type { SignalLike } from '../signal'
+import type { Assert, UpstreamCheck, VoidIsNull } from '../upstream-check'
+import type { CallHeader } from '../wire'
+import type { ContextNoArgs } from './types/ContextNoArgs'
+import type { ContextPageEntry } from './types/ContextPageEntry'
+import type { ContextPages } from './types/ContextPages'
+
+export type { ContextNoArgs } from './types/ContextNoArgs'
+export type { ContextPageEntry } from './types/ContextPageEntry'
+export type { ContextPages } from './types/ContextPages'
+
 /** Each context op's input, after the `call` header every op shares. */
-export type ContextInputs = {}
+export type ContextInputs = {
+  'context.pages': ContextNoArgs
+  'context.newPage': ContextNoArgs
+}
 
 /** Each context op's result. */
-export type ContextOutputs = {}
+export type ContextOutputs = {
+  'context.pages': ContextPages
+  'context.newPage': ContextPageEntry
+}
 
 /**
  * The script's option keys of each context op that takes an `options` bag: the fields of its
@@ -20,4 +40,24 @@ export const CONTEXT_OPTION_KEYS = {} as const
  * One typed sender per context op. A class passes its input as an object literal, so every
  * field is checked against Rust's input type and the result is Rust's result type.
  */
-export const CONTEXT_SEND = {}
+export const CONTEXT_SEND = {
+  'context.pages': (
+    site: CallSite,
+    call: CallHeader,
+    input: ContextNoArgs,
+    signal?: SignalLike,
+  ): Promise<ContextPages> => invoke('context.pages', site, call, input, signal),
+  'context.newPage': (
+    site: CallSite,
+    call: CallHeader,
+    input: ContextNoArgs,
+    signal?: SignalLike,
+  ): Promise<ContextPageEntry> => invoke('context.newPage', site, call, input, signal),
+}
+
+// Each route row against Playwright's own protocol at the pin (upstream-check.ts): tsc
+// names the op and every key that differs without a reason, or whose reason went stale.
+// context.pages: Neo only: Neo lists live tabs instead of upstream's client-side page objects
+// context.newPage: BrowserContext.newPage
+type _context_newPage = Assert<UpstreamCheck<'context.newPage', ContextNoArgs, pw.BrowserContextNewPageParams, never, never, never>>
+type _context_newPage_result = Assert<VoidIsNull<'context.newPage', pw.BrowserContextNewPageResult, ContextPageEntry>>
