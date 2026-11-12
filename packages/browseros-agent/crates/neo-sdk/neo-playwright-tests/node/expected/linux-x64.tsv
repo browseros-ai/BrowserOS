@@ -29,6 +29,7 @@ LO-114	fail	tests/page/locator-highlight.spec.ts	should highlight locator
 LO-142	fail	tests/page/locator-misc-2.spec.ts	should scroll zero-sized element into view
 LO-182	fail	tests/page/locator-query.spec.ts	count() should not throw during navigation
 LO-167	skip	tests/page/locator-query.spec.ts	should filter by regex with a single quote
+LH-001	fail	tests/page/page-add-locator-handler.spec.ts	should work
 AR-021	skip	tests/page/page-aria-snapshot.spec.ts	check aria-hidden text
 AR-036	skip	tests/page/page-aria-snapshot.spec.ts	match values both against regex and string
 AR-006	skip	tests/page/page-aria-snapshot.spec.ts	should allow text nodes
