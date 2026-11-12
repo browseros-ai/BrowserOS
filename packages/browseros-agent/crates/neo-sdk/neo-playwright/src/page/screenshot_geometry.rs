@@ -8,6 +8,7 @@ use std::time::Duration;
 use browseros_core::screenshot::Viewport;
 use serde::Deserialize;
 use serde_json::{Value, json};
+use ts_rs::TS;
 
 use crate::action::ElementRunner;
 use crate::op_scope::OpScope;
@@ -53,7 +54,7 @@ struct VisualViewport {
 }
 
 /// How image pixels relate to CSS pixels, independently of the captured rectangle.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, TS)]
 #[serde(rename_all = "lowercase")]
 pub(super) enum Scale {
     Css,

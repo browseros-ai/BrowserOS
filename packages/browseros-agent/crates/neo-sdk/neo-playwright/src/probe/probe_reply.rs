@@ -269,8 +269,9 @@ pub(crate) struct Point {
 }
 
 /// A rect in one frame's CSS pixels.
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize, ts_rs::TS)]
 #[serde(deny_unknown_fields)]
+#[ts(type = "import('../../../probe/protocol').Rect")]
 pub(crate) struct Rect {
     pub(crate) x: f64,
     pub(crate) y: f64,

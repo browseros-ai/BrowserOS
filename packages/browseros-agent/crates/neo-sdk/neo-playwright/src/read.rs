@@ -17,6 +17,8 @@
 mod element_handle;
 mod element_read;
 mod element_wait;
+#[cfg(test)]
+mod legacy_tests;
 mod normalize;
 pub(crate) mod read_op;
 mod selector_wait;

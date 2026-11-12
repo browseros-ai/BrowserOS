@@ -99,9 +99,10 @@ impl Op {
             OpKind::Expect(op) => op.wire(),
             OpKind::Page(op) => op.wire(),
             OpKind::Input(op) => op.wire(),
-            OpKind::Read(_) | OpKind::Context(_) | OpKind::Event(_) | OpKind::LocatorHandler(_) => {
-                None
-            }
+            OpKind::Read(op) => op.wire(),
+            OpKind::Context(op) => op.wire(),
+            OpKind::LocatorHandler(op) => op.wire(),
+            OpKind::Event(_) => None,
         }
     }
 

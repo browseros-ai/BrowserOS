@@ -14,8 +14,8 @@ use crate::probe::{ProbeReply, ProbeRequest, ProbeTarget, Read};
 use crate::read::element_handle::{self, Located};
 use crate::read::element_read;
 use crate::resolve::{Landed, Resolver};
-use crate::target::{LocatorTarget, Strictness};
-use crate::{ErrorCode, Playwright, PlaywrightError};
+use crate::target::{LocatorTarget, RootHandle, Strictness};
+use crate::{ErrorCode, Playwright, PlaywrightError, op_output};
 
 /// What a selector wait waits for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -72,6 +72,23 @@ impl SelectorState {
     }
 }
 
+/// Temporary JSON boundary for `page/element_evaluate.rs` and
+/// `page/screenshot_geometry.rs`. It goes away when the page families (PRs 12 and 13) use
+/// the typed core; Read handlers call `wait_for_match` directly.
+pub(crate) async fn wait_for_selector(
+    pw: &Playwright,
+    scope: &OpScope<'_>,
+    target: &LocatorTarget,
+    strict: Strictness,
+    state: SelectorState,
+    returning: Returning,
+) -> Result<Value, PlaywrightError> {
+    op_output::to_output(
+        scope,
+        &wait_for_match(pw, scope, target, strict, state, returning).await?,
+    )
+}
+
 /// Waits until `target`'s first match (the only one under `strict`) is in `state`, on the outer
 /// backoff, logging `waiting for <locator> to be <state>` and each poll's `locator resolved to
 /// visible <preview>`. No element, or a frame on the way that is not there, meets `detached`
@@ -81,14 +98,14 @@ impl SelectorState {
 ///
 /// The timeout covers every await of the op, admission and making the handle after a poll
 /// matched included, so a busy renderer cannot keep the op past its deadline.
-pub(crate) async fn wait_for_selector(
+pub(crate) async fn wait_for_match(
     pw: &Playwright,
     scope: &OpScope<'_>,
     target: &LocatorTarget,
     strict: Strictness,
     state: SelectorState,
     returning: Returning,
-) -> Result<Value, PlaywrightError> {
+) -> Result<Option<RootHandle>, PlaywrightError> {
     // Outside the polls, so the timeout error still knows whether any poll matched.
     let matched = AtomicBool::new(false);
     // Boxed: every op's future is one variant of `Playwright::invoke`'s, which a host awaits.
@@ -122,7 +139,7 @@ pub(crate) async fn wait_hidden(
         .map(drop)
 }
 
-/// [`wait_for_selector`]'s polls, which its deadline drops wherever they are. `matched` is set
+/// [`wait_for_match`]'s polls, which its deadline drops wherever they are. `matched` is set
 /// once a poll found an element.
 async fn poll_selector(
     pw: &Playwright,
@@ -132,7 +149,7 @@ async fn poll_selector(
     state: SelectorState,
     returning: Returning,
     matched: &AtomicBool,
-) -> Result<Value, PlaywrightError> {
+) -> Result<Option<RootHandle>, PlaywrightError> {
     let page = OpPage::admit_handle(pw, scope, &target.page).await?;
     scope.log(format!("waiting for {}{}", target.display, state.suffix()));
     let polls = Polls {
@@ -161,7 +178,7 @@ impl Polls {
         page: &OpPage<'_>,
         target: &LocatorTarget,
         matched: &AtomicBool,
-    ) -> Result<Value, PlaywrightError> {
+    ) -> Result<Option<RootHandle>, PlaywrightError> {
         let Self {
             strict,
             state,
@@ -190,13 +207,13 @@ impl Polls {
                     if state.met_without_element()
                         && error.error_code() == Some(ErrorCode::ElementDetached) =>
                 {
-                    return Ok(Value::Null);
+                    return Ok(None);
                 }
                 Err(error) => return Err(error),
             };
             let Some(Landed { reply, world, .. }) = landed else {
                 if state.met_without_element() {
-                    return Ok(Value::Null);
+                    return Ok(None);
                 }
                 continue;
             };
@@ -206,13 +223,13 @@ impl Polls {
                 }
                 ProbeReply::None { stale_ref: None } | ProbeReply::Detached => {
                     if state.met_without_element() {
-                        return Ok(Value::Null);
+                        return Ok(None);
                     }
                     continue;
                 }
                 // A ref that can never match again: gone is what these two wait for.
                 ProbeReply::None { stale_ref: Some(_) } if state.met_without_element() => {
-                    return Ok(Value::Null);
+                    return Ok(None);
                 }
                 other => return Err(resolver.refused(other)),
             };
@@ -223,7 +240,7 @@ impl Polls {
             }
             let hands_out = matches!(state, SelectorState::Attached | SelectorState::Visible);
             if returning == Returning::Nothing || !hands_out {
-                return Ok(Value::Null);
+                return Ok(None);
             }
             // Upstream polls again when the element went before its handle was made.
             if let Some(brand) = element_handle::element_brand(
@@ -235,7 +252,7 @@ impl Polls {
             )
             .await?
             {
-                return Ok(brand);
+                return Ok(Some(brand));
             }
         }
         Err(scope.timed_out(state.timed_out(matched.load(Ordering::Relaxed))))

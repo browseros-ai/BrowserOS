@@ -5,11 +5,12 @@
 use std::io;
 use std::path::{self, Path};
 
+use crate::wire::{Nothing, options};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use serde::Deserialize;
-use serde_json::Value;
 use tokio::fs;
+use ts_rs::TS;
 
 use crate::op_scope::{OpScope, Sent};
 use crate::op_spec::{OpSpec, OpTarget};
@@ -23,18 +24,20 @@ pub(crate) const SPEC: OpSpec = OpSpec::write(
 );
 
 /// The bytes already returned to the client, with its chosen destination.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, TS)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct SaveScreenshotInput {
     path: String,
     base64: String,
 }
 
+options!(SaveScreenshotInput);
+
 /// Save the captured bytes, making parent directories as Playwright's client does.
 pub(crate) async fn save(
     scope: &OpScope<'_>,
     input: SaveScreenshotInput,
-) -> Result<Value, PlaywrightError> {
+) -> Result<Nothing, PlaywrightError> {
     let bytes = STANDARD.decode(&input.base64).map_err(|error| {
         scope.fail(
             ErrorCode::InvalidInput,
@@ -63,7 +66,7 @@ pub(crate) async fn save(
                 ),
             )
         })?;
-    Ok(Value::Null)
+    Ok(())
 }
 
 async fn write_to(_sent: &Sent<'_>, target: &Path, bytes: &[u8]) -> io::Result<()> {
@@ -80,7 +83,6 @@ mod tests {
     use std::path::Path;
 
     use neo_trace::{Effect, ErrorOwner};
-    use serde_json::Value;
     use tokio::fs;
 
     use super::{SPEC, SaveScreenshotInput, save};
@@ -106,7 +108,7 @@ mod tests {
         let op = Op::from_name("page.saveScreenshot").ok_or("save op exists")?;
         let scope = OpScope::new(&env, op, CallHeader::default());
         for _ in 0..2 {
-            assert_eq!(save(&scope, input(&target)).await?, Value::Null);
+            save(&scope, input(&target)).await?;
             assert_eq!(fs::read(&target).await?, b"\x89PNG\r\n\x1a\n");
             fs::write(&target, b"previous file contents").await?;
         }

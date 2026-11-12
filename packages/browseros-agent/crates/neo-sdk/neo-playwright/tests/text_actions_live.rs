@@ -135,26 +135,12 @@ async fn tests_that_actions_on_an_element_handle_reach_its_node_and_fail_once_it
     let twice = handle_of(&run, &at(&page, "#twice")).await?;
     let field = handle_of(&run, &at(&page, "#field")).await?;
     let label = handle_of(&run, &at(&page, "#agree-label")).await?;
-    act(&run, "locator.click", &go, json!({ "options": {} }), 0).await?;
-    act(
-        &run,
-        "locator.dblclick",
-        &twice,
-        json!({ "options": {} }),
-        0,
-    )
-    .await?;
+    act(&run, "locator.click", &go, json!({}), 0).await?;
+    act(&run, "locator.dblclick", &twice, json!({}), 0).await?;
     act(&run, "locator.focus", &field, json!({}), 0).await?;
     // `label.$('input')` then `check()`: a locator rooted at the label's node.
     let agree = under(&label, &page, "input")?;
-    act(
-        &run,
-        "locator.check",
-        &agree,
-        json!({ "options": {} }),
-        5000,
-    )
-    .await?;
+    act(&run, "locator.check", &agree, json!({}), 5000).await?;
     let log = page_log(&run, &page).await?;
     for expected in [
         "click go visible",
@@ -177,7 +163,7 @@ async fn tests_that_actions_on_an_element_handle_reach_its_node_and_fail_once_it
     run.eval(&page, "document.getElementById('go').remove()")
         .await?;
     let started = Instant::now();
-    let gone = act(&run, "locator.click", &go, json!({ "options": {} }), 5000)
+    let gone = act(&run, "locator.click", &go, json!({}), 5000)
         .await
         .err()
         .ok_or("a handle whose node left the page cannot be clicked")?;

@@ -14,14 +14,6 @@
 //! .locator('tr').filter({ has: frameLocator('#f').getByText('Dana') })`). A chunk string
 //! parsed on its own keeps the prefix, and its nested `enter-frame` then never matches.
 
-#![cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the resolver and the families decode their targets with these"
-    )
-)]
-
 use std::{fmt, iter};
 
 use browseros_core::{FrameId, TabId};
@@ -114,7 +106,7 @@ impl LocatorTarget {
 }
 
 /// The handle a query is rooted at, with its `$neo` tag, which must say `element`.
-#[derive(Clone, Debug, Deserialize, TS)]
+#[derive(Clone, Debug, Deserialize, Serialize, TS)]
 #[serde(tag = "$neo", rename_all = "lowercase")]
 #[ts(rename = "ElementBrand")]
 pub(crate) enum RootHandle {
@@ -124,18 +116,20 @@ pub(crate) enum RootHandle {
 /// `{"$neo":"element","page":{"$neo":"page","tab":1234},"seq":4,"node":1234,
 /// "display":"<button>Save</button>"}`. Once document `seq` is gone, the handle is detached for
 /// good.
-#[derive(Clone, Debug, Deserialize, TS)]
+#[derive(Clone, Debug, Deserialize, Serialize, TS)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct ElementTarget {
+    // Results leave through `to_output`, whose `to_value` sorts keys. Keep these fields in
+    // the same readable order, while the byte test pins that actual output boundary.
+    /// Playwright's preview of the element, for messages.
+    pub(crate) display: String,
+    pub(crate) node: BackendNodeId,
     /// The page the element was pinned on.
     // An element is already pinned to an opened page; unlike locator inputs its page can
     // never be the lazy null brand. Reuse the output-side page type for this stronger promise.
     #[ts(as = "crate::page::PageHandle")]
     pub(crate) page: PageRef,
     pub(crate) seq: FrameSeq,
-    pub(crate) node: BackendNodeId,
-    /// Playwright's preview of the element, for messages.
-    pub(crate) display: String,
 }
 
 impl ElementTarget {
@@ -338,7 +332,11 @@ mod tests {
     use browseros_core::{FrameId, TabId};
     use serde_json::{Value, json};
 
-    use super::{AriaRefJump, CallHeader, Chunk, PageRef, Strictness, Target};
+    use super::{AriaRefJump, CallHeader, Chunk, PageRef, RootHandle, Strictness, Target};
+    use crate::Op;
+    use crate::op_output::to_output;
+    use crate::op_scope::OpScope;
+    use crate::test_env::TestEnv;
     use crate::world::{BackendNodeId, FrameSeq};
 
     /// A chunk whose first part is `name=body`, shaped as the vendored `parseSelector` emits it.
@@ -348,6 +346,18 @@ mod tests {
 
     fn jump(value: Value) -> Result<Option<AriaRefJump>, serde_json::Error> {
         serde_json::from_value::<Chunk>(value).map(|chunk| chunk.jump)
+    }
+
+    #[tokio::test]
+    async fn tests_that_an_element_brand_keeps_the_old_sorted_reply_bytes()
+    -> Result<(), Box<dyn Error>> {
+        let old = r#"{"$neo":"element","display":"<button>Go</button>","node":1,"page":{"$neo":"page","tab":7},"seq":4}"#;
+        let brand: RootHandle = serde_json::from_str(old)?;
+        let env = TestEnv::new();
+        let op = Op::from_name("locator.elementHandle").ok_or("element handle op")?;
+        let scope = OpScope::new(&env, op, CallHeader::default());
+        assert_eq!(to_output(&scope, &brand)?.to_string(), old);
+        Ok(())
     }
 
     #[test]

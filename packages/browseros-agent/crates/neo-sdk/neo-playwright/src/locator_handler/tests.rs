@@ -1,11 +1,119 @@
 use std::error::Error;
 use std::time::Duration;
 
-use serde_json::json;
+use serde::Deserialize;
+use serde_json::{Value, json};
 use tokio::{task, time};
 
-use super::LocatorHandlers;
+use super::{AddInput, LocatorHandlers, ResolveInput};
+use crate::op::{Op, OpKind};
+use crate::op_input::OpInput;
+use crate::op_scope::OpScope;
 use crate::target::LocatorTarget;
+use crate::test_env::{self, TestEnv};
+use crate::{ErrorCode, Playwright};
+
+/// The JS oracle records reply order: a pending pull can finish before remove's reply, even
+/// though remove already unregistered it. Reproduce that registry state before each pull.
+#[tokio::test]
+async fn tests_that_handler_routes_keep_the_recorded_input_and_reply_bytes()
+-> Result<(), Box<dyn Error>> {
+    #[derive(Deserialize)]
+    struct Fixture {
+        scenarios: Vec<Scenario>,
+    }
+    #[derive(Deserialize)]
+    struct Scenario {
+        exchanges: Vec<Exchange>,
+    }
+    #[derive(Deserialize)]
+    struct Exchange {
+        op: String,
+        args: String,
+        reply: String,
+    }
+    let fixture: Fixture =
+        serde_json::from_str(include_str!("../../tests/data/locator-handler-wire.json"))?;
+    for scenario in fixture.scenarios {
+        let env = TestEnv::new();
+        let pw = Playwright::new(test_env::offline_session());
+        for exchange in scenario.exchanges {
+            let op = Op::from_name(&exchange.op).ok_or("recorded op is registered")?;
+            let OpInput { call, args } =
+                OpInput::decode(op, serde_json::from_str(&exchange.args)?)?;
+            let scope = OpScope::new(&env, op, call);
+            let expected: Value = serde_json::from_str(&exchange.reply)?;
+            let expected = &expected["ok"];
+            let handlers = &scope.run_state().locator_handlers;
+            if exchange.op == "page.locatorHandlerTriggered" {
+                if let Some(uid) = expected["uid"].as_u64() {
+                    let _running = handlers.trigger(uid).ok_or("registered handler")?;
+                } else {
+                    handlers.unregister(1);
+                }
+            }
+            let actual = super::invoke(
+                &pw,
+                &scope,
+                match op.kind() {
+                    OpKind::LocatorHandler(op) => op,
+                    _ => return Err("fixture must contain only handler ops".into()),
+                },
+                args,
+            )
+            .await?;
+            assert_eq!(
+                serde_json::to_string(&actual)?,
+                serde_json::to_string(expected)?
+            );
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn tests_that_defaulted_flags_keep_rejecting_explicit_null() -> Result<(), Box<dyn Error>> {
+    let target = json!({
+        "$neo": "locator", "page": { "$neo": "page", "tab": 1 },
+        "chunks": [{ "parts": [{ "name": "css", "body": "#overlay", "source": "#overlay" }] }],
+        "display": "locator('#overlay')"
+    });
+    let _: AddInput = serde_json::from_value(json!({ "target": target }))?;
+    assert!(
+        serde_json::from_value::<AddInput>(json!({
+            "target": target, "noWaitAfter": null
+        }))
+        .is_err()
+    );
+    let _: ResolveInput = serde_json::from_value(json!({ "uid": 1 }))?;
+    assert!(serde_json::from_value::<ResolveInput>(json!({ "uid": 1, "remove": null })).is_err());
+    Ok(())
+}
+
+#[tokio::test]
+async fn tests_that_add_keeps_its_element_handle_refusal() -> Result<(), Box<dyn Error>> {
+    let env = TestEnv::new();
+    let pw = Playwright::new(test_env::offline_session());
+    let op = Op::from_name("page.addLocatorHandler").ok_or("registered")?;
+    let OpInput { call, args } = OpInput::decode(
+        op,
+        json!({
+            "target": { "$neo": "element", "page": { "$neo": "page", "tab": 1 },
+                "seq": 1, "node": 1, "display": "<div>" }
+        }),
+    )?;
+    let scope = OpScope::new(&env, op, call);
+    let error = super::invoke(&pw, &scope, super::LocatorHandlerOp::Add, args)
+        .await
+        .err()
+        .ok_or("handles must fail")?;
+    assert_eq!(error.error_code(), Some(ErrorCode::InvalidInput));
+    assert_eq!(
+        error.message(),
+        "page.addLocatorHandler: target: a locator handler takes a locator, not an element handle"
+    );
+    Ok(())
+}
 
 /// `page.locator('#overlay')` on tab `tab`, as the prelude sends it.
 fn overlay(tab: i64) -> Result<LocatorTarget, serde_json::Error> {

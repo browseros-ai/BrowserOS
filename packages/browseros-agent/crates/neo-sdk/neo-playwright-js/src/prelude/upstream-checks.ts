@@ -6,12 +6,7 @@
 import type * as pw from '../../../neo-playwright/third_party/playwright/packages/playwright-core/src/client/channels'
 import type { GeneratedInputs } from './generated'
 import type { OpName } from './generated/ops'
-import type {
-  FILL_KEYS,
-  PRESS_KEYS,
-  SCREENSHOT_KEYS,
-  TYPE_KEYS,
-} from './options'
+import type { FILL_KEYS, PRESS_KEYS, TYPE_KEYS } from './options'
 import type { Assert, KeysCheck, UpstreamCheck } from './upstream-check'
 import type { OpInputs } from './wire'
 
@@ -134,221 +129,9 @@ export type UpstreamChecks = {
       never
     >
   >
-  'locator.textContent': Assert<
-    UpstreamCheck<
-      'locator.textContent',
-      OpInputs['locator.textContent'],
-      pw.ElementHandleTextContentParams,
-      never,
-      never,
-      never
-    >
-  >
-  'locator.innerText': Assert<
-    UpstreamCheck<
-      'locator.innerText',
-      OpInputs['locator.innerText'],
-      pw.ElementHandleInnerTextParams,
-      never,
-      never,
-      never
-    >
-  >
-  'locator.innerHTML': Assert<
-    UpstreamCheck<
-      'locator.innerHTML',
-      OpInputs['locator.innerHTML'],
-      pw.ElementHandleInnerHTMLParams,
-      never,
-      never,
-      never
-    >
-  >
-  'locator.getAttribute': Assert<
-    UpstreamCheck<
-      'locator.getAttribute',
-      OpInputs['locator.getAttribute'],
-      pw.ElementHandleGetAttributeParams,
-      never,
-      never,
-      never
-    >
-  >
-  'locator.inputValue': Assert<
-    UpstreamCheck<
-      'locator.inputValue',
-      OpInputs['locator.inputValue'],
-      pw.ElementHandleInputValueParams,
-      never,
-      never,
-      never
-    >
-  >
-  'locator.isEnabled': Assert<
-    UpstreamCheck<
-      'locator.isEnabled',
-      OpInputs['locator.isEnabled'],
-      pw.ElementHandleIsEnabledParams,
-      never,
-      never,
-      never
-    >
-  >
-  'locator.isDisabled': Assert<
-    UpstreamCheck<
-      'locator.isDisabled',
-      OpInputs['locator.isDisabled'],
-      pw.ElementHandleIsDisabledParams,
-      never,
-      never,
-      never
-    >
-  >
-  'locator.isEditable': Assert<
-    UpstreamCheck<
-      'locator.isEditable',
-      OpInputs['locator.isEditable'],
-      pw.ElementHandleIsEditableParams,
-      never,
-      never,
-      never
-    >
-  >
-  'locator.isChecked': Assert<
-    UpstreamCheck<
-      'locator.isChecked',
-      OpInputs['locator.isChecked'],
-      pw.ElementHandleIsCheckedParams,
-      never,
-      never,
-      never
-    >
-  >
-  'locator.isVisible': Assert<
-    UpstreamCheck<
-      'locator.isVisible',
-      OpInputs['locator.isVisible'],
-      pw.ElementHandleIsVisibleParams,
-      never,
-      never,
-      never
-    >
-  >
-  'locator.isHidden': Assert<
-    UpstreamCheck<
-      'locator.isHidden',
-      OpInputs['locator.isHidden'],
-      pw.ElementHandleIsHiddenParams,
-      never,
-      never,
-      never
-    >
-  >
-  'locator.count': Assert<
-    UpstreamCheck<
-      'locator.count',
-      OpInputs['locator.count'],
-      pw.FrameQueryCountParams,
-      never,
-      never,
-      never
-    >
-  >
   // Neo carries the original selector for diagnostics after brand resolution; it always formats JavaScript, without sdkLanguage.
-  'locator.normalize': Assert<
-    UpstreamCheck<
-      'locator.normalize',
-      OpInputs['locator.normalize'],
-      pw.FrameResolveSelectorParams,
-      'selector',
-      'sdkLanguage',
-      never
-    >
-  >
-  'locator.boundingBox': Assert<
-    UpstreamCheck<
-      'locator.boundingBox',
-      OpInputs['locator.boundingBox'],
-      pw.ElementHandleBoundingBoxParams,
-      never,
-      never,
-      never
-    >
-  >
   // This op also serves waitForElementState, so state includes stable/enabled/disabled/editable.
-  'locator.waitFor': Assert<
-    UpstreamCheck<
-      'locator.waitFor',
-      OpInputs['locator.waitFor'],
-      pw.FrameWaitForSelectorParams,
-      never,
-      never,
-      'state'
-    >
-  >
   // noWait selects the immediate page.$ query instead of the locator wait.
-  'locator.elementHandle': Assert<
-    UpstreamCheck<
-      'locator.elementHandle',
-      OpInputs['locator.elementHandle'],
-      pw.FrameQuerySelectorParams,
-      'noWait',
-      never,
-      never
-    >
-  >
-  'locator.elementHandles': Assert<
-    UpstreamCheck<
-      'locator.elementHandles',
-      OpInputs['locator.elementHandles'],
-      pw.FrameQuerySelectorAllParams,
-      never,
-      never,
-      never
-    >
-  >
-  'page.requestGC': Assert<
-    UpstreamCheck<
-      'page.requestGC',
-      OpInputs['page.requestGC'],
-      pw.PageRequestGCParams,
-      never,
-      never,
-      never
-    >
-  >
-  'page.emulateMedia': Assert<
-    UpstreamCheck<
-      'page.emulateMedia',
-      OpInputs['page.emulateMedia'],
-      pw.PageEmulateMediaParams,
-      never,
-      never,
-      never
-    >
-  >
-  // path is read on the Neo host rather than by an upstream client before sending content.
-  'page.addScriptTag': Assert<
-    UpstreamCheck<
-      'page.addScriptTag',
-      OpInputs['page.addScriptTag'],
-      pw.FrameAddScriptTagParams,
-      'path',
-      never,
-      never
-    >
-  >
-  // path is read on the Neo host rather than by an upstream client before sending content.
-  'page.addStyleTag': Assert<
-    UpstreamCheck<
-      'page.addStyleTag',
-      OpInputs['page.addStyleTag'],
-      pw.FrameAddStyleTagParams,
-      'path',
-      never,
-      never
-    >
-  >
   // worker selects a host-owned worker; script wraps normalized expression/argument or a preflight refusal.
   'worker.evaluate': Assert<
     UpstreamCheck<
@@ -404,38 +187,6 @@ export type UpstreamChecks = {
       never
     >
   >
-  // Masks travel as locator brands rather than upstream frame channel/selector pairs.
-  'page.screenshot': Assert<
-    UpstreamCheck<
-      'page.screenshot',
-      OpInputs['page.screenshot'],
-      pw.PageScreenshotParams,
-      never,
-      never,
-      'mask'
-    >
-  >
-  // Rust also accepts numeric pixel lengths; upstream's protocol only accepts the client's normalized strings.
-  'page.pdf': Assert<
-    UpstreamCheck<
-      'page.pdf',
-      OpInputs['page.pdf'],
-      pw.PagePdfParams,
-      never,
-      never,
-      'width' | 'height' | 'margin'
-    >
-  >
-  'page.setViewportSize': Assert<
-    UpstreamCheck<
-      'page.setViewportSize',
-      OpInputs['page.setViewportSize'],
-      pw.PageSetViewportSizeParams,
-      never,
-      never,
-      never
-    >
-  >
   // script is source or a path read on the Neo host, replacing upstream source.
   'page.addInitScript': Assert<
     UpstreamCheck<
@@ -465,68 +216,6 @@ export type UpstreamChecks = {
       pw.BindingCallResolveParams,
       'arg' | 'context',
       'result',
-      never
-    >
-  >
-  // One Neo op handles getItem and items; name is only required for getItem.
-  'webStorage.read': Assert<
-    UpstreamCheck<
-      'webStorage.read',
-      OpInputs['webStorage.read'],
-      pw.PageWebStorageGetItemParams,
-      'action',
-      never,
-      'name'
-    >
-  >
-  // One Neo op handles setItem, removeItem and clear; name/value are only needed by those actions.
-  'webStorage.write': Assert<
-    UpstreamCheck<
-      'webStorage.write',
-      OpInputs['webStorage.write'],
-      pw.PageWebStorageSetItemParams,
-      'action',
-      never,
-      'name' | 'value'
-    >
-  >
-  'page.addLocatorHandler': Assert<
-    UpstreamCheck<
-      'page.addLocatorHandler',
-      OpInputs['page.addLocatorHandler'],
-      pw.PageRegisterLocatorHandlerParams,
-      never,
-      never,
-      never
-    >
-  >
-  'page.removeLocatorHandler': Assert<
-    UpstreamCheck<
-      'page.removeLocatorHandler',
-      OpInputs['page.removeLocatorHandler'],
-      pw.PageUnregisterLocatorHandlerParams,
-      never,
-      never,
-      never
-    >
-  >
-  'page.resolveLocatorHandler': Assert<
-    UpstreamCheck<
-      'page.resolveLocatorHandler',
-      OpInputs['page.resolveLocatorHandler'],
-      pw.PageResolveLocatorHandlerNoReplyParams,
-      never,
-      never,
-      never
-    >
-  >
-  'context.newPage': Assert<
-    UpstreamCheck<
-      'context.newPage',
-      OpInputs['context.newPage'],
-      pw.BrowserContextNewPageParams,
-      never,
-      never,
       never
     >
   >
@@ -599,12 +288,7 @@ export type UpstreamChecks = {
 
 /** Ops implemented as client work, an event pump, or several upstream commands together. */
 type NeoOnlyOps = {
-  'locator.allTextContents': 'Upstream evaluates all matches in the client; Neo performs a probe read.'
-  'locator.allInnerTexts': 'Upstream evaluates all matches in the client; Neo performs a probe read.'
   'locator.waitForFunction': 'Neo probes the element predicate; upstream composes evaluation and waiting.'
-  'page.saveScreenshot': 'Host-side file write after capture; upstream performs this in its client.'
-  'page.locatorHandlerTriggered': 'Neo background pull replacing upstream locatorHandlerTriggered events.'
-  'context.pages': 'Neo lists live tabs instead of upstream client-side page objects.'
   'disposable.dispose': 'Neo disposes a host-owned registration rather than a channel object.'
   'events.listen': 'Neo run-scoped listener bookkeeping, including cleanup after a tab closes.'
   'events.next': 'Neo background event pump, with one cursor per listener.'
@@ -657,13 +341,6 @@ export type OptionChecks = {
       'locator.pressSequentially',
       (typeof TYPE_KEYS)[number],
       pw.ElementHandleTypeOptions
-    >
-  >
-  'page.screenshot': Assert<
-    KeysCheck<
-      'page.screenshot',
-      (typeof SCREENSHOT_KEYS)[number],
-      pw.PageScreenshotOptions
     >
   >
 }

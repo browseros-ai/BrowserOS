@@ -74,7 +74,6 @@ describe('locator targets', () => {
             display: "getByRole('button', { name: 'Sign in' })",
           },
           strict: 'strict',
-          options: {},
         },
       },
     ])
@@ -186,11 +185,14 @@ describe('locator targets', () => {
       ].join('\n'),
     )
     expect(
-      runtime.calls.map((call) => [call.name, call.input.options]),
+      runtime.calls.map(({ name, input }) => {
+        const { call: _call, target: _target, strict: _strict, ...args } = input
+        return [name, args]
+      }),
     ).toEqual([
       ['locator.dblclick', { button: 'right' }],
       ['locator.check', { force: true }],
-      ['locator.press', { delay: 10 }],
+      ['locator.press', { key: 'Control+A', options: { delay: 10 } }],
     ])
     expect(runtime.calls[1]?.input.call).toEqual({
       api: 'locator.check',

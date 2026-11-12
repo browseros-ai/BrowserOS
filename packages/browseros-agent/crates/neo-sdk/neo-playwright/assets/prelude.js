@@ -1080,18 +1080,6 @@
   var FILL_KEYS = ["force"];
   var PRESS_KEYS = ["delay", "noWaitAfter"];
   var TYPE_KEYS = ["delay"];
-  var SCREENSHOT_KEYS = [
-    "type",
-    "quality",
-    "omitBackground",
-    "fullPage",
-    "clip",
-    "animations",
-    "caret",
-    "style",
-    "scale",
-    "maskColor"
-  ];
   var handles = new WeakSet;
   function markHandle(object) {
     handles.add(object);
@@ -1911,6 +1899,160 @@
     return CallSite.capture();
   }
   var INTERNAL_SITE = CallSite.internal;
+
+  // crates/neo-sdk/neo-playwright-js/src/prelude/generated/action.ts
+  var ACTION_OPTION_KEYS = {
+    "locator.click": ["button", "clickCount", "delay", "force", "modifiers", "noWaitAfter", "position", "scroll", "steps", "trial"],
+    "locator.dblclick": ["button", "delay", "force", "modifiers", "position", "scroll", "steps", "trial"],
+    "locator.hover": ["force", "modifiers", "position", "scroll", "trial"],
+    "locator.check": ["force", "position", "scroll", "trial"],
+    "locator.uncheck": ["force", "position", "scroll", "trial"],
+    "locator.dragTo": ["force", "scroll", "sourcePosition", "targetPosition", "steps", "trial"]
+  };
+  var ACTION_SEND = {
+    "locator.click": (site, call, input, signal) => invoke("locator.click", site, call, input, signal),
+    "locator.dblclick": (site, call, input, signal) => invoke("locator.dblclick", site, call, input, signal),
+    "locator.hover": (site, call, input, signal) => invoke("locator.hover", site, call, input, signal),
+    "locator.check": (site, call, input, signal) => invoke("locator.check", site, call, input, signal),
+    "locator.uncheck": (site, call, input, signal) => invoke("locator.uncheck", site, call, input, signal),
+    "locator.dragTo": (site, call, input, signal) => invoke("locator.dragTo", site, call, input, signal),
+    "locator.drop": (site, call, input, signal) => invoke("locator.drop", site, call, input, signal)
+  };
+
+  // crates/neo-sdk/neo-playwright-js/src/prelude/generated/read.ts
+  var READ_OPTION_KEYS = {};
+  var READ_SEND = {
+    "locator.textContent": (site, call, input, signal) => invoke("locator.textContent", site, call, input, signal),
+    "locator.innerText": (site, call, input, signal) => invoke("locator.innerText", site, call, input, signal),
+    "locator.innerHTML": (site, call, input, signal) => invoke("locator.innerHTML", site, call, input, signal),
+    "locator.getAttribute": (site, call, input, signal) => invoke("locator.getAttribute", site, call, input, signal),
+    "locator.inputValue": (site, call, input, signal) => invoke("locator.inputValue", site, call, input, signal),
+    "locator.isEnabled": (site, call, input, signal) => invoke("locator.isEnabled", site, call, input, signal),
+    "locator.isDisabled": (site, call, input, signal) => invoke("locator.isDisabled", site, call, input, signal),
+    "locator.isEditable": (site, call, input, signal) => invoke("locator.isEditable", site, call, input, signal),
+    "locator.isChecked": (site, call, input, signal) => invoke("locator.isChecked", site, call, input, signal),
+    "locator.isVisible": (site, call, input, signal) => invoke("locator.isVisible", site, call, input, signal),
+    "locator.isHidden": (site, call, input, signal) => invoke("locator.isHidden", site, call, input, signal),
+    "locator.count": (site, call, input, signal) => invoke("locator.count", site, call, input, signal),
+    "locator.allTextContents": (site, call, input, signal) => invoke("locator.allTextContents", site, call, input, signal),
+    "locator.allInnerTexts": (site, call, input, signal) => invoke("locator.allInnerTexts", site, call, input, signal),
+    "locator.boundingBox": (site, call, input, signal) => invoke("locator.boundingBox", site, call, input, signal),
+    "locator.waitFor": (site, call, input, signal) => invoke("locator.waitFor", site, call, input, signal),
+    "locator.elementHandle": (site, call, input, signal) => invoke("locator.elementHandle", site, call, input, signal),
+    "locator.elementHandles": (site, call, input, signal) => invoke("locator.elementHandles", site, call, input, signal),
+    "locator.normalize": (site, call, input, signal) => invoke("locator.normalize", site, call, input, signal)
+  };
+
+  // crates/neo-sdk/neo-playwright-js/src/prelude/generated/snapshot.ts
+  var SNAPSHOT_OPTION_KEYS = {};
+  var SNAPSHOT_SEND = {
+    "page.ariaSnapshot": (site, call, input, signal) => invoke("page.ariaSnapshot", site, call, input, signal),
+    "locator.ariaSnapshot": (site, call, input, signal) => invoke("locator.ariaSnapshot", site, call, input, signal)
+  };
+
+  // crates/neo-sdk/neo-playwright-js/src/prelude/generated/expect.ts
+  var EXPECT_OPTION_KEYS = {};
+  var EXPECT_SEND = {
+    "expect.locator": (site, call, input, signal) => invoke("expect.locator", site, call, input, signal),
+    "expect.page": (site, call, input, signal) => invoke("expect.page", site, call, input, signal)
+  };
+
+  // crates/neo-sdk/neo-playwright-js/src/prelude/generated/input.ts
+  var INPUT_OPTION_KEYS = {
+    "keyboard.press": ["delay"],
+    "keyboard.type": ["delay"],
+    "mouse.move": ["steps"],
+    "mouse.down": ["button", "clickCount"],
+    "mouse.up": ["button", "clickCount"],
+    "mouse.click": ["button", "clickCount", "delay"]
+  };
+  var INPUT_SEND = {
+    "keyboard.down": (site, call, input, signal) => invoke("keyboard.down", site, call, input, signal),
+    "keyboard.up": (site, call, input, signal) => invoke("keyboard.up", site, call, input, signal),
+    "keyboard.press": (site, call, input, signal) => invoke("keyboard.press", site, call, input, signal),
+    "keyboard.type": (site, call, input, signal) => invoke("keyboard.type", site, call, input, signal),
+    "keyboard.insertText": (site, call, input, signal) => invoke("keyboard.insertText", site, call, input, signal),
+    "mouse.move": (site, call, input, signal) => invoke("mouse.move", site, call, input, signal),
+    "mouse.down": (site, call, input, signal) => invoke("mouse.down", site, call, input, signal),
+    "mouse.up": (site, call, input, signal) => invoke("mouse.up", site, call, input, signal),
+    "mouse.click": (site, call, input, signal) => invoke("mouse.click", site, call, input, signal),
+    "mouse.wheel": (site, call, input, signal) => invoke("mouse.wheel", site, call, input, signal)
+  };
+
+  // crates/neo-sdk/neo-playwright-js/src/prelude/generated/page.ts
+  var PAGE_OPTION_KEYS = {
+    "page.screenshot": ["type", "quality", "omitBackground", "fullPage", "clip", "animations", "caret", "style", "scale", "maskColor", "mask"],
+    "page.pdf": ["scale", "displayHeaderFooter", "headerTemplate", "footerTemplate", "printBackground", "landscape", "pageRanges", "format", "width", "height", "preferCSSPageSize", "margin", "tagged", "outline"]
+  };
+  var PAGE_SEND = {
+    "page.goto": (site, call, input, signal) => invoke("page.goto", site, call, input, signal),
+    "page.reload": (site, call, input, signal) => invoke("page.reload", site, call, input, signal),
+    "page.goBack": (site, call, input, signal) => invoke("page.goBack", site, call, input, signal),
+    "page.goForward": (site, call, input, signal) => invoke("page.goForward", site, call, input, signal),
+    "page.waitForNavigation": (site, call, input, signal) => invoke("page.waitForNavigation", site, call, input, signal),
+    "page.waitForURL": (site, call, input, signal) => invoke("page.waitForURL", site, call, input, signal),
+    "page.waitForLoadState": (site, call, input, signal) => invoke("page.waitForLoadState", site, call, input, signal),
+    "page.title": (site, call, input, signal) => invoke("page.title", site, call, input, signal),
+    "page.content": (site, call, input, signal) => invoke("page.content", site, call, input, signal),
+    "page.setContent": (site, call, input, signal) => invoke("page.setContent", site, call, input, signal),
+    "page.addScriptTag": (site, call, input, signal) => invoke("page.addScriptTag", site, call, input, signal),
+    "page.addStyleTag": (site, call, input, signal) => invoke("page.addStyleTag", site, call, input, signal),
+    "page.emulateMedia": (site, call, input, signal) => invoke("page.emulateMedia", site, call, input, signal),
+    "page.requestGC": (site, call, input, signal) => invoke("page.requestGC", site, call, input, signal),
+    "page.close": (site, call, input, signal) => invoke("page.close", site, call, input, signal),
+    "page.opener": (site, call, input, signal) => invoke("page.opener", site, call, input, signal),
+    "page.frames": (site, call, input, signal) => invoke("page.frames", site, call, input, signal),
+    "page.screenshot": (site, call, input, signal) => invoke("page.screenshot", site, call, input, signal),
+    "page.saveScreenshot": (site, call, input, signal) => invoke("page.saveScreenshot", site, call, input, signal),
+    "page.pdf": (site, call, input, signal) => invoke("page.pdf", site, call, input, signal),
+    "page.setViewportSize": (site, call, input, signal) => invoke("page.setViewportSize", site, call, input, signal),
+    "webStorage.read": (site, call, input, signal) => invoke("webStorage.read", site, call, input, signal),
+    "webStorage.write": (site, call, input, signal) => invoke("webStorage.write", site, call, input, signal)
+  };
+
+  // crates/neo-sdk/neo-playwright-js/src/prelude/generated/context.ts
+  var CONTEXT_OPTION_KEYS = {};
+  var CONTEXT_SEND = {
+    "context.pages": (site, call, input, signal) => invoke("context.pages", site, call, input, signal),
+    "context.newPage": (site, call, input, signal) => invoke("context.newPage", site, call, input, signal)
+  };
+
+  // crates/neo-sdk/neo-playwright-js/src/prelude/generated/event.ts
+  var EVENT_OPTION_KEYS = {};
+  var EVENT_SEND = {};
+
+  // crates/neo-sdk/neo-playwright-js/src/prelude/generated/locator-handler.ts
+  var LOCATOR_HANDLER_OPTION_KEYS = {};
+  var LOCATOR_HANDLER_SEND = {
+    "page.addLocatorHandler": (site, call, input, signal) => invoke("page.addLocatorHandler", site, call, input, signal),
+    "page.removeLocatorHandler": (site, call, input, signal) => invoke("page.removeLocatorHandler", site, call, input, signal),
+    "page.locatorHandlerTriggered": (site, call, input, signal) => invoke("page.locatorHandlerTriggered", site, call, input, signal),
+    "page.resolveLocatorHandler": (site, call, input, signal) => invoke("page.resolveLocatorHandler", site, call, input, signal)
+  };
+
+  // crates/neo-sdk/neo-playwright-js/src/prelude/generated/index.ts
+  var OPTION_KEYS = {
+    ...ACTION_OPTION_KEYS,
+    ...READ_OPTION_KEYS,
+    ...SNAPSHOT_OPTION_KEYS,
+    ...EXPECT_OPTION_KEYS,
+    ...INPUT_OPTION_KEYS,
+    ...PAGE_OPTION_KEYS,
+    ...CONTEXT_OPTION_KEYS,
+    ...EVENT_OPTION_KEYS,
+    ...LOCATOR_HANDLER_OPTION_KEYS
+  };
+  var send = {
+    ...ACTION_SEND,
+    ...READ_SEND,
+    ...SNAPSHOT_SEND,
+    ...EXPECT_SEND,
+    ...INPUT_SEND,
+    ...PAGE_SEND,
+    ...CONTEXT_SEND,
+    ...EVENT_SEND,
+    ...LOCATOR_HANDLER_SEND
+  };
 
   // crates/neo-sdk/neo-playwright/third_party/playwright/packages/isomorphic/utilityScriptSerializers.ts
   var kFunctionBindingPrefix = "__pw_fn_";
@@ -3698,119 +3840,6 @@ ${value.stack}`;
   function isThenable(value) {
     return (typeof value === "object" || typeof value === "function") && value !== null && typeof Reflect.get(value, "then") === "function";
   }
-
-  // crates/neo-sdk/neo-playwright-js/src/prelude/generated/action.ts
-  var ACTION_OPTION_KEYS = {
-    "locator.click": ["button", "clickCount", "delay", "force", "modifiers", "noWaitAfter", "position", "scroll", "steps", "trial"],
-    "locator.dblclick": ["button", "delay", "force", "modifiers", "position", "scroll", "steps", "trial"],
-    "locator.hover": ["force", "modifiers", "position", "scroll", "trial"],
-    "locator.check": ["force", "position", "scroll", "trial"],
-    "locator.uncheck": ["force", "position", "scroll", "trial"],
-    "locator.dragTo": ["force", "scroll", "sourcePosition", "targetPosition", "steps", "trial"]
-  };
-  var ACTION_SEND = {
-    "locator.click": (site, call, input, signal) => invoke("locator.click", site, call, input, signal),
-    "locator.dblclick": (site, call, input, signal) => invoke("locator.dblclick", site, call, input, signal),
-    "locator.hover": (site, call, input, signal) => invoke("locator.hover", site, call, input, signal),
-    "locator.check": (site, call, input, signal) => invoke("locator.check", site, call, input, signal),
-    "locator.uncheck": (site, call, input, signal) => invoke("locator.uncheck", site, call, input, signal),
-    "locator.dragTo": (site, call, input, signal) => invoke("locator.dragTo", site, call, input, signal),
-    "locator.drop": (site, call, input, signal) => invoke("locator.drop", site, call, input, signal)
-  };
-
-  // crates/neo-sdk/neo-playwright-js/src/prelude/generated/read.ts
-  var READ_OPTION_KEYS = {};
-  var READ_SEND = {};
-
-  // crates/neo-sdk/neo-playwright-js/src/prelude/generated/snapshot.ts
-  var SNAPSHOT_OPTION_KEYS = {};
-  var SNAPSHOT_SEND = {
-    "page.ariaSnapshot": (site, call, input, signal) => invoke("page.ariaSnapshot", site, call, input, signal),
-    "locator.ariaSnapshot": (site, call, input, signal) => invoke("locator.ariaSnapshot", site, call, input, signal)
-  };
-
-  // crates/neo-sdk/neo-playwright-js/src/prelude/generated/expect.ts
-  var EXPECT_OPTION_KEYS = {};
-  var EXPECT_SEND = {
-    "expect.locator": (site, call, input, signal) => invoke("expect.locator", site, call, input, signal),
-    "expect.page": (site, call, input, signal) => invoke("expect.page", site, call, input, signal)
-  };
-
-  // crates/neo-sdk/neo-playwright-js/src/prelude/generated/input.ts
-  var INPUT_OPTION_KEYS = {
-    "keyboard.press": ["delay"],
-    "keyboard.type": ["delay"],
-    "mouse.move": ["steps"],
-    "mouse.down": ["button", "clickCount"],
-    "mouse.up": ["button", "clickCount"],
-    "mouse.click": ["button", "clickCount", "delay"]
-  };
-  var INPUT_SEND = {
-    "keyboard.down": (site, call, input, signal) => invoke("keyboard.down", site, call, input, signal),
-    "keyboard.up": (site, call, input, signal) => invoke("keyboard.up", site, call, input, signal),
-    "keyboard.press": (site, call, input, signal) => invoke("keyboard.press", site, call, input, signal),
-    "keyboard.type": (site, call, input, signal) => invoke("keyboard.type", site, call, input, signal),
-    "keyboard.insertText": (site, call, input, signal) => invoke("keyboard.insertText", site, call, input, signal),
-    "mouse.move": (site, call, input, signal) => invoke("mouse.move", site, call, input, signal),
-    "mouse.down": (site, call, input, signal) => invoke("mouse.down", site, call, input, signal),
-    "mouse.up": (site, call, input, signal) => invoke("mouse.up", site, call, input, signal),
-    "mouse.click": (site, call, input, signal) => invoke("mouse.click", site, call, input, signal),
-    "mouse.wheel": (site, call, input, signal) => invoke("mouse.wheel", site, call, input, signal)
-  };
-
-  // crates/neo-sdk/neo-playwright-js/src/prelude/generated/page.ts
-  var PAGE_OPTION_KEYS = {};
-  var PAGE_SEND = {
-    "page.goto": (site, call, input, signal) => invoke("page.goto", site, call, input, signal),
-    "page.reload": (site, call, input, signal) => invoke("page.reload", site, call, input, signal),
-    "page.goBack": (site, call, input, signal) => invoke("page.goBack", site, call, input, signal),
-    "page.goForward": (site, call, input, signal) => invoke("page.goForward", site, call, input, signal),
-    "page.waitForNavigation": (site, call, input, signal) => invoke("page.waitForNavigation", site, call, input, signal),
-    "page.waitForURL": (site, call, input, signal) => invoke("page.waitForURL", site, call, input, signal),
-    "page.waitForLoadState": (site, call, input, signal) => invoke("page.waitForLoadState", site, call, input, signal),
-    "page.title": (site, call, input, signal) => invoke("page.title", site, call, input, signal),
-    "page.content": (site, call, input, signal) => invoke("page.content", site, call, input, signal),
-    "page.setContent": (site, call, input, signal) => invoke("page.setContent", site, call, input, signal),
-    "page.close": (site, call, input, signal) => invoke("page.close", site, call, input, signal),
-    "page.opener": (site, call, input, signal) => invoke("page.opener", site, call, input, signal),
-    "page.frames": (site, call, input, signal) => invoke("page.frames", site, call, input, signal)
-  };
-
-  // crates/neo-sdk/neo-playwright-js/src/prelude/generated/context.ts
-  var CONTEXT_OPTION_KEYS = {};
-  var CONTEXT_SEND = {};
-
-  // crates/neo-sdk/neo-playwright-js/src/prelude/generated/event.ts
-  var EVENT_OPTION_KEYS = {};
-  var EVENT_SEND = {};
-
-  // crates/neo-sdk/neo-playwright-js/src/prelude/generated/locator-handler.ts
-  var LOCATOR_HANDLER_OPTION_KEYS = {};
-  var LOCATOR_HANDLER_SEND = {};
-
-  // crates/neo-sdk/neo-playwright-js/src/prelude/generated/index.ts
-  var OPTION_KEYS = {
-    ...ACTION_OPTION_KEYS,
-    ...READ_OPTION_KEYS,
-    ...SNAPSHOT_OPTION_KEYS,
-    ...EXPECT_OPTION_KEYS,
-    ...INPUT_OPTION_KEYS,
-    ...PAGE_OPTION_KEYS,
-    ...CONTEXT_OPTION_KEYS,
-    ...EVENT_OPTION_KEYS,
-    ...LOCATOR_HANDLER_OPTION_KEYS
-  };
-  var send = {
-    ...ACTION_SEND,
-    ...READ_SEND,
-    ...SNAPSHOT_SEND,
-    ...EXPECT_SEND,
-    ...INPUT_SEND,
-    ...PAGE_SEND,
-    ...CONTEXT_SEND,
-    ...EVENT_SEND,
-    ...LOCATOR_HANDLER_SEND
-  };
 
   // crates/neo-sdk/neo-playwright/third_party/playwright/packages/isomorphic/stringUtils.ts
   function escapeWithQuotes(text, char = "'") {
@@ -7282,7 +7311,7 @@ ${value.stack}`;
   }) {
     if (!path)
       return;
-    await invoke("page.saveScreenshot", site, { api, timeoutMs: 0 }, { path, base64: decode(bytes, "base64") }, signal);
+    await send["page.saveScreenshot"](site, { api, timeoutMs: 0 }, { path, base64: decode(bytes, "base64") }, signal);
   }
 
   // crates/neo-sdk/neo-playwright-js/src/prelude/snapshot.ts
@@ -7643,7 +7672,7 @@ ${value.stack}`;
       const strict = options.strict;
       const picked = pick(options, OPTION_KEYS["locator.click"]);
       const addressed = await this._targetArgs(api, selector, strict);
-      const result = await send["locator.click"](site, this._call(api, wait.timeout), { ...addressed, options: picked }, wait.signal);
+      const result = await send["locator.click"](site, this._call(api, wait.timeout), { ...addressed, ...picked }, wait.signal);
       if (result?.navigation) {
         try {
           await this._page._context._events.publishNavigation(this._page, result.navigation, api, deadline, wait.signal);
@@ -7666,7 +7695,7 @@ ${value.stack}`;
       const wait = this._wait(api, options);
       const picked = pick(options, OPTION_KEYS["locator.dblclick"]);
       const addressed = await this._targetArgs(api, selector, strict);
-      await send["locator.dblclick"](site, this._call(api, wait.timeout), { ...addressed, options: picked }, wait.signal);
+      await send["locator.dblclick"](site, this._call(api, wait.timeout), { ...addressed, ...picked }, wait.signal);
     }
     async _hover(api, selector, options = {}) {
       const site = captureSite();
@@ -7674,7 +7703,7 @@ ${value.stack}`;
       const wait = this._wait(api, options);
       const picked = pick(options, OPTION_KEYS["locator.hover"]);
       const addressed = await this._targetArgs(api, selector, strict);
-      await send["locator.hover"](site, this._call(api, wait.timeout), { ...addressed, options: picked }, wait.signal);
+      await send["locator.hover"](site, this._call(api, wait.timeout), { ...addressed, ...picked }, wait.signal);
     }
     async _check(api, selector, checked, options = {}) {
       const site = captureSite();
@@ -7683,7 +7712,7 @@ ${value.stack}`;
       const wait = this._wait(api, options);
       const picked = pick(options, OPTION_KEYS[op]);
       const addressed = await this._targetArgs(api, selector, strict);
-      await send[op](site, this._call(api, wait.timeout), { ...addressed, options: picked }, wait.signal);
+      await send[op](site, this._call(api, wait.timeout), { ...addressed, ...picked }, wait.signal);
     }
     async _dragAndDrop(api, source, target, options = {}) {
       const site = captureSite();
@@ -7692,7 +7721,7 @@ ${value.stack}`;
       const strict = options.strict;
       const picked = pick(options, OPTION_KEYS["locator.dragTo"]);
       const addressed = await this._targetArgs(api, source, strict);
-      await send["locator.dragTo"](site, this._call(api, wait.timeout), { ...addressed, to, options: picked }, wait.signal);
+      await send["locator.dragTo"](site, this._call(api, wait.timeout), { ...addressed, to, ...picked }, wait.signal);
     }
     async _fill(api, selector, value, options = {}) {
       const site = captureSite();
@@ -7760,33 +7789,43 @@ ${value.stack}`;
     }
     async _read(op, api, selector, options = {}) {
       const site = captureSite();
-      const args = {};
-      return await this._selectorOp(op, site, api, selector, options.strict, this._wait(api, options), args);
+      const strict = options.strict;
+      const wait = this._wait(api, options);
+      const addressed = await this._targetArgs(api, selector, strict);
+      return await send[op](site, this._call(api, wait.timeout), { ...addressed }, wait.signal);
     }
     async _getAttribute(api, selector, name, options = {}) {
       const site = captureSite();
-      return await this._selectorOp("locator.getAttribute", site, api, selector, options.strict, this._wait(api, options), { name });
+      const strict = options.strict;
+      const wait = this._wait(api, options);
+      const addressed = await this._targetArgs(api, selector, strict);
+      return await send["locator.getAttribute"](site, this._call(api, wait.timeout), { ...addressed, name }, wait.signal);
     }
     async _isVisible(op, api, selector, options = {}) {
       const site = captureSite();
-      return await this._selectorOp(op, site, api, selector, options.strict, { timeout: 0 }, {});
+      const strict = options.strict;
+      const addressed = await this._targetArgs(api, selector, strict);
+      return await send[op](site, this._call(api, 0), { ...addressed });
     }
     async _everyMatch(op, api, selector) {
       const site = captureSite();
       const target = await this._locatorBrand(api, selector);
-      const input = { target };
-      return await invoke(op, site, this._call(api, 0), input);
+      return await send[op](site, this._call(api, 0), { target });
     }
     async _normalize(api, selector) {
       const site = captureSite();
       const target = await this._locatorBrand(api, selector);
-      const input = { target, selector };
-      const resolved = await invoke("locator.normalize", site, this._call(api, 0), input);
+      const resolved = await send["locator.normalize"](site, this._call(api, 0), {
+        target,
+        selector
+      });
       return resolved.selector;
     }
     async _boundingBox(api, selector, options = {}) {
       const site = captureSite();
-      return await this._selectorOp("locator.boundingBox", site, api, selector, true, this._wait(api, options), {});
+      const wait = this._wait(api, options);
+      const addressed = await this._targetArgs(api, selector, true);
+      return await send["locator.boundingBox"](site, this._call(api, wait.timeout), { ...addressed }, wait.signal);
     }
     async _waitForSelector(api, selector, options = {}, omitReturnValue) {
       const site = captureSite();
@@ -7794,18 +7833,23 @@ ${value.stack}`;
       if (typeof raw === "object" && raw !== null && "visibility" in raw)
         throw clientError(api, "options.visibility is not supported, did you mean options.state?");
       const state = options.state ?? "visible";
-      const handle = await this._selectorOp("locator.waitFor", site, api, selector, options.strict, this._wait(api, options), { state, omitReturnValue });
+      const strict = options.strict;
+      const wait = this._wait(api, options);
+      const addressed = await this._targetArgs(api, selector, strict);
+      const handle = await send["locator.waitFor"](site, this._call(api, wait.timeout), { ...addressed, state, omitReturnValue }, wait.signal);
       return this._page._handle(handle);
     }
     async _elementHandle(api, selector, strict, noWait, options = {}) {
       const site = captureSite();
-      const handle = await this._selectorOp("locator.elementHandle", site, api, selector, strict, noWait ? { timeout: 0 } : this._wait(api, options), noWait ? { noWait: true } : {});
+      const wait = noWait ? { timeout: 0 } : this._wait(api, options);
+      const addressed = await this._targetArgs(api, selector, strict);
+      const handle = noWait ? await send["locator.elementHandle"](site, this._call(api, wait.timeout), { ...addressed, noWait: true }, wait.signal) : await send["locator.elementHandle"](site, this._call(api, wait.timeout), { ...addressed }, wait.signal);
       return this._page._handle(handle);
     }
     async _elementHandles(api, selector) {
       const site = captureSite();
       const target = await this._locatorBrand(api, selector);
-      const handles = await invoke("locator.elementHandles", site, this._call(api, 0), {
+      const handles = await send["locator.elementHandles"](site, this._call(api, 0), {
         target
       });
       return handles.flatMap((handle) => {
@@ -7857,13 +7901,23 @@ ${value.stack}`;
         wire.type = screenshotType({ api, path: options.path });
       const { timeout, signal } = this._wait(api, options);
       const page = await this._page._brand(api);
-      const input = selector === null ? { page, ...wire } : {
+      const target = selector === null ? undefined : await this._locatorBrand(api, selector);
+      const image = await send["page.screenshot"](site, this._call(api, timeout), {
         page,
-        target: await this._locatorBrand(api, selector),
-        strict: "strict",
-        ...wire
-      };
-      const image = await invoke("page.screenshot", site, this._call(api, timeout), input, signal);
+        target,
+        strict: selector === null ? undefined : "strict",
+        type: wire.type,
+        quality: wire.quality,
+        omitBackground: wire.omitBackground,
+        fullPage: wire.fullPage,
+        clip: wire.clip,
+        animations: wire.animations,
+        caret: wire.caret,
+        style: wire.style,
+        scale: wire.scale,
+        maskColor: wire.maskColor,
+        mask: wire.mask
+      }, signal);
       await saveScreenshot({
         api,
         site,
@@ -7918,9 +7972,14 @@ ${value.stack}`;
       }
       let handle;
       try {
+        const { page, frame } = await this._frameArgs(api);
         const { value: result, observed } = await invokeObserved(op, site, this._call(api, 0), {
-          ...await this._frameArgs(api),
-          ...input
+          page,
+          frame,
+          url: input.url,
+          path: input.path,
+          content: input.content,
+          type: op === "page.addScriptTag" ? input.type : undefined
         });
         this._page._evaluated(result.frames, observed);
         handle = this._page._handle(result.element);
@@ -7985,7 +8044,7 @@ ${value.stack}`;
     return Boolean(url(frame.url()));
   }
   async function screenshotOptions(api, options) {
-    const wire = pick(options, SCREENSHOT_KEYS);
+    const wire = pick(options, OPTION_KEYS["page.screenshot"].filter((key) => key !== "mask"));
     if (options.mask !== undefined) {
       wire.mask = await Promise.all(options.mask.map((locator) => {
         if (!(locator instanceof Locator))
@@ -8085,6 +8144,11 @@ ${value.stack}`;
       };
       return await invoke(op, site, { api, timeoutMs: timeoutMs(api, timeout) }, input);
     }
+    async#read(op, site, api) {
+      this.#live(api);
+      const target = this._brand;
+      return await send[op](site, { api, timeoutMs: timeoutMs(api, 0) }, { target, strict: "strict" });
+    }
     #timeout(options) {
       return this._page._timeoutSettings.timeout(options);
     }
@@ -8100,7 +8164,7 @@ ${value.stack}`;
     async $(selector) {
       const site = captureSite();
       const api = "elementHandle.$";
-      const handle = await invoke("locator.elementHandle", site, { api, timeoutMs: timeoutMs(api, 0) }, {
+      const handle = await send["locator.elementHandle"](site, { api, timeoutMs: timeoutMs(api, 0) }, {
         target: this.#rooted(api, selector),
         strict: "firstMatch",
         noWait: true
@@ -8110,7 +8174,7 @@ ${value.stack}`;
     async $$(selector) {
       const site = captureSite();
       const api = "elementHandle.$$";
-      const handles = await invoke("locator.elementHandles", site, { api, timeoutMs: timeoutMs(api, 0) }, { target: this.#rooted(api, selector) });
+      const handles = await send["locator.elementHandles"](site, { api, timeoutMs: timeoutMs(api, 0) }, { target: this.#rooted(api, selector) });
       return handles.flatMap((handle) => {
         const element = this._page._handle(handle);
         return element ? [element] : [];
@@ -8122,7 +8186,7 @@ ${value.stack}`;
       const timeout = this.#timeout(options);
       const picked = pick(options, OPTION_KEYS["locator.click"]);
       this.#live(api);
-      await send["locator.click"](site, { api, timeoutMs: timeoutMs(api, timeout) }, { target: this._brand, strict: "strict", options: picked });
+      await send["locator.click"](site, { api, timeoutMs: timeoutMs(api, timeout) }, { target: this._brand, strict: "strict", ...picked });
     }
     async dblclick(options = {}) {
       const site = captureSite();
@@ -8130,7 +8194,7 @@ ${value.stack}`;
       const timeout = this.#timeout(options);
       const picked = pick(options, OPTION_KEYS["locator.dblclick"]);
       this.#live(api);
-      await send["locator.dblclick"](site, { api, timeoutMs: timeoutMs(api, timeout) }, { target: this._brand, strict: "strict", options: picked });
+      await send["locator.dblclick"](site, { api, timeoutMs: timeoutMs(api, timeout) }, { target: this._brand, strict: "strict", ...picked });
     }
     async hover(options = {}) {
       const site = captureSite();
@@ -8138,7 +8202,7 @@ ${value.stack}`;
       const timeout = this.#timeout(options);
       const picked = pick(options, OPTION_KEYS["locator.hover"]);
       this.#live(api);
-      await send["locator.hover"](site, { api, timeoutMs: timeoutMs(api, timeout) }, { target: this._brand, strict: "strict", options: picked });
+      await send["locator.hover"](site, { api, timeoutMs: timeoutMs(api, timeout) }, { target: this._brand, strict: "strict", ...picked });
     }
     async check(options = {}) {
       const site = captureSite();
@@ -8146,7 +8210,7 @@ ${value.stack}`;
       const timeout = this.#timeout(options);
       const picked = pick(options, OPTION_KEYS["locator.check"]);
       this.#live(api);
-      await send["locator.check"](site, { api, timeoutMs: timeoutMs(api, timeout) }, { target: this._brand, strict: "strict", options: picked });
+      await send["locator.check"](site, { api, timeoutMs: timeoutMs(api, timeout) }, { target: this._brand, strict: "strict", ...picked });
     }
     async uncheck(options = {}) {
       const site = captureSite();
@@ -8154,7 +8218,7 @@ ${value.stack}`;
       const timeout = this.#timeout(options);
       const picked = pick(options, OPTION_KEYS["locator.uncheck"]);
       this.#live(api);
-      await send["locator.uncheck"](site, { api, timeoutMs: timeoutMs(api, timeout) }, { target: this._brand, strict: "strict", options: picked });
+      await send["locator.uncheck"](site, { api, timeoutMs: timeoutMs(api, timeout) }, { target: this._brand, strict: "strict", ...picked });
     }
     async setChecked(checked, options = {}) {
       const site = captureSite();
@@ -8163,7 +8227,7 @@ ${value.stack}`;
       const timeout = this.#timeout(options);
       const picked = pick(options, OPTION_KEYS[op]);
       this.#live(api);
-      await send[op](site, { api, timeoutMs: timeoutMs(api, timeout) }, { target: this._brand, strict: "strict", options: picked });
+      await send[op](site, { api, timeoutMs: timeoutMs(api, timeout) }, { target: this._brand, strict: "strict", ...picked });
     }
     async fill(value, options = {}) {
       const site = captureSite();
@@ -8223,60 +8287,62 @@ ${value.stack}`;
     }
     async waitForElementState(state, options = {}) {
       const site = captureSite();
-      await this.#op("locator.waitFor", site, "elementHandle.waitForElementState", this.#timeout(options), {
-        state,
-        omitReturnValue: true
-      });
+      const api = "elementHandle.waitForElementState";
+      const timeout = this.#timeout(options);
+      this.#live(api);
+      const target = this._brand;
+      await send["locator.waitFor"](site, { api, timeoutMs: timeoutMs(api, timeout) }, { target, strict: "strict", state, omitReturnValue: true });
     }
     textContent() {
       const site = captureSite();
-      return this.#op("locator.textContent", site, "elementHandle.textContent", 0, {});
+      return this.#read("locator.textContent", site, "elementHandle.textContent");
     }
     innerText() {
       const site = captureSite();
-      return this.#op("locator.innerText", site, "elementHandle.innerText", 0, {});
+      return this.#read("locator.innerText", site, "elementHandle.innerText");
     }
     innerHTML() {
       const site = captureSite();
-      return this.#op("locator.innerHTML", site, "elementHandle.innerHTML", 0, {});
+      return this.#read("locator.innerHTML", site, "elementHandle.innerHTML");
     }
     inputValue() {
       const site = captureSite();
-      return this.#op("locator.inputValue", site, "elementHandle.inputValue", 0, {});
+      return this.#read("locator.inputValue", site, "elementHandle.inputValue");
     }
-    getAttribute(name) {
+    async getAttribute(name) {
       const site = captureSite();
-      return this.#op("locator.getAttribute", site, "elementHandle.getAttribute", 0, {
-        name
-      });
+      const api = "elementHandle.getAttribute";
+      this.#live(api);
+      const target = this._brand;
+      return await send["locator.getAttribute"](site, { api, timeoutMs: timeoutMs(api, 0) }, { target, strict: "strict", name });
     }
     isChecked() {
       const site = captureSite();
-      return this.#op("locator.isChecked", site, "elementHandle.isChecked", 0, {});
+      return this.#read("locator.isChecked", site, "elementHandle.isChecked");
     }
     isDisabled() {
       const site = captureSite();
-      return this.#op("locator.isDisabled", site, "elementHandle.isDisabled", 0, {});
+      return this.#read("locator.isDisabled", site, "elementHandle.isDisabled");
     }
     isEditable() {
       const site = captureSite();
-      return this.#op("locator.isEditable", site, "elementHandle.isEditable", 0, {});
+      return this.#read("locator.isEditable", site, "elementHandle.isEditable");
     }
     isEnabled() {
       const site = captureSite();
-      return this.#op("locator.isEnabled", site, "elementHandle.isEnabled", 0, {});
+      return this.#read("locator.isEnabled", site, "elementHandle.isEnabled");
     }
     isHidden() {
       const site = captureSite();
-      return this.#op("locator.isHidden", site, "elementHandle.isHidden", 0, {});
+      return this.#read("locator.isHidden", site, "elementHandle.isHidden");
     }
     isVisible() {
       const site = captureSite();
-      return this.#op("locator.isVisible", site, "elementHandle.isVisible", 0, {});
+      return this.#read("locator.isVisible", site, "elementHandle.isVisible");
     }
     boundingBox() {
       const site = captureSite();
-      return this.#op("locator.boundingBox", site, "elementHandle.boundingBox", 0, {});
+      return this.#read("locator.boundingBox", site, "elementHandle.boundingBox");
     }
     async evaluate(pageFunction, arg, options) {
       const site = captureSite();
@@ -8312,11 +8378,21 @@ ${value.stack}`;
       if (!wire.type && options.path)
         wire.type = screenshotType({ api, path: options.path });
       const signal = signalOf(api, options);
-      const image = await invoke("page.screenshot", site, { api, timeoutMs: timeoutMs(api, this.#timeout(options)) }, {
+      const image = await send["page.screenshot"](site, { api, timeoutMs: timeoutMs(api, this.#timeout(options)) }, {
         page: await this._page._brand(api),
         target: this._brand,
         strict: "strict",
-        ...wire
+        type: wire.type,
+        quality: wire.quality,
+        omitBackground: wire.omitBackground,
+        fullPage: wire.fullPage,
+        clip: wire.clip,
+        animations: wire.animations,
+        caret: wire.caret,
+        style: wire.style,
+        scale: wire.scale,
+        maskColor: wire.maskColor,
+        mask: wire.mask
       }, signal);
       await saveScreenshot({
         api,
@@ -9395,7 +9471,7 @@ ${value.stack}`;
       if (options.times === 0)
         return;
       const target = await locator._frame._locatorBrand(api, locator._selector);
-      const { uid } = await invoke("page.addLocatorHandler", site, { api, timeoutMs: 0 }, options.noWaitAfter ? { target, noWaitAfter: true } : { target });
+      const { uid } = await send["page.addLocatorHandler"](site, { api, timeoutMs: 0 }, { target, noWaitAfter: options.noWaitAfter ? true : undefined });
       this.#byUid.set(uid, { page, locator, handler, times: options.times });
       if (!this.#pulling) {
         this.#pulling = true;
@@ -9408,14 +9484,14 @@ ${value.stack}`;
         if (registration.page !== page || !(locator instanceof Locator) || registration.locator._frame !== locator._frame || registration.locator._selector !== locator._selector)
           continue;
         this.#byUid.delete(uid);
-        await invoke("page.removeLocatorHandler", site, { api, timeoutMs: 0 }, { uid }).catch(() => {});
+        await send["page.removeLocatorHandler"](site, { api, timeoutMs: 0 }, { uid }).catch(() => {});
       }
     }
     async pull() {
       const site = INTERNAL_SITE;
       try {
         while (this.#byUid.size > 0) {
-          const { uid } = await invoke("page.locatorHandlerTriggered", site, { api: "page.locatorHandlerTriggered", timeoutMs: 0 }, {});
+          const { uid } = await send["page.locatorHandlerTriggered"](site, { api: "page.locatorHandlerTriggered", timeoutMs: 0 }, {});
           if (uid !== null)
             this.#run(uid);
         }
@@ -9440,7 +9516,7 @@ ${value.stack}`;
       } finally {
         if (remove)
           this.#byUid.delete(uid);
-        await invoke("page.resolveLocatorHandler", site, { api: "page.resolveLocatorHandler", timeoutMs: 0 }, remove ? { uid, remove: true } : { uid }).catch(() => {});
+        await send["page.resolveLocatorHandler"](site, { api: "page.resolveLocatorHandler", timeoutMs: 0 }, { uid, remove: remove ? true : undefined }).catch(() => {});
       }
     }
   }
@@ -9602,13 +9678,13 @@ ${value.stack}`;
     async items() {
       const site = captureSite();
       const api = "webStorage.items";
-      const items = await invoke("webStorage.read", site, { api, timeoutMs: 0 }, { page: await this.#page._brand(api), kind: this.#kind, action: "items" });
+      const items = await send["webStorage.read"](site, { api, timeoutMs: 0 }, { page: await this.#page._brand(api), kind: this.#kind, action: "items" });
       return Array.isArray(items) ? items : [];
     }
     async getItem(name) {
       const site = captureSite();
       const api = "webStorage.getItem";
-      const value = await invoke("webStorage.read", site, { api, timeoutMs: 0 }, {
+      const value = await send["webStorage.read"](site, { api, timeoutMs: 0 }, {
         page: await this.#page._brand(api),
         kind: this.#kind,
         action: "getItem",
@@ -9619,7 +9695,7 @@ ${value.stack}`;
     async setItem(name, value) {
       const site = captureSite();
       const api = "webStorage.setItem";
-      await invoke("webStorage.write", site, { api, timeoutMs: 0 }, {
+      await send["webStorage.write"](site, { api, timeoutMs: 0 }, {
         page: await this.#page._brand(api),
         kind: this.#kind,
         action: "setItem",
@@ -9630,7 +9706,7 @@ ${value.stack}`;
     async removeItem(name) {
       const site = captureSite();
       const api = "webStorage.removeItem";
-      await invoke("webStorage.write", site, { api, timeoutMs: 0 }, {
+      await send["webStorage.write"](site, { api, timeoutMs: 0 }, {
         page: await this.#page._brand(api),
         kind: this.#kind,
         action: "removeItem",
@@ -9640,7 +9716,7 @@ ${value.stack}`;
     async clear() {
       const site = captureSite();
       const api = "webStorage.clear";
-      await invoke("webStorage.write", site, { api, timeoutMs: 0 }, { page: await this.#page._brand(api), kind: this.#kind, action: "clear" });
+      await send["webStorage.write"](site, { api, timeoutMs: 0 }, { page: await this.#page._brand(api), kind: this.#kind, action: "clear" });
     }
   }
   function text(api, field, value) {
@@ -9750,23 +9826,6 @@ ${value.stack}`;
   }
 
   // crates/neo-sdk/neo-playwright-js/src/prelude/page.ts
-  var PDF_KEYS = [
-    "scale",
-    "displayHeaderFooter",
-    "headerTemplate",
-    "footerTemplate",
-    "printBackground",
-    "landscape",
-    "pageRanges",
-    "format",
-    "width",
-    "height",
-    "preferCSSPageSize",
-    "margin",
-    "tagged",
-    "outline"
-  ];
-
   class Page extends EventEmitter {
     _tab;
     _context;
@@ -9852,7 +9911,7 @@ ${value.stack}`;
           throw clientError("page.setViewportSize", `viewportSize.${side}: expected integer`);
       }
       const size = { width: viewportSize.width, height: viewportSize.height };
-      await invoke("page.setViewportSize", site, { api: "page.setViewportSize", timeoutMs: 0 }, { page: await this._brand("page.setViewportSize"), viewportSize: size });
+      await send["page.setViewportSize"](site, { api: "page.setViewportSize", timeoutMs: 0 }, { page: await this._brand("page.setViewportSize"), viewportSize: size });
     }
     #workers = new Map;
     #workerBatches = new Set;
@@ -10042,7 +10101,7 @@ ${value.stack}`;
     async requestGC() {
       const site = captureSite();
       const api = "page.requestGC";
-      await invoke("page.requestGC", site, { api, timeoutMs: 0 }, { page: await this._brand(api) });
+      await send["page.requestGC"](site, { api, timeoutMs: 0 }, { page: await this._brand(api) });
     }
     async title() {
       const site = captureSite();
@@ -10068,13 +10127,17 @@ ${value.stack}`;
         const value = options[key] === null ? "no-override" : options[key];
         if (value === undefined)
           continue;
-        if (typeof value !== "string" || !allowed[key].includes(value))
+        if (typeof value !== "string" || !allowed[key].some((candidate) => candidate === value))
           throw clientError(api, `${key}: expected one of (${allowed[key].join("|")})`);
         input[key] = value;
       }
-      await invoke("page.emulateMedia", site, this._mainFrame._call(api, 0), {
+      await send["page.emulateMedia"](site, this._mainFrame._call(api, 0), {
         page: await this._brand(api),
-        ...input
+        media: allowed.media.find((value) => value === input.media),
+        colorScheme: allowed.colorScheme.find((value) => value === input.colorScheme),
+        reducedMotion: allowed.reducedMotion.find((value) => value === input.reducedMotion),
+        forcedColors: allowed.forcedColors.find((value) => value === input.forcedColors),
+        contrast: allowed.contrast.find((value) => value === input.contrast)
       });
     }
     addScriptTag(options = {}) {
@@ -10152,7 +10215,7 @@ ${value.stack}`;
       const api = "page.pdf";
       if (options.path !== undefined)
         throw unsupportedError(api, "Neo returns the PDF instead of writing a file; omit path");
-      const wire = pick(options, PDF_KEYS);
+      const wire = pick(options, OPTION_KEYS["page.pdf"]);
       for (const size of ["width", "height"])
         if (typeof wire[size] === "number")
           wire[size] = `${wire[size]}px`;
@@ -10163,7 +10226,23 @@ ${value.stack}`;
             margin[side] = `${margin[side]}px`;
         wire.margin = margin;
       }
-      return await invoke("page.pdf", site, { api, timeoutMs: 0 }, { page: await this._brand(api), ...wire });
+      return await send["page.pdf"](site, { api, timeoutMs: 0 }, {
+        page: await this._brand(api),
+        scale: wire.scale,
+        displayHeaderFooter: wire.displayHeaderFooter,
+        headerTemplate: wire.headerTemplate,
+        footerTemplate: wire.footerTemplate,
+        printBackground: wire.printBackground,
+        landscape: wire.landscape,
+        pageRanges: wire.pageRanges,
+        format: wire.format,
+        width: wire.width,
+        height: wire.height,
+        preferCSSPageSize: wire.preferCSSPageSize,
+        margin: wire.margin,
+        tagged: wire.tagged,
+        outline: wire.outline
+      });
     }
     async opener() {
       const site = captureSite();
@@ -10736,7 +10815,7 @@ ${value.stack}`;
     }
     async#openPage(api) {
       const site = captureSite();
-      const opened = await invoke("context.newPage", site, { api, timeoutMs: 0 }, {});
+      const opened = await send["context.newPage"](site, { api, timeoutMs: 0 }, {});
       const page = this._pageFromResult(opened.page, opened.url);
       if (!page)
         throw internalError(api, "context.newPage returned no page");

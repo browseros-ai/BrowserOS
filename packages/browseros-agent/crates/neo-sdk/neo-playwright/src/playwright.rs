@@ -189,7 +189,7 @@ impl Playwright {
             OpKind::Context(op) => context_op::invoke(self, &scope, op, args).await,
             // A trigger is upstream's `locatorHandlerTriggered` event: listeners for what the
             // page did before it run first, as upstream's one ordered channel runs them.
-            OpKind::LocatorHandler(op) => locator_handler::invoke(&scope, op, args).await,
+            OpKind::LocatorHandler(op) => locator_handler::invoke(self, &scope, op, args).await,
             // The event ops are the pump and the waits themselves: none waits for the pump.
             OpKind::Event(op) => {
                 return scope.settle(event_op::invoke(self, &scope, op, args).await);

@@ -8,15 +8,19 @@ use std::time::Duration;
 use browseros_cdp::CdpEvent;
 use browseros_core::FrameId;
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::json;
 use tokio::{fs, time};
+use ts_rs::TS;
+
+use crate::world::FrameSeq;
 
 use crate::op_scope::OpScope;
 use crate::op_spec::Capability;
-use crate::page::frame_tree::{self, FrameTree};
+use crate::page::frame_tree::{self, FrameInfo, FrameTree};
 use crate::page::{OpPage, evaluate_guard, world_call};
 use crate::target::PageRef;
-use crate::{ErrorCode, Playwright, PlaywrightError, op_output, resolve};
+use crate::wire::options;
+use crate::{ErrorCode, Playwright, PlaywrightError, resolve};
 
 /// Which upstream insertion algorithm and sourceURL syntax to use.
 #[derive(Clone, Copy)]
@@ -26,8 +30,9 @@ pub(crate) enum TagKind {
 }
 
 /// Paths are host-side inputs, as in Playwright's client; URLs are resolved by the document.
-#[derive(Deserialize)]
+#[derive(Deserialize, TS)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
+#[ts(optional_fields)]
 pub(crate) struct AddTagInput {
     page: PageRef,
     frame: Option<FrameId>,
@@ -35,6 +40,79 @@ pub(crate) struct AddTagInput {
     path: Option<String>,
     content: Option<String>,
     r#type: Option<String>,
+}
+
+options!(AddTagInput);
+
+/// Styles omit the script-only type field; the prelude already drops that script option.
+#[derive(Deserialize, TS)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+#[ts(optional_fields)]
+pub(crate) struct AddStyleTagInput {
+    page: PageRef,
+    frame: Option<FrameId>,
+    url: Option<String>,
+    path: Option<String>,
+    content: Option<String>,
+}
+options!(AddStyleTagInput);
+
+/// The inserted node stays pinned to its document; frame facts refresh synchronous accessors.
+#[derive(Serialize, TS)]
+pub(crate) struct Tagged {
+    element: TagElement,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    frames: Option<Vec<FrameInfo>>,
+}
+
+/// A returned node is pinned to the admitted page and the document that created it.
+#[derive(Serialize, TS)]
+struct TagElement {
+    #[serde(rename = "$neo")]
+    #[ts(type = "\"element\"")]
+    brand: &'static str,
+    display: String,
+    node: i64,
+    #[ts(as = "crate::page::PageHandle")]
+    page: PageRef,
+    seq: FrameSeq,
+}
+
+pub(crate) async fn script(
+    pw: &Playwright,
+    scope: &OpScope<'_>,
+    input: AddTagInput,
+) -> Result<Tagged, PlaywrightError> {
+    Box::pin(insert(pw, scope, input, TagKind::Script)).await
+}
+
+pub(crate) async fn style(
+    pw: &Playwright,
+    scope: &OpScope<'_>,
+    input: AddStyleTagInput,
+) -> Result<Tagged, PlaywrightError> {
+    let AddStyleTagInput {
+        page,
+        frame,
+        url,
+        path,
+        content,
+    } = input;
+    Box::pin(insert(
+        pw,
+        scope,
+        AddTagInput {
+            page,
+            frame,
+            url,
+            path,
+            content,
+            r#type: None,
+        },
+        TagKind::Style,
+    ))
+    .await
 }
 
 /// Only renderer inputs cross the browser boundary; host paths are consumed before this point.
@@ -63,7 +141,7 @@ pub(crate) async fn insert(
     scope: &OpScope<'_>,
     input: AddTagInput,
     kind: TagKind,
-) -> Result<Value, PlaywrightError> {
+) -> Result<Tagged, PlaywrightError> {
     scope.require(Capability::MainWorld)?;
     let AddTagInput {
         page: page_ref,
@@ -143,8 +221,13 @@ pub(crate) async fn insert(
         .send("DOM.describeNode", json!({ "objectId": object }))
         .await
         .map_err(|error| scope.core_error(&error))?;
-    let element = json!({ "$neo": "element", "page": page_ref, "seq": world.seq(),
-        "node": described.node.backend_node_id, "display": format!("<{}>", params.kind) });
+    let element = TagElement {
+        brand: "element",
+        page: page_ref.clone(),
+        seq: world.seq(),
+        node: described.node.backend_node_id,
+        display: format!("<{}>", params.kind),
+    };
     tagged(pw, scope, &page_ref, element).await
 }
 
@@ -203,14 +286,10 @@ async fn tagged(
     pw: &Playwright,
     scope: &OpScope<'_>,
     page: &PageRef,
-    element: Value,
-) -> Result<Value, PlaywrightError> {
-    #[derive(Serialize)]
-    struct Tagged {
-        element: Value,
-        #[serde(flatten)]
-        frames: Option<FrameTree>,
-    }
+    element: TagElement,
+) -> Result<Tagged, PlaywrightError> {
+    // ts-rs cannot flatten Option<FrameTree>. Spell out its sole serialized field in
+    // the original position, retaining omission when the best-effort snapshot fails.
     let frames = time::timeout(
         Duration::from_secs(2),
         frame_tree::snapshot(pw, scope, page.tab()),
@@ -219,5 +298,71 @@ async fn tagged(
     .ok()
     .and_then(Result::ok)
     .flatten();
-    op_output::to_output(scope, &Tagged { element, frames })
+    Ok(Tagged {
+        element,
+        frames: frames.map(FrameTree::into_frames),
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::error::Error;
+
+    use serde::Serialize;
+    use serde_json::json;
+
+    use super::{TagElement, Tagged};
+    use crate::Op;
+    use crate::op_output::to_output;
+    use crate::op_scope::OpScope;
+    use crate::page::frame_tree::FrameTree;
+    use crate::target::CallHeader;
+    use crate::test_env::TestEnv;
+    use crate::world::FrameSeq;
+
+    #[tokio::test]
+    async fn tag_reply_preserves_the_flattened_before_bytes() -> Result<(), Box<dyn Error>> {
+        #[derive(Serialize)]
+        struct Before {
+            element: serde_json::Value,
+            #[serde(flatten)]
+            frames: Option<FrameTree>,
+        }
+        let env = TestEnv::new();
+        let op = Op::from_name("page.addScriptTag").ok_or("tag op exists")?;
+        let scope = OpScope::new(&env, op, CallHeader::default());
+        for has_frames in [false, true] {
+            let element = json!({"$neo":"element", "page":{"$neo":"page","tab":7},
+                "seq":3,"node":9,"display":"<script>"});
+            let before = Before {
+                element,
+                frames: has_frames.then(FrameTree::default),
+            };
+            let after = Tagged {
+                element: TagElement {
+                    brand: "element",
+                    page: serde_json::from_value(json!({"$neo":"page","tab":7}))?,
+                    seq: FrameSeq(3),
+                    node: 9,
+                    display: "<script>".to_owned(),
+                },
+                frames: has_frames.then(Vec::new),
+            };
+            // Run uses this encoder before the host records JSON. It sorts object keys, so
+            // direct struct serialization would measure declaration order instead of wire bytes.
+            let before = to_output(&scope, &before)?;
+            let after = to_output(&scope, &after)?;
+            assert_eq!(
+                serde_json::to_string(&after)?,
+                serde_json::to_string(&before)?
+            );
+            let expected = if has_frames {
+                r#"{"element":{"$neo":"element","display":"<script>","node":9,"page":{"$neo":"page","tab":7},"seq":3},"frames":[]}"#
+            } else {
+                r#"{"element":{"$neo":"element","display":"<script>","node":9,"page":{"$neo":"page","tab":7},"seq":3}}"#
+            };
+            assert_eq!(serde_json::to_string(&after)?, expected);
+        }
+        Ok(())
+    }
 }

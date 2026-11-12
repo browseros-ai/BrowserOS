@@ -1,4 +1,5 @@
 import { captureSite } from './call-site'
+import { send } from './generated'
 /**
  * The one browser context a run sees: every tab of the owner's profile, which Neo never closes
  * or recreates. It owns the run's Page objects (one per tab, so identity holds across
@@ -265,8 +266,7 @@ export class BrowserContext extends EventEmitter {
 
   async #openPage(api: string): Promise<Page> {
     const site = captureSite()
-    const opened = await invoke(
-      'context.newPage',
+    const opened = await send['context.newPage'](
       site,
       { api, timeoutMs: 0 },
       {},
