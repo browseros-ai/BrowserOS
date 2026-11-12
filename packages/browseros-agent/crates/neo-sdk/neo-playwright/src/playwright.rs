@@ -28,6 +28,23 @@ use crate::{OpEnv, PlaywrightError, locator_handler};
 /// watcher or a pump that fell far behind.
 const EVENTS_BEFORE_REPLY: Duration = Duration::from_secs(2);
 
+/// Where `context.newPage` (and so a run's lazy default page) opens its tab. Fixed per
+/// [`Playwright`] by the host.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum PagePlacement {
+    /// A background tab in the browser's existing window: the product's placement, so a new
+    /// page never takes the view the owner watches. On Linux such a tab is never drawn, and viz
+    /// sends it one `BeginFrame` a second (`ThrottleUndrawnFrames`): each mouse move waits ~1 s
+    /// for its ack and screenshots wait for frames. Production hosts mask part of that with the
+    /// trace camera's captures; see `lead/verify/ss054/NOTES.md`.
+    #[default]
+    BackgroundTab,
+    /// The only tab of a new, inactive window of its own, where it is drawn: Playwright's own
+    /// placement (each page the active tab of its window). Only the spec harness asks for it
+    /// on Linux, so Playwright's tests measure Neo rather than that throttle.
+    OwnWindow,
+}
+
 /// One per browser connection; runs every Playwright operation. The host builds it once at
 /// startup (claw-sdk: next to its browser link) and calls [`Playwright::invoke`] from each
 /// registered method's handler.
@@ -51,6 +68,8 @@ pub struct Playwright {
     /// `ariaSnapshot({ delta: true })`. It outlives runs on purpose; the watcher drops a tab's
     /// when its document changes.
     snapshot_baselines: Arc<SnapshotBaselines>,
+    /// Where `context.newPage` opens its tab.
+    page_placement: PagePlacement,
 }
 
 // A hand-written `Debug`: the session is not worth printing.
@@ -66,6 +85,15 @@ impl Playwright {
     /// where an already-open tab's seqs start. Needs a tokio runtime, as `BrowserSession` does.
     #[must_use]
     pub fn new(browser: Arc<BrowserSession>) -> Arc<Self> {
+        Self::with_page_placement(browser, PagePlacement::default())
+    }
+
+    /// [`Playwright::new`], with new pages opened at `page_placement`.
+    #[must_use]
+    pub fn with_page_placement(
+        browser: Arc<BrowserSession>,
+        page_placement: PagePlacement,
+    ) -> Arc<Self> {
         let (events, writer) = EventHub::new();
         let attach_log = Arc::new(FrameAttachLog::default());
         let progress = Arc::new(WatcherProgress::default());
@@ -92,7 +120,13 @@ impl Playwright {
             pages,
             media,
             snapshot_baselines,
+            page_placement,
         })
+    }
+
+    /// Where `context.newPage` opens its tab.
+    pub(crate) fn page_placement(&self) -> PagePlacement {
+        self.page_placement
     }
 
     /// The page event log and the dialogs held for runs.

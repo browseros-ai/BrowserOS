@@ -72,7 +72,7 @@ pub use download_facts::{DownloadFacts, DownloadState};
 pub use op::Op;
 pub use op_env::{OpEnv, Refusal};
 pub use op_spec::{Capability, OpLifetime, OpSpec, OpTarget};
-pub use playwright::Playwright;
+pub use playwright::{PagePlacement, Playwright};
 pub use playwright_error::{Answer, ErrorCode, PlaywrightError, TimedOut};
 pub use prelude_source::PRELUDE_JS;
 pub use probe::protocol::render as render_probe_protocol;

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
 import test from 'node:test'
 import { clawContextOptions, clawDefaults } from './claw-context-options.mjs'
-import { runnerOptions } from './options.mjs'
+import { defaultOwnWindowPages, runnerOptions } from './options.mjs'
 
 test('tests that each engine is selected without forwarding the switch', () => {
   assert.equal(runnerOptions([]).engine, 'claw')
@@ -79,5 +79,19 @@ test('tests that hosted mode is an explicit launch option for every engine', () 
     const options = runnerOptions(['--hosted-mode', '--engine', engine])
     assert.equal(options.hostedMode, true)
     assert.ok(!options.args.includes('--hosted-mode'))
+  }
+})
+
+test('tests that only Linux opens pages in a window of their own unless asked', () => {
+  assert.equal(defaultOwnWindowPages('linux'), true)
+  assert.equal(defaultOwnWindowPages('darwin'), false)
+  assert.equal(runnerOptions([]).ownWindowPages, defaultOwnWindowPages())
+  for (const [flag, value] of [
+    ['--own-window-pages', true],
+    ['--background-tabs', false],
+  ]) {
+    const options = runnerOptions([flag])
+    assert.equal(options.ownWindowPages, value)
+    assert.ok(!options.args.includes(flag))
   }
 })

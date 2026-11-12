@@ -5,7 +5,7 @@ use std::sync::Arc;
 use browseros_core::TargetId;
 
 use futures_util::future::BoxFuture;
-use neo_playwright::Playwright;
+use neo_playwright::{PagePlacement, Playwright};
 use tokio::sync::OnceCell;
 
 use crate::browser::BrowserLink;
@@ -24,15 +24,23 @@ pub(crate) struct PlaywrightFacade {
     /// Frozen startup mode, passed through each op's environment. Only hosted BrowserOS
     /// suppresses console/page-error events; ordinary desktop connections keep their waits.
     hosted: bool,
+    /// Where `context.newPage` opens tabs: the product's background tab, or a window of its
+    /// own for a host that asks (the Linux spec harness, `HostedOptions::own_window_pages`).
+    page_placement: PagePlacement,
     playwright: OnceCell<Arc<Playwright>>,
 }
 
 impl PlaywrightFacade {
     /// The facade over `link`'s session, built in the background on its first connect.
-    pub(crate) fn start(link: Arc<BrowserLink>, hosted: bool) -> Arc<Self> {
+    pub(crate) fn start(
+        link: Arc<BrowserLink>,
+        hosted: bool,
+        page_placement: PagePlacement,
+    ) -> Arc<Self> {
         let facade = Arc::new(Self {
             link,
             hosted,
+            page_placement,
             playwright: OnceCell::new(),
         });
         // Waits for a first connect that may never come; nothing waits on this task.
@@ -53,7 +61,9 @@ impl PlaywrightFacade {
     /// the browser.
     pub(crate) async fn get(&self) -> &Arc<Playwright> {
         self.playwright
-            .get_or_init(|| async { Playwright::new(self.link.linked().await) })
+            .get_or_init(|| async {
+                Playwright::with_page_placement(self.link.linked().await, self.page_placement)
+            })
             .await
     }
 }

@@ -454,8 +454,27 @@ impl FakeState {
                 Reply::Now(Ok(json!({ "tabs": tabs })), Vec::new())
             }
             "Browser.getTabInfo" => {
-                let tab = tab_param(params).and_then(|tab| self.tab_reply(tab));
+                // By `tabId`, or by `targetId` (a tab `Target.createTarget` opened).
+                let target = params.get("targetId").and_then(Value::as_str);
+                let tab = tab_param(params)
+                    .or_else(|| {
+                        self.tabs
+                            .iter()
+                            .find(|entry| Some(entry.target.as_str()) == target)
+                            .map(|entry| entry.tab)
+                    })
+                    .and_then(|tab| self.tab_reply(tab));
                 Reply::Now(tab.ok_or_else(no_tab), Vec::new())
+            }
+            // A tab in a window of its own (`PagePlacement::OwnWindow`); the fake has no windows.
+            "Target.createTarget" => {
+                let url = params
+                    .get("url")
+                    .and_then(Value::as_str)
+                    .unwrap_or("about:blank");
+                let tab = self.add_tab(url, url);
+                let events = self.created_events(tab);
+                Reply::Now(Ok(json!({ "targetId": format!("target-{tab}") })), events)
             }
             "Browser.createTab" => {
                 let url = params

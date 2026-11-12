@@ -1339,14 +1339,8 @@ impl BrowserView {
                 return Err(cdp_policy::unsupported("Browser.createTab"));
             }
             opts.window_id = opts.window_id.or(self.unbound_default_window);
-            let (creation, fresh) = self.session.pages.new_page_info(opts).await?;
-            let original = creation.original.clone();
-            self.retain_created_page(creation)?;
-            // An unbound view resolves pages by ID, which would follow a reconciliation or a
-            // reconnect onto another target. Load through the creation's own incarnation.
-            let creating_view = self.with_expected_created_page(&original)?;
-            let access = Arc::new(PageAccess::new(creating_view, original));
-            return self.load_opened(fresh, access, url).await;
+            let created = self.session.pages.new_page_info(opts).await?;
+            return self.load_unbound_created(created, url).await;
         };
         scope.context()?;
         if opts
@@ -1404,6 +1398,33 @@ impl BrowserView {
         }
         let settled = access.fresh().await?;
         self.load_opened(settled, Arc::new(access), url).await
+    }
+
+    /// [`Self::open_page`] for a tab that is the only tab of a new, inactive window of its own,
+    /// where Chromium draws it: on Linux a background tab in a shared window is never drawn and
+    /// viz throttles it to one frame a second (`PageManager::new_page_info_in_own_window`).
+    /// Unbound views only: a profile-scoped view places its tabs in that profile's window.
+    pub async fn open_page_in_own_window(&self, url: &str) -> Result<OpenedPage, CoreError> {
+        if self.scope()?.is_some() || self.expected_created_page.is_some() {
+            return Err(cdp_policy::unsupported("Target.createTarget"));
+        }
+        let created = self.session.pages.new_page_info_in_own_window().await?;
+        self.load_unbound_created(created, url).await
+    }
+
+    /// The unbound half of a page open, once the native create returned.
+    async fn load_unbound_created(
+        &self,
+        (creation, fresh): (PageCreation, PageInfo),
+        url: &str,
+    ) -> Result<OpenedPage, CoreError> {
+        let original = creation.original.clone();
+        self.retain_created_page(creation)?;
+        // An unbound view resolves pages by ID, which would follow a reconciliation or a
+        // reconnect onto another target. Load through the creation's own incarnation.
+        let creating_view = self.with_expected_created_page(&original)?;
+        let access = Arc::new(PageAccess::new(creating_view, original));
+        self.load_opened(fresh, access, url).await
     }
 
     /// Loads `url` into a tab just opened on about:blank, reporting how the load went.

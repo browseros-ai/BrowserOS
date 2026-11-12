@@ -542,6 +542,51 @@ impl PageManager {
         let created: NativeTabReply = root
             .send("Browser.createTab", Value::Object(params))
             .await?;
+        self.finish_created(root, created, epoch, opts.tab_group_id)
+            .await
+    }
+
+    /// Opens a tab on about:blank as the only tab of a new window of its own, shown inactive,
+    /// instead of a background tab in an existing window.
+    ///
+    /// On Linux a background tab is never drawn: focus emulation keeps it "visible", so its
+    /// renderer submits frames no window displays, and after a few of those viz sends it one
+    /// BeginFrame a second (`ThrottleUndrawnFrames`). Every mouse move then waits ~1 s for its
+    /// ack and a screenshot waits for a frame that may never come. The active tab of any window
+    /// is drawn, so this placement keeps a tab at full speed without touching the window the
+    /// owner sees. `Browser.createTab` cannot open a window, hence `Target.createTarget`; the
+    /// tab is then registered exactly as a created one, so it is agent-created (focus emulation,
+    /// the janitor) and its first identity is the native reply's.
+    pub(crate) async fn new_page_info_in_own_window(
+        &self,
+    ) -> Result<(PageCreation, PageInfo), CoreError> {
+        self.ensure_connected().await?;
+        let epoch = self.cdp.connection_epoch();
+        let root = ProtocolSession::root(self.cdp.clone());
+        let target: Value = root
+            .send(
+                "Target.createTarget",
+                json!({ "url": BLANK_URL, "newWindow": true, "background": true }),
+            )
+            .await?;
+        let target_id = target["targetId"]
+            .as_str()
+            .ok_or_else(|| CoreError::Message("Target.createTarget returned no targetId".into()))?;
+        let created: NativeTabReply = root
+            .send("Browser.getTabInfo", json!({ "targetId": target_id }))
+            .await?;
+        self.finish_created(root, created, epoch, None).await
+    }
+
+    /// Everything after the native create reply: registration under the reply's own identity
+    /// and epoch, the readiness poll, and the optional default group.
+    async fn finish_created(
+        &self,
+        root: ProtocolSession,
+        created: NativeTabReply,
+        epoch: u64,
+        tab_group_id: Option<String>,
+    ) -> Result<(PageCreation, PageInfo), CoreError> {
         let creation = self
             .register_created(created.tab, BLANK_URL, epoch, None)
             .await?;
@@ -572,7 +617,7 @@ impl PageManager {
         let mut tab = tab
             .ok_or_else(|| CoreError::Message(format!("Tab {tab_id} not found after creation")))?;
 
-        if let Some(group_id) = opts.tab_group_id {
+        if let Some(group_id) = tab_group_id {
             // The readiness loop can await registry locks and sleeps. Refresh the ORIGINAL
             // incarnation before the final native-tab mutation, never resolve its ID anew.
             let before: NativeTabReply = root
@@ -1108,6 +1153,55 @@ mod tests {
         assert!(
             !calls.iter().any(|call| call.method == "Runtime.enable"),
             "attaching must not leave console reporting on"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn own_window_tab_opens_in_a_new_inactive_window_as_an_agent_tab()
+    -> Result<(), Box<dyn Error>> {
+        let mut responses = vec![
+            ("Target.createTarget", json!({ "targetId": "target-7" })),
+            (
+                "Browser.getTabInfo",
+                json!({ "tab": tab_json(7, "target-7") }),
+            ),
+            (
+                "Browser.getTabInfo",
+                json!({ "tab": tab_json(7, "target-7") }),
+            ),
+        ];
+        responses.extend(attach_responses());
+        responses.push(("Emulation.setFocusEmulationEnabled", json!({})));
+        let connection = TestConnection::new(responses);
+        let manager = PageManager::new(connection.clone(), PageManagerHooks::default());
+
+        let (creation, page) = manager.new_page_info_in_own_window().await?;
+        manager.get_session(page.page_id.clone()).await?;
+
+        let calls = connection.calls()?;
+        assert_eq!(creation.original.tab_id, crate::TabId(7));
+        assert_eq!(
+            calls
+                .first()
+                .map(|call| (call.method.as_str(), &call.params)),
+            Some((
+                "Target.createTarget",
+                &json!({ "url": "about:blank", "newWindow": true, "background": true })
+            )),
+            "the tab is the only one of its own window, shown inactive"
+        );
+        assert!(
+            !calls.iter().any(|call| call.method == "Browser.createTab"),
+            "no tab is added to the owner's window"
+        );
+        assert_eq!(
+            calls
+                .iter()
+                .find(|call| call.method == "Emulation.setFocusEmulationEnabled")
+                .map(|call| &call.params),
+            Some(&json!({ "enabled": true })),
+            "registered as agent-created, so it keeps focus emulation"
         );
         Ok(())
     }

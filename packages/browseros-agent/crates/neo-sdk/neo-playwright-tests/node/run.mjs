@@ -34,6 +34,7 @@ const run = {
   mode: options.engine,
   engine: options.engine,
   hostedMode: options.hostedMode,
+  ownWindowPages: options.ownWindowPages,
   browserosVersion: browserVersion(process.env.NEO_E2E_BROWSER),
   browserLaunch: browserLaunch(
     process.env.NEO_E2E_BROWSER,
@@ -212,6 +213,7 @@ try {
         NEO_NODE_OUTPUT: output,
         NEO_NODE_MODE: run.mode,
         NEO_NODE_HOSTED_MODE: options.hostedMode ? '1' : '0',
+        NEO_NODE_OWN_WINDOW_PAGES: options.ownWindowPages ? '1' : '0',
         NEO_NODE_EXPECT_LOOP: options.expectLoop ? '1' : '0',
         NEO_NODE_CURATION: options.curation
           ? path.join(output, 'curation.json')

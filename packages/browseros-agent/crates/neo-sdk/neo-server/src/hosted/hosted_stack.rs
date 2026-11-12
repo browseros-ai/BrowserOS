@@ -3,6 +3,7 @@ use std::time::Duration;
 
 use browseros_core::NativeCapabilities;
 use neo_captcha::CaptchaSolver;
+use neo_playwright::PagePlacement;
 use neo_trace::{RedactionLimits, Redactor, TraceSink, WriterConfig};
 use tokio::time;
 use tokio_util::sync::CancellationToken;
@@ -32,6 +33,7 @@ impl HostedStack {
         options: HostedOptions,
         link: impl FnOnce(NativeCapabilities, Arc<TabRegistry>) -> Arc<BrowserLink>,
     ) -> Result<Arc<Self>, HostedError> {
+        let own_window_pages = options.own_window_pages;
         let config = options.config()?;
         let store = App::hosted_trace(&config.env.trace_dir())
             .await
@@ -53,6 +55,11 @@ impl HostedStack {
         let playwright = PlaywrightFacade::start(
             Arc::clone(&browser),
             matches!(&config.env.hosted_mode, HostedMode::On),
+            if own_window_pages {
+                PagePlacement::OwnWindow
+            } else {
+                PagePlacement::BackgroundTab
+            },
         );
         let solver = CaptchaSolver::new(config.captcha).map(Arc::new);
         let claims = Arc::new(CaptchaClaims::default());

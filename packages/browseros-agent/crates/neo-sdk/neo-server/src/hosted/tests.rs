@@ -17,12 +17,21 @@ use crate::config::HostedMode;
 use crate::test_support::FakeCdp;
 
 async fn connect(dir: &TempDir, fake: Arc<FakeCdp>) -> Result<HostedRuntime, Box<dyn Error>> {
+    connect_with(dir, fake, false).await
+}
+
+async fn connect_with(
+    dir: &TempDir,
+    fake: Arc<FakeCdp>,
+    own_window_pages: bool,
+) -> Result<HostedRuntime, Box<dyn Error>> {
     Ok(HostedRuntime::start(
         HostedOptions {
             state_dir: dir.path().join("state"),
             execution_dir: Some(dir.path().join("profile/.browseros")),
             browseros_version: Some("0.52.1.1".to_owned()),
             hosted_mode: false,
+            own_window_pages,
         },
         move |native, tabs| {
             BrowserLink::start_with(native, tabs, move || future::ready(fake.connect()))
@@ -94,6 +103,36 @@ async fn open_invoke_finish_records_the_real_run() -> Result<(), Box<dyn Error>>
         RunStatus::Ok,
         "finish flushes a completed run"
     );
+    Ok(())
+}
+
+/// The spec harness's Linux placement: `context.newPage` opens the tab as the only tab of a new,
+/// inactive window, never as a tab of the owner's window. Off, it stays the product's background
+/// tab (every other test here).
+#[tokio::test]
+async fn own_window_pages_open_new_pages_in_a_window_of_their_own() -> Result<(), Box<dyn Error>> {
+    let dir = tempfile::tempdir()?;
+    let fake = FakeCdp::new();
+    let runtime = connect_with(&dir, Arc::clone(&fake), true).await?;
+    let run = runtime.open_run(Duration::from_secs(10)).await?;
+    let opened: Value = serde_json::from_str(
+        &run.invoke("context.newPage".to_owned(), "{}", "run:1:1")
+            .await,
+    )?;
+    assert!(opened["ok"]["page"]["tab"].is_u64(), "{opened}");
+    let created: Vec<Value> = fake
+        .calls()
+        .into_iter()
+        .filter(|call| call.method == "Target.createTarget")
+        .map(|call| call.params)
+        .collect();
+    assert_eq!(
+        created,
+        [json!({ "url": "about:blank", "newWindow": true, "background": true })]
+    );
+    assert_eq!(fake.count("Browser.createTab"), 0);
+    run.finish().await?;
+    runtime.close().await?;
     Ok(())
 }
 

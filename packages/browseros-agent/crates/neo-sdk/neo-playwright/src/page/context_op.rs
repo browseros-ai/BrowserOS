@@ -16,7 +16,7 @@ use crate::op_scope::OpScope;
 use crate::op_spec::{Capability, OpSpec, OpTarget};
 use crate::page::{PageHandle, init_script};
 use crate::wire::{self, Describe, OpWire, Route, Run, options};
-use crate::{Playwright, PlaywrightError};
+use crate::{PagePlacement, Playwright, PlaywrightError};
 
 listed_enum! {
     /// The one browser context a run sees: its tabs, opening a new one, and the init scripts and
@@ -177,19 +177,27 @@ async fn new_page(
     // conformance Runner N, whose first op in a new instance is this one.
     pw.pages().note_open_tabs(pw.browser()).await;
     let _sent = scope.send_effect()?;
-    // Core opens it in the background and keeps focus emulation on, as for every tab it
-    // opens for the agent.
-    let opened = scope
-        .view()
-        .new_page(
-            "about:blank",
-            NewPageOptions {
-                background: Some(true),
-                ..NewPageOptions::default()
-            },
-        )
-        .await
-        .map_err(|error| scope.core_error(&error))?;
+    // Core keeps focus emulation on, as for every tab it opens for the agent. Where the tab
+    // goes is the host's choice (`PagePlacement`): a background tab of the owner's window, or
+    // a window of its own, which Linux draws.
+    let view = scope.view();
+    let opened = match pw.page_placement() {
+        PagePlacement::BackgroundTab => {
+            view.new_page(
+                "about:blank",
+                NewPageOptions {
+                    background: Some(true),
+                    ..NewPageOptions::default()
+                },
+            )
+            .await
+        }
+        PagePlacement::OwnWindow => view
+            .open_page_in_own_window("about:blank")
+            .await
+            .map(|opened| opened.page),
+    }
+    .map_err(|error| scope.core_error(&error))?;
     // No ref printed before this run can be this tab's (run_state/opened_tabs.rs).
     scope.run_state().opened_tabs.opened(opened.tab_id);
     ready(pw, scope, &opened).await;

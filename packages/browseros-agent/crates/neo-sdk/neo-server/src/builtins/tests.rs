@@ -12,7 +12,9 @@ use browseros_core::{NativeCapabilities, TabId, TargetId};
 use futures_util::future::{self, Either};
 use neo_captcha::CaptchaSolver;
 use neo_captcha::config::{CAPSOLVER_KEY_FILE_ENV, CAPSOLVER_URL_ENV, CaptchaConfig};
-use neo_playwright::{ErrorCode as PlaywrightCode, Op, OpEnv, PlaywrightError, Refusal, RunState};
+use neo_playwright::{
+    ErrorCode as PlaywrightCode, Op, OpEnv, PagePlacement, PlaywrightError, Refusal, RunState,
+};
 use neo_takeover::{Lock, LockBinding, LockTtl, Locks, Reads};
 use neo_trace::{
     Delivery, Effect, ErrorOwner, OperationId, OperationRow, Outcome, RedactionLimits, Redactor,
@@ -105,7 +107,8 @@ impl Harness {
         let takeover = Arc::new(TakeoverLock::default());
         takeover.arm(Arc::clone(&locks));
         let claims = Arc::new(CaptchaClaims::default());
-        let playwright = PlaywrightFacade::start(Arc::clone(&link), hosted);
+        let playwright =
+            PlaywrightFacade::start(Arc::clone(&link), hosted, PagePlacement::BackgroundTab);
         let mut registry = RegistryBuilder::default();
         let deps = BuiltinDeps {
             solver,

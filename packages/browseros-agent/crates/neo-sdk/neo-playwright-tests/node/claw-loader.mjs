@@ -57,6 +57,10 @@ export async function openClaw(cdpPort, options = {}, { onUncaught } = {}) {
       // The browser's launch mode, as launchBrowser defaults it: hosted only for --hosted-mode.
       hostedMode:
         options.hostedMode ?? process.env.NEO_NODE_HOSTED_MODE === '1',
+      // Where newPage opens tabs: a window of its own on Linux by run.mjs's default
+      // (options.mjs, `defaultOwnWindowPages`), else the product's background tab.
+      ownWindowPages:
+        options.ownWindowPages ?? process.env.NEO_NODE_OWN_WINDOW_PAGES === '1',
     })
     native = await runtime.openRun({ timeoutMs: options.timeoutMs })
     const holder = {

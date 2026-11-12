@@ -32,6 +32,9 @@ pub struct ConnectOptions {
     pub browseros_version: Option<String>,
     /// Whether the browser was launched with `BROWSERCLAW_HOSTED_MODE=1`; off when absent.
     pub hosted_mode: Option<bool>,
+    /// Open each new page in a window of its own (`HostedOptions::own_window_pages`); off when
+    /// absent.
+    pub own_window_pages: Option<bool>,
 }
 
 #[napi]
@@ -49,6 +52,7 @@ pub fn connect(env: Env, cdp_port: u16, options: ConnectOptions) -> Result<JsObj
                 execution_dir: options.execution_dir.map(PathBuf::from),
                 browseros_version: options.browseros_version,
                 hosted_mode: options.hosted_mode.unwrap_or(false),
+                own_window_pages: options.own_window_pages.unwrap_or(false),
             },
         )
         .await

@@ -16,10 +16,23 @@ export const headfulInvert =
  */
 export const MAX_WORKERS = 32
 
+/**
+ * Where Neo opens each test's page (the add-on's `ownWindowPages`). On Linux a background tab is
+ * never drawn, and Chromium's compositor then sends it one frame a second
+ * (`ThrottleUndrawnFrames`): every mouse move waits ~1 s and screenshots stall (SS-054, LH-001;
+ * claw-sdk `lead/verify/ss054/NOTES.md`). Playwright's own pages are each the active tab of their
+ * window, so on Linux the harness opens Neo's pages in a window of their own too, and the corpus
+ * measures Neo rather than that throttle. macOS draws background tabs, so it keeps the product's
+ * placement. `--background-tabs` and `--own-window-pages` choose either one on any platform.
+ */
+export const defaultOwnWindowPages = (platform = process.platform) =>
+  platform === 'linux'
+
 export function runnerOptions(argv) {
   const options = {
     engine: 'claw',
     hostedMode: false,
+    ownWindowPages: defaultOwnWindowPages(),
     reference: false,
     skipBuild: false,
     debugBuild: false,
@@ -51,6 +64,8 @@ export function runnerOptions(argv) {
     else if (arg === '--engine') selectEngine(argv[++index])
     else if (arg.startsWith('--engine=')) selectEngine(arg.slice(9))
     else if (arg === '--hosted-mode') options.hostedMode = true
+    else if (arg === '--own-window-pages') options.ownWindowPages = true
+    else if (arg === '--background-tabs') options.ownWindowPages = false
     else if (arg === '--no-curation') options.curation = false
     else if (arg === '--skip-build') options.skipBuild = true
     else if (arg === '--debug-build') options.debugBuild = true

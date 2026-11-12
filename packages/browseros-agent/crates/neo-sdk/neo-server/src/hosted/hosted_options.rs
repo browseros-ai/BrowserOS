@@ -21,6 +21,13 @@ pub struct HostedOptions {
     /// which mode it chose. Off by default: then Neo waits for console and page errors, which
     /// hosted BrowserOS never sends (`events.wait` refuses those in hosted mode).
     pub hosted_mode: bool,
+    /// Open each new page (`context.newPage`, a run's default page) as the only tab of a new,
+    /// inactive window instead of a background tab of the existing window. Off by default, the
+    /// product's placement. The spec harness turns it on for Linux, where a background tab is
+    /// never drawn and viz throttles it to one frame a second (SS-054, LH-001), so Playwright's
+    /// tests measure Neo rather than that throttle; Playwright's own pages are each the active
+    /// tab of their window.
+    pub own_window_pages: bool,
 }
 
 impl HostedOptions {

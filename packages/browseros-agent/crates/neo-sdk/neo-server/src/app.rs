@@ -10,6 +10,7 @@ use axum::Router;
 use browseros_core::NativeCapabilities;
 use neo_captcha::CaptchaSolver;
 use neo_captcha::config::{CAPSOLVER_KEY_FILE_ENV, TWOCAPTCHA_KEY_FILE_ENV};
+use neo_playwright::PagePlacement;
 use neo_trace::{
     EpochMillis, RedactionLimits, Redactor, RetentionPolicy, TraceError, TraceSink, TraceStore,
     WriterConfig,
@@ -181,9 +182,11 @@ impl App {
         let tabs = Arc::new(TabRegistry::new());
         let native = NativeCapabilities::from_browseros_version(config.browseros_version());
         let browser = link(native, Arc::clone(&tabs));
+        // The product's placement: a new page is a background tab of the owner's window.
         let playwright = PlaywrightFacade::start(
             Arc::clone(&browser),
             matches!(&config.env.hosted_mode, HostedMode::On),
+            PagePlacement::BackgroundTab,
         );
 
         // One solver for the process: its paid-task budget and page reservations are its own.
