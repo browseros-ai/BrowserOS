@@ -181,12 +181,17 @@ it('drops ignored noWaitAfter options while retaining click and press navigation
     }
   }
   for (const op of ['locator.fill', 'locator.pressSequentially']) {
-    for (const call of runtime.sent(op)) expect(call.input.options).toEqual({})
+    for (const call of runtime.sent(op)) {
+      expect(call.input).not.toHaveProperty('options')
+      expect(call.input).not.toHaveProperty('noWaitAfter')
+    }
   }
   for (const call of runtime.sent('locator.click')) {
     expect(call.input).not.toHaveProperty('options')
     expect(call.input.noWaitAfter).toBe(true)
   }
-  for (const call of runtime.sent('locator.press'))
-    expect(call.input.options).toEqual({ noWaitAfter: true })
+  for (const call of runtime.sent('locator.press')) {
+    expect(call.input).not.toHaveProperty('options')
+    expect(call.input.noWaitAfter).toBe(true)
+  }
 })

@@ -7791,7 +7791,7 @@ ${value.stack}`;
       const wait = this._wait(api, options);
       const picked = pick(options, OPTION_KEYS["locator.fill"]);
       const addressed = await this._targetArgs(api, selector, strict);
-      await send["locator.fill"](site, this._call(api, wait.timeout), { ...addressed, value, options: picked }, wait.signal);
+      await send["locator.fill"](site, this._call(api, wait.timeout), { ...addressed, value, ...picked }, wait.signal);
     }
     async _press(api, selector, key, options = {}) {
       const site = captureSite();
@@ -7799,7 +7799,7 @@ ${value.stack}`;
       const wait = this._wait(api, options);
       const picked = pick(options, OPTION_KEYS["locator.press"]);
       const addressed = await this._targetArgs(api, selector, strict);
-      await send["locator.press"](site, this._call(api, wait.timeout), { ...addressed, key, options: picked }, wait.signal);
+      await send["locator.press"](site, this._call(api, wait.timeout), { ...addressed, key, ...picked }, wait.signal);
     }
     async _type(api, selector, text, options = {}) {
       const site = captureSite();
@@ -7807,7 +7807,7 @@ ${value.stack}`;
       const wait = this._wait(api, options);
       const picked = pick(options, OPTION_KEYS["locator.pressSequentially"]);
       const addressed = await this._targetArgs(api, selector, strict);
-      await send["locator.pressSequentially"](site, this._call(api, wait.timeout), { ...addressed, text, options: picked }, wait.signal);
+      await send["locator.pressSequentially"](site, this._call(api, wait.timeout), { ...addressed, text, ...picked }, wait.signal);
     }
     async _focus(api, selector, options = {}) {
       const site = captureSite();
@@ -7832,8 +7832,8 @@ ${value.stack}`;
       const addressed = await this._targetArgs(api, selector, strict);
       return await send["locator.selectOption"](site, this._call(api, wait.timeout), {
         ...addressed,
-        options: converted.options,
-        elements: converted.elements,
+        options: converted.options.length ? converted.options : undefined,
+        elements: converted.elements.length ? converted.elements : undefined,
         ...picked
       }, wait.signal);
     }
@@ -8339,7 +8339,7 @@ ${value.stack}`;
       const timeout = this.#timeout(options);
       const picked = pick(options, OPTION_KEYS["locator.fill"]);
       this.#live(api);
-      await send["locator.fill"](site, { api, timeoutMs: timeoutMs(api, timeout) }, { target: this._brand, strict: "strict", value, options: picked });
+      await send["locator.fill"](site, { api, timeoutMs: timeoutMs(api, timeout) }, { target: this._brand, strict: "strict", value, ...picked });
     }
     async press(key, options = {}) {
       const site = captureSite();
@@ -8347,7 +8347,7 @@ ${value.stack}`;
       const timeout = this.#timeout(options);
       const picked = pick(options, OPTION_KEYS["locator.press"]);
       this.#live(api);
-      await send["locator.press"](site, { api, timeoutMs: timeoutMs(api, timeout) }, { target: this._brand, strict: "strict", key, options: picked });
+      await send["locator.press"](site, { api, timeoutMs: timeoutMs(api, timeout) }, { target: this._brand, strict: "strict", key, ...picked });
     }
     async type(text, options = {}) {
       const site = captureSite();
@@ -8355,7 +8355,7 @@ ${value.stack}`;
       const timeout = this.#timeout(options);
       const picked = pick(options, OPTION_KEYS["locator.pressSequentially"]);
       this.#live(api);
-      await send["locator.pressSequentially"](site, { api, timeoutMs: timeoutMs(api, timeout) }, { target: this._brand, strict: "strict", text, options: picked });
+      await send["locator.pressSequentially"](site, { api, timeoutMs: timeoutMs(api, timeout) }, { target: this._brand, strict: "strict", text, ...picked });
     }
     async selectOption(values, options = {}) {
       const site = captureSite();
@@ -8367,8 +8367,8 @@ ${value.stack}`;
       return await send["locator.selectOption"](site, { api, timeoutMs: timeoutMs(api, timeout) }, {
         target: this._brand,
         strict: "strict",
-        options: converted.options,
-        elements: converted.elements,
+        options: converted.options.length ? converted.options : undefined,
+        elements: converted.elements.length ? converted.elements : undefined,
         ...picked
       });
     }

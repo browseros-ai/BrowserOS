@@ -1126,7 +1126,7 @@ async fn tests_that_a_locator_matching_nothing_logs_only_its_wait() -> TestResul
         (
             "locator.fill",
             json!({ "call": call("locator.fill"), "target": nope, "strict": "strict",
-                    "value": "x", "options": {} }),
+                    "value": "x" }),
         ),
         (
             "locator.focus",

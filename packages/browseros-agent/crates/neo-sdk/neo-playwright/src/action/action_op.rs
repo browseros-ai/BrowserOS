@@ -226,7 +226,7 @@ fn route<'a, R: Route<'a>>(op: ActionOp, r: R) -> R::Out {
         ActionOp::DispatchEvent => r.op(
             wire::command("ElementHandle.dispatchEvent").retypes(&[(
                 "eventInit",
-                "Neo transports JSON rather than upstream SerializedArgument",
+                "JSON init keeps dispatch in Neo's isolated world instead of the page's world",
             )]),
             dispatch_event,
         ),
@@ -401,7 +401,7 @@ fn optional_drop_data<'de, D: Deserializer<'de>>(
     Vec::deserialize(deserializer).map(Some)
 }
 
-/// `locator.fill(value)` and `clear()`: the redacted text and its existing nested bag.
+/// `locator.fill(value)` and `clear()`: the redacted text and its action options.
 #[derive(Debug, Deserialize, TS)]
 #[serde(deny_unknown_fields)]
 struct FillInput {
@@ -409,59 +409,39 @@ struct FillInput {
     strict: Strictness,
     #[ts(type = "string")]
     value: FillValue,
-    options: FillOptions,
-}
-options!(FillInput => FillOptions);
-
-#[derive(Debug, Deserialize, TS)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-#[ts(optional_fields)]
-struct FillOptions {
     #[serde(default, deserialize_with = "optional_bool")]
     #[ts(optional)]
     force: Option<bool>,
 }
+options!(FillInput, flat, positional["value"]);
 
-/// `locator.press(key, options)`.
+/// `locator.press(key, options)`: delay is in milliseconds; noWaitAfter controls whether
+/// the key runner waits for the navigations requested by its input.
 #[derive(Debug, Deserialize, TS)]
-#[serde(deny_unknown_fields)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct PressInput {
     target: Target,
     strict: Strictness,
     key: Typed,
-    options: KeyOptions,
+    #[ts(optional)]
+    delay: Option<f64>,
+    #[serde(default, deserialize_with = "optional_bool")]
+    #[ts(optional)]
+    no_wait_after: Option<bool>,
 }
-options!(PressInput => KeyOptions);
+options!(PressInput, flat, positional["key"]);
 
-/// `locator.pressSequentially(text, options)` and `type`.
+/// `locator.pressSequentially(text, options)` and `type`; neither waits for navigation.
 #[derive(Debug, Deserialize, TS)]
 #[serde(deny_unknown_fields)]
 struct TypeInput {
     target: Target,
     strict: Strictness,
     text: Typed,
-    options: SequentialOptions,
-}
-options!(TypeInput => SequentialOptions);
-
-#[derive(Debug, Deserialize, TS)]
-#[serde(deny_unknown_fields)]
-#[ts(optional_fields)]
-struct SequentialOptions {
+    #[ts(optional)]
     delay: Option<f64>,
 }
-
-/// The press options; noWaitAfter controls its requested-navigation wait.
-#[derive(Debug, Deserialize, TS)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-#[ts(optional_fields)]
-struct KeyOptions {
-    /// Milliseconds, inside each press and before each inserted character.
-    delay: Option<f64>,
-    /// `press` waits for the navigations its keys requested unless this is set.
-    #[serde(default, deserialize_with = "optional_bool")]
-    no_wait_after: Option<bool>,
-}
+options!(TypeInput, flat, positional["text"]);
 
 /// `locator.selectOption(values)`. `options` contains selected values, not a script option
 /// bag: force stays flat on the wire. `elements` are the `<option>` handles among the values.
@@ -470,14 +450,30 @@ struct KeyOptions {
 struct SelectOptionInput {
     target: Target,
     strict: Strictness,
-    #[ts(type = "Array<import('../../../probe/protocol').SelectOption>")]
-    options: Vec<SelectOption>,
-    elements: Vec<Target>,
+    #[serde(default, deserialize_with = "optional_selection_list")]
+    #[ts(
+        optional,
+        type = "Array<import('../../../probe/protocol').SelectOption>"
+    )]
+    options: Option<Vec<SelectOption>>,
+    #[serde(default, deserialize_with = "optional_selection_list")]
+    #[ts(optional)]
+    elements: Option<Vec<Target>>,
     #[serde(default, deserialize_with = "optional_bool")]
     #[ts(optional)]
     force: Option<bool>,
 }
 options!(SelectOptionInput);
+
+/// Absent selection lists mean empty lists, as upstream defaults them. A present null must
+/// still fail decoding rather than silently clearing a selection at the page-effect boundary.
+fn optional_selection_list<'de, D, T>(deserializer: D) -> Result<Option<Vec<T>>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Vec::deserialize(deserializer).map(Some)
+}
 
 /// `locator.selectText()`.
 #[derive(Debug, Deserialize, TS)]
@@ -587,7 +583,7 @@ async fn fill(
         &page,
         &input.target,
         input.strict,
-        input.options.force.unwrap_or(false),
+        input.force.unwrap_or(false),
     )
     .run(&FormEdit::Fill(&input.value))
     .await?;
@@ -599,7 +595,7 @@ async fn select_option(
     scope: &OpScope<'_>,
     input: SelectOptionInput,
 ) -> Result<Vec<String>, PlaywrightError> {
-    if !input.elements.is_empty() {
+    if input.elements.is_some_and(|elements| !elements.is_empty()) {
         return Err(scope.fail(
             ErrorCode::Unsupported,
             "Neo selects options by value, label or index, not by element handle; pass \
@@ -608,6 +604,7 @@ async fn select_option(
     }
     let page = OpPage::admit_handle(pw, scope, input.target.page()).await?;
     let _lease = lease(scope, &page).await?;
+    let options = input.options.unwrap_or_default();
     FormRunner::new(
         scope,
         &page,
@@ -615,7 +612,7 @@ async fn select_option(
         input.strict,
         input.force.unwrap_or(false),
     )
-    .run(&FormEdit::SelectOptions(&input.options))
+    .run(&FormEdit::SelectOptions(&options))
     .await
 }
 
@@ -646,8 +643,8 @@ async fn press(
     let _lease = lease(scope, &page).await?;
     let keys = Keys::Press {
         key: &input.key.0,
-        delay: millis(input.options.delay),
-        wait_after: !input.options.no_wait_after.unwrap_or(false),
+        delay: millis(input.delay),
+        wait_after: !input.no_wait_after.unwrap_or(false),
     };
     KeyRunner::new(pw, scope, &page, &input.target, input.strict)
         .run(&keys)
@@ -664,7 +661,7 @@ async fn type_text(
     let _lease = lease(scope, &page).await?;
     let keys = Keys::Type {
         text: &input.text.0,
-        delay: millis(input.options.delay),
+        delay: millis(input.delay),
     };
     KeyRunner::new(pw, scope, &page, &input.target, input.strict)
         .run(&keys)
@@ -725,7 +722,7 @@ async fn dispatch_event(
     scope: &OpScope<'_>,
     input: DispatchEventInput,
 ) -> Result<Nothing, PlaywrightError> {
-    // eventInit is deliberately JSON rather than a SerializedArgument. Normalize the old
+    // eventInit stays JSON for the isolated-world probe. Normalize the old
     // null/absent default before admission, and reject primitives before any page effect.
     let init = match input.event_init {
         Value::Object(init) => init,

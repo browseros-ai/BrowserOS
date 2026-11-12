@@ -192,7 +192,7 @@ describe('locator targets', () => {
     ).toEqual([
       ['locator.dblclick', { button: 'right' }],
       ['locator.check', { force: true }],
-      ['locator.press', { key: 'Control+A', options: { delay: 10 } }],
+      ['locator.press', { key: 'Control+A', delay: 10 }],
     ])
     expect(runtime.calls[1]?.input.call).toEqual({
       api: 'locator.check',
