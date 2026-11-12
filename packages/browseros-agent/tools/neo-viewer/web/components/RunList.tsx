@@ -48,8 +48,14 @@ function RunRow({ run }: { run: RunSummary }) {
         <span>code {tokens(run.codeSize)}</span>
         <span>reply {tokens(run.replySize)}</span>
         {run.client && <span className="text-zinc-500">{run.client.name}</span>}
+        {run.tasks.length > 0 && (
+          <span className="text-zinc-500">
+            {run.tasks.length === 1 ? 'task' : 'tasks'}{' '}
+            {run.tasks.map((task) => task.id).join(', ')}
+          </span>
+        )}
         {run.agentTaskId && (
-          <span className="text-zinc-500">task {run.agentTaskId}</span>
+          <span className="text-zinc-500">host task {run.agentTaskId}</span>
         )}
       </button>
       <div className="space-y-2 border-zinc-200 border-t px-3 py-2">

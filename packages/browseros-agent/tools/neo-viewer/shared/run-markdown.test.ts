@@ -126,6 +126,43 @@ describe('one run as Markdown', () => {
     expect(markdown.length).toBeLessThan(4_000)
   })
 
+  test('the header and the facts name the tasks: the script’s, and the host’s', () => {
+    const run = {
+      ...detailWith(9, { text: '1', neo: null }),
+      tasks: [
+        { id: 'shop-4b80', name: 'shop' },
+        { id: 't-91c2', name: null },
+      ],
+      agentTaskId: 'host-1',
+    }
+    const markdown = runMarkdown(run, FULL)
+    expect(markdown.split('\n')[0]).toContain(
+      ' · claude-code · tasks shop-4b80, t-91c2 · host task host-1 · ok · ',
+    )
+    expect(markdown).toContain(
+      "- Tasks the script created or picked: `shop-4b80` (shop), `t-91c2`\n- Host task (the request's `_meta` taskId): `host-1`",
+    )
+    // A name is Neo's free text: it stays on its line and cannot start Markdown of its own.
+    const odd = runMarkdown(
+      { ...run, tasks: [{ id: 'shop-4b80', name: 'shop\n\n## Review *now*' }] },
+      FULL,
+    )
+    expect(odd).toContain('`shop-4b80` (shop \\#\\# Review \\*now\\*)')
+    expect(odd).not.toContain('\n## Review')
+    const one = runMarkdown(
+      { ...run, tasks: [{ id: 'shop-4b80', name: 'shop' }], agentTaskId: null },
+      FULL,
+    )
+    expect(one.split('\n')[0]).toContain(
+      ' · claude-code · task shop-4b80 · ok · ',
+    )
+    expect(
+      runMarkdown(detailWith(10, { text: '1', neo: null }), FULL).split(
+        '\n',
+      )[0],
+    ).toContain(' · claude-code · ok · ')
+  })
+
   test('the first statement is the page’s, on one line, and cut short', () => {
     expect(statementPreview('await page.goto(url);await page.click("a")')).toBe(
       'await page.goto(url);',

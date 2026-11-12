@@ -72,7 +72,7 @@ export function exportReadme(input: {
     '',
     'Times are local. "Calls" are the method calls Neo recorded (– when Neo has no record of the run). A Neo time marked * is the viewer\'s measure: Neo had no record of that run.',
     '',
-    '| # | Started | Client | Host task | Result | Round trip | Neo | Calls | Code tok | Reply tok | First statement |',
+    '| # | Started | Client | Tasks | Result | Round trip | Neo | Calls | Code tok | Reply tok | First statement |',
     '| --: | --- | --- | --- | --- | --: | --: | --: | --: | --: | --- |',
   )
   for (const run of runs.slice(0, TABLE_ROWS)) {
@@ -81,7 +81,7 @@ export function exportReadme(input: {
     out.push(
       `| [${number}](${files?.markdown ?? ''}) | ${clock(run.sentAt)} | ${cell(
         run.client?.name ?? '–',
-      )} | ${run.agentTaskId ? cell(run.agentTaskId) : '–'} | ${outcomeWord(
+      )} | ${tasksCell(run)} | ${outcomeWord(
         run,
       )} | ${run.roundTripMs === null ? '–' : seconds(run.roundTripMs)} | ${neoCell(
         run,
@@ -97,6 +97,15 @@ export function exportReadme(input: {
     )
   out.push('', ...HOW_TO_READ, '', ...QUESTIONS)
   return `${out.join('\n')}\n`
+}
+
+/** The run's tasks: the script's, then the host's marked "(host)"; "–" for none. */
+function tasksCell(run: ExportSource['runs'][number]): string {
+  const ids = [
+    ...run.tasks.map((task) => task.id),
+    ...(run.agentTaskId ? [`${run.agentTaskId} (host)`] : []),
+  ]
+  return ids.length === 0 ? '–' : cell(ids.join(', '))
 }
 
 function neoCell(run: ExportSource['runs'][number]): string {
@@ -135,7 +144,7 @@ const HOW_TO_READ = [
   '  - `export`: when, the folder, the viewer instance and commit, the Neo image and container (`neo.image` is null when the viewer forwarded to a Neo it did not start).',
   '  - `log.clearedAt`: when this list began. `totals`: the numbers above, in ms and token estimates.',
   "  - `toolsList`: the `tools/list` reply the agent read (the `run` tool's description and input schema, which sits in the model's context), with its size; null if no client asked during this log.",
-  "  - `runs[]`: one summary per run, in arrival order: `number`, `seq`, `outcome` (`ok`, `failed`, `cancelled`, `lost`, `running`), `status` (the viewer's: `ok`, `error`, `rpc-error`, `http-error`, …), `client` (the agent's MCP client name), `agentTaskId` (the host task the request's `_meta` named, if any; the tasks a script picked with `neo.task` are in `runs/NNN.json`, `reply.meta[\"com.browseros.neo/run\"].tasks`), `sentAt`/`answeredAt` (ISO), `roundTripMs`, `neoMs` (time in Neo, as above), `neoDurationMs` (Neo's own record only), `gapMs` (since the previous reply; null when runs overlapped), `proxyMs` (the viewer's hold), `operationCount`, `codeSize`/`replySize` (`chars`, `tokens`), `neoRunId`, `neoStatus`, `firstStatement`, and `files` (this run's paths). No code or replies inline.",
+  "  - `runs[]`: one summary per run, in arrival order: `number`, `seq`, `outcome` (`ok`, `failed`, `cancelled`, `lost`, `running`), `status` (the viewer's: `ok`, `error`, `rpc-error`, `http-error`, …), `client` (the agent's MCP client name), `tasks` (the tasks the run's script created or picked with `neo.createTask`/`neo.task`: `id`, and `name` when the reply carries one), `agentTaskId` (the host's task, from the request's `_meta` taskId, if any), `sentAt`/`answeredAt` (ISO), `roundTripMs`, `neoMs` (time in Neo, as above), `neoDurationMs` (Neo's own record only), `gapMs` (since the previous reply; null when runs overlapped), `proxyMs` (the viewer's hold), `operationCount`, `codeSize`/`replySize` (`chars`, `tokens`), `neoRunId`, `neoStatus`, `firstStatement`, and `files` (this run's paths). No code or replies inline.",
   `- **\`runs/NNN.md\`**: one run, top to bottom: a one-line header, the facts, the code laid out one statement per line as the viewer shows it (whitespace only; \`code\` in \`runs/NNN.json\` is as sent), each line's methods (\`L3 locator.click: +415 ms, 80 ms, ok\` is line 3, started 415 ms into the run, took 80 ms), a table of every operation (\`seq\`, \`name\`, \`effect\` read or write, \`line\`, \`start\` offset, \`duration\`, \`outcome\`, \`error\`), the operations not on a code line (Neo's own work, or calls inside another operation), the console lines, the error if it failed, and what the model read: the first ${count(REPLY_INLINE_CHARS)} characters, with the full size and a link to the reply file.`,
   "- **`runs/NNN.json`**: that run complete. `code` as sent; `request.raw`, the HTTP body the agent sent; `reply.raw`, the body Neo answered with (SSE framing included); `reply.text`, what the model read; `reply.structuredContent`, `reply.isError`, `reply.meta`, `reply.rpcError`, `reply.notifications`; `parsed` (`value`, the returned value when `valueIsJson`; `valueText`; `console`; `notes`, Neo's `[unknown outcome]`/`[not awaited]` lines); `neo`, Neo's record (null when there is none): `status`, `startedAt`/`endedAt` (epoch ms), `durationMs`, `complete`, `tabs`, `error`, and `operations[]` with each one's `seq`, `parentId`, `name`, `kind`, `effect`, `site` (`line`, `column`), `startOffsetMs`, `durationMs`, `tabId`, `args`, `result`, `argsTruncated`/`resultTruncated` (Neo bounds both), `outcome`, `delivery`, `error` (`owner`, `code`, `message`, `retryable`) and `notes` (its call log).",
   '- **`runs/NNN.reply.txt`** (`.reply.json` when the whole text is JSON): exactly the text the model read, alone, to grep. Absent when the model read nothing.',

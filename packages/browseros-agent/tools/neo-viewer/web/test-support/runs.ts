@@ -36,6 +36,7 @@ export function runSummary(
     id: `run-${seq}`,
     client: { name: 'claude-code' },
     agentTaskId: null,
+    tasks: [],
     seq,
     tool: 'run',
     status,

@@ -217,6 +217,7 @@ function pick(run: Omit<RunDetail, 'code' | 'replyPreview'>) {
     id: run.id,
     status: run.status,
     client: run.client,
+    tasks: run.tasks,
     agentTaskId: run.agentTaskId,
     tool: run.tool,
     sentAt: run.sentAt,
