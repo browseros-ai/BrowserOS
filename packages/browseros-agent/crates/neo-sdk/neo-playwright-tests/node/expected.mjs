@@ -10,8 +10,9 @@
  *                                                                                ├─▶ the list this run supports
  *                                                                                └─▶ the proof for each test it drops
  *
- * Tests on known-flaky.tsv (known-flaky.mjs) are reported, never judged. scope.json alone decides
- * which tests count; nothing here changes selection, scope or curation.
+ * Positive expectations on known-flaky.tsv (known-flaky.mjs) are reported, never judged.
+ * scope.json alone decides which tests count; decisions.mjs separately enforces its explicit
+ * negative expectations. Nothing here changes selection, scope or curation.
  */
 import fs from 'node:fs'
 import { fileURLToPath } from 'node:url'
@@ -446,7 +447,14 @@ const rate = (score) =>
  * The job summary: totals, then every test the verdict names. `run` carries what the caller
  * knows about the run (platform, workers, wall times, the CI run's URL and artifact names).
  */
-export function summaryMarkdown({ verdict, scores, run, committed, next }) {
+export function summaryMarkdown({
+  verdict,
+  scores,
+  run,
+  committed,
+  next,
+  decisions = { total: 0, failed: 0 },
+}) {
   const name = (test) =>
     `${test.id ? `**${test.id}** ` : ''}${markdown(test.file)} › ${markdown(test.title)}`
   const reruns = (item) =>
@@ -475,6 +483,8 @@ export function summaryMarkdown({ verdict, scores, run, committed, next }) {
     '|---|--:|--:|--:|--:|',
     `| In scope | ${scores.inScope.passed} | ${scores.inScope.total} | ${rate(scores.inScope)} | ${scores.inScope.skipped} (${scores.inScope.skippedByHarness} by the harness) |`,
     `| All | ${scores.all.passed} | ${scores.all.total} | ${rate(scores.all)} | ${scores.all.skipped} |`,
+    '',
+    `fails by decision: ${decisions.failed} of ${decisions.total} still fail`,
     '',
     `Expected not to pass: ${committed ? committed.size : 'no list committed'}; this run supports ${next.size}. Flaky this run: ${verdict.flaky.length}. Known flaky, not judged: ${verdict.knownFlaky.length}.`,
     `Suite ${seconds(run.suiteMs)} on ${run.workers} workers${run.rerunCount ? `; ${run.rerunCount} reruns alone in ${seconds(run.rerunMs)}` : ''}.${run.browser ? ` Browser: ${markdown(run.browser)}.` : ''}`,

@@ -68,10 +68,11 @@ async function verdict(
   write(output, 'results.json', report(false))
   write(output, 'scores.json', { all: score, inScope: score })
   write(output, 'run.json', { workers: 1, endedAt: 'now' })
-  fs.copyFileSync(
-    path.join(import.meta.dir, 'node/scope.json'),
-    path.join(output, 'scope.json'),
+  // This synthetic full corpus contains one positive test, not the real manifest's negatives.
+  const scope = JSON.parse(
+    fs.readFileSync(path.join(import.meta.dir, 'node/scope.json'), 'utf8'),
   )
+  write(output, 'scope.json', { ...scope, entries: [] })
   const listFile = path.join(root, 'list.tsv')
   fs.writeFileSync(listFile, '# empty\n')
   let attempt = 0
@@ -151,6 +152,99 @@ describe('ciVerdict', () => {
     expect(result.code).toBe(1)
     expect(result.summary).toMatch(/results\.json is not JSON/)
     expect(result.summary).toMatch(/launcher failed/)
+  })
+})
+
+describe('decision-backed exclusions', () => {
+  /** Both cases remain in the report: one is a negative test, the legacy pass is reporting-only. */
+  async function decidedRun(passed: boolean, writeExpected = false) {
+    const { scoreResults } = await import('./node/scope.mjs')
+    const output = path.join(root, 'decided-full')
+    fs.mkdirSync(output)
+    const results = report(passed)
+    results.suites[0].specs[0].title = 'NA-001 decided read'
+    const legacy = report(true).suites[0]
+    legacy.file = 'page/network.spec.ts'
+    legacy.specs[0].file = legacy.file
+    legacy.specs[0].title = 'NE-901 legacy excluded pass'
+    results.suites.push(legacy)
+    const scope = {
+      schemaVersion: 1,
+      reasons: {
+        'decided-deviation': 'isolated-world engine',
+        network: 'no Network',
+      },
+      entries: [
+        {
+          file: 'tests/page/page-goto.spec.ts',
+          ids: ['NA-001'],
+          reason: 'decided-deviation',
+          decision: 'D-isolated: the engine never reads page-world objects',
+        },
+        { file: 'tests/page/network.spec.ts', reason: 'network' },
+      ],
+    }
+    for (const [file, value] of Object.entries({
+      'results.json': results,
+      'scope.json': scope,
+      'scores.json': scoreResults(results, scope),
+      'run.json': { workers: 1, endedAt: 'now' },
+    }))
+      fs.writeFileSync(path.join(output, file), JSON.stringify(value))
+    const listFile = path.join(root, 'decided-list.tsv')
+    fs.writeFileSync(listFile, '# empty\n')
+    const runner: Runner = {
+      node: 'node',
+      env: {},
+      flags: [],
+      rerunArgs: () => [],
+      runRunner: async () => {
+        throw new Error('Decision violations must not be waived by a rerun')
+      },
+    }
+    const code = await ciVerdict({
+      runner,
+      output,
+      complete: true,
+      writeExpected,
+      listFile,
+    })
+    return {
+      code,
+      summary: fs.readFileSync(path.join(output, 'summary.md'), 'utf8'),
+      verdict: JSON.parse(
+        fs.readFileSync(path.join(output, 'verdict.json'), 'utf8'),
+      ),
+    }
+  }
+
+  it('keeps a failed decision case running and tolerates a legacy excluded pass', async () => {
+    const result = await decidedRun(false)
+    expect(result.code).toBe(0)
+    expect(result.summary).toContain('fails by decision: 1 of 1 still fail')
+    expect(result.verdict.decisions).toMatchObject({
+      total: 1,
+      failed: 1,
+      violations: [],
+    })
+  })
+
+  it('fails CI and names a passing decision case even though it left the in-scope count', async () => {
+    const result = await decidedRun(true)
+    expect(result.code).toBe(1)
+    expect(result.summary).toContain('fails by decision: 0 of 1 still fail')
+    expect(result.summary).toMatch(
+      /NA-001.*passed although decision.*D-isolated/,
+    )
+    expect(result.summary).toContain(
+      'the design changed, or this entry is wrong',
+    )
+    expect(result.verdict.passed).toBe(false)
+  })
+
+  it('cannot accept a passing negative test with --write-expected', async () => {
+    const result = await decidedRun(true, true)
+    expect(result.code).toBe(1)
   })
 })
 
