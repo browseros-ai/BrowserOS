@@ -416,3 +416,66 @@ async fn diag_main(page: &OpPage<'_>) -> String {
     }
 }
 
+/// DIAGNOSTIC v4: marks one screenshot operation as finished when dropped.
+pub(crate) struct DiagWatch {
+    done: Arc<std::sync::atomic::AtomicBool>,
+}
+
+static DIAG_DUMPED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+impl DiagWatch {
+    pub(crate) fn start() -> Self {
+        let done = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let flag = Arc::clone(&done);
+        drop(std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_secs(6));
+            if flag.load(std::sync::atomic::Ordering::SeqCst) {
+                return;
+            }
+            diag_log("STALL6s: a screenshot is still running after 6 s");
+            if DIAG_DUMPED.swap(true, std::sync::atomic::Ordering::SeqCst) {
+                return;
+            }
+            let pid = std::process::id();
+            let mut report = String::new();
+            if let Ok(tasks) = std::fs::read_dir("/proc/self/task") {
+                for task in tasks.flatten() {
+                    let dir = task.path();
+                    let read = |name: &str| std::fs::read_to_string(dir.join(name)).unwrap_or_default();
+                    let stat = read("stat");
+                    let state = stat.rsplit(')').next().unwrap_or("").split_whitespace().next().unwrap_or("?").to_owned();
+                    report.push_str(&format!(
+                        "task {} comm={} state={} wchan={} syscall={}\n",
+                        task.file_name().to_string_lossy(),
+                        read("comm").trim(),
+                        state,
+                        read("wchan").trim(),
+                        read("syscall").split_whitespace().next().unwrap_or(""),
+                    ));
+                }
+            }
+            let gdb = std::process::Command::new("gdb")
+                .args(["-p", &pid.to_string(), "-batch", "-nx", "-ex", "set pagination off", "-ex", "thread apply all bt 40"])
+                .output();
+            match gdb {
+                Ok(out) => {
+                    report.push_str(&String::from_utf8_lossy(&out.stdout));
+                    report.push_str(&String::from_utf8_lossy(&out.stderr));
+                }
+                Err(error) => report.push_str(&format!("gdb failed: {error}\n")),
+            }
+            if let Ok(dir) = std::env::var("NEO_NODE_OUTPUT") {
+                let _written = std::fs::write(std::path::Path::new(&dir).join(format!("ss054-stacks-{pid}.txt")), &report);
+            }
+            diag_log("STALL6s: stacks written");
+        }));
+        Self { done }
+    }
+}
+
+impl Drop for DiagWatch {
+    fn drop(&mut self) {
+        self.done.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+

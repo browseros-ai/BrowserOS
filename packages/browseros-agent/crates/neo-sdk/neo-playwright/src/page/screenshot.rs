@@ -158,6 +158,9 @@ pub(crate) async fn capture(
         ImageType::Jpeg => ScreenshotFormat::Jpeg,
         ImageType::Webp => ScreenshotFormat::Webp,
     };
+    // DIAGNOSTIC v4 (diag/ss054-fonts only): an OS-thread watchdog dumps every thread's state
+    // and gdb backtraces when one screenshot is still running after 6 s.
+    let _watch = crate::page::screenshot_preparation::DiagWatch::start();
     let capture = async {
         let backoff = Backoff::outer(scope.timeout());
         for attempt in 0.. {

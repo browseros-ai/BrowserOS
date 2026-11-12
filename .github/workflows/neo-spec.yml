@@ -131,7 +131,10 @@ jobs:
       - name: Run the screenshot animation tests repeatedly
         env:
           NEO_NODE_OUTPUT_DIR: ${{ runner.temp }}/neo-spec
+          CARGO_PROFILE_RELEASE_DEBUG: line-tables-only
         run: |
+          sudo apt-get install -y -q gdb > /dev/null
+          sudo sysctl -w kernel.yama.ptrace_scope=0
           bun run test:neo-spec page-screenshot --workers 8 --repeat-each 12 \
             --grep 'should not capture css animations in shadow DOM|should not capture infinite css animation|should capture canvas changes' || true
           echo '--- diagnostics'
