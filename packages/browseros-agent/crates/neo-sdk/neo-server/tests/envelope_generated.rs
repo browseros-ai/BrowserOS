@@ -24,7 +24,7 @@ use std::error::Error;
 use std::path::Path;
 use std::{fs, io};
 
-use neo_server::test_support::{EnvelopeType, envelope_examples, envelope_types};
+use neo_server::test_support::{self, EnvelopeType};
 
 /// From this crate's manifest directory.
 const PINNED: &str = "tests/data/envelope-examples.json";
@@ -74,7 +74,7 @@ fn render(types: &[EnvelopeType]) -> Result<String, Vec<String>> {
 
 #[test]
 fn tests_that_the_generated_envelope_types_match_the_rust_types() -> Result<(), Box<dyn Error>> {
-    let text = render(&envelope_types()).map_err(|refusals| refusals.join("\n"))?;
+    let text = render(&test_support::envelope_types()).map_err(|refusals| refusals.join("\n"))?;
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(GENERATED);
     let committed = match fs::read_to_string(&path) {
         Ok(committed) => Some(committed),
@@ -114,7 +114,7 @@ fn tests_that_two_rust_types_under_one_name_are_refused() {
 
 #[test]
 fn tests_that_the_envelope_bytes_match_the_pinned_examples() -> Result<(), Box<dyn Error>> {
-    let rendered: BTreeMap<String, String> = envelope_examples()?
+    let rendered: BTreeMap<String, String> = test_support::envelope_examples()?
         .into_iter()
         .map(|example| (example.name.to_owned(), example.text))
         .collect();

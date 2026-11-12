@@ -6,8 +6,6 @@
 //! contract are checked against identical bytes: a change to a field's name, order, omission or
 //! encoding fails one of the two.
 
-use std::str::FromStr;
-
 use browseros_core::TabId;
 use browseros_core::viewport::Size;
 use neo_trace::{Delivery, IdError, OperationId, RunId};
@@ -17,7 +15,7 @@ use crate::browser::PageRef;
 use crate::dispatch::{
     ApprovedClose, ErrorCode, Observation, OpFailure, OpReply, OperationError, PageFact, WorkerFact,
 };
-use crate::runtime;
+use crate::runtime::{self, RunInit};
 
 /// One rendered example: its name in the pinned file and the exact text the realm reads.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -33,7 +31,7 @@ const RUN: &str = "0196a0c4-1f2e-7a3b-8c4d-5e6f7a8b9c0d";
 
 /// Every example, in the pinned file's order.
 pub fn envelope_examples() -> Result<Vec<EnvelopeExample>, IdError> {
-    let operation = OperationId::new(RunId::from_str(RUN)?, 4);
+    let operation = OperationId::new(RUN.parse::<RunId>()?, 4);
     Ok(vec![
         example(
             "init.page",
@@ -56,7 +54,7 @@ fn example(name: &'static str, text: String) -> EnvelopeExample {
 
 /// The run's init, as `run_script` and the hosted run hand it to the realm.
 fn init(page: Option<&PageRef>, pages: &[PageFact], observed: Option<&Observation>) -> String {
-    runtime::RunInit::new(page, pages, observed).to_json()
+    RunInit::new(page, pages, observed).to_json()
 }
 
 /// A `page.title` answer carrying every optional field the envelope has.
