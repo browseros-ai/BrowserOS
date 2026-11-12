@@ -159,23 +159,50 @@ impl ScreenshotPreparation {
             scope.log("waiting for fonts to load...".to_owned());
             // A pending promise keeps the original screenshot deadline. A retired world
             // restarts preparation so the replacement's own fonts are awaited as well.
-            // DIAGNOSTIC (throwaway branch diag/ss054-fonts, never to land).
+            // DIAGNOSTIC v3 (throwaway branch diag/ss054-fonts, never to land).
+            let began = std::time::Instant::now();
             diag_log(&format!("entry {:?} iso={} main={}", world.frame(), diag_iso(&world).await, diag_main(page).await));
-            let no_arguments = json!([]);
-            let call = world.call_for_screenshot(
-                "function() { return document.fonts.ready.then(() => {}); }",
-                &no_arguments,
-            );
-            tokio::pin!(call);
-            let fonts = match time::timeout(Duration::from_secs(3), &mut call).await {
-                Ok(result) => result,
-                Err(_) => {
-                    diag_log(&format!("STALL3s {:?} iso={} main={}", world.frame(), diag_iso(&world).await, diag_main(page).await));
-                    time::sleep(Duration::from_secs(1)).await;
-                    diag_log(&format!("STALL4s {:?} iso={} main={}", world.frame(), diag_iso(&world).await, diag_main(page).await));
-                    call.await
-                }
-            };
+            let tokio_fired = Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let done = Arc::new(std::sync::atomic::AtomicBool::new(false));
+            {
+                let tokio_fired = Arc::clone(&tokio_fired);
+                let done = Arc::clone(&done);
+                drop(tokio::spawn(async move {
+                    time::sleep(Duration::from_secs(3)).await;
+                    tokio_fired.store(true, std::sync::atomic::Ordering::SeqCst);
+                    if !done.load(std::sync::atomic::Ordering::SeqCst) {
+                        diag_log("tokio-watchdog fired at 3s, fonts still pending");
+                    }
+                }));
+            }
+            {
+                let tokio_fired = Arc::clone(&tokio_fired);
+                let done = Arc::clone(&done);
+                drop(std::thread::spawn(move || {
+                    std::thread::sleep(Duration::from_millis(3500));
+                    if !done.load(std::sync::atomic::Ordering::SeqCst) {
+                        diag_log(&format!(
+                            "os-watchdog at 3.5s: fonts pending, tokio watchdog fired={}",
+                            tokio_fired.load(std::sync::atomic::Ordering::SeqCst)
+                        ));
+                    }
+                    std::thread::sleep(Duration::from_secs(10));
+                    if !done.load(std::sync::atomic::Ordering::SeqCst) {
+                        diag_log(&format!(
+                            "os-watchdog at 13.5s: fonts pending, tokio watchdog fired={}",
+                            tokio_fired.load(std::sync::atomic::Ordering::SeqCst)
+                        ));
+                    }
+                }));
+            }
+            let fonts = world
+                .call_for_screenshot(
+                    "function() { return document.fonts.ready.then(() => {}); }",
+                    &json!([]),
+                )
+                .await;
+            done.store(true, std::sync::atomic::Ordering::SeqCst);
+            diag_log(&format!("fonts-done {:?} in {}ms ok={}", world.frame(), began.elapsed().as_millis(), fonts.is_ok()));
             if let Err(error) = fonts
                 && matches!(ProbeFailure::from_core(error), ProbeFailure::Gone(_))
             {
@@ -345,7 +372,7 @@ mod tests {
 // DIAGNOSTIC helpers (diag/ss054-fonts only).
 const DIAG_PROBE: &str = "JSON.stringify({vis: document.visibilityState, focus: document.hasFocus(), fonts: document.fonts.status, beats: window.__ssBeat ?? -1, t: Math.round(performance.now()), anims: document.getAnimations().map(a => a.playState).join(',')})";
 
-fn diag_log(line: &str) {
+pub(crate) fn diag_log(line: &str) {
     use std::io::Write as _;
     eprintln!("SS054-DIAG {line}");
     if let Ok(dir) = std::env::var("NEO_NODE_OUTPUT")

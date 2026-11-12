@@ -206,8 +206,11 @@ pub(crate) async fn capture(
                 .await
                 .map(screenshot_document::Attempt::Captured)
             };
+            let began = std::time::Instant::now();
             let captured = screenshot_document::capture(&page, scope, work).await;
+            crate::page::screenshot_preparation::diag_log(&format!("captured in {}ms ok={}", began.elapsed().as_millis(), captured.is_ok()));
             preparation.restore().await;
+            crate::page::screenshot_preparation::diag_log(&format!("restored at {}ms", began.elapsed().as_millis()));
             match captured {
                 Ok(screenshot_document::Attempt::Captured(data)) => return Ok(data),
                 Ok(screenshot_document::Attempt::Navigated) => {
