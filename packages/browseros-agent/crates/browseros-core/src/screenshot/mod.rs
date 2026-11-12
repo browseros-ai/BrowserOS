@@ -242,10 +242,29 @@ async fn capture_without_pointer(
     page_session: &ProtocolSession,
     params: Value,
 ) -> Result<String, CoreError> {
-    let capture = page_session.send::<_, CaptureScreenshotResult>("Page.captureScreenshot", params);
+    let shown = params.to_string();
+    let capture = async {
+        let began = std::time::Instant::now();
+        let reply = page_session.send::<_, CaptureScreenshotResult>("Page.captureScreenshot", params).await;
+        diag_core(&format!("normalized captureScreenshot {shown} took {}ms ok={}", began.elapsed().as_millis(), reply.is_ok()));
+        reply
+    };
     without_pointer(page_session, capture)
         .await
         .map(|shot| shot.data)
+}
+
+/// DIAGNOSTIC (diag/ss054-fonts only).
+fn diag_core(line: &str) {
+    use std::io::Write as _;
+    if let Ok(dir) = std::env::var("NEO_NODE_OUTPUT")
+        && let Ok(mut file) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(std::path::Path::new(&dir).join("ss054-diag.log"))
+    {
+        let _written = writeln!(file, "{} core {line}", std::process::id());
+    }
 }
 
 /// Runs `capture` with the agent pointer hidden and restores it even when CDP fails. The
@@ -339,7 +358,12 @@ async fn capture_image(
     // Only JPEG viewport captures get the short wait and the fallback; every other format
     // keeps the original format, clip, and CDP behavior.
     if format != ScreenshotFormat::Jpeg || full_page {
-        return page_session.send("Page.captureScreenshot", params).await;
+        let shown = params.to_string();
+        let began = std::time::Instant::now();
+        diag_core(&format!("plain captureScreenshot {shown} sent"));
+        let reply = page_session.send("Page.captureScreenshot", params).await;
+        diag_core(&format!("plain captureScreenshot took {}ms ok={}", began.elapsed().as_millis(), reply.is_ok()));
+        return reply;
     }
     // Bound the native capture, then fall back to the screencast. The two are not raced:
     // the fallback owns a Page.startScreencast/stopScreencast pair, and dropping it

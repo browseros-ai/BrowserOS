@@ -272,7 +272,13 @@ async fn capture_pixels(
     };
     // The default opaque path needs no layout or utility-world support. Transparent captures
     // use the normalized core path, which owns background isolation from audit captures.
-    if default_viewport && background == ScreenshotBackground::Default && input.mask.is_empty() {
+    // DIAGNOSTIC v5: NEO_DIAG_CLIP=1 sends viewport screenshots with an explicit clip, as Playwright does.
+    let force_clip = std::env::var_os("NEO_DIAG_CLIP").is_some();
+    if default_viewport
+        && !force_clip
+        && background == ScreenshotBackground::Default
+        && input.mask.is_empty()
+    {
         return scope
             .view()
             .screenshot(
@@ -289,7 +295,7 @@ async fn capture_pixels(
             .map(|shot| shot.data)
             .map_err(|error| scope.core_error(&error));
     }
-    let geometry = if default_viewport {
+    let geometry = if default_viewport && !force_clip {
         None
     } else {
         Some(

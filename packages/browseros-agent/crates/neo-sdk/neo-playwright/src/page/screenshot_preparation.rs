@@ -454,16 +454,6 @@ impl DiagWatch {
                     ));
                 }
             }
-            let gdb = std::process::Command::new("gdb")
-                .args(["-p", &pid.to_string(), "-batch", "-nx", "-ex", "set pagination off", "-ex", "thread apply all bt 40"])
-                .output();
-            match gdb {
-                Ok(out) => {
-                    report.push_str(&String::from_utf8_lossy(&out.stdout));
-                    report.push_str(&String::from_utf8_lossy(&out.stderr));
-                }
-                Err(error) => report.push_str(&format!("gdb failed: {error}\n")),
-            }
             if let Ok(dir) = std::env::var("NEO_NODE_OUTPUT") {
                 let _written = std::fs::write(std::path::Path::new(&dir).join(format!("ss054-stacks-{pid}.txt")), &report);
             }

@@ -130,15 +130,27 @@ jobs:
       # DIAGNOSTIC branch diag/ss054-fonts (never to land): SS-054 and two siblings, repeated.
       - name: Run the screenshot animation tests repeatedly
         env:
-          NEO_NODE_OUTPUT_DIR: ${{ runner.temp }}/neo-spec
-          CARGO_PROFILE_RELEASE_DEBUG: line-tables-only
+          GREP: should not capture css animations in shadow DOM|should not capture infinite css animation|should capture canvas changes
         run: |
-          sudo apt-get install -y -q gdb > /dev/null
-          sudo sysctl -w kernel.yama.ptrace_scope=0
-          bun run test:neo-spec page-screenshot --workers 8 --repeat-each 12 \
-            --grep 'should not capture css animations in shadow DOM|should not capture infinite css animation|should capture canvas changes' || true
-          echo '--- diagnostics'
-          cat "$RUNNER_TEMP"/neo-spec/*/ss054-diag.log 2>/dev/null || echo 'no fonts.ready stall recorded'
+          set -u
+          run_group() {
+            group=$1; shift
+            NEO_NODE_OUTPUT_DIR="$RUNNER_TEMP/neo-spec/$group" bun run test:neo-spec page-screenshot --workers 8 --repeat-each 12 --grep "$GREP" "$@" > "$RUNNER_TEMP/$group.log" 2>&1 || true
+            tail -4 "$RUNNER_TEMP/$group.log"
+          }
+          echo '=== A: Neo as it is'; run_group A
+          echo '=== B: vanilla Playwright (--reference) on the same browser'; run_group B --reference
+          echo '=== C: Neo with an explicit viewport clip (NEO_DIAG_CLIP=1)'; NEO_DIAG_CLIP=1 run_group C --skip-build
+          for group in A B C; do
+            for results in "$RUNNER_TEMP"/neo-spec/$group/*/results.json; do
+              echo "--- $group"
+              node -e 'const r=require(process.argv[1]); const c={}; const v=s=>{for(const sp of s.specs||[])for(const t of sp.tests)for(const x of t.results){const k=sp.title.slice(0,40)+" "+x.status;c[k]=(c[k]||0)+1}; for(const ch of s.suites||[])v(ch)}; r.suites.forEach(v); console.log(c)' "$results"
+            done
+          done
+          echo '--- slow or stuck captures (A and C)'
+          grep -h "captureScreenshot took" "$RUNNER_TEMP"/neo-spec/*/*/ss054-diag.log | awk '{ for (i=1;i<=NF;i++) if ($i=="took") print $(i+1) }' | sort -n | tail -5
+          grep -c "plain captureScreenshot .* sent" "$RUNNER_TEMP"/neo-spec/A/*/ss054-diag.log || true
+          grep -c "plain captureScreenshot took" "$RUNNER_TEMP"/neo-spec/A/*/ss054-diag.log || true
           find "$RUNNER_TEMP/neo-spec" -type d -name upstream -prune -print | while read -r tree; do
             rm -rf "$tree/tests" "$tree/packages" "$tree/node_modules"
           done
