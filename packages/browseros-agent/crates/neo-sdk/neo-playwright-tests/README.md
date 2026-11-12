@@ -79,7 +79,9 @@ bun run test:neo-spec --expected-from <run URL or ID>
 ```
 
 then commit `node/expected/linux-x64.tsv`. It prints what it removed, added and changed; an
-added test accepts a regression, so the pull request says why. Two pull requests that each fix
+added test accepts a regression, so the pull request says why. A pull request's run tests it
+merged into the current `main`, so a test `main` fixed since the list last changed shows up as
+newly passing too; the same command takes it. Two pull requests that each fix
 a test change different lines and merge cleanly. On a Linux machine,
 `bun run test:neo-spec --ci --write-expected` writes the list from a local run instead.
 

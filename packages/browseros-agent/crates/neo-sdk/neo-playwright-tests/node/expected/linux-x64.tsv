@@ -17,9 +17,6 @@ EX-199	fail	tests/page/expect-misc.spec.ts	toHaveJSProperty › pass null
 EX-192	fail	tests/page/expect-misc.spec.ts	toHaveJSProperty › pass number
 EX-190	fail	tests/page/expect-misc.spec.ts	toHaveJSProperty › pass string
 EX-198	fail	tests/page/expect-misc.spec.ts	toHaveJSProperty › pass undefined
-EX-216	fail	tests/page/expect-misc.spec.ts	toHaveURL › fail with invalid argument
-EX-222	fail	tests/page/expect-misc.spec.ts	toHaveURL › support URLPattern
-EX-258	fail	tests/page/expect-timeout.spec.ts	should fail the assertion when the signal is already aborted
 FR-007	fail	tests/page/frame-evaluate.spec.ts	should allow cross-frame element handles
 FR-004	skip	tests/page/frame-evaluate.spec.ts	should dispose context on cross-origin navigation
 FR-003	skip	tests/page/frame-evaluate.spec.ts	should dispose context on navigation
@@ -45,7 +42,6 @@ AR-022	skip	tests/page/page-aria-snapshot.spec.ts	should ignore presentation and
 AR-017	skip	tests/page/page-aria-snapshot.spec.ts	should include new line for block pseudo
 AR-020	skip	tests/page/page-aria-snapshot.spec.ts	should include pseudo codepoints
 AR-015	skip	tests/page/page-aria-snapshot.spec.ts	should include pseudo in text
-AR-028	fail	tests/page/page-aria-snapshot.spec.ts	should normalize whitespace
 AR-016	skip	tests/page/page-aria-snapshot.spec.ts	should not include hidden pseudo in text
 AR-032	skip	tests/page/page-aria-snapshot.spec.ts	should not report textarea textContent
 AR-024	skip	tests/page/page-aria-snapshot.spec.ts	should not use on as checkbox value
@@ -59,7 +55,6 @@ AR-019	skip	tests/page/page-aria-snapshot.spec.ts	should snapshot inner text
 AR-010	skip	tests/page/page-aria-snapshot.spec.ts	should snapshot integration
 AR-002	skip	tests/page/page-aria-snapshot.spec.ts	should snapshot list
 AR-003	skip	tests/page/page-aria-snapshot.spec.ts	should snapshot list with accessible name
-AR-011	fail	tests/page/page-aria-snapshot.spec.ts	should support multiline text
 AR-023	skip	tests/page/page-aria-snapshot.spec.ts	should treat input value as text in templates, but not for checkbox/radio/file
 AR-018	skip	tests/page/page-aria-snapshot.spec.ts	should work with slots
 CL-106	fail	tests/page/page-click-react.spec.ts	should timeout when click opens alert
@@ -90,7 +85,6 @@ DD-019	skip	tests/page/page-drag.spec.ts	should handle custom dataTransfer
 DD-018	skip	tests/page/page-drag.spec.ts	should report event.buttons
 DD-017	skip	tests/page/page-drag.spec.ts	should work if not doing a drag
 DD-020	skip	tests/page/page-drag.spec.ts	what happens when dragging element is destroyed
-EM-011	fail	tests/page/page-emulate-media.spec.ts	should emulate contrast 
 EM-012	fail	tests/page/page-emulate-media.spec.ts	should report hover and fine pointer for desktop
 EV-137	skip	tests/page/page-evaluate-no-stall.spec.ts	should throw when no main execution context
 EV-136	skip	tests/page/page-evaluate-no-stall.spec.ts	should throw while pending navigation
@@ -117,8 +111,6 @@ LE-001	skip	tests/page/page-leaks.spec.ts	click should not leak
 LE-003	skip	tests/page/page-leaks.spec.ts	expect should not leak
 LE-002	skip	tests/page/page-leaks.spec.ts	fill should not leak
 LE-004	skip	tests/page/page-leaks.spec.ts	waitFor should not leak
-EE-001	fail	tests/page/page-listeners.spec.ts	should not throw with ignoreErrors
-EE-003	fail	tests/page/page-listeners.spec.ts	wait should throw
 NE-083	fail	tests/page/page-network-idle.spec.ts	should not wait for an open EventSource connection in setContent
 NE-080	fail	tests/page/page-network-idle.spec.ts	should wait for networkidle when iframe attaches and detaches
 NE-020	skip	tests/page/page-network-request.spec.ts	should return multipart/form-data
@@ -144,7 +136,6 @@ SS-065	fail	tests/page/page-screenshot.spec.ts	should throw if screenshot size i
 PA-036	skip	tests/page/page-set-content.spec.ts	should handle timeout properly
 PA-037	skip	tests/page/page-set-content.spec.ts	should handle timeout properly 2
 IF-002	fail	tests/page/page-set-input-files.spec.ts	should upload a folder
-PA-038	fail	tests/page/page-transition.spec.ts	should not crash when filter transition completes
 WA-124	fail	tests/page/page-wait-for-request.spec.ts	should respect default timeout
 WA-123	fail	tests/page/page-wait-for-request.spec.ts	should respect timeout
 WA-131	fail	tests/page/page-wait-for-response.spec.ts	should respect default timeout
