@@ -71,6 +71,7 @@ use crate::events::page_event::{
     DownloadStarted, ExceptionParams, FileChooserOpened, OpenedPage, PageError, PageEvent,
     WindowKind,
 };
+use crate::events::recorded_reports::{RecordedReports, ReportKey};
 use crate::events::worker_table::WorkerContext;
 use crate::events::{PageEventKind, WatcherProgress, navigation_event};
 use crate::snapshot::SnapshotBaselines;
@@ -183,6 +184,9 @@ struct Watcher {
     worker_sessions: HashMap<SessionId, String>,
     /// `Runtime` on each chosen worker session: off unless a run listens on its tab.
     worker_runtime: HashMap<SessionId, WorkerRuntime>,
+    /// The console messages and exceptions the log recorded, so a lease's replay of one is
+    /// dropped by identity.
+    recorded: RecordedReports,
     /// Older Chromium has no workerScriptLoaded event and uses context creation instead.
     worker_script_events: Option<bool>,
     /// Watcher-owned root sessions only auto-attach descendants; page Runtime stays off.
@@ -438,6 +442,7 @@ impl Watcher {
             page_sessions: HashSet::new(),
             worker_sessions: HashMap::new(),
             worker_runtime: HashMap::new(),
+            recorded: RecordedReports::default(),
             worker_script_events: None,
             root_observers: HashMap::new(),
             lifecycle_sources: LifecycleSources::default(),
@@ -541,6 +546,7 @@ impl Watcher {
 
     /// A session went: its tab and its contexts are forgotten.
     fn session_detached(&mut self, session: &SessionId) {
+        self.recorded.forget(session);
         self.root_observers.remove(session);
         self.worker_runtime.remove(session);
         if let Some(id) = self.worker_sessions.remove(session) {
@@ -710,6 +716,7 @@ impl Watcher {
             }
             self.worker_sessions.clear();
             self.worker_runtime.clear();
+            self.recorded.clear();
             self.worker_script_events = None;
             self.root_observers.clear();
             self.sessions.clear();
@@ -1488,22 +1495,39 @@ impl Watcher {
     }
 
     /// A console message or uncaught exception, for the runs listening on its tab, unless it
-    /// is history the browser replayed when a lease enabled `Runtime`.
+    /// is history the browser replayed when a lease enabled `Runtime`: stamped before the
+    /// lease's floor, or one this session's log already recorded ([`RecordedReports`]), which
+    /// the floor alone misses when both fall in one millisecond.
     async fn runtime_report(&mut self, method: &str, session: SessionId, params: Value) {
         if self.replayed(&session, &params) {
             return;
         }
-        if method == "Runtime.consoleAPICalled" {
+        let key = ReportKey::of(method, &params);
+        if key.is_some_and(|key| self.recorded.contains(&session, key)) {
+            return;
+        }
+        let recorded = if method == "Runtime.consoleAPICalled" {
             if let Some(target) = self.wanted(&session, PageEventKind::Console).await
                 && let Some(params) = parse::<ConsoleParams>(params)
             {
                 self.console(&session, target, params);
+                true
+            } else {
+                false
             }
         } else if let Some(target) = self.wanted(&session, PageEventKind::PageError).await
             && let Some(params) = parse::<ExceptionParams>(params)
         {
             let error = PageError::from_params(target, params);
             self.writer.record(PageEvent::PageError(error));
+            true
+        } else {
+            false
+        };
+        // Only what the log holds: a report nobody wanted then is not a later waiter's history
+        // by identity, and its replay still meets the floor.
+        if recorded && let Some(key) = key {
+            self.recorded.insert(&session, key);
         }
     }
 
@@ -1759,7 +1783,7 @@ mod worker_observation_tests {
 
     use super::Watcher;
     use crate::events::worker_table::WorkerInfo;
-    use crate::events::{EventHub, PageEventKind, Subscription, WatcherProgress};
+    use crate::events::{EventHub, PageEvent, PageEventKind, Subscription, WatcherProgress};
     use crate::run_state::RunState;
     use crate::snapshot::SnapshotBaselines;
     use crate::world::FrameAttachLog;
@@ -2119,6 +2143,82 @@ mod worker_observation_tests {
                 .page_signals
                 .runtime_leases()
                 .is_held(&SessionId::from("w"))
+        );
+        Ok(())
+    }
+
+    /// ER-006, the race itself: a wait's floor is the script's `Date.now()`, whole milliseconds,
+    /// and the browser stamps with microseconds. Round 3's error, thrown at 1000.6 under a floor
+    /// of 1000, is recorded; round 4's wait starts in the same millisecond, its lease opens a new
+    /// span, and the browser replays round 3's error, stamped above that floor. It is dropped by
+    /// identity, and round 4's own error, in the same millisecond, still arrives.
+    #[tokio::test]
+    async fn tests_that_a_replay_of_a_recorded_error_in_the_floors_millisecond_is_dropped()
+    -> Result<(), Box<dyn Error>> {
+        let connection =
+            TestConnection::new([("Browser.getVersion", json!({"product":"Chrome/143.0"}))]);
+        for method in ["Runtime.enable", "Runtime.disable"] {
+            connection.always(method, json!({}))?;
+        }
+        let (hub, mut watcher) = scripted(&connection);
+        let page = TargetId("page".to_owned());
+        let session = SessionId::from("page-session");
+        watcher.sessions.insert(session.clone(), page.clone());
+        let run = Arc::new(RunState::default());
+        hub.bind(&run);
+        let errors = Subscription::Page {
+            tab: TabId(1),
+            target: page,
+            event: PageEventKind::PageError,
+        };
+        let leases = Arc::clone(watcher.browser.page_signals.runtime_leases());
+        let protocol = watcher.browser.protocol_session(session.clone());
+        let thrown = |id: i64, stamp: f64, exception: serde_json::Value| CdpEvent {
+            method: "Runtime.exceptionThrown".to_owned(),
+            params: json!({ "timestamp": stamp, "exceptionDetails": {
+                "exceptionId": id, "text": "Uncaught", "exception": exception } }),
+            session_id: Some(session.clone()),
+        };
+
+        let round_three = run.events.waiting(errors.clone(), 1_000);
+        let lease = leases.acquire(&protocol, 1_000.0).await?;
+        watcher
+            .handle(thrown(
+                3,
+                1_000.6,
+                json!({ "type": "number", "value": 0, "description": "0" }),
+            ))
+            .await;
+        drop(lease);
+        drop(round_three);
+        settle().await;
+
+        let _round_four = run.events.waiting(errors, 1_000);
+        let _lease = leases.acquire(&protocol, 1_000.0).await?;
+        // The new span's replay, then round 4's own error.
+        watcher
+            .handle(thrown(
+                3,
+                1_000.6,
+                json!({ "type": "number", "value": 0, "description": "0" }),
+            ))
+            .await;
+        watcher
+            .handle(thrown(4, 1_000.8, json!({ "type": "string", "value": "" })))
+            .await;
+        let messages: Vec<String> = hub
+            .read_after(0)
+            .records
+            .into_iter()
+            .filter_map(|record| match record.event {
+                PageEvent::PageError(error) => Some(error.message),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            messages,
+            ["0", ""],
+            "round 3's error once, then round 4's own"
         );
         Ok(())
     }
