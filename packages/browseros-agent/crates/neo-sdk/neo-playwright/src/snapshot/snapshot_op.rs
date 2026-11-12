@@ -92,7 +92,8 @@ fn route<'a, R: Route<'a>>(op: SnapshotOp, r: R) -> R::Out {
         "Rust stitches the child frames and answers the JSON tree plus the frames it could \
          not read; the prelude renders the text, upstream's YAML for mode 'default' and \
          Neo's condensed list of actionable lines for 'ai', each line upstream's own, and \
-         annotates the partial frames",
+         annotates the partial frames; a whole page's answer also names the document it read, \
+         for the delta baseline",
     );
     match op {
         SnapshotOp::Page => r.op(command, page_snapshot),
@@ -165,6 +166,11 @@ struct BaselineInput {
     /// The script passed `delta: true`. Without it, a baseline found means a delta was possible,
     /// which the run's reply turns into a tip.
     delta: bool,
+    /// The `document` the page's snapshot answered. A text with none, or of a document the tab
+    /// has since left, is not kept and finds no baseline.
+    #[serde(default)]
+    #[ts(optional)]
+    document: Option<u32>,
 }
 options!(BaselineInput);
 
@@ -189,6 +195,9 @@ async fn page_snapshot(
 ) -> Result<aria_snapshot::SnapshotResult, PlaywrightError> {
     let page = input.page.tab();
     let page = OpPage::admit(pw, scope, page).await?;
+    // Before the tree: a document that commits after this makes the text stale for the
+    // baseline, so a late swap cannot hand the new document the old one's text.
+    let document = pw.snapshot_baselines().generation(page.target_id());
     let snapshotter = Snapshotter {
         scope,
         page: &page,
@@ -210,7 +219,11 @@ async fn page_snapshot(
             return Err(scope.timed_out(ErrorCode::WaitTimeout));
         };
         if let Some(root) = read? {
-            return snapshotter.stitched(root, input.depth).await;
+            let stitched = snapshotter.stitched(root, input.depth).await?;
+            return Ok(aria_snapshot::SnapshotResult {
+                document: Some(document),
+                ..stitched
+            });
         }
     }
     Err(scope.timed_out(ErrorCode::WaitTimeout))
@@ -276,7 +289,12 @@ async fn swap_baseline(
     input: BaselineInput,
 ) -> Result<Option<String>, PlaywrightError> {
     let page = OpPage::admit(pw, scope, input.page.tab()).await?;
-    let previous = pw.snapshot_baselines().swap(page.target_id(), input.text);
+    let Some(document) = input.document else {
+        return Ok(None);
+    };
+    let previous = pw
+        .snapshot_baselines()
+        .swap(page.target_id(), document, input.text);
     if previous.is_some() && !input.delta {
         scope.run_state().note_full_snapshot_repeat(page.tab());
     }

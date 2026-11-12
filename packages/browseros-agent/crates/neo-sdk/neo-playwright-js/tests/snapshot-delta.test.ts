@@ -508,11 +508,70 @@ describe('the baseline as scripts see it', () => {
       (call) => call.name === 'page.snapshotBaseline',
     )
     expect(sent?.input).toEqual({
-      call: { api: 'page.ariaSnapshot', timeoutMs: 0 },
+      call: { api: 'page.ariaSnapshot', timeoutMs: expect.any(Number) },
       page: { $neo: 'page', tab: 1007 },
       text,
       delta: false,
     })
+  })
+
+  it("tests that the swap hands back the page snapshot's document and keeps its timeout", async () => {
+    const runtime = loadPrelude({
+      seed: SEED,
+      answer: (call) =>
+        call.name === 'page.ariaSnapshot'
+          ? { ...tree('Open'), document: 7 }
+          : null,
+    })
+    await runtime.run('await page.ariaSnapshot({ delta: true, timeout: 900 })')
+    const sent = runtime.calls.find(
+      (call) => call.name === 'page.snapshotBaseline',
+    )?.input as { document: number; call: { timeoutMs: number } } | undefined
+    expect(sent?.document).toBe(7)
+    // What is left of the script's 900 ms, never 0, which would mean no deadline.
+    expect(sent?.call.timeoutMs).toBeGreaterThan(0)
+    expect(sent?.call.timeoutMs).toBeLessThanOrEqual(900)
+  })
+
+  it('tests that the script aborting while the baseline is swapped rejects the snapshot', async () => {
+    const runtime = loadPrelude({
+      seed: SEED,
+      answer: async (call) => {
+        if (call.name === 'page.ariaSnapshot') return tree('Open')
+        if (call.name !== 'page.snapshotBaseline' || call.abort === undefined)
+          return null
+        const reason = await call.abort.aborted
+        return {
+          err: {
+            code: 'aborted',
+            owner: 'script',
+            delivery: 'not_sent',
+            retryable: true,
+            operationId: 'op.2',
+            timeout: false,
+            message: `page.ariaSnapshot: ${reason}\nCall log:\n  - operation was aborted: ${reason}\n`,
+          },
+        }
+      },
+    })
+    const outcome = await runtime.run(`
+      const listeners = []
+      const signal = {
+        aborted: false,
+        reason: undefined,
+        addEventListener(type, listener) { listeners.push(listener) },
+        removeEventListener() {},
+      }
+      const pending = page.ariaSnapshot({ delta: true, signal }).catch((e) => e)
+      await new Promise((resolve) => setTimeout(resolve, 10))
+      signal.aborted = true
+      signal.reason = new Error('stop')
+      for (const listener of listeners) listener()
+      const error = await pending
+      return [error instanceof Error, error.name, error.code]
+    `)
+    expect(outcome).toEqual([true, 'AbortError', 'aborted'])
+    expect(runtime.aborts.length).toBeGreaterThan(0)
   })
 
   it('tests that delta of the wrong type is refused before any op is sent', async () => {

@@ -70,7 +70,7 @@ const ANSWERS = {
   'locator.waitFor': ELEMENT,
   'locator.elementHandle': ELEMENT,
   'locator.elementHandles': [ELEMENT],
-  'page.ariaSnapshot': { json: [], partial: [] },
+  'page.ariaSnapshot': { json: [], partial: [], document: 3 },
   'locator.ariaSnapshot': { json: [], partial: [] },
   'page.snapshotBaseline': '- button "Go" [ref=e1]',
   'page.frames': FRAMES,

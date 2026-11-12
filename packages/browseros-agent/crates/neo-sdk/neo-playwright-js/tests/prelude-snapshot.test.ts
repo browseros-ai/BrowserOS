@@ -87,7 +87,8 @@ it('tests that page and locator snapshots send their mode and depth, the text pa
     {
       // A whole page's v1 text becomes the tab's delta baseline; a locator's never does.
       name: 'page.snapshotBaseline',
-      call: { api: 'page.ariaSnapshot', timeoutMs: 0 },
+      // What is left of the snapshot's own 5 s.
+      call: { api: 'page.ariaSnapshot', timeoutMs: expect.any(Number) },
       page: { $neo: 'page', tab: 1007 },
       text: expect.any(String),
       delta: false,

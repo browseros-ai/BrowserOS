@@ -289,7 +289,9 @@
     ],
     "page.setContent": [],
     "page.setViewportSize": [],
-    "page.snapshotBaseline": [],
+    "page.snapshotBaseline": [
+      "document"
+    ],
     "page.title": [],
     "page.waitForFunction": [
       "arg",
@@ -3803,26 +3805,28 @@
       {
         "call": {
           "api": "page.ariaSnapshot",
-          "timeoutMs": 0
+          "timeoutMs": 5000
         },
         "page": {
           "$neo": "page",
           "tab": 1007
         },
         "text": "",
-        "delta": false
+        "delta": false,
+        "document": 3
       },
       {
         "call": {
           "api": "page.ariaSnapshot",
-          "timeoutMs": 0
+          "timeoutMs": 5000
         },
         "page": {
           "$neo": "page",
           "tab": 1007
         },
         "text": "",
-        "delta": true
+        "delta": true,
+        "document": 3
       }
     ],
     "page.title": [

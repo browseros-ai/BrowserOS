@@ -8652,10 +8652,23 @@ ${changes}`;
       if (mode !== "ai" || upstreamSnapshots)
         return renderSnapshot(await this._snapshot(api, selector, options, mode));
       const { delta, ...format } = snapshotV1Options(api, options);
-      const text = renderSnapshotV1(await this._snapshot(api, selector, options, mode), format);
+      const wait = this._wait(api, options);
+      const deadline = new EventDeadline(api, null, Date.now(), wait.timeout);
+      const result = await this._snapshot(api, selector, options, mode);
+      const text = renderSnapshotV1(result, format);
       if (selector !== null)
         return text;
-      const previous = await send["page.snapshotBaseline"](site, this._call(api, 0), { page: await this._page._brand(api), text, delta });
+      let previous;
+      try {
+        previous = await send["page.snapshotBaseline"](site, this._call(api, deadline.left()), {
+          page: await this._page._brand(api),
+          text,
+          delta,
+          document: result.document
+        }, wait.signal);
+      } catch (error) {
+        throw deadline.named(error);
+      }
       return delta ? renderDelta(previous, text) : text;
     }
     async _ariaSnapshotJSON(api, selector, options = {}) {

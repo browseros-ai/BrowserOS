@@ -14,4 +14,9 @@ text: string,
  * The script passed `delta: true`. Without it, a baseline found means a delta was possible,
  * which the run's reply turns into a tip.
  */
-delta: boolean, };
+delta: boolean, 
+/**
+ * The `document` the page's snapshot answered. A text with none, or of a document the tab
+ * has since left, is not kept and finds no baseline.
+ */
+document?: number, };

@@ -22,9 +22,10 @@
 //!   closes held dialogs whose runs all ended (`dialog_table.rs`).
 //! - **Frames.** `Page.frameAttached`, a removing `Page.frameDetached` and the main frame's
 //!   `Page.frameNavigated` go to the `FrameAttachLog`, from one session per native target, so frames are
-//!   numbered in the order Playwright numbers them (`world/frame_attach_log.rs`). That commit,
-//!   a closed tab and a lag also drop the tab's snapshot baseline (`SnapshotBaselines`), so a
-//!   delta never diffs a new document against the one it replaced.
+//!   numbered in the order Playwright numbers them (`world/frame_attach_log.rs`). That commit
+//!   and a closed tab also drop the tab's snapshot baseline, and a lag or a new connection drops
+//!   all of them (`SnapshotBaselines`), so a delta never diffs a new document against the one it
+//!   replaced.
 //! - **Binding calls.** `Runtime.bindingCalled` for upstream's `__playwright__binding__` goes,
 //!   while some run exposes a binding on that tab, to each such run's own queue, never the
 //!   bounded log, so no call the page awaits is evicted unread. It comes on a channel of its own
@@ -470,12 +471,8 @@ impl Watcher {
                         self.handle(event).await;
                         self.progress.handled(1);
                     }
-                    // Events were dropped: rediscover, which records what closed meanwhile, and
-                    // tell the frame log that commits may be missing.
                     Err(RecvError::Lagged(skipped)) => {
-                        self.epoch = None;
-                        self.attach_log.lost_events();
-                        self.baselines.forget_all();
+                        self.lost_events();
                         self.progress.handled(skipped);
                     }
                     Err(RecvError::Closed) => {
@@ -554,6 +551,15 @@ impl Watcher {
         self.page_sessions.remove(session);
     }
 
+    /// Events were dropped: rediscover, which records what closed meanwhile, and tell the frame
+    /// log that commits may be missing, and the snapshot baselines that any tab's document may
+    /// have changed unseen.
+    fn lost_events(&mut self) {
+        self.epoch = None;
+        self.attach_log.lost_events();
+        self.baselines.events_lost();
+    }
+
     /// Handles every broadcast event already queued, without waiting for more.
     async fn drain(&mut self, events: &mut Receiver<CdpEvent>) {
         loop {
@@ -564,8 +570,7 @@ impl Watcher {
                     self.progress.handled(1);
                 }
                 Err(TryRecvError::Lagged(skipped)) => {
-                    self.epoch = None;
-                    self.attach_log.lost_events();
+                    self.lost_events();
                     self.progress.handled(skipped);
                 }
                 Err(TryRecvError::Empty | TryRecvError::Closed) => return,
@@ -697,6 +702,8 @@ impl Watcher {
             });
         }
         if changed {
+            // Whatever the tabs did while the old socket was down went unseen.
+            self.baselines.events_lost();
             self.lifecycle = FrameLifecycleTracker::default();
             for id in self.worker_sessions.values().cloned().collect::<Vec<_>>() {
                 self.close_worker(&id);
@@ -910,7 +917,7 @@ impl Watcher {
         }
         self.frames.remove(target.as_str());
         self.attach_log.forget(target);
-        self.baselines.forget(target);
+        self.baselines.tab_closed(target);
         self.lifecycle.forget(target);
         let Some(page) = self.pages.remove(target) else {
             return;
@@ -1447,7 +1454,7 @@ impl Watcher {
                     // A cross-document commit (same-document ones are
                     // `Page.navigatedWithinDocument`): the text the agent last saw is of a
                     // document that is gone.
-                    self.baselines.forget(&tab);
+                    self.baselines.document_changed(&tab);
                     self.attach_log
                         .record(&tab, FrameEvent::MainCommitted { url });
                 }
@@ -1781,8 +1788,11 @@ mod worker_observation_tests {
         let session = SessionId::from("tab-session");
         watcher.sessions.insert(session.clone(), tab.clone());
         watcher.lifecycle_sources.attach(&session, &tab);
-        baselines.swap(&tab, "tab text".to_owned());
-        baselines.swap(&other, "other text".to_owned());
+        let snapshot = |target: &TargetId, text: &str| {
+            baselines.swap(target, baselines.generation(target), text.to_owned())
+        };
+        snapshot(&tab, "tab text");
+        snapshot(&other, "other text");
         let on_tab = |method: &str, params: serde_json::Value| CdpEvent {
             method: method.to_owned(),
             params,
@@ -1802,7 +1812,7 @@ mod worker_observation_tests {
             ))
             .await;
         assert_eq!(
-            baselines.swap(&tab, "tab text".to_owned()).as_deref(),
+            snapshot(&tab, "tab text").as_deref(),
             Some("tab text"),
             "the main document is still the one the agent saw"
         );
@@ -1814,7 +1824,7 @@ mod worker_observation_tests {
             ))
             .await;
         assert_eq!(
-            baselines.swap(&tab, "next text".to_owned()),
+            snapshot(&tab, "next text"),
             None,
             "a new main document starts over"
         );
@@ -1827,12 +1837,12 @@ mod worker_observation_tests {
             })
             .await;
         assert_eq!(
-            baselines.swap(&other, "again".to_owned()),
+            snapshot(&other, "again"),
             None,
             "a closed tab keeps nothing"
         );
         assert_eq!(
-            baselines.swap(&tab, "next text".to_owned()).as_deref(),
+            snapshot(&tab, "next text").as_deref(),
             Some("next text"),
             "another tab's close leaves this one's"
         );
