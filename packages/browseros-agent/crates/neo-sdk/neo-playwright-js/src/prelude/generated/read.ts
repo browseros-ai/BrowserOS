@@ -241,8 +241,10 @@ type _locator_isHidden_result = Assert<VoidIsNull<'locator.isHidden', pw.Element
 // locator.count: Frame.queryCount
 type _locator_count = Assert<UpstreamCheck<'locator.count', ReadEveryMatchInput, pw.FrameQueryCountParams, never, never, never>>
 type _locator_count_result = Assert<VoidIsNull<'locator.count', pw.FrameQueryCountResult, number>>
-// locator.allTextContents: Neo only: upstream evaluates all matches in the client; Neo performs a probe read
-// locator.allInnerTexts: Neo only: upstream evaluates all matches in the client; Neo performs a probe read
+// locator.allTextContents replaces Frame.evalOnSelectorAll: runs in the isolated world, not the page's: upstream's client evaluates `ee => ee.map(e => e.textContent || '')` over every match in the page's main world, and Neo reads the same text in its isolated-world probe as a read op, so the page cannot tamper with it and the door treats it as a read
+type _locator_allTextContents_replaces = pw.FrameEvalOnSelectorAllParams
+// locator.allInnerTexts replaces Frame.evalOnSelectorAll: runs in the isolated world, not the page's: upstream's client evaluates `ee => ee.map(e => e.innerText)` over every match in the page's main world, and Neo reads the same text in its isolated-world probe as a read op, so the page cannot tamper with it and the door treats it as a read
+type _locator_allInnerTexts_replaces = pw.FrameEvalOnSelectorAllParams
 // locator.boundingBox: ElementHandle.boundingBox
 type _locator_boundingBox = Assert<UpstreamCheck<'locator.boundingBox', ReadElementInput, pw.ElementHandleBoundingBoxParams, never, never, never>>
 type _locator_boundingBox_result = Assert<VoidIsNull<'locator.boundingBox', pw.ElementHandleBoundingBoxResult, Rect | null>>
