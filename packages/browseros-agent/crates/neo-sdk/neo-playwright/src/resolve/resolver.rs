@@ -13,7 +13,7 @@ use crate::probe::{
 use crate::resolve::frame_start::{FrameStart, Started};
 use crate::resolve::{self, FramePath, HandleSite, Hop, HopIframe};
 use crate::target::{AriaRefJump, Chunk, LocatorTarget, RootHandle, Strictness};
-use crate::world::{IsolatedWorld, ParentLink, Pin, Place, SeqLookup};
+use crate::world::{Endpoint, IsolatedWorld, ParentLink, Pin, Place, SeqLookup};
 use crate::{ErrorCode, PlaywrightError};
 
 /// Resolves one locator for one op. It never waits: "not there yet" is an attempt that lands
@@ -569,7 +569,10 @@ pub(super) async fn enter_iframe(
             };
         }
     };
-    let endpoint = page.child_endpoint(target.session, frame);
+    let endpoint = Endpoint {
+        session: target.session,
+        frame,
+    };
     let link = ParentLink {
         parent: parent.seq(),
         iframe_key: key,

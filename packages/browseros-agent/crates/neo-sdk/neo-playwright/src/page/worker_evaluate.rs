@@ -1,6 +1,11 @@
 //! Agent-supplied scripts run in a dedicated worker's default execution context. The same
 //! `UtilityScript` transport as page.evaluate preserves Playwright's value serialization;
-//! worker closure races both context startup and the CDP command, including pending promises.
+//! worker closure races both script startup and the CDP commands, including pending promises.
+//!
+//! The call goes through a handle to the worker's global, taken from the session's default
+//! context, not by an execution context id: a worker has one context, and learning its id would
+//! need `Runtime` enabled on the session, which a site can detect by timing its console calls
+//! (`browseros_core::runtime_lease`). So `worker.evaluate` leaves `Runtime` off.
 
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -63,16 +68,16 @@ pub(crate) async fn evaluate(
         .get(&admitted.session.target_id, &worker)
         .ok_or_else(closed)?;
     let mut context = worker.context.subscribe();
-    let id = loop {
+    loop {
         let state = *context.borrow_and_update();
         match state {
-            WorkerContext::Ready(id) => break id,
+            WorkerContext::Ready => break,
             WorkerContext::Closed => return Err(closed()),
-            WorkerContext::Starting { .. } => {
+            WorkerContext::Starting => {
                 context.changed().await.map_err(|_disconnected| closed())?;
             }
         }
-    };
+    }
     let (expression, is_function, ArgText(arg)) = match script {
         Script::Run { handles, .. } if !handles.is_empty() => {
             return Err(scope.fail(
@@ -88,22 +93,45 @@ pub(crate) async fn evaluate(
         } => (expression, is_function, arg),
         Script::Refused(message) => return Err(scope.fail(ErrorCode::PageError, &message)),
     };
-    let params = json!({
-        "functionDeclaration": MAIN_WORLD_JS,
-        "executionContextId": id,
-        "arguments": [{"value": "evaluate"}, {"value": is_function},
-            {"value": expression}, {"value": 1}, {"value": arg}],
-        "returnByValue": true,
-        "awaitPromise": true,
-        "userGesture": true,
-    });
-    let _sent = scope.send_effect()?;
+    // After the readiness wait: a recovered endpoint may have been rebound meanwhile.
     let session = worker.session();
-    let call = session.send_value("Runtime.callFunctionOn", params);
+    let call = async {
+        // Reading `globalThis` runs no worker code, so it comes before the effect is marked.
+        let global: Global = session
+            .send(
+                "Runtime.evaluate",
+                json!({
+                    "expression": "globalThis",
+                    "objectGroup": scope.object_group(&session),
+                    "silent": true,
+                }),
+            )
+            .await
+            .map_err(|error| scope.core_error(&error))?;
+        let global = global.result.object_id.ok_or_else(|| {
+            scope.fail(ErrorCode::Internal, "the worker returned no handle to its global")
+        })?;
+        let _sent = scope.send_effect()?;
+        session
+            .send_value(
+                "Runtime.callFunctionOn",
+                json!({
+                    "objectId": global,
+                    "functionDeclaration": MAIN_WORLD_JS,
+                    "arguments": [{"value": "evaluate"}, {"value": is_function},
+                        {"value": expression}, {"value": 1}, {"value": arg}],
+                    "returnByValue": true,
+                    "awaitPromise": true,
+                    "userGesture": true,
+                }),
+            )
+            .await
+            .map_err(|error| scope.core_error(&error))
+    };
     let reply = tokio::select! {
         biased;
         _ = context.wait_for(|state| *state == WorkerContext::Closed) => return Err(closed()),
-        reply = call => reply.map_err(|error| scope.core_error(&error))?,
+        reply = call => reply?,
     };
     let reply: Reply = serde_json::from_value(reply)
         .map_err(|error| scope.fail(ErrorCode::Internal, &error.to_string()))?;
@@ -133,6 +161,18 @@ struct Reply {
 struct RemoteObject {
     value: Option<Value>,
     description: Option<String>,
+}
+
+/// `Runtime.evaluate`'s reply for `globalThis`, by handle.
+#[derive(Deserialize)]
+struct Global {
+    result: GlobalHandle,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GlobalHandle {
+    object_id: Option<String>,
 }
 
 #[derive(Deserialize)]

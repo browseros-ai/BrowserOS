@@ -3,12 +3,11 @@
 //!
 //! ```text
 //!  first use of (session, frame) in a page ── FrameWorlds::world        single-flight cell
-//!     ├─ SessionSetup::ensure(session)       once per session: Runtime.enable (OOPIF only)
 //!     └─ IsolatedWorld::install                Page.createIsolatedWorld, then the handle to its
-//!          │                                 global by the new world's uniqueId (its
-//!          │                                 executionContextCreated, watched from before the
-//!          │                                 create), or by number for a world that existed
-//!          │                                 if the session reported nothing about the number
+//!          │                                 global by number, if the session reported nothing
+//!          │                                 about the number; by the new world's uniqueId
+//!          │                                 while a Runtime lease has the session report its
+//!          │                                 contexts (watched from before the create)
 //!          └─ install_function(engine, boot { frameSeq, epoch })
 //!               → described { seq, retired? }   a re-key's old seq is never handed out again
 //!  every later call ── probe::call(world)    Runtime.callFunctionOn on that handle
@@ -18,10 +17,13 @@
 //! Invariants, and what enforces each:
 //! - **The engine never runs in a page world.** The page's own scripts share the main world
 //!   with it, so the engine lives only in its isolated world.
-//! - **The handle is the isolated world's, never a page world's.** A numeric context id can name
-//!   a page's world in another renderer, so the install takes the handle by the new world's
-//!   `uniqueId`, or by number only across a window in which the session reported nothing about
-//!   that number (`IsolatedWorld::install`). Every later call goes by the handle.
+//! - **The handle is the isolated world's, never a page world's, as far as the session
+//!   reports.** A numeric context id can name a page's world in another renderer, so the install
+//!   takes the handle by the new world's `uniqueId`, or by number only across a window in which
+//!   the session reported nothing about that number (`IsolatedWorld::install`). Every later call
+//!   goes by the handle. Neo leaves `Runtime` off on every session, because a site can time its
+//!   console calls while it is on to detect an open inspector; the session then reports no contexts, and
+//!   this guard holds only while some `Runtime` lease has it report them.
 //! - **One engine per world.** The install's guard on `__neoProbe` makes it idempotent, and the
 //!   single-flight cell makes concurrent first uses share one install.
 //! - **A seq names one document forever.** Every new document gets a new seq and none is
@@ -41,7 +43,6 @@ mod frame_attach_log;
 mod frame_seq;
 mod frame_worlds;
 mod isolated_world;
-mod session_setup;
 
 pub(crate) use frame_attach_log::{FrameAttachLog, FrameEvent};
 pub(crate) use frame_seq::{BackendNodeId, ContextId, Epoch, FrameSeq, Pin};
@@ -49,7 +50,6 @@ pub(crate) use frame_worlds::{
     Endpoint, FrameWorlds, Installer, LinkedParent, ParentLink, Place, SeqLookup,
 };
 pub(crate) use isolated_world::{ContextWatch, Installed, IsolatedWorld};
-pub(crate) use session_setup::{SessionKind, SessionSetup};
 
 #[cfg(test)]
 mod live_tests;

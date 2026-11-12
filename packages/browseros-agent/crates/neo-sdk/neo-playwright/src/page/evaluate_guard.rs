@@ -663,7 +663,10 @@ pub(crate) fn frame_endpoint(
         }
     } else {
         TreeFrame {
-            endpoint: page.child_endpoint(session.clone(), frame),
+            endpoint: Endpoint {
+                session: session.clone(),
+                frame,
+            },
             place: Place::Descendant,
         }
     }

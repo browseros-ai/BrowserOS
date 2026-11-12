@@ -2,8 +2,9 @@
 //! that concurrent first uses share one install, that a navigation retires a seq, that the
 //! probe reads a field as the page has it, that a strict CSP does not stop the install, that a second
 //! `Playwright` re-keys a world, that `page.setContent` keeps the seq while an old ref fails,
-//! and that the install takes its handle by the new world's unique id in every kind of frame
-//! and fails `Gone` when the document changes renderer inside its window.
+//! that with `Runtime` off the install takes every kind of frame's world by number, and that
+//! while a `Runtime` lease has the session report its contexts the install takes a new world by
+//! its unique id and fails `Gone` when the document changes renderer inside its window.
 //!
 //! Needs BrowserOS with CDP on `BROWSEROS_CDP_PORT` (default 9005):
 //! `cargo test -p neo-playwright --lib world::live_tests -- --ignored`. Each test opens
@@ -32,7 +33,7 @@ use crate::test_support::fixture_server::{FixtureServer, Page};
 use crate::test_support::{LiveBrowser, Tab, TestResult, count_op};
 use crate::world::isolated_world::ENGINE_WORLD;
 use crate::world::{
-    ContextWatch, FrameSeq, IsolatedWorld, ParentLink, Pin, Place, SeqLookup, SessionKind,
+    ContextWatch, Endpoint, FrameSeq, IsolatedWorld, ParentLink, Pin, Place, SeqLookup,
 };
 
 const PASSWORD_PAGE: &str = r#"<!doctype html><title>pw</title>
@@ -212,17 +213,35 @@ impl CdpConnection for Recorder {
     }
 }
 
-/// One install as `FrameWorlds` runs it (session setup, then the watch, then the install),
-/// over `recorder`.
+/// Whether the session reports its contexts while an install runs: not at all, as Neo leaves
+/// every session, or under a `Runtime` lease, as while a run listens for console messages.
+#[derive(Clone, Copy, Debug)]
+enum Reporting {
+    Off,
+    Leased,
+}
+
+/// One install as `FrameWorlds` runs it (the watch, then the install), over `recorder`, with
+/// the session reporting as `reporting` says.
 async fn install_over(
     live: &LiveBrowser,
     recorder: &Arc<Recorder>,
-    at: (&ProtocolSession, &str, SessionKind),
+    at: (&ProtocolSession, &str),
     seq: u32,
+    reporting: Reporting,
 ) -> TestResult<Result<IsolatedWorld, ProbeFailure>> {
-    let (session, frame, kind) = at;
+    let (session, frame) = at;
     let session = recorder.session(session)?;
-    live.playwright.sessions().ensure(&session, kind).await?;
+    let _lease = match reporting {
+        Reporting::Off => None,
+        Reporting::Leased => Some(
+            live.browser
+                .page_signals
+                .runtime_leases()
+                .acquire(&session, 0.0)
+                .await?,
+        ),
+    };
     Ok(IsolatedWorld::install(
         session,
         FrameId(frame.to_owned()),
@@ -502,7 +521,10 @@ async fn tests_that_a_second_playwright_rekeys_the_world_so_old_refs_fail() -> T
     let first_page = OpPage::admit(&first.playwright, &scope, tab.id).await?;
     let child = first_page
         .world(
-            &first_page.child_endpoint(world.session().clone(), child_frame.clone()),
+            &Endpoint {
+                session: world.session().clone(),
+                frame: child_frame.clone(),
+            },
             Place::Child(ParentLink {
                 parent: world.seq(),
                 iframe_key: key.clone(),
@@ -535,7 +557,10 @@ async fn tests_that_a_second_playwright_rekeys_the_world_so_old_refs_fail() -> T
         parent: rekeyed.seq(),
         iframe_key: key.clone(),
     });
-    let child_endpoint = other_page.child_endpoint(rekeyed.session().clone(), child_frame);
+    let child_endpoint = Endpoint {
+        session: rekeyed.session().clone(),
+        frame: child_frame,
+    };
     let other_child = other_page
         .world(&child_endpoint, child_place.clone())
         .await?;
@@ -794,67 +819,128 @@ async fn tests_that_set_content_keeps_the_seq_while_an_old_ref_fails() -> TestRe
     Ok(())
 }
 
+/// One frame of each kind on a fresh `/frames.html` tab, with the session each is installed on
+/// and the URL its world must read: the main frame, a same-process child (on the page's own
+/// session) and a cross-site child (an OOPIF, on its own session).
+struct FrameKinds {
+    tab: Tab,
+    same: String,
+    oop: String,
+    oop_session: ProtocolSession,
+    oop_url: String,
+}
+
+impl FrameKinds {
+    async fn open(live: &LiveBrowser, server: &FixtureServer) -> TestResult<Self> {
+        let tab = live.open(&server.url("127.0.0.1", "/frames.html")).await?;
+        let tree: Value = tab.session.send("Page.getFrameTree", json!({})).await?;
+        let same = tree["frameTree"]["childFrames"][0]["frame"]["id"]
+            .as_str()
+            .ok_or("the page session lists its same-process child")?
+            .to_owned();
+        let oop_url = server.url("localhost", "/child.html");
+        let targets: Value = live
+            .browser
+            .cdp("Target.getTargets", json!({}), None)
+            .await?;
+        let oop = targets["targetInfos"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .find(|info| info["type"] == "iframe" && info["url"] == oop_url.as_str())
+            .and_then(|info| info["targetId"].as_str())
+            .ok_or("the cross-site child is an OOPIF target")?
+            .to_owned();
+        let oop_session = live
+            .browser
+            .frames()
+            .resolve_frame_target(
+                tab.page.clone(),
+                Some(FrameId(oop.clone())),
+                Some(&tab.session),
+                true,
+            )
+            .await?
+            .session;
+        Ok(Self {
+            tab,
+            same,
+            oop,
+            oop_session,
+            oop_url,
+        })
+    }
+
+    /// `(label, session, frame, url)` for each kind.
+    fn each<'a>(
+        &'a self,
+        server: &FixtureServer,
+    ) -> [(&'static str, &'a ProtocolSession, &'a str, String); 3] {
+        [
+            (
+                "main frame",
+                &self.tab.session,
+                self.tab.target.as_str(),
+                server.url("127.0.0.1", "/frames.html"),
+            ),
+            (
+                "same-process child",
+                &self.tab.session,
+                self.same.as_str(),
+                server.url("127.0.0.1", "/child.html"),
+            ),
+            (
+                "OOPIF",
+                &self.oop_session,
+                self.oop.as_str(),
+                self.oop_url.clone(),
+            ),
+        ]
+    }
+}
+
 #[tokio::test]
 #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT (default 9005)"]
-async fn tests_that_every_kind_of_frame_takes_a_new_worlds_handle_by_its_unique_id() -> TestResult {
+async fn tests_that_with_runtime_off_every_kind_of_frame_takes_its_world_by_number() -> TestResult
+{
     let live = LiveBrowser::connect().await?;
     let server = fixtures().await?;
-    let tab = live.open(&server.url("127.0.0.1", "/frames.html")).await?;
-    let tree: Value = tab.session.send("Page.getFrameTree", json!({})).await?;
-    let same = tree["frameTree"]["childFrames"][0]["frame"]["id"]
-        .as_str()
-        .ok_or("the page session lists its same-process child")?
-        .to_owned();
-    let oop_url = server.url("localhost", "/child.html");
-    let targets: Value = live
-        .browser
-        .cdp("Target.getTargets", json!({}), None)
-        .await?;
-    let oop = targets["targetInfos"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .find(|info| info["type"] == "iframe" && info["url"] == oop_url.as_str())
-        .and_then(|info| info["targetId"].as_str())
-        .ok_or("the cross-site child is an OOPIF target")?
-        .to_owned();
-    let oop_session = live
-        .browser
-        .frames()
-        .resolve_frame_target(
-            tab.page.clone(),
-            Some(FrameId(oop.clone())),
-            Some(&tab.session),
-            true,
-        )
-        .await?
-        .session;
+    let frames = FrameKinds::open(&live, &server).await?;
     let recorder = Recorder::over(&live);
-    let frames = [
-        (
-            "main frame",
-            &tab.session,
-            tab.target.as_str(),
-            SessionKind::Page,
-            server.url("127.0.0.1", "/frames.html"),
-        ),
-        (
-            "same-process child",
-            &tab.session,
-            same.as_str(),
-            SessionKind::Page,
-            server.url("127.0.0.1", "/child.html"),
-        ),
-        (
-            "OOPIF",
-            &oop_session,
-            oop.as_str(),
-            SessionKind::Oopif,
-            oop_url.clone(),
-        ),
-    ];
-    for (label, session, frame, kind, url) in frames {
-        let world = install_over(&live, &recorder, (session, frame, kind), 0).await??;
+    for (label, session, frame, url) in frames.each(&server) {
+        let world = install_over(&live, &recorder, (session, frame), 0, Reporting::Off).await??;
+        let evaluated = recorder.take("Runtime.evaluate");
+        assert!(
+            evaluated.len() == 1 && evaluated[0].get("contextId").is_some(),
+            "{label}: the session reports no contexts, so the number takes the handle: \
+             {evaluated:?}"
+        );
+        assert!(
+            recorder.take("Runtime.enable").is_empty(),
+            "{label}: the install never switches Runtime on"
+        );
+        assert_eq!(world_url(&world).await?, json!([url, false]), "{label}");
+        let described = probe::call(&world, &ProbeRequest::Describe).await;
+        assert!(
+            matches!(described, Ok(ProbeReply::Described { .. })),
+            "{label}: {described:?}"
+        );
+    }
+    live.close(&frames.tab).await;
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT (default 9005)"]
+async fn tests_that_under_a_runtime_lease_every_kind_of_frame_takes_a_new_world_by_its_unique_id()
+-> TestResult {
+    let live = LiveBrowser::connect().await?;
+    let server = fixtures().await?;
+    let frames = FrameKinds::open(&live, &server).await?;
+    let recorder = Recorder::over(&live);
+    for (label, session, frame, url) in frames.each(&server) {
+        let world =
+            install_over(&live, &recorder, (session, frame), 0, Reporting::Leased).await??;
         assert!(
             recorder.take("Runtime.addBinding").is_empty(),
             "{label}: world setup does not install a typing journal binding"
@@ -876,7 +962,8 @@ async fn tests_that_every_kind_of_frame_takes_a_new_worlds_handle_by_its_unique_
 
         // The world exists now, so the create sends no event: the number takes the handle,
         // in a window the session reported nothing about it.
-        let again = install_over(&live, &recorder, (session, frame, kind), 0).await??;
+        let again =
+            install_over(&live, &recorder, (session, frame), 0, Reporting::Leased).await??;
         let evaluated = recorder.take("Runtime.evaluate");
         assert!(
             evaluated.len() == 1 && evaluated[0].get("contextId").is_some(),
@@ -884,10 +971,13 @@ async fn tests_that_every_kind_of_frame_takes_a_new_worlds_handle_by_its_unique_
         );
         assert_eq!(world_url(&again).await?, json!([url, false]), "{label}");
     }
-    live.close(&tab).await;
+    live.close(&frames.tab).await;
     Ok(())
 }
 
+/// The guard holds only while the session reports its contexts, so every install here runs under
+/// a `Runtime` lease. With `Runtime` off, as Neo leaves sessions by default, the same swap goes
+/// unseen (`IsolatedWorld::install`).
 #[tokio::test]
 #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT (default 9005)"]
 async fn tests_that_a_renderer_swap_in_the_install_window_fails_gone_never_a_page_world()
@@ -897,11 +987,11 @@ async fn tests_that_a_renderer_swap_in_the_install_window_fails_gone_never_a_pag
     let start = server.url("127.0.0.1", "/password.html");
     let tab = live.open(&start).await?;
     let recorder = Recorder::over(&live);
-    let main = (&tab.session, tab.target.as_str(), SessionKind::Page);
+    let main = (&tab.session, tab.target.as_str());
 
     // A new world: the document moves to another site between the create and the evaluate.
     recorder.swap_before("Runtime.evaluate", server.url("localhost", "/kids.html"));
-    let installed = install_over(&live, &recorder, main, 0).await?;
+    let installed = install_over(&live, &recorder, main, 0, Reporting::Leased).await?;
     let landed = match &installed {
         Ok(world) => world_url(world).await?,
         Err(_) => Value::Null,
@@ -913,12 +1003,12 @@ async fn tests_that_a_renderer_swap_in_the_install_window_fails_gone_never_a_pag
 
     // A world that already existed: the same swap, now on the numeric path.
     tab.navigate(&start).await?;
-    install_over(&live, &recorder, main, 0).await??;
+    install_over(&live, &recorder, main, 0, Reporting::Leased).await??;
     recorder.swap_before(
         "Runtime.evaluate",
         server.url("localhost", "/kids.html?again"),
     );
-    let installed = install_over(&live, &recorder, main, 0).await?;
+    let installed = install_over(&live, &recorder, main, 0, Reporting::Leased).await?;
     let landed = match &installed {
         Ok(world) => world_url(world).await?,
         Err(_) => Value::Null,
@@ -930,7 +1020,7 @@ async fn tests_that_a_renderer_swap_in_the_install_window_fails_gone_never_a_pag
     );
 
     // The retry a gone world gets: the next document's own world.
-    let world = install_over(&live, &recorder, main, 1).await??;
+    let world = install_over(&live, &recorder, main, 1, Reporting::Leased).await??;
     assert_eq!(
         world_url(&world).await?,
         json!([server.url("localhost", "/kids.html?again"), false])
