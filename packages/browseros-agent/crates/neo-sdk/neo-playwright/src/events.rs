@@ -40,6 +40,7 @@ mod file_chooser;
 mod frame_lifecycle;
 mod navigation_event;
 mod page_event;
+mod recorded_reports;
 mod run_downloads;
 mod run_events;
 mod subscription;
