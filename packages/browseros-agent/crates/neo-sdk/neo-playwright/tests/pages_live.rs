@@ -482,7 +482,7 @@ async fn tests_that_captures_return_their_bytes() -> TestResult {
 /// The five public commands translate back to the unchanged probe action protocol.
 #[tokio::test]
 #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
-async fn tests_that_storage_commands_and_void_viewport_keep_their_public_results() -> TestResult {
+async fn tests_that_storage_commands_keep_their_public_results() -> TestResult {
     with_page(|run, server, page| async move {
         let result = async {
             goto(&run, &page, &server.url("/child.html"), "load").await?;
@@ -519,16 +519,6 @@ async fn tests_that_storage_commands_and_void_viewport_keep_their_public_results
                 );
                 assert_eq!(run.invoke("webStorage.getItem", key).await?, Value::Null);
             }
-            assert_eq!(
-                run.invoke(
-                    "page.setViewportSize",
-                    json!({
-                        "page":brand(&page), "viewportSize":{"width":600,"height":400},
-                    })
-                )
-                .await?,
-                Value::Null
-            );
             Ok(())
         }
         .await;

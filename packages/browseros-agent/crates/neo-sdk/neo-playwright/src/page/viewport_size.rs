@@ -60,3 +60,23 @@ pub(crate) async fn set(
         .map_err(|error| scope.core_error(&error))?;
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use std::error::Error;
+
+    use crate::Op;
+    use crate::op_output::to_output;
+    use crate::op_scope::OpScope;
+    use crate::target::CallHeader;
+    use crate::test_env::TestEnv;
+
+    #[tokio::test]
+    async fn viewport_void_receipt_leaves_the_route_as_null() -> Result<(), Box<dyn Error>> {
+        let env = TestEnv::new();
+        let op = Op::from_name("page.setViewportSize").ok_or("viewport op exists")?;
+        let scope = OpScope::new(&env, op, CallHeader::default());
+        assert_eq!(serde_json::to_string(&to_output(&scope, &())?)?, "null");
+        Ok(())
+    }
+}
