@@ -12,11 +12,10 @@ use super::{
     ActionOp, CheckInput, ClickInput, Clicked, DblclickInput, DragInput, DropInput, HoverInput,
     UncheckInput,
 };
-use crate::Op;
 use crate::action::requested_navigations::NavigationCut;
-use crate::op_output;
 use crate::op_scope::OpScope;
 use crate::test_env::TestEnv;
+use crate::{Op, op_output};
 
 #[derive(Deserialize)]
 struct Recording {
