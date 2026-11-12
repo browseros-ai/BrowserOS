@@ -149,11 +149,14 @@ export async function ciVerdict({
   output,
   complete,
   writeExpected,
+  listFile: listOverride,
 }: {
   runner: Runner
   output: string
   complete: boolean
   writeExpected: boolean
+  /** The committed list to hold the run to; tests pass their own instead of the platform's. */
+  listFile?: string
 }): Promise<number> {
   const expected = await import('./node/expected.mjs')
   const { loadScope } = await import('./node/scope.mjs')
@@ -163,7 +166,7 @@ export async function ciVerdict({
   const scores = read('scores.json')
   const run = read('run.json')
   const platform = expected.platformKey()
-  const listFile = expected.expectedPath(platform)
+  const listFile = listOverride ?? expected.expectedPath(platform)
   const committed = expected.readExpected(listFile)
   const listed = committed ?? new Map()
   // The run's own copy of scope.json: the policy it was scored with.
