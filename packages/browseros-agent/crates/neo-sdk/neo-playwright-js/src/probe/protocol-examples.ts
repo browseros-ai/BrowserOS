@@ -503,6 +503,12 @@ const REPLY_EXAMPLES: {
       ],
       iframes: [{ ref: 'e3', depth: 1, src: 'https://pay.example/frame' }],
     },
+    {
+      kind: 'snapshot',
+      json: [{ role: 'generic', ref: 'e1', text: 'Open menu' }],
+      iframes: [],
+      marksSkipped: true,
+    },
   ],
   expect: [
     {

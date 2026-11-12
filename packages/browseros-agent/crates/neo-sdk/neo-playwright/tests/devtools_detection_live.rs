@@ -82,11 +82,12 @@ function detector(report, withDom) {
 ";
 
 /// The top document on `127.0.0.1`; its iframe loads from `localhost` on the same port, another
-/// site, so Chromium gives it its own process and Neo its own session.
+/// site, so Chromium gives it its own process and Neo its own session. `#menu` has only a click
+/// listener, so each v1 snapshot's clickable marking resolves it and asks the probe its ref.
 fn top_html() -> String {
     format!(
         r#"<!doctype html><title>detector</title>
-<p id="text">Resume</p><button id="save">Save</button>
+<p id="text">Resume</p><button id="save">Save</button><div id="menu">Menu</div>
 <iframe id="child" title="child"></iframe>
 <script>
 document.getElementById('child').src = `http://localhost:${{location.port}}/child.html`;
@@ -101,6 +102,7 @@ const source = detector.toString() + "\ndetector((det) => postMessage(JSON.parse
 const worker = new Worker(URL.createObjectURL(new Blob([source], {{ type: 'text/javascript' }})));
 worker.onmessage = (event) => {{ window.__workerDet = event.data; }};
 document.getElementById('save').addEventListener('click', () => console.error('save failed: validation'));
+document.getElementById('menu').addEventListener('click', () => {{}});
 </script>"#
     )
 }
@@ -188,7 +190,9 @@ fn phases(top_url: &str) -> [(&'static str, String); 8] {
         ("idle", "return true;".to_owned()),
         (
             "snapshots",
-            "for (let i = 0; i < 5; i++) await page.ariaSnapshot({ mode: 'ai' }); return true;"
+            "let marked = 0; for (let i = 0; i < 5; i++) \
+             if ((await page.ariaSnapshot({ mode: 'ai' })).includes('[cursor=pointer]: Menu')) \
+             marked++; return marked;"
                 .to_owned(),
         ),
         (
@@ -255,6 +259,16 @@ fn judge(report: &[Value]) -> TestResult {
         worker_evaluate,
         Some(&json!(5)),
         "five worker.evaluate calls answered: {report:?}"
+    );
+    let snapshots = report
+        .iter()
+        .find(|line| phase(line) == "snapshots")
+        .and_then(|line| line.pointer("/result/Ok"));
+    assert_eq!(
+        snapshots,
+        Some(&json!(5)),
+        "every snapshot marked the listener-only menu, so clickable marking's whole CDP path \
+         ran in the phase: {report:?}"
     );
     for line in &quiet {
         assert_eq!(

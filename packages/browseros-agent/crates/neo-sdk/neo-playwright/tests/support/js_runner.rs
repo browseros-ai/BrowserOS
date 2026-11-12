@@ -87,6 +87,14 @@ pub(crate) trait OpHost: Send + Sync {
     /// Runs `expression` in `page`'s own world with a user gesture, as the user's click or the
     /// page's own script would, and returns its value by JSON.
     fn gesture(&self, page: TestPage, expression: String) -> BoxFuture<'_, Result<Value, String>>;
+
+    /// Whether the run's realm carries the spec harness's conformance switch
+    /// (`__neo_upstream_snapshots`, neo-playwright-tests/node/claw-loader.mjs), set before the
+    /// prelude starts, which keeps `ariaSnapshot()` at Playwright's own modes and text.
+    /// Production hosts never set it.
+    fn upstream_snapshots(&self) -> bool {
+        false
+    }
 }
 
 impl OpHost for LiveRun {
@@ -178,6 +186,12 @@ async fn evaluate<'js>(
     install(ctx, door)
         .catch(ctx)
         .map_err(|caught| fail("natives", &caught))?;
+    if door.host.upstream_snapshots() {
+        ctx.globals()
+            .set("__neo_upstream_snapshots", true)
+            .catch(ctx)
+            .map_err(|caught| fail("conformance switch", &caught))?;
+    }
     install_web_globals::install_web_globals(ctx, JS_MEMORY_BYTES)
         .catch(ctx)
         .map_err(|caught| fail("web_globals.js", &caught))?;

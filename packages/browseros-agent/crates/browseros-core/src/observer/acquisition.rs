@@ -97,12 +97,17 @@ pub(super) fn trace_stage(
 }
 
 #[derive(Clone)]
-pub(super) struct SnapshotBudget {
+pub struct SnapshotBudget {
     permits: Arc<Semaphore>,
 }
 
 impl SnapshotBudget {
-    pub(super) fn new() -> Self {
+    #[expect(
+        clippy::new_without_default,
+        reason = "a budget bounds one snapshot's reads, so each snapshot caller builds its own \
+                  deliberately; a Default would hide that"
+    )]
+    pub fn new() -> Self {
         Self {
             permits: Arc::new(Semaphore::new(MAX_IN_FLIGHT_REQUESTS)),
         }

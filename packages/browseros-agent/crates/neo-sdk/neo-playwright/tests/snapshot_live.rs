@@ -1054,3 +1054,152 @@ async fn tests_that_a_late_same_site_child_is_partial_like_any_other() -> TestRe
     );
     live.close(&page).await
 }
+
+/// Clickable marking's test page. Containers desktop's rules count as hits but which must never
+/// be passed as pointer targets: a `tabindex` scroll pane holding its own controls (a link, a
+/// button, a pointer row and an empty pointer tile), a `tabindex` box of real pointer rows, a
+/// `tabindex` list whose items are listener-only `div`s, a `tabindex` box that holds a pointer row
+/// only through `aria-owns`, and a `tabindex` box in a shadow root whose pointer row is slotted. Beside them, three real hits: a `div`
+/// with only a click listener, an empty listener tile and a `tabindex` card with text.
+const CLICKABLE_PANE: &str = r##"<!doctype html><title>pane</title><main>
+<div id="pane" tabindex="0" style="height: 160px; overflow: auto">
+  <a href="#docs">Docs</a> <button>Save</button>
+  <div style="cursor: pointer">Row one</div>
+  <div style="width: 20px; height: 20px; cursor: pointer"></div>
+</div>
+<div tabindex="0"><div style="cursor: pointer">Pointer row A</div><div style="cursor: pointer">Pointer row B</div></div>
+<ul tabindex="0"><li><div class="item">Item A</div></li><li><div class="item">Item B</div></li></ul>
+<div tabindex="0" aria-owns="owned">Owner</div>
+<div id="owned" style="cursor: pointer">Owned row</div>
+<slotted-box><div style="cursor: pointer">Slotted row</div></slotted-box>
+<div id="menu">Open menu</div>
+<div id="tile" style="width: 20px; height: 20px"></div>
+<div tabindex="0">Card text</div>
+</main>
+<script>
+for (const id of ['menu', 'tile']) document.getElementById(id).addEventListener('click', () => {})
+for (const item of document.querySelectorAll('.item')) item.addEventListener('click', () => {})
+customElements.define('slotted-box', class extends HTMLElement {
+  constructor() {
+    super()
+    this.attachShadow({ mode: 'open' }).innerHTML = '<div tabindex="0">Box <slot></slot></div>'
+  }
+})
+</script>"##;
+
+/// Every ref of a snapshot's `json`, with whether its node carries `cursor: pointer`.
+fn refs_and_marks(json: &Value) -> (HashSet<String>, HashSet<String>) {
+    fn visit(node: &Value, refs: &mut HashSet<String>, marked: &mut HashSet<String>) {
+        if let Some(r#ref) = field(node, "ref").as_str() {
+            refs.insert(r#ref.to_owned());
+            if field(node, "cursor") == "pointer" {
+                marked.insert(r#ref.to_owned());
+            }
+        }
+        for child in field(node, "children").as_array().into_iter().flatten() {
+            visit(child, refs, marked);
+        }
+    }
+    let (mut refs, mut marked) = (HashSet::new(), HashSet::new());
+    for node in json.as_array().into_iter().flatten() {
+        visit(node, &mut refs, &mut marked);
+    }
+    (refs, marked)
+}
+
+/// The ref of the node whose own text is `text`.
+fn ref_with_text(json: &Value, text: &str) -> Option<String> {
+    let node = json
+        .as_array()?
+        .iter()
+        .find_map(|node| node_with_text(node, text))?;
+    field(node, "ref").as_str().map(str::to_owned)
+}
+
+fn node_with_text<'a>(node: &'a Value, text: &str) -> Option<&'a Value> {
+    if field(node, "text") == text {
+        return Some(node);
+    }
+    field(node, "children")
+        .as_array()?
+        .iter()
+        .find_map(|child| node_with_text(child, text))
+}
+
+/// Marking never removes a ref or a mark: every ref, and every `cursor: pointer`, of the snapshot
+/// taken without marking is in the one taken with it, page and locator alike. The containers are
+/// left out as targets, so the rows and the empty tile inside them (an owned one included) keep
+/// their own marks and the list's items gain theirs; the listener-only `div`, the empty listener tile and the `tabindex`
+/// card gain theirs too. An unmarked snapshot after a marked one is the first one again: the
+/// engine reads every real cursor once the marked call is over.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT (default 9005)"]
+async fn tests_that_clickable_marking_adds_refs_and_marks_and_never_removes_one() -> TestResult {
+    let _alone = ALONE.acquire().await?;
+    let live = LiveBrowser::connect().await?;
+    let pages = HashMap::from([(
+        "/clickable/pane.html".to_owned(),
+        Page::html(CLICKABLE_PANE).with_header("cache-control", "no-store"),
+    )]);
+    let server = FixtureServer::start(pages).await?;
+    let page = live
+        .open(&server.url("127.0.0.1", "/clickable/pane.html"))
+        .await?;
+    let main = locator(&page, &[role("main")], "getByRole('main')");
+    for (op, input) in [
+        ("page.ariaSnapshot", page_snapshot(&page, "ai")),
+        ("locator.ariaSnapshot", locator_snapshot(&main, "ai")),
+    ] {
+        let plain = live.invoke(op, input.clone()).await??;
+        let mut marking = input.clone();
+        marking["clickable"] = json!(true);
+        let marked = live.invoke(op, marking).await??;
+        let again = live.invoke(op, input).await??;
+        assert_eq!(again, plain, "{op}: nothing of the marked call outlives it");
+        let (plain_refs, plain_marks) = refs_and_marks(field(&plain, "json"));
+        let (marked_refs, marked_marks) = refs_and_marks(field(&marked, "json"));
+        assert!(
+            plain_refs.is_subset(&marked_refs),
+            "{op}: marking removed refs {:?}",
+            plain_refs.difference(&marked_refs).collect::<Vec<_>>()
+        );
+        assert!(
+            plain_marks.is_subset(&marked_marks),
+            "{op}: marking removed marks {:?}",
+            plain_marks.difference(&marked_marks).collect::<Vec<_>>()
+        );
+        // The slotted row has no ref of upstream's to keep: the subset checks above cover it.
+        for row in ["Row one", "Owned row"] {
+            let printed = ref_with_text(field(&plain, "json"), row)
+                .ok_or_else(|| format!("{op}: {row} prints: {plain}"))?;
+            assert!(
+                plain_marks.contains(&printed),
+                "{op}: the page's own {row} is marked"
+            );
+        }
+        for item in ["Item A", "Item B"] {
+            let item = ref_with_text(field(&marked, "json"), item).ok_or("the item prints")?;
+            assert!(
+                marked_marks.contains(&item),
+                "{op}: a listener-only item gains its mark; its tabindex list is no target"
+            );
+        }
+        let menu = ref_with_text(field(&marked, "json"), "Open menu").ok_or("the menu prints")?;
+        let card = ref_with_text(field(&marked, "json"), "Card text").ok_or("the card prints")?;
+        assert!(
+            !plain_marks.contains(&menu) && marked_marks.contains(&menu),
+            "{op}: the listener-only div gains its mark"
+        );
+        assert!(
+            marked_marks.contains(&card),
+            "{op}: the tabindex card gains its mark"
+        );
+        assert_eq!(
+            marked_marks.len(),
+            plain_marks.len() + 5,
+            "{op}: exactly the menu, the empty tile, the card and the two items gain a mark, no \
+             container does: {marked}"
+        );
+    }
+    live.close(&page).await
+}

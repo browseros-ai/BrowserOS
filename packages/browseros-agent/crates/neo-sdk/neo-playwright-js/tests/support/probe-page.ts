@@ -38,8 +38,11 @@ const DOM_GLOBALS = [
 
 export type ProbePage = {
   document: Document
-  /** What Rust's CALL_FUNCTION does: the probe's reply, or `uninstalled`. */
-  call(request: unknown, root?: Node): unknown
+  /**
+   * What Rust's CALL_FUNCTION does: the probe's reply, or `uninstalled`. `nodes` follow the
+   * root, as Rust's call_with_nodes hands them.
+   */
+  call(request: unknown, root?: Node | null, ...nodes: unknown[]): unknown
   /** `__neoProbe.boot`, as the install expression calls it. */
   boot(options: unknown): unknown
   close(): void
@@ -70,7 +73,8 @@ export function openProbePage(html: string): ProbePage {
   if (!probe) throw new Error('the asset did not define __neoProbe')
   return {
     document,
-    call: (request, root) => callFunction.call(globalThis, request, root),
+    call: (request, root, ...nodes) =>
+      callFunction.call(globalThis, request, root, ...nodes),
     // Through Reflect.apply, so tests can hand boot options Rust never would.
     boot: (options) => Reflect.apply(probe.boot, probe, [options]),
     close() {

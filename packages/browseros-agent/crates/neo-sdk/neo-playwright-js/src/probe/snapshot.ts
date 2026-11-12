@@ -10,6 +10,7 @@
  * element; iframe refs are in it too, which is how Rust's hop finds each iframe again.
  */
 import { parseSelector } from '../../../neo-playwright/third_party/playwright/packages/isomorphic/selectorParser'
+import { asPointerTargets, leafTargets, type RoleOf } from './pointer-targets'
 import type { ReplyTo, SnapshotIframe, SnapshotRequest } from './protocol'
 import { type Found, resolveTarget } from './resolve'
 import { frameSource, lastSnapshotRefs, type World } from './world'
@@ -27,10 +28,16 @@ function frameRoot(world: World): Found {
   return element ? { kind: 'one', element } : { kind: 'none' }
 }
 
+/**
+ * `nodes`, the call's nodes after its root, are the elements Rust found clickable without a
+ * pointer cursor (clickable marking, pointer-targets.ts); Rust sends them only in ai mode, and
+ * never under the spec harness's conformance switch, so without them this is upstream's call.
+ */
 export function snapshot(
   world: World,
   request: SnapshotRequest,
   root: Node | undefined,
+  nodes: readonly unknown[],
 ): ReplyTo<'snapshot'> {
   // A locator's element is strict in both modes, as upstream's locator.ariaSnapshot is.
   const found =
@@ -39,10 +46,16 @@ export function snapshot(
       : resolveTarget(world, request.root, 'strict', root)
   if (found.kind !== 'one') return found
   const { injected } = world
-  const { json, iframeRefs, iframeDepths } = injected.ariaSnapshotJSON(
-    found.element,
-    { mode: request.mode, depth: request.depth, boxes: request.boxes },
-  )
+  const element = found.element
+  const plain = () =>
+    injected.ariaSnapshotJSON(element, {
+      mode: request.mode,
+      depth: request.depth,
+      boxes: request.boxes,
+    })
+  const roleOf = (of: Element) => injected.utils.getAriaRole(of)
+  const { result, skipped } = marked(nodes, roleOf, plain)
+  const { json, iframeRefs, iframeDepths } = result
   const iframes: SnapshotIframe[] = []
   if (request.mode === 'ai') {
     const minted = lastSnapshotRefs(injected)
@@ -59,5 +72,29 @@ export function snapshot(
     kind: 'snapshot',
     json,
     iframes,
+    ...(skipped ? { marksSkipped: true } : {}),
+  }
+}
+
+/**
+ * `snapshot` with clickable marking's targets, or plainly without any. Marking must never fail a
+ * snapshot: if the guard or the marked engine call throws on a page shape nobody foresaw, the
+ * snapshot is taken again as upstream takes it, with every read real, and `skipped` tells Rust,
+ * which notes it on the op's call log.
+ */
+function marked<T>(
+  nodes: readonly unknown[],
+  roleOf: RoleOf,
+  snapshot: () => T,
+): { result: T; skipped: boolean } {
+  const elements = nodes.filter((node) => node instanceof Element)
+  if (elements.length === 0) return { result: snapshot(), skipped: false }
+  try {
+    return {
+      result: asPointerTargets(leafTargets(elements, roleOf), snapshot),
+      skipped: false,
+    }
+  } catch {
+    return { result: snapshot(), skipped: true }
   }
 }

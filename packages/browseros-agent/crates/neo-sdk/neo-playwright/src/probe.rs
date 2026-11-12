@@ -5,8 +5,9 @@
 //!  Runtime.callFunctionOn {
 //!    objectId: <the world's global, held since install>,   // never executionContextId: see probe_call
 //!    functionDeclaration: CALL_FUNCTION,
-//!    arguments: [{ value: <ProbeRequest> }], returnByValue: true }
-//!        └─▶ globalThis.__neoProbe.call(request) ─▶ <ProbeReply>, or { kind: "uninstalled" }
+//!    arguments: [{ value: <ProbeRequest> }, root?, ...nodes?], returnByValue: true }
+//!        └─▶ globalThis.__neoProbe.call(request, root, nodes) ─▶ <ProbeReply>,
+//!            or { kind: "uninstalled" }
 //! ```
 //!
 //! Rust's request/reply types generate `neo-playwright-js/src/probe/generated.ts` via
@@ -20,8 +21,8 @@ mod probe_request;
 pub(crate) mod protocol;
 
 pub(crate) use probe_call::{
-    NAVIGATED_OR_CLOSED, ProbeFailure, Ran, call, call_on, call_with_gesture, pinned_nodes,
-    pinned_object, reply_of,
+    NAVIGATED_OR_CLOSED, ProbeFailure, Ran, call, call_on, call_with_gesture, call_with_nodes,
+    pinned_nodes, pinned_object, reply_of,
 };
 pub(crate) use probe_reply::{
     ErrorClass, Hit, PROBE_PROTOCOL, PageText, Point, ProbeReply, Rect, Resolution, SnapshotIframe,

@@ -8598,7 +8598,7 @@ ${value.stack}`;
   }
 
   // crates/neo-sdk/neo-playwright-js/src/probe/protocol.ts
-  var PROTOCOL = 27;
+  var PROTOCOL = 28;
 
   // crates/neo-sdk/neo-playwright-js/src/probe/read.ts
   var XHTML = "http://www.w3.org/1999/xhtml";
@@ -8789,6 +8789,180 @@ ${value.stack}`;
     return { kind: "value", value: null };
   }
 
+  // crates/neo-sdk/neo-playwright-js/src/probe/pointer-targets.ts
+  var INTERACTIVE_TAGS = new Set([
+    "a",
+    "button",
+    "input",
+    "select",
+    "textarea",
+    "details",
+    "summary"
+  ]);
+  var INTERACTIVE_ROLES = new Set([
+    "button",
+    "link",
+    "textbox",
+    "checkbox",
+    "radio",
+    "combobox",
+    "listbox",
+    "menuitem",
+    "menuitemcheckbox",
+    "menuitemradio",
+    "option",
+    "searchbox",
+    "slider",
+    "spinbutton",
+    "switch",
+    "tab",
+    "treeitem"
+  ]);
+  var SECTION_ROLES = new Set([
+    "banner",
+    "navigation",
+    "main",
+    "complementary",
+    "contentinfo",
+    "search",
+    "form",
+    "region",
+    "article"
+  ]);
+  var FRAME_TAGS = new Set(["iframe", "frame"]);
+  var pointerTargets = new Map;
+  var nearestTargets = new Map;
+  function leafTargets(targets, roleOf) {
+    const all = new Set(targets);
+    return targets.filter((target) => !holdsTarget(target, all, roleOf));
+  }
+  function holdsTarget(target, targets, roleOf) {
+    const seen = new Set([target]);
+    const pending = [];
+    pushChildren(pending, seen, target);
+    for (let element = pending.pop();element; element = pending.pop()) {
+      if (targets.has(element) || isOwnTarget(element, roleOf))
+        return true;
+      pushChildren(pending, seen, element);
+    }
+    return false;
+  }
+  function pushChildren(pending, seen, element) {
+    const push = (child) => {
+      if (seen.has(child))
+        return;
+      seen.add(child);
+      pending.push(child);
+    };
+    const assigned = typeof HTMLSlotElement !== "undefined" && element instanceof HTMLSlotElement ? element.assignedNodes() : [];
+    if (assigned.length) {
+      for (const node of assigned)
+        if (node.nodeType === Node.ELEMENT_NODE)
+          push(node);
+    } else {
+      for (const child of element.children)
+        if (!child.assignedSlot)
+          push(child);
+      const shadow = element.shadowRoot;
+      if (shadow)
+        for (const child of shadow.children)
+          push(child);
+    }
+    for (const id of element.getAttribute("aria-owns")?.split(/\s+/) ?? []) {
+      const owned = id ? element.ownerDocument.getElementById(id) : null;
+      if (owned)
+        push(owned);
+    }
+  }
+  function isOwnTarget(element, roleOf) {
+    const tag = element.localName;
+    if (INTERACTIVE_TAGS.has(tag) || FRAME_TAGS.has(tag))
+      return true;
+    const role = roleOf(element);
+    if (role !== null && (INTERACTIVE_ROLES.has(role) || SECTION_ROLES.has(role)))
+      return true;
+    return getComputedStyle(element)?.cursor === "pointer";
+  }
+  function asPointerTargets(targets, snapshot) {
+    if (targets.length === 0)
+      return snapshot();
+    const read = globalThis.getComputedStyle;
+    if (typeof read !== "function")
+      return snapshot();
+    const own = Object.getOwnPropertyDescriptor(globalThis, "getComputedStyle");
+    for (const target of targets) {
+      const style = Reflect.apply(read, globalThis, [
+        target
+      ]);
+      pointerTargets.set(target, style?.cursor ?? "");
+    }
+    Object.defineProperty(globalThis, "getComputedStyle", {
+      configurable: true,
+      enumerable: own?.enumerable ?? true,
+      writable: true,
+      value: function getComputedStyle2(element, pseudo) {
+        const style = Reflect.apply(read, this, [
+          element,
+          pseudo
+        ]);
+        if (pseudo)
+          return style;
+        if (pointerTargets.has(element))
+          return pointerStyle(style);
+        const target = nearestTarget(element);
+        return target && style.cursor === pointerTargets.get(target) ? pointerStyle(style) : style;
+      }
+    });
+    try {
+      return snapshot();
+    } finally {
+      if (own)
+        Object.defineProperty(globalThis, "getComputedStyle", own);
+      else
+        Reflect.deleteProperty(globalThis, "getComputedStyle");
+      pointerTargets.clear();
+      nearestTargets.clear();
+    }
+  }
+  function nearestTarget(element) {
+    const chain = [];
+    let found = null;
+    for (let node = parentOrHost(element);node; node = parentOrHost(node)) {
+      if (pointerTargets.has(node)) {
+        found = node;
+        break;
+      }
+      const known = nearestTargets.get(node);
+      if (known !== undefined) {
+        found = known;
+        break;
+      }
+      chain.push(node);
+    }
+    nearestTargets.set(element, found);
+    for (const node of chain)
+      nearestTargets.set(node, found);
+    return found;
+  }
+  function parentOrHost(element) {
+    if (element.assignedSlot)
+      return element.assignedSlot;
+    if (element.parentElement)
+      return element.parentElement;
+    const parent = element.parentNode;
+    return typeof ShadowRoot !== "undefined" && parent instanceof ShadowRoot ? parent.host : null;
+  }
+  function pointerStyle(style) {
+    return new Proxy(style, {
+      get(target, key) {
+        if (key === "cursor")
+          return "pointer";
+        const value = Reflect.get(target, key);
+        return typeof value === "function" ? value.bind(target) : value;
+      }
+    });
+  }
+
   // crates/neo-sdk/neo-playwright-js/src/probe/snapshot.ts
   var FRAME_ROOT = parseSelector("body,frameset");
   function frameRoot(world) {
@@ -8796,12 +8970,20 @@ ${value.stack}`;
     const element = injected.querySelector(FRAME_ROOT, injected.document, false);
     return element ? { kind: "one", element } : { kind: "none" };
   }
-  function snapshot(world, request, root) {
+  function snapshot(world, request, root, nodes) {
     const found = request.root === "document" ? frameRoot(world) : resolveTarget(world, request.root, "strict", root);
     if (found.kind !== "one")
       return found;
     const { injected } = world;
-    const { json, iframeRefs, iframeDepths } = injected.ariaSnapshotJSON(found.element, { mode: request.mode, depth: request.depth, boxes: request.boxes });
+    const element = found.element;
+    const plain = () => injected.ariaSnapshotJSON(element, {
+      mode: request.mode,
+      depth: request.depth,
+      boxes: request.boxes
+    });
+    const roleOf = (of) => injected.utils.getAriaRole(of);
+    const { result, skipped } = marked(nodes, roleOf, plain);
+    const { json, iframeRefs, iframeDepths } = result;
     const iframes = [];
     if (request.mode === "ai") {
       const minted = lastSnapshotRefs(injected);
@@ -8817,8 +8999,22 @@ ${value.stack}`;
     return {
       kind: "snapshot",
       json,
-      iframes
+      iframes,
+      ...skipped ? { marksSkipped: true } : {}
     };
+  }
+  function marked(nodes, roleOf, snapshot) {
+    const elements = nodes.filter((node) => node instanceof Element);
+    if (elements.length === 0)
+      return { result: snapshot(), skipped: false };
+    try {
+      return {
+        result: asPointerTargets(leafTargets(elements, roleOf), snapshot),
+        skipped: false
+      };
+    } catch {
+      return { result: snapshot(), skipped: true };
+    }
   }
 
   // crates/neo-sdk/neo-playwright/third_party/playwright/packages/isomorphic/urlMatch.ts
@@ -9069,11 +9265,11 @@ ${value.stack}`;
     const pins = new Pins;
     const refs = new RefMap;
     let world;
-    function answer(booted, request, scope) {
+    function answer(booted, request, scope, nodes) {
       try {
         if (request.op === "pinned")
           return pinned(booted, request);
-        const reply = dispatch(booted, request.op, request, scope);
+        const reply = dispatch(booted, request.op, request, scope, nodes);
         return reply instanceof Promise ? reply.catch(thrownReply) : reply;
       } catch (error) {
         return thrownReply(error);
@@ -9095,20 +9291,21 @@ ${value.stack}`;
         world = { epoch, seq: frameSeq, injected, pins, refs };
         return retired === undefined ? described2(world) : { ...described2(world), retired };
       },
-      call(request, root) {
+      call(request, root, nodes) {
         const booted = world;
         if (!booted)
           return UNINSTALLED;
         if (!hasKnownOp(request))
           return errorReply("internal", "not a probe request");
         const scope = root instanceof Node ? root : undefined;
-        return answer(booted, request, scope);
+        const handed = Array.isArray(nodes) ? nodes : [];
+        return answer(booted, request, scope, handed);
       }
     };
   }
-  function dispatch(world, op, request, root) {
+  function dispatch(world, op, request, root, nodes) {
     const handler = HANDLERS[op];
-    return handler(world, request, root);
+    return handler(world, request, root, nodes);
   }
   function hasKnownOp(request) {
     if (typeof request !== "object" || request === null)

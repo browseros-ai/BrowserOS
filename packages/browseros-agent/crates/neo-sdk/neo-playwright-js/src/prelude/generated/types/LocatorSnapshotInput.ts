@@ -5,4 +5,8 @@ import type { Target } from "./Target";
 /**
  * `locator.ariaSnapshot`.
  */
-export type LocatorSnapshotInput = { target: Target, strict: Strictness, mode: import('../../../probe/protocol').SnapshotMode, depth?: number, boxes?: boolean, };
+export type LocatorSnapshotInput = { target: Target, strict: Strictness, mode: import('../../../probe/protocol').SnapshotMode, depth?: number, boxes?: boolean, 
+/**
+ * Neo's clickable marking, as on `page.ariaSnapshot`.
+ */
+clickable?: boolean, };

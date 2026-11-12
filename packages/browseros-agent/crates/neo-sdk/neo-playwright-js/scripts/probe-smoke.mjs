@@ -206,19 +206,31 @@ async function openTab(cdp, url) {
         described: await tab.evaluate(install(options), contextId),
       }
     },
-    async call(contextId, request) {
+    async call(contextId, request, nodes = []) {
+      // Nodes follow an empty root, as Rust's call_with_nodes sends them.
+      const handed = nodes.length
+        ? [{ value: null }, ...nodes.map((objectId) => ({ objectId }))]
+        : []
       const { result, exceptionDetails } = await tab.send(
         'Runtime.callFunctionOn',
         {
           functionDeclaration: PROTOCOL.callFunction,
           executionContextId: contextId,
-          arguments: [{ value: request }],
+          arguments: [{ value: request }, ...handed],
           returnByValue: true,
           awaitPromise: true,
         },
       )
       if (exceptionDetails) throw new Error(exceptionDetails.text)
       return result.value
+    },
+    /** `expression`'s value in world `contextId`, by handle. */
+    async handle(expression, contextId) {
+      const { result } = await tab.send('Runtime.evaluate', {
+        expression,
+        contextId,
+      })
+      return result.objectId
     },
   }
   await tab.send('Page.enable')
@@ -247,6 +259,17 @@ function check(ok, what, detail) {
   console.log(
     `ok ${checks} - ${what}${detail === undefined ? '' : `: ${JSON.stringify(detail)}`}`,
   )
+}
+
+/** The ref of the first node of an ai snapshot's JSON that `matches`. */
+function refWhere(nodes, matches) {
+  for (const node of nodes) {
+    if (typeof node === 'string') continue
+    if (matches(node)) return node.ref
+    const below = refWhere(node.children ?? [], matches)
+    if (below !== undefined) return below
+  }
+  return undefined
 }
 
 const resolveRequest = (target, want = 'element', strictness = 'strict') => ({
@@ -336,6 +359,33 @@ async function plainPage(cdp, server, epoch) {
         ),
       "two buttons are Playwright's strict mode violation",
       strict.message.split('\n')[0],
+    )
+
+    // Clickable marking's page half: a snapshot call that carries nodes after its root has the
+    // engine read them as `cursor: pointer` for that call only. #outside is a plain div.
+    const outside = (json) =>
+      refWhere(
+        json,
+        (node) => node.text === 'outside' && node.cursor === 'pointer',
+      )
+    const node = await tab.handle(
+      "document.getElementById('outside')",
+      contextId,
+    )
+    const snapshotOf = { op: 'snapshot', root: 'document', mode: 'ai' }
+    const marked = await tab.call(contextId, snapshotOf, [node])
+    const after = await tab.call(contextId, snapshotOf)
+    const cursorAfter = await tab.evaluate(
+      "getComputedStyle(document.getElementById('outside')).cursor",
+      contextId,
+    )
+    check(
+      marked.kind === 'snapshot' &&
+        outside(marked.json) !== undefined &&
+        outside(after.json) === undefined &&
+        cursorAfter === 'auto',
+      "a snapshot's targets read as cursor: pointer for that call only; the next snapshot and this world's own reads see the real cursor",
+      { marked: outside(marked.json), after: outside(after.json), cursorAfter },
     )
 
     const same = await tab.evaluate(install({ frameSeq: 5, epoch }), contextId)
