@@ -24,7 +24,8 @@ mod route;
 mod upstream;
 
 pub use op_wire::{OpWire, WireType};
-pub(crate) use option_keys::{OptionKeys, options, serde_fields};
+pub use option_keys::OptionNesting;
+pub(crate) use option_keys::{ADDRESSING, OptionKeys, options, serde_fields};
 pub(crate) use route::{Describe, Nothing, Route, Run};
 pub use upstream::{Command, Upstream};
 pub(crate) use upstream::{command, neo_only, replaces};

@@ -7,7 +7,7 @@ use std::path::PathBuf;
 
 use ts_rs::{Config, TS, TypeVisitor};
 
-use super::Upstream;
+use super::{ADDRESSING, OptionNesting, Upstream};
 
 /// One op's wire, as `tests/wire_generated.rs` lays it out into the prelude's generated files
 /// and as the host's tests read it. Public like `OpSpec`, and like it only data: nothing decides
@@ -21,9 +21,13 @@ pub struct OpWire {
     pub output: String,
     /// The named types `input` and `output` mention, which a file using them imports.
     pub references: Vec<String>,
-    /// The script's option keys: the wire field names of the input's `options` struct, read from
-    /// serde's own field list. Empty for an op without one.
+    /// The script's option keys, read from serde's own field list: the fields of the input's
+    /// `options` struct, or of a flat input itself minus Neo's addressing and the row's `adds`.
+    /// Empty for an op without options.
     pub option_keys: Vec<&'static str>,
+    /// Where the input carries those options. A flat input's upstream check compares the
+    /// nesting too.
+    pub option_nesting: OptionNesting,
     /// Where the op sits in Playwright's protocol, for the generated upstream check.
     pub upstream: Upstream,
     /// Every named type the input and result reach, each once, in the order the walk met them.
@@ -48,11 +52,27 @@ pub struct WireType {
 }
 
 impl OpWire {
-    /// The wire of an op whose handler takes `I` and answers `O`.
+    /// The wire of an op whose handler takes `I` and answers `O`, with its options as
+    /// `options!` declared them: `fields` are the options struct's, or a flat input's own.
     pub(crate) fn of<I: TS + 'static, O: TS + 'static>(
-        option_keys: Vec<&'static str>,
+        option_nesting: OptionNesting,
+        fields: Vec<&'static str>,
         upstream: Upstream,
     ) -> Self {
+        let option_keys: Vec<&'static str> = match option_nesting {
+            OptionNesting::Flat => {
+                let adds = match upstream {
+                    Upstream::Command(command) => command.adds,
+                    Upstream::NeoOnly { .. } | Upstream::Replaces { .. } => &[],
+                };
+                fields
+                    .into_iter()
+                    .filter(|field| !ADDRESSING.contains(field))
+                    .filter(|field| !adds.iter().any(|(added, _)| added == field))
+                    .collect()
+            }
+            OptionNesting::Nested | OptionNesting::None => fields,
+        };
         let cfg = ts_config();
         let mut references = References::default();
         references.add::<I>(&cfg);
@@ -65,6 +85,7 @@ impl OpWire {
             output: O::name(&cfg),
             references: references.names,
             option_keys,
+            option_nesting,
             upstream,
             types: types.found,
         }
@@ -162,7 +183,7 @@ mod tests {
     use ts_rs::TS;
 
     use super::OpWire;
-    use crate::wire::{Nothing, command};
+    use crate::wire::{Nothing, OptionNesting, command};
 
     /// A result in the shape of `locator.click`'s, with a 64-bit counter inside.
     #[derive(Serialize, TS)]
@@ -220,6 +241,7 @@ mod tests {
     #[test]
     fn tests_that_an_option_result_is_a_reference_and_its_types_have_files() {
         let wire = OpWire::of::<ClickInput, Option<Clicked>>(
+            OptionNesting::Nested,
             vec!["clickCount"],
             command("ElementHandle.click").into(),
         );
@@ -262,7 +284,11 @@ mod tests {
 
     #[test]
     fn tests_that_64_bit_integers_and_the_core_ids_print_as_numbers_and_strings() {
-        let wire = OpWire::of::<ClickInput, Clicked>(Vec::new(), command("Frame.click").into());
+        let wire = OpWire::of::<ClickInput, Clicked>(
+            OptionNesting::None,
+            Vec::new(),
+            command("Frame.click").into(),
+        );
         assert!(
             text_of(&wire, "Cut").contains("seq: number"),
             "u64 prints as number, not bigint: {}",
@@ -278,10 +304,53 @@ mod tests {
     }
 
     #[test]
+    fn tests_that_a_flat_input_keys_its_own_fields_but_addressing_and_adds() {
+        let flat = OpWire::of::<ClickInput, Nothing>(
+            OptionNesting::Flat,
+            vec![
+                "target",
+                "strict",
+                "publication",
+                "force",
+                "clickCount",
+                "frame",
+                "page",
+            ],
+            command("Frame.goto")
+                .adds(&[("publication", "the prelude stamps it")])
+                .into(),
+        );
+        assert_eq!(
+            flat.option_keys,
+            ["force", "clickCount"],
+            "Neo's addressing and the fields the prelude computes are never the script's options"
+        );
+        assert_eq!(flat.option_nesting, OptionNesting::Flat);
+        let nested = OpWire::of::<ClickInput, Nothing>(
+            OptionNesting::Nested,
+            vec!["force", "target"],
+            command("Frame.click").into(),
+        );
+        assert_eq!(
+            nested.option_keys,
+            ["force", "target"],
+            "an options struct's fields are all keys, whatever their names"
+        );
+    }
+
+    #[test]
     fn tests_that_nothing_is_null_and_a_recursive_tree_ends() {
-        let wire = OpWire::of::<ClickInput, Nothing>(Vec::new(), command("Frame.hover").into());
+        let wire = OpWire::of::<ClickInput, Nothing>(
+            OptionNesting::None,
+            Vec::new(),
+            command("Frame.hover").into(),
+        );
         assert_eq!(wire.output, "null", "`Nothing` answers JSON null");
-        let tree = OpWire::of::<ClickInput, Vec<Node>>(Vec::new(), command("Frame.tree").into());
+        let tree = OpWire::of::<ClickInput, Vec<Node>>(
+            OptionNesting::None,
+            Vec::new(),
+            command("Frame.tree").into(),
+        );
         assert_eq!(tree.output, "Array<Node>");
         assert_eq!(tree.references, ["ClickArgs", "Node"]);
         assert!(
