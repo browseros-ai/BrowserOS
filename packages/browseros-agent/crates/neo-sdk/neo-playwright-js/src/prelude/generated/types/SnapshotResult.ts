@@ -27,4 +27,9 @@ export type SnapshotResult = { json: import('../../vendored').AriaSnapshotJSON, 
 /**
  * Set on `page.ariaSnapshot` only; a locator's snapshot never becomes a baseline.
  */
-document?: number, };
+document?: number, 
+/**
+ * Set on `page.ariaSnapshot` only: the id of this snapshot call, which the baseline ops after
+ * it name so Rust holds them to this call's own deadline (`snapshot_calls.rs`).
+ */
+snapshotCall?: number, };

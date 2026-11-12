@@ -395,3 +395,24 @@ it('does not join a native navigation that has no completion receipt', async () 
   expect(await pending).toBe(false)
   navigation.resolve({ response: null, frameSnapshotAttempted: true })
 })
+
+// The click has landed once Rust answers it; the fence only orders the realm's consumers of its
+// navigation before the click resolves. Past the click's deadline the click resolves anyway,
+// rather than a click that worked failing with a timeout a script would answer by clicking again.
+it('completes a click whose navigation consumers outlast its deadline', async () => {
+  const runtime = loadPrelude({
+    seed: SEED,
+    now: 100,
+    answer: ({ name }) => {
+      if (name === 'page.frames') return tree
+      if (name === 'events.wait') return new Promise(() => {})
+      if (name === 'locator.click') return { navigation: { seq: 8, at: 100 } }
+      return null
+    },
+  })
+  const clicked = await runtime.run(`
+    page.waitForEvent('framenavigated', { timeout: 0 }).catch(() => {})
+    return await page.click('a', { timeout: 50 }).then(() => 'clicked', (e) => e.name)
+  `)
+  expect(clicked).toBe('clicked')
+})

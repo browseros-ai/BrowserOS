@@ -14,7 +14,7 @@ use crate::events::{RunDownloads, RunEvents};
 use crate::locator_handler::LocatorHandlers;
 use crate::object_group::ObjectGroup;
 use crate::page::{FrameRoutes, InitScripts};
-use crate::snapshot::PendingBaselines;
+use crate::snapshot::{PendingBaselines, SnapshotCalls};
 
 /// One run's Playwright state: event cursors, navigation publication receipts, discovered
 /// frame endpoints, retained element objects, downloads, init scripts, what its snapshots
@@ -45,6 +45,9 @@ pub struct RunState {
     /// The run's whole-page v1 texts, which become baselines only when the run ends with them in
     /// the caller's hands ([`RunState::settle_snapshot_baselines`]).
     pub(crate) pending_baselines: PendingBaselines,
+    /// The run's whole-page snapshot calls and when each one's timeout passes: the baseline ops
+    /// after a tree are held to their own call's, by Rust's clock alone.
+    pub(crate) snapshot_calls: SnapshotCalls,
     /// The tabs the run opened and snapshotted: on a tab it opened and never snapshotted, a
     /// failed ref came from another tab, and its message says so.
     pub(crate) opened_tabs: OpenedTabs,

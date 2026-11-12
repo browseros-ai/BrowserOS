@@ -11,6 +11,11 @@ export type SnapshotPendingInput = { page: PageHandle,
  */
 document?: number, 
 /**
+ * The `snapshotCall` the page's snapshot answered: the record is held to that call's
+ * deadline. None holds it to none.
+ */
+snapshotCall?: number, 
+/**
  * The whole page's v1 text, after the notice and the cap: what the baseline becomes.
  */
 text: string, 

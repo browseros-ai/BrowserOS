@@ -3916,12 +3916,16 @@ ${value.stack}`;
       this.endsAt = timeout === 0 ? null : since + timeout;
     }
     left() {
+      const left = this.remaining();
+      if (left === null)
+        throw this.expired();
+      return left;
+    }
+    remaining() {
       if (this.endsAt === null)
         return 0;
       const left = this.endsAt - Date.now();
-      if (left <= 0)
-        throw this.expired();
-      return left;
+      return left > 0 ? left : null;
     }
     named(error) {
       if (!(error instanceof Error) || Reflect.get(error, "code") !== "wait_timeout")
@@ -3941,6 +3945,17 @@ ${value.stack}`;
         cancel = startTimer(Math.max(0, endsAt - Date.now()), () => reject(this.expired()));
       });
       return Promise.race([verdict, expired]).finally(cancel);
+    }
+    async within(work) {
+      const endsAt = this.endsAt;
+      if (endsAt === null)
+        return { value: await work };
+      let cancel = () => {};
+      const passed = new Promise((resolve) => {
+        cancel = startTimer(Math.max(0, endsAt - Date.now()), () => resolve(null));
+      });
+      const done = work.then((value) => ({ value }));
+      return await Promise.race([done, passed]).finally(cancel);
     }
     expired() {
       return waitTimeoutError(this.api, this.message());
@@ -7994,6 +8009,7 @@ ${value.stack}`;
   var NO_BASELINE = "# whole page: no earlier snapshot of this page";
   var NO_CHANGE = "# no change since your last snapshot of this tab";
   var TOO_MUCH = "# whole page: too much differs from your last snapshot to list as changes";
+  var NO_TIME = "# whole page: no time was left to look for an earlier snapshot of this page";
   var CONTEXT = 3;
   var MAX_CHANGED_LINES = 1000;
   function renderDelta(stored, result, passed) {
@@ -8016,6 +8032,10 @@ ${whole.text}`, baseline: whole };
     });
     return { returned: `${TOO_MUCH}
 ${whole.text}`, baseline: whole };
+  }
+  function renderUncompared(result, passed) {
+    return `${NO_TIME}
+${renderSnapshotV1(result, withDefaults(passed)).text}`;
   }
   function agrees(passed, form) {
     return (passed.text === undefined || passed.text === showsText(form.text)) && (passed.urls === undefined || passed.urls === form.urls) && (passed.maxTokens === undefined || passed.maxTokens === form.maxTokens);
@@ -8203,6 +8223,23 @@ ${changes}`;
   }
   function indentOf(line) {
     return line.length - line.trimStart().length;
+  }
+
+  // crates/neo-sdk/neo-playwright-js/src/prelude/snapshot-late.ts
+  var LATE_SNAPSHOT = "return";
+  async function baselineOp(late, deadline, op) {
+    const left = deadline.remaining();
+    if (late === "fail")
+      return { value: await op(left ?? 0) };
+    if (left === null)
+      return null;
+    try {
+      return { value: await op(left) };
+    } catch (error) {
+      if (error instanceof Error && Reflect.get(error, "code") === "wait_timeout")
+        return null;
+      throw error;
+    }
   }
 
   // crates/neo-sdk/neo-playwright-js/src/prelude/timeouts.ts
@@ -8554,14 +8591,8 @@ ${changes}`;
         try {
           await this._page._context._events.publishNavigation(this._page, result.navigation, api, deadline, wait.signal);
         } catch (error) {
-          if (error instanceof Error) {
+          if (error instanceof Error)
             Object.assign(error, { delivery: "unknown", retryable: false });
-            if (Reflect.get(error, "code") === "wait_timeout")
-              Object.assign(error, {
-                code: "navigation_observation_timeout",
-                owner: "neo"
-              });
-          }
           throw error;
         }
       }
@@ -8833,30 +8864,29 @@ ${changes}`;
       const result = await this._snapshot(api, selector, options, mode, true);
       if (selector !== null)
         return renderSnapshotV1(result, withDefaults(passed)).text;
-      const { document } = result;
-      try {
-        const page = await this._page._brand(api);
-        let returned;
-        let baseline;
-        if (delta) {
-          const stored = await send["page.snapshotBaseline"](site, this._call(api, deadline.left()), { page, document }, wait.signal);
-          ({ returned, baseline } = renderDelta(stored, result, passed));
-        } else {
-          baseline = renderSnapshotV1(result, withDefaults(passed));
-          returned = baseline.text;
-        }
-        await send["page.snapshotPending"](site, this._call(api, deadline.left()), {
-          page,
-          document,
-          text: baseline.text,
-          form: baseline.form,
-          delta,
-          returned: delta ? returned : undefined
-        }, wait.signal);
-        return returned;
-      } catch (error) {
-        throw deadline.named(error);
+      const { document, snapshotCall } = result;
+      const page = await this._page._brand(api);
+      let returned;
+      let baseline;
+      if (delta) {
+        const stored = await baselineOp(LATE_SNAPSHOT, deadline, (timeoutMs) => send["page.snapshotBaseline"](site, this._call(api, timeoutMs), { page, document, snapshotCall }, wait.signal));
+        if (stored === null)
+          return renderUncompared(result, passed);
+        ({ returned, baseline } = renderDelta(stored.value, result, passed));
+      } else {
+        baseline = renderSnapshotV1(result, withDefaults(passed));
+        returned = baseline.text;
       }
+      await baselineOp(LATE_SNAPSHOT, deadline, (timeoutMs) => send["page.snapshotPending"](site, this._call(api, timeoutMs), {
+        page,
+        document,
+        snapshotCall,
+        text: baseline.text,
+        form: baseline.form,
+        delta,
+        returned: delta ? returned : undefined
+      }, wait.signal));
+      return returned;
     }
     async _ariaSnapshotJSON(api, selector, options = {}) {
       return (await this._snapshot(api, selector, options, options.mode ?? "default")).json;
@@ -8915,12 +8945,14 @@ ${changes}`;
         return await (completion ?? this._page._navigated(api, this, result, observed, ready));
       });
     }
-    async _waitForLoadState(api, site, state, options = {}) {
+    async _waitForLoadState(api, site, state, options = {}, deadline) {
       const verified = loadState(api, "state", state ?? "load");
       const signal = signalOf(api, options);
       await untilAborted(signal, () => abortedError(api, signal), async () => {
-        const { value: result, observed } = await invokeObserved("page.waitForLoadState", site, this._call(api, this._navigationTimeout(options)), { ...await this._frameArgs(api), state: verified }, undefined, signal);
-        await this._page._navigated(api, this, result, observed);
+        const wait = invokeObserved("page.waitForLoadState", site, this._call(api, this._navigationTimeout(options)), { ...await this._frameArgs(api), state: verified }, undefined, signal);
+        const { value: result, observed } = await (deadline ? deadline.race(wait) : wait);
+        const navigated = this._page._navigated(api, this, result, observed);
+        await (deadline ? deadline.within(navigated) : navigated);
       });
     }
     async _content(api, options = {}) {
@@ -10130,7 +10162,7 @@ ${changes}`;
       this.navigationPublications.add(publication);
       this.settleNavigationPublications();
       try {
-        await untilAborted(signal, () => abortedError(api, signal), () => deadline.race(Promise.all([...waits, delivered])));
+        await untilAborted(signal, () => abortedError(api, signal), () => deadline.within(Promise.all([...waits, delivered])));
       } finally {
         this.navigationPublications.delete(publication);
       }
@@ -11413,7 +11445,7 @@ ${changes}`;
         });
       }
       ready?.();
-      return typeof result?.response?.status === "number" ? new Response(frame, result.response) : null;
+      return navigationResponse(frame, result);
     }
     #payloadCurrent(at) {
       return !this._closed && at !== null && at.payloadCurrent === true && at.seq === this.#observedSeq;
@@ -11724,11 +11756,11 @@ ${changes}`;
           ...url ? { url } : {},
           waitUntil: predicate ? "commit" : waitUntil
         }, undefined, signal)).catch(rethrow);
-        const response = await deadline.race(this._navigated(api, frame, result, observed));
-        if (!predicate) {
-          deadline.left();
+        const navigated = this._navigated(api, frame, result, observed);
+        const settled = await deadline.within(navigated);
+        const response = settled ? settled.value : navigationResponse(frame, result);
+        if (!predicate)
           return response;
-        }
         after = result.navigationSeq;
         let matched;
         try {
@@ -11737,11 +11769,7 @@ ${changes}`;
           throw prefixed(api, error);
         }
         if (matched) {
-          await deadline.race(frame._waitForLoadState(api, site, waitUntil, {
-            timeout: deadline.left(),
-            signal
-          }).catch(rethrow));
-          deadline.left();
+          await frame._waitForLoadState(api, site, waitUntil, { timeout: deadline.left(), signal }, deadline).catch(rethrow);
           return response;
         }
       }
@@ -11758,6 +11786,9 @@ ${changes}`;
         return await (completion ?? this._navigated(api, this._mainFrame, result, observed, ready));
       });
     }
+  }
+  function navigationResponse(frame, result) {
+    return typeof result?.response?.status === "number" ? new Response(frame, result.response) : null;
   }
 
   // crates/neo-sdk/neo-playwright-js/src/prelude/context.ts

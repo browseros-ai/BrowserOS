@@ -56,7 +56,8 @@ import {
   renderSnapshot,
   upstreamSnapshots,
 } from './snapshot'
-import { renderDelta } from './snapshot-delta'
+import { renderDelta, renderUncompared } from './snapshot-delta'
+import { baselineOp, LATE_SNAPSHOT } from './snapshot-late'
 import {
   DEFAULT_MAX_TOKENS,
   type PassedV1Options,
@@ -840,17 +841,13 @@ export class Frame extends EventEmitter {
           wait.signal,
         )
       } catch (error) {
-        // Input already landed. A caught publication failure must never invite replay.
-        // Uncaught local errors remain script_error at the host boundary; RunReply derives
-        // whole-run retryability from recorded writes, so that path is nonretryable too.
-        if (error instanceof Error) {
+        // Input already landed. A caught publication failure (events lost before the fence, an
+        // abort) must never invite replay; the deadline passing is no failure here (events.ts
+        // `publishNavigation`). Uncaught local errors remain script_error at the host boundary;
+        // RunReply derives whole-run retryability from recorded writes, so that path is
+        // nonretryable too.
+        if (error instanceof Error)
           Object.assign(error, { delivery: 'unknown', retryable: false })
-          if (Reflect.get(error, 'code') === 'wait_timeout')
-            Object.assign(error, {
-              code: 'navigation_observation_timeout',
-              owner: 'neo',
-            })
-        }
         throw error
       }
     }
@@ -1498,45 +1495,52 @@ export class Frame extends EventEmitter {
     // The script's timeout and signal cover the whole call, the baseline ops included.
     const wait = this._wait(api, options)
     const deadline = new EventDeadline(api, null, Date.now(), wait.timeout)
+    // The tree is the snapshot, and the op's own timeout in Rust has judged it. What follows keeps
+    // the tab's delta baseline; when the call's timeout passes during it, Rust decides so and
+    // `LATE_SNAPSHOT` chooses whether the call returns its snapshot or fails (snapshot-late.ts).
+    // The realm never raises that timeout itself.
     const result = await this._snapshot(api, selector, options, mode, true)
     if (selector !== null)
       return renderSnapshotV1(result, withDefaults(passed)).text
-    const { document } = result
-    try {
-      const page = await this._page._brand(api)
-      let returned: string
-      let baseline: RenderedV1
-      if (delta) {
-        const stored = await send['page.snapshotBaseline'](
+    // `snapshotCall` names this call to Rust, which holds both baseline ops to its own deadline.
+    const { document, snapshotCall } = result
+    const page = await this._page._brand(api)
+    let returned: string
+    let baseline: RenderedV1
+    if (delta) {
+      const stored = await baselineOp(LATE_SNAPSHOT, deadline, (timeoutMs) =>
+        send['page.snapshotBaseline'](
           site,
-          this._call(api, deadline.left()),
-          { page, document },
+          this._call(api, timeoutMs),
+          { page, document, snapshotCall },
           wait.signal,
-        )
-        ;({ returned, baseline } = renderDelta(stored, result, passed))
-      } else {
-        baseline = renderSnapshotV1(result, withDefaults(passed))
-        returned = baseline.text
-      }
-      await send['page.snapshotPending'](
+        ),
+      )
+      if (stored === null) return renderUncompared(result, passed)
+      ;({ returned, baseline } = renderDelta(stored.value, result, passed))
+    } else {
+      baseline = renderSnapshotV1(result, withDefaults(passed))
+      returned = baseline.text
+    }
+    await baselineOp(LATE_SNAPSHOT, deadline, (timeoutMs) =>
+      send['page.snapshotPending'](
         site,
-        this._call(api, deadline.left()),
+        this._call(api, timeoutMs),
         // A full call returns the text itself, which need not cross twice. The form is set
         // with the text it describes, so a baseline always says how the caller's copy was made.
         {
           page,
           document,
+          snapshotCall,
           text: baseline.text,
           form: baseline.form,
           delta,
           returned: delta ? returned : undefined,
         },
         wait.signal,
-      )
-      return returned
-    } catch (error) {
-      throw deadline.named(error)
-    }
+      ),
+    )
+    return returned
   }
 
   /** The tree itself, in upstream's default mode when the script names none. */
@@ -1632,11 +1636,18 @@ export class Frame extends EventEmitter {
     })
   }
 
+  /**
+   * Waits for `state`. A caller that keeps a deadline across several ops (`waitForNavigation`'s
+   * predicate path) passes it: the native wait races it, as upstream's Waiter does, and the
+   * frame-cache refresh after the wait answered is bounded by it without failing the call
+   * (event-deadline.ts).
+   */
   async _waitForLoadState(
     api: string,
     site: CallSite,
     state: LoadState | undefined,
     options: TimeoutOption & SignalOption = {},
+    deadline?: EventDeadline,
   ): Promise<void> {
     const verified = loadState(api, 'state', state ?? 'load')
     // upstream waits for a load state with a Waiter, whose abort rejects the whole wait.
@@ -1645,7 +1656,7 @@ export class Frame extends EventEmitter {
       signal,
       () => abortedError(api, signal as SignalLike),
       async () => {
-        const { value: result, observed } = await invokeObserved(
+        const wait = invokeObserved(
           'page.waitForLoadState',
           site,
           this._call(api, this._navigationTimeout(options)),
@@ -1653,7 +1664,11 @@ export class Frame extends EventEmitter {
           undefined,
           signal,
         )
-        await this._page._navigated(api, this, result, observed)
+        const { value: result, observed } = await (deadline
+          ? deadline.race(wait)
+          : wait)
+        const navigated = this._page._navigated(api, this, result, observed)
+        await (deadline ? deadline.within(navigated) : navigated)
       },
     )
   }

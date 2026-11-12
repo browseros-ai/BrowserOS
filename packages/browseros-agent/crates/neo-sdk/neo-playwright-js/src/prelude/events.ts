@@ -390,6 +390,11 @@ export class EventHub {
    * A click waits for the consumers of its own committed event, not for arbitrary pending
    * browser work. Async predicates are deliberately excluded: they may themselves await the
    * click. Listener callbacks run synchronously, just as EventEmitter does upstream.
+   *
+   * The click has landed by now, so this fence only orders the realm's own consumers before the
+   * click resolves. It waits within what is left of the click's deadline and no longer: past it
+   * the click resolves and the consumers run when the pump delivers, rather than a click that
+   * worked failing with a timeout (a script would click again). Lost events still fail it.
    */
   async publishNavigation(
     page: Page,
@@ -419,7 +424,7 @@ export class EventHub {
       await untilAborted(
         signal,
         () => abortedError(api, signal as SignalLike),
-        () => deadline.race(Promise.all([...waits, delivered])),
+        () => deadline.within(Promise.all([...waits, delivered])),
       )
     } finally {
       this.navigationPublications.delete(publication)

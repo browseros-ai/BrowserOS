@@ -1199,9 +1199,7 @@ export class Page extends EventEmitter {
     // No browser await remains after this mark. A later evaluate may now publish this
     // navigation's public promise before returning its own observation.
     ready?.()
-    return typeof result?.response?.status === 'number'
-      ? new Response(frame, result.response)
-      : null
+    return navigationResponse(frame, result)
   }
 
   /** Both the payload's admitted binding and this Page's newest fact must agree. */
@@ -1650,6 +1648,10 @@ export class Page extends EventEmitter {
     const rethrow = (error: unknown): never => {
       throw deadline.named(error)
     }
+    // A wait op in flight races the deadline, as upstream's Waiter races its timer against the
+    // event; the script's predicate too. Once the op that settles the call has answered, no
+    // deadline check follows it (event-deadline.ts): the frame-cache refresh after a navigation
+    // or a load-state wait is bounded by the deadline but never fails the call.
     for (;;) {
       const { value: result, observed } = await deadline
         .race(
@@ -1669,13 +1671,12 @@ export class Page extends EventEmitter {
           ),
         )
         .catch(rethrow)
-      const response = await deadline.race(
-        this._navigated(api, frame, result, observed),
-      )
-      if (!predicate) {
-        deadline.left()
-        return response
-      }
+      const navigated = this._navigated(api, frame, result, observed)
+      const settled = await deadline.within(navigated)
+      const response = settled
+        ? settled.value
+        : navigationResponse(frame, result)
+      if (!predicate) return response
       after = result.navigationSeq
       let matched: unknown
       try {
@@ -1686,15 +1687,15 @@ export class Page extends EventEmitter {
         throw prefixed(api, error)
       }
       if (matched) {
-        await deadline.race(
-          frame
-            ._waitForLoadState(api, site, waitUntil, {
-              timeout: deadline.left(),
-              signal,
-            })
-            .catch(rethrow),
-        )
-        deadline.left()
+        await frame
+          ._waitForLoadState(
+            api,
+            site,
+            waitUntil,
+            { timeout: deadline.left(), signal },
+            deadline,
+          )
+          .catch(rethrow)
         return response
       }
     }
@@ -1729,4 +1730,14 @@ export class Page extends EventEmitter {
         this._navigated(api, this._mainFrame, result, observed, ready))
     })
   }
+}
+
+/** The `Response` a navigation's result reports, or null for one with no HTTP response. */
+function navigationResponse(
+  frame: Frame,
+  result: Partial<NavigationResult> | null,
+): Response | null {
+  return typeof result?.response?.status === 'number'
+    ? new Response(frame, result.response)
+    : null
 }

@@ -7,7 +7,9 @@
  *              call gave as pending; the host stores it once the run ends with it in the
  *              caller's hands (neo-playwright's snapshot_baselines.rs and pending_baselines.rs)
  *   here       stored baseline + the snapshot's tree + the options the call passed
- *                → one of four first lines, then the hunks or the whole page
+ *                → one of four first lines, then the hunks or the whole page; or, when the
+ *                call's timeout passed before the baseline could be read, `NO_TIME` and the
+ *                whole page
  *
  * The form rule (design section 7, "The form of a delta"): a baseline's form is how its text was
  * rendered (the `text` option and what the length rule chose, `urls`, `maxTokens`). A delta call
@@ -42,6 +44,12 @@ export const NO_CHANGE = '# no change since your last snapshot of this tab'
  */
 export const TOO_MUCH =
   '# whole page: too much differs from your last snapshot to list as changes'
+/**
+ * Not "no earlier snapshot": the call's timeout passed after its tree arrived and before it could
+ * read the tab's stored baseline, so it cannot say whether there is one. True either way.
+ */
+export const NO_TIME =
+  '# whole page: no time was left to look for an earlier snapshot of this page'
 
 /** Unchanged lines printed on each side of a change. */
 const CONTEXT = 3
@@ -89,6 +97,18 @@ export function renderDelta(
     maxTokens: passed.maxTokens ?? form.maxTokens,
   })
   return { returned: `${TOO_MUCH}\n${whole.text}`, baseline: whole }
+}
+
+/**
+ * A delta call's answer when its timeout passed before the stored baseline could be read: the
+ * whole page, rendered by the options the call passed as with no baseline, under `NO_TIME`. It
+ * becomes no baseline, since the call that returns it records none.
+ */
+export function renderUncompared(
+  result: SnapshotResult,
+  passed: PassedV1Options,
+): string {
+  return `${NO_TIME}\n${renderSnapshotV1(result, withDefaults(passed)).text}`
 }
 
 /**

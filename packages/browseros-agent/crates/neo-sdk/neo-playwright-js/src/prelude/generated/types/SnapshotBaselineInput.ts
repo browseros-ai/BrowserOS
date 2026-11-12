@@ -8,4 +8,9 @@ export type SnapshotBaselineInput = { page: PageHandle,
 /**
  * The `document` the page's snapshot answered. None finds no baseline.
  */
-document?: number, };
+document?: number, 
+/**
+ * The `snapshotCall` the page's snapshot answered: the read is held to that call's
+ * deadline. None holds it to none.
+ */
+snapshotCall?: number, };
