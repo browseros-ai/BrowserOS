@@ -66,7 +66,7 @@ export function ProBanner({ onClosed }: { onClosed?: () => void }) {
           <em className="text-accent-ink">ultrafast</em>
         </>
       }
-      description={`Faster tasks, a year of history and more, for ${formatPrice(month)} a month.`}
+      description={`Faster skills, robot checks solved, and more, for ${formatPrice(month)} a month.`}
       dismissLabel="Hide this"
       onDismiss={dismiss}
       action={
