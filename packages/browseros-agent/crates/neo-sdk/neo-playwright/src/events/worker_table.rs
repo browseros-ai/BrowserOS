@@ -8,9 +8,10 @@ use std::sync::{Arc, Mutex, PoisonError};
 use browseros_core::{ProtocolSession, SessionId, TargetId};
 use serde::Serialize;
 use tokio::sync::watch;
+use ts_rs::TS;
 
 /// A live dedicated worker, for the host's ordered page facts and the prelude's cache.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, TS)]
 pub struct WorkerInfo {
     /// The worker target's identity, stable until it closes.
     pub id: String,

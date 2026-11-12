@@ -2,13 +2,18 @@
 // `since` stamp, one pump pulls each listener's events, `waitForEvent` stamps its call time
 // before anything is sent and re-waits after a rejected event.
 import { describe, expect, it } from 'bun:test'
+import type {
+  DialogInfo,
+  EventRecord,
+  PageBrand,
+} from '../src/prelude/generated'
 import { type Call, json, loadPrelude, SEED } from './support/prelude-runtime'
 
 const never = new Promise<never>(() => {})
 
 /** Answers `events.next` from a queue of batches, then never again (the pump idles). */
 function pumpAnswers(
-  batches: unknown[][],
+  batches: EventRecord[][],
   others: (call: Call) => unknown = () => null,
 ) {
   const queue = [...batches]
@@ -40,19 +45,32 @@ async function eventually(check: () => boolean): Promise<void> {
   throw new Error('the condition never held')
 }
 
-const brand = (id: number) => ({ $neo: 'page', tab: 1000 + id })
+/**
+ * When Rust recorded a fixture's event: after any listener's stamp, as every record the pump
+ * delivers was (a context listener drops a record from before it attached).
+ */
+const RECORDED_AT = Number.MAX_SAFE_INTEGER
+
+const brand = (id: number): PageBrand => ({ $neo: 'page', tab: 1000 + id })
 
 /** The opener's `popup` event for a tab that opened. */
-const popup = (seq: number, id: number, url: string, opener = 7) => ({
+const popup = (
+  seq: number,
+  id: number,
+  url: string,
+  opener = 7,
+): EventRecord => ({
   seq,
+  at: RECORDED_AT,
   event: 'popup',
   page: brand(opener),
   popup: { page: brand(id), url },
 })
 
 /** A console message from the opener page. */
-const consoleRecord = (seq: number) => ({
+const consoleRecord = (seq: number): EventRecord => ({
   seq,
+  at: RECORDED_AT,
   event: 'console',
   page: brand(7),
   message: {
@@ -64,8 +82,9 @@ const consoleRecord = (seq: number) => ({
 })
 
 /** The context's `page` event for a tab that opened. */
-const newTab = (seq: number, id: number, url: string) => ({
+const newTab = (seq: number, id: number, url: string): EventRecord => ({
   seq,
+  at: RECORDED_AT,
   event: 'page',
   page: brand(id),
   url,
@@ -385,6 +404,7 @@ describe('listeners and the pump', () => {
         [
           {
             seq: 3,
+            at: RECORDED_AT,
             event: 'dialog',
             page: brand(7),
             dialog: {
@@ -422,6 +442,7 @@ describe('listeners and the pump', () => {
         [
           {
             seq: 1,
+            at: RECORDED_AT,
             event: 'dialog',
             page: brand(7),
             dialog: {
@@ -433,6 +454,7 @@ describe('listeners and the pump', () => {
           },
           {
             seq: 2,
+            at: RECORDED_AT,
             event: 'dialog',
             page: brand(7),
             dialog: {
@@ -444,6 +466,7 @@ describe('listeners and the pump', () => {
           },
           {
             seq: 3,
+            at: RECORDED_AT,
             event: 'dialog',
             page: brand(7),
             dialog: {
@@ -511,6 +534,7 @@ describe('listeners and the pump', () => {
         [
           {
             seq: 2,
+            at: RECORDED_AT,
             event: 'console',
             page: brand(7),
             message: {
@@ -540,6 +564,7 @@ describe('listeners and the pump', () => {
         [
           {
             seq: 9,
+            at: RECORDED_AT,
             event: 'console',
             page: brand(7),
             message: {
@@ -554,8 +579,8 @@ describe('listeners and the pump', () => {
             },
           },
         ],
-        [{ seq: 4, event: 'close', page: brand(7) }],
-        [{ seq: 4, event: 'close', page: brand(7) }],
+        [{ seq: 4, at: RECORDED_AT, event: 'close', page: brand(7) }],
+        [{ seq: 4, at: RECORDED_AT, event: 'close', page: brand(7) }],
       ]),
     })
     const result = json(
@@ -593,6 +618,7 @@ describe('listeners and the pump', () => {
           [
             {
               seq: 1,
+              at: RECORDED_AT,
               event: 'pageerror',
               page: brand(7),
               error: {
@@ -603,6 +629,7 @@ describe('listeners and the pump', () => {
             },
             {
               seq: 2,
+              at: RECORDED_AT,
               event: 'download',
               page: brand(7),
               download: {
@@ -1028,7 +1055,7 @@ it('orders context on/off around async setup and rejects an old pump period', as
 
 it('reuses the original Dialog for page and context closure and delivers each once', async () => {
   const recordedAt = Date.now()
-  const dialog = {
+  const dialog: DialogInfo = {
     id: 91,
     type: 'confirm',
     message: 'Close?',

@@ -2059,7 +2059,16 @@
 
   // crates/neo-sdk/neo-playwright-js/src/prelude/generated/event.ts
   var EVENT_OPTION_KEYS = {};
-  var EVENT_SEND = {};
+  var EVENT_SEND = {
+    "events.listen": (site, call, input, signal) => invoke("events.listen", site, call, input, signal),
+    "events.next": (site, call, input, signal) => invoke("events.next", site, call, input, signal),
+    "events.wait": (site, call, input, signal) => invoke("events.wait", site, call, input, signal),
+    "events.interceptFileChooser": (site, call, input, signal) => invoke("events.interceptFileChooser", site, call, input, signal),
+    "dialog.accept": (site, call, input, signal) => invoke("dialog.accept", site, call, input, signal),
+    "dialog.dismiss": (site, call, input, signal) => invoke("dialog.dismiss", site, call, input, signal),
+    "download.path": (site, call, input, signal) => invoke("download.path", site, call, input, signal),
+    "download.saveAs": (site, call, input, signal) => invoke("download.saveAs", site, call, input, signal)
+  };
 
   // crates/neo-sdk/neo-playwright-js/src/prelude/generated/locator-handler.ts
   var LOCATOR_HANDLER_OPTION_KEYS = {};
@@ -8928,10 +8937,10 @@ ${value.stack}`;
     async accept(promptText) {
       const site = captureSite();
       const api = "dialog.accept";
-      await invoke("dialog.accept", site, { api, timeoutMs: 0 }, {
+      await send["dialog.accept"](site, { api, timeoutMs: 0 }, {
         page: await this.#pageValue._brand(api),
         dialog: this.#info.id,
-        ...promptText === undefined ? {} : { promptText }
+        promptText
       });
     }
     async dismiss() {
@@ -8939,7 +8948,7 @@ ${value.stack}`;
       const api = "dialog.dismiss";
       const page = await this.#pageValue._brand(api);
       try {
-        await invoke("dialog.dismiss", site, { api, timeoutMs: 0 }, { page, dialog: this.#info.id });
+        await send["dialog.dismiss"](site, { api, timeoutMs: 0 }, { page, dialog: this.#info.id });
       } catch (error) {
         if (Reflect.get(Object(error), "code") === "target_closed")
           return;
@@ -8968,7 +8977,7 @@ ${value.stack}`;
     async path() {
       const site = captureSite();
       const api = "download.path";
-      const done = await invoke("download.path", site, { api, timeoutMs: 0 }, { download: this.#info.id });
+      const done = await send["download.path"](site, { api, timeoutMs: 0 }, { download: this.#info.id });
       if (done.path === null)
         throw new Error(`${api}: ${done.failure ?? "download failed"}`);
       return done.path;
@@ -8976,13 +8985,13 @@ ${value.stack}`;
     async failure() {
       const site = captureSite();
       const api = "download.failure";
-      const done = await invoke("download.path", site, { api, timeoutMs: 0 }, { download: this.#info.id });
+      const done = await send["download.path"](site, { api, timeoutMs: 0 }, { download: this.#info.id });
       return done.failure;
     }
     async saveAs(path) {
       const site = captureSite();
       const api = "download.saveAs";
-      await invoke("download.saveAs", site, { api, timeoutMs: 0 }, { download: this.#info.id, path });
+      await send["download.saveAs"](site, { api, timeoutMs: 0 }, { download: this.#info.id, path });
     }
   }
 
@@ -9273,19 +9282,15 @@ ${value.stack}`;
       try {
         if (on && lease)
           await lease.ready;
-        const input = !on && event === "workerstate" && page?._tab != null ? {
-          page: null,
-          retiredTab: page._tab,
-          event,
-          on: false,
-          since
-        } : {
-          page: page === null ? null : await page._openedBrand(api),
-          event,
-          on,
-          since
-        };
-        await invoke("events.listen", site, { api, timeoutMs: 0 }, input);
+        if (!on && event === "workerstate" && page?._tab != null)
+          await send["events.listen"](site, { api, timeoutMs: 0 }, { page: null, retiredTab: page._tab, event, on: false, since });
+        else
+          await send["events.listen"](site, { api, timeoutMs: 0 }, {
+            page: page === null ? null : await page._openedBrand(api),
+            event,
+            on,
+            since
+          });
       } catch {
         if (on && lease)
           lease.release().catch(() => {});
@@ -9300,7 +9305,7 @@ ${value.stack}`;
       const api = "page.filechooser";
       const target = page._openedBrand(api);
       const ready = target.then(async (page) => {
-        await invoke("events.interceptFileChooser", site, { api, timeoutMs: 0 }, { page, lease: id, on: true });
+        await send["events.interceptFileChooser"](site, { api, timeoutMs: 0 }, { page, lease: id, on: true });
       });
       trackChooserSetup(ready);
       let released = null;
@@ -9309,7 +9314,7 @@ ${value.stack}`;
         release: () => {
           if (!released) {
             released = ready.then(async () => {
-              await invoke("events.interceptFileChooser", site, { api, timeoutMs: 0 }, { page: await target, lease: id, on: false });
+              await send["events.interceptFileChooser"](site, { api, timeoutMs: 0 }, { page: await target, lease: id, on: false });
             });
             trackChooserSetup(released);
           }

@@ -7,6 +7,7 @@
 use browseros_core::{FrameId, SessionId, TargetId};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use ts_rs::TS;
 
 use crate::events::PageEventKind;
 use crate::events::frame_lifecycle::{EventFrame, FrameLifecycle};
@@ -158,11 +159,13 @@ pub(crate) struct DialogOpened {
 }
 
 /// Neo's number for one dialog, unique per `Playwright`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, TS)]
 pub(crate) struct DialogId(pub(crate) u64);
 
-/// Playwright's dialog types.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// Playwright's dialog types, as `dialog.type()` names them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "lowercase")]
+#[ts(rename = "DialogType")]
 pub(crate) enum DialogKind {
     Alert,
     Confirm,
@@ -214,8 +217,9 @@ pub(crate) struct ConsoleMessage {
 }
 
 /// Where a message or error came from: the first stack frame, 0-based as CDP reports it.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(rename = "ConsoleLocation")]
 pub(crate) struct Location {
     pub(crate) url: String,
     pub(crate) line_number: u64,
@@ -507,7 +511,7 @@ mod tests {
     use browseros_core::TargetId;
     use serde_json::json;
 
-    use super::{ConsoleMessage, ConsoleParams, ExceptionParams, PageError};
+    use super::{ConsoleMessage, ConsoleParams, DialogKind, ExceptionParams, PageError};
 
     fn target() -> TargetId {
         TargetId("T".to_owned())
@@ -606,6 +610,20 @@ mod tests {
             } }))?;
             let error = PageError::from_params(target(), thrown);
             assert_eq!((error.name.as_str(), error.message.as_str()), ("", message));
+        }
+        Ok(())
+    }
+
+    /// A dialog's `type` on the wire is the name `dialog.type()` answers, for every kind.
+    #[test]
+    fn tests_that_a_dialog_kind_serializes_as_its_playwright_name() -> Result<(), Box<dyn Error>> {
+        for kind in [
+            DialogKind::Alert,
+            DialogKind::Confirm,
+            DialogKind::Prompt,
+            DialogKind::BeforeUnload,
+        ] {
+            assert_eq!(serde_json::to_value(kind)?, json!(kind.as_str()));
         }
         Ok(())
     }

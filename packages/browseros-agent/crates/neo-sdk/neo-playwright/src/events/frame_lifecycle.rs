@@ -6,11 +6,13 @@ use std::collections::{HashMap, HashSet};
 use browseros_core::{FrameId, TargetId};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use ts_rs::TS;
 
 use crate::events::PageEventKind;
 
-/// The Frame fields delivered to JavaScript before its callback runs.
-#[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq, Serialize)]
+/// The Frame fields delivered to JavaScript before its callback runs: the shape of a page's
+/// `FrameInfo`, as the frame stood when the watcher recorded the event.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct EventFrame {
     pub(crate) id: FrameId,
@@ -21,8 +23,10 @@ pub(crate) struct EventFrame {
     #[serde(default)]
     pub(crate) url: String,
     #[serde(default, skip_serializing)]
+    #[ts(skip)]
     url_fragment: String,
     #[serde(default, skip_serializing)]
+    #[ts(skip)]
     pub(crate) loader_id: Option<String>,
 }
 

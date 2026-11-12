@@ -6,12 +6,13 @@ use std::time::Duration;
 
 use browseros_core::{FrameId, TargetId};
 use serde::Serialize;
+use ts_rs::TS;
 
 use crate::events::event_hub::EventRecord;
 use crate::events::file_chooser::FileChooser;
 use crate::events::frame_lifecycle::{EventFrame, FrameLifecycle};
 use crate::events::page_event::{
-    DialogId, DialogOpened, Location, OpenedPage, PageEvent, WindowKind,
+    DialogId, DialogKind, DialogOpened, Location, OpenedPage, PageEvent, WindowKind,
 };
 use crate::events::run_events::QueuedCall;
 use crate::events::{PageEventKind, Subscription};
@@ -24,17 +25,25 @@ const LISTING_RETRIES: u32 = 5;
 const LISTING_WAIT: Duration = Duration::from_millis(100);
 
 /// One event as `events.wait` and `events.next` return it:
-/// `{ "seq": 12, "at": 1700000000123, "event": "popup", "page": .., .. }`. `seq` is the record's
-/// place in the log; a `waitForEvent` whose predicate rejects the event asks again with `after`
-/// set to it.
-#[derive(Debug, Serialize)]
+/// `{ "seq": 12, "at": 1700000000123, "event": "popup", "page": .., .. }`. `event` is
+/// Playwright's name and `page` the page it fires on; the context's `page` event names the new
+/// tab there. `seq` is the record's place in the log; a `waitForEvent` whose predicate rejects
+/// the event asks again with `after` set to it.
+///
+/// The log is read once per listener, from that listener's own position, so one opened tab
+/// reaches the opener's `popup` listener and the context's `page` listener as two events.
+#[derive(Debug, Serialize, TS)]
+#[ts(rename = "EventRecord")]
 pub(crate) struct Delivered {
     pub(crate) seq: u64,
-    /// The record's [`EventRecord::at_ms`]: when the watcher recorded the event, not when the
-    /// page acted, in ms since the epoch from `EpochMillis::now`, the function that stamps
-    /// `neo_takeover::Locks`' `created_at` and `ended.at`. claw-sdk's door compares `at`
-    /// with those to withhold what a page did while its owner held the tab.
+    /// When the watcher recorded the event, not when the page acted: ms since the epoch on the
+    /// clock that stamps takeover lock times (`EpochMillis::now`, as `neo_takeover::Locks`'
+    /// `created_at` and `ended.at`). claw-sdk's door compares `at` with those to withhold what a
+    /// page did while its owner held the tab, and the prelude drops a context-level event
+    /// recorded before the context's listener attached.
+    // The log record's `EventRecord::at_ms`, never the time a read delivered it.
     at: u64,
+    // ts-rs prints the flattened tagged enum as `{ seq, at } & ({ event: 'popup', .. } | ..)`.
     #[serde(flatten)]
     payload: Payload,
 }
@@ -55,8 +64,10 @@ impl Delivered {
     }
 }
 
-#[derive(Debug, Serialize)]
+/// What happened, tagged with Playwright's event name.
+#[derive(Debug, Serialize, TS)]
 #[serde(tag = "event")]
+#[ts(rename = "EventPayload")]
 enum Payload {
     #[serde(rename = "workerstate")]
     WorkerState {
@@ -135,10 +146,11 @@ enum Payload {
         page: PageHandle,
         chooser: FileChooser,
     },
-    /// A call of a binding the run exposed: the stub's JSON `payload`, the execution context to
-    /// answer it in (`bindingCall.resolve`), and that context's frame, `null` for the main frame
-    /// or a frame the watcher did not see made. Named `executionContext`, not `context`, which the
-    /// prelude reads as a context-level event's flag.
+    /// A call of a binding the run exposed: the stub's JSON `payload` (`{ name, seq,
+    /// serializedArgs }`), the execution context to answer it in (`bindingCall.resolve`), and
+    /// that context's frame, `null` for the main frame or a frame the watcher did not see made.
+    /// Named `executionContext`, not `context`, which the prelude reads as a context-level
+    /// event's flag.
     #[serde(rename = "binding", rename_all = "camelCase")]
     Binding {
         page: PageHandle,
@@ -148,27 +160,32 @@ enum Payload {
     },
 }
 
-#[derive(Debug, Serialize)]
+/// The tab a `popup` opened, with the URL the prelude caches for its synchronous `url()`.
+#[derive(Debug, Serialize, TS)]
+#[ts(rename = "PopupTab")]
 struct NewTab {
     page: PageHandle,
     url: String,
 }
 
 /// Playwright's `Dialog`; `id` is what `dialog.accept` and `dialog.dismiss` name.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(rename = "DialogInfo")]
 struct Dialog {
     id: DialogId,
     #[serde(rename = "type")]
-    kind: &'static str,
+    kind: DialogKind,
     message: String,
     default_value: String,
 }
 
 /// Playwright's `ConsoleMessage`: `type()`, `text()`, `location()`, `timestamp()`.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, TS)]
+#[ts(rename = "ConsoleInfo")]
 struct ConsoleMessage {
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     worker: Option<super::worker_table::WorkerInfo>,
     #[serde(rename = "type")]
     kind: String,
@@ -178,16 +195,19 @@ struct ConsoleMessage {
 }
 
 /// The `Error` Playwright's `pageerror` passes.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, TS)]
+#[ts(rename = "PageErrorInfo")]
 struct PageError {
     name: String,
     message: String,
     stack: String,
 }
 
-/// Playwright's `Download`: `url()` and `suggestedFilename()`.
-#[derive(Debug, Serialize)]
+/// Playwright's `Download`: `url()` and `suggestedFilename()`. `id` is the browser's download
+/// guid, which `download.path` and `download.saveAs` name.
+#[derive(Debug, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(rename = "DownloadInfo")]
 struct Download {
     id: String,
     url: String,
@@ -561,7 +581,7 @@ fn plain(event: &PageEvent, page: PageHandle) -> Option<Payload> {
 fn dialog_info(dialog: &DialogOpened) -> Dialog {
     Dialog {
         id: dialog.id,
-        kind: dialog.kind.as_str(),
+        kind: dialog.kind,
         message: dialog.message.clone(),
         default_value: dialog.default_value.clone(),
     }
@@ -609,10 +629,10 @@ mod tests {
     use browseros_core::{TabId, TargetId};
     use serde_json::json;
 
-    use super::{ConsoleMessage, Delivered, NewTab, Payload, Tabs, WindowPopup};
+    use super::{ConsoleMessage, Delivered, Dialog, Download, NewTab, Payload, Tabs, WindowPopup};
     use crate::Playwright;
     use crate::events::event_hub::EventRecord;
-    use crate::events::page_event::{Location, PageEvent};
+    use crate::events::page_event::{DialogId, DialogKind, Location, PageEvent};
     use crate::events::{PageEventKind, Subscription};
     use crate::op::Op;
     use crate::op_scope::OpScope;
@@ -717,6 +737,69 @@ mod tests {
             serde_json::to_value(&delivered)?,
             json!({ "seq": 3, "at": 1_700_000_000_123_u64, "event": "close",
                     "page": { "$neo": "page", "tab": 700 } })
+        );
+        Ok(())
+    }
+
+    /// The payloads the earlier test leaves out, with the shapes generated/event.ts declares:
+    /// a dialog's typed `type`, a download, and a binding call's camelCase fields.
+    #[test]
+    fn tests_that_dialog_download_and_binding_records_keep_their_bytes()
+    -> Result<(), serde_json::Error> {
+        let dialog = Delivered {
+            seq: 3,
+            at: 1_700_000_000_003,
+            payload: Payload::Dialog {
+                page: handle(7),
+                dialog: Dialog {
+                    id: DialogId(41),
+                    kind: DialogKind::BeforeUnload,
+                    message: "Leave?".to_owned(),
+                    default_value: String::new(),
+                },
+            },
+        };
+        assert_eq!(
+            serde_json::to_value(&dialog)?,
+            json!({ "seq": 3, "at": 1_700_000_000_003_u64, "event": "dialog",
+                    "page": { "$neo": "page", "tab": 700 },
+                    "dialog": { "id": 41, "type": "beforeunload", "message": "Leave?",
+                                "defaultValue": "" } })
+        );
+        let download = Delivered {
+            seq: 4,
+            at: 1_700_000_000_004,
+            payload: Payload::Download {
+                page: handle(7),
+                download: Download {
+                    id: "guid-5".to_owned(),
+                    url: "https://files.test/f.csv".to_owned(),
+                    suggested_filename: "f.csv".to_owned(),
+                },
+            },
+        };
+        assert_eq!(
+            serde_json::to_value(&download)?,
+            json!({ "seq": 4, "at": 1_700_000_000_004_u64, "event": "download",
+                    "page": { "$neo": "page", "tab": 700 },
+                    "download": { "id": "guid-5", "url": "https://files.test/f.csv",
+                                  "suggestedFilename": "f.csv" } })
+        );
+        let binding = Delivered {
+            seq: 5,
+            at: 1_700_000_000_005,
+            payload: Payload::Binding {
+                page: handle(7),
+                frame: None,
+                execution_context: 12,
+                payload: "{}".to_owned(),
+            },
+        };
+        assert_eq!(
+            serde_json::to_value(&binding)?,
+            json!({ "seq": 5, "at": 1_700_000_000_005_u64, "event": "binding",
+                    "page": { "$neo": "page", "tab": 700 }, "frame": null,
+                    "executionContext": 12, "payload": "{}" })
         );
         Ok(())
     }

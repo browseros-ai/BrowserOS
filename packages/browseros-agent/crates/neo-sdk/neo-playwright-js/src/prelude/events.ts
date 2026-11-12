@@ -21,12 +21,7 @@
  * A reply lost when the host cancels the pump at the run's end loses its events with the run.
  */
 import { answerBindingCall } from './bindings'
-import {
-  invoke,
-  invokeObserved,
-  type Observation,
-  pumpDispatched,
-} from './bridge'
+import { invokeObserved, type Observation, pumpDispatched } from './bridge'
 import { type CallSite, INTERNAL_SITE } from './call-site'
 import { trackChooserSetup } from './chooser-setup'
 import type { EventEmitter } from './emitter'
@@ -44,6 +39,7 @@ import {
   FileChooser,
   pageError,
 } from './event-values'
+import { send } from './generated'
 import type { Page } from './page'
 import { type SignalLike, signalOf, untilAborted } from './signal'
 import type { TimeoutSettings } from './timeouts'
@@ -511,22 +507,23 @@ export class EventHub {
       if (on && lease) await lease.ready
       // A closed tab cannot pass the host's page admission. Internal cleanup names only
       // its run-local subscription key, so the host can release it without touching a tab.
-      const input =
-        !on && event === 'workerstate' && page?._tab != null
-          ? {
-              page: null,
-              retiredTab: page._tab,
-              event,
-              on: false as const,
-              since,
-            }
-          : {
-              page: page === null ? null : await page._openedBrand(api),
-              event,
-              on,
-              since,
-            }
-      await invoke('events.listen', site, { api, timeoutMs: 0 }, input)
+      if (!on && event === 'workerstate' && page?._tab != null)
+        await send['events.listen'](
+          site,
+          { api, timeoutMs: 0 },
+          { page: null, retiredTab: page._tab, event, on: false, since },
+        )
+      else
+        await send['events.listen'](
+          site,
+          { api, timeoutMs: 0 },
+          {
+            page: page === null ? null : await page._openedBrand(api),
+            event,
+            on,
+            since,
+          },
+        )
     } catch {
       // `page.on` already returned, so there is no caller to tell; a listener on a page that
       // is gone never fires, as in Playwright.
@@ -542,8 +539,7 @@ export class EventHub {
     const api = 'page.filechooser'
     const target = page._openedBrand(api)
     const ready = target.then(async (page) => {
-      await invoke(
-        'events.interceptFileChooser',
+      await send['events.interceptFileChooser'](
         site,
         { api, timeoutMs: 0 },
         { page, lease: id, on: true },
@@ -556,8 +552,7 @@ export class EventHub {
       release: () => {
         if (!released) {
           released = ready.then(async () => {
-            await invoke(
-              'events.interceptFileChooser',
+            await send['events.interceptFileChooser'](
               site,
               { api, timeoutMs: 0 },
               { page: await target, lease: id, on: false },
