@@ -159,6 +159,14 @@ async fn screenshot_wrapper_preserves_rect_and_null_values() -> TestResult {
             viewport_box::for_screenshot(&scope, &FramePath::default(), old.clone()).await?;
         assert_eq!(value, old);
         assert_eq!(value.to_string(), old.to_string());
+        assert_eq!(
+            value.to_string(),
+            if old.is_null() {
+                "null"
+            } else {
+                r#"{"height":4.0,"width":3.0,"x":1.25,"y":2.5}"#
+            }
+        );
     }
     Ok(())
 }
