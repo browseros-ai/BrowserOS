@@ -242,8 +242,8 @@ export type ScreenshotOptions = Omit<
 >
 
 /**
- * PDF fields accepted by pdf.rs. Rust accepts pixels or CSS lengths; the prelude normalizes
- * script-supplied numbers to px strings before sending, as Playwright's client does.
+ * PDF channel fields accepted by pdf.rs. pdf-options.ts keeps the script's numeric lengths
+ * separate and normalizes them to px strings before sending, as Playwright's client does.
  */
 export type PdfOptions = Omit<GeneratedInputs['page.pdf'], 'page'>
 

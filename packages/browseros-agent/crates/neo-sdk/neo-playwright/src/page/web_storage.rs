@@ -3,8 +3,8 @@
 //! as upstream evaluates `localStorage.getItem(...)` and the rest in its utility world: the
 //! world shares the document's Storage, and the page's own script cannot replace the methods.
 //!
-//! Two ops, so the dispatcher knows which calls change the page: `webStorage.read` (`items`,
-//! `getItem`) and `webStorage.write` (`setItem`, `removeItem`, `clear`). A write rechecks the
+//! Each upstream command has its own typed route; the dispatcher marks only `setItem`,
+//! `removeItem` and `clear` as writes. A write rechecks the
 //! host's policies and marks itself sent before each attempt, and is never sent twice into one
 //! document, so a lost answer reads `unknown`, never `not_sent`.
 
@@ -25,19 +25,34 @@ use crate::wire::{Nothing, options};
 use crate::world::{Endpoint, IsolatedWorld, Place};
 use crate::{ErrorCode, Playwright, PlaywrightError};
 
-pub(crate) const READ_SPEC: OpSpec = OpSpec::read(
-    "webStorage.read",
+pub(crate) const ITEMS_SPEC: OpSpec = OpSpec::read(
+    "webStorage.items",
     PAGE,
-    "the main frame's localStorage or sessionStorage: every item, or one",
+    "every item in the main frame's localStorage or sessionStorage",
+);
+pub(crate) const GET_ITEM_SPEC: OpSpec = OpSpec::read(
+    "webStorage.getItem",
+    PAGE,
+    "one item in the main frame's localStorage or sessionStorage",
+);
+pub(crate) const SET_ITEM_SPEC: OpSpec = OpSpec::write(
+    "webStorage.setItem",
+    PAGE,
+    "set one item in the main frame's localStorage or sessionStorage",
+);
+pub(crate) const REMOVE_ITEM_SPEC: OpSpec = OpSpec::write(
+    "webStorage.removeItem",
+    PAGE,
+    "remove one item from the main frame's localStorage or sessionStorage",
+);
+pub(crate) const CLEAR_SPEC: OpSpec = OpSpec::write(
+    "webStorage.clear",
+    PAGE,
+    "clear the main frame's localStorage or sessionStorage",
 );
 
-pub(crate) const WRITE_SPEC: OpSpec = OpSpec::write(
-    "webStorage.write",
-    PAGE,
-    "set or remove an item of the main frame's localStorage or sessionStorage, or clear it",
-);
-
-/// The shared runner's decoded fields; the read and write routes own their separate inputs.
+/// Only the host-to-probe boundary carries an action. Typed routes choose it, so callers
+/// cannot ask a read route to mutate storage or omit a write's required name/value.
 struct WebStorageInput {
     page: PageRef,
     kind: StorageKind,
@@ -46,43 +61,43 @@ struct WebStorageInput {
     value: Option<String>,
 }
 
-/// Reads keep the existing action/name shape; only setItem's sibling accepts a value.
+/// Upstream's items and clear commands address a storage area without an item name.
 #[derive(Deserialize, TS)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub(crate) struct StorageReadInput {
+pub(crate) struct StorageInput {
     page: PageRef,
     #[ts(type = "\"local\" | \"session\"")]
     kind: StorageKind,
-    #[ts(type = "\"items\" | \"getItem\"")]
-    action: StorageAction,
-    #[serde(default)]
-    #[ts(optional)]
-    name: Option<String>,
 }
-options!(StorageReadInput);
+options!(StorageInput);
 
-/// The write side keeps optional name/value fields for removeItem and clear.
+/// Upstream's getItem and removeItem commands require a name.
 #[derive(Deserialize, TS)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub(crate) struct StorageWriteInput {
+pub(crate) struct StorageKeyInput {
     page: PageRef,
     #[ts(type = "\"local\" | \"session\"")]
     kind: StorageKind,
-    #[ts(type = "\"setItem\" | \"removeItem\" | \"clear\"")]
-    action: StorageAction,
-    #[serde(default)]
-    #[ts(optional)]
-    name: Option<String>,
-    #[serde(default)]
-    #[ts(optional)]
-    value: Option<String>,
+    name: String,
 }
-options!(StorageWriteInput);
+options!(StorageKeyInput);
+
+/// Upstream's setItem command requires both strings; neither is an optional option.
+#[derive(Deserialize, TS)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub(crate) struct StorageSetInput {
+    page: PageRef,
+    #[ts(type = "\"local\" | \"session\"")]
+    kind: StorageKind,
+    name: String,
+    value: String,
+}
+options!(StorageSetInput);
 
 /// The probe's storage results: item lists, a string, or null, without a wrapper object.
-#[derive(Deserialize, Serialize, TS)]
+#[derive(Deserialize)]
 #[serde(untagged)]
-pub(crate) enum StorageValue {
+enum StorageValue {
     Items(Vec<StorageItem>),
     Item(Option<String>),
 }
@@ -94,67 +109,121 @@ pub(crate) struct StorageItem {
     value: String,
 }
 
-pub(crate) async fn read(
+pub(crate) async fn items(
     pw: &Playwright,
     scope: &OpScope<'_>,
-    input: StorageReadInput,
-) -> Result<StorageValue, PlaywrightError> {
-    let StorageReadInput {
-        page,
-        kind,
-        action,
-        name,
-    } = input;
+    input: StorageInput,
+) -> Result<Vec<StorageItem>, PlaywrightError> {
+    let reply = call(
+        pw,
+        scope,
+        WebStorageInput {
+            page: input.page,
+            kind: input.kind,
+            action: StorageAction::Items,
+            name: None,
+            value: None,
+        },
+    )
+    .await?;
+    match reply {
+        StorageValue::Items(items) => Ok(items),
+        StorageValue::Item(_) => {
+            Err(scope.fail(ErrorCode::Internal, "invalid storage items reply"))
+        }
+    }
+}
+
+pub(crate) async fn get_item(
+    pw: &Playwright,
+    scope: &OpScope<'_>,
+    input: StorageKeyInput,
+) -> Result<Option<String>, PlaywrightError> {
+    let reply = call(
+        pw,
+        scope,
+        WebStorageInput {
+            page: input.page,
+            kind: input.kind,
+            action: StorageAction::GetItem,
+            name: Some(input.name),
+            value: None,
+        },
+    )
+    .await?;
+    match reply {
+        StorageValue::Item(value) => Ok(value),
+        StorageValue::Items(_) => {
+            Err(scope.fail(ErrorCode::Internal, "invalid storage item reply"))
+        }
+    }
+}
+
+pub(crate) async fn set_item(
+    pw: &Playwright,
+    scope: &OpScope<'_>,
+    input: StorageSetInput,
+) -> Result<Nothing, PlaywrightError> {
     call(
         pw,
         scope,
         WebStorageInput {
-            page,
-            kind,
-            action,
-            name,
-            value: None,
+            page: input.page,
+            kind: input.kind,
+            action: StorageAction::SetItem,
+            name: Some(input.name),
+            value: Some(input.value),
         },
-        false,
-    )
-    .await
-}
-
-pub(crate) async fn write_value(
-    pw: &Playwright,
-    scope: &OpScope<'_>,
-    input: StorageWriteInput,
-) -> Result<Nothing, PlaywrightError> {
-    let StorageWriteInput {
-        page,
-        kind,
-        action,
-        name,
-        value,
-    } = input;
-    let _reply = call(
-        pw,
-        scope,
-        WebStorageInput {
-            page,
-            kind,
-            action,
-            name,
-            value,
-        },
-        true,
     )
     .await?;
     Ok(())
 }
 
-/// Runs one Storage call. `writes` is the op's own side: a read op refuses a write action, and
-/// the other way round, so the dispatcher's effect for the op always matches the call.
+pub(crate) async fn remove_item(
+    pw: &Playwright,
+    scope: &OpScope<'_>,
+    input: StorageKeyInput,
+) -> Result<Nothing, PlaywrightError> {
+    call(
+        pw,
+        scope,
+        WebStorageInput {
+            page: input.page,
+            kind: input.kind,
+            action: StorageAction::RemoveItem,
+            name: Some(input.name),
+            value: None,
+        },
+    )
+    .await?;
+    Ok(())
+}
+
+pub(crate) async fn clear(
+    pw: &Playwright,
+    scope: &OpScope<'_>,
+    input: StorageInput,
+) -> Result<Nothing, PlaywrightError> {
+    call(
+        pw,
+        scope,
+        WebStorageInput {
+            page: input.page,
+            kind: input.kind,
+            action: StorageAction::Clear,
+            name: None,
+            value: None,
+        },
+    )
+    .await?;
+    Ok(())
+}
+
+/// Keep the probe protocol and its navigation retry rules independent of route packaging.
 async fn call(
     pw: &Playwright,
     scope: &OpScope<'_>,
     input: WebStorageInput,
-    writes: bool,
 ) -> Result<StorageValue, PlaywrightError> {
     let WebStorageInput {
         page,
@@ -163,19 +232,6 @@ async fn call(
         name,
         value,
     } = input;
-    if action.writes() != writes {
-        return Err(scope.fail(
-            ErrorCode::InvalidInput,
-            &format!("{action:?} is not a call of this op"),
-        ));
-    }
-    let needs_name = !matches!(action, StorageAction::Items | StorageAction::Clear);
-    if needs_name != name.is_some() || (action == StorageAction::SetItem) != value.is_some() {
-        return Err(scope.fail(
-            ErrorCode::InvalidInput,
-            &format!("{action:?} takes a name, and setItem a value too"),
-        ));
-    }
     let page = OpPage::admit_handle(pw, scope, &page).await?;
     let world = world_call::frame_world(&page, scope, None).await?;
     let TreeFrame { endpoint, place } =
@@ -186,7 +242,7 @@ async fn call(
         name,
         value,
     };
-    let reply = if writes {
+    let reply = if action.writes() {
         write(&page, scope, &endpoint, &place, request).await?
     } else {
         // A read changes nothing, so with_world may send it again in a replaced document.
@@ -271,22 +327,44 @@ async fn send(
 mod tests {
     use std::error::Error;
 
-    use super::StorageValue;
+    use super::{StorageInput, StorageItem, StorageKeyInput, StorageSetInput};
     use crate::Op;
     use crate::op_output::to_output;
     use crate::op_scope::OpScope;
     use crate::target::CallHeader;
     use crate::test_env::TestEnv;
 
+    #[test]
+    fn storage_commands_require_only_their_upstream_fields() {
+        let area = serde_json::json!({"page":{"$neo":"page","tab":1},"kind":"local"});
+        assert!(serde_json::from_value::<StorageInput>(area.clone()).is_ok());
+        assert!(serde_json::from_value::<StorageKeyInput>(area.clone()).is_err());
+        let mut named = area.clone();
+        named["name"] = serde_json::json!("key");
+        assert!(serde_json::from_value::<StorageInput>(named.clone()).is_err());
+        assert!(serde_json::from_value::<StorageKeyInput>(named.clone()).is_ok());
+        assert!(serde_json::from_value::<StorageSetInput>(named.clone()).is_err());
+        named["value"] = serde_json::json!("value");
+        assert!(serde_json::from_value::<StorageSetInput>(named).is_ok());
+        let mut legacy = area;
+        legacy["action"] = serde_json::json!("clear");
+        assert!(serde_json::from_value::<StorageInput>(legacy).is_err());
+    }
+
     #[tokio::test]
     async fn storage_replies_keep_their_recorded_json_shapes() -> Result<(), Box<dyn Error>> {
         let env = TestEnv::new();
-        let op = Op::from_name("webStorage.read").ok_or("storage op exists")?;
+        let op = Op::from_name("webStorage.items").ok_or("storage op exists")?;
         let scope = OpScope::new(&env, op, CallHeader::default());
-        for before in [r#"[{"name":"a","value":"b"}]"#, r#""b""#, "null", "[]"] {
-            let typed: StorageValue = serde_json::from_str(before)?;
+        for before in [r#"[{"name":"a","value":"b"}]"#, "[]"] {
+            let typed: Vec<StorageItem> = serde_json::from_str(before)?;
             assert_eq!(serde_json::to_string(&to_output(&scope, &typed)?)?, before);
         }
+        for before in [r#""b""#, "null"] {
+            let typed: Option<String> = serde_json::from_str(before)?;
+            assert_eq!(serde_json::to_string(&to_output(&scope, &typed)?)?, before);
+        }
+        assert_eq!(serde_json::to_string(&to_output(&scope, &())?)?, "null");
         Ok(())
     }
 }

@@ -421,12 +421,27 @@
       target: "page",
       lifetime: "operation"
     },
-    "webStorage.read": {
+    "webStorage.items": {
       effect: "read",
       target: "page",
       lifetime: "operation"
     },
-    "webStorage.write": {
+    "webStorage.getItem": {
+      effect: "read",
+      target: "page",
+      lifetime: "operation"
+    },
+    "webStorage.setItem": {
+      effect: "write",
+      target: "page",
+      lifetime: "operation"
+    },
+    "webStorage.removeItem": {
+      effect: "write",
+      target: "page",
+      lifetime: "operation"
+    },
+    "webStorage.clear": {
       effect: "write",
       target: "page",
       lifetime: "operation"
@@ -2006,8 +2021,11 @@
     "page.saveScreenshot": (site, call, input, signal) => invoke("page.saveScreenshot", site, call, input, signal),
     "page.pdf": (site, call, input, signal) => invoke("page.pdf", site, call, input, signal),
     "page.setViewportSize": (site, call, input, signal) => invoke("page.setViewportSize", site, call, input, signal),
-    "webStorage.read": (site, call, input, signal) => invoke("webStorage.read", site, call, input, signal),
-    "webStorage.write": (site, call, input, signal) => invoke("webStorage.write", site, call, input, signal)
+    "webStorage.items": (site, call, input, signal) => invoke("webStorage.items", site, call, input, signal),
+    "webStorage.getItem": (site, call, input, signal) => invoke("webStorage.getItem", site, call, input, signal),
+    "webStorage.setItem": (site, call, input, signal) => invoke("webStorage.setItem", site, call, input, signal),
+    "webStorage.removeItem": (site, call, input, signal) => invoke("webStorage.removeItem", site, call, input, signal),
+    "webStorage.clear": (site, call, input, signal) => invoke("webStorage.clear", site, call, input, signal)
   };
 
   // crates/neo-sdk/neo-playwright-js/src/prelude/generated/context.ts
@@ -9521,6 +9539,32 @@ ${value.stack}`;
     }
   }
 
+  // crates/neo-sdk/neo-playwright-js/src/prelude/pdf-options.ts
+  function length(value) {
+    return typeof value === "number" ? `${value}px` : value;
+  }
+  function normalizeMargin(value) {
+    if (typeof value !== "object" || value === null)
+      return value;
+    const margin = { ...value };
+    return {
+      ...margin,
+      top: length(margin.top),
+      right: length(margin.right),
+      bottom: length(margin.bottom),
+      left: length(margin.left)
+    };
+  }
+  function normalizePdfOptions(options) {
+    const wire = pick(options, OPTION_KEYS["page.pdf"]);
+    return {
+      ...wire,
+      width: length(wire.width),
+      height: length(wire.height),
+      margin: normalizeMargin(wire.margin)
+    };
+  }
+
   // crates/neo-sdk/neo-playwright-js/src/prelude/input.ts
   var hasOwn = Object.hasOwn;
   function ownOption(picked, key) {
@@ -9686,16 +9730,15 @@ ${value.stack}`;
     async items() {
       const site = captureSite();
       const api = "webStorage.items";
-      const items = await send["webStorage.read"](site, { api, timeoutMs: 0 }, { page: await this.#page._brand(api), kind: this.#kind, action: "items" });
+      const items = await send["webStorage.items"](site, { api, timeoutMs: 0 }, { page: await this.#page._brand(api), kind: this.#kind });
       return Array.isArray(items) ? items : [];
     }
     async getItem(name) {
       const site = captureSite();
       const api = "webStorage.getItem";
-      const value = await send["webStorage.read"](site, { api, timeoutMs: 0 }, {
+      const value = await send["webStorage.getItem"](site, { api, timeoutMs: 0 }, {
         page: await this.#page._brand(api),
         kind: this.#kind,
-        action: "getItem",
         name: text(api, "name", name)
       });
       return typeof value === "string" ? value : null;
@@ -9703,10 +9746,9 @@ ${value.stack}`;
     async setItem(name, value) {
       const site = captureSite();
       const api = "webStorage.setItem";
-      await send["webStorage.write"](site, { api, timeoutMs: 0 }, {
+      await send["webStorage.setItem"](site, { api, timeoutMs: 0 }, {
         page: await this.#page._brand(api),
         kind: this.#kind,
-        action: "setItem",
         name: text(api, "name", name),
         value: text(api, "value", value)
       });
@@ -9714,17 +9756,16 @@ ${value.stack}`;
     async removeItem(name) {
       const site = captureSite();
       const api = "webStorage.removeItem";
-      await send["webStorage.write"](site, { api, timeoutMs: 0 }, {
+      await send["webStorage.removeItem"](site, { api, timeoutMs: 0 }, {
         page: await this.#page._brand(api),
         kind: this.#kind,
-        action: "removeItem",
         name: text(api, "name", name)
       });
     }
     async clear() {
       const site = captureSite();
       const api = "webStorage.clear";
-      await send["webStorage.write"](site, { api, timeoutMs: 0 }, { page: await this.#page._brand(api), kind: this.#kind, action: "clear" });
+      await send["webStorage.clear"](site, { api, timeoutMs: 0 }, { page: await this.#page._brand(api), kind: this.#kind });
     }
   }
   function text(api, field, value) {
@@ -10223,17 +10264,7 @@ ${value.stack}`;
       const api = "page.pdf";
       if (options.path !== undefined)
         throw unsupportedError(api, "Neo returns the PDF instead of writing a file; omit path");
-      const wire = pick(options, OPTION_KEYS["page.pdf"]);
-      for (const size of ["width", "height"])
-        if (typeof wire[size] === "number")
-          wire[size] = `${wire[size]}px`;
-      if (typeof wire.margin === "object" && wire.margin !== null) {
-        const margin = { ...wire.margin };
-        for (const side of ["top", "right", "bottom", "left"])
-          if (typeof margin[side] === "number")
-            margin[side] = `${margin[side]}px`;
-        wire.margin = margin;
-      }
+      const wire = normalizePdfOptions(options);
       return await send["page.pdf"](site, { api, timeoutMs: 0 }, {
         page: await this._brand(api),
         scale: wire.scale,

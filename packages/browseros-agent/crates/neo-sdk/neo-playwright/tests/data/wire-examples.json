@@ -2783,7 +2783,20 @@
         "waitUntil": "load"
       }
     ],
-    "webStorage.read": [
+    "webStorage.clear": [
+      {
+        "call": {
+          "api": "webStorage.clear",
+          "timeoutMs": 0
+        },
+        "page": {
+          "$neo": "page",
+          "tab": 1007
+        },
+        "kind": "session"
+      }
+    ],
+    "webStorage.getItem": [
       {
         "call": {
           "api": "webStorage.getItem",
@@ -2794,11 +2807,37 @@
           "tab": 1007
         },
         "kind": "local",
-        "action": "getItem",
         "name": "token"
       }
     ],
-    "webStorage.write": [
+    "webStorage.items": [
+      {
+        "call": {
+          "api": "webStorage.items",
+          "timeoutMs": 0
+        },
+        "page": {
+          "$neo": "page",
+          "tab": 1007
+        },
+        "kind": "local"
+      }
+    ],
+    "webStorage.removeItem": [
+      {
+        "call": {
+          "api": "webStorage.removeItem",
+          "timeoutMs": 0
+        },
+        "page": {
+          "$neo": "page",
+          "tab": 1007
+        },
+        "kind": "local",
+        "name": "token"
+      }
+    ],
+    "webStorage.setItem": [
       {
         "call": {
           "api": "webStorage.setItem",
@@ -2809,7 +2848,6 @@
           "tab": 1007
         },
         "kind": "session",
-        "action": "setItem",
         "name": "flag",
         "value": "1"
       }

@@ -465,9 +465,70 @@ async fn tests_that_captures_return_their_bytes() -> TestResult {
                 .ok_or("quality on a PNG must fail")?;
             assert_eq!(error.error_code(), Some(ErrorCode::InvalidInput));
 
-            let pdf = run.invoke("page.pdf", json!({ "page": brand(&page) })).await?;
+            let pdf = run.invoke("page.pdf", json!({ "page": brand(&page),
+                "width": "960px", "height": "10in",
+                "margin": {"top":"96px", "right":"1cm", "bottom":"0px", "left":"1mm"},
+            })).await?;
             assert!(base64_of(&pdf)?.starts_with("JVBERi0"), "%PDF- magic");
 
+            Ok(())
+        }
+        .await;
+        (run, result)
+    })
+    .await
+}
+
+/// The five public commands translate back to the unchanged probe action protocol.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_storage_commands_and_void_viewport_keep_their_public_results() -> TestResult {
+    with_page(|run, server, page| async move {
+        let result = async {
+            goto(&run, &page, &server.url("/child.html"), "load").await?;
+            for kind in ["local", "session"] {
+                let area = json!({"page":brand(&page), "kind":kind});
+                assert_eq!(
+                    run.invoke("webStorage.clear", area.clone()).await?,
+                    Value::Null
+                );
+                assert_eq!(
+                    run.invoke("webStorage.items", area.clone()).await?,
+                    json!([])
+                );
+                let mut key = area.clone();
+                key["name"] = json!("key");
+                assert_eq!(
+                    run.invoke("webStorage.getItem", key.clone()).await?,
+                    Value::Null
+                );
+                let mut set = key.clone();
+                set["value"] = json!("value");
+                assert_eq!(run.invoke("webStorage.setItem", set).await?, Value::Null);
+                assert_eq!(
+                    run.invoke("webStorage.getItem", key.clone()).await?,
+                    json!("value")
+                );
+                assert_eq!(
+                    run.invoke("webStorage.items", area.clone()).await?,
+                    json!([{"name":"key","value":"value"}])
+                );
+                assert_eq!(
+                    run.invoke("webStorage.removeItem", key.clone()).await?,
+                    Value::Null
+                );
+                assert_eq!(run.invoke("webStorage.getItem", key).await?, Value::Null);
+            }
+            assert_eq!(
+                run.invoke(
+                    "page.setViewportSize",
+                    json!({
+                        "page":brand(&page), "viewportSize":{"width":600,"height":400},
+                    })
+                )
+                .await?,
+                Value::Null
+            );
             Ok(())
         }
         .await;
