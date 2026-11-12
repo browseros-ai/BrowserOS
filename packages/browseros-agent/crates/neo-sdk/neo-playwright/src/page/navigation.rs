@@ -163,6 +163,8 @@ pub(crate) struct Response {
     url: String,
     status: u16,
     status_text: &'static str,
+    /// Navigation Timing's negotiated protocol, without enabling the Network domain.
+    http_version: String,
     ok: bool,
     /// Always empty: reading headers needs the Network domain, which Neo leaves off.
     #[ts(type = "Record<string, string>")]
@@ -707,13 +709,16 @@ async fn history_entry(session: &ProtocolSession, delta: i64) -> Result<Option<i
 /// The main document's status and final URL. Navigation Timing exposes both to an isolated
 /// world without touching the page's own scripts or enabling the Network domain.
 const TIMING_JS: &str = "(() => { const entry = performance.getEntriesByType('navigation')[0]; \
-return entry ? { status: entry.responseStatus || 0, url: entry.name } : null; })()";
+return entry ? { status: entry.responseStatus || 0, url: entry.name, \
+protocol: entry.nextHopProtocol || '' } : null; })()";
 
 /// What [`TIMING_JS`] returns.
 #[derive(Deserialize)]
 struct Timing {
     status: u16,
     url: String,
+    #[serde(default)]
+    protocol: String,
 }
 
 /// The response for the main document at `url`, or `None` for one that has none (about:blank
@@ -735,11 +740,21 @@ pub(crate) async fn read_response(
         .flatten()?;
     Some(Response {
         status_text: status_text(timing.status),
+        http_version: http_version(&timing.protocol).to_owned(),
         ok: timing.status == 0 || (200..=299).contains(&timing.status),
         url: timing.url,
         status: timing.status,
         headers: Map::new(),
     })
+}
+
+/// Playwright normalizes the two common ALPN names and preserves unfamiliar protocols.
+fn http_version(protocol: &str) -> &str {
+    match protocol {
+        "" | "http/1.1" => "HTTP/1.1",
+        "h2" => "HTTP/2.0",
+        other => other,
+    }
 }
 
 /// Check on both sides of the isolated-world read: a commit between either CDP reply and
@@ -854,6 +869,7 @@ impl Response {
             url: "https://main.test/".to_owned(),
             status: 200,
             status_text: "OK",
+            http_version: "HTTP/1.1".to_owned(),
             ok: true,
             headers: Map::new(),
         }
@@ -898,7 +914,7 @@ mod tests {
         assert_eq!(with, serde_json::to_string(&before)?);
         assert_eq!(
             with,
-            r#"{"response":{"url":"https://main.test/","status":200,"statusText":"OK","ok":true,"headers":{}},"url":"https://main.test/","frames":[{"id":"main","parentId":null,"name":"","url":"https://main.test/"},{"id":"child","parentId":"main","name":"ad","url":"https://child.test/"}],"frameSnapshotAttempted":true}"#
+            r#"{"response":{"url":"https://main.test/","status":200,"statusText":"OK","httpVersion":"HTTP/1.1","ok":true,"headers":{}},"url":"https://main.test/","frames":[{"id":"main","parentId":null,"name":"","url":"https://main.test/"},{"id":"child","parentId":"main","name":"ad","url":"https://child.test/"}],"frameSnapshotAttempted":true}"#
         );
         let without = serde_json::to_string(&NavigationResult {
             response: None,

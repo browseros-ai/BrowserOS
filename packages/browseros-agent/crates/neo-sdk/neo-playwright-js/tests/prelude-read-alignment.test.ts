@@ -43,6 +43,81 @@ const TARGET = {
   display: "locator('#go')",
 }
 
+it('sends includeShadow on page and frame content without changing the default request', async () => {
+  const runtime = loadPrelude({ seed: SEED, answer: () => '<html></html>' })
+  expect(
+    json(
+      await runtime.run(`return [
+    await page.content(),
+    await page.content({ includeShadow: true }),
+    await page.mainFrame().content({ includeShadow: false }),
+  ]`),
+    ),
+  ).toEqual(['<html></html>', '<html></html>', '<html></html>'])
+  expect(runtime.sent('page.content').map(({ input }) => input)).toEqual([
+    { call: { api: 'page.content', timeoutMs: 0 }, page: ELEMENT.page },
+    {
+      call: { api: 'page.content', timeoutMs: 0 },
+      page: ELEMENT.page,
+      includeShadow: true,
+    },
+    {
+      call: { api: 'frame.content', timeoutMs: 0 },
+      page: ELEMENT.page,
+      includeShadow: false,
+    },
+  ])
+})
+
+it('rejects the obsolete waitFor key before starting a page or frame selector wait', async () => {
+  const runtime = loadPrelude({ seed: SEED, answer: () => ELEMENT })
+  expect(
+    json(
+      await runtime.run(`return await Promise.all([
+    page.waitForSelector('*', { waitFor: 'attached' }),
+    page.mainFrame().waitForSelector('*', { waitFor: 'attached' }),
+  ].map(wait => wait.catch(error => ({ name: error.name, message: error.message }))))`),
+    ),
+  ).toEqual([
+    {
+      name: 'Error',
+      message:
+        'page.waitForSelector: options.waitFor is not supported, did you mean options.state?',
+    },
+    {
+      name: 'Error',
+      message:
+        'frame.waitForSelector: options.waitFor is not supported, did you mean options.state?',
+    },
+  ])
+  expect(runtime.sent('locator.waitFor')).toEqual([])
+})
+
+it('prefixes the vendored element preview without changing its handle brand', async () => {
+  const runtime = loadPrelude({ seed: SEED, answer: () => ELEMENT })
+  expect(
+    json(
+      await runtime.run(`const handle = await page.$('button');
+    return [String(handle), handle.toJSON()]`),
+    ),
+  ).toEqual(['JSHandle@<button>Go</button>', ELEMENT])
+})
+
+it('preserves the legacy visible and falsy waitFor values upstream tolerates', async () => {
+  const runtime = loadPrelude({ seed: SEED, answer: () => ELEMENT })
+  expect(
+    json(
+      await runtime.run(`return await Promise.all(
+    ['visible', undefined, null, false, 0, ''].map(async waitFor =>
+      !!await page.waitForSelector('*', { waitFor })))`),
+    ),
+  ).toEqual([true, true, true, true, true, true])
+  expect(runtime.sent('locator.waitFor')).toHaveLength(6)
+  expect(
+    runtime.sent('locator.waitFor').some(({ input }) => 'waitFor' in input),
+  ).toBe(false)
+})
+
 it('keeps immediate queries immediate and sends locator elementHandle through the attached wait', async () => {
   const wire: WireExchange[] = []
   const runtime = loadPrelude({

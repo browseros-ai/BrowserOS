@@ -30,6 +30,10 @@ export class Response {
     return this.#info.statusText
   }
 
+  async httpVersion(): Promise<string> {
+    return this.#info.httpVersion
+  }
+
   ok(): boolean {
     return this.#info.ok
   }

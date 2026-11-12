@@ -106,9 +106,14 @@ it('tests that every example request gets a reply its op allows from the built p
           reply,
           why: unbuilt ? 'should still be unbuilt' : 'is routed nowhere',
         })
+      // linkedom lacks Element.getHTML; the upstream shadow-content spec exercises that
+      // browser serializer. Keep ordinary document reads covered by this offline matrix.
+      const needsBrowser =
+        NEEDS_A_BROWSER.has(op) ||
+        (request.op === 'document' && request.includeShadow === true)
       if (
         !unbuilt &&
-        !NEEDS_A_BROWSER.has(op) &&
+        !needsBrowser &&
         fieldOf(reply, 'class') === 'internal' &&
         !INTERNAL_ON_A_FRESH_PAGE.has(op)
       )

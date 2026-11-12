@@ -371,6 +371,136 @@ describe('retrying matchers', () => {
       refusalCall('expect.toBeVisible', 'invalid_input', message),
     ])
   })
+
+  it("tests that an expected value of the wrong type rejects the assertion's promise with upstream's message", async () => {
+    const runtime = loadPrelude({ seed: SEED })
+    const outcome = json(
+      await runtime.run(`
+        const rejected = async (assertion) => {
+          let promise
+          try { promise = assertion() } catch (e) { return ['threw', e.message] }
+          return promise.then(() => ['passed'], (e) => [e.name, e.message])
+        }
+        return [
+          await rejected(() => expect(page).toHaveURL({})),
+          await rejected(() => expect(page.locator('#x'), 'ignored').not.toHaveText(null)),
+          // Printing the value reads its getters; that throw rejects the promise too.
+          await rejected(() => expect(page).toHaveTitle({ get value() { throw new Error('bad getter') } })),
+        ]
+      `),
+    )
+    const url =
+      'expect(page).toHaveURL(expected) failed\n\nError: expected value must be a string or regular expression\nExpected has type:  object\nExpected has value: {}\n'
+    const text =
+      "expect(locator).not.toHaveText(expected) failed\n\nLocator: locator('#x')\nError: expected value must be a string or regular expression\nExpected has value: null\n"
+    expect(outcome).toEqual([
+      ['Error', url],
+      ['Error', text],
+      ['Error', 'bad getter'],
+    ])
+    expect(runtime.calls).toEqual([
+      refusalCall('expect.toHaveURL', 'invalid_input', url),
+      refusalCall('expect.toHaveText', 'invalid_input', text),
+    ])
+  })
+
+  it("tests that a URLPattern is upstream's predicate over the page's URL, read by its brand", async () => {
+    const runtime = loadPrelude({
+      seed: {
+        ...SEED,
+        pages: [{ tab: 1007, url: 'https://shop.example/cart' }],
+      },
+    })
+    const tested = json(
+      await runtime.run(`
+        const tested = []
+        const pattern = (protocol) => ({
+          [Symbol.toStringTag]: 'URLPattern',
+          test: (url) => { tested.push(url); return url.startsWith(protocol) },
+        })
+        await expect(page).toHaveURL(pattern('https:'))
+        await expect(page).not.toHaveURL(pattern('data:'))
+        return tested
+      `),
+    )
+    expect(tested).toEqual([
+      'https://shop.example/cart',
+      'https://shop.example/cart',
+    ])
+    expect(runtime.calls).toEqual([])
+  })
+
+  it('tests that a URL predicate is tested on every URL the page commits, not only the latest', async () => {
+    const committed = [
+      'https://shop.example/target',
+      'https://shop.example/later',
+    ]
+    const runtime = loadPrelude({
+      seed: {
+        ...SEED,
+        pages: [{ tab: 1007, url: 'https://shop.example/start' }],
+      },
+      answer: (call) =>
+        call.name === 'page.waitForURL'
+          ? { url: committed.shift(), frameSnapshotAttempted: true }
+          : null,
+    })
+    const tested = json(
+      await runtime.run(`
+        const tested = []
+        await expect(page).toHaveURL((url) => {
+          tested.push(url.href)
+          return url.pathname === '/target'
+        }, { timeout: 1000 })
+        return tested
+      `),
+    )
+    expect(tested).toEqual([
+      'https://shop.example/start',
+      'https://shop.example/target',
+    ])
+  })
+
+  it('tests that a signal aborted before the assertion fails it at once with the reason, sending nothing', async () => {
+    const runtime = loadPrelude({
+      seed: {
+        ...SEED,
+        pages: [{ tab: 1007, url: 'https://shop.example/cart' }],
+      },
+    })
+    const outcome = json(
+      await runtime.run(`
+        const aborted = (reason) => ({ aborted: true, reason, addEventListener() {}, removeEventListener() {} })
+        const failure = (e) => [e.name, e.message, e.matcherResult?.pass, e.matcherResult?.name]
+        return [
+          await expect(page.locator('div')).toBeVisible({ timeout: 5000, signal: aborted(new Error('already aborted')) }).catch(failure),
+          await expect(page, 'the cart').not.toHaveURL('https://shop.example/', { signal: aborted('stop it') }).catch(failure),
+          await expect(page).toHaveURL(() => true, { signal: aborted(undefined) }).catch(failure),
+        ]
+      `),
+    )
+    expect(outcome).toEqual([
+      [
+        'Error',
+        "expect(locator).toBeVisible() failed\n\nLocator: locator('div')\nExpected: visible\nError: The assertion was aborted: already aborted\n",
+        false,
+        'toBeVisible',
+      ],
+      [
+        'Error',
+        'the cart\n\nexpect(page).not.toHaveURL(expected) failed\n\nExpected: not "https://shop.example/"\nError: The assertion was aborted: stop it\n',
+        true,
+        'toHaveURL',
+      ],
+      [
+        'Error',
+        'expect(page).toHaveURL(expected) failed\n\nExpected: predicate to succeed\nError: The assertion was aborted\n',
+        false,
+        'toHaveURL',
+      ],
+    ])
+    expect(runtime.calls).toEqual([])
+  })
 })
 
 describe('toMatchAriaSnapshot', () => {

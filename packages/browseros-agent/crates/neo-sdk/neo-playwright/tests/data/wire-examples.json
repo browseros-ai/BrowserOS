@@ -212,7 +212,9 @@
       "depth"
     ],
     "page.close": [],
-    "page.content": [],
+    "page.content": [
+      "includeShadow"
+    ],
     "page.emulateMedia": [
       "colorScheme",
       "contrast",
@@ -3046,6 +3048,17 @@
           "$neo": "page",
           "tab": 1007
         }
+      },
+      {
+        "call": {
+          "api": "page.content",
+          "timeoutMs": 0
+        },
+        "page": {
+          "$neo": "page",
+          "tab": 1007
+        },
+        "includeShadow": true
       }
     ],
     "page.emulateMedia": [

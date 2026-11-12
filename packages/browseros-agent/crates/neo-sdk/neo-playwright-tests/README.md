@@ -142,11 +142,21 @@ opens popups as tabs, but suppresses CDP console events that vanilla Playwright'
   assertions and its statics, including extended value matchers. Configured expect
   imports retain the run binding and the generated config's assertion timeout.
   `neoExpect` annotations record this path; these passes count as product passes.
-  `toHaveScreenshot` is the runner-owned exception: Playwright Test owns baseline paths,
-  tolerances, attachments and the pinned stability/comparison loop. A visual receiver
-  supplies only real Neo `screenshot` and `evaluate` calls, including for locators and
-  explicit masks. Its annotation says `playwright-visual/neo-capture`; standalone Neo
-  `expect` retains its clear refusal because it has no TestInfo or baseline store.
+  The test runner owns three things on a Neo receiver, each with its own annotation
+  description:
+  - `toHaveScreenshot` (`playwright-visual/neo-capture`): Playwright Test owns baseline
+    paths, tolerances, attachments and the pinned stability/comparison loop. A visual
+    receiver supplies only real Neo `screenshot` and `evaluate` calls, including for
+    locators and explicit masks.
+  - matchers a spec defines with `expect.extend` (`playwright-custom/neo-calls`): user
+    code that Playwright runs on the Neo receiver itself, so its page reads are Neo calls
+    (`page-emulate-media`'s `toMatchMedia`). Only the names passed to `extend` leave Neo;
+    a built-in matcher Neo lacks still fails in Neo.
+  - soft assertions (`expect.soft`, `configure({ soft: true })`, still `product`): Neo's
+    hard matcher runs, and a failure is recorded on the test through its
+    `_failWithError`, as Playwright's soft step records one, so the test fails at its end.
+  Standalone Neo `expect` keeps its clear refusals of `soft` and `toHaveScreenshot`: a
+  run has no test to record on and no baseline store.
   The legacy v2 adapter still uses `expectLoop` and reports its passes separately.
   The historical `--no-expect-loop` flag disables either assertion import adapter.
 - Claw ignores only curation skips whose reason is an uncovered `expectLoop`

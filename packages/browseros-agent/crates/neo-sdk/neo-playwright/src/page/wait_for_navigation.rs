@@ -301,7 +301,7 @@ mod tests {
             let json = serde_json::to_string(&reply)?;
             assert_eq!(json, serde_json::to_string(&before)?);
             let response = if answered {
-                r#"{"url":"https://main.test/","status":200,"statusText":"OK","ok":true,"headers":{}}"#
+                r#"{"url":"https://main.test/","status":200,"statusText":"OK","httpVersion":"HTTP/1.1","ok":true,"headers":{}}"#
             } else {
                 "null"
             };

@@ -1,17 +1,20 @@
 /**
  * The retrying matchers: for each Locator and Page matcher, the `FrameExpectParams`, argument
  * text and printed expectation matchers.ts builds at v1.64.1, and the op that sends them. Rust
- * polls, prints Received, Timeout and the call log, and owns the failure.
+ * polls, prints Received, Timeout and the call log, and owns the failure. Two failures never
+ * reach Rust and are formatted here: an expected value of the wrong type, and a signal already
+ * aborted when the assertion starts.
  */
 import type { ExpectParams } from '../probe/protocol'
 import { parseTemplate, unshift } from './aria-template'
 import type { CallSite } from './call-site'
-import { plainError, prefixed } from './errors'
-import { receiverText, stringify } from './expect-equality'
+import { assertionError, plainError, prefixed } from './errors'
+import { printWithType, receiverText, stringify } from './expect-equality'
 import { fail, header, type State } from './expect-values'
 import { send } from './generated'
 import { Locator } from './locator'
 import { Page } from './page'
+import { assertionAbortedMessage, readSignal, type SignalLike } from './signal'
 import { type TimeoutOption, timeoutMs } from './timeouts'
 import { normalizeUrl } from './url'
 
@@ -34,6 +37,13 @@ export type Retrying = {
    * before it polls; Rust fails the op with it as the `Error:` line, after the call log's title.
    */
   templateError?: string
+  /**
+   * `value` is neither a string nor a RegExp, refused as upstream's toMatchText refuses it:
+   * inside the async matcher, after the receiver check, so the assertion's promise rejects
+   * rather than the call throwing. The value is printed there too, since printing can throw
+   * (a getter), and that throw must reject the promise as well.
+   */
+  invalidExpected?: true
 }
 
 type ExpectedTextValue = NonNullable<ExpectParams['expectedText']>[number]
@@ -49,7 +59,9 @@ function textValues(
   return items.map((item) => {
     const value: ExpectedTextValue = {}
     if (typeof item === 'string') value.string = item
-    else {
+    // Anything else is serialized as upstream's serializeExpectedTextValues does: neither field.
+    // text() refuses such a value; reading `.source` here would throw on null first.
+    else if (item instanceof RegExp) {
       value.regexSource = item.source
       value.regexFlags = item.flags
     }
@@ -90,7 +102,6 @@ function argumentError(matcher: string, message: string): Error {
 
 /** toHaveText and the other string-or-pattern matchers (upstream's toMatchText). */
 function text(
-  matcher: string,
   receiver: 'Locator' | 'Page',
   expression: string,
   expected: string | RegExp,
@@ -99,10 +110,15 @@ function text(
   extra: Partial<ExpectParams> = {},
 ): Retrying {
   if (typeof expected !== 'string' && !(expected instanceof RegExp))
-    throw argumentError(
-      matcher,
-      'expected value must be a string or regular expression',
-    )
+    return {
+      receiver,
+      expectation: 'expected',
+      expected: () => '',
+      value: expected,
+      params: { expression, ...extra },
+      options,
+      invalidExpected: true,
+    }
   const substring = values[0]?.matchSubstring === true
   const suffix =
     typeof expected === 'string' ? (substring ? ' substring' : '') : ' pattern'
@@ -236,7 +252,6 @@ export const RETRYING: Record<string, (...args: never[]) => Retrying> = {
           }),
         })
       : text(
-          'toContainText',
           'Locator',
           'to.have.text',
           expected,
@@ -252,7 +267,6 @@ export const RETRYING: Record<string, (...args: never[]) => Retrying> = {
     options?: TextOptions,
   ) =>
     text(
-      'toHaveAccessibleDescription',
       'Locator',
       'to.have.accessible.description',
       expected,
@@ -264,7 +278,6 @@ export const RETRYING: Record<string, (...args: never[]) => Retrying> = {
     ),
   toHaveAccessibleName: (expected: string | RegExp, options?: TextOptions) =>
     text(
-      'toHaveAccessibleName',
       'Locator',
       'to.have.accessible.name',
       expected,
@@ -279,7 +292,6 @@ export const RETRYING: Record<string, (...args: never[]) => Retrying> = {
     options?: TextOptions,
   ) =>
     text(
-      'toHaveAccessibleErrorMessage',
       'Locator',
       'to.have.accessible.error.message',
       expected,
@@ -309,7 +321,6 @@ export const RETRYING: Record<string, (...args: never[]) => Retrying> = {
       })
     const value = expected as string | RegExp
     return text(
-      'toHaveAttribute',
       'Locator',
       'to.have.attribute.value',
       value,
@@ -327,7 +338,6 @@ export const RETRYING: Record<string, (...args: never[]) => Retrying> = {
           expectedText: textValues(expected),
         })
       : text(
-          'toHaveClass',
           'Locator',
           'to.have.class',
           expected,
@@ -351,7 +361,6 @@ export const RETRYING: Record<string, (...args: never[]) => Retrying> = {
         '"expected" argument in toContainClass cannot be a RegExp value',
       )
     return text(
-      'toContainClass',
       'Locator',
       'to.contain.class',
       expected,
@@ -366,27 +375,12 @@ export const RETRYING: Record<string, (...args: never[]) => Retrying> = {
     expected: string | RegExp,
     options?: TimeoutOption & { pseudo?: 'before' | 'after' },
   ) =>
-    text(
-      'toHaveCSS',
-      'Locator',
-      'to.have.css',
-      expected,
-      textValues([expected]),
-      options,
-      {
-        expressionArg: name,
-        ...(options?.pseudo ? { pseudo: options.pseudo } : {}),
-      },
-    ),
+    text('Locator', 'to.have.css', expected, textValues([expected]), options, {
+      expressionArg: name,
+      ...(options?.pseudo ? { pseudo: options.pseudo } : {}),
+    }),
   toHaveId: (expected: string | RegExp, options?: TimeoutOption) =>
-    text(
-      'toHaveId',
-      'Locator',
-      'to.have.id',
-      expected,
-      textValues([expected]),
-      options,
-    ),
+    text('Locator', 'to.have.id', expected, textValues([expected]), options),
   toHaveJSProperty: (
     name: string,
     expected: unknown,
@@ -403,7 +397,6 @@ export const RETRYING: Record<string, (...args: never[]) => Retrying> = {
         '"role" argument in toHaveRole must be a string',
       )
     return text(
-      'toHaveRole',
       'Locator',
       'to.have.role',
       expected,
@@ -423,7 +416,6 @@ export const RETRYING: Record<string, (...args: never[]) => Retrying> = {
           }),
         })
       : text(
-          'toHaveText',
           'Locator',
           'to.have.text',
           expected,
@@ -434,21 +426,13 @@ export const RETRYING: Record<string, (...args: never[]) => Retrying> = {
           options,
         ),
   toHaveValue: (expected: string | RegExp, options?: TimeoutOption) =>
-    text(
-      'toHaveValue',
-      'Locator',
-      'to.have.value',
-      expected,
-      textValues([expected]),
-      options,
-    ),
+    text('Locator', 'to.have.value', expected, textValues([expected]), options),
   toHaveValues: (expected: (string | RegExp)[], options?: TimeoutOption) =>
     equal('to.have.values', expected, options, {
       expectedText: textValues(expected),
     }),
   toHaveTitle: (expected: string | RegExp, options?: TimeoutOption) =>
     text(
-      'toHaveTitle',
       'Page',
       'to.have.title',
       expected,
@@ -491,7 +475,6 @@ export const RETRYING: Record<string, (...args: never[]) => Retrying> = {
     const value =
       typeof expected === 'string' ? normalizeUrl(expected) : expected
     return text(
-      'toHaveURL',
       'Page',
       'to.have.url',
       value,
@@ -521,6 +504,23 @@ export async function retry(
     throw argumentError(
       name,
       `${name} can be only used with ${matcher.receiver} object${matcher.receiver.includes(' or ') ? 's' : ''}, was called with ${receiverText(actual)}`,
+    )
+  // Upstream formats this refusal as a failed matcher but throws it, so no `expect(x, message)`
+  // prefix and no matcherResult; Neo still records it as an argument refusal.
+  if (matcher.invalidExpected)
+    throw argumentError(
+      name,
+      `${failedHead(name, state, actual, matcher.expectation)}Error: expected value must be a string or regular expression\n${printWithType('Expected', matcher.value)}\n`,
+    )
+  // Before the first await, where upstream's client finds the signal aborted and sends nothing.
+  const signal = readSignal(api, matcher.options)
+  if (signal?.aborted)
+    abortedAssertion(
+      name,
+      state,
+      matcher.value,
+      `${failedHead(name, state, actual, matcher.expectation)}${matcher.expected(state.isNot)}\n`,
+      signal,
     )
   const timeout = matcher.options?.timeout ?? state.config.timeout
   const call = { api, timeoutMs: timeoutMs(api, timeout) }
@@ -558,6 +558,50 @@ export async function retry(
       error.message = `${state.message}\n\n${error.message}`
     throw error
   }
+}
+
+/**
+ * The head of a failure the prelude formats itself, as upstream's `formatMatcherMessage`
+ * (matcherHint.ts at v1.64.1) prints one with an `Error:` line: the title, then the locator
+ * unaligned. Rust formats every failure an op returns; these two never send one.
+ */
+function failedHead(
+  name: string,
+  state: State,
+  actual: unknown,
+  expectation: string,
+): string {
+  const locator = actual instanceof Locator ? `Locator: ${actual}\n` : ''
+  return `${header(name, state, actual instanceof Locator ? 'locator' : 'page', expectation)} failed\n\n${locator}`
+}
+
+/**
+ * Fails an assertion whose signal was aborted before it started: the client's AbortError becomes
+ * the matcher's `Error:` line, so the failure is a plain Error with a matcherResult, as a
+ * timeout's is. `printed` is the head and the `Expected` line.
+ */
+function abortedAssertion(
+  name: string,
+  state: State,
+  expected: unknown,
+  printed: string,
+  signal: SignalLike,
+): never {
+  const message = `${printed}Error: ${assertionAbortedMessage(signal.reason)}\n`
+  const error = assertionError(
+    state.message ? `${state.message}\n\n${message}` : message,
+  )
+  Reflect.set(error, 'matcherResult', {
+    message,
+    pass: state.isNot,
+    actual: undefined,
+    name,
+    expected,
+    log: undefined,
+    timeout: undefined,
+    ariaSnapshot: undefined,
+  })
+  throw error
 }
 
 /** What Rust's expect op saw when the matcher failed (`MatcherFacts`, expectation.rs). */
@@ -612,12 +656,23 @@ export async function urlPredicate(
   state: State,
   options: TimeoutOption | undefined,
 ): Promise<void> {
+  const signal = readSignal('expect.toHaveURL', options)
+  if (signal?.aborted)
+    abortedAssertion(
+      'toHaveURL',
+      state,
+      undefined,
+      `${header('toHaveURL', state, 'page')} failed\n\nExpected: predicate to ${state.isNot ? 'fail' : 'succeed'}\n`,
+      signal,
+    )
   const timeout = options?.timeout ?? state.config.timeout
   const deadline = Date.now() + timeout
+  // The URL the predicate is tested on: the page's, then each one the page commits after it.
+  let candidate: unknown = URL.parse(page.url()) ?? page.url()
   for (;;) {
     let passed: boolean
     try {
-      passed = Boolean(await predicate(URL.parse(page.url()) ?? page.url()))
+      passed = Boolean(await predicate(candidate))
     } catch (error) {
       throw prefixed('expect.toHaveURL', error)
     }
@@ -628,17 +683,20 @@ export async function urlPredicate(
         state,
         `${header('toHaveURL', state, 'page')} failed\n\nExpected: predicate to ${state.isNot ? 'fail' : 'succeed'}\nReceived: ${stringify(page.url())}\nTimeout: ${timeout}ms`,
       )
+    // Wake on the first committed URL other than the one just tested, and test that one. The
+    // page's own URL is no reference here: reply facts move it to each URL `_waitForURL` hands
+    // this detector, so comparing with it would never wake and skip every URL in between.
+    const tested = hrefOf(candidate)
+    let committed: unknown
     try {
       await page._waitForURL(
         'expect.toHaveURL',
         site,
         page._mainFrame,
         (url) => {
-          const href =
-            typeof url === 'object' && url !== null
-              ? Reflect.get(url, 'href')
-              : url
-          return href !== page.url()
+          if (hrefOf(url) === tested) return false
+          committed = url
+          return true
         },
         { timeout: timeout === 0 ? 0 : remaining, waitUntil: 'commit' },
       )
@@ -649,5 +707,13 @@ export async function urlPredicate(
       )
         throw error
     }
+    candidate = committed ?? URL.parse(page.url()) ?? page.url()
   }
+}
+
+/** A predicate URL's text: a parsed URL's `href`, or the string a URL that did not parse stays. */
+export function hrefOf(url: unknown): string {
+  return typeof url === 'object' && url !== null
+    ? String(Reflect.get(url, 'href'))
+    : String(url)
 }
