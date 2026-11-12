@@ -89,6 +89,7 @@ function shownOrRecord(
     return (
       failed(operation) ??
       unfinished(operation) ??
+      cancelled(operation) ??
       snapshot(operation, operations) ??
       pending(operation) ??
       evaluated(operation) ??
@@ -132,6 +133,18 @@ function unfinished(operation: NeoOperation): Shown | null {
   return {
     ...toned('', 'muted'),
     source: 'The call has not finished.',
+    cut: false,
+  }
+}
+
+/** A call stopped before it answered: it returned nothing, whatever its record holds. */
+function cancelled(operation: NeoOperation): Shown | null {
+  if (operation.outcome !== 'cancelled') return null
+  return {
+    ...toned('(cancelled)', 'muted'),
+    source: isNeoInternal(operation)
+      ? 'Neo internal: stopped when the run ended or stopped waiting for it; it returned no value.'
+      : 'The call was cancelled before it answered, so it returned no value.',
     cut: false,
   }
 }

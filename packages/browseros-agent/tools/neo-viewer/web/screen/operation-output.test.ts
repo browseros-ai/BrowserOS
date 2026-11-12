@@ -311,6 +311,20 @@ describe('what a call gave the script', () => {
     expect(shallow.source).not.toContain('may have thrown')
   })
 
+  it('says a cancelled call returned nothing, not null', () => {
+    const pump = shown(
+      operation(1, 'events.next', { outcome: 'cancelled', result: null }),
+    )
+    expect(pump.lines).toEqual(['(cancelled)'])
+    expect(pump.source).toContain('Neo internal: stopped when the run ended')
+    expect(
+      shown(operation(2, 'page.goto', { outcome: 'cancelled', result: null }))
+        .source,
+    ).toBe(
+      'The call was cancelled before it answered, so it returned no value.',
+    )
+  })
+
   it('says which view Neo cut: a whole text from a cut tree', () => {
     const all = [
       operation(3, 'page.ariaSnapshot', {
