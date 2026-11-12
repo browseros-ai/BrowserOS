@@ -1126,8 +1126,8 @@ impl Watcher {
 
     /// Takes a `Runtime` lease on worker session `id` while some run asks for console messages
     /// or page errors on its tab, and drops it once none does ([`WorkerRuntime`]). A run asks
-    /// through a listener only where it leased its page's `Runtime` for them, so in hosted
-    /// BrowserOS, which reports neither, workers stay quiet too.
+    /// through a listener only where it leased its page's `Runtime` for them, so a tab's
+    /// workers report exactly when its page does.
     ///
     /// The lease's floor is where the browser's replay of the worker's stored history starts to
     /// count (`RuntimeLeases::floor_ms`): the earliest `since` of the tab's listeners, which is
@@ -1947,7 +1947,7 @@ mod worker_observation_tests {
     }
 
     #[tokio::test]
-    async fn a_listener_that_leased_no_page_and_a_wait_ask_as_hosted_mode_says()
+    async fn a_listener_that_leased_no_page_leaves_workers_quiet_and_a_wait_asks()
     -> Result<(), Box<dyn Error>> {
         let connection =
             TestConnection::new([("Browser.getVersion", json!({"product":"Chrome/143.0"}))]);
@@ -1972,7 +1972,7 @@ mod worker_observation_tests {
             .start_worker(page.clone(), worker("w"), SessionId::from("w"), true)
             .await;
 
-        // Hosted BrowserOS reports no page errors, so the listener leases nothing there.
+        // A listener whose page took no lease (`event_op::lease_runtime` declined it).
         run.events.listen(errors.clone(), 1_000, 0);
         run.events.hold_runtime(&errors, Vec::new());
         watcher.lease_worker_runtime().await;
@@ -1984,7 +1984,7 @@ mod worker_observation_tests {
             "a listener that asked for nothing leaves the worker quiet"
         );
 
-        // A wait, which hosted BrowserOS refuses before it starts, does ask.
+        // A wait asks.
         let waiting = run.events.waiting(errors.clone());
         watcher.lease_worker_runtime().await;
         assert!(

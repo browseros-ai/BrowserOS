@@ -66,11 +66,10 @@ struct Inner {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct WorkerReports {
     /// The earliest `since` of the run's `page.on('console' | 'pageerror')` listeners on the tab
-    /// that leased its page's `Runtime`. A listener holds no lease where those events never
-    /// come (hosted BrowserOS), and then asks nothing of workers either.
+    /// that leased its page's `Runtime`. A listener that took no lease (`event_op`'s
+    /// `lease_runtime` decides) asks nothing of workers either: they follow the page.
     pub(crate) listening_since: Option<u64>,
-    /// Whether a `waitForEvent` for one is in flight on the tab (hosted BrowserOS refuses
-    /// those). It keeps no `since` here.
+    /// Whether a `waitForEvent` for one is in flight on the tab. It keeps no `since` here.
     pub(crate) waiting: bool,
 }
 
