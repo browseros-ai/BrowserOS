@@ -8832,16 +8832,16 @@ ${value.stack}`;
   var FRAME_TAGS = new Set(["iframe", "frame"]);
   var pointerTargets = new Map;
   var nearestTargets = new Map;
-  function leafTargets(targets, roleOf) {
+  function leafTargets(targets, engine) {
     const all = new Set(targets);
-    return targets.filter((target) => !holdsTarget(target, all, roleOf));
+    return targets.filter((target) => !holdsTarget(target, all, engine));
   }
-  function holdsTarget(target, targets, roleOf) {
+  function holdsTarget(target, targets, engine) {
     const seen = new Set([target]);
     const pending = [];
     pushChildren(pending, seen, target);
     for (let element = pending.pop();element; element = pending.pop()) {
-      if (targets.has(element) || isOwnTarget(element, roleOf))
+      if (engine.isVisible(element) && (targets.has(element) || isOwnTarget(element, engine)))
         return true;
       pushChildren(pending, seen, element);
     }
@@ -8874,11 +8874,11 @@ ${value.stack}`;
         push(owned);
     }
   }
-  function isOwnTarget(element, roleOf) {
+  function isOwnTarget(element, engine) {
     const tag = element.localName;
     if (INTERACTIVE_TAGS.has(tag) || FRAME_TAGS.has(tag))
       return true;
-    const role = roleOf(element);
+    const role = engine.roleOf(element);
     if (role !== null && (INTERACTIVE_ROLES.has(role) || SECTION_ROLES.has(role)))
       return true;
     return getComputedStyle(element)?.cursor === "pointer";
@@ -8981,8 +8981,11 @@ ${value.stack}`;
       depth: request.depth,
       boxes: request.boxes
     });
-    const roleOf = (of) => injected.utils.getAriaRole(of);
-    const { result, skipped } = marked(nodes, roleOf, plain);
+    const engine = {
+      roleOf: (of) => injected.utils.getAriaRole(of),
+      isVisible: (of) => injected.utils.isElementVisible(of)
+    };
+    const { result, skipped } = marked(nodes, engine, plain);
     const { json, iframeRefs, iframeDepths } = result;
     const iframes = [];
     if (request.mode === "ai") {
@@ -9003,13 +9006,13 @@ ${value.stack}`;
       ...skipped ? { marksSkipped: true } : {}
     };
   }
-  function marked(nodes, roleOf, snapshot) {
+  function marked(nodes, engine, snapshot) {
     const elements = nodes.filter((node) => node instanceof Element);
     if (elements.length === 0)
       return { result: snapshot(), skipped: false };
     try {
       return {
-        result: asPointerTargets(leafTargets(elements, roleOf), snapshot),
+        result: asPointerTargets(leafTargets(elements, engine), snapshot),
         skipped: false
       };
     } catch {

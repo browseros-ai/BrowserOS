@@ -1,7 +1,8 @@
 // Clickable marking's container guard (src/probe/pointer-targets.ts `leafTargets`): a target
 // that holds a target of its own is never passed to the engine as a pointer target, because the
 // engine folds everything inside one into it and marking must never take a ref or a mark away.
-// The tag and role lists are desktop Neo's own, pinned here to browseros-core's source.
+// Only what the engine draws counts. The tag and role lists are desktop Neo's own, pinned here to
+// browseros-core's source.
 import { expect, it } from 'bun:test'
 import { readFileSync } from 'node:fs'
 import { parseHTML } from 'linkedom'
@@ -28,6 +29,14 @@ const { document } = parseHTML(`<html><body>
   <div id="tokens" tabindex="0"><div role="region group" aria-label="Notes">Only text</div></div>
   <div id="spaced" tabindex="0"><div role="region " aria-label="Notes">Only text</div></div>
   <div id="unnamed" tabindex="0"><section><p>Plain</p></section></div>
+  <div id="none" tabindex="0">Open menu<button style="display: none">Hidden</button></div>
+  <div id="drop" tabindex="0">Drop files here<input type="file" hidden></div>
+  <div id="zero" tabindex="0"><input type="checkbox" style="width: 0; height: 0"><span>Notifications</span></div>
+  <div id="hidden-nav" tabindex="0">Docs<nav style="display: none"><a href="#x">Docs</a></nav></div>
+  <div id="unseen" tabindex="0">Menu<span style="visibility: hidden"><button>Close</button></span></div>
+  <div id="row" tabindex="0">Row text<div id="row-hit" style="visibility: hidden">Hidden hit</div></div>
+  <div id="seen" tabindex="0"><span style="visibility: hidden"><button style="visibility: visible">Open</button></span></div>
+  <div id="drawn" tabindex="0">Card text<button aria-hidden="true" tabindex="-1">x</button></div>
 </body></html>`)
 // linkedom computes no styles: read an inline cursor, as Chromium would compute it here.
 Reflect.set(globalThis, 'getComputedStyle', (element: Element) => ({
@@ -70,7 +79,22 @@ const roleOf = (element: Element): string | null =>
     .find((token) => KNOWN_ROLES.has(token)) ??
   IMPLICIT[element.localName] ??
   null
-const leaves = (targets: Element[]) => leafTargets(targets, roleOf)
+// A stand-in for the engine's visibility test (InjectedScript.utils.isElementVisible, which
+// prelude_live exercises on a real page) from inline styles, as these pages need it: not drawn
+// under `display: none` or `hidden`, with a zero width, or when the nearest `visibility` is
+// `hidden`. linkedom lays nothing out.
+const isVisible = (element: Element): boolean => {
+  const style = (of: Element) => of.getAttribute('style') ?? ''
+  let visibility: string | undefined
+  for (let node: Element | null = element; node; node = node.parentElement) {
+    if (node.hasAttribute('hidden') || /display:\s*none/.test(style(node)))
+      return false
+    visibility ??= /visibility:\s*(\w+)/.exec(style(node))?.[1]
+  }
+  return visibility !== 'hidden' && !/width:\s*0/.test(style(element))
+}
+const leaves = (targets: Element[]) =>
+  leafTargets(targets, { roleOf, isVisible })
 
 it('tests that a target holding a control, a pointer element or another target is left out, and leaves are kept', () => {
   const ids = ['pane', 'panel', 'card', 'host', 'icon', 'menu', 'tile']
@@ -93,6 +117,25 @@ it('tests that a target holding a control, a pointer element or another target i
   // A tabindex list of clickable divs: the list folds the same way, its items are leaves.
   const list = ['list', 'item-a', 'item-b'].map(byId)
   expect(leaves(list).map((target) => target.id)).toEqual(['item-a', 'item-b'])
+})
+
+it('tests that a control the engine does not draw does not make a container, and a drawn one does', () => {
+  // display: none, the `hidden` attribute, a zero-size box, a hidden section, a control under
+  // `visibility: hidden`, and a hidden target of its own: none prints with a ref, so each wrapper
+  // is the only thing to click.
+  const hidden = [
+    'none',
+    'drop',
+    'zero',
+    'hidden-nav',
+    'unseen',
+    'row',
+    'row-hit',
+  ]
+  expect(leaves(hidden.map(byId)).map((target) => target.id)).toEqual(hidden)
+  // A child drawn under a hidden parent still counts, as does a drawn `aria-hidden` control: in
+  // ai mode the engine prints it with its ref.
+  expect(leaves(['seen', 'drawn'].map(byId))).toEqual([])
 })
 
 it("tests that the interactive tags and roles are desktop Neo's own", () => {

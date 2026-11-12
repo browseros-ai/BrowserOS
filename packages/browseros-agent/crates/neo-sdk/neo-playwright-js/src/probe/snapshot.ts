@@ -10,7 +10,11 @@
  * element; iframe refs are in it too, which is how Rust's hop finds each iframe again.
  */
 import { parseSelector } from '../../../neo-playwright/third_party/playwright/packages/isomorphic/selectorParser'
-import { asPointerTargets, leafTargets, type RoleOf } from './pointer-targets'
+import {
+  asPointerTargets,
+  type EngineReads,
+  leafTargets,
+} from './pointer-targets'
 import type { ReplyTo, SnapshotIframe, SnapshotRequest } from './protocol'
 import { type Found, resolveTarget } from './resolve'
 import { frameSource, lastSnapshotRefs, type World } from './world'
@@ -53,8 +57,11 @@ export function snapshot(
       depth: request.depth,
       boxes: request.boxes,
     })
-  const roleOf = (of: Element) => injected.utils.getAriaRole(of)
-  const { result, skipped } = marked(nodes, roleOf, plain)
+  const engine: EngineReads = {
+    roleOf: (of) => injected.utils.getAriaRole(of),
+    isVisible: (of) => injected.utils.isElementVisible(of),
+  }
+  const { result, skipped } = marked(nodes, engine, plain)
   const { json, iframeRefs, iframeDepths } = result
   const iframes: SnapshotIframe[] = []
   if (request.mode === 'ai') {
@@ -84,14 +91,14 @@ export function snapshot(
  */
 function marked<T>(
   nodes: readonly unknown[],
-  roleOf: RoleOf,
+  engine: EngineReads,
   snapshot: () => T,
 ): { result: T; skipped: boolean } {
   const elements = nodes.filter((node) => node instanceof Element)
   if (elements.length === 0) return { result: snapshot(), skipped: false }
   try {
     return {
-      result: asPointerTargets(leafTargets(elements, roleOf), snapshot),
+      result: asPointerTargets(leafTargets(elements, engine), snapshot),
       skipped: false,
     }
   } catch {
