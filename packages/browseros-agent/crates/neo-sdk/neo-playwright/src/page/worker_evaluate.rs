@@ -2,42 +2,55 @@
 //! `UtilityScript` transport as page.evaluate preserves Playwright's value serialization;
 //! worker closure races both context startup and the CDP command, including pending promises.
 
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use serde_json::{Value, json};
 use ts_rs::TS;
 
 use crate::events::worker_table::WorkerContext;
 use crate::op_scope::OpScope;
-use crate::page::evaluate::ScriptInput;
-use crate::page::evaluate_guard::{self, MAIN_WORLD_JS};
+use crate::page::evaluate::{self, ScriptArg};
+use crate::page::evaluate_guard::{self, ArgText, MAIN_WORLD_JS, Script};
 use crate::page::serialized_value::SerializedValue;
 use crate::target::PageRef;
 use crate::wire::options;
 use crate::{ErrorCode, Playwright, PlaywrightError};
 
-/// `worker.evaluate(fn, arg)`: the page, the worker the host's table names, and the script.
+/// `worker.evaluate(fn, arg)`: the page, the worker the host's table names, and upstream's
+/// `Worker.evaluateExpression` params with `refused` (`evaluate::script`).
 #[derive(Deserialize, TS)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub(crate) struct WorkerEvaluateInput {
     page: PageRef,
     worker: String,
-    script: ScriptInput,
+    expression: String,
+    #[serde(default)]
+    #[ts(optional, as = "Option<bool>")]
+    is_function: bool,
+    #[serde(default)]
+    #[ts(optional)]
+    arg: Option<ScriptArg>,
+    #[serde(default)]
+    #[ts(optional)]
+    refused: Option<String>,
 }
 options!(WorkerEvaluateInput);
-
-/// `worker.evaluate`'s answer: the script's value.
-#[derive(Debug, Serialize, TS)]
-pub(crate) struct WorkerEvaluated {
-    value: SerializedValue,
-}
 
 pub(crate) async fn evaluate(
     pw: &Playwright,
     scope: &OpScope<'_>,
     input: WorkerEvaluateInput,
-) -> Result<WorkerEvaluated, PlaywrightError> {
+) -> Result<SerializedValue, PlaywrightError> {
+    let WorkerEvaluateInput {
+        page,
+        worker,
+        expression,
+        is_function,
+        arg,
+        refused,
+    } = input;
+    let script = evaluate::script(scope, expression, is_function, arg, refused)?;
     scope.require(crate::Capability::MainWorld)?;
-    let admitted = scope.admit(pw.browser(), input.page.tab()).await?;
+    let admitted = scope.admit(pw.browser(), page.tab()).await?;
     let closed = || {
         scope.fail(
             ErrorCode::TargetClosed,
@@ -47,7 +60,7 @@ pub(crate) async fn evaluate(
     let worker = pw
         .events()
         .workers
-        .get(&admitted.session.target_id, &input.worker)
+        .get(&admitted.session.target_id, &worker)
         .ok_or_else(closed)?;
     let mut context = worker.context.subscribe();
     let id = loop {
@@ -60,21 +73,26 @@ pub(crate) async fn evaluate(
             }
         }
     };
-    let script = match input.script {
-        ScriptInput::Run(script) => script,
-        ScriptInput::Refused(message) => return Err(scope.fail(ErrorCode::PageError, &message)),
+    let (expression, is_function, ArgText(arg)) = match script {
+        Script::Run { handles, .. } if !handles.is_empty() => {
+            return Err(scope.fail(
+                ErrorCode::Unsupported,
+                "worker.evaluate does not accept element handles",
+            ));
+        }
+        Script::Run {
+            expression,
+            is_function,
+            arg,
+            ..
+        } => (expression, is_function, arg),
+        Script::Refused(message) => return Err(scope.fail(ErrorCode::PageError, &message)),
     };
-    if !script.handles.is_empty() {
-        return Err(scope.fail(
-            ErrorCode::Unsupported,
-            "worker.evaluate does not accept element handles",
-        ));
-    }
     let params = json!({
         "functionDeclaration": MAIN_WORLD_JS,
         "executionContextId": id,
-        "arguments": [{"value": "evaluate"}, {"value": script.is_function},
-            {"value": script.expression}, {"value": 1}, {"value": script.arg}],
+        "arguments": [{"value": "evaluate"}, {"value": is_function},
+            {"value": expression}, {"value": 1}, {"value": arg}],
         "returnByValue": true,
         "awaitPromise": true,
         "userGesture": true,
@@ -101,9 +119,7 @@ pub(crate) async fn evaluate(
         _ => None,
     };
     let value = evaluate_guard::evaluation_result(scope, text)?;
-    Ok(WorkerEvaluated {
-        value: SerializedValue(value),
-    })
+    Ok(SerializedValue(value))
 }
 
 #[derive(Deserialize)]

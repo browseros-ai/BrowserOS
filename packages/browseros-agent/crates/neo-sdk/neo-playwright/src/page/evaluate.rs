@@ -30,56 +30,47 @@ const RAF_POLL: Duration = Duration::from_millis(100);
 /// ([`timed_out_mid_poll`]).
 const POLL_CANCEL: Duration = Duration::from_millis(500);
 
-/// The script as the prelude sends it, decoded once: ready to run, or the message of the
-/// server-side check upstream fails first, raised at its point with nothing sent.
+/// `arg` as every evaluating op carries it: upstream's `SerializedArgument` nesting with Neo's
+/// contents. `value` is the argument in the page's serialized form as JSON text, which the main
+/// world parses itself so the page's own globals cannot alter it (`main-world/json-text.ts`), and
+/// `handles` are the element handles its `{h: i}` names, in order, as brands. No `Debug`: the
+/// value may be a password the script passes.
 #[derive(Deserialize, TS)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-#[ts(rename = "PageScript")]
-pub(crate) enum ScriptInput {
-    /// upstream's client and server steps passed: the script to run.
-    Run(RunInput),
-    /// The message of the server-side check upstream fails first, raised at its point.
-    Refused(String),
+#[serde(deny_unknown_fields)]
+pub(crate) struct ScriptArg {
+    value: String,
+    handles: Vec<RootHandle>,
 }
 
-#[derive(Deserialize, TS)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub(crate) struct RunInput {
-    /// `normalizeEvaluationExpression(String(pageFunction), isFunction)`.
-    pub(crate) expression: String,
-    /// `typeof pageFunction === 'function'`.
-    pub(crate) is_function: bool,
-    /// Playwright's in-page serialized argument, as JSON text.
-    pub(crate) arg: String,
-    /// The element handles the argument's `{h: i}` names, in order; left out when none.
-    #[serde(default)]
-    #[ts(optional, as = "Option<Vec<RootHandle>>")]
-    pub(crate) handles: Vec<RootHandle>,
-}
-
-impl From<ScriptInput> for Script {
-    fn from(input: ScriptInput) -> Self {
-        match input {
-            ScriptInput::Run(RunInput {
-                expression,
-                is_function,
-                arg,
-                handles,
-            }) => Self::Run {
-                expression,
-                is_function,
-                arg: ArgText(arg),
-                handles: handles
-                    .into_iter()
-                    .map(|RootHandle::Element(handle)| handle)
-                    .collect(),
-            },
-            ScriptInput::Refused(message) => Self::Refused(message),
-        }
+/// One evaluating op's script, from the four fields each op carries beside its addressing:
+/// upstream's `expression`, `isFunction` and `arg`, or Neo's `refused`, the message of a check
+/// upstream fails only after its command starts (its server's normalization, or its client's
+/// argument checks after a locator's wait), which the gateway raises at that point with nothing
+/// sent. The prelude leaves `arg` out only beside `refused`.
+pub(crate) fn script(
+    scope: &OpScope<'_>,
+    expression: String,
+    is_function: bool,
+    arg: Option<ScriptArg>,
+    refused: Option<String>,
+) -> Result<Script, PlaywrightError> {
+    match (refused, arg) {
+        (Some(message), _) => Ok(Script::Refused(message)),
+        (None, Some(ScriptArg { value, handles })) => Ok(Script::Run {
+            expression,
+            is_function,
+            arg: ArgText(value),
+            handles: handles
+                .into_iter()
+                .map(|RootHandle::Element(handle)| handle)
+                .collect(),
+        }),
+        (None, None) => Err(scope.fail(ErrorCode::InvalidInput, "missing field `arg`")),
     }
 }
 
-/// `page.evaluate(pageFunction, arg)`: `{ page, frame?, script }`.
+/// `page.evaluate(pageFunction, arg)`: upstream's `Frame.evaluateExpression` params on the page
+/// or one of its frames, and `refused` (`script`).
 #[derive(Deserialize, TS)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub(crate) struct EvaluateInput {
@@ -88,11 +79,21 @@ pub(crate) struct EvaluateInput {
     #[serde(default)]
     #[ts(optional)]
     frame: Option<FrameId>,
-    script: ScriptInput,
+    expression: String,
+    #[serde(default)]
+    #[ts(optional, as = "Option<bool>")]
+    is_function: bool,
+    #[serde(default)]
+    #[ts(optional)]
+    arg: Option<ScriptArg>,
+    #[serde(default)]
+    #[ts(optional)]
+    refused: Option<String>,
 }
 options!(EvaluateInput);
 
-/// `page.waitForFunction(pageFunction, arg, { polling })`: the evaluate input and `polling`.
+/// `page.waitForFunction(pageFunction, arg, { polling })`: upstream's `Frame.waitForFunction`
+/// params, and `refused` (`script`).
 #[derive(Deserialize, TS)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub(crate) struct WaitForFunctionInput {
@@ -100,12 +101,21 @@ pub(crate) struct WaitForFunctionInput {
     #[serde(default)]
     #[ts(optional)]
     frame: Option<FrameId>,
-    script: ScriptInput,
-    /// An interval in milliseconds; absent is `'raf'`. The prelude refuses any other string,
-    /// as upstream's client does.
+    expression: String,
+    #[serde(default)]
+    #[ts(optional, as = "Option<bool>")]
+    is_function: bool,
     #[serde(default)]
     #[ts(optional)]
-    polling: Option<f64>,
+    arg: Option<ScriptArg>,
+    #[serde(default)]
+    #[ts(optional)]
+    refused: Option<String>,
+    /// An interval in milliseconds; absent is `'raf'`, as upstream's. The prelude refuses any
+    /// other string, as upstream's client does.
+    #[serde(default)]
+    #[ts(optional)]
+    polling_interval: Option<f64>,
 }
 options!(WaitForFunctionInput);
 
@@ -136,14 +146,23 @@ pub(crate) async fn evaluate(
     scope: &OpScope<'_>,
     input: EvaluateInput,
 ) -> Result<Evaluated, PlaywrightError> {
-    let call = MainWorldCall::once(input.script.into(), Subject::Frame(input.frame));
-    let mut guard = EvaluateGuard::open(pw, scope, &input.page, call).await?;
+    let EvaluateInput {
+        page,
+        frame,
+        expression,
+        is_function,
+        arg,
+        refused,
+    } = input;
+    let script = script(scope, expression, is_function, arg, refused)?;
+    let call = MainWorldCall::once(script, Subject::Frame(frame));
+    let mut guard = EvaluateGuard::open(pw, scope, &page, call).await?;
     // A document that was gone before the script started ran nothing, so the script is tried
     // once more in the new one, as upstream waits for the new main context.
     for _attempt in 0..2 {
         match guard.run(scope).await? {
             Outcome::Answered(answer) => {
-                return evaluated(pw, scope, &input.page, answer.finish(scope)?.value).await;
+                return evaluated(pw, scope, &page, answer.finish(scope)?.value).await;
             }
             Outcome::NotRun => {}
             Outcome::Destroyed => break,
@@ -188,11 +207,20 @@ pub(crate) async fn wait_for_function(
     scope: &OpScope<'_>,
     input: WaitForFunctionInput,
 ) -> Result<WaitedFunction, PlaywrightError> {
-    let interval = poll_interval(scope, input.polling)?;
-    let call = MainWorldCall::poll(input.script.into(), input.frame);
+    let WaitForFunctionInput {
+        page,
+        frame,
+        expression,
+        is_function,
+        arg,
+        refused,
+        polling_interval,
+    } = input;
+    let interval = poll_interval(scope, polling_interval)?;
+    let call = MainWorldCall::poll(script(scope, expression, is_function, arg, refused)?, frame);
     // Upstream's timeout covers the whole call: the guard finds the frame and installs its
     // world within it, and each poll runs within it here.
-    let mut guard = EvaluateGuard::open(pw, scope, &input.page, call).await?;
+    let mut guard = EvaluateGuard::open(pw, scope, &page, call).await?;
     let answer = loop {
         // Boxed: a run's state holds a world's install and the main-world calls, and every
         // poll would hold it inside `Playwright::invoke`'s future.

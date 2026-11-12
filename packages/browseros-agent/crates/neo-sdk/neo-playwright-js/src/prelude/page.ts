@@ -36,6 +36,7 @@ import {
   type EvaluateOptions,
   exposesFunctions,
   pageCall,
+  type ScriptParams,
 } from './evaluation'
 import { EventDeadline } from './event-deadline'
 import { checkReported, isReported } from './events'
@@ -93,7 +94,6 @@ import type {
   NavigationResult,
   PageBrand,
   PageHandle,
-  PageScript,
 } from './wire'
 import { Worker } from './worker'
 
@@ -845,13 +845,11 @@ export class Page extends EventEmitter {
       api,
       {
         register: async (source) =>
-          (
-            await send['page.addInitScript'](
-              site,
-              { api, timeoutMs: 0 },
-              { page: await this._brand(api), script: source },
-            )
-          ).id,
+          await send['page.addInitScript'](
+            site,
+            { api, timeoutMs: 0 },
+            { page: await this._brand(api), ...source },
+          ),
         expose: (name, callback) =>
           exposeOnPage(this, site, api, name, callback, true),
       },
@@ -901,12 +899,12 @@ export class Page extends EventEmitter {
     pageFunction: unknown,
     arg: unknown,
     options: unknown,
-  ): Promise<PageScript> {
+  ): Promise<ScriptParams> {
     const callbacks: Callbacks | undefined = exposesFunctions(options)
       ? []
       : undefined
     const script = pageCall(api, form, pageFunction, arg, options, callbacks)
-    if (!callbacks?.length || !('run' in script)) return script
+    if (!callbacks?.length || script.refused !== undefined) return script
     const settled = await Promise.allSettled(
       callbacks.map(([name, callback]) =>
         exposeOnPage(

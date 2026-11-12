@@ -24,6 +24,7 @@ import {
   type EvaluateOptions,
   fromPageValue,
   pageCall,
+  type ScriptParams,
 } from './evaluation'
 import { EventDeadline } from './event-deadline'
 import { dropFiles, inputFiles, withClientErrors } from './files'
@@ -72,7 +73,6 @@ import type {
   OpInputs,
   OpOutputs,
   PageHandle,
-  PageScript,
   PointerOptions,
   ScreenshotOptions,
   SerializedValue,
@@ -1268,20 +1268,27 @@ export class Frame extends EventEmitter {
     site: CallSite,
     selector: string,
     strict: boolean,
-    script: PageScript,
+    script: ScriptParams,
     noWait: boolean,
     options: TimeoutOption & SignalOption = {},
   ): Promise<unknown> {
     const wait: Wait = noWait ? { timeout: 0 } : this._wait(api, options)
     const addressed = await this._targetArgs(api, selector, strict)
-    const value = await send['locator.evaluate'](
-      site,
-      this._call(api, wait.timeout),
-      noWait
-        ? { ...addressed, script, noWait: true, selector }
-        : { ...addressed, script },
-      wait.signal,
-    )
+    const call = this._call(api, wait.timeout)
+    // `$eval` is upstream's `Frame.evalOnSelector`; a locator's evaluate waits for its element
+    // and then evaluates on it, upstream's `JSHandle.evaluateExpression`.
+    const value = noWait
+      ? await send['page.evalOnSelector'](site, call, {
+          ...addressed,
+          selector,
+          ...script,
+        })
+      : await send['locator.evaluate'](
+          site,
+          call,
+          { ...addressed, ...script },
+          wait.signal,
+        )
     return fromPageValue(api, value)
   }
 
@@ -1289,13 +1296,13 @@ export class Frame extends EventEmitter {
   async _evaluateAll(
     api: string,
     selector: string,
-    script: PageScript,
+    script: ScriptParams,
   ): Promise<unknown> {
     const site = captureSite()
     const target = await this._locatorBrand(api, selector)
     const value = await send['locator.evaluateAll'](site, this._call(api, 0), {
       target,
-      script,
+      ...script,
     })
     return fromPageValue(api, value)
   }
@@ -1567,7 +1574,7 @@ export class Frame extends EventEmitter {
       'page.evaluate',
       site,
       this._call(api, 0),
-      { page, frame, script },
+      { page, frame, ...script },
     )
     this._page._evaluated(result.frames, observed)
     await this._page._publishCompleted()
@@ -1587,15 +1594,16 @@ export class Frame extends EventEmitter {
     const script = pageCall(api, 'frame', pageFunction, arg)
     const wait = this._wait(api, options)
     const { page, frame } = await this._frameArgs(api)
-    // `polling` is absent for 'raf': the codec drops an undefined field.
+    // `pollingInterval` is absent for 'raf', as upstream's client sends it: the codec drops an
+    // undefined field.
     const { value, preview } = await send['page.waitForFunction'](
       site,
       this._call(api, wait.timeout),
       {
         page,
         frame,
-        script,
-        polling:
+        ...script,
+        pollingInterval:
           typeof options.polling === 'number' ? options.polling : undefined,
       },
       wait.signal,

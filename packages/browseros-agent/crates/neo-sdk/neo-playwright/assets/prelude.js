@@ -371,6 +371,11 @@
       target: "target",
       lifetime: "operation"
     },
+    "page.evalOnSelector": {
+      effect: "write",
+      target: "target",
+      lifetime: "operation"
+    },
     "locator.evaluateAll": {
       effect: "write",
       target: "target",
@@ -2033,6 +2038,7 @@
     "page.evaluate": (site, call, input, signal) => invoke("page.evaluate", site, call, input, signal),
     "worker.evaluate": (site, call, input, signal) => invoke("worker.evaluate", site, call, input, signal),
     "locator.evaluate": (site, call, input, signal) => invoke("locator.evaluate", site, call, input, signal),
+    "page.evalOnSelector": (site, call, input, signal) => invoke("page.evalOnSelector", site, call, input, signal),
     "locator.evaluateAll": (site, call, input, signal) => invoke("locator.evaluateAll", site, call, input, signal),
     "page.waitForFunction": (site, call, input, signal) => invoke("page.waitForFunction", site, call, input, signal),
     "locator.waitForFunction": (site, call, input, signal) => invoke("locator.waitForFunction", site, call, input, signal),
@@ -7261,7 +7267,7 @@ ${value.stack}`;
       const script = pageCall(api, "query", pageFunction, arg);
       const wait = this._frame._wait(api, options ?? {});
       const addressed = await this._frame._targetArgs(api, this._selector, true);
-      await send["locator.waitForFunction"](site, this._frame._call(api, wait.timeout), { ...addressed, script }, wait.signal);
+      await send["locator.waitForFunction"](site, this._frame._call(api, wait.timeout), { ...addressed, ...script }, wait.signal);
     }
     async evaluateAll(pageFunction, arg) {
       const api = "locator.evaluateAll";
@@ -7952,7 +7958,12 @@ ${value.stack}`;
     async _evaluateOn(api, site, selector, strict, script, noWait, options = {}) {
       const wait = noWait ? { timeout: 0 } : this._wait(api, options);
       const addressed = await this._targetArgs(api, selector, strict);
-      const value = await send["locator.evaluate"](site, this._call(api, wait.timeout), noWait ? { ...addressed, script, noWait: true, selector } : { ...addressed, script }, wait.signal);
+      const call = this._call(api, wait.timeout);
+      const value = noWait ? await send["page.evalOnSelector"](site, call, {
+        ...addressed,
+        selector,
+        ...script
+      }) : await send["locator.evaluate"](site, call, { ...addressed, ...script }, wait.signal);
       return fromPageValue(api, value);
     }
     async _evaluateAll(api, selector, script) {
@@ -7960,7 +7971,7 @@ ${value.stack}`;
       const target = await this._locatorBrand(api, selector);
       const value = await send["locator.evaluateAll"](site, this._call(api, 0), {
         target,
-        script
+        ...script
       });
       return fromPageValue(api, value);
     }
@@ -8097,7 +8108,7 @@ ${value.stack}`;
       const site = captureSite();
       const script = await this._page._evaluationScript(api, site, "frame", pageFunction, arg, options);
       const { page, frame } = await this._frameArgs(api);
-      const { value: result, observed } = await invokeObserved("page.evaluate", site, this._call(api, 0), { page, frame, script });
+      const { value: result, observed } = await invokeObserved("page.evaluate", site, this._call(api, 0), { page, frame, ...script });
       this._page._evaluated(result.frames, observed);
       await this._page._publishCompleted();
       return fromPageValue(api, result.value);
@@ -8112,8 +8123,8 @@ ${value.stack}`;
       const { value, preview } = await send["page.waitForFunction"](site, this._call(api, wait.timeout), {
         page,
         frame,
-        script,
-        polling: typeof options.polling === "number" ? options.polling : undefined
+        ...script,
+        pollingInterval: typeof options.polling === "number" ? options.polling : undefined
       }, wait.signal);
       return new WaitHandle(value, preview);
     }
@@ -8465,18 +8476,17 @@ ${value.stack}`;
       this.#live(api);
       const script = await this._page._evaluationScript(api, site, "handle", pageFunction, arg, options);
       this.#live(api);
-      return fromPageValue(api, await send["locator.evaluate"](site, { api, timeoutMs: timeoutMs(api, 0) }, { target: this._brand, strict: "strict", script }));
+      return fromPageValue(api, await send["locator.evaluate"](site, { api, timeoutMs: timeoutMs(api, 0) }, { target: this._brand, strict: "strict", ...script }));
     }
     async $eval(selector, pageFunction, arg) {
       const site = captureSite();
       const api = "elementHandle.$eval";
       const script = pageCall(api, "query", pageFunction, arg);
-      const value = await send["locator.evaluate"](site, { api, timeoutMs: timeoutMs(api, 0) }, {
+      const value = await send["page.evalOnSelector"](site, { api, timeoutMs: timeoutMs(api, 0) }, {
         target: this.#rooted(api, selector),
         strict: "firstMatch",
-        noWait: true,
         selector,
-        script
+        ...script
       });
       return fromPageValue(api, value);
     }
@@ -8484,7 +8494,7 @@ ${value.stack}`;
       const site = captureSite();
       const api = "elementHandle.$$eval";
       const script = pageCall(api, "query", pageFunction, arg);
-      const value = await send["locator.evaluateAll"](site, { api, timeoutMs: timeoutMs(api, 0) }, { target: this.#rooted(api, selector), script });
+      const value = await send["locator.evaluateAll"](site, { api, timeoutMs: timeoutMs(api, 0) }, { target: this.#rooted(api, selector), ...script });
       return fromPageValue(api, value);
     }
     async screenshot(options = {}) {
@@ -8672,6 +8682,8 @@ ${value.stack}`;
       if (afterWait) {
         const message = error instanceof Error ? error.message : String(error);
         return {
+          expression: "",
+          isFunction: typeof pageFunction === "function",
           refused: message.startsWith(`${api}: `) ? message.slice(api.length + 2) : message
         };
       }
@@ -8683,11 +8695,17 @@ ${value.stack}`;
   function script(api, pageFunction, arg, callbacks) {
     const isFunction = typeof pageFunction === "function";
     const { serialized, clientHandles } = serializeArgument(api, arg, callbacks);
+    let source = "";
     let expression;
     try {
-      expression = normalizeEvaluationExpression(String(pageFunction), isFunction);
+      source = String(pageFunction);
+      expression = normalizeEvaluationExpression(source, isFunction);
     } catch (error) {
-      return { refused: error instanceof Error ? error.message : String(error) };
+      return {
+        expression: source,
+        isFunction,
+        refused: error instanceof Error ? error.message : String(error)
+      };
     }
     const onServer = parseSerializedValue(serialized, clientHandles);
     const handles = [];
@@ -8697,14 +8715,7 @@ ${value.stack}`;
       handles.push(value._brand);
       return { h: handles.length - 1 };
     }));
-    return {
-      run: {
-        expression,
-        isFunction,
-        arg: text,
-        ...handles.length > 0 ? { handles } : {}
-      }
-    };
+    return { expression, isFunction, arg: { value: text, handles } };
   }
   function serializeArgument(api, arg, callbacks) {
     let serialized;
@@ -8813,7 +8824,7 @@ ${value.stack}`;
       events.bindingRemoved();
     });
     try {
-      const { id } = await send["page.exposeBinding"](site, { api, timeoutMs: 0 }, {
+      const id = await send["page.exposeBinding"](site, { api, timeoutMs: 0 }, {
         page: await page._brand(api),
         name,
         noGlobal: noGlobal ? true : undefined
@@ -8836,7 +8847,7 @@ ${value.stack}`;
       context._events.bindingRemoved();
     });
     try {
-      const { id } = await send["context.exposeBinding"](site, { api, timeoutMs: 0 }, { name, noGlobal: noGlobal ? true : undefined });
+      const id = await send["context.exposeBinding"](site, { api, timeoutMs: 0 }, { name, noGlobal: noGlobal ? true : undefined });
       return registration(id, forget);
     } catch (error) {
       forget();
@@ -9895,7 +9906,7 @@ ${value.stack}`;
       const script = pageCall(api, "frame", pageFunction, arg);
       if (this._closed)
         throw clientError(api, "Target page, context or browser has been closed");
-      const { value } = await send["worker.evaluate"](site, { api, timeoutMs: 0 }, { page: await this.#page._brand(api), worker: this.#info.id, script });
+      const value = await send["worker.evaluate"](site, { api, timeoutMs: 0 }, { page: await this.#page._brand(api), worker: this.#info.id, ...script });
       return fromPageValue(api, value);
     }
     evaluateHandle() {
@@ -10312,7 +10323,7 @@ ${value.stack}`;
       const site = captureSite();
       const api = "page.addInitScript";
       return addInitScript(api, {
-        register: async (source) => (await send["page.addInitScript"](site, { api, timeoutMs: 0 }, { page: await this._brand(api), script: source })).id,
+        register: async (source) => await send["page.addInitScript"](site, { api, timeoutMs: 0 }, { page: await this._brand(api), ...source }),
         expose: (name, callback) => exposeOnPage(this, site, api, name, callback, true)
       }, script, arg, options);
     }
@@ -10327,7 +10338,7 @@ ${value.stack}`;
     async _evaluationScript(api, site, form, pageFunction, arg, options) {
       const callbacks = exposesFunctions(options) ? [] : undefined;
       const script = pageCall(api, form, pageFunction, arg, options, callbacks);
-      if (!callbacks?.length || !("run" in script))
+      if (!callbacks?.length || script.refused !== undefined)
         return script;
       const settled = await Promise.allSettled(callbacks.map(([name, callback]) => exposeOnPage(this, site, api, name, (_source, ...args) => Reflect.apply(callback, undefined, args), true)));
       const failed = settled.find((outcome) => outcome.status === "rejected");
@@ -10886,7 +10897,7 @@ ${value.stack}`;
       const site = captureSite();
       const api = "browserContext.addInitScript";
       return addInitScript(api, {
-        register: async (source) => (await send["context.addInitScript"](site, { api, timeoutMs: 0 }, { script: source })).id,
+        register: async (source) => await send["context.addInitScript"](site, { api, timeoutMs: 0 }, source),
         expose: (name, callback) => exposeOnContext(this, site, api, name, callback, true)
       }, script, arg, options);
     }

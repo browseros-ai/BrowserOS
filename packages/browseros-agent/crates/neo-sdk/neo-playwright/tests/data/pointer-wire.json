@@ -191,13 +191,13 @@
         },
         {
           "op": "page.evaluate",
-          "args": "{\"call\":{\"api\":\"page.evaluate\",\"timeoutMs\":0},\"page\":{\"$neo\":\"page\",\"tab\":1007},\"script\":{\"run\":{\"expression\":\"() => window.clicked\",\"isFunction\":true,\"arg\":\"{\\\"v\\\":\\\"undefined\\\"}\"}}}",
+          "args": "{\"call\":{\"api\":\"page.evaluate\",\"timeoutMs\":0},\"page\":{\"$neo\":\"page\",\"tab\":1007},\"expression\":\"() => window.clicked\",\"isFunction\":true,\"arg\":{\"value\":\"{\\\"v\\\":\\\"undefined\\\"}\",\"handles\":[]}}",
           "reply": "{\"pages\":[],\"ok\":{\"value\":true},\"observed\":{\"seq\":5,\"events\":0,\"payloadCurrent\":true}}",
           "body": "{\"value\":true}"
         },
         {
           "op": "page.evaluate",
-          "args": "{\"call\":{\"api\":\"page.evaluate\",\"timeoutMs\":0},\"page\":{\"$neo\":\"page\",\"tab\":1007},\"script\":{\"run\":{\"expression\":\"() => window['scrolls']\",\"isFunction\":true,\"arg\":\"{\\\"v\\\":\\\"undefined\\\"}\"}}}",
+          "args": "{\"call\":{\"api\":\"page.evaluate\",\"timeoutMs\":0},\"page\":{\"$neo\":\"page\",\"tab\":1007},\"expression\":\"() => window['scrolls']\",\"isFunction\":true,\"arg\":{\"value\":\"{\\\"v\\\":\\\"undefined\\\"}\",\"handles\":[]}}",
           "reply": "{\"pages\":[],\"ok\":{\"value\":{\"a\":[0,2],\"id\":1}},\"observed\":{\"seq\":6,\"events\":0,\"payloadCurrent\":true}}",
           "body": "{\"value\":{\"a\":[0,2],\"id\":1}}"
         }

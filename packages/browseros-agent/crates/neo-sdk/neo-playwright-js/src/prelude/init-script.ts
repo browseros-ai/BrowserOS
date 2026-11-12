@@ -15,10 +15,16 @@ import type { BindingCallback } from './bindings'
 import { type CallSite, captureSite } from './call-site'
 import { plainError } from './errors'
 import { send } from './generated'
-import type { InitSource } from './wire'
 
 const TOO_MANY_ARGUMENTS =
   'Too many arguments. If you need to pass more than 1 argument to the function wrap them in an object.'
+
+/**
+ * An init script's source as upstream's client builds it (`evaluationScript`), or the path of a
+ * file on Neo's disk that Rust reads as upstream's client reads it, `//# sourceURL` appended.
+ * Exactly one of the two travels, at the op's top level beside its addressing.
+ */
+export type InitSource = { source: string } | { path: string }
 
 /** Where an init script goes: a page, or the run's context. */
 export type InitOwner = {

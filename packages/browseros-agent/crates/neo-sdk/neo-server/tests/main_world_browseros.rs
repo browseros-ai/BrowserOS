@@ -6,7 +6,8 @@
 //! ```text
 //!  page.evaluate, frame.evaluate ──────────────────────────────────▶ page.evaluate
 //!  page.waitForFunction, frame.waitForFunction ────────────────────▶ page.waitForFunction
-//!  locator.evaluate, elementHandle.evaluate, $eval (page, frame, handle) ─▶ locator.evaluate
+//!  locator.evaluate, elementHandle.evaluate ───────────────────────▶ locator.evaluate
+//!  $eval (page, frame, handle) ────────────────────────────────────▶ page.evalOnSelector
 //!  locator.evaluateAll, $$eval (page, frame, handle) ──────────────▶ locator.evaluateAll
 //!  locator.waitForFunction ─────────────────────────────────────────▶ locator.waitForFunction
 //!  page.setContent, frame.setContent ──────────────────────────────▶ page.setContent

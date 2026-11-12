@@ -37,9 +37,10 @@ import {
   unsupportedError,
 } from './errors'
 import { WaitHandle } from './frame'
+import type { GeneratedInputs } from './generated'
 import { callbackName } from './init-script'
 import { isHandle } from './options'
-import type { ElementBrand, PageScript, SerializedValue } from './wire'
+import type { ElementBrand, SerializedValue } from './wire'
 
 /**
  * `evaluate`'s options: upstream's one. With `exposeFunctions`, each function in the argument
@@ -147,6 +148,19 @@ const FORMS: Record<CallForm, { options: boolean; afterWait: boolean }> = {
 }
 
 /**
+ * A script as every evaluating op carries it, beside the op's addressing: upstream's
+ * `expression`, `isFunction` and `arg` (the argument in the page's serialized form as JSON text,
+ * which the main world parses itself, with the element brands its `{h: i}` names), or, for a
+ * script upstream fails only after its command starts, `refused` with that message and no `arg`,
+ * which Rust raises at upstream's point with nothing sent. A refused script's `expression` is
+ * the source as far as it was read, `''` when a check refused it first; Rust ignores it.
+ */
+export type ScriptParams = Pick<
+  GeneratedInputs['page.evaluate'],
+  'expression' | 'isFunction' | 'arg' | 'refused'
+>
+
+/**
  * The script for `pageFunction(subject?, arg)` in `form`. The order is upstream's: the options,
  * then the client serializes the argument (throwing for a function inside it), the channel's
  * validator checks it and its handles, then the server normalizes the expression and
@@ -159,7 +173,7 @@ export function pageCall(
   arg: unknown,
   options?: unknown,
   callbacks?: Callbacks,
-): PageScript {
+): ScriptParams {
   const { options: checksOptions, afterWait } = FORMS[form]
   try {
     if (checksOptions) assertEvaluateOptions(options)
@@ -168,6 +182,8 @@ export function pageCall(
     if (afterWait) {
       const message = error instanceof Error ? error.message : String(error)
       return {
+        expression: '',
+        isFunction: typeof pageFunction === 'function',
         refused: message.startsWith(`${api}: `)
           ? message.slice(api.length + 2)
           : message,
@@ -185,14 +201,20 @@ function script(
   pageFunction: unknown,
   arg: unknown,
   callbacks: Callbacks | undefined,
-): PageScript {
+): ScriptParams {
   const isFunction = typeof pageFunction === 'function'
   const { serialized, clientHandles } = serializeArgument(api, arg, callbacks)
+  let source = ''
   let expression: string
   try {
-    expression = normalizeEvaluationExpression(String(pageFunction), isFunction)
+    source = String(pageFunction)
+    expression = normalizeEvaluationExpression(source, isFunction)
   } catch (error) {
-    return { refused: error instanceof Error ? error.message : String(error) }
+    return {
+      expression: source,
+      isFunction,
+      refused: error instanceof Error ? error.message : String(error),
+    }
   }
   const onServer: unknown = parseSerializedValue(serialized, clientHandles)
   const handles: ElementBrand[] = []
@@ -203,14 +225,7 @@ function script(
       return { h: handles.length - 1 }
     }),
   )
-  return {
-    run: {
-      expression,
-      isFunction,
-      arg: text,
-      ...(handles.length > 0 ? { handles } : {}),
-    },
-  }
+  return { expression, isFunction, arg: { value: text, handles } }
 }
 
 /**

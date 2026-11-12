@@ -308,6 +308,7 @@ mod tests {
             served("page.evaluate", &[MainWorld]),
             served("worker.evaluate", &[MainWorld]),
             served("locator.evaluate", &[MainWorld]),
+            served("page.evalOnSelector", &[MainWorld]),
             served("locator.evaluateAll", &[MainWorld]),
             served("page.waitForFunction", &[MainWorld]),
             served("locator.waitForFunction", &[MainWorld]),
@@ -550,6 +551,12 @@ mod tests {
         },
         BrowserosCase {
             op: "locator.evaluate",
+            file: "main_world_browseros.rs",
+            test: "locator_evaluate_and_dollar_eval_behave_as_playwright_on_browseros",
+            proves: Proves::Served,
+        },
+        BrowserosCase {
+            op: "page.evalOnSelector",
             file: "main_world_browseros.rs",
             test: "locator_evaluate_and_dollar_eval_behave_as_playwright_on_browseros",
             proves: Proves::Served,

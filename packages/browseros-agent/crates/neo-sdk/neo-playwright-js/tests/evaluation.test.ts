@@ -19,6 +19,15 @@ import {
   SEED,
 } from './support/prelude-runtime'
 
+/**
+ * The script an evaluating op carried, flat on its input: upstream's `expression`, `isFunction`
+ * and `arg`, and Neo's `refused`. `json` drops the ones left out.
+ */
+function scriptOf(input: Record<string, unknown> | undefined): unknown {
+  const { expression, isFunction, arg, refused } = input ?? {}
+  return json({ expression, isFunction, arg, refused })
+}
+
 type Case = {
   name: string
   source: string
@@ -87,9 +96,13 @@ it('tests that every argument reaches the wire as upstream sends it, or fails as
       .filter((call) => !isRefusal(call))
     if (value.arg !== undefined) {
       expect([value.name, thrown]).toEqual([value.name, null])
-      expect([value.name, json(sent[0]?.input.script)]).toEqual([
+      expect([value.name, scriptOf(sent[0]?.input)]).toEqual([
         value.name,
-        { run: { expression: '(x) => x', isFunction: true, arg: value.arg } },
+        {
+          expression: '(x) => x',
+          isFunction: true,
+          arg: { value: value.arg, handles: [] },
+        },
       ])
     } else {
       expect([value.name, thrown]).toEqual([value.name, value.argError])
@@ -148,9 +161,15 @@ it('tests that upstream client checks throw unprefixed and the server one is rai
       runtime
         .sent('page.evaluate')
         .filter((call) => !isRefusal(call))
-        .map((call) => call.input.script),
+        .map((call) => scriptOf(call.input)),
     ),
-  ).toEqual([{ refused: 'Passed function is not well-serializable!' }])
+  ).toEqual([
+    {
+      expression: 'get x() { return 1 }',
+      isFunction: true,
+      refused: 'Passed function is not well-serializable!',
+    },
+  ])
 })
 
 it('tests that a method shorthand and an async one are normalized as upstream server does', async () => {
@@ -160,30 +179,21 @@ it('tests that a method shorthand and an async one are normalized as upstream se
     await page.evaluate({ async later() { return 7 } }.later)
     await page.evaluate('document.title')
   `)
+  const nothing = { value: '{"v":"undefined"}', handles: [] }
   expect(
-    json(runtime.sent('page.evaluate').map((call) => call.input.script)),
+    runtime.sent('page.evaluate').map((call) => scriptOf(call.input)),
   ).toEqual([
     {
-      run: {
-        expression: '(function answer() { return 7 })',
-        isFunction: true,
-        arg: '{"v":"undefined"}',
-      },
+      expression: '(function answer() { return 7 })',
+      isFunction: true,
+      arg: nothing,
     },
     {
-      run: {
-        expression: '(async function later() { return 7 })',
-        isFunction: true,
-        arg: '{"v":"undefined"}',
-      },
+      expression: '(async function later() { return 7 })',
+      isFunction: true,
+      arg: nothing,
     },
-    {
-      run: {
-        expression: 'document.title',
-        isFunction: false,
-        arg: '{"v":"undefined"}',
-      },
-    },
+    { expression: 'document.title', isFunction: false, arg: nothing },
   ])
 })
 
@@ -210,9 +220,7 @@ it('tests that one waitForFunction handle twice in an argument reaches the page 
     .map(
       (call) =>
         parseEvaluationResultValue(
-          JSON.parse(
-            (call.input.script as { run: { arg: string } }).run.arg,
-          ) as never,
+          JSON.parse((call.input.arg as { value: string }).value) as never,
         ) as [unknown, unknown],
     )
   expect(received.map(([a, b]) => [a, a === b])).toEqual([
@@ -288,8 +296,8 @@ it('tests that a locator.evaluate check upstream runs after the wait fails as th
   const runtime = loadPrelude({
     seed: SEED,
     answer: (call) => {
-      const script = call.input.script as { refused?: string } | undefined
-      return call.name === 'locator.evaluate' && script?.refused !== undefined
+      const refused = call.input.refused as string | undefined
+      return call.name === 'locator.evaluate' && refused !== undefined
         ? {
             err: {
               code: 'invalid_input',
@@ -298,7 +306,7 @@ it('tests that a locator.evaluate check upstream runs after the wait fails as th
               retryable: true,
               operationId: 'run.1',
               timeout: false,
-              message: `locator.evaluate: ${script.refused}`,
+              message: `locator.evaluate: ${refused}`,
             },
           }
         : null
@@ -329,14 +337,14 @@ it('tests that a locator.evaluate check upstream runs after the wait fails as th
     )
     const sent = runtime.calls
       .slice(before)
-      .map((call) => [call.name, call.input.script])
+      .map((call) => [call.name, scriptOf(call.input)])
     seen.push([script, thrown, json(sent)])
   }
   expect(seen).toEqual(
     deferred.map(([script, refused]) => [
       script,
       ['Error', `locator.evaluate: ${refused}`, 'invalid_input'],
-      [['locator.evaluate', { refused }]],
+      [['locator.evaluate', { expression: '', isFunction: true, refused }]],
     ]),
   )
 })

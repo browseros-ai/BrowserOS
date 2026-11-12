@@ -123,9 +123,19 @@ async fn goto(run: &LiveRun, page: &TestPage, url: &str) -> Result<Value, Playwr
     .await
 }
 
-/// A script as the prelude sends it, `arg` already in Playwright's in-page format.
+/// A script's fields as the prelude sends them beside an op's addressing, `arg` already in
+/// Playwright's in-page format.
 fn script(expression: &str, is_function: bool, arg: &Value) -> Value {
-    json!({ "run": { "expression": expression, "isFunction": is_function, "arg": arg.to_string() } })
+    json!({ "expression": expression, "isFunction": is_function,
+            "arg": { "value": arg.to_string(), "handles": [] } })
+}
+
+/// `input` with `fields` added, as the prelude spreads a script beside an op's addressing.
+fn with_fields(mut input: Value, fields: Value) -> Value {
+    if let (Some(input), Value::Object(fields)) = (input.as_object_mut(), fields) {
+        input.extend(fields);
+    }
+    input
 }
 
 /// Playwright's in-page form of `undefined`, the argument a script given none receives.
@@ -141,12 +151,15 @@ async fn evaluate(
 ) -> Result<Value, PlaywrightError> {
     run.invoke(
         "page.evaluate",
-        json!({ "page": brand(page), "script": script(function, true, &undefined()) }),
+        with_fields(
+            json!({ "page": brand(page) }),
+            script(function, true, &undefined()),
+        ),
     )
     .await
 }
 
-/// `page.waitForFunction(fn)` as the prelude sends it, with `extra` fields (`polling`).
+/// `page.waitForFunction(fn)` as the prelude sends it, with `extra` fields (`pollingInterval`).
 async fn wait_for_function(
     run: &LiveRun,
     page: &TestPage,
@@ -154,12 +167,12 @@ async fn wait_for_function(
     function: &str,
     extra: Value,
 ) -> Result<Value, PlaywrightError> {
-    let mut input = json!({ "call": { "timeoutMs": timeout_ms }, "page": brand(page),
-                            "script": script(function, true, &undefined()) });
-    if let (Some(input), Value::Object(extra)) = (input.as_object_mut(), extra) {
-        input.extend(extra);
-    }
-    run.invoke("page.waitForFunction", input).await
+    let input = with_fields(
+        json!({ "call": { "timeoutMs": timeout_ms }, "page": brand(page) }),
+        script(function, true, &undefined()),
+    );
+    run.invoke("page.waitForFunction", with_fields(input, extra))
+        .await
 }
 
 /// An error message's first line: upstream keeps the page's stack lines after it.
@@ -230,12 +243,20 @@ async fn tests_that_evaluate_returns_page_values_no_field_holds_untouched() -> T
     on_page("/login.html", |run, _server, page| async move {
         let result = async {
             type_secrets(&run, &page).await?;
-            let note = evaluate(&run, &page, "() => document.getElementById('note').textContent").await?;
+            let note = evaluate(
+                &run,
+                &page,
+                "() => document.getElementById('note').textContent",
+            )
+            .await?;
             assert_eq!(note, json!("nothing secret here"));
             let expression = run
                 .invoke(
                     "page.evaluate",
-                    json!({ "page": brand(&page), "script": script("document.title", false, &undefined()) }),
+                    with_fields(
+                        json!({ "page": brand(&page) }),
+                        script("document.title", false, &undefined()),
+                    ),
                 )
                 .await?;
             assert_eq!(expression, json!("Login"), "a string is an expression");
@@ -243,7 +264,10 @@ async fn tests_that_evaluate_returns_page_values_no_field_holds_untouched() -> T
             let with_arg = run
                 .invoke(
                     "page.evaluate",
-                    json!({ "page": brand(&page), "script": script("({ x }) => x * 2", true, &x) }),
+                    with_fields(
+                        json!({ "page": brand(&page) }),
+                        script("({ x }) => x * 2", true, &x),
+                    ),
                 )
                 .await?;
             assert_eq!(with_arg, json!(42));
@@ -251,7 +275,10 @@ async fn tests_that_evaluate_returns_page_values_no_field_holds_untouched() -> T
             let null_arg = run
                 .invoke(
                     "page.evaluate",
-                    json!({ "page": brand(&page), "script": script("(a) => a === null", true, &null) }),
+                    with_fields(
+                        json!({ "page": brand(&page) }),
+                        script("(a) => a === null", true, &null),
+                    ),
                 )
                 .await?;
             assert_eq!(null_arg, json!(true), "a null argument stays null");
@@ -341,7 +368,7 @@ async fn tests_that_wait_for_function_polls_until_truthy_and_times_out() -> Test
                 &page,
                 5000,
                 "() => (window.polls = (window.polls || 0) + 1) >= 3 && window.polls",
-                json!({ "polling": 20 }),
+                json!({ "pollingInterval": 20 }),
             )
             .await?;
             assert_eq!(
@@ -418,8 +445,10 @@ async fn tests_that_main_world_scripts_are_sent_only_after_their_document_resolv
                 let error = run
                     .invoke(
                         op,
-                        json!({ "call": { "timeoutMs": 5000 }, "page": brand(&page),
-                                "script": self::script(script, true, &undefined()) }),
+                        with_fields(
+                            json!({ "call": { "timeoutMs": 5000 }, "page": brand(&page) }),
+                            self::script(script, true, &undefined()),
+                        ),
                     )
                     .await
                     .err()
@@ -938,7 +967,7 @@ async fn tests_that_a_same_site_child_frames_script_reads_its_parents_field() ->
                 &same,
                 "frame.evaluate",
                 "page.evaluate",
-                json!({ "script": script_input(script) }),
+                script_input(script),
             )
             .await?;
             assert_eq!(
@@ -948,7 +977,12 @@ async fn tests_that_a_same_site_child_frames_script_reads_its_parents_field() ->
             );
             assert_eq!(
                 run.calls(),
-                [EnvCall::Recheck, EnvCall::MarkSent, EnvCall::Recheck, EnvCall::MarkSent],
+                [
+                    EnvCall::Recheck,
+                    EnvCall::MarkSent,
+                    EnvCall::Recheck,
+                    EnvCall::MarkSent
+                ],
                 "the rejected cross-context call and direct retry each recheck and mark their send"
             );
             let waited = in_frame(
@@ -957,7 +991,7 @@ async fn tests_that_a_same_site_child_frames_script_reads_its_parents_field() ->
                 &same,
                 "frame.waitForFunction",
                 "page.waitForFunction",
-                json!({ "script": script_input("() => parent.document.getElementById('pw').value") }),
+                script_input("() => parent.document.getElementById('pw').value"),
             )
             .await?;
             assert_eq!(
@@ -965,10 +999,22 @@ async fn tests_that_a_same_site_child_frames_script_reads_its_parents_field() ->
                 Some(&json!("parent-secret-41")),
                 "frame.waitForFunction runs in the child too: {waited}"
             );
-            let title = in_frame(&run, &page, &same, "frame.title", "page.title", json!({})).await?;
-            assert_eq!(title, json!("Field"), "frame.title reads the child's document");
-            let content =
-                in_frame(&run, &page, &same, "frame.content", "page.content", json!({})).await?;
+            let title =
+                in_frame(&run, &page, &same, "frame.title", "page.title", json!({})).await?;
+            assert_eq!(
+                title,
+                json!("Field"),
+                "frame.title reads the child's document"
+            );
+            let content = in_frame(
+                &run,
+                &page,
+                &same,
+                "frame.content",
+                "page.content",
+                json!({}),
+            )
+            .await?;
             let content = content.as_str().unwrap_or_default();
             assert!(
                 content.contains("<title>Field</title>") && !content.contains("Framed"),
@@ -996,9 +1042,7 @@ async fn tests_that_an_out_of_process_frames_script_reads_its_own_field() -> Tes
                 &cross,
                 "frame.evaluate",
                 "page.evaluate",
-                json!({ "script": script_input(
-                    "() => [location.hostname, document.querySelector('input').value]"
-                ) }),
+                script_input("() => [location.hostname, document.querySelector('input').value]"),
             )
             .await?;
             assert_eq!(
@@ -1054,7 +1098,7 @@ async fn tests_that_frame_wait_for_function_follows_its_frame_into_another_proce
                     frame,
                     "frame.waitForFunction",
                     "page.waitForFunction",
-                    json!({ "script": script_input(&predicate) }),
+                    script_input(&predicate),
                 )
                 .await
                 .map_err(|error| format!("{name} to {host}: {error}"))?;
@@ -1314,15 +1358,11 @@ async fn tests_that_a_detached_frames_forms_fail_as_upstreams_do() -> TestResult
             )
             .await?;
             let forms = [
-                (
-                    "frame.evaluate",
-                    "page.evaluate",
-                    json!({ "script": script_input("() => 1") }),
-                ),
+                ("frame.evaluate", "page.evaluate", script_input("() => 1")),
                 (
                     "frame.waitForFunction",
                     "page.waitForFunction",
-                    json!({ "script": script_input("() => true") }),
+                    script_input("() => true"),
                 ),
                 (
                     "frame.setContent",

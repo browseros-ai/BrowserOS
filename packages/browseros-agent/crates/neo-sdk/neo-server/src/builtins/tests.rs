@@ -26,7 +26,7 @@ use tokio::task;
 use tokio::time::{self, Instant};
 
 use super::event_release::EventRelease;
-use super::op_marks::Hold;
+use super::op_marks::{Hold, OpMarks};
 use super::playwright_ops::{self, OpCtxEnv, leaf_error};
 use super::{BuiltinDeps, CaptchaClaims, PlaywrightFacade, TabJanitor};
 use crate::browser::{BrowserLink, PageRef, TabRegistry};
@@ -3934,8 +3934,8 @@ async fn an_evicted_pick_and_a_full_task_book_never_block_plain_opens() -> Resul
 }
 
 /// The op `$eval` (`page.$eval`, `frame.$eval`, `elementHandle.$eval`) sends, and its input on
-/// `page`: a script that names the first `h1`, matched now.
-const DOLLAR_EVAL: &str = "locator.evaluate";
+/// `page`: a script that names the first heading, matched now.
+const DOLLAR_EVAL: &str = "page.evalOnSelector";
 
 fn dollar_eval(page: &PageRef) -> Value {
     json!({
@@ -3947,9 +3947,10 @@ fn dollar_eval(page: &PageRef) -> Value {
             "display": "getByRole('heading')",
         },
         "strict": "firstMatch",
-        "noWait": true,
         "selector": "h1",
-        "script": { "run": { "expression": "(el) => el.textContent", "isFunction": true, "arg": "{\"v\":\"undefined\"}" } },
+        "expression": "(el) => el.textContent",
+        "isFunction": true,
+        "arg": { "value": "{\"v\":\"undefined\"}", "handles": [] },
     })
 }
 
@@ -3973,11 +3974,9 @@ fn door_outcome(reply: OpReply) -> String {
     }
 }
 
-/// `$eval` meets the door as the main-world script it is, whatever op carries it: the same answer
-/// with no lock (the door lets it through, and the fake browser's reply ends it in the crate),
-/// with an owner's lock that lets reads through and with one that blocks them (refused, nothing
-/// sent). Pinned on `locator.evaluate`'s `noWait` form before `$eval` became its own op (task
-/// 006); the expectations stay as they are after.
+/// `$eval` meets the door as the main-world script it is: with no lock the door lets it through
+/// (and the fake browser's reply ends it in the crate), and an owner's lock refuses it with
+/// nothing sent, whether it lets reads through or blocks them.
 #[tokio::test]
 async fn tests_that_dollar_eval_meets_the_door_as_a_main_world_script() -> Result<(), Box<dyn Error>>
 {
@@ -4011,5 +4010,46 @@ async fn tests_that_dollar_eval_meets_the_door_as_a_main_world_script() -> Resul
             format!("Some(Block): {owner_has_control}"),
         ]
     );
+    Ok(())
+}
+
+/// What a running `$eval` read reaches the script as a running `locator.evaluate`'s would once the
+/// owner takes the tab: the door decides by the op's main-world mark, and both ops derive the same
+/// one. A lock that blocks reads withholds the value and the page's error alike; one that lets
+/// reads through releases the value.
+#[tokio::test]
+async fn tests_that_a_takeover_while_dollar_eval_runs_decides_as_for_locator_evaluate()
+-> Result<(), Box<dyn Error>> {
+    let harness = Harness::new().await?;
+    let owners = harness.owner_tab("https://bank.example/").await?;
+    let page_script = |name: &str| {
+        Op::from_name(name)
+            .map(|op| {
+                OpMarks::of(&op.spec(), "the run description's line")
+                    .spec
+                    .page_script
+            })
+            .ok_or(format!("{name} is an op"))
+    };
+    let dollar_eval = page_script("page.evalOnSelector")?;
+    assert_eq!(dollar_eval, page_script("locator.evaluate")?);
+    for answers in [Answers::Read, Answers::Throws] {
+        let (operation, reply) = answer_after_a_takeover(
+            &harness,
+            Takeover::of(&owners, Reads::Block),
+            dollar_eval,
+            answers,
+        )
+        .await?;
+        assert_withheld_by_the_lock(&harness, operation, reply, answers).await?;
+    }
+    let (_, reply) = answer_after_a_takeover(
+        &harness,
+        Takeover::of(&owners, Reads::Allow),
+        dollar_eval,
+        Answers::Read,
+    )
+    .await?;
+    assert_eq!(value(reply)?, json!({ "read": OWNERS_TEXT }));
     Ok(())
 }

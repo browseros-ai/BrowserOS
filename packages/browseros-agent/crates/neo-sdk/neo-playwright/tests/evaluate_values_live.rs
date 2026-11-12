@@ -326,9 +326,8 @@ async fn tests_that_a_function_upstream_cannot_read_is_refused_with_nothing_sent
 
 /// `page.evaluate` as the prelude sends it, its argument `undefined`.
 fn evaluate_input(page: &TestPage, function: &str) -> Value {
-    json!({ "page": brand(page), "script": { "run": {
-        "expression": function, "isFunction": true, "arg": r#"{"v":"undefined"}"#,
-    } } })
+    json!({ "page": brand(page), "expression": function, "isFunction": true,
+            "arg": { "value": r#"{"v":"undefined"}"#, "handles": [] } })
 }
 
 #[tokio::test]

@@ -678,7 +678,7 @@ export class Locator {
     await send['locator.waitForFunction'](
       site,
       this._frame._call(api, wait.timeout),
-      { ...addressed, script },
+      { ...addressed, ...script },
       wait.signal,
     )
   }

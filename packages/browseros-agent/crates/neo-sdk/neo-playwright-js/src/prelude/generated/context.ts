@@ -15,7 +15,6 @@ import type { ContextPageEntry } from './types/ContextPageEntry'
 import type { ContextPages } from './types/ContextPages'
 import type { ContextScriptInput } from './types/ContextScriptInput'
 import type { DisposeInput } from './types/DisposeInput'
-import type { Disposed } from './types/Disposed'
 import type { Registered } from './types/Registered'
 
 export type { ContextBindingInput } from './types/ContextBindingInput'
@@ -24,7 +23,6 @@ export type { ContextPageEntry } from './types/ContextPageEntry'
 export type { ContextPages } from './types/ContextPages'
 export type { ContextScriptInput } from './types/ContextScriptInput'
 export type { DisposeInput } from './types/DisposeInput'
-export type { Disposed } from './types/Disposed'
 
 /** Each context op's input, after the `call` header every op shares. */
 export type ContextInputs = {
@@ -41,7 +39,7 @@ export type ContextOutputs = {
   'context.newPage': ContextPageEntry
   'context.addInitScript': Registered
   'context.exposeBinding': Registered
-  'disposable.dispose': Disposed
+  'disposable.dispose': null
 }
 
 /**
@@ -85,7 +83,7 @@ export const CONTEXT_SEND = {
     call: CallHeader,
     input: DisposeInput,
     signal?: SignalLike,
-  ): Promise<Disposed> => invoke('disposable.dispose', site, call, input, signal),
+  ): Promise<null> => invoke('disposable.dispose', site, call, input, signal),
 }
 
 // Each route row against Playwright's own protocol at the pin (upstream-check.ts): tsc
@@ -95,11 +93,14 @@ export const CONTEXT_SEND = {
 type _context_newPage = Assert<UpstreamCheck<'context.newPage', ContextNoArgs, pw.BrowserContextNewPageParams, never, never, never>>
 //   result: the prelude caches url from the new tab so page.url() remains synchronous (no void check: Neo answers more than null on purpose)
 // context.addInitScript: BrowserContext.addInitScript
-//   adds script: the source, or a path Rust reads on Neo's disk as upstream's client reads it
-//   omits source: folded into script
-type _context_addInitScript = Assert<UpstreamCheck<'context.addInitScript', ContextScriptInput, pw.BrowserContextAddInitScriptParams, 'script', 'source', never>>
-type _context_addInitScript_result = Assert<VoidIsNull<'context.addInitScript', pw.BrowserContextAddInitScriptResult, Registered>>
+//   adds path: the prelude has no filesystem, so Rust reads the file as upstream's client does (UTF-8, //# sourceURL appended)
+//   retypes source: absent when path names the file Rust reads
+type _context_addInitScript = Assert<UpstreamCheck<'context.addInitScript', ContextScriptInput, pw.BrowserContextAddInitScriptParams, 'path', never, 'source'>>
+//   result: the registration's id, standing for upstream's Disposable channel; disposable.dispose takes it (no void check: Neo answers more than null on purpose)
 // context.exposeBinding: BrowserContext.exposeBinding
 type _context_exposeBinding = Assert<UpstreamCheck<'context.exposeBinding', ContextBindingInput, pw.BrowserContextExposeBindingParams, never, never, never>>
-type _context_exposeBinding_result = Assert<VoidIsNull<'context.exposeBinding', pw.BrowserContextExposeBindingResult, Registered>>
-// disposable.dispose: Neo only: Neo disposes a host-owned registration rather than a channel object
+//   result: the registration's id, standing for upstream's Disposable channel; disposable.dispose takes it (no void check: Neo answers more than null on purpose)
+// disposable.dispose: Disposable.dispose
+//   adds id: the registration's id, standing for upstream's Disposable channel, as worker.evaluate's worker does for its worker
+type _disposable_dispose = Assert<UpstreamCheck<'disposable.dispose', DisposeInput, pw.DisposableDisposeParams, 'id', never, never>>
+type _disposable_dispose_result = Assert<VoidIsNull<'disposable.dispose', pw.DisposableDisposeResult, null>>

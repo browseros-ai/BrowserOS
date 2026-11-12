@@ -46,6 +46,7 @@ listed_enum! {
         Evaluate,
         WorkerEvaluate,
         EvaluateOnElement,
+        EvalOnSelector,
         EvaluateOnAll,
         WaitForFunction,
         WaitForFunctionOnElement,
@@ -178,7 +179,17 @@ impl PageOp {
             Self::EvaluateOnElement => OpSpec::write(
                 "locator.evaluate",
                 TARGET,
-                "run a function on one element in the main world; also $eval",
+                "run a function on one element in the main world",
+            )
+            .using(&[Capability::MainWorld])
+            .policed(),
+            // The agent's function on an element in the page's main world, as `locator.evaluate`:
+            // a write the door polices like every main-world script, and that it rechecks before
+            // the script's value or error is released.
+            Self::EvalOnSelector => OpSpec::write(
+                "page.evalOnSelector",
+                TARGET,
+                "run a function on the first match now in the main world ($eval)",
             )
             .using(&[Capability::MainWorld])
             .policed(),
@@ -244,19 +255,20 @@ const RESOLVE_BINDING: OpSpec = OpSpec::write(
 .policed();
 
 /// The evaluating ops' one field upstream's commands lack.
-const SCRIPT: (&str, &str) = (
-    "script",
-    "the script as one value: upstream's expression, isFunction and argument after its client \
-     normalized them, or the refusal of upstream's first server-side check, which Rust raises \
-     at its point with nothing sent",
+const REFUSED: (&str, &str) = (
+    "refused",
+    "a check upstream runs only after its command starts (its server's normalization of the \
+     expression, or its client's argument checks after a locator's wait), which the prelude \
+     decides because only it runs JavaScript; Rust raises it at that point with nothing sent",
 );
 
-/// What `script` carries in upstream's commands.
-const EVALUATION: [(&str, &str); 3] = [
-    ("arg", "carried in script"),
-    ("expression", "carried in script"),
-    ("isFunction", "carried in script"),
-];
+/// How the evaluating ops carry upstream's argument.
+const ARG: (&str, &str) = (
+    "arg",
+    "the argument in the page's serialized form as JSON text, which the main world parses itself \
+     so the page's own globals cannot alter it, with Neo's element brands for its handles; \
+     absent beside refused",
+);
 
 /// The navigations' one field upstream's commands lack.
 const PUBLICATION: &[(&str, &str)] = &[(
@@ -381,67 +393,73 @@ fn route<'a, R: Route<'a>>(op: PageOp, r: R) -> R::Out {
         // large as its largest leaf.
         PageOp::Evaluate => r.op(
             wire::command("Frame.evaluateExpression")
-                .adds(&[SCRIPT])
-                .omits(&EVALUATION),
+                .adds(&[REFUSED])
+                .retypes(&[ARG])
+                .result(
+                    "the frames as the script left them ride beside its value: a main-world \
+                     script can navigate or add frames, and the prelude's synchronous frames() \
+                     reads them",
+                ),
             |pw, scope, input| Box::pin(evaluate::evaluate(pw, scope, input)),
         ),
         PageOp::WorkerEvaluate => r.op(
             wire::command("Worker.evaluateExpression")
                 .adds(&[
-                    SCRIPT,
+                    REFUSED,
                     (
                         "worker",
                         "the host-owned worker's id, standing for upstream's worker channel",
                     ),
                 ])
-                .omits(&EVALUATION),
+                .retypes(&[ARG]),
             super::worker_evaluate::evaluate,
         ),
         PageOp::EvaluateOnElement => r.op(
+            wire::command("JSHandle.evaluateExpression")
+                .adds(&[REFUSED])
+                .retypes(&[ARG]),
+            |pw, scope, input| Box::pin(element_evaluate::evaluate_on_element(pw, scope, input)),
+        ),
+        PageOp::EvalOnSelector => r.op(
             wire::command("Frame.evalOnSelector")
                 .adds(&[
-                    (
-                        "noWait",
-                        "`$eval`: the first match now instead of waiting for one",
-                    ),
-                    SCRIPT,
+                    REFUSED,
                     (
                         "selector",
-                        "`$eval`'s selector as the script wrote it, for upstream's no-match \
-                         message",
+                        "the selector as the script wrote it, which upstream's no-match error \
+                         quotes; target carries it parsed, since Rust never parses selectors",
                     ),
                 ])
-                .omits(&EVALUATION),
-            |pw, scope, input| Box::pin(element_evaluate::evaluate_on_element(pw, scope, input)),
+                .retypes(&[ARG]),
+            |pw, scope, input| Box::pin(element_evaluate::eval_on_selector(pw, scope, input)),
         ),
         PageOp::EvaluateOnAll => r.op(
             wire::command("Frame.evalOnSelectorAll")
-                .adds(&[SCRIPT])
-                .omits(&EVALUATION),
+                .adds(&[REFUSED])
+                .retypes(&[ARG]),
             |pw, scope, input| Box::pin(element_evaluate::evaluate_on_all(pw, scope, input)),
         ),
         PageOp::WaitForFunction => r.op(
             wire::command("Frame.waitForFunction")
-                .adds(&[
-                    (
-                        "polling",
-                        "milliseconds between polls, absent for 'raf', in place of \
-                         pollingInterval",
-                    ),
-                    SCRIPT,
-                ])
-                .omits(&[
-                    ("arg", "carried in script"),
-                    ("expression", "carried in script"),
-                    ("isFunction", "carried in script"),
-                    ("pollingInterval", "sent as polling"),
-                ]),
+                .adds(&[REFUSED])
+                .retypes(&[ARG])
+                .result(
+                    "Neo keeps no page objects, so the handle holds the value Rust read and \
+                     upstream's preview of it, which jsonValue() and toString() answer",
+                ),
             |pw, scope, input| Box::pin(evaluate::wait_for_function(pw, scope, input)),
         ),
+        // upstream's `Locator.waitForFunction` sends `Frame.waitForFunction` with the locator's
+        // selector and `strict`, Neo's `target` and `strict` here.
         PageOp::WaitForFunctionOnElement => r.op(
-            wire::neo_only(
-                "Neo probes the element predicate; upstream composes evaluation and waiting",
-            ),
+            wire::command("Frame.waitForFunction")
+                .adds(&[REFUSED])
+                .omits(&[(
+                    "pollingInterval",
+                    "upstream's Locator.waitForFunction takes no polling option; its client never \
+                     sends one",
+                )])
+                .retypes(&[ARG]),
             |pw, scope, input| {
                 Box::pin(element_evaluate::wait_for_function_on_element(
                     pw, scope, input,
@@ -451,15 +469,18 @@ fn route<'a, R: Route<'a>>(op: PageOp, r: R) -> R::Out {
         PageOp::AddInitScript => r.op(
             wire::command("Page.addInitScript")
                 .adds(&[(
-                    "script",
-                    "the source, or a path Rust reads on Neo's disk as upstream's client reads it",
+                    "path",
+                    "the prelude has no filesystem, so Rust reads the file as upstream's client \
+                     does (UTF-8, //# sourceURL appended)",
                 )])
-                .omits(&[("source", "folded into script")]),
+                .retypes(&[("source", "absent when path names the file Rust reads")])
+                .result(init_script::REGISTRATION),
             init_script::add_to_page,
         ),
-        PageOp::ExposeBinding => r.op(wire::command("Page.exposeBinding"), |pw, scope, input| {
-            Box::pin(init_script::expose_on_page(pw, scope, input))
-        }),
+        PageOp::ExposeBinding => r.op(
+            wire::command("Page.exposeBinding").result(init_script::REGISTRATION),
+            |pw, scope, input| Box::pin(init_script::expose_on_page(pw, scope, input)),
+        ),
         PageOp::ResolveBinding => r.op(
             wire::command("BindingCall.resolve")
                 .adds(&[
@@ -474,8 +495,7 @@ fn route<'a, R: Route<'a>>(op: PageOp, r: R) -> R::Out {
                          is named",
                     ),
                 ])
-                .omits(&[("result", "carried in arg")])
-                .result("answers {} as it always has; the prelude reads nothing from it"),
+                .omits(&[("result", "carried in arg")]),
             evaluate_guard::resolve_binding,
         ),
     }

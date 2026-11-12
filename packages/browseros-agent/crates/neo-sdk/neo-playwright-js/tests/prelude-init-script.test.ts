@@ -11,8 +11,8 @@ function runtime() {
     answer: (call) =>
       call.name === 'page.addInitScript' ||
       call.name === 'context.addInitScript'
-        ? { id: 7 }
-        : {},
+        ? 7
+        : null,
   })
 }
 
@@ -49,7 +49,8 @@ describe('the source sent', () => {
       const run = runtime()
       await run.run(`await ${script}`)
       const [call] = run.sent('page.addInitScript')
-      expect(call?.input.script).toEqual(sent)
+      const { source, path } = call?.input ?? {}
+      expect(JSON.parse(JSON.stringify({ source, path }))).toEqual(sent)
       expect(call?.input.call).toEqual({
         api: 'page.addInitScript',
         timeoutMs: 0,
@@ -62,7 +63,7 @@ describe('the source sent', () => {
     const [call] = run.sent('context.addInitScript')
     expect(call?.input).toEqual({
       call: { api: 'browserContext.addInitScript', timeoutMs: 0 },
-      script: { source: 'window.c = 1' },
+      source: 'window.c = 1',
     })
   })
 })
