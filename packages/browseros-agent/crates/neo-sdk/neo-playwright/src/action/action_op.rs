@@ -1,6 +1,6 @@
 //! The action ops and their registration metadata.
 //!
-//! Each pointer handler owns its input and reply shape. The shared runners still own
+//! Each action handler owns its input and reply shape. The shared runners still own
 //! actionability, retrying, focus leases and navigation waits; typing the wire does not move
 //! those checks or grant an op any capability.
 
@@ -57,8 +57,7 @@ listed_enum! {
 }
 
 impl ActionOp {
-    /// Typed actions describe their handlers; the rest retain raw decoding and hand-written
-    /// TypeScript contracts until they move onto typed rows.
+    /// Describes every action from the same exhaustive route rows used at runtime.
     pub(crate) fn wire(self) -> Option<OpWire> {
         route(self, Describe)
     }
@@ -149,8 +148,7 @@ impl ActionOp {
     }
 }
 
-/// The same exhaustive rows drive runtime decoding and wire generation. The transitional
-/// rows keep undescribed actions on their existing decoder and hand-written contract.
+/// The same exhaustive rows drive runtime decoding, generated senders and upstream checks.
 fn route<'a, R: Route<'a>>(op: ActionOp, r: R) -> R::Out {
     match op {
         ActionOp::Click => r.op(
@@ -191,18 +189,51 @@ fn route<'a, R: Route<'a>>(op: ActionOp, r: R) -> R::Out {
                 ]),
             drop,
         ),
-        op @ (ActionOp::Fill
-        | ActionOp::Press
-        | ActionOp::PressSequentially
-        | ActionOp::SelectOption
-        | ActionOp::SelectText
-        | ActionOp::Focus
-        | ActionOp::Blur
-        | ActionOp::SetInputFiles
-        | ActionOp::DispatchEvent
-        | ActionOp::ScrollIntoViewIfNeeded) => {
-            r.untyped(move |pw, scope, args| run(pw, scope, op, args))
-        }
+        ActionOp::Fill => r.op(wire::command("ElementHandle.fill"), fill),
+        ActionOp::Press => r.op(wire::command("ElementHandle.press"), press),
+        ActionOp::PressSequentially => r.op(wire::command("ElementHandle.type"), type_text),
+        ActionOp::SelectOption => r.op(
+            wire::command("ElementHandle.selectOption").retypes(&[(
+                "elements",
+                "Neo element brands replace upstream channel handles",
+            )]),
+            select_option,
+        ),
+        ActionOp::SelectText => r.op(wire::command("ElementHandle.selectText"), select_text),
+        ActionOp::Focus => r.op(wire::command("ElementHandle.focus"), focus),
+        ActionOp::Blur => r.op(wire::command("Frame.blur"), blur),
+        ActionOp::SetInputFiles => r.op(
+            wire::command("ElementHandle.setInputFiles")
+                .adds(&[(
+                    "files",
+                    "Neo resolves paths or prepared payloads on its host",
+                )])
+                .omits(&[
+                    (
+                        "directoryStream",
+                        "host directories use Neo's files paths variant",
+                    ),
+                    (
+                        "localDirectory",
+                        "host directories use Neo's files paths variant",
+                    ),
+                    ("localPaths", "folded into Neo's files paths variant"),
+                    ("payloads", "folded into Neo's files payloads variant"),
+                    ("streams", "no client file streams in a stateless run"),
+                ]),
+            set_input_files,
+        ),
+        ActionOp::DispatchEvent => r.op(
+            wire::command("ElementHandle.dispatchEvent").retypes(&[(
+                "eventInit",
+                "Neo transports JSON rather than upstream SerializedArgument",
+            )]),
+            dispatch_event,
+        ),
+        ActionOp::ScrollIntoViewIfNeeded => r.op(
+            wire::command("ElementHandle.scrollIntoViewIfNeeded"),
+            scroll_into_view,
+        ),
     }
 }
 
@@ -370,87 +401,110 @@ fn optional_drop_data<'de, D: Deserializer<'de>>(
     Vec::deserialize(deserializer).map(Some)
 }
 
-/// `locator.fill(value)` and `clear()` (wire.ts `FillOptions`).
-#[derive(Debug, Deserialize)]
+/// `locator.fill(value)` and `clear()`: the redacted text and its existing nested bag.
+#[derive(Debug, Deserialize, TS)]
 #[serde(deny_unknown_fields)]
 struct FillInput {
     target: Target,
     strict: Strictness,
+    #[ts(type = "string")]
     value: FillValue,
     options: FillOptions,
 }
+options!(FillInput => FillOptions);
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, TS)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
+#[ts(optional_fields)]
 struct FillOptions {
-    #[serde(default)]
-    force: bool,
+    #[serde(default, deserialize_with = "optional_bool")]
+    #[ts(optional)]
+    force: Option<bool>,
 }
 
 /// `locator.press(key, options)`.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, TS)]
 #[serde(deny_unknown_fields)]
 struct PressInput {
     target: Target,
     strict: Strictness,
+    #[ts(type = "string")]
     key: Typed,
     options: KeyOptions,
 }
+options!(PressInput => KeyOptions);
 
 /// `locator.pressSequentially(text, options)` and `type`.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, TS)]
 #[serde(deny_unknown_fields)]
 struct TypeInput {
     target: Target,
     strict: Strictness,
+    #[ts(type = "string")]
     text: Typed,
-    options: KeyOptions,
+    options: SequentialOptions,
+}
+options!(TypeInput => SequentialOptions);
+
+#[derive(Debug, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+#[ts(optional_fields)]
+struct SequentialOptions {
+    delay: Option<f64>,
 }
 
-/// wire.ts `KeyOptions`.
-#[derive(Debug, Deserialize)]
+/// The press options; noWaitAfter controls its requested-navigation wait.
+#[derive(Debug, Deserialize, TS)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
+#[ts(optional_fields)]
 struct KeyOptions {
     /// Milliseconds, inside each press and before each inserted character.
     delay: Option<f64>,
-    /// `press` waits for the navigations its keys requested unless this is set; `type` never
-    /// waits, as upstream.
-    #[serde(default)]
-    no_wait_after: bool,
+    /// `press` waits for the navigations its keys requested unless this is set.
+    #[serde(default, deserialize_with = "optional_bool")]
+    no_wait_after: Option<bool>,
 }
 
-/// `locator.selectOption(values)`. `elements` are the `<option>` handles among the values.
-#[derive(Debug, Deserialize)]
+/// `locator.selectOption(values)`. `options` contains selected values, not a script option
+/// bag: force stays flat on the wire. `elements` are the `<option>` handles among the values.
+#[derive(Debug, Deserialize, TS)]
 #[serde(deny_unknown_fields)]
 struct SelectOptionInput {
     target: Target,
     strict: Strictness,
+    #[ts(type = "Array<import('../../../probe/protocol').SelectOption>")]
     options: Vec<SelectOption>,
     elements: Vec<Target>,
-    #[serde(default)]
-    force: bool,
+    #[serde(default, deserialize_with = "optional_bool")]
+    #[ts(optional)]
+    force: Option<bool>,
 }
+options!(SelectOptionInput);
 
 /// `locator.selectText()`.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, TS)]
 #[serde(deny_unknown_fields)]
 struct SelectTextInput {
     target: Target,
     strict: Strictness,
-    #[serde(default)]
-    force: bool,
+    #[serde(default, deserialize_with = "optional_bool")]
+    #[ts(optional)]
+    force: Option<bool>,
 }
+options!(SelectTextInput);
 
 /// `locator.focus`, `blur` and `scrollIntoViewIfNeeded`.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, TS)]
 #[serde(deny_unknown_fields)]
+#[ts(rename = "ActionTargetInput")]
 struct TargetInput {
     target: Target,
     strict: Strictness,
 }
+options!(TargetInput);
 
 /// `locator.dispatchEvent(type, eventInit)`.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, TS)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct DispatchEventInput {
     target: Target,
@@ -458,8 +512,10 @@ struct DispatchEventInput {
     r#type: String,
     /// JSON in v1; an absent or `null` init is `{}`, as upstream's default.
     #[serde(default)]
+    #[ts(type = "unknown")]
     event_init: Value,
 }
+options!(DispatchEventInput);
 
 #[derive(Clone, Copy, Debug, Deserialize, TS)]
 #[serde(rename_all = "lowercase")]
@@ -520,135 +576,172 @@ pub(crate) async fn invoke(
     route(op, Run { pw, scope, args }).await
 }
 
-#[expect(
-    clippy::too_many_lines,
-    reason = "one arm per op, each decoding its input and handing it to its runner"
-)]
-async fn run(
+/// Form edits keep their retry/input-lock runner; only selectOption exposes its selected values.
+async fn fill(
     pw: &Playwright,
     scope: &OpScope<'_>,
-    op: ActionOp,
-    args: OpArgs,
-) -> Result<Value, PlaywrightError> {
-    match op {
-        // These variants are always intercepted by typed route rows above. Keep this
-        // boundary explicit while the remaining ten variants still share the old runner.
-        ActionOp::Click
-        | ActionOp::Dblclick
-        | ActionOp::Hover
-        | ActionOp::Check
-        | ActionOp::Uncheck
-        | ActionOp::DragTo
-        | ActionOp::Drop => {
-            return Err(scope.fail(ErrorCode::Internal, "a typed action bypassed its route"));
-        }
-        ActionOp::Focus | ActionOp::Blur => {
-            let input: TargetInput = args.decode(scope)?;
-            let page = OpPage::admit_handle(pw, scope, input.target.page()).await?;
-            let edit = if op == ActionOp::Focus {
-                Edit::Focus {
-                    reset_selection: false,
-                }
-            } else {
-                Edit::Blur
-            };
-            ElementRunner::new(scope, &page, &input.target, input.strict)
-                .edit(edit)
-                .await?;
-        }
-        ActionOp::DispatchEvent => {
-            let input: DispatchEventInput = args.decode(scope)?;
-            let init = match input.event_init {
-                Value::Object(init) => init,
-                Value::Null => Map::new(),
-                _ => {
-                    return Err(
-                        scope.fail(ErrorCode::InvalidInput, "eventInit: expected an object")
-                    );
-                }
-            };
-            let page = OpPage::admit_handle(pw, scope, input.target.page()).await?;
-            let _lease = lease(scope, &page).await?;
-            ElementRunner::new(scope, &page, &input.target, input.strict)
-                .edit(Edit::DispatchEvent {
-                    r#type: input.r#type,
-                    init,
-                })
-                .await?;
-        }
-        ActionOp::ScrollIntoViewIfNeeded => {
-            let input: TargetInput = args.decode(scope)?;
-            let page = OpPage::admit_handle(pw, scope, input.target.page()).await?;
-            ElementRunner::new(scope, &page, &input.target, input.strict)
-                .scroll_into_view()
-                .await?;
-        }
-        ActionOp::Fill => {
-            let input: FillInput = args.decode(scope)?;
-            let page = OpPage::admit_handle(pw, scope, input.target.page()).await?;
-            let _lease = lease(scope, &page).await?;
-            let edit = FormEdit::Fill(&input.value);
-            FormRunner::new(
-                scope,
-                &page,
-                &input.target,
-                input.strict,
-                input.options.force,
-            )
-            .run(&edit)
-            .await?;
-        }
-        ActionOp::SelectOption => {
-            let input: SelectOptionInput = args.decode(scope)?;
-            if !input.elements.is_empty() {
-                return Err(scope.fail(
-                    ErrorCode::Unsupported,
-                    "Neo selects options by value, label or index, not by element handle; pass \
-                     the option's value or label",
-                ));
-            }
-            let page = OpPage::admit_handle(pw, scope, input.target.page()).await?;
-            let _lease = lease(scope, &page).await?;
-            let edit = FormEdit::SelectOptions(&input.options);
-            return FormRunner::new(scope, &page, &input.target, input.strict, input.force)
-                .run(&edit)
-                .await;
-        }
-        ActionOp::SelectText => {
-            let input: SelectTextInput = args.decode(scope)?;
-            let page = OpPage::admit_handle(pw, scope, input.target.page()).await?;
-            FormRunner::new(scope, &page, &input.target, input.strict, input.force)
-                .run(&FormEdit::SelectText)
-                .await?;
-        }
-        ActionOp::Press => {
-            let input: PressInput = args.decode(scope)?;
-            let page = OpPage::admit_handle(pw, scope, input.target.page()).await?;
-            let _lease = lease(scope, &page).await?;
-            let keys = Keys::Press {
-                key: &input.key.0,
-                delay: millis(input.options.delay),
-                wait_after: !input.options.no_wait_after,
-            };
-            KeyRunner::new(pw, scope, &page, &input.target, input.strict)
-                .run(&keys)
-                .await?;
-        }
-        ActionOp::PressSequentially => {
-            let input: TypeInput = args.decode(scope)?;
-            let page = OpPage::admit_handle(pw, scope, input.target.page()).await?;
-            let _lease = lease(scope, &page).await?;
-            let keys = Keys::Type {
-                text: &input.text.0,
-                delay: millis(input.options.delay),
-            };
-            KeyRunner::new(pw, scope, &page, &input.target, input.strict)
-                .run(&keys)
-                .await?;
-        }
-        ActionOp::SetInputFiles => set_input_files(pw, scope, args.decode(scope)?).await?,
+    input: FillInput,
+) -> Result<Nothing, PlaywrightError> {
+    let page = OpPage::admit_handle(pw, scope, input.target.page()).await?;
+    let _lease = lease(scope, &page).await?;
+    FormRunner::new(
+        scope,
+        &page,
+        &input.target,
+        input.strict,
+        input.options.force.unwrap_or(false),
+    )
+    .run(&FormEdit::Fill(&input.value))
+    .await?;
+    Ok(())
+}
+
+async fn select_option(
+    pw: &Playwright,
+    scope: &OpScope<'_>,
+    input: SelectOptionInput,
+) -> Result<Vec<String>, PlaywrightError> {
+    if !input.elements.is_empty() {
+        return Err(scope.fail(
+            ErrorCode::Unsupported,
+            "Neo selects options by value, label or index, not by element handle; pass \
+             the option's value or label",
+        ));
     }
-    Ok(Value::Null)
+    let page = OpPage::admit_handle(pw, scope, input.target.page()).await?;
+    let _lease = lease(scope, &page).await?;
+    FormRunner::new(
+        scope,
+        &page,
+        &input.target,
+        input.strict,
+        input.force.unwrap_or(false),
+    )
+    .run(&FormEdit::SelectOptions(&input.options))
+    .await
+}
+
+async fn select_text(
+    pw: &Playwright,
+    scope: &OpScope<'_>,
+    input: SelectTextInput,
+) -> Result<Nothing, PlaywrightError> {
+    let page = OpPage::admit_handle(pw, scope, input.target.page()).await?;
+    FormRunner::new(
+        scope,
+        &page,
+        &input.target,
+        input.strict,
+        input.force.unwrap_or(false),
+    )
+    .run(&FormEdit::SelectText)
+    .await?;
+    Ok(())
+}
+
+async fn press(
+    pw: &Playwright,
+    scope: &OpScope<'_>,
+    input: PressInput,
+) -> Result<Nothing, PlaywrightError> {
+    let page = OpPage::admit_handle(pw, scope, input.target.page()).await?;
+    let _lease = lease(scope, &page).await?;
+    let keys = Keys::Press {
+        key: &input.key.0,
+        delay: millis(input.options.delay),
+        wait_after: !input.options.no_wait_after.unwrap_or(false),
+    };
+    KeyRunner::new(pw, scope, &page, &input.target, input.strict)
+        .run(&keys)
+        .await?;
+    Ok(())
+}
+
+async fn type_text(
+    pw: &Playwright,
+    scope: &OpScope<'_>,
+    input: TypeInput,
+) -> Result<Nothing, PlaywrightError> {
+    let page = OpPage::admit_handle(pw, scope, input.target.page()).await?;
+    let _lease = lease(scope, &page).await?;
+    let keys = Keys::Type {
+        text: &input.text.0,
+        delay: millis(input.options.delay),
+    };
+    KeyRunner::new(pw, scope, &page, &input.target, input.strict)
+        .run(&keys)
+        .await?;
+    Ok(())
+}
+
+async fn focus(
+    pw: &Playwright,
+    scope: &OpScope<'_>,
+    input: TargetInput,
+) -> Result<Nothing, PlaywrightError> {
+    edit_target(
+        pw,
+        scope,
+        input,
+        Edit::Focus {
+            reset_selection: false,
+        },
+    )
+    .await
+}
+
+async fn blur(
+    pw: &Playwright,
+    scope: &OpScope<'_>,
+    input: TargetInput,
+) -> Result<Nothing, PlaywrightError> {
+    edit_target(pw, scope, input, Edit::Blur).await
+}
+
+/// Focus and blur keep their existing read-admission path, without acquiring an input lease.
+async fn edit_target(
+    pw: &Playwright,
+    scope: &OpScope<'_>,
+    input: TargetInput,
+    edit: Edit,
+) -> Result<Nothing, PlaywrightError> {
+    let page = OpPage::admit_handle(pw, scope, input.target.page()).await?;
+    ElementRunner::new(scope, &page, &input.target, input.strict)
+        .edit(edit)
+        .await
+}
+
+async fn scroll_into_view(
+    pw: &Playwright,
+    scope: &OpScope<'_>,
+    input: TargetInput,
+) -> Result<Nothing, PlaywrightError> {
+    let page = OpPage::admit_handle(pw, scope, input.target.page()).await?;
+    ElementRunner::new(scope, &page, &input.target, input.strict)
+        .scroll_into_view()
+        .await
+}
+
+async fn dispatch_event(
+    pw: &Playwright,
+    scope: &OpScope<'_>,
+    input: DispatchEventInput,
+) -> Result<Nothing, PlaywrightError> {
+    // eventInit is deliberately JSON rather than a SerializedArgument. Normalize the old
+    // null/absent default before admission, and reject primitives before any page effect.
+    let init = match input.event_init {
+        Value::Object(init) => init,
+        Value::Null => Map::new(),
+        _ => return Err(scope.fail(ErrorCode::InvalidInput, "eventInit: expected an object")),
+    };
+    let page = OpPage::admit_handle(pw, scope, input.target.page()).await?;
+    let _lease = lease(scope, &page).await?;
+    ElementRunner::new(scope, &page, &input.target, input.strict)
+        .edit(Edit::DispatchEvent {
+            r#type: input.r#type,
+            init,
+        })
+        .await
 }
 
 /// Click alone returns a navigation cut. Keeping this result typed ties the publication the
@@ -895,3 +988,7 @@ fn drag_phases(input: &DragInput) -> DragPhases {
 #[cfg(test)]
 #[path = "pointer_wire_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "form_wire_tests.rs"]
+mod form_tests;

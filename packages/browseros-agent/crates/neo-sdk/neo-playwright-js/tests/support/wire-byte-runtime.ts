@@ -1,4 +1,4 @@
-/** Record pointer calls at the bootstrap boundary, retaining JSON spelling and key order. */
+/** Record calls at the bootstrap boundary, retaining JSON spelling and key order. */
 import {
   type Answer,
   loadPrelude,
@@ -7,7 +7,7 @@ import {
 } from './prelude-runtime'
 
 /** Startup frame reads are outside the script; every later engine exchange is retained. */
-export async function recordPointerWire(
+export async function recordWireBytes(
   script: string,
   answer: Answer,
   prelude?: string,

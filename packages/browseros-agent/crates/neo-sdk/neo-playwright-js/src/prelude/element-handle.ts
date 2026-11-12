@@ -25,14 +25,7 @@ import {
 } from './frame'
 import { OPTION_KEYS, send } from './generated'
 import type { OpName } from './generated/ops'
-import {
-  FILL_KEYS,
-  markHandle,
-  PRESS_KEYS,
-  pick,
-  selectOptionValues,
-  TYPE_KEYS,
-} from './options'
+import { markHandle, pick, selectOptionValues } from './options'
 import type { Page } from './page'
 import { saveScreenshot, screenshotType } from './screenshot'
 import { locatorBrand } from './selectors'
@@ -297,15 +290,14 @@ export class ElementHandle extends EventEmitter {
     options: FillOptions & TimeoutOption = {},
   ): Promise<void> {
     const site = captureSite()
-    await this.#op(
-      'locator.fill',
+    const api = 'elementHandle.fill'
+    const timeout = this.#timeout(options)
+    const picked = pick(options, OPTION_KEYS['locator.fill'])
+    this.#live(api)
+    await send['locator.fill'](
       site,
-      'elementHandle.fill',
-      this.#timeout(options),
-      {
-        value,
-        options: pick(options, FILL_KEYS),
-      },
+      { api, timeoutMs: timeoutMs(api, timeout) },
+      { target: this._brand, strict: 'strict', value, options: picked },
     )
   }
 
@@ -314,15 +306,14 @@ export class ElementHandle extends EventEmitter {
     options: KeyOptions & TimeoutOption = {},
   ): Promise<void> {
     const site = captureSite()
-    await this.#op(
-      'locator.press',
+    const api = 'elementHandle.press'
+    const timeout = this.#timeout(options)
+    const picked = pick(options, OPTION_KEYS['locator.press'])
+    this.#live(api)
+    await send['locator.press'](
       site,
-      'elementHandle.press',
-      this.#timeout(options),
-      {
-        key,
-        options: pick(options, PRESS_KEYS),
-      },
+      { api, timeoutMs: timeoutMs(api, timeout) },
+      { target: this._brand, strict: 'strict', key, options: picked },
     )
   }
 
@@ -331,15 +322,14 @@ export class ElementHandle extends EventEmitter {
     options: KeyOptions & TimeoutOption = {},
   ): Promise<void> {
     const site = captureSite()
-    await this.#op(
-      'locator.pressSequentially',
+    const api = 'elementHandle.type'
+    const timeout = this.#timeout(options)
+    const picked = pick(options, OPTION_KEYS['locator.pressSequentially'])
+    this.#live(api)
+    await send['locator.pressSequentially'](
       site,
-      'elementHandle.type',
-      this.#timeout(options),
-      {
-        text,
-        options: pick(options, TYPE_KEYS),
-      },
+      { api, timeoutMs: timeoutMs(api, timeout) },
+      { target: this._brand, strict: 'strict', text, options: picked },
     )
   }
 
@@ -349,16 +339,21 @@ export class ElementHandle extends EventEmitter {
   ): Promise<string[]> {
     const site = captureSite()
     const api = 'elementHandle.selectOption'
-    return await this.#op(
-      'locator.selectOption',
+    const timeout = this.#timeout(options)
+    const converted = selectOptionValues(api, values)
+    const picked = pick(options, ['force'] satisfies KeyList<
+      PickOptions['locator.selectOption']
+    >)
+    this.#live(api)
+    return await send['locator.selectOption'](
       site,
-      api,
-      this.#timeout(options),
+      { api, timeoutMs: timeoutMs(api, timeout) },
       {
-        ...selectOptionValues(api, values),
-        ...pick(options, ['force'] satisfies KeyList<
-          PickOptions['locator.selectOption']
-        >),
+        target: this._brand,
+        strict: 'strict',
+        options: converted.options,
+        elements: converted.elements,
+        force: picked.force,
       },
     )
   }
@@ -367,14 +362,16 @@ export class ElementHandle extends EventEmitter {
     options: TimeoutOption & { force?: boolean } = {},
   ): Promise<void> {
     const site = captureSite()
-    await this.#op(
-      'locator.selectText',
+    const api = 'elementHandle.selectText'
+    const timeout = this.#timeout(options)
+    const picked = pick(options, ['force'] satisfies KeyList<
+      PickOptions['locator.selectText']
+    >)
+    this.#live(api)
+    await send['locator.selectText'](
       site,
-      'elementHandle.selectText',
-      this.#timeout(options),
-      pick(options, ['force'] satisfies KeyList<
-        PickOptions['locator.selectText']
-      >),
+      { api, timeoutMs: timeoutMs(api, timeout) },
+      { target: this._brand, strict: 'strict', force: picked.force },
     )
   }
 
@@ -385,40 +382,50 @@ export class ElementHandle extends EventEmitter {
     const site = captureSite()
     const api = 'elementHandle.setInputFiles'
     const input = inputFiles(api, files)
-    await withClientErrors(api, () =>
-      this.#op('locator.setInputFiles', site, api, this.#timeout(options), {
-        files: input,
-      }),
-    )
+    await withClientErrors(api, async () => {
+      const timeout = this.#timeout(options)
+      this.#live(api)
+      return await send['locator.setInputFiles'](
+        site,
+        { api, timeoutMs: timeoutMs(api, timeout) },
+        { target: this._brand, strict: 'strict', files: input },
+      )
+    })
   }
 
   async focus(): Promise<void> {
     const site = captureSite()
-    await this.#op('locator.focus', site, 'elementHandle.focus', 0, {})
+    const api = 'elementHandle.focus'
+    const timeout = 0
+    this.#live(api)
+    await send['locator.focus'](
+      site,
+      { api, timeoutMs: timeoutMs(api, timeout) },
+      { target: this._brand, strict: 'strict' },
+    )
   }
 
   async dispatchEvent(type: string, eventInit: unknown = {}): Promise<void> {
     const site = captureSite()
-    await this.#op(
-      'locator.dispatchEvent',
+    const api = 'elementHandle.dispatchEvent'
+    const timeout = 0
+    this.#live(api)
+    await send['locator.dispatchEvent'](
       site,
-      'elementHandle.dispatchEvent',
-      0,
-      {
-        type,
-        eventInit,
-      },
+      { api, timeoutMs: timeoutMs(api, timeout) },
+      { target: this._brand, strict: 'strict', type, eventInit },
     )
   }
 
   async scrollIntoViewIfNeeded(options: TimeoutOption = {}): Promise<void> {
     const site = captureSite()
-    await this.#op(
-      'locator.scrollIntoViewIfNeeded',
+    const api = 'elementHandle.scrollIntoViewIfNeeded'
+    const timeout = this.#timeout(options)
+    this.#live(api)
+    await send['locator.scrollIntoViewIfNeeded'](
       site,
-      'elementHandle.scrollIntoViewIfNeeded',
-      this.#timeout(options),
-      {},
+      { api, timeoutMs: timeoutMs(api, timeout) },
+      { target: this._brand, strict: 'strict' },
     )
   }
 

@@ -23,9 +23,6 @@ export function pick<T extends object, K extends keyof T>(
   return picked
 }
 
-export const FILL_KEYS = ['force'] as const
-export const PRESS_KEYS = ['delay', 'noWaitAfter'] as const
-export const TYPE_KEYS = ['delay'] as const
 /** Objects the prelude hands to scripts (pages, frames, locators, handles), by identity. */
 const handles = new WeakSet<object>()
 

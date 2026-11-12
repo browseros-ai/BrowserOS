@@ -1,12 +1,12 @@
 /** The engine-facing pointer contract captured before typed route migration, byte for byte. */
 import { expect, it } from 'bun:test'
 import fixture from '../../neo-playwright/tests/data/pointer-wire.json'
-import { recordPointerWire } from './support/pointer-wire-runtime'
+import { recordWireBytes } from './support/wire-byte-runtime'
 
 for (const scenario of fixture.scenarios) {
   it(`pins aligned engine op, argument and recorded reply bytes: ${scenario.name}`, async () => {
     let next = 0
-    const actual = await recordPointerWire(scenario.script, () => {
+    const actual = await recordWireBytes(scenario.script, () => {
       const exchange = scenario.exchanges[next++]
       if (!exchange) throw new Error('the prelude sent an extra engine call')
       // Alignment changes only the approved request fields. Replaying the original reply,

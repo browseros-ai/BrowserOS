@@ -49,26 +49,28 @@ use crate::page::OpPage;
 use crate::probe::{self, Edit, FilePayload, ProbeFailure, ProbeReply, ProbeRequest, Read};
 use crate::resolve::{self, Resolved};
 use crate::target::{Strictness, Target};
+use crate::wire::options;
 use crate::world::Pin;
 use crate::{ErrorCode, Playwright, PlaywrightError};
 
 /// `locator.setInputFiles` and its page, frame and handle forms, as the prelude sends them.
-#[derive(Deserialize)]
+#[derive(Deserialize, TS)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct SetInputFilesInput {
     target: Target,
     strict: Strictness,
     files: FilesInput,
 }
+options!(SetInputFilesInput);
 
 /// The files after upstream's client checks that need no disk (the prelude's files.ts).
-#[derive(Deserialize)]
+#[derive(Deserialize, TS)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) enum FilesInput {
     /// The strings as the script wrote them, in its order.
     Paths(Vec<String>),
     /// In-memory files, `[]` among them, ready for the page.
-    Payloads(Vec<FilePayload>),
+    Payloads(#[ts(type = "Array<import('../../../probe/protocol').FilePayload>")] Vec<FilePayload>),
 }
 
 /// Drop paths carry MIME types from Playwright's vendored table in the prelude.

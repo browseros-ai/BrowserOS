@@ -17,7 +17,6 @@
  */
 
 import type { SerializedValue } from '../../../neo-playwright/third_party/playwright/packages/isomorphic/utilityScriptSerializers'
-import type { SelectOption } from '../probe/protocol'
 import type { GeneratedInputs, GeneratedOutputs } from './generated'
 // The run envelope's types (Observation, PageFact, WorkerInfo) are neo-server's, in bridge.ts.
 // The event records below name the same worker identity.
@@ -28,6 +27,9 @@ import type { OpName } from './generated/ops'
 // union, so its fields are never repeated in TypeScript.
 export type {
   ElementBrand,
+  FilesInput,
+  FillOptions,
+  KeyOptions,
   FrameInfo,
   LoadState,
   MouseButton,
@@ -199,8 +201,6 @@ export type Pumped = { events: EventRecord[]; lost: number }
 
 export type Modifier = 'Alt' | 'Control' | 'ControlOrMeta' | 'Meta' | 'Shift'
 
-export type FillOptions = { force?: boolean }
-export type KeyOptions = { delay?: number; noWaitAfter?: boolean }
 export type WaitForState = 'attached' | 'detached' | 'visible' | 'hidden'
 export type ElementStateName =
   | 'visible'
@@ -247,16 +247,6 @@ export type ScreenshotOptions = Omit<
  */
 export type PdfOptions = Omit<GeneratedInputs['page.pdf'], 'page'>
 
-/**
- * One in-memory file as upstream's injected script takes it: `mimeType` already defaulted from
- * the name, and `buffer` the base64 text upstream's server makes of the script's bytes.
- */
-export type FilePayload = { name: string; mimeType: string; buffer: string }
-/**
- * `setInputFiles`' files (files.ts): paths exactly as the script wrote them, which Rust stats
- * and resolves on Neo's disk, or payloads, `[]` among them.
- */
-export type FilesInput = { paths: string[] } | { payloads: FilePayload[] }
 export type TargetArgs = { target: Target; strict: Strictness }
 export type EveryMatchArgs = { target: Target }
 export type PageArgs = { page: PageHandle }
@@ -265,32 +255,16 @@ export type FrameArgs = PageArgs & { frame?: string }
 /** Each op's input after `call`, for the ops Rust does not describe yet. */
 export type HandInputs = {
   'events.interceptFileChooser': PageArgs & { lease: number; on: boolean }
-  'locator.fill': TargetArgs & { value: string; options: FillOptions }
-  'locator.press': TargetArgs & { key: string; options: KeyOptions }
-  'locator.pressSequentially': TargetArgs & {
-    text: string
-    options: Pick<KeyOptions, 'delay'>
-  }
-  'locator.selectOption': TargetArgs & {
-    options: SelectOption[]
-    elements: ElementBrand[]
-    force?: boolean
-  }
-  'locator.selectText': TargetArgs & { force?: boolean }
-  'locator.focus': TargetArgs
-  'locator.blur': TargetArgs
-  'locator.setInputFiles': TargetArgs & { files: FilesInput }
-  'locator.dispatchEvent': TargetArgs & { type: string; eventInit: unknown }
-  'locator.scrollIntoViewIfNeeded': TargetArgs
-  /**
-   * The reads below wait for a locator's element, as upstream's do; an element handle's
-   * target needs no waiting, so no flag says it.
-   */
-  /**
-   * `locator.waitFor`, `page.waitForSelector` and `elementHandle.waitForElementState` (whose
-   * states are the element-state names). `omitReturnValue` skips pinning a handle.
-   */
-  /** `noWait` is `page.$`: the first match now, or null, instead of waiting for one. */
+
+
+
+
+
+
+
+
+
+
   'worker.evaluate': { page: PageHandle; worker: string; script: PageScript }
   'page.evaluate': FrameArgs & { script: PageScript }
   /** `noWait` is `$eval`: no waiting for the element, as `locator.evaluate` does. */
@@ -357,17 +331,16 @@ export type HandInputs = {
 /** Each op's result, for the ops Rust does not describe yet. */
 export type HandOutputs = {
   'events.interceptFileChooser': Done
-  'locator.fill': null
-  'locator.press': null
-  'locator.pressSequentially': null
-  'locator.selectOption': string[]
-  'locator.selectText': null
-  'locator.focus': null
-  'locator.blur': null
-  'locator.setInputFiles': null
-  'locator.dispatchEvent': null
-  'locator.scrollIntoViewIfNeeded': null
-  /** The script's result in Playwright's in-page format. */
+
+
+
+
+
+
+
+
+
+
   'worker.evaluate': { value: SerializedValue }
   'page.evaluate': { value: SerializedValue; frames?: FrameInfo[] }
   'locator.evaluate': SerializedValue

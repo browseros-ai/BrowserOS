@@ -31,12 +31,9 @@ import { OPTION_KEYS, send } from './generated'
 import type { OpName } from './generated/ops'
 import { FrameLocator, Locator, testIdAttributeName } from './locator'
 import {
-  FILL_KEYS,
   markHandle,
-  PRESS_KEYS,
   pick,
   selectOptionValues,
-  TYPE_KEYS,
 } from './options'
 import type { Page } from './page'
 import type { Response } from './response'
@@ -703,6 +700,8 @@ export class Frame extends EventEmitter {
    * `const addressed = await this._targetArgs(api, selector, strict)` then
    * `send[op](site, this._call(api, wait.timeout), { ...addressed, ...fields }, wait.signal)`.
    * The op's own fields stay checked against Rust's input type; the spread ones are typed.
+   * Capture the script's field values before awaiting this address: branding can open a page,
+   * during which a caller could mutate its option bag.
    */
   async _targetArgs(
     api: string,
@@ -872,17 +871,15 @@ export class Frame extends EventEmitter {
     const site = captureSite()
     if (typeof value !== 'string')
       throw clientError(api, `value: expected string, got ${typeof value}`)
-    await this._selectorOp(
-      'locator.fill',
+    const strict = options.strict
+    const wait = this._wait(api, options)
+    const picked = pick(options, OPTION_KEYS['locator.fill'])
+    const addressed = await this._targetArgs(api, selector, strict)
+    await send['locator.fill'](
       site,
-      api,
-      selector,
-      options.strict,
-      this._wait(api, options),
-      {
-        value,
-        options: pick(options, FILL_KEYS),
-      },
+      this._call(api, wait.timeout),
+      { ...addressed, value, options: picked },
+      wait.signal,
     )
   }
 
@@ -893,17 +890,15 @@ export class Frame extends EventEmitter {
     options: KeyOptions & TimeoutOption & StrictOption = {},
   ): Promise<void> {
     const site = captureSite()
-    await this._selectorOp(
-      'locator.press',
+    const strict = options.strict
+    const wait = this._wait(api, options)
+    const picked = pick(options, OPTION_KEYS['locator.press'])
+    const addressed = await this._targetArgs(api, selector, strict)
+    await send['locator.press'](
       site,
-      api,
-      selector,
-      options.strict,
-      this._wait(api, options),
-      {
-        key,
-        options: pick(options, PRESS_KEYS),
-      },
+      this._call(api, wait.timeout),
+      { ...addressed, key, options: picked },
+      wait.signal,
     )
   }
 
@@ -915,14 +910,15 @@ export class Frame extends EventEmitter {
     options: KeyOptions & TimeoutOption & StrictOption = {},
   ): Promise<void> {
     const site = captureSite()
-    await this._selectorOp(
-      'locator.pressSequentially',
+    const strict = options.strict
+    const wait = this._wait(api, options)
+    const picked = pick(options, OPTION_KEYS['locator.pressSequentially'])
+    const addressed = await this._targetArgs(api, selector, strict)
+    await send['locator.pressSequentially'](
       site,
-      api,
-      selector,
-      options.strict,
-      this._wait(api, options),
-      { text, options: pick(options, TYPE_KEYS) },
+      this._call(api, wait.timeout),
+      { ...addressed, text, options: picked },
+      wait.signal,
     )
   }
 
@@ -932,14 +928,14 @@ export class Frame extends EventEmitter {
     options: TimeoutOption & StrictOption = {},
   ): Promise<void> {
     const site = captureSite()
-    await this._selectorOp(
-      'locator.focus',
+    const strict = options.strict
+    const wait = this._wait(api, options)
+    const addressed = await this._targetArgs(api, selector, strict)
+    await send['locator.focus'](
       site,
-      api,
-      selector,
-      options.strict,
-      this._wait(api, options),
-      {},
+      this._call(api, wait.timeout),
+      { ...addressed },
+      wait.signal,
     )
   }
 
@@ -949,14 +945,14 @@ export class Frame extends EventEmitter {
     options: TimeoutOption & StrictOption = {},
   ): Promise<void> {
     const site = captureSite()
-    await this._selectorOp(
-      'locator.blur',
+    const strict = options.strict
+    const wait = this._wait(api, options)
+    const addressed = await this._targetArgs(api, selector, strict)
+    await send['locator.blur'](
       site,
-      api,
-      selector,
-      options.strict,
-      this._wait(api, options),
-      {},
+      this._call(api, wait.timeout),
+      { ...addressed },
+      wait.signal,
     )
   }
 
@@ -967,15 +963,23 @@ export class Frame extends EventEmitter {
     options: TimeoutOption & StrictOption & { force?: boolean } = {},
   ): Promise<string[]> {
     const site = captureSite()
-    return await this._selectorOp(
-      'locator.selectOption',
+    const strict = options.strict
+    const wait = this._wait(api, options)
+    const converted = selectOptionValues(api, values)
+    const picked = pick(options, ['force'] satisfies KeyList<
+      PickOptions['locator.selectOption']
+    >)
+    const addressed = await this._targetArgs(api, selector, strict)
+    return await send['locator.selectOption'](
       site,
-      api,
-      selector,
-      options.strict,
-      this._wait(api, options),
-      // biome-ignore format: Bun preserves literal layout in the byte-checked prelude asset.
-      { ...selectOptionValues(api, values), ...pick(options, ['force'] satisfies KeyList<PickOptions['locator.selectOption']>) },
+      this._call(api, wait.timeout),
+      {
+        ...addressed,
+        options: converted.options,
+        elements: converted.elements,
+        force: picked.force,
+      },
+      wait.signal,
     )
   }
 
@@ -985,16 +989,17 @@ export class Frame extends EventEmitter {
     options: TimeoutOption & StrictOption & { force?: boolean } = {},
   ): Promise<void> {
     const site = captureSite()
-    await this._selectorOp(
-      'locator.selectText',
+    const strict = options.strict
+    const wait = this._wait(api, options)
+    const picked = pick(options, ['force'] satisfies KeyList<
+      PickOptions['locator.selectText']
+    >)
+    const addressed = await this._targetArgs(api, selector, strict)
+    await send['locator.selectText'](
       site,
-      api,
-      selector,
-      options.strict,
-      this._wait(api, options),
-      pick(options, ['force'] satisfies KeyList<
-        PickOptions['locator.selectText']
-      >),
+      this._call(api, wait.timeout),
+      { ...addressed, force: picked.force },
+      wait.signal,
     )
   }
 
@@ -1034,19 +1039,19 @@ export class Frame extends EventEmitter {
     options: TimeoutOption & StrictOption = {},
   ): Promise<void> {
     const site = captureSite()
-    // Upstream's client converts the files before it sends the selector anywhere.
+    // Upstream converts files before addressing; client failures keep the same API boundary.
     const input = inputFiles(api, files)
-    await withClientErrors(api, () =>
-      this._selectorOp(
-        'locator.setInputFiles',
+    await withClientErrors(api, async () => {
+      const strict = options.strict
+      const wait = this._wait(api, options)
+      const addressed = await this._targetArgs(api, selector, strict)
+      return await send['locator.setInputFiles'](
         site,
-        api,
-        selector,
-        options.strict,
-        this._wait(api, options),
-        { files: input },
-      ),
-    )
+        this._call(api, wait.timeout),
+        { ...addressed, files: input },
+        wait.signal,
+      )
+    })
   }
 
   async _dispatchEvent(
@@ -1057,14 +1062,15 @@ export class Frame extends EventEmitter {
     options: TimeoutOption & StrictOption = {},
   ): Promise<void> {
     const site = captureSite()
-    await this._selectorOp(
-      'locator.dispatchEvent',
+    const strict = options.strict
+    const wait = this._wait(api, options)
+    const init = eventInit ?? {}
+    const addressed = await this._targetArgs(api, selector, strict)
+    await send['locator.dispatchEvent'](
       site,
-      api,
-      selector,
-      options.strict,
-      this._wait(api, options),
-      { type, eventInit: eventInit ?? {} },
+      this._call(api, wait.timeout),
+      { ...addressed, type, eventInit: init },
+      wait.signal,
     )
   }
 
@@ -1074,14 +1080,14 @@ export class Frame extends EventEmitter {
     options: TimeoutOption & StrictOption = {},
   ): Promise<void> {
     const site = captureSite()
-    await this._selectorOp(
-      'locator.scrollIntoViewIfNeeded',
+    const strict = options.strict
+    const wait = this._wait(api, options)
+    const addressed = await this._targetArgs(api, selector, strict)
+    await send['locator.scrollIntoViewIfNeeded'](
       site,
-      api,
-      selector,
-      options.strict,
-      this._wait(api, options),
-      {},
+      this._call(api, wait.timeout),
+      { ...addressed },
+      wait.signal,
     )
   }
 
