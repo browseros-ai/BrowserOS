@@ -144,21 +144,6 @@ struct RemoteObject {
     subtype: Option<String>,
     #[serde(default)]
     object_id: Option<String>,
-    #[serde(default)]
-    preview: Option<ObjectPreview>,
-}
-
-#[derive(Deserialize)]
-struct ObjectPreview {
-    #[serde(default)]
-    properties: Vec<PreviewProperty>,
-}
-
-#[derive(Deserialize)]
-struct PreviewProperty {
-    name: String,
-    #[serde(default)]
-    value: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -311,9 +296,10 @@ pub(crate) async fn pinned_object(
         "functionDeclaration": CALL_FUNCTION,
         "arguments": [{ "value": request }],
         "returnByValue": false,
-        // By handle the reply's fields cannot be read, so a preview tells `uninstalled` (a
-        // plain object) apart from the element.
-        "generatePreview": true,
+        // Chromium truncates property previews by UTF-16 code unit and can emit lone
+        // surrogates for emoji attributes, which Rust's JSON decoder cannot read. The node
+        // subtype is sufficient here; inspect only a non-node reply for `uninstalled` below.
+        "generatePreview": false,
         "objectGroup": scope.object_group(world.session()),
     });
     let called = world
@@ -333,7 +319,9 @@ pub(crate) async fn pinned_object(
     match result.subtype.as_deref() {
         Some("node") => Ok(result.object_id),
         Some("null") => Ok(None),
-        _ if is_uninstalled(result.preview.as_ref()) => Err(ProbeFailure::Gone(Ran::No)),
+        _ if is_uninstalled(world, result.object_id.as_deref()).await? => {
+            Err(ProbeFailure::Gone(Ran::No))
+        }
         _ => Err(ProbeFailure::Broken(
             "the probe answered `pinned` with neither an element nor null".to_owned(),
         )),
@@ -341,12 +329,24 @@ pub(crate) async fn pinned_object(
 }
 
 /// Whether a by-handle result is the `{ kind: "uninstalled" }` of [`CALL_FUNCTION`].
-fn is_uninstalled(preview: Option<&ObjectPreview>) -> bool {
-    preview.is_some_and(|preview| {
-        preview.properties.iter().any(|property| {
-            property.name == "kind" && property.value.as_deref() == Some("uninstalled")
-        })
-    })
+async fn is_uninstalled(world: &IsolatedWorld, object: Option<&str>) -> Result<bool, ProbeFailure> {
+    let Some(object) = object else {
+        return Ok(false);
+    };
+    // This receiver came from CALL_FUNCTION in the isolated world. Reading only the marker
+    // avoids previews of page-owned properties, and a stale receiver still fails as Gone.
+    let called: Called = world.session().send(
+        "Runtime.callFunctionOn",
+        json!({ "objectId": object, "functionDeclaration": "function () { return this.kind === 'uninstalled'; }",
+                "returnByValue": true }),
+    ).await.map_err(ProbeFailure::from_core)?;
+    if let Some(exception) = called.exception_details {
+        return Err(ProbeFailure::Broken(format!(
+            "the probe threw: {}",
+            exception.message()
+        )));
+    }
+    Ok(called.result.value == Value::Bool(true))
 }
 
 #[cfg(test)]

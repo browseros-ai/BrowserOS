@@ -28,7 +28,12 @@ import {
 } from './evaluation'
 import { EventDeadline } from './event-deadline'
 import { dropFiles, inputFiles, withClientErrors } from './files'
-import { OPTION_KEYS, type Strictness, send } from './generated'
+import {
+  type GeneratedInputs,
+  OPTION_KEYS,
+  type Strictness,
+  send,
+} from './generated'
 import type { OpName } from './generated/ops'
 import { FrameLocator, Locator, testIdAttributeName } from './locator'
 import { markHandle, pick, selectOptionValues } from './options'
@@ -89,6 +94,10 @@ export type ScriptTagOptions = {
   type?: string
 }
 export type StyleTagOptions = Omit<ScriptTagOptions, 'type'>
+export type ContentOptions = Pick<
+  GeneratedInputs['page.content'],
+  'includeShadow'
+>
 
 export type StrictOption = { strict?: boolean }
 export type ClickOptions = PointerOptions &
@@ -602,8 +611,8 @@ export class Frame extends EventEmitter {
     return await send['page.title'](site, this._call(api, 0), { page, frame })
   }
 
-  content(): Promise<string> {
-    return this._content('frame.content')
+  content(options: ContentOptions = {}): Promise<string> {
+    return this._content('frame.content', options)
   }
 
   addScriptTag(options: ScriptTagOptions = {}): Promise<ElementHandle> {
@@ -1194,6 +1203,15 @@ export class Frame extends EventEmitter {
   ): Promise<ElementHandle | null> {
     const site = captureSite()
     const raw: unknown = options
+    const waitFor =
+      typeof raw === 'object' && raw !== null && 'waitFor' in raw
+        ? raw.waitFor
+        : undefined
+    if (waitFor && waitFor !== 'visible')
+      throw clientError(
+        api,
+        'options.waitFor is not supported, did you mean options.state?',
+      )
     if (typeof raw === 'object' && raw !== null && 'visibility' in raw)
       throw clientError(
         api,
@@ -1469,10 +1487,14 @@ export class Frame extends EventEmitter {
     )
   }
 
-  async _content(api: string): Promise<string> {
+  async _content(api: string, options: ContentOptions = {}): Promise<string> {
     const site = captureSite()
     const { page, frame } = await this._frameArgs(api)
-    return await send['page.content'](site, this._call(api, 0), { page, frame })
+    return await send['page.content'](site, this._call(api, 0), {
+      page,
+      frame,
+      includeShadow: options.includeShadow,
+    })
   }
 
   /** Page delegates here so frame routing, errors and returned node ownership stay identical. */

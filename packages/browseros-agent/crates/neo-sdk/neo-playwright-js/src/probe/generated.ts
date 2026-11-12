@@ -211,7 +211,7 @@ depth?: number,
 /**
  * Upstream's `boxes`: each node's box in this frame's own viewport.
  */
-boxes?: boolean, } | { "op": "expect", target: ProbeTarget, strictness: Strictness, frameVisible: boolean, params: ExpectParams, } | { "op": "matchUrl", pattern: UrlPattern, url: string, } | { "op": "pinned", pin: Pin, } | { "op": "document", part: DocumentPart, } | { "op": "setContent", html: string, } | { "op": "armInput", pin: Pin, } | { "op": "inputArrived", pin: Pin, } | { "op": "webStorage", kind: StorageKind, action: StorageAction, name?: string, value?: string, };
+boxes?: boolean, } | { "op": "expect", target: ProbeTarget, strictness: Strictness, frameVisible: boolean, params: ExpectParams, } | { "op": "matchUrl", pattern: UrlPattern, url: string, } | { "op": "pinned", pin: Pin, } | { "op": "document", part: DocumentPart, includeShadow?: boolean, } | { "op": "setContent", html: string, } | { "op": "armInput", pin: Pin, } | { "op": "inputArrived", pin: Pin, } | { "op": "webStorage", kind: StorageKind, action: StorageAction, name?: string, value?: string, };
 
 /**
  * What a request runs on inside the world.

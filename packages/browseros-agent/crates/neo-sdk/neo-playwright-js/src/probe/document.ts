@@ -27,7 +27,11 @@ export function documentText(
               mode: 'default',
             })
           : ''
-        : content(document)
+        : request.includeShadow
+          ? // The vendored serializer recursively includes open roots, even non-serializable
+            // ones, while closed roots remain inaccessible from the engine's isolated world.
+            injected.documentContent(true)
+          : content(document)
   return { kind: 'documentText', text }
 }
 

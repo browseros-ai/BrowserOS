@@ -3,7 +3,7 @@ import type { FrameId } from "./FrameId";
 import type { PageHandle } from "./PageHandle";
 
 /**
- * `page.title()` and `page.content()`: `{ page, frame? }`.
+ * `page.title()`: `{ page, frame? }`.
  */
 export type DocumentInput = { page: PageHandle, 
 /**

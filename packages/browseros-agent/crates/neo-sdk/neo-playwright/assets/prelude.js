@@ -7668,8 +7668,8 @@ ${value.stack}`;
       const { page, frame } = await this._frameArgs(api);
       return await send["page.title"](site, this._call(api, 0), { page, frame });
     }
-    content() {
-      return this._content("frame.content");
+    content(options = {}) {
+      return this._content("frame.content", options);
     }
     addScriptTag(options = {}) {
       return this._addTag("frame.addScriptTag", "page.addScriptTag", options);
@@ -7928,6 +7928,9 @@ ${value.stack}`;
     async _waitForSelector(api, selector, options = {}, omitReturnValue) {
       const site = captureSite();
       const raw = options;
+      const waitFor = typeof raw === "object" && raw !== null && "waitFor" in raw ? raw.waitFor : undefined;
+      if (waitFor && waitFor !== "visible")
+        throw clientError(api, "options.waitFor is not supported, did you mean options.state?");
       if (typeof raw === "object" && raw !== null && "visibility" in raw)
         throw clientError(api, "options.visibility is not supported, did you mean options.state?");
       const state = options.state ?? "visible";
@@ -8061,10 +8064,14 @@ ${value.stack}`;
         await this._page._navigated(api, this, result, observed);
       });
     }
-    async _content(api) {
+    async _content(api, options = {}) {
       const site = captureSite();
       const { page, frame } = await this._frameArgs(api);
-      return await send["page.content"](site, this._call(api, 0), { page, frame });
+      return await send["page.content"](site, this._call(api, 0), {
+        page,
+        frame,
+        includeShadow: options.includeShadow
+      });
     }
     async _addTag(api, op, options) {
       const site = captureSite();
@@ -8235,7 +8242,7 @@ ${value.stack}`;
         throw clientError(api, "Target page, context or browser has been closed");
     }
     toString() {
-      return this._brand.display;
+      return `JSHandle@${this._brand.display}`;
     }
     toJSON() {
       return this._brand;
@@ -9797,6 +9804,9 @@ ${value.stack}`;
     statusText() {
       return this.#info.statusText;
     }
+    async httpVersion() {
+      return this.#info.httpVersion;
+    }
     ok() {
       return this.#info.ok;
     }
@@ -10275,8 +10285,8 @@ ${value.stack}`;
       const title = await send["page.title"](site, { api, timeoutMs: 0 }, { page: await this._brand(api) });
       return title;
     }
-    content() {
-      return this._mainFrame._content("page.content");
+    content(options = {}) {
+      return this._mainFrame._content("page.content", options);
     }
     async emulateMedia(options = {}) {
       const site = captureSite();

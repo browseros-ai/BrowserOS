@@ -12,6 +12,7 @@ import type { CallHeader } from '../wire'
 import type { AddStyleTagInput } from './types/AddStyleTagInput'
 import type { AddTagInput } from './types/AddTagInput'
 import type { Bytes } from './types/Bytes'
+import type { ContentInput } from './types/ContentInput'
 import type { DocumentInput } from './types/DocumentInput'
 import type { EvalOnSelectorInput } from './types/EvalOnSelectorInput'
 import type { EvaluateInput } from './types/EvaluateInput'
@@ -57,6 +58,7 @@ export type { AddTagInput } from './types/AddTagInput'
 export type { Animations } from './types/Animations'
 export type { Bytes } from './types/Bytes'
 export type { Caret } from './types/Caret'
+export type { ContentInput } from './types/ContentInput'
 export type { Dimensions } from './types/Dimensions'
 export type { DocumentInput } from './types/DocumentInput'
 export type { EvalOnSelectorInput } from './types/EvalOnSelectorInput'
@@ -118,7 +120,7 @@ export type PageInputs = {
   'page.waitForURL': WaitForUrlInput
   'page.waitForLoadState': LoadStateInput
   'page.title': DocumentInput
-  'page.content': DocumentInput
+  'page.content': ContentInput
   'page.setContent': SetContentInput
   'page.addScriptTag': AddTagInput
   'page.addStyleTag': AddStyleTagInput
@@ -256,7 +258,7 @@ export const PAGE_SEND = {
   'page.content': (
     site: CallSite,
     call: CallHeader,
-    input: DocumentInput,
+    input: ContentInput,
     signal?: SignalLike,
   ): Promise<string> => invoke('page.content', site, call, input, signal),
   'page.setContent': (
@@ -454,8 +456,7 @@ type _page_goForward = Assert<UpstreamCheck<'page.goForward', NavigateInput, pw.
 type _page_title = Assert<UpstreamCheck<'page.title', DocumentInput, pw.FrameTitleParams, never, never, never>>
 type _page_title_result = Assert<VoidIsNull<'page.title', pw.FrameTitleResult, string>>
 // page.content: Frame.content
-//   omits includeShadow: shadow-root serialization is not offered (parity gap PA-025)
-type _page_content = Assert<UpstreamCheck<'page.content', DocumentInput, pw.FrameContentParams, never, 'includeShadow', never>>
+type _page_content = Assert<UpstreamCheck<'page.content', ContentInput, pw.FrameContentParams, never, never, never>>
 type _page_content_result = Assert<VoidIsNull<'page.content', pw.FrameContentResult, string>>
 // page.setContent: Frame.setContent
 type _page_setContent = Assert<UpstreamCheck<'page.setContent', SetContentInput, pw.FrameSetContentParams, never, never, never>>

@@ -3,7 +3,11 @@
 /**
  * Playwright's `Response` for the selected document, from its navigation timing entry.
  */
-export type ResponseInfo = { url: string, status: number, statusText: string, ok: boolean, 
+export type ResponseInfo = { url: string, status: number, statusText: string, 
+/**
+ * Navigation Timing's negotiated protocol, without enabling the Network domain.
+ */
+httpVersion: string, ok: boolean, 
 /**
  * Always empty: reading headers needs the Network domain, which Neo leaves off.
  */
