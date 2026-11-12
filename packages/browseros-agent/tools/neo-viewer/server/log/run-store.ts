@@ -16,6 +16,7 @@ import type {
   RunDetail,
   RunStatus,
   RunSummary,
+  RunTask,
   TextSize,
   ViewerEvent,
 } from '../../shared/api'
@@ -318,6 +319,7 @@ function summarizeRun(
   const text = end?.reply.text ?? null
   const runMeta = runMetaOf(end?.reply.meta)
   return {
+    tasks: tasksFromMeta(end?.reply.meta),
     id: start.id,
     seq,
     client: start.client,
@@ -397,6 +399,32 @@ function totalsOf(runs: RunSummary[]): LogTotals {
 function add(total: TextSize, size: TextSize): void {
   total.chars += size.chars
   total.tokens += size.tokens
+}
+
+/**
+ * The tasks a run's script created or picked, from the reply's `_meta["com.browseros.neo/run"]
+ * .tasks` (each `{id, kind, name?, tabs}`), once by id in Neo's order. Anything else is ignored:
+ * an older Neo sends no `tasks`, and the host's own task is the request's `_meta` taskId.
+ */
+export function tasksFromMeta(meta: unknown): RunTask[] {
+  const listed = runMetaOf(meta)?.tasks
+  if (!Array.isArray(listed)) return []
+  const tasks: RunTask[] = []
+  for (const entry of listed) {
+    if (typeof entry !== 'object' || entry === null) continue
+    const { id, name } = entry as Record<string, unknown>
+    if (
+      typeof id !== 'string' ||
+      id === '' ||
+      tasks.some((task) => task.id === id)
+    )
+      continue
+    tasks.push({
+      id,
+      name: typeof name === 'string' && name !== '' ? name : null,
+    })
+  }
+  return tasks
 }
 
 function runMetaOf(meta: unknown): Record<string, unknown> | null {

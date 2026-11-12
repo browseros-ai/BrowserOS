@@ -60,6 +60,7 @@ export function RunRow({
       </span>
       <span className="flex min-w-0 flex-1 items-baseline gap-[1ch] whitespace-pre pr-3">
         <ClientLabel run={run} />
+        <TaskChips run={run} all={open} />
         {open ? (
           <OpenSummary
             run={run}
@@ -215,17 +216,70 @@ function OpenSummary({
   )
 }
 
-/**
- * Which agent sent the run, quietly: several may share the list. Its client's name, and the
- * host task its request named (`_meta` taskId), when it named one.
- */
+/** Which agent sent the run, quietly: several may share the list. */
 function ClientLabel({ run }: { run: RunSummary }) {
   const name = run.client?.name
-  if (!name && !run.agentTaskId) return null
+  if (!name) return null
   return (
-    <span className="shrink-0 font-plex text-[11px] text-ink-4">
-      {name}
-      {run.agentTaskId ? ` · ${run.agentTaskId}` : ''}
+    <span className="shrink-0 font-plex text-[11px] text-ink-4">{name}</span>
+  )
+}
+
+/**
+ * The tasks the run touched, as quiet chips beside the client, drawn like the methods' read/write
+ * chips: the ones its script created or picked (`neo.task`), then the host's own task (the
+ * request's `_meta` taskId) with a small "host" mark. A closed row shows the first and "+N"; an
+ * open one shows all; the title lists all either way. A task keeps one hue on every row (from its
+ * id), so the eye can follow a task down the list without a menu. A run with no task shows none.
+ */
+export function TaskChips({ run, all }: { run: RunSummary; all: boolean }) {
+  const chips = [
+    ...run.tasks.map((task) => ({ id: task.id, name: task.name, host: false })),
+    ...(run.agentTaskId &&
+    !run.tasks.some((task) => task.id === run.agentTaskId)
+      ? [{ id: run.agentTaskId, name: null, host: true }]
+      : []),
+  ]
+  if (chips.length === 0) return null
+  const shown = all ? chips : chips.slice(0, 1)
+  const title = chips
+    .map(
+      (chip) =>
+        `${chip.host ? 'host task' : 'task'} ${chip.id}${chip.name ? ` (${chip.name})` : ''}`,
+    )
+    .join(', ')
+  return (
+    <span
+      className="flex shrink-0 items-baseline gap-1"
+      title={title}
+      data-tasks={chips.length}
+    >
+      {shown.map((chip) => (
+        <span
+          key={`${chip.host}-${chip.id}`}
+          data-task={chip.id}
+          className="rounded px-[7px] py-px font-code text-[11px] leading-[14px]"
+          style={taskHue(chip.id)}
+        >
+          {chip.host && (
+            <span className="mr-1 font-plex text-[10px] opacity-70">host</span>
+          )}
+          {chip.id}
+        </span>
+      ))}
+      {shown.length < chips.length && (
+        <span className="font-plex text-[11px] text-ink-3">
+          +{chips.length - shown.length}
+        </span>
+      )}
     </span>
   )
+}
+
+/** One light hue per task id, stable across rows and reloads. */
+export function taskHue(id: string): { background: string; color: string } {
+  let hash = 0
+  for (const char of id) hash = (hash * 31 + (char.codePointAt(0) ?? 0)) >>> 0
+  const hue = hash % 360
+  return { background: `hsl(${hue} 70% 93%)`, color: `hsl(${hue} 45% 28%)` }
 }

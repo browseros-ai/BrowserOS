@@ -115,8 +115,8 @@ export function runMarkdown(
 }
 
 /**
- * `Run 007 · 10:14:02 · claude-code · ok · round trip 1.85 s · Neo 1.62 s · 4 method calls ·
- * code ≈52 tok · reply ≈220 tok`.
+ * `Run 007 · 10:14:02 · claude-code · task shop-4b80 · ok · round trip 1.85 s · Neo 1.62 s ·
+ * 4 method calls · code ≈52 tok · reply ≈220 tok`.
  */
 function runHeader(run: RunSummary, width: number): string {
   const neo = neoMs(run)
@@ -124,6 +124,7 @@ function runHeader(run: RunSummary, width: number): string {
     `Run ${runNumber(run, width)}`,
     clock(run.sentAt),
     run.client?.name ?? 'unknown client',
+    ...taskWords(run),
     outcomeWord(run),
     `round trip ${run.roundTripMs === null ? '–' : seconds(run.roundTripMs)}`,
     `Neo ${neo === null ? '–' : seconds(neo)}`,
@@ -145,12 +146,29 @@ function methodCalls(run: RunSummary): string {
     : 'method calls unknown'
 }
 
+/** `task shop-4b80`, `tasks a, b`, `host task h1`: what the run's tasks were, for the header. */
+export function taskWords(run: RunSummary): string[] {
+  const words: string[] = []
+  if (run.tasks.length > 0)
+    words.push(
+      `${run.tasks.length === 1 ? 'task' : 'tasks'} ${run.tasks.map((task) => task.id).join(', ')}`,
+    )
+  if (run.agentTaskId) words.push(`host task ${run.agentTaskId}`)
+  return words
+}
+
 function facts(detail: RunDetail): string[] {
   const lines = [
     `- Sent ${detail.sentAt}${detail.answeredAt ? `, answered ${detail.answeredAt}` : ''}`,
   ]
   if (detail.gapMs !== null)
     lines.push(`- ${seconds(detail.gapMs)} after the previous reply`)
+  if (detail.tasks.length > 0)
+    lines.push(
+      `- Tasks the script created or picked: ${detail.tasks
+        .map((task) => `\`${task.id}\`${task.name ? ` (${task.name})` : ''}`)
+        .join(', ')}`,
+    )
   if (detail.agentTaskId)
     lines.push(
       `- Host task (the request's \`_meta\` taskId): \`${detail.agentTaskId}\``,
