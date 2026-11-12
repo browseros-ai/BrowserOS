@@ -284,9 +284,10 @@ mod tests {
     /// The ops with an empty row send selectors, values or trusted input, or read in the isolated
     /// world. `page.goto` delegates URLs to Chromium, including `javascript:` scripts in the
     /// current document; it has no separate script gateway. Aliases share their op's row:
-    /// `locator.screenshot` and `elementHandle.screenshot` send `page.screenshot`; `$eval`,
-    /// `frame.$eval` and `elementHandle.evaluate` send `locator.evaluate`; `$$eval` sends
-    /// `locator.evaluateAll`; the `frame` forms send the page ops.
+    /// `locator.screenshot` and `elementHandle.screenshot` send `page.screenshot`; `page.$eval`,
+    /// `frame.$eval` and `elementHandle.$eval` send `page.evalOnSelector`;
+    /// `elementHandle.evaluate` sends `locator.evaluate`; `$$eval` sends `locator.evaluateAll`; the
+    /// `frame` forms send the page ops.
     #[test]
     #[expect(
         clippy::too_many_lines,
@@ -367,6 +368,7 @@ mod tests {
             ("worker.evaluate", &[MainWorld], true),
             ("page.evaluate", &[MainWorld], true),
             ("locator.evaluate", &[MainWorld], true),
+            ("page.evalOnSelector", &[MainWorld], true),
             ("locator.evaluateAll", &[MainWorld], true),
             ("page.waitForFunction", &[MainWorld], true),
             ("locator.waitForFunction", &[MainWorld], true),
@@ -495,9 +497,9 @@ mod tests {
             let expected = match (spec.name, receiver) {
                 // The screenshot client's filesystem step has no browser target.
                 ("page.saveScreenshot", _) => OpTarget::None,
-                ("expect.locator" | "page.addLocatorHandler", _) | (_, Some("locator")) => {
-                    OpTarget::Field("target")
-                }
+                // `$eval` takes a selector rooted in a page, frame or element handle.
+                ("expect.locator" | "page.addLocatorHandler" | "page.evalOnSelector", _)
+                | (_, Some("locator")) => OpTarget::Field("target"),
                 // They name a registration, not a page, and must answer after the handler
                 // closed its page.
                 (

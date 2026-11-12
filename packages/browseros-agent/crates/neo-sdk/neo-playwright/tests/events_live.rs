@@ -715,13 +715,11 @@ async fn ordered_rounds(run: &LiveRun, server: &PageServer, page: &TestPage) -> 
             };
             let evaluated = async {
                 let expression = format!("() => console.log({text:?})");
-                let script = json!({ "run": {
-                    "expression": expression, "isFunction": true, "arg": r#"{"v":"undefined"}"#,
-                } });
                 let reply = run
                     .invoke(
                         "page.evaluate",
-                        json!({ "page": brand(page), "script": script }),
+                        json!({ "page": brand(page), "expression": expression, "isFunction": true,
+                                "arg": { "value": r#"{"v":"undefined"}"#, "handles": [] } }),
                     )
                     .await;
                 (reply, Instant::now())

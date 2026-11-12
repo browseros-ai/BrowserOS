@@ -35,7 +35,7 @@ function runtime(batch: unknown[] = []) {
         sent.name.endsWith('.exposeBinding') ||
         sent.name.endsWith('.addInitScript')
       )
-        return { id: 3 }
+        return 3
       return {}
     },
   })
@@ -101,11 +101,9 @@ describe('registering', () => {
       },
     ])
     expect(
-      run.sent('page.addInitScript').map((sent) => sent.input.script),
+      run.sent('page.addInitScript').map((sent) => sent.input.source),
     ).toEqual([
-      {
-        source: `(({ cb }) => cb(1))(globalThis['__playwright__binding__controller__'].parseInitScriptArg({"o":[{"k":"cb","v":{"fn":"${name}"}}],"id":1}))`,
-      },
+      `(({ cb }) => cb(1))(globalThis['__playwright__binding__controller__'].parseInitScriptArg({"o":[{"k":"cb","v":{"fn":"${name}"}}],"id":1}))`,
     ])
   })
 })
@@ -199,7 +197,7 @@ it('tests that a call with a known frame runs its callback as the pump dispatche
         }))
       }
       if (sent.name === 'events.listen') release()
-      if (sent.name === 'page.exposeBinding') return { id: 3 }
+      if (sent.name === 'page.exposeBinding') return 3
       return {}
     },
   })
@@ -249,7 +247,7 @@ it('tests that a failed exposeFunctions setup disposes the bindings it made', as
     seed: SEED,
     answer: (sent: Call) => {
       if (sent.name === 'events.next') return never
-      if (sent.name === 'page.exposeBinding') return { id: ++registered }
+      if (sent.name === 'page.exposeBinding') return ++registered
       if (sent.name === 'page.addInitScript')
         return {
           err: { code: 'owner_has_control', owner: 'host', message: 'held' },
@@ -298,8 +296,8 @@ describe("evaluate's exposeFunctions", () => {
       },
     ])
     const [evaluate] = run.sent('page.evaluate')
-    const script = evaluate?.input.script as { run: { arg: string } }
-    expect(JSON.parse(script.run.arg)).toEqual({
+    const arg = evaluate?.input.arg as { value: string }
+    expect(JSON.parse(arg.value)).toEqual({
       o: [{ k: 'cb', v: { fn: name } }],
       id: 1,
     })
@@ -322,7 +320,7 @@ describe("evaluate's exposeFunctions", () => {
     expect(aborted).toBe('AbortError')
     const scripts = run
       .sent('locator.evaluate')
-      .map((sent) => sent.input.script as { refused?: string })
+      .map((sent) => sent.input as { refused?: string })
     expect(String(scripts[1]?.refused)).toStartWith(
       'Neo passes element handles',
     )
@@ -341,7 +339,7 @@ describe("evaluate's exposeFunctions", () => {
         if (sent.name === 'events.next') return never
         if (sent.name === 'page.exposeBinding')
           return ++registered === 1
-            ? { id: 1 }
+            ? 1
             : {
                 err: {
                   code: 'owner_has_control',

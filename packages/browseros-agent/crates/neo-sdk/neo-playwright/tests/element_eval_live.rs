@@ -121,9 +121,18 @@ fn arg_text(arg: Option<&str>) -> String {
     )
 }
 
-/// The prelude's script for `function`, with a string argument or none.
-fn script(function: &str, arg: Option<&str>) -> Value {
-    json!({ "run": { "expression": function, "isFunction": true, "arg": arg_text(arg) } })
+/// `input` with the prelude's script for `function` beside its addressing: upstream's
+/// `expression`, `isFunction` and `arg`, with a string argument or none.
+fn scripted(mut input: Value, function: &str, arg: Option<&str>) -> Value {
+    if let Some(fields) = input.as_object_mut() {
+        fields.insert("expression".to_owned(), json!(function));
+        fields.insert("isFunction".to_owned(), json!(true));
+        fields.insert(
+            "arg".to_owned(),
+            json!({ "value": arg_text(arg), "handles": [] }),
+        );
+    }
+    input
 }
 
 /// `locator.evaluate(function, arg)` as the prelude sends it for `api`, with a timeout, its
@@ -135,12 +144,17 @@ async fn evaluate(
     function: &str,
     arg: Option<&str>,
 ) -> Result<Value, PlaywrightError> {
-    let input = json!({ "call": { "api": api, "timeoutMs": 10_000 }, "target": target,
-                        "strict": "strict", "script": script(function, arg) });
+    let input = scripted(
+        json!({ "call": { "api": api, "timeoutMs": 10_000 }, "target": target,
+                "strict": "strict" }),
+        function,
+        arg,
+    );
     run.invoke("locator.evaluate", input).await.map(plain)
 }
 
-/// `page.$eval(selector, function)` or `elementHandle.$eval`: the first match now.
+/// `page.$eval(selector, function)` or `elementHandle.$eval`: the first match now, as
+/// `page.evalOnSelector` with the selector as the script wrote it.
 async fn eval_first(
     run: &LiveRun,
     api: &str,
@@ -149,9 +163,13 @@ async fn eval_first(
     function: &str,
 ) -> Result<Value, PlaywrightError> {
     run.invoke(
-        "locator.evaluate",
-        json!({ "call": { "api": api, "timeoutMs": 0 }, "target": target, "strict": "firstMatch",
-                "noWait": true, "selector": selector, "script": script(function, None) }),
+        "page.evalOnSelector",
+        scripted(
+            json!({ "call": { "api": api, "timeoutMs": 0 }, "target": target,
+                    "strict": "firstMatch", "selector": selector }),
+            function,
+            None,
+        ),
     )
     .await
     .map(plain)
@@ -165,8 +183,11 @@ async fn evaluate_all(
     function: &str,
     arg: Option<&str>,
 ) -> Result<Value, PlaywrightError> {
-    let input = json!({ "call": { "api": api, "timeoutMs": 0 }, "target": target,
-                        "script": script(function, arg) });
+    let input = scripted(
+        json!({ "call": { "api": api, "timeoutMs": 0 }, "target": target }),
+        function,
+        arg,
+    );
     run.invoke("locator.evaluateAll", input).await.map(plain)
 }
 
@@ -181,8 +202,8 @@ async fn evaluate_with(
         .map(|index| json!({ "h": index }))
         .collect();
     let input = json!({ "call": { "api": "page.evaluate", "timeoutMs": 0 }, "page": brand(page),
-        "script": { "run": { "expression": function, "isFunction": true,
-            "arg": json!({ "a": items, "id": 1 }).to_string(), "handles": handles } } });
+        "expression": function, "isFunction": true,
+        "arg": { "value": json!({ "a": items, "id": 1 }).to_string(), "handles": handles } });
     run.invoke("page.evaluate", input).await.map(plain)
 }
 
@@ -665,9 +686,12 @@ async fn tests_that_a_missing_match_fails_with_nothing_sent() -> TestResult {
             let waited = run
                 .invoke(
                     "locator.evaluate",
-                    json!({ "call": { "api": "locator.evaluate", "timeoutMs": 300 },
-                            "target": at(&page, "#nowhere"), "strict": "strict",
-                            "script": script("(el) => el.id", None) }),
+                    scripted(
+                        json!({ "call": { "api": "locator.evaluate", "timeoutMs": 300 },
+                                "target": at(&page, "#nowhere"), "strict": "strict" }),
+                        "(el) => el.id",
+                        None,
+                    ),
                 )
                 .await
                 .err()
@@ -696,25 +720,48 @@ async fn tests_that_a_missing_match_fails_with_nothing_sent() -> TestResult {
 async fn tests_that_a_handle_argument_is_adopted_from_its_own_document_only() -> TestResult {
     on_page("/eval.html", |run, page| async move {
         let result = async {
-            run.eval(&page, "document.getElementById('pw').value = 'handle-secret-3'").await?;
+            run.eval(
+                &page,
+                "document.getElementById('pw').value = 'handle-secret-3'",
+            )
+            .await?;
             let field = handle_of(&run, &at(&page, "#pw")).await?;
             let list = handle_of(&run, &at(&page, "#list")).await?;
             run.clear_calls();
-            let same = evaluate_with(&run, &page, "([a, b]) => [a.id, b.id, a.value]",
-                &[&field, &list]).await?;
-            assert_eq!(same, json!(["pw", "list", "handle-secret-3"]), "handles of the page's document");
+            let same = evaluate_with(
+                &run,
+                &page,
+                "([a, b]) => [a.id, b.id, a.value]",
+                &[&field, &list],
+            )
+            .await?;
+            assert_eq!(
+                same,
+                json!(["pw", "list", "handle-secret-3"]),
+                "handles of the page's document"
+            );
             sent_once(&run, "a script with handle arguments");
             let one = run
-                .invoke("locator.evaluate", json!({
+                .invoke(
+                    "locator.evaluate",
+                    json!({
                     "call": { "api": "locator.evaluate", "timeoutMs": 10_000 },
                     "target": at(&page, "#list"), "strict": "strict",
-                    "script": { "run": { "expression": "(el, f) => [el.id, f.id]", "isFunction": true,
-                        "arg": r#"{"h":0}"#, "handles": [&field] } } }))
+                    "expression": "(el, f) => [el.id, f.id]", "isFunction": true,
+                    "arg": { "value": r#"{"h":0}"#, "handles": [&field] } }),
+                )
                 .await
                 .map(plain)?;
-            assert_eq!(one, json!(["list", "pw"]), "an element script takes a handle too");
-            let inner = locator(&page, &[css("#inner"), enter_frame(), css("#reach")],
-                "locator('#inner').contentFrame().locator('#reach')");
+            assert_eq!(
+                one,
+                json!(["list", "pw"]),
+                "an element script takes a handle too"
+            );
+            let inner = locator(
+                &page,
+                &[css("#inner"), enter_frame(), css("#reach")],
+                "locator('#inner').contentFrame().locator('#reach')",
+            );
             let child = handle_of(&run, &inner).await?;
             let other = run.new_page().await?;
             run.clear_calls();
@@ -732,7 +779,10 @@ async fn tests_that_a_handle_argument_is_adopted_from_its_own_document_only() ->
                 .await
                 .err()
                 .ok_or("another page's handle is refused")?;
-            assert_eq!(elsewhere.message(), "page.evaluate: Frame has been detached.");
+            assert_eq!(
+                elsewhere.message(),
+                "page.evaluate: Frame has been detached."
+            );
             not_sent(&run, "a handle that cannot be adopted");
             run.close_page(&other).await;
             run.eval(&page, "location.reload()").await?;
@@ -948,6 +998,168 @@ async fn tests_that_element_scripts_run_through_the_prelude() -> TestResult {
             "missing": "elementHandle.$eval: Failed to find element matching selector \"b\"",
         }),
         "each answer is what Playwright gives"
+    );
+    Ok(())
+}
+
+/// The opening of a pin script: `record(key, call)` keeps what one call threw as the script sees
+/// it, or `'passed'`: the error's name and its message's first line, and `stack` when a page error
+/// carries the main world's frames, whose line numbers belong to the injected main-world script.
+const RECORD: &str = "const seen = {}\n\
+const record = async (key, call) => {\n\
+  try { await call(); seen[key] = 'passed' }\n\
+  catch (error) {\n\
+    const [first, ...frames] = error.message.split('\\nCall log:')[0].split('\\n    at ')\n\
+    seen[key] = { name: error.name, message: first, ...(frames.length ? { stack: true } : {}) }\n\
+  }\n\
+}\n";
+
+/// What a script sees when an evaluation fails, through the real prelude: upstream's messages and
+/// error names, `$eval`'s no-match error quoting the selector as the script wrote it, and the
+/// refusals of a script that cannot run, raised with nothing sent. The evaluating ops' wire may
+/// change shape (task 006); none of these may.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_evaluation_failures_read_as_playwright_and_refusals_send_nothing() -> TestResult
+{
+    let server = FixtureServer::start([("/eval.html".to_owned(), Page::html(EVAL))].into()).await?;
+    let run = Arc::new(LiveRun::connect().await?);
+    let page = run.new_page().await?;
+    let opened = run
+        .invoke(
+            "page.goto",
+            json!({ "call": { "timeoutMs": 30_000 }, "page": brand(&page),
+                    "url": server.url("127.0.0.1", "/eval.html") }),
+        )
+        .await;
+    let result = match opened {
+        Ok(_) => evaluation_failures(&run, &page).await,
+        Err(error) => Err(error.into()),
+    };
+    run.close_page(&page).await;
+    result
+}
+
+async fn evaluation_failures(run: &Arc<LiveRun>, page: &TestPage) -> TestResult {
+    refusals(run, page).await?;
+    failures(run, page).await
+}
+
+/// Scripts that cannot run: refused with upstream's message, and nothing sent.
+async fn refusals(run: &Arc<LiveRun>, page: &TestPage) -> TestResult {
+    let host: Arc<dyn OpHost> = Arc::<LiveRun>::clone(run);
+    let init = json!({ "page": brand(page) });
+    // `Math.max` prints as native code, which upstream's server cannot normalize; an argument
+    // holding a function fails upstream's client after a locator's wait.
+    run.clear_calls();
+    let refused = run_script(
+        &host,
+        &init,
+        &format!(
+            "{RECORD}\
+             const pw = await page.$('#pw')\n\
+             const sent = () => {{}}\n\
+             await record('page.evaluate', () => page.evaluate(Math.max))\n\
+             await record('frame.evaluate', () => page.mainFrame().evaluate(Math.max))\n\
+             await record('page.waitForFunction', () => page.waitForFunction(Math.max))\n\
+             await record('page.$eval', () => page.$eval('#pw', Math.max))\n\
+             await record('page.$$eval', () => page.$$eval('li', Math.max))\n\
+             await record('locator.evaluate', () => page.locator('#pw').evaluate(Math.max))\n\
+             await record('locator.evaluateAll', () => page.locator('li').evaluateAll(Math.max))\n\
+             await record('locator.waitForFunction', () => page.locator('#pw').waitForFunction(Math.max))\n\
+             await record('elementHandle.evaluate', () => pw.evaluate(Math.max))\n\
+             const list = await page.$('#list')\n\
+             await record('elementHandle.$eval', () => list.$eval('li', Math.max))\n\
+             await record('elementHandle.$eval no match first', () => pw.$eval('*', Math.max))\n\
+             await record('locator.evaluate arg', () => page.locator('#pw').evaluate((el) => el, sent))\n\
+             return seen"
+        ),
+    )
+    .await?;
+    let calls = run.calls();
+    assert!(
+        !calls.iter().any(|call| matches!(call, EnvCall::MarkSent)),
+        "a refused script sends nothing: {calls:?}"
+    );
+    let refusal = |api: &str| json!({ "name": "Error", "message": format!("{api}: Passed function is not well-serializable!") });
+    assert_eq!(
+        refused,
+        json!({
+            "page.evaluate": refusal("page.evaluate"),
+            "frame.evaluate": refusal("frame.evaluate"),
+            "page.waitForFunction": refusal("page.waitForFunction"),
+            "page.$eval": refusal("page.$eval"),
+            "page.$$eval": refusal("page.$$eval"),
+            "locator.evaluate": refusal("locator.evaluate"),
+            "locator.evaluateAll": refusal("locator.evaluateAll"),
+            "locator.waitForFunction": refusal("locator.waitForFunction"),
+            "elementHandle.evaluate": refusal("elementHandle.evaluate"),
+            "elementHandle.$eval": refusal("elementHandle.$eval"),
+            // Upstream's server finds the element before it normalizes the expression.
+            "elementHandle.$eval no match first": {
+                "name": "Error",
+                "message": "elementHandle.$eval: Failed to find element matching selector \"*\"",
+            },
+            // Upstream's client serializes the argument after the locator's wait.
+            "locator.evaluate arg": {
+                "name": "Error",
+                "message": "locator.evaluate: Attempting to serialize unexpected value: () => {}",
+            },
+        }),
+        "refusals"
+    );
+    Ok(())
+}
+
+/// Scripts that run, or wait, and fail as upstream's do.
+async fn failures(run: &Arc<LiveRun>, page: &TestPage) -> TestResult {
+    let host: Arc<dyn OpHost> = Arc::<LiveRun>::clone(run);
+    let init = json!({ "page": brand(page) });
+    let failed = run_script(
+        &host,
+        &init,
+        &format!(
+            "{RECORD}\
+             const list = await page.$('#list')\n\
+             await record('page.$eval', () => page.$eval('#nowhere', (el) => el))\n\
+             await record('frame.$eval', () => page.mainFrame().$eval('#nowhere', (el) => el))\n\
+             await record('elementHandle.$eval', () => list.$eval('b', (el) => el))\n\
+             await record('locator.evaluate missing', () => page.locator('#nowhere').evaluate((el) => el, () => {{}}, {{ timeout: 300 }}))\n\
+             await record('page.evaluate arg', () => page.evaluate((x) => x, () => {{}}))\n\
+             await record('page.evaluate throws', () => page.evaluate(() => {{ throw new Error('boom') }}))\n\
+             await record('locator.evaluate throws', () => page.locator('#pw').evaluate(() => {{ throw new Error('boom') }}))\n\
+             await record('locator.evaluateAll throws', () => page.locator('li').evaluateAll(() => {{ throw new Error('boom') }}))\n\
+             await record('page.waitForFunction throws', () => page.waitForFunction(() => {{ throw new Error('boom') }}))\n\
+             await record('page.waitForFunction timeout', () => page.waitForFunction(() => false, null, {{ timeout: 300 }}))\n\
+             await record('locator.waitForFunction timeout', () => page.locator('#pw').waitForFunction(() => false, null, {{ timeout: 300 }}))\n\
+             await record('page.waitForFunction polling', () => page.waitForFunction(() => false, null, {{ polling: 'often' }}))\n\
+             return seen"
+        ),
+    )
+    .await?;
+    let error = |message: &str| json!({ "name": "Error", "message": message });
+    let timeout = |api: &str| json!({ "name": "TimeoutError", "message": format!("{api}: Timeout 300ms exceeded.") });
+    let thrown = |api: &str| json!({ "name": "Error", "message": format!("{api}: Error: boom"), "stack": true });
+    assert_eq!(
+        failed,
+        json!({
+            "page.$eval": error("page.$eval: Failed to find element matching selector \"#nowhere\""),
+            "frame.$eval": error("frame.$eval: Failed to find element matching selector \"#nowhere\""),
+            "elementHandle.$eval": error("elementHandle.$eval: Failed to find element matching selector \"b\""),
+            // A locator waits before upstream's client serializes the argument, so the wait's
+            // timeout comes first.
+            "locator.evaluate missing": timeout("locator.evaluate"),
+            // A frame's evaluate has no wait: upstream's client throws before anything is sent.
+            "page.evaluate arg": error("Attempting to serialize unexpected value: () => {}"),
+            "page.evaluate throws": thrown("page.evaluate"),
+            "locator.evaluate throws": thrown("locator.evaluate"),
+            "locator.evaluateAll throws": thrown("locator.evaluateAll"),
+            "page.waitForFunction throws": thrown("page.waitForFunction"),
+            "page.waitForFunction timeout": timeout("page.waitForFunction"),
+            "locator.waitForFunction timeout": timeout("locator.waitForFunction"),
+            "page.waitForFunction polling": error("Unknown polling option: often"),
+        }),
+        "failures"
     );
     Ok(())
 }

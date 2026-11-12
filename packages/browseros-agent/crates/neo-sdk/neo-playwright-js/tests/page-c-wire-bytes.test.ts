@@ -22,10 +22,26 @@ for (const scenario of fixture.scenarios) {
   })
 }
 
-it('changes only storage command packaging and the void viewport receipt', () => {
+it("changes only storage command packaging, the void viewport receipt and page B's init scripts and disposables", () => {
   const expected = structuredClone(before)
   for (const scenario of expected.scenarios) {
     for (const exchange of scenario.exchanges) {
+      // Page B (task 006): an init script's source or path travels at the top level as
+      // upstream's `source`, a registration answers its bare id, and a dispose answers null.
+      if (exchange.op === 'context.addInitScript') {
+        const { script, ...args } = JSON.parse(exchange.args)
+        exchange.args = JSON.stringify({ ...args, ...script })
+      }
+      if (
+        exchange.op === 'context.addInitScript' ||
+        exchange.op === 'context.exposeBinding'
+      )
+        exchange.reply = exchange.reply.replace(
+          /"ok":\{"id":(\d+)\}/,
+          '"ok":$1',
+        )
+      if (exchange.op === 'disposable.dispose')
+        exchange.reply = exchange.reply.replace('"ok":{}', '"ok":null')
       if (
         exchange.op === 'webStorage.read' ||
         exchange.op === 'webStorage.write'

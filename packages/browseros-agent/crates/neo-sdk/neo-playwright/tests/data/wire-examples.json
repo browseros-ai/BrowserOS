@@ -21,9 +21,7 @@
           "api": "browserContext.addInitScript",
           "timeoutMs": 0
         },
-        "script": {
-          "source": "window.b = 1"
-        }
+        "source": "window.b = 1"
       }
     ],
     "context.exposeBinding": [
@@ -941,12 +939,11 @@
           "display": "getByRole('button')"
         },
         "strict": "strict",
-        "script": {
-          "run": {
-            "expression": "(e) => e.id",
-            "isFunction": true,
-            "arg": "{\"v\":\"undefined\"}"
-          }
+        "expression": "(e) => e.id",
+        "isFunction": true,
+        "arg": {
+          "value": "{\"v\":\"undefined\"}",
+          "handles": []
         }
       },
       {
@@ -965,119 +962,12 @@
           "display": "<button>Go</button>"
         },
         "strict": "strict",
-        "script": {
-          "run": {
-            "expression": "(e) => e.id",
-            "isFunction": true,
-            "arg": "{\"v\":\"undefined\"}"
-          }
+        "expression": "(e) => e.id",
+        "isFunction": true,
+        "arg": {
+          "value": "{\"v\":\"undefined\"}",
+          "handles": []
         }
-      },
-      {
-        "call": {
-          "api": "elementHandle.$eval",
-          "timeoutMs": 0
-        },
-        "target": {
-          "$neo": "locator",
-          "page": {
-            "$neo": "page",
-            "tab": 1007
-          },
-          "frame": null,
-          "chunks": [
-            {
-              "parts": [
-                {
-                  "name": "css",
-                  "body": [
-                    {
-                      "simples": [
-                        {
-                          "selector": {
-                            "css": "b",
-                            "functions": []
-                          },
-                          "combinator": ""
-                        }
-                      ]
-                    }
-                  ],
-                  "source": "b"
-                }
-              ]
-            }
-          ],
-          "display": "locator('b')",
-          "root": {
-            "$neo": "element",
-            "page": {
-              "$neo": "page",
-              "tab": 1007
-            },
-            "seq": 0,
-            "node": 9,
-            "display": "<button>Go</button>"
-          }
-        },
-        "strict": "firstMatch",
-        "noWait": true,
-        "selector": "b",
-        "script": {
-          "run": {
-            "expression": "(e) => e.id",
-            "isFunction": true,
-            "arg": "{\"v\":\"undefined\"}"
-          }
-        }
-      },
-      {
-        "call": {
-          "api": "page.$eval",
-          "timeoutMs": 0
-        },
-        "target": {
-          "$neo": "locator",
-          "page": {
-            "$neo": "page",
-            "tab": 1007
-          },
-          "frame": null,
-          "chunks": [
-            {
-              "parts": [
-                {
-                  "name": "css",
-                  "body": [
-                    {
-                      "simples": [
-                        {
-                          "selector": {
-                            "css": "b",
-                            "functions": []
-                          },
-                          "combinator": ""
-                        }
-                      ]
-                    }
-                  ],
-                  "source": "b"
-                }
-              ]
-            }
-          ],
-          "display": "locator('b')"
-        },
-        "strict": "firstMatch",
-        "script": {
-          "run": {
-            "expression": "(e) => e.id",
-            "isFunction": true,
-            "arg": "{\"v\":\"undefined\"}"
-          }
-        },
-        "noWait": true,
-        "selector": "b"
       }
     ],
     "locator.evaluateAll": [
@@ -1106,12 +996,11 @@
           ],
           "display": "getByRole('button')"
         },
-        "script": {
-          "run": {
-            "expression": "(es) => es.length",
-            "isFunction": true,
-            "arg": "{\"v\":\"undefined\"}"
-          }
+        "expression": "(es) => es.length",
+        "isFunction": true,
+        "arg": {
+          "value": "{\"v\":\"undefined\"}",
+          "handles": []
         }
       },
       {
@@ -1161,12 +1050,11 @@
             "display": "<button>Go</button>"
           }
         },
-        "script": {
-          "run": {
-            "expression": "(es) => es.length",
-            "isFunction": true,
-            "arg": "{\"v\":\"undefined\"}"
-          }
+        "expression": "(es) => es.length",
+        "isFunction": true,
+        "arg": {
+          "value": "{\"v\":\"undefined\"}",
+          "handles": []
         }
       },
       {
@@ -1206,12 +1094,11 @@
           ],
           "display": "locator('b')"
         },
-        "script": {
-          "run": {
-            "expression": "(es) => es.length",
-            "isFunction": true,
-            "arg": "{\"v\":\"undefined\"}"
-          }
+        "expression": "(es) => es.length",
+        "isFunction": true,
+        "arg": {
+          "value": "{\"v\":\"undefined\"}",
+          "handles": []
         }
       }
     ],
@@ -1990,12 +1877,11 @@
           "display": "getByRole('button')"
         },
         "strict": "strict",
-        "script": {
-          "run": {
-            "expression": "(e) => e.id",
-            "isFunction": true,
-            "arg": "{\"v\":\"undefined\"}"
-          }
+        "expression": "(e) => e.id",
+        "isFunction": true,
+        "arg": {
+          "value": "{\"v\":\"undefined\"}",
+          "handles": []
         }
       }
     ],
@@ -2075,9 +1961,7 @@
           "$neo": "page",
           "tab": 1007
         },
-        "script": {
-          "source": "((a) => { window.a = a })(1)"
-        }
+        "source": "((a) => { window.a = a })(1)"
       },
       {
         "call": {
@@ -2088,9 +1972,7 @@
           "$neo": "page",
           "tab": 1007
         },
-        "script": {
-          "path": "Cargo.toml"
-        }
+        "path": "Cargo.toml"
       },
       {
         "call": {
@@ -2101,9 +1983,7 @@
           "$neo": "page",
           "tab": 1007
         },
-        "script": {
-          "source": "(({ cb }) => cb(1))(globalThis['__playwright__binding__controller__'].parseInitScriptArg({\"o\":[{\"k\":\"cb\",\"v\":{\"fn\":\"__pw_fn_40404040404040404040404040404040\"}}],\"id\":1}))"
-        }
+        "source": "(({ cb }) => cb(1))(globalThis['__playwright__binding__controller__'].parseInitScriptArg({\"o\":[{\"k\":\"cb\",\"v\":{\"fn\":\"__pw_fn_40404040404040404040404040404040\"}}],\"id\":1}))"
       }
     ],
     "page.addLocatorHandler": [
@@ -2228,6 +2108,110 @@
         "contrast": "more"
       }
     ],
+    "page.evalOnSelector": [
+      {
+        "call": {
+          "api": "elementHandle.$eval",
+          "timeoutMs": 0
+        },
+        "target": {
+          "$neo": "locator",
+          "page": {
+            "$neo": "page",
+            "tab": 1007
+          },
+          "frame": null,
+          "chunks": [
+            {
+              "parts": [
+                {
+                  "name": "css",
+                  "body": [
+                    {
+                      "simples": [
+                        {
+                          "selector": {
+                            "css": "b",
+                            "functions": []
+                          },
+                          "combinator": ""
+                        }
+                      ]
+                    }
+                  ],
+                  "source": "b"
+                }
+              ]
+            }
+          ],
+          "display": "locator('b')",
+          "root": {
+            "$neo": "element",
+            "page": {
+              "$neo": "page",
+              "tab": 1007
+            },
+            "seq": 0,
+            "node": 9,
+            "display": "<button>Go</button>"
+          }
+        },
+        "strict": "firstMatch",
+        "selector": "b",
+        "expression": "(e) => e.id",
+        "isFunction": true,
+        "arg": {
+          "value": "{\"v\":\"undefined\"}",
+          "handles": []
+        }
+      },
+      {
+        "call": {
+          "api": "page.$eval",
+          "timeoutMs": 0
+        },
+        "target": {
+          "$neo": "locator",
+          "page": {
+            "$neo": "page",
+            "tab": 1007
+          },
+          "frame": null,
+          "chunks": [
+            {
+              "parts": [
+                {
+                  "name": "css",
+                  "body": [
+                    {
+                      "simples": [
+                        {
+                          "selector": {
+                            "css": "b",
+                            "functions": []
+                          },
+                          "combinator": ""
+                        }
+                      ]
+                    }
+                  ],
+                  "source": "b"
+                }
+              ]
+            }
+          ],
+          "display": "locator('b')"
+        },
+        "strict": "firstMatch",
+        "selector": "b",
+        "expression": "(e) => e.id",
+        "isFunction": true,
+        "arg": {
+          "value": "{\"v\":\"undefined\"}",
+          "handles": []
+        }
+      }
+    ],
     "page.evaluate": [
       {
         "call": {
@@ -2238,12 +2222,11 @@
           "$neo": "page",
           "tab": 1007
         },
-        "script": {
-          "run": {
-            "expression": "() => 1",
-            "isFunction": true,
-            "arg": "{\"v\":\"undefined\"}"
-          }
+        "expression": "() => 1",
+        "isFunction": true,
+        "arg": {
+          "value": "{\"v\":\"undefined\"}",
+          "handles": []
         }
       },
       {
@@ -2255,24 +2238,22 @@
           "$neo": "page",
           "tab": 1007
         },
-        "script": {
-          "run": {
-            "expression": "(e, h) => h.id",
-            "isFunction": true,
-            "arg": "{\"h\":0}",
-            "handles": [
-              {
-                "$neo": "element",
-                "page": {
-                  "$neo": "page",
-                  "tab": 1007
-                },
-                "seq": 0,
-                "node": 9,
-                "display": "<button>Go</button>"
-              }
-            ]
-          }
+        "expression": "(e, h) => h.id",
+        "isFunction": true,
+        "arg": {
+          "value": "{\"h\":0}",
+          "handles": [
+            {
+              "$neo": "element",
+              "page": {
+                "$neo": "page",
+                "tab": 1007
+              },
+              "seq": 0,
+              "node": 9,
+              "display": "<button>Go</button>"
+            }
+          ]
         }
       }
     ],
@@ -2700,12 +2681,11 @@
           "$neo": "page",
           "tab": 1007
         },
-        "script": {
-          "run": {
-            "expression": "() => true",
-            "isFunction": true,
-            "arg": "{\"v\":\"undefined\"}"
-          }
+        "expression": "() => true",
+        "isFunction": true,
+        "arg": {
+          "value": "{\"v\":\"undefined\"}",
+          "handles": []
         }
       }
     ],
@@ -2862,12 +2842,11 @@
           "tab": 1007
         },
         "worker": "worker-1",
-        "script": {
-          "run": {
-            "expression": "() => 1",
-            "isFunction": true,
-            "arg": "{\"v\":\"undefined\"}"
-          }
+        "expression": "() => 1",
+        "isFunction": true,
+        "arg": {
+          "value": "{\"v\":\"undefined\"}",
+          "handles": []
         }
       }
     ]

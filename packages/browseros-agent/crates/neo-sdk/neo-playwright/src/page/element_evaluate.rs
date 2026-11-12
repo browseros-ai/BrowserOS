@@ -1,13 +1,13 @@
-//! `locator.evaluate` and `locator.evaluateAll`, with their element-handle, page and frame forms
-//! (`elementHandle.evaluate`, `$eval`, `$$eval`): the agent's function called with elements, in
-//! the main world of the frame they are in, through the main-world gateway (`evaluate_guard`).
-//! Both answer in Playwright's serialized format, which the prelude reads back with the vendored
-//! `parseEvaluationResultValue`.
+//! `locator.evaluate`, `page.evalOnSelector` and `locator.evaluateAll`, with their element-handle,
+//! page and frame forms (`elementHandle.evaluate`, `$eval`, `$$eval`): the agent's function called
+//! with elements, in the main world of the frame they are in, through the main-world gateway
+//! (`evaluate_guard`). All answer in Playwright's serialized format, which the prelude reads back
+//! with the vendored `parseEvaluationResultValue`.
 //!
 //! ```text
-//!  locator.evaluate ── waitForSelector(attached, strict) ─▶ handle ─┐  upstream's `_withElement`
-//!  $eval (noWait) ──── the first match now, or upstream's failure ──┤
-//!  elementHandle.evaluate ──────────────────────────────────────────┴▶ Subject::Element
+//!  locator.evaluate ───── waitForSelector(attached, strict) ─▶ handle ─┐ upstream's `_withElement`
+//!  page.evalOnSelector ── ($eval) the first match now, or the failure ─┤
+//!  elementHandle.evaluate ─────────────────────────────────────────────┴▶ Subject::Element
 //!  locator.evaluateAll, $$eval ── every match now, pinned ─▶ Subject::Elements in their frame
 //!                                 nothing matched, or a frame on the way missing ─▶ fn([]) in
 //!                                 the query's starting frame (measured, spike S-detached)
@@ -27,7 +27,7 @@ use ts_rs::TS;
 
 use crate::backoff::Backoff;
 use crate::op_scope::OpScope;
-use crate::page::evaluate::ScriptInput;
+use crate::page::evaluate::{self, ScriptArg};
 use crate::page::evaluate_guard::{
     self, DOCUMENT_REPLACED, EvaluateGuard, MainWorldCall, NAVIGATED, Outcome, Script, Subject,
     TreeFrame,
@@ -41,48 +41,92 @@ use crate::wire::{Nothing, options};
 use crate::world::{FrameSeq, SeqLookup};
 use crate::{ErrorCode, Playwright, PlaywrightError};
 
-/// `locator.evaluate(fn, arg)`, `elementHandle.evaluate`, and `$eval` with `noWait`.
+/// `locator.evaluate(fn, arg)` and `elementHandle.evaluate`: upstream's
+/// `JSHandle.evaluateExpression` params on the element a locator waits for, or on a handle's, and
+/// `refused` (`evaluate::script`).
 #[derive(Deserialize, TS)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub(crate) struct EvaluateOnElementInput {
     target: Target,
     strict: Strictness,
-    script: ScriptInput,
-    /// `$eval`: the first match now, or upstream's failure, instead of waiting for an element.
-    /// The prelude sends it only for `$eval`, so it prints as optional.
+    expression: String,
     #[serde(default)]
     #[ts(optional, as = "Option<bool>")]
-    no_wait: bool,
-    /// `$eval`'s selector as the script wrote it, which upstream's no-match message quotes.
+    is_function: bool,
     #[serde(default)]
     #[ts(optional)]
-    selector: Option<String>,
+    arg: Option<ScriptArg>,
+    #[serde(default)]
+    #[ts(optional)]
+    refused: Option<String>,
 }
 options!(EvaluateOnElementInput);
 
-/// `locator.evaluateAll(fn, arg)` and `$$eval`.
+/// `page.$eval`, `frame.$eval` and `elementHandle.$eval`: upstream's `Frame.evalOnSelector` (and
+/// `ElementHandle.evalOnSelector`, the same params) on the first match now, and `refused`.
+/// `selector` is the selector as the script wrote it, which upstream's no-match error quotes;
+/// `target` carries it parsed, since Rust never parses selectors.
+#[derive(Deserialize, TS)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub(crate) struct EvalOnSelectorInput {
+    target: Target,
+    strict: Strictness,
+    selector: String,
+    expression: String,
+    #[serde(default)]
+    #[ts(optional, as = "Option<bool>")]
+    is_function: bool,
+    #[serde(default)]
+    #[ts(optional)]
+    arg: Option<ScriptArg>,
+    #[serde(default)]
+    #[ts(optional)]
+    refused: Option<String>,
+}
+options!(EvalOnSelectorInput);
+
+/// `locator.evaluateAll(fn, arg)` and `$$eval`: upstream's `Frame.evalOnSelectorAll` params, and
+/// `refused`.
 #[derive(Deserialize, TS)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub(crate) struct EvaluateOnAllInput {
     target: Target,
-    script: ScriptInput,
+    expression: String,
+    #[serde(default)]
+    #[ts(optional, as = "Option<bool>")]
+    is_function: bool,
+    #[serde(default)]
+    #[ts(optional)]
+    arg: Option<ScriptArg>,
+    #[serde(default)]
+    #[ts(optional)]
+    refused: Option<String>,
 }
 options!(EvaluateOnAllInput);
 
-/// `locator.waitForFunction(fn, arg)`.
+/// `locator.waitForFunction(fn, arg)`: upstream's `Frame.waitForFunction` with the locator for its
+/// `selector` and `strict`, and `refused`.
 #[derive(Deserialize, TS)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub(crate) struct WaitForFunctionOnElementInput {
     target: Target,
     strict: Strictness,
-    script: ScriptInput,
+    expression: String,
+    #[serde(default)]
+    #[ts(optional, as = "Option<bool>")]
+    is_function: bool,
+    #[serde(default)]
+    #[ts(optional)]
+    arg: Option<ScriptArg>,
+    #[serde(default)]
+    #[ts(optional)]
+    refused: Option<String>,
 }
 options!(WaitForFunctionOnElementInput);
 
 /// Runs `fn(element, arg)`. A locator waits for its element as upstream's `_withElement` does
 /// (attached, strict, until the op's timeout), and the script itself has no timeout but the
-/// run's; `$eval` takes the first match now. An element handle runs on its node, in its
-/// document or out of it, as upstream's does.
+/// run's. An element handle runs on its node, in its document or out of it, as upstream's does.
 pub(crate) async fn evaluate_on_element(
     pw: &Playwright,
     scope: &OpScope<'_>,
@@ -91,19 +135,46 @@ pub(crate) async fn evaluate_on_element(
     let EvaluateOnElementInput {
         target,
         strict,
-        script,
-        no_wait,
-        selector,
+        expression,
+        is_function,
+        arg,
+        refused,
     } = input;
+    let script = evaluate::script(scope, expression, is_function, arg, refused)?;
     let element = match target {
         Target::Element(handle) => handle,
-        Target::Locator(locator) if no_wait => {
-            first_match(pw, scope, &locator, strict, selector.as_deref()).await?
-        }
         Target::Locator(locator) => attached(pw, scope, &locator, strict).await?,
     };
     let page = element.page().clone();
-    let call = MainWorldCall::once(script.into(), Subject::Element(element));
+    let call = MainWorldCall::once(script, Subject::Element(element));
+    run_once(pw, scope, &page, call).await
+}
+
+/// Runs `$eval`: `fn(element, arg)` on the first match now, or upstream's failure quoting
+/// `selector` as the script wrote it, as upstream's `evalOnSelector` does with no waiting.
+pub(crate) async fn eval_on_selector(
+    pw: &Playwright,
+    scope: &OpScope<'_>,
+    input: EvalOnSelectorInput,
+) -> Result<SerializedValue, PlaywrightError> {
+    let EvalOnSelectorInput {
+        target,
+        strict,
+        selector,
+        expression,
+        is_function,
+        arg,
+        refused,
+    } = input;
+    let script = evaluate::script(scope, expression, is_function, arg, refused)?;
+    let element = match target {
+        Target::Element(handle) => handle,
+        Target::Locator(locator) => {
+            first_match(pw, scope, &locator, strict, Some(selector.as_str())).await?
+        }
+    };
+    let page = element.page().clone();
+    let call = MainWorldCall::once(script, Subject::Element(element));
     run_once(pw, scope, &page, call).await
 }
 
@@ -117,7 +188,14 @@ pub(crate) async fn evaluate_on_all(
     scope: &OpScope<'_>,
     input: EvaluateOnAllInput,
 ) -> Result<SerializedValue, PlaywrightError> {
-    let EvaluateOnAllInput { target, script } = input;
+    let EvaluateOnAllInput {
+        target,
+        expression,
+        is_function,
+        arg,
+        refused,
+    } = input;
+    let script = evaluate::script(scope, expression, is_function, arg, refused)?;
     let Target::Locator(locator) = target else {
         return Err(scope.fail(
             ErrorCode::InvalidInput,
@@ -144,7 +222,7 @@ pub(crate) async fn evaluate_on_all(
         pw,
         scope,
         locator.page(),
-        MainWorldCall::once(script.into(), subject),
+        MainWorldCall::once(script, subject),
     )
     .await
 }
@@ -165,8 +243,12 @@ pub(crate) async fn wait_for_function_on_element(
     let WaitForFunctionOnElementInput {
         target,
         strict,
-        script,
+        expression,
+        is_function,
+        arg,
+        refused,
     } = input;
+    let script = evaluate::script(scope, expression, is_function, arg, refused)?;
     let Target::Locator(locator) = target else {
         return Err(scope.fail(
             ErrorCode::InvalidInput,
@@ -174,7 +256,6 @@ pub(crate) async fn wait_for_function_on_element(
         ));
     };
     // Upstream's server normalizes the expression before it waits, so its refusal comes first.
-    let script = Script::from(script);
     if let Script::Refused(message) = &script {
         return Err(scope.fail(ErrorCode::InvalidInput, message));
     }
