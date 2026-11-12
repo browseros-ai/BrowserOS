@@ -217,7 +217,7 @@ function OpenSummary({
 
 /**
  * Which agent sent the run, quietly: several may share the list. Its client's name, and the
- * task id it sent itself, when it sent one.
+ * host task its request named (`_meta` taskId), when it named one.
  */
 function ClientLabel({ run }: { run: RunSummary }) {
   const name = run.client?.name

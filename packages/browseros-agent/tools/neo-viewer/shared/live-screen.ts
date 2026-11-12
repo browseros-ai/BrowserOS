@@ -156,9 +156,10 @@ export type HostState =
 
 /**
  * Where the agent is: the tab of the most recent run's last operation that acted on a tab, while
- * that tab is open. "Follow agent" keeps it in front, Take over takes it. `taskId` is that run's
- * own task id, when the agent sent one: then Neo follows the task, so the screen moves with it to
- * a new tab without waiting for the next status.
+ * that tab is open. "Follow agent" keeps it in front, Take over takes it. `taskId` is the task
+ * that run's request named (`_meta` taskId), when it named one: then Neo follows the task, so the
+ * screen moves with it to a new tab without waiting for the next status. A task a script picks
+ * itself (`neo.task`) is not in Neo's trace; such a run is followed by its tab.
  */
 export interface AgentFocus {
   tab: LiveTab
