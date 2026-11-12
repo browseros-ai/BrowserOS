@@ -209,6 +209,11 @@ struct BaselineInput {
     #[serde(default)]
     #[ts(optional)]
     document: Option<u32>,
+    /// The `snapshotCall` the page's snapshot answered: the read is held to that call's
+    /// deadline. None holds it to none.
+    #[serde(default, rename = "snapshotCall")]
+    #[ts(optional)]
+    snapshot_call: Option<u32>,
 }
 options!(BaselineInput);
 
@@ -222,6 +227,11 @@ struct PendingInput {
     #[serde(default)]
     #[ts(optional)]
     document: Option<u32>,
+    /// The `snapshotCall` the page's snapshot answered: the record is held to that call's
+    /// deadline. None holds it to none.
+    #[serde(default, rename = "snapshotCall")]
+    #[ts(optional)]
+    snapshot_call: Option<u32>,
     /// The whole page's v1 text, after the notice and the cap: what the baseline becomes.
     text: String,
     /// How `text` was rendered, which the baseline keeps beside it: the form a later delta
@@ -289,8 +299,15 @@ async fn page_snapshot(
         };
         if let Some(root) = read? {
             let stitched = snapshotter.stitched(root, input.depth).await?;
+            // The call this tree answers, and when its timeout passes, for the baseline ops
+            // the prelude may send after it (`snapshot_calls.rs`).
+            let call = scope
+                .run_state()
+                .snapshot_calls
+                .taken(scope.timeout(), scope.deadline());
             return Ok(aria_snapshot::SnapshotResult {
                 document: Some(document),
+                snapshot_call: Some(call),
                 ..stitched
             });
         }
@@ -397,6 +414,7 @@ async fn read_baseline(
     input: BaselineInput,
 ) -> Result<Option<Baseline>, PlaywrightError> {
     let page = OpPage::admit(pw, scope, input.page.tab()).await?;
+    within_snapshot_call(scope, input.snapshot_call, "reading its delta baseline")?;
     Ok(input
         .document
         .and_then(|document| pw.snapshot_baselines().stored(page.target_id(), document)))
@@ -411,6 +429,7 @@ async fn record_pending(
     input: PendingInput,
 ) -> Result<Nothing, PlaywrightError> {
     let page = OpPage::admit(pw, scope, input.page.tab()).await?;
+    within_snapshot_call(scope, input.snapshot_call, "recording its delta baseline")?;
     let Some(document) = input.document else {
         return Ok(());
     };
@@ -427,6 +446,36 @@ async fn record_pending(
         input.returned,
     );
     Ok(())
+}
+
+/// Fails a baseline op once the timeout of the snapshot call it names has passed, by Rust's clock
+/// and the tree op's own record (`snapshot_calls.rs`): that call's `wait_timeout`, naming the
+/// `phase` it ran out in, with this op's id. Nothing the realm sends decides it. A script's abort
+/// of this op comes first, as in `OpScope::timed_out`.
+fn within_snapshot_call(
+    scope: &OpScope<'_>,
+    call: Option<u32>,
+    phase: &str,
+) -> Result<(), PlaywrightError> {
+    if let Some(aborted) = scope.aborted_error() {
+        return Err(aborted);
+    }
+    let passed = call.and_then(|call| {
+        scope
+            .run_state()
+            .snapshot_calls
+            .passed(call, Instant::now())
+    });
+    match passed {
+        Some(timeout) => Err(scope.fail(
+            ErrorCode::WaitTimeout,
+            &format!(
+                "Timeout {}ms exceeded after the snapshot was taken, while {phase}.",
+                timeout.as_millis()
+            ),
+        )),
+        None => Ok(()),
+    }
 }
 
 /// What every frame of one snapshot op shares.

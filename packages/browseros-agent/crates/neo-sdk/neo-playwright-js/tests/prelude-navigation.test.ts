@@ -49,7 +49,9 @@ it('bounds a pending URL predicate by the original navigation timeout', async ()
   })
 })
 
-it('keeps a post-navigation frame refresh inside the navigation deadline', async () => {
+// The navigation the call waited for has answered, so a frame-cache refresh after it is
+// bookkeeping: bounded by the deadline, it never turns that navigation into a timeout.
+it('keeps a post-navigation frame refresh inside the navigation deadline without failing the navigation', async () => {
   let frames = 0
   const runtime = loadPrelude({
     seed: SEED,
@@ -59,20 +61,22 @@ it('keeps a post-navigation frame refresh inside the navigation deadline', async
       if (name === 'page.waitForNavigation')
         return {
           url: 'https://a.example/target',
-          response: null,
+          response: {
+            url: 'https://a.example/target',
+            status: 200,
+            statusText: 'OK',
+            ok: true,
+            headers: {},
+          },
           navigationSeq: 101,
         }
       return null
     },
   })
-  const error = json(
-    await runtime.run(`return await page.waitForNavigation({ timeout: 50 })
-    .catch(error => ({ name: error.name, message: error.message }))`),
+  const status = await runtime.run(
+    'return (await page.waitForNavigation({ timeout: 50 })).status()',
   )
-  expect(error).toEqual({
-    name: 'TimeoutError',
-    message: 'page.waitForNavigation: Timeout 50ms exceeded.',
-  })
+  expect(status).toBe(200)
 })
 
 it('bounds a native reply that stalls after its browser-side navigation wait', async () => {
@@ -114,4 +118,38 @@ it('returns the negotiated HTTP version read with the committed navigation', asy
     await runtime.run(`const response = await page.goto('https://a.example/');
     return await response.httpVersion()`),
   ).toBe('HTTP/2.0')
+})
+
+// The predicate path: the native load-state wait answered `{}` as production's does, so the
+// frame cache is refreshed after it. That refresh is bounded by the deadline but never turns the
+// navigation the predicate accepted into a timeout.
+it('keeps the frame refresh after a matched navigation load state from failing the navigation', async () => {
+  let frames = 0
+  const runtime = loadPrelude({
+    seed: SEED,
+    answer: ({ name }) => {
+      if (name === 'page.frames')
+        return ++frames === 1 ? { frames: [] } : new Promise(() => {})
+      if (name === 'page.waitForNavigation')
+        return {
+          url: 'https://a.example/target',
+          response: {
+            url: 'https://a.example/target',
+            status: 200,
+            statusText: 'OK',
+            ok: true,
+            headers: {},
+          },
+          navigationSeq: 101,
+          frameSnapshotAttempted: true,
+        }
+      if (name === 'page.waitForLoadState') return {}
+      return null
+    },
+  })
+  const status = await runtime.run(
+    'return (await page.waitForNavigation({ url: () => true, timeout: 50 })).status()',
+  )
+  expect(status).toBe(200)
+  expect(runtime.sent('page.waitForLoadState')).toHaveLength(1)
 })

@@ -150,6 +150,11 @@ pub(crate) struct SnapshotResult {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub(crate) document: Option<u32>,
+    /// Set on `page.ariaSnapshot` only: the id of this snapshot call, which the baseline ops after
+    /// it name so Rust holds them to this call's own deadline (`snapshot_calls.rs`).
+    #[serde(rename = "snapshotCall", skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub(crate) snapshot_call: Option<u32>,
 }
 
 /// The page's snapshot from the root frame's tree: every read child stitched in and the name
@@ -164,6 +169,7 @@ pub(crate) fn stitch(root: FrameSnapshot) -> SnapshotResult {
         json,
         partial,
         document: None,
+        snapshot_call: None,
     }
 }
 
