@@ -1168,7 +1168,7 @@ async fn tests_that_a_page_snapshot_that_times_out_names_the_phase_that_ran_out(
         took < Duration::from_millis(1_300),
         "the call answers at its timeout, not after the walk: {took:?}"
     );
-    Ok(())
+    live.close(&page).await
 }
 
 /// Marking never removes a ref or a mark: every ref, and every `cursor: pointer`, of the snapshot

@@ -22,7 +22,7 @@ use crate::page::{MediaSessions, PageRegistry, context_op, page_op};
 use crate::read::read_op;
 use crate::snapshot::{SnapshotBaselines, snapshot_op};
 use crate::world::{Epoch, FrameAttachLog};
-use crate::{OpEnv, PlaywrightError, locator_handler};
+use crate::{OpEnv, PlaywrightError, TimedOut, locator_handler};
 
 /// How long an op that ends may wait for its events to reach the run's listeners first
 /// ([`Playwright::events_before_reply`]). Both steps are usually immediate; this only bounds a
@@ -226,7 +226,9 @@ impl Playwright {
                 return scope.settle(event_op::invoke(self, &scope, op, args).await);
             }
         };
-        self.events_before_reply(&scope).await;
+        if waits_for_ordering(&answered) {
+            self.events_before_reply(&scope).await;
+        }
         scope.settle(answered)
     }
 
@@ -248,18 +250,11 @@ impl Playwright {
     /// it has dispatched that many pump replies. So the listeners run before the script continues
     /// past this op, whatever order the host's promises settle in (the Node add-on settles each
     /// on a threadsafe function of its own, in no fixed order). A run with no listener has
-    /// nothing to order and does not wait.
-    ///
-    /// The wait never runs past the op's own timeout: the caller's timeout is how long the call
-    /// takes, so an op that timed out answers at once. Its listeners still run, only maybe after
-    /// the script has its error. A slow watcher held a timed-out 5 s snapshot here for up to 2 s.
+    /// nothing to order and does not wait. An op that timed out does not wait either
+    /// ([`waits_for_ordering`]).
     async fn events_before_reply(&self, scope: &OpScope<'_>) {
         let run = scope.run_state();
         if !run.events.has_listeners() {
-            return;
-        }
-        let bound = ordering_bound(scope.deadline(), time::Instant::now());
-        if bound.is_zero() {
             return;
         }
         let fence = Fence {
@@ -270,16 +265,18 @@ impl Playwright {
             self.progress.reached(fence).await;
             run.events.taken_through(self.events.head()).await;
         };
-        let _bounded = time::timeout(bound, ordered).await;
+        let _bounded = time::timeout(EVENTS_BEFORE_REPLY, ordered).await;
     }
 }
 
-/// How long an op that ends at `now` may wait for event ordering: [`EVENTS_BEFORE_REPLY`], and
-/// never past the op's `deadline`, so one that timed out answers at once.
-fn ordering_bound(deadline: Option<time::Instant>, now: time::Instant) -> Duration {
-    deadline.map_or(EVENTS_BEFORE_REPLY, |deadline| {
-        EVENTS_BEFORE_REPLY.min(deadline.saturating_duration_since(now))
-    })
+/// Whether an op that `answered` waits for event ordering before its reply leaves. Every op
+/// does, except one whose own timeout passed: the caller's timeout is how long its call takes,
+/// so a timed-out op answers at once. Its listeners still run, only maybe after the script has
+/// its error. A slow watcher held a timed-out 5 s snapshot here for up to 2 s in the owner's
+/// run. An op that succeeds keeps the whole wait, even near its deadline, so code after it never
+/// runs before the listeners for what it did.
+fn waits_for_ordering(answered: &Result<Value, PlaywrightError>) -> bool {
+    !matches!(answered, Err(error) if error.timed_out() == TimedOut::Yes)
 }
 
 #[cfg(test)]
@@ -294,7 +291,7 @@ mod tests {
 
     use super::Playwright;
     use crate::test_env::{self, TestEnv};
-    use crate::{ErrorCode, Op, Refusal};
+    use crate::{ErrorCode, Op, PlaywrightError, Refusal};
 
     /// An op either answers `not built yet` or decodes its input before it reaches the host, so
     /// an empty call names the missing field and nothing is sent or noted. The ops whose
@@ -364,27 +361,26 @@ mod tests {
     const WIRE_EXAMPLES: &str = include_str!("../tests/data/wire-examples.json");
 
     #[test]
-    fn tests_that_the_ordering_wait_never_runs_past_the_op_s_timeout() {
-        let now = time::Instant::now();
-        let ms = Duration::from_millis;
-        assert_eq!(
-            super::ordering_bound(None, now),
-            super::EVENTS_BEFORE_REPLY,
-            "an op with no timeout keeps the whole bound"
+    fn tests_that_only_an_op_that_timed_out_skips_the_ordering_wait() {
+        let timed_out = Err(PlaywrightError::new(
+            ErrorCode::WaitTimeout,
+            "page.ariaSnapshot: Timeout 2000ms exceeded.".to_owned(),
+        ));
+        assert!(
+            !super::waits_for_ordering(&timed_out),
+            "a timed-out op answers at its timeout"
         );
-        assert_eq!(
-            super::ordering_bound(Some(now + Duration::from_secs(30)), now),
-            super::EVENTS_BEFORE_REPLY
+        assert!(
+            super::waits_for_ordering(&Ok(json!(null))),
+            "a successful op keeps its listeners ahead of the script, even near its deadline"
         );
-        assert_eq!(
-            super::ordering_bound(Some(now + ms(300)), now),
-            ms(300),
-            "an op near its timeout waits only for what is left"
-        );
-        assert_eq!(
-            super::ordering_bound(Some(now - ms(1)), now),
-            Duration::ZERO,
-            "an op that timed out answers at once, not up to 2 s later"
+        let refused = Err(PlaywrightError::new(
+            ErrorCode::ElementDetached,
+            "e17 is not on the page any more".to_owned(),
+        ));
+        assert!(
+            super::waits_for_ordering(&refused),
+            "any other failure still orders its events"
         );
     }
 
