@@ -156,7 +156,9 @@ pub(crate) enum ProbeRequest {
     /// (`locator.normalize`, one frame's part).
     Selector { target: ProbeTarget },
     /// `ariaSnapshotJSON` of `root` and this frame's rendered iframe refs. `root: document` is
-    /// upstream's frame root, `body,frameset`.
+    /// upstream's frame root, `body,frameset`. Any nodes the call carries after its root
+    /// ([`super::call_with_nodes`]) are clickable marking's targets: for this call the engine
+    /// reads them as `cursor: pointer` (probe/pointer-targets.ts).
     Snapshot {
         root: ProbeTarget,
         mode: SnapshotMode,

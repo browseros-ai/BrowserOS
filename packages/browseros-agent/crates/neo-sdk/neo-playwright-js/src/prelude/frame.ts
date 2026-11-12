@@ -1380,24 +1380,29 @@ export class Frame extends EventEmitter {
 
   /**
    * A snapshot rooted at `selector`, or at the page when `selector` is null, in `mode`: the
-   * caller decides what an absent mode means (the text and JSON paths differ).
+   * caller decides what an absent mode means (the text and JSON paths differ). `clickable`
+   * asks Rust to mark what Chromium reports clickable without a pointer cursor (its
+   * `clickable_targets`); only the v1 format asks, so upstream's modes, and every snapshot under
+   * the conformance switch, send exactly the keys they always did.
    */
   async _snapshot(
     api: string,
     selector: string | null,
     options: SnapshotOptions,
     mode: NonNullable<SnapshotOptions['mode']>,
+    clickable = false,
   ): Promise<SnapshotResult> {
     const site = captureSite()
     // Capture options before resolving a locator's page, which can await opening its tab.
     const { depth, boxes } = options
+    const marking = clickable ? { clickable } : {}
     const wait = this._wait(api, options)
     if (selector !== null) {
       const addressed = await this._targetArgs(api, selector, true)
       return await send['locator.ariaSnapshot'](
         site,
         this._call(api, wait.timeout),
-        { ...addressed, mode, depth, boxes },
+        { ...addressed, mode, depth, boxes, ...marking },
         wait.signal,
       )
     }
@@ -1414,6 +1419,7 @@ export class Frame extends EventEmitter {
         mode,
         depth,
         boxes,
+        ...marking,
       },
       wait.signal,
     )
@@ -1421,8 +1427,9 @@ export class Frame extends EventEmitter {
 
   /**
    * The text: the v1 format (snapshot-v1.ts) for `mode: 'ai'` or no mode, which asks the engine
-   * for its `'ai'` tree, refs included; Playwright's YAML for `mode: 'default'`, and for every
-   * mode under the conformance switch, where no mode means `'default'` as upstream's does.
+   * for its `'ai'` tree, refs included, with clickable marking; Playwright's YAML for
+   * `mode: 'default'`, and for every mode under the conformance switch, where no mode means
+   * `'default'` as upstream's does.
    *
    * A whole page's v1 text may then become the tab's delta baseline:
    *
@@ -1451,7 +1458,7 @@ export class Frame extends EventEmitter {
     // The script's timeout and signal cover the whole call, the baseline ops included.
     const wait = this._wait(api, options)
     const deadline = new EventDeadline(api, null, Date.now(), wait.timeout)
-    const result = await this._snapshot(api, selector, options, mode)
+    const result = await this._snapshot(api, selector, options, mode, true)
     const text = renderSnapshotV1(result, format)
     if (selector !== null) return text
     const { document } = result

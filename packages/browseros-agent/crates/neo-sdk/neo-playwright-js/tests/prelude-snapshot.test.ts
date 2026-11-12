@@ -58,7 +58,7 @@ it('tests that a partial frame whose iframe line is missing is still reported, a
   )
 })
 
-it('tests that page and locator snapshots send their mode and depth, the text path ai by default, and JSON skips the rendering', async () => {
+it('tests that page and locator snapshots send their mode and depth, the text path ai by default with clickable marking, and JSON skips the rendering', async () => {
   const runtime = snapshotting(fixture.result)
   const result = json(
     await runtime.run(`
@@ -82,6 +82,7 @@ it('tests that page and locator snapshots send their mode and depth, the text pa
       call: { api: 'page.ariaSnapshot', timeoutMs: 5000 },
       page: { $neo: 'page', tab: 1007 },
       mode: 'ai',
+      clickable: true,
       target: undefined,
     },
     {
@@ -100,6 +101,7 @@ it('tests that page and locator snapshots send their mode and depth, the text pa
       strict: 'strict',
       mode: 'ai',
       depth: 3,
+      clickable: true,
       target: undefined,
     },
     {
@@ -109,6 +111,55 @@ it('tests that page and locator snapshots send their mode and depth, the text pa
       mode: 'ai',
       target: undefined,
     },
+  ])
+})
+
+it('tests that only the v1 text asks for clickable marking: never mode default, the JSON, or anything under the conformance switch', async () => {
+  const script = `
+    await page.ariaSnapshot()
+    await page.ariaSnapshot({ mode: 'ai' })
+    await page.ariaSnapshot({ mode: 'default' })
+    await page.getByRole('main').ariaSnapshot({ mode: 'ai' })
+    await page.getByRole('main').ariaSnapshot({ mode: 'default' })
+    await page.ariaSnapshotJSON({ mode: 'ai' })
+    await page.getByRole('main').ariaSnapshotJSON({ mode: 'ai' })
+  `
+  const asked = (runtime: ReturnType<typeof snapshotting>) =>
+    runtime.calls
+      .filter((call) => call.name.endsWith('.ariaSnapshot'))
+      .map((call) => ({
+        name: call.name,
+        mode: call.input.mode,
+        clickable: Object.hasOwn(call.input, 'clickable')
+          ? call.input.clickable
+          : 'absent',
+      }))
+  const v1 = snapshotting(fixture.result)
+  await v1.run(script)
+  expect(asked(v1)).toEqual([
+    { name: 'page.ariaSnapshot', mode: 'ai', clickable: true },
+    { name: 'page.ariaSnapshot', mode: 'ai', clickable: true },
+    { name: 'page.ariaSnapshot', mode: 'default', clickable: 'absent' },
+    { name: 'locator.ariaSnapshot', mode: 'ai', clickable: true },
+    { name: 'locator.ariaSnapshot', mode: 'default', clickable: 'absent' },
+    { name: 'page.ariaSnapshot', mode: 'ai', clickable: 'absent' },
+    { name: 'locator.ariaSnapshot', mode: 'ai', clickable: 'absent' },
+  ])
+  const upstream = loadPrelude({
+    seed: SEED,
+    upstreamSnapshots: true,
+    answer: (call) =>
+      call.name.endsWith('.ariaSnapshot') ? fixture.result : null,
+  })
+  await upstream.run(script)
+  expect(asked(upstream)).toEqual([
+    { name: 'page.ariaSnapshot', mode: 'default', clickable: 'absent' },
+    { name: 'page.ariaSnapshot', mode: 'ai', clickable: 'absent' },
+    { name: 'page.ariaSnapshot', mode: 'default', clickable: 'absent' },
+    { name: 'locator.ariaSnapshot', mode: 'ai', clickable: 'absent' },
+    { name: 'locator.ariaSnapshot', mode: 'default', clickable: 'absent' },
+    { name: 'page.ariaSnapshot', mode: 'ai', clickable: 'absent' },
+    { name: 'locator.ariaSnapshot', mode: 'ai', clickable: 'absent' },
   ])
 })
 
@@ -208,9 +259,10 @@ it('tests that text, urls and maxTokens never reach the wire, and mode default i
       Object.keys(call.input).filter((key) => key !== 'target'),
     ),
   ).toEqual([
-    ['call', 'page', 'mode'],
+    // The v1 text asks for clickable marking; mode default sends what it always did.
+    ['call', 'page', 'mode', 'clickable'],
     ['call', 'page', 'text', 'delta'],
-    ['call', 'strict', 'mode'],
+    ['call', 'strict', 'mode', 'clickable'],
     ['call', 'page', 'mode'],
   ])
 })

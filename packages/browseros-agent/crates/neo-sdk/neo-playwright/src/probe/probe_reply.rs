@@ -24,7 +24,7 @@ use crate::world::{FrameSeq, Pin};
 /// contract: a world keeps the probe an earlier build installed, and the install replaces that
 /// probe only when its number differs (`engine_source`), so a shape changed under the same
 /// number reaches this build in the old shape. The lock's test catches a change without a bump.
-pub(crate) const PROBE_PROTOCOL: u32 = 27;
+pub(crate) const PROBE_PROTOCOL: u32 = 28;
 
 /// One reply; `kind` is the tag. Any request may also answer `error`, and `uninstalled` when
 /// the world has no booted probe.
@@ -153,6 +153,11 @@ pub(crate) enum ProbeReply {
         )]
         json: Value,
         iframes: Vec<SnapshotIframe>,
+        /// Clickable marking threw on this page and the snapshot was taken again without it;
+        /// the op's call log says so.
+        #[serde(default)]
+        #[ts(optional, as = "Option<bool>")]
+        marks_skipped: bool,
     },
     /// One `expect` poll: the matcher's own result before `.not`, upstream's call-log text for
     /// what the locator resolved to, the value it compared (`None` is JavaScript's

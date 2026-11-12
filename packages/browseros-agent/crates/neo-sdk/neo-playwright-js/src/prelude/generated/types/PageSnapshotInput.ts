@@ -8,4 +8,9 @@ export type PageSnapshotInput = { page: PageHandle, mode: import('../../../probe
 /**
  * Upstream's `boxes`: every node's box in its own frame's viewport.
  */
-boxes?: boolean, };
+boxes?: boolean, 
+/**
+ * Neo's clickable marking, in mode `ai` only: the prelude asks for it in its condensed
+ * format, never under the spec harness's conformance switch (`clickable_targets`).
+ */
+clickable?: boolean, };

@@ -13,6 +13,10 @@
 //!  aria_snapshot::stitch: merge, the name rule → { json, partial }
 //! ```
 //!
+//! With `clickable` in mode `ai` (the prelude's v1 text asks for it), each frame's snapshot call
+//! also carries that frame's clickable targets (`clickable_targets`), read before it; a locator's
+//! own frame resolves its element first, so the targets come from the world it landed in.
+//!
 //! A snapshot only reads, so it never calls `send_effect`. Default mode mints no refs and so
 //! prints no iframes to follow: it reads one frame, as upstream's does.
 //!
@@ -28,10 +32,11 @@ use std::time::Duration;
 use futures_util::future::{self, BoxFuture};
 use serde::Deserialize;
 use serde_json::Value;
-use tokio::time;
+use tokio::time::{self, Instant};
 use ts_rs::TS;
 
 use super::aria_snapshot::{self, AriaNode, ChildFrame, FrameSnapshot, PartialFrame};
+use super::clickable_targets::Marking;
 use crate::backoff::Backoff;
 use crate::listed_enum::listed_enum;
 use crate::op_input::OpArgs;
@@ -39,12 +44,12 @@ use crate::op_scope::OpScope;
 use crate::op_spec::{OpSpec, PAGE, TARGET};
 use crate::page::OpPage;
 use crate::probe::{
-    self, ProbeFailure, ProbeReply, ProbeRequest, ProbeTarget, SnapshotIframe, SnapshotMode,
+    self, ProbeFailure, ProbeReply, ProbeRequest, ProbeTarget, SnapshotIframe, SnapshotMode, Want,
 };
 use crate::resolve::{self, Hopped, Landed, Resolver};
 use crate::target::{Chunk, PageRef, Strictness, Target};
 use crate::wire::{self, Describe, Nothing, OpWire, Route, Run, options};
-use crate::world::{Place, SeqLookup};
+use crate::world::{IsolatedWorld, Pin, Place, SeqLookup};
 use crate::{ErrorCode, Playwright, PlaywrightError};
 
 listed_enum! {
@@ -70,12 +75,14 @@ impl SnapshotOp {
             Self::Page => OpSpec::read(
                 "page.ariaSnapshot",
                 PAGE,
-                "the page's aria snapshot with its frames stitched in; mode 'ai' prints refs",
+                "the page's aria snapshot with its frames stitched in; mode 'ai' mints refs, and \
+                 `clickable` marks what Chromium reports clickable",
             ),
             Self::Locator => OpSpec::read(
                 "locator.ariaSnapshot",
                 TARGET,
-                "an aria snapshot rooted at one element; mode 'ai' prints refs",
+                "an aria snapshot rooted at one element; mode 'ai' mints refs, and `clickable` \
+                 marks what Chromium reports clickable",
             ),
             // Reads: they touch only text Neo keeps, never the page.
             Self::Baseline => OpSpec::read(
@@ -97,13 +104,20 @@ impl SnapshotOp {
 /// One exhaustive table binds each snapshot's handler to the upstream command. `Run` and
 /// `Describe` walk these same rows; the policy in `spec()` remains independent of the shapes.
 fn route<'a, R: Route<'a>>(op: SnapshotOp, r: R) -> R::Out {
-    let command = wire::command("Frame.ariaSnapshot").result(
-        "Rust stitches the child frames and answers the JSON tree plus the frames it could \
-         not read; the prelude renders the text, upstream's YAML for mode 'default' and \
-         Neo's condensed list of actionable lines for 'ai', each line upstream's own, and \
-         annotates the partial frames; a whole page's answer also names the document it read, \
-         for the delta baseline",
-    );
+    let command = wire::command("Frame.ariaSnapshot")
+        .adds(&[(
+            "clickable",
+            "Neo also marks elements Chromium reports clickable without a pointer cursor, so the \
+             condensed snapshot keeps their refs; read over CDP, never a script in the page",
+        )])
+        .result(
+            "Rust stitches the child frames and answers the JSON tree plus the frames it could \
+             not read, with `clickable` also marking `cursor: 'pointer'` on the elements \
+             Chromium reports clickable; the prelude renders the text, upstream's YAML for mode \
+             'default' and Neo's condensed list of actionable lines for 'ai', each line \
+             upstream's own, and annotates the partial frames; a whole page's answer also names \
+             the document it read, for the delta baseline",
+        );
     match op {
         SnapshotOp::Page => r.op(command, page_snapshot),
         SnapshotOp::Locator => r.op(command, locator_snapshot),
@@ -148,6 +162,11 @@ struct PageInput {
     #[serde(default)]
     #[ts(optional, as = "Option<bool>")]
     boxes: bool,
+    /// Neo's clickable marking, in mode `ai` only: the prelude asks for it in its condensed
+    /// format, never under the spec harness's conformance switch (`clickable_targets`).
+    #[serde(default)]
+    #[ts(optional, as = "Option<bool>")]
+    clickable: bool,
 }
 // Snapshots have always sent flat fields, not a nested `options` bag. Keep that wire shape;
 // there is no options bag for the generator's option-key probe to describe.
@@ -168,6 +187,10 @@ struct LocatorInput {
     #[serde(default)]
     #[ts(optional, as = "Option<bool>")]
     boxes: bool,
+    /// Neo's clickable marking, as on `page.ariaSnapshot`.
+    #[serde(default)]
+    #[ts(optional, as = "Option<bool>")]
+    clickable: bool,
 }
 options!(LocatorInput);
 
@@ -231,12 +254,6 @@ async fn page_snapshot(
     // Before the tree: a document that commits after this makes the text stale for the
     // baseline, so a run that ends later cannot hand the new document the old one's text.
     let document = pw.snapshot_baselines().generation(page.target_id());
-    let snapshotter = Snapshotter {
-        scope,
-        page: &page,
-        mode: input.mode,
-        boxes: input.boxes,
-    };
     let request = ProbeRequest::Snapshot {
         root: ProbeTarget::Document,
         mode: input.mode,
@@ -248,6 +265,14 @@ async fn page_snapshot(
         if scope.sleep(backoff.wait(attempt)).await.is_err() {
             return Err(scope.timed_out(ErrorCode::WaitTimeout));
         }
+        // Each attempt captures afresh: a document read before its body existed has no targets.
+        let snapshotter = Snapshotter {
+            scope,
+            page: &page,
+            mode: input.mode,
+            boxes: input.boxes,
+            marking: marks(input.mode, input.clickable).then(Marking::new),
+        };
         let Ok(read) = scope.within(snapshotter.main_frame(&request)).await else {
             return Err(scope.timed_out(ErrorCode::WaitTimeout));
         };
@@ -274,12 +299,7 @@ async fn locator_snapshot(
         return Err(scope.not_built());
     };
     let page = OpPage::admit_handle(pw, scope, &target.page).await?;
-    let snapshotter = Snapshotter {
-        scope,
-        page: &page,
-        mode: input.mode,
-        boxes: input.boxes,
-    };
+    let marked = marks(input.mode, input.clickable);
     let resolver = Resolver::new(&page, scope, target, input.strict);
     scope.log(format!("waiting for {}", target.display));
     let backoff = Backoff::outer(scope.timeout());
@@ -287,20 +307,46 @@ async fn locator_snapshot(
         if scope.sleep(backoff.wait(attempt)).await.is_err() {
             return Err(scope.timed_out(ErrorCode::NoMatch));
         }
-        let request = |last, _frame_visible| ProbeRequest::Snapshot {
-            root: ProbeTarget::Chunk(last),
+        let snapshotter = Snapshotter {
+            scope,
+            page: &page,
             mode: input.mode,
-            depth: input.depth,
             boxes: input.boxes,
+            marking: marked.then(Marking::new),
+        };
+        // Marked, the element is pinned first: its frame's targets are read in the world it
+        // landed in, then the snapshot is taken there with them. Unmarked, one call does both.
+        let request = |last, _frame_visible| {
+            let root = ProbeTarget::Chunk(last);
+            if marked {
+                ProbeRequest::Resolve {
+                    target: root,
+                    strictness: Strictness::Strict,
+                    want: Want::Element,
+                }
+            } else {
+                snapshot_request(root, input.mode, input.depth, input.boxes)
+            }
         };
         let Ok(attempt) = scope.within(resolver.attempt_at(request)).await else {
             return Err(scope.timed_out(ErrorCode::NoMatch));
         };
-        let Some(Landed { reply, .. }) = attempt? else {
+        let Some(Landed { reply, world, path }) = attempt? else {
             continue;
         };
+        let reply = match reply {
+            ProbeReply::Element { pin, .. } => {
+                let parent = path.hops().last().map(|hop| &hop.parent);
+                let pinned = snapshotter.pinned(&world, parent, pin, input.depth);
+                let Ok(pinned) = scope.within(pinned).await else {
+                    return Err(scope.timed_out(ErrorCode::NoMatch));
+                };
+                pinned?
+            }
+            other => other,
+        };
         match reply {
-            ProbeReply::Snapshot { json, iframes } => {
+            ProbeReply::Snapshot { json, iframes, .. } => {
                 let root = frame_reply(json, iframes)
                     .map_err(|why| scope.fail(ErrorCode::Internal, why))?;
                 return snapshotter.stitched(root, input.depth).await;
@@ -310,6 +356,21 @@ async fn locator_snapshot(
         }
     }
     Err(scope.timed_out(ErrorCode::NoMatch))
+}
+
+/// A `snapshot` request with the op's own options.
+fn snapshot_request(
+    root: ProbeTarget,
+    mode: SnapshotMode,
+    depth: Option<i64>,
+    boxes: bool,
+) -> ProbeRequest {
+    ProbeRequest::Snapshot {
+        root,
+        mode,
+        depth,
+        boxes,
+    }
 }
 
 /// The tab's stored baseline for the snapshot's document, or `null`: none yet, its main frame
@@ -360,6 +421,8 @@ struct Snapshotter<'op> {
     mode: SnapshotMode,
     /// Asked of every frame, as upstream passes its options down to each child frame.
     boxes: bool,
+    /// Clickable marking, for `clickable` in mode `ai`, the only mode that mints refs.
+    marking: Option<Marking>,
 }
 
 /// One frame's `snapshot` reply, decoded at the boundary.
@@ -403,7 +466,63 @@ impl fmt::Display for Unread {
     }
 }
 
+/// Whether a snapshot is marked: `clickable` asks for it, and only mode `ai` mints the refs
+/// marking names. Default mode ignores the key, as it prints no refs.
+fn marks(mode: SnapshotMode, clickable: bool) -> bool {
+    clickable && mode == SnapshotMode::Ai
+}
+
 impl Snapshotter<'_> {
+    /// `request` in `world`, with that frame's clickable targets when the snapshot is marked.
+    /// `parent` is the world of the frame that holds its iframe, `None` for the main frame;
+    /// `frame_deadline` is when a child frame's [`FRAME_BUDGET`] ends.
+    async fn call(
+        &self,
+        world: &IsolatedWorld,
+        parent: Option<&IsolatedWorld>,
+        frame_deadline: Option<Instant>,
+        request: &ProbeRequest,
+    ) -> Result<ProbeReply, ProbeFailure> {
+        let targets = match &self.marking {
+            Some(marking) => {
+                marking
+                    .targets(self.scope, world, parent, frame_deadline)
+                    .await
+            }
+            None => Vec::new(),
+        };
+        let reply = probe::call_with_nodes(world, request, &targets).await;
+        if let Ok(ProbeReply::Snapshot {
+            marks_skipped: true,
+            ..
+        }) = &reply
+        {
+            self.scope
+                .log("  clickable marking skipped a frame (page shape)".to_owned());
+        }
+        reply
+    }
+
+    /// A marked locator's snapshot, from the element its resolve pinned in `world`. A world
+    /// that went away answers `detached`, so the locator tries again.
+    async fn pinned(
+        &self,
+        world: &IsolatedWorld,
+        parent: Option<&IsolatedWorld>,
+        pin: Pin,
+        depth: Option<i64>,
+    ) -> Result<ProbeReply, PlaywrightError> {
+        let request = snapshot_request(ProbeTarget::Pin(pin), self.mode, depth, self.boxes);
+        match self.call(world, parent, None, &request).await {
+            Ok(reply) => Ok(reply),
+            Err(ProbeFailure::Gone(_)) => {
+                self.page.frames().invalidate(world);
+                Ok(ProbeReply::Detached)
+            }
+            Err(failure) => Err(resolve::failed(self.scope, failure)),
+        }
+    }
+
     /// One read of the main frame: its reply, or `None` to try again.
     async fn main_frame(
         &self,
@@ -418,8 +537,8 @@ impl Snapshotter<'_> {
             Err(ProbeFailure::Gone(_)) => return Ok(None),
             Err(failure) => return Err(resolve::failed(self.scope, failure)),
         };
-        match probe::call(&world, request).await {
-            Ok(ProbeReply::Snapshot { json, iframes }) => frame_reply(json, iframes)
+        match self.call(&world, None, None, request).await {
+            Ok(ProbeReply::Snapshot { json, iframes, .. }) => frame_reply(json, iframes)
                 .map(Some)
                 .map_err(|why| self.scope.fail(ErrorCode::Internal, why)),
             Ok(ProbeReply::None { stale_ref: None }) => Ok(None),
@@ -470,7 +589,8 @@ impl Snapshotter<'_> {
         let depth = child_depth(depth, iframe.depth);
         // A dropped read leaves nothing behind: an install interrupted inside its cell
         // leaves the cell empty for the next op, and the op's objects go with its scope.
-        let read = time::timeout(FRAME_BUDGET, self.enter(&iframe.r#ref, depth))
+        let deadline = Instant::now() + FRAME_BUDGET;
+        let read = time::timeout_at(deadline, self.enter(&iframe.r#ref, depth, deadline))
             .await
             .unwrap_or(Err(Unread::Timeout));
         match read {
@@ -490,8 +610,14 @@ impl Snapshotter<'_> {
     /// prefix (upstream jumps there the same way, `_jumpToAriaRefFrameIfNeeded`), and goes
     /// through `aria-ref=<ref>`, so it records the child's parent link like any resolver hop. A
     /// child world that went away under the read (its frame navigated since the install) is
-    /// dropped and entered once more, as the resolver's liveness rule does.
-    async fn enter(&self, iframe_ref: &str, depth: Option<i64>) -> Result<FrameReply, Unread> {
+    /// dropped and entered once more, as the resolver's liveness rule does. `deadline`, when
+    /// the frame's [`FRAME_BUDGET`] ends, bounds its clickable marking too.
+    async fn enter(
+        &self,
+        iframe_ref: &str,
+        depth: Option<i64>,
+        deadline: Instant,
+    ) -> Result<FrameReply, Unread> {
         // The engine mints every ref this reads, so one that is not a ref is a probe bug.
         let Ok(chunk) = Chunk::aria_ref(iframe_ref) else {
             return Err(Unread::Failed(ErrorCode::Internal));
@@ -499,12 +625,7 @@ impl Snapshotter<'_> {
         let Some(printer) = chunk.jump else {
             return Err(Unread::Failed(ErrorCode::Internal));
         };
-        let request = ProbeRequest::Snapshot {
-            root: ProbeTarget::Document,
-            mode: self.mode,
-            depth,
-            boxes: self.boxes,
-        };
+        let request = snapshot_request(ProbeTarget::Document, self.mode, depth, self.boxes);
         for _ in 0..2 {
             let SeqLookup::Live { world: parent, .. } = self.page.frames().by_seq(printer.seq)
             else {
@@ -526,8 +647,11 @@ impl Snapshotter<'_> {
                     ));
                 }
             };
-            match probe::call(&child, &request).await {
-                Ok(ProbeReply::Snapshot { json, iframes }) => {
+            match self
+                .call(&child, Some(&parent), Some(deadline), &request)
+                .await
+            {
+                Ok(ProbeReply::Snapshot { json, iframes, .. }) => {
                     return frame_reply(json, iframes)
                         .map_err(|_why| Unread::Failed(ErrorCode::Internal));
                 }

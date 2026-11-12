@@ -51,7 +51,7 @@ const ELEMENT_NODE: i64 = 1;
 
 /// Which document of a session's capture belongs to the frame being acquired.
 #[derive(Clone, Copy, Debug)]
-pub(super) enum ClickableDocument {
+pub enum ClickableDocument {
     /// The session's own root document: the top frame or an out-of-process iframe.
     SessionDefault,
     /// A same-process child frame, named by its document node's backend id.
@@ -67,7 +67,7 @@ pub(super) enum ClickableDocument {
 /// whole process's DOM once per frame. A failed capture is remembered too: retrying per frame
 /// would multiply the cost of a page that cannot be captured, and each of its frames reports it.
 #[derive(Clone, Default)]
-pub(super) struct DomSnapshots {
+pub struct DomSnapshots {
     captures: Arc<Mutex<HashMap<Option<String>, CaptureCell>>>,
 }
 
@@ -108,7 +108,7 @@ impl DomSnapshots {
 
 /// Clickable non-semantic elements of one frame's document, keyed by backend node id, each with
 /// the signals that made it one (`cursor:pointer`, `clickable`, `tabindex`).
-pub(super) async fn find_clickables(
+pub async fn find_clickables(
     snapshots: &DomSnapshots,
     session: &ProtocolSession,
     document: ClickableDocument,

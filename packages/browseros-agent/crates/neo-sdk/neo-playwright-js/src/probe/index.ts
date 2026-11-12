@@ -56,6 +56,7 @@ type Handler<O extends Routed> = (
   world: World,
   request: RequestOf<O>,
   root: Node | undefined,
+  nodes: readonly unknown[],
 ) => ReplyTo<O> | Promise<ReplyTo<O>>
 type Handlers = { [O in Routed]: Handler<O> }
 
@@ -107,10 +108,11 @@ function createProbe() {
     booted: World,
     request: ProbeRequest,
     scope: Node | undefined,
+    nodes: readonly unknown[],
   ): unknown {
     try {
       if (request.op === 'pinned') return pinned(booted, request)
-      const reply = dispatch(booted, request.op, request, scope)
+      const reply = dispatch(booted, request.op, request, scope, nodes)
       // CDP's `awaitPromise` settles a promise for Rust, so a handler that throws after
       // its first await is classified here, as a synchronous one is below.
       return reply instanceof Promise ? reply.catch(thrownReply) : reply
@@ -140,14 +142,16 @@ function createProbe() {
         : { ...described(world), retired }
     },
 
-    call(request: unknown, root?: unknown) {
+    call(request: unknown, root?: unknown, nodes?: unknown) {
       const booted = world
       if (!booted) return UNINSTALLED
       if (!hasKnownOp(request))
         return errorReply('internal', 'not a probe request')
       // On a context call CALL_FUNCTION passes the world's global as `root`.
       const scope = root instanceof Node ? root : undefined
-      return answer(booted, request, scope)
+      // The nodes after the root, in Rust's order; each handler checks what it reads.
+      const handed: readonly unknown[] = Array.isArray(nodes) ? nodes : []
+      return answer(booted, request, scope, handed)
     },
   }
 }
@@ -158,9 +162,10 @@ function dispatch<O extends Routed>(
   op: O,
   request: RequestOf<O>,
   root: Node | undefined,
+  nodes: readonly unknown[],
 ): ReplyTo<O> | Promise<ReplyTo<O>> {
   const handler: Handler<O> = HANDLERS[op]
-  return handler(world, request, root)
+  return handler(world, request, root, nodes)
 }
 
 /**

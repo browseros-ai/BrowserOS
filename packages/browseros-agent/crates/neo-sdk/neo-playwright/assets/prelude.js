@@ -8656,13 +8656,14 @@ ${changes}`;
       });
       return fromPageValue(api, value);
     }
-    async _snapshot(api, selector, options, mode) {
+    async _snapshot(api, selector, options, mode, clickable = false) {
       const site = captureSite();
       const { depth, boxes } = options;
+      const marking = clickable ? { clickable } : {};
       const wait = this._wait(api, options);
       if (selector !== null) {
         const addressed = await this._targetArgs(api, selector, true);
-        return await send["locator.ariaSnapshot"](site, this._call(api, wait.timeout), { ...addressed, mode, depth, boxes }, wait.signal);
+        return await send["locator.ariaSnapshot"](site, this._call(api, wait.timeout), { ...addressed, mode, depth, boxes, ...marking }, wait.signal);
       }
       if (this._id !== null)
         throw unsupportedError(api, "snapshot a child frame through its iframe: page.locator('iframe').contentFrame().locator('body').ariaSnapshot()");
@@ -8670,7 +8671,8 @@ ${changes}`;
         page: await this._page._brand(api),
         mode,
         depth,
-        boxes
+        boxes,
+        ...marking
       }, wait.signal);
     }
     async _ariaSnapshot(api, selector, options = {}) {
@@ -8681,7 +8683,7 @@ ${changes}`;
       const { delta, ...format } = snapshotV1Options(api, options);
       const wait = this._wait(api, options);
       const deadline = new EventDeadline(api, null, Date.now(), wait.timeout);
-      const result = await this._snapshot(api, selector, options, mode);
+      const result = await this._snapshot(api, selector, options, mode, true);
       const text = renderSnapshotV1(result, format);
       if (selector !== null)
         return text;

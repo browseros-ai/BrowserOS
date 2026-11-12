@@ -17,16 +17,17 @@ export type NeoProbe = NonNullable<typeof globalThis.__neoProbe>
  * reports it, and an install whose number differs from Rust's PROBE_PROTOCOL fails as
  * `neo / internal` (the engine asset is stale).
  */
-export const PROTOCOL = 27
+export const PROTOCOL = 28
 
 /**
  * The function declaration Rust sends with every request. Rust calls it on the world's global
- * object, with the request and an element handle's node as the call's root (or null), so the
- * probe treats a root that is not a Node as "no root". A world whose probe is gone (or never
- * booted) answers `uninstalled`, which Rust treats like a stale context: install again, once.
+ * object, with the request, an element handle's node as the call's root (or null), and any
+ * further nodes a request reads (`snapshot`'s clickable targets), so the probe treats a root that is not a Node as
+ * "no root". A world whose probe is gone (or never booted) answers `uninstalled`, which Rust
+ * treats like a stale context: install again, once.
  */
 export const CALL_FUNCTION =
-  'function (request, root) { const probe = globalThis.__neoProbe; return probe ? probe.call(request, root ?? this) : { kind: "uninstalled" }; }'
+  'function (request, root, ...nodes) { const probe = globalThis.__neoProbe; return probe ? probe.call(request, root ?? this, nodes) : { kind: "uninstalled" }; }'
 
 /** Per-op and per-kind views add names without repeating any generated fields. */
 export type Op = ProbeRequest['op']

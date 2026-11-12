@@ -58,6 +58,7 @@
     "locator.allTextContents": [],
     "locator.ariaSnapshot": [
       "boxes",
+      "clickable",
       "depth"
     ],
     "locator.blur": [],
@@ -209,6 +210,7 @@
     ],
     "page.ariaSnapshot": [
       "boxes",
+      "clickable",
       "depth"
     ],
     "page.close": [],
@@ -1052,7 +1054,8 @@
         "strict": "strict",
         "mode": "ai",
         "depth": 1,
-        "boxes": false
+        "boxes": false,
+        "clickable": true
       },
       {
         "call": {
@@ -3007,7 +3010,8 @@
         },
         "mode": "ai",
         "depth": 1,
-        "boxes": false
+        "boxes": false,
+        "clickable": true
       },
       {
         "call": {
@@ -3018,7 +3022,8 @@
           "$neo": "page",
           "tab": 1007
         },
-        "mode": "ai"
+        "mode": "ai",
+        "clickable": true
       },
       {
         "call": {

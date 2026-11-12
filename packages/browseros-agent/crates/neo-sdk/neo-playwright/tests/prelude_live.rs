@@ -24,7 +24,7 @@ mod js_runner;
 )]
 mod live_run;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::{env, fs};
@@ -707,5 +707,294 @@ async fn tests_that_the_blind_page_prints_the_v1_text_on_a_live_browser() -> Tes
         "the default is the text form"
     );
     assert_eq!(result["interactive"], BLIND_INTERACTIVE, "text: false");
+    Ok(())
+}
+
+/// Snapshot v1's clickable marking (design section 4), as twins: each element under `listeners`
+/// has only a click listener and the default cursor; its twin under `pointers` has a real
+/// `cursor: pointer` and no listener. The cases: a `div` with text, an empty tile, a `div`
+/// around a named icon, a shadow `div` whose named icon is slotted into it (CSS inheritance
+/// follows the slot), a `div` wrapped in another together with a note, and a `div` that is its
+/// wrapper's only child (which upstream's distiller inlines into the wrapper, real cursor or not;
+/// design.md section 4, what the engine still loses). A container whose listener only relays its buttons' clicks
+/// follows. The listeners are the page's own script.
+const CLICKABLE_PAGE: &str = r#"<!doctype html><html><head><title>Clickable</title></head><body>
+<main>
+<nav aria-label="listeners">
+<div class="menu">Open menu</div>
+<div class="tile" style="width: 40px; height: 40px"></div>
+<div class="icon"><img alt="Settings" width="16" height="16" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16'/%3E"></div>
+<icon-box data-hit><img alt="Slotted" width="16" height="16" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16'/%3E"></icon-box>
+<div><div class="inner">Wrapped with</div><span>a note</span></div>
+<div><div class="inner">Wrapped</div></div>
+</nav>
+<nav aria-label="pointers">
+<div style="cursor: pointer">Open menu</div>
+<div style="width: 40px; height: 40px; cursor: pointer"></div>
+<div style="cursor: pointer"><img alt="Settings" width="16" height="16" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16'/%3E"></div>
+<icon-box data-pointer><img alt="Slotted" width="16" height="16" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16'/%3E"></icon-box>
+<div><div style="cursor: pointer">Wrapped with</div><span>a note</span></div>
+<div><div style="cursor: pointer">Wrapped</div></div>
+</nav>
+<div id="relay"><button>Archive</button><button>Delete</button></div>
+<p>Plain text</p>
+</main>
+<script>
+customElements.define('icon-box', class extends HTMLElement {
+  constructor() {
+    super()
+    const style = this.hasAttribute('data-pointer') ? ' style="cursor: pointer"' : ''
+    this.attachShadow({ mode: 'open' }).innerHTML = `<div${style}><slot></slot></div>`
+    if (this.hasAttribute('data-hit'))
+      this.shadowRoot.firstElementChild.addEventListener('click', () => {})
+  }
+})
+const listeners = document.querySelector('nav[aria-label="listeners"]')
+for (const element of listeners.querySelectorAll('.menu, .tile, .icon, .inner'))
+  element.addEventListener('click', () => {})
+listeners.querySelector('.menu').addEventListener('click', (event) => { event.currentTarget.textContent = 'Menu open' })
+document.getElementById('relay').addEventListener('click', () => {})
+</script>
+</body></html>"#;
+
+/// The script both runs share: the v1 text (or, under the switch, Playwright's), the ai text, and
+/// a click through the listener menu's printed ref.
+fn clickable_script(url: &str) -> String {
+    format!(
+        "try {{\n\
+           await page.goto({url})\n\
+           const plain = await page.ariaSnapshot()\n\
+           const ai = await page.ariaSnapshot({{ mode: 'ai' }})\n\
+           const menu = ai.match(/- generic \\[ref=([^\\]]+)\\][^\\n]*: Open menu/)?.[1] ?? null\n\
+           if (menu) await page.getByRef(menu).click()\n\
+           const after = menu ? await page.getByRef(menu).textContent() : null\n\
+           const refless = (text) => text.replace(/\\[ref=[^\\]]+\\]/g, '[ref]')\n\
+           return {{ plain: refless(plain), ai: refless(ai), after }}\n\
+         }} finally {{\n\
+           await page.close()\n\
+         }}",
+        url = json!(url),
+    )
+}
+
+/// The lines under the navigation named `name`, without their indent.
+fn block(text: &str, name: &str) -> Vec<String> {
+    let header = format!("- navigation \"{name}\" [ref]:");
+    let mut lines = text.lines().skip_while(|line| line.trim() != header);
+    let Some(header) = lines.next() else {
+        return Vec::new();
+    };
+    let indent = header.len() - header.trim_start().len() + 2;
+    lines
+        .take_while(|line| line.len() - line.trim_start().len() >= indent)
+        .map(|line| line.trim().to_owned())
+        .collect()
+}
+
+/// A `div` with only a click listener and the default cursor keeps its ref, printed with
+/// `[cursor=pointer]`, and a click through that ref reaches its listener; every listener-only
+/// element prints exactly as its twin with a real `cursor: pointer` does, and a container that
+/// relays its buttons' clicks prints no line of its own. Under the spec harness's conformance
+/// switch the same page prints Playwright's own text: the listener-only elements have no mark.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_listener_only_elements_print_as_their_pointer_twins_and_the_switch_leaves_them()
+-> TestResult {
+    let page = Page::html(CLICKABLE_PAGE).with_header("cache-control", "no-store");
+    let server =
+        FixtureServer::start(HashMap::from([("/clickable.html".to_owned(), page)])).await?;
+    let url = server.url("127.0.0.1", "/clickable.html");
+    let run = Arc::new(LiveRun::connect().await?);
+    let host: Arc<dyn OpHost> = Arc::clone(&run) as Arc<dyn OpHost>;
+    let init = json!({ "page": null });
+    let v1 = js_runner::run_script(&host, &init, &clickable_script(&url)).await?;
+    let plain = v1["plain"].as_str().ok_or("the v1 text")?;
+    let twins = [
+        "- generic [ref] [cursor=pointer]: Open menu",
+        "- generic [ref] [cursor=pointer]",
+        "- img \"Settings\" [ref] [cursor=pointer]",
+        "- img \"Slotted\" [ref] [cursor=pointer]",
+        "- generic [ref] [cursor=pointer]: Wrapped with",
+        "- text: a note Wrapped",
+    ];
+    assert_eq!(block(plain, "listeners"), twins, "{plain}");
+    assert_eq!(block(plain, "pointers"), twins, "{plain}");
+    assert!(
+        plain.ends_with(
+            "  - button \"Archive\" [ref]\n  - button \"Delete\" [ref]\n  - text: Plain text"
+        ),
+        "the relaying container prints no line of its own: {plain}"
+    );
+    assert_eq!(v1["plain"], v1["ai"], "no mode is mode 'ai'");
+    assert_eq!(v1["after"], "Menu open", "a click through the printed ref");
+
+    let upstream: Arc<dyn OpHost> = Arc::new(Upstream(Arc::clone(&run)));
+    let upstream = js_runner::run_script(&upstream, &init, &clickable_script(&url)).await?;
+    let ai = upstream["ai"].as_str().ok_or("Playwright's ai text")?;
+    let listeners = ai
+        .split("- navigation \"pointers\"")
+        .next()
+        .ok_or("the listeners' half")?;
+    assert!(
+        listeners.contains("- generic [ref]: Open menu") && !listeners.contains("[cursor=pointer]"),
+        "under the switch no listener-only element is marked: {ai}"
+    );
+    assert!(
+        ai.contains("- generic [ref] [cursor=pointer]: Open menu"),
+        "the real pointer twin keeps upstream's own mark: {ai}"
+    );
+    Ok(())
+}
+
+/// The live browser as the spec harness hosts it: the same ops, with the conformance switch set
+/// in the run's realm.
+struct Upstream(Arc<LiveRun>);
+
+impl OpHost for Upstream {
+    fn invoke<'a>(
+        &'a self,
+        name: &'a str,
+        input: Value,
+    ) -> BoxFuture<'a, Result<Value, PlaywrightError>> {
+        OpHost::invoke(&*self.0, name, input)
+    }
+
+    fn event_head(&self) -> u64 {
+        OpHost::event_head(&*self.0)
+    }
+
+    fn page_facts(&self, tabs: Vec<TabId>) -> BoxFuture<'_, Vec<Value>> {
+        OpHost::page_facts(&*self.0, tabs)
+    }
+
+    fn gesture(&self, page: TestPage, expression: String) -> BoxFuture<'_, Result<Value, String>> {
+        OpHost::gesture(&*self.0, page, expression)
+    }
+
+    fn upstream_snapshots(&self) -> bool {
+        true
+    }
+}
+
+/// Containers clickable marking must never pass as targets, as the v1 text prints them: a
+/// `tabindex` pane of controls and pointer rows, a `tabindex` box of pointer rows, a `tabindex`
+/// list of listener-only items, a listener card holding a note and a text-only `<article>` (a section the v1
+/// text prints with its ref only with its text), and a `tabindex` card in a shadow root whose
+/// slot holds assigned text over a fallback button (the engine never shows the fallback), and a
+/// `tabindex` box holding a text-only region whose `role` is a token list (`region group`).
+const MARKING_PAGE: &str = r##"<!doctype html><html><head><title>Marking</title></head><body>
+<main>
+<div tabindex="0"><a href="#docs">Docs</a> <button>Save</button>
+<div style="cursor: pointer">Row one</div><div style="width: 20px; height: 20px; cursor: pointer"></div></div>
+<div tabindex="0"><div style="cursor: pointer">Pointer row A</div><div style="cursor: pointer">Pointer row B</div></div>
+<ul tabindex="0"><li><div class="item">Item A</div></li><li><div class="item">Item B</div></li></ul>
+<div class="story"><span>Read on</span><article><p>Story text</p></article></div>
+<div tabindex="0"><span>Note</span><div role="region group" aria-label="Notes">Region text</div></div>
+<text-card>Card text</text-card>
+<div class="menu">Open menu</div>
+</main>
+<script>
+customElements.define('text-card', class extends HTMLElement {
+  constructor() {
+    super()
+    this.attachShadow({ mode: 'open' }).innerHTML = '<div tabindex="0"><slot><button>Fallback</button></slot></div>'
+  }
+})
+for (const element of document.querySelectorAll('.item, .story, .menu'))
+  element.addEventListener('click', () => {})
+</script>
+</body></html>"##;
+
+/// The live browser with marking switched off: the same ops without `clickable`, so the prelude
+/// renders the same v1 text from an unmarked snapshot.
+struct Unmarked(Arc<LiveRun>);
+
+impl OpHost for Unmarked {
+    fn invoke<'a>(
+        &'a self,
+        name: &'a str,
+        mut input: Value,
+    ) -> BoxFuture<'a, Result<Value, PlaywrightError>> {
+        if let Some(input) = input.as_object_mut() {
+            input.remove("clickable");
+        }
+        OpHost::invoke(&*self.0, name, input)
+    }
+
+    fn event_head(&self) -> u64 {
+        OpHost::event_head(&*self.0)
+    }
+
+    fn page_facts(&self, tabs: Vec<TabId>) -> BoxFuture<'_, Vec<Value>> {
+        OpHost::page_facts(&*self.0, tabs)
+    }
+
+    fn gesture(&self, page: TestPage, expression: String) -> BoxFuture<'_, Result<Value, String>> {
+        OpHost::gesture(&*self.0, page, expression)
+    }
+}
+
+/// Every ref a v1 text prints.
+fn printed_refs(text: &str) -> HashSet<String> {
+    text.split("[ref=")
+        .skip(1)
+        .filter_map(|rest| rest.split(']').next())
+        .map(str::to_owned)
+        .collect()
+}
+
+/// Marking never removes a ref the v1 text prints: on a fresh copy of the same page, every ref
+/// the unmarked text prints, in both forms, is printed by the marked text too. The article's
+/// section line survives, the containers stay unmarked, and the listener items, the menu and the
+/// shadow card whose slot holds text are marked.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_marking_never_removes_a_ref_the_v1_text_prints() -> TestResult {
+    let page = Page::html(MARKING_PAGE).with_header("cache-control", "no-store");
+    let server = FixtureServer::start(HashMap::from([("/marking.html".to_owned(), page)])).await?;
+    let script = format!(
+        "try {{\n\
+           await page.goto({url})\n\
+           return {{ plain: await page.ariaSnapshot(), interactive: await page.ariaSnapshot({{ text: false }}) }}\n\
+         }} finally {{\n\
+           await page.close()\n\
+         }}",
+        url = json!(server.url("127.0.0.1", "/marking.html")),
+    );
+    let run = Arc::new(LiveRun::connect().await?);
+    let init = json!({ "page": null });
+    let unmarked: Arc<dyn OpHost> = Arc::new(Unmarked(Arc::clone(&run)));
+    let unmarked = js_runner::run_script(&unmarked, &init, &script).await?;
+    let marked: Arc<dyn OpHost> = run;
+    let marked = js_runner::run_script(&marked, &init, &script).await?;
+    for form in ["plain", "interactive"] {
+        let before = unmarked[form].as_str().ok_or("the unmarked text")?;
+        let after = marked[form].as_str().ok_or("the marked text")?;
+        let lost: Vec<_> = printed_refs(before)
+            .difference(&printed_refs(after))
+            .cloned()
+            .collect();
+        assert!(
+            lost.is_empty(),
+            "{form}: marking removed {lost:?}\n--- unmarked\n{before}\n--- marked\n{after}"
+        );
+    }
+    let plain = marked["plain"].as_str().ok_or("the marked text")?;
+    assert!(
+        plain.contains("- article [ref="),
+        "the article keeps its line: {plain}"
+    );
+    assert!(
+        plain.contains("- region \"Notes\" [ref="),
+        "the region named by its first role token keeps its line: {plain}"
+    );
+    for marked_line in ["] [cursor=pointer]: Item A", "] [cursor=pointer]: Item B"] {
+        assert!(plain.contains(marked_line), "{marked_line}: {plain}");
+    }
+    assert!(plain.contains("] [cursor=pointer]: Open menu"), "{plain}");
+    assert!(
+        plain.contains("] [cursor=pointer]: Card text"),
+        "the shadow card whose slot holds text is a leaf: {plain}"
+    );
     Ok(())
 }

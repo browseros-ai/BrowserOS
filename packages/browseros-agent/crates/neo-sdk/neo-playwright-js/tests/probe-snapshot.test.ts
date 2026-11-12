@@ -47,3 +47,25 @@ it('tests that a frame-level snapshot carries no iframes outside ai mode', () =>
     probe.call({ op: 'snapshot', root: 'document', mode: 'default' }),
   ).toMatchObject({ kind: 'snapshot', iframes: [] })
 })
+
+it('tests that a snapshot whose clickable marking throws is still taken, as upstream takes it', () => {
+  const probe = booted()
+  const target = probe.document.querySelector('h1')
+  const inside = probe.document.createElement('span')
+  target?.append(inside)
+  // A shape marking's guard trips on and the engine never asks about: `aria-owns` read on an
+  // element that has none.
+  const read = inside.getAttribute.bind(inside)
+  inside.getAttribute = (name: string) => {
+    if (name === 'aria-owns') throw new Error('unforeseen page shape')
+    return read(name)
+  }
+  const request = { op: 'snapshot', root: 'document', mode: 'ai' }
+  expect(probe.call(request, null, target)).toMatchObject({
+    kind: 'snapshot',
+    marksSkipped: true,
+  })
+  const plain = probe.call(request)
+  expect(plain).toMatchObject({ kind: 'snapshot' })
+  expect(plain).not.toHaveProperty('marksSkipped')
+})

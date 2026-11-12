@@ -27,9 +27,10 @@ use crate::world::{BackendNodeId, IsolatedWorld, Pin};
 
 /// The function declaration every request is sent with. It must equal `CALL_FUNCTION` in
 /// protocol.ts (a test checks it against probe-protocol.json). It runs on the world's global,
-/// with the request and an element handle's node or null as the call's root; a world without
-/// a booted probe answers `uninstalled`, which Rust treats like a stale context.
-pub(crate) const CALL_FUNCTION: &str = "function (request, root) { const probe = globalThis.__neoProbe; return probe ? probe.call(request, root ?? this) : { kind: \"uninstalled\" }; }";
+/// with the request, an element handle's node or null as the call's root, and any further
+/// nodes the request reads ([`call_with_nodes`]); a world without a booted probe answers
+/// `uninstalled`, which Rust treats like a stale context.
+pub(crate) const CALL_FUNCTION: &str = "function (request, root, ...nodes) { const probe = globalThis.__neoProbe; return probe ? probe.call(request, root ?? this, nodes) : { kind: \"uninstalled\" }; }";
 
 /// Why a probe call or an install produced no reply.
 #[derive(Debug)]
@@ -197,7 +198,7 @@ pub(crate) async fn call(
     world: &IsolatedWorld,
     request: &ProbeRequest,
 ) -> Result<ProbeReply, ProbeFailure> {
-    send(world, request, None, Gesture::None).await
+    send(world, request, Handed::NONE, Gesture::None).await
 }
 
 /// [`call`] with a user gesture, as upstream sends its own utility-world calls
@@ -207,7 +208,7 @@ pub(crate) async fn call_with_gesture(
     world: &IsolatedWorld,
     request: &ProbeRequest,
 ) -> Result<ProbeReply, ProbeFailure> {
-    send(world, request, None, Gesture::User).await
+    send(world, request, Handed::NONE, Gesture::User).await
 }
 
 /// One request about an element handle's node (`root`, a remote object in this world), which
@@ -224,7 +225,46 @@ pub(crate) async fn call_on(
     request: &ProbeRequest,
     root: &str,
 ) -> Result<ProbeReply, ProbeFailure> {
-    send(world, request, Some(root), Gesture::None).await
+    let handed = Handed {
+        root: Some(root),
+        nodes: &[],
+    };
+    send(world, request, handed, Gesture::None).await
+}
+
+/// One request with several nodes (remote objects in this world, from `DOM.resolveNode` with
+/// its context id), which the probe reads in their order after an empty root: a snapshot's
+/// clickable targets. With no nodes it is [`call`]. As with [`call_on`], an id a later document
+/// took over fails the call as `Gone`, and never reaches a page's own world.
+pub(crate) async fn call_with_nodes(
+    world: &IsolatedWorld,
+    request: &ProbeRequest,
+    nodes: &[String],
+) -> Result<ProbeReply, ProbeFailure> {
+    let handed = Handed { root: None, nodes };
+    send(world, request, handed, Gesture::None).await
+}
+
+/// The remote objects a call hands the probe after its request.
+#[derive(Clone, Copy)]
+struct Handed<'a> {
+    /// The call's root: an element handle's node, read as `ProbeTarget::Root`.
+    root: Option<&'a str>,
+    /// Nodes a request reads in order, after the root.
+    nodes: &'a [String],
+}
+
+impl Handed<'_> {
+    const NONE: Self = Self {
+        root: None,
+        nodes: &[],
+    };
+
+    /// Whether the call carries any object of the world, which V8 checks against the world
+    /// the call runs in.
+    fn any(self) -> bool {
+        self.root.is_some() || !self.nodes.is_empty()
+    }
 }
 
 /// Whether a probe call carries a user gesture.
@@ -239,13 +279,13 @@ enum Gesture {
 async fn send(
     world: &IsolatedWorld,
     request: &ProbeRequest,
-    root: Option<&str>,
+    handed: Handed<'_>,
     gesture: Gesture,
 ) -> Result<ProbeReply, ProbeFailure> {
     let mut params = json!({
         "objectId": world.global(),
         "functionDeclaration": CALL_FUNCTION,
-        "arguments": call_arguments(request, root)?,
+        "arguments": call_arguments(request, handed)?,
         "returnByValue": true,
         "awaitPromise": true,
     });
@@ -260,7 +300,7 @@ async fn send(
         .await
         .map_err(|error| match ProbeFailure::from_core(error) {
             ProbeFailure::Cdp(CoreError::Cdp(CdpError::Protocol { message, .. }))
-                if root.is_some() && message.contains("same JavaScript world") =>
+                if handed.any() && message.contains("same JavaScript world") =>
             {
                 ProbeFailure::Gone(Ran::No)
             }
@@ -269,15 +309,20 @@ async fn send(
     reply_of(called)
 }
 
-/// [`CALL_FUNCTION`]'s `arguments` for one call: the request, then the root when there is one.
-fn call_arguments(request: &ProbeRequest, root: Option<&str>) -> Result<Vec<Value>, ProbeFailure> {
+/// [`CALL_FUNCTION`]'s `arguments` for one call: the request, then the root when there is one
+/// (`null` when only nodes follow), then the nodes.
+fn call_arguments(request: &ProbeRequest, handed: Handed<'_>) -> Result<Vec<Value>, ProbeFailure> {
     let request = serde_json::to_value(request).map_err(|error| {
         ProbeFailure::Broken(format!("a probe request did not encode: {error}"))
     })?;
     let mut arguments = vec![json!({ "value": request })];
-    if let Some(root) = root {
-        arguments.push(json!({ "objectId": root }));
+    if handed.any() {
+        arguments.push(match handed.root {
+            Some(root) => json!({ "objectId": root }),
+            None => json!({ "value": null }),
+        });
     }
+    arguments.extend(handed.nodes.iter().map(|node| json!({ "objectId": node })));
     Ok(arguments)
 }
 
@@ -439,7 +484,7 @@ mod tests {
     use browseros_core::CoreError;
     use serde_json::{Value, json};
 
-    use super::{CALL_FUNCTION, ProbeFailure, Ran, call_arguments, reply_of};
+    use super::{CALL_FUNCTION, Handed, ProbeFailure, Ran, call_arguments, reply_of};
     use crate::probe::probe_reply::ProbeReply;
     use crate::probe::probe_request::ProbeRequest;
 
@@ -460,17 +505,47 @@ mod tests {
     fn tests_that_a_call_sends_the_request_then_its_root() -> Result<(), Box<dyn Error>> {
         let request = ProbeRequest::Describe;
         assert_eq!(
-            call_arguments(&request, None)?,
+            call_arguments(
+                &request,
+                Handed {
+                    root: None,
+                    nodes: &[]
+                }
+            )?,
+            call_arguments(&request, Handed::NONE)?,
+            "a call with no nodes is the plain call"
+        );
+        assert_eq!(
+            call_arguments(&request, Handed::NONE)?,
             [json!({ "value": { "op": "describe" } })],
             "a call on the world's global sends the request alone"
         );
+        let rooted = Handed {
+            root: Some("node-1"),
+            nodes: &[],
+        };
         assert_eq!(
-            call_arguments(&request, Some("node-1"))?,
+            call_arguments(&request, rooted)?,
             [
                 json!({ "value": { "op": "describe" } }),
                 json!({ "objectId": "node-1" }),
             ],
             "an element handle's node follows as the call's root"
+        );
+        let nodes = ["node-2".to_owned(), "node-3".to_owned()];
+        let several = Handed {
+            root: None,
+            nodes: &nodes,
+        };
+        assert_eq!(
+            call_arguments(&ProbeRequest::Disarm, several)?,
+            [
+                json!({ "value": { "op": "disarm" } }),
+                json!({ "value": null }),
+                json!({ "objectId": "node-2" }),
+                json!({ "objectId": "node-3" }),
+            ],
+            "nodes follow an empty root, in order, so the probe reads them positionally"
         );
         Ok(())
     }
