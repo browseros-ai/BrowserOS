@@ -142,7 +142,7 @@ describe('ProBanner', () => {
 
     expect(container.textContent).toContain('ultrafast')
     expect(container.textContent).toContain(
-      'Faster tasks, a year of history and more, for $20 a month.',
+      'Faster skills, robot checks solved, and more, for $20 a month.',
     )
     const link = container.querySelector('a')
     expect(link?.textContent).toContain('See ultrafast')

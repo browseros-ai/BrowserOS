@@ -11,7 +11,6 @@ import type {
 } from '@browseros/claw-api'
 import { skipToken, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useRef, useState } from 'react'
-import type { ProWelcome } from '@/components/pro/WelcomeProDialog'
 import { AnalyticsEvent, track } from '@/modules/analytics/events'
 import {
   useOpenPortal,
@@ -35,8 +34,6 @@ function openInNewTab(url: string): void {
 export interface StartProCheckout {
   plan: string
   interval: PriceInterval
-  /** This computer is on a key whose Pro has ended, so paying keeps that key. */
-  sameKey: boolean
 }
 
 export interface ProCheckout {
@@ -47,7 +44,8 @@ export interface ProCheckout {
   reopen: () => void
   /** The person says they won't pay this time. */
   cancel: () => void
-  welcome: ProWelcome | null
+  /** Paid just now: the welcome is open until it's closed. */
+  welcoming: boolean
   closeWelcome: () => void
 }
 
@@ -58,7 +56,6 @@ export interface ProCheckout {
 export function useProCheckout(): ProCheckout {
   const queryClient = useQueryClient()
   const [cancelled, setCancelled] = useState(false)
-  const [sameKey, setSameKey] = useState(false)
   const [welcomeClosed, setWelcomeClosed] = useState(false)
   const settled = useRef<string | null>(null)
 
@@ -135,7 +132,6 @@ export function useProCheckout(): ProCheckout {
     start: (checkout) => {
       setCancelled(false)
       setWelcomeClosed(false)
-      setSameKey(checkout.sameKey)
       start.mutate({ plan: checkout.plan, interval: checkout.interval })
     },
     isStarting: start.isPending,
@@ -146,7 +142,7 @@ export function useProCheckout(): ProCheckout {
       setCancelled(true)
       track(AnalyticsEvent.ProCheckoutAbandoned)
     },
-    welcome: paidPlan && !welcomeClosed ? { plan: paidPlan, sameKey } : null,
+    welcoming: Boolean(paidPlan) && !welcomeClosed,
     closeWelcome: () => setWelcomeClosed(true),
   }
 }
