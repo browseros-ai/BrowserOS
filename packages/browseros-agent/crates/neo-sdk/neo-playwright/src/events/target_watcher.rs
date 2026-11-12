@@ -340,6 +340,10 @@ struct Watcher {
     /// Synchronize requests whose fence covers an event a line still holds: answered once the
     /// log has every event before their fence.
     deferred: Vec<WatcherRequest>,
+    /// The session id and target id of each attachment waiting in a tab's line (a worker's),
+    /// with that tab: what they report waits behind the attachment, though the loop does not
+    /// know them yet. Both are CDP's unique ids, so they share one map.
+    held_attachments: HashMap<String, TargetId>,
 }
 
 /// One tab's events while a frame-tree read for one of its new frame sessions is out.
@@ -643,6 +647,7 @@ impl Watcher {
             lines: HashMap::new(),
             seeded: None,
             deferred: Vec::new(),
+            held_attachments: HashMap::new(),
         };
         (watcher, found_rx)
     }
@@ -1735,6 +1740,20 @@ impl Watcher {
             return Some(event);
         };
         let position = self.progress.events_handled();
+        if event.method == "Target.attachedToTarget" {
+            let session = event.params.get("sessionId");
+            let target = event
+                .params
+                .get("targetInfo")
+                .and_then(|info| info.get("targetId"));
+            for key in [session, target]
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str)
+            {
+                self.held_attachments.insert(key.to_owned(), tab.clone());
+            }
+        }
         if let Some(line) = self.lines.get_mut(&tab) {
             line.push_back(LineItem::Event { position, event });
         }
@@ -1752,6 +1771,15 @@ impl Watcher {
     fn line_for(&self, event: &CdpEvent) -> Option<TargetId> {
         if self.lines.is_empty() {
             return None;
+        }
+        let named = |key: Option<&str>| key.and_then(|key| self.held_attachments.get(key));
+        // What a session or target whose attachment waits in a line reports waits behind it,
+        // bookkeeping included: a worker's readiness or its end must not pass its attachment.
+        let held = named(event.session_id.as_ref().map(SessionId::as_str))
+            .or_else(|| named(event.params.get("sessionId").and_then(Value::as_str)))
+            .or_else(|| named(event.params.get("targetId").and_then(Value::as_str)));
+        if let Some(tab) = held {
+            return self.lines.contains_key(tab).then(|| tab.clone());
         }
         let tab = match event.method.as_str() {
             "Target.attachedToTarget"
@@ -1829,6 +1857,10 @@ impl Watcher {
             }
         }
         self.lines.retain(|_, line| !line.is_empty());
+        // Every held attachment was handled with its line: the loop knows those sessions now.
+        let lines = &self.lines;
+        self.held_attachments
+            .retain(|_, tab| lines.contains_key(tab));
         self.publish_hold();
         self.answer_deferred();
     }
@@ -2470,12 +2502,9 @@ mod worker_observation_tests {
         Ok(())
     }
 
-    /// What waits in a tab's line while its frame-tree read is out: everything of that tab that
-    /// publishes or changes the worker table (a worker's attachment, a console report, a frame
-    /// event, a frame session's detach, the tab's end), but not a new frame session's attachment
-    /// (it only adds a read) nor context bookkeeping; and nothing of another tab.
-    #[tokio::test]
-    async fn a_line_holds_what_publishes_and_lets_bookkeeping_through() {
+    /// A watcher whose tab `tab` (sessions `page` and `ad`) has a frame-tree read out; another
+    /// tab has session `elsewhere`.
+    fn watcher_with_a_line() -> Watcher {
         let connection = TestConnection::new([]);
         let browser = BrowserSession::new(
             Arc::clone(&connection) as Arc<dyn CdpConnection>,
@@ -2489,65 +2518,81 @@ mod worker_observation_tests {
             Arc::new(WatcherProgress::default()),
             Arc::new(SnapshotBaselines::default()),
         );
-        let (tab, other) = (TargetId("tab".to_owned()), TargetId("other".to_owned()));
+        let tab = TargetId("tab".to_owned());
         watcher
             .sessions
             .insert(SessionId::from("page"), tab.clone());
         watcher.sessions.insert(SessionId::from("ad"), tab.clone());
-        watcher.sessions.insert(SessionId::from("elsewhere"), other);
-        watcher.lines.insert(tab.clone(), VecDeque::new());
-        let event = |method: &str, session: &str, params: serde_json::Value| CdpEvent {
+        watcher
+            .sessions
+            .insert(SessionId::from("elsewhere"), TargetId("other".to_owned()));
+        watcher.lines.insert(tab, VecDeque::new());
+        watcher
+    }
+
+    fn cdp(method: &str, session: &str, params: serde_json::Value) -> CdpEvent {
+        CdpEvent {
             method: method.to_owned(),
             params,
             session_id: Some(SessionId::from(session)),
-        };
+        }
+    }
+
+    fn worker_attached() -> CdpEvent {
+        cdp(
+            "Target.attachedToTarget",
+            "page",
+            json!({ "sessionId": "w", "targetInfo": { "targetId": "w", "type": "worker" } }),
+        )
+    }
+
+    /// What waits in a tab's line while its frame-tree read is out: everything of that tab that
+    /// publishes or changes the worker table (a worker's attachment, a console report, a frame
+    /// event, a frame session's detach, the tab's end), but not a new frame session's attachment
+    /// (it only adds a read) nor context bookkeeping; and nothing of another tab.
+    #[tokio::test]
+    async fn a_line_holds_what_publishes_and_lets_bookkeeping_through() -> Result<(), Box<dyn Error>>
+    {
+        let watcher = watcher_with_a_line();
+        let tab = Some(TargetId("tab".to_owned()));
         let held = [
-            event(
-                "Target.attachedToTarget",
-                "page",
-                json!({ "sessionId": "w", "targetInfo": { "targetId": "w", "type": "worker" } }),
-            ),
-            event(
+            worker_attached(),
+            cdp(
                 "Runtime.consoleAPICalled",
                 "page",
                 json!({ "type": "log", "args": [] }),
             ),
-            event(
+            cdp(
                 "Page.frameNavigated",
                 "page",
                 json!({ "frame": { "id": "tab", "url": "a" } }),
             ),
-            event(
+            cdp(
                 "Target.detachedFromTarget",
                 "page",
                 json!({ "sessionId": "ad" }),
             ),
-            event(
+            cdp(
                 "Target.targetDestroyed",
                 "browser",
                 json!({ "targetId": "tab" }),
             ),
         ];
         for event in &held {
-            assert_eq!(
-                watcher.line_for(event),
-                Some(tab.clone()),
-                "{} waits",
-                event.method
-            );
+            assert_eq!(watcher.line_for(event), tab, "{} waits", event.method);
         }
         let through = [
-            event(
+            cdp(
                 "Target.attachedToTarget",
                 "page",
                 json!({ "sessionId": "f", "targetInfo": { "targetId": "f", "type": "iframe" } }),
             ),
-            event(
+            cdp(
                 "Runtime.executionContextCreated",
                 "page",
                 json!({ "context": {} }),
             ),
-            event(
+            cdp(
                 "Page.frameNavigated",
                 "elsewhere",
                 json!({ "frame": { "id": "o", "url": "b" } }),
@@ -2556,6 +2601,46 @@ mod worker_observation_tests {
         for event in &through {
             assert_eq!(watcher.line_for(event), None, "{} goes on", event.method);
         }
+        Ok(())
+    }
+
+    /// A worker whose attachment waits in a line: what its session and target report waits
+    /// behind it, its readiness and its end included, though the loop does not know them yet.
+    #[tokio::test]
+    async fn a_held_worker_s_reports_wait_behind_its_attachment() -> Result<(), Box<dyn Error>> {
+        let mut watcher = watcher_with_a_line();
+        let tab = Some(TargetId("tab".to_owned()));
+        assert!(
+            watcher.hold(worker_attached()).is_none(),
+            "the attachment waits"
+        );
+        let worker = [
+            cdp("Inspector.workerScriptLoaded", "w", json!({})),
+            cdp(
+                "Runtime.executionContextCreated",
+                "w",
+                json!({ "context": {} }),
+            ),
+            cdp(
+                "Target.detachedFromTarget",
+                "page",
+                json!({ "sessionId": "w" }),
+            ),
+            cdp(
+                "Target.targetDestroyed",
+                "browser",
+                json!({ "targetId": "w" }),
+            ),
+        ];
+        for event in &worker {
+            assert_eq!(
+                watcher.line_for(event),
+                tab,
+                "the worker's {}",
+                event.method
+            );
+        }
+        Ok(())
     }
 
     /// A tab's snapshot baseline names its main frame's document: a new document or a closed tab
