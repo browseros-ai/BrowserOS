@@ -820,6 +820,21 @@ impl PageManager {
         // arguments for the inspector, and sites time that to detect DevTools and blank or
         // close themselves. Runtime commands work without it; `PageSignals::harvest_console`
         // turns it on only for the instant it takes to collect the console history.
+        // DIAGNOSTIC v10: NEO_DIAG_RUNTIME / NEO_DIAG_NETWORK / NEO_DIAG_METRICS enable what Playwright's page setup does.
+        if std::env::var_os("NEO_DIAG_RUNTIME").is_some() {
+            let _ = session.send::<_, Value>("Runtime.enable", json!({})).await;
+        }
+        if std::env::var_os("NEO_DIAG_NETWORK").is_some() {
+            let _ = session.send::<_, Value>("Network.enable", json!({})).await;
+        }
+        if std::env::var_os("NEO_DIAG_METRICS").is_some() {
+            let _ = session
+                .send::<_, Value>(
+                    "Emulation.setDeviceMetricsOverride",
+                    json!({ "width": 1280, "height": 720, "deviceScaleFactor": 1, "mobile": false, "screenWidth": 1280, "screenHeight": 720 }),
+                )
+                .await;
+        }
         if std::env::var_os("NEO_DIAG_NOAX").is_none() {
             let _: Value = session.send("Accessibility.enable", json!({})).await?;
         }

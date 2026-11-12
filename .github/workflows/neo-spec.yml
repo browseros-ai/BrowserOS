@@ -139,16 +139,16 @@ jobs:
             tail -4 "$RUNNER_TEMP/$group.log"
           }
           echo '=== A: Neo as it is'; run_group A
-          echo '=== K: the tab window set to normal before each capture (NEO_DIAG_NORMAL=1)'; NEO_DIAG_NORMAL=1 run_group K --skip-build
-          echo '--- windows seen in A'; grep -ho 'window {.*' "$RUNNER_TEMP"/neo-spec/A/*/ss054-diag.log | sort | uniq -c | sort -rn | head -5
-          echo '--- window calls in K'; grep -ho 'setWindowBounds.*' "$RUNNER_TEMP"/neo-spec/K/*/ss054-diag.log | sort | uniq -c | head -3
-          for group in A K; do
+          echo '=== L: viewport emulation on attach (NEO_DIAG_METRICS=1)'; NEO_DIAG_METRICS=1 run_group L --skip-build
+          echo '=== M: Runtime.enable on attach (NEO_DIAG_RUNTIME=1)'; NEO_DIAG_RUNTIME=1 run_group M --skip-build
+          echo '=== N: Network.enable on attach (NEO_DIAG_NETWORK=1)'; NEO_DIAG_NETWORK=1 run_group N --skip-build
+          for group in A L M N; do
             for results in "$RUNNER_TEMP"/neo-spec/$group/*/results.json; do
               echo "--- $group"
               node -e 'const r=require(process.argv[1]); const c={}; const v=s=>{for(const sp of s.specs||[])for(const t of sp.tests)for(const x of t.results){const k=sp.title.slice(0,40)+" "+x.status;c[k]=(c[k]||0)+1}; for(const ch of s.suites||[])v(ch)}; r.suites.forEach(v); console.log(c)' "$results"
             done
           done
-          for group in A K; do
+          for group in A L M N; do
             echo "--- slowest captures in $group"
             grep -h "captureScreenshot took" "$RUNNER_TEMP"/neo-spec/$group/*/ss054-diag.log | awk '{ for (i=1;i<=NF;i++) if ($i=="took") print $(i+1) }' | sort -n | tail -3
           done
