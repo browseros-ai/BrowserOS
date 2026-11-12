@@ -306,7 +306,10 @@ impl Observer {
 
     /// Brings the log up to `fence` in the observation's turn, unless an earlier wait gave up
     /// on a fence the log is still short of: then this one would wait out the same stall, and
-    /// a run's replies would pay it one after another.
+    /// a run's replies would pay it one after another. A skipped wait publishes what a wait
+    /// that gave up always published, facts the log has not caught up with: a close still
+    /// reaches the script in log order (a live fact with an older head cannot reopen a page the
+    /// log closed later), and the batch carries no worker list.
     async fn catch_up(&self, turn: &mut Turn, fence: EventFence) -> Waited {
         if let Some(stalled) = turn.stalled_at {
             if !self.log.handled_through(stalled) {
@@ -418,7 +421,8 @@ mod tests {
     /// it again (each used to, in turn: 2 s per tab). Facts the log was not proven to hold
     /// carry no worker list; once the watcher catches up, observations wait and carry it again.
     #[tokio::test(start_paused = true)]
-    async fn one_stalled_watcher_costs_one_bound_for_every_queued_observation() {
+    async fn one_stalled_watcher_costs_one_bound_for_every_queued_observation()
+    -> Result<(), Box<dyn Error>> {
         let log = Arc::new(Behind::default());
         let observer = Observer::new(Arc::clone(&log) as _);
         let registry = TabRegistry::new();
@@ -459,6 +463,7 @@ mod tests {
             "past the stall, it waits again"
         );
         assert!(caught_up.workers[0].is_some(), "and carries the workers");
+        Ok(())
     }
 
     fn info(target: &str) -> PageInfo {

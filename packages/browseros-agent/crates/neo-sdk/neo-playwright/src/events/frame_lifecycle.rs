@@ -90,14 +90,6 @@ impl FrameLifecycleTracker {
     /// Seed existing documents without inventing historical events. Actual queued attach
     /// notifications still announce their frame once, even if this snapshot read ahead.
     pub(crate) fn seed(&mut self, target: &TargetId, tree: Value) {
-        self.seed_except(target, tree, &HashSet::new());
-    }
-
-    /// [`Self::seed`] from a tree read some events ago (`target_watcher.rs` reads a new frame
-    /// session's tree off its loop). `stale` names the frames removed, or given a new document,
-    /// since the read: they and everything under them are left out, so a late tree cannot
-    /// bring back a frame the log already removed, nor an old document's children.
-    pub(crate) fn seed_except(&mut self, target: &TargetId, tree: Value, stale: &HashSet<FrameId>) {
         #[derive(Deserialize)]
         #[serde(rename_all = "camelCase")]
         struct Tree {
@@ -117,9 +109,6 @@ impl FrameLifecycleTracker {
         let mut pending = vec![(reply.frame_tree, None)];
         while let Some((tree, parent)) = pending.pop() {
             let mut frame = tree.frame;
-            if stale.contains(&frame.id) {
-                continue;
-            }
             if frame.parent_id.is_none() && frame.id.0 != target.0 {
                 frame.parent_id = parent;
             }
@@ -291,42 +280,12 @@ fn remove_frame(
 mod tests {
     use browseros_core::{FrameId, TargetId};
     use serde_json::json;
-    use std::collections::HashSet;
     use std::error::Error;
 
     use super::{EventFrame, FrameLifecycleTracker};
     use crate::RunState;
     use crate::events::{EventHub, PageEvent, PageEventKind};
     use crate::page::LoadState;
-
-    /// A tree read before a frame went, or before its document changed, must not bring the
-    /// frame or the old document's children back when it is applied after those events.
-    #[test]
-    fn tests_that_a_late_tree_leaves_out_frames_removed_or_renewed_since_it_was_read() {
-        let mut tracker = FrameLifecycleTracker::default();
-        let target = TargetId("main".to_owned());
-        let late = json!({"frameTree": {
-            "frame": {"id":"main", "loaderId":"one", "url":"https://a.test/"},
-            "childFrames": [
-                {"frame":{"id":"gone", "url":"https://ad.test/"},
-                 "childFrames": [{"frame":{"id":"gone-child", "url":"about:blank"}}]},
-                {"frame":{"id":"renewed", "loaderId":"old", "url":"https://b.test/"},
-                 "childFrames": [{"frame":{"id":"old-child", "url":"about:blank"}}]},
-                {"frame":{"id":"kept", "url":"https://c.test/"}}
-            ]
-        }});
-        let stale = HashSet::from([FrameId("gone".to_owned()), FrameId("renewed".to_owned())]);
-        tracker.seed_except(&target, late, &stale);
-        let known: Vec<&str> = tracker.tabs[&target]
-            .iter()
-            .map(|frame| frame.id.0.as_str())
-            .collect();
-        assert_eq!(
-            known,
-            ["main", "kept"],
-            "the stale frames and their subtrees stay out"
-        );
-    }
 
     #[test]
     fn tests_that_seeded_frames_are_removed_without_replaying_old_attachments()

@@ -325,21 +325,38 @@ struct Watcher {
     /// Window lookups report their popup back on this channel, so only this task writes the
     /// log. The receiving end is a local of the task's loop.
     found: UnboundedSender<OpenedPage>,
-    /// Frame-tree reads in flight for new out-of-process frame sessions ([`Seeding`]).
-    seeding: HashMap<SessionId, Seeding>,
+    /// Each tab's events in wire order behind its frame-tree reads in flight ([`TabLine`]).
+    lines: HashMap<TargetId, TabLine>,
     /// Where those reads send their answers back, so only this task writes the tracker; set by
     /// the run loop. Without it (a test driving `handle` alone) a read is awaited in place.
     seeded: Option<UnboundedSender<SeededTree>>,
+    /// Synchronize requests whose fence covers an event a line still holds: answered once the
+    /// log has every event before their fence.
+    deferred: Vec<WatcherRequest>,
+    /// Set while a line's held events are handled, so they are not held again.
+    replaying: bool,
 }
 
-/// A new frame session's tree read, in flight off the watcher's loop. A busy frame answers
-/// only between its script's tasks (100 ms each under an ad's busy loop, measured), so a page
-/// that churns frames kept the loop waiting on one read after another, and every reply's
-/// synchronize behind it. While the read is out, the loop records which of the tab's frames
-/// went or got a new document: the answer leaves those out when it lands.
-struct Seeding {
-    tab: TargetId,
-    stale: HashSet<FrameId>,
+/// One tab's events while a frame-tree read for one of its new frame sessions is out.
+///
+/// A new out-of-process frame's tree is read once, to seed the frame tracker with frames that
+/// existed before its session reported events. The frame answers only between its script's
+/// tasks (about 100 ms under an ad's busy loop, measured), and the loop used to wait for it in
+/// place: a page that keeps creating frames kept the loop on one read after another, and every
+/// reply's synchronize behind it. Now the read goes out on a task of its own, and the tab's
+/// later events wait here, in order, until its answer is applied: the tracker sees the tree
+/// and the tab's events in the same order as when the loop waited, while other tabs go on.
+type TabLine = VecDeque<LineItem>;
+
+enum LineItem {
+    /// A frame session's tree read; `answer` is `None` while it is out, then the tree (or
+    /// `None` when the read failed or ran out of its second).
+    Read {
+        session: SessionId,
+        answer: Option<Option<Value>>,
+    },
+    /// An event of the tab read at broadcast `position` and held behind the reads before it.
+    Event { position: u64, event: CdpEvent },
 }
 
 /// A tree read's answer, for the session it was asked on; `None` when it failed or timed out.
@@ -610,8 +627,10 @@ impl Watcher {
             pending_dialogs: HashMap::new(),
             next_reap: Instant::now() + REAP,
             found,
-            seeding: HashMap::new(),
+            lines: HashMap::new(),
             seeded: None,
+            deferred: Vec::new(),
+            replaying: false,
         };
         (watcher, found_rx)
     }
@@ -676,12 +695,16 @@ impl Watcher {
                     // its tab's workers and frames reporting before the script's next call.
                     self.lease_worker_runtime().await;
                     self.lease_frame_logs().await;
-                    for request in batch {
-                        let _ = request.done.send(());
-                    }
+                    // An event before a fence may still wait in a tab's line; such a request is
+                    // answered once the line lets it go (`answer_deferred`).
+                    self.deferred.extend(batch);
+                    self.answer_deferred();
                 }
                 Some(opened) = found.recv() => self.found(opened),
-                Some(seeded) = trees.recv() => self.seeded_tree(seeded),
+                Some(seeded) = trees.recv() => {
+                    self.seeded_tree(seeded);
+                    self.advance_lines().await;
+                }
                 _ = tick.tick() => self.tick().await,
                 () = time::sleep_until(grace_ends.unwrap_or_else(Instant::now)), if grace_ends.is_some() => {
                     self.end_graces();
@@ -733,7 +756,6 @@ impl Watcher {
         self.contexts.retain(|(known, _), _| known != session);
         self.sessions.remove(session);
         self.page_sessions.remove(session);
-        self.seeding.remove(session);
     }
 
     /// Events were dropped: rediscover, which records what closed meanwhile, and tell the frame
@@ -743,8 +765,6 @@ impl Watcher {
         self.epoch = None;
         self.attach_log.lost_events();
         self.baselines.events_lost();
-        // A removal this loop never saw cannot be marked stale; the reads in flight are dropped.
-        self.seeding.clear();
     }
 
     /// Handles the queued broadcast events up to `fence`: every event broadcast before whoever
@@ -933,6 +953,14 @@ impl Watcher {
     }
 
     async fn handle(&mut self, event: CdpEvent) {
+        if let Some(tab) = self.line_for(&event) {
+            let position = self.progress.events_handled();
+            if let Some(line) = self.lines.get_mut(&tab) {
+                line.push_back(LineItem::Event { position, event });
+            }
+            self.publish_hold();
+            return;
+        }
         let CdpEvent {
             method,
             params,
@@ -1664,21 +1692,23 @@ impl Watcher {
     }
 
     /// [`Self::seed_lifecycle`] for a new out-of-process frame session, off the loop: the read
-    /// goes out now and its answer is applied when it comes back ([`Seeding`]).
+    /// goes out now, and the tab's later events wait in its line until the answer is applied
+    /// ([`TabLine`]).
     async fn seed_frame_session(&mut self, tab: &TargetId, session: &SessionId) {
         let Some(seeded) = self.seeded.clone() else {
             self.seed_lifecycle(tab, session).await;
             return;
         };
-        self.seeding.insert(
-            session.clone(),
-            Seeding {
-                tab: tab.clone(),
-                stale: HashSet::new(),
-            },
-        );
+        self.lines
+            .entry(tab.clone())
+            .or_default()
+            .push_back(LineItem::Read {
+                session: session.clone(),
+                answer: None,
+            });
         let protocol = self.browser.protocol_session(session.clone());
         let session = session.clone();
+        // Bounded as the in-place read was, so a line waits at most a second for any read.
         drop(tokio::spawn(async move {
             let tree = time::timeout(
                 Duration::from_secs(1),
@@ -1691,37 +1721,116 @@ impl Watcher {
         }));
     }
 
-    /// A frame session's tree came back: its frames join the tab's, less those removed or
-    /// renewed since it was asked. Nothing if the session detached or events were lost since.
+    /// The tab whose line `event` must wait in: while a tab has a frame-tree read out, its
+    /// later events go behind it, except a new attachment (which only adds a read of its own)
+    /// and `Runtime`/`Inspector` reports, whose contexts a binding call arriving on its own
+    /// channel needs in arrival order.
+    fn line_for(&self, event: &CdpEvent) -> Option<TargetId> {
+        if self.replaying || self.lines.is_empty() {
+            return None;
+        }
+        let tab = match event.method.as_str() {
+            "Target.attachedToTarget" => return None,
+            method if method.starts_with("Runtime.") || method.starts_with("Inspector.") => {
+                return None;
+            }
+            // A frame or worker session going: named in the params, not by the event's session.
+            "Target.detachedFromTarget" => self
+                .sessions
+                .get(&SessionId::from(event.params.get("sessionId")?.as_str()?))?
+                .clone(),
+            "Target.targetDestroyed" | "Target.targetCrashed" => {
+                TargetId(event.params.get("targetId")?.as_str()?.to_owned())
+            }
+            _ => self.sessions.get(event.session_id.as_ref()?)?.clone(),
+        };
+        self.lines.contains_key(&tab).then_some(tab)
+    }
+
+    /// A frame session's tree came back: its read in the line is answered, to be applied in
+    /// order by [`Self::advance_lines`].
     fn seeded_tree(&mut self, SeededTree { session, tree }: SeededTree) {
-        if let (Some(seeding), Some(tree)) = (self.seeding.remove(&session), tree) {
-            self.lifecycle
-                .seed_except(&seeding.tab, tree, &seeding.stale);
+        let read = self
+            .lines
+            .values_mut()
+            .flat_map(|line| line.iter_mut())
+            .find_map(|item| match item {
+                LineItem::Read {
+                    session: asked,
+                    answer: answer @ None,
+                } if *asked == session => Some(answer),
+                _ => None,
+            });
+        if let Some(answer) = read {
+            *answer = Some(tree);
         }
     }
 
-    /// Marks, for the tree reads in flight on `tab`, a frame this event removes or gives a new
-    /// document: a tree read before it holds that frame's old subtree.
-    fn mark_stale(&mut self, tab: &TargetId, method: &str, params: &Value) {
-        if self.seeding.is_empty() {
+    /// Applies, in each tab's order, every answered read and the events behind it, up to the
+    /// next read still out; then answers the synchronize requests the log now covers.
+    async fn advance_lines(&mut self) {
+        loop {
+            let next = self.lines.iter_mut().find_map(|(tab, line)| {
+                let ready = match line.front() {
+                    Some(LineItem::Read { answer, .. }) => answer.is_some(),
+                    Some(LineItem::Event { .. }) => true,
+                    None => false,
+                };
+                if ready {
+                    line.pop_front().map(|item| (tab.clone(), item))
+                } else {
+                    None
+                }
+            });
+            let Some((tab, item)) = next else {
+                break;
+            };
+            match item {
+                LineItem::Read {
+                    answer: Some(Some(tree)),
+                    ..
+                } => self.lifecycle.seed(&tab, tree),
+                LineItem::Read { .. } => {}
+                LineItem::Event { event, .. } => {
+                    self.replaying = true;
+                    self.handle(event).await;
+                    self.replaying = false;
+                }
+            }
+        }
+        self.lines.retain(|_, line| !line.is_empty());
+        self.publish_hold();
+        self.answer_deferred();
+    }
+
+    /// Tells [`WatcherProgress`] the oldest event a line holds, so no fence past it counts as
+    /// in the log.
+    fn publish_hold(&self) {
+        let oldest = self
+            .lines
+            .values()
+            .filter_map(|line| {
+                line.iter().find_map(|item| match item {
+                    LineItem::Event { position, .. } => Some(*position),
+                    LineItem::Read { .. } => None,
+                })
+            })
+            .min();
+        self.progress.hold_from(oldest);
+    }
+
+    /// Answers the deferred synchronize requests whose fence the log now covers.
+    fn answer_deferred(&mut self) {
+        if self.deferred.is_empty() {
             return;
         }
-        let frame = match method {
-            "Page.frameDetached" => parse::<FrameDetached>(params.clone())
-                .filter(|detached| detached.reason != "swap")
-                .map(|detached| detached.frame_id),
-            "Page.frameNavigated" => {
-                parse::<FrameNavigated>(params.clone()).map(|navigated| navigated.frame.id)
-            }
-            _ => None,
-        };
-        let Some(frame) = frame.map(FrameId) else {
-            return;
-        };
-        for seeding in self.seeding.values_mut() {
-            if seeding.tab == *tab {
-                seeding.stale.insert(frame.clone());
-            }
+        let applied = self.progress.applied_through();
+        let (ready, waiting): (Vec<_>, Vec<_>) = mem::take(&mut self.deferred)
+            .into_iter()
+            .partition(|request| request.fence.0 <= applied);
+        self.deferred = waiting;
+        for request in ready {
+            let _ = request.done.send(());
         }
     }
 
@@ -1766,7 +1875,6 @@ impl Watcher {
     /// frame's commit. Same-document navigations and process swaps change no number.
     async fn frame_lifecycle(&mut self, method: &str, session: &SessionId, params: &Value) {
         if let Some(target) = self.target_of(session).await {
-            self.mark_stale(&target, method, params);
             for event in self.lifecycle.record(&target, method, params) {
                 self.writer.record(PageEvent::FrameLifecycle(event));
             }
@@ -2173,10 +2281,10 @@ mod worker_observation_tests {
         BrowserSession, BrowserSessionHooks, CdpConnection, SessionId, TabId, TargetId,
     };
     use serde_json::json;
-    use tokio::sync::broadcast;
+    use tokio::sync::{broadcast, mpsc, oneshot};
     use tokio::task;
 
-    use super::{EventFence, Watcher, WatcherHandle};
+    use super::{EventFence, SeededTree, Watcher, WatcherHandle, WatcherRequest};
     use crate::events::worker_table::WorkerInfo;
     use crate::events::{EventHub, PageEvent, PageEventKind, Subscription, WatcherProgress};
     use crate::run_state::RunState;
@@ -2222,6 +2330,108 @@ mod worker_observation_tests {
             10,
             "short of its fence, a drain ends when nothing more is queued"
         );
+        Ok(())
+    }
+
+    /// Handles `event` as the run loop does: counted as read once it was handled.
+    async fn read(watcher: &mut Watcher, event: CdpEvent) {
+        watcher.handle(event).await;
+        watcher.progress.handled(1);
+    }
+
+    /// While a new frame session's tree read is out, the tab's later events wait behind it and
+    /// run after its answer, in the order the loop read them: a child known only to that tree
+    /// and removed before the answer lands is still published removed, with its payload, and a
+    /// synchronize whose fence covers a held event is answered only once it is in the log.
+    #[tokio::test]
+    async fn a_tab_s_events_wait_behind_its_frame_tree_read() -> Result<(), Box<dyn Error>> {
+        let connection = TestConnection::new([]);
+        let browser = BrowserSession::new(
+            Arc::clone(&connection) as Arc<dyn CdpConnection>,
+            BrowserSessionHooks::default(),
+        );
+        let (hub, writer) = EventHub::new();
+        let progress = Arc::new(WatcherProgress::default());
+        let (mut watcher, _found) = Watcher::new(
+            browser,
+            writer,
+            Arc::new(FrameAttachLog::default()),
+            Arc::clone(&progress),
+            Arc::new(SnapshotBaselines::default()),
+        );
+        progress.start(0, 0);
+        let (seeded, _answers) = mpsc::unbounded_channel();
+        watcher.seeded = Some(seeded);
+        let (tab, page, ad) = (
+            TargetId("tab".to_owned()),
+            SessionId::from("page"),
+            SessionId::from("ad"),
+        );
+        watcher.sessions.insert(page.clone(), tab.clone());
+        watcher.lifecycle_sources.attach(&page, &tab);
+        // The ad frame's own session attaches: its tree read goes out.
+        read(
+            &mut watcher,
+            CdpEvent {
+                method: "Target.attachedToTarget".to_owned(),
+                params: json!({ "sessionId": "ad",
+                    "targetInfo": { "targetId": "ad", "type": "iframe", "url": "https://ad.test/" } }),
+                session_id: Some(page.clone()),
+            },
+        )
+        .await;
+        // A child the session never announced goes before the answer comes back.
+        read(
+            &mut watcher,
+            CdpEvent {
+                method: "Page.frameDetached".to_owned(),
+                params: json!({ "frameId": "child", "reason": "remove" }),
+                session_id: Some(ad.clone()),
+            },
+        )
+        .await;
+        assert_eq!(progress.events_handled(), 2, "both read");
+        assert_eq!(progress.applied_through(), 1, "the removal is held");
+        let (done, mut answered) = oneshot::channel();
+        watcher.deferred.push(WatcherRequest {
+            closed: None,
+            fence: EventFence(2),
+            done,
+        });
+        watcher.answer_deferred();
+        assert!(
+            answered.try_recv().is_err(),
+            "its fence covers the held removal"
+        );
+
+        watcher.seeded_tree(SeededTree {
+            session: ad,
+            tree: Some(json!({ "frameTree": {
+                "frame": { "id": "ad", "url": "https://ad.test/" },
+                "childFrames": [{ "frame": { "id": "child", "parentId": "ad",
+                    "url": "https://ad.test/child" } }]
+            } })),
+        });
+        watcher.advance_lines().await;
+        let removed: Vec<String> = hub
+            .read_after(0)
+            .records
+            .into_iter()
+            .filter_map(|record| match record.event {
+                PageEvent::FrameLifecycle(event) if event.kind == PageEventKind::FrameDetached => {
+                    Some(event.frame.url)
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            removed,
+            ["https://ad.test/child"],
+            "removed, with the tree's payload"
+        );
+        assert!(watcher.lines.is_empty());
+        assert_eq!(progress.applied_through(), 2);
+        assert!(answered.try_recv().is_ok(), "answered once the log has it");
         Ok(())
     }
 
