@@ -742,13 +742,8 @@ mod tests {
 
     impl CaptchaPage for FakePage {
         async fn eval_main(&self, expression: &str) -> Result<Value, PageError> {
-            if expression.contains("const widgets = [], roots = [], frames = [];") {
-                return Ok(json!({
-                    "widgets":[{"kind":"arkose", "state":"active", "sitekey":KEY,
-                        "invisible":false, "enterprise":false}],
-                    "frames":[], "addresses":[], "checked":null, "expired":false,
-                    "complete":true, "top":true, "url":document().url
-                }));
+            if expression.contains("captcha:vendor") {
+                return Ok(json!({"complete": true}));
             }
             if expression.contains("arkose:apply") {
                 let delay = self.state().apply_delay;
@@ -807,6 +802,17 @@ mod tests {
         }
         async fn eval_in_frame(&self, _: &FrameRef, _: &str) -> Result<Value, PageError> {
             Err(PageError::Browser("isolated world must not be used".into()))
+        }
+        async fn scan_dom(&self, frame: Option<&FrameRef>, _: &str) -> Result<Value, PageError> {
+            if frame.is_some() {
+                return Err(PageError::Browser("no frame DOM in this fixture".into()));
+            }
+            Ok(json!({
+                "widgets":[{"kind":"arkose", "state":"active", "sitekey":KEY,
+                    "invisible":false, "enterprise":false}],
+                "frames":[], "addresses":[], "checked":null, "expired":false,
+                "complete":true, "top":true, "url":document().url
+            }))
         }
         async fn frames(&self) -> Result<Vec<FrameRef>, PageError> {
             Ok(if self.state().extra_owner.is_some() {

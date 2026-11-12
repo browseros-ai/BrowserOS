@@ -43,7 +43,7 @@ fn marked_scan(nonce: &str, count: usize, truncated: bool, function: &str) -> St
 }
 
 fn scan_nonce() -> String {
-    format!("{:x}", rand::random::<u64>())
+    ulid::Ulid::new().to_string()
 }
 
 pub trait CaptchaPage: Send + Sync {
