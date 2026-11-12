@@ -18,7 +18,7 @@ use url::Url;
 use crate::services::billing::Billing;
 
 /// The staging worker, for builds with the `billing-staging` feature.
-const STAGING_URL: Option<&str> = None;
+const STAGING_URL: Option<&str> = Some("https://decisions-api-worker-staging.eng-6b4.workers.dev");
 
 /// The production worker. `None` until launch, alongside the production billing gateway.
 const RELEASE_URL: Option<&str> = None;

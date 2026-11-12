@@ -202,6 +202,17 @@ fn hosted_servers_have_no_worker_and_release_builds_wait_for_launch() {
     }
 }
 
+#[cfg(feature = "billing-staging")]
+#[test]
+fn a_staging_build_uses_the_staging_worker() {
+    if std::env::var_os("CLAW_DECISIONS_URL").is_none() {
+        assert_eq!(
+            Decisions::for_build(false).url().map(url::Url::as_str),
+            Some("https://decisions-api-worker-staging.eng-6b4.workers.dev/")
+        );
+    }
+}
+
 fn one_question() -> BTreeMap<String, Question> {
     let mut asked = BTreeMap::new();
     asked.insert(
