@@ -33,6 +33,8 @@ export function browserLaunch(
       '--lang=en-US',
       hostedMode ? '--window-size=1280,841' : '--window-size=1520,801',
       '--force-device-scale-factor=1',
+      // DIAGNOSTIC (diag/lh001-flags, never lands): one group's extra switches.
+      ...(process.env.NEO_DIAG_CHROME_FLAGS ?? '').split(' ').filter(Boolean),
       'about:blank',
     ],
     env: { BROWSERCLAW_HOSTED_MODE: hostedMode ? '1' : null },

@@ -32,6 +32,12 @@ on:
       - packages/browseros-agent/Cargo.lock
       - packages/browseros-agent/package.json
   workflow_dispatch:
+    inputs:
+      mode:
+        description: "together: control and all three flags; each: one flag per group"
+        type: choice
+        options: [together, each]
+        default: together
 
 permissions:
   contents: read
@@ -49,7 +55,7 @@ jobs:
       github.event_name != 'pull_request' ||
       github.event.pull_request.head.repo.full_name == github.repository
     runs-on: warp-custom-browseros-ubuntu-2204-x64-32x
-    timeout-minutes: 45
+    timeout-minutes: 90
     defaults:
       run:
         working-directory: packages/browseros-agent
@@ -127,41 +133,46 @@ jobs:
           path: ~/.cache/browseros/neo-spec
           key: neo-spec-playwright-${{ hashFiles('packages/browseros-agent/crates/neo-sdk/neo-playwright-tests/corpus.json', 'packages/browseros-agent/crates/neo-sdk/neo-playwright-tests/js/prepare.mjs') }}-node26
 
-      - name: Run the spec suite
-        id: spec
+      # DIAGNOSTIC branch diag/lh001-flags (never to land): does Chromium's background throttling
+      # cause LH-001's ~1 s per mouse action and SS-054's stalled captures on Linux? Each group runs
+      # the same seven tests 12 times; NEO_DIAG_CHROME_FLAGS adds switches to the browser launch
+      # (node/browser.mjs). Groups run one after another on this runner, the same way.
+      - name: Run the seven tests repeatedly, per group
         env:
-          NEO_NODE_OUTPUT_DIR: ${{ runner.temp }}/neo-spec
-        # Sets the step output `results` to the run's results folder.
-        run: bun run test:neo-spec --ci --workers "$NEO_SPEC_WORKERS"
-
-      - name: Leave the copied Playwright tree out of the report
-        if: always() && steps.spec.outputs.results != ''
-        env:
-          RESULTS: ${{ steps.spec.outputs.results }}
-        # Each run's `upstream/` holds a 240 MB copy of the tests and links to the cached source,
-        # which upload-artifact would follow. Its test-results/ (failure screenshots and diffs)
-        # stays.
+          MODE: ${{ inputs.mode }}
+          GREP: >-
+            (?:^| )page/page-add-locator-handler\.spec\.ts should work(?: @\S+)*$|(?:^| )page/page-add-locator-handler\.spec\.ts should work with toHaveScreenshot(?: @\S+)*$|(?:^| )page/elementhandle-screenshot\.spec\.ts element screenshot should wait for visible(?: @\S+)*$|(?:^| )page/elementhandle-screenshot\.spec\.ts element screenshot should wait for element to stop moving(?: @\S+)*$|(?:^| )page/page-screenshot\.spec\.ts page screenshot animations should not capture css animations in shadow DOM(?: @\S+)*$|(?:^| )page/page-screenshot\.spec\.ts page screenshot should capture canvas changes(?: @\S+)*$|(?:^| )page/page-screenshot\.spec\.ts page screenshot animations should not capture infinite css animation(?: @\S+)*$
         run: |
-          set -euo pipefail
-          find "$RESULTS" -type d -name upstream -prune -print | while read -r tree; do
+          set -u
+          R=--disable-renderer-backgrounding
+          T=--disable-background-timer-throttling
+          O=--disable-backgrounding-occluded-windows
+          build=""
+          run_group() {
+            group=$1; flags=$2
+            mkdir -p "$RUNNER_TEMP/neo-spec/$group"
+            echo "=== $group: flags [${flags}]"
+            NEO_DIAG_CHROME_FLAGS="$flags" NEO_NODE_OUTPUT_DIR="$RUNNER_TEMP/neo-spec/$group" \
+              bun run test:neo-spec page-add-locator-handler page-screenshot elementhandle-screenshot \
+              --workers 8 --repeat-each 12 --grep "$GREP" $build > "$RUNNER_TEMP/neo-spec/$group.log" 2>&1 || true
+            tail -4 "$RUNNER_TEMP/neo-spec/$group.log"
+            build=--skip-build
+          }
+          if [ "$MODE" = each ]; then
+            run_group R "$R"; run_group T "$T"; run_group O "$O"
+          else
+            run_group C ""; run_group F "$R $T $O"
+          fi
+          python3 crates/neo-sdk/neo-playwright-tests/diag-lh001-summary.py "$RUNNER_TEMP/neo-spec" | tee -a "$GITHUB_STEP_SUMMARY"
+          find "$RUNNER_TEMP/neo-spec" -type d -name upstream -prune -print | while read -r tree; do
             rm -rf "$tree/tests" "$tree/packages" "$tree/node_modules"
           done
-          du -sh "$RESULTS"
+          du -sh "$RUNNER_TEMP/neo-spec"
 
-      - name: Upload the report
-        if: always() && steps.spec.outputs.results != ''
+      - name: Upload the diagnostic results
+        if: always()
         uses: actions/upload-artifact@v7
         with:
-          # Names match ARTIFACTS in neo-playwright-tests/node/expected.mjs.
-          name: neo-spec-report
-          path: ${{ steps.spec.outputs.results }}
-          retention-days: 14
-
-      - name: Upload the list this run supports
-        if: always() && steps.spec.outputs.results != ''
-        uses: actions/upload-artifact@v7
-        with:
-          name: neo-spec-expected
-          path: ${{ steps.spec.outputs.results }}/expected/
-          if-no-files-found: ignore
-          retention-days: 30
+          name: neo-spec-lh001-diag-${{ inputs.mode }}
+          path: ${{ runner.temp }}/neo-spec
+          retention-days: 7
