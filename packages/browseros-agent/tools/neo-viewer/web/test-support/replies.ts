@@ -18,3 +18,19 @@ export const TIP_LINE =
 export const SNAPSHOT = JSON.parse(
   SNAPSHOT_WITH_TIP.split('\n')[0] ?? '""',
 ) as string
+
+/** A line Neo does not write today, standing for whatever it appends after the value later. */
+const UNKNOWN_TRAILER = 'Notice: a line Neo does not write yet'
+
+/**
+ * Each reply with a line after its returned value, and that line: run 8 as it was, and run 8's
+ * value followed by `UNKNOWN_TRAILER`.
+ */
+export const TRAILED: ReadonlyArray<readonly [reply: string, trailer: string]> =
+  [
+    [SNAPSHOT_WITH_TIP, TIP_LINE],
+    [
+      `${SNAPSHOT_WITH_TIP.split('\n')[0]}\n${UNKNOWN_TRAILER}`,
+      UNKNOWN_TRAILER,
+    ],
+  ]

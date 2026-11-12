@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'bun:test'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { detailWith } from '../../server/test-support/neo-records'
-import { SNAPSHOT, SNAPSHOT_WITH_TIP, TIP_LINE } from '../test-support/replies'
+import { SNAPSHOT, TRAILED } from '../test-support/replies'
 import { FormattedReply, previewText } from './RunList'
 
 const text = (markup: string) =>
@@ -31,18 +31,18 @@ describe("the plain page's reply", () => {
     expect(shown).not.toContain('\\n')
   })
 
-  it("shows run 8, a returned snapshot then Neo's tip, decoded with the tip under it", () => {
-    const shown = text(
-      renderToStaticMarkup(
-        <FormattedReply
-          detail={detailWith(8, { text: SNAPSHOT_WITH_TIP, neo: null })}
-        />,
-      ),
-    )
-    expect(shown).toContain('Shown decoded')
-    expect(shown).toContain(SNAPSHOT.split('\n').slice(0, 3).join('\n'))
-    expect(shown).toContain(TIP_LINE)
-    expect(shown).not.toContain('\\n- ')
+  it('shows run 8, and the same value before an unknown line, decoded with the line under it', () => {
+    for (const [reply, trailer] of TRAILED) {
+      const shown = text(
+        renderToStaticMarkup(
+          <FormattedReply detail={detailWith(8, { text: reply, neo: null })} />,
+        ),
+      )
+      expect(shown).toContain('Shown decoded')
+      expect(shown).toContain(SNAPSHOT.split('\n').slice(0, 3).join('\n'))
+      expect(shown).toContain(trailer)
+      expect(shown).not.toContain('\\n- ')
+    }
   })
 
   it('shows any other value as the model read it', () => {

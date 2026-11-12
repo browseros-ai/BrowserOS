@@ -96,6 +96,14 @@ describe("reading a run's reply", () => {
     const text =
       'website / strict_mode_violation: getByRole resolved to 2 elements:\n  1) <button>Place order</button>\n  2) <button>Confirm later</button>'
     expect(replyParts(text)).toEqual({ value: text, console: [], notes: [] })
+    // Errors get no tips, so a line of the message that reads like one stays in it.
+    const tipLike =
+      'script / script_error: login failed\nTip: refresh the session'
+    expect(replyParts(tipLike)).toEqual({
+      value: tipLike,
+      console: [],
+      notes: [],
+    })
     expect(errorCode(text)).toBe('strict_mode_violation')
     expect(errorCode('{"ok":true}')).toBeNull()
   })

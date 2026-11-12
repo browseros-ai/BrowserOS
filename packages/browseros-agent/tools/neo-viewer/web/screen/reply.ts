@@ -29,11 +29,15 @@ export interface ReplyParts {
   notes: string[]
 }
 
+/** Neo's notes on operations the script left unconfirmed; they can follow a failed run too. */
+const NOTE_FORMS = ['[unknown outcome] ', '[not awaited] ']
+
 /**
- * The forms of the lines Neo writes after the console. Used only to find where console output
- * ends, which the text does not mark (a script can log any line); never to find the value.
+ * The forms of the lines Neo writes after a returned value's console output: its notes, then
+ * tips. Used only to find where console output ends, which the text does not mark (a script can
+ * log any line); never to find the value, and never on an error, which gets no tips.
  */
-const NEO_LINE_FORMS = ['[unknown outcome] ', '[not awaited] ', 'Tip: ']
+const AFTER_CONSOLE_FORMS = [...NOTE_FORMS, 'Tip: ']
 
 export function replyParts(text: string): ReplyParts {
   const lines = text.split('\n')
@@ -45,13 +49,13 @@ export function replyParts(text: string): ReplyParts {
 /** The lines after a returned value: a console block when the script logged, then notes. */
 function trailer(lines: string[]): Omit<ReplyParts, 'value'> {
   if (lines[0] !== 'console:') return { console: [], notes: lines }
-  const end = neoLinesStart(lines, 1)
+  const end = neoLinesStart(lines, 1, AFTER_CONSOLE_FORMS)
   return { console: lines.slice(1, end), notes: lines.slice(end) }
 }
 
 /** An error reply: the error line(s), then the console block and notes, found from the end. */
 function errorParts(lines: string[]): ReplyParts {
-  const end = neoLinesStart(lines, 1)
+  const end = neoLinesStart(lines, 1, NOTE_FORMS)
   const notes = lines.slice(end)
   const consoleAt = lines.indexOf('console:', 1)
   if (consoleAt !== -1 && consoleAt < end) {
@@ -64,13 +68,10 @@ function errorParts(lines: string[]): ReplyParts {
   return { value: lines.slice(0, end).join('\n'), console: [], notes }
 }
 
-/** Where the run of Neo's own lines at the end of `lines` starts, looking no earlier than `from`. */
-function neoLinesStart(lines: string[], from: number): number {
+/** Where the run of lines in one of `forms` at the end of `lines` starts, no earlier than `from`. */
+function neoLinesStart(lines: string[], from: number, forms: string[]): number {
   let end = lines.length
-  while (
-    end > from &&
-    NEO_LINE_FORMS.some((form) => lines[end - 1]?.startsWith(form))
-  ) {
+  while (end > from && forms.some((form) => lines[end - 1]?.startsWith(form))) {
     end--
   }
   return end
