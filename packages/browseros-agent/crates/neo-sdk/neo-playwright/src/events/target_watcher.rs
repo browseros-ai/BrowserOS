@@ -160,6 +160,9 @@ struct Watcher {
     closed_early: HashSet<TargetId>,
     /// Which tab each page or OOPIF session belongs to.
     sessions: HashMap<SessionId, TargetId>,
+    /// Core's own page sessions, which it attaches with `Runtime` off: a console report on one
+    /// that no lease holds on is a replay another toggle caused (core's console harvest).
+    page_sessions: HashSet<SessionId>,
     /// Only the chosen auto-attach endpoint publishes a worker's console and close.
     worker_sessions: HashMap<SessionId, String>,
     /// Older Chromium has no workerScriptLoaded event and uses context creation instead.
@@ -400,6 +403,7 @@ impl Watcher {
             pages: HashMap::new(),
             closed_early: HashSet::new(),
             sessions: HashMap::new(),
+            page_sessions: HashSet::new(),
             worker_sessions: HashMap::new(),
             worker_script_events: None,
             root_observers: HashMap::new(),
@@ -517,6 +521,7 @@ impl Watcher {
         }
         self.contexts.retain(|(known, _), _| known != session);
         self.sessions.remove(session);
+        self.page_sessions.remove(session);
     }
 
     /// Handles every broadcast event already queued, without waiting for more.
@@ -769,21 +774,9 @@ impl Watcher {
                     self.dialog_closed(&session);
                 }
             }
-            "Runtime.consoleAPICalled" => {
-                if let Some(session) = session_id
-                    && let Some(target) = self.wanted(&session, PageEventKind::Console).await
-                    && let Some(params) = parse::<ConsoleParams>(params)
-                {
-                    self.console(&session, target, params);
-                }
-            }
-            "Runtime.exceptionThrown" => {
-                if let Some(session) = session_id
-                    && let Some(target) = self.wanted(&session, PageEventKind::PageError).await
-                    && let Some(params) = parse::<ExceptionParams>(params)
-                {
-                    let error = PageError::from_params(target, params);
-                    self.writer.record(PageEvent::PageError(error));
+            "Runtime.consoleAPICalled" | "Runtime.exceptionThrown" => {
+                if let Some(session) = session_id {
+                    self.runtime_report(&method, session, params).await;
                 }
             }
             "Browser.downloadWillBegin" => {
@@ -1116,6 +1109,7 @@ impl Watcher {
                 let target = TargetId(target_info.target_id);
                 self.lifecycle_sources.attach(&session_id, &target);
                 self.sessions.insert(session_id.clone(), target.clone());
+                self.page_sessions.insert(session_id.clone());
                 if self.lifecycle_sources.accepts(&session_id) {
                     self.seed_lifecycle(&target, &session_id).await;
                 }
@@ -1353,6 +1347,40 @@ impl Watcher {
     }
 
     /// The tab of `session`, if some run listens for `event` on it.
+    /// Whether a console message or exception is the browser's replay of history: a lease
+    /// that switched `Runtime` on makes the browser send what it stored before, and a listener
+    /// must see only what came after it asked, as it did while `Runtime` stayed on from attach.
+    fn replayed(&self, session: &SessionId, params: &Value) -> bool {
+        let Some(floor) = self.browser.page_signals.runtime_leases().floor_ms(session) else {
+            // Workers and OOPIFs still keep `Runtime` on without a lease.
+            return self.page_sessions.contains(session);
+        };
+        params
+            .get("timestamp")
+            .and_then(Value::as_f64)
+            .is_some_and(|stamped| stamped < floor)
+    }
+
+    /// A console message or uncaught exception, for the runs listening on its tab, unless it
+    /// is history the browser replayed when a lease enabled `Runtime`.
+    async fn runtime_report(&mut self, method: &str, session: SessionId, params: Value) {
+        if self.replayed(&session, &params) {
+            return;
+        }
+        if method == "Runtime.consoleAPICalled" {
+            if let Some(target) = self.wanted(&session, PageEventKind::Console).await
+                && let Some(params) = parse::<ConsoleParams>(params)
+            {
+                self.console(&session, target, params);
+            }
+        } else if let Some(target) = self.wanted(&session, PageEventKind::PageError).await
+            && let Some(params) = parse::<ExceptionParams>(params)
+        {
+            let error = PageError::from_params(target, params);
+            self.writer.record(PageEvent::PageError(error));
+        }
+    }
+
     async fn wanted(&mut self, session: &SessionId, event: PageEventKind) -> Option<TargetId> {
         let target = self.target_of(session).await?;
         self.writer.hub().wants(&target, event).then_some(target)

@@ -31,6 +31,7 @@ def _create_context(version: str = "", product: str = "browseros") -> Context:
             chromium_src=root,
             architecture="",
             build_type="release",
+            artifact_only=True,
             product=product,
         )
     except ValueError as e:

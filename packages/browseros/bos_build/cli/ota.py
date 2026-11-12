@@ -51,6 +51,7 @@ def create_ota_context() -> Context:
         chromium_src=Path(),
         architecture="",
         build_type="release",
+        artifact_only=True,
     )
 
 

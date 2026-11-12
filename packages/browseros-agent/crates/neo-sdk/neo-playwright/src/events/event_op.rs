@@ -14,7 +14,7 @@ use std::path::{self, Path, PathBuf};
 use std::pin::pin;
 use std::{io, slice};
 
-use browseros_core::{CoreError, ProtocolSession, TabId};
+use browseros_core::{CoreError, ProtocolSession, RuntimeLease, TabId};
 use serde::de::{self, Deserializer};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -471,6 +471,52 @@ async fn subscription(
     }
 }
 
+/// Whether only `Runtime` reports `event` on a page session: console messages and uncaught
+/// errors, and binding calls with the main-world contexts that name their frame. Core attaches
+/// pages with `Runtime` off (a site times the inspector's console serialization to detect an
+/// attached inspector), so a run that wants these takes a lease ([`lease_runtime`]).
+pub(crate) const fn needs_runtime(event: PageEventKind) -> bool {
+    matches!(
+        event,
+        PageEventKind::Console | PageEventKind::PageError | PageEventKind::Binding
+    )
+}
+
+/// The `Runtime` lease a page listener for console messages or page errors needs, floored at
+/// the script's `since_ms`. Context listeners cover lifecycle events only
+/// (`PageEventKind::context`), and a context binding is plumbed, and leased, per page as each is
+/// admitted (`page/init_script.rs`). Hosted BrowserOS sends no console or exception events, so
+/// there a listener for them leases nothing.
+async fn lease_runtime(
+    pw: &Playwright,
+    scope: &OpScope<'_>,
+    subscription: &Subscription,
+    since_ms: u64,
+) -> Result<Vec<RuntimeLease>, PlaywrightError> {
+    let Subscription::Page { tab, event, .. } = subscription else {
+        return Ok(Vec::new());
+    };
+    let hosted_silent =
+        scope.hosted_mode() && matches!(event, PageEventKind::Console | PageEventKind::PageError);
+    if !needs_runtime(*event) || hosted_silent {
+        return Ok(Vec::new());
+    }
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "epoch milliseconds stay far below 2^53"
+    )]
+    let floor = since_ms as f64;
+    let admitted = scope.admit(pw.browser(), *tab).await?;
+    let lease = pw
+        .browser()
+        .page_signals
+        .runtime_leases()
+        .acquire(&admitted.session.session, floor)
+        .await
+        .map_err(|error| scope.core_error(&error))?;
+    Ok(vec![lease])
+}
+
 /// Context listeners observe existing tabs without requiring a prior page action. These are
 /// core-owned observation sessions; event release still maps each returned tab through the run.
 async fn observe_context(scope: &OpScope<'_>) -> Result<(), PlaywrightError> {
@@ -547,7 +593,10 @@ async fn listen(
     hub.bind(run);
     let observes_context = matches!(subscription, Subscription::Context(_));
     run.events
-        .listen(subscription, since, hub.position_at(since));
+        .listen(subscription.clone(), since, hub.position_at(since));
+    // Before the ack: the script's next action may log what it listens for.
+    let leases = lease_runtime(pw, scope, &subscription, since).await?;
+    run.events.hold_runtime(&subscription, leases);
     // Register before asynchronous observation setup: an off arriving during setup removes
     // the actual listener and cannot be undone when this on finishes.
     if observes_context {
@@ -654,13 +703,18 @@ async fn wait(
     if matches!(subscription, Subscription::Context(_)) {
         observe_context(scope).await?;
     }
-    let found = first_event(
-        pw,
-        scope,
-        &subscription,
-        input.since,
-        input.after.unwrap_or(0),
-    );
+    let found = async {
+        // Inside the wait's deadline: a slow enable ends at the script's timeout too.
+        let _runtime = lease_runtime(pw, scope, &subscription, input.since).await?;
+        first_event(
+            pw,
+            scope,
+            &subscription,
+            input.since,
+            input.after.unwrap_or(0),
+        )
+        .await
+    };
     match scope.within(found).await {
         Ok(found) => {
             let found = found?;

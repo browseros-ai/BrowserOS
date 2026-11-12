@@ -24,5 +24,6 @@ pub mod sessions;
 pub mod skill_runs;
 pub mod skills;
 pub mod tab_cleanup;
+pub mod tool_usage;
 
 pub mod extension_updates;

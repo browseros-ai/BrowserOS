@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Optional
 
 from ...core.context import Context
+from ...core.patch_source import validate_v8_gitlink
 from ...core.step import Step, ValidationError, step
 from ...lib.utils import log_info, log_success
 
@@ -395,9 +396,14 @@ def checkout(
     *,
     reset: bool = False,
     branch: Optional[str] = None,
+    patch_root: Optional[Path] = None,
 ) -> Path:
     """Select only the requested tag; preserve work unless reset is explicit."""
     src = _fetch_pin(src, version, strategy)
+    # A fetched revision is the first point where an upgrade's nested pin can
+    # be checked. Reject it before reset, checkout or gclient touches source.
+    if patch_root is not None:
+        validate_v8_gitlink(patch_root, src)
     tag_ref = f"refs/tags/{version}"
     if reset and _git_output(["rev-parse", "--verify", "HEAD"], cwd=src):
         reset_source(src)
@@ -439,6 +445,7 @@ def prepare(
     *,
     reset: bool = False,
     branch: Optional[str] = None,
+    patch_root: Optional[Path] = None,
 ) -> Path:
     """Prepare source under the caller's checkout lock and return its path.
 
@@ -472,12 +479,19 @@ def prepare(
     )
     if step_name == "fetch":
         _fetch_pin(src, version, strategy)
+        if patch_root is not None:
+            validate_v8_gitlink(patch_root, src)
         if not _git_output(["rev-parse", "--verify", "HEAD"], cwd=src):
-            checkout(src, version, strategy)
+            checkout(src, version, strategy, patch_root=patch_root)
     elif step_name in ("checkout", "all"):
-        checkout(src, version, strategy, reset=reset, branch=branch)
-    elif reset:
-        reset_source(src)
+        checkout(
+            src, version, strategy, reset=reset, branch=branch, patch_root=patch_root
+        )
+    else:
+        if patch_root is not None:
+            validate_v8_gitlink(patch_root, src)
+        if reset:
+            reset_source(src)
     if step_name in ("sync", "all"):
         sync(src, depot_tools, reset=reset)
         head = _git_output(["rev-parse", "HEAD"], cwd=src)
@@ -554,6 +568,7 @@ class SourceCheckoutModule(_SourceStep):
             ctx.chromium_version,
             strategy="shallow",
             step_name="fetch",
+            patch_root=ctx.get_patch_root(),
         )
 
 
@@ -567,4 +582,5 @@ class SourceSyncModule(_SourceStep):
             ctx.chromium_version,
             strategy="shallow",
             step_name="all",
+            patch_root=ctx.get_patch_root(),
         )

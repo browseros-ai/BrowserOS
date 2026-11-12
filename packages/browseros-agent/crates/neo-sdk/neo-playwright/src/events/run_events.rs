@@ -10,7 +10,7 @@ use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
 use browseros_core::file_transfers::FileChooserInterception;
-use browseros_core::{TabId, TargetId};
+use browseros_core::{RuntimeLease, TabId, TargetId};
 use tokio::sync::Notify;
 use tokio::time;
 
@@ -55,6 +55,10 @@ struct Inner {
     dropped_calls: u64,
     /// View-approved identities remain usable by retained events after the tab disappears.
     known_pages: VecDeque<KnownPage>,
+    /// The `Runtime` leases this run's listeners hold (console, page errors, bindings): core
+    /// leaves `Runtime` off on page sessions, so these keep its events flowing exactly while
+    /// someone listens. Removing the listener, or ending the run, drops them.
+    runtime: HashMap<Subscription, Vec<RuntimeLease>>,
 }
 
 /// Marks one `events.next` in flight until dropped.
@@ -159,9 +163,42 @@ impl RunEvents {
 
     /// Stops the listener `key` names, whatever target its page has now.
     pub(crate) fn unlisten(&self, key: &ListenerKey) {
-        self.lock()
+        let mut inner = self.lock();
+        inner
             .listening
             .retain(|subscription, _| subscription.key() != *key);
+        inner
+            .runtime
+            .retain(|subscription, _| subscription.key() != *key);
+    }
+
+    /// Whether the run holds a `Runtime` lease for `subscription`.
+    pub(crate) fn holds_runtime(&self, subscription: &Subscription) -> bool {
+        self.lock()
+            .runtime
+            .get(subscription)
+            .is_some_and(|leases| !leases.is_empty())
+    }
+
+    /// Releases the lease the run's bindings on `target` hold, once its last binding there is
+    /// disposed. The binding-call listener stays: a later binding leases again.
+    pub(crate) fn release_binding_runtime(&self, target: &TargetId) {
+        self.lock().runtime.retain(|subscription, _| {
+            subscription.page_event() != Some((target, PageEventKind::Binding))
+        });
+    }
+
+    /// Keeps `leases` for as long as `subscription` listens. One removed while they were taken
+    /// releases them at once.
+    pub(crate) fn hold_runtime(&self, subscription: &Subscription, leases: Vec<RuntimeLease>) {
+        let mut inner = self.lock();
+        if inner.listening.contains_key(subscription) {
+            inner
+                .runtime
+                .entry(subscription.clone())
+                .or_default()
+                .extend(leases);
+        }
     }
 
     /// Counts one `waitForEvent` for `subscription` until the returned guard drops.

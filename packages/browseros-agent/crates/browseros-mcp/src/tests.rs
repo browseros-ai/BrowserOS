@@ -222,6 +222,8 @@ struct HarnessConnection {
     calls: Mutex<Vec<HarnessCall>>,
     created_tab: Mutex<Option<Value>>,
     emit_console_on_input: AtomicBool,
+    /// Console messages the page logged, replayed when `Runtime.enable` arrives.
+    stored_console: Mutex<Vec<Value>>,
     /// The page's DOM mutation count, as the readiness probe reports it. A test bumps it to
     /// stand in for the page changing.
     mutations: AtomicU64,
@@ -246,6 +248,7 @@ impl HarnessConnection {
             calls: Mutex::new(Vec::new()),
             created_tab: Mutex::new(None),
             emit_console_on_input: AtomicBool::new(false),
+            stored_console: Mutex::new(Vec::new()),
             mutations: AtomicU64::new(0),
             navigate_reply: Mutex::new(json!({ "frameId": "main", "loaderId": "loader-2" })),
             history: Mutex::new(json!({
@@ -442,7 +445,7 @@ impl CdpConnection for HarnessConnection {
                 "Page.enable"
                 | "Page.setInterceptFileChooserDialog"
                 | "DOM.enable"
-                | "Runtime.enable"
+                | "Runtime.disable"
                 | "Accessibility.enable"
                 | "Runtime.runIfWaitingForDebugger"
                 | "Target.setAutoAttach"
@@ -510,11 +513,19 @@ impl CdpConnection for HarnessConnection {
                 "Runtime.evaluate" => Ok(json!({ "result": { "value": 0 } })),
                 "Input.dispatchKeyEvent" => {
                     if self.emit_console_on_input.swap(false, Ordering::SeqCst) {
-                        self.emit(
-                            "Runtime.consoleAPICalled",
-                            json!({
+                        let logged_ms = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .map(|elapsed| elapsed.as_secs_f64() * 1000.0)
+                            .unwrap_or(0.0);
+                        // Sessions keep console reporting off, so the browser only stores the
+                        // message; it reaches the agent when a harvest enables `Runtime`.
+                        self.stored_console
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner)
+                            .push(json!({
                                 "type": "error",
                                 "args": [{ "type": "string", "value": "TypeError: act failed" }],
+                                "timestamp": logged_ms,
                                 "stackTrace": {
                                     "callFrames": [{
                                         "url": "https://example.test/app.js",
@@ -522,10 +533,22 @@ impl CdpConnection for HarnessConnection {
                                         "columnNumber": 0
                                     }]
                                 }
-                            }),
+                            }));
+                    }
+                    Ok(json!({}))
+                }
+                "Runtime.enable" => {
+                    let stored = self
+                        .stored_console
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .clone();
+                    for params in stored {
+                        self.emit(
+                            "Runtime.consoleAPICalled",
+                            params,
                             session.map(SessionId::as_str),
                         );
-                        tokio::task::yield_now().await;
                     }
                     Ok(json!({}))
                 }
@@ -1918,6 +1941,12 @@ async fn alert_auto_accept_note_is_prepended_to_next_page_response() {
 #[tokio::test]
 async fn read_console_returns_captured_ring() {
     let (ctx, connection, page) = harness_ctx().await;
+    assert!(
+        !connection
+            .calls()
+            .iter()
+            .any(|call| call.method == "Runtime.enable")
+    );
     connection.emit(
         "Runtime.consoleAPICalled",
         json!({
@@ -1955,6 +1984,13 @@ async fn read_console_returns_captured_ring() {
     let text = result_text(&result);
     assert!(text.contains("warning: deprecated API (https://example.test/app.js:10)"));
     assert!(text.contains("exception: TypeError: x is undefined (https://example.test/app.js:13)"));
+    let runtime: Vec<_> = connection
+        .calls()
+        .into_iter()
+        .map(|call| call.method)
+        .filter(|method| method == "Runtime.enable" || method == "Runtime.disable")
+        .collect();
+    assert_eq!(runtime, ["Runtime.enable", "Runtime.disable"]);
     assert_eq!(
         result
             .structured_content
@@ -1980,6 +2016,13 @@ async fn act_appends_console_error_summary_for_action_window() {
     let text = result_text(&result);
     assert!(text.contains("[page 1 console] 1 error during action, e.g.: TypeError: act failed"));
     assert!(!result.is_error);
+    let runtime: Vec<_> = connection
+        .calls()
+        .into_iter()
+        .map(|call| call.method)
+        .filter(|method| method == "Runtime.enable" || method == "Runtime.disable")
+        .collect();
+    assert_eq!(runtime, ["Runtime.enable", "Runtime.disable"]);
 }
 
 #[tokio::test]

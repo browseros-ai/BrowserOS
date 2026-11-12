@@ -5,10 +5,8 @@ name: "Release: Neo Docker image"
 # extractable by anyone who can pull the image. Both native smoke jobs must pass
 # before publication; use latest only for a promoted browser version.
 #
-#   server   builds this commit's server for amd64 and arm64 on WarpBuild's
+#   server   builds this commit's claw-server for amd64 and arm64 on WarpBuild's
 #            32-vCPU x64 runner (zig cross-compiles arm64), with a Cargo cache.
-#            The server is claw-server by default, or claw-sdk, which is built
-#            and smoke-tested only (push=false) until it becomes the default.
 #   verify   builds each architecture's image natively, checks it runs that
 #            server, smoke-tests it, and with push=true pushes that same image by
 #            digest, untagged.
@@ -37,19 +35,8 @@ on:
         description: "Publish after both native smoke jobs pass"
         type: boolean
         default: true
-      server:
-        description: "Server installed over the browser's bundled one. claw-sdk is built and smoke-tested only (push=false, verify_paid=false) until it becomes the default"
-        type: choice
-        default: claw-server
-        options:
-          - claw-server
-          - claw-sdk
 
 permissions: {}
-# The server input reaches shells only through this variable. The server job
-# builds that server, and verify holds the image to it.
-env:
-  SERVER: ${{ inputs.server }}
 concurrency:
   group: release-docker
   cancel-in-progress: false
@@ -136,21 +123,6 @@ jobs:
     env:
       CARGO_TARGET_DIR: ${{ github.workspace }}/target/neo-docker
     steps:
-      - name: Check the inputs for this server
-        # First, so a refused run fails in seconds rather than after the build.
-        # Only claw-server images may take the release tags
-        # (docker_image.RELEASED_KINDS), and the paid demo drives claw-server's
-        # solve_captcha tool, so claw-sdk is built and smoke-tested only until
-        # it becomes the default server.
-        env:
-          PUSH: ${{ inputs.push }}
-          VERIFY_PAID: ${{ inputs.verify_paid }}
-        run: |
-          set -euo pipefail
-          if [ "$SERVER" != claw-server ] && { [ "$PUSH" = true ] || [ "$VERIFY_PAID" = true ]; }; then
-            echo "::error::server=$SERVER is built and smoke-tested only until it becomes the default server. Dispatch it with push=false and verify_paid=false."
-            exit 1
-          fi
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v6
         with:
@@ -165,21 +137,22 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           cache-provider: warpbuild
-          workspaces: packages/browseros-agent
+          # A fresh key namespace: caches saved while the repo used a shared
+          # Cargo build-dir hold the compiled output where cargo no longer
+          # reads it, and an exact hit on one would never be replaced.
+          prefix-key: browseros-target-v1
+          # CARGO_TARGET_DIR (set on this job) holds intermediates and final
+          # artifacts alike, so that is the directory to cache. The path is
+          # relative to the workspace.
+          workspaces: packages/browseros-agent -> ../../target/neo-docker
           # One cache per target: each job only builds its own. The default
           # environment hash stays in the key and covers Cargo.lock, so a
           # dependency change misses the exact key, restores this target's
           # newest cache by prefix, and saves a fresh one. Turning it off would
           # leave one fixed key that never refreshes.
           shared-key: neo-docker-${{ matrix.rust_target }}
-          # The compiled dependencies live in the shared Cargo build-dir
-          # (.cargo/config.toml), not in the target dir; ~/.cargo/bin keeps
+          # The cache also covers ~/.cargo/bin by default, which keeps
           # cargo-zigbuild installed across runs.
-          cache-directories: ~/.cargo/build/browseros
-          # The key does not name the server, so whichever run saves first owns
-          # it. Only claw-server runs save. claw-sdk runs restore the shared
-          # dependencies but never replace the cache releases build from.
-          save-if: ${{ inputs.server == 'claw-server' }}
       - name: Set up cross compiler
         run: |
           python3 -m pip install ziglang==0.15.2
@@ -195,35 +168,22 @@ jobs:
           CLAW_SENTRY_DSN: ${{ secrets.CLAW_SENTRY_DSN }}
         run: |
           set -euo pipefail
-          # The input is the server kind (docker_image.ServerKind), mapped to its Cargo package.
-          case "$SERVER" in
-            claw-server) pkg=claw-server bin=browseros-claw-server-rs ;;
-            claw-sdk) pkg=neo-server bin=browseros-claw-sdk ;;
-            *) echo "Unknown server '$SERVER'" >&2; exit 1 ;;
-          esac
-          # claw-sdk ships without PostHog (sdk-skeleton D1), so only claw-server
-          # must carry the production key.
-          if [ "$SERVER" = claw-server ] && [ -z "$CLAW_POSTHOG_KEY" ]; then
+          if [ -z "$CLAW_POSTHOG_KEY" ]; then
             echo 'CLAW_POSTHOG_KEY is required' >&2
             exit 1
           fi
-          cargo zigbuild --release --locked --target "$RUST_TARGET.2.17" -p "$pkg" --bin "$bin"
-          if [ "$SERVER" = claw-server ]; then
-            python3 - <<'PY'
+          cargo zigbuild --release --locked --target "$RUST_TARGET.2.17" -p claw-server --bin browseros-claw-server-rs
+          python3 - <<'PY'
           import os
           from pathlib import Path
           binary = Path(os.environ["CARGO_TARGET_DIR"]) / os.environ["RUST_TARGET"] / "release/browseros-claw-server-rs"
           if os.environ["CLAW_POSTHOG_KEY"].encode() not in binary.read_bytes():
               raise SystemExit("Compiled server is missing its PostHog configuration")
           PY
-          fi
-          # Staged under a neutral name, because the version marker compiled into
-          # the binary, not its file name, tells the release which server it is.
-          install -D -m 0755 "$CARGO_TARGET_DIR/$RUST_TARGET/release/$bin" "$RUNNER_TEMP/neo-server/neo-server"
       - uses: actions/upload-artifact@v7
         with:
           name: neo-server-${{ matrix.arch }}
-          path: ${{ runner.temp }}/neo-server/neo-server
+          path: target/neo-docker/${{ matrix.rust_target }}/release/browseros-claw-server-rs
           if-no-files-found: error
 
   verify:
@@ -288,27 +248,14 @@ jobs:
           test "$(docker image inspect -f '{{index .Config.Labels "org.opencontainers.image.revision"}}' "ghcr.io/browseros-ai/neo:$VERSION-${GITHUB_SHA::7}")" = "$GITHUB_SHA"
       - name: Check the image runs this commit's server
         # The browser package bundles its own claw-server; the image must have
-        # replaced it with the binary the server job built. The image
-        # (neo-server-info) and the release CLI's label each read that binary's
-        # kind, and both must match $SERVER. The run's request is the
-        # expectation here, never a value read back from the image under test.
+        # replaced it with the binary the server job built.
         run: |
           set -euo pipefail
-          image="ghcr.io/browseros-ai/neo:$VERSION-${GITHUB_SHA::7}"
-          expected="$(sha256sum "$RUNNER_TEMP/neo-servers/$ARCH/neo-server" | cut -d' ' -f1)"
-          installed="$(docker run --rm --entrypoint sh "$image" -c 'sha256sum "$(neo-server-info path)"' | cut -d' ' -f1)"
+          expected="$(sha256sum "$RUNNER_TEMP/neo-servers/$ARCH/browseros-claw-server-rs" | cut -d' ' -f1)"
+          installed="$(docker run --rm --entrypoint sh "ghcr.io/browseros-ai/neo:$VERSION-${GITHUB_SHA::7}" \
+            -c 'sha256sum $(find /usr/lib /opt -type f -name browseros-claw-server)' | cut -d' ' -f1)"
           if [ "$installed" != "$expected" ]; then
-            echo "::error::The image's server ($installed) is not this commit's build ($expected)"
-            exit 1
-          fi
-          kind="$(docker run --rm --entrypoint neo-server-info "$image" kind)"
-          if [ "$kind" != "$SERVER" ]; then
-            echo "::error::The image runs $kind, but this run builds $SERVER"
-            exit 1
-          fi
-          label="com.browseros.$SERVER.version"
-          if [ -z "$(docker image inspect -f "{{index .Config.Labels \"$label\"}}" "$image")" ]; then
-            echo "::error::The image has no $label label, so the release CLI did not read a $SERVER build from neo-server"
+            echo "::error::The image's browseros-claw-server ($installed) is not this commit's build ($expected)"
             exit 1
           fi
       - name: Verify viewer, MCP, and hosted CAPTCHA on and off
@@ -317,11 +264,7 @@ jobs:
           KEYED: ${{ steps.keys.outputs.keyed }}
         run: |
           set -euo pipefail
-          # claw-sdk runs only in hosted mode (sdk-skeleton D1), so it has no
-          # desktop leg to test.
-          hosted_modes="1 0"
-          if [ "$SERVER" = claw-sdk ]; then hosted_modes=1; fi
-          for hosted in $hosted_modes; do
+          for hosted in 1 0; do
             name="neo-smoke-$hosted"
             volume="neo-smoke-$hosted-data"
             # Cover both the default explicit mount and a private data root
@@ -352,17 +295,10 @@ jobs:
                 test "$(docker exec "$name" stat -c %u:%g:%a /var/lib/mirror)" = 0:0:755
               fi
               port=$(docker inspect -f '{{(index (index .NetworkSettings.Ports "9010/tcp") 0).HostPort}}' "$name")
-              # captcha_smoke.py and smoke.py drive claw-server's MCP tools;
-              # claw-sdk serves only `run`, which smoke_sdk.py drives instead.
-              if [ "$SERVER" = claw-server ]; then
-                python3 packages/browseros/docker/neo/captcha_smoke.py "http://127.0.0.1:$port" "$hosted" "$KEYED"
-              fi
+              python3 packages/browseros/docker/neo/captcha_smoke.py "http://127.0.0.1:$port" "$hosted" "$KEYED"
               docker exec -i "$name" python3 - "$extensions_disabled" < packages/browseros/docker/neo/check_extensions.py
               docker exec -i "$name" python3 - < packages/browseros/docker/neo/check_zoom.py
-              docker exec -i "$name" python3 - "$SERVER" < packages/browseros/docker/neo/check_display.py
-              if [ "$SERVER" = claw-sdk ]; then
-                python3 packages/browseros/docker/neo/smoke_sdk.py --mcp-port "$port"
-              elif [ "$hosted" = 1 ]; then
+              if [ "$hosted" = 1 ]; then
                 vnc=$(docker inspect -f '{{(index (index .NetworkSettings.Ports "6080/tcp") 0).HostPort}}' "$name")
                 python3 packages/browseros/docker/neo/smoke.py --mcp-port "$port" --vnc-port "$vnc"
                 if [ "$extensions_disabled" = true ]; then

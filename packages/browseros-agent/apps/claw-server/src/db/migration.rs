@@ -29,7 +29,79 @@ impl MigratorTrait for Migrator {
             Box::new(m0020_add_feedback_invite_snooze::Migration),
             Box::new(m0021_add_skill_flows::Migration),
             Box::new(m0022_add_mode_to_skill_runs::Migration),
+            Box::new(m0023_add_tool_calls_daily::Migration),
         ]
+    }
+}
+
+mod m0023_add_tool_calls_daily {
+    use super::*;
+
+    pub struct Migration;
+
+    impl MigrationName for Migration {
+        fn name(&self) -> &str {
+            "m0023_add_tool_calls_daily"
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl MigrationTrait for Migration {
+        async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+            // Tool call counts per UTC day, tool and client, waiting to be reported once the
+            // day is over. A day's rows are deleted once it is sent.
+            manager
+                .create_table(
+                    Table::create()
+                        .table(ToolCallsDaily::Table)
+                        .if_not_exists()
+                        .col(ColumnDef::new(ToolCallsDaily::Day).string().not_null())
+                        .col(ColumnDef::new(ToolCallsDaily::ToolName).string().not_null())
+                        .col(
+                            ColumnDef::new(ToolCallsDaily::ClientName)
+                                .string()
+                                .not_null(),
+                        )
+                        .col(
+                            ColumnDef::new(ToolCallsDaily::Calls)
+                                .big_integer()
+                                .not_null()
+                                .default(0),
+                        )
+                        .col(
+                            ColumnDef::new(ToolCallsDaily::ErrorCalls)
+                                .big_integer()
+                                .not_null()
+                                .default(0),
+                        )
+                        .primary_key(
+                            Index::create()
+                                .col(ToolCallsDaily::Day)
+                                .col(ToolCallsDaily::ToolName)
+                                .col(ToolCallsDaily::ClientName),
+                        )
+                        .to_owned(),
+                )
+                .await?;
+            Ok(())
+        }
+
+        async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+            manager
+                .drop_table(Table::drop().table(ToolCallsDaily::Table).to_owned())
+                .await?;
+            Ok(())
+        }
+    }
+
+    #[derive(DeriveIden)]
+    enum ToolCallsDaily {
+        Table,
+        Day,
+        ToolName,
+        ClientName,
+        Calls,
+        ErrorCalls,
     }
 }
 

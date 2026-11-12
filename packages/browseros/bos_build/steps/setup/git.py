@@ -42,6 +42,7 @@ class GitSetupModule(Step):
             ctx.chromium_version,
             strategy="full",
             branch=BROWSEROS_BRANCH,
+            patch_root=ctx.get_patch_root(),
         )
 
 

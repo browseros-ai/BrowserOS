@@ -18,6 +18,58 @@ use harness_integrations::{AgentId, SkillSpec, is_installed};
 const CHILD: &str = "NEO_PROVISIONING_TEST_HOME";
 
 #[test]
+fn dev_harness_service_never_mutates_shared_agent_files() -> anyhow::Result<()> {
+    isolated(
+        "dev_harness_service_never_mutates_shared_agent_files",
+        None,
+        |home| async move {
+            let config = home.join(".claude.json");
+            let installed = r#"{"mcpServers":{"browseros-neo":{"type":"http","url":"http://127.0.0.1:9000/mcp"}}}"#;
+            fs::create_dir_all(home.join(".claude"))?;
+            fs::write(&config, installed)?;
+            let state = home.join("state");
+            let service = HarnessService::new_with_managed_skill(
+                state.join("mcp"),
+                state.join("skills"),
+                home.clone(),
+                SkillSpec::new("browseros-neo", "dev instructions")?,
+                Arc::new(NoopAnalyticsSink),
+            )
+            .with_read_only(true);
+            // Exercise entry points directly too: a future caller must not bypass the
+            // same policy merely by skipping the HTTP runtime's startup guard.
+            for _ in 0..2 {
+                service
+                    .run_reconciliation("http://127.0.0.1:9200/mcp")
+                    .await?;
+                service
+                    .first_run_connect("http://127.0.0.1:9200/mcp")
+                    .await?;
+                service.run_integrity_scan().await?;
+                service.run_skill_reconciliation().await?;
+                service
+                    .migrate_browseros_identity("http://127.0.0.1:9200/mcp")
+                    .await?;
+                service
+                    .migrate_connected_urls("http://127.0.0.1:9200/mcp")
+                    .await?;
+                let agents = service
+                    .install_skill(SkillSpec::new("neo-test", "dev only")?)
+                    .await?;
+                assert!(agents.is_empty());
+                service.uninstall_skill("browseros-neo").await?;
+                assert!(service.connected_agents().await?.is_empty());
+                assert_eq!(fs::read_to_string(&config)?, installed);
+                assert!(!state.exists());
+                assert!(!home.join(".agents").exists());
+                assert!(!home.join(".claude/skills").exists());
+            }
+            Ok(())
+        },
+    )
+}
+
+#[test]
 fn provisions_common_skills_without_apps_or_mcp_connections() -> anyhow::Result<()> {
     isolated(
         "provisions_common_skills_without_apps_or_mcp_connections",

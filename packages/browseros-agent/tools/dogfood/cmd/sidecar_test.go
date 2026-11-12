@@ -56,8 +56,8 @@ func TestWriteDogfoodSidecarConfigUsesExplicitResourceDirectory(t *testing.T) {
 				t.Fatalf("unexpected directories: %#v", directories)
 			}
 			flags := got["flags"].(map[string]any)
-			if devMode, ok := flags["devMode"]; !ok || devMode != false {
-				t.Fatalf("dogfood must pin devMode false: %#v", flags)
+			if devMode, ok := flags["devMode"]; !ok || devMode != true {
+				t.Fatalf("dogfood must disable agent config provisioning with devMode true: %#v", flags)
 			}
 		})
 	}

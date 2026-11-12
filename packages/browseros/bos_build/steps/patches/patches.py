@@ -2,6 +2,7 @@
 """Patch management module for BrowserOS build system"""
 
 import shutil
+from ...core.patch_source import validate_v8_gitlink
 from ...core.step import Step, ValidationError, step
 from ...core.context import Context
 from ...lib.utils import log_info, log_error
@@ -12,6 +13,13 @@ class PatchesModule(Step):
     produces = []
     requires = []
     description = "Apply BrowserOS patches to Chromium"
+
+    def preflight(self, ctx: Context) -> None:
+        # Provisioning may still need to fetch the selected revision. Check it
+        # now when available; source preparation repeats this after fetching.
+        validate_v8_gitlink(
+            ctx.get_patch_root(), ctx.chromium_src, allow_missing_base=True
+        )
 
     def validate(self, ctx: Context) -> None:
         if not shutil.which("git"):

@@ -14,6 +14,7 @@ from unittest import mock
 import yaml
 
 from ...core.context import Context
+from ...lib.testing import MockBrowserOSRoot
 from ...core.products import get_product_descriptor
 from ...lib.notarization import NOTARYTOOL_WAIT_TIMEOUT
 from . import macos as macos_module
@@ -299,11 +300,20 @@ class SignModuleGuardWiringTest(unittest.TestCase):
             chromium_src = Path(tmp) / "src"
             app_path = Path(tmp) / "out" / "BrowserOS.app"
             source_root = (
-                chromium_src / "chrome" / "browser" / "browseros" / "server" / "resources"
+                chromium_src
+                / "chrome"
+                / "browser"
+                / "browseros"
+                / "server"
+                / "resources"
             )
             _write_exec(source_root / "bin" / "third_party" / "rg")
 
+            package = MockBrowserOSRoot(
+                Path(tmp) / "patches", chromium_version="158.0.8127.18"
+            ).with_patch_store()
             ctx = Context(
+                patch_root=package.root,
                 chromium_src=chromium_src,
                 architecture="arm64",
                 build_type="release",
@@ -319,7 +329,12 @@ class SignModuleGuardWiringTest(unittest.TestCase):
             chromium_src = Path(tmp) / "src"
             app_path = Path(tmp) / "out" / "BrowserOS.app"
             source_root = (
-                chromium_src / "chrome" / "browser" / "browseros" / "server" / "resources"
+                chromium_src
+                / "chrome"
+                / "browser"
+                / "browseros"
+                / "server"
+                / "resources"
             )
             bundle_root = (
                 app_path
@@ -332,7 +347,11 @@ class SignModuleGuardWiringTest(unittest.TestCase):
             _write_exec(source_root / "bin" / "third_party" / "rg")
             _write_exec(bundle_root / "bin" / "third_party" / "rg")
 
+            package = MockBrowserOSRoot(
+                Path(tmp) / "patches", chromium_version="158.0.8127.18"
+            ).with_patch_store()
             ctx = Context(
+                patch_root=package.root,
                 chromium_src=chromium_src,
                 architecture="arm64",
                 build_type="release",

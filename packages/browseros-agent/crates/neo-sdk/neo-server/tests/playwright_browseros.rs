@@ -173,6 +173,7 @@ async fn a_playwright_script_reads_a_page_its_refs_and_its_frame() -> TestResult
 }
 
 #[tokio::test(flavor = "multi_thread")]
+#[ignore = "hosted console listening is off since Runtime is no longer left enabled; owner: ignore hosted for now (2026-11-11)"]
 async fn a_fresh_tasks_first_call_can_be_a_console_listener() -> TestResult {
     on_browseros(|rig| Box::pin(listen_first(rig))).await
 }

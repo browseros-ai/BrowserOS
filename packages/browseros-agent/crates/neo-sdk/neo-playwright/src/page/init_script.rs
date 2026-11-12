@@ -460,6 +460,14 @@ pub(crate) async fn dispose(
         {
             for (target, name) in claims {
                 hub.release_binding(&target, &name, run);
+                if !registry
+                    .claims
+                    .values()
+                    .flatten()
+                    .any(|(held, _)| *held == target)
+                {
+                    run.events.release_binding_runtime(&target);
+                }
             }
         }
         registry.context.retain(|script| script.id != input.id);
@@ -763,6 +771,40 @@ async fn expose(
     })
 }
 
+/// Holds `Runtime` on the tab's session while the run has a binding there: binding calls, and
+/// the main-world contexts that name their frame, are `Runtime` events, and core attaches pages
+/// with it off. The dispose of the run's last binding on the tab releases it ([`dispose`]); the
+/// next add leases again.
+async fn hold_binding_runtime(
+    scope: &OpScope<'_>,
+    admitted: &AdmittedPage,
+    session: &ProtocolSession,
+) -> Result<(), PlaywrightError> {
+    let run = scope.run_state();
+    let calls = Subscription::Page {
+        tab: admitted.tab,
+        target: admitted.session.target_id.clone(),
+        event: PageEventKind::Binding,
+    };
+    if run.events.holds_runtime(&calls) {
+        return Ok(());
+    }
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "epoch milliseconds stay far below 2^53"
+    )]
+    let floor = now_ms() as f64;
+    let lease = scope
+        .view()
+        .signals()
+        .runtime_leases()
+        .acquire(session, floor)
+        .await
+        .map_err(|error| scope.core_error(&error))?;
+    run.events.hold_runtime(&calls, vec![lease]);
+    Ok(())
+}
+
 /// [`expose`] without the proof, for a context binding, which the admitting op's recheck covers.
 /// `None` when another live run holds the name on this tab ([`EventHub::claim_binding`]): the
 /// page keeps that run's binding, and this one adds nothing there.
@@ -779,6 +821,7 @@ async fn add_binding(
         return Ok(None);
     }
     scripts.plumb(scope, hub, admitted, session).await?;
+    hold_binding_runtime(scope, admitted, session).await?;
     scope.recheck()?;
     add_script(
         session,

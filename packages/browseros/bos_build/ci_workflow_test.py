@@ -1,11 +1,9 @@
 #!/usr/bin/env python3
 """Regression tests for the reusable Chromium build workflow."""
 
-import hashlib
 import json
 import os
 import re
-import shlex
 import subprocess
 import sys
 import tempfile
@@ -16,7 +14,6 @@ from unittest import mock
 
 import yaml
 
-from bos_build.release.docker_image import RELEASED_KINDS, SERVER_FILE, ServerKind
 from bos_build.release.feeds.spec import all_feeds
 from bos_build.steps.source import provision
 
@@ -2887,7 +2884,6 @@ class MacOSChromiumWorkspaceHelperTest(unittest.TestCase):
         self.tmp.cleanup()
 
     def _write_fake_uv(self):
-        import sys
 
         # Exercise the shell-to-CLI handoff on Linux CI, replacing only the
         # macOS platform/device facts and external git/gclient/cp executables.
@@ -3960,169 +3956,11 @@ class StepRun:
 
 
 class DockerImageWorkflowTest(unittest.TestCase):
-    VERSION = "0.52.0.1"
-    SHA = "0123456789abcdef0123456789abcdef01234567"
-    # Smoke containers that turn healthy at once, publish 9010 and 6080 on fixed
-    # host ports, and own the hosted data root's parent as the image sets it up.
-    HEALTHY = (
-        ("{{.State.Health.Status}}", "healthy\n", 0),
-        ('"9010/tcp"', "49010\n", 0),
-        ('"6080/tcp"', "46080\n", 0),
-        ("stat -c %u:%g:%a /var/lib/mirror", "0:0:755\n", 0),
-    )
-
     def setUp(self):
         self.workflow = yaml.safe_load(
             (WORKFLOW_DIR / "release-docker.yml").read_text(encoding="utf-8")
         )
         self.jobs = self.workflow["jobs"]
-
-    @staticmethod
-    def resolve(value, context: dict) -> str:
-        """`value` with each `${{ a.b }}` taken from `context`, rendered as GitHub
-        renders it into env (booleans as true/false). Only plain context
-        references resolve; any other expression fails the test."""
-
-        def lookup(match):
-            node = context
-            for key in match[1].split("."):
-                node = node[key]
-            return str(node).lower() if isinstance(node, bool) else str(node)
-
-        resolved = re.sub(r"\$\{\{\s*([\w.]+)\s*\}\}", lookup, str(value))
-        if "${{" in resolved:
-            raise AssertionError(f"dry_run cannot evaluate {value!r}")
-        return resolved
-
-    def dry_run(self, job, step, *, stub=(), answers=(), inputs=None, secrets=None,
-                outputs=None, files=None, env=None) -> StepRun:
-        """Runs the `run:` shell of `job`'s step named or with id `step` under
-        `bash -e`, GitHub's default shell, with each command named in `stub`
-        replaced by FAKE_RELEASE_TOOL.
-
-        The shell gets the workflow, job and step `env:` blocks, each `${{ }}`
-        taken from the dispatch `inputs` (over the declared defaults), the job's
-        first matrix entry, `secrets` and earlier steps' `outputs`. It runs from
-        the checkout, so relative paths resolve, while github.workspace,
-        RUNNER_TEMP and HOME are scratch directories, so nothing it writes lands
-        in the checkout. `files` are written under RUNNER_TEMP first. An
-        unstubbed python3 is this test's interpreter, so heredoc checks run.
-        """
-        if os.name == "nt":
-            self.skipTest("release-docker.yml's steps run on Linux runners")
-        job_spec = self.jobs[job]
-        script = next(s for s in job_spec["steps"] if step in (s.get("name"), s.get("id")))
-        root = Path(self.enterContext(tempfile.TemporaryDirectory()))
-        runner_temp, workspace, fake_bin = root / "runner-temp", root / "workspace", root / "bin"
-        for directory in (runner_temp, workspace, fake_bin):
-            directory.mkdir()
-        for relative, content in (files or {}).items():
-            path = runner_temp / relative
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_bytes(content)
-        tool = root / "fake_release_tool.py"
-        tool.write_text(FAKE_RELEASE_TOOL, encoding="utf-8")
-        # Wrappers exec the interpreter by absolute path, so a stubbed python3
-        # never runs the stubs themselves.
-        for name in {*stub, "python3"}:
-            command = [sys.executable, *([str(tool), name] if name in stub else [])]
-            wrapper = fake_bin / name
-            wrapper.write_text(f'#!/bin/sh\nexec {shlex.join(command)} "$@"\n', encoding="utf-8")
-            wrapper.chmod(0o755)
-        triggers = self.workflow.get("on", self.workflow.get(True))
-        declared = triggers["workflow_dispatch"]["inputs"]
-        context = {
-            "inputs": {
-                name: field["default"] for name, field in declared.items() if "default" in field
-            } | (inputs or {}),
-            "matrix": job_spec.get("strategy", {}).get("matrix", {}).get("include", [{}])[0],
-            "secrets": secrets or {},
-            "steps": {id_: {"outputs": values} for id_, values in (outputs or {}).items()},
-            "github": {"workspace": workspace},
-            "runner": {"temp": runner_temp},
-        }
-        github_output, calls = root / "github-output", root / "calls.jsonl"
-        github_output.touch()
-        calls.touch()
-        process_env = {
-            "PATH": f"{fake_bin}{os.pathsep}{os.environ['PATH']}",
-            "HOME": str(root),
-            "TMPDIR": str(root),
-            "GITHUB_OUTPUT": str(github_output),
-            "GITHUB_SHA": self.SHA,
-            "GITHUB_WORKSPACE": str(workspace),
-            "RUNNER_TEMP": str(runner_temp),
-            "FAKE_CALLS": str(calls),
-            "FAKE_SCRIPTS": str(NEO_DOCKER_DIR),
-            "FAKE_ANSWERS": json.dumps(list(answers)),
-            **(env or {}),
-        }
-        for block in (self.workflow.get("env"), job_spec.get("env"), script.get("env")):
-            for key, value in (block or {}).items():
-                process_env[key] = self.resolve(value, context)
-        result = subprocess.run(
-            [git_bash_path(), "-e", "-c", script["run"]],
-            cwd=REPO_ROOT / script.get("working-directory", "."),
-            env=process_env,
-            stdin=subprocess.DEVNULL,
-            capture_output=True,
-            text=True,
-            timeout=120,
-        )
-        return StepRun(
-            result.returncode,
-            result.stdout,
-            result.stderr,
-            [json.loads(line) for line in calls.read_text(encoding="utf-8").splitlines()],
-            dict(
-                line.split("=", 1)
-                for line in github_output.read_text(encoding="utf-8").splitlines()
-            ),
-            runner_temp,
-        )
-
-    def build(self, server, *, posthog_key: str, compiled: str) -> StepRun:
-        """The server job's build for `server`, given CLAW_POSTHOG_KEY
-        `posthog_key`, where cargo produces a binary holding `compiled`."""
-        return self.dry_run(
-            "server", "Build this commit's server",
-            stub=("cargo", "install"),
-            inputs={"server": server},
-            secrets={"CLAW_POSTHOG_KEY": posthog_key, "CLAW_SENTRY_DSN": ""},
-            env={"FAKE_CARGO_OUTPUT": compiled},
-        )
-
-    def smoke(self, server, answers=()) -> StepRun:
-        """verify's smoke step for `server` against HEALTHY containers, keyed."""
-        return self.dry_run(
-            "verify", "smoke",
-            stub=("docker", "python3", "sleep"),
-            inputs={"version": self.VERSION, "server": server},
-            outputs={"keys": {"keyed": "1"}},
-            answers=[*answers, *self.HEALTHY],
-        )
-
-    @staticmethod
-    def smoke_plan(run: StepRun) -> list[str]:
-        """The smoke step's legs and checks in order: each container start and
-        stop, and every script run inside a container or against it."""
-        plan = []
-        for call in run.calls:
-            tool, *args = call["argv"]
-            if tool == "python3":
-                plan.append(" ".join(["host:", Path(args[0]).name, *args[1:]]))
-            elif args[:2] == ["run", "-d"]:
-                env = dict(args[i + 1].split("=", 1) for i, arg in enumerate(args) if arg == "-e")
-                plan.append(
-                    f"start {args[args.index('--name') + 1]}"
-                    f" hosted={env['BROWSERCLAW_HOSTED_MODE']}"
-                    f" extensions_disabled={env['NEO_DISABLE_BROWSEROS_EXTENSIONS']}"
-                )
-            elif "stdin" in call:  # docker exec -i NAME python3 - ARGS < script
-                plan.append(" ".join([f"{args[2]}:", call["stdin"], *args[5:]]))
-            elif args[:1] == ["stop"]:
-                plan.append(f"stop {args[-1]}")
-        return plan
 
     def test_only_jobs_that_push_images_can_write_packages(self):
         # verify pushes the image it tested by digest; publish names it.
@@ -4140,12 +3978,16 @@ class DockerImageWorkflowTest(unittest.TestCase):
         cache = next(step for step in server["steps"]
                      if step.get("uses", "").startswith("Swatinem/rust-cache@"))
         self.assertEqual(cache["with"]["cache-provider"], "warpbuild")
-        self.assertIn("~/.cargo/build/browseros", cache["with"]["cache-directories"])
+        # With no shared build-dir, CARGO_TARGET_DIR holds everything worth caching.
+        self.assertEqual(
+            cache["with"]["workspaces"],
+            "packages/browseros-agent -> ../../target/neo-docker",
+        )
+        self.assertEqual(cache["with"]["prefix-key"], "browseros-target-v1")
+        self.assertNotIn("cache-directories", cache["with"])
         self.assertEqual(cache["with"]["shared-key"], "neo-docker-${{ matrix.rust_target }}")
         # Without the environment hash the key ignores Cargo.lock and never refreshes.
         self.assertNotIn("add-rust-environment-hash-key", cache["with"])
-        # claw-sdk runs restore claw-server's cache but never save over it.
-        self.assertEqual(cache["with"]["save-if"], "${{ inputs.server == 'claw-server' }}")
         watchdog = self.jobs["queue-watchdog"]["steps"][0]["env"]
         self.assertEqual(watchdog["RUNNER_LABEL"], server["runs-on"])
         self.assertEqual(watchdog["CONCURRENCY_GROUP"], self.workflow["concurrency"]["group"])
@@ -4156,6 +3998,9 @@ class DockerImageWorkflowTest(unittest.TestCase):
         check = names.index("Check the image runs this commit's server")
         self.assertLess(names.index("Build native image"), check)
         self.assertLess(check, next(i for i, step in enumerate(steps) if step.get("id") == "smoke"))
+        run = steps[check]["run"]
+        self.assertIn('sha256sum "$RUNNER_TEMP/neo-servers/$ARCH/browseros-claw-server-rs"', run)
+        self.assertIn("find /usr/lib /opt -type f -name browseros-claw-server", run)
 
     def test_publish_tags_the_images_verify_tested_without_building(self):
         steps = self.jobs["verify"]["steps"]
@@ -4187,6 +4032,11 @@ class DockerImageWorkflowTest(unittest.TestCase):
         self.assertIn("verify", self.jobs["publish"]["needs"])
         steps = {step.get("name"): step for step in verify["steps"]}
         self.assertNotIn("--push", steps["Build native image"]["run"])
+        smoke = next(step for step in verify["steps"] if step.get("id") == "smoke")
+        self.assertIn("for hosted in 1 0", smoke["run"])
+        self.assertIn("for extensions_disabled in false true", smoke["run"])
+        self.assertIn("< packages/browseros/docker/neo/check_extensions.py", smoke["run"])
+        self.assertIn('captcha_smoke.py "http://127.0.0.1:$port" "$hosted" "$KEYED"', smoke["run"])
         self.assertEqual(self.jobs["publish"]["if"], "inputs.push")
 
     def test_keyed_jobs_scope_secrets_to_preparation_and_always_clean_files(self):
@@ -4208,207 +4058,12 @@ class DockerImageWorkflowTest(unittest.TestCase):
                      if step.get("name") == "Build this commit's server")
         self.assertEqual(build["env"]["CLAW_POSTHOG_KEY"], "${{ secrets.CLAW_POSTHOG_KEY }}")
         self.assertEqual(build["env"]["CLAW_SENTRY_DSN"], "${{ secrets.CLAW_SENTRY_DSN }}")
+        self.assertIn('if [ -z "$CLAW_POSTHOG_KEY" ]', build["run"])
 
     def test_inputs_reach_shell_only_through_environment(self):
         for job in self.jobs.values():
             for step in job["steps"]:
                 self.assertNotIn("${{ inputs.", step.get("run", ""))
-
-    def test_server_input_offers_the_release_clis_server_kinds(self):
-        triggers = self.workflow.get("on", self.workflow.get(True))
-        server = triggers["workflow_dispatch"]["inputs"]["server"]
-        self.assertEqual(server["type"], "choice")
-        self.assertEqual(server["options"], [kind.value for kind in ServerKind])
-        self.assertEqual(server["default"], ServerKind.CLAW_SERVER)
-
-    def test_unreleased_servers_are_refused_publication_before_the_build(self):
-        check = "Check the inputs for this server"
-        self.assertEqual(self.jobs["server"]["steps"][0]["name"], check)
-        for server in ServerKind:
-            for push in (True, False):
-                for verify_paid in (True, False):
-                    with self.subTest(server=server.value, push=push, verify_paid=verify_paid):
-                        run = self.dry_run("server", check, inputs={
-                            "server": server, "push": push, "verify_paid": verify_paid,
-                        })
-                        refused = server not in RELEASED_KINDS and (push or verify_paid)
-                        self.assertEqual(run.returncode != 0, refused, run.stdout + run.stderr)
-                        if refused:
-                            self.assertIn("::error::", run.stdout)
-                            self.assertIn("push=false", run.stdout)
-                            self.assertIn("verify_paid=false", run.stdout)
-        # push defaults to true, so a dispatch that names only claw-sdk is refused.
-        self.assertNotEqual(
-            self.dry_run("server", check, inputs={"server": ServerKind.CLAW_SDK}).returncode, 0
-        )
-
-    def test_server_job_builds_the_requested_server_as_the_neo_server_artifact(self):
-        upload = next(step for step in self.jobs["server"]["steps"]
-                      if step.get("uses", "").startswith("actions/upload-artifact@"))
-        download = next(step for step in self.jobs["verify"]["steps"]
-                        if step.get("uses", "").startswith("actions/download-artifact@"))
-        self.assertEqual(download["with"]["name"], upload["with"]["name"])
-        for server, package, binary, posthog_key, compiled in (
-            (ServerKind.CLAW_SERVER, "claw-server", "browseros-claw-server-rs", "phc_neo",
-             "browseros-claw-server-version=1.2.3; phc_neo"),
-            # claw-sdk ships without PostHog (sdk-skeleton D1): no key, none compiled in.
-            (ServerKind.CLAW_SDK, "neo-server", "browseros-claw-sdk", "", "browseros-claw-sdk-version=0.1.0;"),
-        ):
-            with self.subTest(server=server.value):
-                run = self.build(server, posthog_key=posthog_key, compiled=compiled)
-                self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
-                self.assertEqual(run.argv("cargo"), [[
-                    "zigbuild", "--release", "--locked", "--target", "x86_64-unknown-linux-gnu.2.17",
-                    "-p", package, "--bin", binary,
-                ]])
-                # What the job uploads is that binary, under the name the release CLI reads.
-                artifact = Path(self.resolve(upload["with"]["path"], {"runner": {"temp": run.runner_temp}}))
-                self.assertEqual(artifact.name, SERVER_FILE)
-                self.assertEqual(artifact.read_text(encoding="utf-8"), compiled)
-                self.assertEqual(artifact.stat().st_mode & 0o777, 0o755)
-        unknown = self.build("claw-other", posthog_key="phc_neo", compiled="")
-        self.assertNotEqual(unknown.returncode, 0)
-        self.assertEqual(unknown.argv("cargo"), [])
-
-    def test_only_claw_server_must_compile_in_its_production_posthog_key(self):
-        # claw-sdk building without any key is covered by the artifact test above.
-        missing = self.build(ServerKind.CLAW_SERVER, posthog_key="",
-                             compiled="browseros-claw-server-version=1.2.3;")
-        self.assertNotEqual(missing.returncode, 0)
-        self.assertIn("CLAW_POSTHOG_KEY is required", missing.stderr)
-        self.assertEqual(missing.argv("cargo"), [], "refused before the build")
-        unconfigured = self.build(ServerKind.CLAW_SERVER, posthog_key="phc_neo",
-                                  compiled="browseros-claw-server-version=1.2.3;")
-        self.assertNotEqual(unconfigured.returncode, 0)
-        self.assertIn("missing its PostHog configuration", unconfigured.stderr)
-        self.assertEqual(unconfigured.argv("install"), [], "nothing staged for upload")
-
-    def test_verify_holds_the_image_to_the_requested_server(self):
-        download = next(step for step in self.jobs["verify"]["steps"]
-                        if step.get("uses", "").startswith("actions/download-artifact@"))
-        # Where download-artifact leaves this architecture's server, relative to RUNNER_TEMP.
-        artifact = Path(self.resolve(download["with"]["path"], {
-            "runner": {"temp": "."}, "matrix": {"arch": "amd64"},
-        })) / SERVER_FILE
-        image = f"ghcr.io/browseros-ai/neo:{self.VERSION}-{self.SHA[:7]}"
-        for server in ServerKind:
-            other = next(kind for kind in ServerKind if kind is not server)
-            binary = f"browseros-{server}-version=1.2.3;".encode()
-            built = hashlib.sha256(binary).hexdigest()
-            bundled = hashlib.sha256(b"the package's own server").hexdigest()
-            # Each image: the sha256 of its server, what `neo-server-info kind`
-            # prints, and its labels.
-            for case, (installed, kind, labels, passes) in {
-                "runs this build": (built, server, {server.label: "1.2.3"}, True),
-                "runs another binary": (bundled, server, {server.label: "1.2.3"}, False),
-                "identifies as the other server": (built, other, {server.label: "1.2.3"}, False),
-                "lacks this server's label": (built, server, {other.label: "1.2.3"}, False),
-            }.items():
-                with self.subTest(server=server.value, image=case):
-                    run = self.dry_run(
-                        "verify", "Check the image runs this commit's server",
-                        stub=("docker", "sha256sum"),
-                        inputs={"version": self.VERSION, "server": server},
-                        files={artifact: binary},
-                        answers=[
-                            ("neo-server-info path", f"{installed}  /usr/lib/neo/browseros-claw-server\n", 0),
-                            ("--entrypoint neo-server-info", f"{kind}\n", 0),
-                            *((label, f"{version}\n", 0) for label, version in labels.items()),
-                        ],
-                    )
-                    self.assertEqual(run.returncode == 0, passes, run.stdout + run.stderr)
-                    if not passes:
-                        self.assertIn("::error::", run.stdout)
-                    # Every check reads the image this run built and tagged for its commit.
-                    self.assertTrue(run.argv("docker"))
-                    for argv in run.argv("docker"):
-                        self.assertIn(image, argv)
-
-    def test_claw_server_smoke_is_todays_plus_its_display_check(self):
-        run = self.smoke(ServerKind.CLAW_SERVER)
-        self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
-        # Today's sequence, captured from the workflow before the server switch,
-        # with check_display.py added to every leg.
-        self.assertEqual(self.smoke_plan(run), [
-            "start neo-smoke-1 hosted=1 extensions_disabled=false",
-            "host: captcha_smoke.py http://127.0.0.1:49010 1 1",
-            "neo-smoke-1: check_extensions.py false",
-            "neo-smoke-1: check_zoom.py",
-            "neo-smoke-1: check_display.py claw-server",
-            "host: smoke.py --mcp-port 49010 --vnc-port 46080",
-            "stop neo-smoke-1",
-            "start neo-smoke-1 hosted=1 extensions_disabled=true",
-            "host: captcha_smoke.py http://127.0.0.1:49010 1 1",
-            "neo-smoke-1: check_extensions.py true",
-            "neo-smoke-1: check_zoom.py",
-            "neo-smoke-1: check_display.py claw-server",
-            "host: smoke.py --mcp-port 49010 --vnc-port 46080",
-            "start neo-smoke-0 hosted=0 extensions_disabled=false",
-            "host: captcha_smoke.py http://127.0.0.1:49010 0 1",
-            "neo-smoke-0: check_extensions.py false",
-            "neo-smoke-0: check_zoom.py",
-            "neo-smoke-0: check_display.py claw-server",
-            "stop neo-smoke-0",
-            "start neo-smoke-0 hosted=0 extensions_disabled=true",
-            "host: captcha_smoke.py http://127.0.0.1:49010 0 1",
-            "neo-smoke-0: check_extensions.py true",
-            "neo-smoke-0: check_zoom.py",
-            "neo-smoke-0: check_display.py claw-server",
-        ])
-        # The paid demo drives this MCP endpoint, left running after the last hosted leg.
-        self.assertEqual(run.outputs, {"mcp_url": "http://127.0.0.1:49010/mcp"})
-
-    def test_claw_sdk_smoke_is_hosted_only_and_drives_its_run_tool(self):
-        run = self.smoke(ServerKind.CLAW_SDK)
-        self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
-        self.assertEqual(self.smoke_plan(run), [
-            "start neo-smoke-1 hosted=1 extensions_disabled=false",
-            "neo-smoke-1: check_extensions.py false",
-            "neo-smoke-1: check_zoom.py",
-            "neo-smoke-1: check_display.py claw-sdk",
-            "host: smoke_sdk.py --mcp-port 49010",
-            "stop neo-smoke-1",
-            "start neo-smoke-1 hosted=1 extensions_disabled=true",
-            "neo-smoke-1: check_extensions.py true",
-            "neo-smoke-1: check_zoom.py",
-            "neo-smoke-1: check_display.py claw-sdk",
-            "host: smoke_sdk.py --mcp-port 49010",
-        ])
-        # No mcp_url: its only reader is the paid demo, which claw-sdk runs refuse.
-        self.assertEqual(run.outputs, {})
-
-    def test_a_display_that_does_not_match_the_server_fails_the_smoke(self):
-        for server in ServerKind:
-            with self.subTest(server=server.value):
-                run = self.smoke(server, answers=[("< check_display.py", "FAIL 127.0.0.1:6080\n", 1)])
-                self.assertNotEqual(run.returncode, 0)
-                self.assertEqual(self.smoke_plan(run)[-1], f"neo-smoke-1: check_display.py {server}")
-
-    def test_push_by_digest_repeats_the_tested_build_request(self):
-        inputs = {"version": self.VERSION}
-        built = self.dry_run("verify", "Build native image", stub=("uv", "docker"), inputs=inputs, answers=[
-            ("{{len .Config.Volumes}}", "0\n", 0),
-            ("org.opencontainers.image.revision", f"{self.SHA}\n", 0),
-        ])
-        pushed = self.dry_run("verify", "Push the tested image by digest", stub=("uv",), inputs=inputs)
-        self.assertEqual(built.returncode, 0, built.stdout + built.stderr)
-        self.assertEqual(pushed.returncode, 0, pushed.stdout + pushed.stderr)
-
-        def request(run):
-            [argv] = run.argv("uv")
-            return [arg.replace(str(run.runner_temp), "$RUNNER_TEMP") for arg in argv]
-
-        build, push = request(built), request(pushed)
-        self.assertEqual(push, [*build, "--push-by-digest"])
-        # The CLI reads <arch>/neo-server below --server-dir, where download-artifact puts it.
-        download = next(step for step in self.jobs["verify"]["steps"]
-                        if step.get("uses", "").startswith("actions/download-artifact@"))
-        self.assertEqual(
-            f"{build[build.index('--server-dir') + 1]}/amd64",
-            self.resolve(download["with"]["path"], {
-                "runner": {"temp": "$RUNNER_TEMP"}, "matrix": {"arch": "amd64"},
-            }),
-        )
 
 
 class NeoSdkImageWorkflowTest(unittest.TestCase):

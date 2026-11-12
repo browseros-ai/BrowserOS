@@ -63,6 +63,7 @@ http = "1"
 tower = { version = "0.5", features = ["util"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls-webpki-roots"] }
 posthog-rs = { version = "0.21", default-features = false, features = ["async-client"] }
+chrono = { version = "0.4", default-features = false }
 # Deliberately minimal. The default feature set installs a panic hook and a tracing
 # integration that would capture far more than the one event we build by hand, which
 # would defeat the redaction this feature exists to guarantee.
@@ -110,13 +111,19 @@ print_stderr = "warn"
 dbg_macro = "warn"
 
 [profile.dev]
-# Dependencies are never stepped into, so their DWARF is pure disk cost: a strip
-# probe put debug info at 81% of the largest dependency rlib. Workspace crates
-# keep line tables so panics and backtraces still resolve to file and line.
-debug = "line-tables-only"
-
-[profile.dev.package."*"]
+# Every checkout and worktree builds into its own target/, so whatever a build
+# leaves behind is multiplied by the number of worktrees on a machine. Both
+# settings below trade a little convenience for that disk.
+#
+# No debug info for any crate. Line tables for the workspace crates alone kept
+# about 0.5 GB per target/ (the object files that hold them cannot be deleted
+# after linking). A panic still reports its own file and line; backtrace frames
+# keep their function names and lose line numbers.
 debug = false
+# Incremental state is never pruned: it grew a 4 GB target/ to tens of GB. With
+# it off the directory stays flat, and a rebuild after an edit takes about 25 s
+# instead of 8 s. CARGO_INCREMENTAL=1 turns it back on for one shell.
+incremental = false
 
 [profile.release]
 lto = "thin"
