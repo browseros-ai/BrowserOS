@@ -8,7 +8,6 @@ BC-054	fail	tests/library/browsercontext-pages.spec.ts	should click with disable
 BC-055	fail	tests/library/browsercontext-pages.spec.ts	should not hang with touch-enabled viewports
 BC-058	fail	tests/library/browsercontext-pages.spec.ts	should return bounding box with page scale
 HE-012	fail	tests/library/headful.spec.ts	Page.bringToFront should work
-EH-025	fail	tests/page/elementhandle-convenience.spec.ts	should have a nice preview for non-ascii attributes/children
 EH-096	skip	tests/page/elementhandle-scroll-into-view.spec.ts	should scroll display:contents into view
 EX-188	fail	tests/page/expect-misc.spec.ts	toHaveJSProperty › pass
 EX-194	fail	tests/page/expect-misc.spec.ts	toHaveJSProperty › pass boolean
@@ -121,9 +120,8 @@ EE-001	fail	tests/page/page-listeners.spec.ts	should not throw with ignoreErrors
 EE-003	fail	tests/page/page-listeners.spec.ts	wait should throw
 NE-083	fail	tests/page/page-network-idle.spec.ts	should not wait for an open EventSource connection in setContent
 NE-080	fail	tests/page/page-network-idle.spec.ts	should wait for networkidle when iframe attaches and detaches
-NE-020	fail	tests/page/page-network-request.spec.ts	should return multipart/form-data
-NE-050	fail	tests/page/page-network-response.spec.ts	should return body for prefetch script
-NE-055	fail	tests/page/page-network-response.spec.ts	should return http version
+NE-020	skip	tests/page/page-network-request.spec.ts	should return multipart/form-data
+NE-050	skip	tests/page/page-network-response.spec.ts	should return body for prefetch script
 NE-031	fail	tests/page/page-network-response.spec.ts	should return multiple header value
 NE-041	skip	tests/page/page-network-response.spec.ts	should return non-utf8 body even when content-type says utf8
 NE-042	fail	tests/page/page-network-response.spec.ts	should return status text
@@ -144,7 +142,6 @@ SS-053	fail	tests/page/page-screenshot.spec.ts	page screenshot animations › sh
 SS-065	fail	tests/page/page-screenshot.spec.ts	should throw if screenshot size is too large
 PA-036	skip	tests/page/page-set-content.spec.ts	should handle timeout properly
 PA-037	skip	tests/page/page-set-content.spec.ts	should handle timeout properly 2
-PA-025	fail	tests/page/page-set-content.spec.ts	should include shadow roots
 IF-002	fail	tests/page/page-set-input-files.spec.ts	should upload a folder
 PA-038	fail	tests/page/page-transition.spec.ts	should not crash when filter transition completes
 WA-124	fail	tests/page/page-wait-for-request.spec.ts	should respect default timeout
@@ -152,7 +149,6 @@ WA-123	fail	tests/page/page-wait-for-request.spec.ts	should respect timeout
 WA-131	fail	tests/page/page-wait-for-response.spec.ts	should respect default timeout
 WA-130	fail	tests/page/page-wait-for-response.spec.ts	should respect timeout
 WA-032	fail	tests/page/page-wait-for-selector-1.spec.ts	elementHandle.waitForSelector should timeout
-WA-027	fail	tests/page/page-wait-for-selector-1.spec.ts	should throw on waitFor
 WA-072	fail	tests/page/page-wait-for-selector-2.spec.ts	should work when navigating before node adoption
 RE-013	fail	tests/page/retarget.spec.ts	direct actions retargeting
 SE-016	skip	tests/page/selectors-css.spec.ts	should work with :nth-child(of) notation with nested functions
