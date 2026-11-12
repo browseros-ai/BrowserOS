@@ -1809,30 +1809,45 @@ export async function screenshotOptions(
 const HELD_VALUE =
   "Neo's waitForFunction handle holds the value, not the page's object; read it with jsonValue()"
 
+/** Why a value handle cannot answer `jsonValue()`: Rust did not read all of its value. */
+type UnheldValue = { unheld: string }
+
 /**
  * What `waitForFunction` resolves to: upstream's JSHandle for the truthy value
  * (`JSHandle.from`, PW:62147), as a snapshot. Neo keeps no page object past an op, so the
  * handle holds the value Rust read when the wait ended, in Playwright's format, and
  * upstream's preview of it. `jsonValue()` reads that value afresh on every call, as upstream's
- * does, and `toString()` is the preview. What needs the page's own object is refused.
+ * does, and `toString()` is the preview. What needs the page's own object is refused, with
+ * `held` as the hint. A console message's arguments are such snapshots too
+ * (`ConsoleMessage.args()`), and one whose value the console's report cut short refuses
+ * `jsonValue()` as well ({@link UnheldValue}).
  */
 export class WaitHandle {
-  readonly #value: SerializedValue
+  readonly #value: SerializedValue | UnheldValue
   readonly #preview: string
+  readonly #held: string
 
-  constructor(value: SerializedValue, preview: string) {
+  constructor(
+    value: SerializedValue | UnheldValue,
+    preview: string,
+    held = HELD_VALUE,
+  ) {
     this.#value = value
     this.#preview = preview
+    this.#held = held
     markHandle(this)
   }
 
   async jsonValue(): Promise<unknown> {
-    return fromPageValue('jsHandle.jsonValue', this.#value)
+    return this._value('jsHandle.jsonValue')
   }
 
   /** The value, for a script that passes this handle as its argument to `api`. */
   _value(api: string): unknown {
-    return fromPageValue(api, this.#value)
+    const value = this.#value
+    if (value && typeof value === 'object' && 'unheld' in value)
+      throw unsupportedError(api, value.unheld)
+    return fromPageValue(api, value)
   }
 
   asElement(): null {
@@ -1846,22 +1861,22 @@ export class WaitHandle {
   }
 
   evaluate(): Promise<never> {
-    return Promise.reject(unsupportedError('jsHandle.evaluate', HELD_VALUE))
+    return Promise.reject(unsupportedError('jsHandle.evaluate', this.#held))
   }
 
   evaluateHandle(): Promise<never> {
     return Promise.reject(
-      unsupportedError('jsHandle.evaluateHandle', HELD_VALUE),
+      unsupportedError('jsHandle.evaluateHandle', this.#held),
     )
   }
 
   getProperty(): Promise<never> {
-    return Promise.reject(unsupportedError('jsHandle.getProperty', HELD_VALUE))
+    return Promise.reject(unsupportedError('jsHandle.getProperty', this.#held))
   }
 
   getProperties(): Promise<never> {
     return Promise.reject(
-      unsupportedError('jsHandle.getProperties', HELD_VALUE),
+      unsupportedError('jsHandle.getProperties', this.#held),
     )
   }
 }

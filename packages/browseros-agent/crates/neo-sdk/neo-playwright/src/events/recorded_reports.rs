@@ -41,11 +41,13 @@ struct Remembered {
 /// its stamp (ids start over in a new renderer process, the stamp does not repeat), a console
 /// message's stamp, type and arguments as values (no id; two calls are told apart by the
 /// microsecond). A replay wraps object arguments anew, with another `objectId` and no preview,
-/// so only what the replay carries unchanged identifies an argument.
+/// so only what the replay carries unchanged identifies an argument. A browser log entry
+/// (`Log.entryAdded`, `log_lease.rs`) is its stamp, source, level, text and place.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum ReportKey {
     Exception { id: i64, stamp: u64 },
     Console { digest: u64 },
+    Log { digest: u64 },
 }
 
 impl ReportKey {
@@ -54,6 +56,18 @@ impl ReportKey {
     pub(crate) fn of(method: &str, params: &Value) -> Option<Self> {
         use std::hash::{Hash, Hasher};
 
+        if method == "Log.entryAdded" {
+            let entry = params.get("entry")?;
+            let stamp = entry.get("timestamp").and_then(Value::as_f64)?.to_bits();
+            let mut hasher = DefaultHasher::new();
+            stamp.hash(&mut hasher);
+            for field in ["source", "level", "text", "url", "lineNumber"] {
+                entry.get(field).map(Value::to_string).hash(&mut hasher);
+            }
+            return Some(Self::Log {
+                digest: hasher.finish(),
+            });
+        }
         let stamp = params.get("timestamp").and_then(Value::as_f64)?.to_bits();
         if method == "Runtime.exceptionThrown" {
             let id = params
@@ -169,6 +183,19 @@ mod tests {
             ReportKey::of("Runtime.consoleAPICalled", &json!({ "type": "log" })),
             None
         );
+        let entry = |stamp: f64, text: &str| {
+            ReportKey::of(
+                "Log.entryAdded",
+                &json!({ "entry": { "source": "network", "level": "error", "text": text,
+                                    "timestamp": stamp, "networkRequestId": "1.2" } }),
+            )
+        };
+        assert_eq!(
+            entry(1_000.6, "a"),
+            entry(1_000.6, "a"),
+            "a log entry's replay"
+        );
+        assert_ne!(entry(1_000.6, "a"), entry(1_000.7, "a"));
 
         let mut reports = RecordedReports::default();
         let page = SessionId::from("page".to_owned());

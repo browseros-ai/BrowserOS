@@ -1,4 +1,6 @@
-<!doctype html><html><head><meta charset="utf-8"><title>popups</title></head><body>
+<!doctype html><html><head><meta charset="utf-8"><title>popups</title>
+<!-- No favicon request: its 404 is a browser log entry, which console listeners now receive. -->
+<link rel="icon" href="data:,"></head><body>
 <!-- Every way a page opens a page (from spikes/fixtures/popups.html), plus the dialogs. -->
 <button id="open" onclick="window.open('/child.html?open', 'w1', 'width=400,height=300')">window.open popup</button>
 <button id="tab" onclick="window.open('/child.html?tab')">window.open tab</button>
@@ -10,4 +12,8 @@
 <button id="prompt" onclick="window.__answer = prompt('Name?', 'Ada')">prompt</button>
 <button id="alert" onclick="alert('Hello'); window.__answer = 'alerted'">alert</button>
 <button id="log" onclick="console.log('clicked', 7); setTimeout(() => { throw new Error('boom') }, 0)">log</button>
+<button id="closed" onclick="window.open('/child.html?closed').close()">window.open then close</button>
+<button id="refused" onclick="fetch('http://127.0.0.1:1/refused').catch(() => {})">a fetch the browser refuses (a log entry)</button>
+<!-- Large tables every 100 ms, as the DevTools detector logs them: 50 rows of 400 columns. -->
+<button id="tables" onclick="const rows = Array.from({ length: 50 }, (_, i) => Object.fromEntries(Array.from({ length: 400 }, (_, k) => ['k' + k, 'v' + i + '_' + k]))); window.__tables = setInterval(() => console.table(rows), 100)">log large tables</button>
 </body></html>

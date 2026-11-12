@@ -4,10 +4,11 @@
 //! Console messages and page errors are turned into Playwright's text here, as upstream does on
 //! its server (`renderPreview`, `exceptionToError`), so each reader gets the same string.
 
-use browseros_core::{FrameId, SessionId, TargetId};
+use browseros_core::{FrameId, SessionId, TabId, TargetId};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{Number, Value, json};
 use ts_rs::TS;
+use url::Url;
 
 use crate::events::PageEventKind;
 use crate::events::frame_lifecycle::{EventFrame, FrameLifecycle};
@@ -138,6 +139,11 @@ pub(crate) struct OpenedPage {
     pub(crate) opener: Option<TargetId>,
     pub(crate) url: String,
     pub(crate) window: WindowKind,
+    /// BrowserOS's native tab id, from the target's `tabId` (present from `targetCreated` on,
+    /// measured). The run's tab listing names live tabs only, so this is how a popup that
+    /// closed before a read got to it (`window.open(..)` then `close()` in one task) still
+    /// reaches the script as a page, already closed, as upstream emits it.
+    pub(crate) tab: Option<TabId>,
 }
 
 /// Where a new page opened.
@@ -213,10 +219,29 @@ pub(crate) struct ConsoleMessage {
     pub(crate) kind: String,
     /// The arguments' previews joined with spaces, as upstream's `text()`.
     pub(crate) text: String,
+    /// The call's arguments, for `args()`; none for a browser log entry, as upstream's.
+    pub(crate) args: Vec<ConsoleArg>,
     pub(crate) location: Location,
     /// When the page called the console, in milliseconds since the Unix epoch, as CDP reports
     /// it and upstream's `timestamp()` returns it.
     pub(crate) timestamp: f64,
+}
+
+/// One argument of a console call, as `message.args()` hands it out. Neo keeps no page object
+/// past the event (no handles, `scope.json`), so an argument is the value the call's own report
+/// carried, a snapshot read without calling into the page.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct ConsoleArg {
+    /// The value in Playwright's serialized format (`page/serialized_value.rs`) when the report
+    /// holds all of it: a primitive, or an object or array whose V8 preview lists every member
+    /// as a primitive. V8 previews one level deep, at most 5 properties of an object and 100
+    /// items of an array, and abbreviates long strings; `None` for anything it cut, which
+    /// `jsonValue()` refuses rather than guess. One known gap: a preview does not say which own
+    /// properties are enumerable, so a property made non-enumerable with `defineProperty` is
+    /// included where upstream's `Object.keys` leaves it out.
+    pub(crate) value: Option<Value>,
+    /// What the argument prints as (upstream's `renderPreview`): its part of `text()`.
+    pub(crate) preview: String,
 }
 
 /// Where a message or error came from: the first stack frame, 0-based as CDP reports it.
@@ -269,16 +294,112 @@ pub(crate) struct RemoteObject {
 }
 
 #[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct ObjectPreview {
+    #[serde(default)]
+    subtype: Option<String>,
+    #[serde(default)]
+    description: Option<String>,
+    /// Whether V8 left members out.
+    #[serde(default)]
+    overflow: bool,
     #[serde(default)]
     properties: Vec<PropertyPreview>,
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct PropertyPreview {
     name: String,
+    #[serde(rename = "type", default)]
+    kind: String,
+    #[serde(default)]
+    subtype: Option<String>,
+    /// The member as text; V8 abbreviates a long string with a `…` in its middle.
     #[serde(default)]
     value: Option<String>,
+    // No `valuePreview`: V8 nests one only in `console.table`'s preview, which lists every
+    // column of every row (50 rows of 400 columns report as 20,000 properties, 1 MB, measured).
+    // Read, it made each such call a value that size on its way to the script.
+}
+
+/// The most items of an array V8 lists in a preview. Upstream reads every index of an array, so a
+/// longer one is never read from its preview, however sparse, and its length alone cannot make
+/// Neo build a large value. No preview with more members than this is read either.
+const ARRAY_PREVIEW_ITEMS: usize = 100;
+
+/// `Log.entryAdded`, reduced to what upstream's `_onLogEntryAdded` reads.
+#[derive(Debug, Deserialize)]
+pub(crate) struct LogEntryParams {
+    entry: LogEntry,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct LogEntry {
+    /// `network`, `security`, `violation`, `worker`, `other`, ...
+    #[serde(default)]
+    source: String,
+    /// `verbose`, `info`, `warning` or `error`, which upstream passes on as the message's type.
+    #[serde(default)]
+    level: String,
+    #[serde(default)]
+    text: String,
+    #[serde(default)]
+    url: Option<String>,
+    #[serde(default)]
+    line_number: Option<u64>,
+    /// Milliseconds since the Unix epoch, as the console's own timestamps.
+    #[serde(default)]
+    timestamp: f64,
+    #[serde(default)]
+    args: Vec<HeldObject>,
+}
+
+/// A remote object a log entry holds, by id.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct HeldObject {
+    #[serde(default)]
+    object_id: Option<String>,
+}
+
+impl LogEntryParams {
+    /// Whether the page logged it: upstream drops what a worker logged, which reaches it as the
+    /// worker's own console.
+    pub(crate) fn logged_by_page(&self) -> bool {
+        self.entry.source != "worker"
+    }
+
+    /// Whether it is the failure of the browser's own request for the document's default
+    /// favicon. Upstream's headless Chromium never asks for one (upstream's `favicon.spec.ts`:
+    /// "headless browsers, except firefox, do not request favicons"), so no upstream listener
+    /// sees it; BrowserOS asks even headless, as an ordinary image load whose `404` logs exactly
+    /// like the page's own (measured). Only the URL tells them apart, so a page script's own
+    /// failed load of `/favicon.ico` reads as the browser's too.
+    pub(crate) fn browser_favicon(&self) -> bool {
+        self.entry.source == "network"
+            && self
+                .entry
+                .url
+                .as_deref()
+                .and_then(|url| Url::parse(url).ok())
+                .is_some_and(|url| url.path() == "/favicon.ico")
+    }
+
+    /// When the browser logged it.
+    pub(crate) fn timestamp(&self) -> f64 {
+        self.entry.timestamp
+    }
+
+    /// The remote objects it holds, which upstream releases.
+    pub(crate) fn argument_objects(&self) -> Vec<String> {
+        self.entry
+            .args
+            .iter()
+            .filter_map(|held| held.object_id.clone())
+            .collect()
+    }
 }
 
 /// `Runtime.consoleAPICalled`, reduced to what a message needs.
@@ -336,7 +457,15 @@ struct ExceptionDetails {
 impl ConsoleMessage {
     /// The message `params` describes, on the page whose target is `target`.
     pub(crate) fn from_params(target: TargetId, params: ConsoleParams) -> Self {
-        let text: Vec<String> = params.args.iter().map(RemoteObject::preview).collect();
+        let args: Vec<ConsoleArg> = params
+            .args
+            .iter()
+            .map(|arg| ConsoleArg {
+                value: arg.serialized(),
+                preview: arg.preview(),
+            })
+            .collect();
+        let text: Vec<&str> = args.iter().map(|arg| arg.preview.as_str()).collect();
         let location = params
             .stack_trace
             .and_then(|stack| stack.call_frames.into_iter().next())
@@ -351,8 +480,28 @@ impl ConsoleMessage {
             target,
             kind: params.kind,
             text: text.join(" "),
+            args,
             location,
             timestamp: params.timestamp,
+        }
+    }
+
+    /// Upstream's `_onLogEntryAdded`: the entry's level as the type and its text, no arguments,
+    /// and the entry's URL and line, column 0.
+    pub(crate) fn from_log_entry(target: TargetId, params: LogEntryParams) -> Self {
+        let entry = params.entry;
+        Self {
+            worker: None,
+            target,
+            kind: entry.level,
+            text: entry.text,
+            args: Vec::new(),
+            location: Location {
+                url: entry.url.unwrap_or_default(),
+                line_number: entry.line_number.unwrap_or(0),
+                column_number: 0,
+            },
+            timestamp: entry.timestamp,
         }
     }
 }
@@ -474,6 +623,131 @@ impl RemoteObject {
     }
 }
 
+impl RemoteObject {
+    /// The argument as upstream's `serializeAsCallArgument` writes it for `jsonValue()`, read
+    /// from the report alone ([`ConsoleArg::value`]). Each argument numbers its objects from 1,
+    /// as each upstream handle's own serialization does.
+    fn serialized(&self) -> Option<Value> {
+        match self.kind.as_str() {
+            // Upstream writes a function as nothing, which reads back as `undefined` too.
+            "undefined" | "symbol" | "function" => Some(json!({ "v": "undefined" })),
+            "string" | "boolean" => self.value.clone(),
+            "number" => match (&self.value, &self.unserializable_value) {
+                (Some(value), _) => Some(value.clone()),
+                (None, Some(special)) => special_number(special),
+                (None, None) => None,
+            },
+            "bigint" => bigint(self.unserializable_value.as_deref()?),
+            "object" if self.subtype.as_deref() == Some("null") => Some(json!({ "v": "null" })),
+            "object" => self.preview.as_ref()?.serialized(&mut 0),
+            _ => None,
+        }
+    }
+}
+
+impl ObjectPreview {
+    /// An array or a plain object whose preview lists every member, as upstream serializes it:
+    /// `{a, id}` over every index (a hole reads as `undefined`), `{o: [{k, v}], id}` over the
+    /// own keys. `ids` is the last object number used.
+    fn serialized(&self, ids: &mut u64) -> Option<Value> {
+        if self.overflow || self.properties.len() > ARRAY_PREVIEW_ITEMS {
+            return None;
+        }
+        match self.subtype.as_deref() {
+            Some("array") => {
+                let length: usize = self
+                    .description
+                    .as_deref()?
+                    .strip_prefix("Array(")?
+                    .strip_suffix(')')?
+                    .parse()
+                    .ok()?;
+                if length > ARRAY_PREVIEW_ITEMS {
+                    return None;
+                }
+                *ids += 1;
+                let id = *ids;
+                let mut items = vec![json!({ "v": "undefined" }); length];
+                for property in &self.properties {
+                    // Upstream reads indices only; other keys of an array are not its value.
+                    if let Ok(index) = property.name.parse::<usize>() {
+                        *items.get_mut(index)? = property.serialized()?;
+                    }
+                }
+                Some(json!({ "a": items, "id": id }))
+            }
+            // A class instance with no own key may serialize as its `toJSON()` upstream, which
+            // a preview cannot tell; a plain object cannot.
+            None if !self.properties.is_empty()
+                || self.description.as_deref() == Some("Object") =>
+            {
+                *ids += 1;
+                let id = *ids;
+                let members = self
+                    .properties
+                    .iter()
+                    .map(|property| {
+                        // Upstream writes an own `toJSON` function as an empty object.
+                        let value = if property.name == "toJSON" && property.kind == "function" {
+                            json!({ "o": [], "id": 0 })
+                        } else {
+                            property.serialized()?
+                        };
+                        Some(json!({ "k": property.name, "v": value }))
+                    })
+                    .collect::<Option<Vec<Value>>>()?;
+                Some(json!({ "o": members, "id": id }))
+            }
+            _ => None,
+        }
+    }
+}
+
+impl PropertyPreview {
+    fn serialized(&self) -> Option<Value> {
+        let text = self.value.as_deref();
+        match self.kind.as_str() {
+            "undefined" | "symbol" | "function" => Some(json!({ "v": "undefined" })),
+            // V8 cuts a long string in the middle; a string that holds `…` may be cut.
+            "string" => text.filter(|text| !text.contains('…')).map(Value::from),
+            "boolean" => match text? {
+                "true" => Some(Value::Bool(true)),
+                "false" => Some(Value::Bool(false)),
+                _ => None,
+            },
+            "number" => {
+                let text = text?;
+                special_number(text).or_else(|| {
+                    let number: f64 = text
+                        .parse()
+                        .ok()
+                        .filter(|number: &f64| number.is_finite())?;
+                    text.parse::<i64>()
+                        .map(Value::from)
+                        .ok()
+                        .or_else(|| Number::from_f64(number).map(Value::Number))
+                })
+            }
+            "bigint" => bigint(text?),
+            "object" if self.subtype.as_deref() == Some("null") => Some(json!({ "v": "null" })),
+            // A nested object or array: a preview lists only its description. A getter
+            // (`accessor`) runs page code to read.
+            _ => None,
+        }
+    }
+}
+
+/// The numbers JSON cannot carry, as CDP names them and Playwright's format writes them.
+fn special_number(text: &str) -> Option<Value> {
+    matches!(text, "NaN" | "Infinity" | "-Infinity" | "-0").then(|| json!({ "v": text }))
+}
+
+/// A `BigInt` as CDP prints it (`123n`), in Playwright's format.
+fn bigint(text: &str) -> Option<Value> {
+    let digits = text.strip_suffix('n')?;
+    Some(json!({ "bi": digits }))
+}
+
 /// JavaScript's `String(value)` for a JSON value.
 fn js_string(value: &Value) -> String {
     match value {
@@ -514,7 +788,9 @@ mod tests {
     use browseros_core::TargetId;
     use serde_json::json;
 
-    use super::{ConsoleMessage, ConsoleParams, DialogKind, ExceptionParams, PageError};
+    use super::{
+        ConsoleMessage, ConsoleParams, DialogKind, ExceptionParams, LogEntryParams, PageError,
+    };
 
     fn target() -> TargetId {
         TargetId("T".to_owned())
@@ -628,6 +904,134 @@ mod tests {
         ] {
             assert_eq!(serde_json::to_value(kind)?, json!(kind.as_str()));
         }
+        Ok(())
+    }
+
+    /// Upstream's `_onLogEntryAdded`: the level as the type, the text, the entry's URL and line
+    /// with column 0, and nothing from a worker.
+    #[test]
+    fn tests_that_a_log_entry_reads_as_upstreams_console_message() -> Result<(), serde_json::Error>
+    {
+        let blocked: LogEntryParams = serde_json::from_value(json!({ "entry": {
+            "source": "network", "level": "error",
+            "text": "Access to fetch at 'http://b.test/' from origin 'http://a.test' has been blocked by CORS policy",
+            "url": "http://b.test/", "lineNumber": 4, "timestamp": 1_700_000_000_123.5,
+            "args": [{ "type": "object", "objectId": "held" }],
+        } }))?;
+        assert!(blocked.logged_by_page());
+        assert_eq!(blocked.argument_objects(), ["held"]);
+        let message = ConsoleMessage::from_log_entry(target(), blocked);
+        assert_eq!(
+            (message.kind.as_str(), message.location.url.as_str()),
+            ("error", "http://b.test/")
+        );
+        assert!(message.text.contains("CORS policy"));
+        assert_eq!(
+            (message.location.line_number, message.location.column_number),
+            (4, 0)
+        );
+        let worker: LogEntryParams = serde_json::from_value(json!({ "entry": {
+            "source": "worker", "level": "info", "text": "w", "timestamp": 1.0,
+        } }))?;
+        assert!(!worker.logged_by_page());
+        let favicon: LogEntryParams = serde_json::from_value(json!({ "entry": {
+            "source": "network", "level": "error",
+            "text": "Failed to load resource: the server responded with a status of 404 (Not Found)",
+            "url": "http://127.0.0.1:8907/favicon.ico", "timestamp": 1.0,
+        } }))?;
+        assert!(
+            favicon.browser_favicon(),
+            "the browser's own favicon request"
+        );
+        let missing: LogEntryParams = serde_json::from_value(json!({ "entry": {
+            "source": "network", "level": "error",
+            "text": "Failed to load resource: the server responded with a status of 404 (Not Found)",
+            "url": "http://127.0.0.1:8907/missing.png", "timestamp": 1.0,
+        } }))?;
+        assert!(!missing.browser_favicon(), "a page's own failed load");
+        Ok(())
+    }
+
+    /// `args()` values in Playwright's format, read from the console call's report alone:
+    /// primitives and flat objects and arrays whole, with each argument numbering its objects
+    /// from 1; anything V8's preview cut (a nested object, overflow, an abbreviated string, a
+    /// getter) has no value, nor has `console.table`'s preview, which nests every row.
+    #[test]
+    fn tests_that_console_arguments_keep_only_values_their_preview_holds_whole()
+    -> Result<(), serde_json::Error> {
+        let params: ConsoleParams = serde_json::from_value(json!({
+            "type": "log", "timestamp": 1.0,
+            "args": [
+                { "type": "string", "value": "hello" },
+                { "type": "number", "value": 5 },
+                { "type": "number", "unserializableValue": "-0", "description": "-0" },
+                { "type": "bigint", "unserializableValue": "12n", "description": "12n" },
+                { "type": "undefined" },
+                { "type": "object", "subtype": "null", "value": null },
+                { "type": "object", "className": "Object", "description": "Object",
+                  "preview": { "type": "object", "description": "Object", "overflow": false,
+                    "properties": [
+                      { "name": "foo", "type": "string", "value": "bar" },
+                      { "name": "n", "type": "number", "value": "NaN" },
+                    ] } },
+                { "type": "object", "subtype": "array", "description": "Array(2)",
+                  "preview": { "type": "object", "subtype": "array", "description": "Array(2)",
+                    "overflow": false,
+                    "properties": [{ "name": "1", "type": "boolean", "value": "true" }] } },
+                // `console.table`'s preview nests every row's columns: no value is read from it.
+                { "type": "object", "subtype": "array", "description": "Array(1)",
+                  "preview": { "type": "object", "subtype": "array", "description": "Array(1)",
+                    "overflow": false,
+                    "properties": [{ "name": "0", "type": "object", "value": "Object",
+                      "valuePreview": { "type": "object", "description": "Object",
+                        "overflow": false,
+                        "properties": [{ "name": "k0", "type": "string", "value": "v" }] } }] } },
+                { "type": "object", "description": "Object",
+                  "preview": { "type": "object", "description": "Object", "overflow": false,
+                    "properties": [{ "name": "deep", "type": "object", "value": "Object" }] } },
+                { "type": "object", "description": "Object",
+                  "preview": { "type": "object", "description": "Object", "overflow": true,
+                    "properties": [] } },
+                { "type": "object", "description": "Object",
+                  "preview": { "type": "object", "description": "Object", "overflow": false,
+                    "properties": [{ "name": "long", "type": "string", "value": "aaaa…aaaa" }] } },
+                { "type": "object", "description": "Object",
+                  "preview": { "type": "object", "description": "Object", "overflow": false,
+                    "properties": [{ "name": "get", "type": "accessor" }] } },
+                { "type": "object", "description": "Object",
+                  "preview": { "type": "object", "description": "Object", "overflow": false,
+                    "properties": [{ "name": "toJSON", "type": "function", "value": "" },
+                                   { "name": "f", "type": "function", "value": "" }] } },
+            ],
+        }))?;
+        let message = ConsoleMessage::from_params(target(), params);
+        let values: Vec<Option<serde_json::Value>> =
+            message.args.into_iter().map(|arg| arg.value).collect();
+        assert_eq!(
+            values,
+            [
+                Some(json!("hello")),
+                Some(json!(5)),
+                Some(json!({ "v": "-0" })),
+                Some(json!({ "bi": "12" })),
+                Some(json!({ "v": "undefined" })),
+                Some(json!({ "v": "null" })),
+                Some(json!({ "o": [
+                    { "k": "foo", "v": "bar" },
+                    { "k": "n", "v": { "v": "NaN" } },
+                ], "id": 1 })),
+                Some(json!({ "a": [{ "v": "undefined" }, true], "id": 1 })),
+                None,
+                None,
+                None,
+                None,
+                None,
+                Some(json!({ "o": [
+                    { "k": "toJSON", "v": { "o": [], "id": 0 } },
+                    { "k": "f", "v": { "v": "undefined" } },
+                ], "id": 1 })),
+            ]
+        );
         Ok(())
     }
 }

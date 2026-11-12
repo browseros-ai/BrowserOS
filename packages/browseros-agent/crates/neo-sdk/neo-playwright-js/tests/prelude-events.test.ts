@@ -76,6 +76,7 @@ const consoleRecord = (seq: number): EventRecord => ({
   message: {
     type: 'log',
     text: 'logged',
+    args: [{ value: 'logged', preview: 'logged' }],
     location: { url: '', lineNumber: 0, columnNumber: 0 },
     timestamp: 1,
   },
@@ -608,6 +609,7 @@ describe('listeners and the pump', () => {
             message: {
               type: 'log',
               text: 'Hello world',
+              args: [{ value: 'Hello world', preview: 'Hello world' }],
               location: { url: '', lineNumber: 0, columnNumber: 0 },
               timestamp: 1,
             },
@@ -625,6 +627,56 @@ describe('listeners and the pump', () => {
     expect(inspected).toEqual(['Hello world', "locator('#name')"])
   })
 
+  it('tests that console arguments answer jsonValue() with the value Rust read, and refuse what it could not', async () => {
+    const runtime = loadPrelude({
+      seed: SEED,
+      answer: pumpAnswers([
+        [
+          {
+            seq: 2,
+            at: RECORDED_AT,
+            event: 'console',
+            page: brand(7),
+            message: {
+              type: 'log',
+              text: 'hello 5 {foo: bar} {a: {…}}',
+              args: [
+                { value: 'hello', preview: 'hello' },
+                { value: 5, preview: '5' },
+                {
+                  value: { o: [{ k: 'foo', v: 'bar' }], id: 1 },
+                  preview: '{foo: bar}',
+                },
+                { preview: '{a: {…}}' },
+              ],
+              location: { url: '', lineNumber: 0, columnNumber: 0 },
+              timestamp: 1,
+            },
+          },
+        ],
+      ]),
+    })
+    const read = json(
+      await runtime.run(`
+        const message = await new Promise((resolve) => page.on('console', resolve))
+        const args = message.args()
+        const values = await Promise.all(args.slice(0, 3).map((arg) => arg.jsonValue()))
+        const refused = await args[3].jsonValue().then(() => null, (e) => [e.code, e.message])
+        const evaluated = await args[0].evaluate((v) => v).then(() => null, (e) => e.code)
+        return { values, refused, evaluated, printed: args.map(String) }
+      `),
+    )
+    expect(read).toEqual({
+      values: ['hello', 5, { foo: 'bar' }],
+      refused: [
+        'method_unavailable',
+        expect.stringContaining('jsHandle.jsonValue: the console reported'),
+      ],
+      evaluated: 'method_unavailable',
+      printed: ['hello', '5', '{foo: bar}', '{a: {…}}'],
+    })
+  })
+
   it("tests that an event older than the pump's last one still reaches its listener, and a close closes once", async () => {
     const runtime = loadPrelude({
       seed: SEED,
@@ -638,6 +690,7 @@ describe('listeners and the pump', () => {
             message: {
               type: 'log',
               text: 'after',
+              args: [],
               location: {
                 url: 'https://shop.example/a.js',
                 lineNumber: 3,

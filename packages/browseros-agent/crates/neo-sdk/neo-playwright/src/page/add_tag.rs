@@ -1,6 +1,8 @@
 //! Script and stylesheet insertion: host files become content, the owning frame's main world
 //! creates the tag, and CDP's CSP log races its load. Returned handles name that document and
 //! backend node; temporary remote objects belong to the operation and are freed on cancellation.
+//! `Log` is on for the insert only, under a lease it shares with console listeners
+//! (`events/log_lease.rs`).
 
 use std::io::ErrorKind;
 use std::time::Duration;
@@ -9,8 +11,12 @@ use browseros_cdp::CdpEvent;
 use browseros_core::FrameId;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use tokio::sync::broadcast;
+use tokio::sync::broadcast::error::{RecvError, TryRecvError};
 use tokio::{fs, time};
 use ts_rs::TS;
+
+use crate::events::event_hub::now_ms;
 
 use crate::world::FrameSeq;
 
@@ -174,14 +180,24 @@ pub(crate) async fn insert(
         .await
         .map_err(|failure| resolve::failed(scope, failure))?;
     let session = world.session();
-    let mut events = pw.browser().cdp_events_targeted("Log.entryAdded");
-    session
-        .send_value("Log.enable", json!({}))
+    // The broadcast, not a targeted channel: that would take `Log.entryAdded` off the broadcast,
+    // where the event watcher passes entries on as console messages, for every tab meanwhile.
+    let mut events = pw.browser().cdp_events();
+    // Counted with console listeners' `Log`, so a listener's release cannot switch the CSP
+    // reports off under this insert, and `Log` goes off again once the last holder is done.
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "epoch milliseconds stay far below 2^53"
+    )]
+    let _log = pw
+        .events()
+        .log_leases()
+        .acquire(session, now_ms() as f64)
         .await
         .map_err(|error| scope.core_error(&error))?;
     // Log.enable replays retained entries. They belong to earlier actions, so only messages
     // arriving after this barrier participate in this insertion's upstream-style CSP race.
-    while events.try_recv().is_ok() {}
+    while let Ok(Some(_)) | Err(Lagged) = queued(&mut events) {}
     let params = TagParams {
         kind: match kind {
             TagKind::Script => "script",
@@ -194,9 +210,17 @@ pub(crate) async fn insert(
     let sent = scope.send_effect()?;
     let insert = evaluate_guard::insert_tag(scope, &world, &document, json!(params), &sent);
     let failure = async {
-        while let Some(event) = events.recv().await {
-            if let Some(message) = csp_message(&event, world.session_id()) {
-                return scope.fail(ErrorCode::PageError, &message);
+        loop {
+            match events.recv().await {
+                Ok(event) => {
+                    if let Some(message) = csp_message(&event, world.session_id()) {
+                        return scope.fail(ErrorCode::PageError, &message);
+                    }
+                }
+                // A report may have gone with what the reader missed: say so rather than wait
+                // on a load that a blocked tag never finishes.
+                Err(RecvError::Lagged(_)) => return lagged(scope),
+                Err(RecvError::Closed) => break,
             }
         }
         scope.fail(
@@ -211,11 +235,7 @@ pub(crate) async fn insert(
     };
     // The gateway's final round trip flushes asynchronous inline CSP reports, as upstream
     // Chromium does. Prefer their useful browser wording over a generic load-event failure.
-    while let Ok(event) = events.try_recv() {
-        if let Some(message) = csp_message(&event, world.session_id()) {
-            return Err(scope.fail(ErrorCode::PageError, &message));
-        }
-    }
+    received_report(scope, &mut events, world.session_id())?;
     let object = node?;
     let described: Described = session
         .send("DOM.describeNode", json!({ "objectId": object }))
@@ -244,7 +264,7 @@ fn csp_message(event: &CdpEvent, session: Option<&browseros_core::SessionId>) ->
     struct Logged {
         entry: Entry,
     }
-    if event.session_id.as_ref() != session {
+    if event.method != "Log.entryAdded" || event.session_id.as_ref() != session {
         return None;
     }
     let logged: Logged = serde_json::from_value(event.params.clone()).ok()?;
@@ -252,6 +272,48 @@ fn csp_message(event: &CdpEvent, session: Option<&browseros_core::SessionId>) ->
     (level == "error"
         && (text.contains("Content-Security-Policy") || text.contains("Content Security Policy")))
     .then_some(text)
+}
+
+/// Fails with the CSP report `events` already received for `session`, if one is there.
+fn received_report(
+    scope: &OpScope<'_>,
+    events: &mut broadcast::Receiver<CdpEvent>,
+    session: Option<&browseros_core::SessionId>,
+) -> Result<(), PlaywrightError> {
+    loop {
+        match queued(events) {
+            Ok(Some(event)) => {
+                if let Some(message) = csp_message(&event, session) {
+                    return Err(scope.fail(ErrorCode::PageError, &message));
+                }
+            }
+            Ok(None) => return Ok(()),
+            Err(Lagged) => return Err(lagged(scope)),
+        }
+    }
+}
+
+/// The reader fell behind the shared broadcast and missed events.
+struct Lagged;
+
+/// The next event already received; `None` when none is.
+fn queued(events: &mut broadcast::Receiver<CdpEvent>) -> Result<Option<CdpEvent>, Lagged> {
+    match events.try_recv() {
+        Ok(event) => Ok(Some(event)),
+        Err(TryRecvError::Lagged(_)) => Err(Lagged),
+        Err(TryRecvError::Empty | TryRecvError::Closed) => Ok(None),
+    }
+}
+
+/// The insertion's CSP reports arrive on the shared broadcast, which drops what a reader that
+/// fell behind has not read; a dropped report would leave a blocked tag waiting on a load it
+/// never finishes, so the op fails plainly instead.
+fn lagged(scope: &OpScope<'_>) -> PlaywrightError {
+    scope.fail(
+        ErrorCode::Internal,
+        "Neo fell behind the browser's events while this tag's Content Security Policy reports \
+         were due, so it cannot tell whether the page blocked the tag",
+    )
 }
 
 /// Playwright reads UTF-8 with replacement and strips newlines only from the sourceURL.

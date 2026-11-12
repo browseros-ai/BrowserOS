@@ -6,9 +6,10 @@
 //! own CDP session) and a dedicated worker. The test drives the tab through the real prelude and
 //! `Playwright::invoke` in phases (goto, snapshots, reads, a click, a frame read, a
 //! `worker.evaluate`, then a console listener) and prints the detector counts and the
-//! `Runtime.enable` commands Neo sent after each phase, so a detection can be traced to the
-//! phase, and session kind, that caused it. Until the script asks for console events, no session
-//! (page, OOPIF or worker) may get `Runtime.enable`, and no place may detect anything.
+//! `Runtime.enable` and `Log.enable` commands Neo sent after each phase, so a detection can be
+//! traced to the phase, and session kind, that caused it. Until the script asks for console
+//! events, no session (page, OOPIF or worker) may get `Runtime.enable` or `Log.enable`, and no
+//! place may detect anything.
 //!
 //! Needs BrowserOS with CDP on `BROWSEROS_CDP_PORT` (default 9005):
 //! `cargo test -p neo-playwright --test devtools_detection_live -- --ignored --nocapture`.
@@ -156,14 +157,12 @@ async fn reports_what_a_neo_driven_tab_detects_per_phase() -> TestResult {
             run.record_methods();
             let value = script(&run, &page, &body).await;
             time::sleep(Duration::from_millis(1500)).await;
-            let enables = run
-                .recorded_methods()
-                .iter()
-                .filter(|method| method.as_str() == "Runtime.enable")
-                .count();
+            let methods = run.recorded_methods();
+            let sent = |method: &str| methods.iter().filter(|sent| *sent == method).count();
             let seen = detections(&run, &page).await?;
             let line = json!({ "phase": name, "result": value.map_err(|e| e.to_string()),
-                               "runtimeEnables": enables, "detections": seen });
+                               "runtimeEnables": sent("Runtime.enable"),
+                               "logEnables": sent("Log.enable"), "detections": seen });
             eprintln!("DETECTION {line}");
             report.push(line);
         }
@@ -275,6 +274,11 @@ fn judge(report: &[Value]) -> TestResult {
             line.get("runtimeEnables"),
             Some(&json!(0)),
             "no session gets Runtime.enable before a listener asks: {line}"
+        );
+        assert_eq!(
+            line.get("logEnables"),
+            Some(&json!(0)),
+            "no session gets Log.enable before a listener asks: {line}"
         );
     }
     let last_quiet = quiet.last().ok_or("no phase ran")?;

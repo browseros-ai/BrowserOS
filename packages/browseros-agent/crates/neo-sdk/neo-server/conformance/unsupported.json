@@ -31,7 +31,6 @@
   "browserContext.tracing",
   "browserContext.unroute",
   "browserContext.unrouteAll",
-  "consoleMessage.args",
   "download.cancel",
   "download.createReadStream",
   "download.delete",

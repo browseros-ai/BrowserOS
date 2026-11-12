@@ -10,11 +10,12 @@ use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
 use browseros_core::file_transfers::FileChooserInterception;
-use browseros_core::{RuntimeLease, TabId, TargetId};
+use browseros_core::{TabId, TargetId};
 use tokio::sync::Notify;
 use tokio::time;
 
 use crate::events::event_hub::LOG_CAPACITY;
+use crate::events::log_lease::ReportingLease;
 use crate::events::page_event::BindingCalled;
 use crate::events::{ListenerKey, PageEventKind, Subscription};
 
@@ -55,10 +56,11 @@ struct Inner {
     dropped_calls: u64,
     /// View-approved identities remain usable by retained events after the tab disappears.
     known_pages: VecDeque<KnownPage>,
-    /// The `Runtime` leases this run's listeners hold (console, page errors, bindings): core
-    /// leaves `Runtime` off on page sessions, so these keep its events flowing exactly while
-    /// someone listens. Removing the listener, or ending the run, drops them.
-    runtime: HashMap<Subscription, Vec<RuntimeLease>>,
+    /// The `Runtime` leases this run's listeners hold (console, page errors, bindings), each with
+    /// `Log` on top for console messages: core leaves `Runtime` off on page sessions, so these
+    /// keep its events flowing exactly while someone listens. Removing the listener, or ending
+    /// the run, drops them.
+    runtime: HashMap<Subscription, Vec<ReportingLease>>,
 }
 
 /// Marks one `events.next` in flight until dropped.
@@ -193,7 +195,7 @@ impl RunEvents {
 
     /// Keeps `leases` for as long as `subscription` listens. One removed while they were taken
     /// releases them at once.
-    pub(crate) fn hold_runtime(&self, subscription: &Subscription, leases: Vec<RuntimeLease>) {
+    pub(crate) fn hold_runtime(&self, subscription: &Subscription, leases: Vec<ReportingLease>) {
         let mut inner = self.lock();
         if inner.listening.contains_key(subscription) {
             inner

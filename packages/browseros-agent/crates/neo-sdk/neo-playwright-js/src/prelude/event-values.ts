@@ -5,10 +5,12 @@
  */
 import { captureSite } from './call-site'
 import type { ElementHandle } from './element-handle'
+import { WaitHandle } from './frame'
 import { send } from './generated'
 import { inspectCustom, markHandle } from './options'
 import type { Page } from './page'
 import type {
+  ConsoleArgInfo,
   ConsoleInfo,
   DialogInfo,
   DownloadInfo,
@@ -199,6 +201,17 @@ export class ConsoleMessage {
     return this.#info.text
   }
 
+  /**
+   * Upstream's JSHandles for the call's arguments, as value snapshots: Neo keeps no page object
+   * past the event, so each holds what the console call's report carried, read without calling
+   * into the page. `jsonValue()` answers for primitives and for flat objects and arrays, which
+   * the report holds whole; anything it cut short refuses, as does every handle method that needs
+   * the page's own object. A browser log entry has none, as upstream's.
+   */
+  args(): WaitHandle[] {
+    return this.#info.args.map(consoleArgument)
+  }
+
   location(): {
     url: string
     line: number
@@ -227,6 +240,20 @@ export class ConsoleMessage {
   [inspectCustom](): string {
     return this.text()
   }
+}
+
+const CONSOLE_ARGUMENT =
+  "Neo keeps a console argument as the value the console reported, not the page's object; read it with jsonValue()"
+
+const CONSOLE_PREVIEW =
+  'the console reported this argument only in part (nested objects, more than 5 properties or 100 items, long strings), so Neo cannot give its value; log a JSON string instead, or read message.text()'
+
+function consoleArgument(arg: ConsoleArgInfo): WaitHandle {
+  return new WaitHandle(
+    'value' in arg ? arg.value : { unheld: CONSOLE_PREVIEW },
+    arg.preview,
+    CONSOLE_ARGUMENT,
+  )
 }
 
 /** `pageerror` carries the page's exception as an Error, as upstream's client parses it. */

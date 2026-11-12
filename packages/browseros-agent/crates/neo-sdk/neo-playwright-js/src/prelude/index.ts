@@ -19,7 +19,7 @@ import { Browser } from './browser'
 import { Buffer } from './buffer'
 import { BrowserContext } from './context'
 import { ElementHandle, elementBrand } from './element-handle'
-import { ConsoleMessage, Download } from './event-values'
+import { Download } from './event-values'
 import { createExpect } from './expect'
 import { Frame } from './frame'
 import { Keyboard, Mouse } from './input'
@@ -41,7 +41,6 @@ installUnsupported({
   Mouse,
   ElementHandle,
   Download,
-  ConsoleMessage,
   Response,
 })
 

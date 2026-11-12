@@ -9,6 +9,12 @@
 //! starts it: then the console test checks that nothing arrives. Every test opens its own tabs
 //! and closes them.
 
+#[path = "support/js_runner.rs"]
+#[expect(
+    dead_code,
+    reason = "the shared runner also serves selector and detector tests"
+)]
+mod js_runner;
 #[path = "support/live_run.rs"]
 #[expect(
     dead_code,
@@ -27,6 +33,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use browseros_cdp::{CdpClient, CdpError, CdpEvent};
 use browseros_core::{CdpConnection, SessionId};
 use futures_util::future::BoxFuture;
+use js_runner::OpHost;
 use live_run::{LiveRun, TestPage, TestResult, brand, test_page};
 use neo_playwright::{ErrorCode, PlaywrightError};
 use neo_trace::ErrorOwner;
@@ -182,9 +189,10 @@ async fn tests_that_the_context_reports_new_tabs_and_a_page_reports_its_close() 
             });
             let other = other?;
             let mut opened = opened?;
-            // A context reports every tab that opens, and a fresh browser can open its own
-            // startup tab after the wait began. Skip those, as a script's predicate would.
-            for _ in 0..4 {
+            // A context reports every tab that opens: a fresh browser's own startup tab, and the
+            // tabs and popups this suite's other tests open at the same time on the same browser.
+            // Skip those, as a script's predicate would.
+            for _ in 0..16 {
                 if opened["page"] == brand(&other) {
                     break;
                 }
@@ -754,8 +762,9 @@ async fn ordered_rounds(run: &LiveRun, server: &PageServer, page: &TestPage) -> 
 }
 
 /// Core attaches pages with `Runtime` off, since a site can time the inspector's console work
-/// to tell it is being inspected. A run that listens for nothing sends no `Runtime.enable`; a console
-/// listener leases it on (`browseros_core::runtime_lease`), and the run's end switches it off.
+/// to tell it is being inspected. A run that listens for nothing sends no `Runtime.enable` and
+/// no `Log.enable`; a console listener leases `Runtime` on (`browseros_core::runtime_lease`) and
+/// `Log` after it (`events/log_lease.rs`), and the run's end switches `Log` off, then `Runtime`.
 #[tokio::test]
 #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
 async fn tests_that_runtime_is_on_only_while_a_run_listens_for_it() -> TestResult {
@@ -764,13 +773,12 @@ async fn tests_that_runtime_is_on_only_while_a_run_listens_for_it() -> TestResul
             run.record_methods();
             open(&run, &page, &server.url("/popups.html")).await?;
             run.click(&page, "#log").await?;
+            run.click(&page, "#refused").await?;
             let quiet = run.recorded_methods();
             run.record_methods();
             assert!(
-                !quiet
-                    .iter()
-                    .any(|method| method.starts_with("Runtime.enable")),
-                "a run that listens for nothing enabled Runtime: {quiet:?}"
+                !quiet.iter().any(|method| method == "Runtime.enable" || method == "Log.enable"),
+                "a run that listens for nothing enabled Runtime or Log: {quiet:?}"
             );
             run.invoke(
                 "events.listen",
@@ -779,13 +787,14 @@ async fn tests_that_runtime_is_on_only_while_a_run_listens_for_it() -> TestResul
             .await?;
             let listening = run.recorded_methods();
             run.record_methods();
+            let enables: Vec<&String> = listening
+                .iter()
+                .filter(|method| method.ends_with(".enable"))
+                .collect();
             assert_eq!(
-                listening
-                    .iter()
-                    .filter(|method| *method == "Runtime.enable")
-                    .count(),
-                1,
-                "the listener takes one lease: {listening:?}"
+                enables,
+                ["Runtime.enable", "Log.enable"],
+                "the listener takes one lease of each, Runtime first: {listening:?}"
             );
             run.next_run();
             let deadline = Instant::now() + Duration::from_secs(5);
@@ -799,6 +808,15 @@ async fn tests_that_runtime_is_on_only_while_a_run_listens_for_it() -> TestResul
                 ended.extend(run.recorded_methods());
                 run.record_methods();
             }
+            let disables: Vec<&String> = ended
+                .iter()
+                .filter(|method| method.ends_with(".disable"))
+                .collect();
+            assert_eq!(
+                disables,
+                ["Log.disable", "Runtime.disable"],
+                "the ended run switched Log off before Runtime: {ended:?}"
+            );
             Ok(())
         }
         .await;
@@ -859,4 +877,139 @@ async fn tests_that_console_and_page_errors_reach_listeners_outside_hosted_mode(
         (run, result)
     })
     .await
+}
+
+/// Upstream emits `popup` for a popup its page closed in the same task, with a page already
+/// closed. The tab is gone before any listing names it, so Neo hands it out by the native tab id
+/// its target carried, and the context no longer lists it.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_popup_closed_at_once_still_reaches_its_waiter() -> TestResult {
+    with_page(|run, server, page| async move {
+        let result = async {
+            open(&run, &page, &server.url("/popups.html")).await?;
+            let since = now_ms()?;
+            let (popup, clicked) = tokio::join!(
+                wait_for(&run, Some(&page), "popup", since),
+                click_soon(&run, &page, "#closed")
+            );
+            clicked?;
+            let popup = popup?;
+            assert_eq!(popup["event"], json!("popup"), "{popup}");
+            assert_eq!(popup["page"], brand(&page), "on the opener's page");
+            let tab = test_page(&popup["popup"]["page"])?;
+            assert_ne!(brand(&tab), brand(&page), "the popup is a page of its own");
+            let listed = run.invoke("context.pages", json!({})).await?;
+            assert!(
+                !listed["pages"]
+                    .as_array()
+                    .is_some_and(|pages| pages.iter().any(|entry| entry["page"] == brand(&tab))),
+                "a closed popup is not one of the context's pages: {listed}"
+            );
+            Ok(())
+        }
+        .await;
+        (run, result)
+    })
+    .await
+}
+
+/// What the browser itself logs (here a `fetch` to a port it refuses) reaches a console listener
+/// as upstream's `_onLogEntryAdded` emits it: the entry's level as the type, its text, no
+/// arguments. An entry logged before the listener asked is the replay `Log.enable` sends, and
+/// is not the listener's.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_browser_log_entry_reaches_a_console_listener_as_a_message() -> TestResult {
+    if env::var("BROWSERCLAW_HOSTED_MODE").is_ok_and(|mode| mode == "1") {
+        // Hosted mode sends no console events, so a listener leases nothing there.
+        return Ok(());
+    }
+    with_page(|run, server, page| async move {
+        let result = async {
+            open(&run, &page, &server.url("/popups.html")).await?;
+            run.click(&page, "#refused").await?;
+            time::sleep(Duration::from_millis(300)).await;
+            run.invoke(
+                "events.listen",
+                json!({ "page": brand(&page), "event": "console", "enabled": true, "since": now_ms()? }),
+            )
+            .await?;
+            run.click(&page, "#refused").await?;
+            let mut seen = Vec::new();
+            let deadline = Instant::now() + Duration::from_secs(3);
+            while Instant::now() < deadline {
+                let Ok(pumped) = time::timeout(
+                    Duration::from_millis(1000),
+                    run.invoke("events.next", json!({})),
+                )
+                .await
+                else {
+                    continue;
+                };
+                seen.extend(pumped?["events"].as_array().cloned().unwrap_or_default());
+            }
+            let refused: Vec<&Value> = seen
+                .iter()
+                .filter(|event| {
+                    event["event"] == "console"
+                        && event["message"]["text"]
+                            .as_str()
+                            .is_some_and(|text| text.contains("ERR_UNSAFE_PORT"))
+                })
+                .collect();
+            assert_eq!(
+                refused.len(),
+                1,
+                "only the entry logged after the listener asked: {seen:?}"
+            );
+            let message = &refused[0]["message"];
+            assert_eq!(message["type"], json!("error"), "{message}");
+            assert_eq!(message["args"], json!([]), "a log entry has no arguments");
+            Ok(())
+        }
+        .await;
+        (run, result)
+    })
+    .await
+}
+
+/// A click whose handler logs, while a script holds a console listener and the page logs large
+/// tables all the while, as the `DevTools` detector's page does: the click completes in its
+/// timeout, and the listener hears the handler's message exactly once. Through the prelude, so
+/// the pump delivers every console message to the script as a run's would. `console.table`'s
+/// preview lists every column of every row; read as a value, each such call carried 1 MB to the
+/// script, and an op that ends waits for the pump in flight, so the click timed out after its
+/// action and the message came too late.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_click_that_logs_completes_under_a_console_listener_and_is_heard_once()
+-> TestResult {
+    if env::var("BROWSERCLAW_HOSTED_MODE").is_ok_and(|mode| mode == "1") {
+        // Hosted mode sends no console events, so there is nothing to hear.
+        return Ok(());
+    }
+    let run = Arc::new(LiveRun::connect().await?);
+    let server = PageServer::start().await?;
+    let page = run.new_page().await?;
+    let result = async {
+        open(&run, &page, &server.url("/popups.html")).await?;
+        run.click(&page, "#tables").await?;
+        // Tables stored before the listener: its lease's `Runtime.enable` replays them too.
+        time::sleep(Duration::from_millis(1000)).await;
+        let host: Arc<dyn OpHost> = Arc::clone(&run) as Arc<dyn OpHost>;
+        let heard = js_runner::run_script(
+            &host,
+            &json!({ "page": brand(&page) }),
+            "const seen = []; page.on('console', (message) => seen.push(message.text())); \
+             await page.locator('#log').click({ timeout: 5000 }); await page.waitForTimeout(2000); \
+             return seen.filter((text) => text === 'clicked 7').length;",
+        )
+        .await?;
+        assert_eq!(heard, json!(1), "the handler's message, exactly once");
+        Ok(())
+    }
+    .await;
+    run.close_page(&page).await;
+    result
 }

@@ -21,6 +21,7 @@ import type { EventWaitInput } from './types/EventWaitInput'
 import type { InterceptFileChooserInput } from './types/InterceptFileChooserInput'
 import type { Pumped } from './types/Pumped'
 
+export type { ConsoleArgInfo } from './types/ConsoleArgInfo'
 export type { ConsoleInfo } from './types/ConsoleInfo'
 export type { ConsoleLocation } from './types/ConsoleLocation'
 export type { DialogAcceptInput } from './types/DialogAcceptInput'

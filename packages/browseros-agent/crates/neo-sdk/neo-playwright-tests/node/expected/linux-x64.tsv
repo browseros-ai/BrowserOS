@@ -20,7 +20,6 @@ EX-198	fail	tests/page/expect-misc.spec.ts	toHaveJSProperty › pass undefined
 FR-007	fail	tests/page/frame-evaluate.spec.ts	should allow cross-frame element handles
 FR-004	skip	tests/page/frame-evaluate.spec.ts	should dispose context on cross-origin navigation
 FR-003	skip	tests/page/frame-evaluate.spec.ts	should dispose context on navigation
-FR-035	fail	tests/page/frame-hierarchy.spec.ts	should refuse to display x-frame-options:deny iframe
 RO-158	skip	tests/page/interception.spec.ts	should intercept worker requests when enabled after worker creation
 LO-114	fail	tests/page/locator-highlight.spec.ts	should highlight locator
 LO-182	fail	tests/page/locator-query.spec.ts	count() should not throw during navigation
@@ -92,13 +91,9 @@ CM-017	fail	tests/page/page-event-console.spec.ts	consoleMessages should work
 CM-019	fail	tests/page/page-event-console.spec.ts	consoleMessages since-navigation filter should work
 CM-020	fail	tests/page/page-event-console.spec.ts	pageErrors since-navigation filter should work
 CM-016	fail	tests/page/page-event-console.spec.ts	should have timestamp in consoleMessages
-CM-008	fail	tests/page/page-event-console.spec.ts	should trigger correct Log
-CM-001	fail	tests/page/page-event-console.spec.ts	should work @smoke
 ER-012	fail	tests/page/page-event-pageerror.spec.ts	clearPageErrors should work
 ER-011	fail	tests/page/page-event-pageerror.spec.ts	pageErrors should work
 PO-005	fail	tests/page/page-event-popup.spec.ts	should be able to capture alert
-PO-003	fail	tests/page/page-event-popup.spec.ts	should emit for immediately closed popups
-PO-004	fail	tests/page/page-event-popup.spec.ts	should emit for immediately closed popups 2
 PO-002	fail	tests/page/page-event-popup.spec.ts	should work with window features
 FC-024	skip	tests/page/page-filechooser.spec.ts	should emit event after navigation
 KB-053	fail	tests/page/page-keyboard.spec.ts	should close dialog on Escape key press in contenteditable

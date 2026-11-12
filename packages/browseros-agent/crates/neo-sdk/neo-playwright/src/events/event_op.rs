@@ -14,7 +14,7 @@ use std::path::{self, Path, PathBuf};
 use std::pin::pin;
 use std::{io, slice};
 
-use browseros_core::{CoreError, ProtocolSession, RuntimeLease, TabId};
+use browseros_core::{CoreError, ProtocolSession, TabId};
 use serde::de::{self, Deserializer};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -24,6 +24,7 @@ use ts_rs::TS;
 use crate::events::dialog_table::{ClosedBy, Unanswerable};
 use crate::events::event_hub::{now_ms, receives};
 use crate::events::event_reader::{Delivered, Tabs, WindowPopup, binding_call, deliver};
+use crate::events::log_lease::{LogRefused, ReportingLease};
 use crate::events::page_event::DialogId;
 use crate::events::subscription::Unknown;
 use crate::events::{ListenerKey, PageEvent, PageEventKind, Subscription};
@@ -487,13 +488,17 @@ pub(crate) const fn needs_runtime(event: PageEventKind) -> bool {
 /// (`PageEventKind::context`), and a context binding is plumbed, and leased, per page as each is
 /// admitted (`page/init_script.rs`). Hosted BrowserOS sends no console or exception events, so
 /// there a listener for them leases nothing.
+///
+/// For console messages `Log` rides on that lease (`log_lease.rs`): upstream emits the browser's
+/// own log entries (a CORS failure, a frame `X-Frame-Options` refused) as console messages too.
+/// Best effort: a page that refuses `Log.enable` still reports its console API calls.
 async fn lease_runtime(
     pw: &Playwright,
     scope: &OpScope<'_>,
     subscription: &Subscription,
     since_ms: u64,
-) -> Result<Vec<RuntimeLease>, PlaywrightError> {
-    let Subscription::Page { tab, event, .. } = subscription else {
+) -> Result<Vec<ReportingLease>, PlaywrightError> {
+    let Subscription::Page { tab, target, event } = subscription else {
         return Ok(Vec::new());
     };
     let hosted_silent =
@@ -507,14 +512,35 @@ async fn lease_runtime(
     )]
     let floor = since_ms as f64;
     let admitted = scope.admit(pw.browser(), *tab).await?;
-    let lease = pw
+    let session = &admitted.session.session;
+    let runtime = pw
         .browser()
         .page_signals
         .runtime_leases()
-        .acquire(&admitted.session.session, floor)
+        .acquire(session, floor)
         .await
         .map_err(|error| scope.core_error(&error))?;
-    Ok(vec![lease])
+    if *event != PageEventKind::Console {
+        return Ok(vec![runtime.into()]);
+    }
+    // After `Runtime`, so `Log` is never on without it; the lease releases them in reverse.
+    let console = pw.events().log_leases().acquire_console(
+        runtime,
+        session,
+        target.clone(),
+        floor,
+        pw.watcher(),
+    );
+    match console.await {
+        Ok(lease) => Ok(vec![lease]),
+        Err(refused) => {
+            let LogRefused { lease, error } = *refused;
+            scope.log(format!(
+                "browser log entries stay off on this page: {error}"
+            ));
+            Ok(vec![lease])
+        }
+    }
 }
 
 /// Context listeners observe existing tabs without requiring a prior page action. These are
