@@ -30,10 +30,17 @@ subclass `TimeoutError`. `delivery: \"unknown\"` means a write may have happened
 page before repeating it.";
 
 /// sdk-playwright's ref hint, shown once its snapshot method is registered. The prelude's v1
-/// text is the default (`neo-playwright-js/src/prelude/snapshot-v1.ts`): refs on what can be
-/// acted on, page text only while it is short, so the hint names the option that adds it.
+/// text is the default (`neo-playwright-js/src/prelude/snapshot-v1.ts`): refs only on what can
+/// be acted on and on sections, page text only while it is short. So the hint names the option
+/// that adds the text, and the two ways to reach an element printed without a ref: a locator,
+/// or the JSON tree, which neither the v1 text nor clickable marking changes. Every agent follows
+/// this text literally, so the JSON clause says to search the tree in the script: returned, it
+/// costs what v1 exists to save (8.3k tokens at the median of 31 live pages, 49k on a big one).
 const REF_HINT: &str = "`page.ariaSnapshot()` lists what you can act on, with refs; \
-`page.getByRef('e5')` acts on one; `{ text: true }` adds the page's text.";
+`page.getByRef('e5')` acts on one; `{ text: true }` adds the page's text. An element without a \
+ref is reached with a locator (`page.getByText('…')`). `page.ariaSnapshotJSON({ mode: 'ai' })` \
+is the whole tree with every ref, several times larger: search it in the script, do not return \
+it.";
 const SNAPSHOT_METHOD: &str = "page.ariaSnapshot";
 
 /// Usage, limits, the error model, then the registry's listed methods: each `Own` line, and
@@ -153,6 +160,15 @@ mod tests {
         let description = run_description(&builder.build());
         assert!(description.contains("`page.ariaSnapshot()` lists what you can act on"));
         assert!(description.contains("page.getByRef('e5')"));
+        assert!(
+            description.contains(
+                "An element without a ref is reached with a locator (`page.getByText('…')`). \
+                 `page.ariaSnapshotJSON({ mode: 'ai' })` is the whole tree with every ref, \
+                 several times larger: search it in the script, do not return it."
+            ),
+            "v1 prints refs only on controls and sections, so the model learns how to reach the \
+             rest, and not to return the whole tree: {description}"
+        );
         Ok(())
     }
 
