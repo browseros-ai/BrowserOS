@@ -181,6 +181,11 @@ function CodeLine({
 }) {
   const operations = placed?.byLine.get(number) ?? []
   const spanMs = placed?.spanMs ?? 1
+  // How many times the line ran: the most any one call on it was made.
+  const runs = Math.max(
+    1,
+    ...operations.map((operation) => places.get(operation.id)?.calls ?? 1),
+  )
   const [first, ...more] = operations
   const shown =
     unfolded || operations.length <= FOLD_AFTER
@@ -196,7 +201,7 @@ function CodeLine({
         outputOf={outputOf}
         number={isFirst ? number : undefined}
         code={isFirst ? line : undefined}
-        calls={isFirst ? place?.calls : undefined}
+        calls={isFirst ? runs : undefined}
         label={isFirst ? undefined : rowLabel(operation, place)}
         spanMs={spanMs}
         open={operation.id === openId}

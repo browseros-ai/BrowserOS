@@ -245,6 +245,32 @@ describe("an open run's methods", () => {
     expect(selections.at(-1)?.place).toEqual({ line: 2, call: 2, calls: 3 })
   })
 
+  it('counts the line on its first row even when a later call on it is the one repeated', async () => {
+    const lineCode =
+      'const titles = await Promise.all((await context.pages()).map((p) => p.title()))'
+    const once = operation(3, 'context.pages', {
+      site: { line: 1, column: 35 },
+    })
+    const titles = [4, 5, 6].map((seq) =>
+      operation(seq, 'page.title', {
+        site: { line: 1, column: 70 },
+        startOffsetMs: seq,
+      }),
+    )
+    const run = runSummary(5, { code: lineCode })
+    await show(run, detailWith(run, record([once, ...titles], 100)))
+    const counts = [
+      ...dom.container.querySelectorAll('[title^="This line ran"]'),
+    ]
+    expect(counts.map((badge) => badge.textContent)).toEqual(['×3'])
+    expect(methods()).toEqual([
+      'context.pages on line 1',
+      'page.title',
+      'page.title, 2nd call',
+      'page.title, 3rd call',
+    ])
+  })
+
   it("labels Neo's own bookkeeping on a line, and the Model read row selects the reply again", async () => {
     const snapshotCode = 'return await page.ariaSnapshot({ text: true })'
     const operations = [

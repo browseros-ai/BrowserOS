@@ -399,7 +399,7 @@ describe('what a call gave the script', () => {
     // locator.waitForFunction resolves to nothing.
     expect(
       shown(operation(5, 'locator.waitForFunction', { result: null })).source,
-    ).toBe('The call returned no value.')
+    ).toContain('nothing at all from a method that returns no value')
   })
 
   it("decodes with the run's own decoder: a shared object once, a cycle as such, typed arrays as numbers", () => {
@@ -450,9 +450,11 @@ describe('what a call gave the script', () => {
         operation(2, 'context.newPage', { result: { $neo: 'page', tab: 18 } }),
       ).lines,
     ).toEqual(['page (tab 18)'])
-    expect(shown(operation(3, 'locator.click', { result: null })).source).toBe(
-      'The call returned no value.',
+    const nothing = shown(
+      operation(3, 'locator.getAttribute', { result: null }),
     )
+    expect(nothing.lines).toEqual(['null'])
+    expect(nothing.source).toContain('the script got null')
     const failed = shown(
       operation(4, 'locator.click', {
         outcome: 'error',

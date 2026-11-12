@@ -404,10 +404,18 @@ function recordedValue(operation: NeoOperation): Shown {
       cut,
     }
   }
-  if (result === null || result === undefined) {
+  if (result === undefined) {
     return {
       ...toned('(no value)', 'muted'),
       source: 'The call returned no value.',
+      cut,
+    }
+  }
+  if (result === null) {
+    return {
+      ...toned('null', 'json'),
+      source:
+        'Neo recorded null: the script got null, or nothing at all from a method that returns no value.',
       cut,
     }
   }
