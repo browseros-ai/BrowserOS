@@ -11,7 +11,9 @@
  *                           `renderSnapshot` builds it (`snapshot-yaml.ts`), unread frames' comments
  *                           included.
  *   locator.ariaSnapshot    v1 text rendered with options the wire does not carry: the tree,
- *                           saying the text was not recorded.
+ *                           saying the text was not recorded. So is `mode: 'full'`, which goes
+ *                           out as `'ai'` and is rendered by the run with no record of its text;
+ *                           when one line made both kinds, its v1 text is not paired at all.
  *   page.evaluate           `{ value, frames }`; the evaluate methods below it the serialized
  *                           value itself; page.waitForFunction `{ value, preview }`, which the
  *                           script gets as a JSHandle. Each decoded as the run decodes it
