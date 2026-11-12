@@ -300,7 +300,7 @@ describe('known-flaky.tsv', () => {
       './node/known-flaky.mjs'
     )
     const entries = [...readKnownFlaky().values()]
-    expect(entries.map((entry) => entry.id)).toEqual(['ER-006', 'SS-054'])
+    expect(entries.map((entry) => entry.id)).toEqual(['SS-054'])
     for (const entry of entries) {
       expect(entry.reason.length).toBeGreaterThan(20)
       expect(entry.tracked.length).toBeGreaterThan(10)
