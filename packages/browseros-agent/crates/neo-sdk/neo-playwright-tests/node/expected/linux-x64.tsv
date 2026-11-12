@@ -23,7 +23,6 @@ FR-003	skip	tests/page/frame-evaluate.spec.ts	should dispose context on navigati
 FR-035	fail	tests/page/frame-hierarchy.spec.ts	should refuse to display x-frame-options:deny iframe
 RO-158	skip	tests/page/interception.spec.ts	should intercept worker requests when enabled after worker creation
 LO-114	fail	tests/page/locator-highlight.spec.ts	should highlight locator
-LO-142	fail	tests/page/locator-misc-2.spec.ts	should scroll zero-sized element into view
 LO-182	fail	tests/page/locator-query.spec.ts	count() should not throw during navigation
 LO-167	skip	tests/page/locator-query.spec.ts	should filter by regex with a single quote
 LH-001	fail	tests/page/page-add-locator-handler.spec.ts	should work

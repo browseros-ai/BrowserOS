@@ -1,14 +1,14 @@
 //! The element actions without pointer input: `focus`, `blur` and `dispatchEvent`, which wait
 //! only for the element to be attached (D6), and `scrollIntoViewIfNeeded`, which waits for it
-//! to be stable once scrolled.
+//! to be stable and then scrolls it once.
 //!
 //! ```text
 //!  focus, blur, dispatchEvent   outer loop: resolve { want: element } → pin
 //!                                           ── the tab's input lock ──────────────────────
 //!                                           send_effect() → edit { pin, … }   (detached: again)
 //!  scrollIntoViewIfNeeded       outer loop, then upstream's inner retry:
-//!                                           act → DOM.scrollIntoViewIfNeeded → act
-//!                                           → 16 ms → act → same rect
+//!                                           act → 16 ms → act → same rect
+//!                                           → act → DOM.scrollIntoViewIfNeeded → act
 //! ```
 
 use std::time::Duration;
@@ -140,9 +140,9 @@ impl<'a> ElementRunner<'a> {
         self.call(located, &ProbeRequest::Edit { pin, edit }).await
     }
 
-    /// `scrollIntoViewIfNeeded`, as upstream's `_waitAndScrollIntoViewIfNeeded`: scroll until
-    /// the element has a box and holds still. Scrolling inside a frame scrolls every frame
-    /// above it too, cross-site ones included (measured).
+    /// `scrollIntoViewIfNeeded`, as upstream's `_waitAndScrollIntoViewIfNeeded`: wait until the
+    /// element has a box and holds still, then scroll it once. Scrolling inside a frame scrolls
+    /// every frame above it too, cross-site ones included (measured).
     pub(crate) async fn scroll_into_view(&self) -> Result<(), PlaywrightError> {
         self.scroll(&[], Restart::AtHandle).await
     }
@@ -200,7 +200,7 @@ impl<'a> ElementRunner<'a> {
                 }
                 attempt.log("  waiting for element to be stable".to_owned());
                 let measured = self
-                    .measure(&located, target.clone(), true, required_states)
+                    .measure(&located, target.clone(), false, required_states)
                     .await?;
                 match measured {
                     Measured::Rect(..) | Measured::Hidden => {
@@ -230,26 +230,67 @@ impl<'a> ElementRunner<'a> {
                 };
                 matched = true;
                 target = ProbeTarget::Pin(pin);
-                if self.scope.sleep(STABLE_GAP).await.is_err() {
-                    return Err(timed_out(matched));
-                }
                 match self
-                    .measure(&located, target.clone(), false, required_states)
+                    .stable_then_scroll(&located, pin, rect, required_states)
                     .await?
                 {
-                    Measured::Rect(_, again) if again == rect => return Ok(()),
-                    Measured::Rect(..) => {
-                        self.scope.log("  element is not stable".to_owned());
-                    }
-                    Measured::Hidden => self.scope.log("  element is not visible".to_owned()),
-                    Measured::Gone | Measured::Unmatched => {
-                        self.subject.detached()?;
-                        break;
-                    }
+                    Settled::Scrolled => return Ok(()),
+                    Settled::Retry => {}
+                    Settled::Detached => break,
                 }
             }
         }
         Err(timed_out(matched))
+    }
+
+    /// The rest of a scroll attempt once the pinned element measured `rect`: upstream's order,
+    /// stable first, then one scroll, and done. Done is safe because the protocol's scroll is
+    /// instant (`protocol_scroll.rs`); a page-side scroll under `scroll-behavior: smooth` would
+    /// still be moving. Scrolling before the stability check would scroll again whenever the
+    /// scroll itself changes the element (a lazy load that grows it once it is in view), moving
+    /// the page further than upstream does.
+    async fn stable_then_scroll(
+        &self,
+        located: &Resolved,
+        pin: Pin,
+        rect: Rect,
+        required_states: &[ElementState],
+    ) -> Result<Settled, PlaywrightError> {
+        if self.scope.sleep(STABLE_GAP).await.is_err() {
+            return Err(self.scope.timed_out(ErrorCode::NotActionable));
+        }
+        match self
+            .measure(located, ProbeTarget::Pin(pin), false, required_states)
+            .await?
+        {
+            Measured::Rect(_, again) if again == rect => {}
+            Measured::Rect(..) => {
+                self.scope.log("  element is not stable".to_owned());
+                return Ok(Settled::Retry);
+            }
+            Measured::Hidden => {
+                self.scope.log("  element is not visible".to_owned());
+                return Ok(Settled::Retry);
+            }
+            Measured::Gone | Measured::Unmatched => {
+                self.subject.detached()?;
+                return Ok(Settled::Detached);
+            }
+        }
+        match self
+            .measure(located, ProbeTarget::Pin(pin), true, required_states)
+            .await?
+        {
+            Measured::Rect(..) => Ok(Settled::Scrolled),
+            Measured::Hidden => {
+                self.scope.log("  element is not visible".to_owned());
+                Ok(Settled::Retry)
+            }
+            Measured::Gone | Measured::Unmatched => {
+                self.subject.detached()?;
+                Ok(Settled::Detached)
+            }
+        }
     }
 
     /// One measurement after optional scrolling. Screenshot callers additionally require
@@ -330,6 +371,16 @@ impl<'a> ElementRunner<'a> {
             Err(failure) => Err(resolve::failed(self.scope, failure)),
         }
     }
+}
+
+/// How a scroll attempt ended after its element was measured once.
+enum Settled {
+    /// Stable, then scrolled: the op is done.
+    Scrolled,
+    /// Moved or lost its box: the inner loop's next retry.
+    Retry,
+    /// It left the page: resolve again.
+    Detached,
 }
 
 /// One measurement of a scrolled element.
