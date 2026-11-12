@@ -536,7 +536,7 @@ export function summaryMarkdown({ verdict, scores, run, committed, next }) {
     "On `node/known-flaky.tsv`, so not judged either way. This run's outcome for each, so a test that has stopped flaking shows:",
     verdict.knownFlaky,
     (item) =>
-      `- ${name(item.entry)}: ${item.test ? `${item.test.outcome} this run${errorOf(item)}` : 'not in this run (take it off known-flaky.tsv)'}. ${markdown(item.entry.reason)} Tracked: ${markdown(item.entry.tracked)}`,
+      `- ${name(item.entry)}: ${item.test ? `${item.test.outcome} this run${errorOf(item).replace(/\.$/, '')}` : 'not in this run (take it off known-flaky.tsv)'}. ${markdown(item.entry.reason)} Tracked: ${markdown(item.entry.tracked)}`,
   )
   if (run.artifacts)
     lines.push(
