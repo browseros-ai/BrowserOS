@@ -137,7 +137,9 @@ The page at `/` (the approved design, "Viewer C v2"):
   **Start** column is when the call started, measured from the run's start (its header and each
   value say so on hover). A line in a loop runs more than once: its first row counts the calls
   (`×3`) and each later row says which call it is (`2nd call`) where the code would be; a line
-  that called many folds the rest behind one row. Neo's own bookkeeping (`page.snapshotPending`,
+  that called many folds the rest behind one row. Calls are counted by their place in the script,
+  and Neo's record does not mark where one call ends, so a call that makes several operations
+  from one place (`page.waitForURL` checking again) counts each, as a loop's passes would. Neo's own bookkeeping (`page.snapshotPending`,
   `events.listen`, the row of operations not on a line) says **Neo internal**, so it is not taken
   for the script's calls. Click a method to select it: its arguments (a locator by its text, the
   timeout, the name the script used when it differs, a long string by its start), call log and

@@ -159,7 +159,9 @@ export function callPlaces(placed: PlacedOperations): Map<string, CallPlace> {
  * The script place a call came from, which a loop pass calls again: by its line and column
  * alone, since one place can call a different method each pass (`locator[method]()`). Neo's
  * bookkeeping records the site of the call it serves (`page.snapshotPending` that of its
- * `ariaSnapshot()`), so it is counted on its own; a call with no site, by its name.
+ * `ariaSnapshot()`), so it is counted on its own; a call with no site, by its name. Neo's record
+ * does not mark where one script call ends, so a call that makes several operations from one
+ * place (`page.waitForURL` checking again) counts each, as a loop's passes would.
  */
 function callSite(operation: NeoOperation): string {
   const site = operation.site
