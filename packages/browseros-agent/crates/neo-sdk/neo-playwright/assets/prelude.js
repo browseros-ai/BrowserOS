@@ -2023,7 +2023,12 @@
 
   // crates/neo-sdk/neo-playwright-js/src/prelude/generated/locator-handler.ts
   var LOCATOR_HANDLER_OPTION_KEYS = {};
-  var LOCATOR_HANDLER_SEND = {};
+  var LOCATOR_HANDLER_SEND = {
+    "page.addLocatorHandler": (site, call, input, signal) => invoke("page.addLocatorHandler", site, call, input, signal),
+    "page.removeLocatorHandler": (site, call, input, signal) => invoke("page.removeLocatorHandler", site, call, input, signal),
+    "page.locatorHandlerTriggered": (site, call, input, signal) => invoke("page.locatorHandlerTriggered", site, call, input, signal),
+    "page.resolveLocatorHandler": (site, call, input, signal) => invoke("page.resolveLocatorHandler", site, call, input, signal)
+  };
 
   // crates/neo-sdk/neo-playwright-js/src/prelude/generated/index.ts
   var OPTION_KEYS = {
@@ -9466,7 +9471,7 @@ ${value.stack}`;
       if (options.times === 0)
         return;
       const target = await locator._frame._locatorBrand(api, locator._selector);
-      const { uid } = await invoke("page.addLocatorHandler", site, { api, timeoutMs: 0 }, options.noWaitAfter ? { target, noWaitAfter: true } : { target });
+      const { uid } = await send["page.addLocatorHandler"](site, { api, timeoutMs: 0 }, { target, noWaitAfter: options.noWaitAfter ? true : undefined });
       this.#byUid.set(uid, { page, locator, handler, times: options.times });
       if (!this.#pulling) {
         this.#pulling = true;
@@ -9479,14 +9484,14 @@ ${value.stack}`;
         if (registration.page !== page || !(locator instanceof Locator) || registration.locator._frame !== locator._frame || registration.locator._selector !== locator._selector)
           continue;
         this.#byUid.delete(uid);
-        await invoke("page.removeLocatorHandler", site, { api, timeoutMs: 0 }, { uid }).catch(() => {});
+        await send["page.removeLocatorHandler"](site, { api, timeoutMs: 0 }, { uid }).catch(() => {});
       }
     }
     async pull() {
       const site = INTERNAL_SITE;
       try {
         while (this.#byUid.size > 0) {
-          const { uid } = await invoke("page.locatorHandlerTriggered", site, { api: "page.locatorHandlerTriggered", timeoutMs: 0 }, {});
+          const { uid } = await send["page.locatorHandlerTriggered"](site, { api: "page.locatorHandlerTriggered", timeoutMs: 0 }, {});
           if (uid !== null)
             this.#run(uid);
         }
@@ -9511,7 +9516,7 @@ ${value.stack}`;
       } finally {
         if (remove)
           this.#byUid.delete(uid);
-        await invoke("page.resolveLocatorHandler", site, { api: "page.resolveLocatorHandler", timeoutMs: 0 }, remove ? { uid, remove: true } : { uid }).catch(() => {});
+        await send["page.resolveLocatorHandler"](site, { api: "page.resolveLocatorHandler", timeoutMs: 0 }, { uid, remove: remove ? true : undefined }).catch(() => {});
       }
     }
   }

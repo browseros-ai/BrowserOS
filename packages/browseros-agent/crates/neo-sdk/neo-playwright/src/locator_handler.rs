@@ -28,10 +28,11 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
 use browseros_core::TabId;
-use serde::Deserialize;
-use serde_json::{Value, json};
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use tokio::sync::{Notify, watch};
 use tokio::time;
+use ts_rs::TS;
 
 use crate::listed_enum::listed_enum;
 use crate::op_input::OpArgs;
@@ -41,7 +42,8 @@ use crate::page::OpPage;
 use crate::probe::{ProbeReply, ProbeRequest, ProbeTarget, QueryState, Read};
 use crate::resolve::{self, Landed, Resolver};
 use crate::target::{LocatorTarget, Strictness, Target};
-use crate::{ErrorCode, PlaywrightError, read};
+use crate::wire::{self, Describe, Nothing, OpWire, Route, Run, options};
+use crate::{ErrorCode, Playwright, PlaywrightError, read};
 
 /// How often a checkpoint waiting on a handler looks whether its page closed.
 const CLOSE_POLL: Duration = Duration::from_millis(250);
@@ -58,6 +60,11 @@ listed_enum! {
 }
 
 impl LocatorHandlerOp {
+    /// Describes the input and result bound to the runtime handler by its route row.
+    pub(crate) fn wire(self) -> Option<OpWire> {
+        route(self, Describe)
+    }
+
     /// This op's registration metadata. None of them touches the page: they read and write
     /// the run's registry, and the checkpoint's own reads run inside the action that pauses.
     pub(crate) const fn spec(self) -> OpSpec {
@@ -87,72 +94,133 @@ impl LocatorHandlerOp {
     }
 }
 
-/// `page.addLocatorHandler(locator, handler, { noWaitAfter })`.
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-struct AddInput {
-    target: Target,
-    #[serde(default)]
-    no_wait_after: bool,
+/// The registry protocol has one route for execution and contract generation; the checkpoint
+/// and its run-scoped lifetime remain independent of this wire description.
+fn route<'a, R: Route<'a>>(op: LocatorHandlerOp, r: R) -> R::Out {
+    match op {
+        LocatorHandlerOp::Add => r.op(wire::command("Page.registerLocatorHandler"), add),
+        LocatorHandlerOp::Remove => r.op(wire::command("Page.unregisterLocatorHandler"), remove),
+        LocatorHandlerOp::Triggered => r.op(
+            wire::neo_only(
+                "Neo background pull replacing upstream locatorHandlerTriggered events.",
+            ),
+            triggered,
+        ),
+        LocatorHandlerOp::Resolve => {
+            r.op(wire::command("Page.resolveLocatorHandlerNoReply"), resolve)
+        }
+    }
 }
 
+/// `page.addLocatorHandler(locator, handler, { noWaitAfter })`.
+#[derive(Debug, Deserialize, TS)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+#[ts(rename = "LocatorHandlerAddInput")]
+struct AddInput {
+    target: Target,
+    // The prelude omits false; keep serde's defaulted bool so explicit null still fails.
+    #[serde(default)]
+    #[ts(optional, as = "Option<bool>")]
+    no_wait_after: bool,
+}
+options!(AddInput);
+
 /// One registration, by the uid `page.addLocatorHandler` answered.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, TS)]
 #[serde(deny_unknown_fields)]
+#[ts(rename = "LocatorHandlerRemoveInput")]
 struct RemoveInput {
     uid: u64,
 }
+options!(RemoveInput);
 
-#[derive(Debug, Deserialize)]
+/// The run's background pull carries no payload.
+#[derive(Debug, Deserialize, TS)]
 #[serde(deny_unknown_fields)]
+#[ts(rename = "LocatorHandlerTriggeredInput")]
 struct TriggeredInput {}
+options!(TriggeredInput);
 
 /// `remove` once the handler's `times` ran out, as upstream's `resolveLocatorHandlerNoReply`.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, TS)]
 #[serde(deny_unknown_fields)]
+#[ts(rename = "LocatorHandlerResolveInput")]
 struct ResolveInput {
     uid: u64,
     #[serde(default)]
+    #[ts(optional, as = "Option<bool>")]
     remove: bool,
 }
+options!(ResolveInput);
 
-/// Runs one locator-handler op.
+/// The registration id retained by the prelude for subsequent pulls and cleanup.
+#[derive(Debug, Serialize, TS)]
+struct LocatorHandlerAdded {
+    uid: u64,
+}
+
+/// A trigger to run, or an explicit null when the run has no handler left.
+#[derive(Debug, Serialize, TS)]
+struct LocatorHandlerTriggered {
+    uid: Option<u64>,
+}
+
+/// Runs one registry op through the same row that describes its generated wire contract.
 pub(crate) async fn invoke(
+    pw: &Playwright,
     scope: &OpScope<'_>,
     op: LocatorHandlerOp,
     args: OpArgs,
 ) -> Result<Value, PlaywrightError> {
-    let handlers = &scope.run_state().locator_handlers;
-    match op {
-        LocatorHandlerOp::Add => {
-            let AddInput {
-                target,
-                no_wait_after,
-            } = args.decode(scope)?;
-            let Target::Locator(target) = target else {
-                return Err(scope.fail(
-                    ErrorCode::InvalidInput,
-                    "target: a locator handler takes a locator, not an element handle",
-                ));
-            };
-            let uid = handlers.register(target, no_wait_after);
-            Ok(json!({ "uid": uid }))
-        }
-        LocatorHandlerOp::Remove => {
-            let RemoveInput { uid } = args.decode(scope)?;
-            handlers.unregister(uid);
-            Ok(Value::Null)
-        }
-        LocatorHandlerOp::Triggered => {
-            let TriggeredInput {} = args.decode(scope)?;
-            Ok(json!({ "uid": handlers.next_trigger().await }))
-        }
-        LocatorHandlerOp::Resolve => {
-            let ResolveInput { uid, remove } = args.decode(scope)?;
-            handlers.resolve(uid, remove);
-            Ok(Value::Null)
-        }
-    }
+    route(op, Run { pw, scope, args }).await
+}
+
+async fn add(
+    _pw: &Playwright,
+    scope: &OpScope<'_>,
+    input: AddInput,
+) -> Result<LocatorHandlerAdded, PlaywrightError> {
+    let Target::Locator(target) = input.target else {
+        return Err(scope.fail(
+            ErrorCode::InvalidInput,
+            "target: a locator handler takes a locator, not an element handle",
+        ));
+    };
+    let uid = scope
+        .run_state()
+        .locator_handlers
+        .register(target, input.no_wait_after);
+    Ok(LocatorHandlerAdded { uid })
+}
+
+async fn remove(
+    _pw: &Playwright,
+    scope: &OpScope<'_>,
+    input: RemoveInput,
+) -> Result<Nothing, PlaywrightError> {
+    scope.run_state().locator_handlers.unregister(input.uid);
+    Ok(())
+}
+
+async fn triggered(
+    _pw: &Playwright,
+    scope: &OpScope<'_>,
+    _input: TriggeredInput,
+) -> Result<LocatorHandlerTriggered, PlaywrightError> {
+    let uid = scope.run_state().locator_handlers.next_trigger().await;
+    Ok(LocatorHandlerTriggered { uid })
+}
+
+async fn resolve(
+    _pw: &Playwright,
+    scope: &OpScope<'_>,
+    input: ResolveInput,
+) -> Result<Nothing, PlaywrightError> {
+    scope
+        .run_state()
+        .locator_handlers
+        .resolve(input.uid, input.remove);
+    Ok(())
 }
 
 /// Whether an action runs the checkpoint before its attempts, as upstream decides per action.

@@ -219,36 +219,6 @@ export type UpstreamChecks = {
       never
     >
   >
-  'page.addLocatorHandler': Assert<
-    UpstreamCheck<
-      'page.addLocatorHandler',
-      OpInputs['page.addLocatorHandler'],
-      pw.PageRegisterLocatorHandlerParams,
-      never,
-      never,
-      never
-    >
-  >
-  'page.removeLocatorHandler': Assert<
-    UpstreamCheck<
-      'page.removeLocatorHandler',
-      OpInputs['page.removeLocatorHandler'],
-      pw.PageUnregisterLocatorHandlerParams,
-      never,
-      never,
-      never
-    >
-  >
-  'page.resolveLocatorHandler': Assert<
-    UpstreamCheck<
-      'page.resolveLocatorHandler',
-      OpInputs['page.resolveLocatorHandler'],
-      pw.PageResolveLocatorHandlerNoReplyParams,
-      never,
-      never,
-      never
-    >
-  >
   // script is source or a path read on the Neo host, replacing upstream source.
   'context.addInitScript': Assert<
     UpstreamCheck<
@@ -319,7 +289,6 @@ export type UpstreamChecks = {
 /** Ops implemented as client work, an event pump, or several upstream commands together. */
 type NeoOnlyOps = {
   'locator.waitForFunction': 'Neo probes the element predicate; upstream composes evaluation and waiting.'
-  'page.locatorHandlerTriggered': 'Neo background pull replacing upstream locatorHandlerTriggered events.'
   'disposable.dispose': 'Neo disposes a host-owned registration rather than a channel object.'
   'events.listen': 'Neo run-scoped listener bookkeeping, including cleanup after a tab closes.'
   'events.next': 'Neo background event pump, with one cursor per listener.'
