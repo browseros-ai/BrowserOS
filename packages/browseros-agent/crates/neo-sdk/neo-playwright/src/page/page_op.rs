@@ -243,6 +243,10 @@ const PUBLICATION: &[(&str, &str)] = &[(
 /// `Describe` walk the same rows, and the policy in `spec()` stays independent of the shapes.
 /// The family moves in three changes: the ops not moved yet go through the untyped row to
 /// `run_untyped`, and keep their hand-written TypeScript in `wire.ts` until theirs lands.
+#[expect(
+    clippy::too_many_lines,
+    reason = "one exhaustive row per page operation keeps the wire contract together"
+)]
 fn route<'a, R: Route<'a>>(op: PageOp, r: R) -> R::Out {
     match op {
         PageOp::Goto => r.op(wire::command("Frame.goto").adds(PUBLICATION), goto),

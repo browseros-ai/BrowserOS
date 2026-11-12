@@ -10,15 +10,14 @@ use browseros_cdp::CdpError;
 use browseros_core::{CoreError, ProtocolSession};
 use serde::Deserialize;
 use serde_json::json;
-use ts_rs::TS;
-
-use crate::wire::{Nothing, options};
 use tokio::runtime::Handle;
 use tokio::sync::OwnedMutexGuard;
+use ts_rs::TS;
 
 use crate::op_scope::OpScope;
 use crate::page::{OpPage, frame_tree};
 use crate::target::PageRef;
+use crate::wire::{Nothing, options};
 use crate::{ErrorCode, Playwright, PlaywrightError};
 
 /// The last committed settings for a tab. None means Neo has never emulated this tab.

@@ -87,7 +87,7 @@ pub(crate) enum StorageValue {
     Item(Option<String>),
 }
 
-/// One name/value pair in Storage.items(), in the document's existing iteration order.
+/// One name/value pair in `Storage.items()`, in the document's existing iteration order.
 #[derive(Deserialize, Serialize, TS)]
 pub(crate) struct StorageItem {
     name: String,
@@ -150,7 +150,7 @@ pub(crate) async fn write_value(
 
 /// Runs one Storage call. `writes` is the op's own side: a read op refuses a write action, and
 /// the other way round, so the dispatcher's effect for the op always matches the call.
-pub(crate) async fn call(
+async fn call(
     pw: &Playwright,
     scope: &OpScope<'_>,
     input: WebStorageInput,

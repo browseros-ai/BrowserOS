@@ -12,14 +12,14 @@ use serde_json::json;
 use tokio::{fs, time};
 use ts_rs::TS;
 
-use crate::wire::options;
 use crate::world::FrameSeq;
 
 use crate::op_scope::OpScope;
 use crate::op_spec::Capability;
-use crate::page::frame_tree::{self, FrameInfo};
+use crate::page::frame_tree::{self, FrameInfo, FrameTree};
 use crate::page::{OpPage, evaluate_guard, world_call};
 use crate::target::PageRef;
+use crate::wire::options;
 use crate::{ErrorCode, Playwright, PlaywrightError, resolve};
 
 /// Which upstream insertion algorithm and sourceURL syntax to use.
@@ -300,7 +300,7 @@ async fn tagged(
     .flatten();
     Ok(Tagged {
         element,
-        frames: frames.map(|tree| tree.into_frames()),
+        frames: frames.map(FrameTree::into_frames),
     })
 }
 
