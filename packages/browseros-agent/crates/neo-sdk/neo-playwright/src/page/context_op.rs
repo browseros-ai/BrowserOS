@@ -190,6 +190,8 @@ async fn new_page(
         )
         .await
         .map_err(|error| scope.core_error(&error))?;
+    // No ref printed before this run can be this tab's (run_state/opened_tabs.rs).
+    scope.run_state().opened_tabs.opened(opened.tab_id);
     ready(pw, scope, &opened).await;
     Ok(PageEntry {
         page: PageHandle::new(opened.tab_id),

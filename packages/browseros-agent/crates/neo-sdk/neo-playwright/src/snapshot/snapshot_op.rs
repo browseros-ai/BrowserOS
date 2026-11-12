@@ -259,6 +259,9 @@ async fn page_snapshot(
 ) -> Result<aria_snapshot::SnapshotResult, PlaywrightError> {
     let page = input.page.tab();
     let page = OpPage::admit(pw, scope, page).await?;
+    if input.mode == SnapshotMode::Ai {
+        scope.run_state().opened_tabs.snapshotted(page.tab());
+    }
     // Before the tree: a document that commits after this makes the text stale for the
     // baseline, so a run that ends later cannot hand the new document the old one's text.
     let document = pw.snapshot_baselines().generation(page.target_id());
@@ -307,6 +310,9 @@ async fn locator_snapshot(
         return Err(scope.not_built());
     };
     let page = OpPage::admit_handle(pw, scope, &target.page).await?;
+    if input.mode == SnapshotMode::Ai {
+        scope.run_state().opened_tabs.snapshotted(page.tab());
+    }
     let marked = marks(input.mode, input.clickable);
     let resolver = Resolver::new(&page, scope, target, input.strict);
     scope.log(format!("waiting for {}", target.display));

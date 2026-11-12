@@ -356,7 +356,7 @@ impl<'a> Resolver<'a> {
                 SeqLookup::Retired => Err(self.detached(&jump.to_string())),
                 SeqLookup::Unknown => Err(self.scope.fail(
                     ErrorCode::InvalidInput,
-                    &format!("{jump} is not a ref on this page; take a new snapshot"),
+                    &ref_message(self.scope, &jump.to_string(), "is not a ref on this page"),
                 )),
             };
         }
@@ -670,8 +670,27 @@ pub(crate) fn refused(scope: &OpScope<'_>, reply: ProbeReply) -> PlaywrightError
 fn detached(scope: &OpScope<'_>, stale: &str) -> PlaywrightError {
     scope.fail(
         ErrorCode::ElementDetached,
-        &format!("{stale} is not on the page any more; take a new snapshot"),
+        &ref_message(scope, stale, "is not on the page any more"),
     )
+}
+
+/// What a ref that cannot match says. On a tab this run opened and has not snapshotted, no ref
+/// can be the tab's own, and a new snapshot of it brings nothing back: most often the ref is
+/// from the last run, which ran in another tab, so the message names the way to keep a tab.
+/// Every other tab gets `<ref> <ordinary>; take a new snapshot`. Both ref failures (an element
+/// gone, and a frame ref this tab never printed) use it, each with its own owner and code.
+fn ref_message(scope: &OpScope<'_>, r#ref: &str, ordinary: &str) -> String {
+    let opened_here = scope
+        .admitted_tab()
+        .is_some_and(|tab| scope.run_state().opened_tabs.opened_unsnapshotted(tab));
+    if opened_here {
+        format!(
+            "{ref} is not from this tab, which this run opened: a ref works only in the tab \
+             whose snapshot printed it. A task keeps its tab across runs: await neo.task(id)"
+        )
+    } else {
+        format!("{ref} {ordinary}; take a new snapshot")
+    }
 }
 
 /// A probe failure that is not the liveness rule's to handle.

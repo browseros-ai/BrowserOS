@@ -18,6 +18,8 @@
 //!    a delta after { text: true } on a page whose default leaves text out lists only the change,
 //!    in the text form; and the reply's tip after a full snapshot found a stored one: at most
 //!    three per task, or per tab for runs with no task
+//!  a ref from an earlier run, used in the new tab a run with no task starts on: its failure says
+//!    the ref is not from this tab; one that went stale on a tab with a snapshot does not
 //! ```
 //!
 //! Like `e2e_browseros.rs`, it runs only when `CLAW_SDK_E2E_BROWSER` names a BrowserOS binary.
@@ -462,6 +464,121 @@ async fn delta_tips(client: &Client) -> TestResult {
         }
     }
     assert_eq!(untasked, 3, "a tab with no task has three of its own");
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_ref_from_an_earlier_run_says_it_is_not_from_the_tab_this_run_opened() -> TestResult {
+    on_browseros(|rig| Box::pin(refs_from_elsewhere(rig))).await
+}
+
+/// The text a ref's failure gives on a tab the run opened and never snapshotted.
+fn not_from_this_tab(r#ref: &str) -> String {
+    format!(
+        "{ref} is not from this tab, which this run opened: a ref works only in the tab whose \
+         snapshot printed it. A task keeps its tab across runs: await neo.task(id)"
+    )
+}
+
+/// A run's failure line: the text the model reads up to the call log.
+async fn failure_of(client: &Client, code: &str, meta: &Value) -> Result<String, Box<dyn Error>> {
+    let result = run(client, code, meta).await?;
+    let (text, status) = read(&result)?;
+    assert_eq!(status, json!("error"), "{result:?}");
+    Ok(text.lines().next().unwrap_or_default().to_owned())
+}
+
+/// Design section 5, "A ref used in a tab this run opened": each run with no task starts on a
+/// new tab, so a ref from the last run cannot be clicked there, and the message says why and how
+/// to keep a tab. A ref that went stale on a tab that had a snapshot, and one used on a task's tab
+/// this run did not open, keep the ordinary message.
+async fn refs_from_elsewhere(rig: &Rig) -> TestResult {
+    rig.until_ready().await?;
+    let client = rig.client().await?;
+    let none = json!({});
+    let printed = delta_of(
+        &client,
+        "await page.goto('data:text/html,' + encodeURIComponent('<main><button>One</button>\
+         <button>Two</button><iframe srcdoc=\"<button>Inside</button>\"></iframe></main>'))\n\
+         return await page.ariaSnapshot()",
+        &none,
+    )
+    .await?;
+    // The ref on the line that prints `pattern`.
+    let ref_of = |pattern: &str| -> Result<String, Box<dyn Error>> {
+        let line = printed
+            .lines()
+            .find(|line| line.contains(pattern))
+            .ok_or(format!("{pattern} in {printed}"))?;
+        let r#ref = line
+            .split("[ref=")
+            .nth(1)
+            .and_then(|tail| tail.split(']').next())
+            .ok_or(format!("a ref on {line}"))?;
+        Ok(r#ref.to_owned())
+    };
+    let two = ref_of("button \"Two\"")?;
+    let inside = ref_of("button \"Inside\"")?;
+    assert!(inside.starts_with('f'), "a frame's ref: {inside}");
+    // The next run with no task is on a new tab.
+    let click = |r#ref: &str| format!("await page.getByRef('{ref}').click({{ timeout: 2000 }})");
+    assert_eq!(
+        failure_of(&client, &click(&two), &none).await?,
+        format!(
+            "website / element_detached: locator.click: {}",
+            not_from_this_tab(&two)
+        )
+    );
+    assert_eq!(
+        failure_of(&client, &click(&inside), &none).await?,
+        format!(
+            "script / invalid_input: locator.click: {}",
+            not_from_this_tab(&inside)
+        )
+    );
+    // The same tab once this run snapshotted it: no longer provably another tab's ref.
+    assert_eq!(
+        failure_of(
+            &client,
+            &format!("await page.ariaSnapshot()\n{}", click("e999")),
+            &none
+        )
+        .await?,
+        "website / element_detached: locator.click: e999 is not on the page any more; take a \
+         new snapshot"
+    );
+    // A ref that really went stale on a tab with a snapshot.
+    let stale = "await page.setContent('<button>Gone soon</button>')\n\
+                 const ref = /\\[ref=(e\\d+)\\]/.exec(await page.ariaSnapshot())[1]\n\
+                 await page.setContent('<p>Replaced</p>')\n\
+                 await page.getByRef(ref).click({ timeout: 2000 })";
+    let failure = failure_of(&client, stale, &none).await?;
+    assert!(
+        failure.starts_with("website / element_detached: locator.click: e")
+            && failure.ends_with(" is not on the page any more; take a new snapshot"),
+        "{failure}"
+    );
+    // A task's tab, opened by an earlier run and never snapshotted, keeps the ordinary text too.
+    let task = delta_of(
+        &client,
+        "const task = await neo.createTask('refs elsewhere')\n\
+         await neo.task(task.id)\n\
+         await page.title()\n\
+         return task.id",
+        &none,
+    )
+    .await?;
+    assert_eq!(
+        failure_of(
+            &client,
+            &format!("await neo.task({task:?})\n{}", click("e999")),
+            &none
+        )
+        .await?,
+        "website / element_detached: locator.click: e999 is not on the page any more; take a \
+         new snapshot"
+    );
+    client.cancel().await?;
     Ok(())
 }
 
