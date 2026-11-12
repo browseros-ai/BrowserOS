@@ -1,4 +1,5 @@
 import { captureSite } from './call-site'
+import { send } from './generated'
 /**
  * Playwright's Locator and FrameLocator, following playwright-core 1.64.1's client/locator.ts.
  *
@@ -672,14 +673,13 @@ export class Locator {
     const site = captureSite()
     const api = 'locator.waitForFunction'
     const script = pageCall(api, 'query', pageFunction, arg)
-    await this._frame._selectorOp(
-      'locator.waitForFunction',
+    const wait = this._frame._wait(api, options ?? {})
+    const addressed = await this._frame._targetArgs(api, this._selector, true)
+    await send['locator.waitForFunction'](
       site,
-      api,
-      this._selector,
-      true,
-      this._frame._wait(api, options ?? {}),
-      { script },
+      this._frame._call(api, wait.timeout),
+      { ...addressed, script },
+      wait.signal,
     )
   }
 

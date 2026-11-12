@@ -529,9 +529,14 @@ export class ElementHandle extends EventEmitter {
       arg,
       options,
     )
+    this.#live(api)
     return fromPageValue(
       api,
-      await this.#op('locator.evaluate', site, api, 0, { script }),
+      await send['locator.evaluate'](
+        site,
+        { api, timeoutMs: timeoutMs(api, 0) },
+        { target: this._brand, strict: 'strict', script },
+      ),
     )
   }
 
@@ -544,8 +549,7 @@ export class ElementHandle extends EventEmitter {
     const site = captureSite()
     const api = 'elementHandle.$eval'
     const script = pageCall(api, 'query', pageFunction, arg)
-    const value = await invoke(
-      'locator.evaluate',
+    const value = await send['locator.evaluate'](
       site,
       { api, timeoutMs: timeoutMs(api, 0) },
       {
@@ -568,8 +572,7 @@ export class ElementHandle extends EventEmitter {
     const site = captureSite()
     const api = 'elementHandle.$$eval'
     const script = pageCall(api, 'query', pageFunction, arg)
-    const value = await invoke(
-      'locator.evaluateAll',
+    const value = await send['locator.evaluateAll'](
       site,
       { api, timeoutMs: timeoutMs(api, 0) },
       { target: this.#rooted(api, selector), script },

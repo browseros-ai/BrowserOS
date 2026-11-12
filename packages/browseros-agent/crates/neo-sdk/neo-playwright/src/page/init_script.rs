@@ -59,14 +59,15 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::runtime::Handle;
 use tokio::sync::OnceCell;
+use ts_rs::TS;
 
 use crate::action::input_files;
 use crate::events::event_hub::now_ms;
 use crate::events::{BINDING_NAME, EventHub, PageEventKind, Subscription};
-use crate::op_output::to_output;
 use crate::op_scope::{AdmittedPage, OpScope, Sent};
 use crate::op_spec::Capability;
 use crate::target::PageRef;
+use crate::wire::options;
 use crate::{ErrorCode, Playwright, PlaywrightError};
 
 /// The page side of every binding: upstream's `BindingsController`, which installs itself at
@@ -256,7 +257,7 @@ async fn run_in_loaded_documents(session: &ProtocolSession, source: &str) {
 
 /// The script's source as the prelude built it (upstream's client `evaluationScript`), or the
 /// path of a file to read it from. No `Debug`: the source may hold a value the agent was given.
-#[derive(Deserialize)]
+#[derive(Deserialize, TS)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub(crate) enum InitSource {
     /// A function call with its argument, a string, or `{ content }`.
@@ -267,49 +268,63 @@ pub(crate) enum InitSource {
 }
 
 /// `page.addInitScript`'s input.
-#[derive(Deserialize)]
+#[derive(Deserialize, TS)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct PageScriptInput {
     page: PageRef,
     script: InitSource,
 }
+options!(PageScriptInput);
 
 /// `context.addInitScript`'s input.
-#[derive(Deserialize)]
+#[derive(Deserialize, TS)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct ContextScriptInput {
     script: InitSource,
 }
+options!(ContextScriptInput);
 
 /// `disposable.dispose`'s input: the id an `addInitScript` returned.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, TS)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct DisposeInput {
     id: u64,
 }
+options!(DisposeInput);
+
+/// `disposable.dispose`'s answer: `{}`, as it has always been; the prelude reads nothing from
+/// it, and an empty object rather than `Nothing` keeps the reply's bytes.
+#[derive(Debug, Serialize, TS)]
+pub(crate) struct Disposed {}
 
 /// `page.exposeBinding`'s input: `exposeFunction` sends it too.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, TS)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub(crate) struct PageBindingInput {
     page: PageRef,
     name: String,
+    /// The prelude sends it only when set, so it prints as optional.
     #[serde(default)]
+    #[ts(optional, as = "Option<bool>")]
     no_global: bool,
 }
+options!(PageBindingInput);
 
 /// `context.exposeBinding`'s input.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, TS)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub(crate) struct ContextBindingInput {
     name: String,
+    /// The prelude sends it only when set, so it prints as optional.
     #[serde(default)]
+    #[ts(optional, as = "Option<bool>")]
     no_global: bool,
 }
+options!(ContextBindingInput);
 
 /// What `addInitScript` and `exposeBinding` return: the id their disposable disposes.
-#[derive(Debug, Serialize)]
-struct Registered {
+#[derive(Debug, Serialize, TS)]
+pub(crate) struct Registered {
     id: u64,
 }
 
@@ -319,7 +334,7 @@ pub(crate) async fn add_to_page(
     pw: &Playwright,
     scope: &OpScope<'_>,
     input: PageScriptInput,
-) -> Result<Value, PlaywrightError> {
+) -> Result<Registered, PlaywrightError> {
     let source = gate(scope, input.script).await?;
     let admitted = scope.admit(pw.browser(), input.page.tab()).await?;
     let session = pw
@@ -330,7 +345,7 @@ pub(crate) async fn add_to_page(
         .await
         .map_err(|error| scope.core_error(&error))?;
     let id = scope.run_state().init_scripts.keep(registration);
-    to_output(scope, &Registered { id })
+    Ok(Registered { id })
 }
 
 /// `page.exposeBinding`: the binding's stub added to the page's session, after the door's rules
@@ -340,7 +355,7 @@ pub(crate) async fn expose_on_page(
     pw: &Playwright,
     scope: &OpScope<'_>,
     input: PageBindingInput,
-) -> Result<Value, PlaywrightError> {
+) -> Result<Registered, PlaywrightError> {
     scope.require(Capability::MainWorld)?;
     let scripts = &scope.run_state().init_scripts;
     let hub = scripts.keep_hub(pw);
@@ -361,7 +376,7 @@ pub(crate) async fn expose_on_page(
         .entry(id)
         .or_default()
         .push((admitted.session.target_id.clone(), binding.name));
-    to_output(scope, &Registered { id })
+    Ok(Registered { id })
 }
 
 /// `context.exposeBinding`: the binding kept for every tab the run writes to from now on, as
@@ -370,7 +385,7 @@ pub(crate) fn expose_on_context(
     pw: &Playwright,
     scope: &OpScope<'_>,
     input: ContextBindingInput,
-) -> Result<Value, PlaywrightError> {
+) -> Result<Registered, PlaywrightError> {
     scope.require(Capability::MainWorld)?;
     let scripts = &scope.run_state().init_scripts;
     let _hub = scripts.keep_hub(pw);
@@ -380,7 +395,7 @@ pub(crate) fn expose_on_context(
         no_global: input.no_global,
     };
     let id = scripts.keep_for_context(Reach::Binding(Arc::new(binding)));
-    to_output(scope, &Registered { id })
+    Ok(Registered { id })
 }
 
 /// `context.addInitScript`: the script kept for every tab the run writes to from now on. Marked
@@ -388,14 +403,14 @@ pub(crate) fn expose_on_context(
 pub(crate) async fn add_to_context(
     scope: &OpScope<'_>,
     input: ContextScriptInput,
-) -> Result<Value, PlaywrightError> {
+) -> Result<Registered, PlaywrightError> {
     let source = gate(scope, input.script).await?;
     let _sent = scope.send_effect()?;
     let id = scope
         .run_state()
         .init_scripts
         .keep_for_context(Reach::Script(source.into()));
-    to_output(scope, &Registered { id })
+    Ok(Registered { id })
 }
 
 /// `disposable.dispose`: removes every registration of `id`, page or context, and awaits each
@@ -407,7 +422,7 @@ pub(crate) async fn add_to_context(
 pub(crate) async fn dispose(
     scope: &OpScope<'_>,
     input: DisposeInput,
-) -> Result<Value, PlaywrightError> {
+) -> Result<Disposed, PlaywrightError> {
     let _sent = scope.send_effect()?;
     let run = scope.run_state();
     let (removed, in_flight) = {
@@ -439,7 +454,7 @@ pub(crate) async fn dispose(
         // Waits out an add in progress; with none, this closure runs and initializes nothing.
         let _settled = cell.get_or_try_init(|| async { Err(()) }).await;
     }
-    Ok(json!({}))
+    Ok(Disposed {})
 }
 
 impl InitScripts {

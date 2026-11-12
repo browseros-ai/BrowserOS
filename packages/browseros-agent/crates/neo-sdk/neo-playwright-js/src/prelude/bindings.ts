@@ -12,12 +12,13 @@
  * A binding lasts as long as the run (Rust removes it when the run ends) or until its disposable
  * is disposed. The callbacks live here, in the realm, which is why a binding cannot outlive the run.
  */
-import { invoke } from './bridge'
+
 import { type CallSite, INTERNAL_SITE } from './call-site'
 import type { BrowserContext } from './context'
 import { clientError } from './errors'
 import { fromInPageArgument, inPageArgument } from './evaluation'
 import type { Frame } from './frame'
+import { send } from './generated'
 import { type Disposable, registration } from './init-script'
 import type { Page } from './page'
 import type { BindingRecord } from './wire'
@@ -67,14 +68,14 @@ export async function exposeOnPage(
     events.bindingRemoved()
   })
   try {
-    const { id } = await invoke(
-      'page.exposeBinding',
+    // `noGlobal` is absent unless set: the codec drops an undefined field.
+    const { id } = await send['page.exposeBinding'](
       site,
       { api, timeoutMs: 0 },
       {
         page: await page._brand(api),
         name,
-        ...(noGlobal ? { noGlobal: true as const } : {}),
+        noGlobal: noGlobal ? true : undefined,
       },
     )
     return registration(id, forget)
@@ -107,11 +108,10 @@ export async function exposeOnContext(
     context._events.bindingRemoved()
   })
   try {
-    const { id } = await invoke(
-      'context.exposeBinding',
+    const { id } = await send['context.exposeBinding'](
       site,
       { api, timeoutMs: 0 },
-      { name, ...(noGlobal ? { noGlobal: true as const } : {}) },
+      { name, noGlobal: noGlobal ? true : undefined },
     )
     return registration(id, forget)
   } catch (error) {
@@ -192,8 +192,7 @@ export async function answerBindingCall(
     arg = inPageArgument({ name, seq, error })
   }
   const api = 'bindingCall.resolve'
-  await invoke(
-    'bindingCall.resolve',
+  await send['bindingCall.resolve'](
     site,
     { api, timeoutMs: 0 },
     { page: await page._brand(api), context: record.executionContext, arg },

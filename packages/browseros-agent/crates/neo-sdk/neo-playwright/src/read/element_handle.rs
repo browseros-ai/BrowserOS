@@ -2,7 +2,7 @@
 //! `locator.elementHandle(s)`, `page.$`, `page.$$` and `page.waitForSelector`.
 
 use serde::Deserialize;
-use serde_json::{Value, json};
+use serde_json::json;
 
 use crate::op_scope::OpScope;
 use crate::page::OpPage;
@@ -11,7 +11,7 @@ use crate::read::element_read;
 use crate::resolve::{self, Landed, Resolver};
 use crate::target::{ElementTarget, LocatorTarget, PageRef, RootHandle, Strictness};
 use crate::world::{BackendNodeId, IsolatedWorld, Pin};
-use crate::{ErrorCode, Playwright, PlaywrightError, op_output};
+use crate::{ErrorCode, Playwright, PlaywrightError};
 
 /// A `located` read's value: the first match, pinned, and what `waitForSelector` checks and
 /// logs on each poll.
@@ -158,17 +158,6 @@ pub(crate) async fn every_match(
         nodes.push(node);
     }
     Ok(Some((world, nodes)))
-}
-
-/// Temporary JSON boundary for `page/element_evaluate.rs` only. It goes away when the
-/// page families (PRs 12 and 13) use the typed core; Read handlers never pass through it.
-pub(crate) async fn query_one(
-    pw: &Playwright,
-    scope: &OpScope<'_>,
-    target: &LocatorTarget,
-    strict: Strictness,
-) -> Result<Value, PlaywrightError> {
-    op_output::to_output(scope, &find_one(pw, scope, target, strict).await?)
 }
 
 /// `page.$` and `frame.$`: the first match now as a handle, or null, as upstream's

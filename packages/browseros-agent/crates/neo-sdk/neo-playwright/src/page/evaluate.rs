@@ -7,16 +7,19 @@ use std::time::Duration;
 
 use browseros_core::FrameId;
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::Value;
 use tokio::time;
+use ts_rs::TS;
 
 use crate::op_scope::OpScope;
 use crate::page::evaluate_guard::{
     ArgText, DOCUMENT_REPLACED, EvaluateGuard, MainWorldCall, NAVIGATED, Outcome, Script, Subject,
 };
-use crate::page::frame_tree::{self, FrameTree};
-use crate::target::{ElementTarget, PageRef};
-use crate::{ErrorCode, Playwright, PlaywrightError, op_output};
+use crate::page::frame_tree::{self, FrameInfo, FrameTree};
+use crate::page::serialized_value::SerializedValue;
+use crate::target::{PageRef, RootHandle};
+use crate::wire::options;
+use crate::{ErrorCode, Playwright, PlaywrightError};
 
 /// How often `waitForFunction` polls for `polling: 'raf'`, its default. Rust polls instead of
 /// the page's animation frames, which never fire in a background tab (measured); 100 ms is
@@ -27,9 +30,11 @@ const RAF_POLL: Duration = Duration::from_millis(100);
 /// ([`timed_out_mid_poll`]).
 const POLL_CANCEL: Duration = Duration::from_millis(500);
 
-/// The script as the prelude sends it (`wire.ts` `PageScript`), decoded once.
-#[derive(Deserialize)]
+/// The script as the prelude sends it, decoded once: ready to run, or the message of the
+/// server-side check upstream fails first, raised at its point with nothing sent.
+#[derive(Deserialize, TS)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
+#[ts(rename = "PageScript")]
 pub(crate) enum ScriptInput {
     /// upstream's client and server steps passed: the script to run.
     Run(RunInput),
@@ -37,7 +42,7 @@ pub(crate) enum ScriptInput {
     Refused(String),
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, TS)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub(crate) struct RunInput {
     /// `normalizeEvaluationExpression(String(pageFunction), isFunction)`.
@@ -48,14 +53,8 @@ pub(crate) struct RunInput {
     pub(crate) arg: String,
     /// The element handles the argument's `{h: i}` names, in order; left out when none.
     #[serde(default)]
-    pub(crate) handles: Vec<HandleArg>,
-}
-
-/// A handle argument: an element brand, with its `$neo` tag.
-#[derive(Deserialize)]
-#[serde(tag = "$neo", rename_all = "lowercase")]
-pub(crate) enum HandleArg {
-    Element(ElementTarget),
+    #[ts(optional, as = "Option<Vec<RootHandle>>")]
+    pub(crate) handles: Vec<RootHandle>,
 }
 
 impl From<ScriptInput> for Script {
@@ -72,7 +71,7 @@ impl From<ScriptInput> for Script {
                 arg: ArgText(arg),
                 handles: handles
                     .into_iter()
-                    .map(|HandleArg::Element(handle)| handle)
+                    .map(|RootHandle::Element(handle)| handle)
                     .collect(),
             },
             ScriptInput::Refused(message) => Self::Refused(message),
@@ -81,28 +80,53 @@ impl From<ScriptInput> for Script {
 }
 
 /// `page.evaluate(pageFunction, arg)`: `{ page, frame?, script }`.
-#[derive(Deserialize)]
+#[derive(Deserialize, TS)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub(crate) struct EvaluateInput {
     page: PageRef,
     /// A child frame, for `frame.evaluate`; absent is the main frame.
     #[serde(default)]
+    #[ts(optional)]
     frame: Option<FrameId>,
     script: ScriptInput,
 }
+options!(EvaluateInput);
 
 /// `page.waitForFunction(pageFunction, arg, { polling })`: the evaluate input and `polling`.
-#[derive(Deserialize)]
+#[derive(Deserialize, TS)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub(crate) struct WaitForFunctionInput {
     page: PageRef,
     #[serde(default)]
+    #[ts(optional)]
     frame: Option<FrameId>,
     script: ScriptInput,
     /// An interval in milliseconds; absent is `'raf'`. The prelude refuses any other string,
     /// as upstream's client does.
     #[serde(default)]
+    #[ts(optional)]
     polling: Option<f64>,
+}
+options!(WaitForFunctionInput);
+
+/// `page.evaluate`'s answer: the script's value, and the page's frames as the script left them,
+/// for the prelude's synchronous accessors; absent when that bounded read did not finish.
+#[derive(Debug, Serialize, TS)]
+pub(crate) struct Evaluated {
+    value: SerializedValue,
+    // A plain optional field where a flattened `Option<FrameTree>` was (ts-rs cannot print a
+    // flattened `Option`): the same JSON, pinned by `tests::tests_that_the_answers_keep_their_bytes`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    frames: Option<Vec<FrameInfo>>,
+}
+
+/// `page.waitForFunction`'s answer: the predicate's truthy value and upstream's preview of it
+/// (`toString()`), which the prelude's wait handle holds.
+#[derive(Debug, Serialize, TS)]
+pub(crate) struct WaitedFunction {
+    value: SerializedValue,
+    preview: String,
 }
 
 /// Runs `page.evaluate`. It has no Playwright timeout, as upstream; the run's deadline still
@@ -111,7 +135,7 @@ pub(crate) async fn evaluate(
     pw: &Playwright,
     scope: &OpScope<'_>,
     input: EvaluateInput,
-) -> Result<Value, PlaywrightError> {
+) -> Result<Evaluated, PlaywrightError> {
     let call = MainWorldCall::once(input.script.into(), Subject::Frame(input.frame));
     let mut guard = EvaluateGuard::open(pw, scope, &input.page, call).await?;
     // A document that was gone before the script started ran nothing, so the script is tried
@@ -141,20 +165,17 @@ async fn evaluated(
     scope: &OpScope<'_>,
     page: &PageRef,
     value: Value,
-) -> Result<Value, PlaywrightError> {
-    #[derive(Serialize)]
-    struct Evaluated {
-        value: Value,
-        #[serde(flatten)]
-        frames: Option<FrameTree>,
-    }
+) -> Result<Evaluated, PlaywrightError> {
     let read = frame_tree::snapshot(pw, scope, page.tab());
-    let frames = time::timeout(Duration::from_secs(2), read)
+    let frames: Option<FrameTree> = time::timeout(Duration::from_secs(2), read)
         .await
         .ok()
         .and_then(Result::ok)
         .flatten();
-    op_output::to_output(scope, &Evaluated { value, frames })
+    Ok(Evaluated {
+        value: SerializedValue(value),
+        frames: frames.map(FrameTree::into_frames),
+    })
 }
 
 /// Runs `page.waitForFunction`: polls from Rust until the predicate is truthy or throws, because
@@ -166,7 +187,7 @@ pub(crate) async fn wait_for_function(
     pw: &Playwright,
     scope: &OpScope<'_>,
     input: WaitForFunctionInput,
-) -> Result<Value, PlaywrightError> {
+) -> Result<WaitedFunction, PlaywrightError> {
     let interval = poll_interval(scope, input.polling)?;
     let call = MainWorldCall::poll(input.script.into(), input.frame);
     // Upstream's timeout covers the whole call: the guard finds the frame and installs its
@@ -187,7 +208,18 @@ pub(crate) async fn wait_for_function(
         }
     };
     let finished = answer.finish(scope)?;
-    Ok(json!({ "value": finished.value, "preview": finished.preview }))
+    // A wait's answer settles with its preview (`Answer::Settled`); the one other answer a poll
+    // gives, an unreadable value, fails in `finish` first.
+    let preview = finished.preview.ok_or_else(|| {
+        scope.fail(
+            ErrorCode::Internal,
+            "a waitForFunction answer came back without its preview",
+        )
+    })?;
+    Ok(WaitedFunction {
+        value: SerializedValue(finished.value),
+        preview,
+    })
 }
 
 /// The timeout of a wait whose deadline cut a poll short. The poll may already be in the page
@@ -217,4 +249,72 @@ fn poll_interval(scope: &OpScope<'_>, polling: Option<f64>) -> Result<Duration, 
                 &format!("Cannot poll with non-positive interval: {millis}"),
             )
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use serde::Serialize;
+    use serde_json::{Error, Value, json};
+
+    use super::{Evaluated, WaitedFunction};
+    use crate::page::frame_tree::{FrameTree, sample_tree};
+    use crate::page::serialized_value::SerializedValue;
+    use crate::test_support::TestResult;
+
+    /// An answer as the route sends it: through `serde_json::to_value`, whose maps sort the keys
+    /// (`op_output::to_output`). Written straight to text a struct keeps its declaration order,
+    /// which is not what goes over the wire.
+    fn sent(answer: &impl Serialize) -> Result<String, Error> {
+        serde_json::to_string(&serde_json::to_value(answer)?)
+    }
+
+    /// `page.evaluate` sends the bytes the struct with a flattened `Option<FrameTree>` it
+    /// replaced did, key order included, with frames and without; `waitForFunction` sends the
+    /// bytes its `json!` did. A later edit cannot drift unseen.
+    #[test]
+    fn tests_that_the_answers_keep_their_bytes() -> TestResult {
+        #[derive(Serialize)]
+        struct Before {
+            value: Value,
+            #[serde(flatten)]
+            frames: Option<FrameTree>,
+        }
+        let value = || json!({ "v": "undefined" });
+        let with = sent(&Evaluated {
+            value: SerializedValue(value()),
+            frames: Some(sample_tree()?.into_frames()),
+        })?;
+        let before = Before {
+            value: value(),
+            frames: Some(sample_tree()?),
+        };
+        assert_eq!(with, sent(&before)?);
+        assert_eq!(
+            with,
+            r#"{"frames":[{"id":"main","name":"","parentId":null,"url":"https://main.test/"},{"id":"child","name":"ad","parentId":"main","url":"https://child.test/"}],"value":{"v":"undefined"}}"#
+        );
+        let without = sent(&Evaluated {
+            value: SerializedValue(value()),
+            frames: None,
+        })?;
+        let before = Before {
+            value: value(),
+            frames: None,
+        };
+        assert_eq!(without, sent(&before)?);
+        assert_eq!(without, r#"{"value":{"v":"undefined"}}"#);
+        let waited = sent(&WaitedFunction {
+            value: SerializedValue(value()),
+            preview: "undefined".to_owned(),
+        })?;
+        assert_eq!(
+            waited,
+            sent(&json!({ "value": value(), "preview": "undefined" }))?
+        );
+        assert_eq!(
+            waited,
+            r#"{"preview":"undefined","value":{"v":"undefined"}}"#
+        );
+        Ok(())
+    }
 }

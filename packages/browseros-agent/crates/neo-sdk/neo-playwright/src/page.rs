@@ -55,6 +55,7 @@ mod screenshot_geometry;
 mod screenshot_masks;
 mod screenshot_png;
 mod screenshot_preparation;
+pub(crate) mod serialized_value;
 mod subtree_load;
 mod viewport_size;
 mod wait_for_navigation;

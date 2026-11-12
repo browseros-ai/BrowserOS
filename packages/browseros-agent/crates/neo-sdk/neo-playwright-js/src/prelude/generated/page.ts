@@ -11,8 +11,13 @@ import type { Assert, ExactUpstreamCheck, KeysCheck, UpstreamCheck, VoidIsNull }
 import type { CallHeader } from '../wire'
 import type { AddStyleTagInput } from './types/AddStyleTagInput'
 import type { AddTagInput } from './types/AddTagInput'
+import type { BindingResolved } from './types/BindingResolved'
 import type { Bytes } from './types/Bytes'
 import type { DocumentInput } from './types/DocumentInput'
+import type { EvaluateInput } from './types/EvaluateInput'
+import type { EvaluateOnAllInput } from './types/EvaluateOnAllInput'
+import type { EvaluateOnElementInput } from './types/EvaluateOnElementInput'
+import type { Evaluated } from './types/Evaluated'
 import type { FramesInput } from './types/FramesInput'
 import type { GotoInput } from './types/GotoInput'
 import type { LoadStateInput } from './types/LoadStateInput'
@@ -22,11 +27,16 @@ import type { NavigateInput } from './types/NavigateInput'
 import type { NavigationReply } from './types/NavigationReply'
 import type { NavigationResult } from './types/NavigationResult'
 import type { OpenerResult } from './types/OpenerResult'
+import type { PageBindingInput } from './types/PageBindingInput'
 import type { PageFrames } from './types/PageFrames'
 import type { PageOnlyInput } from './types/PageOnlyInput'
+import type { PageScriptInput } from './types/PageScriptInput'
 import type { PdfInput } from './types/PdfInput'
+import type { Registered } from './types/Registered'
+import type { ResolveBindingInput } from './types/ResolveBindingInput'
 import type { SaveScreenshotInput } from './types/SaveScreenshotInput'
 import type { ScreenshotInput } from './types/ScreenshotInput'
+import type { SerializedValue } from './types/SerializedValue'
 import type { SetContentInput } from './types/SetContentInput'
 import type { StorageInput } from './types/StorageInput'
 import type { StorageItem } from './types/StorageItem'
@@ -35,16 +45,26 @@ import type { StorageSetInput } from './types/StorageSetInput'
 import type { Tagged } from './types/Tagged'
 import type { UrlResult } from './types/UrlResult'
 import type { ViewportSizeInput } from './types/ViewportSizeInput'
+import type { WaitForFunctionInput } from './types/WaitForFunctionInput'
+import type { WaitForFunctionOnElementInput } from './types/WaitForFunctionOnElementInput'
 import type { WaitForNavigationInput } from './types/WaitForNavigationInput'
 import type { WaitForUrlInput } from './types/WaitForUrlInput'
+import type { WaitedFunction } from './types/WaitedFunction'
+import type { WorkerEvaluateInput } from './types/WorkerEvaluateInput'
+import type { WorkerEvaluated } from './types/WorkerEvaluated'
 
 export type { AddStyleTagInput } from './types/AddStyleTagInput'
 export type { AddTagInput } from './types/AddTagInput'
 export type { Animations } from './types/Animations'
+export type { BindingResolved } from './types/BindingResolved'
 export type { Bytes } from './types/Bytes'
 export type { Caret } from './types/Caret'
 export type { Dimensions } from './types/Dimensions'
 export type { DocumentInput } from './types/DocumentInput'
+export type { EvaluateInput } from './types/EvaluateInput'
+export type { EvaluateOnAllInput } from './types/EvaluateOnAllInput'
+export type { EvaluateOnElementInput } from './types/EvaluateOnElementInput'
+export type { Evaluated } from './types/Evaluated'
 export type { FrameInfo } from './types/FrameInfo'
 export type { FramesInput } from './types/FramesInput'
 export type { GotoInput } from './types/GotoInput'
@@ -61,13 +81,19 @@ export type { NavigationPublication } from './types/NavigationPublication'
 export type { NavigationReply } from './types/NavigationReply'
 export type { NavigationResult } from './types/NavigationResult'
 export type { OpenerResult } from './types/OpenerResult'
+export type { PageBindingInput } from './types/PageBindingInput'
 export type { PageFrames } from './types/PageFrames'
 export type { PageOnlyInput } from './types/PageOnlyInput'
+export type { PageScript } from './types/PageScript'
+export type { PageScriptInput } from './types/PageScriptInput'
 export type { PdfInput } from './types/PdfInput'
+export type { ResolveBindingInput } from './types/ResolveBindingInput'
 export type { ResponseInfo } from './types/ResponseInfo'
+export type { RunInput } from './types/RunInput'
 export type { SaveScreenshotInput } from './types/SaveScreenshotInput'
 export type { Scale } from './types/Scale'
 export type { ScreenshotInput } from './types/ScreenshotInput'
+export type { SerializedValue } from './types/SerializedValue'
 export type { SetContentInput } from './types/SetContentInput'
 export type { StorageInput } from './types/StorageInput'
 export type { StorageItem } from './types/StorageItem'
@@ -77,8 +103,13 @@ export type { TagElement } from './types/TagElement'
 export type { Tagged } from './types/Tagged'
 export type { UrlResult } from './types/UrlResult'
 export type { ViewportSizeInput } from './types/ViewportSizeInput'
+export type { WaitForFunctionInput } from './types/WaitForFunctionInput'
+export type { WaitForFunctionOnElementInput } from './types/WaitForFunctionOnElementInput'
 export type { WaitForNavigationInput } from './types/WaitForNavigationInput'
 export type { WaitForUrlInput } from './types/WaitForUrlInput'
+export type { WaitedFunction } from './types/WaitedFunction'
+export type { WorkerEvaluateInput } from './types/WorkerEvaluateInput'
+export type { WorkerEvaluated } from './types/WorkerEvaluated'
 
 /** Each page op's input, after the `call` header every op shares. */
 export type PageInputs = {
@@ -100,10 +131,19 @@ export type PageInputs = {
   'page.runBeforeUnload': PageOnlyInput
   'page.opener': PageOnlyInput
   'page.frames': FramesInput
+  'page.evaluate': EvaluateInput
+  'worker.evaluate': WorkerEvaluateInput
+  'locator.evaluate': EvaluateOnElementInput
+  'locator.evaluateAll': EvaluateOnAllInput
+  'page.waitForFunction': WaitForFunctionInput
+  'locator.waitForFunction': WaitForFunctionOnElementInput
   'page.screenshot': ScreenshotInput
   'page.saveScreenshot': SaveScreenshotInput
   'page.pdf': PdfInput
   'page.setViewportSize': ViewportSizeInput
+  'page.addInitScript': PageScriptInput
+  'page.exposeBinding': PageBindingInput
+  'bindingCall.resolve': ResolveBindingInput
   'webStorage.items': StorageInput
   'webStorage.getItem': StorageKeyInput
   'webStorage.setItem': StorageSetInput
@@ -131,10 +171,19 @@ export type PageOutputs = {
   'page.runBeforeUnload': null
   'page.opener': OpenerResult
   'page.frames': PageFrames
+  'page.evaluate': Evaluated
+  'worker.evaluate': WorkerEvaluated
+  'locator.evaluate': SerializedValue
+  'locator.evaluateAll': SerializedValue
+  'page.waitForFunction': WaitedFunction
+  'locator.waitForFunction': null
   'page.screenshot': Bytes
   'page.saveScreenshot': null
   'page.pdf': Bytes
   'page.setViewportSize': null
+  'page.addInitScript': Registered
+  'page.exposeBinding': Registered
+  'bindingCall.resolve': BindingResolved
   'webStorage.items': Array<StorageItem>
   'webStorage.getItem': string | null
   'webStorage.setItem': null
@@ -265,6 +314,42 @@ export const PAGE_SEND = {
     input: FramesInput,
     signal?: SignalLike,
   ): Promise<PageFrames> => invoke('page.frames', site, call, input, signal),
+  'page.evaluate': (
+    site: CallSite,
+    call: CallHeader,
+    input: EvaluateInput,
+    signal?: SignalLike,
+  ): Promise<Evaluated> => invoke('page.evaluate', site, call, input, signal),
+  'worker.evaluate': (
+    site: CallSite,
+    call: CallHeader,
+    input: WorkerEvaluateInput,
+    signal?: SignalLike,
+  ): Promise<WorkerEvaluated> => invoke('worker.evaluate', site, call, input, signal),
+  'locator.evaluate': (
+    site: CallSite,
+    call: CallHeader,
+    input: EvaluateOnElementInput,
+    signal?: SignalLike,
+  ): Promise<SerializedValue> => invoke('locator.evaluate', site, call, input, signal),
+  'locator.evaluateAll': (
+    site: CallSite,
+    call: CallHeader,
+    input: EvaluateOnAllInput,
+    signal?: SignalLike,
+  ): Promise<SerializedValue> => invoke('locator.evaluateAll', site, call, input, signal),
+  'page.waitForFunction': (
+    site: CallSite,
+    call: CallHeader,
+    input: WaitForFunctionInput,
+    signal?: SignalLike,
+  ): Promise<WaitedFunction> => invoke('page.waitForFunction', site, call, input, signal),
+  'locator.waitForFunction': (
+    site: CallSite,
+    call: CallHeader,
+    input: WaitForFunctionOnElementInput,
+    signal?: SignalLike,
+  ): Promise<null> => invoke('locator.waitForFunction', site, call, input, signal),
   'page.screenshot': (
     site: CallSite,
     call: CallHeader,
@@ -289,6 +374,24 @@ export const PAGE_SEND = {
     input: ViewportSizeInput,
     signal?: SignalLike,
   ): Promise<null> => invoke('page.setViewportSize', site, call, input, signal),
+  'page.addInitScript': (
+    site: CallSite,
+    call: CallHeader,
+    input: PageScriptInput,
+    signal?: SignalLike,
+  ): Promise<Registered> => invoke('page.addInitScript', site, call, input, signal),
+  'page.exposeBinding': (
+    site: CallSite,
+    call: CallHeader,
+    input: PageBindingInput,
+    signal?: SignalLike,
+  ): Promise<Registered> => invoke('page.exposeBinding', site, call, input, signal),
+  'bindingCall.resolve': (
+    site: CallSite,
+    call: CallHeader,
+    input: ResolveBindingInput,
+    signal?: SignalLike,
+  ): Promise<BindingResolved> => invoke('bindingCall.resolve', site, call, input, signal),
   'webStorage.items': (
     site: CallSite,
     call: CallHeader,
@@ -375,6 +478,47 @@ type _page_runBeforeUnload = Assert<UpstreamCheck<'page.runBeforeUnload', PageOn
 type _page_runBeforeUnload_result = Assert<VoidIsNull<'page.runBeforeUnload', pw.PageRunBeforeUnloadResult, null>>
 // page.opener: Neo only: upstream reads its initializer state; Neo asks its tab bookkeeping
 // page.frames: Neo only: upstream keeps client-side frame objects; Neo reads the tree for the prelude's synchronous frames()
+// page.evaluate: Frame.evaluateExpression
+//   adds script: the script as one value: upstream's expression, isFunction and argument after its client normalized them, or the refusal of upstream's first server-side check, which Rust raises at its point with nothing sent
+//   omits arg: carried in script
+//   omits expression: carried in script
+//   omits isFunction: carried in script
+type _page_evaluate = Assert<UpstreamCheck<'page.evaluate', EvaluateInput, pw.FrameEvaluateExpressionParams, 'script', 'arg' | 'expression' | 'isFunction', never>>
+type _page_evaluate_result = Assert<VoidIsNull<'page.evaluate', pw.FrameEvaluateExpressionResult, Evaluated>>
+// worker.evaluate: Worker.evaluateExpression
+//   adds script: the script as one value: upstream's expression, isFunction and argument after its client normalized them, or the refusal of upstream's first server-side check, which Rust raises at its point with nothing sent
+//   adds worker: the host-owned worker's id, standing for upstream's worker channel
+//   omits arg: carried in script
+//   omits expression: carried in script
+//   omits isFunction: carried in script
+type _worker_evaluate = Assert<UpstreamCheck<'worker.evaluate', WorkerEvaluateInput, pw.WorkerEvaluateExpressionParams, 'script' | 'worker', 'arg' | 'expression' | 'isFunction', never>>
+type _worker_evaluate_result = Assert<VoidIsNull<'worker.evaluate', pw.WorkerEvaluateExpressionResult, WorkerEvaluated>>
+// locator.evaluate: Frame.evalOnSelector
+//   adds noWait: `$eval`: the first match now instead of waiting for one
+//   adds script: the script as one value: upstream's expression, isFunction and argument after its client normalized them, or the refusal of upstream's first server-side check, which Rust raises at its point with nothing sent
+//   adds selector: `$eval`'s selector as the script wrote it, for upstream's no-match message
+//   omits arg: carried in script
+//   omits expression: carried in script
+//   omits isFunction: carried in script
+type _locator_evaluate = Assert<UpstreamCheck<'locator.evaluate', EvaluateOnElementInput, pw.FrameEvalOnSelectorParams, 'noWait' | 'script' | 'selector', 'arg' | 'expression' | 'isFunction', never>>
+type _locator_evaluate_result = Assert<VoidIsNull<'locator.evaluate', pw.FrameEvalOnSelectorResult, SerializedValue>>
+// locator.evaluateAll: Frame.evalOnSelectorAll
+//   adds script: the script as one value: upstream's expression, isFunction and argument after its client normalized them, or the refusal of upstream's first server-side check, which Rust raises at its point with nothing sent
+//   omits arg: carried in script
+//   omits expression: carried in script
+//   omits isFunction: carried in script
+type _locator_evaluateAll = Assert<UpstreamCheck<'locator.evaluateAll', EvaluateOnAllInput, pw.FrameEvalOnSelectorAllParams, 'script', 'arg' | 'expression' | 'isFunction', never>>
+type _locator_evaluateAll_result = Assert<VoidIsNull<'locator.evaluateAll', pw.FrameEvalOnSelectorAllResult, SerializedValue>>
+// page.waitForFunction: Frame.waitForFunction
+//   adds polling: milliseconds between polls, absent for 'raf', in place of pollingInterval
+//   adds script: the script as one value: upstream's expression, isFunction and argument after its client normalized them, or the refusal of upstream's first server-side check, which Rust raises at its point with nothing sent
+//   omits arg: carried in script
+//   omits expression: carried in script
+//   omits isFunction: carried in script
+//   omits pollingInterval: sent as polling
+type _page_waitForFunction = Assert<UpstreamCheck<'page.waitForFunction', WaitForFunctionInput, pw.FrameWaitForFunctionParams, 'polling' | 'script', 'arg' | 'expression' | 'isFunction' | 'pollingInterval', never>>
+type _page_waitForFunction_result = Assert<VoidIsNull<'page.waitForFunction', pw.FrameWaitForFunctionResult, WaitedFunction>>
+// locator.waitForFunction: Neo only: Neo probes the element predicate; upstream composes evaluation and waiting
 // page.screenshot: Page.screenshot
 //   retypes mask: mask locators travel as Neo brands instead of frame channels and selectors
 type _page_screenshot = Assert<ExactUpstreamCheck<'page.screenshot', ScreenshotInput, pw.PageScreenshotParams, never, never, 'mask'>>
@@ -388,6 +532,20 @@ type _page_pdf_result = Assert<VoidIsNull<'page.pdf', pw.PagePdfResult, Bytes>>
 // page.setViewportSize: Page.setViewportSize
 type _page_setViewportSize = Assert<UpstreamCheck<'page.setViewportSize', ViewportSizeInput, pw.PageSetViewportSizeParams, never, never, never>>
 type _page_setViewportSize_result = Assert<VoidIsNull<'page.setViewportSize', pw.PageSetViewportSizeResult, null>>
+// page.addInitScript: Page.addInitScript
+//   adds script: the source, or a path Rust reads on Neo's disk as upstream's client reads it
+//   omits source: folded into script
+type _page_addInitScript = Assert<UpstreamCheck<'page.addInitScript', PageScriptInput, pw.PageAddInitScriptParams, 'script', 'source', never>>
+type _page_addInitScript_result = Assert<VoidIsNull<'page.addInitScript', pw.PageAddInitScriptResult, Registered>>
+// page.exposeBinding: Page.exposeBinding
+type _page_exposeBinding = Assert<UpstreamCheck<'page.exposeBinding', PageBindingInput, pw.PageExposeBindingParams, never, never, never>>
+type _page_exposeBinding_result = Assert<VoidIsNull<'page.exposeBinding', pw.PageExposeBindingResult, Registered>>
+// bindingCall.resolve: BindingCall.resolve
+//   adds arg: the binding's JSON completion upstream's server builds for the page's stub, as text, which serves resolve and reject
+//   adds context: Neo keeps no BindingCall object, so the execution context that called is named
+//   omits result: carried in arg
+type _bindingCall_resolve = Assert<UpstreamCheck<'bindingCall.resolve', ResolveBindingInput, pw.BindingCallResolveParams, 'arg' | 'context', 'result', never>>
+//   result: answers {} as it always has; the prelude reads nothing from it (no void check: Neo answers more than null on purpose)
 // webStorage.items: Page.webStorageItems
 type _webStorage_items = Assert<UpstreamCheck<'webStorage.items', StorageInput, pw.PageWebStorageItemsParams, never, never, never>>
 type _webStorage_items_result = Assert<VoidIsNull<'webStorage.items', pw.PageWebStorageItemsResult, Array<StorageItem>>>

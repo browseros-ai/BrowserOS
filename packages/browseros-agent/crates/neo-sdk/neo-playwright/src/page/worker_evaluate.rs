@@ -2,29 +2,40 @@
 //! `UtilityScript` transport as page.evaluate preserves Playwright's value serialization;
 //! worker closure races both context startup and the CDP command, including pending promises.
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use ts_rs::TS;
 
 use crate::events::worker_table::WorkerContext;
 use crate::op_scope::OpScope;
 use crate::page::evaluate::ScriptInput;
 use crate::page::evaluate_guard::{self, MAIN_WORLD_JS};
+use crate::page::serialized_value::SerializedValue;
 use crate::target::PageRef;
+use crate::wire::options;
 use crate::{ErrorCode, Playwright, PlaywrightError};
 
-#[derive(Deserialize)]
+/// `worker.evaluate(fn, arg)`: the page, the worker the host's table names, and the script.
+#[derive(Deserialize, TS)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub(crate) struct WorkerEvaluateInput {
     page: PageRef,
     worker: String,
     script: ScriptInput,
 }
+options!(WorkerEvaluateInput);
+
+/// `worker.evaluate`'s answer: the script's value.
+#[derive(Debug, Serialize, TS)]
+pub(crate) struct WorkerEvaluated {
+    value: SerializedValue,
+}
 
 pub(crate) async fn evaluate(
     pw: &Playwright,
     scope: &OpScope<'_>,
     input: WorkerEvaluateInput,
-) -> Result<Value, PlaywrightError> {
+) -> Result<WorkerEvaluated, PlaywrightError> {
     scope.require(crate::Capability::MainWorld)?;
     let admitted = scope.admit(pw.browser(), input.page.tab()).await?;
     let closed = || {
@@ -90,7 +101,9 @@ pub(crate) async fn evaluate(
         _ => None,
     };
     let value = evaluate_guard::evaluation_result(scope, text)?;
-    Ok(json!({"value": value}))
+    Ok(WorkerEvaluated {
+        value: SerializedValue(value),
+    })
 }
 
 #[derive(Deserialize)]

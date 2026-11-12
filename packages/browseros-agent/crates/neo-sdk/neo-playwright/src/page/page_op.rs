@@ -65,8 +65,8 @@ listed_enum! {
 }
 
 impl PageOp {
-    /// Describes the ops on typed route rows from the same types the runtime route decodes and
-    /// encodes; `None` for an op still on the untyped row.
+    /// Describes the op from the same types the runtime route decodes and encodes: `Some` for
+    /// every page op, since all of them are on typed route rows.
     pub(crate) fn wire(self) -> Option<OpWire> {
         route(self, Describe)
     }
@@ -243,6 +243,21 @@ const RESOLVE_BINDING: OpSpec = OpSpec::write(
 .using(&[Capability::MainWorld])
 .policed();
 
+/// The evaluating ops' one field upstream's commands lack.
+const SCRIPT: (&str, &str) = (
+    "script",
+    "the script as one value: upstream's expression, isFunction and argument after its client \
+     normalized them, or the refusal of upstream's first server-side check, which Rust raises \
+     at its point with nothing sent",
+);
+
+/// What `script` carries in upstream's commands.
+const EVALUATION: [(&str, &str); 3] = [
+    ("arg", "carried in script"),
+    ("expression", "carried in script"),
+    ("isFunction", "carried in script"),
+];
+
 /// The navigations' one field upstream's commands lack.
 const PUBLICATION: &[(&str, &str)] = &[(
     "publication",
@@ -257,8 +272,6 @@ const NAVIGATION_RESULT: &str = "page.url(), page.frames() and the Response are 
 
 /// One table binds each page op on a typed handler to Playwright 1.64.1's command; `Run` and
 /// `Describe` walk the same rows, and the policy in `spec()` stays independent of the shapes.
-/// The family moves in three changes: the ops not moved yet go through the untyped row to
-/// `run_untyped`, and keep their hand-written TypeScript in `wire.ts` until theirs lands.
 #[expect(
     clippy::too_many_lines,
     reason = "one exhaustive row per page operation keeps the wire contract together"
@@ -363,18 +376,108 @@ fn route<'a, R: Route<'a>>(op: PageOp, r: R) -> R::Out {
         PageOp::WebStorageSetItem => r.op(wire::command("Page.webStorageSetItem"), web_storage::set_item),
         PageOp::WebStorageRemoveItem => r.op(wire::command("Page.webStorageRemoveItem"), web_storage::remove_item),
         PageOp::WebStorageClear => r.op(wire::command("Page.webStorageClear"), web_storage::clear),
-        op @ (PageOp::Evaluate
-        | PageOp::WorkerEvaluate
-        | PageOp::EvaluateOnElement
-        | PageOp::EvaluateOnAll
-        | PageOp::WaitForFunction
-        | PageOp::WaitForFunctionOnElement
-        | PageOp::AddInitScript
-        | PageOp::ExposeBinding
-        | PageOp::ResolveBinding
-        ) => {
-            r.untyped(move |pw, scope, args| run_untyped(pw, scope, op, args))
-        }
+        // The script ops box their handlers, as the other families box their leaves: a script's
+        // guard and its polls are the largest state a page op holds, and every op's future is as
+        // large as its largest leaf.
+        PageOp::Evaluate => r.op(
+            wire::command("Frame.evaluateExpression")
+                .adds(&[SCRIPT])
+                .omits(&EVALUATION),
+            |pw, scope, input| Box::pin(evaluate::evaluate(pw, scope, input)),
+        ),
+        PageOp::WorkerEvaluate => r.op(
+            wire::command("Worker.evaluateExpression")
+                .adds(&[
+                    SCRIPT,
+                    (
+                        "worker",
+                        "the host-owned worker's id, standing for upstream's worker channel",
+                    ),
+                ])
+                .omits(&EVALUATION),
+            super::worker_evaluate::evaluate,
+        ),
+        PageOp::EvaluateOnElement => r.op(
+            wire::command("Frame.evalOnSelector")
+                .adds(&[
+                    (
+                        "noWait",
+                        "`$eval`: the first match now instead of waiting for one",
+                    ),
+                    SCRIPT,
+                    (
+                        "selector",
+                        "`$eval`'s selector as the script wrote it, for upstream's no-match \
+                         message",
+                    ),
+                ])
+                .omits(&EVALUATION),
+            |pw, scope, input| Box::pin(element_evaluate::evaluate_on_element(pw, scope, input)),
+        ),
+        PageOp::EvaluateOnAll => r.op(
+            wire::command("Frame.evalOnSelectorAll")
+                .adds(&[SCRIPT])
+                .omits(&EVALUATION),
+            |pw, scope, input| Box::pin(element_evaluate::evaluate_on_all(pw, scope, input)),
+        ),
+        PageOp::WaitForFunction => r.op(
+            wire::command("Frame.waitForFunction")
+                .adds(&[
+                    (
+                        "polling",
+                        "milliseconds between polls, absent for 'raf', in place of \
+                         pollingInterval",
+                    ),
+                    SCRIPT,
+                ])
+                .omits(&[
+                    ("arg", "carried in script"),
+                    ("expression", "carried in script"),
+                    ("isFunction", "carried in script"),
+                    ("pollingInterval", "sent as polling"),
+                ]),
+            |pw, scope, input| Box::pin(evaluate::wait_for_function(pw, scope, input)),
+        ),
+        PageOp::WaitForFunctionOnElement => r.op(
+            wire::neo_only(
+                "Neo probes the element predicate; upstream composes evaluation and waiting",
+            ),
+            |pw, scope, input| {
+                Box::pin(element_evaluate::wait_for_function_on_element(
+                    pw, scope, input,
+                ))
+            },
+        ),
+        PageOp::AddInitScript => r.op(
+            wire::command("Page.addInitScript")
+                .adds(&[(
+                    "script",
+                    "the source, or a path Rust reads on Neo's disk as upstream's client reads it",
+                )])
+                .omits(&[("source", "folded into script")]),
+            init_script::add_to_page,
+        ),
+        PageOp::ExposeBinding => r.op(wire::command("Page.exposeBinding"), |pw, scope, input| {
+            Box::pin(init_script::expose_on_page(pw, scope, input))
+        }),
+        PageOp::ResolveBinding => r.op(
+            wire::command("BindingCall.resolve")
+                .adds(&[
+                    (
+                        "arg",
+                        "the binding's JSON completion upstream's server builds for the page's \
+                         stub, as text, which serves resolve and reject",
+                    ),
+                    (
+                        "context",
+                        "Neo keeps no BindingCall object, so the execution context that called \
+                         is named",
+                    ),
+                ])
+                .omits(&[("result", "carried in arg")])
+                .result("answers {} as it always has; the prelude reads nothing from it"),
+            evaluate_guard::resolve_binding,
+        ),
     }
 }
 
@@ -386,86 +489,6 @@ pub(crate) async fn invoke(
     args: OpArgs,
 ) -> Result<Value, PlaywrightError> {
     route(op, Run { pw, scope, args }).await
-}
-
-/// The page ops not on typed rows yet, decoded and answered as JSON here. The ops that run in
-/// the page's main world (evaluate, waitForFunction, the element scripts) are built with it.
-async fn run_untyped(
-    pw: &Playwright,
-    scope: &OpScope<'_>,
-    op: PageOp,
-    args: OpArgs,
-) -> Result<Value, PlaywrightError> {
-    match op {
-        PageOp::AddInitScript => init_script::add_to_page(pw, scope, args.decode(scope)?).await,
-        PageOp::ExposeBinding => {
-            Box::pin(init_script::expose_on_page(pw, scope, args.decode(scope)?)).await
-        }
-        PageOp::ResolveBinding => {
-            evaluate_guard::resolve_binding(pw, scope, args.decode(scope)?).await
-        }
-        // Boxed, as the other families box their leaves: a script's guard and its polls are the
-        // largest state a page op holds, and every op's future is as large as its largest leaf.
-        PageOp::Evaluate => Box::pin(evaluate::evaluate(pw, scope, args.decode(scope)?)).await,
-        PageOp::WaitForFunction => {
-            Box::pin(evaluate::wait_for_function(pw, scope, args.decode(scope)?)).await
-        }
-        PageOp::WorkerEvaluate => {
-            super::worker_evaluate::evaluate(pw, scope, args.decode(scope)?).await
-        }
-        PageOp::EvaluateOnElement => {
-            Box::pin(element_evaluate::evaluate_on_element(
-                pw,
-                scope,
-                args.decode(scope)?,
-            ))
-            .await
-        }
-        PageOp::EvaluateOnAll => {
-            Box::pin(element_evaluate::evaluate_on_all(
-                pw,
-                scope,
-                args.decode(scope)?,
-            ))
-            .await
-        }
-        PageOp::WaitForFunctionOnElement => {
-            Box::pin(element_evaluate::wait_for_function_on_element(
-                pw,
-                scope,
-                args.decode(scope)?,
-            ))
-            .await
-        }
-        // The typed rows never reach the untyped arm (`route`).
-        PageOp::Goto
-        | PageOp::Reload
-        | PageOp::GoBack
-        | PageOp::GoForward
-        | PageOp::WaitForNavigation
-        | PageOp::WaitForUrl
-        | PageOp::WaitForLoadState
-        | PageOp::Title
-        | PageOp::Content
-        | PageOp::SetContent
-        | PageOp::Close
-        | PageOp::RunBeforeUnload
-        | PageOp::Opener
-        | PageOp::Frames
-        | PageOp::SetViewportSize
-        | PageOp::AddScriptTag
-        | PageOp::AddStyleTag
-        | PageOp::EmulateMedia
-        | PageOp::RequestGc
-        | PageOp::Screenshot
-        | PageOp::SaveScreenshot
-        | PageOp::Pdf
-        | PageOp::WebStorageItems
-        | PageOp::WebStorageGetItem
-        | PageOp::WebStorageSetItem
-        | PageOp::WebStorageRemoveItem
-        | PageOp::WebStorageClear => Err(scope.not_built()),
-    }
 }
 
 /// `page.goto` and `frame.goto`.

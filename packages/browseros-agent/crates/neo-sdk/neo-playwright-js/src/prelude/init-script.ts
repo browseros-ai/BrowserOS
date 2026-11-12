@@ -5,15 +5,16 @@
  * init_script.rs) and removes it when the run ends, so a script lasts as long as the agent's own
  * script, a later `goto` in it included.
  */
+
 import {
   kBindingsControllerProperty,
   kFunctionBindingPrefix,
   serializeAsCallArgument,
 } from '../../../neo-playwright/third_party/playwright/packages/isomorphic/utilityScriptSerializers'
 import type { BindingCallback } from './bindings'
-import { invoke } from './bridge'
 import { type CallSite, captureSite } from './call-site'
 import { plainError } from './errors'
+import { send } from './generated'
 import type { InitSource } from './wire'
 
 const TOO_MANY_ARGUMENTS =
@@ -193,8 +194,7 @@ export class Disposable {
 export function registration(id: number, forget?: () => void): Disposable {
   return new Disposable(async (site) => {
     try {
-      await invoke(
-        'disposable.dispose',
+      await send['disposable.dispose'](
         site,
         { api: 'disposable.dispose', timeoutMs: 0 },
         { id },

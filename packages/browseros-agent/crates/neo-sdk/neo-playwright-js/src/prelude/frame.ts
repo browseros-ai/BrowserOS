@@ -1274,14 +1274,15 @@ export class Frame extends EventEmitter {
     noWait: boolean,
     options: TimeoutOption & SignalOption = {},
   ): Promise<unknown> {
-    const value = await this._selectorOp(
-      'locator.evaluate',
+    const wait: Wait = noWait ? { timeout: 0 } : this._wait(api, options)
+    const addressed = await this._targetArgs(api, selector, strict)
+    const value = await send['locator.evaluate'](
       site,
-      api,
-      selector,
-      strict,
-      noWait ? { timeout: 0 } : this._wait(api, options),
-      noWait ? { script, noWait: true, selector } : { script },
+      this._call(api, wait.timeout),
+      noWait
+        ? { ...addressed, script, noWait: true, selector }
+        : { ...addressed, script },
+      wait.signal,
     )
     return fromPageValue(api, value)
   }
@@ -1294,15 +1295,10 @@ export class Frame extends EventEmitter {
   ): Promise<unknown> {
     const site = captureSite()
     const target = await this._locatorBrand(api, selector)
-    const value = await invoke(
-      'locator.evaluateAll',
-      site,
-      this._call(api, 0),
-      {
-        target,
-        script,
-      },
-    )
+    const value = await send['locator.evaluateAll'](site, this._call(api, 0), {
+      target,
+      script,
+    })
     return fromPageValue(api, value)
   }
 
@@ -1568,14 +1564,12 @@ export class Frame extends EventEmitter {
       arg,
       options,
     )
+    const { page, frame } = await this._frameArgs(api)
     const { value: result, observed } = await invokeObserved(
       'page.evaluate',
       site,
       this._call(api, 0),
-      {
-        ...(await this._frameArgs(api)),
-        script,
-      },
+      { page, frame, script },
     )
     this._page._evaluated(result.frames, observed)
     await this._page._publishCompleted()
@@ -1594,16 +1588,17 @@ export class Frame extends EventEmitter {
       throw plainError(api, `Unknown polling option: ${options.polling}`)
     const script = pageCall(api, 'frame', pageFunction, arg)
     const wait = this._wait(api, options)
-    const { value, preview } = await invoke(
-      'page.waitForFunction',
+    const { page, frame } = await this._frameArgs(api)
+    // `polling` is absent for 'raf': the codec drops an undefined field.
+    const { value, preview } = await send['page.waitForFunction'](
       site,
       this._call(api, wait.timeout),
       {
-        ...(await this._frameArgs(api)),
+        page,
+        frame,
         script,
-        ...(typeof options.polling === 'number'
-          ? { polling: options.polling }
-          : {}),
+        polling:
+          typeof options.polling === 'number' ? options.polling : undefined,
       },
       wait.signal,
     )

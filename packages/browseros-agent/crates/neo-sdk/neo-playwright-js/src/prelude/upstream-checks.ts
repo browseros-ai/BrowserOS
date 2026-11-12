@@ -21,117 +21,6 @@ export type UpstreamChecks = {
       never
     >
   >
-  // Neo carries the original selector for diagnostics after brand resolution; it always formats JavaScript, without sdkLanguage.
-  // This op also serves waitForElementState, so state includes stable/enabled/disabled/editable.
-  // noWait selects the immediate page.$ query instead of the locator wait.
-  // worker selects a host-owned worker; script wraps normalized expression/argument or a preflight refusal.
-  'worker.evaluate': Assert<
-    UpstreamCheck<
-      'worker.evaluate',
-      OpInputs['worker.evaluate'],
-      pw.WorkerEvaluateExpressionParams,
-      'script' | 'worker',
-      'arg' | 'expression' | 'isFunction',
-      never
-    >
-  >
-  // script wraps normalized expression/argument or a preflight refusal instead of upstream evaluation fields.
-  'page.evaluate': Assert<
-    UpstreamCheck<
-      'page.evaluate',
-      OpInputs['page.evaluate'],
-      pw.FrameEvaluateExpressionParams,
-      'script',
-      'arg' | 'expression' | 'isFunction',
-      never
-    >
-  >
-  // script carries normalized evaluation; noWait and selector preserve $eval timing and no-match diagnostics.
-  'locator.evaluate': Assert<
-    UpstreamCheck<
-      'locator.evaluate',
-      OpInputs['locator.evaluate'],
-      pw.FrameEvalOnSelectorParams,
-      'noWait' | 'script' | 'selector',
-      'arg' | 'expression' | 'isFunction',
-      never
-    >
-  >
-  // script wraps normalized expression/argument or a preflight refusal instead of upstream evaluation fields.
-  'locator.evaluateAll': Assert<
-    UpstreamCheck<
-      'locator.evaluateAll',
-      OpInputs['locator.evaluateAll'],
-      pw.FrameEvalOnSelectorAllParams,
-      'script',
-      'arg' | 'expression' | 'isFunction',
-      never
-    >
-  >
-  // Neo wraps evaluation in script and uses polling milliseconds (absent means raf), replacing pollingInterval.
-  'page.waitForFunction': Assert<
-    UpstreamCheck<
-      'page.waitForFunction',
-      OpInputs['page.waitForFunction'],
-      pw.FrameWaitForFunctionParams,
-      'polling' | 'script',
-      'arg' | 'expression' | 'isFunction' | 'pollingInterval',
-      never
-    >
-  >
-  // script is source or a path read on the Neo host, replacing upstream source.
-  'page.addInitScript': Assert<
-    UpstreamCheck<
-      'page.addInitScript',
-      OpInputs['page.addInitScript'],
-      pw.PageAddInitScriptParams,
-      'script',
-      'source',
-      never
-    >
-  >
-  'page.exposeBinding': Assert<
-    UpstreamCheck<
-      'page.exposeBinding',
-      OpInputs['page.exposeBinding'],
-      pw.PageExposeBindingParams,
-      never,
-      never,
-      never
-    >
-  >
-  // Neo names an execution context and sends the JSON binding completion, replacing upstream result.
-  'bindingCall.resolve': Assert<
-    UpstreamCheck<
-      'bindingCall.resolve',
-      OpInputs['bindingCall.resolve'],
-      pw.BindingCallResolveParams,
-      'arg' | 'context',
-      'result',
-      never
-    >
-  >
-  // script is source or a path read on the Neo host, replacing upstream source.
-  'context.addInitScript': Assert<
-    UpstreamCheck<
-      'context.addInitScript',
-      OpInputs['context.addInitScript'],
-      pw.BrowserContextAddInitScriptParams,
-      'script',
-      'source',
-      never
-    >
-  >
-  'context.exposeBinding': Assert<
-    UpstreamCheck<
-      'context.exposeBinding',
-      OpInputs['context.exposeBinding'],
-      pw.BrowserContextExposeBindingParams,
-      never,
-      never,
-      never
-    >
-  >
   // dialog identifies the host-owned dialog instead of an upstream channel receiver.
   'dialog.accept': Assert<
     UpstreamCheck<
@@ -180,8 +69,6 @@ export type UpstreamChecks = {
 
 /** Ops implemented as client work, an event pump, or several upstream commands together. */
 type NeoOnlyOps = {
-  'locator.waitForFunction': 'Neo probes the element predicate; upstream composes evaluation and waiting.'
-  'disposable.dispose': 'Neo disposes a host-owned registration rather than a channel object.'
   'events.listen': 'Neo run-scoped listener bookkeeping, including cleanup after a tab closes.'
   'events.next': 'Neo background event pump, with one cursor per listener.'
   'events.wait': 'Neo journal wait by event and timestamp instead of upstream channel events.'

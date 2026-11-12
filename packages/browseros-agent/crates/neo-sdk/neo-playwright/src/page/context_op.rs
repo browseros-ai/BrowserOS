@@ -1,6 +1,6 @@
 //! The browser-context ops and their registration metadata.
 
-use std::future::Future;
+use std::future::{self, Future};
 
 use browseros_cdp::{CdpError, CdpEvent};
 use browseros_core::pages::{NewPageOptions, PageInfo};
@@ -95,7 +95,6 @@ struct PageEntry {
     url: String,
 }
 
-/// Context registration/disposal stays with the page init-script family until PR 12 moves it.
 /// Execution and description share these rows; the policy above remains unchanged.
 fn route<'a, R: Route<'a>>(op: ContextOp, r: R) -> R::Out {
     match op {
@@ -109,9 +108,24 @@ fn route<'a, R: Route<'a>>(op: ContextOp, r: R) -> R::Out {
             ),
             new_page,
         ),
-        op @ (ContextOp::AddInitScript | ContextOp::ExposeBinding | ContextOp::Dispose) => {
-            r.untyped(move |pw, scope, args| run_untyped(pw, scope, op, args))
-        }
+        ContextOp::AddInitScript => r.op(
+            wire::command("BrowserContext.addInitScript")
+                .adds(&[(
+                    "script",
+                    "the source, or a path Rust reads on Neo's disk as upstream's client reads it",
+                )])
+                .omits(&[("source", "folded into script")]),
+            |_pw, scope, input| init_script::add_to_context(scope, input),
+        ),
+        ContextOp::ExposeBinding => r.op(
+            wire::command("BrowserContext.exposeBinding"),
+            // The registration keeps the binding for the run's later writes and awaits nothing.
+            |pw, scope, input| future::ready(init_script::expose_on_context(pw, scope, input)),
+        ),
+        ContextOp::Dispose => r.op(
+            wire::neo_only("Neo disposes a host-owned registration rather than a channel object"),
+            |_pw, scope, input| init_script::dispose(scope, input),
+        ),
     }
 }
 
@@ -123,20 +137,6 @@ pub(crate) async fn invoke(
     args: OpArgs,
 ) -> Result<Value, PlaywrightError> {
     route(op, Run { pw, scope, args }).await
-}
-
-async fn run_untyped(
-    pw: &Playwright,
-    scope: &OpScope<'_>,
-    op: ContextOp,
-    args: OpArgs,
-) -> Result<Value, PlaywrightError> {
-    match op {
-        ContextOp::AddInitScript => init_script::add_to_context(scope, args.decode(scope)?).await,
-        ContextOp::ExposeBinding => init_script::expose_on_context(pw, scope, args.decode(scope)?),
-        ContextOp::Dispose => init_script::dispose(scope, args.decode(scope)?).await,
-        ContextOp::Pages | ContextOp::NewPage => Err(scope.not_built()),
-    }
 }
 
 async fn pages(

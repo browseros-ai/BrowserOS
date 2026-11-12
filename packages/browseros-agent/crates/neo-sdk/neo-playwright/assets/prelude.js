@@ -2027,10 +2027,19 @@
     "page.runBeforeUnload": (site, call, input, signal) => invoke("page.runBeforeUnload", site, call, input, signal),
     "page.opener": (site, call, input, signal) => invoke("page.opener", site, call, input, signal),
     "page.frames": (site, call, input, signal) => invoke("page.frames", site, call, input, signal),
+    "page.evaluate": (site, call, input, signal) => invoke("page.evaluate", site, call, input, signal),
+    "worker.evaluate": (site, call, input, signal) => invoke("worker.evaluate", site, call, input, signal),
+    "locator.evaluate": (site, call, input, signal) => invoke("locator.evaluate", site, call, input, signal),
+    "locator.evaluateAll": (site, call, input, signal) => invoke("locator.evaluateAll", site, call, input, signal),
+    "page.waitForFunction": (site, call, input, signal) => invoke("page.waitForFunction", site, call, input, signal),
+    "locator.waitForFunction": (site, call, input, signal) => invoke("locator.waitForFunction", site, call, input, signal),
     "page.screenshot": (site, call, input, signal) => invoke("page.screenshot", site, call, input, signal),
     "page.saveScreenshot": (site, call, input, signal) => invoke("page.saveScreenshot", site, call, input, signal),
     "page.pdf": (site, call, input, signal) => invoke("page.pdf", site, call, input, signal),
     "page.setViewportSize": (site, call, input, signal) => invoke("page.setViewportSize", site, call, input, signal),
+    "page.addInitScript": (site, call, input, signal) => invoke("page.addInitScript", site, call, input, signal),
+    "page.exposeBinding": (site, call, input, signal) => invoke("page.exposeBinding", site, call, input, signal),
+    "bindingCall.resolve": (site, call, input, signal) => invoke("bindingCall.resolve", site, call, input, signal),
     "webStorage.items": (site, call, input, signal) => invoke("webStorage.items", site, call, input, signal),
     "webStorage.getItem": (site, call, input, signal) => invoke("webStorage.getItem", site, call, input, signal),
     "webStorage.setItem": (site, call, input, signal) => invoke("webStorage.setItem", site, call, input, signal),
@@ -2042,7 +2051,10 @@
   var CONTEXT_OPTION_KEYS = {};
   var CONTEXT_SEND = {
     "context.pages": (site, call, input, signal) => invoke("context.pages", site, call, input, signal),
-    "context.newPage": (site, call, input, signal) => invoke("context.newPage", site, call, input, signal)
+    "context.newPage": (site, call, input, signal) => invoke("context.newPage", site, call, input, signal),
+    "context.addInitScript": (site, call, input, signal) => invoke("context.addInitScript", site, call, input, signal),
+    "context.exposeBinding": (site, call, input, signal) => invoke("context.exposeBinding", site, call, input, signal),
+    "disposable.dispose": (site, call, input, signal) => invoke("disposable.dispose", site, call, input, signal)
   };
 
   // crates/neo-sdk/neo-playwright-js/src/prelude/generated/event.ts
@@ -7235,7 +7247,9 @@ ${value.stack}`;
       const site = captureSite();
       const api = "locator.waitForFunction";
       const script = pageCall(api, "query", pageFunction, arg);
-      await this._frame._selectorOp("locator.waitForFunction", site, api, this._selector, true, this._frame._wait(api, options ?? {}), { script });
+      const wait = this._frame._wait(api, options ?? {});
+      const addressed = await this._frame._targetArgs(api, this._selector, true);
+      await send["locator.waitForFunction"](site, this._frame._call(api, wait.timeout), { ...addressed, script }, wait.signal);
     }
     async evaluateAll(pageFunction, arg) {
       const api = "locator.evaluateAll";
@@ -7924,13 +7938,15 @@ ${value.stack}`;
       });
     }
     async _evaluateOn(api, site, selector, strict, script, noWait, options = {}) {
-      const value = await this._selectorOp("locator.evaluate", site, api, selector, strict, noWait ? { timeout: 0 } : this._wait(api, options), noWait ? { script, noWait: true, selector } : { script });
+      const wait = noWait ? { timeout: 0 } : this._wait(api, options);
+      const addressed = await this._targetArgs(api, selector, strict);
+      const value = await send["locator.evaluate"](site, this._call(api, wait.timeout), noWait ? { ...addressed, script, noWait: true, selector } : { ...addressed, script }, wait.signal);
       return fromPageValue(api, value);
     }
     async _evaluateAll(api, selector, script) {
       const site = captureSite();
       const target = await this._locatorBrand(api, selector);
-      const value = await invoke("locator.evaluateAll", site, this._call(api, 0), {
+      const value = await send["locator.evaluateAll"](site, this._call(api, 0), {
         target,
         script
       });
@@ -8068,10 +8084,8 @@ ${value.stack}`;
     async _evaluate(api, pageFunction, arg, options) {
       const site = captureSite();
       const script = await this._page._evaluationScript(api, site, "frame", pageFunction, arg, options);
-      const { value: result, observed } = await invokeObserved("page.evaluate", site, this._call(api, 0), {
-        ...await this._frameArgs(api),
-        script
-      });
+      const { page, frame } = await this._frameArgs(api);
+      const { value: result, observed } = await invokeObserved("page.evaluate", site, this._call(api, 0), { page, frame, script });
       this._page._evaluated(result.frames, observed);
       await this._page._publishCompleted();
       return fromPageValue(api, result.value);
@@ -8082,10 +8096,12 @@ ${value.stack}`;
         throw plainError(api, `Unknown polling option: ${options.polling}`);
       const script = pageCall(api, "frame", pageFunction, arg);
       const wait = this._wait(api, options);
-      const { value, preview } = await invoke("page.waitForFunction", site, this._call(api, wait.timeout), {
-        ...await this._frameArgs(api),
+      const { page, frame } = await this._frameArgs(api);
+      const { value, preview } = await send["page.waitForFunction"](site, this._call(api, wait.timeout), {
+        page,
+        frame,
         script,
-        ...typeof options.polling === "number" ? { polling: options.polling } : {}
+        polling: typeof options.polling === "number" ? options.polling : undefined
       }, wait.signal);
       return new WaitHandle(value, preview);
     }
@@ -8436,13 +8452,14 @@ ${value.stack}`;
       const api = "elementHandle.evaluate";
       this.#live(api);
       const script = await this._page._evaluationScript(api, site, "handle", pageFunction, arg, options);
-      return fromPageValue(api, await this.#op("locator.evaluate", site, api, 0, { script }));
+      this.#live(api);
+      return fromPageValue(api, await send["locator.evaluate"](site, { api, timeoutMs: timeoutMs(api, 0) }, { target: this._brand, strict: "strict", script }));
     }
     async $eval(selector, pageFunction, arg) {
       const site = captureSite();
       const api = "elementHandle.$eval";
       const script = pageCall(api, "query", pageFunction, arg);
-      const value = await invoke("locator.evaluate", site, { api, timeoutMs: timeoutMs(api, 0) }, {
+      const value = await send["locator.evaluate"](site, { api, timeoutMs: timeoutMs(api, 0) }, {
         target: this.#rooted(api, selector),
         strict: "firstMatch",
         noWait: true,
@@ -8455,7 +8472,7 @@ ${value.stack}`;
       const site = captureSite();
       const api = "elementHandle.$$eval";
       const script = pageCall(api, "query", pageFunction, arg);
-      const value = await invoke("locator.evaluateAll", site, { api, timeoutMs: timeoutMs(api, 0) }, { target: this.#rooted(api, selector), script });
+      const value = await send["locator.evaluateAll"](site, { api, timeoutMs: timeoutMs(api, 0) }, { target: this.#rooted(api, selector), script });
       return fromPageValue(api, value);
     }
     async screenshot(options = {}) {
@@ -8584,7 +8601,7 @@ ${value.stack}`;
   function registration(id, forget) {
     return new Disposable(async (site) => {
       try {
-        await invoke("disposable.dispose", site, { api: "disposable.dispose", timeoutMs: 0 }, { id });
+        await send["disposable.dispose"](site, { api: "disposable.dispose", timeoutMs: 0 }, { id });
       } finally {
         forget?.();
       }
@@ -8784,10 +8801,10 @@ ${value.stack}`;
       events.bindingRemoved();
     });
     try {
-      const { id } = await invoke("page.exposeBinding", site, { api, timeoutMs: 0 }, {
+      const { id } = await send["page.exposeBinding"](site, { api, timeoutMs: 0 }, {
         page: await page._brand(api),
         name,
-        ...noGlobal ? { noGlobal: true } : {}
+        noGlobal: noGlobal ? true : undefined
       });
       return registration(id, forget);
     } catch (error) {
@@ -8807,7 +8824,7 @@ ${value.stack}`;
       context._events.bindingRemoved();
     });
     try {
-      const { id } = await invoke("context.exposeBinding", site, { api, timeoutMs: 0 }, { name, ...noGlobal ? { noGlobal: true } : {} });
+      const { id } = await send["context.exposeBinding"](site, { api, timeoutMs: 0 }, { name, noGlobal: noGlobal ? true : undefined });
       return registration(id, forget);
     } catch (error) {
       forget();
@@ -8857,7 +8874,7 @@ ${value.stack}`;
       arg = inPageArgument({ name, seq, error });
     }
     const api = "bindingCall.resolve";
-    await invoke("bindingCall.resolve", site, { api, timeoutMs: 0 }, { page: await page._brand(api), context: record.executionContext, arg }).catch(() => {});
+    await send["bindingCall.resolve"](site, { api, timeoutMs: 0 }, { page: await page._brand(api), context: record.executionContext, arg }).catch(() => {});
   }
 
   // crates/neo-sdk/neo-playwright-js/src/prelude/event-values.ts
@@ -9865,7 +9882,7 @@ ${value.stack}`;
       const script = pageCall(api, "frame", pageFunction, arg);
       if (this._closed)
         throw clientError(api, "Target page, context or browser has been closed");
-      const { value } = await invoke("worker.evaluate", site, { api, timeoutMs: 0 }, { page: await this.#page._brand(api), worker: this.#info.id, script });
+      const { value } = await send["worker.evaluate"](site, { api, timeoutMs: 0 }, { page: await this.#page._brand(api), worker: this.#info.id, script });
       return fromPageValue(api, value);
     }
     evaluateHandle() {
@@ -10275,7 +10292,7 @@ ${value.stack}`;
       const site = captureSite();
       const api = "page.addInitScript";
       return addInitScript(api, {
-        register: async (source) => (await invoke("page.addInitScript", site, { api, timeoutMs: 0 }, { page: await this._brand(api), script: source })).id,
+        register: async (source) => (await send["page.addInitScript"](site, { api, timeoutMs: 0 }, { page: await this._brand(api), script: source })).id,
         expose: (name, callback) => exposeOnPage(this, site, api, name, callback, true)
       }, script, arg, options);
     }
@@ -10841,7 +10858,7 @@ ${value.stack}`;
       const site = captureSite();
       const api = "browserContext.addInitScript";
       return addInitScript(api, {
-        register: async (source) => (await invoke("context.addInitScript", site, { api, timeoutMs: 0 }, { script: source })).id,
+        register: async (source) => (await send["context.addInitScript"](site, { api, timeoutMs: 0 }, { script: source })).id,
         expose: (name, callback) => exposeOnContext(this, site, api, name, callback, true)
       }, script, arg, options);
     }
