@@ -147,8 +147,10 @@ impl Displays {
         let role = match request {
             DisplayRequest::View { follow } => {
                 // In the registry before the follower looks up its target, so an implicit agent
-                // move that decides after this sees the viewer.
+                // move that decides after this sees the viewer; then a move already past its last
+                // check lands before the view is admitted, as a control display waits it out.
                 let watch = self.browser.watch_screen(follow.clone());
+                drop(self.browser.front_turn().await);
                 let follower = match follow {
                     Some(follow) => Some(follow::admit(follow, self).await),
                     None => None,

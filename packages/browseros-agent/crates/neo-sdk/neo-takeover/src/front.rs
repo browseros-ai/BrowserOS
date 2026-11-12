@@ -171,6 +171,12 @@ impl Front {
         if self.displays.browser.is_active(tab).await? {
             return Ok(Forward::AlreadyInFront);
         }
+        // Once more after that read: a hold or a view that began while it was in flight wins.
+        // Nothing awaits between this check and the send; a control display or a view admitted
+        // after it waits out this turn before it serves.
+        if let Some(stays) = self.stays_behind(tab, task.as_ref()) {
+            return Ok(stays);
+        }
         let activated = turn.activate(tab, Mover::Agent { task }).await;
         drop(turn);
         activated?;

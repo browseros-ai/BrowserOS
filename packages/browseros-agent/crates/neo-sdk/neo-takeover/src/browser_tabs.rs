@@ -72,8 +72,16 @@ struct FrontState {
     /// The open view displays, each with what it follows (`None`: the plain screen). The
     /// agent's implicit move ([`crate::Front::bring_forward`]) reads it, so it never changes
     /// what a viewer watches. A std mutex, never held across an await.
-    views: Mutex<Vec<(u64, Option<Follow>)>>,
+    views: Mutex<Vec<OpenView>>,
     next_view: AtomicU64,
+}
+
+/// One open view display in [`FrontState::views`].
+struct OpenView {
+    /// Which [`ViewWatchGuard`] removes it.
+    id: u64,
+    /// What the view keeps in front; `None` shows whatever is.
+    follow: Option<Follow>,
 }
 
 /// One open view display in the registry. Dropping it removes the view, so a view that ended
@@ -90,7 +98,7 @@ impl Drop for ViewWatchGuard {
             .views
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .retain(|(id, _)| *id != self.id);
+            .retain(|view| view.id != self.id);
     }
 }
 
@@ -218,7 +226,7 @@ impl BrowserTabs {
             .views
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .push((id, follow));
+            .push(OpenView { id, follow });
         ViewWatchGuard {
             front: Arc::clone(&self.front),
             id,
@@ -234,7 +242,7 @@ impl BrowserTabs {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .iter()
-            .all(|(_, follow)| match follow {
+            .all(|view| match &view.follow {
                 Some(Follow::Tab(followed)) => *followed == tab,
                 Some(Follow::Task(followed)) => Some(followed) == task,
                 None => false,

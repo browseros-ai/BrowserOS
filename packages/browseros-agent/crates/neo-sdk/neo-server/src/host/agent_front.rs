@@ -5,7 +5,8 @@
 //!    armed (the host API runs: an owner, views)  ─▶ neo_takeover::Front::bring_forward(tab, task)
 //!        owner holds the screen, or a view watches another tab or task ─▶ stays behind
 //!        else, under the front turn: already active, or Browser.activateTab (a move followers read)
-//!    not armed (no host API in this process: no owner screen, no views) ─▶ the run's view:
+//!    the app before its host API serves ─▶ stays behind (an owner may arrive at once)
+//!    without_host (no host API in this process: no owner screen, no views) ─▶ the run's view:
 //!        Browser.getTabInfo ─ not active ─▶ Browser.activateTab
 //! ```
 //!
@@ -22,15 +23,28 @@ use serde_json::{Value, json};
 use tokio::sync::SetOnce;
 use tracing::debug;
 
-/// Brings an agent tab forward for one op (`OpEnv::bring_forward`). Armed with the service's
-/// [`Front`] when the host API starts, together with the takeover lock, so with an owner around
-/// every move goes through the one front turn and the screen rule. `default()` is unarmed.
+/// Brings an agent tab forward for one op (`OpEnv::bring_forward`). In the app it is armed with
+/// the service's [`Front`] when the host API starts, together with the takeover lock, so with an
+/// owner around every move goes through the one front turn and the screen rule; until then it
+/// moves nothing, since an owner may arrive the moment the API serves. A process with no host
+/// API at all ([`AgentFront::without_host`]) activates directly.
 #[derive(Default)]
 pub(crate) struct AgentFront {
     front: SetOnce<Front>,
+    /// No host API will ever arm this process: there is no owner's screen or view to respect.
+    without_host: bool,
 }
 
 impl AgentFront {
+    /// For a process that serves no host API (the hosted sidecar, the spec harness).
+    #[cfg(feature = "hosted-run")]
+    pub(crate) fn without_host() -> Self {
+        Self {
+            front: SetOnce::new(),
+            without_host: true,
+        }
+    }
+
     /// The host API started: from now on its front decides. Called once per process; a second
     /// call changes nothing.
     pub(crate) fn arm(&self, front: Front) {
@@ -57,7 +71,8 @@ impl AgentFront {
                 .await
                 .map(|forward| describe(&forward))
                 .map_err(|error| error.to_string()),
-            None => activate(&view, tab).await,
+            None if self.without_host => activate(&view, tab).await,
+            None => Ok("stays behind: the host API is not serving yet"),
         };
         match outcome {
             Ok(what) => debug!(tab = tab.0, what, "agent tab forward"),

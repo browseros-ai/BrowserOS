@@ -50,12 +50,12 @@ impl HostedStack {
         let native =
             NativeCapabilities::from_browseros_version(config.launch.browseros_version.as_deref());
         let browser = link(native, Arc::clone(&tabs));
-        // Never armed: the sidecar serves no host API, so there is no owner's screen or view
-        // here and an agent tab is simply made active (host/agent_front.rs).
+        // The sidecar serves no host API, so there is no owner's screen or view here and an
+        // agent tab is simply made active (host/agent_front.rs).
         let playwright = PlaywrightFacade::start(
             Arc::clone(&browser),
             matches!(&config.env.hosted_mode, HostedMode::On),
-            Arc::new(AgentFront::default()),
+            Arc::new(AgentFront::without_host()),
         );
         let solver = CaptchaSolver::new(config.captcha).map(Arc::new);
         let claims = Arc::new(CaptchaClaims::default());
