@@ -34,6 +34,17 @@ type MouseClickOptions = Pick<
   (typeof OPTION_KEYS)['mouse.click'][number]
 >
 
+// The former nested JSON emitted only the picked object's own fields. Reading a missing
+// option while flattening must not invoke an inherited getter. Capture the intrinsic before
+// agent code can replace Object.hasOwn.
+const hasOwn = Object.hasOwn
+function ownOption<T extends object, K extends keyof T>(
+  picked: T,
+  key: K,
+): T[K] | undefined {
+  return hasOwn(picked, key) ? picked[key] : undefined
+}
+
 export class Keyboard {
   readonly #page: Page
 
@@ -70,7 +81,7 @@ export class Keyboard {
     await send['keyboard.press'](
       site,
       { api, timeoutMs: 0 },
-      { page, key, delay: picked.delay },
+      { page, key, delay: ownOption(picked, 'delay') },
     )
   }
 
@@ -82,7 +93,7 @@ export class Keyboard {
     await send['keyboard.type'](
       site,
       { api, timeoutMs: 0 },
-      { page, text, delay: picked.delay },
+      { page, text, delay: ownOption(picked, 'delay') },
     )
   }
 
@@ -117,7 +128,7 @@ export class Mouse {
     await send['mouse.move'](
       site,
       { api, timeoutMs: 0 },
-      { page, x, y, steps: picked.steps },
+      { page, x, y, steps: ownOption(picked, 'steps') },
     )
   }
 
@@ -129,7 +140,11 @@ export class Mouse {
     await send['mouse.down'](
       site,
       { api, timeoutMs: 0 },
-      { page, button: picked.button, clickCount: picked.clickCount },
+      {
+        page,
+        button: ownOption(picked, 'button'),
+        clickCount: ownOption(picked, 'clickCount'),
+      },
     )
   }
 
@@ -141,7 +156,11 @@ export class Mouse {
     await send['mouse.up'](
       site,
       { api, timeoutMs: 0 },
-      { page, button: picked.button, clickCount: picked.clickCount },
+      {
+        page,
+        button: ownOption(picked, 'button'),
+        clickCount: ownOption(picked, 'clickCount'),
+      },
     )
   }
 
@@ -184,9 +203,9 @@ export class Mouse {
         page,
         x,
         y,
-        button: picked.button,
-        clickCount: picked.clickCount,
-        delay: picked.delay,
+        button: ownOption(picked, 'button'),
+        clickCount: ownOption(picked, 'clickCount'),
+        delay: ownOption(picked, 'delay'),
       },
     )
   }

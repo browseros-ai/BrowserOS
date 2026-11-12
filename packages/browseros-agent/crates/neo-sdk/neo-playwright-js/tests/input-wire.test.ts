@@ -29,3 +29,27 @@ it('pins flat input bytes for full options, empty options and the dblclick proje
   )
   expect(`${JSON.stringify(runtime.calls, null, 2)}\n`).toBe(recording)
 })
+
+it('does not read inherited option fields when the script omits their values', async () => {
+  const runtime = loadPrelude({ seed: SEED, answer: () => null })
+  const reads = await runtime.run(`
+    let reads = 0;
+    for (const key of ['delay', 'steps', 'button', 'clickCount'])
+      Object.defineProperty(Object.prototype, key, { configurable: true, get() { reads++; return 7; } });
+    await page.keyboard.press('a', { delay: undefined });
+    await page.keyboard.type('a', { delay: undefined });
+    await page.mouse.move(1, 2, { steps: undefined });
+    await page.mouse.down({ button: undefined, clickCount: undefined });
+    await page.mouse.up({ button: undefined, clickCount: undefined });
+    await page.mouse.click(1, 2, { button: undefined, clickCount: undefined, delay: undefined });
+    return reads;
+  `)
+  expect(reads).toBe(0)
+  expect(runtime.calls).toHaveLength(6)
+  for (const call of runtime.calls)
+    expect(
+      ['delay', 'steps', 'button', 'clickCount'].filter((key) =>
+        Object.hasOwn(call.input, key),
+      ),
+    ).toEqual([])
+})
