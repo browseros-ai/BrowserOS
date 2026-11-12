@@ -317,6 +317,54 @@ async fn tests_that_an_element_script_reads_a_typed_password_as_the_page_holds_i
     .await
 }
 
+/// A large batch keeps its order and shadow-root matches even if the page replaces its own
+/// selector methods. Only the user's callback runs in the main world; Neo queries in isolation.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_large_evaluate_all_batch_keeps_isolated_selection_and_order() -> TestResult {
+    on_page("/eval.html", |run, page| async move {
+        let result = async {
+            run.eval(
+                &page,
+                "const host = document.createElement('section');
+                 document.body.append(host);
+                 const root = host.attachShadow({mode: 'open'});
+                 for (let i = 0; i < 16_384; i++) {
+                   const node = document.createElement('span');
+                   node.className = 'batch';
+                   node.dataset.index = String(i);
+                   node.title = '😛';
+                   root.append(node);
+                 }
+                 Document.prototype.querySelectorAll = () => [];
+                 Element.prototype.querySelectorAll = () => []",
+            )
+            .await?;
+            let answer = time::timeout(
+                Duration::from_secs(30),
+                evaluate_all(
+                    &run,
+                    "locator.evaluateAll",
+                    &at(&page, ".batch"),
+                    "els => [els.length, els.every((el, i) => el.dataset.index === String(i)),
+                             els[0].title, els[0].ownerDocument === document]",
+                    None,
+                ),
+            )
+            .await??;
+            assert_eq!(
+                answer,
+                json!([16_384, true, "😛", true]),
+                "the complete isolated query reaches the callback in document order"
+            );
+            Ok(())
+        }
+        .await;
+        (run, result)
+    })
+    .await
+}
+
 /// Each of the other element forms reads the typed password too.
 #[tokio::test]
 #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]

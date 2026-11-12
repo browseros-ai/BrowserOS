@@ -23,7 +23,7 @@ use serde_json::{Value, json};
 use crate::op_scope::OpScope;
 use crate::probe::probe_reply::ProbeReply;
 use crate::probe::probe_request::ProbeRequest;
-use crate::world::{IsolatedWorld, Pin};
+use crate::world::{BackendNodeId, IsolatedWorld, Pin};
 
 /// The function declaration every request is sent with. It must equal `CALL_FUNCTION` in
 /// protocol.ts (a test checks it against probe-protocol.json). It runs on the world's global,
@@ -144,6 +144,27 @@ struct RemoteObject {
     subtype: Option<String>,
     #[serde(default)]
     object_id: Option<String>,
+    #[serde(default)]
+    deep_serialized_value: Option<DeepNodes>,
+}
+
+/// Chromium's deep serialization names DOM nodes by backend id without walking their
+/// children. Only the batch pin reader asks for it; ordinary calls omit this field.
+#[derive(Deserialize)]
+#[serde(tag = "type", content = "value", rename_all = "camelCase")]
+enum DeepNodes {
+    Array(Vec<DeepNode>),
+    Null,
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "type", content = "value", rename_all = "camelCase")]
+enum DeepNode {
+    Node {
+        #[serde(rename = "backendNodeId")]
+        backend_node_id: BackendNodeId,
+    },
+    Null,
 }
 
 #[derive(Deserialize)]
@@ -324,6 +345,67 @@ pub(crate) async fn pinned_object(
         }
         _ => Err(ProbeFailure::Broken(
             "the probe answered `pinned` with neither an element nor null".to_owned(),
+        )),
+    }
+}
+
+/// Transfers a pinned query's nodes to Rust in one isolated-world call. Deep serialization
+/// carries backend ids directly, avoiding a `pinned` call and `DOM.describeNode` per match.
+/// The result's remote array lives in the op's object group, keeping every node alive until
+/// the main-world gateway has adopted it; no selector or Neo callback runs in the page world.
+pub(crate) async fn pinned_nodes(
+    scope: &OpScope<'_>,
+    world: &IsolatedWorld,
+    pins: Vec<Pin>,
+) -> Result<Option<Vec<BackendNodeId>>, ProbeFailure> {
+    let count = pins.len();
+    let requests: Vec<ProbeRequest> = pins
+        .into_iter()
+        .map(|pin| ProbeRequest::Pinned { pin })
+        .collect();
+    // Use the same request gateway as single pins, including its uninstalled marker. A
+    // batch runs synchronously so a re-key cannot mix pins from two probe lifetimes.
+    let function = format!(
+        "function (requests) {{ const call = ({CALL_FUNCTION}); \
+         const nodes = requests.map(request => call.call(this, request)); \
+         return nodes.some(node => node && !(node instanceof Node) && \
+                           node.kind === 'uninstalled') ? null : nodes; }}"
+    );
+    let called: Called = world
+        .session()
+        .send(
+            "Runtime.callFunctionOn",
+            json!({
+                "objectId": world.global(),
+                "functionDeclaration": function,
+                "arguments": [{ "value": requests }],
+                "objectGroup": scope.object_group(world.session()),
+                "serializationOptions": {
+                    "serialization": "deep",
+                    "maxDepth": 2,
+                    "additionalParameters": { "maxNodeDepth": 0, "includeShadowTree": "none" }
+                }
+            }),
+        )
+        .await
+        .map_err(ProbeFailure::from_core)?;
+    if let Some(exception) = called.exception_details {
+        return Err(ProbeFailure::Broken(format!(
+            "the probe threw: {}",
+            exception.message()
+        )));
+    }
+    match called.result.deep_serialized_value {
+        Some(DeepNodes::Array(nodes)) if nodes.len() == count => Ok(nodes
+            .into_iter()
+            .map(|node| match node {
+                DeepNode::Node { backend_node_id } => Some(backend_node_id),
+                DeepNode::Null => None,
+            })
+            .collect()),
+        Some(DeepNodes::Null) => Err(ProbeFailure::Gone(Ran::No)),
+        Some(DeepNodes::Array(_)) | None => Err(ProbeFailure::Broken(
+            "the probe returned an incomplete batch of pinned nodes".to_owned(),
         )),
     }
 }
