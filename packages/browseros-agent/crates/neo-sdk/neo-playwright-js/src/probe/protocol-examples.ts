@@ -320,6 +320,7 @@ export const REQUEST_EXAMPLES: { [O in Op]: AtLeastOne<RequestOf<O>> } = {
   document: [
     { op: 'document', part: 'title' },
     { op: 'document', part: 'content' },
+    { op: 'document', part: 'content', includeShadow: true },
     { op: 'document', part: 'expectSnapshot' },
   ],
   armInput: [{ op: 'armInput', pin: 4 }],

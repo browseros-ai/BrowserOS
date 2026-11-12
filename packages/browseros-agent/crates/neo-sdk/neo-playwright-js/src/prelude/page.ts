@@ -42,6 +42,7 @@ import { EventDeadline } from './event-deadline'
 import { checkReported, isReported } from './events'
 import {
   type ClickOptions,
+  type ContentOptions,
   type ExactOption,
   Frame,
   frameMatches,
@@ -750,8 +751,8 @@ export class Page extends EventEmitter {
     return title
   }
 
-  content(): Promise<string> {
-    return this._mainFrame._content('page.content')
+  content(options: ContentOptions = {}): Promise<string> {
+    return this._mainFrame._content('page.content', options)
   }
 
   async emulateMedia(options: MediaOptions = {}): Promise<void> {

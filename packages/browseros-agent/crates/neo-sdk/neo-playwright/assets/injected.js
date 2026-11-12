@@ -8431,7 +8431,7 @@ ${value.stack}`;
     const { document } = injected;
     const text = request.part === "title" ? document.title : request.part === "expectSnapshot" ? document.body ? injected.ariaSnapshotForExpectFailure(document.body, {
       mode: "default"
-    }) : "" : content(document);
+    }) : "" : request.includeShadow ? injected.documentContent(true) : content(document);
     return { kind: "documentText", text };
   }
   function content(document) {
@@ -8606,7 +8606,7 @@ ${value.stack}`;
   }
 
   // crates/neo-sdk/neo-playwright-js/src/probe/protocol.ts
-  var PROTOCOL = 25;
+  var PROTOCOL = 26;
 
   // crates/neo-sdk/neo-playwright-js/src/probe/read.ts
   var XHTML = "http://www.w3.org/1999/xhtml";

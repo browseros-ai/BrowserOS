@@ -106,7 +106,7 @@ export class ElementHandle extends EventEmitter {
   }
 
   override toString(): string {
-    return this._brand.display
+    return `JSHandle@${this._brand.display}`
   }
 
   toJSON(): ElementBrand {

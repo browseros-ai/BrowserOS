@@ -17,7 +17,7 @@ use crate::target::PageRef;
 use crate::wire::{Nothing, options};
 use crate::{ErrorCode, Playwright, PlaywrightError};
 
-/// `page.title()` and `page.content()`: `{ page, frame? }`.
+/// `page.title()`: `{ page, frame? }`.
 #[derive(Debug, Deserialize, TS)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct DocumentInput {
@@ -28,6 +28,39 @@ pub(crate) struct DocumentInput {
     frame: Option<FrameId>,
 }
 options!(DocumentInput);
+
+/// `page.content()` and `frame.content()`, including upstream's open-shadow-root option.
+#[derive(Debug, Deserialize, TS)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub(crate) struct ContentInput {
+    page: PageRef,
+    #[serde(default)]
+    #[ts(optional)]
+    frame: Option<FrameId>,
+    #[serde(default)]
+    #[ts(optional, as = "Option<bool>")]
+    include_shadow: bool,
+}
+options!(ContentInput);
+
+/// Keeps the wire option on the content command alone; title must still reject that key.
+pub(crate) async fn content(
+    pw: &Playwright,
+    scope: &OpScope<'_>,
+    input: ContentInput,
+) -> Result<String, PlaywrightError> {
+    read(
+        pw,
+        scope,
+        DocumentInput {
+            page: input.page,
+            frame: input.frame,
+        },
+        DocumentPart::Content,
+        input.include_shadow,
+    )
+    .await
+}
 
 /// `page.setContent(html, { waitUntil })`: `{ page, frame?, html, waitUntil? }`.
 #[derive(Debug, Deserialize, TS)]
@@ -49,6 +82,7 @@ pub(crate) async fn read(
     scope: &OpScope<'_>,
     input: DocumentInput,
     part: DocumentPart,
+    include_shadow: bool,
 ) -> Result<String, PlaywrightError> {
     let page = OpPage::admit_handle(pw, scope, &input.page).await?;
     let world = match world_call::frame_world(&page, scope, input.frame.as_ref()).await {
@@ -66,7 +100,10 @@ pub(crate) async fn read(
     };
     let TreeFrame { endpoint, place } =
         evaluate_guard::frame_endpoint(&page, world.session(), world.frame().clone());
-    let request = &ProbeRequest::Document { part };
+    let request = &ProbeRequest::Document {
+        part,
+        include_shadow,
+    };
     with_world(&page, &endpoint, &place, |world| async move {
         match probe::call(&world, request).await? {
             ProbeReply::DocumentText { text } => Ok(text),
@@ -91,6 +128,7 @@ pub(crate) async fn expect_snapshot(
         evaluate_guard::frame_endpoint(page, world.session(), world.frame().clone());
     let request = &ProbeRequest::Document {
         part: DocumentPart::ExpectSnapshot,
+        include_shadow: false,
     };
     let text = with_world(page, &endpoint, &place, |world| async move {
         match probe::call(&world, request).await? {

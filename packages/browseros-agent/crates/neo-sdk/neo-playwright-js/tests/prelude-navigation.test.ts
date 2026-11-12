@@ -90,3 +90,28 @@ it('bounds a native reply that stalls after its browser-side navigation wait', a
     message: 'page.waitForNavigation: Timeout 50ms exceeded.',
   })
 })
+
+it('returns the negotiated HTTP version read with the committed navigation', async () => {
+  const runtime = loadPrelude({
+    seed: SEED,
+    answer: ({ name }) =>
+      name === 'page.goto'
+        ? {
+            url: 'https://a.example/',
+            response: {
+              url: 'https://a.example/',
+              status: 200,
+              statusText: 'OK',
+              httpVersion: 'HTTP/2.0',
+              ok: true,
+              headers: {},
+            },
+            frameSnapshotAttempted: true,
+          }
+        : null,
+  })
+  expect(
+    await runtime.run(`const response = await page.goto('https://a.example/');
+    return await response.httpVersion()`),
+  ).toBe('HTTP/2.0')
+})

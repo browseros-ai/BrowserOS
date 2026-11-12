@@ -182,7 +182,12 @@ pub(crate) enum ProbeRequest {
     /// The pinned element itself, by handle (`returnByValue: false`).
     Pinned { pin: Pin },
     /// The document's title, or its doctype and root markup.
-    Document { part: DocumentPart },
+    Document {
+        part: DocumentPart,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        #[ts(optional, as = "Option<bool>")]
+        include_shadow: bool,
+    },
     /// `document.open`, `write` and `close` with `html`. The Document and this world outlive
     /// the write, so the world keeps its engine and its seq.
     SetContent { html: String },
@@ -240,7 +245,7 @@ impl StorageAction {
 pub(crate) enum DocumentPart {
     /// `page.title()`.
     Title,
-    /// `page.content()`: the doctype and the root element's `outerHTML`.
+    /// `page.content()`: the doctype and root markup, optionally including open shadow roots.
     Content,
     /// The body's aria snapshot a failed `expect` that found nothing reports in
     /// `error.matcherResult` (upstream's `Frame._expectInternal`); `""` without a body.

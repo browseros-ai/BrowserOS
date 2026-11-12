@@ -331,13 +331,7 @@ fn route<'a, R: Route<'a>>(op: PageOp, r: R) -> R::Out {
             navigation::wait_for_load_state,
         ),
         PageOp::Title => r.op(wire::command("Frame.title"), title),
-        PageOp::Content => r.op(
-            wire::command("Frame.content").omits(&[(
-                "includeShadow",
-                "shadow-root serialization is not offered (parity gap PA-025)",
-            )]),
-            content,
-        ),
+        PageOp::Content => r.op(wire::command("Frame.content"), document_op::content),
         PageOp::SetContent => r.op(wire::command("Frame.setContent"), document_op::set_content),
         PageOp::Close => r.op(
             wire::command("Page.close").omits(&[(
@@ -561,15 +555,7 @@ async fn title(
     scope: &OpScope<'_>,
     input: DocumentInput,
 ) -> Result<String, PlaywrightError> {
-    document_op::read(pw, scope, input, DocumentPart::Title).await
-}
-
-async fn content(
-    pw: &Playwright,
-    scope: &OpScope<'_>,
-    input: DocumentInput,
-) -> Result<String, PlaywrightError> {
-    document_op::read(pw, scope, input, DocumentPart::Content).await
+    document_op::read(pw, scope, input, DocumentPart::Title, false).await
 }
 
 async fn close(
