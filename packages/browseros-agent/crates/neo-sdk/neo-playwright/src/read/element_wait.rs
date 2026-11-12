@@ -3,8 +3,6 @@
 
 use std::time::Duration;
 
-use serde_json::Value;
-
 use crate::backoff::Backoff;
 use crate::op_scope::OpScope;
 use crate::page::OpPage;
@@ -12,6 +10,7 @@ use crate::probe::{ProbeReply, ProbeRequest, ProbeTarget, QueryState, Read, Rect
 use crate::read::element_read;
 use crate::resolve::{self, HandleSite};
 use crate::target::{ElementTarget, Strictness};
+use crate::wire::Nothing;
 use crate::{ErrorCode, Playwright, PlaywrightError};
 
 /// The gap between the two measurements of the `stable` check, on Rust's clock: about one
@@ -81,7 +80,7 @@ pub(crate) async fn wait_for_element_state(
     scope: &OpScope<'_>,
     target: &ElementTarget,
     state: ElementWait,
-) -> Result<Value, PlaywrightError> {
+) -> Result<Nothing, PlaywrightError> {
     // Boxed: every op's future is one variant of `Playwright::invoke`'s, which a host awaits.
     match scope
         .within(Box::pin(poll_element(pw, scope, target, state)))
@@ -98,11 +97,11 @@ async fn poll_element(
     scope: &OpScope<'_>,
     target: &ElementTarget,
     state: ElementWait,
-) -> Result<Value, PlaywrightError> {
+) -> Result<Nothing, PlaywrightError> {
     let page = OpPage::admit_handle(pw, scope, &target.page).await?;
     let gone = || {
         if state == ElementWait::Hidden {
-            Ok(Value::Null)
+            Ok(())
         } else {
             Err(resolve::handle_detached(scope))
         }
@@ -125,7 +124,7 @@ async fn poll_element(
             return Err(scope.timed_out(state.timed_out()));
         }
         match meets(scope, &site, state).await? {
-            Some(true) => return Ok(Value::Null),
+            Some(true) => return Ok(()),
             Some(false) => scope.log(format!("  element is not {}", state.name())),
             None => return gone(),
         }

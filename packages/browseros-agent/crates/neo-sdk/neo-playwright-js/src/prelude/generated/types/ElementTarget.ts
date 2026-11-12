@@ -10,10 +10,10 @@ import type { PageBrand } from "./PageBrand";
  */
 export type ElementTarget = { 
 /**
- * The page the element was pinned on.
- */
-page: PageBrand, seq: FrameSeq, node: BackendNodeId, 
-/**
  * Playwright's preview of the element, for messages.
  */
-display: string, };
+display: string, node: BackendNodeId, 
+/**
+ * The page the element was pinned on.
+ */
+page: PageBrand, seq: FrameSeq, };

@@ -1,14 +1,18 @@
 //! The read ops and their registration metadata.
 
 use serde::Deserialize;
-use serde_json::{Value, json};
+use serde::de::DeserializeOwned;
+use serde_json::Value;
+use ts_rs::TS;
 
 use crate::listed_enum::listed_enum;
 use crate::op_input::OpArgs;
 use crate::op_scope::OpScope;
 use crate::op_spec::{OpSpec, TARGET};
 use crate::page::OpPage;
-use crate::probe::{PageText, ProbeReply, ProbeRequest, ProbeTarget, QueryState, Read, ReadAll};
+use crate::probe::{
+    PageText, ProbeReply, ProbeRequest, ProbeTarget, QueryState, Read, ReadAll, Rect,
+};
 use crate::read::element_read::Visibility;
 use crate::read::element_wait::ElementWait;
 use crate::read::selector_wait::{Returning, SelectorState};
@@ -16,7 +20,8 @@ use crate::read::{
     element_handle, element_read, element_wait, normalize, selector_wait, viewport_box,
 };
 use crate::resolve::{Landed, Resolver};
-use crate::target::{Strictness, Target};
+use crate::target::{RootHandle, Strictness, Target};
+use crate::wire::{self, Describe, OpWire, Route, Run, options};
 use crate::{ErrorCode, Playwright, PlaywrightError};
 
 listed_enum! {
@@ -46,6 +51,11 @@ listed_enum! {
 }
 
 impl ReadOp {
+    /// Describes exactly the inputs and results used by the runtime route.
+    pub(crate) fn wire(self) -> Option<OpWire> {
+        route(self, Describe)
+    }
+
     /// This op's registration metadata.
     pub(crate) const fn spec(self) -> OpSpec {
         match self {
@@ -150,11 +160,13 @@ impl ReadOp {
 
 /// The reads of every match (`count`, `allTextContents`, `allInnerTexts`): the locator, hops
 /// included, and nothing else.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, TS)]
 #[serde(deny_unknown_fields)]
+#[ts(rename = "ReadEveryMatchInput")]
 struct EveryMatchInput {
     target: Target,
 }
+options!(EveryMatchInput);
 
 /// What every match read: how many there were, and one value each for the text reads.
 #[derive(Debug, Default)]
@@ -164,28 +176,34 @@ struct Matched {
 }
 
 /// The reads of one element, and their page, frame and element-handle forms.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, TS)]
 #[serde(deny_unknown_fields)]
+#[ts(rename = "ReadElementInput")]
 struct ElementInput {
     target: Target,
     strict: Strictness,
 }
+options!(ElementInput);
 
 /// `locator.waitFor`, `page.waitForSelector` and `elementHandle.waitForElementState`, whose
-/// states are the element-state names.
-#[derive(Debug, Deserialize)]
+/// states are the element-state names. `omitReturnValue` suppresses a handle for
+/// `locator.waitFor`, whatever the requested state.
+#[derive(Debug, Deserialize, TS)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
+#[ts(rename = "ReadWaitForInput")]
 struct WaitForInput {
     target: Target,
     strict: Strictness,
     state: WaitState,
-    /// `locator.waitFor`: no handle back, whatever the state.
+    // `locator.waitFor`: no handle back, whatever the state.
     omit_return_value: bool,
 }
+options!(WaitForInput);
 
 /// Every state `locator.waitFor` takes, and `waitForElementState`'s.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(rename = "ReadWaitState")]
 enum WaitState {
     Attached,
     Detached,
@@ -224,108 +242,324 @@ impl WaitState {
 }
 
 /// `locator.elementHandle`, and `page.$` (`noWait`: the first match now, or null).
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, TS)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
+#[ts(rename = "ReadElementHandleInput")]
 struct ElementHandleInput {
     target: Target,
     strict: Strictness,
+    // Omission means false without admitting JSON null. Keep the bool at decode time;
+    // this TS attribute retains its type while describing that omission is allowed.
     #[serde(default)]
+    #[ts(optional = nullable)]
     no_wait: bool,
 }
+options!(ElementHandleInput);
 
 /// `locator.getAttribute(name)`.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, TS)]
 #[serde(deny_unknown_fields)]
+#[ts(rename = "ReadAttributeInput")]
 struct AttributeInput {
     target: Target,
     strict: Strictness,
     name: String,
 }
+options!(AttributeInput);
 
-/// Runs one read op.
+/// Runs the selected typed handler through the shared decode/call/encode boundary.
 pub(crate) async fn invoke(
     pw: &Playwright,
     scope: &OpScope<'_>,
     op: ReadOp,
     args: OpArgs,
 ) -> Result<Value, PlaywrightError> {
+    route(op, Run { pw, scope, args }).await
+}
+
+/// Runtime dispatch and description share these rows. Resolution, polling and policy remain
+/// in the existing read runners; their probe JSON is decoded into each op's concrete result.
+fn route<'a, R: Route<'a>>(op: ReadOp, r: R) -> R::Out {
     match op {
-        ReadOp::Count => {
-            let matched = every_match(pw, scope, args.decode(scope)?, ReadAll::Count).await?;
-            Ok(json!(matched.count))
-        }
-        ReadOp::AllTextContents => {
-            let matched =
-                every_match(pw, scope, args.decode(scope)?, ReadAll::TextContents).await?;
-            Ok(Value::Array(matched.values))
-        }
-        ReadOp::AllInnerTexts => {
-            let matched = every_match(pw, scope, args.decode(scope)?, ReadAll::InnerTexts).await?;
-            Ok(Value::Array(matched.values))
-        }
-        ReadOp::TextContent => element(pw, scope, args.decode(scope)?, Read::TextContent).await,
-        ReadOp::InnerText => element(pw, scope, args.decode(scope)?, Read::InnerText).await,
-        ReadOp::InnerHtml => element(pw, scope, args.decode(scope)?, Read::InnerHtml).await,
-        ReadOp::InputValue => element(pw, scope, args.decode(scope)?, Read::InputValue).await,
-        ReadOp::GetAttribute => {
-            let AttributeInput {
-                target,
-                strict,
-                name,
-            } = args.decode(scope)?;
-            let input = ElementInput { target, strict };
-            element(pw, scope, input, Read::Attribute { name }).await
-        }
-        ReadOp::BoundingBox => {
-            let ElementInput { target, strict } = args.decode(scope)?;
-            let reading =
-                element_read::read_attached(pw, scope, &target, strict, &Read::BoundingBox).await?;
-            viewport_box::in_main_viewport(scope, &reading.path, reading.value).await
-        }
-        ReadOp::IsEnabled => state(pw, scope, args.decode(scope)?, QueryState::Enabled).await,
-        ReadOp::IsDisabled => state(pw, scope, args.decode(scope)?, QueryState::Disabled).await,
-        ReadOp::IsEditable => state(pw, scope, args.decode(scope)?, QueryState::Editable).await,
-        ReadOp::IsChecked => state(pw, scope, args.decode(scope)?, QueryState::Checked).await,
-        ReadOp::IsVisible => {
-            let ElementInput { target, strict } = args.decode(scope)?;
-            element_read::read_visibility(pw, scope, &target, strict, Visibility::Visible).await
-        }
-        ReadOp::IsHidden => {
-            let ElementInput { target, strict } = args.decode(scope)?;
-            element_read::read_visibility(pw, scope, &target, strict, Visibility::Hidden).await
-        }
-        ReadOp::WaitFor => wait_for(pw, scope, args.decode(scope)?).await,
-        ReadOp::ElementHandle => {
-            let ElementHandleInput {
-                target,
-                strict,
-                no_wait,
-            } = args.decode(scope)?;
-            let Target::Locator(target) = &target else {
-                return Err(scope.fail(
-                    ErrorCode::InvalidInput,
-                    "target: an element handle is not a selector; query from it with root",
-                ));
-            };
-            if no_wait {
-                element_handle::query_one(pw, scope, target, strict).await
-            } else {
-                let (state, returning) = (SelectorState::Attached, Returning::Handle);
-                selector_wait::wait_for_selector(pw, scope, target, strict, state, returning).await
-            }
-        }
-        ReadOp::Normalize => normalize::normalize(pw, scope, args.decode(scope)?).await,
-        ReadOp::ElementHandles => {
-            let EveryMatchInput { target } = args.decode(scope)?;
-            let Target::Locator(target) = &target else {
-                return Err(scope.fail(
-                    ErrorCode::InvalidInput,
-                    "target: an element handle is not a selector; query from it with root",
-                ));
-            };
-            element_handle::query_all(pw, scope, target).await
-        }
+        ReadOp::TextContent => r.op(wire::command("ElementHandle.textContent"), text_content),
+        ReadOp::InnerText => r.op(wire::command("ElementHandle.innerText"), inner_text),
+        ReadOp::InnerHtml => r.op(wire::command("ElementHandle.innerHTML"), inner_html),
+        ReadOp::GetAttribute => r.op(wire::command("ElementHandle.getAttribute"), get_attribute),
+        ReadOp::InputValue => r.op(wire::command("ElementHandle.inputValue"), input_value),
+        ReadOp::IsEnabled => r.op(wire::command("ElementHandle.isEnabled"), is_enabled),
+        ReadOp::IsDisabled => r.op(wire::command("ElementHandle.isDisabled"), is_disabled),
+        ReadOp::IsEditable => r.op(wire::command("ElementHandle.isEditable"), is_editable),
+        ReadOp::IsChecked => r.op(wire::command("ElementHandle.isChecked"), is_checked),
+        ReadOp::IsVisible => r.op(wire::command("ElementHandle.isVisible"), is_visible),
+        ReadOp::IsHidden => r.op(wire::command("ElementHandle.isHidden"), is_hidden),
+        ReadOp::BoundingBox => r.op(wire::command("ElementHandle.boundingBox"), bounding_box),
+        ReadOp::Count => r.op(wire::command("Frame.queryCount"), count),
+        ReadOp::AllTextContents => r.op(
+            wire::neo_only(
+                "upstream evaluates all matches in the client; Neo performs a probe read",
+            ),
+            all_text_contents,
+        ),
+        ReadOp::AllInnerTexts => r.op(
+            wire::neo_only(
+                "upstream evaluates all matches in the client; Neo performs a probe read",
+            ),
+            all_inner_texts,
+        ),
+        ReadOp::Normalize => r.op(
+            wire::command("Frame.resolveSelector")
+                .adds(&[(
+                    "selector",
+                    "original selector for diagnostics after brand resolution",
+                )])
+                .omits(&[("sdkLanguage", "Neo always formats a JavaScript locator")]),
+            normalize::normalize,
+        ),
+        ReadOp::WaitFor => r.op(
+            wire::command("Frame.waitForSelector").retypes(&[(
+                "state",
+                "also serves waitForElementState's stable/enabled/disabled/editable states",
+            )]),
+            wait_for,
+        ),
+        ReadOp::ElementHandle => r.op(
+            wire::command("Frame.querySelector").adds(&[(
+                "noWait",
+                "selects the immediate page.$ query instead of a locator wait",
+            )]),
+            handle,
+        ),
+        ReadOp::ElementHandles => r.op(wire::command("Frame.querySelectorAll"), handles),
     }
+}
+
+async fn text_content(
+    pw: &Playwright,
+    scope: &OpScope<'_>,
+    input: ElementInput,
+) -> Result<Option<String>, PlaywrightError> {
+    element(pw, scope, input, Read::TextContent).await
+}
+
+async fn inner_text(
+    pw: &Playwright,
+    scope: &OpScope<'_>,
+    input: ElementInput,
+) -> Result<String, PlaywrightError> {
+    element(pw, scope, input, Read::InnerText).await
+}
+
+async fn inner_html(
+    pw: &Playwright,
+    scope: &OpScope<'_>,
+    input: ElementInput,
+) -> Result<String, PlaywrightError> {
+    element(pw, scope, input, Read::InnerHtml).await
+}
+
+async fn input_value(
+    pw: &Playwright,
+    scope: &OpScope<'_>,
+    input: ElementInput,
+) -> Result<String, PlaywrightError> {
+    element(pw, scope, input, Read::InputValue).await
+}
+
+async fn is_enabled(
+    pw: &Playwright,
+    scope: &OpScope<'_>,
+    input: ElementInput,
+) -> Result<bool, PlaywrightError> {
+    element(
+        pw,
+        scope,
+        input,
+        Read::State {
+            state: QueryState::Enabled,
+        },
+    )
+    .await
+}
+
+async fn is_disabled(
+    pw: &Playwright,
+    scope: &OpScope<'_>,
+    input: ElementInput,
+) -> Result<bool, PlaywrightError> {
+    element(
+        pw,
+        scope,
+        input,
+        Read::State {
+            state: QueryState::Disabled,
+        },
+    )
+    .await
+}
+
+async fn is_editable(
+    pw: &Playwright,
+    scope: &OpScope<'_>,
+    input: ElementInput,
+) -> Result<bool, PlaywrightError> {
+    element(
+        pw,
+        scope,
+        input,
+        Read::State {
+            state: QueryState::Editable,
+        },
+    )
+    .await
+}
+
+async fn is_checked(
+    pw: &Playwright,
+    scope: &OpScope<'_>,
+    input: ElementInput,
+) -> Result<bool, PlaywrightError> {
+    element(
+        pw,
+        scope,
+        input,
+        Read::State {
+            state: QueryState::Checked,
+        },
+    )
+    .await
+}
+
+async fn get_attribute(
+    pw: &Playwright,
+    scope: &OpScope<'_>,
+    input: AttributeInput,
+) -> Result<Option<String>, PlaywrightError> {
+    let AttributeInput {
+        target,
+        strict,
+        name,
+    } = input;
+    element(
+        pw,
+        scope,
+        ElementInput { target, strict },
+        Read::Attribute { name },
+    )
+    .await
+}
+
+async fn is_visible(
+    pw: &Playwright,
+    scope: &OpScope<'_>,
+    input: ElementInput,
+) -> Result<bool, PlaywrightError> {
+    let ElementInput { target, strict } = input;
+    element_read::read_visibility(pw, scope, &target, strict, Visibility::Visible).await
+}
+
+async fn is_hidden(
+    pw: &Playwright,
+    scope: &OpScope<'_>,
+    input: ElementInput,
+) -> Result<bool, PlaywrightError> {
+    let ElementInput { target, strict } = input;
+    element_read::read_visibility(pw, scope, &target, strict, Visibility::Hidden).await
+}
+
+async fn bounding_box(
+    pw: &Playwright,
+    scope: &OpScope<'_>,
+    input: ElementInput,
+) -> Result<Option<Rect>, PlaywrightError> {
+    let ElementInput { target, strict } = input;
+    let reading =
+        element_read::read_attached(pw, scope, &target, strict, &Read::BoundingBox).await?;
+    viewport_box::in_main_viewport(scope, &reading.path, reading.value).await
+}
+
+async fn count(
+    pw: &Playwright,
+    scope: &OpScope<'_>,
+    input: EveryMatchInput,
+) -> Result<u32, PlaywrightError> {
+    Ok(every_match(pw, scope, input, ReadAll::Count).await?.count)
+}
+
+async fn all_text_contents(
+    pw: &Playwright,
+    scope: &OpScope<'_>,
+    input: EveryMatchInput,
+) -> Result<Vec<String>, PlaywrightError> {
+    read_texts(pw, scope, input, ReadAll::TextContents).await
+}
+
+async fn all_inner_texts(
+    pw: &Playwright,
+    scope: &OpScope<'_>,
+    input: EveryMatchInput,
+) -> Result<Vec<String>, PlaywrightError> {
+    read_texts(pw, scope, input, ReadAll::InnerTexts).await
+}
+
+/// Both text-vector reads decode the probe's page values at this shared protocol boundary.
+async fn read_texts(
+    pw: &Playwright,
+    scope: &OpScope<'_>,
+    input: EveryMatchInput,
+    read: ReadAll,
+) -> Result<Vec<String>, PlaywrightError> {
+    let matched = every_match(pw, scope, input, read).await?;
+    matched
+        .values
+        .into_iter()
+        .map(|value| element_read::read_value(scope, value))
+        .collect()
+}
+
+async fn handle(
+    pw: &Playwright,
+    scope: &OpScope<'_>,
+    input: ElementHandleInput,
+) -> Result<Option<RootHandle>, PlaywrightError> {
+    let ElementHandleInput {
+        target,
+        strict,
+        no_wait,
+    } = input;
+    let Target::Locator(target) = &target else {
+        return Err(scope.fail(
+            ErrorCode::InvalidInput,
+            "target: an element handle is not a selector; query from it with root",
+        ));
+    };
+    if no_wait {
+        element_handle::find_one(pw, scope, target, strict).await
+    } else {
+        selector_wait::wait_for_match(
+            pw,
+            scope,
+            target,
+            strict,
+            SelectorState::Attached,
+            Returning::Handle,
+        )
+        .await
+    }
+}
+
+async fn handles(
+    pw: &Playwright,
+    scope: &OpScope<'_>,
+    input: EveryMatchInput,
+) -> Result<Vec<RootHandle>, PlaywrightError> {
+    let EveryMatchInput { target } = input;
+    let Target::Locator(target) = &target else {
+        return Err(scope.fail(
+            ErrorCode::InvalidInput,
+            "target: an element handle is not a selector; query from it with root",
+        ));
+    };
+    element_handle::query_all(pw, scope, target).await
 }
 
 /// `locator.waitFor` and `page.waitForSelector`: upstream's `waitForSelector`, for the four
@@ -334,7 +568,7 @@ async fn wait_for(
     pw: &Playwright,
     scope: &OpScope<'_>,
     input: WaitForInput,
-) -> Result<Value, PlaywrightError> {
+) -> Result<Option<RootHandle>, PlaywrightError> {
     let target = match &input.target {
         Target::Locator(target) => target,
         Target::Element(target) => {
@@ -344,7 +578,8 @@ async fn wait_for(
                     "state: expected one of (visible|hidden|stable|enabled|disabled|editable)",
                 ));
             };
-            return element_wait::wait_for_element_state(pw, scope, target, state).await;
+            element_wait::wait_for_element_state(pw, scope, target, state).await?;
+            return Ok(None);
         }
     };
     let Some(state) = input.state.for_selector() else {
@@ -358,7 +593,7 @@ async fn wait_for(
     } else {
         Returning::Handle
     };
-    selector_wait::wait_for_selector(pw, scope, target, input.strict, state, returning).await
+    selector_wait::wait_for_match(pw, scope, target, input.strict, state, returning).await
 }
 
 /// Every element that matches now, as upstream's `queryCount` and the client's `$$eval`s: one
@@ -392,24 +627,13 @@ async fn every_match(
 }
 
 /// One element's read, once the locator matches (`read_attached`).
-async fn element(
+async fn element<T: DeserializeOwned>(
     pw: &Playwright,
     scope: &OpScope<'_>,
     input: ElementInput,
     read: Read,
-) -> Result<Value, PlaywrightError> {
+) -> Result<T, PlaywrightError> {
     let reading =
         element_read::read_attached(pw, scope, &input.target, input.strict, &read).await?;
-    Ok(reading.value)
-}
-
-/// `isEnabled`, `isDisabled`, `isEditable` and `isChecked`: upstream's `_elementState`, which
-/// waits for the element as the other reads do.
-async fn state(
-    pw: &Playwright,
-    scope: &OpScope<'_>,
-    input: ElementInput,
-    state: QueryState,
-) -> Result<Value, PlaywrightError> {
-    element(pw, scope, input, Read::State { state }).await
+    element_read::read_value(scope, reading.value)
 }

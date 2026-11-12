@@ -14,14 +14,14 @@
 //! borderless, untransformed iframes.
 
 use serde::Deserialize;
-use serde_json::{Value, json};
+use serde_json::Value;
 
 use crate::op_scope::OpScope;
 use crate::probe::{self, Point, ProbeFailure, ProbeReply, ProbeRequest, Read, Rect};
 use crate::read::element_read;
 use crate::resolve::{self, FramePath, Hop};
 use crate::target::Strictness;
-use crate::{ErrorCode, PlaywrightError};
+use crate::{ErrorCode, PlaywrightError, op_output};
 
 /// The box `local` (a `Rect` in the element's own frame, or null) in the main viewport. Null
 /// when the element has no layout box, and when a frame on the way is no longer rendered or no
@@ -30,18 +30,22 @@ pub(crate) async fn in_main_viewport(
     scope: &OpScope<'_>,
     path: &FramePath,
     local: Value,
-) -> Result<Value, PlaywrightError> {
+) -> Result<Option<Rect>, PlaywrightError> {
     project(scope, path, local, Projection::BoundingBox).await
 }
 
-/// Screenshot locators must retry the entire preparation when an ancestor disappears. Keep
-/// this distinct from a hidden frame, which has no capturable layout rather than a new node.
+/// Temporary JSON boundary for `page/screenshot_geometry.rs` only; it goes away when the
+/// page families (PRs 12 and 13) use the typed projection. Screenshots distinguish a vanished
+/// ancestor (retry preparation) from a hidden frame (no capturable layout).
 pub(crate) async fn for_screenshot(
     scope: &OpScope<'_>,
     path: &FramePath,
     local: Value,
 ) -> Result<Value, PlaywrightError> {
-    project(scope, path, local, Projection::Screenshot).await
+    op_output::to_output(
+        scope,
+        &project(scope, path, local, Projection::Screenshot).await?,
+    )
 }
 
 #[derive(Clone, Copy)]
@@ -61,9 +65,9 @@ async fn project(
     path: &FramePath,
     local: Value,
     projection: Projection,
-) -> Result<Value, PlaywrightError> {
+) -> Result<Option<Rect>, PlaywrightError> {
     let Some(rect) = element_read::read_value::<Option<Rect>>(scope, local)? else {
-        return Ok(Value::Null);
+        return Ok(None);
     };
     // A point `p` of the innermost frame is at `origin + scale * p` in the main viewport.
     let mut origin = Point { x: 0.0, y: 0.0 };
@@ -90,16 +94,16 @@ async fn project(
                      in page coordinates in Neo",
                 ));
             }
-            OriginState::Hidden => return Ok(Value::Null),
+            OriginState::Hidden => return Ok(None),
             OriginState::Detached => {
                 return match projection {
-                    Projection::BoundingBox => Ok(Value::Null),
+                    Projection::BoundingBox => Ok(None),
                     Projection::Screenshot => Err(resolve::handle_detached(scope)),
                 };
             }
         }
     }
-    Ok(json!(Rect {
+    Ok(Some(Rect {
         x: origin.x + scale.x * rect.x,
         y: origin.y + scale.y * rect.y,
         width: scale.x * rect.width,
@@ -212,10 +216,7 @@ mod tests {
                 iframe: HopIframe::Key("#iframe".to_owned()),
             });
             let local = json!({ "x": 1, "y": 2, "width": 3, "height": 4 });
-            assert_eq!(
-                in_main_viewport(&scope, &path, local.clone()).await?,
-                Value::Null
-            );
+            assert_eq!(in_main_viewport(&scope, &path, local.clone()).await?, None);
             let screenshot = for_screenshot(&scope, &path, local).await;
             if detached {
                 assert_eq!(

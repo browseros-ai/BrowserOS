@@ -12,14 +12,15 @@
 //! A ref jump's path is the parent links its frame was reached through, so `getByRef('f4e2')`
 //! comes back as the chain of frame locators upstream would print.
 
-use serde::Deserialize;
-use serde_json::{Value, json};
+use serde::{Deserialize, Serialize};
+use ts_rs::TS;
 
 use crate::op_scope::OpScope;
 use crate::page::OpPage;
 use crate::probe::{self, ProbeFailure, ProbeReply, ProbeRequest, ProbeTarget};
 use crate::resolve::{self, FramePath, Landed, Resolver};
 use crate::target::{Strictness, Target};
+use crate::wire::options;
 use crate::{ErrorCode, Playwright, PlaywrightError};
 
 /// What joins the parts, as upstream's `resolveSelector` joins them.
@@ -27,10 +28,19 @@ const ENTER_FRAME: &str = " >> internal:control=enter-frame >> ";
 
 /// `locator.normalize()`: `{ target, selector }`. `selector` is the locator's own selector as
 /// the script built it, which upstream's two messages quote.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, TS)]
 #[serde(deny_unknown_fields)]
+#[ts(rename = "ReadNormalizeInput")]
 pub(crate) struct NormalizeInput {
     target: Target,
+    selector: String,
+}
+options!(NormalizeInput);
+
+/// The generator's selector for the first match, framed from the main document down.
+#[derive(Debug, Serialize, TS)]
+#[ts(rename = "ReadNormalized")]
+pub(crate) struct Normalized {
     selector: String,
 }
 
@@ -41,7 +51,7 @@ pub(crate) async fn normalize(
     pw: &Playwright,
     scope: &OpScope<'_>,
     input: NormalizeInput,
-) -> Result<Value, PlaywrightError> {
+) -> Result<Normalized, PlaywrightError> {
     let Target::Locator(target) = &input.target else {
         return Err(scope.not_built());
     };
@@ -75,7 +85,9 @@ pub(crate) async fn normalize(
     };
     let mut parts = frame_selectors(scope, &path, &input.selector).await?;
     parts.push(element);
-    Ok(json!({ "selector": parts.join(ENTER_FRAME) }))
+    Ok(Normalized {
+        selector: parts.join(ENTER_FRAME),
+    })
 }
 
 /// The selector of each `<iframe>` on `path`, top down, each written in its parent's world.

@@ -62,6 +62,11 @@ struct Imported {
 const IMPORTED: &[Imported] = &[
     Imported {
         module: "../../../probe/protocol",
+        name: "Rect",
+        checked_by: "tests/data/probe-protocol.json",
+    },
+    Imported {
+        module: "../../../probe/protocol",
         name: "Point",
         checked_by: "tests/data/probe-protocol.json",
     },
