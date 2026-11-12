@@ -357,7 +357,8 @@ fn navigation_publication(name: &str, input: &Value) -> Option<NavigationPublica
     serde_json::from_value(input.get("publication")?.clone()).ok()
 }
 
-fn envelope(reply: &OpReply, completed_navigations: &[u64]) -> String {
+/// The text `__neo_invoke` resolves with for `reply`: [`Envelope`] as JSON, never a failure.
+pub(crate) fn envelope(reply: &OpReply, completed_navigations: &[u64]) -> String {
     let pumped = reply.pumped;
     let default_page = reply.default_page.as_ref().map(DefaultPage::from);
     let envelope = match &reply.outcome {

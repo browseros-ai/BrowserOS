@@ -39,5 +39,7 @@ mod tests;
 use bridge::Bridge;
 #[cfg(feature = "hosted-run")]
 pub(crate) use bridge::Bridge;
+#[cfg(feature = "test-support")]
+pub(crate) use bridge::envelope;
 pub(crate) use run_logs::{LogLevel, LogLine, RunLogs};
 pub(crate) use run_script::{Script, ScriptEnd, ScriptOutcome, run_script};
