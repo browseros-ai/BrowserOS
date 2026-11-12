@@ -1,5 +1,5 @@
 diff --git a/chrome/browser/devtools/protocol/browser_handler.h b/chrome/browser/devtools/protocol/browser_handler.h
-index e1424aa52cbf60d3de12a509f7eb815a390a32bc..b82f83ebda7b4e9ba5b51fa02e4461dc90f6db47 100644
+index e1424aa52cbf60d3de12a509f7eb815a390a32bc..e25ddf0e21bf0bacc1d027d95cfdc891198f18af 100644
 --- a/chrome/browser/devtools/protocol/browser_handler.h
 +++ b/chrome/browser/devtools/protocol/browser_handler.h
 @@ -5,9 +5,17 @@
@@ -35,7 +35,7 @@ index e1424aa52cbf60d3de12a509f7eb815a390a32bc..b82f83ebda7b4e9ba5b51fa02e4461dc
    protocol::Response GetWindowBounds(
        int window_id,
        std::unique_ptr<protocol::Browser::Bounds>* out_bounds) override;
-@@ -41,6 +57,115 @@ class BrowserHandler : public protocol::Browser::Backend {
+@@ -41,6 +57,121 @@ class BrowserHandler : public protocol::Browser::Backend {
    protocol::Response AddPrivacySandboxEnrollmentOverride(
        const std::string& in_url) override;
  
@@ -125,6 +125,12 @@ index e1424aa52cbf60d3de12a509f7eb815a390a32bc..b82f83ebda7b4e9ba5b51fa02e4461dc
 +      std::optional<int> window_id,
 +      std::unique_ptr<protocol::Array<protocol::Browser::TabGroupInfo>>*
 +          out_groups) override;
++  protocol::Response GetClosedTabGroups(
++      std::unique_ptr<protocol::Array<protocol::Browser::ClosedTabGroupInfo>>*
++          out_groups) override;
++  protocol::Response DeleteClosedTabGroup(
++      const std::string& browser_profile_id,
++      const std::string& saved_group_id) override;
 +  protocol::Response CreateTabGroup(
 +      std::unique_ptr<protocol::Array<int>> tab_ids,
 +      std::optional<std::string> title,

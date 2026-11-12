@@ -1,5 +1,5 @@
 diff --git a/chrome/browser/devtools/protocol/browser_handler_android.cc b/chrome/browser/devtools/protocol/browser_handler_android.cc
-index 7e68ad976d8e1d480d4297e7ade562c2b2f693a7..a6b70cc256f15512be75ba704d654145b8210f5f 100644
+index 7e68ad976d8e1d480d4297e7ade562c2b2f693a7..2ffa7200564f5e60ab62243cc538ae61b4752996 100644
 --- a/chrome/browser/devtools/protocol/browser_handler_android.cc
 +++ b/chrome/browser/devtools/protocol/browser_handler_android.cc
 @@ -15,6 +15,7 @@
@@ -70,7 +70,7 @@ index 7e68ad976d8e1d480d4297e7ade562c2b2f693a7..a6b70cc256f15512be75ba704d654145
  Response BrowserHandlerAndroid::GetWindowBounds(
      int window_id,
      std::unique_ptr<protocol::Browser::Bounds>* out_bounds) {
-@@ -355,3 +409,190 @@ protocol::Response BrowserHandlerAndroid::AddPrivacySandboxEnrollmentOverride(
+@@ -355,3 +409,204 @@ protocol::Response BrowserHandlerAndroid::AddPrivacySandboxEnrollmentOverride(
      const std::string& in_url) {
    return Response::MethodNotFound(kNotImplemented);
  }
@@ -220,6 +220,20 @@ index 7e68ad976d8e1d480d4297e7ade562c2b2f693a7..a6b70cc256f15512be75ba704d654145
 +    std::unique_ptr<protocol::Array<protocol::Browser::TabGroupInfo>>*
 +        out_groups) {
 +  return Response::MethodNotFound(kNotImplemented);
++}
++
++Response BrowserHandlerAndroid::GetClosedTabGroups(
++    std::unique_ptr<protocol::Array<protocol::Browser::ClosedTabGroupInfo>>*
++        out_groups) {
++  return Response::ServerError(
++      "Closed tab group management is not supported on Android");
++}
++
++Response BrowserHandlerAndroid::DeleteClosedTabGroup(
++    const std::string& browser_profile_id,
++    const std::string& saved_group_id) {
++  return Response::ServerError(
++      "Closed tab group management is not supported on Android");
 +}
 +
 +Response BrowserHandlerAndroid::CreateTabGroup(

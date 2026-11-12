@@ -68,6 +68,7 @@ export class Application {
         port: this.config.serverPort,
         host: '0.0.0.0',
         version: VERSION,
+        nativeBrowserosVersion: this.config.instanceBrowserosVersion,
         browser,
         browserSession,
         browserosId: identity.getBrowserOSId(),

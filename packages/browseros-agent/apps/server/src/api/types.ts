@@ -157,6 +157,8 @@ export interface HttpServerConfig {
   host?: string
 
   version: string
+  /** Installed browser version; `version` is the independently updated server. */
+  nativeBrowserosVersion?: string
   browser: Browser
   browserSession: BrowserSession
 

@@ -39,6 +39,8 @@ pub enum NativeFeature {
     /// Saved payment card metadata, card saves and native card filling, served by
     /// BrowserOS's own `Payments` CDP domain.
     PaymentCards,
+    /// Explicit listing/deletion of closed saved groups, separate from live tab groups.
+    ClosedTabGroups,
 }
 
 impl NativeFeature {
@@ -47,6 +49,7 @@ impl NativeFeature {
         Self::ProfileTargeting,
         Self::Credentials,
         Self::PaymentCards,
+        Self::ClosedTabGroups,
     ];
 
     /// Stable camelCase key for machine-readable surfaces such as run's feature flags.
@@ -56,6 +59,7 @@ impl NativeFeature {
             Self::ProfileTargeting => "profileTargeting",
             Self::Credentials => "credentials",
             Self::PaymentCards => "paymentCards",
+            Self::ClosedTabGroups => "closedTabGroups",
         }
     }
 
@@ -175,6 +179,13 @@ const FEATURES: &[FeatureSpec] = &[
         ],
         raw_params: &[],
     },
+    FeatureSpec {
+        feature: NativeFeature::ClosedTabGroups,
+        label: "closed saved tab groups",
+        min_browseros: BrowserOsVersion::new(0, 52, 2, 0),
+        raw_methods: &["Browser.getClosedTabGroups", "Browser.deleteClosedTabGroup"],
+        raw_params: &[],
+    },
 ];
 
 /// The connected browser's native identity, fixed for one server process.
@@ -280,6 +291,25 @@ mod tests {
         assert!(!native("0.51.1.2").supports(NativeFeature::ProfileTargeting));
         assert!(native("0.51.1.3").supports(NativeFeature::ProfileTargeting));
         assert!(native("0.52.0.0").supports(NativeFeature::ProfileTargeting));
+    }
+
+    #[test]
+    fn closed_tab_groups_require_the_native_release_and_guard_only_new_methods() {
+        for caps in [NativeCapabilities::default(), native("0.52.1.1")] {
+            assert!(!caps.supports(NativeFeature::ClosedTabGroups));
+            for method in ["Browser.getClosedTabGroups", "Browser.deleteClosedTabGroup"] {
+                assert!(caps.check_raw(method, &json!({})).is_err());
+            }
+            for method in ["Browser.getTabGroups", "Browser.closeTabGroup"] {
+                assert!(caps.check_raw(method, &json!({})).is_ok());
+            }
+        }
+        assert!(native("0.52.2").supports(NativeFeature::ClosedTabGroups));
+        assert!(
+            native("0.52.2")
+                .check_raw("Browser.deleteClosedTabGroup", &json!({}))
+                .is_ok()
+        );
     }
 
     #[test]

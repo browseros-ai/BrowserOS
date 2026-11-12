@@ -13,6 +13,8 @@ export interface ToolContext {
   session: BrowserSession
   defaultWindowId?: number
   defaultTabGroupId?: string
+  /** Installed BrowserOS version, distinct from an OTA-updated MCP server version. */
+  nativeBrowserosVersion?: string
   signal?: AbortSignal
 }
 

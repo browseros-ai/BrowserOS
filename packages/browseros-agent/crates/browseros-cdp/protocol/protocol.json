@@ -4675,6 +4675,38 @@
                     ]
                 },
                 {
+                    "id": "ClosedTabGroupInfo",
+                    "description": "Saved groups with no local tab-strip group, scoped to a loaded regular profile.",
+                    "experimental": true,
+                    "type": "object",
+                    "properties": [
+                        {
+                            "name": "savedGroupId",
+                            "type": "string"
+                        },
+                        {
+                            "name": "browserProfileId",
+                            "$ref": "BrowserProfileID"
+                        },
+                        {
+                            "name": "title",
+                            "type": "string"
+                        },
+                        {
+                            "name": "color",
+                            "type": "string"
+                        },
+                        {
+                            "name": "tabCount",
+                            "type": "integer"
+                        },
+                        {
+                            "name": "shared",
+                            "type": "boolean"
+                        }
+                    ]
+                },
+                {
                     "id": "PermissionType",
                     "experimental": true,
                     "type": "string",
@@ -4840,6 +4872,35 @@
                 }
             ],
             "commands": [
+                {
+                    "name": "getClosedTabGroups",
+                    "description": "List closed saved groups without loading profiles or opening windows.",
+                    "experimental": true,
+                    "returns": [
+                        {
+                            "name": "groups",
+                            "type": "array",
+                            "items": {
+                                "$ref": "ClosedTabGroupInfo"
+                            }
+                        }
+                    ]
+                },
+                {
+                    "name": "deleteClosedTabGroup",
+                    "description": "Delete exactly one closed saved group. Open and shared groups are refused.\nThis removes the saved record and propagates through normal tab-group sync.",
+                    "experimental": true,
+                    "parameters": [
+                        {
+                            "name": "browserProfileId",
+                            "$ref": "BrowserProfileID"
+                        },
+                        {
+                            "name": "savedGroupId",
+                            "type": "string"
+                        }
+                    ]
+                },
                 {
                     "name": "getProfiles",
                     "description": "Lists saved regular profiles without loading them or opening windows.",
@@ -5348,7 +5409,7 @@
                 },
                 {
                     "name": "closeTabGroup",
-                    "description": "Close all tabs in a group, destroying the group.",
+                    "description": "Close all tabs in a group. Its saved record is preserved for reopening.",
                     "experimental": true,
                     "parameters": [
                         {

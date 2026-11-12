@@ -44,8 +44,15 @@ interface CreateApiRoutesDeps {
 /** Composes the BrowserOS HTTP API from the existing route factories. */
 export function createApiRoutes(deps: CreateApiRoutesDeps) {
   const { agentRoutes, config, klavis, onShutdown, tokenManager } = deps
-  const { browser, browserosId, browserSession, port, resourcesDir, version } =
-    config
+  const {
+    browser,
+    browserosId,
+    browserSession,
+    nativeBrowserosVersion,
+    port,
+    resourcesDir,
+    version,
+  } = config
   const { activity } = config
   const acpRuntime = new AcpAgentRuntime({ serverPort: port, resourcesDir })
   const conversationRuns = new ConversationRuns({ activity })
@@ -53,6 +60,7 @@ export function createApiRoutes(deps: CreateApiRoutesDeps) {
   // both /chat and /mcp must share it for loopback calls to recover context.
   const browserMcp = new BrowserMcpModule({
     version,
+    nativeBrowserosVersion,
     browserSession,
     conversationRuns,
     klavis,

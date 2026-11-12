@@ -50,6 +50,9 @@ export function createBrowserMcpServer(
     {
       defaultWindowId: options.defaultWindowId,
       defaultTabGroupId: options.defaultTabGroupId,
+      ...(options.nativeBrowserosVersion !== undefined && {
+        nativeBrowserosVersion: options.nativeBrowserosVersion,
+      }),
     },
     options.registration,
   )

@@ -87,6 +87,7 @@ type RegisterFn = (
 export interface BrowserToolDefaults {
   defaultWindowId?: number
   defaultTabGroupId?: string
+  nativeBrowserosVersion?: string
 }
 
 interface BrowserToolLogger {

@@ -1,16 +1,28 @@
 diff --git a/chrome/browser/devtools/protocol/devtools_protocol_browsertest.cc b/chrome/browser/devtools/protocol/devtools_protocol_browsertest.cc
-index fdf0973f53f6b26814596bcdcd0e2a2caa29727c..cc537f1c3900b6d30291a898c15729f1e045f1d2 100644
+index fdf0973f53f6b26814596bcdcd0e2a2caa29727c..abdb300bbe0e60fa83d2f19810dbe9867bc8c77a 100644
 --- a/chrome/browser/devtools/protocol/devtools_protocol_browsertest.cc
 +++ b/chrome/browser/devtools/protocol/devtools_protocol_browsertest.cc
-@@ -23,6 +23,7 @@
+@@ -18,11 +18,14 @@
+ #include "base/strings/to_string.h"
+ #include "base/strings/utf_string_conversions.h"
+ #include "base/test/bind.h"
++#include "base/test/run_until.h"
+ #include "base/test/scoped_feature_list.h"
+ #include "base/test/test_future.h"
  #include "base/test/test_switches.h"
  #include "base/test/values_test_util.h"
  #include "base/threading/thread_restrictions.h"
 +#include "base/time/time.h"
++#include "base/uuid.h"
  #include "base/values.h"
  #include "build/build_config.h"
  #include "chrome/browser/apps/app_service/app_service_proxy.h"
-@@ -34,6 +35,7 @@
+@@ -30,14 +33,17 @@
+ #include "chrome/browser/apps/app_service/browser_app_launcher.h"
+ #include "chrome/browser/custom_handlers/protocol_handler_registry_factory.h"
+ #include "chrome/browser/data_saver/data_saver.h"
++#include "chrome/browser/devtools/devtools_browser_context_manager.h"
+ #include "chrome/browser/devtools/devtools_window.h"
  #include "chrome/browser/devtools/protocol/devtools_protocol_test_support.h"
  #include "chrome/browser/first_party_sets/first_party_sets_policy_service.h"
  #include "chrome/browser/first_party_sets/first_party_sets_policy_service_factory.h"
@@ -18,7 +30,12 @@ index fdf0973f53f6b26814596bcdcd0e2a2caa29727c..cc537f1c3900b6d30291a898c15729f1
  #include "chrome/browser/preloading/preloading_prefs.h"
  #include "chrome/browser/privacy_sandbox/privacy_sandbox_attestations/privacy_sandbox_attestations_mixin.h"
  #include "chrome/browser/profiles/profile.h"
-@@ -48,6 +50,8 @@
+ #include "chrome/browser/ssl/https_upgrades_util.h"
++#include "chrome/browser/tab_group_sync/tab_group_sync_service_factory.h"
+ #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+ #include "chrome/common/chrome_paths.h"
+ #include "chrome/common/chrome_switches.h"
+@@ -48,12 +54,17 @@
  #include "components/content_settings/core/browser/cookie_settings.h"
  #include "components/content_settings/core/common/pref_names.h"
  #include "components/custom_handlers/protocol_handler_registry.h"
@@ -27,7 +44,16 @@ index fdf0973f53f6b26814596bcdcd0e2a2caa29727c..cc537f1c3900b6d30291a898c15729f1
  #include "components/infobars/content/content_infobar_manager.h"
  #include "components/infobars/core/infobar.h"
  #include "components/infobars/core/infobar_delegate.h"
-@@ -109,6 +113,7 @@
+ #include "components/optimization_guide/proto/features/common_quality_data.pb.h"
+ #include "components/privacy_sandbox/privacy_sandbox_attestations/privacy_sandbox_attestations.h"
+ #include "components/privacy_sandbox/privacy_sandbox_prefs.h"
++#include "components/saved_tab_groups/public/saved_tab_group.h"
++#include "components/saved_tab_groups/public/saved_tab_group_tab.h"
++#include "components/saved_tab_groups/public/tab_group_sync_service.h"
+ #include "components/services/app_service/public/cpp/app_launch_params.h"
+ #include "content/public/browser/btm_redirect.h"
+ #include "content/public/browser/btm_service.h"
+@@ -109,6 +120,7 @@
  #include "chrome/browser/sessions/session_restore_test_helper.h"
  #include "chrome/browser/sessions/session_service_test_helper.h"
  #include "chrome/browser/ui/browser_commands.h"
@@ -35,7 +61,7 @@ index fdf0973f53f6b26814596bcdcd0e2a2caa29727c..cc537f1c3900b6d30291a898c15729f1
  #include "chrome/browser/ui/browser_window/public/global_browser_collection.h"
  #include "chrome/browser/ui/tabs/tab_strip_model.h"
  #include "chrome/browser/ui/web_applications/test/isolated_web_app_test_utils.h"
-@@ -480,8 +485,8 @@ IN_PROC_BROWSER_TEST_F(DevToolsProtocolTest, CreateTargetWithFocus) {
+@@ -480,8 +492,8 @@ IN_PROC_BROWSER_TEST_F(DevToolsProtocolTest, CreateTargetWithFocus) {
  }
  
  #if BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_MAC)
@@ -46,7 +72,7 @@ index fdf0973f53f6b26814596bcdcd0e2a2caa29727c..cc537f1c3900b6d30291a898c15729f1
  #define MAYBE_AutoAttachToUnloadedTab DISABLED_AutoAttachToUnloadedTab
  #else
  #define MAYBE_AutoAttachToUnloadedTab AutoAttachToUnloadedTab
-@@ -1497,8 +1502,9 @@ IN_PROC_BROWSER_TEST_F(DevToolsProtocolTest, VisibleSecurityStateSecureState) {
+@@ -1497,8 +1509,9 @@ IN_PROC_BROWSER_TEST_F(DevToolsProtocolTest, VisibleSecurityStateSecureState) {
    net::SSLCipherSuiteToStrings(&page_key_exchange_str, &page_cipher, &page_mac,
                                 &is_aead, &is_tls13, page_cipher_suite);
    std::string page_key_exchange;
@@ -57,11 +83,237 @@ index fdf0973f53f6b26814596bcdcd0e2a2caa29727c..cc537f1c3900b6d30291a898c15729f1
  
    const char* page_key_exchange_group =
        SSL_get_curve_name(entry->GetSSL().key_exchange_group);
-@@ -2681,6 +2687,216 @@ IN_PROC_BROWSER_TEST_F(DevToolsProtocolTest,
+@@ -2681,6 +2694,442 @@ IN_PROC_BROWSER_TEST_F(DevToolsProtocolTest,
    EXPECT_EQ(group_id.ToString(),
              *second_get_target_info_data.FindString("tabGroupId"));
  }
 +
++IN_PROC_BROWSER_TEST_F(DevToolsProtocolTest,
++                       PRE_BrowserClosedTabGroupCanBeDeletedAfterRestart) {
++  auto* service = tab_groups::TabGroupSyncServiceFactory::GetForProfile(
++      browser()->GetProfile());
++  ASSERT_TRUE(service);
++  base::RunLoop().RunUntilIdle();
++  const auto guid =
++      base::Uuid::ParseLowercase("a12bdd40-84d3-49d2-9e59-bac416973651");
++  tab_groups::SavedTabGroup group(u"Saved before restart",
++                                  tab_groups::TabGroupColorId::kBlue, {},
++                                  std::nullopt, guid);
++  group.AddTabLocally(tab_groups::SavedTabGroupTab(GURL("https://example.com"),
++                                                   u"Example", guid, 0));
++  service->AddGroup(group);
++  ASSERT_TRUE(base::test::RunUntil(
++      [&] { return service->GetGroup(guid).has_value(); }));
++}
++
++IN_PROC_BROWSER_TEST_F(DevToolsProtocolTest,
++                       BrowserClosedTabGroupCanBeDeletedAfterRestart) {
++  AttachToBrowserTarget();
++  auto* service = tab_groups::TabGroupSyncServiceFactory::GetForProfile(
++      browser()->GetProfile());
++  ASSERT_TRUE(service);
++  base::RunLoop().RunUntilIdle();
++  const auto guid =
++      base::Uuid::ParseLowercase("a12bdd40-84d3-49d2-9e59-bac416973651");
++  ASSERT_TRUE(base::test::RunUntil(
++      [&] { return service->GetGroup(guid).has_value(); }));
++  SendCommandSync("Browser.getClosedTabGroups");
++  ASSERT_FALSE(error());
++  const auto* groups = result()->FindList("groups");
++  ASSERT_TRUE(groups);
++  std::string profile_id;
++  for (const auto& value : *groups) {
++    const auto& group = value.GetDict();
++    if (group.FindString("savedGroupId") &&
++        *group.FindString("savedGroupId") == guid.AsLowercaseString()) {
++      profile_id = *group.FindString("browserProfileId");
++      break;
++    }
++  }
++  ASSERT_FALSE(profile_id.empty());
++  SendCommandSync("Browser.deleteClosedTabGroup",
++                  base::DictValue()
++                      .Set("browserProfileId", profile_id)
++                      .Set("savedGroupId", guid.AsLowercaseString()));
++  ASSERT_FALSE(error());
++  EXPECT_FALSE(service->GetGroup(guid));
++}
++
++IN_PROC_BROWSER_TEST_F(DevToolsProtocolTest,
++                       BrowserClosedTabGroupDeletionUsesExactSavedIdentity) {
++  AttachToBrowserTarget();
++  auto* service = tab_groups::TabGroupSyncServiceFactory::GetForProfile(
++      browser()->GetProfile());
++  ASSERT_TRUE(service);
++  base::RunLoop().RunUntilIdle();
++
++  const auto make_group = [] {
++    tab_groups::SavedTabGroup group(u"Same title",
++                                    tab_groups::TabGroupColorId::kBlue, {});
++    group.AddTabLocally(tab_groups::SavedTabGroupTab(
++        GURL("https://example.com"), u"Example", group.saved_guid(), 0));
++    return group;
++  };
++  const auto first = make_group();
++  const auto second = make_group();
++  service->AddGroup(first);
++  service->AddGroup(second);
++  ASSERT_TRUE(base::test::RunUntil([&] {
++    return service->GetGroup(first.saved_guid()).has_value() &&
++           service->GetGroup(second.saved_guid()).has_value();
++  }));
++
++  SendCommandSync("Browser.getClosedTabGroups");
++  ASSERT_FALSE(error());
++  const auto* groups = result()->FindList("groups");
++  ASSERT_TRUE(groups);
++  std::string profile_id;
++  for (const auto& entry : *groups) {
++    const auto& group = entry.GetDict();
++    if (group.FindString("savedGroupId") &&
++        *group.FindString("savedGroupId") ==
++            first.saved_guid().AsLowercaseString()) {
++      ASSERT_TRUE(group.FindString("browserProfileId"));
++      profile_id = *group.FindString("browserProfileId");
++      EXPECT_EQ(group.FindInt("tabCount"), 1);
++      EXPECT_EQ(group.FindBool("shared"), false);
++    }
++  }
++  ASSERT_FALSE(profile_id.empty());
++
++  SendCommandSync(
++      "Browser.deleteClosedTabGroup",
++      base::DictValue()
++          .Set("browserProfileId", "unrelated-profile")
++          .Set("savedGroupId", first.saved_guid().AsLowercaseString()));
++  ASSERT_TRUE(error());
++  EXPECT_TRUE(service->GetGroup(first.saved_guid()));
++
++  SendCommandSync("Browser.deleteClosedTabGroup",
++                  base::DictValue()
++                      .Set("browserProfileId", profile_id)
++                      .Set("savedGroupId", "not-a-uuid"));
++  ASSERT_TRUE(error());
++  EXPECT_TRUE(service->GetGroup(first.saved_guid()));
++
++  SendCommandSync(
++      "Browser.deleteClosedTabGroup",
++      base::DictValue()
++          .Set("browserProfileId", profile_id)
++          .Set("savedGroupId", first.saved_guid().AsLowercaseString()));
++  ASSERT_FALSE(error());
++  EXPECT_FALSE(service->GetGroup(first.saved_guid()));
++  EXPECT_TRUE(service->GetGroup(second.saved_guid()));
++
++  // A stale/repeated delete fails without selecting a same-titled sibling.
++  SendCommandSync(
++      "Browser.deleteClosedTabGroup",
++      base::DictValue()
++          .Set("browserProfileId", profile_id)
++          .Set("savedGroupId", first.saved_guid().AsLowercaseString()));
++  ASSERT_TRUE(error());
++  EXPECT_TRUE(service->GetGroup(second.saved_guid()));
++}
++
++IN_PROC_BROWSER_TEST_F(
++    DevToolsProtocolTest,
++    BrowserClosedTabGroupDeletionRefusesOpenAndSharedGroups) {
++  AttachToBrowserTarget();
++  auto* service = tab_groups::TabGroupSyncServiceFactory::GetForProfile(
++      browser()->GetProfile());
++  ASSERT_TRUE(service);
++  base::RunLoop().RunUntilIdle();
++  ASSERT_TRUE(AddTabAtIndex(1, GURL("about:blank"),
++                            ui::PageTransition::PAGE_TRANSITION_TYPED));
++  const auto local_id = browser()->tab_strip_model()->AddToNewGroup({1});
++  base::RunLoop().RunUntilIdle();
++  ASSERT_TRUE(base::test::RunUntil(
++      [&] { return service->GetGroup(local_id).has_value(); }));
++  const auto saved = service->GetGroup(local_id);
++  ASSERT_TRUE(saved);
++  const std::string saved_id = saved->saved_guid().AsLowercaseString();
++
++  const auto profile_handle =
++      DevToolsBrowserContextManager::GetInstance().GetBrowserProfileId(
++          browser()->GetProfile());
++  ASSERT_TRUE(profile_handle);
++  const std::string profile_id = *profile_handle;
++  const auto delete_params = [&] {
++    return base::DictValue()
++        .Set("browserProfileId", profile_id)
++        .Set("savedGroupId", saved_id);
++  };
++  SendCommandSync("Browser.deleteClosedTabGroup", delete_params());
++  ASSERT_TRUE(error());
++  EXPECT_TRUE(service->GetGroup(local_id));
++  EXPECT_EQ(browser()->tab_strip_model()->count(), 2);
++
++  // Close keeps the saved record. It can then be found and explicitly deleted.
++  SendCommandSync(
++      "Browser.closeTabGroup",
++      base::DictValue().Set("groupId", local_id.token().ToString()));
++  ASSERT_FALSE(error());
++  base::RunLoop().RunUntilIdle();
++  ASSERT_TRUE(base::test::RunUntil([&] {
++    auto closed = service->GetGroup(saved->saved_guid());
++    return closed && !closed->local_group_id();
++  }));
++  EXPECT_EQ(browser()->tab_strip_model()->count(), 1);
++
++  // Verify that a real close is visible through the closed-group listing.
++  SendCommandSync("Browser.getClosedTabGroups");
++  ASSERT_FALSE(error());
++  ASSERT_TRUE(result());
++  const base::ListValue* closed_groups = result()->FindList("groups");
++  ASSERT_TRUE(closed_groups);
++  const base::DictValue* closed_group_info = nullptr;
++  for (const auto& entry : *closed_groups) {
++    const base::DictValue& candidate = entry.GetDict();
++    const std::string* candidate_id = candidate.FindString("savedGroupId");
++    if (candidate_id && *candidate_id == saved_id) {
++      closed_group_info = &candidate;
++      break;
++    }
++  }
++  ASSERT_TRUE(closed_group_info);
++  ASSERT_TRUE(closed_group_info->FindString("browserProfileId"));
++  EXPECT_EQ(profile_id, *closed_group_info->FindString("browserProfileId"));
++  EXPECT_THAT(closed_group_info->FindInt("tabCount"), testing::Optional(1));
++  EXPECT_THAT(closed_group_info->FindBool("shared"), testing::Optional(false));
++
++  SendCommandSync("Browser.deleteClosedTabGroup", delete_params());
++  ASSERT_FALSE(error());
++  EXPECT_FALSE(service->GetGroup(saved->saved_guid()));
++  EXPECT_EQ(browser()->tab_strip_model()->count(), 1);
++
++  ASSERT_TRUE(AddTabAtIndex(1, GURL("about:blank"),
++                            ui::PageTransition::PAGE_TRANSITION_TYPED));
++  const auto shared_local_id = browser()->tab_strip_model()->AddToNewGroup({1});
++  base::RunLoop().RunUntilIdle();
++  ASSERT_TRUE(base::test::RunUntil(
++      [&] { return service->GetGroup(shared_local_id).has_value(); }));
++  service->MakeTabGroupSharedForTesting(
++      shared_local_id, syncer::CollaborationId("test-collaboration"));
++  const auto shared = service->GetGroup(shared_local_id);
++  ASSERT_TRUE(shared);
++  SendCommandSync(
++      "Browser.closeTabGroup",
++      base::DictValue().Set("groupId", shared_local_id.token().ToString()));
++  ASSERT_FALSE(error());
++  base::RunLoop().RunUntilIdle();
++  ASSERT_TRUE(base::test::RunUntil([&] {
++    auto closed = service->GetGroup(shared->saved_guid());
++    return closed && !closed->local_group_id();
++  }));
++  SendCommandSync(
++      "Browser.deleteClosedTabGroup",
++      base::DictValue()
++          .Set("browserProfileId", profile_id)
++          .Set("savedGroupId", shared->saved_guid().AsLowercaseString()));
++  ASSERT_TRUE(error());
++  EXPECT_TRUE(service->GetGroup(shared->saved_guid()));
++  EXPECT_EQ(browser()->tab_strip_model()->count(), 1);
++}
 +IN_PROC_BROWSER_TEST_F(DevToolsProtocolTest,
 +                       BrowserCreateWindowRejectsHiddenWithoutSideEffects) {
 +  AttachToBrowserTarget();
@@ -107,24 +359,24 @@ index fdf0973f53f6b26814596bcdcd0e2a2caa29727c..cc537f1c3900b6d30291a898c15729f1
 +IN_PROC_BROWSER_TEST_F(DevToolsProtocolTest,
 +                       BrowserSetWindowVisibilityRejectsHideWithoutMutation) {
 +  AttachToBrowserTarget();
-+  ASSERT_TRUE(browser()->window()->IsVisible());
++  ASSERT_TRUE(browser()->GetWindow()->IsVisible());
 +
 +  SendCommandSync("Browser.setWindowVisibility",
 +                  base::DictValue()
-+                      .Set("windowId", browser()->session_id().id())
++                      .Set("windowId", browser()->GetSessionID().id())
 +                      .Set("visible", false));
 +
 +  ASSERT_TRUE(error());
 +  EXPECT_THAT(error()->FindInt("code"), testing::Optional(-32602));
 +  EXPECT_EQ("Hidden windows are no longer supported.",
 +            *error()->FindString("message"));
-+  EXPECT_TRUE(browser()->window()->IsVisible());
++  EXPECT_TRUE(browser()->GetWindow()->IsVisible());
 +}
 +
 +IN_PROC_BROWSER_TEST_F(DevToolsProtocolTest,
 +                       BrowserSetWindowVisibilityShowsInPlace) {
 +  AttachToBrowserTarget();
-+  const int window_id = browser()->session_id().id();
++  const int window_id = browser()->GetSessionID().id();
 +
 +  const base::DictValue* result = SendCommandSync(
 +      "Browser.setWindowVisibility", base::DictValue()
@@ -236,7 +488,7 @@ index fdf0973f53f6b26814596bcdcd0e2a2caa29727c..cc537f1c3900b6d30291a898c15729f1
 +  AttachToBrowserTarget();
 +
 +  history::HistoryService* history_service =
-+      HistoryServiceFactory::GetForProfile(browser()->profile(),
++      HistoryServiceFactory::GetForProfile(browser()->GetProfile(),
 +                                           ServiceAccessType::EXPLICIT_ACCESS);
 +  ui_test_utils::WaitForHistoryToLoad(history_service);
 +
