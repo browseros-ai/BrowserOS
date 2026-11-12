@@ -564,8 +564,6 @@ struct PageInput {
 }
 options!(PageInput);
 
-/// Upstream collects on the main renderer session. Treat collection as a write because
-/// finalizers can execute page code; recheck the host immediately before the CDP command.
 /// The disk write has no page target; capture has already passed the tab's read policies.
 async fn save_screenshot(
     _pw: &Playwright,
@@ -575,6 +573,8 @@ async fn save_screenshot(
     save_screenshot::save(scope, input).await
 }
 
+/// Upstream collects on the main renderer session. Treat collection as a write because
+/// finalizers can execute page code; recheck the host immediately before the CDP command.
 async fn request_gc(
     pw: &Playwright,
     scope: &OpScope<'_>,
