@@ -274,6 +274,14 @@ async fn capture_pixels(
     // use the normalized core path, which owns background isolation from audit captures.
     // DIAGNOSTIC v5: NEO_DIAG_CLIP=1 sends viewport screenshots with an explicit clip, as Playwright does.
     let force_clip = std::env::var_os("NEO_DIAG_CLIP").is_some();
+    // DIAGNOSTIC v6: NEO_DIAG_FRONT=1 makes the tab the window's active tab before capturing.
+    if std::env::var_os("NEO_DIAG_FRONT").is_some() {
+        let front = page
+            .root_session()
+            .send::<_, Value>("Page.bringToFront", json!({}))
+            .await;
+        crate::page::screenshot_preparation::diag_log(&format!("bringToFront ok={}", front.is_ok()));
+    }
     if default_viewport
         && !force_clip
         && background == ScreenshotBackground::Default
