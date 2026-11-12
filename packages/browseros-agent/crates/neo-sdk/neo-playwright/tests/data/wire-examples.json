@@ -788,33 +788,6 @@
     "locator.elementHandle": [
       {
         "call": {
-          "api": "locator.elementHandle",
-          "timeoutMs": 5000
-        },
-        "target": {
-          "$neo": "locator",
-          "page": {
-            "$neo": "page",
-            "tab": 1007
-          },
-          "frame": null,
-          "chunks": [
-            {
-              "parts": [
-                {
-                  "name": "internal:role",
-                  "body": "button",
-                  "source": "button"
-                }
-              ]
-            }
-          ],
-          "display": "getByRole('button')"
-        },
-        "strict": "strict"
-      },
-      {
-        "call": {
           "api": "elementHandle.$",
           "timeoutMs": 0
         },
@@ -860,8 +833,7 @@
             "display": "<button>Go</button>"
           }
         },
-        "strict": "firstMatch",
-        "noWait": true
+        "strict": "firstMatch"
       }
     ],
     "locator.elementHandles": [
@@ -1962,6 +1934,35 @@
         "strict": "strict",
         "state": "visible",
         "omitReturnValue": true
+      },
+      {
+        "call": {
+          "api": "locator.elementHandle",
+          "timeoutMs": 5000
+        },
+        "target": {
+          "$neo": "locator",
+          "page": {
+            "$neo": "page",
+            "tab": 1007
+          },
+          "frame": null,
+          "chunks": [
+            {
+              "parts": [
+                {
+                  "name": "internal:role",
+                  "body": "button",
+                  "source": "button"
+                }
+              ]
+            }
+          ],
+          "display": "getByRole('button')"
+        },
+        "strict": "strict",
+        "state": "attached",
+        "omitReturnValue": false
       }
     ],
     "locator.waitForFunction": [

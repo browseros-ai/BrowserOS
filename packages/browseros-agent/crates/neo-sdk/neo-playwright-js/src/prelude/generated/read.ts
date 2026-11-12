@@ -251,8 +251,7 @@ type _locator_boundingBox_result = Assert<VoidIsNull<'locator.boundingBox', pw.E
 type _locator_waitFor = Assert<UpstreamCheck<'locator.waitFor', ReadWaitForInput, pw.FrameWaitForSelectorParams, never, never, 'state'>>
 type _locator_waitFor_result = Assert<VoidIsNull<'locator.waitFor', pw.FrameWaitForSelectorResult, ElementBrand | null>>
 // locator.elementHandle: Frame.querySelector
-//   adds noWait: selects the immediate page.$ query instead of a locator wait
-type _locator_elementHandle = Assert<UpstreamCheck<'locator.elementHandle', ReadElementHandleInput, pw.FrameQuerySelectorParams, 'noWait', never, never>>
+type _locator_elementHandle = Assert<UpstreamCheck<'locator.elementHandle', ReadElementHandleInput, pw.FrameQuerySelectorParams, never, never, never>>
 type _locator_elementHandle_result = Assert<VoidIsNull<'locator.elementHandle', pw.FrameQuerySelectorResult, ElementBrand | null>>
 // locator.elementHandles: Frame.querySelectorAll
 type _locator_elementHandles = Assert<UpstreamCheck<'locator.elementHandles', ReadEveryMatchInput, pw.FrameQuerySelectorAllParams, never, never, never>>

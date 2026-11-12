@@ -273,7 +273,6 @@ describe('locator targets', () => {
     expect(runtime.calls[0]?.input).toMatchObject({
       call: { api: 'page.$', timeoutMs: 0 },
       strict: 'firstMatch',
-      noWait: true,
     })
     expect(runtime.calls[1]?.input).toMatchObject({
       call: { api: 'elementHandle.click', timeoutMs: 5000 },
@@ -586,7 +585,7 @@ describe('errors', () => {
     const runtime = loadPrelude({
       seed: SEED,
       answer: (call) =>
-        call.name === 'locator.elementHandle'
+        call.name === 'locator.waitFor'
           ? {
               $neo: 'element',
               page: { $neo: 'page', tab: 1007 },

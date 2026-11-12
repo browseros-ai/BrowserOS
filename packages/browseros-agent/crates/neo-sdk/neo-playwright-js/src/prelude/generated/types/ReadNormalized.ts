@@ -3,4 +3,4 @@
 /**
  * The generator's selector for the first match, framed from the main document down.
  */
-export type ReadNormalized = { selector: string, };
+export type ReadNormalized = { resolvedSelector: string, };

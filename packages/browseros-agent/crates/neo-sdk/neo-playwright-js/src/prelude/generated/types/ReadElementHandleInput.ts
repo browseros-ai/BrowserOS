@@ -3,6 +3,7 @@ import type { Strictness } from "./Strictness";
 import type { Target } from "./Target";
 
 /**
- * `locator.elementHandle`, and `page.$` (`noWait`: the first match now, or null).
+ * The immediate query used by `page.$`, `frame.$` and `elementHandle.$`. A locator's
+ * waiting `elementHandle()` uses `locator.waitFor`, like upstream's `waitForSelector`.
  */
-export type ReadElementHandleInput = { target: Target, strict: Strictness, noWait?: boolean, };
+export type ReadElementHandleInput = { target: Target, strict: Strictness, };

@@ -190,8 +190,10 @@ async fn evaluate_with(
 async fn handle_of(run: &LiveRun, target: &Value) -> TestResult<Value> {
     let handle = run
         .invoke(
-            "locator.elementHandle",
-            json!({ "call": { "timeoutMs": 10_000 }, "target": target, "strict": "strict" }),
+            "locator.waitFor",
+            json!({ "call": { "api": "locator.elementHandle", "timeoutMs": 10_000 },
+                "target": target, "strict": "strict", "state": "attached",
+                "omitReturnValue": false }),
         )
         .await?;
     if handle.get("$neo").and_then(Value::as_str) != Some("element") {
