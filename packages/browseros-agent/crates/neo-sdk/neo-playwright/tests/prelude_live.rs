@@ -1358,9 +1358,9 @@ async fn tests_that_listener_only_elements_in_same_and_cross_site_frames_are_mar
 /// The fallback markup of `FALLBACK_PAGE`'s second iframe, as the HTML parser keeps it: raw text.
 const FALLBACK_MARKUP: &str = "<p>Your browser does not support iframes.</p>";
 
-/// The page of the ruling on an iframe's fallback markup (design section 13, found after
-/// #3521): the same cross-site card frame twice, the first iframe written empty and the second
-/// with fallback markup between its tags, as the card frames of a real donation page carry it.
+/// The page for an iframe's fallback markup (design section 13): the same cross-site card frame
+/// twice, the first iframe written empty and the second with fallback markup between its tags,
+/// as the card frames of a real donation page carry it.
 /// The frames are on `localhost`, another site, so each runs out of process with a session of
 /// its own; their address names the page's own port.
 const FALLBACK_PAGE: &str = r#"<!doctype html><html><head><title>Fallback</title></head><body>

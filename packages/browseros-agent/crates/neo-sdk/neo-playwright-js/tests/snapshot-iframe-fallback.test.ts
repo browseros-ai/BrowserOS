@@ -1,9 +1,9 @@
-// An iframe with fallback markup between its tags (design section 13, the defect found after
-// #3521). The HTML parser keeps `<iframe …><p>Your browser does not support iframes.</p></iframe>`
-// as raw text, the engine reads it as the iframe node's `text`, and Rust stitches the frame's
-// content under the same node. Playwright's renderer prints such a node as one line and drops the
-// frame, so on a payment page `mode: 'full'` lost the card fields the default text printed. Neo's
-// two formats print the frame and never the markup; Playwright's own YAML (`mode: 'default'`, the
+// An iframe with fallback markup between its tags (design section 13). The HTML parser keeps
+// `<iframe …><p>Your browser does not support iframes.</p></iframe>` as raw text, the engine
+// reads it as the iframe node's `text`, and Rust stitches the frame's content under the same
+// node. Playwright's renderer prints such a node as one line and drops the frame: on a payment
+// page, the card fields. Neo's two formats print the frame and never the markup, so `mode:
+// 'full'` keeps every ref the default text prints; Playwright's own YAML (`mode: 'default'`, the
 // conformance switch) is untouched. Scripts run through the built prelude against a stand-in
 // host; the tree is the ruling's two-iframe page as neo-playwright's prelude_live test reads it
 // from a live engine (`FALLBACK_PAGE`): one cross-site card frame twice, the first iframe written
