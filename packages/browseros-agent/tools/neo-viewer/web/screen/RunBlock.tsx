@@ -73,7 +73,7 @@ export function RunBlock({
   const places = placed ? callPlaces(placed) : new Map<string, CallPlace>()
   const operations = record?.operations ?? []
   const outputOf = (operation: NeoOperation) =>
-    operationOutput(operation, operations)
+    operationOutput(operation, operations, record?.traceGaps ?? 0)
   const openId = selectedOperationId
   const [unfolded, setUnfolded] = useState<ReadonlySet<number>>(new Set())
   const [showUnplaced, setShowUnplaced] = useState(false)
@@ -136,6 +136,7 @@ export function RunBlock({
           run={run}
           detail={detail}
           selected={selected && openId === null}
+          onSelect={() => onSelect(null)}
           onOpenFull={onOpenFull}
         />
       </div>
@@ -291,15 +292,18 @@ function MethodOnLine({
   )
 }
 
+/** The reply in one line; clicking it (or the row's label) shows it on the right. */
 function ModelRead({
   run,
   detail,
   selected,
+  onSelect,
   onOpenFull,
 }: {
   run: RunSummary
   detail: RunDetail | null
   selected: boolean
+  onSelect: () => void
   onOpenFull: () => void
 }) {
   if (run.status === 'running') {
@@ -317,15 +321,22 @@ function ModelRead({
   const chip = valueChip(text)
   return (
     <span className="flex min-w-0 flex-1 items-center gap-2.5">
-      <code
-        className={`min-w-0 max-w-[60%] truncate rounded border border-neo-edge bg-white px-2 py-0.5 font-code ${chip.failed ? 'text-bad' : 'text-ink'}`}
+      <button
+        type="button"
+        onClick={onSelect}
+        title="Show the reply in the right panel"
+        className="flex min-w-0 items-center gap-2.5 text-left"
       >
-        {chip.text}
-      </code>
-      <span className="shrink-0 whitespace-pre text-[11px] text-ink-2 leading-[14px]">
-        {replyFacts(text, run.replySize)}
-        {selected && ', shown in full on the right'}
-      </span>
+        <code
+          className={`min-w-0 max-w-[60%] truncate rounded border border-neo-edge bg-white px-2 py-0.5 font-code ${chip.failed ? 'text-bad' : 'text-ink'}`}
+        >
+          {chip.text}
+        </code>
+        <span className="shrink-0 whitespace-pre text-[11px] text-ink-2 leading-[14px]">
+          {replyFacts(text, run.replySize)}
+          {selected && ', shown in full on the right'}
+        </span>
+      </button>
       <button
         type="button"
         onClick={onOpenFull}

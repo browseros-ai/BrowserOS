@@ -290,6 +290,21 @@ describe("an open run's methods", () => {
       ),
     )
     await dom.interact(() => fire(button(/^Model read$/), 'click'))
+    // The reply's own line selects it too, beside its Open full.
+    await dom.interact(() =>
+      fire(
+        dom.container.querySelector('[data-operation="4"]') as Element,
+        'click',
+      ),
+    )
+    const chip = [
+      ...dom.container.querySelectorAll(
+        'button[title="Show the reply in the right panel"]',
+      ),
+    ].at(-1) as Element
+    await dom.interact(() => fire(chip, 'click'))
+    expect(selections.at(-1)).toBeNull()
+    selections.splice(2)
     expect(selections).toEqual([
       {
         runId: run.id,

@@ -12,7 +12,7 @@
  */
 
 import type { ReactNode } from 'react'
-import type { NeoOperation } from '../../shared/api'
+import { type NeoOperation, textSize } from '../../shared/api'
 import type { OperationOutput } from './operation-output'
 import { argumentLines } from './operation-values'
 import { namesWithCounts, waterfallBar } from './operations'
@@ -266,9 +266,9 @@ export function MethodDetail({
             </div>
           ) : (
             <p className="text-ink-2">
-              {count(output.formattedText.length)} chars, ≈
-              {count(Math.floor(output.formattedText.length / 4))} tok, shown on
-              the right
+              {count(textSize(output.formattedText).chars)} chars, ≈
+              {count(textSize(output.formattedText).tokens)} tok, shown on the
+              right
             </p>
           )}
           {output.cut && (

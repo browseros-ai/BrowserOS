@@ -11,7 +11,7 @@
  */
 
 import { type RefObject, useLayoutEffect, useRef, useState } from 'react'
-import type { RunSummary } from '../../shared/api'
+import { type RunSummary, textSize } from '../../shared/api'
 import { LiveScreen } from '../live-screen/LiveScreen'
 import type { LiveScreenController } from '../live-screen/use-live-screen'
 import { useRunDetail } from '../use-viewer'
@@ -171,7 +171,9 @@ function OperationPanel({
   const operation =
     operations.find((candidate) => candidate.id === selection.operationId) ??
     null
-  const output = operation ? operationOutput(operation, operations) : null
+  const output = operation
+    ? operationOutput(operation, operations, detail?.neo?.traceGaps ?? 0)
+    : null
   const formatted = view === 'formatted'
   const lines = output ? (formatted ? output.formatted : output.raw) : []
   const text = output ? (formatted ? output.formattedText : output.rawText) : ''
@@ -211,7 +213,7 @@ function OperationPanel({
         />
         <span className="min-w-0 truncate text-[11px] text-ink-2 leading-[14px]">
           {output
-            ? `${count(text.length)} chars, ≈${count(Math.floor(text.length / 4))} tok, ${plural(lines.length, 'line')}`
+            ? `${count(textSize(text).chars)} chars, ≈${count(textSize(text).tokens)} tok, ${plural(lines.length, 'line')}`
             : detail
               ? "This call is not in Neo's record."
               : 'Loading…'}

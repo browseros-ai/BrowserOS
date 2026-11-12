@@ -46,5 +46,6 @@ export function record(
     tabs: [1],
     error: null,
     operations,
+    traceGaps: 0,
   }
 }

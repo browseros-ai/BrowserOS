@@ -6,7 +6,12 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react'
-import type { NeoOperation, RunDetail, RunSummary } from '../../shared/api'
+import {
+  type NeoOperation,
+  type RunDetail,
+  type RunSummary,
+  textSize,
+} from '../../shared/api'
 import { formatCode } from '../../shared/code-format'
 import { useRunDetail } from '../use-viewer'
 import { findMatches, markLine, rangesByLine, stepMatch } from './find'
@@ -212,7 +217,7 @@ export function FullOutput({
           <>
             <span className="text-ink">
               <span className="font-code text-neo">
-                ≈{count(Math.floor(frame.shownText.length / 4))}
+                ≈{count(textSize(frame.shownText).tokens)}
               </span>{' '}
               tok
             </span>
@@ -398,7 +403,7 @@ function callIn(
       : null
   return {
     operation,
-    output: operationOutput(operation, record.operations),
+    output: operationOutput(operation, record.operations, record.traceGaps),
     place: places.get(operation.id) ?? selection.place,
     previous: selectionOf(ordered[at - 1]),
     next: selectionOf(ordered[at + 1]),

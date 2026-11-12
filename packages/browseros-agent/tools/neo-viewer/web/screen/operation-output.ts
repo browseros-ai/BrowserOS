@@ -63,14 +63,18 @@ type Shown = Pick<
   'formatted' | 'formattedText' | 'source' | 'cut'
 >
 
-/** `operations`: the run's, which hold the `page.snapshotPending` a snapshot's text is in. */
+/**
+ * `operations`: the run's, which hold the `page.snapshotPending` a snapshot's text is in;
+ * `traceGaps`: how many of its records Neo dropped, past which no text is paired.
+ */
 export function operationOutput(
   operation: NeoOperation,
   operations: NeoOperation[],
+  traceGaps = 0,
 ): OperationOutput {
   const rawText = recorded(operation)
   return {
-    ...shownOrRecord(operation, operations),
+    ...shownOrRecord(operation, traceGaps > 0 ? null : operations),
     raw: rawText.split('\n').map(jsonLine),
     rawText,
     rawCut: operation.error ? false : operation.resultTruncated,
@@ -83,7 +87,7 @@ export function operationOutput(
  */
 function shownOrRecord(
   operation: NeoOperation,
-  operations: NeoOperation[],
+  operations: NeoOperation[] | null,
 ): Shown {
   try {
     return (
@@ -149,9 +153,10 @@ function cancelled(operation: NeoOperation): Shown | null {
   }
 }
 
+/** `operations` is null when Neo dropped records: a snapshot's text is then not paired. */
 function snapshot(
   operation: NeoOperation,
-  operations: NeoOperation[],
+  operations: NeoOperation[] | null,
 ): Shown | null {
   if (!operation.name.endsWith('.ariaSnapshot')) return null
   const result = operation.result
@@ -167,7 +172,12 @@ function snapshot(
   const text =
     rendered(operation) ??
     (operation.name === 'page.ariaSnapshot'
-      ? textOf(operation, operations)
+      ? operations
+        ? textOf(operation, operations)
+        : tree(
+            operation,
+            "The tree the page answered, as Neo recorded it: Neo dropped some of this run's records, so which recorded text was this call's cannot be told.",
+          )
       : null)
   return (
     text ??
@@ -406,6 +416,14 @@ function isCutText(text: string): boolean {
 function recordedValue(operation: NeoOperation): Shown {
   const result = operation.result
   const cut = operation.resultTruncated
+  if (isNeoInternal(operation)) {
+    return {
+      ...json(result),
+      source:
+        'Neo internal: its own record of this step. The script did not call this, and did not get this value.',
+      cut,
+    }
+  }
   if (typeof result === 'string') {
     return { ...lines(result), source: 'The text the call returned.', cut }
   }

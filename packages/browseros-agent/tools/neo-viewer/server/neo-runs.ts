@@ -46,6 +46,7 @@ export function toNeoRunRecord(raw: Raw): NeoRunRecord {
     operations: operations.map((operation) =>
       toOperation(operation, startedAt),
     ),
+    traceGaps: numberOr(raw.traceGaps, 0) ?? 0,
   }
 }
 

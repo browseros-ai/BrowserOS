@@ -325,6 +325,34 @@ describe('what a call gave the script', () => {
     )
   })
 
+  it("pairs no text across records Neo dropped, and keeps Neo's own null its own", () => {
+    const tree = { document: 4, json: [] }
+    const all = [
+      operation(1, 'page.ariaSnapshot', { line: 1, tabId: 1, result: tree }),
+      operation(3, 'page.snapshotPending', {
+        line: 1,
+        tabId: 1,
+        args: {
+          document: 4,
+          text: 'maybe not mine',
+          form: 'text',
+          delta: false,
+        },
+      }),
+    ]
+    const gapped = operationOutput(all[0] as NeoOperation, all, 1)
+    expect(gapped.source).toContain("Neo dropped some of this run's records")
+    expect(gapped.formattedText).toBe(JSON.stringify(tree, null, 2))
+    // page.snapshotBaseline found no stored text: Neo's null, not the script's.
+    const baseline = shown(
+      operation(2, 'page.snapshotBaseline', { result: null }),
+    )
+    expect(baseline.source).toContain(
+      'Neo internal: its own record of this step',
+    )
+    expect(baseline.source).not.toContain('the script got null')
+  })
+
   it('says which view Neo cut: a whole text from a cut tree', () => {
     const all = [
       operation(3, 'page.ariaSnapshot', {
