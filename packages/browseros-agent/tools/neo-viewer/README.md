@@ -158,9 +158,13 @@ beside it), kept for debugging.
 
 Nothing, in either direction. Every method, path, header and body reaches Neo as the agent sent it,
 and every reply reaches the agent as Neo sent it, byte for byte, chunk by chunk as it streams; so
-Neo behaves exactly as it does without the viewer, and an agent's runs share its default tab. If the
-agent sends its own `_meta["com.browseros.neo/run"].taskId` (zuzu does), it passes through untouched
-and the run shows it beside the client (`RunSummary.agentTaskId`). Headers that belong to one HTTP hop (`connection`,
+Neo behaves exactly as it does without the viewer: a run that names no task gets a new tab of its
+own (plain Playwright), a script picks a task with `neo.createTask`/`neo.task(id)`, and a request's
+`_meta["com.browseros.neo/run"].taskId` (a host's task; zuzu sends one) keeps that task's tab (#3452).
+That `_meta` taskId passes through untouched and the run shows it beside the client
+(`RunSummary.agentTaskId`). The tasks a run touched come back in the reply's
+`_meta["com.browseros.neo/run"].tasks`, kept in the log and in `GET /api/runs/:id` (`reply.meta`);
+the page does not show them. Headers that belong to one HTTP hop (`connection`,
 `transfer-encoding`, `content-length`, `host`) are set by each hop, as for any proxy. When the agent
 goes away mid-reply the viewer closes its request to Neo, which is how Neo's stateless MCP learns to
 stop the run.
@@ -171,11 +175,13 @@ Every call through the proxy is appended to one list, in the order it reached th
 agent sent it (owner, 2026-11-11: an agent that calls the MCP URL from a new curl or Python process
 each time is still one job). Each run shows its client as a quiet label: its `clientInfo`, an older
 client's `initialize`, or its User-Agent's product name, since several agents may share the list.
-An agent that wants to label its runs sends the label in `_meta["com.browseros.neo/run"].taskId`
-(zuzu does), and the run shows it beside the client; a `taskId` tool argument is refused by Neo
-(`unknown field taskId`).
+A request's `_meta["com.browseros.neo/run"].taskId` shows beside the client too: it is a host's task
+for the run (it picks the run's tab), not a label. Tasks a script picks itself (`neo.task`) are not
+shown. A `taskId` tool argument is refused by Neo (`unknown field taskId`).
 **Clear** (top bar, or `POST /api/clear`) empties it; the log before it is kept once, as
-`log.prev.jsonl`, in case of a mis-click.
+`log.prev.jsonl`, in case of a mis-click. Clear leaves Neo's tabs as they are: each run that names
+no task leaves a tab, which Neo closes after 30 minutes idle. Stopping the viewer removes them only
+with the container it started; with `--upstream` it started none, and Neo keeps its tabs.
 
 ## The log
 
@@ -263,7 +269,7 @@ relays it and adds the token on its side; `shared/live-screen.ts` holds the rout
 
 | On the panel | What it opens on Neo |
 |---|---|
-| Follow agent | `GET /v1/display?mode=view&followTab=<tab>`: watch; Neo keeps the agent's tab in front, the tab of the most recent run's last operation (from `/v1/trace`; subscriptions act on no tab, `newPage` counts with its new tab). When that run carried a label (`_meta…taskId`, see One list), `followTask=<label>` instead, so Neo follows it to a new tab by itself; by tab, the panel moves when its status poll (1.5 s) sees the agent on another tab |
+| Follow agent | `GET /v1/display?mode=view&followTab=<tab>`: watch; Neo keeps the agent's tab in front, the tab of the most recent run's last operation (from `/v1/trace`; subscriptions act on no tab, `newPage` counts with its new tab). When that run's request named a host task (`_meta…taskId`, see One list), `followTask=<task>` instead, so Neo follows it to a new tab by itself; a task a script picks with `neo.task` is not in Neo's trace, so such a run is followed by its tab; by tab, the panel moves when its status poll (1.5 s) sees the agent on another tab |
 | Control | `GET /v1/display?mode=control`: clicks and keys reach the browser; the front tab stops following; the agent is not held |
 | Take over / Give back | `POST /v1/takeovers {tabId, viewer}` for the agent's tab as the panel shows it, then `display?mode=control&release=<id>`; the agent's calls on that tab fail with `owner_has_control` until `POST /v1/takeovers/{id}/release`, or until the takeover expires (the viewer asks for no TTL, so Neo's default of 20 minutes applies). `viewer` is Neo's own screen size, so Neo's fit brings the tab to the front and leaves the screen as it is; Neo puts the window back on release |
 

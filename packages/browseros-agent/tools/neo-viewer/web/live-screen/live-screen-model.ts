@@ -4,8 +4,9 @@
  * the owner's clicks, the display socket opening and closing); `LiveScreen.tsx` renders it.
  *
  * Three ways to look at Neo's screen, one display at a time:
- *   follow   view display that keeps the agent's tab in front: `followTask` when the agent's
- *            latest run named its own task, else `followTab` with the tab it last acted on
+ *   follow   view display that keeps the agent's tab in front: `followTask` when the latest
+ *            run's request named a task (`_meta` taskId), else `followTab` with the tab it last
+ *            acted on (Neo's trace records no task a script picks itself with `neo.task`)
  *   control  control display: the owner clicks and types; the front tab stops following,
  *            the agent is not blocked
  *   taken    control display bound to a takeover (`release=`): the agent's calls on that tab
@@ -193,8 +194,8 @@ function closed(
 }
 
 /**
- * The agent's own task when its latest run named one: Neo then follows the task to a new tab by
- * itself. Otherwise the tab it last acted on, which the status poll moves when the agent does.
+ * The host task when the latest run's request named one (`_meta` taskId): Neo then follows the
+ * task to a new tab by itself. Otherwise the tab it last acted on, which the status poll moves when the agent does.
  * The same target keeps its object, so an unchanged status opens no new display.
  */
 function followOf(status: LiveStatus, current: Follow | null): Follow | null {

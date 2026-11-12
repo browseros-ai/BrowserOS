@@ -152,7 +152,9 @@ function facts(detail: RunDetail): string[] {
   if (detail.gapMs !== null)
     lines.push(`- ${seconds(detail.gapMs)} after the previous reply`)
   if (detail.agentTaskId)
-    lines.push(`- Agent task id: \`${detail.agentTaskId}\``)
+    lines.push(
+      `- Host task (the request's \`_meta\` taskId): \`${detail.agentTaskId}\``,
+    )
   if (detail.timeoutMs !== null)
     lines.push(`- Timeout asked for: ${seconds(detail.timeoutMs)}`)
   if (detail.neoRunId) {

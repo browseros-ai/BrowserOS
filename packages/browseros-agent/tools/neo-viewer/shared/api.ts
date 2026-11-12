@@ -106,8 +106,10 @@ export interface RunSummary {
   /** The agent that sent it (its `clientInfo`, or its User-Agent's product); several may share the log. */
   client: ClientInfo | null
   /**
-   * The agent's own `_meta["com.browseros.neo/run"].taskId`, when it sent one. The viewer never
-   * adds one: Neo sees each call exactly as the agent sent it.
+   * The request's `_meta["com.browseros.neo/run"].taskId`, when it named one: a host's task, which
+   * picks the run's tab. The viewer never adds one: Neo sees each call exactly as it was sent. A
+   * task a script picks itself (`neo.task`) is not here; the reply's `_meta` lists the tasks a run
+   * touched (`RunDetail.reply.meta["com.browseros.neo/run"].tasks`).
    */
   agentTaskId: string | null
   /** The tool called; Neo serves one, `run`. */
