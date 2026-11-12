@@ -3,9 +3,7 @@ import { mkdir, mkdtemp, open, readFile, realpath, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { promisify } from 'node:util'
-import { McpSession } from '../../../contracts/claw-mcp/tests/mcp-client'
-
-const ownerPorts = new Set([9010, 9011, 9121, 9211, 9212, 9213, 9214, 9215])
+import { connected, fetchHealth, OWNER_PORTS } from './preflight'
 
 export function parseWatchPorts(log: string) {
   const match = log.match(
@@ -21,87 +19,9 @@ export function parseWatchPorts(log: string) {
   return { cdp, server, extension }
 }
 
-export interface Preflight {
-  url: string
-  port: number
-  hostedMode: '1' | '0'
-  toolPresent: boolean | null
-  health: unknown
-  ok: boolean
-  error?: string
-}
-
-function connected(health: unknown): boolean {
-  const value = health as {
-    status?: string
-    browser?: { connected?: boolean }
-  } | null
-  return value?.status === 'ok' && value.browser?.connected === true
-}
-
-async function fetchHealth(url: string): Promise<unknown> {
-  const response = await fetch(new URL('/system/health', url), {
-    signal: AbortSignal.timeout(1000),
-  })
-  if (!response.ok) throw new Error(`health HTTP ${response.status}`)
-  return response.json()
-}
-
-export async function checkDevPreflight(
-  url: string,
-  expectToolMissing = false,
-  dependencies = {
-    health: () => fetchHealth(url),
-    tools: async (): Promise<readonly { name: string }[]> => {
-      const session = await McpSession.connect(
-        url.replace(/\/mcp\/?$/, ''),
-        'captcha-preflight',
-      )
-      try {
-        return await session.listTools()
-      } finally {
-        await session.close().catch(() => {})
-      }
-    },
-  },
-  hostedMode: '1' | '0' = '1',
-): Promise<Preflight> {
-  const result: Preflight = {
-    url,
-    port: Number(new URL(url).port),
-    hostedMode,
-    toolPresent: null,
-    health: null,
-    ok: false,
-  }
-  try {
-    if (ownerPorts.has(result.port))
-      throw new Error(`refusing owner port ${result.port}`)
-    result.health = await dependencies.health()
-    if (!connected(result.health))
-      throw new Error('health must be ok with browser connected')
-    result.toolPresent = (await dependencies.tools()).some(
-      (tool) => tool.name === 'solve_captcha',
-    )
-    if (result.toolPresent === expectToolMissing)
-      throw new Error(
-        `solve_captcha is ${result.toolPresent ? 'present but --expect-tool-missing was set' : 'missing'}`,
-      )
-    result.ok = true
-  } catch (error) {
-    result.error =
-      error instanceof Error ? error.message : 'preflight request failed'
-  }
-  return result
-}
-
-export function renderPreflight(preflight: Preflight): string {
-  return `Preflight: ${JSON.stringify(preflight)}\n\n`
-}
-
 function spawnWatch(env: NodeJS.ProcessEnv, fd: number) {
   const child = spawn('bun', ['run', 'dev:claw:watch:new'], {
-    cwd: resolve(import.meta.dir, '../../..'),
+    cwd: resolve(import.meta.dir, '../../../../..'),
     detached: true,
     env,
     stdio: ['ignore', fd, fd],
@@ -156,13 +76,16 @@ async function waitForExit(exited: Promise<unknown>, ms: number) {
   }
 }
 
-/** Registers a handle immediately; waiting for readiness must happen after ownership. */
+/**
+ * `bun run dev:claw:watch:new` on the SDK backend (`BROWSERCLAW_USE_SDK=1`): this worktree's
+ * browseros-claw-sdk under a fresh browser profile. Registers a handle immediately; waiting for
+ * readiness must happen after ownership.
+ */
 export async function startDevWatch(
   options: {
     out: string
     startupTimeout: number
-    keyEnv: NodeJS.ProcessEnv
-    hostedMode?: '1' | '0'
+    serverEnv: NodeJS.ProcessEnv
   },
   overrides: Partial<typeof defaults> = {},
 ) {
@@ -180,8 +103,9 @@ export async function startDevWatch(
       child = dependencies.spawn(
         {
           ...process.env,
-          ...options.keyEnv,
-          BROWSERCLAW_HOSTED_MODE: options.hostedMode ?? '1',
+          ...options.serverEnv,
+          BROWSERCLAW_USE_SDK: '1',
+          BROWSERCLAW_HOSTED_MODE: '1',
           BROWSERCLAW_DIR: join(directory, 'state'),
           TMPDIR: directory,
           CARGO_TARGET_DIR:
@@ -218,7 +142,7 @@ export async function startDevWatch(
         const ports = parseWatchPorts(await readFile(logPath, 'utf8'))
         if (ports) {
           for (const port of Object.values(ports))
-            if (ownerPorts.has(port))
+            if (OWNER_PORTS.has(port))
               throw new Error(`refusing owner port ${port}`)
           const url = `http://127.0.0.1:${ports.server}/mcp`
           waiting = 'health status ok and browser connected'

@@ -163,7 +163,8 @@ export const SUITES: Record<string, SuiteConfig> = {
   },
   captcha: {
     suite: 'captcha',
-    command: 'bun run ./scripts/run-bun-test.ts ./tools/captcha-testbed',
+    command:
+      'bun run ./scripts/run-bun-test.ts ./crates/neo-sdk/neo-captcha/testbed',
     junit_path: 'test-results/captcha.xml',
     needs_browser: false,
     needs_rust: false,
@@ -302,7 +303,11 @@ export function computeAffectedSuites(
   ) {
     keys.add('claw-mcp')
   }
-  if (changedFiles.some((f) => f.startsWith(`${AGENT}tools/captcha-testbed/`)))
+  if (
+    changedFiles.some((f) =>
+      f.startsWith(`${AGENT}crates/neo-sdk/neo-captcha/testbed/`),
+    )
+  )
     keys.add('captcha')
   // claw-server's tests check that every key the shipped behaviour file
   // documents applies on this server.

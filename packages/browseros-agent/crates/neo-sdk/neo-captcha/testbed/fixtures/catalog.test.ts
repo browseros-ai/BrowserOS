@@ -5,8 +5,51 @@ import {
   type CaptchaFamily,
   DEMO_PAGES,
   FIXTURE_PAGES,
+  pageCheck,
+  SPOTTING_PAGES,
   tokenLengthExpression,
 } from './catalog'
+
+const VERDICTS = [
+  'solved',
+  'token_applied',
+  'already_clear',
+  'unsolved',
+  'cancelled',
+  'unknown',
+]
+
+test('tests that every expectation is an SDK verdict, never a claw-server status', () => {
+  for (const page of [...FIXTURE_PAGES, ...SPOTTING_PAGES, ...DEMO_PAGES])
+    for (const verdict of page.expect) expect(VERDICTS).toContain(verdict)
+})
+
+test('tests that unsupported families are detections refused as unsupported, never solves', () => {
+  const pages = [...FIXTURE_PAGES, ...DEMO_PAGES]
+  for (const [id, type] of [
+    ['hcaptcha-test', 'hcaptcha'],
+    ['hcaptcha-demo', 'hcaptcha'],
+    ['cloudflare-wall', 'cloudflare_challenge'],
+  ]) {
+    const page = pages.find((p) => p.id === id)
+    expect(page).toMatchObject({
+      expect: ['unsolved'],
+      expectType: type,
+      expectReason: ['unsupported_type'],
+    })
+    if (page) expect(pageCheck(page)).toBe('detect')
+  }
+})
+
+test('tests that only pages with a site check can count as independently solved', () => {
+  const all = [...FIXTURE_PAGES, ...SPOTTING_PAGES, ...DEMO_PAGES]
+  const arkose = all.find((p) => p.id === 'arkose-demo')
+  expect(arkose?.site).toBeUndefined()
+  if (arkose) expect(pageCheck(arkose)).toBe('deliver')
+  for (const page of all.filter((p) => pageCheck(p) === 'solve'))
+    expect(page.site).toBeDefined()
+  expect(SPOTTING_PAGES.every((p) => pageCheck(p) === 'detect')).toBe(true)
+})
 
 test('tests that always-pass Turnstile pages also accept a widget that already passed', () => {
   const pages = [...FIXTURE_PAGES, ...DEMO_PAGES]
@@ -43,7 +86,7 @@ test('tests that the catalog contains every required page with unique ids and ex
     expect(
       await Bun.file(`${import.meta.dir}/pages${page.path}`).exists(),
     ).toBe(true)
-    expect(page.verdict).toEqual({
+    expect(page.site).toEqual({
       submitSelector: '#submit',
       acceptedPattern: '^ACCEPTED',
       rejectedPattern: '^REJECTED',
@@ -64,12 +107,13 @@ test.each(['recaptcha_v2', 'turnstile', 'hcaptcha', 'none'] as CaptchaFamily[])(
     expect(runInNewContext(tokenLengthExpression(family), { document })).toBe(
       family === 'none' ? 0 : 5,
     )
-    const field = {
+    const fields: Partial<Record<CaptchaFamily, string>> = {
       recaptcha_v2: 'g-recaptcha-response',
       turnstile: 'cf-turnstile-response',
       hcaptcha: 'h-captcha-response',
       none: '',
-    }[family]
+    }
+    const field = fields[family]
     if (field) expect(selector).toContain(field)
     expect(
       runInNewContext(tokenLengthExpression(family), {
@@ -104,12 +148,12 @@ test('tests that all eleven spotting fixtures require the right family and zero 
       path: `/${id}.html`,
       family,
       kind: 'fixture',
-      expect: ['unsupported', 'needs_human'],
+      expect: ['unsolved'],
       expectType: family,
       maxPaidTasks: 0,
       mayNeedPaid: false,
     })
-    expect(page?.verdict).toBeUndefined()
+    expect(page?.site).toBeUndefined()
     expect(await Bun.file(`${import.meta.dir}/pages/${id}.html`).exists()).toBe(
       true,
     )
@@ -141,10 +185,8 @@ test.each(['geetest', 'geetest-v4'])(
       expectType: 'geetest',
       mayNeedPaid: true,
     })
-    expect(page?.verdict?.submitSelector).toBe(
-      'main form button[type="submit"]',
-    )
-    const accepted = new RegExp(page?.verdict?.acceptedPattern ?? '(?!)')
+    expect(page?.site?.submitSelector).toBe('main form button[type="submit"]')
+    const accepted = new RegExp(page?.site?.acceptedPattern ?? '(?!)')
     const response =
       slug === 'geetest-v4' ? { result: 'success' } : { success: true }
     const rejected =
@@ -397,8 +439,8 @@ test.each([
       mayNeedPaid: expected.mayNeedPaid,
     })
     if (!page) throw new Error('demo missing')
-    expect(page.verdict?.submitSelector).toBe('main form button[type="submit"]')
-    const accepted = new RegExp(page.verdict?.acceptedPattern ?? '(?!)')
+    expect(page.site?.submitSelector).toBe('main form button[type="submit"]')
+    const accepted = new RegExp(page.site?.acceptedPattern ?? '(?!)')
     expect(
       accepted.test('Captcha is passed successfully! {"success": true}'),
     ).toBe(true)

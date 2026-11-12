@@ -128,7 +128,16 @@ async function poll2Captcha(
       'getTaskResult',
       { clientKey, taskId },
       Math.min(timing.requestMs, budget),
-    )
+    ).catch((error: unknown) => {
+      // A request the poll's deadline cut short is the poll's timeout, not the request's.
+      if (
+        error instanceof ProviderError &&
+        error.code === 'REQUEST_TIMEOUT' &&
+        budget < timing.requestMs
+      )
+        throw new ProviderError('POLL_TIMEOUT', '2Captcha did not become ready')
+      throw error
+    })
     if (reply.status === 'ready') return reply
     if (reply.status !== 'processing') invalid('unexpected task status')
   }

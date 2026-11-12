@@ -6,15 +6,32 @@ export type CaptchaFamily =
   | 'aws_waf'
   | 'arkose'
   | 'none'
-export type TerminalStatus =
+/** neo-captcha's `CaptchaKind`: the `type` that `neo.solveCaptcha` reports. */
+export type CaptchaType =
+  | 'recaptcha_v2'
+  | 'recaptcha_v3'
+  | 'turnstile'
+  | 'cloudflare_challenge'
+  | 'hcaptcha'
+  | 'geetest'
+  | 'aws_waf'
+  | 'arkose'
+  | 'unknown'
+/** `neo.solveCaptcha`'s `verdict`, exactly as the SDK returns it. */
+export type Verdict =
   | 'solved'
   | 'token_applied'
   | 'already_clear'
-  | 'unsupported'
-  | 'failed'
+  | 'unsolved'
   | 'cancelled'
-  | 'needs_human'
-export interface PageVerdict {
+  | 'unknown'
+export const SUCCESS_VERDICTS: readonly Verdict[] = [
+  'solved',
+  'token_applied',
+  'already_clear',
+]
+/** How the runner asks the page's own server whether it accepted the submission. */
+export interface SiteCheck {
   submitSelector: string
   acceptedPattern: string
   rejectedPattern?: string
@@ -22,24 +39,38 @@ export interface PageVerdict {
 export interface CaptchaPage {
   id: string
   title: string
-  kind: 'fixture' | 'demo' | 'spotting'
+  kind: 'fixture' | 'demo'
   family: CaptchaFamily
   sitekey?: string
   path?: string
   url?: string
-  expect: TerminalStatus[]
-  expectType?: CaptchaFamily
+  /** Verdicts that pass. A success verdict on a CAPTCHA page also needs the site's acceptance. */
+  expect: Verdict[]
+  /** When set, a matching verdict also needs one of these reasons. */
+  expectReason?: string[]
+  expectType?: CaptchaType
   maxPaidTasks?: number
   mayNeedPaid: boolean
   ready: string
-  verdict?: PageVerdict
+  site?: SiteCheck
   notes?: string
+}
+
+/**
+ * What a passing page proves. `solve`: the page's own server accepted the solve. `deliver`: the
+ * solver's word only, as no server checks this page (never counted as independently solved).
+ * `detect`: the right type, with no solve claimed.
+ */
+export function pageCheck(page: CaptchaPage): 'solve' | 'deliver' | 'detect' {
+  if (!page.expect.some((verdict) => SUCCESS_VERDICTS.includes(verdict)))
+    return 'detect'
+  return page.site ? 'solve' : 'deliver'
 }
 
 function spotting(
   id: string,
   title: string,
-  family: CaptchaFamily,
+  family: CaptchaFamily & CaptchaType,
 ): CaptchaPage {
   return {
     id,
@@ -47,7 +78,7 @@ function spotting(
     family,
     kind: 'fixture',
     path: `/${id}.html`,
-    expect: ['unsupported', 'needs_human'],
+    expect: ['unsolved'],
     expectType: family,
     maxPaidTasks: 0,
     mayNeedPaid: false,
@@ -79,7 +110,7 @@ function fixture(
   family: CaptchaFamily,
   path: string,
   sitekey?: string,
-  expect: TerminalStatus[] = ['solved'],
+  expect: Verdict[] = ['solved'],
 ): CaptchaPage {
   return {
     id,
@@ -92,13 +123,20 @@ function fixture(
     mayNeedPaid: false,
     ready:
       "JSON.parse(document.documentElement.dataset.captchaFixture || '{}').rendered === true",
-    verdict: {
+    site: {
       submitSelector: '#submit',
       acceptedPattern: '^ACCEPTED',
       rejectedPattern: '^REJECTED',
     },
   }
 }
+
+/** Detected, and refused as a type Neo does not solve: never a solve. */
+const unsupported = (type: CaptchaType) => ({
+  expect: ['unsolved'] as Verdict[],
+  expectType: type,
+  expectReason: ['unsupported_type'],
+})
 
 export const FIXTURE_PAGES: readonly CaptchaPage[] = [
   fixture(
@@ -122,7 +160,7 @@ export const FIXTURE_PAGES: readonly CaptchaPage[] = [
     'turnstile',
     '/turnstile-block.html',
     '2x00000000000000000000AB',
-    ['failed', 'needs_human'],
+    ['unsolved', 'unknown'],
   ),
   fixture(
     'turnstile-interactive',
@@ -145,8 +183,8 @@ export const FIXTURE_PAGES: readonly CaptchaPage[] = [
       'turnstile',
       '/cloudflare-wall.html',
       '3x00000000000000000000FF',
-      ['unsupported', 'needs_human'],
     ),
+    ...unsupported('cloudflare_challenge'),
     notes:
       'Detected as cloudflare_challenge by its challenge script; its Turnstile is the wall checkbox.',
   },
@@ -158,14 +196,16 @@ export const FIXTURE_PAGES: readonly CaptchaPage[] = [
     undefined,
     ['already_clear'],
   ),
-  fixture(
-    'hcaptcha-test',
-    'hCaptcha test checkbox',
-    'hcaptcha',
-    '/hcaptcha.html',
-    '10000000-ffff-ffff-ffff-000000000001',
-    ['unsupported', 'needs_human'],
-  ),
+  {
+    ...fixture(
+      'hcaptcha-test',
+      'hCaptcha test checkbox',
+      'hcaptcha',
+      '/hcaptcha.html',
+      '10000000-ffff-ffff-ffff-000000000001',
+    ),
+    ...unsupported('hcaptcha'),
+  },
 ]
 
 export const DEMO_PAGES: readonly CaptchaPage[] = [
@@ -181,7 +221,7 @@ export const DEMO_PAGES: readonly CaptchaPage[] = [
       mayNeedPaid: true,
       ready:
         '(document.querySelector(".geetest_holder")?.getBoundingClientRect().height ?? 0) > 0',
-      verdict: {
+      site: {
         submitSelector: 'main form button[type="submit"]',
         acceptedPattern:
           slug === 'geetest-v4'
@@ -200,7 +240,7 @@ export const DEMO_PAGES: readonly CaptchaPage[] = [
     expect: ['solved'],
     mayNeedPaid: true,
     ready: '!!document.querySelector("#recaptcha-demo iframe")',
-    verdict: {
+    site: {
       submitSelector: '#recaptcha-demo-submit',
       acceptedPattern: 'Verification Success',
     },
@@ -216,7 +256,7 @@ export const DEMO_PAGES: readonly CaptchaPage[] = [
     mayNeedPaid: false,
     ready:
       '(document.querySelector(".cf-turnstile > div")?.getBoundingClientRect().height ?? 0) > 0',
-    verdict: {
+    site: {
       submitSelector: 'form[action="/handler"] button[type="submit"]',
       acceptedPattern: '"success"\\s*:\\s*true',
       rejectedPattern: '"success"\\s*:\\s*false',
@@ -229,7 +269,7 @@ export const DEMO_PAGES: readonly CaptchaPage[] = [
     family: 'hcaptcha',
     url: 'https://accounts.hcaptcha.com/demo',
     sitekey: 'a5f74b19-9e45-40e0-b45d-47ff91b7a6c2',
-    expect: ['unsupported', 'needs_human'],
+    ...unsupported('hcaptcha'),
     mayNeedPaid: false,
     ready: '!!document.querySelector(".h-captcha iframe")',
   },
@@ -243,7 +283,7 @@ export const DEMO_PAGES: readonly CaptchaPage[] = [
     expect: ['solved'],
     mayNeedPaid: true,
     ready: '!!document.querySelector("#g-recaptcha iframe")',
-    verdict: {
+    site: {
       submitSelector: 'main form button[type="submit"]',
       acceptedPattern: '"success"\\s*:\\s*true',
     },
@@ -259,7 +299,7 @@ export const DEMO_PAGES: readonly CaptchaPage[] = [
     mayNeedPaid: false,
     ready:
       '(document.querySelector("#cf-turnstile > div")?.getBoundingClientRect().height ?? 0) > 0',
-    verdict: {
+    site: {
       submitSelector: 'main form button[type="submit"]',
       acceptedPattern: '"success"\\s*:\\s*true',
     },

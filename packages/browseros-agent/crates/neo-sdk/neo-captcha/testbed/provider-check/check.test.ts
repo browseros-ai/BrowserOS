@@ -235,6 +235,30 @@ test('tests that 2Captcha polling stops at its deadline', async () => {
   expect(report.exitCode).toBe(1)
 })
 
+test('tests that a poll request cut short by the poll deadline is a poll timeout', async () => {
+  handler = async (vendor, method) => {
+    if (method === 'getTaskResult') await Bun.sleep(100)
+    return successful(vendor, method)
+  }
+  const { report } = await run({ pollIntervalMs: 1, pollTimeoutMs: 15 })
+  expect(report.vendors[1]?.task.status).toBe('error')
+  expect(report.vendors[1]?.message).toContain('POLL_TIMEOUT')
+  expect(report.vendors[1]?.message).not.toContain('REQUEST_TIMEOUT')
+})
+
+test('tests that a poll request timing out within the poll budget keeps its own error', async () => {
+  handler = async (vendor, method) => {
+    if (method === 'getTaskResult') await Bun.sleep(100)
+    return successful(vendor, method)
+  }
+  const { report } = await run({
+    pollIntervalMs: 1,
+    pollTimeoutMs: 1000,
+    requestTimeoutMs: 10,
+  })
+  expect(report.vendors[1]?.message).toContain('REQUEST_TIMEOUT')
+})
+
 test('tests that a slow poll request cannot overrun its overall deadline', async () => {
   handler = async (vendor, method) => {
     if (method === 'getTaskResult') await Bun.sleep(150)

@@ -3,7 +3,7 @@ import { writeFileSync } from 'node:fs'
 import { mkdtemp, rm, stat } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { checkDevPreflight, parseWatchPorts, startDevWatch } from './dev-watch'
+import { parseWatchPorts, startDevWatch } from './dev-watch'
 
 const health = { status: 'ok', browser: { connected: true } }
 
@@ -25,78 +25,7 @@ test('tests that watch ports are parsed from complete, decorated log lines', () 
     expect(parseWatchPorts(log)).toBeNull()
 })
 
-test('tests that preflight proves a connected dev server and expected tool availability', async () => {
-  const result = await checkDevPreflight('http://127.0.0.1:9402/mcp', false, {
-    health: async () => health,
-    tools: async () => [{ name: 'solve_captcha' }],
-  })
-  expect(result).toMatchObject({
-    url: 'http://127.0.0.1:9402/mcp',
-    port: 9402,
-    toolPresent: true,
-    health,
-    ok: true,
-  })
-  expect(
-    (
-      await checkDevPreflight(result.url, true, {
-        health: async () => health,
-        tools: async () => [],
-      })
-    ).ok,
-  ).toBe(true)
-})
-
-test('tests that preflight refuses missing or unexpectedly present tools and disconnected health', async () => {
-  for (const [expectMissing, tools, serverHealth, error] of [
-    [false, [], health, 'solve_captcha is missing'],
-    [true, [{ name: 'solve_captcha' }], health, 'solve_captcha is present'],
-    [
-      false,
-      [{ name: 'solve_captcha' }],
-      { status: 'ok', browser: { connected: false } },
-      'connected',
-    ],
-    [
-      false,
-      [{ name: 'solve_captcha' }],
-      { status: 'error', browser: { connected: true } },
-      'connected',
-    ],
-  ] as const) {
-    const result = await checkDevPreflight(
-      'http://127.0.0.1:9402/mcp',
-      expectMissing,
-      {
-        health: async () => serverHealth,
-        tools: async () => [...tools],
-      },
-    )
-    expect(result.ok).toBe(false)
-    expect(result.error).toContain(error)
-  }
-})
-
-test('tests that owner ports are refused before making any request', async () => {
-  for (const port of [9010, 9011, 9121, 9211, 9212, 9213, 9214, 9215]) {
-    const result = await checkDevPreflight(
-      `http://127.0.0.1:${port}/mcp`,
-      false,
-      {
-        health: async () => {
-          throw new Error('must not request owner health')
-        },
-        tools: async () => {
-          throw new Error('must not request owner tools')
-        },
-      },
-    )
-    expect(result.ok).toBe(false)
-    expect(result.error).toContain('owner port')
-  }
-})
-
-test('tests that a fake watch gets isolated state, logs, and idempotent teardown without launching a process', async () => {
+test('tests that a fake watch runs the SDK backend with isolated state, logs, and idempotent teardown', async () => {
   const out = await mkdtemp(join(tmpdir(), 'watch-test-'))
   const signals: Array<[number, string]> = []
   let env: NodeJS.ProcessEnv = {}
@@ -108,7 +37,12 @@ test('tests that a fake watch gets isolated state, logs, and idempotent teardown
     {
       out,
       startupTimeout: 100,
-      keyEnv: { BROWSEROS_CAPSOLVER_API_KEY_FILE: '/fake/key' },
+      serverEnv: {
+        BROWSEROS_CAPSOLVER_API_KEY_FILE: '/fake/key',
+        BROWSEROS_CAPTCHA_PAID_TASK_LIMIT: '3',
+        BROWSERCLAW_HOSTED_MODE: '0',
+        BROWSERCLAW_USE_SDK: '',
+      },
     },
     {
       spawn: (childEnv, fd) => {
@@ -130,6 +64,9 @@ test('tests that a fake watch gets isolated state, logs, and idempotent teardown
     expect(env.BROWSERCLAW_DIR).toStartWith(watch.directory)
     expect(env.TMPDIR).toBe(watch.directory)
     expect(env.BROWSEROS_CAPSOLVER_API_KEY_FILE).toBe('/fake/key')
+    expect(env.BROWSEROS_CAPTCHA_PAID_TASK_LIMIT).toBe('3')
+    expect(env.BROWSERCLAW_USE_SDK).toBe('1')
+    expect(env.BROWSERCLAW_HOSTED_MODE).toBe('1')
     expect(env.CARGO_TARGET_DIR).toBeTruthy()
     await watch.stop()
     await watch.stop()
@@ -147,7 +84,7 @@ test('tests that startup timeout and leaked processes fail clearly with fake pro
   const out = await mkdtemp(join(tmpdir(), 'watch-failure-test-'))
   let directory = ''
   const watch = await startDevWatch(
-    { out, startupTimeout: 10, keyEnv: {} },
+    { out, startupTimeout: 10, serverEnv: {} },
     {
       spawn: (env) => {
         directory = String(env.TMPDIR)
@@ -176,7 +113,7 @@ test('tests that teardown waits for exiting descendants before declaring a leak'
   let root = ''
   let scans = 0
   const watch = await startDevWatch(
-    { out, startupTimeout: 10, keyEnv: {} },
+    { out, startupTimeout: 10, serverEnv: {} },
     {
       spawn: (env) => {
         root = String(env.TMPDIR)
@@ -207,7 +144,7 @@ test('tests that a startup timeout still tears down and an unresponsive supervis
     exit = resolve
   })
   const watch = await startDevWatch(
-    { out, startupTimeout: 5, keyEnv: {} },
+    { out, startupTimeout: 5, serverEnv: {} },
     {
       spawn: () => ({ pid: 12345, exited }),
       supervisor: async () => 12346,

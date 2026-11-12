@@ -323,7 +323,7 @@ jobs:
         run: |
           bun install --frozen-lockfile > "$RUNNER_TEMP/neo-install.log" 2>&1
           result=0
-          bun run test:captcha-e2e -- --mcp-url "$MCP_URL" --pages demo --only google-recaptcha-demo --keys real --paid --out "$RUNNER_TEMP/captcha-e2e" > "$RUNNER_TEMP/captcha-e2e.log" 2>&1 || result=$?
+          bun run test:captcha-e2e -- --server claw-server --mcp-url "$MCP_URL" --pages demo --only google-recaptcha-demo --keys real --paid --out "$RUNNER_TEMP/captcha-e2e" > "$RUNNER_TEMP/captcha-e2e.log" 2>&1 || result=$?
           if [ -f "$RUNNER_TEMP/captcha-e2e/results.md" ]; then cat "$RUNNER_TEMP/captcha-e2e/results.md"; fi
           [ "$result" -eq 0 ]
           python3 -c 'import json, os; r=json.load(open(os.environ["RUNNER_TEMP"]+"/captcha-e2e/results.json")); assert len(r)==1 and r[0]["outcome"]=="PASS"'
