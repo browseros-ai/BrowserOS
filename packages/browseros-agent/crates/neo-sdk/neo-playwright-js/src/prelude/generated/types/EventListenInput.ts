@@ -3,6 +3,8 @@ import type { EventListenInterest } from "./EventListenInterest";
 import type { EventListenRetired } from "./EventListenRetired";
 
 /**
- * `events.listen`, in either of its two shapes: a script's interest, or the prelude's cleanup.
+ * `events.listen`, upstream's `<Page|BrowserContext>.updateSubscription`, sent where upstream's
+ * client sends it (`channelOwner.ts`): on the first listener for an event and after the last.
+ * Either a script's interest, or the prelude's cleanup.
  */
 export type EventListenInput = EventListenInterest | EventListenRetired;

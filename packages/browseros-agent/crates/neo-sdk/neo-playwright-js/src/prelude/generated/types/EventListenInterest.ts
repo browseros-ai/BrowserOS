@@ -2,9 +2,9 @@
 import type { PageHandle } from "./PageHandle";
 
 /**
- * `page.on(event)` (`on: true`) and `page.off(event)` once its last listener goes
- * (`on: false`); without `page`, the context's event. `since` is the script's `Date.now()` when
- * it attached the listener (or removed it). The event ops name no target the door resolves, so
- * their page always has its tab: the prelude opens the run's lazy page first.
+ * `page.on(event)` (`enabled: true`) and `page.off(event)` once its last listener goes
+ * (`enabled: false`); without `page`, the context's event. `since` is the script's `Date.now()`
+ * when it attached the listener (or removed it). The event ops name no target the door
+ * resolves, so their page always has its tab: the prelude opens the run's lazy page first.
  */
-export type EventListenInterest = { page?: PageHandle | null, event: string, on: boolean, since?: number, };
+export type EventListenInterest = { page?: PageHandle | null, event: string, enabled: boolean, since?: number, };

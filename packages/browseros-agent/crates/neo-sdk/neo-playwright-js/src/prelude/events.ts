@@ -1,8 +1,8 @@
 /**
  * One run's page and context events.
  *
- *   page.on('dialog', fn)   first listener ──▶ events.listen { page, event, on: true, since }
- *   page.off(...)           last listener  ──▶ events.listen { page, event, on: false, since }
+ *   page.on('dialog', fn)   first listener ──▶ events.listen { page, event, enabled: true, since }
+ *   page.off(...)           last listener  ──▶ events.listen { page, event, enabled: false, since }
  *   pump (one per run)      events.next {}, a background long poll ──▶ { events, lost }
  *                           ──▶ emit each on its page or the context, or answer a binding call
  *                           (bindings.ts), the pump running while a binding is exposed too
@@ -511,7 +511,7 @@ export class EventHub {
         await send['events.listen'](
           site,
           { api, timeoutMs: 0 },
-          { page: null, retiredTab: page._tab, event, on: false, since },
+          { page: null, retiredTab: page._tab, event, enabled: false, since },
         )
       else
         await send['events.listen'](
@@ -520,7 +520,7 @@ export class EventHub {
           {
             page: page === null ? null : await page._openedBrand(api),
             event,
-            on,
+            enabled: on,
             since,
           },
         )
@@ -542,7 +542,7 @@ export class EventHub {
       await send['events.interceptFileChooser'](
         site,
         { api, timeoutMs: 0 },
-        { page, lease: id, on: true },
+        { page, event: 'fileChooser', enabled: true, lease: id },
       )
     })
     trackChooserSetup(ready)
@@ -555,7 +555,12 @@ export class EventHub {
             await send['events.interceptFileChooser'](
               site,
               { api, timeoutMs: 0 },
-              { page: await target, lease: id, on: false },
+              {
+                page: await target,
+                event: 'fileChooser',
+                enabled: false,
+                lease: id,
+              },
             )
           })
           trackChooserSetup(released)

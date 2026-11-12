@@ -15,7 +15,9 @@ export type Flatten<T> = T extends { options: infer O }
 
 /** An open index signature is not an inventory of named protocol fields. */
 type Keys<T> = string extends keyof T ? never : keyof T & string
-type NeoKeys<T> = Exclude<Keys<T>, NeoAddressing>
+// Every variant's keys of a union input (an op with two shapes, `events.listen`): `keyof` a
+// union keeps only the shared keys, so a key one variant sends would escape the check unlisted.
+type NeoKeys<T> = T extends unknown ? Exclude<Keys<T>, NeoAddressing> : never
 type UpstreamKeys<T> = Exclude<Keys<T>, UpstreamAddressing>
 type IsAny<T> = 0 extends 1 & T ? true : false
 // skipLibCheck can hide an unresolved import in a vendored declaration as `any`. Refuse it

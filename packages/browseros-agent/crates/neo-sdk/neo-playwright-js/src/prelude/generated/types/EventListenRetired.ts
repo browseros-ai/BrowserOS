@@ -6,4 +6,4 @@ import type { TabId } from "./TabId";
  * run's subscription table, without resolving or acting on the retired tab, so it carries no
  * page and only ever removes the `workerstate` interest.
  */
-export type EventListenRetired = { page: null, retiredTab: TabId, event: 'workerstate', on: false, since?: number, };
+export type EventListenRetired = { page: null, retiredTab: TabId, event: 'workerstate', enabled: false, since?: number, };

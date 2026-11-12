@@ -744,7 +744,7 @@ async fn tests_that_a_confirm_opened_by_a_click_is_answered_and_the_click_finish
     // A listener accepts it while the click waits on it.
     run.invoke(
         "events.listen",
-        json!({ "page": brand(&page), "event": "dialog", "on": true, "since": now_ms()? }),
+        json!({ "page": brand(&page), "event": "dialog", "enabled": true, "since": now_ms()? }),
     )
     .await?;
     let answered = async {

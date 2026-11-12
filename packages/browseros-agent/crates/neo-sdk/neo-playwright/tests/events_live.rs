@@ -254,7 +254,7 @@ async fn tests_that_a_dialog_reaches_its_listener_and_takes_its_answer() -> Test
             let since = now_ms()?;
             run.invoke(
                 "events.listen",
-                json!({ "page": brand(&page), "event": "dialog", "on": true, "since": since }),
+                json!({ "page": brand(&page), "event": "dialog", "enabled": true, "since": since }),
             )
             .await?;
             // The pump, as the prelude runs it for page.on('dialog'), answers while the click
@@ -304,7 +304,7 @@ async fn tests_that_a_dialog_reaches_its_listener_and_takes_its_answer() -> Test
             // A waitForEvent holds a dialog the same way.
             run.invoke(
                 "events.listen",
-                json!({ "page": brand(&page), "event": "dialog", "on": false }),
+                json!({ "page": brand(&page), "event": "dialog", "enabled": false }),
             )
             .await?;
             let since = now_ms()?;
@@ -526,7 +526,7 @@ async fn dropped_answers(
         run.eval(page, "window.__answer = 'unanswered'").await?;
         run.invoke(
             "events.listen",
-            json!({ "page": brand(page), "event": "dialog", "on": true, "since": now_ms()? }),
+            json!({ "page": brand(page), "event": "dialog", "enabled": true, "since": now_ms()? }),
         )
         .await?;
         // From a timer, so this returns before the confirm blocks the page.
@@ -704,7 +704,7 @@ async fn ordered_rounds(run: &LiveRun, server: &PageServer, page: &TestPage) -> 
         open(run, page, &server.url("/popups.html")).await?;
         run.invoke(
             "events.listen",
-            json!({ "page": brand(page), "event": "console", "on": true, "since": now_ms()? }),
+            json!({ "page": brand(page), "event": "console", "enabled": true, "since": now_ms()? }),
         )
         .await?;
         for round in 0..5 {
@@ -758,7 +758,7 @@ async fn tests_that_console_and_page_errors_reach_listeners_outside_hosted_mode(
             for event in ["console", "pageerror"] {
                 run.invoke(
                     "events.listen",
-                    json!({ "page": brand(&page), "event": event, "on": true, "since": now_ms()? }),
+                    json!({ "page": brand(&page), "event": event, "enabled": true, "since": now_ms()? }),
                 )
                 .await?;
             }

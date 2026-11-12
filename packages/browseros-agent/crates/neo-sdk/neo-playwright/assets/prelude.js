@@ -9286,12 +9286,12 @@ ${value.stack}`;
         if (on && lease)
           await lease.ready;
         if (!on && event === "workerstate" && page?._tab != null)
-          await send["events.listen"](site, { api, timeoutMs: 0 }, { page: null, retiredTab: page._tab, event, on: false, since });
+          await send["events.listen"](site, { api, timeoutMs: 0 }, { page: null, retiredTab: page._tab, event, enabled: false, since });
         else
           await send["events.listen"](site, { api, timeoutMs: 0 }, {
             page: page === null ? null : await page._openedBrand(api),
             event,
-            on,
+            enabled: on,
             since
           });
       } catch {
@@ -9308,7 +9308,7 @@ ${value.stack}`;
       const api = "page.filechooser";
       const target = page._openedBrand(api);
       const ready = target.then(async (page) => {
-        await send["events.interceptFileChooser"](site, { api, timeoutMs: 0 }, { page, lease: id, on: true });
+        await send["events.interceptFileChooser"](site, { api, timeoutMs: 0 }, { page, event: "fileChooser", enabled: true, lease: id });
       });
       trackChooserSetup(ready);
       let released = null;
@@ -9317,7 +9317,12 @@ ${value.stack}`;
         release: () => {
           if (!released) {
             released = ready.then(async () => {
-              await send["events.interceptFileChooser"](site, { api, timeoutMs: 0 }, { page: await target, lease: id, on: false });
+              await send["events.interceptFileChooser"](site, { api, timeoutMs: 0 }, {
+                page: await target,
+                event: "fileChooser",
+                enabled: false,
+                lease: id
+              });
             });
             trackChooserSetup(released);
           }
