@@ -43,21 +43,48 @@ function comment(partial: PartialFrame): string {
 }
 
 /**
- * Whether `text` is `node`'s own line. `lineToNode` indexes the renderer's lines, which a key
- * with a raw newline would shift once split; a line that does not start with the node's key
- * gets no node, so a shift can never make the cap treat a text line as a section or a dialog.
+ * The vendored renderer's YAML for `json`, line for line, each element's line with its node.
+ *
+ * The renderer recurses once per tree level, and an `'ai'` tree keeps every wrapper, so a page
+ * stitched from nested frames could nest deeper than QuickJS's 512 KiB stack allows. Here the
+ * walk keeps its pending children on an explicit stack, and each node's own lines (its key, its
+ * text or its `/url` and `/placeholder`) are the renderer's for a copy of that node without
+ * children, so keys, quoting and escaping stay Playwright's byte for byte. Alone, only a node
+ * with children and neither text nor props renders differently: as a leaf, so its line gains the
+ * colon that opens its block. Like the renderer, a node with text prints no children.
  */
-function isLineOf(text: string, node: AriaNodeJSON): boolean {
-  const line = text.trimStart()
-  const start = line.startsWith("- '") ? 3 : 2
-  const after = line.charAt(start + node.role.length)
-  if (
-    !line.startsWith('- ') ||
-    line.slice(start, start + node.role.length) !== node.role ||
-    !(after === '' || after === ' ' || after === ':' || after === "'")
-  )
-    return false
-  return node.ref === undefined || line.includes(`[ref=${node.ref}]`)
+function treeLines(json: AriaSnapshotJSON): YamlLine[] {
+  const lines: YamlLine[] = []
+  const steps: { child: AriaNodeJSON | string; depth: number }[] = []
+  const later = (
+    children: readonly (AriaNodeJSON | string)[],
+    depth: number,
+  ) => {
+    for (let index = children.length - 1; index >= 0; index--)
+      steps.push({ child: children[index], depth })
+  }
+  later(json, 0)
+  for (let step = steps.pop(); step; step = steps.pop()) {
+    const indent = '  '.repeat(step.depth)
+    const { child } = step
+    if (typeof child === 'string' || child.role === 'text') {
+      const text = typeof child === 'string' ? child : child.text || ''
+      const line = renderAriaSnapshotAsYaml([{ role: 'text', text }])
+      if (line !== '') lines.push({ text: indent + line })
+      continue
+    }
+    const { children, ...own } = child
+    const [key, ...rest] = renderAriaSnapshotAsYaml([own]).split('\n')
+    const block =
+      own.text === undefined &&
+      own.url === undefined &&
+      own.placeholder === undefined &&
+      (children?.length ?? 0) > 0
+    lines.push({ text: indent + key + (block ? ':' : ''), node: child })
+    for (const line of rest) lines.push({ text: indent + line })
+    if (own.text === undefined && children) later(children, step.depth + 1)
+  }
+  return lines
 }
 
 /** The iframe line for `ref`, by its node, or by a scan when its node was not placed. */
@@ -72,15 +99,7 @@ function iframeLine(lines: readonly YamlLine[], ref: string): number {
 
 /** The YAML's lines for one snapshot op's `{ json, partial }`, each element's with its node. */
 function yamlLines(result: SnapshotResult): YamlLine[] {
-  const json: AriaSnapshotJSON = result.json
-  const lineToNode = new Map<number, AriaNodeJSON>()
-  const yaml = renderAriaSnapshotAsYaml(json, { lineToNode })
-  const lines: YamlLine[] =
-    yaml === '' ? [] : yaml.split('\n').map((text) => ({ text }))
-  for (const [index, node] of lineToNode) {
-    const line = lines[index]
-    if (line !== undefined && isLineOf(line.text, node)) line.node = node
-  }
+  const lines = treeLines(result.json)
   if (result.partial.length === 0) return lines
   const placed = result.partial.map((partial) => ({
     partial,
@@ -149,7 +168,8 @@ function printed(lines: readonly YamlLine[]): Printed[] {
     open.push({ index, indent })
   }
   return lines.map(({ text, node }, index): Printed => {
-    const line: Printed = { text, ref: node?.ref !== undefined }
+    // As the rule words it, a line that prints `[ref=`: page text that says so counts too.
+    const line: Printed = { text, ref: text.includes('[ref=') }
     const end = ends[index]
     if (node === undefined) return line
     if (KEPT.has(node.role)) line.keptEnd = end

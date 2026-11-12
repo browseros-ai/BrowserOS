@@ -7901,13 +7901,35 @@ ${value.stack}`;
   function comment(partial) {
     return `# partial: ${partial.frame} not read (${partial.reason})`;
   }
-  function isLineOf(text, node) {
-    const line = text.trimStart();
-    const start = line.startsWith("- '") ? 3 : 2;
-    const after = line.charAt(start + node.role.length);
-    if (!line.startsWith("- ") || line.slice(start, start + node.role.length) !== node.role || !(after === "" || after === " " || after === ":" || after === "'"))
-      return false;
-    return node.ref === undefined || line.includes(`[ref=${node.ref}]`);
+  function treeLines(json) {
+    const lines = [];
+    const steps = [];
+    const later = (children, depth) => {
+      for (let index = children.length - 1;index >= 0; index--)
+        steps.push({ child: children[index], depth });
+    };
+    later(json, 0);
+    for (let step = steps.pop();step; step = steps.pop()) {
+      const indent = "  ".repeat(step.depth);
+      const { child } = step;
+      if (typeof child === "string" || child.role === "text") {
+        const text = typeof child === "string" ? child : child.text || "";
+        const line = renderAriaSnapshotAsYaml([{ role: "text", text }]);
+        if (line !== "")
+          lines.push({ text: indent + line });
+        continue;
+      }
+      const { children, ...own } = child;
+      const [key, ...rest] = renderAriaSnapshotAsYaml([own]).split(`
+`);
+      const block = own.text === undefined && own.url === undefined && own.placeholder === undefined && (children?.length ?? 0) > 0;
+      lines.push({ text: indent + key + (block ? ":" : ""), node: child });
+      for (const line of rest)
+        lines.push({ text: indent + line });
+      if (own.text === undefined && children)
+        later(children, step.depth + 1);
+    }
+    return lines;
   }
   function iframeLine(lines, ref) {
     const placed = lines.findIndex((line) => line.node?.ref === ref);
@@ -7917,16 +7939,7 @@ ${value.stack}`;
     return lines.findIndex((line) => /^\s*- /.test(line.text) && line.text.includes(tag));
   }
   function yamlLines(result) {
-    const json = result.json;
-    const lineToNode = new Map;
-    const yaml = renderAriaSnapshotAsYaml(json, { lineToNode });
-    const lines = yaml === "" ? [] : yaml.split(`
-`).map((text) => ({ text }));
-    for (const [index, node] of lineToNode) {
-      const line = lines[index];
-      if (line !== undefined && isLineOf(line.text, node))
-        line.node = node;
-    }
+    const lines = treeLines(result.json);
     if (result.partial.length === 0)
       return lines;
     const placed = result.partial.map((partial) => ({
@@ -7964,7 +7977,7 @@ ${value.stack}`;
       open.push({ index, indent });
     }
     return lines.map(({ text, node }, index) => {
-      const line = { text, ref: node?.ref !== undefined };
+      const line = { text, ref: text.includes("[ref=") };
       const end = ends[index];
       if (node === undefined)
         return line;

@@ -5,6 +5,7 @@
 // text is what Playwright 1.64.1's own `ariaSnapshot({ mode: 'ai' })` printed for the same page.
 import { describe, expect, it } from 'bun:test'
 import { readFileSync } from 'node:fs'
+import { renderAriaSnapshotAsYaml } from '../../neo-playwright/third_party/playwright/packages/isomorphic/ariaSnapshotRenderer'
 import { renderFullSnapshot, renderSnapshot } from '../src/prelude/snapshot'
 import { NO_CHANGE } from '../src/prelude/snapshot-delta'
 import type { SnapshotBaseline, SnapshotResult } from '../src/prelude/wire'
@@ -113,6 +114,94 @@ async function thrown(
     (error: Error) => error.message,
   )
 }
+
+/**
+ * Every shape the vendored renderer prints differently: a link's `/url` above its children, a
+ * field with a placeholder and a value, an empty value, keys and text that need YAML quoting, a
+ * raw newline, an empty string child, an empty children list, a name too long to print, every
+ * attribute, a frame's refs, and a second root.
+ */
+const SHAPES: Node[] = [
+  {
+    role: 'generic',
+    ref: 'e1',
+    children: [
+      {
+        role: 'link',
+        name: 'Docs',
+        ref: 'e2',
+        cursor: 'pointer',
+        url: 'https://x.example/a: b',
+        children: ['Docs', { role: 'img', name: 'logo', ref: 'e3' }],
+      },
+      {
+        role: 'textbox',
+        name: 'Email',
+        ref: 'e4',
+        placeholder: 'you@x.example',
+        text: 'a@b.c',
+      },
+      { role: 'textbox', name: 'Search', ref: 'e5', text: '' },
+      { role: 'heading', name: 'Price: $5 # off', level: 2, ref: 'e6' },
+      {
+        role: 'paragraph',
+        ref: 'e7',
+        children: ['- a dash', { role: 'text', text: 'two\nlines' }, ''],
+      },
+      { role: 'list', ref: 'e8', children: [] },
+      {
+        role: 'checkbox',
+        name: 'x'.repeat(901),
+        checked: 'mixed',
+        disabled: true,
+        ref: 'e9',
+        box: { x: 1, y: 2, width: 3, height: 4 },
+      },
+      {
+        role: 'button',
+        name: "It's",
+        pressed: 'mixed',
+        expanded: true,
+        active: true,
+        selected: true,
+        invalid: 'spelling',
+        ariaHidden: true,
+        ref: 'e10',
+      },
+      {
+        role: 'iframe',
+        ref: 'e11',
+        children: [{ role: 'button', name: 'In frame', ref: 'f1e2' }],
+      },
+    ],
+  },
+  { role: 'generic', children: ['A second root'] },
+]
+
+describe("Playwright's lines", () => {
+  it("tests that the walk prints the vendored renderer's YAML byte for byte, for every shape and the blind page", () => {
+    const blind = JSON.parse(blindData('blind.json')) as SnapshotResult
+    for (const json of [SHAPES, PAGE.json, blind.json, []])
+      expect(renderSnapshot({ json, partial: [] })).toBe(
+        renderAriaSnapshotAsYaml(json),
+      )
+  })
+
+  it('tests that a tree thousands of levels deep renders as the vendored renderer does, and is cut', () => {
+    // An explicit stack: a stitched tree can nest deeper than QuickJS's 512 KiB stack allows
+    // a recursive walk, which Bun's larger stack would not show.
+    let deep: Node = { role: 'button', name: 'Deep', ref: 'e0' }
+    for (let level = 1; level <= 3_000; level++)
+      deep = { role: 'generic', ref: `e${level}`, children: [deep] }
+    const json = [deep]
+    expect(renderSnapshot({ json, partial: [] })).toBe(
+      renderAriaSnapshotAsYaml(json),
+    )
+    expect(
+      renderFullSnapshot({ json, partial: [] }, 8_000).split('\n').at(-1),
+    ).toStartWith('# cut: ')
+  })
+})
 
 describe('the text', () => {
   it("tests that the blind page prints Playwright's own ai text, byte for byte", async () => {
