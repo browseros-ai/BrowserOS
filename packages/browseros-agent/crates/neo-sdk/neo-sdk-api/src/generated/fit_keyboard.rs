@@ -11,7 +11,7 @@
 use crate::models;
 use serde::{Deserialize, Serialize};
 
-/// FitKeyboard : Boxes of the fields a phone keyboard opens for, in screen px, `[x, y, width, height]`. Present only while they were measured at `width`×`height`.
+/// FitKeyboard : Boxes of the fields a phone keyboard opens for, in screen px, `[x, y, width, height]`: a field's own box, or for a field with no size that the page draws with its own elements (digit squares over a hidden code input) the drawing's box, where the owner taps. Present only while they were measured at `width`×`height`.
 #[derive(Clone, Default, Debug, PartialEq, Serialize, Deserialize)]
 pub struct FitKeyboard {
     #[serde(rename = "width")]
@@ -25,7 +25,7 @@ pub struct FitKeyboard {
 }
 
 impl FitKeyboard {
-    /// Boxes of the fields a phone keyboard opens for, in screen px, `[x, y, width, height]`. Present only while they were measured at `width`×`height`.
+    /// Boxes of the fields a phone keyboard opens for, in screen px, `[x, y, width, height]`: a field's own box, or for a field with no size that the page draws with its own elements (digit squares over a hidden code input) the drawing's box, where the owner taps. Present only while they were measured at `width`×`height`.
     pub fn new(width: i32, height: i32, at: i64, boxes: Vec<Vec<f64>>) -> FitKeyboard {
         FitKeyboard {
             width,

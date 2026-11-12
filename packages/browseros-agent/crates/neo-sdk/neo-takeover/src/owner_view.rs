@@ -3,9 +3,10 @@
 //! are pulled into the tab. zuzu's `ownerViewScript` and `ownerTabJS`, tuned against real
 //! phones, ported.
 //!
-//! Geometry only: the script reads where fields are, never their values, labels or text. It
-//! runs in BrowserOS's isolated world (core's `PageJs::isolated_only`), so the page can neither
-//! see it nor forge what it reports, and it never changes zoom, the window or the viewport.
+//! Geometry only: the script reads where fields and the page's drawings of them are, never
+//! their values, labels' words or text. It runs in BrowserOS's isolated world (core's
+//! `PageJs::isolated_only`), so the page can neither see it nor forge what it reports, and it
+//! writes nothing into the page: it never changes focus, zoom, the window or the viewport.
 
 use crate::fit_rule::FitMode;
 use crate::limits::{MAX_KEYBOARD_BOXES, MAX_SCANNED_FIELDS, POPUP_CLOSE_POLL, POPUP_CLOSE_WAIT};
@@ -79,11 +80,18 @@ struct PageReading {
     touch: bool,
 }
 
-/// The visible text-like fields that pass a hit test, while the page has focus, in screen px.
+/// The editable text-like fields a tap can reach, while the page has focus, in screen px: a
+/// field that passes a hit test at its middle, and a field the page draws with its own elements
+/// ([`DRAWN_BY`]), such as six digit squares over a code input with no size.
+///
 /// Screen px are page px times the pinch zoom and the browser zoom (`devicePixelRatio`, over
 /// the mode's own device scale: 2 on a phone). A phone's page fills the fullscreen window from
 /// the screen's top-left; a desktop's starts below the browser's toolbar, whose height is the
 /// window's outer height less the page's.
+///
+/// A field with no size is hit-tested at its top-left corner, where a page lays its drawing, and
+/// its box is the drawing ([`DRAWING`]), since a tap must land on what the owner sees. A drawn
+/// field with a size keeps its own box: the drawing lies over it.
 fn script(mode: FitMode) -> String {
     let (device_scale, desktop) = match mode {
         FitMode::Mobile => (2, false),
@@ -93,23 +101,83 @@ fn script(mode: FitMode) -> String {
         "(() => {{
   const v = visualViewport, scale = v.scale * devicePixelRatio / {device_scale}, boxes = [];
   const left = {desktop} ? screenX : 0, top = {desktop} ? screenY + outerHeight - innerHeight : 0;
+  const clip = r => {{
+    const x = Math.max(r.left, v.offsetLeft), y = Math.max(r.top, v.offsetTop);
+    return [x, y, Math.min(r.right, v.offsetLeft + v.width) - x, Math.min(r.bottom, v.offsetTop + v.height) - y];
+  }};
+  const drawnBy = {DRAWN_BY}, drawing = {DRAWING};
   let scanned = 0;
   if (document.hasFocus()) for (const e of document.querySelectorAll('input,textarea,[contenteditable]')) {{
     if (boxes.length >= {MAX_KEYBOARD_BOXES} || ++scanned > {MAX_SCANNED_FIELDS}) break;
     if (e.disabled || e.readOnly || !(e.isContentEditable || e.tagName === 'TEXTAREA' ||
         ['text', 'search', 'url', 'tel', 'email', 'password', 'number'].includes(e.type))) continue;
-    const r = e.getBoundingClientRect();
-    const x = Math.max(r.left, v.offsetLeft), y = Math.max(r.top, v.offsetTop);
-    const w = Math.min(r.right, v.offsetLeft + v.width) - x, h = Math.min(r.bottom, v.offsetTop + v.height) - y;
+    const r = e.getBoundingClientRect(), empty = r.width === 0 || r.height === 0;
+    let [x, y, w, h] = clip(r);
+    const hit = empty ? document.elementFromPoint(r.left, r.top)
+      : w > 0 && h > 0 ? document.elementFromPoint(x + w / 2, y + h / 2) : null;
+    if (!hit) continue;
+    if (hit !== e && !e.contains(hit)) {{
+      // A form's named controls shadow its own DOM methods in every world (`<input
+      // name=contains>`), so the rule can throw on a page's form: that field is then not drawn,
+      // and the other fields keep their boxes.
+      try {{
+        if (!drawnBy(e, hit)) continue;
+        if (empty) [x, y, w, h] = clip(drawing(e, hit).getBoundingClientRect());
+      }} catch {{ continue; }}
+    }}
     if (w <= 0 || h <= 0) continue;
-    const hit = document.elementFromPoint(x + w / 2, y + h / 2);
-    if (hit !== e && !e.contains(hit)) continue;
     boxes.push([left + (x - v.offsetLeft) * scale, top + (y - v.offsetTop) * scale, w * scale, h * scale]);
   }}
   return {{ boxes, screen: [screen.width, screen.height], touch: navigator.maxTouchPoints > 0 }};
 }})()"
     )
 }
+
+/// `(field, top) => bool`: whether the page draws `field` with its own elements, given `top`,
+/// the element the browser finds on top at the field's place (its middle, or for a field with
+/// no size, its top-left corner) when that is neither the field nor inside it. zuzu's
+/// `neo.DrawnBy` (ZUZU-282), ported unchanged. The page draws the field when all hold:
+///
+/// - the page renders the field: `display:none`, which has no client rects, never counts;
+/// - `top` is inside the field's scope but is not the scope itself, the page's body, or the
+///   field or what it holds. The scope is the field's parent, or for a field with no size its
+///   form (else its parent), so a drawing elsewhere on the page never claims a field;
+/// - `top` is not inside a control (a link, button, field, select or label, or a
+///   `role=button`/`role=link`), which draws itself. Only a field with no size may be drawn by
+///   its own label, as a digit row inside the label that holds the code input;
+/// - a `top` that holds the field counts only for a field with no size, and only when it draws
+///   something else beside the field: a rendered child that does not hold the field, as a digit
+///   row holding the input and its digits. A wrapper that holds nothing but the field, or the
+///   form's line of text, is not a drawing.
+///
+/// So a hidden input with no stand-in gets no box: off screen (no element on top), alone in the
+/// body or a wrapper, next to text or a button, or `display:none`.
+const DRAWN_BY: &str = "(field, top) => {
+    if (!field.getClientRects().length) return false;
+    const r = field.getBoundingClientRect(), empty = r.width === 0 || r.height === 0;
+    const scope = empty ? field.form || field.parentElement : field.parentElement;
+    if (!scope || scope === field.ownerDocument.body || top === scope || !scope.contains(top) ||
+        field.contains(top)) return false;
+    const inOwnLabel = [...(field.labels || [])].some(label => label.contains(top));
+    if (inOwnLabel ? !empty
+        : top.closest('a,button,input,select,textarea,label,[role=button],[role=link]')) return false;
+    return !top.contains(field) ||
+      empty && [...top.children].some(c => !c.contains(field) && c.getClientRects().length > 0);
+  }";
+
+/// `(field, top) => Element`: what a tap on a drawn field with no size must land on, the
+/// drawing as a whole rather than the one digit at the field's corner. That is `top` when it
+/// holds the field; else the branch of the scope that holds `top`, or the field's parent when
+/// that branch sits beside the field there, unless the parent is the field's whole form. zuzu's
+/// `ownerViewScript`, ported unchanged. [`DRAWN_BY`] has checked that the scope holds `top`, so
+/// the climb ends inside it.
+const DRAWING: &str = "(field, top) => {
+    if (top.contains(field)) return top;
+    let branch = top;
+    while (!branch.parentElement.contains(field)) branch = branch.parentElement;
+    return branch.parentElement === field.parentElement && field.parentElement !== field.form
+      ? field.parentElement : branch;
+  }";
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -243,4 +311,195 @@ async fn pull_in(
         tokio::time::sleep(POPUP_CLOSE_POLL).await;
     }
     Ok(PullIn::Moved)
+}
+
+/// The owner view's script on real BrowserOS pages at a phone's size: which fields get a
+/// keyboard box, and where. Needs a throwaway BrowserOS with CDP on `BROWSEROS_CDP_PORT`
+/// (default 9005), for example
+/// `BROWSEROS_CDP_PORT=9371 cargo test -p neo-takeover owner_view -- --ignored`.
+///
+/// The fits loop and the host API around the script are the fits tests' (over a fake browser,
+/// which cannot lay out a page); these read real layout and hit tests.
+#[cfg(test)]
+mod live_tests {
+    use super::{PageReading, script};
+    use crate::BrowserTabs;
+    use crate::fit_rule::FitMode;
+    use browseros_cdp::{CdpClient, ConnectOptions};
+    use browseros_core::viewport::Viewports;
+    use browseros_core::{BrowserSession, BrowserSessionHooks, PageJs, TargetId};
+    use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
+    use serde_json::{Value, json};
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    type BoxError = Box<dyn std::error::Error + Send + Sync>;
+    type TestResult = Result<(), BoxError>;
+
+    /// A sign-in code the page draws as six digit squares over one input with no size, beside
+    /// an ordinary field. A tap on the squares reaches the page's own focus of the input.
+    const CODE_ENTRY: &str = r#"<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1">
+<style>body{margin:16px}#email{display:block;width:260px;height:32px;margin-bottom:24px}
+.otp{position:relative}.otp input{position:absolute;width:0;height:0;padding:0;border:0;opacity:0}
+.digits{display:flex;gap:8px}.digits span{width:36px;height:44px;border:1px solid}</style>
+<input id="email" type="email" aria-label="Email">
+<div class="otp" onclick="document.getElementById('otp').focus()">
+<input id="otp" inputmode="numeric" autocomplete="one-time-code" maxlength="6" aria-label="Code">
+<div class="digits"><span></span><span></span><span></span><span></span><span></span><span></span></div></div>"#;
+
+    /// zuzu's scenario 89 page (`cell/harness/test/e2e-gateway.mjs`, `/local-browser-fixture?keyboard=1`),
+    /// unchanged but for its script: one visible field and one drawn code box get a keyboard
+    /// box; a disabled field, a read-only one, and a field with no size that nothing draws
+    /// (alone in a bordered wrapper, before a button, beside text, `display:none`, alone in the
+    /// body) do not.
+    const ZUZU_SCENARIO_89: &str = concat!(
+        r#"<title>Local pilot fixture</title><meta name="viewport" content="width=device-width"><body>"#,
+        r#"<input id="mobile-text" value="keyboard-private-fixture"><input disabled value="disabled"><textarea readonly>read only</textarea>"#,
+        r#"<form><input id="drawn-code" aria-label="Code" style="position:absolute;width:0;height:0;padding:0;border:0;opacity:0">"#,
+        r#"<div onclick="this.previousElementSibling.focus()" style="display:flex;gap:4px">"#,
+        r#"<div style="width:24px;height:32px;border:1px solid"></div><div style="width:24px;height:32px;border:1px solid"></div>"#,
+        r#"<div style="width:24px;height:32px;border:1px solid"></div><div style="width:24px;height:32px;border:1px solid"></div>"#,
+        r#"<div style="width:24px;height:32px;border:1px solid"></div><div style="width:24px;height:32px;border:1px solid"></div></div></form>"#,
+        r#"<form><div style="padding:6px;border:1px solid"><input id="wrapped-zero" style="width:0;height:0;padding:0;border:0"></div>"#,
+        r#"<div><input id="form-zero" style="width:0;height:0;padding:0;border:0"><button type="button">Send</button></div></form>"#,
+        r#"<form><input id="form-only" style="width:0;height:0;padding:0;border:0"> Pay later <button type="button">Go</button></form>"#,
+        r#"<form style="position:fixed;left:0;top:0"><input id="gone" style="display:none"><span style="display:block;width:10px;height:10px"></span></form>"#,
+        r#"<input name="zero_size" style="width:0;height:0;padding:0;border:0"><div id="result">Before JavaScript</div>"#,
+        r#"<a href="/local-browser-next">Next page</a></body>"#,
+    );
+
+    /// The rule's edges, one form each so no two share a scope.
+    const EDGES: &str = r##"<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1">
+<style>body{margin:16px}form{margin:12px 0}.cell{width:30px;height:40px;border:1px solid}
+.zero{width:0;height:0;padding:0;border:0}</style>
+<form><input id="plain" aria-label="Name"></form>
+<form><div style="position:relative;width:228px;height:42px"><input id="under" style="position:absolute;inset:0;opacity:0"><div style="position:absolute;inset:0;display:flex;gap:8px"><div class="cell"></div><div class="cell"></div><div class="cell"></div><div class="cell"></div><div class="cell"></div><div class="cell"></div></div></div></form>
+<form><label style="position:relative;display:block;width:200px;height:40px"><input id="labelled" style="position:absolute;inset:0;opacity:0"><span style="position:absolute;inset:0">Labelled</span></label></form>
+<form><label id="row-label" style="display:block"><input id="in-label" class="zero" style="position:absolute;opacity:0"><div style="display:flex;gap:4px"><div class="cell"></div><div class="cell"></div><div class="cell"></div><div class="cell"></div></div></label></form>
+<form><input id="off-screen" name="website" tabindex="-1" autocomplete="off" style="position:absolute;left:-9999px"></form>
+<form><input id="before-button" class="zero"><button type="button">Sign up</button></form>
+<form><input id="alone" class="zero" style="opacity:0"></form>
+<form><input id="by-link" class="zero" style="position:absolute"><a href="#" style="display:block;width:200px;height:30px">Forgot code?</a></form>
+<form><div style="display:flex;gap:4px"><input id="shadowed" class="zero" style="position:absolute"><div class="cell"></div><div class="cell"></div></div><input id="named" name="contains"></form>"##;
+
+    /// The keyboard boxes the script reports on `html` at a phone's size, and the boxes of the
+    /// elements `expected` selects, measured the same way: a phone's page fills the screen from
+    /// its top-left at one screen px per page px (DPR 2 over the phone's device scale of 2).
+    async fn boxes_on(html: &str, expected: &[&str]) -> Result<[Vec<[f64; 4]>; 2], BoxError> {
+        let port = std::env::var("BROWSEROS_CDP_PORT")
+            .ok()
+            .and_then(|port| port.parse().ok())
+            .unwrap_or(9005);
+        let client = CdpClient::connect(ConnectOptions::new(port)).await?;
+        let session = BrowserSession::new(Arc::new(client), BrowserSessionHooks::default());
+        let url = format!(
+            "data:text/html,{}",
+            utf8_percent_encode(html, NON_ALPHANUMERIC)
+        );
+        let created = session
+            .cdp("Target.createTarget", json!({ "url": url }), None)
+            .await?;
+        let target = TargetId(
+            created["targetId"]
+                .as_str()
+                .ok_or("a target id")?
+                .to_string(),
+        );
+        let tabs = BrowserTabs::new(Arc::clone(&session), Arc::new(Viewports::default()));
+        let read = read_page(&tabs, &target, expected).await;
+        session
+            .cdp(
+                "Target.closeTarget",
+                json!({ "targetId": target.as_str() }),
+                None,
+            )
+            .await?;
+        read
+    }
+
+    async fn read_page(
+        tabs: &BrowserTabs,
+        target: &TargetId,
+        expected: &[&str],
+    ) -> Result<[Vec<[f64; 4]>; 2], BoxError> {
+        let mut page = None;
+        for _ in 0..50 {
+            page = tabs
+                .pages()
+                .await?
+                .into_iter()
+                .find(|page| &page.target_id == target);
+            if page.is_some() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        let page = page.ok_or("the new tab is listed")?;
+        let session = tabs.session_for(&page).await?;
+        // A fit's phone: mobile emulation at its size, DPR 2. The headless window never has
+        // the focus a real one has, which the script requires.
+        let _: Value = session
+            .send(
+                "Emulation.setDeviceMetricsOverride",
+                json!({ "width": 390, "height": 844, "deviceScaleFactor": 2, "mobile": true }),
+            )
+            .await?;
+        let _: Value = session
+            .send(
+                "Emulation.setFocusEmulationEnabled",
+                json!({ "enabled": true }),
+            )
+            .await?;
+        for _ in 0..50 {
+            let loaded = PageJs::isolated_only(&session)
+                .eval::<bool>("document.readyState === 'complete'")
+                .await
+                .unwrap_or(false);
+            if loaded {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        let reading: PageReading = PageJs::isolated_only(&session)
+            .eval(&script(FitMode::Mobile))
+            .await?;
+        let want = PageJs::isolated_only(&session)
+            .eval(&format!(
+                "{}.map(s => {{ const r = document.querySelector(s).getBoundingClientRect(); \
+                 return [r.left, r.top, r.width, r.height]; }})",
+                serde_json::to_string(expected)?
+            ))
+            .await?;
+        Ok([reading.boxes, want])
+    }
+
+    #[tokio::test]
+    #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+    async fn a_code_the_page_draws_over_a_field_with_no_size_gets_the_drawings_box() -> TestResult {
+        let [boxes, want] = boxes_on(CODE_ENTRY, &["#email", ".otp"]).await?;
+        assert_eq!(boxes, want);
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+    async fn zuzus_scenario_89_page_gets_its_visible_field_and_its_drawn_code() -> TestResult {
+        let [boxes, want] =
+            boxes_on(ZUZU_SCENARIO_89, &["#mobile-text", "#drawn-code + div"]).await?;
+        assert_eq!(boxes, want);
+        Ok(())
+    }
+
+    /// A field with a size under the page's drawing keeps its own box; one under its own label's
+    /// text gets none, as zuzu's rule has it. A field with no size inside a label that draws it
+    /// gets the label's box. No honeypot gets a box: off screen, before a button, alone, beside
+    /// only a link. A form whose control is named `contains` shadows `form.contains`, so its drawn
+    /// field gets none, and every other field keeps its box.
+    #[tokio::test]
+    #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+    async fn the_rules_edges_and_honeypots() -> TestResult {
+        let [boxes, want] = boxes_on(EDGES, &["#plain", "#under", "#row-label", "#named"]).await?;
+        assert_eq!(boxes, want);
+        Ok(())
+    }
 }
