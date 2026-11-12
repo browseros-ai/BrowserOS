@@ -12,6 +12,7 @@ bun run test:neo-spec                          # every spec on Neo (claw engine,
 bun run test:neo-spec page-goto page-fill      # some specs, by file name without .spec.ts
 bun run test:neo-spec page-goto --reference    # the same on real Playwright
 bun run test:neo-spec page-fill --grep 'should fill range input'
+bun run test:neo-spec --ci                     # the CI gate: the whole corpus against its expected list
 ```
 
 It needs Node 22 or newer (taken from PATH, then `/opt/homebrew/opt/node@26/bin`; the corpus
@@ -21,9 +22,9 @@ takes a few minutes. Each run ends with the in-scope score, the all-tests score,
 folder and the command that reruns one failing test.
 
 A name is a spec file without `.spec.ts`, or `page/<name>` when two folders share it; full paths
-work too. Other flags go to `node/run.mjs` unchanged: `--grep`, `--workers 1` to `4`,
-`--skip-build`, `--hosted-mode`, `--no-curation`. `--list` lists the selected tests and needs no
-browser.
+work too. Other flags go to `node/run.mjs` unchanged: `--grep`, `--workers 1` to `32` (each
+worker owns one browser; keep the default 4 on a machine that runs other builds), `--skip-build`,
+`--hosted-mode`, `--no-curation`. `--list` lists the selected tests and needs no browser.
 
 Overrides:
 
@@ -43,6 +44,46 @@ run directly with the variables above set, e.g.
 v2's fixture implementation but fails immediately: `Neo v2's SDK is not on this branch`.
 Claw builds `node/claw-addon` with `cargo build --release --locked`, then installs
 `claw_node.node`. `--skip-build` reuses it.
+
+## CI
+
+`.github/workflows/neo-spec.yml` runs `bun run test:neo-spec --ci --workers 16` on WarpBuild's
+32-vCPU Linux runner for every pull request and push to `main` that touches `crates/`, the
+workspace manifest or this command, with the browser `neo-server/docker/browser.lock` pins
+(headless, the SDK image's fonts). `--ci` is the same run plus a verdict (`ci.ts`, rules in
+`node/expected.mjs`):
+
+- `node/expected/<platform>.tsv` (`linux-x64` in CI) lists the in-scope tests that do not pass
+  there, each `fail` or `skip`. The runner writes it; nobody edits it by hand.
+- A test whose full-run result differs from its expectation (pass, or its listed outcome) is
+  rerun alone, up to twice, stopping at the first rerun that matches. Matching once makes it
+  **flaky**: reported, not failing the job, and it keeps its expectation. Never matching settles
+  it at what its reruns agree on: an expected pass that does not pass is a **regression**; a
+  listed test that passed every rerun is **newly passing**, and the job fails until the pull
+  request takes it off the list, so the count only ratchets up; a listed `fail` that now skips
+  (or the reverse) has a **changed outcome**.
+- A skip in the full run is decided by the spec or the harness, not by timing, so it is not
+  rerun: an expected pass that skipped is a regression straight away.
+- A listed test that left the corpus is **stale**, and a rerun that produced no result for its
+  test is **inconclusive**; both fail the job. A run that reported an error (Playwright's, a
+  stop signal, browsers that survived cleanup) fails it too.
+- The job summary has the totals, every regression, newly passing, changed and flaky test by name.
+  The results folder (with `verdict.json`, `summary.md` and failure screenshots) is the
+  `neo-spec-report` artifact; the list this run supports is `neo-spec-expected`.
+
+**Updating the list**, when your pull request fixes or (deliberately) changes a test: take the
+list your pull request's CI run wrote, with the GitHub CLI signed in,
+
+```sh
+bun run test:neo-spec --expected-from <run URL or ID>
+```
+
+then commit `node/expected/linux-x64.tsv`. It prints what it removed, added and changed; an
+added test accepts a regression, so the pull request says why. A pull request's run tests it
+merged into the current `main`, so a test `main` fixed since the list last changed shows up as
+newly passing too; the same command takes it. Two pull requests that each fix
+a test change different lines and merge cleanly. On a Linux machine,
+`bun run test:neo-spec --ci --write-expected` writes the list from a local run instead.
 
 ## The corpus
 

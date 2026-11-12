@@ -1,4 +1,4 @@
-/** Neo: Keeps caller selection inside the pinned corpus and the four-browser ownership limit. */
+/** Neo: Keeps caller selection inside the pinned corpus and the browser ownership limit. */
 
 /**
  * Of headful.spec.ts only HE-012 (`Page.bringToFront should work`) runs, headless by owner
@@ -7,6 +7,14 @@
  */
 export const headfulInvert =
   '\\bheadful\\.spec\\.ts\\b(?!.*\\bPage\\.bringToFront should work\\b)'
+
+/**
+ * Each worker owns one headless BrowserOS (browser-owner.mjs holds its slot until that browser is
+ * gone). Four is the default because developer machines run several builds at once; the CI job
+ * (neo-spec.yml) has a 32-vCPU runner to itself and passes more. The cap keeps a typo from
+ * starting a browser per test file.
+ */
+export const MAX_WORKERS = 32
 
 export function runnerOptions(argv) {
   const options = {
@@ -53,9 +61,10 @@ export function runnerOptions(argv) {
         ? arg.slice(2).replace(/^=/, '')
         : arg.slice('--workers'.length).replace(/^=/, '')
       const value = attached || argv[++index]
-      if (!/^[1-4]$/.test(value || ''))
-        throw new Error('--workers must be between 1 and 4')
-      options.workers = Number(value)
+      const workers = /^\d+$/.test(value || '') ? Number(value) : 0
+      if (workers < 1 || workers > MAX_WORKERS)
+        throw new Error(`--workers must be between 1 and ${MAX_WORKERS}`)
+      options.workers = workers
     } else if (/^--grep-invert(=|$)|^-G/.test(arg)) {
       const attached = arg.startsWith('-G')
         ? arg.slice(2).replace(/^=/, '')

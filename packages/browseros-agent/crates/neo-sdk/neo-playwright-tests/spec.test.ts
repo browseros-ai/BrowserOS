@@ -4,10 +4,14 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import {
+  ciArgs,
+  ciRerunArgs,
   ensureSource,
+  exactGrep,
   findBrowser,
   findNode,
   finish,
+  isFiltered,
   publishSource,
   rerunFlags,
   rerunLine,
@@ -448,5 +452,73 @@ describe('the closing rerun line', () => {
     expect(line).toContain(
       "(interrupted): bun run test:neo-spec page-click --grep '(?:^| )page/page-click\\.spec\\.ts should click on a span with an inline element inside(?: @\\S+)*$'",
     )
+  })
+})
+
+describe('--ci', () => {
+  it('takes its own switches off the command line and leaves the rest for run.mjs', () => {
+    expect(
+      ciArgs(['--ci', '--workers', '16', '--grep', '--ci', '--write-expected']),
+    ).toEqual({
+      ci: true,
+      writeExpected: true,
+      expectedFrom: undefined,
+      argv: ['--workers', '16', '--grep', '--ci'],
+    })
+    expect(ciArgs(['--expected-from', '123']).expectedFrom).toBe('123')
+    expect(
+      ciArgs(['--expected-from=https://github.com/o/r/actions/runs/9'])
+        .expectedFrom,
+    ).toBe('https://github.com/o/r/actions/runs/9')
+    expect(() => ciArgs(['--write-expected'])).toThrow(/goes with --ci/)
+    expect(() => ciArgs(['--expected-from'])).toThrow(/run ID or URL/)
+    expect(() => ciArgs(['--expected-from', '1', 'page-goto'])).toThrow(
+      /runs no tests/,
+    )
+  })
+
+  it('knows a filtered run from the whole corpus', () => {
+    expect(isFiltered([], ['--workers', '16', '--hosted-mode'])).toBe(false)
+    expect(isFiltered(['page-goto'], [])).toBe(true)
+    expect(isFiltered([], ['--grep', 'x'])).toBe(true)
+    expect(isFiltered([], ['--shard=1/2'])).toBe(true)
+  })
+
+  it("reruns one test alone with the full run's other flags and the add-on it built", () => {
+    const test = {
+      file: 'tests/page/page-fill.spec.ts',
+      titles: ['should fill (textarea)'],
+    }
+    expect(
+      ciRerunArgs(
+        [
+          '--workers',
+          '16',
+          '-j8',
+          '--hosted-mode',
+          '--grep',
+          'fill',
+          '--skip-build',
+        ],
+        test,
+      ),
+    ).toEqual([
+      '--hosted-mode',
+      '--skip-build',
+      '--workers',
+      '1',
+      'tests/page/page-fill.spec.ts',
+      '--grep',
+      exactGrep(test.file, test.titles),
+    ])
+    const grep = new RegExp(exactGrep(test.file, test.titles))
+    expect(
+      grep.test('browseros-neo page/page-fill.spec.ts should fill (textarea)'),
+    ).toBe(true)
+    expect(
+      grep.test(
+        'browseros-neo page/page-fill.spec.ts should fill (textarea) twice',
+      ),
+    ).toBe(false)
   })
 })

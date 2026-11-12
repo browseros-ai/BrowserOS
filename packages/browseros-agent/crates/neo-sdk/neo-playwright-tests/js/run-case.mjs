@@ -85,7 +85,11 @@ export async function leasePorts({ signal } = {}) {
   fs.mkdirSync(root, { recursive: true })
   for (let attempt = 0; attempt < 100; attempt++) {
     check(signal)
-    const port = 16000 + randomInt(8000) * 4
+    // Blocks of four from 16000 to 31999: below Linux's ephemeral range (32768-60999 by
+    // default) as well as macOS's and Windows' (49152 up). The block is free when probed, but a
+    // test server binds it later; inside the ephemeral range an outgoing connection, such as a
+    // browser's to another worker's server, can take a port in between (EADDRINUSE on Linux CI).
+    const port = 16000 + randomInt(4000) * 4
     const lock = path.join(root, String(port))
     try {
       fs.mkdirSync(lock)
