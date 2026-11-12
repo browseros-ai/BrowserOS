@@ -1,11 +1,13 @@
 //! One run's Playwright state, owned by the host so it lives exactly as long as the run.
 
 mod navigation_publications;
+mod opened_tabs;
 
 use std::sync::{Mutex, PoisonError};
 
 use browseros_core::TabId;
 use navigation_publications::NavigationPublications;
+pub(crate) use opened_tabs::OpenedTabs;
 
 use crate::DownloadFacts;
 use crate::events::{RunDownloads, RunEvents};
@@ -15,8 +17,8 @@ use crate::page::{FrameRoutes, InitScripts};
 use crate::snapshot::PendingBaselines;
 
 /// One run's Playwright state: event cursors, navigation publication receipts, discovered
-/// frame endpoints, retained element objects, downloads, init scripts and what its snapshots
-/// tell the run's reply. The host creates it
+/// frame endpoints, retained element objects, downloads, init scripts, what its snapshots
+/// tell the run's reply, and the tabs it opened. The host creates it
 /// with `Default`, keeps it in its run slot and drops it with the run; the crate reaches it through
 /// `OpEnv::run_state`. Opaque, so its contents can change without the host noticing.
 ///
@@ -43,6 +45,9 @@ pub struct RunState {
     /// The run's whole-page v1 texts, which become baselines only when the run ends with them in
     /// the caller's hands ([`RunState::settle_snapshot_baselines`]).
     pub(crate) pending_baselines: PendingBaselines,
+    /// The tabs the run opened and snapshotted: on a tab it opened and never snapshotted, a
+    /// failed ref came from another tab, and its message says so.
+    pub(crate) opened_tabs: OpenedTabs,
 }
 
 impl RunState {

@@ -34,8 +34,11 @@ export type {
   PartialFrame,
   ResponseInfo,
   ScrollOption,
+  SnapshotBaseline,
+  SnapshotForm,
   SnapshotResult,
   Target,
+  TextForm,
 } from './generated'
 /** Playwright's in-page serialized value (`utilityScriptSerializers.ts`), as JSON. */
 export type { SerializedValue }

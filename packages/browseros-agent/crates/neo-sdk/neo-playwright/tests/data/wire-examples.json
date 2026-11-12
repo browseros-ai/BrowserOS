@@ -3835,6 +3835,11 @@
         },
         "document": 3,
         "text": "",
+        "form": {
+          "text": "kept",
+          "urls": false,
+          "maxTokens": 8000
+        },
         "delta": false
       },
       {
@@ -3848,6 +3853,11 @@
         },
         "document": 3,
         "text": "",
+        "form": {
+          "text": "kept",
+          "urls": false,
+          "maxTokens": 8000
+        },
         "delta": true,
         "returned": "# full snapshot: too much differs from your last snapshot to list as changes\n"
       }

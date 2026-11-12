@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
 
 use browseros_core::TargetId;
 
-use super::SnapshotBaselines;
+use super::{Baseline, SnapshotBaselines, SnapshotForm};
 
 /// At most this many pending texts per tab in one run; a run that snapshots one tab more often
 /// keeps its latest. A text dropped here might have been the one the caller was given, so a tab
@@ -45,18 +45,22 @@ struct Pending {
     document: u32,
     /// The full v1 text: what becomes the baseline.
     text: String,
+    /// How the prelude rendered `text`.
+    form: SnapshotForm,
     /// What the call returned when it was not `text` itself: a delta call's delta.
     returned: Option<String>,
 }
 
 impl PendingBaselines {
-    /// Records one whole-page snapshot of `tab` taken by this run.
+    /// Records one whole-page snapshot of `tab` taken by this run: its full text in `form`, and
+    /// what the call returned when that was not the text itself.
     pub(crate) fn record(
         &self,
         store: &Arc<SnapshotBaselines>,
         tab: TargetId,
         document: u32,
         text: String,
+        form: SnapshotForm,
         returned: Option<String>,
     ) {
         let _ = self.store.set(Arc::clone(store));
@@ -73,6 +77,7 @@ impl PendingBaselines {
             tab,
             document,
             text,
+            form,
             returned,
         });
     }
@@ -94,7 +99,11 @@ impl PendingBaselines {
                 continue;
             }
             if given(entry.returned.as_deref().unwrap_or(&entry.text)) {
-                store.commit(&entry.tab, entry.document, entry.text);
+                let baseline = Baseline {
+                    text: entry.text,
+                    form: entry.form,
+                };
+                store.commit(&entry.tab, entry.document, baseline);
                 committed.push(entry.tab);
             }
         }
@@ -117,14 +126,23 @@ mod tests {
     use browseros_core::TargetId;
 
     use super::{PENDING_PER_TAB, PendingBaselines};
-    use crate::snapshot::SnapshotBaselines;
+    use crate::snapshot::{SnapshotBaselines, SnapshotForm, TextForm};
+
+    /// The form of a default snapshot that kept its text.
+    const KEPT: SnapshotForm = SnapshotForm {
+        text: TextForm::Kept,
+        urls: false,
+        max_tokens: 8000.0,
+    };
 
     fn tab(id: &str) -> TargetId {
         TargetId(id.to_owned())
     }
 
     fn stored(store: &SnapshotBaselines, id: &str) -> Option<String> {
-        store.stored(&tab(id), store.generation(&tab(id)))
+        store
+            .stored(&tab(id), store.generation(&tab(id)))
+            .map(|baseline| baseline.text)
     }
 
     /// One whole-page snapshot a test run takes.
@@ -154,6 +172,7 @@ mod tests {
                 tab(snapshot.tab),
                 document,
                 snapshot.text.to_owned(),
+                KEPT,
                 snapshot.returned.map(str::to_owned),
             );
         }
@@ -229,11 +248,35 @@ mod tests {
     }
 
     #[test]
+    fn tests_that_the_committed_baseline_keeps_the_form_its_text_was_recorded_in() {
+        let store = Arc::new(SnapshotBaselines::default());
+        let never = SnapshotForm {
+            text: TextForm::Never,
+            ..KEPT
+        };
+        for form in [never, KEPT] {
+            let pending = PendingBaselines::default();
+            let document = store.generation(&tab("A"));
+            pending.record(&store, tab("A"), document, "page".to_owned(), form, None);
+            pending.settle(true, &|returned: &str| returned == "page");
+            let stored = store.stored(&tab("A"), document);
+            assert_eq!(stored.map(|baseline| baseline.form), Some(form));
+        }
+    }
+
+    #[test]
     fn tests_that_a_document_change_during_the_run_drops_its_pending_text() {
         let store = Arc::new(SnapshotBaselines::default());
         let pending = PendingBaselines::default();
         let document = store.generation(&tab("A"));
-        pending.record(&store, tab("A"), document, "old page".to_owned(), None);
+        pending.record(
+            &store,
+            tab("A"),
+            document,
+            "old page".to_owned(),
+            KEPT,
+            None,
+        );
         store.document_changed(&tab("A"));
         pending.settle(true, &|_: &str| true);
         assert_eq!(stored(&store, "A"), None);
