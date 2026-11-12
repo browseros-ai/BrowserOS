@@ -4,14 +4,18 @@
 //! browser, not the SDK, which brings an agent tab forward before input or a capture
 //! (neo-server's `AgentFront`).
 //!
-//! **It does not on Linux, so there this test is expected to fail.** Focus emulation keeps the
-//! background tab "visible", so its renderer submits frames that no window draws, and after
-//! more than three of them viz sends that tab one `BeginFrame` a second (`ThrottleUndrawnFrames`
-//! in `CompositorFrameSinkSupport::ShouldSendBeginFrame`). A mouse move is rAF-aligned input,
-//! acked at the next frame: ~1 s. A screenshot waits for a forced frame's presentation: ~1.2 s
-//! headed, possibly never headless. macOS draws background tabs and passes. When this passes on
-//! Linux, BrowserOS's focus emulation no longer leaves the tab throttled: take the mark off, and
-//! `AgentFront`'s activation, kept only for this, goes with it.
+//! **It does not on Linux, so there this test is expected to fail.** Two separate slow paths:
+//! - Input. Focus emulation keeps the background tab "visible", so its renderer submits frames
+//!   that no window draws, and after more than three of them viz sends that tab one `BeginFrame`
+//!   a second (`ThrottleUndrawnFrames` in `CompositorFrameSinkSupport::ShouldSendBeginFrame`). A
+//!   mouse move is rAF-aligned input, acked at the next frame: ~1 s.
+//! - Captures. A screenshot waits for a forced frame's presentation: ~1.2 s headed, possibly
+//!   never headless. That wait is not the throttle (measured at 1.2 s with no `BeginFrame`
+//!   throttled); its cause is not yet found.
+//!
+//! macOS draws background tabs and passes. Both halves must be fast for this to pass on Linux:
+//! a browser patch that only lifts the throttle leaves captures slow. When it passes, take the
+//! mark off, and `AgentFront`'s activation, kept only for this, goes with it.
 //!
 //! Needs BrowserOS with CDP on `BROWSEROS_CDP_PORT` (default 9005):
 //! `cargo test -p neo-playwright --test background_tab_live -- --ignored`.

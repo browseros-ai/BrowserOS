@@ -53,12 +53,19 @@ impl AgentFront {
 
     /// Makes `tab` its window's active tab if nothing of the owner's says otherwise. Never fails:
     /// what happened is logged.
-    // TODO(remove): on Linux a background agent tab is never drawn, and the focus emulation core
-    // gives it keeps it rendering frames that viz then throttles to one BeginFrame a second
-    // (ThrottleUndrawnFrames): without this, every mouse move waits ~1 s for its ack and a
-    // screenshot waits for a frame that may never be presented (SS-054, LH-001). Remove it once
-    // BrowserOS's focus emulation clears that throttle for the page (claw-sdk
-    // `lead/verify/ss054/BROWSER-PATCH-DESIGN.md`).
+    // TODO(remove): on Linux no display draws a background agent tab, and without this two
+    // things are slow there (SS-054, LH-001):
+    // - Input and frames: the focus emulation core gives the tab keeps it rendering frames that
+    //   viz throttles to one BeginFrame a second (ThrottleUndrawnFrames), so every mouse move
+    //   waits ~1 s for its ack.
+    // - Captures: a screenshot waits for the presentation of a forced frame, ~1.2 s headed and
+    //   possibly forever headless. This is not the throttle (1.2 s with zero throttled
+    //   BeginFrames); its cause is not yet found. The first lead is Chromium's
+    //   CDPScreenshotNewSurface feature, not yet measured.
+    // Remove it only when BOTH are fast for a background agent tab on Linux, i.e.
+    // `neo-playwright/tests/background_tab_live.rs` passes there. The planned focus-emulation
+    // patch (claw-sdk `lead/verify/ss054/BROWSER-PATCH-DESIGN.md`) lifts the throttle only, so
+    // it is not enough alone.
     pub(crate) async fn bring_forward(
         self: Arc<Self>,
         view: BrowserView,
