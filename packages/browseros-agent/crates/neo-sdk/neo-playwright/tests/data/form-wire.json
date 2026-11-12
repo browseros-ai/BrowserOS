@@ -12,31 +12,31 @@
       "exchanges": [
         {
           "op": "locator.selectOption",
-          "args": "{\"call\":{\"api\":\"locator.selectOption\",\"timeoutMs\":5000},\"target\":{\"$neo\":\"locator\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"frame\":null,\"chunks\":[{\"parts\":[{\"name\":\"css\",\"body\":[{\"simples\":[{\"selector\":{\"css\":\"#input\",\"functions\":[]},\"combinator\":\"\"}]}],\"source\":\"#input\"}]}],\"display\":\"locator('#input')\"},\"strict\":\"strict\",\"options\":[{\"valueOrLabel\":\"x\"}]}",
+          "args": "{\"call\":{\"api\":\"locator.selectOption\",\"timeoutMs\":30000},\"target\":{\"$neo\":\"locator\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"frame\":null,\"chunks\":[{\"parts\":[{\"name\":\"css\",\"body\":[{\"simples\":[{\"selector\":{\"css\":\"#input\",\"functions\":[]},\"combinator\":\"\"}]}],\"source\":\"#input\"}]}],\"display\":\"locator('#input')\"},\"strict\":\"strict\",\"options\":[{\"valueOrLabel\":\"x\"}]}",
           "reply": "{\"pages\":[],\"ok\":[\"x\"],\"observed\":{\"seq\":2,\"events\":0,\"payloadCurrent\":true}}",
           "body": "[\"x\"]"
         },
         {
           "op": "locator.selectText",
-          "args": "{\"call\":{\"api\":\"locator.selectText\",\"timeoutMs\":5000},\"target\":{\"$neo\":\"locator\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"frame\":null,\"chunks\":[{\"parts\":[{\"name\":\"css\",\"body\":[{\"simples\":[{\"selector\":{\"css\":\"#input\",\"functions\":[]},\"combinator\":\"\"}]}],\"source\":\"#input\"}]}],\"display\":\"locator('#input')\"},\"strict\":\"strict\"}",
+          "args": "{\"call\":{\"api\":\"locator.selectText\",\"timeoutMs\":30000},\"target\":{\"$neo\":\"locator\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"frame\":null,\"chunks\":[{\"parts\":[{\"name\":\"css\",\"body\":[{\"simples\":[{\"selector\":{\"css\":\"#input\",\"functions\":[]},\"combinator\":\"\"}]}],\"source\":\"#input\"}]}],\"display\":\"locator('#input')\"},\"strict\":\"strict\"}",
           "reply": "{\"pages\":[],\"ok\":null,\"observed\":{\"seq\":3,\"events\":0,\"payloadCurrent\":true}}",
           "body": "null"
         },
         {
           "op": "locator.waitFor",
-          "args": "{\"call\":{\"api\":\"locator.elementHandle\",\"timeoutMs\":5000},\"target\":{\"$neo\":\"locator\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"frame\":null,\"chunks\":[{\"parts\":[{\"name\":\"css\",\"body\":[{\"simples\":[{\"selector\":{\"css\":\"#input\",\"functions\":[]},\"combinator\":\"\"}]}],\"source\":\"#input\"}]}],\"display\":\"locator('#input')\"},\"strict\":\"strict\",\"state\":\"attached\",\"omitReturnValue\":false}",
+          "args": "{\"call\":{\"api\":\"locator.elementHandle\",\"timeoutMs\":30000},\"target\":{\"$neo\":\"locator\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"frame\":null,\"chunks\":[{\"parts\":[{\"name\":\"css\",\"body\":[{\"simples\":[{\"selector\":{\"css\":\"#input\",\"functions\":[]},\"combinator\":\"\"}]}],\"source\":\"#input\"}]}],\"display\":\"locator('#input')\"},\"strict\":\"strict\",\"state\":\"attached\",\"omitReturnValue\":false}",
           "reply": "{\"pages\":[],\"ok\":{\"$neo\":\"element\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"seq\":2,\"node\":9,\"display\":\"<input>\"},\"observed\":{\"seq\":4,\"events\":0,\"payloadCurrent\":true}}",
           "body": "{\"$neo\":\"element\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"seq\":2,\"node\":9,\"display\":\"<input>\"}"
         },
         {
           "op": "locator.selectOption",
-          "args": "{\"call\":{\"api\":\"elementHandle.selectOption\",\"timeoutMs\":5000},\"target\":{\"$neo\":\"element\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"seq\":2,\"node\":9,\"display\":\"<input>\"},\"strict\":\"strict\",\"options\":[{\"valueOrLabel\":\"x\"}]}",
+          "args": "{\"call\":{\"api\":\"elementHandle.selectOption\",\"timeoutMs\":30000},\"target\":{\"$neo\":\"element\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"seq\":2,\"node\":9,\"display\":\"<input>\"},\"strict\":\"strict\",\"options\":[{\"valueOrLabel\":\"x\"}]}",
           "reply": "{\"pages\":[],\"ok\":[\"x\"],\"observed\":{\"seq\":5,\"events\":0,\"payloadCurrent\":true}}",
           "body": "[\"x\"]"
         },
         {
           "op": "locator.selectText",
-          "args": "{\"call\":{\"api\":\"elementHandle.selectText\",\"timeoutMs\":5000},\"target\":{\"$neo\":\"element\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"seq\":2,\"node\":9,\"display\":\"<input>\"},\"strict\":\"strict\"}",
+          "args": "{\"call\":{\"api\":\"elementHandle.selectText\",\"timeoutMs\":30000},\"target\":{\"$neo\":\"element\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"seq\":2,\"node\":9,\"display\":\"<input>\"},\"strict\":\"strict\"}",
           "reply": "{\"pages\":[],\"ok\":null,\"observed\":{\"seq\":6,\"events\":0,\"payloadCurrent\":true}}",
           "body": "null"
         }
@@ -49,7 +49,7 @@
       "exchanges": [
         {
           "op": "locator.pressSequentially",
-          "args": "{\"call\":{\"api\":\"locator.pressSequentially\",\"timeoutMs\":5000},\"target\":{\"$neo\":\"locator\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"frame\":null,\"chunks\":[{\"parts\":[{\"name\":\"css\",\"body\":[{\"simples\":[{\"selector\":{\"css\":\"#input\",\"functions\":[]},\"combinator\":\"\"}]}],\"source\":\"#input\"}]}],\"display\":\"locator('#input')\"},\"strict\":\"strict\",\"text\":\"ab\",\"delay\":7}",
+          "args": "{\"call\":{\"api\":\"locator.pressSequentially\",\"timeoutMs\":30000},\"target\":{\"$neo\":\"locator\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"frame\":null,\"chunks\":[{\"parts\":[{\"name\":\"css\",\"body\":[{\"simples\":[{\"selector\":{\"css\":\"#input\",\"functions\":[]},\"combinator\":\"\"}]}],\"source\":\"#input\"}]}],\"display\":\"locator('#input')\"},\"strict\":\"strict\",\"text\":\"ab\",\"delay\":7}",
           "reply": "{\"pages\":[],\"ok\":null,\"observed\":{\"seq\":2,\"events\":0,\"payloadCurrent\":true}}",
           "body": "null"
         }
@@ -128,7 +128,7 @@
         },
         {
           "op": "locator.selectOption",
-          "args": "{\"call\":{\"api\":\"locator.selectOption\",\"timeoutMs\":5000},\"target\":{\"$neo\":\"locator\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"frame\":null,\"chunks\":[{\"parts\":[{\"name\":\"css\",\"body\":[{\"simples\":[{\"selector\":{\"css\":\"#input\",\"functions\":[]},\"combinator\":\"\"}]}],\"source\":\"#input\"}]}],\"display\":\"locator('#input')\"},\"strict\":\"strict\"}",
+          "args": "{\"call\":{\"api\":\"locator.selectOption\",\"timeoutMs\":30000},\"target\":{\"$neo\":\"locator\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"frame\":null,\"chunks\":[{\"parts\":[{\"name\":\"css\",\"body\":[{\"simples\":[{\"selector\":{\"css\":\"#input\",\"functions\":[]},\"combinator\":\"\"}]}],\"source\":\"#input\"}]}],\"display\":\"locator('#input')\"},\"strict\":\"strict\"}",
           "reply": "{\"pages\":[],\"ok\":[\"x\"],\"observed\":{\"seq\":13,\"events\":0,\"payloadCurrent\":true}}",
           "body": "[\"x\"]"
         },
@@ -200,7 +200,7 @@
         },
         {
           "op": "locator.waitFor",
-          "args": "{\"call\":{\"api\":\"locator.elementHandle\",\"timeoutMs\":5000},\"target\":{\"$neo\":\"locator\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"frame\":null,\"chunks\":[{\"parts\":[{\"name\":\"css\",\"body\":[{\"simples\":[{\"selector\":{\"css\":\"#input\",\"functions\":[]},\"combinator\":\"\"}]}],\"source\":\"#input\"}]}],\"display\":\"locator('#input')\"},\"strict\":\"strict\",\"state\":\"attached\",\"omitReturnValue\":false}",
+          "args": "{\"call\":{\"api\":\"locator.elementHandle\",\"timeoutMs\":30000},\"target\":{\"$neo\":\"locator\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"frame\":null,\"chunks\":[{\"parts\":[{\"name\":\"css\",\"body\":[{\"simples\":[{\"selector\":{\"css\":\"#input\",\"functions\":[]},\"combinator\":\"\"}]}],\"source\":\"#input\"}]}],\"display\":\"locator('#input')\"},\"strict\":\"strict\",\"state\":\"attached\",\"omitReturnValue\":false}",
           "reply": "{\"pages\":[],\"ok\":{\"$neo\":\"element\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"seq\":2,\"node\":9,\"display\":\"<input>\"},\"observed\":{\"seq\":25,\"events\":0,\"payloadCurrent\":true}}",
           "body": "{\"$neo\":\"element\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"seq\":2,\"node\":9,\"display\":\"<input>\"}"
         },
@@ -327,7 +327,7 @@
         },
         {
           "op": "locator.waitFor",
-          "args": "{\"call\":{\"api\":\"locator.elementHandle\",\"timeoutMs\":5000},\"target\":{\"$neo\":\"locator\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"frame\":null,\"chunks\":[{\"parts\":[{\"name\":\"css\",\"body\":[{\"simples\":[{\"selector\":{\"css\":\"#input\",\"functions\":[]},\"combinator\":\"\"}]}],\"source\":\"#input\"}]}],\"display\":\"locator('#input')\"},\"strict\":\"strict\",\"state\":\"attached\",\"omitReturnValue\":false}",
+          "args": "{\"call\":{\"api\":\"locator.elementHandle\",\"timeoutMs\":30000},\"target\":{\"$neo\":\"locator\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"frame\":null,\"chunks\":[{\"parts\":[{\"name\":\"css\",\"body\":[{\"simples\":[{\"selector\":{\"css\":\"#input\",\"functions\":[]},\"combinator\":\"\"}]}],\"source\":\"#input\"}]}],\"display\":\"locator('#input')\"},\"strict\":\"strict\",\"state\":\"attached\",\"omitReturnValue\":false}",
           "reply": "{\"pages\":[],\"ok\":{\"$neo\":\"element\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"seq\":2,\"node\":9,\"display\":\"<input>\"},\"observed\":{\"seq\":12,\"events\":0,\"payloadCurrent\":true}}",
           "body": "{\"$neo\":\"element\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"seq\":2,\"node\":9,\"display\":\"<input>\"}"
         },

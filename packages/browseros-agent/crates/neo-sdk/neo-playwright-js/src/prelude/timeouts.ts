@@ -3,14 +3,16 @@
  * every op carries the result as `call.timeoutMs`.
  *
  * Order, as playwright-core's client `TimeoutSettings`: the call's `timeout` option, then the
- * page's `setDefaultTimeout` / `setDefaultNavigationTimeout`, then the context's, then Neo's
- * approved defaults: 5 s for actions (and `expect`, which has its own chain in expect.ts) and
- * 30 s for navigation. A navigation falls back to a plain default before the parent's, as
- * upstream: `page.setDefaultTimeout(10_000)` also bounds that page's `goto`. 0 means no timeout.
+ * page's `setDefaultTimeout` / `setDefaultNavigationTimeout`, then the context's, then the
+ * Playwright defaults: 30 s for actions, reads, snapshots, event waits and navigation;
+ * 5 s for `expect`, which has its own chain in expect.ts. Navigation falls back to a plain
+ * default before the parent's, as upstream: `page.setDefaultTimeout(10_000)` also bounds that
+ * page's `goto`. 0 means no timeout.
  */
 import { clientError } from './errors'
 
-export const DEFAULT_TIMEOUT = 5_000
+export const DEFAULT_TIMEOUT = 30_000
+export const DEFAULT_EXPECT_TIMEOUT = 5_000
 const DEFAULT_NAVIGATION_TIMEOUT = 30_000
 
 export type TimeoutOption = { timeout?: number }

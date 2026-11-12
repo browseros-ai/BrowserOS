@@ -114,7 +114,7 @@ describe('waitForEvent', () => {
       'locator.click',
     ])
     expect(runtime.sent('events.wait')[0]?.input).toEqual({
-      call: { api: 'page.waitForEvent', timeoutMs: 111 + 5000 - 999 },
+      call: { api: 'page.waitForEvent', timeoutMs: 111 + 30000 - 999 },
       page: { $neo: 'page', tab: 1007 },
       event: 'popup',
       since: 111,
@@ -331,7 +331,7 @@ describe('waitForEvent', () => {
     )
     expect(listed).toBe('https://new.example/')
     expect(runtime.sent('events.wait')[0]?.input).toMatchObject({
-      call: { api: 'browserContext.waitForEvent', timeoutMs: 5000 },
+      call: { api: 'browserContext.waitForEvent', timeoutMs: 30000 },
       page: null,
       event: 'page',
     })
