@@ -43,3 +43,14 @@ it('byte-pins all ten form, key, file and event operations', () => {
   ])
     expect(ops.has(`locator.${op}`)).toBe(true)
 })
+
+it('records only delay when a script passes pressSequentially noWaitAfter', () => {
+  const scenario = fixture.scenarios.find(
+    (s) => s.name === 'pressSequentially drops noWaitAfter',
+  )
+  const exchange = scenario?.exchanges.find(
+    (e) => e.op === 'locator.pressSequentially',
+  )
+  expect(exchange).toBeDefined()
+  expect(JSON.parse(exchange?.args ?? '{}').options).toEqual({ delay: 7 })
+})
