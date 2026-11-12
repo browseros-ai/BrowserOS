@@ -16,7 +16,7 @@ use neo_playwright::{ErrorCode as PlaywrightCode, Op, OpEnv, PlaywrightError, Re
 use neo_takeover::{Lock, LockBinding, LockTtl, Locks, Reads};
 use neo_trace::{
     Delivery, Effect, ErrorOwner, OperationId, OperationRow, Outcome, RedactionLimits, Redactor,
-    RunId, RunStatus, TraceSink, TraceStore, WriterConfig, spawn_writer,
+    RunId, RunStatus, TaskId, TraceSink, TraceStore, WriterConfig, spawn_writer,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -24,6 +24,7 @@ use tempfile::TempDir;
 use tokio::sync::Notify;
 use tokio::task;
 use tokio::time::{self, Instant};
+use tokio_util::sync::CancellationToken;
 
 use super::event_release::EventRelease;
 use super::op_marks::{Hold, OpMarks};
@@ -38,6 +39,9 @@ use crate::dispatch::{
     StopReason, Visibility,
 };
 use crate::host::TakeoverLock;
+use crate::run::{RunMeta, RunRequest, RunService, RunServiceParts, RunTimeout};
+#[cfg(feature = "hosted-run")]
+use crate::runtime::RunInit;
 use crate::runtime::{Script, ScriptOutcome, run_script};
 use crate::test_rig::{TestError, on_neo_runtime};
 use crate::test_support::FakeCdp;
@@ -235,6 +239,20 @@ impl Harness {
             Arc::clone(&self.tabs),
             Observer::new(Arc::clone(&self.playwright) as _),
         )))
+    }
+
+    /// The run service over this harness's door, as app.rs builds it: a host's `run` call from
+    /// the task's page default and the run's first facts to its reply.
+    fn run_service(&self) -> Arc<RunService> {
+        RunService::new(RunServiceParts {
+            dispatcher: Arc::clone(&self.dispatcher),
+            browser: Arc::clone(&self.link),
+            tabs: Arc::clone(&self.tabs),
+            store: self.store.clone(),
+            trace: self.sink.clone(),
+            shutdown: CancellationToken::new(),
+            orphan_grace: Duration::ZERO,
+        })
     }
 
     fn janitor(&self) -> TabJanitor {
@@ -4051,5 +4069,216 @@ async fn tests_that_a_takeover_while_dollar_eval_runs_decides_as_for_locator_eva
     )
     .await?;
     assert_eq!(value(reply)?, json!({ "read": OWNERS_TEXT }));
+    Ok(())
+}
+
+/// Where the owner went while holding a tab. A reads-blocking lock keeps it from every run,
+/// one that starts during the takeover included.
+const OWNERS_PRIVATE_URL: &str = "https://bank.example/statements?account=4417&session=7Qx";
+
+/// What a new run's script reads of the tabs before its first op: `context.pages()` and its
+/// own `page` (the task's tab), then the title it asks the door for.
+const FIRST_LOOK: &str = "const first = {
+  pages: context.pages().map((p) => p.url()),
+  url: page.url(),
+  frames: page.frames().map((frame) => frame.url()),
+};
+first.title = await page.title().then((title) => title, (error) => error.message);
+return first;";
+
+/// A host's `run` of `code`, for `task` when it names one.
+fn run_request(code: &str, task: Option<&TaskId>) -> Result<RunRequest, TestError> {
+    Ok(RunRequest {
+        code: code.to_owned(),
+        timeout: RunTimeout::from_millis(None)?,
+        meta: RunMeta {
+            request_id: None,
+            task_id: task.cloned(),
+            host_data: None,
+        },
+    })
+}
+
+/// A run that starts while the owner holds its task's tab gets that tab's first facts past the
+/// lock, as every reply's facts are (`Dispatcher::release_facts`): with reads blocked, none of
+/// the URL, title or frames the owner reached. A lock that lets reads through, and no lock,
+/// leave the first facts as they were.
+#[test]
+fn a_run_that_starts_during_a_takeover_gets_no_facts_of_the_held_tab() -> Result<(), TestError> {
+    on_neo_runtime(async {
+        for reads in [None, Some(Reads::Allow), Some(Reads::Block)] {
+            let harness = Harness::new().await.map_err(|error| error.to_string())?;
+            let held = harness
+                .owner_tab("https://bank.example/")
+                .await
+                .map_err(|error| error.to_string())?;
+            harness
+                .owner_tab("https://news.example/")
+                .await
+                .map_err(|error| error.to_string())?;
+            // The task's last tab, so the new run's `page` is the held tab.
+            let task = TaskId::parse("errands")?;
+            harness
+                .tabs
+                .touched(&held, harness.tabs.seen(), Some(&task));
+            if let Some(reads) = reads {
+                harness
+                    .lock(held.tab, reads)
+                    .await
+                    .map_err(|error| error.to_string())?;
+            }
+            assert!(
+                harness
+                    .fake
+                    .navigate_tab(held.tab, OWNERS_PRIVATE_URL, "Statements"),
+                "the owner signs in while holding the tab"
+            );
+            let reply = harness
+                .run_service()
+                .run(run_request(FIRST_LOOK, Some(&task))?)
+                .await;
+            assert!(reply.error.is_none(), "{reads:?}: {reply:?}");
+            let seen = &reply.value;
+            if reads == Some(Reads::Block) {
+                assert_eq!(
+                    seen["pages"],
+                    json!(["https://news.example/", "about:blank"]),
+                    "the held tab is listed only as the run's page, which has no facts"
+                );
+                assert_eq!(
+                    (&seen["url"], &seen["frames"]),
+                    (&json!("about:blank"), &json!(["about:blank"])),
+                    "the page knows its tab and nothing the owner reached"
+                );
+                assert!(
+                    seen["title"]
+                        .as_str()
+                        .is_some_and(|title| title.contains("owner has control")),
+                    "the door refuses the title too: {seen}"
+                );
+                assert!(
+                    !seen.to_string().contains("bank.example"),
+                    "nothing of the held tab reaches the script: {seen}"
+                );
+            } else {
+                assert_eq!(
+                    seen["url"],
+                    json!(OWNERS_PRIVATE_URL),
+                    "{reads:?} leaves the first facts as they were"
+                );
+                assert!(
+                    seen["pages"]
+                        .as_array()
+                        .is_some_and(|pages| pages.contains(&json!(OWNERS_PRIVATE_URL))),
+                    "{reads:?}: {seen}"
+                );
+            }
+        }
+        Ok(())
+    })
+}
+
+/// A lock the owner takes while a new run's first facts wait for their observation withholds
+/// them all the same: they pass the rules after the read, as a reply's facts do.
+#[test]
+#[expect(
+    clippy::await_holding_invalid_type,
+    reason = "the test holds the observation serial while the owner takes the tab"
+)]
+fn a_lock_taken_while_a_runs_first_facts_wait_withholds_them() -> Result<(), TestError> {
+    on_neo_runtime(async {
+        let harness = Harness::new().await.map_err(|error| error.to_string())?;
+        let held = harness
+            .owner_tab("https://bank.example/")
+            .await
+            .map_err(|error| error.to_string())?;
+        let service = harness.run_service();
+        let serial = harness.dispatcher.observer().hold().await;
+        // Only the run's listing refreshes core's cache, so the new URL there says it listed.
+        harness.fake.hold_events();
+        assert!(
+            harness
+                .fake
+                .navigate_tab(held.tab, OWNERS_PRIVATE_URL, "Statements")
+        );
+        let request = run_request("return context.pages().map((p) => p.url());", None)?;
+        let running = tokio::spawn(async move { service.run(request).await });
+        within(async {
+            while harness
+                .link
+                .page(held.tab)
+                .await
+                .is_none_or(|page| page.url != OWNERS_PRIVATE_URL)
+            {
+                time::sleep(Duration::from_millis(1)).await;
+            }
+        })
+        .await
+        .map_err(|error| error.to_string())?;
+        harness.fake.release_events();
+        assert!(
+            !running.is_finished(),
+            "the first facts wait behind the held serial"
+        );
+        harness
+            .lock(held.tab, Reads::Block)
+            .await
+            .map_err(|error| error.to_string())?;
+        drop(serial);
+        let reply = running.await?;
+        assert_eq!(
+            reply.value,
+            json!([]),
+            "the listing named the tab before the lock, and its facts are withheld: {reply:?}"
+        );
+        Ok(())
+    })
+}
+
+/// The hosted run's init is the same first listing (`RunService::hosted_open_pages`, which
+/// `HostedRun::initialize` serializes as here), so it passes the same lock.
+#[cfg(feature = "hosted-run")]
+#[tokio::test]
+async fn a_hosted_runs_init_gets_no_facts_of_a_held_tab() -> Result<(), Box<dyn Error>> {
+    for reads in [None, Some(Reads::Allow), Some(Reads::Block)] {
+        let harness = Harness::new().await?;
+        let held = harness.owner_tab("https://bank.example/").await?;
+        harness.owner_tab("https://news.example/").await?;
+        if let Some(reads) = reads {
+            harness.lock(held.tab, reads).await?;
+        }
+        assert!(
+            harness
+                .fake
+                .navigate_tab(held.tab, OWNERS_PRIVATE_URL, "Statements")
+        );
+        let (run, _guard) = harness.run()?;
+        let facts = harness.run_service().hosted_open_pages(&run).await;
+        let init: Value = serde_json::from_str(
+            &RunInit::new(None, &facts.pages, facts.observed.as_ref()).to_json(),
+        )?;
+        let urls: Vec<&Value> = init["pages"]
+            .as_array()
+            .ok_or("the init lists pages")?
+            .iter()
+            .map(|fact| &fact["url"])
+            .collect();
+        if reads == Some(Reads::Block) {
+            assert_eq!(urls, [&json!("https://news.example/")], "{init}");
+            assert!(
+                !init.to_string().contains("bank.example"),
+                "nothing of the held tab reaches the other host's prelude: {init}"
+            );
+            assert!(
+                init["observed"]["seq"].is_u64(),
+                "the other tab's facts keep their observation: {init}"
+            );
+        } else {
+            assert!(
+                urls.contains(&&json!(OWNERS_PRIVATE_URL)),
+                "{reads:?} leaves the init as it was: {init}"
+            );
+        }
+    }
     Ok(())
 }

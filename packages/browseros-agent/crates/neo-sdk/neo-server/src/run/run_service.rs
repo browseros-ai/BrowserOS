@@ -279,8 +279,10 @@ impl RunService {
     /// Every tab open as the run starts, for its init (decision 25, PB input 4): Playwright's
     /// `context.pages()` is synchronous, so the prelude can list a tab only once something named
     /// it, and this names them all before the script's first op. The facts are a reply's, the
-    /// realm's other entry. A listing that fails leaves the list empty, and replies then name the
-    /// tabs the script touches. Raced with the run's stop, inside the race with its deadline.
+    /// realm's other entry, and cross the door's rules as a reply's do: a tab the owner holds
+    /// with reads blocked is left out (`Dispatcher::release_first_facts`). A listing that fails
+    /// leaves the list empty, and replies then name the tabs the script touches. Raced with the
+    /// run's stop, inside the race with its deadline.
     async fn open_pages(&self, run: &RunCtx) -> PageFacts {
         let listing = tokio::select! {
             biased;
@@ -313,10 +315,12 @@ impl RunService {
                         fact
                     })
                     .collect();
-                PageFacts {
+                let facts = PageFacts {
                     pages,
                     observed: Some(observation.observed),
-                }
+                };
+                self.dispatcher
+                    .release_first_facts(run, facts, &observation.withheld)
             }
             Err(error) => {
                 tracing::debug!(%error, "could not list the tabs for the run's init; context.pages() starts empty");

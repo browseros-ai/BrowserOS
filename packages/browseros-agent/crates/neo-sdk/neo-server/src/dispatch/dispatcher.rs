@@ -52,6 +52,9 @@ const NAME_CHARS: usize = 128;
 /// The spec recorded for a name with no method. `Write`, so an unknown call is never recorded
 /// as a harmless read.
 const UNKNOWN_METHOD: MethodSpec = MethodSpec::new("unknown", Effect::Write);
+/// What a run's first facts pass the rules as: the script's read, through `context.pages()`, of
+/// every tab open as it starts. No op stands behind it; the rules read its effect and the tab.
+const FIRST_FACTS: MethodSpec = MethodSpec::new("context.pages", Effect::Read);
 
 /// The one door every SDK operation walks through (skeleton D7). Built once at startup and
 /// shared by every run.
@@ -900,6 +903,43 @@ impl Dispatcher {
         claims: &HashMap<TabId, Vec<Claim>>,
         ending: &mut Ending,
     ) -> PageFacts {
+        let refusals = self.withhold_unreadable(&mut facts, withheld, check);
+        close_release(ending, claims, &facts.pages, &refusals);
+        facts
+    }
+
+    /// A run's first facts (`RunService::open_pages`, which the hosted run's init shares) pass
+    /// the rules exactly as a reply's do in [`Dispatcher::release_facts`]: each tab as the
+    /// script's read of it, after the observation that read them, so a lock the owner took while
+    /// the listing waited counts too. A tab held with reads blocked is left out, as a reply leaves
+    /// out its fact, and with it everything the owner's session put there: URL, title, task,
+    /// viewport and workers. The run learns of that tab only from a later reply that names it.
+    pub(crate) fn release_first_facts(
+        &self,
+        run: &RunCtx,
+        mut facts: PageFacts,
+        withheld: &[TabId],
+    ) -> PageFacts {
+        let check = PolicyCheck {
+            method: &FIRST_FACTS,
+            caller: Caller::Script,
+            tab: None,
+            // Op seqs start at 1, so this names no op of the run. Only a write's check reads it.
+            operation: OperationId::new(run.id(), 0),
+        };
+        self.withhold_unreadable(&mut facts, withheld, check);
+        facts
+    }
+
+    /// Keeps the facts `check` may read, asked per tab, minus the tabs `withheld` names, and
+    /// only the close records of kept tabs. A batch left with no facts loses its observation.
+    /// Returns why each refused tab was dropped.
+    fn withhold_unreadable(
+        &self,
+        facts: &mut PageFacts,
+        withheld: &[TabId],
+        check: PolicyCheck<'_>,
+    ) -> HashMap<TabId, OperationError> {
         let mut refusals = HashMap::new();
         facts.pages.retain(|page| {
             match self.check(&PolicyCheck {
@@ -918,11 +958,10 @@ impl Dispatcher {
                 .closes
                 .retain(|close| facts.pages.iter().any(|fact| fact.tab == close.tab));
         }
-        close_release(ending, claims, &facts.pages, &refusals);
         if facts.pages.is_empty() {
             facts.observed = None;
         }
-        facts
+        refusals
     }
 }
 
