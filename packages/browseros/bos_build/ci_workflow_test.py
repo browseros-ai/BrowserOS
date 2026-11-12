@@ -4013,7 +4013,7 @@ class NeoSdkImageWorkflowTest(unittest.TestCase):
             output.touch()
             values = {"EVENT": "", "REF": "", "PUBLISH": "", "CONFIRM": "", **env}
             result = subprocess.run(
-                ["bash", "-c", step["run"]],
+                [git_bash_path(), "-c", step["run"]],
                 env={**os.environ, **values, "GITHUB_OUTPUT": str(output)},
                 capture_output=True,
                 text=True,
