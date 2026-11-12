@@ -115,6 +115,12 @@ the load of 16 workers) and passed the first time it ran alone, so it counts as 
   expected pass; full run fail, alone: pass — Test timeout of 30000ms exceeded.
 ```
 
+Some tests pass only part of the time on Linux, also alone (SS-054, LH-001). A lucky run can
+take one off the list and an unlucky one then report it as a regression in a pull request that
+cannot reach it. If the regression's test is one your change does not touch and earlier runs
+show it passing and failing, take the run's list with `--expected-from` and say so in the pull
+request; that puts it back as `fail`.
+
 `alone: fail, pass` means it needed both reruns. A listed test can be flaky the other way
 (`expected fail; full run pass, alone: fail`); it stays listed. A test that shows up flaky in
 run after run is worth fixing, but does not block a pull request.
