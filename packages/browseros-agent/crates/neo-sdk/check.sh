@@ -14,9 +14,6 @@
 # them. The [lints] tables and clippy.toml need nothing here, because Cargo and clippy read them
 # on every build.
 #
-# Until 2026-11-12 it covered only claw-sdk's lint set, leaving the rest to CI's workspace suites:
-# a rustfmt slip in neo-takeover passed it and failed CI.
-#
 # In a Grove worktree, run it with a private build dir, or it waits behind other workers:
 #   CARGO_BUILD_BUILD_DIR="$(git rev-parse --show-toplevel)/packages/browseros-agent/target/build-private" \
 #     crates/neo-sdk/check.sh
