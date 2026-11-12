@@ -9,7 +9,9 @@ use serde_json::Value;
 use tokio::time;
 
 use crate::action::action_op;
-use crate::events::{BINDING_CALLED, EventHub, Fence, TargetWatcher, WatcherProgress, event_op};
+use crate::events::{
+    BINDING_CALLED, EventHub, Fence, TargetWatcher, WatcherHandle, WatcherProgress, event_op,
+};
 use crate::expect::expect_op;
 use crate::input::input_op;
 use crate::op::{Op, OpKind};
@@ -113,6 +115,11 @@ impl Playwright {
     /// Bring the independent event watcher up to the CDP events received so far.
     pub async fn synchronize_events(&self) {
         self.watcher.synchronize(None).await;
+    }
+
+    /// A handle on the event watcher for what outlives an op (`events::log_lease`).
+    pub(crate) fn watcher(&self) -> WatcherHandle {
+        self.watcher.handle()
     }
 
     /// Retire workers after a successful explicit page close; their outstanding promises

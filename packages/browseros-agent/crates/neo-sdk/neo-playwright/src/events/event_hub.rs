@@ -12,6 +12,7 @@ use tokio::sync::futures::Notified;
 use crate::RunState;
 use crate::events::dialog_table::{self, DialogAnswer, DialogTable, Unanswerable};
 use crate::events::download_table::DownloadTable;
+use crate::events::log_lease::LogLeases;
 use crate::events::page_event::{BindingCalled, DialogId, DialogKind, PageEvent};
 use crate::events::run_events::QueuedCall;
 use crate::events::{PageEventKind, Subscription};
@@ -38,6 +39,9 @@ pub(crate) struct EventHub {
     /// ends. The page's controller keeps one binding per name, so two runs on one tab must not
     /// share one, or each would answer and remove the other's.
     bindings: Mutex<HashMap<(TargetId, String), Weak<RunState>>>,
+    /// `Log` on the sessions whose console a run listens to (pages and their frames) and where
+    /// `addScriptTag` reads CSP reports; the watcher reads each span's replay floor from it.
+    log_leases: LogLeases,
 }
 
 #[derive(Debug, Default)]
@@ -213,6 +217,11 @@ impl EventHub {
                 run.upgrade()
                     .is_some_and(|run| run.events.wants_context_lifecycle())
             })
+    }
+
+    /// The `Log` leases on page and frame sessions (`log_lease.rs`).
+    pub(crate) fn log_leases(&self) -> &LogLeases {
+        &self.log_leases
     }
 
     /// The seq of the newest record: a reader's place for "from now on".

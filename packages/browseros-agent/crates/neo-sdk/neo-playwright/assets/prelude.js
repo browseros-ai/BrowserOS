@@ -8887,16 +8887,21 @@ ${changes}`;
   class WaitHandle {
     #value;
     #preview;
-    constructor(value, preview) {
+    #held;
+    constructor(value, preview, held = HELD_VALUE) {
       this.#value = value;
       this.#preview = preview;
+      this.#held = held;
       markHandle(this);
     }
     async jsonValue() {
-      return fromPageValue("jsHandle.jsonValue", this.#value);
+      return this._value("jsHandle.jsonValue");
     }
     _value(api) {
-      return fromPageValue(api, this.#value);
+      const value = this.#value;
+      if (value && typeof value === "object" && "unheld" in value)
+        throw unsupportedError(api, value.unheld);
+      return fromPageValue(api, value);
     }
     asElement() {
       return null;
@@ -8906,16 +8911,16 @@ ${changes}`;
       return this.#preview;
     }
     evaluate() {
-      return Promise.reject(unsupportedError("jsHandle.evaluate", HELD_VALUE));
+      return Promise.reject(unsupportedError("jsHandle.evaluate", this.#held));
     }
     evaluateHandle() {
-      return Promise.reject(unsupportedError("jsHandle.evaluateHandle", HELD_VALUE));
+      return Promise.reject(unsupportedError("jsHandle.evaluateHandle", this.#held));
     }
     getProperty() {
-      return Promise.reject(unsupportedError("jsHandle.getProperty", HELD_VALUE));
+      return Promise.reject(unsupportedError("jsHandle.getProperty", this.#held));
     }
     getProperties() {
-      return Promise.reject(unsupportedError("jsHandle.getProperties", HELD_VALUE));
+      return Promise.reject(unsupportedError("jsHandle.getProperties", this.#held));
     }
   }
 
@@ -9754,6 +9759,9 @@ ${changes}`;
     text() {
       return this.#info.text;
     }
+    args() {
+      return this.#info.args.map(consoleArgument);
+    }
     location() {
       const { url, lineNumber, columnNumber } = this.#info.location;
       return {
@@ -9773,6 +9781,11 @@ ${changes}`;
     [inspectCustom]() {
       return this.text();
     }
+  }
+  var CONSOLE_ARGUMENT = "Neo keeps a console argument as the value the console reported, not the page's object; read it with jsonValue()";
+  var CONSOLE_PREVIEW = "the console reported this argument only in part (nested objects, more than 5 properties or 100 items, long strings), so Neo cannot give its value; log a JSON string instead, or read message.text()";
+  function consoleArgument(arg) {
+    return new WaitHandle("value" in arg ? arg.value : { unheld: CONSOLE_PREVIEW }, arg.preview, CONSOLE_ARGUMENT);
   }
   function pageError(info) {
     const error = new Error(info.message);
@@ -19185,12 +19198,6 @@ Timeout: ${timeout}ms`);
       createReadStream: "Neo gives a script the saved file, not its bytes: await download.path() and upload it with setInputFiles; the host reads the bytes from the run",
       delete: "Neo keeps the run's downloads; it cannot delete one"
     },
-    ConsoleMessage: {
-      args: {
-        hint: "Neo passes console text only; use message.text()",
-        kind: "sync"
-      }
-    },
     Response: {
       body: "Neo does not read response bodies; read the page with page.content() or page.evaluate()",
       json: "Neo does not read response bodies; read the page with page.content() or page.evaluate()",
@@ -19444,7 +19451,6 @@ Call Log:
     Mouse,
     ElementHandle,
     Download,
-    ConsoleMessage,
     Response
   });
   var context2 = new BrowserContext;

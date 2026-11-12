@@ -50,7 +50,7 @@ use std::time::Duration;
 use browseros_cdp::CdpEvent;
 use browseros_core::{
     BrowserSession, BrowserView, CoreError, FrameId, ProtocolSession, RuntimeLease, SessionId,
-    TargetId,
+    TabId, TargetId,
 };
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
@@ -66,10 +66,11 @@ use tokio::time::{self, Instant, MissedTickBehavior};
 use crate::events::dialog_table::{ClosedBy, HeldDialog, Unanswered};
 use crate::events::event_hub::EventWriter;
 use crate::events::frame_lifecycle::FrameLifecycleTracker;
+use crate::events::log_lease::LogLease;
 use crate::events::page_event::{
     BindingCalled, ConsoleMessage, ConsoleParams, DialogId, DialogKind, DialogOpened,
-    DownloadStarted, ExceptionParams, FileChooserOpened, OpenedPage, PageError, PageEvent,
-    WindowKind,
+    DownloadStarted, ExceptionParams, FileChooserOpened, LogEntryParams, OpenedPage, PageError,
+    PageEvent, WindowKind,
 };
 use crate::events::recorded_reports::{RecordedReports, ReportKey};
 use crate::events::worker_table::WorkerContext;
@@ -117,7 +118,44 @@ struct WatcherRequest {
     done: oneshot::Sender<()>,
 }
 
+/// A handle on the running watcher for what outlives an op: a console lease's release has it
+/// take the frames' `Log` off before `Runtime` goes (`log_lease.rs`).
+#[derive(Clone, Debug)]
+pub(crate) struct WatcherHandle {
+    requests: UnboundedSender<WatcherRequest>,
+}
+
+impl WatcherHandle {
+    /// Waits, at most 2 s, for the watcher to handle the events received so far and bring
+    /// every worker's `Runtime` and frame's `Log` in line with who listens now. A watcher that
+    /// is gone answers at once.
+    pub(crate) async fn synchronize(&self) {
+        let (done, wait) = oneshot::channel();
+        if self
+            .requests
+            .send(WatcherRequest { closed: None, done })
+            .is_ok()
+        {
+            let _ = time::timeout(Duration::from_secs(2), wait).await;
+        }
+    }
+
+    /// A handle no watcher answers, for tests.
+    #[cfg(test)]
+    pub(crate) fn detached() -> Self {
+        let (requests, _gone) = mpsc::unbounded_channel();
+        Self { requests }
+    }
+}
+
 impl TargetWatcher {
+    /// A handle on this watcher that outlives the op holding it ([`WatcherHandle`]).
+    pub(crate) fn handle(&self) -> WatcherHandle {
+        WatcherHandle {
+            requests: self.requests.clone(),
+        }
+    }
+
     /// Foreground replies must see every CDP fact received before their command replied.
     /// A confirmed explicit close also retires workers before Chromium finishes tearing
     /// down a renderer with unresolved promises (Playwright issue 43204).
@@ -184,6 +222,9 @@ struct Watcher {
     worker_sessions: HashMap<SessionId, String>,
     /// `Runtime` on each chosen worker session: off unless a run listens on its tab.
     worker_runtime: HashMap<SessionId, WorkerRuntime>,
+    /// `Log` on each out-of-process frame's session: off unless a run listens for console
+    /// messages on its tab.
+    frame_logs: HashMap<SessionId, FrameLog>,
     /// The console messages and exceptions the log recorded, so a lease's replay of one is
     /// dropped by identity.
     recorded: RecordedReports,
@@ -220,6 +261,19 @@ enum WorkerRuntime {
     On { _lease: RuntimeLease },
 }
 
+/// An out-of-process frame session's `Log` reporting. Upstream enables `Log` on every frame
+/// session, and a frame's own entries arrive only there: a frame refused for `X-Frame-Options`
+/// reports the refusal on its session as it attaches (measured), and a later `Log.enable`
+/// replays it. On only while some run listens for console messages on the frame's tab, whose
+/// page session holds `Runtime` and `Log` for that listener meanwhile (`log_lease.rs`), and
+/// only on the frame's chosen session ([`LifecycleSources`]), so an entry is recorded once.
+enum FrameLog {
+    /// Off: no run asks, or another session of the frame reports.
+    Off,
+    /// On until the lease drops: the session's last lease switches `Log` off again.
+    On { lease: LogLease },
+}
+
 /// The watcher owns only this root attachment, fenced to the socket that created it.
 struct RootObserver {
     target: TargetId,
@@ -251,6 +305,8 @@ impl Drop for Watcher {
 
 struct KnownPage {
     opener: Option<TargetId>,
+    /// The native tab id, which the popup's record carries (`OpenedPage::tab`).
+    tab: Option<TabId>,
     state: PageState,
 }
 
@@ -290,6 +346,9 @@ struct TargetInfo {
     /// BrowserOS's: the window that holds the tab.
     #[serde(default)]
     window_id: Option<i64>,
+    /// BrowserOS's: the tab's native id, already on a popup's `targetCreated` (measured).
+    #[serde(default)]
+    tab_id: Option<TabId>,
 }
 
 #[derive(Deserialize)]
@@ -442,6 +501,7 @@ impl Watcher {
             page_sessions: HashSet::new(),
             worker_sessions: HashMap::new(),
             worker_runtime: HashMap::new(),
+            frame_logs: HashMap::new(),
             recorded: RecordedReports::default(),
             worker_script_events: None,
             root_observers: HashMap::new(),
@@ -500,8 +560,9 @@ impl Watcher {
                         for worker in self.writer.hub().workers.list(&target) { self.close_worker(&worker.id); }
                     }
                     // Every op synchronizes before it replies, so a listener the op added has
-                    // its tab's workers reporting before the script's next call.
+                    // its tab's workers and frames reporting before the script's next call.
                     self.lease_worker_runtime().await;
+                    self.lease_frame_logs().await;
                     let _ = request.done.send(());
                 }
                 Some(opened) = found.recv() => self.found(opened),
@@ -549,6 +610,7 @@ impl Watcher {
         self.recorded.forget(session);
         self.root_observers.remove(session);
         self.worker_runtime.remove(session);
+        self.frame_logs.remove(session);
         if let Some(id) = self.worker_sessions.remove(session) {
             self.close_worker(&id);
         }
@@ -652,6 +714,7 @@ impl Watcher {
         }
         // Catches a `waitForEvent` that started mid-op, and lets go once a run stops listening.
         self.lease_worker_runtime().await;
+        self.lease_frame_logs().await;
     }
 
     /// Learns the tabs that exist and turns discovery on. `changed`: the connection is a new
@@ -704,6 +767,7 @@ impl Watcher {
         for target in live {
             self.pages.entry(target).or_insert(KnownPage {
                 opener: None,
+                tab: None,
                 state: PageState::Reported,
             });
         }
@@ -716,6 +780,7 @@ impl Watcher {
             }
             self.worker_sessions.clear();
             self.worker_runtime.clear();
+            self.frame_logs.clear();
             self.recorded.clear();
             self.worker_script_events = None;
             self.root_observers.clear();
@@ -831,6 +896,11 @@ impl Watcher {
                     self.runtime_report(&method, session, params).await;
                 }
             }
+            "Log.entryAdded" => {
+                if let Some(session) = session_id {
+                    self.log_entry(session, params).await;
+                }
+            }
             "Browser.downloadWillBegin" => {
                 if let Some(download) = parse(params) {
                     self.download(download);
@@ -850,6 +920,7 @@ impl Watcher {
             target.clone(),
             KnownPage {
                 opener: info.opener_id.map(TargetId),
+                tab: info.tab_id,
                 state: PageState::Pending {
                     deadline: Instant::now() + URL_WAIT,
                     window_id: info.window_id,
@@ -863,10 +934,11 @@ impl Watcher {
 
     fn info_changed(&mut self, info: TargetInfo) {
         let target = TargetId(info.target_id);
-        let pending = self
-            .pages
-            .get(&target)
-            .is_some_and(|page| matches!(page.state, PageState::Pending { .. }));
+        let Some(page) = self.pages.get_mut(&target) else {
+            return;
+        };
+        page.tab = info.tab_id.or(page.tab);
+        let pending = matches!(page.state, PageState::Pending { .. });
         if pending && !info.url.is_empty() {
             self.ready(&target, info.url, info.window_id);
         }
@@ -877,6 +949,7 @@ impl Watcher {
         let Some(page) = self.pages.get_mut(target) else {
             return;
         };
+        let tab = page.tab;
         let Some(opener) = page.opener.clone() else {
             page.state = PageState::Reported;
             self.writer.record(PageEvent::Opened(OpenedPage {
@@ -884,6 +957,7 @@ impl Watcher {
                 opener: None,
                 url,
                 window: WindowKind::Tab,
+                tab,
             }));
             return;
         };
@@ -899,6 +973,7 @@ impl Watcher {
                 opener: Some(opener),
                 url,
                 window,
+                tab,
             });
         });
     }
@@ -938,6 +1013,7 @@ impl Watcher {
         for session in &sessions {
             self.dialog_closed(session);
             self.sessions.remove(session);
+            self.frame_logs.remove(session);
             self.recorded.forget(session);
             self.lifecycle_sources.detach(session);
         }
@@ -948,7 +1024,20 @@ impl Watcher {
             PageState::LookingUp => {
                 self.closed_early.insert(target.clone());
             }
-            // Never reported, so its closing is not news either.
+            // A popup closed before its URL came (`window.open()` then `close()` at once):
+            // upstream still emits `popup`, with a page already closed. Its window is gone, so
+            // it reads as a tab, as any lookup that cannot tell does (`window_kind`).
+            PageState::Pending { .. } if page.opener.is_some() => {
+                self.writer.record(PageEvent::Opened(OpenedPage {
+                    target: target.clone(),
+                    opener: page.opener,
+                    url: "about:blank".to_owned(),
+                    window: WindowKind::Tab,
+                    tab: page.tab,
+                }));
+                self.writer.record(PageEvent::Closed(target.clone()));
+            }
+            // A tab nobody opened from a page, never reported: its closing is not news either.
             PageState::Pending { .. } => {}
         }
     }
@@ -1213,6 +1302,57 @@ impl Watcher {
         }
     }
 
+    /// Brings every out-of-process frame session's `Log` in line with who listens now.
+    async fn lease_frame_logs(&mut self) {
+        let sessions: Vec<SessionId> = self.frame_logs.keys().cloned().collect();
+        for session in sessions {
+            self.lease_frame_log(&session).await;
+        }
+    }
+
+    /// Takes a `Log` lease on frame session `id` while a console lease holds its tab and the
+    /// session is its frame's chosen one, and drops it once either stops ([`FrameLog`]). The
+    /// floor is the earliest such lease's, so the replay keeps what the frame logged after the
+    /// run began to listen, however late the frame attached. A console lease's release asks for
+    /// this pass before it lets `Runtime` go (`log_lease.rs`).
+    async fn lease_frame_log(&mut self, id: &SessionId) {
+        let since = self
+            .sessions
+            .get(id)
+            .filter(|_| self.lifecycle_sources.accepts(id))
+            .and_then(|tab| self.writer.hub().log_leases().console_floor(tab));
+        let since = match (since, self.frame_logs.get(id)) {
+            (_, None) | (Some(_), Some(FrameLog::On { .. })) | (None, Some(FrameLog::Off)) => {
+                return;
+            }
+            (None, Some(FrameLog::On { .. })) => {
+                // Awaited: a console lease's release asks for this pass and lets `Runtime` go
+                // only once it answered, so the frame's `Log.disable` must be out by then.
+                if let Some(FrameLog::On { lease }) =
+                    self.frame_logs.insert(id.clone(), FrameLog::Off)
+                {
+                    lease.release().await;
+                }
+                return;
+            }
+            (Some(since), Some(FrameLog::Off)) => since,
+        };
+        let session = self
+            .browser
+            .protocol_session(id.clone())
+            .at_connection_epoch();
+        // A failed enable leaves it off; the next pass tries again while the frame lives.
+        if let Ok(lease) = self
+            .writer
+            .hub()
+            .log_leases()
+            .acquire(&session, since)
+            .await
+        {
+            self.frame_logs.insert(id.clone(), FrameLog::On { lease });
+        }
+    }
+
     async fn attached(&mut self, parent: Option<&SessionId>, attached: Attached) {
         let Attached {
             session_id,
@@ -1252,9 +1392,11 @@ impl Watcher {
                         .attach(&session_id, &TargetId(target_info.target_id.clone()));
                     self.frames.insert(target_info.target_id, tab.clone());
                     self.sessions.insert(session_id.clone(), tab.clone());
+                    self.frame_logs.insert(session_id.clone(), FrameLog::Off);
                     if self.lifecycle_sources.accepts(&session_id) {
                         self.seed_lifecycle(&tab, &session_id).await;
                     }
+                    self.lease_frame_log(&session_id).await;
                 }
             }
             _ => {}
@@ -1536,6 +1678,51 @@ impl Watcher {
         }
     }
 
+    /// A browser log entry, as upstream's `_onLogEntryAdded` emits it: a console message of the
+    /// entry's level, with no arguments, unless a worker logged it. Only while a console lease
+    /// holds `Log` on for the session (`log_lease.rs`), and not the entries `Log.enable` replayed
+    /// from before the span's floor. Off the broadcast, so in wire order with the console API's
+    /// messages.
+    async fn log_entry(&mut self, session: SessionId, params: Value) {
+        let Some(floor) = self.writer.hub().log_leases().floor_ms(&session) else {
+            // No run asked (`addScriptTag` enables `Log` for its own CSP reports).
+            return;
+        };
+        let key = ReportKey::of("Log.entryAdded", &params);
+        let Some(entry) = parse::<LogEntryParams>(params) else {
+            return;
+        };
+        // Upstream releases the entry's argument objects, which it does not pass on.
+        let held = entry.argument_objects();
+        if !held.is_empty() {
+            let objects = self.browser.protocol_session(session.clone());
+            tokio::spawn(async move {
+                for object in held {
+                    let _released = objects
+                        .send_value("Runtime.releaseObject", json!({ "objectId": object }))
+                        .await;
+                }
+            });
+        }
+        // As for `Runtime` reports, the floor is whole milliseconds and the stamp is not: an
+        // entry this session's log already recorded is the replay of a new span (ER-006).
+        let recorded = key.is_some_and(|key| self.recorded.contains(&session, key));
+        if entry.timestamp() < floor
+            || recorded
+            || !entry.logged_by_page()
+            || entry.browser_favicon()
+        {
+            return;
+        }
+        if let Some(target) = self.wanted(&session, PageEventKind::Console).await {
+            let message = ConsoleMessage::from_log_entry(target, entry);
+            self.writer.record(PageEvent::Console(message));
+            if let Some(key) = key {
+                self.recorded.insert(&session, key);
+            }
+        }
+    }
+
     async fn wanted(&mut self, session: &SessionId, event: PageEventKind) -> Option<TargetId> {
         let target = self.target_of(session).await?;
         self.writer.hub().wants(&target, event).then_some(target)
@@ -1650,6 +1837,7 @@ impl Watcher {
             Some(KnownPage {
                 opener: Some(opener),
                 state: PageState::Pending { .. },
+                ..
             }) => Some(opener.clone()),
             Some(_) => Some(frame_target),
             None => self.frames.get(&download.frame_id).cloned(),
@@ -2044,7 +2232,7 @@ mod worker_observation_tests {
             .protocol_session(SessionId::from("page-session"));
         run.events.hold_runtime(
             &console,
-            vec![leases.acquire(&page_session, 1_000.0).await?],
+            vec![leases.acquire(&page_session, 1_000.0).await?.into()],
         );
         watcher.lease_worker_runtime().await;
         // A worker that starts while the listener is there.

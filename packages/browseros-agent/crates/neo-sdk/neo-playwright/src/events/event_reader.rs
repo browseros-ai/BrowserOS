@@ -4,7 +4,7 @@
 
 use std::time::Duration;
 
-use browseros_core::{FrameId, TargetId};
+use browseros_core::{FrameId, TabId, TargetId};
 use serde::Serialize;
 use ts_rs::TS;
 
@@ -18,6 +18,7 @@ use crate::events::run_events::QueuedCall;
 use crate::events::{PageEventKind, Subscription};
 use crate::op_scope::OpScope;
 use crate::page::PageHandle;
+use crate::page::serialized_value::SerializedValue;
 use crate::{ErrorCode, Playwright, PlaywrightError};
 
 /// How many times a read lists the tabs again for a new tab the view does not list yet.
@@ -188,7 +189,7 @@ struct Dialog {
     default_value: String,
 }
 
-/// Playwright's `ConsoleMessage`: `type()`, `text()`, `location()`, `timestamp()`.
+/// Playwright's `ConsoleMessage`: `type()`, `text()`, `args()`, `location()`, `timestamp()`.
 #[derive(Debug, Serialize, TS)]
 #[ts(rename = "ConsoleInfo")]
 struct ConsoleMessage {
@@ -198,8 +199,20 @@ struct ConsoleMessage {
     #[serde(rename = "type")]
     kind: String,
     text: String,
+    args: Vec<ConsoleArgument>,
     location: Location,
     timestamp: f64,
+}
+
+/// One of `args()`: the argument's value when the console call's report held all of it
+/// (`page_event::ConsoleArg`), and what it prints as, its `toString()`.
+#[derive(Debug, Serialize, TS)]
+#[ts(rename = "ConsoleArgInfo")]
+struct ConsoleArgument {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    value: Option<SerializedValue>,
+    preview: String,
 }
 
 /// The `Error` Playwright's `pageerror` passes.
@@ -256,9 +269,27 @@ impl Tabs {
         scope: &OpScope<'_>,
         target: &TargetId,
     ) -> Result<Option<PageHandle>, PlaywrightError> {
+        self.opened_tab(scope, target, || None).await
+    }
+
+    /// [`Self::new_tab`] for a tab the watcher recorded opening. The listing names live tabs
+    /// only, so one that closed before it named it (`window.open()` then `close()` in one task)
+    /// is handed out by `closed()`, its native id once the log holds its close: upstream emits
+    /// such a page, already closed. The reply's page facts then report it closed to the
+    /// script, as for any tab core no longer has (neo-server's `PageFact::new`).
+    async fn opened_tab(
+        &mut self,
+        scope: &OpScope<'_>,
+        target: &TargetId,
+        closed: impl Fn() -> Option<TabId>,
+    ) -> Result<Option<PageHandle>, PlaywrightError> {
         for retry in 0..=LISTING_RETRIES {
             if let Some(page) = self.known(scope, target).await? {
                 return Ok(Some(page));
+            }
+            if let Some(tab) = closed() {
+                scope.run_state().events.remember_page(target, tab);
+                return Ok(Some(PageHandle::new(tab)));
             }
             if retry == LISTING_RETRIES || scope.sleep(LISTING_WAIT).await.is_err() {
                 break;
@@ -465,7 +496,7 @@ async fn ordinary_payload(
 ) -> Result<Option<Payload>, PlaywrightError> {
     let payload = match (event, listener) {
         (PageEvent::Opened(opened), Some(page)) => {
-            let Some(popup) = popup_tab(scope, opened, tabs, windows).await? else {
+            let Some(popup) = popup_tab(pw, scope, opened, tabs, windows).await? else {
                 return Ok(None);
             };
             let popup = NewTab {
@@ -478,12 +509,20 @@ async fn ordinary_payload(
             if opened.window == WindowKind::Window {
                 return Ok(None);
             }
-            let Some(page) = tabs.new_tab(scope, &opened.target).await? else {
-                return Ok(None);
-            };
             let opener = match &opened.opener {
                 Some(opener) => tabs.known(scope, opener).await?,
                 None => None,
+            };
+            // A closed tab the listing cannot vouch for reaches the context only as a popup of
+            // a page the view admits, never as some other window's tab.
+            let closed = closed_tab(pw, opened);
+            let Some(page) = tabs
+                .opened_tab(scope, &opened.target, || {
+                    opener.as_ref().and_then(|_| closed())
+                })
+                .await?
+            else {
+                return Ok(None);
             };
             Payload::Page {
                 page,
@@ -558,6 +597,14 @@ fn plain(event: &PageEvent, page: PageHandle) -> Option<Payload> {
                 worker: message.worker.clone(),
                 kind: message.kind.clone(),
                 text: message.text.clone(),
+                args: message
+                    .args
+                    .iter()
+                    .map(|arg| ConsoleArgument {
+                        value: arg.value.clone().map(SerializedValue),
+                        preview: arg.preview.clone(),
+                    })
+                    .collect(),
                 location: message.location.clone(),
                 timestamp: message.timestamp,
             },
@@ -622,6 +669,7 @@ fn report_navigation(scope: &OpScope<'_>, page: Option<&PageHandle>, event: &Pag
 
 /// The popup's page, or what the read does with a window.
 async fn popup_tab(
+    pw: &Playwright,
     scope: &OpScope<'_>,
     opened: &OpenedPage,
     tabs: &mut Tabs,
@@ -640,7 +688,19 @@ async fn popup_tab(
             WindowPopup::Skip => Ok(None),
         };
     }
-    tabs.new_tab(scope, &opened.target).await
+    tabs.opened_tab(scope, &opened.target, closed_tab(pw, opened))
+        .await
+}
+
+/// The native tab of `opened` once the log holds its close (target ids are never reused). Only
+/// for a popup whose opener the run's view admits: the popup listener's own page, or one the
+/// context path found in the listing.
+fn closed_tab<'a>(pw: &'a Playwright, opened: &'a OpenedPage) -> impl Fn() -> Option<TabId> + 'a {
+    move || {
+        opened
+            .tab
+            .filter(|_| pw.events().closed_at(&opened.target).is_some())
+    }
 }
 
 #[cfg(test)]
@@ -650,7 +710,10 @@ mod tests {
     use browseros_core::{TabId, TargetId};
     use serde_json::json;
 
-    use super::{ConsoleMessage, Delivered, Dialog, Download, NewTab, Payload, Tabs, WindowPopup};
+    use super::{
+        ConsoleArgument, ConsoleMessage, Delivered, Dialog, Download, NewTab, Payload, Tabs,
+        WindowPopup,
+    };
     use crate::Playwright;
     use crate::events::event_hub::EventRecord;
     use crate::events::page_event::{DialogId, DialogKind, DialogOpened, Location, PageEvent};
@@ -658,6 +721,7 @@ mod tests {
     use crate::op::Op;
     use crate::op_scope::OpScope;
     use crate::page::PageHandle;
+    use crate::page::serialized_value::SerializedValue;
     use crate::target::CallHeader;
     use crate::test_env::{self, EnvCall, TestEnv};
 
@@ -708,6 +772,10 @@ mod tests {
                     worker: None,
                     kind: "log".to_owned(),
                     text: "hi".to_owned(),
+                    args: vec![ConsoleArgument {
+                        value: Some(SerializedValue(json!("hi"))),
+                        preview: "hi".to_owned(),
+                    }],
                     location: Location::default(),
                     timestamp: 5.0,
                 },
@@ -717,6 +785,7 @@ mod tests {
             serde_json::to_value(&console)?,
             json!({ "seq": 9, "at": 1_700_000_000_009_u64, "event": "console", "page": { "$neo": "page", "tab": 700 },
                     "message": { "type": "log", "text": "hi", "timestamp": 5.0,
+                                 "args": [{ "value": "hi", "preview": "hi" }],
                                  "location": { "url": "", "lineNumber": 0, "columnNumber": 0 } } })
         );
         Ok(())

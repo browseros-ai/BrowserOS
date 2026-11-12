@@ -169,12 +169,6 @@ export const UNSUPPORTED = {
       'Neo gives a script the saved file, not its bytes: await download.path() and upload it with setInputFiles; the host reads the bytes from the run',
     delete: "Neo keeps the run's downloads; it cannot delete one",
   },
-  ConsoleMessage: {
-    args: {
-      hint: 'Neo passes console text only; use message.text()',
-      kind: 'sync',
-    },
-  },
   Response: {
     body: 'Neo does not read response bodies; read the page with page.content() or page.evaluate()',
     json: 'Neo does not read response bodies; read the page with page.content() or page.evaluate()',

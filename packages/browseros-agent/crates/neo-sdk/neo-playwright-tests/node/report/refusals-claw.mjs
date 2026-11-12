@@ -204,8 +204,12 @@ const hints = [
     sources: ['neo-playwright-js/src/prelude/unsupported.ts'],
   },
   {
-    hint: 'Neo passes console text only; use message.text()',
-    sources: ['neo-playwright-js/src/prelude/unsupported.ts'],
+    hint: "Neo keeps a console argument as the value the console reported, not the page's object; read it with jsonValue()",
+    sources: ['neo-playwright-js/src/prelude/event-values.ts'],
+  },
+  {
+    hint: 'the console reported this argument only in part (nested objects, more than 5 properties or 100 items, long strings), so Neo cannot give its value; log a JSON string instead, or read message.text()',
+    sources: ['neo-playwright-js/src/prelude/event-values.ts'],
   },
   {
     hint: 'Neo does not read response bodies; read the page with page.content() or page.evaluate()',

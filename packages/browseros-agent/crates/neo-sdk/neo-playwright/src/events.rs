@@ -30,6 +30,13 @@
 //! **Raw facts, mapped per run.** Records name tabs by CDP target id. A reader maps a new tab to
 //! a tab id through its run's view, so a run only ever sees tabs its view admits, and a popup
 //! that opened as a separate window fails `waitForEvent('popup')` with `neo / unsupported` (D9).
+//! The one exception is a popup of a page the view admits that closed before the view could list
+//! it: the reader hands it out by the native tab id its record carries, already closed, as
+//! upstream emits it.
+//!
+//! **Reporting on demand.** Console messages, page errors and binding calls need `Runtime`, and
+//! the browser's own log entries need `Log`, which Neo leaves off until a run asks: a listener or
+//! wait takes leases for exactly as long as it listens (`event_op::lease_runtime`, `log_lease.rs`).
 
 mod dialog_table;
 mod download_table;
@@ -38,6 +45,7 @@ pub(crate) mod event_op;
 mod event_reader;
 mod file_chooser;
 mod frame_lifecycle;
+mod log_lease;
 mod navigation_event;
 mod page_event;
 mod recorded_reports;
@@ -55,5 +63,5 @@ pub(crate) use page_event::PageEvent;
 pub(crate) use run_downloads::RunDownloads;
 pub(crate) use run_events::RunEvents;
 pub(crate) use subscription::{ListenerKey, PageEventKind, Subscription};
-pub(crate) use target_watcher::{BINDING_CALLED, BINDING_NAME, TargetWatcher};
+pub(crate) use target_watcher::{BINDING_CALLED, BINDING_NAME, TargetWatcher, WatcherHandle};
 pub(crate) use watcher_progress::{Fence, WatcherProgress};

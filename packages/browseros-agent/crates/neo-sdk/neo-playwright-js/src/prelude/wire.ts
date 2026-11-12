@@ -12,6 +12,7 @@ import type { GeneratedInputs } from './generated'
 // Rust owns these shared shapes now. LocatorBrand is a projection of the tagged Target
 // union, so its fields are never repeated in TypeScript.
 export type {
+  ConsoleArgInfo,
   ConsoleInfo,
   DialogInfo,
   DownloadInfo,

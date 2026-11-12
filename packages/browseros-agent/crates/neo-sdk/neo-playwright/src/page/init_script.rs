@@ -801,7 +801,7 @@ async fn hold_binding_runtime(
         .acquire(session, floor)
         .await
         .map_err(|error| scope.core_error(&error))?;
-    run.events.hold_runtime(&calls, vec![lease]);
+    run.events.hold_runtime(&calls, vec![lease.into()]);
     Ok(())
 }
 
