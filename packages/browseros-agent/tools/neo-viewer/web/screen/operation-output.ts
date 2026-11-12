@@ -298,7 +298,7 @@ function pendingText(match: NeoOperation): Shown | null {
     ...lines(value),
     source:
       "The snapshot text the script's await got, as the run rendered it (recorded by Neo's page.snapshotPending).",
-    cut: match.argsTruncated,
+    cut: match.argsTruncated && isCutText(value),
   }
 }
 
@@ -311,7 +311,7 @@ function pending(operation: NeoOperation): Shown | null {
     ...lines(text),
     source:
       "Neo internal: the snapshot text it records as this tab's pending delta baseline. The script did not call this.",
-    cut: operation.argsTruncated,
+    cut: operation.argsTruncated && isCutText(text),
   }
 }
 
@@ -357,9 +357,37 @@ function decoded(
   }
   return {
     ...(typeof value === 'string' ? lines(text) : toned(text, 'json')),
-    source,
+    source:
+      depthOf(value) >= RUN_DECODE_DEPTH
+        ? `${source} It is nested about ${RUN_DECODE_DEPTH} levels deep or more, past what the run's decoder reaches, so the script's await may have thrown instead.`
+        : source,
     cut: false,
   }
+}
+
+/**
+ * The run decodes a value on a small stack: one nested more than about this deep fails its call
+ * after the page answered (neo-server's README, "Maximum call stack size exceeded"), so the
+ * viewer, which decodes it fine, must not say the script got it.
+ */
+const RUN_DECODE_DEPTH = 50
+
+/** How deeply the page's serialized form nests its arrays, objects, Maps and Sets. */
+function depthOf(value: unknown): number {
+  if (!isRecord(value)) return 0
+  const items = [value.a, value.o, value.m, value.s].find(Array.isArray)
+  if (!items) return 0
+  let deepest = 0
+  for (const item of items) {
+    const inner = isRecord(item) && 'k' in item ? [item.k, item.v] : [item]
+    for (const part of inner) deepest = Math.max(deepest, depthOf(part))
+  }
+  return deepest + 1
+}
+
+/** Neo cut this string: it ends in the trace's `…[+N bytes]` marker. */
+function isCutText(text: string): boolean {
+  return /…\[\+\d+ bytes\]$/.test(text)
 }
 
 function recordedValue(operation: NeoOperation): Shown {

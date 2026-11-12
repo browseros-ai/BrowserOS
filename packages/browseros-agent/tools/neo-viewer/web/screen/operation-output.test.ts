@@ -268,6 +268,49 @@ describe('what a call gave the script', () => {
     expect(recorded.source).toContain('pending delta baseline')
   })
 
+  it('flags only the text it shows as cut: a whole delta beside a cut baseline is whole', () => {
+    const all = [
+      operation(1, 'page.ariaSnapshot', {
+        line: 1,
+        result: { document: 4, json: [] },
+      }),
+      operation(2, 'page.snapshotPending', {
+        line: 1,
+        argsTruncated: true,
+        args: {
+          document: 4,
+          text: '- link "One" [ref=e1]\n…[+90000 bytes]',
+          form: 'text',
+          delta: true,
+          returned: '# no change since your last snapshot of this tab',
+        },
+      }),
+    ]
+    const delta = shown(all[0] as NeoOperation, all)
+    expect(delta.lines).toEqual([
+      '# no change since your last snapshot of this tab',
+    ])
+    expect(delta.cut).toBe(false)
+    // The pending record on its own shows that baseline, which Neo did cut.
+    expect(shown(all[1] as NeoOperation, all).cut).toBe(true)
+  })
+
+  it('does not claim the script got a value nested deeper than the run can decode', () => {
+    let value: unknown = { id: 0, o: [] }
+    for (let id = 1; id <= 60; id++)
+      value = { id, o: [{ k: 'next', v: value }] }
+    const deep = shown(operation(1, 'page.evaluate', { result: { value } }))
+    expect(deep.source).toContain(
+      "so the script's await may have thrown instead",
+    )
+    const shallow = shown(
+      operation(2, 'page.evaluate', {
+        result: { value: { id: 1, o: [{ k: 'a', v: 1 }] } },
+      }),
+    )
+    expect(shallow.source).not.toContain('may have thrown')
+  })
+
   it('says which view Neo cut: a whole text from a cut tree', () => {
     const all = [
       operation(3, 'page.ariaSnapshot', {
