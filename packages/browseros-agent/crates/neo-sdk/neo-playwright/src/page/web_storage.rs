@@ -95,9 +95,9 @@ pub(crate) struct StorageSetInput {
 options!(StorageSetInput);
 
 /// The probe's storage results: item lists, a string, or null, without a wrapper object.
-#[derive(Deserialize)]
+#[derive(Deserialize, TS)]
 #[serde(untagged)]
-enum StorageValue {
+pub(crate) enum StorageValue {
     Items(Vec<StorageItem>),
     Item(Option<String>),
 }

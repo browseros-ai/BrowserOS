@@ -24,8 +24,9 @@ pub(crate) mod read_op;
 mod selector_wait;
 mod viewport_box;
 
-pub(crate) use element_handle::{every_match, find_one};
+// Read runners own these value payloads; the probe generator shares their declarations.
+pub(crate) use element_handle::{Located, PinnedMatch, every_match, find_one};
 pub(crate) use element_read::read_attached;
 pub(crate) use read_op::ReadOp;
 pub(crate) use selector_wait::{Returning, SelectorState, wait_for_match, wait_hidden};
-pub(crate) use viewport_box::for_screenshot;
+pub(crate) use viewport_box::{FrameOrigin, for_screenshot};

@@ -61,6 +61,9 @@ mod viewport_size;
 mod wait_for_navigation;
 mod wait_for_url;
 mod web_storage;
+
+// The storage runner owns this decoded probe payload; generation uses the same declaration.
+pub(crate) use web_storage::StorageValue;
 pub(crate) mod worker_evaluate;
 pub(crate) mod world_call;
 

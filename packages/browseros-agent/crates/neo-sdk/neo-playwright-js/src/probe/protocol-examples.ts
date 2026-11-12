@@ -1,17 +1,16 @@
 /**
  * Typed examples of every probe request and reply: the protocol's executable contract.
  * scripts/build.ts writes them to crates/neo-sdk/neo-playwright/tests/data/probe-protocol.json,
- * which the Rust mirror decodes, and tests/probe-protocol.test.ts sends every request through
+ * which Rust decodes, and tests/probe-protocol.test.ts sends every request through
  * the built asset. The mapped types make a request op or a reply kind without an example a
  * type error, so a new kind cannot ship undocumented on either side.
  */
 import { parseSelector } from '../../../neo-playwright/third_party/playwright/packages/isomorphic/selectorParser'
+import type { ProbeReply, ProbeTarget } from './generated'
 import {
   CALL_FUNCTION,
   type Op,
   PROTOCOL,
-  type ProbeReply,
-  type ProbeTarget,
   REPLY_KINDS,
   type ReplyKind,
   type RequestOf,

@@ -9,7 +9,7 @@ use serde_json::{Value, json};
 use tokio::sync::broadcast;
 use tokio::sync::broadcast::error::TryRecvError;
 
-use crate::probe::{self, PROBE_PROTOCOL, ProbeFailure, ProbeReply, Ran};
+use crate::probe::{self, BootOptions, PROBE_PROTOCOL, ProbeFailure, ProbeReply, Ran};
 use crate::world::engine_source::install_function;
 use crate::world::{ContextId, Epoch, FrameSeq};
 
@@ -229,7 +229,7 @@ impl IsolatedWorld {
                 json!({
                     "objectId": global,
                     "functionDeclaration": install_function(),
-                    "arguments": [{ "value": { "frameSeq": candidate, "epoch": epoch.as_str() } }],
+                    "arguments": [{ "value": BootOptions { frame_seq: candidate, epoch: epoch.as_str() } }],
                     "returnByValue": true,
                 }),
             )

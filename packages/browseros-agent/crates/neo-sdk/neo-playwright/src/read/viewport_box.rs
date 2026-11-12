@@ -15,6 +15,7 @@
 
 use serde::Deserialize;
 use serde_json::Value;
+use ts_rs::TS;
 
 use crate::op_scope::OpScope;
 use crate::probe::{self, Point, ProbeFailure, ProbeReply, ProbeRequest, Read, Rect};
@@ -107,10 +108,10 @@ async fn project(
     }))
 }
 
-/// A `frameOrigin` read's value, as protocol.ts's `FrameOrigin` types it.
-#[derive(Debug, Deserialize)]
+/// A `frameOrigin` read's value, also used to generate the page-side probe declaration.
+#[derive(Debug, Deserialize, TS)]
 #[serde(untagged)]
-enum FrameOrigin {
+pub(crate) enum FrameOrigin {
     /// Where the iframe's document starts in the parent's viewport, and its scale there.
     #[serde(rename_all = "camelCase")]
     Placed {
@@ -124,8 +125,8 @@ enum FrameOrigin {
 }
 
 /// The string `"rotated"`.
-#[derive(Debug, Deserialize)]
-enum Rotated {
+#[derive(Debug, Deserialize, TS)]
+pub(crate) enum Rotated {
     #[serde(rename = "rotated")]
     Rotated,
 }

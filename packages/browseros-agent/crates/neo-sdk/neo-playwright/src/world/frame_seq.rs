@@ -47,5 +47,5 @@ pub(crate) struct ContextId(pub(crate) i64);
 /// The probe keeps the last 512 and never reuses a number in a document, so an evicted or
 /// removed pin reads as `detached` and sends the op back to re-resolve; it can never name
 /// another element.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
 pub(crate) struct Pin(pub(crate) u32);
