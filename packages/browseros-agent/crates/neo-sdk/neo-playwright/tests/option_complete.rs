@@ -36,11 +36,6 @@ const UNREACHABLE: &[UnreachableKey] = &[
         key: "expectedNumber",
         reason: "only locator count/viewport matchers supply expectedNumber; Page receiver validation rejects them",
     },
-    UnreachableKey {
-        op: "dialog.dismiss",
-        key: "promptText",
-        reason: "dismiss shares accept's decoder, but its public method takes no text and always sends only page/dialog",
-    },
 ];
 
 #[derive(Deserialize)]
