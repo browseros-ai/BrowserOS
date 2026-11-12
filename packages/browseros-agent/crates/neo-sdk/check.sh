@@ -1,13 +1,21 @@
 #!/usr/bin/env bash
 # The Neo SDK gate, also called by the server package's `lint:rust`.
 #
-# It checks what the workspace-wide CI commands do not: Google's rustfmt options (stable rustfmt
-# applies them only through --config), the dependency boundary, and the exact CI toolchain. The
-# [lints] table and clippy.toml need nothing here, because Cargo and clippy read them on every
-# build, including CI's `cargo clippy --workspace`.
+# It covers every Rust crate under crates/neo-sdk, read from the folder, so a new crate is in the
+# gate the day it lands. Two kinds, by the crate's own Cargo.toml:
+#   - claw-sdk's lint set: a restated [lints] table (neo-server, neo-playwright). On top of the
+#     rest, Google's rustfmt options (stable rustfmt applies them only through --config) and the
+#     dependency boundary.
+#   - the workspace's lints (`[lints] workspace = true`: neo-takeover, neo-trace, neo-service,
+#     ...): plain rustfmt, as CI's `cargo fmt --all --check` and their own `lint:rust` run it.
+# Every crate gets clippy -D warnings on all targets and its tests (except TESTS_NOT_RUN below),
+# on CI's exact toolchain. None of these tests needs a display or a browser: the live suites skip
+# themselves (`#[ignore]`, or no `CLAW_SDK_E2E_BROWSER`), as CI's `cargo test --workspace` runs
+# them. The [lints] tables and clippy.toml need nothing here, because Cargo and clippy read them
+# on every build.
 #
-# It covers every crate on the claw-sdk lint set: crates/neo-sdk/neo-server, and crates/neo-sdk/neo-playwright
-# once that crate exists.
+# Until 2026-11-12 it covered only claw-sdk's lint set, leaving the rest to CI's workspace suites:
+# a rustfmt slip in neo-takeover passed it and failed CI.
 #
 # In a Grove worktree, run it with a private build dir, or it waits behind other workers:
 #   CARGO_BUILD_BUILD_DIR="$(git rev-parse --show-toplevel)/packages/browseros-agent/target/build-private" \
@@ -32,14 +40,52 @@ if ! cargo "+${TOOLCHAIN}" clippy --version >/dev/null 2>&1; then
 fi
 cargo_pinned() { cargo "+${TOOLCHAIN}" "$@"; }
 
-PACKAGES=(neo-server)
-if [[ -f crates/neo-sdk/neo-playwright/Cargo.toml ]]; then
-  PACKAGES+=(neo-playwright)
-fi
+# PACKAGES: claw-sdk's lint set. WORKSPACE_LINTED: every other SDK crate. ALL_ARGS: both.
+PACKAGES=()
+WORKSPACE_LINTED=()
+for manifest in crates/neo-sdk/*/Cargo.toml; do
+  package="$(sed -n 's/^name = "\(.*\)"$/\1/p' "$manifest" | head -n 1)"
+  if [[ -z "$package" ]]; then
+    echo "check.sh: no package name in $manifest" >&2
+    exit 1
+  fi
+  if grep -A1 -x '\[lints\]' "$manifest" | grep -qx 'workspace = true'; then
+    WORKSPACE_LINTED+=("$package")
+  else
+    PACKAGES+=("$package")
+  fi
+done
+for required in neo-server neo-playwright; do
+  if [[ " ${PACKAGES[*]} " != *" $required "* ]]; then
+    echo "check.sh: $required is not on claw-sdk's lint set (its own [lints] table); fix the table or this script." >&2
+    exit 1
+  fi
+done
 PACKAGE_ARGS=()
 for package in "${PACKAGES[@]}"; do
   PACKAGE_ARGS+=(-p "$package")
 done
+WORKSPACE_ARGS=()
+for package in "${WORKSPACE_LINTED[@]}"; do
+  WORKSPACE_ARGS+=(-p "$package")
+done
+ALL_ARGS=("${PACKAGE_ARGS[@]}" "${WORKSPACE_ARGS[@]}")
+
+# Crates whose tests the gate does not run yet; rustfmt and clippy still cover them. Each entry
+# names why and what brings it back. CI's `cargo test --workspace` still runs them (one retry).
+# - neo-captcha: two tests are flaky outside this gate's control, measured 2026-11-12 on its own
+#   `cargo test -p neo-captcha`: events::tests_that_tracing_records_contract_fields_without_sensitive_data
+#   fails 2 runs in 5 in parallel (a thread-local subscriber against tracing's shared callsite
+#   interest), and twocaptcha::tests_that_cancel_mid_poll_and_deadlines_honor_paid_submission
+#   1 in 6 single-threaded (a deadline). Drop the entry once both are fixed.
+TESTS_NOT_RUN=(neo-captcha)
+TEST_ARGS=()
+for package in "${PACKAGES[@]}" "${WORKSPACE_LINTED[@]}"; do
+  if [[ " ${TESTS_NOT_RUN[*]} " != *" $package "* ]]; then
+    TEST_ARGS+=(-p "$package")
+  fi
+done
+printf 'claw-sdk lint set: %s\nworkspace lints:   %s\n' "${PACKAGES[*]}" "${WORKSPACE_LINTED[*]:-none}"
 
 step() { printf '\n== %s\n' "$1"; }
 
@@ -49,6 +95,12 @@ step() { printf '\n== %s\n' "$1"; }
 FMT_CONFIG="imports_granularity=Module,hex_literal_case=Lower,format_macro_matchers=true"
 step "rustfmt (${FMT_CONFIG})"
 cargo_pinned fmt "${PACKAGE_ARGS[@]}" -- --check --config "$FMT_CONFIG"
+
+# The workspace-linted crates keep plain rustfmt: their own `lint:rust` and CI check exactly this.
+if [[ ${#WORKSPACE_ARGS[@]} -gt 0 ]]; then
+  step "rustfmt (workspace defaults)"
+  cargo_pinned fmt "${WORKSPACE_ARGS[@]}" -- --check
+fi
 
 # Crates that must never enter the graph (normal and build edges, transitively). claw-sdk builds on
 # browseros-cdp/-core and new code (CONTEXT.md); a dev-dependency of a dependency never counts.
@@ -83,10 +135,10 @@ fi
 echo "  ok"
 
 step "clippy -D warnings"
-cargo_pinned clippy "${PACKAGE_ARGS[@]}" --all-targets --locked -- -D warnings
+cargo_pinned clippy "${ALL_ARGS[@]}" --all-targets --locked -- -D warnings
 
-step "tests"
-cargo_pinned test "${PACKAGE_ARGS[@]}" --locked
+step "tests (not run: ${TESTS_NOT_RUN[*]})"
+cargo_pinned test "${TEST_ARGS[@]}" --locked
 
 # The embedded host is off in the default graph. Shared startup or constructor changes must
 # still compile and pass the same lints and tests through that composition root.

@@ -63,7 +63,9 @@ From `packages/browseros-agent`, run the existing SDK gate with private build st
 CARGO_BUILD_BUILD_DIR="$PWD/target/build-private" crates/neo-sdk/check.sh
 ```
 
-The gate covers `neo-server` and `neo-playwright`. Follow [STYLE.md](STYLE.md) and the workspace's
+The gate covers every Rust crate in this folder: rustfmt, clippy `-D warnings` and tests for each
+(not yet `neo-captcha`'s tests, which are flaky; `check.sh` says why), plus Google's rustfmt
+options and the forbidden-dependency check for `neo-server` and `neo-playwright`. Follow [STYLE.md](STYLE.md) and the workspace's
 contributor rules. Build the server with `cargo build -p neo-server --bin browseros-claw-sdk`.
 Use Bun 1.4.2 in `neo-playwright-js` for `bun run build`, `bun run build:check` and its tests.
 Regenerate the host contract from the agent root with `bun run codegen:neo-sdk-api`; never
