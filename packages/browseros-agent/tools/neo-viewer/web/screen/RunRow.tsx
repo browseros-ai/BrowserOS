@@ -60,7 +60,7 @@ export function RunRow({
       </span>
       <span className="flex min-w-0 flex-1 items-baseline gap-[1ch] whitespace-pre pr-3">
         <ClientLabel run={run} />
-        <TaskChips run={run} all={open} />
+        <TaskChips run={run} />
         {open ? (
           <OpenSummary
             run={run}
@@ -211,6 +211,10 @@ function OpenSummary({
           : returned
             ? `, ${returned}`
             : ''}
+        {taskChips(run).length > 1 &&
+          `, ${taskChips(run)
+            .map((chip) => `${chip.host ? 'host task' : 'task'} ${chip.id}`)
+            .join(', ')}`}
       </span>
     </span>
   )
@@ -226,22 +230,33 @@ function ClientLabel({ run }: { run: RunSummary }) {
 }
 
 /**
- * The tasks the run touched, as quiet chips beside the client, drawn like the methods' read/write
- * chips: the ones its script created or picked (`neo.task`), then the host's own task (the
- * request's `_meta` taskId) with a small "host" mark. A closed row shows the first and "+N"; an
- * open one shows all; the title lists all either way. A task keeps one hue on every row (from its
- * id), so the eye can follow a task down the list without a menu. A run with no task shows none.
+ * The run's tasks: the ones its script created or picked (`neo.task`), and the host's own task
+ * (the request's `_meta` taskId), marked host even when the script picked it too.
  */
-export function TaskChips({ run, all }: { run: RunSummary; all: boolean }) {
-  const chips = [
-    ...run.tasks.map((task) => ({ id: task.id, name: task.name, host: false })),
-    ...(run.agentTaskId &&
-    !run.tasks.some((task) => task.id === run.agentTaskId)
-      ? [{ id: run.agentTaskId, name: null, host: true }]
-      : []),
-  ]
+function taskChips(
+  run: RunSummary,
+): Array<{ id: string; name: string | null; host: boolean }> {
+  const chips = run.tasks.map((task) => ({
+    id: task.id,
+    name: task.name,
+    host: task.id === run.agentTaskId,
+  }))
+  if (run.agentTaskId && !chips.some((chip) => chip.host))
+    chips.push({ id: run.agentTaskId, name: null, host: true })
+  return chips
+}
+
+/**
+ * The tasks the run touched, as quiet chips beside the client, drawn like the methods' read/write
+ * chips; the host's task has a small "host" mark. The row stays compact, open or closed: the
+ * first chip and "+N"; the title lists all, and an open row's summary names them all. A task
+ * keeps one hue on every row (from its id), so the eye can follow a task down the list without a
+ * menu. A run with no task shows none.
+ */
+export function TaskChips({ run }: { run: RunSummary }) {
+  const chips = taskChips(run)
   if (chips.length === 0) return null
-  const shown = all ? chips : chips.slice(0, 1)
+  const shown = chips.slice(0, 1)
   const title = chips
     .map(
       (chip) =>

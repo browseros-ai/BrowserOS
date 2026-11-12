@@ -8,8 +8,8 @@ const run = (overrides: Partial<RunSummary>): RunSummary => ({
   ...runSummary(1),
   ...overrides,
 })
-const html = (summary: RunSummary, all = false) =>
-  renderToStaticMarkup(<TaskChips run={summary} all={all} />)
+const html = (summary: RunSummary) =>
+  renderToStaticMarkup(<TaskChips run={summary} />)
 const text = (markup: string) =>
   markup
     .replace(/<[^>]+>/g, ' ')
@@ -32,7 +32,7 @@ describe('the task chips on a run row', () => {
     expect(taskHue('t-91c2')).not.toEqual(taskHue('shop-4b80'))
   })
 
-  it('closed: the first and +N, all of them in the title; open: every chip', () => {
+  it('stay compact, open or closed: the first and +N, all of them in the title', () => {
     const summary = run({
       tasks: [
         { id: 'shop-4b80', name: 'shop' },
@@ -45,12 +45,17 @@ describe('the task chips on a run row', () => {
     expect(closed).toContain(
       'title="task shop-4b80 (shop), task t-91c2, host task host-1"',
     )
-    expect(text(html(summary, true))).toBe('shop-4b80 t-91c2 host host-1')
   })
 
   it("show a host task (the request's _meta taskId) with a small host mark", () => {
     const markup = html(run({ agentTaskId: 'host-1' }))
     expect(text(markup)).toBe('host host-1')
     expect(markup).toContain('title="host task host-1"')
+    // The script picked the host's task too: still one chip, still marked host.
+    const picked = html(
+      run({ agentTaskId: 'host-1', tasks: [{ id: 'host-1', name: null }] }),
+    )
+    expect(text(picked)).toBe('host host-1')
+    expect(picked).toContain('title="host task host-1"')
   })
 })

@@ -142,6 +142,13 @@ describe('one run as Markdown', () => {
     expect(markdown).toContain(
       "- Tasks the script created or picked: `shop-4b80` (shop), `t-91c2`\n- Host task (the request's `_meta` taskId): `host-1`",
     )
+    // A name is Neo's free text: it stays on its line and cannot start Markdown of its own.
+    const odd = runMarkdown(
+      { ...run, tasks: [{ id: 'shop-4b80', name: 'shop\n\n## Review *now*' }] },
+      FULL,
+    )
+    expect(odd).toContain('`shop-4b80` (shop \\#\\# Review \\*now\\*)')
+    expect(odd).not.toContain('\n## Review')
     const one = runMarkdown(
       { ...run, tasks: [{ id: 'shop-4b80', name: 'shop' }], agentTaskId: null },
       FULL,

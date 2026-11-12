@@ -166,7 +166,10 @@ function facts(detail: RunDetail): string[] {
   if (detail.tasks.length > 0)
     lines.push(
       `- Tasks the script created or picked: ${detail.tasks
-        .map((task) => `\`${task.id}\`${task.name ? ` (${task.name})` : ''}`)
+        .map(
+          (task) =>
+            `\`${task.id}\`${task.name ? ` (${inline(task.name)})` : ''}`,
+        )
         .join(', ')}`,
     )
   if (detail.agentTaskId)
@@ -322,6 +325,11 @@ function bounded(text: string, options: RunMarkdownOptions): string[] {
     '',
     fenced(text.slice(0, limit), 'text'),
   ]
+}
+
+/** A name from Neo, safe inline in Markdown: one line, its Markdown and HTML characters escaped. */
+function inline(text: string): string {
+  return text.replace(/\s+/g, ' ').replace(/[\\`*_[\]<>#|]/g, '\\$&')
 }
 
 function cut(text: string, max: number | null): string {
