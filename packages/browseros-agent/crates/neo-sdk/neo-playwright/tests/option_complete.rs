@@ -2,8 +2,8 @@
 //! option. TypeScript's checker supplies optional input fields and generated option tuples;
 //! build --check keeps that metadata fresh without a second hand-written input schema.
 //!
-//! Rust handler -> wire_generated -> generated TS -> input-examples.ts -> optionalKeys
-//! Real prelude -> recorded inputs; this test joins both using OpWire's nesting.
+//! Rust handler -> `wire_generated` -> generated TS -> `input-examples.ts` -> `optionalKeys`.
+//! Real prelude -> recorded inputs; this test joins both using the nesting in `OpWire`.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
