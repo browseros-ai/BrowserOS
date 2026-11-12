@@ -145,13 +145,16 @@ impl AppState {
             &home_dir,
             config.browserclaw_dir.join("claude-desktop"),
         ));
-        let harness = Arc::new(HarnessService::new_with_managed_skill(
-            config.browserclaw_dir.join("mcp-manager"),
-            config.browserclaw_dir.join("harness-integrations"),
-            home_dir,
-            skill,
-            analytics_sink.clone(),
-        ));
+        let harness = Arc::new(
+            HarnessService::new_with_managed_skill(
+                config.browserclaw_dir.join("mcp-manager"),
+                config.browserclaw_dir.join("harness-integrations"),
+                home_dir,
+                skill,
+                analytics_sink.clone(),
+            )
+            .with_read_only(config.dev_mode),
+        );
         let skills = Arc::new(SkillService::new(
             SkillsRepository::new(database.clone()),
             harness.clone(),

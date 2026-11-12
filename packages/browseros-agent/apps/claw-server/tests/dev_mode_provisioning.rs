@@ -1,7 +1,7 @@
 //! A dev claw-server (tools/dev `dev:claw:watch`) shares the developer's home with their
 //! installed BrowserOS neo, and both name their MCP entry `browseros-neo`. These tests launch
 //! the real binary against a disposable home holding the installed app's entry, so only a
-//! non-dev server may provision agent harnesses on its own.
+//! non-dev server may change agent harnesses, including through app requests.
 use std::{
     fs,
     io::{BufRead, BufReader},
@@ -12,6 +12,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use claw_server::services::harness::Harness;
 use serde_json::{Value, json};
 use tempfile::{TempDir, tempdir};
 
@@ -32,6 +33,81 @@ fn dev_server_leaves_the_installed_apps_harness_configs_alone() -> anyhow::Resul
         !home.path().join(".agents/skills/browseros-neo").exists(),
         "a dev server must not install its skill into the shared skill roots"
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn dev_server_connect_leaves_the_installed_apps_mcp_url_alone() -> anyhow::Result<()> {
+    let home = Home::seeded()?;
+    let before = fs::read(home.path().join(".claude.json"))?;
+    let server = Server::launch(&home, true)?;
+    server.wait_for_any(&[PROVISIONING_SKIPPED, PROVISIONING_RAN])?;
+
+    // The app can still send Connect after boot. Exercise the real HTTP boundary so a
+    // startup-only guard cannot hide a later takeover of the installed app's endpoint.
+    let response = reqwest::Client::new()
+        .put(format!(
+            "http://127.0.0.1:{}/api/v1/connections/Claude%20Code",
+            server.port
+        ))
+        .send()
+        .await?;
+
+    assert_eq!(home.claude_mcp_url()?, INSTALLED_MCP_URL);
+    assert_eq!(fs::read(home.path().join(".claude.json"))?, before);
+    assert_eq!(response.status(), reqwest::StatusCode::FORBIDDEN);
+    assert!(response.text().await?.contains("development mode"));
+    Ok(())
+}
+
+#[tokio::test]
+async fn dev_server_refuses_connection_changes_for_every_harness() -> anyhow::Result<()> {
+    let home = Home::seeded()?;
+    let before = fs::read(home.path().join(".claude.json"))?;
+    let server = Server::launch(&home, true)?;
+    server.wait_for_any(&[PROVISIONING_SKIPPED, PROVISIONING_RAN])?;
+    assert_harness_changes_refused(&server).await?;
+    assert_connections_readable(&server).await?;
+    assert_eq!(fs::read(home.path().join(".claude.json"))?, before);
+    assert!(!home.root.path().join("state/mcp-manager").exists());
+    assert!(!home.path().join(".agents/skills/browseros-neo").exists());
+    Ok(())
+}
+
+/// Exercise both mutation verbs for every supported app through the real listener.
+async fn assert_harness_changes_refused(server: &Server) -> anyhow::Result<()> {
+    let client = reqwest::Client::new();
+    for harness in Harness::ALL {
+        let url = connection_url(server, harness)?;
+        for method in [reqwest::Method::PUT, reqwest::Method::DELETE] {
+            let response = client.request(method.clone(), url.clone()).send().await?;
+            assert_eq!(
+                response.status(),
+                reqwest::StatusCode::FORBIDDEN,
+                "dev {method} must leave {harness}'s config alone"
+            );
+        }
+    }
+    Ok(())
+}
+
+fn connection_url(server: &Server, harness: Harness) -> anyhow::Result<reqwest::Url> {
+    let mut url = reqwest::Url::parse(&format!("http://127.0.0.1:{}", server.port))?;
+    url.path_segments_mut()
+        .map_err(|()| anyhow::anyhow!("invalid test base URL"))?
+        .extend(["api", "v1", "connections", harness.as_str()]);
+    Ok(url)
+}
+
+async fn assert_connections_readable(server: &Server) -> anyhow::Result<()> {
+    let response = reqwest::Client::new()
+        .get(format!(
+            "http://127.0.0.1:{}/api/v1/connections",
+            server.port
+        ))
+        .send()
+        .await?;
+    assert_eq!(response.status(), reqwest::StatusCode::OK);
     Ok(())
 }
 
