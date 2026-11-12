@@ -23,8 +23,8 @@ export type Delivery = "not_sent" | "done" | "unknown";
 
 /**
  * The JS wire form of an `OpReply`: `{"ok": value, "pages": […]}` or `{"err": {…}, "pages":
- * […]}`, plus `defaultPage` once the call opened the run's own page and `pumped` once an op
- * ordered its answer after event-pump replies. Protocol translation only: the door decided
+ * […]}`, plus `defaultPage` once the call opened the run's own page, `pickedPage` once a task
+ * pick bound it, and `pumped` once an op ordered its answer after event-pump replies. Protocol translation only: the door decided
  * every value in it. Every field after `ok`/`err` is the same in both shapes.
  */
 export type Envelope = { 
@@ -44,6 +44,11 @@ observed?: Observation,
  * The run's own page, on the reply of the call that opened it.
  */
 defaultPage?: DefaultPage, 
+/**
+ * The tab a task pick bound the run's own page to (`OpReply::picked_page`): the
+ * prelude's `page` takes it unless the script already holds another Page for it.
+ */
+pickedPage?: DefaultPage, 
 /**
  * `OpReply::pumped`: the prelude dispatches that many event-pump replies before it
  * hands the script this one. Absent for none.
@@ -70,6 +75,10 @@ observed?: Observation,
  * As for `Ok`.
  */
 defaultPage?: DefaultPage, 
+/**
+ * As for `Ok`.
+ */
+pickedPage?: DefaultPage, 
 /**
  * As for `Ok`.
  */

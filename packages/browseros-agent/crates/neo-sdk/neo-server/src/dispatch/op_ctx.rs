@@ -111,6 +111,9 @@ pub(super) struct OpState {
     after_pump: AtomicU64,
     /// Run-local completion identities reported by a method, carried as reply metadata only.
     completed_publications: Mutex<Vec<u64>>,
+    /// The run's lazy page, when this op bound it ([`OpCtx::bind_run_page`]). The reply offers
+    /// it to the prelude as `pickedPage` (`OpReply::picked_page`).
+    bound_page: OnceLock<PageRef>,
 }
 
 /// A page's viewport lease, held or inherited from an ancestor op. A method keeps it for as
@@ -231,6 +234,17 @@ impl<M> OpCtx<M> {
     /// browser implementation. These identities affect publication ordering, never delivery.
     pub(crate) fn report_publications(&self, completed: Vec<u64>) {
         *lock(&self.core.state.completed_publications) = completed;
+    }
+
+    /// Makes `page` the run's built-in page if nothing gave it a tab yet
+    /// ([`RunCtx::bind_default_page`]); the reply then offers it as `pickedPage`, which binds the
+    /// prelude's `page` object before the script's next statement. The page's URL and title reach
+    /// the script only as a reported page's fact (`report_page`), past the read rules like
+    /// every reply's, so a tab whose reads are blocked binds with nothing to read.
+    pub(crate) fn bind_run_page(&self, page: &PageRef) {
+        if self.core.run.bind_default_page(page) {
+            let _ = self.core.state.bound_page.set(page.clone());
+        }
     }
 
     /// Reports a page this op opened, navigated or closed.
@@ -420,7 +434,13 @@ impl OpState {
             viewports: Mutex::new(Vec::new()),
             after_pump: AtomicU64::new(0),
             completed_publications: Mutex::default(),
+            bound_page: OnceLock::new(),
         })
+    }
+
+    /// The run's page this op bound, if it did.
+    pub(super) fn bound_page(&self) -> Option<PageRef> {
+        self.bound_page.get().cloned()
     }
 
     pub(super) fn id(&self) -> OperationId {

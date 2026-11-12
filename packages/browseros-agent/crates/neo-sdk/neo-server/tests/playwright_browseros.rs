@@ -21,6 +21,8 @@
 //!    three per task, or per tab for runs with no task
 //!  a ref from an earlier run, used in the new tab a run with no task starts on: its failure says
 //!    the ref is not from this tab; one that went stale on a tab with a snapshot does not
+//!  await neo.task(id): `page` is the task's tab on the next line (url, tabId, taskId), as is a
+//!    host task's from a run's first line; a host lock with blocked reads leaves its URL unread
 //! ```
 //!
 //! Like `e2e_browseros.rs`, it runs only when `CLAW_SDK_E2E_BROWSER` names a BrowserOS binary.
@@ -578,6 +580,165 @@ async fn refs_from_elsewhere(rig: &Rig) -> TestResult {
         .await?,
         "website / element_detached: locator.click: e999 is not on the page any more; take a \
          new snapshot"
+    );
+    client.cancel().await?;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_picked_tasks_page_has_its_tabs_url_before_any_action() -> TestResult {
+    on_browseros(|rig| Box::pin(task_page_at_once(rig))).await
+}
+
+/// The value of a run that must have succeeded.
+async fn value_of(client: &Client, code: &str, meta: &Value) -> Result<Value, Box<dyn Error>> {
+    let result = run(client, code, meta).await?;
+    assert_eq!(
+        outcome(&result)?.get("status"),
+        Some(&json!("ok")),
+        "{result:?}"
+    );
+    result
+        .structured_content
+        .as_ref()
+        .and_then(|reply| reply.get("value").cloned())
+        .ok_or_else(|| format!("the script returns: {result:?}").into())
+}
+
+/// The host locks `tab` with `reads`, runs `code`, and releases the lock. Returns the run's value.
+async fn under_lock(
+    rig: &Rig,
+    client: &Client,
+    tab: &Value,
+    reads: &str,
+    code: &str,
+) -> Result<Value, Box<dyn Error>> {
+    let take = json!({ "tabId": tab, "reads": reads, "ttlSeconds": 600 });
+    let taken = rig
+        .host(
+            "POST",
+            "/v1/locks",
+            Some(browseros_rig::HOST_TOKEN),
+            Some(&take),
+        )
+        .await?;
+    assert_eq!(
+        taken.status,
+        200,
+        "the host locks the tab: {}",
+        taken.text()
+    );
+    let lock = taken.json()?;
+    let id = lock
+        .get("id")
+        .and_then(Value::as_str)
+        .ok_or("a lock has an id")?;
+    let value = value_of(client, code, &json!({})).await;
+    let released = rig
+        .host(
+            "DELETE",
+            &format!("/v1/locks/{id}"),
+            Some(browseros_rig::HOST_TOKEN),
+            None,
+        )
+        .await?;
+    assert_eq!(released.status, 200, "{}", released.text());
+    value
+}
+
+/// The viewer's report (night 4e58b2527, VIEWER.md 4.5): after `await neo.task(id)` the built-in
+/// `page` read `about:blank` until its first awaited call. Playwright's synchronous getters are
+/// right as soon as a script holds a page: here on the next line after the pick, and on the first
+/// line of a run whose host names the task in `_meta`. A tab the host holds with blocked reads
+/// still binds `page` and gives it nothing to read; allowed reads give it the URL.
+async fn task_page_at_once(rig: &Rig) -> TestResult {
+    rig.until_ready().await?;
+    let client = rig.client().await?;
+    let none = json!({});
+    let made = value_of(
+        &client,
+        "const task = await neo.createTask('url at once')\n\
+         await page.goto('data:text/html,' + encodeURIComponent('<title>At once</title><h1>Task tab</h1>'))\n\
+         return { id: task.id, url: page.url(), tab: page.tabId }",
+        &none,
+    )
+    .await?;
+    let field = |name: &str| made.get(name).cloned().unwrap_or(Value::Null);
+    let (id, url, tab) = (field("id"), field("url"), field("tab"));
+    assert!(
+        url.as_str().is_some_and(|url| url.starts_with("data:")),
+        "{made}"
+    );
+    let getters = "return { url: page.url(), frame: page.mainFrame().url(), tab: page.tabId, \
+                   task: page.taskId, closed: page.isClosed(), \
+                   listed: context.pages().includes(page), viewport: page.viewportSize() }";
+    let picked = value_of(
+        &client,
+        &format!(
+            "const task = await neo.task({id})\n\
+             const before = (() => {{ {getters} }})()\n\
+             const title = await page.title()\n\
+             const after = (() => {{ {getters} }})()\n\
+             return {{ before, title, after, inTask: task.pages().includes(page) }}"
+        ),
+        &none,
+    )
+    .await?;
+    let at = |path: &str| picked.pointer(path).cloned().unwrap_or(Value::Null);
+    assert_eq!(
+        (at("/before/url"), at("/before/frame")),
+        (url.clone(), url.clone()),
+        "page.url() is the task tab's on the line after the pick: {picked}"
+    );
+    assert_eq!(
+        (
+            at("/before/tab"),
+            at("/before/task"),
+            at("/before/closed"),
+            at("/before/listed"),
+            at("/inTask"),
+        ),
+        (
+            tab.clone(),
+            id.clone(),
+            json!(false),
+            json!(true),
+            json!(true)
+        ),
+        "{picked}"
+    );
+    assert_eq!(
+        at("/before"),
+        at("/after"),
+        "an awaited call changes no getter: {picked}"
+    );
+    assert_eq!(at("/title"), json!("At once"), "{picked}");
+
+    // A host task: its tab is the run's page from the run's first line.
+    let host = json!({ "taskId": "url-at-once-host" });
+    let hosted = value_of(
+        &client,
+        "await page.goto('data:text/html,' + encodeURIComponent('<title>Host task</title>'))\n\
+         return page.url()",
+        &host,
+    )
+    .await?;
+    assert_eq!(
+        value_of(&client, "return page.url()", &host).await?,
+        hosted,
+        "the host task's tab, before any op"
+    );
+
+    let pick = format!("await neo.task({id})\nreturn [page.url(), page.tabId]");
+    assert_eq!(
+        under_lock(rig, &client, &tab, "block", &pick).await?,
+        json!(["about:blank", tab]),
+        "blocked reads: `page` is the tab, with nothing of it to read"
+    );
+    assert_eq!(
+        under_lock(rig, &client, &tab, "allow", &pick).await?,
+        json!([url, tab]),
+        "allowed reads: the tab's URL"
     );
     client.cancel().await?;
     Ok(())

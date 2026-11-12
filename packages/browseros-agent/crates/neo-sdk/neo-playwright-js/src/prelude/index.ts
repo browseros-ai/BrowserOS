@@ -53,7 +53,9 @@ const expect = createExpect()
 registerBrand('page', (json) => context._pageFromResult(json))
 registerBrand('element', (json) => {
   const brand = elementBrand(json)
-  return brand ? new ElementHandle(context._pageFor(brand.page), brand) : json
+  return brand
+    ? new ElementHandle(context._handOut(context._pageFor(brand.page)), brand)
+    : json
 })
 // Screenshots and PDFs resolve to a Buffer, as upstream's do, so `toString('base64')` is
 // base64 and the bytes can be a `setInputFiles` payload's buffer.

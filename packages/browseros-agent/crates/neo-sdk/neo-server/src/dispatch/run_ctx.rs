@@ -388,6 +388,18 @@ impl RunCtx {
         }
     }
 
+    /// A task pick hands the lazy page an open tab of the task, so built-in `page` is that tab
+    /// from the pick's reply on instead of from its first action. True only when this call
+    /// bound it: a known page, one already resolved, and one an op is opening right now each
+    /// keep theirs, because `page` holds the first tab it gets for the whole run (its listeners
+    /// and the prelude's `Page` object are that tab's).
+    pub(super) fn bind_default_page(&self, page: &PageRef) -> bool {
+        match &self.default_page {
+            DefaultPage::Known(_) => false,
+            DefaultPage::Lazy(cell) => cell.set(page.clone()).is_ok(),
+        }
+    }
+
     /// The default page's tab when it is known without opening anything.
     pub(super) fn known_default_tab(&self) -> Option<TabId> {
         match &self.default_page {

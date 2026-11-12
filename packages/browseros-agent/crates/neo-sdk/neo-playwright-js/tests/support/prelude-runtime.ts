@@ -24,12 +24,16 @@ export type Call = {
   abort?: { key: string; aborted: Promise<string> }
 }
 
-/** An op's answer: a value, or an envelope (`{ ok }`, `{ err }`, with `pages`, `defaultPage`). */
+/**
+ * An op's answer: a value, or an envelope (`{ ok }`, `{ err }`, with `pages`, `defaultPage`,
+ * `pickedPage`).
+ */
 type Envelope = {
   ok?: unknown
   err?: Record<string, unknown>
   pages?: unknown[]
   defaultPage?: { tab: number }
+  pickedPage?: { tab: number }
   observed?: Observation | null
 }
 export type Answer = (call: Call) => unknown | Promise<unknown>

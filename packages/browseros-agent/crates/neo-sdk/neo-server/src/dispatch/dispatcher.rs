@@ -127,6 +127,12 @@ pub(crate) struct OpReply {
     pub(crate) observed: Option<Observation>,
     /// Set when the op resolved the run's default page, so the script's `page` learns its id.
     pub(crate) default_page: Option<PageRef>,
+    /// Set when the op bound the run's lazy page to a tab without acting on it (`neo.task`'s
+    /// pick, `OpCtx::bind_run_page`). Unlike `default_page` it is an offer the prelude may
+    /// decline: it binds the script's `page` now only if no other Page object for that tab has
+    /// reached the script, and otherwise leaves `page` to that tab's `default_page` at its first
+    /// action, so a handle the script holds keeps its listeners and bindings.
+    pub(crate) picked_page: Option<PageRef>,
     /// The event-pump replies the script dispatches before it takes this one
     /// ([`OpCtx::answer_after_pump`]); 0 for an op that set none.
     pub(crate) pumped: u64,
@@ -330,12 +336,11 @@ impl Dispatcher {
         run: &Arc<RunCtx>,
     ) -> Result<PageRef, OperationError> {
         let task = run.current_task().and_then(|id| self.tabs.task(&id).ok());
-        if let Some(task) = &task {
-            for tab in task.last_used_tab.iter().chain(task.tabs.iter().rev()) {
-                if !run.closed_it(*tab) && self.tabs.is_open(*tab) {
-                    return Ok(PageRef { tab: *tab });
-                }
-            }
+        if let Some(tab) = task
+            .as_ref()
+            .and_then(|task| task.page_tab(|tab| !run.closed_it(tab) && self.tabs.is_open(tab)))
+        {
+            return Ok(PageRef { tab });
         }
         let opened = self
             .invoke_child(run, None, DEFAULT_PAGE_OPENER, json!({}))
@@ -1011,6 +1016,7 @@ impl PendingReply {
                 pages: Vec::new(),
                 observed: None,
                 default_page: None,
+                picked_page: None,
                 pumped: 0,
                 completed_publications: Vec::new(),
             }

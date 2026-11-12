@@ -882,7 +882,8 @@
       listener({
         observed,
         pages: readPageFacts(field(envelope, "pages")),
-        defaultPage: readTab(field(envelope, "defaultPage"))
+        defaultPage: readTab(field(envelope, "defaultPage")),
+        pickedPage: readTab(field(envelope, "pickedPage"))
       });
     });
   }
@@ -9707,7 +9708,7 @@ ${changes}`;
   async function exposeOnContext(context, site, api, name, callback, noGlobal = false) {
     if (context._exposed.has(name))
       throw clientError(api, `Function "${name}" has been already registered`);
-    if (context.pages().some((page) => page._exposed.has(name)))
+    if (context._knownPages().some((page) => page._exposed.has(name)))
       throw clientError(api, `Function "${name}" has been already registered in one of the pages`);
     context._exposed.set(name, (source, ...args) => callback(source, ...args));
     context._events.bindingAdded();
@@ -11782,6 +11783,7 @@ ${changes}`;
     _browser = null;
     #byTab = new Map;
     #unopened = null;
+    #handed = new WeakSet;
     #started = false;
     constructor() {
       super();
@@ -11789,6 +11791,12 @@ ${changes}`;
       markHandle(this);
     }
     pages() {
+      const pages = this._knownPages();
+      for (const page of pages)
+        this.#handed.add(page);
+      return pages;
+    }
+    _knownPages() {
       return [...this.#byTab.values()].filter((page) => !page.isClosed());
     }
     browser() {
@@ -11834,7 +11842,7 @@ ${changes}`;
       return this._events.wait("browserContext.waitForEvent", site, null, event, optionsOrPredicate, since, this._timeoutSettings);
     }
     toJSON() {
-      return { pages: this.pages().length };
+      return { pages: this._knownPages().length };
     }
     _checkEvent(event) {
       checkReported("browserContext.on", event, "context");
@@ -11859,7 +11867,11 @@ ${changes}`;
         return null;
       if (url !== undefined)
         fact.url = url;
-      return this._pageFor(fact);
+      return this._handOut(this._pageFor(fact));
+    }
+    _handOut(page) {
+      this.#handed.add(page);
+      return page;
     }
     _runPage(init) {
       for (const fact of init.pages)
@@ -11872,7 +11884,7 @@ ${changes}`;
       return page;
     }
     async _refreshWorkingFrames(api) {
-      const working = this.pages().filter((page) => page._working && page._tab !== null && page._navigationsInFlight === 0);
+      const working = this._knownPages().filter((page) => page._working && page._tab !== null && page._navigationsInFlight === 0);
       await Promise.all(working.map((page) => page._refreshFrames(api).catch(() => {
         return;
       })));
@@ -11881,12 +11893,14 @@ ${changes}`;
       for (const page of this.#byTab.values())
         page._settleWorkerFacts(at);
     }
-    _applyReply({ pages, defaultPage, observed }) {
+    _applyReply({ pages, defaultPage, pickedPage, observed }) {
       const page = this.#unopened;
-      if (defaultPage && page) {
+      const held = pickedPage ? this.#byTab.get(pickedPage.tab) : undefined;
+      const bind = defaultPage ?? (held && this.#handed.has(held) ? null : pickedPage);
+      if (bind && page) {
         this.#unopened = null;
-        page._tab = defaultPage.tab;
-        this.#byTab.set(defaultPage.tab, page);
+        page._tab = bind.tab;
+        this.#byTab.set(bind.tab, page);
       }
       const approved = new Map;
       for (const close of observed?.closes ?? [])
@@ -19600,7 +19614,7 @@ Call Log:
   registerBrand("page", (json) => context2._pageFromResult(json));
   registerBrand("element", (json) => {
     const brand = elementBrand(json);
-    return brand ? new ElementHandle(context2._pageFor(brand.page), brand) : json;
+    return brand ? new ElementHandle(context2._handOut(context2._pageFor(brand.page)), brand) : json;
   });
   registerBrand("bytes", (json) => Buffer.from(String(Reflect.get(json, "base64") ?? ""), "base64"));
   onReply((reply) => context2._applyReply(reply));
