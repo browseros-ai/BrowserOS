@@ -6,8 +6,7 @@
 import type * as pw from '../../../neo-playwright/third_party/playwright/packages/playwright-core/src/client/channels'
 import type { GeneratedInputs } from './generated'
 import type { OpName } from './generated/ops'
-import type { FILL_KEYS, PRESS_KEYS, TYPE_KEYS } from './options'
-import type { Assert, KeysCheck, UpstreamCheck } from './upstream-check'
+import type { Assert, UpstreamCheck } from './upstream-check'
 import type { OpInputs } from './wire'
 
 export type UpstreamChecks = {
@@ -212,10 +211,9 @@ export type AllOpsChecked = Assert<
     : false
 >
 
-// Shared exported lists are checked by their actual inferred keys. Private and inline lists
-// use KeyList at their declaration/call site so their literal keys cannot drift from a copy.
-export type OptionChecks = {
-}
+// All exported option lists now carry generated checks; retain the empty assertion map
+// while the remaining hand op checks still use this module.
+export type OptionChecks = Record<never, never>
 
 /** Private/inline lists refer to these vendored options only through erased type imports. */
 export type PickOptions = {

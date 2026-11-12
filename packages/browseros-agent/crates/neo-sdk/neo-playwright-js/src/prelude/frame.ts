@@ -30,11 +30,7 @@ import { dropFiles, inputFiles, withClientErrors } from './files'
 import { OPTION_KEYS, send } from './generated'
 import type { OpName } from './generated/ops'
 import { FrameLocator, Locator, testIdAttributeName } from './locator'
-import {
-  markHandle,
-  pick,
-  selectOptionValues,
-} from './options'
+import { markHandle, pick, selectOptionValues } from './options'
 import type { Page } from './page'
 import type { Response } from './response'
 import { saveScreenshot, screenshotType } from './screenshot'

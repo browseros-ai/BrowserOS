@@ -80,8 +80,7 @@ async fn tests_that_pointer_inputs_and_reply_bytes_match_the_aligned_recording()
         };
         seen.insert(op.spec().name);
         let mut args: Value = serde_json::from_str(&exchange.args)?;
-        args
-            .as_object_mut()
+        args.as_object_mut()
             .ok_or("recorded object args")?
             .remove("call")
             .ok_or("recorded call header")?;

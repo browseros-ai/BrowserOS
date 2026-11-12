@@ -9,26 +9,46 @@ import type { CallSite } from '../call-site'
 import type { SignalLike } from '../signal'
 import type { Assert, ExactUpstreamCheck, KeysCheck, UpstreamCheck, VoidIsNull } from '../upstream-check'
 import type { CallHeader } from '../wire'
+import type { ActionTargetInput } from './types/ActionTargetInput'
 import type { CheckInput } from './types/CheckInput'
 import type { ClickInput } from './types/ClickInput'
 import type { Clicked } from './types/Clicked'
 import type { DblclickInput } from './types/DblclickInput'
+import type { DispatchEventInput } from './types/DispatchEventInput'
 import type { DragInput } from './types/DragInput'
 import type { DropInput } from './types/DropInput'
+import type { FillInput } from './types/FillInput'
 import type { HoverInput } from './types/HoverInput'
+import type { PressInput } from './types/PressInput'
+import type { SelectOptionInput } from './types/SelectOptionInput'
+import type { SelectTextInput } from './types/SelectTextInput'
+import type { SetInputFilesInput } from './types/SetInputFilesInput'
+import type { TypeInput } from './types/TypeInput'
 import type { UncheckInput } from './types/UncheckInput'
 
+export type { ActionTargetInput } from './types/ActionTargetInput'
 export type { CheckInput } from './types/CheckInput'
 export type { ClickInput } from './types/ClickInput'
 export type { Clicked } from './types/Clicked'
 export type { DblclickInput } from './types/DblclickInput'
+export type { DispatchEventInput } from './types/DispatchEventInput'
 export type { DragInput } from './types/DragInput'
 export type { DropFiles } from './types/DropFiles'
 export type { DropInput } from './types/DropInput'
 export type { DropPath } from './types/DropPath'
+export type { FilesInput } from './types/FilesInput'
+export type { FillInput } from './types/FillInput'
+export type { FillOptions } from './types/FillOptions'
 export type { HoverInput } from './types/HoverInput'
+export type { KeyOptions } from './types/KeyOptions'
 export type { NavigationCut } from './types/NavigationCut'
+export type { PressInput } from './types/PressInput'
 export type { ScrollOption } from './types/ScrollOption'
+export type { SelectOptionInput } from './types/SelectOptionInput'
+export type { SelectTextInput } from './types/SelectTextInput'
+export type { SequentialOptions } from './types/SequentialOptions'
+export type { SetInputFilesInput } from './types/SetInputFilesInput'
+export type { TypeInput } from './types/TypeInput'
 export type { UncheckInput } from './types/UncheckInput'
 export type { WireButton } from './types/WireButton'
 export type { WireModifier } from './types/WireModifier'
@@ -42,6 +62,16 @@ export type ActionInputs = {
   'locator.uncheck': UncheckInput
   'locator.dragTo': DragInput
   'locator.drop': DropInput
+  'locator.fill': FillInput
+  'locator.press': PressInput
+  'locator.pressSequentially': TypeInput
+  'locator.selectOption': SelectOptionInput
+  'locator.selectText': SelectTextInput
+  'locator.focus': ActionTargetInput
+  'locator.blur': ActionTargetInput
+  'locator.setInputFiles': SetInputFilesInput
+  'locator.dispatchEvent': DispatchEventInput
+  'locator.scrollIntoViewIfNeeded': ActionTargetInput
 }
 
 /** Each action op's result. */
@@ -53,6 +83,16 @@ export type ActionOutputs = {
   'locator.uncheck': null
   'locator.dragTo': null
   'locator.drop': null
+  'locator.fill': null
+  'locator.press': null
+  'locator.pressSequentially': null
+  'locator.selectOption': Array<string>
+  'locator.selectText': null
+  'locator.focus': null
+  'locator.blur': null
+  'locator.setInputFiles': null
+  'locator.dispatchEvent': null
+  'locator.scrollIntoViewIfNeeded': null
 }
 
 /**
@@ -67,6 +107,9 @@ export const ACTION_OPTION_KEYS = {
   'locator.check': ['force', 'position', 'scroll', 'trial'],
   'locator.uncheck': ['force', 'position', 'scroll', 'trial'],
   'locator.dragTo': ['force', 'scroll', 'sourcePosition', 'targetPosition', 'steps', 'trial'],
+  'locator.fill': ['force'],
+  'locator.press': ['delay', 'noWaitAfter'],
+  'locator.pressSequentially': ['delay'],
 } as const
 
 /**
@@ -116,6 +159,66 @@ export const ACTION_SEND = {
     input: DropInput,
     signal?: SignalLike,
   ): Promise<null> => invoke('locator.drop', site, call, input, signal),
+  'locator.fill': (
+    site: CallSite,
+    call: CallHeader,
+    input: FillInput,
+    signal?: SignalLike,
+  ): Promise<null> => invoke('locator.fill', site, call, input, signal),
+  'locator.press': (
+    site: CallSite,
+    call: CallHeader,
+    input: PressInput,
+    signal?: SignalLike,
+  ): Promise<null> => invoke('locator.press', site, call, input, signal),
+  'locator.pressSequentially': (
+    site: CallSite,
+    call: CallHeader,
+    input: TypeInput,
+    signal?: SignalLike,
+  ): Promise<null> => invoke('locator.pressSequentially', site, call, input, signal),
+  'locator.selectOption': (
+    site: CallSite,
+    call: CallHeader,
+    input: SelectOptionInput,
+    signal?: SignalLike,
+  ): Promise<Array<string>> => invoke('locator.selectOption', site, call, input, signal),
+  'locator.selectText': (
+    site: CallSite,
+    call: CallHeader,
+    input: SelectTextInput,
+    signal?: SignalLike,
+  ): Promise<null> => invoke('locator.selectText', site, call, input, signal),
+  'locator.focus': (
+    site: CallSite,
+    call: CallHeader,
+    input: ActionTargetInput,
+    signal?: SignalLike,
+  ): Promise<null> => invoke('locator.focus', site, call, input, signal),
+  'locator.blur': (
+    site: CallSite,
+    call: CallHeader,
+    input: ActionTargetInput,
+    signal?: SignalLike,
+  ): Promise<null> => invoke('locator.blur', site, call, input, signal),
+  'locator.setInputFiles': (
+    site: CallSite,
+    call: CallHeader,
+    input: SetInputFilesInput,
+    signal?: SignalLike,
+  ): Promise<null> => invoke('locator.setInputFiles', site, call, input, signal),
+  'locator.dispatchEvent': (
+    site: CallSite,
+    call: CallHeader,
+    input: DispatchEventInput,
+    signal?: SignalLike,
+  ): Promise<null> => invoke('locator.dispatchEvent', site, call, input, signal),
+  'locator.scrollIntoViewIfNeeded': (
+    site: CallSite,
+    call: CallHeader,
+    input: ActionTargetInput,
+    signal?: SignalLike,
+  ): Promise<null> => invoke('locator.scrollIntoViewIfNeeded', site, call, input, signal),
 }
 
 // Each route row against Playwright's own protocol at the pin (upstream-check.ts): tsc
@@ -154,3 +257,44 @@ type _locator_dragTo_result = Assert<VoidIsNull<'locator.dragTo', pw.FrameDragAn
 //   omits streams: no client file streams in a stateless run
 type _locator_drop = Assert<UpstreamCheck<'locator.drop', DropInput, pw.FrameDropParams, 'files', 'localPaths' | 'payloads' | 'streams', never>>
 type _locator_drop_result = Assert<VoidIsNull<'locator.drop', pw.FrameDropResult, null>>
+// locator.fill: ElementHandle.fill
+type _locator_fill = Assert<UpstreamCheck<'locator.fill', FillInput, pw.ElementHandleFillParams, never, never, never>>
+type _locator_fill_keys = Assert<KeysCheck<'locator.fill', (typeof ACTION_OPTION_KEYS)['locator.fill'][number], pw.ElementHandleFillOptions>>
+type _locator_fill_result = Assert<VoidIsNull<'locator.fill', pw.ElementHandleFillResult, null>>
+// locator.press: ElementHandle.press
+type _locator_press = Assert<UpstreamCheck<'locator.press', PressInput, pw.ElementHandlePressParams, never, never, never>>
+type _locator_press_keys = Assert<KeysCheck<'locator.press', (typeof ACTION_OPTION_KEYS)['locator.press'][number], pw.ElementHandlePressOptions>>
+type _locator_press_result = Assert<VoidIsNull<'locator.press', pw.ElementHandlePressResult, null>>
+// locator.pressSequentially: ElementHandle.type
+type _locator_pressSequentially = Assert<UpstreamCheck<'locator.pressSequentially', TypeInput, pw.ElementHandleTypeParams, never, never, never>>
+type _locator_pressSequentially_keys = Assert<KeysCheck<'locator.pressSequentially', (typeof ACTION_OPTION_KEYS)['locator.pressSequentially'][number], pw.ElementHandleTypeOptions>>
+type _locator_pressSequentially_result = Assert<VoidIsNull<'locator.pressSequentially', pw.ElementHandleTypeResult, null>>
+// locator.selectOption: ElementHandle.selectOption
+//   retypes elements: Neo element brands replace upstream channel handles
+type _locator_selectOption = Assert<UpstreamCheck<'locator.selectOption', SelectOptionInput, pw.ElementHandleSelectOptionParams, never, never, 'elements'>>
+type _locator_selectOption_result = Assert<VoidIsNull<'locator.selectOption', pw.ElementHandleSelectOptionResult, Array<string>>>
+// locator.selectText: ElementHandle.selectText
+type _locator_selectText = Assert<UpstreamCheck<'locator.selectText', SelectTextInput, pw.ElementHandleSelectTextParams, never, never, never>>
+type _locator_selectText_result = Assert<VoidIsNull<'locator.selectText', pw.ElementHandleSelectTextResult, null>>
+// locator.focus: ElementHandle.focus
+type _locator_focus = Assert<UpstreamCheck<'locator.focus', ActionTargetInput, pw.ElementHandleFocusParams, never, never, never>>
+type _locator_focus_result = Assert<VoidIsNull<'locator.focus', pw.ElementHandleFocusResult, null>>
+// locator.blur: Frame.blur
+type _locator_blur = Assert<UpstreamCheck<'locator.blur', ActionTargetInput, pw.FrameBlurParams, never, never, never>>
+type _locator_blur_result = Assert<VoidIsNull<'locator.blur', pw.FrameBlurResult, null>>
+// locator.setInputFiles: ElementHandle.setInputFiles
+//   adds files: Neo resolves paths or prepared payloads on its host
+//   omits directoryStream: host directories use Neo's files paths variant
+//   omits localDirectory: host directories use Neo's files paths variant
+//   omits localPaths: folded into Neo's files paths variant
+//   omits payloads: folded into Neo's files payloads variant
+//   omits streams: no client file streams in a stateless run
+type _locator_setInputFiles = Assert<UpstreamCheck<'locator.setInputFiles', SetInputFilesInput, pw.ElementHandleSetInputFilesParams, 'files', 'directoryStream' | 'localDirectory' | 'localPaths' | 'payloads' | 'streams', never>>
+type _locator_setInputFiles_result = Assert<VoidIsNull<'locator.setInputFiles', pw.ElementHandleSetInputFilesResult, null>>
+// locator.dispatchEvent: ElementHandle.dispatchEvent
+//   retypes eventInit: Neo transports JSON rather than upstream SerializedArgument
+type _locator_dispatchEvent = Assert<UpstreamCheck<'locator.dispatchEvent', DispatchEventInput, pw.ElementHandleDispatchEventParams, never, never, 'eventInit'>>
+type _locator_dispatchEvent_result = Assert<VoidIsNull<'locator.dispatchEvent', pw.ElementHandleDispatchEventResult, null>>
+// locator.scrollIntoViewIfNeeded: ElementHandle.scrollIntoViewIfNeeded
+type _locator_scrollIntoViewIfNeeded = Assert<UpstreamCheck<'locator.scrollIntoViewIfNeeded', ActionTargetInput, pw.ElementHandleScrollIntoViewIfNeededParams, never, never, never>>
+type _locator_scrollIntoViewIfNeeded_result = Assert<VoidIsNull<'locator.scrollIntoViewIfNeeded', pw.ElementHandleScrollIntoViewIfNeededResult, null>>

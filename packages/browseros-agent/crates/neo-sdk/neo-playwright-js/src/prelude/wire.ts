@@ -29,8 +29,8 @@ export type {
   ElementBrand,
   FilesInput,
   FillOptions,
-  KeyOptions,
   FrameInfo,
+  KeyOptions,
   LoadState,
   MouseButton,
   NavigationCut,
@@ -256,15 +256,6 @@ export type FrameArgs = PageArgs & { frame?: string }
 export type HandInputs = {
   'events.interceptFileChooser': PageArgs & { lease: number; on: boolean }
 
-
-
-
-
-
-
-
-
-
   'worker.evaluate': { page: PageHandle; worker: string; script: PageScript }
   'page.evaluate': FrameArgs & { script: PageScript }
   /** `noWait` is `$eval`: no waiting for the element, as `locator.evaluate` does. */
@@ -331,15 +322,6 @@ export type HandInputs = {
 /** Each op's result, for the ops Rust does not describe yet. */
 export type HandOutputs = {
   'events.interceptFileChooser': Done
-
-
-
-
-
-
-
-
-
 
   'worker.evaluate': { value: SerializedValue }
   'page.evaluate': { value: SerializedValue; frames?: FrameInfo[] }

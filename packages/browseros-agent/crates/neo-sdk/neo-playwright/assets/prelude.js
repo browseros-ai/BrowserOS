@@ -1091,9 +1091,6 @@
         picked[key] = source[key];
     return picked;
   }
-  var FILL_KEYS = ["force"];
-  var PRESS_KEYS = ["delay", "noWaitAfter"];
-  var TYPE_KEYS = ["delay"];
   var handles = new WeakSet;
   function markHandle(object) {
     handles.add(object);
@@ -1921,7 +1918,10 @@
     "locator.hover": ["force", "modifiers", "position", "scroll", "trial"],
     "locator.check": ["force", "position", "scroll", "trial"],
     "locator.uncheck": ["force", "position", "scroll", "trial"],
-    "locator.dragTo": ["force", "scroll", "sourcePosition", "targetPosition", "steps", "trial"]
+    "locator.dragTo": ["force", "scroll", "sourcePosition", "targetPosition", "steps", "trial"],
+    "locator.fill": ["force"],
+    "locator.press": ["delay", "noWaitAfter"],
+    "locator.pressSequentially": ["delay"]
   };
   var ACTION_SEND = {
     "locator.click": (site, call, input, signal) => invoke("locator.click", site, call, input, signal),
@@ -1930,7 +1930,17 @@
     "locator.check": (site, call, input, signal) => invoke("locator.check", site, call, input, signal),
     "locator.uncheck": (site, call, input, signal) => invoke("locator.uncheck", site, call, input, signal),
     "locator.dragTo": (site, call, input, signal) => invoke("locator.dragTo", site, call, input, signal),
-    "locator.drop": (site, call, input, signal) => invoke("locator.drop", site, call, input, signal)
+    "locator.drop": (site, call, input, signal) => invoke("locator.drop", site, call, input, signal),
+    "locator.fill": (site, call, input, signal) => invoke("locator.fill", site, call, input, signal),
+    "locator.press": (site, call, input, signal) => invoke("locator.press", site, call, input, signal),
+    "locator.pressSequentially": (site, call, input, signal) => invoke("locator.pressSequentially", site, call, input, signal),
+    "locator.selectOption": (site, call, input, signal) => invoke("locator.selectOption", site, call, input, signal),
+    "locator.selectText": (site, call, input, signal) => invoke("locator.selectText", site, call, input, signal),
+    "locator.focus": (site, call, input, signal) => invoke("locator.focus", site, call, input, signal),
+    "locator.blur": (site, call, input, signal) => invoke("locator.blur", site, call, input, signal),
+    "locator.setInputFiles": (site, call, input, signal) => invoke("locator.setInputFiles", site, call, input, signal),
+    "locator.dispatchEvent": (site, call, input, signal) => invoke("locator.dispatchEvent", site, call, input, signal),
+    "locator.scrollIntoViewIfNeeded": (site, call, input, signal) => invoke("locator.scrollIntoViewIfNeeded", site, call, input, signal)
   };
 
   // crates/neo-sdk/neo-playwright-js/src/prelude/generated/read.ts
@@ -7745,37 +7755,63 @@ ${value.stack}`;
       const site = captureSite();
       if (typeof value !== "string")
         throw clientError(api, `value: expected string, got ${typeof value}`);
-      await this._selectorOp("locator.fill", site, api, selector, options.strict, this._wait(api, options), {
-        value,
-        options: pick(options, FILL_KEYS)
-      });
+      const strict = options.strict;
+      const wait = this._wait(api, options);
+      const picked = pick(options, OPTION_KEYS["locator.fill"]);
+      const addressed = await this._targetArgs(api, selector, strict);
+      await send["locator.fill"](site, this._call(api, wait.timeout), { ...addressed, value, options: picked }, wait.signal);
     }
     async _press(api, selector, key, options = {}) {
       const site = captureSite();
-      await this._selectorOp("locator.press", site, api, selector, options.strict, this._wait(api, options), {
-        key,
-        options: pick(options, PRESS_KEYS)
-      });
+      const strict = options.strict;
+      const wait = this._wait(api, options);
+      const picked = pick(options, OPTION_KEYS["locator.press"]);
+      const addressed = await this._targetArgs(api, selector, strict);
+      await send["locator.press"](site, this._call(api, wait.timeout), { ...addressed, key, options: picked }, wait.signal);
     }
     async _type(api, selector, text, options = {}) {
       const site = captureSite();
-      await this._selectorOp("locator.pressSequentially", site, api, selector, options.strict, this._wait(api, options), { text, options: pick(options, TYPE_KEYS) });
+      const strict = options.strict;
+      const wait = this._wait(api, options);
+      const picked = pick(options, OPTION_KEYS["locator.pressSequentially"]);
+      const addressed = await this._targetArgs(api, selector, strict);
+      await send["locator.pressSequentially"](site, this._call(api, wait.timeout), { ...addressed, text, options: picked }, wait.signal);
     }
     async _focus(api, selector, options = {}) {
       const site = captureSite();
-      await this._selectorOp("locator.focus", site, api, selector, options.strict, this._wait(api, options), {});
+      const strict = options.strict;
+      const wait = this._wait(api, options);
+      const addressed = await this._targetArgs(api, selector, strict);
+      await send["locator.focus"](site, this._call(api, wait.timeout), { ...addressed }, wait.signal);
     }
     async _blur(api, selector, options = {}) {
       const site = captureSite();
-      await this._selectorOp("locator.blur", site, api, selector, options.strict, this._wait(api, options), {});
+      const strict = options.strict;
+      const wait = this._wait(api, options);
+      const addressed = await this._targetArgs(api, selector, strict);
+      await send["locator.blur"](site, this._call(api, wait.timeout), { ...addressed }, wait.signal);
     }
     async _selectOption(api, selector, values, options = {}) {
       const site = captureSite();
-      return await this._selectorOp("locator.selectOption", site, api, selector, options.strict, this._wait(api, options), { ...selectOptionValues(api, values), ...pick(options, ["force"]) });
+      const strict = options.strict;
+      const wait = this._wait(api, options);
+      const converted = selectOptionValues(api, values);
+      const picked = pick(options, ["force"]);
+      const addressed = await this._targetArgs(api, selector, strict);
+      return await send["locator.selectOption"](site, this._call(api, wait.timeout), {
+        ...addressed,
+        options: converted.options,
+        elements: converted.elements,
+        ...picked
+      }, wait.signal);
     }
     async _selectText(api, selector, options = {}) {
       const site = captureSite();
-      await this._selectorOp("locator.selectText", site, api, selector, options.strict, this._wait(api, options), pick(options, ["force"]));
+      const strict = options.strict;
+      const wait = this._wait(api, options);
+      const picked = pick(options, ["force"]);
+      const addressed = await this._targetArgs(api, selector, strict);
+      await send["locator.selectText"](site, this._call(api, wait.timeout), { ...addressed, ...picked }, wait.signal);
     }
     async _drop(selector, payload, options) {
       const site = captureSite();
@@ -7795,15 +7831,27 @@ ${value.stack}`;
     async _setInputFiles(api, selector, files, options = {}) {
       const site = captureSite();
       const input = inputFiles(api, files);
-      await withClientErrors(api, () => this._selectorOp("locator.setInputFiles", site, api, selector, options.strict, this._wait(api, options), { files: input }));
+      await withClientErrors(api, async () => {
+        const strict = options.strict;
+        const wait = this._wait(api, options);
+        const addressed = await this._targetArgs(api, selector, strict);
+        return await send["locator.setInputFiles"](site, this._call(api, wait.timeout), { ...addressed, files: input }, wait.signal);
+      });
     }
     async _dispatchEvent(api, selector, type, eventInit, options = {}) {
       const site = captureSite();
-      await this._selectorOp("locator.dispatchEvent", site, api, selector, options.strict, this._wait(api, options), { type, eventInit: eventInit ?? {} });
+      const strict = options.strict;
+      const wait = this._wait(api, options);
+      const init = eventInit ?? {};
+      const addressed = await this._targetArgs(api, selector, strict);
+      await send["locator.dispatchEvent"](site, this._call(api, wait.timeout), { ...addressed, type, eventInit: init }, wait.signal);
     }
     async _scrollIntoViewIfNeeded(api, selector, options = {}) {
       const site = captureSite();
-      await this._selectorOp("locator.scrollIntoViewIfNeeded", site, api, selector, options.strict, this._wait(api, options), {});
+      const strict = options.strict;
+      const wait = this._wait(api, options);
+      const addressed = await this._targetArgs(api, selector, strict);
+      await send["locator.scrollIntoViewIfNeeded"](site, this._call(api, wait.timeout), { ...addressed }, wait.signal);
     }
     async _read(op, api, selector, options = {}) {
       const site = captureSite();
@@ -8248,59 +8296,81 @@ ${value.stack}`;
     }
     async fill(value, options = {}) {
       const site = captureSite();
-      await this.#op("locator.fill", site, "elementHandle.fill", this.#timeout(options), {
-        value,
-        options: pick(options, FILL_KEYS)
-      });
+      const api = "elementHandle.fill";
+      const timeout = this.#timeout(options);
+      const picked = pick(options, OPTION_KEYS["locator.fill"]);
+      this.#live(api);
+      await send["locator.fill"](site, { api, timeoutMs: timeoutMs(api, timeout) }, { target: this._brand, strict: "strict", value, options: picked });
     }
     async press(key, options = {}) {
       const site = captureSite();
-      await this.#op("locator.press", site, "elementHandle.press", this.#timeout(options), {
-        key,
-        options: pick(options, PRESS_KEYS)
-      });
+      const api = "elementHandle.press";
+      const timeout = this.#timeout(options);
+      const picked = pick(options, OPTION_KEYS["locator.press"]);
+      this.#live(api);
+      await send["locator.press"](site, { api, timeoutMs: timeoutMs(api, timeout) }, { target: this._brand, strict: "strict", key, options: picked });
     }
     async type(text, options = {}) {
       const site = captureSite();
-      await this.#op("locator.pressSequentially", site, "elementHandle.type", this.#timeout(options), {
-        text,
-        options: pick(options, TYPE_KEYS)
-      });
+      const api = "elementHandle.type";
+      const timeout = this.#timeout(options);
+      const picked = pick(options, OPTION_KEYS["locator.pressSequentially"]);
+      this.#live(api);
+      await send["locator.pressSequentially"](site, { api, timeoutMs: timeoutMs(api, timeout) }, { target: this._brand, strict: "strict", text, options: picked });
     }
     async selectOption(values, options = {}) {
       const site = captureSite();
       const api = "elementHandle.selectOption";
-      return await this.#op("locator.selectOption", site, api, this.#timeout(options), {
-        ...selectOptionValues(api, values),
-        ...pick(options, ["force"])
+      const timeout = this.#timeout(options);
+      const converted = selectOptionValues(api, values);
+      const picked = pick(options, ["force"]);
+      this.#live(api);
+      return await send["locator.selectOption"](site, { api, timeoutMs: timeoutMs(api, timeout) }, {
+        target: this._brand,
+        strict: "strict",
+        options: converted.options,
+        elements: converted.elements,
+        ...picked
       });
     }
     async selectText(options = {}) {
       const site = captureSite();
-      await this.#op("locator.selectText", site, "elementHandle.selectText", this.#timeout(options), pick(options, ["force"]));
+      const api = "elementHandle.selectText";
+      const timeout = this.#timeout(options);
+      const picked = pick(options, ["force"]);
+      this.#live(api);
+      await send["locator.selectText"](site, { api, timeoutMs: timeoutMs(api, timeout) }, { target: this._brand, strict: "strict", ...picked });
     }
     async setInputFiles(files, options = {}) {
       const site = captureSite();
       const api = "elementHandle.setInputFiles";
       const input = inputFiles(api, files);
-      await withClientErrors(api, () => this.#op("locator.setInputFiles", site, api, this.#timeout(options), {
-        files: input
-      }));
+      await withClientErrors(api, async () => {
+        const timeout = this.#timeout(options);
+        this.#live(api);
+        return await send["locator.setInputFiles"](site, { api, timeoutMs: timeoutMs(api, timeout) }, { target: this._brand, strict: "strict", files: input });
+      });
     }
     async focus() {
       const site = captureSite();
-      await this.#op("locator.focus", site, "elementHandle.focus", 0, {});
+      const api = "elementHandle.focus";
+      const timeout = 0;
+      this.#live(api);
+      await send["locator.focus"](site, { api, timeoutMs: timeoutMs(api, timeout) }, { target: this._brand, strict: "strict" });
     }
     async dispatchEvent(type, eventInit = {}) {
       const site = captureSite();
-      await this.#op("locator.dispatchEvent", site, "elementHandle.dispatchEvent", 0, {
-        type,
-        eventInit
-      });
+      const api = "elementHandle.dispatchEvent";
+      const timeout = 0;
+      this.#live(api);
+      await send["locator.dispatchEvent"](site, { api, timeoutMs: timeoutMs(api, timeout) }, { target: this._brand, strict: "strict", type, eventInit });
     }
     async scrollIntoViewIfNeeded(options = {}) {
       const site = captureSite();
-      await this.#op("locator.scrollIntoViewIfNeeded", site, "elementHandle.scrollIntoViewIfNeeded", this.#timeout(options), {});
+      const api = "elementHandle.scrollIntoViewIfNeeded";
+      const timeout = this.#timeout(options);
+      this.#live(api);
+      await send["locator.scrollIntoViewIfNeeded"](site, { api, timeoutMs: timeoutMs(api, timeout) }, { target: this._brand, strict: "strict" });
     }
     async waitForElementState(state, options = {}) {
       const site = captureSite();
