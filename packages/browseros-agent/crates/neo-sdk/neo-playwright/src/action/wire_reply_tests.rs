@@ -15,7 +15,7 @@ use ts_rs::TS;
 use super::{ActionOp, Clicked, route};
 use crate::action::requested_navigations::NavigationCut;
 use crate::op::Op;
-use crate::op_input::{OpArgs, OpInput};
+use crate::op_input::OpInput;
 use crate::op_scope::OpScope;
 use crate::test_env::{self, TestEnv};
 use crate::wire::{OptionKeys, Route, Run, Upstream};
@@ -81,19 +81,6 @@ impl<'a> Route<'a> for Reply<'a> {
                 recorded::<O>(body)
                     .map_err(|error| scope.fail(ErrorCode::Internal, &error.to_string()))
             })
-    }
-
-    fn untyped<F, Fut>(self, _handler: F) -> Self::Out
-    where
-        F: FnOnce(&'a Playwright, &'a OpScope<'a>, OpArgs) -> Fut + Send + 'a,
-        Fut: Future<Output = Result<Value, PlaywrightError>> + Send + 'a,
-    {
-        Box::pin(async move {
-            Err(self.run.scope.fail(
-                ErrorCode::Internal,
-                "a recorded action bypassed its typed row",
-            ))
-        })
     }
 }
 

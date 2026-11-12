@@ -27,7 +27,7 @@ import {
 } from './evaluation'
 import { EventDeadline } from './event-deadline'
 import { dropFiles, inputFiles, withClientErrors } from './files'
-import { OPTION_KEYS, send } from './generated'
+import { OPTION_KEYS, type Strictness, send } from './generated'
 import type { OpName } from './generated/ops'
 import { FrameLocator, Locator, testIdAttributeName } from './locator'
 import { markHandle, pick, selectOptionValues } from './options'
@@ -48,7 +48,6 @@ import {
 import { renderSnapshot } from './snapshot'
 import { type TimeoutOption, timeoutMs } from './timeouts'
 import type { KeyList } from './upstream-check'
-import type { PickOptions } from './upstream-checks'
 import { globMatches } from './url'
 import {
   type AriaSnapshotJSON,
@@ -78,7 +77,6 @@ import type {
   ScreenshotOptions,
   SerializedValue,
   SnapshotResult,
-  Strictness,
   TargetArgs,
   WaitForState,
 } from './wire'
@@ -963,7 +961,7 @@ export class Frame extends EventEmitter {
     const wait = this._wait(api, options)
     const converted = selectOptionValues(api, values)
     const picked = pick(options, ['force'] satisfies KeyList<
-      PickOptions['locator.selectOption']
+      OpInputs['locator.selectOption']
     >)
     const addressed = await this._targetArgs(api, selector, strict)
     return await send['locator.selectOption'](
@@ -988,7 +986,7 @@ export class Frame extends EventEmitter {
     const strict = options.strict
     const wait = this._wait(api, options)
     const picked = pick(options, ['force'] satisfies KeyList<
-      PickOptions['locator.selectText']
+      OpInputs['locator.selectText']
     >)
     const addressed = await this._targetArgs(api, selector, strict)
     await send['locator.selectText'](
@@ -1423,7 +1421,7 @@ export class Frame extends EventEmitter {
           waitUntil,
           publication,
           ...pick(options, ['referer'] satisfies KeyList<
-            PickOptions['page.goto']
+            OpInputs['page.goto']
           >),
         },
         (result, observed) => {
@@ -1480,10 +1478,10 @@ export class Frame extends EventEmitter {
     const keys =
       op === 'page.addScriptTag'
         ? (['url', 'path', 'content', 'type'] as const satisfies KeyList<
-            PickOptions['page.addScriptTag']
+            OpInputs['page.addScriptTag']
           >)
         : (['url', 'path', 'content'] as const satisfies KeyList<
-            PickOptions['page.addStyleTag']
+            OpInputs['page.addStyleTag']
           >)
     const input = pick(options, keys)
     for (const key of keys) {

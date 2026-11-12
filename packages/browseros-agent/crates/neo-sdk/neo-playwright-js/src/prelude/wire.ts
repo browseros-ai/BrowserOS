@@ -1,24 +1,13 @@
 /**
- * The prelude's half of neo-playwright's op contract: every handle it sends, every op's
- * input after the shared `call` header, and every result it reads back.
- *
- * Rust decodes each input once with `deny_unknown_fields`: the header and the targets in
- * crates/neo-sdk/neo-playwright/src/target.rs, the rest in each family's `*_op.rs`. A field added
- * or renamed here must change there in the same commit, or the op fails `script /
- * invalid_input` before it sends anything. Types the probe consumes unchanged (expect params,
- * select options, URL patterns) are imported from the probe protocol, so the three halves
- * cannot drift apart.
- *
- * The op maps are being moved into Rust one family at a time: a family on route rows has its
- * inputs and results generated from its handlers' types (`./generated`, written by
- * crates/neo-sdk/neo-playwright/tests/wire_generated.rs), and its hand rows leave
- * `HandInputs` and `HandOutputs` here in the same change. `_Partition` at the end fails to
- * compile while an op is described by both, or by neither.
+ * The prelude's view of Rust's op contract. Every input and result comes from its handler's
+ * serde/ts-rs types, rendered by neo-playwright/tests/wire_generated.rs into ./generated.
+ * Change the handler or route row and regenerate; the sender checks and upstream checks then
+ * follow the same contract. The aliases below adapt those types for script options and
+ * prelude bookkeeping. The run envelope is generated separately by neo-server (see bridge.ts).
  */
 
 import type { SerializedValue } from '../../../neo-playwright/third_party/playwright/packages/isomorphic/utilityScriptSerializers'
-import type { GeneratedInputs, GeneratedOutputs } from './generated'
-import type { OpName } from './generated/ops'
+import type { GeneratedInputs } from './generated'
 
 // Rust owns these shared shapes now. LocatorBrand is a projection of the tagged Target
 // union, so its fields are never repeated in TypeScript.
@@ -32,6 +21,8 @@ export type {
   FilesInput,
   FillOptions,
   FrameInfo,
+  GeneratedInputs as OpInputs,
+  GeneratedOutputs as OpOutputs,
   InitSource,
   KeyOptions,
   LoadState,
@@ -47,13 +38,12 @@ export type {
   ResponseInfo,
   ScrollOption,
   SnapshotResult,
-  Strictness,
   Target,
 } from './generated'
 /** Playwright's in-page serialized value (`utilityScriptSerializers.ts`), as JSON. */
 export type { SerializedValue }
 
-import type { EventRecord, PageHandle, Strictness, Target } from './generated'
+import type { EventRecord, PageHandle, Target } from './generated'
 
 /** Script options are the flat Rust input with its host addressing removed. */
 export type PointerOptions = Omit<
@@ -74,12 +64,6 @@ export type UnopenedPageBrand = PageHandle & { tab: null }
  * Playwright timeout the prelude resolved; 0 means none, and the run deadline bounds the op.
  */
 export type CallHeader = { api: string; timeoutMs: number }
-
-/**
- * The empty object still returned by host bookkeeping. Null results are spelled out per op:
- * changing this alias would misdescribe existing run-record payloads.
- */
-export type Done = Record<string, never>
 
 /**
  * The Playwright events Neo reports. `page` is the context's; the rest are a page's. Rust takes
@@ -135,38 +119,8 @@ export type ScreenshotOptions = Omit<
  */
 export type PdfOptions = Omit<GeneratedInputs['page.pdf'], 'page'>
 
-export type TargetArgs = { target: Target; strict: Strictness }
-export type EveryMatchArgs = { target: Target }
-export type PageArgs = { page: PageHandle }
-/** A page op on one of the page's frames; `frame` is left out for the main frame. */
-export type FrameArgs = PageArgs & { frame?: string }
-/**
- * Each op's input after `call`, for the ops Rust does not describe yet: none since the events
- * family moved. The close-out deletes both hand maps with `_Partition`.
- */
-export type HandInputs = Record<never, never>
-
-/** Each op's result, for the ops Rust does not describe yet: none. */
-export type HandOutputs = Record<never, never>
-
-/** Each op's input after `call`: Rust's generated type, or the hand row above. */
-export type OpInputs = GeneratedInputs & HandInputs
-
-/**
- * Each op's result. Page and element handles arrive revived by the bootstrap
- * (`__neo.brands.register`); the revivers and the classes read the raw brands.
- */
-export type OpOutputs = GeneratedOutputs & HandOutputs
-
-type Exact<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false
-type Assert<T extends true> = T
-/**
- * Fails to compile when an op is described both by Rust and by hand, or by neither: every op
- * in `OPS` has exactly one input and one result type.
- */
-type _Partition = [
-  Assert<Exact<keyof GeneratedInputs & keyof HandInputs, never>>,
-  Assert<Exact<keyof GeneratedOutputs & keyof HandOutputs, never>>,
-  Assert<Exact<keyof OpInputs, OpName>>,
-  Assert<Exact<keyof OpOutputs, OpName>>,
-]
+/** The addressing shared by typed locator actions, projected from Rust's click input. */
+export type TargetArgs = Pick<
+  GeneratedInputs['locator.click'],
+  'target' | 'strict'
+>

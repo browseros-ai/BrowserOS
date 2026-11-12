@@ -33,7 +33,7 @@ listed_enum! {
 
 impl ContextOp {
     /// Shapes and runtime dispatch come from the same route rows.
-    pub(crate) fn wire(self) -> Option<OpWire> {
+    pub(crate) fn wire(self) -> OpWire {
         route(self, Describe)
     }
 

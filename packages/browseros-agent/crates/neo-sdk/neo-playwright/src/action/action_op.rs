@@ -58,7 +58,7 @@ listed_enum! {
 
 impl ActionOp {
     /// Describes every action from the same exhaustive route rows used at runtime.
-    pub(crate) fn wire(self) -> Option<OpWire> {
+    pub(crate) fn wire(self) -> OpWire {
         route(self, Describe)
     }
 

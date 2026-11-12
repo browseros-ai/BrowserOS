@@ -1,5 +1,5 @@
 //! Writes the prelude's generated folder, `neo-playwright-js/src/prelude/generated/`, from Rust's
-//! op table (`Op::all()`, each op's `spec()`) and each described op's wire (`Op::wire()`). A
+//! op table (`Op::all()`, each op's `spec()`) and each op's wire (`Op::wire()`). A
 //! stale file is rewritten and the test fails, so the regenerated files are reviewed and
 //! committed like any other change. ts-rs prints every type; this file only lays them out.
 //!
@@ -171,21 +171,19 @@ struct Family {
     ops: Vec<(&'static str, OpWire)>,
 }
 
-/// Every family in `Op::all()`'s order. A family whose ops are not described yet still gets its
-/// (empty) file, so `index.ts` names the same files whichever families have moved.
+/// Every family in `Op::all()`'s order. Each registered op contributes exactly one wire row;
+/// there is no undescribed branch that could silently leave it out of TypeScript.
 fn families() -> Vec<Family> {
     let mut families: Vec<Family> = Vec::new();
     for op in Op::all() {
         let name = op.family();
-        if !families.iter().any(|family| family.name == name) {
-            families.push(Family {
+        let row = (op.spec().name, op.wire());
+        match families.iter_mut().find(|family| family.name == name) {
+            Some(family) => family.ops.push(row),
+            None => families.push(Family {
                 name,
-                ops: Vec::new(),
-            });
-        }
-        let family = families.iter_mut().find(|family| family.name == name);
-        if let (Some(wire), Some(family)) = (op.wire(), family) {
-            family.ops.push((op.spec().name, wire));
+                ops: vec![row],
+            }),
         }
     }
     families

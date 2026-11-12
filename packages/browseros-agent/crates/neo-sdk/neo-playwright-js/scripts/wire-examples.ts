@@ -9,6 +9,8 @@
  * when wire.ts changes, there when a Rust input changes. tests/prelude-wire.test.ts runs the
  * same script to check where each op carries its page handle.
  */
+import { Buffer } from 'node:buffer'
+import type { ElementBrand, OpOutputs } from '../src/prelude/wire'
 import { type Call, loadPrelude, SEED } from '../tests/support/prelude-runtime'
 
 /** The clock the recording runs on, so `since` stamps are the same on every build. */
@@ -20,7 +22,7 @@ const ELEMENT = {
   seq: 0,
   node: 9,
   display: '<button>Go</button>',
-}
+} satisfies ElementBrand
 const DIALOG = {
   seq: 1,
   event: 'dialog',
@@ -58,7 +60,7 @@ const FRAMES = {
     { id: 'F1', parentId: 'MAIN', name: 'pay', url: 'https://pay.example/' },
   ],
 }
-const ANSWERS: Record<string, unknown> = {
+const ANSWERS = {
   'locator.selectOption': ['a'],
   'locator.count': 0,
   'locator.normalize': { resolvedSelector: 'internal:role=button[name="Go"i]' },
@@ -71,12 +73,12 @@ const ANSWERS: Record<string, unknown> = {
   'locator.ariaSnapshot': { json: [], partial: [] },
   'page.frames': FRAMES,
   'page.opener': { opener: null },
-  'page.evaluate': { value: null },
+  'page.evaluate': { value: { v: 'null' } },
   'worker.evaluate': { value: 1 },
   'page.addScriptTag': { element: ELEMENT },
   'page.addStyleTag': { element: ELEMENT },
   'page.waitForFunction': { value: true, preview: 'true' },
-  'page.screenshot': { $neo: 'bytes', base64: 'iVBORw0KGgo=' },
+  'page.screenshot': Buffer.from('iVBORw0KGgo=', 'base64'),
   'context.newPage': {
     page: { $neo: 'page', tab: 1008 },
     url: 'about:blank',
@@ -87,6 +89,11 @@ const ANSWERS: Record<string, unknown> = {
   'page.exposeBinding': { id: 3 },
   'context.exposeBinding': { id: 4 },
   'page.addLocatorHandler': 1,
+} satisfies Partial<OpOutputs>
+
+/** Fixture calls include bootstrap-internal names too; only these own keys have canned answers. */
+function hasAnswer(name: string): name is keyof typeof ANSWERS {
+  return Object.hasOwn(ANSWERS, name)
 }
 
 /**
@@ -120,7 +127,12 @@ function everyOpAnswer(): (call: Call) => unknown {
       triggered = true
       return { uid: 1 }
     }
-    return ANSWERS[call.name] ?? null
+    const answer = hasAnswer(call.name) ? ANSWERS[call.name] : null
+    // OpOutputs describes what the prelude sees after the bootstrap revives brands. This
+    // fixture answers at the host's JSON boundary, so put binary answers back in wire form.
+    return answer instanceof Uint8Array
+      ? { $neo: 'bytes', base64: Buffer.from(answer).toString('base64') }
+      : answer
   }
 }
 

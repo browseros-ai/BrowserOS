@@ -23,7 +23,7 @@ import {
   type ScreenshotOptionsInput,
   screenshotOptions,
 } from './frame'
-import { OPTION_KEYS, send } from './generated'
+import { OPTION_KEYS, type Strictness, send } from './generated'
 import type { OpName } from './generated/ops'
 import { markHandle, pick, selectOptionValues } from './options'
 import type { Page } from './page'
@@ -32,7 +32,6 @@ import { locatorBrand } from './selectors'
 import { signalOf } from './signal'
 import { type TimeoutOption, timeoutMs } from './timeouts'
 import type { KeyList } from './upstream-check'
-import type { PickOptions } from './upstream-checks'
 import type {
   ElementBrand,
   ElementStateName,
@@ -41,7 +40,6 @@ import type {
   LocatorBrand,
   OpInputs,
   OpOutputs,
-  Strictness,
 } from './wire'
 
 /** These generated senders all take only an element target and strictness. */
@@ -342,7 +340,7 @@ export class ElementHandle extends EventEmitter {
     const timeout = this.#timeout(options)
     const converted = selectOptionValues(api, values)
     const picked = pick(options, ['force'] satisfies KeyList<
-      PickOptions['locator.selectOption']
+      OpInputs['locator.selectOption']
     >)
     this.#live(api)
     return await send['locator.selectOption'](
@@ -365,7 +363,7 @@ export class ElementHandle extends EventEmitter {
     const api = 'elementHandle.selectText'
     const timeout = this.#timeout(options)
     const picked = pick(options, ['force'] satisfies KeyList<
-      PickOptions['locator.selectText']
+      OpInputs['locator.selectText']
     >)
     this.#live(api)
     await send['locator.selectText'](

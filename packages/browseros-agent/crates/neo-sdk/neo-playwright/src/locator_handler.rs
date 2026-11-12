@@ -61,7 +61,7 @@ listed_enum! {
 
 impl LocatorHandlerOp {
     /// Describes the input and result bound to the runtime handler by its route row.
-    pub(crate) fn wire(self) -> Option<OpWire> {
+    pub(crate) fn wire(self) -> OpWire {
         route(self, Describe)
     }
 

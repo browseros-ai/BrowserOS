@@ -28,7 +28,7 @@ listed_enum! {
 
 impl ExpectOp {
     /// Describes the same matcher inputs and null result the runtime route handles.
-    pub(crate) fn wire(self) -> Option<OpWire> {
+    pub(crate) fn wire(self) -> OpWire {
         route(self, Describe)
     }
 
