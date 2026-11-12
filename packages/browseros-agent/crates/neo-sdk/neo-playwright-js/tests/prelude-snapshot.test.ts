@@ -79,7 +79,7 @@ it('tests that page and locator snapshots send their mode and depth, the text pa
   ).toEqual([
     {
       name: 'page.ariaSnapshot',
-      call: { api: 'page.ariaSnapshot', timeoutMs: 5000 },
+      call: { api: 'page.ariaSnapshot', timeoutMs: 30000 },
       page: { $neo: 'page', tab: 1007 },
       mode: 'ai',
       clickable: true,
@@ -88,7 +88,7 @@ it('tests that page and locator snapshots send their mode and depth, the text pa
     {
       // A whole page's v1 text is recorded as the run's pending baseline; a locator's never is.
       name: 'page.snapshotPending',
-      // What is left of the snapshot's own 5 s.
+      // What is left of the snapshot's own 30 s.
       call: { api: 'page.ariaSnapshot', timeoutMs: expect.any(Number) },
       page: { $neo: 'page', tab: 1007 },
       text: expect.any(String),
@@ -108,7 +108,7 @@ it('tests that page and locator snapshots send their mode and depth, the text pa
     },
     {
       name: 'page.ariaSnapshot',
-      call: { api: 'page.ariaSnapshotJSON', timeoutMs: 5000 },
+      call: { api: 'page.ariaSnapshotJSON', timeoutMs: 30000 },
       page: { $neo: 'page', tab: 1007 },
       mode: 'ai',
       target: undefined,

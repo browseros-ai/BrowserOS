@@ -160,15 +160,20 @@ describe('retrying matchers', () => {
 
   it("tests that expect's timeout is its own: the call option, then configure, then 5 s, never the page's", async () => {
     const sent = await expectOps(`
-      page.setDefaultTimeout(60_000)
       const loc = page.locator('#x')
       await expect(loc).toBeVisible()
+      page.setDefaultTimeout(60_000)
+      await expect(loc).toBeVisible()
       await expect(loc).toBeVisible({ timeout: 900 })
-      await expect.configure({ timeout: 10_000 })(loc).toBeHidden()
+      const configured = expect.configure({ timeout: 10_000 })
+      await configured(loc).toBeHidden()
+      await configured(loc).toBeHidden({ timeout: 0 })
+      await expect.configure({ timeout: 0 })(loc).toBeVisible()
+      await expect(loc).toBeVisible()
     `)
     expect(
       sent.map((op) => (op.call as { timeoutMs: number }).timeoutMs),
-    ).toEqual([5000, 900, 10_000])
+    ).toEqual([5000, 5000, 900, 10_000, 0, 0, 5000])
   })
 
   it("tests that Rust's failure reaches the script as Playwright's plain Error, with the fields and a custom message", async () => {

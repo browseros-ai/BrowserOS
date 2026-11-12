@@ -115,6 +115,7 @@ declare global {
   }
   /** A timeout, as Playwright's. */
   class TimeoutError extends NeoError {}
+  // Actions and reads wait up to 30 s (expect: 5 s); pass { timeout } to fail sooner, 0 for none.
 
   // Also given to every script: `console` (its lines come back with the result),
   // `setTimeout` and `clearTimeout`. The engine is QuickJS: no `Intl`, no Node APIs but Buffer.

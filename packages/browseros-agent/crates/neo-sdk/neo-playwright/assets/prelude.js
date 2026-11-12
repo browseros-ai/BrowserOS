@@ -8206,7 +8206,8 @@ ${changes}`;
   }
 
   // crates/neo-sdk/neo-playwright-js/src/prelude/timeouts.ts
-  var DEFAULT_TIMEOUT = 5000;
+  var DEFAULT_TIMEOUT = 30000;
+  var DEFAULT_EXPECT_TIMEOUT = 5000;
   var DEFAULT_NAVIGATION_TIMEOUT = 30000;
   function timeoutMs(api, timeout) {
     if (!Number.isFinite(timeout) || timeout < 0)
@@ -19546,7 +19547,7 @@ Call Log:
     };
     return polled(state.isNot);
   }
-  function createExpect(config = { timeout: DEFAULT_TIMEOUT }) {
+  function createExpect(config = { timeout: DEFAULT_EXPECT_TIMEOUT }) {
     const expect = (actual, messageOrOptions) => {
       const message = typeof messageOrOptions === "string" ? messageOrOptions : messageOrOptions?.message;
       return matchers(actual, { isNot: false, promise: "", config, message });

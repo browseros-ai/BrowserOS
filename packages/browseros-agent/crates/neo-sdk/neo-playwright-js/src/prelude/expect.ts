@@ -41,7 +41,7 @@ import {
   valueMatchers,
 } from './expect-values'
 import { Page } from './page'
-import { DEFAULT_TIMEOUT, type TimeoutOption } from './timeouts'
+import { DEFAULT_EXPECT_TIMEOUT, type TimeoutOption } from './timeouts'
 import { installUnsupportedExpect } from './unsupported'
 
 /** One assertion's matchers, with `not`, `resolves` and `rejects` as getters. */
@@ -263,7 +263,7 @@ export type Expect = ((
 
 /** Builds `expect` with its statics; `configure` returns another with new defaults. */
 export function createExpect(
-  config: ExpectConfig = { timeout: DEFAULT_TIMEOUT },
+  config: ExpectConfig = { timeout: DEFAULT_EXPECT_TIMEOUT },
 ): Expect {
   const expect = ((
     actual: unknown,

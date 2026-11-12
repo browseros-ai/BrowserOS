@@ -541,7 +541,7 @@
       {
         "call": {
           "api": "page.waitForEvent",
-          "timeoutMs": 5000
+          "timeoutMs": 30000
         },
         "page": {
           "$neo": "page",
@@ -554,7 +554,7 @@
       {
         "call": {
           "api": "page.waitForEvent",
-          "timeoutMs": 5000
+          "timeoutMs": 30000
         },
         "page": {
           "$neo": "page",
@@ -567,7 +567,7 @@
       {
         "call": {
           "api": "page.waitForEvent",
-          "timeoutMs": 5000
+          "timeoutMs": 30000
         },
         "page": {
           "$neo": "page",
@@ -1029,7 +1029,7 @@
       {
         "call": {
           "api": "locator.ariaSnapshot",
-          "timeoutMs": 5000
+          "timeoutMs": 30000
         },
         "target": {
           "$neo": "locator",
@@ -1060,7 +1060,7 @@
       {
         "call": {
           "api": "locator.ariaSnapshotJSON",
-          "timeoutMs": 5000
+          "timeoutMs": 30000
         },
         "target": {
           "$neo": "locator",
@@ -1092,7 +1092,7 @@
       {
         "call": {
           "api": "locator.blur",
-          "timeoutMs": 5000
+          "timeoutMs": 30000
         },
         "target": {
           "$neo": "locator",
@@ -1121,7 +1121,7 @@
       {
         "call": {
           "api": "locator.boundingBox",
-          "timeoutMs": 5000
+          "timeoutMs": 30000
         },
         "target": {
           "$neo": "locator",
@@ -1150,7 +1150,7 @@
       {
         "call": {
           "api": "locator.check",
-          "timeoutMs": 5000
+          "timeoutMs": 30000
         },
         "target": {
           "$neo": "locator",
@@ -1186,7 +1186,7 @@
       {
         "call": {
           "api": "locator.click",
-          "timeoutMs": 5000
+          "timeoutMs": 30000
         },
         "target": {
           "$neo": "locator",
@@ -1228,7 +1228,7 @@
       {
         "call": {
           "api": "elementHandle.click",
-          "timeoutMs": 5000
+          "timeoutMs": 30000
         },
         "target": {
           "$neo": "element",
@@ -1313,7 +1313,7 @@
       {
         "call": {
           "api": "locator.dblclick",
-          "timeoutMs": 5000
+          "timeoutMs": 30000
         },
         "target": {
           "$neo": "locator",
@@ -1355,7 +1355,7 @@
       {
         "call": {
           "api": "locator.dispatchEvent",
-          "timeoutMs": 5000
+          "timeoutMs": 30000
         },
         "target": {
           "$neo": "locator",
@@ -1386,7 +1386,7 @@
       {
         "call": {
           "api": "locator.dragTo",
-          "timeoutMs": 5000
+          "timeoutMs": 30000
         },
         "target": {
           "$neo": "locator",
@@ -1459,7 +1459,7 @@
       {
         "call": {
           "api": "locator.drop",
-          "timeoutMs": 5000
+          "timeoutMs": 30000
         },
         "target": {
           "$neo": "locator",
@@ -1634,7 +1634,7 @@
       {
         "call": {
           "api": "locator.evaluate",
-          "timeoutMs": 5000
+          "timeoutMs": 30000
         },
         "target": {
           "$neo": "locator",
@@ -1667,7 +1667,7 @@
       {
         "call": {
           "api": "locator.evaluate",
-          "timeoutMs": 5000
+          "timeoutMs": 30000
         },
         "target": {
           "$neo": "locator",
@@ -1883,7 +1883,7 @@
       {
         "call": {
           "api": "locator.fill",
-          "timeoutMs": 5000
+          "timeoutMs": 30000
         },
         "target": {
           "$neo": "locator",
@@ -1914,7 +1914,7 @@
       {
         "call": {
           "api": "locator.focus",
-          "timeoutMs": 5000
+          "timeoutMs": 30000
         },
         "target": {
           "$neo": "locator",
@@ -1943,7 +1943,7 @@
       {
         "call": {
           "api": "locator.getAttribute",
-          "timeoutMs": 5000
+          "timeoutMs": 30000
         },
         "target": {
           "$neo": "locator",
@@ -1973,7 +1973,7 @@
       {
         "call": {
           "api": "locator.hover",
-          "timeoutMs": 5000
+          "timeoutMs": 30000
         },
         "target": {
           "$neo": "locator",
@@ -2012,7 +2012,7 @@
       {
         "call": {
           "api": "locator.innerHTML",
-          "timeoutMs": 5000
+          "timeoutMs": 30000
         },
         "target": {
           "$neo": "locator",
@@ -2041,7 +2041,7 @@
       {
         "call": {
           "api": "locator.innerText",
-          "timeoutMs": 5000
+          "timeoutMs": 30000
         },
         "target": {
           "$neo": "locator",
@@ -2070,7 +2070,7 @@
       {
         "call": {
           "api": "locator.inputValue",
-          "timeoutMs": 5000
+          "timeoutMs": 30000
         },
         "target": {
           "$neo": "locator",
@@ -2099,7 +2099,7 @@
       {
         "call": {
           "api": "locator.isChecked",
-          "timeoutMs": 5000
+          "timeoutMs": 30000
         },
         "target": {
           "$neo": "locator",
@@ -2128,7 +2128,7 @@
       {
         "call": {
           "api": "locator.isDisabled",
-          "timeoutMs": 5000
+          "timeoutMs": 30000
         },
         "target": {
           "$neo": "locator",
@@ -2157,7 +2157,7 @@
       {
         "call": {
           "api": "locator.isEditable",
-          "timeoutMs": 5000
+          "timeoutMs": 30000
         },
         "target": {
           "$neo": "locator",
@@ -2186,7 +2186,7 @@
       {
         "call": {
           "api": "locator.isEnabled",
-          "timeoutMs": 5000
+          "timeoutMs": 30000
         },
         "target": {
           "$neo": "locator",
@@ -2302,7 +2302,7 @@
       {
         "call": {
           "api": "locator.press",
-          "timeoutMs": 5000
+          "timeoutMs": 30000
         },
         "target": {
           "$neo": "locator",
@@ -2334,7 +2334,7 @@
       {
         "call": {
           "api": "locator.pressSequentially",
-          "timeoutMs": 5000
+          "timeoutMs": 30000
         },
         "target": {
           "$neo": "locator",
@@ -2365,7 +2365,7 @@
       {
         "call": {
           "api": "locator.scrollIntoViewIfNeeded",
-          "timeoutMs": 5000
+          "timeoutMs": 30000
         },
         "target": {
           "$neo": "locator",
@@ -2394,7 +2394,7 @@
       {
         "call": {
           "api": "locator.selectOption",
-          "timeoutMs": 5000
+          "timeoutMs": 30000
         },
         "target": {
           "$neo": "locator",
@@ -2427,7 +2427,7 @@
       {
         "call": {
           "api": "locator.selectOption",
-          "timeoutMs": 5000
+          "timeoutMs": 30000
         },
         "target": {
           "$neo": "locator",
@@ -2474,7 +2474,7 @@
       {
         "call": {
           "api": "locator.selectText",
-          "timeoutMs": 5000
+          "timeoutMs": 30000
         },
         "target": {
           "$neo": "locator",
@@ -2504,7 +2504,7 @@
       {
         "call": {
           "api": "locator.setInputFiles",
-          "timeoutMs": 5000
+          "timeoutMs": 30000
         },
         "target": {
           "$neo": "locator",
@@ -2536,7 +2536,7 @@
       {
         "call": {
           "api": "locator.setInputFiles",
-          "timeoutMs": 5000
+          "timeoutMs": 30000
         },
         "target": {
           "$neo": "locator",
@@ -2574,7 +2574,7 @@
       {
         "call": {
           "api": "locator.textContent",
-          "timeoutMs": 5000
+          "timeoutMs": 30000
         },
         "target": {
           "$neo": "locator",
@@ -2603,7 +2603,7 @@
       {
         "call": {
           "api": "locator.uncheck",
-          "timeoutMs": 5000
+          "timeoutMs": 30000
         },
         "target": {
           "$neo": "locator",
@@ -2639,7 +2639,7 @@
       {
         "call": {
           "api": "locator.waitFor",
-          "timeoutMs": 5000
+          "timeoutMs": 30000
         },
         "target": {
           "$neo": "locator",
@@ -2668,7 +2668,7 @@
       {
         "call": {
           "api": "locator.elementHandle",
-          "timeoutMs": 5000
+          "timeoutMs": 30000
         },
         "target": {
           "$neo": "locator",
@@ -2699,7 +2699,7 @@
       {
         "call": {
           "api": "locator.waitForFunction",
-          "timeoutMs": 5000
+          "timeoutMs": 30000
         },
         "target": {
           "$neo": "locator",
@@ -2732,7 +2732,7 @@
       {
         "call": {
           "api": "locator.waitForFunction",
-          "timeoutMs": 5000
+          "timeoutMs": 30000
         },
         "target": {
           "$neo": "locator",
@@ -3002,7 +3002,7 @@
       {
         "call": {
           "api": "page.ariaSnapshot",
-          "timeoutMs": 5000
+          "timeoutMs": 30000
         },
         "page": {
           "$neo": "page",
@@ -3016,7 +3016,7 @@
       {
         "call": {
           "api": "page.ariaSnapshot",
-          "timeoutMs": 5000
+          "timeoutMs": 30000
         },
         "page": {
           "$neo": "page",
@@ -3028,7 +3028,7 @@
       {
         "call": {
           "api": "page.ariaSnapshotJSON",
-          "timeoutMs": 5000
+          "timeoutMs": 30000
         },
         "page": {
           "$neo": "page",
@@ -3656,7 +3656,7 @@
       {
         "call": {
           "api": "page.screenshot",
-          "timeoutMs": 5000
+          "timeoutMs": 30000
         },
         "page": {
           "$neo": "page",
@@ -3703,7 +3703,7 @@
       {
         "call": {
           "api": "locator.screenshot",
-          "timeoutMs": 5000
+          "timeoutMs": 30000
         },
         "page": {
           "$neo": "page",
@@ -3771,7 +3771,7 @@
       {
         "call": {
           "api": "page.screenshot",
-          "timeoutMs": 5000
+          "timeoutMs": 30000
         },
         "page": {
           "$neo": "page",
@@ -3814,7 +3814,7 @@
       {
         "call": {
           "api": "page.ariaSnapshot",
-          "timeoutMs": 5000
+          "timeoutMs": 30000
         },
         "page": {
           "$neo": "page",
@@ -3827,7 +3827,7 @@
       {
         "call": {
           "api": "page.ariaSnapshot",
-          "timeoutMs": 5000
+          "timeoutMs": 30000
         },
         "page": {
           "$neo": "page",
@@ -3845,7 +3845,7 @@
       {
         "call": {
           "api": "page.ariaSnapshot",
-          "timeoutMs": 5000
+          "timeoutMs": 30000
         },
         "page": {
           "$neo": "page",
@@ -3878,7 +3878,7 @@
       {
         "call": {
           "api": "page.waitForFunction",
-          "timeoutMs": 5000
+          "timeoutMs": 30000
         },
         "page": {
           "$neo": "page",
@@ -3895,7 +3895,7 @@
       {
         "call": {
           "api": "page.waitForFunction",
-          "timeoutMs": 5000
+          "timeoutMs": 30000
         },
         "page": {
           "$neo": "page",

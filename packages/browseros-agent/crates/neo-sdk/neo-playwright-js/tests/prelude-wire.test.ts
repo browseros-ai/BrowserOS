@@ -55,7 +55,7 @@ describe('locator targets', () => {
       {
         name: 'locator.click',
         input: {
-          call: { api: 'locator.click', timeoutMs: 5000 },
+          call: { api: 'locator.click', timeoutMs: 30000 },
           target: {
             $neo: 'locator',
             page: { $neo: 'page', tab: 1007 },
@@ -275,7 +275,7 @@ describe('locator targets', () => {
       strict: 'firstMatch',
     })
     expect(runtime.calls[1]?.input).toMatchObject({
-      call: { api: 'elementHandle.click', timeoutMs: 5000 },
+      call: { api: 'elementHandle.click', timeoutMs: 30000 },
       target: element,
       strict: 'strict',
     })
@@ -324,13 +324,13 @@ describe('timeouts', () => {
     ])
   }
 
-  it("tests that Neo's defaults are 5 s for actions and 30 s for navigation, and none for instant calls", async () => {
+  it("tests that Neo's defaults are 30 s for actions and navigation, and none for instant calls", async () => {
     expect(
       await timeouts(
         "await page.click('#a'); await page.goto('https://a.example/'); await page.title(); await page.keyboard.press('a')",
       ),
     ).toEqual([
-      ['page.click', 5000],
+      ['page.click', 30000],
       ['page.goto', 30000],
       ['page.title', 0],
       ['keyboard.press', 0],
@@ -369,6 +369,9 @@ describe('timeouts', () => {
           "await page.goto('https://a.example/')",
           "await page.click('#a', { timeout: 42 })",
           "await page.getByRole('button').click({ timeout: 0 })",
+          'page.setDefaultTimeout(0)',
+          "await page.click('#a')",
+          "await page.goto('https://a.example/')",
         ].join('\n'),
       ),
     ).toEqual([
@@ -377,6 +380,8 @@ describe('timeouts', () => {
       ['page.goto', 1500],
       ['page.click', 42],
       ['locator.click', 0],
+      ['page.click', 0],
+      ['page.goto', 0],
     ])
   })
 
@@ -646,7 +651,7 @@ describe('errors', () => {
         .map((call) => call.input),
     ).toEqual([
       {
-        call: { api: 'page.screenshot', timeoutMs: 5000 },
+        call: { api: 'page.screenshot', timeoutMs: 30000 },
         page: { $neo: 'page', tab: 1007 },
         maskColor: '#00ff00',
         mask: [
@@ -658,7 +663,7 @@ describe('errors', () => {
         ],
       },
       {
-        call: { api: 'locator.screenshot', timeoutMs: 5000 },
+        call: { api: 'locator.screenshot', timeoutMs: 30000 },
         page: { $neo: 'page', tab: 1007 },
         target: expect.objectContaining({ display: "locator('#a')" }),
         strict: 'strict',
