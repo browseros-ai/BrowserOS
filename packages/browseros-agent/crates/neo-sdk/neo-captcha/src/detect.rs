@@ -158,7 +158,7 @@ fn script(main: bool) -> String {
 
 fn closed_script() -> String {
     format!(
-        "function() {{ const scope = this; {DOM_SCAN} return {{widgets, frames, addresses, checked, expired, complete, top: window === window.top, url: location.href}}; }}"
+        "function(closedRoots, truncated) {{ const out = closedRoots.map(root => (function() {{ const scope = this; {DOM_SCAN} return {{widgets, frames, addresses, checked, expired, complete, top: window === window.top, url: location.href}}; }}).call(root)); if (truncated) out.push({{widgets: [], frames: [], checked: null, expired: false, complete: false}}); return out; }}"
     )
 }
 
@@ -380,14 +380,9 @@ async fn scan(
         } else {
             Some(frame.clone())
         };
-        match bounded(
-            deadline,
-            page.scan_closed_shadow_roots(frame, &closed_script()),
-        )
-        .await
-        {
+        match bounded(deadline, page.scan_dom(Some(frame), &closed_script())).await {
             Ok(values) => {
-                for value in values {
+                for value in values.as_array().cloned().unwrap_or_default() {
                     match decode(value) {
                         Ok(mut closed) => {
                             complete &= closed.complete;
@@ -947,12 +942,12 @@ mod tests {
             .ok_or(PageError::Closed)
         }
 
-        async fn scan_closed_shadow_roots(
+        async fn scan_dom(
             &self,
-            _frame: &FrameRef,
+            _frame: Option<&FrameRef>,
             _function: &str,
-        ) -> Result<Vec<Value>, PageError> {
-            self.closed.clone()
+        ) -> Result<Value, PageError> {
+            self.closed.clone().map(Value::Array)
         }
 
         async fn click_at(&self, _x: f64, _y: f64) -> Result<(), PageError> {
