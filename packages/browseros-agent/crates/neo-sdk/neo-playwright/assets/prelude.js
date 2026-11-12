@@ -9480,8 +9480,13 @@ ${value.stack}`;
         return;
       }
       const context = record.event === "page" || record.event === "pageload" || "context" in record && record.context;
-      if (context && typeof record.at === "number" && record.at < (this.contextSince.get(record.event) ?? Infinity))
+      if (context && typeof record.at === "number" && record.at < (this.contextSince.get(record.event) ?? Infinity)) {
+        if (record.event === "dialog") {
+          const page = this.page(record.page);
+          this.answerUnheld(page, this.dialog(page, record.dialog), true);
+        }
         return;
+      }
       switch (record.event) {
         case "workerstate": {
           const worker = this.page(record.page)._worker(record.worker);
@@ -9551,8 +9556,7 @@ ${value.stack}`;
           const emitter = record.context ? this.owner : page;
           if (emitter.emit("dialog", dialog))
             this.takenDialogs.add(dialog);
-          if (!this.dialogHeld(page, dialog, record.context))
-            (dialog.type() === "beforeunload" ? dialog.accept() : dialog.dismiss()).catch(() => {});
+          this.answerUnheld(page, dialog, record.context);
           return;
         }
         case "crash": {
@@ -9644,9 +9648,11 @@ ${value.stack}`;
           return;
       }
     }
-    dialogHeld(page, dialog, context) {
+    answerUnheld(page, dialog, context) {
       const other = context ? page : this.owner;
-      return this.takenDialogs.has(dialog) || this.dialogWaits.has(page) || this.dialogWaits.has(null) || other.listenerCount("dialog") > 0;
+      if (this.takenDialogs.has(dialog) || this.dialogWaits.has(page) || this.dialogWaits.has(null) || other.listenerCount("dialog") > 0)
+        return;
+      (dialog.type() === "beforeunload" ? dialog.accept() : dialog.dismiss()).catch(() => {});
     }
     dialog(page, info) {
       const known = this.dialogs.get(info.id);

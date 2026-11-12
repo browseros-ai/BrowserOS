@@ -1475,6 +1475,28 @@ describe('dialogs on the context, dialog waits, crashes', () => {
     ).toBe(false)
   })
 
+  it("tests that a context dialog queued for a listener that left is still answered, as upstream's client does", async () => {
+    let push: ((value: unknown) => void) | undefined
+    const runtime = loadPrelude({
+      seed: SEED,
+      answer: (call) =>
+        call.name === 'events.next'
+          ? new Promise((resolve) => {
+              push = resolve
+            })
+          : null,
+    })
+    await runtime.run(`
+      const listener = () => { throw new Error('a removed listener heard it') }
+      context.on('dialog', listener)
+      context.off('dialog', listener)
+    `)
+    await eventually(() => push !== undefined)
+    push?.({ events: [dialogRecord(5, 7, true, 71)], lost: 0 })
+    await eventually(() => runtime.sent('dialog.dismiss').length === 1)
+    expect(runtime.sent('dialog.dismiss')[0]?.input.dialog).toBe(71)
+  })
+
   it('tests that a dialog a wait takes is never answered by the pump, though its listener left', async () => {
     let answerWait: ((record: EventRecord) => void) | undefined
     const runtime = loadPrelude({

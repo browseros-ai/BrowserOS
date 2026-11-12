@@ -706,8 +706,15 @@ export class EventHub {
       context &&
       typeof record.at === 'number' &&
       record.at < (this.contextSince.get(record.event) ?? Infinity)
-    )
+    ) {
+      // No context listener of now may hear it, but a dialog still needs an answer: Rust held
+      // it for the listener that is gone, and nothing else would close it before the run ends.
+      if (record.event === 'dialog') {
+        const page = this.page(record.page)
+        this.answerUnheld(page, this.dialog(page, record.dialog), true)
+      }
       return
+    }
     switch (record.event) {
       case 'workerstate': {
         const worker = this.page(record.page)._worker(record.worker)
@@ -785,14 +792,7 @@ export class EventHub {
         const dialog = this.dialog(page, record.dialog)
         const emitter = record.context ? this.owner : page
         if (emitter.emit('dialog', dialog)) this.takenDialogs.add(dialog)
-        // upstream's client answers a dialog nobody handles, because a listener can be removed
-        // after Rust decided to hold the dialog for it.
-        if (!this.dialogHeld(page, dialog, record.context))
-          void (
-            dialog.type() === 'beforeunload'
-              ? dialog.accept()
-              : dialog.dismiss()
-          ).catch(() => {})
+        this.answerUnheld(page, dialog, record.context)
         return
       }
       case 'crash': {
@@ -901,18 +901,23 @@ export class EventHub {
   }
 
   /**
-   * Whether the script holds `dialog`, so the pump must leave its answer to it: a listener or
-   * a wait received it, a wait for it is still in flight, or the audience this delivery is not
-   * for listens and gets its own delivery of the same record.
+   * upstream's client answers a dialog nobody handles, because a listener can be removed after
+   * Rust decided to hold the dialog for it: dismissed, or accepted for `beforeunload`. The
+   * script holds it when a listener or a wait received it, a wait for it is still in flight,
+   * or the audience this delivery is not for listens and gets its own delivery of the record.
    */
-  private dialogHeld(page: Page, dialog: Dialog, context: boolean): boolean {
+  private answerUnheld(page: Page, dialog: Dialog, context: boolean): void {
     const other = context ? page : this.owner
-    return (
+    if (
       this.takenDialogs.has(dialog) ||
       this.dialogWaits.has(page) ||
       this.dialogWaits.has(null) ||
       other.listenerCount('dialog') > 0
     )
+      return
+    void (
+      dialog.type() === 'beforeunload' ? dialog.accept() : dialog.dismiss()
+    ).catch(() => {})
   }
 
   private dialog(page: Page, info: DialogInfo): Dialog {
