@@ -12,7 +12,11 @@ use super::{
     ActionOp, CheckInput, ClickInput, Clicked, DblclickInput, DragInput, DropInput, HoverInput,
     UncheckInput,
 };
+use crate::Op;
 use crate::action::requested_navigations::NavigationCut;
+use crate::op_output;
+use crate::op_scope::OpScope;
+use crate::test_env::TestEnv;
 
 #[derive(Deserialize)]
 struct Recording {
@@ -63,13 +67,14 @@ fn decode_pointer_input(op: ActionOp, args: Value) -> Result<(), Box<dyn Error>>
 /// The aligned bootstrap recording and the real Rust serde types share this fixture.
 /// The JS test pins whole request/reply strings; here every pointer request decodes,
 /// and the handler's reply encoding keeps both navigation-cut presence and null absence.
-#[test]
-fn tests_that_pointer_inputs_and_reply_bytes_match_the_aligned_recording()
+#[tokio::test]
+async fn tests_that_pointer_inputs_and_reply_bytes_match_the_aligned_recording()
 -> Result<(), Box<dyn Error>> {
     let recording: Recording =
         serde_json::from_str(include_str!("../../tests/data/pointer-wire.json"))?;
     let mut seen = BTreeSet::new();
     let mut click_replies = BTreeSet::new();
+    let env = TestEnv::new();
     for exchange in recording.scenarios.into_iter().flat_map(|s| s.exchanges) {
         let Some(op) = ActionOp::ALL
             .iter()
@@ -81,11 +86,16 @@ fn tests_that_pointer_inputs_and_reply_bytes_match_the_aligned_recording()
             continue;
         };
         seen.insert(op.spec().name);
+        let registered = Op::all()
+            .find(|candidate| candidate.spec().name == exchange.op)
+            .ok_or("pointer op is unregistered")?;
         let mut args: Value = serde_json::from_str(&exchange.args)?;
-        args.as_object_mut()
-            .ok_or("recorded engine arguments must be an object")?
+        let call = args
+            .as_object_mut()
+            .ok_or("recorded object args")?
             .remove("call")
-            .ok_or("recorded arguments must carry their shared call header")?;
+            .ok_or("recorded call header")?;
+        let scope = OpScope::new(&env, registered, serde_json::from_value(call)?);
         decode_pointer_input(op, args)?;
         let reply: Value = serde_json::from_str(&exchange.reply)?;
         let body: Value = serde_json::from_str(&exchange.body)?;
@@ -114,13 +124,13 @@ fn tests_that_pointer_inputs_and_reply_bytes_match_the_aligned_recording()
                     },
                 })
             };
-            serde_json::to_value(clicked)?
+            op_output::to_output(&scope, &clicked)?
         } else {
             assert_eq!(op.wire().ok_or("pointer op is undescribed")?.output, "null");
-            serde_json::to_value(())?
+            op_output::to_output(&scope, &())?
         };
-        // Run's to_output serializes through Value, whose object ordering is the byte
-        // ordering the engine records, rather than direct struct-to-string ordering.
+        // Pin the route's output encoder, including its sorted map representation, rather
+        // than serializing a handler's struct directly in declaration order.
         assert_eq!(
             serde_json::to_string(&encoded)?,
             exchange.body,
