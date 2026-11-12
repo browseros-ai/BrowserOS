@@ -223,7 +223,6 @@ impl Method for PlaywrightOp {
         {
             return Err(LeafError::definite(refusal));
         }
-        let pages = self.pages.of_call(&input);
         let input = input.resolved(page);
         let playwright = self.facade.get().await;
         let env = OpCtxEnv::new(op, self.facade.hosted_mode());
@@ -236,7 +235,7 @@ impl Method for PlaywrightOp {
         // SDK readiness → method facts → OpReply → runtime; the bridge never reads SDK state.
         op.report_publications(env.run_state().completed_navigation_loads());
         let result = result?;
-        pages.report(op, page, &result);
+        self.pages.report(op, page, &result);
         let value = result.map_err(|error| leaf_error(&error))?;
         self.events.release(op, value)
     }
@@ -298,12 +297,6 @@ impl<'de> Deserialize<'de> for OpInput {
 }
 
 impl OpInput {
-    /// `page.close({ runBeforeUnload: true })`: the page's `beforeunload` handlers run first,
-    /// and one of them can keep the tab open.
-    fn runs_before_unload(&self) -> bool {
-        self.json.get("runBeforeUnload") == Some(&Value::Bool(true))
-    }
-
     /// Rejects unsupported URL schemes before sending a navigation. `frame.goto` uses the
     /// same op; reload checks the current URL instead, and history follows a previous entry.
     fn refused_navigation(&self) -> Option<OperationError> {
@@ -461,24 +454,9 @@ impl PageEffect {
             | "page.evaluate" => Self::Navigates,
             "page.reload" => Self::Reloads,
             "page.close" => Self::Closes,
+            // `page.runBeforeUnload` stays untracked: Chromium takes the request before its
+            // dialog can veto it. Only the tab watcher may mark that page closed and emit it.
             _ => Self::Untracked,
-        }
-    }
-
-    /// The effect of one call. A close that runs the page's `beforeunload` handlers returns
-    /// once the browser took the request (the crate's `Page.close`, as upstream), and a
-    /// handler's dialog can still keep the tab open. So only a close nothing can veto is
-    /// reported closed, which makes `isClosed()` true at once; the tab watch sees the other kind
-    /// go if it does, and the page's facts and `close` event say so from then on.
-    fn of_call(self, input: &OpInput) -> Self {
-        match self {
-            Self::Closes if input.runs_before_unload() => Self::Untracked,
-            Self::Untracked
-            | Self::Opens
-            | Self::Links
-            | Self::Navigates
-            | Self::Reloads
-            | Self::Closes => self,
         }
     }
 
@@ -963,6 +941,11 @@ mod tests {
             assert_ne!(PageEffect::of(name), PageEffect::Untracked, "{name}");
         }
         assert_eq!(PageEffect::of("page.title"), PageEffect::Untracked);
+        assert!(Op::from_name("page.runBeforeUnload").is_some());
+        assert_eq!(
+            PageEffect::of("page.runBeforeUnload"),
+            PageEffect::Untracked
+        );
     }
 
     #[test]

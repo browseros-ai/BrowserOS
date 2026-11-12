@@ -8,6 +8,27 @@ import { json, loadPrelude, SEED } from './support/prelude-runtime'
 const acknowledgments = [{}, null]
 const turns = () => new Promise((resolve) => setTimeout(resolve, 10))
 
+it('page.close selects the upstream command while keeping its public API and void result', async () => {
+  for (const runBeforeUnload of [undefined, false, true]) {
+    const runtime = loadPrelude({ seed: SEED, answer: () => null })
+    expect(
+      await runtime.run(
+        `return await page.close(${JSON.stringify({ runBeforeUnload, reason: 'done' })}) === undefined`,
+      ),
+    ).toBe(true)
+    const op = runBeforeUnload ? 'page.runBeforeUnload' : 'page.close'
+    expect(json(runtime.calls)).toEqual([
+      {
+        name: op,
+        input: {
+          call: { api: 'page.close', timeoutMs: 0 },
+          page: { $neo: 'page', tab: 1007 },
+        },
+      },
+    ])
+  }
+})
+
 it('page.close hides both acknowledgment forms and retains the reply page fact', async () => {
   const results = []
   for (const acknowledgment of acknowledgments) {

@@ -75,9 +75,14 @@ impl SnapshotOp {
 /// One exhaustive table binds each snapshot's handler to the upstream command. `Run` and
 /// `Describe` walk these same rows; the policy in `spec()` remains independent of the shapes.
 fn route<'a, R: Route<'a>>(op: SnapshotOp, r: R) -> R::Out {
+    let command = wire::command("Frame.ariaSnapshot").result(
+        "Rust stitches the child frames and answers the JSON tree plus the frames it could \
+         not read; the prelude renders YAML with upstream's own renderer and annotates the \
+         partial frames",
+    );
     match op {
-        SnapshotOp::Page => r.op(wire::command("Frame.ariaSnapshot"), page_snapshot),
-        SnapshotOp::Locator => r.op(wire::command("Frame.ariaSnapshot"), locator_snapshot),
+        SnapshotOp::Page => r.op(command, page_snapshot),
+        SnapshotOp::Locator => r.op(command, locator_snapshot),
     }
 }
 

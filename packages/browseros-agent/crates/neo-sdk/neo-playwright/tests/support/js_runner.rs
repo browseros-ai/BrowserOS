@@ -350,10 +350,7 @@ impl RunDoor {
         let events = self.host.event_head();
         let mut facts = self.host.page_facts(tabs).await;
         // An unconditional completed close reports Closed before the asynchronous cache catches up.
-        if name == "page.close"
-            && outcome.is_ok()
-            && input.get("runBeforeUnload").and_then(Value::as_bool) != Some(true)
-        {
+        if name == "page.close" && outcome.is_ok() {
             for fact in &mut facts {
                 if let Some(fields) = fact.as_object_mut() {
                     fields.insert("closed".into(), json!(true));

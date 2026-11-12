@@ -341,6 +341,11 @@
       target: "page",
       lifetime: "operation"
     },
+    "page.runBeforeUnload": {
+      effect: "write",
+      target: "page",
+      lifetime: "operation"
+    },
     "page.opener": {
       effect: "read",
       target: "page",
@@ -2000,6 +2005,7 @@
     "page.emulateMedia": (site, call, input, signal) => invoke("page.emulateMedia", site, call, input, signal),
     "page.requestGC": (site, call, input, signal) => invoke("page.requestGC", site, call, input, signal),
     "page.close": (site, call, input, signal) => invoke("page.close", site, call, input, signal),
+    "page.runBeforeUnload": (site, call, input, signal) => invoke("page.runBeforeUnload", site, call, input, signal),
     "page.opener": (site, call, input, signal) => invoke("page.opener", site, call, input, signal),
     "page.frames": (site, call, input, signal) => invoke("page.frames", site, call, input, signal),
     "page.screenshot": (site, call, input, signal) => invoke("page.screenshot", site, call, input, signal),
@@ -10261,7 +10267,8 @@ ${value.stack}`;
       }
       const page = await this._brand(api);
       try {
-        await send["page.close"](site, { api, timeoutMs: 0 }, { page, runBeforeUnload: options.runBeforeUnload ? true : undefined });
+        const op = options.runBeforeUnload ? "page.runBeforeUnload" : "page.close";
+        await send[op](site, { api, timeoutMs: 0 }, { page });
       } catch (error) {
         if (!["target_closed", "page_closed"].includes(String(Reflect.get(Object(error), "code"))) || options.runBeforeUnload)
           throw error;

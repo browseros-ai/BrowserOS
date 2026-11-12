@@ -12,7 +12,6 @@ import type { CallHeader } from '../wire'
 import type { AddStyleTagInput } from './types/AddStyleTagInput'
 import type { AddTagInput } from './types/AddTagInput'
 import type { Bytes } from './types/Bytes'
-import type { CloseInput } from './types/CloseInput'
 import type { DocumentInput } from './types/DocumentInput'
 import type { FramesInput } from './types/FramesInput'
 import type { GotoInput } from './types/GotoInput'
@@ -44,7 +43,6 @@ export type { AddTagInput } from './types/AddTagInput'
 export type { Animations } from './types/Animations'
 export type { Bytes } from './types/Bytes'
 export type { Caret } from './types/Caret'
-export type { CloseInput } from './types/CloseInput'
 export type { Dimensions } from './types/Dimensions'
 export type { DocumentInput } from './types/DocumentInput'
 export type { FrameInfo } from './types/FrameInfo'
@@ -99,7 +97,8 @@ export type PageInputs = {
   'page.addStyleTag': AddStyleTagInput
   'page.emulateMedia': MediaInput
   'page.requestGC': PageOnlyInput
-  'page.close': CloseInput
+  'page.close': PageOnlyInput
+  'page.runBeforeUnload': PageOnlyInput
   'page.opener': PageOnlyInput
   'page.frames': FramesInput
   'page.screenshot': ScreenshotInput
@@ -127,6 +126,7 @@ export type PageOutputs = {
   'page.emulateMedia': null
   'page.requestGC': null
   'page.close': null
+  'page.runBeforeUnload': null
   'page.opener': OpenerResult
   'page.frames': PageFrames
   'page.screenshot': Bytes
@@ -239,9 +239,15 @@ export const PAGE_SEND = {
   'page.close': (
     site: CallSite,
     call: CallHeader,
-    input: CloseInput,
+    input: PageOnlyInput,
     signal?: SignalLike,
   ): Promise<null> => invoke('page.close', site, call, input, signal),
+  'page.runBeforeUnload': (
+    site: CallSite,
+    call: CallHeader,
+    input: PageOnlyInput,
+    signal?: SignalLike,
+  ): Promise<null> => invoke('page.runBeforeUnload', site, call, input, signal),
   'page.opener': (
     site: CallSite,
     call: CallHeader,
@@ -297,19 +303,19 @@ export const PAGE_SEND = {
 // page.goto: Frame.goto
 //   adds publication: the run-local receipt the prelude stamps, correlating the host's navigation facts with the call that caused them
 type _page_goto = Assert<UpstreamCheck<'page.goto', GotoInput, pw.FrameGotoParams, 'publication', never, never>>
-type _page_goto_result = Assert<VoidIsNull<'page.goto', pw.FrameGotoResult, NavigationResult>>
+//   result: page.url(), page.frames() and the Response are synchronous or object-less in Neo, so the navigation answers the url, the frames and the response facts the prelude caches (no void check: Neo answers more than null on purpose)
 // page.reload: Page.reload
 //   adds publication: the run-local receipt the prelude stamps, correlating the host's navigation facts with the call that caused them
 type _page_reload = Assert<UpstreamCheck<'page.reload', NavigateInput, pw.PageReloadParams, 'publication', never, never>>
-type _page_reload_result = Assert<VoidIsNull<'page.reload', pw.PageReloadResult, NavigationResult>>
+//   result: page.url(), page.frames() and the Response are synchronous or object-less in Neo, so the navigation answers the url, the frames and the response facts the prelude caches (no void check: Neo answers more than null on purpose)
 // page.goBack: Page.goBack
 //   adds publication: the run-local receipt the prelude stamps, correlating the host's navigation facts with the call that caused them
 type _page_goBack = Assert<UpstreamCheck<'page.goBack', NavigateInput, pw.PageGoBackParams, 'publication', never, never>>
-type _page_goBack_result = Assert<VoidIsNull<'page.goBack', pw.PageGoBackResult, NavigationResult>>
+//   result: page.url(), page.frames() and the Response are synchronous or object-less in Neo, so the navigation answers the url, the frames and the response facts the prelude caches (no void check: Neo answers more than null on purpose)
 // page.goForward: Page.goForward
 //   adds publication: the run-local receipt the prelude stamps, correlating the host's navigation facts with the call that caused them
 type _page_goForward = Assert<UpstreamCheck<'page.goForward', NavigateInput, pw.PageGoForwardParams, 'publication', never, never>>
-type _page_goForward_result = Assert<VoidIsNull<'page.goForward', pw.PageGoForwardResult, NavigationResult>>
+//   result: page.url(), page.frames() and the Response are synchronous or object-less in Neo, so the navigation answers the url, the frames and the response facts the prelude caches (no void check: Neo answers more than null on purpose)
 // page.waitForNavigation: Neo only: a client-side wait upstream; Neo waits on its navigation journal in Rust
 // page.waitForURL: Neo only: a client-side wait upstream; Neo matches the URL as part of a navigation wait
 // page.waitForLoadState: Neo only: a client-side wait upstream; Neo waits on its lifecycle journal
@@ -317,7 +323,7 @@ type _page_goForward_result = Assert<VoidIsNull<'page.goForward', pw.PageGoForwa
 type _page_title = Assert<UpstreamCheck<'page.title', DocumentInput, pw.FrameTitleParams, never, never, never>>
 type _page_title_result = Assert<VoidIsNull<'page.title', pw.FrameTitleResult, string>>
 // page.content: Frame.content
-//   omits includeShadow: Neo returns the document's HTML; shadow-root serialization is not offered
+//   omits includeShadow: shadow-root serialization is not offered (parity gap PA-025)
 type _page_content = Assert<UpstreamCheck<'page.content', DocumentInput, pw.FrameContentParams, never, 'includeShadow', never>>
 type _page_content_result = Assert<VoidIsNull<'page.content', pw.FrameContentResult, string>>
 // page.setContent: Frame.setContent
@@ -338,10 +344,12 @@ type _page_emulateMedia_result = Assert<VoidIsNull<'page.emulateMedia', pw.PageE
 type _page_requestGC = Assert<UpstreamCheck<'page.requestGC', PageOnlyInput, pw.PageRequestGCParams, never, never, never>>
 type _page_requestGC_result = Assert<VoidIsNull<'page.requestGC', pw.PageRequestGCResult, null>>
 // page.close: Page.close
-//   adds runBeforeUnload: upstream sends Page.runBeforeUnload as a command of its own; Neo folds it into close, where the host's policy reads it
-//   omits reason: the script's close reason is not sent; a closed page's errors do not carry it
-type _page_close = Assert<UpstreamCheck<'page.close', CloseInput, pw.PageCloseParams, 'runBeforeUnload', 'reason', never>>
+//   omits reason: Neo reports the browser's own close and attaches no reason text to later errors
+type _page_close = Assert<UpstreamCheck<'page.close', PageOnlyInput, pw.PageCloseParams, never, 'reason', never>>
 type _page_close_result = Assert<VoidIsNull<'page.close', pw.PageCloseResult, null>>
+// page.runBeforeUnload: Page.runBeforeUnload
+type _page_runBeforeUnload = Assert<UpstreamCheck<'page.runBeforeUnload', PageOnlyInput, pw.PageRunBeforeUnloadParams, never, never, never>>
+type _page_runBeforeUnload_result = Assert<VoidIsNull<'page.runBeforeUnload', pw.PageRunBeforeUnloadResult, null>>
 // page.opener: Neo only: upstream reads its initializer state; Neo asks its tab bookkeeping
 // page.frames: Neo only: upstream keeps client-side frame objects; Neo reads the tree for the prelude's synchronous frames()
 // page.screenshot: Page.screenshot

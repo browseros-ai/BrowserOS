@@ -2579,6 +2579,18 @@
         "uid": 1
       }
     ],
+    "page.runBeforeUnload": [
+      {
+        "call": {
+          "api": "page.close",
+          "timeoutMs": 0
+        },
+        "page": {
+          "$neo": "page",
+          "tab": 1008
+        }
+      }
+    ],
     "page.saveScreenshot": [
       {
         "call": {

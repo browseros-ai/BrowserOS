@@ -334,6 +334,11 @@ export const OPS = {
     target: 'page',
     lifetime: 'operation',
   },
+  'page.runBeforeUnload': {
+    effect: 'write',
+    target: 'page',
+    lifetime: 'operation',
+  },
   'page.opener': {
     effect: 'read',
     target: 'page',

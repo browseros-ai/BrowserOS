@@ -7,7 +7,7 @@ import type * as pw from '../../../../neo-playwright/third_party/playwright/pack
 import { invoke } from '../bridge'
 import type { CallSite } from '../call-site'
 import type { SignalLike } from '../signal'
-import type { Assert, UpstreamCheck, VoidIsNull } from '../upstream-check'
+import type { Assert, UpstreamCheck } from '../upstream-check'
 import type { CallHeader } from '../wire'
 import type { LocatorSnapshotInput } from './types/LocatorSnapshotInput'
 import type { PageSnapshotInput } from './types/PageSnapshotInput'
@@ -60,7 +60,7 @@ export const SNAPSHOT_SEND = {
 // names the op and every key that differs without a reason, or whose reason went stale.
 // page.ariaSnapshot: Frame.ariaSnapshot
 type _page_ariaSnapshot = Assert<UpstreamCheck<'page.ariaSnapshot', PageSnapshotInput, pw.FrameAriaSnapshotParams, never, never, never>>
-type _page_ariaSnapshot_result = Assert<VoidIsNull<'page.ariaSnapshot', pw.FrameAriaSnapshotResult, SnapshotResult>>
+//   result: Rust stitches the child frames and answers the JSON tree plus the frames it could not read; the prelude renders YAML with upstream's own renderer and annotates the partial frames (no void check: Neo answers more than null on purpose)
 // locator.ariaSnapshot: Frame.ariaSnapshot
 type _locator_ariaSnapshot = Assert<UpstreamCheck<'locator.ariaSnapshot', LocatorSnapshotInput, pw.FrameAriaSnapshotParams, never, never, never>>
-type _locator_ariaSnapshot_result = Assert<VoidIsNull<'locator.ariaSnapshot', pw.FrameAriaSnapshotResult, SnapshotResult>>
+//   result: Rust stitches the child frames and answers the JSON tree plus the frames it could not read; the prelude renders YAML with upstream's own renderer and annotates the partial frames (no void check: Neo answers more than null on purpose)

@@ -337,6 +337,7 @@ mod tests {
             ("page.addStyleTag", &[MainWorld, HostFiles], true),
             ("page.emulateMedia", &[], true),
             ("page.close", &[], true),
+            ("page.runBeforeUnload", &[], true),
             ("page.opener", &[], true),
             ("page.frames", &[], true),
             ("worker.evaluate", &[MainWorld], true),

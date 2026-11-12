@@ -382,8 +382,21 @@ async fn a_close_that_beforeunload_can_veto_leaves_the_page_open_until_the_brows
     let page = page_of(&value(
         harness.submit(&run, "context.newPage", json!({})).await,
     )?)?;
-    let close = json!({ "page": handle(&page), "runBeforeUnload": true });
-    let (close_op, reply) = harness.submit_op(&run, "page.close", close).await;
+    for name in ["page.close", "page.runBeforeUnload"] {
+        let refused = failure(
+            harness
+                .submit(
+                    &run,
+                    name,
+                    json!({ "page": handle(&page), "runBeforeUnload": true }),
+                )
+                .await,
+        )?;
+        assert_eq!(refused.error.code(), ErrorCode::INVALID_INPUT);
+        assert_eq!(refused.delivery, Delivery::NotSent);
+    }
+    let close = json!({ "page": handle(&page) });
+    let (close_op, reply) = harness.submit_op(&run, "page.runBeforeUnload", close).await;
     let fact = reply
         .pages
         .first()

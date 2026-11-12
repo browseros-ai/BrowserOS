@@ -2,6 +2,6 @@
 import type { PageHandle } from "./PageHandle";
 
 /**
- * Page methods without options (`opener`, `requestGC`): `{ page }`.
+ * Page methods without options (`close`, `runBeforeUnload`, `opener`, `requestGC`): `{ page }`.
  */
 export type PageOnlyInput = { page: PageHandle, };
