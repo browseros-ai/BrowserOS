@@ -1262,6 +1262,52 @@ async fn the_janitor_closes_idle_agent_tabs_through_the_door() -> Result<(), Box
     Ok(())
 }
 
+/// A tab whose navigation never commits answers no page command, and core attaches a tab afresh
+/// on each browser connection. The janitor's close needs the browser alone, so a new connection
+/// and a page that answers nothing still leave the idle tab closable within one sweep.
+#[tokio::test]
+async fn the_janitor_closes_an_idle_tab_that_answers_no_page_command() -> Result<(), Box<dyn Error>>
+{
+    let harness = Harness::new().await?;
+    let stuck = {
+        let (run, _guard) = harness.run()?;
+        page_of(&value(
+            harness.submit(&run, "context.newPage", json!({})).await,
+        )?)?
+    };
+    harness.fake.drop_connection();
+    harness.fake.reconnect();
+    within(async {
+        while !harness.link.is_ready() || harness.fake.count("Target.setDiscoverTargets") < 2 {
+            time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await?;
+    for method in [
+        "Page.enable",
+        "DOM.enable",
+        "Accessibility.enable",
+        "Runtime.evaluate",
+    ] {
+        harness.fake.hang(method);
+    }
+    let attached = harness.fake.count("Target.attachToTarget");
+
+    let sweep = within(harness.janitor().sweep(Instant::now() + Defaults::TAB_IDLE)).await?;
+
+    assert!(sweep.is_some(), "the sweep ran");
+    assert!(
+        !harness.is_open(stuck.tab).await?,
+        "the idle agent tab closed"
+    );
+    assert_eq!(
+        harness.fake.count("Target.attachToTarget"),
+        attached,
+        "closing attached nothing"
+    );
+    Ok(())
+}
+
 #[tokio::test]
 async fn solving_without_a_provider_key_is_the_deployments_to_fix() -> Result<(), Box<dyn Error>> {
     let harness = Harness::new().await?;

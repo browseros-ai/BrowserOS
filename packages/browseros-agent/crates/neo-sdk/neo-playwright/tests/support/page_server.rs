@@ -5,9 +5,11 @@
 //!
 //! Routes beyond the fixtures: `/slow.png` answers after [`SLOW`], holding the load event of a
 //! page that shows it; `/missing.html` is a 404 page; `/echo.html` prints the request's
-//! `Referer` header in `#referer`.
+//! `Referer` header in `#referer`; `/stall.html` takes the request and never answers, so a
+//! navigation to it never commits.
 
 use std::error::Error;
+use std::future;
 use std::time::Duration;
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -71,6 +73,10 @@ async fn serve(mut stream: TcpStream, port: u16) {
     let request = String::from_utf8_lossy(&request);
     let target = request.split_whitespace().nth(1).unwrap_or("/");
     let path = target.split('?').next().unwrap_or(target);
+    if path == "/stall.html" {
+        // The connection stays open and silent until the test's runtime drops this task.
+        future::pending::<()>().await;
+    }
     let referer = request
         .lines()
         .find_map(|line| {
