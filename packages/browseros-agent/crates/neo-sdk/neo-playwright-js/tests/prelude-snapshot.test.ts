@@ -1,10 +1,12 @@
-// ariaSnapshot() as scripts see it: Rust returns the stitched JSON, and the prelude
-// renders it with the vendored renderer, adding a `# partial` comment under each iframe line
-// whose frame could not be read.
+// ariaSnapshot() as scripts see it: Rust returns the stitched JSON, and the prelude renders it.
+// With `mode: 'default'` that is the vendored renderer's YAML, with a `# partial` comment under
+// each iframe line whose frame could not be read; with no mode or `mode: 'ai'` it is the v1
+// format (src/prelude/snapshot-v1.ts, rule by rule in snapshot-v1.test.ts), unless the spec
+// harness's conformance switch keeps upstream's text.
 import { expect, it } from 'bun:test'
 import { readFileSync } from 'node:fs'
 import { renderAriaSnapshotAsYaml } from '../../neo-playwright/third_party/playwright/packages/isomorphic/ariaSnapshotRenderer'
-import { json, loadPrelude, SEED } from './support/prelude-runtime'
+import { json, loadPrelude, refusalCall, SEED } from './support/prelude-runtime'
 
 const fixture: {
   result: {
@@ -23,11 +25,11 @@ function snapshotting(result: unknown) {
   })
 }
 
-it("tests that a snapshot without partial frames is the vendored renderer's YAML, byte for byte", async () => {
+it("tests that a default-mode snapshot without partial frames is the vendored renderer's YAML, byte for byte", async () => {
   const whole = { json: fixture.result.json, partial: [] }
   const runtime = snapshotting(whole)
   const yaml = await runtime.run(
-    "return await page.ariaSnapshot({ mode: 'ai' })",
+    "return await page.ariaSnapshot({ mode: 'default' })",
   )
   expect(yaml).toBe(renderAriaSnapshotAsYaml(fixture.result.json))
   expect(yaml).toBe(
@@ -40,7 +42,7 @@ it("tests that a snapshot without partial frames is the vendored renderer's YAML
 it('tests that each frame Rust could not read gets its comment under its iframe line', async () => {
   const runtime = snapshotting(fixture.result)
   expect(
-    await runtime.run("return await page.ariaSnapshot({ mode: 'ai' })"),
+    await runtime.run("return await page.ariaSnapshot({ mode: 'default' })"),
   ).toBe(fixture.yaml.join('\n'))
 })
 
@@ -56,7 +58,7 @@ it('tests that a partial frame whose iframe line is missing is still reported, a
   )
 })
 
-it('tests that page and locator snapshots send their mode and depth, and JSON skips the rendering', async () => {
+it('tests that page and locator snapshots send their mode and depth, the text path ai by default, and JSON skips the rendering', async () => {
   const runtime = snapshotting(fixture.result)
   const result = json(
     await runtime.run(`
@@ -79,7 +81,7 @@ it('tests that page and locator snapshots send their mode and depth, and JSON sk
       name: 'page.ariaSnapshot',
       call: { api: 'page.ariaSnapshot', timeoutMs: 5000 },
       page: { $neo: 'page', tab: 1007 },
-      mode: 'default',
+      mode: 'ai',
       target: undefined,
     },
     {
@@ -114,5 +116,117 @@ it("tests that boxes go to Rust as the script passed them, upstream's option", a
   ).toEqual([
     { name: 'page.ariaSnapshot', boxes: true },
     { name: 'locator.ariaSnapshot', boxes: false },
+  ])
+})
+
+/** A small page: its v1 text is the main line, the notice's text and the button. */
+const small = {
+  json: [
+    {
+      role: 'generic',
+      ref: 'e1',
+      children: [
+        {
+          role: 'main',
+          ref: 'e2',
+          children: [
+            {
+              role: 'paragraph',
+              ref: 'e3',
+              text: 'Press Continue if you are a person.',
+            },
+            { role: 'button', name: 'Continue', ref: 'e4' },
+          ],
+        },
+      ],
+    },
+  ],
+  partial: [],
+} as const
+const smallV1 =
+  '- main [ref=e2]:\n  - text: Press Continue if you are a person.\n  - button "Continue" [ref=e4]'
+const smallYaml = renderAriaSnapshotAsYaml(
+  small.json as unknown as Parameters<typeof renderAriaSnapshotAsYaml>[0],
+)
+
+it("tests that the conformance switch keeps upstream's modes and text, and ignores the v1 options", async () => {
+  const runtime = loadPrelude({
+    seed: SEED,
+    upstreamSnapshots: true,
+    answer: (call) => (call.name.endsWith('.ariaSnapshot') ? small : null),
+  })
+  expect(
+    await runtime.run(`return [
+      await page.ariaSnapshot(),
+      await page.ariaSnapshot({ mode: 'ai' }),
+      await page.getByRole('main').ariaSnapshot({ text: false, maxTokens: 1 }),
+    ]`),
+  ).toEqual([smallYaml, smallYaml, smallYaml])
+  expect(runtime.calls.map((call) => call.input.mode)).toEqual([
+    'default',
+    'ai',
+    'default',
+  ])
+})
+
+it('tests that a script setting the switch itself changes nothing: it is read once, at the start', async () => {
+  const runtime = snapshotting(small)
+  expect(
+    await runtime.run(`
+      globalThis.__neo_upstream_snapshots = true
+      return await page.ariaSnapshot()
+    `),
+  ).toBe(smallV1)
+  expect(runtime.calls.map((call) => call.input.mode)).toEqual(['ai'])
+})
+
+it('tests that text, urls and maxTokens never reach the wire, and mode default ignores them', async () => {
+  const runtime = snapshotting(small)
+  expect(
+    await runtime.run(`return [
+      await page.ariaSnapshot({ mode: 'ai' }),
+      await page.getByRole('main').ariaSnapshot({ text: false, urls: true, maxTokens: 20000 }),
+      await page.ariaSnapshot({ mode: 'default', text: 'yes', maxTokens: -1 }),
+    ]`),
+  ).toEqual([
+    smallV1,
+    '- main [ref=e2]:\n  - button "Continue" [ref=e4]',
+    smallYaml,
+  ])
+  expect(
+    runtime.calls.map((call) =>
+      Object.keys(call.input).filter((key) => key !== 'target'),
+    ),
+  ).toEqual([
+    ['call', 'page', 'mode'],
+    ['call', 'strict', 'mode'],
+    ['call', 'page', 'mode'],
+  ])
+})
+
+it('tests that a v1 option of the wrong type is refused before any snapshot op is sent', async () => {
+  const runtime = snapshotting(small)
+  const thrown = (code: string) =>
+    runtime.run(code).then(
+      () => null,
+      (error: Error) => error.message,
+    )
+  expect(await thrown("await page.ariaSnapshot({ text: 'yes' })")).toBe(
+    'page.ariaSnapshot: text: expected boolean, got string',
+  )
+  expect(
+    await thrown("await page.getByRole('main').ariaSnapshot({ maxTokens: 0 })"),
+  ).toBe('locator.ariaSnapshot: maxTokens: expected a positive number, got 0')
+  expect(runtime.calls).toEqual([
+    refusalCall(
+      'page.ariaSnapshot',
+      'invalid_input',
+      'page.ariaSnapshot: text: expected boolean, got string',
+    ),
+    refusalCall(
+      'locator.ariaSnapshot',
+      'invalid_input',
+      'locator.ariaSnapshot: maxTokens: expected a positive number, got 0',
+    ),
   ])
 })

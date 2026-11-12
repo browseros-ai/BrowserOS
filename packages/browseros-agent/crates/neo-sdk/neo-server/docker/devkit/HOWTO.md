@@ -73,9 +73,22 @@ Each example is a script in `devkit/examples/`. `run` prints the script's return
 run 01a1acf4-cf1f-7102-8a53-f7b39569a66e ok effects=done 73ms tabs=[1276814799]
 ```
 
-### Read an AI snapshot, then act on a printed ref
+### Read a snapshot, then act on a printed ref
 
-`aria-ref.js` reads `page.ariaSnapshot({ mode: 'ai' })`, takes the ref printed for a button, and reads that element back through `page.getByRef(ref)` and `aria-ref=`.
+`aria-ref.js` reads `page.ariaSnapshot()`, takes the ref printed for a button, and reads that element back through `page.getByRef(ref)` and `aria-ref=`.
+
+`page.ariaSnapshot()` (the same as `{ mode: 'ai' }`) lists what a script can act on, in Playwright's line syntax with Playwright's refs, and the page's text while the whole snapshot stays under about 3,000 tokens:
+
+```text
+- heading "Orders" [level=1]
+- button "Save order" [ref=e3]
+- button "Cancel" [ref=e4]
+- iframe [ref=e5]:
+  - text: Inside the frame
+  - button "Frame action" [ref=f1e3]
+```
+
+On a bigger page its first line says how much text it left out. `{ text: true }` always includes the text and `{ text: false }` never does; `{ urls: true }` prints each link's url; `{ maxTokens: 20000 }` raises the 8,000-token cap. `page.getByRef('e5').ariaSnapshot()` reads one section. `{ mode: 'default' }` is Playwright's full default YAML, unchanged.
 
 ```sh
 ./dev.sh run --task howto-aria -f devkit/examples/aria-ref.js

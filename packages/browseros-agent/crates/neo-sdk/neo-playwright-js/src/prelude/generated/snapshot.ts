@@ -60,7 +60,7 @@ export const SNAPSHOT_SEND = {
 // names the op and every key that differs without a reason, or whose reason went stale.
 // page.ariaSnapshot: Frame.ariaSnapshot
 type _page_ariaSnapshot = Assert<UpstreamCheck<'page.ariaSnapshot', PageSnapshotInput, pw.FrameAriaSnapshotParams, never, never, never>>
-//   result: Rust stitches the child frames and answers the JSON tree plus the frames it could not read; the prelude renders YAML with upstream's own renderer and annotates the partial frames (no void check: Neo answers more than null on purpose)
+//   result: Rust stitches the child frames and answers the JSON tree plus the frames it could not read; the prelude renders the text, upstream's YAML for mode 'default' and Neo's condensed list of actionable lines for 'ai', each line upstream's own, and annotates the partial frames (no void check: Neo answers more than null on purpose)
 // locator.ariaSnapshot: Frame.ariaSnapshot
 type _locator_ariaSnapshot = Assert<UpstreamCheck<'locator.ariaSnapshot', LocatorSnapshotInput, pw.FrameAriaSnapshotParams, never, never, never>>
-//   result: Rust stitches the child frames and answers the JSON tree plus the frames it could not read; the prelude renders YAML with upstream's own renderer and annotates the partial frames (no void check: Neo answers more than null on purpose)
+//   result: Rust stitches the child frames and answers the JSON tree plus the frames it could not read; the prelude renders the text, upstream's YAML for mode 'default' and Neo's condensed list of actionable lines for 'ai', each line upstream's own, and annotates the partial frames (no void check: Neo answers more than null on purpose)

@@ -1,5 +1,7 @@
 /**
- * Renders the snapshot ops' result as the YAML `ariaSnapshot()` returns.
+ * Renders the snapshot ops' result as Playwright's YAML, the text `ariaSnapshot()` returns with
+ * `mode: 'default'` (and with `mode: 'ai'` under the conformance switch below). The default text
+ * format is snapshot-v1.ts, made from the same result.
  *
  * Rust stitches every frame's JSON and applies Neo's naming rule; the text is made here, in the agent runtime, as upstream makes it in its server and
  * never in a page. Rendering in the root frame's world would copy cross-site frames' text into
@@ -15,6 +17,17 @@ import {
   renderAriaSnapshotAsYaml,
 } from './vendored'
 import type { PartialFrame, SnapshotResult } from './wire'
+
+/**
+ * The conformance switch. Playwright's own spec tests pin its exact snapshot text, so the spec
+ * harness (neo-playwright-tests/node/claw-loader.mjs) sets `__neo_upstream_snapshots` on the
+ * prelude's globalThis: then `ariaSnapshot()` with no mode means `'default'` and `mode: 'ai'`
+ * prints Playwright's text, both as they did before the v1 format. Production hosts never set
+ * it. Read once, as the prelude starts and before the agent's function exists, so a script that
+ * sets the global changes nothing.
+ */
+export const upstreamSnapshots: boolean =
+  Reflect.get(globalThis, '__neo_upstream_snapshots') === true
 
 function comment(partial: PartialFrame): string {
   return `# partial: ${partial.frame} not read (${partial.reason})`

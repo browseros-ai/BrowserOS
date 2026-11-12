@@ -15,8 +15,8 @@ import type { PartialFrame } from "./PartialFrame";
  * ```
  *
  * `json` is upstream's `AriaSnapshotJSON` with every frame stitched in and the name rule
- * applied. The prelude renders it with the vendored `renderAriaSnapshotAsYaml`
- * and adds a `# partial` line under each partial iframe. `tests/data/snapshot-output.json` is
- * one recorded from real frames.
+ * applied. The prelude renders it, as upstream's YAML (the vendored `renderAriaSnapshotAsYaml`)
+ * or as the condensed v1 text (`prelude/snapshot-v1.ts`), and adds a `# partial` line under each
+ * partial iframe. `tests/data/snapshot-output.json` is one recorded from real frames.
  */
 export type SnapshotResult = { json: import('../../vendored').AriaSnapshotJSON, partial: Array<PartialFrame>, };

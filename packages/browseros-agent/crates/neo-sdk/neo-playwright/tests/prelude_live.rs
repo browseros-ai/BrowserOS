@@ -1,9 +1,9 @@
 //! Runner N (R13): Playwright scripts as agents write them, run by the real prelude in QuickJS
 //! (`tests/support/js_runner.rs`), with every op going through `Playwright::invoke`. This is the
 //! end-to-end check of the wire contract: wire-examples.json proves the inputs decode, and these
-//! scripts prove the outputs read back as Playwright's values: navigation responses, reads, both
-//! snapshot modes and refs from them, the frame tree, popups through a wait and through the
-//! event pump, and page handles that keep their identity.
+//! scripts prove the outputs read back as Playwright's values: navigation responses, reads, the
+//! default and v1 snapshot texts and refs from them, the frame tree, popups through a wait and
+//! through the event pump, and page handles that keep their identity.
 //!
 //! The offline test needs no browser. The live test needs a throwaway BrowserOS with CDP on
 //! `BROWSEROS_CDP_PORT` (default 9005): `cargo test -p neo-playwright --test prelude_live
@@ -25,7 +25,9 @@ mod js_runner;
 mod live_run;
 
 use std::collections::HashMap;
+use std::path::Path;
 use std::sync::{Arc, Mutex, PoisonError};
+use std::{env, fs};
 
 use browseros_core::TabId;
 use fixture_server::{FixtureServer, Page};
@@ -456,10 +458,20 @@ async fn tests_that_a_playwright_script_runs_through_the_prelude_on_a_live_brows
            const response = await page.goto({page})\n\
            const go = await page.getByRole('button', {{ name: 'Go' }}).textContent()\n\
            const items = await page.locator('li').count()\n\
-           const snapshot = await page.ariaSnapshot()\n\
+           const snapshot = await page.ariaSnapshot({{ mode: 'default' }})\n\
            const aiSnapshot = await page.ariaSnapshot({{ mode: 'ai' }})\n\
+           const unnamed = await page.ariaSnapshot()\n\
            const refs = [...aiSnapshot.matchAll(/\\[ref=([^\\]]+)\\]/g)].map((match) => match[1])\n\
-           const byRef = [await page.getByRef(refs[1]).textContent(), await page.getByRef(refs[8]).textContent()]\n\
+           const inFrame = (nodes) => {{\n\
+             for (const node of nodes) {{\n\
+               if (typeof node === 'string') continue\n\
+               if (node.text === 'side') return node.ref\n\
+               const found = inFrame(node.children ?? [])\n\
+               if (found) return found\n\
+             }}\n\
+           }}\n\
+           const sideRef = inFrame(await page.ariaSnapshotJSON({{ mode: 'ai' }}))\n\
+           const byRef = [await page.getByRef(refs[0]).textContent(), await page.getByRef(sideRef).textContent()]\n\
            const frames = page.frames().map((frame) => ({{\n\
              name: frame.name(), url: frame.url(), parent: frame.parentFrame()?.name() ?? null,\n\
            }}))\n\
@@ -477,7 +489,7 @@ async fn tests_that_a_playwright_script_runs_through_the_prelude_on_a_live_brows
            await page.goto({side})\n\
            return {{\n\
              status: response.status(), ok: response.ok(), statusText: response.statusText(),\n\
-             go, items, snapshot, ai: aiSnapshot.replace(/\\[ref=[^\\]]+\\]/g, '[ref]'), byRef, frames, popupUrl, pumped, opener, listed, popupClosed: popup.isClosed(),\n\
+             go, items, snapshot, ai: aiSnapshot.replace(/\\[ref=[^\\]]+\\]/g, '[ref]'), unnamedIsAi: unnamed === aiSnapshot, byRef, frames, popupUrl, pumped, opener, listed, popupClosed: popup.isClosed(),\n\
              after: page.frames().map((frame) => frame.url()), url: page.url(),\n\
            }}\n\
          }} finally {{\n\
@@ -495,11 +507,12 @@ async fn tests_that_a_playwright_script_runs_through_the_prelude_on_a_live_brows
             "items": 3,
             "snapshot": "- button \"Go\"\n- button \"Stop\"\n- list:\n  - listitem: One\n  \
                          - listitem: Two\n  - listitem: Three\n- iframe",
-            // Refs differ per process, so they are compared as `[ref]`; two of them, one in the
-            // iframe, are read back through getByRef.
-            "ai": "- generic [active] [ref]:\n  - button \"Go\" [ref]\n  - button \"Stop\" [ref]\n  \
-                   - list [ref]:\n    - listitem [ref]: One\n    - listitem [ref]: Two\n    \
-                   - listitem [ref]: Three\n  - iframe [ref]:\n    - paragraph [ref]: side",
+            // Refs differ per process, so they are compared as `[ref]`. The v1 text prints refs
+            // only on what can be acted on or scoped to; a button's is read back through
+            // getByRef, and so is one inside the iframe, taken from the JSON tree.
+            "ai": "- button \"Go\" [ref]\n- button \"Stop\" [ref]\n- text: One Two Three\n\
+                   - iframe [ref]:\n  - text: side",
+            "unnamedIsAi": true,
             "byRef": ["Go", "side"],
             "frames": [
                 { "name": "", "url": url("page"), "parent": null },
@@ -515,5 +528,66 @@ async fn tests_that_a_playwright_script_runs_through_the_prelude_on_a_live_brows
         }),
         "each answer is what Playwright gives"
     );
+    Ok(())
+}
+
+/// The v1 format's test page: a block notice beside a button, a form error, prices beside
+/// buttons and a dialog, the cases a list of controls alone would leave unexplained.
+const BLIND_PAGE: &str = include_str!("data/snapshot-v1/blind.html");
+/// What `ariaSnapshot()` prints for it: the text form, since the page is small.
+const BLIND_DEFAULT: &str = include_str!("data/snapshot-v1/blind.v1-default.txt");
+/// What `ariaSnapshot({ text: false })` prints for it.
+const BLIND_INTERACTIVE: &str = include_str!("data/snapshot-v1/blind.v1-interactive.txt");
+/// The snapshot op's `{ json, partial }` for the page, which the prelude's renderer tests read
+/// (neo-playwright-js/tests/snapshot-v1.test.ts). From this crate's manifest directory.
+const BLIND_RESULT: &str = "tests/data/snapshot-v1/blind.json";
+
+/// The v1 text on a real engine, page and `run`: the renderer's unit tests read the JSON this
+/// test pins, so together they show the fixture's expected text is what a live page prints.
+/// `NEO_RECORD_SNAPSHOT_V1=1` rewrites the JSON instead of comparing it. The ref numbers are
+/// those of the first snapshot of a freshly loaded page.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_the_blind_page_prints_the_v1_text_on_a_live_browser() -> TestResult {
+    let page = Page::html(BLIND_PAGE).with_header("cache-control", "no-store");
+    let server = FixtureServer::start(HashMap::from([(
+        "/snapshot-v1/blind.html".to_owned(),
+        page,
+    )]))
+    .await?;
+    let run = Arc::new(LiveRun::connect().await?);
+    let host: Arc<dyn OpHost> = run;
+    let script = format!(
+        "try {{\n\
+           await page.goto({url})\n\
+           const plain = await page.ariaSnapshot()\n\
+           const interactive = await page.ariaSnapshot({{ text: false }})\n\
+           const json = await page.ariaSnapshotJSON({{ mode: 'ai' }})\n\
+           return {{ plain, interactive, json }}\n\
+         }} finally {{\n\
+           await page.close()\n\
+         }}",
+        url = json!(server.url("127.0.0.1", "/snapshot-v1/blind.html")),
+    );
+    let result = js_runner::run_script(&host, &json!({ "page": null }), &script).await?;
+    let recorded = json!({ "json": result["json"], "partial": [] });
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(BLIND_RESULT);
+    if env::var("NEO_RECORD_SNAPSHOT_V1").is_ok_and(|record| record == "1") {
+        fs::write(
+            &path,
+            format!("{}\n", serde_json::to_string_pretty(&recorded)?),
+        )?;
+    } else {
+        let committed: Value = serde_json::from_str(&fs::read_to_string(&path)?)?;
+        assert_eq!(
+            recorded, committed,
+            "the engine still gives the committed tree"
+        );
+    }
+    assert_eq!(
+        result["plain"], BLIND_DEFAULT,
+        "the default is the text form"
+    );
+    assert_eq!(result["interactive"], BLIND_INTERACTIVE, "text: false");
     Ok(())
 }

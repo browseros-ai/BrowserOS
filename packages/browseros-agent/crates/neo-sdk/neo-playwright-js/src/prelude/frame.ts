@@ -51,7 +51,12 @@ import {
   signalOf,
   untilAborted,
 } from './signal'
-import { renderSnapshot } from './snapshot'
+import { renderSnapshot, upstreamSnapshots } from './snapshot'
+import {
+  DEFAULT_MAX_TOKENS,
+  renderSnapshotV1,
+  type SnapshotV1Options,
+} from './snapshot-v1'
 import { type TimeoutOption, timeoutMs } from './timeouts'
 import type { KeyList } from './upstream-check'
 import { globMatches } from './url'
@@ -112,6 +117,15 @@ export type SnapshotOptions = TimeoutOption &
     depth?: number
     boxes?: boolean
   }
+/**
+ * `ariaSnapshot()`'s options: the engine's, plus the v1 format's own (snapshot-v1.ts). Those
+ * never reach the wire, since the prelude renders, and `mode: 'default'` ignores them.
+ */
+export type AriaSnapshotOptions = SnapshotOptions & {
+  text?: boolean
+  urls?: boolean
+  maxTokens?: number
+}
 export type NavigateOptions = TimeoutOption &
   SignalOption & {
     waitUntil?: LoadState | 'networkidle0'
@@ -172,6 +186,40 @@ export function loadState(
   const known = knownLoadState(state)
   if (known === null) throw plainError(api, loadStateError(name))
   return known
+}
+
+/**
+ * The v1 format's options, read at once (the script may change its object while a locator's
+ * page opens) and refused for a wrong type before any op is sent.
+ */
+function snapshotV1Options(
+  api: string,
+  options: AriaSnapshotOptions,
+): SnapshotV1Options {
+  const { text, urls, maxTokens } = options
+  for (const [name, value] of [
+    ['text', text],
+    ['urls', urls],
+  ] as const)
+    if (value !== undefined && typeof value !== 'boolean')
+      throw clientError(api, `${name}: expected boolean, got ${typeof value}`)
+  if (
+    maxTokens !== undefined &&
+    !(
+      typeof maxTokens === 'number' &&
+      Number.isFinite(maxTokens) &&
+      maxTokens > 0
+    )
+  )
+    throw clientError(
+      api,
+      `maxTokens: expected a positive number, got ${String(maxTokens)}`,
+    )
+  return {
+    text,
+    urls: urls ?? false,
+    maxTokens: maxTokens ?? DEFAULT_MAX_TOKENS,
+  }
 }
 
 /** The grouped reads share an identical target/strict input; each sender retains its result. */
@@ -1325,14 +1373,17 @@ export class Frame extends EventEmitter {
     return fromPageValue(api, value)
   }
 
-  /** A snapshot rooted at `selector`, or at the page when `selector` is null. */
+  /**
+   * A snapshot rooted at `selector`, or at the page when `selector` is null, in `mode`: the
+   * caller decides what an absent mode means (the text and JSON paths differ).
+   */
   async _snapshot(
     api: string,
     selector: string | null,
-    options: SnapshotOptions = {},
+    options: SnapshotOptions,
+    mode: NonNullable<SnapshotOptions['mode']>,
   ): Promise<SnapshotResult> {
     const site = captureSite()
-    const mode = options.mode ?? 'default'
     // Capture options before resolving a locator's page, which can await opening its tab.
     const { depth, boxes } = options
     const wait = this._wait(api, options)
@@ -1363,20 +1414,35 @@ export class Frame extends EventEmitter {
     )
   }
 
+  /**
+   * The text: the v1 format (snapshot-v1.ts) for `mode: 'ai'` or no mode, which asks the engine
+   * for its `'ai'` tree, refs included; Playwright's YAML for `mode: 'default'`, and for every
+   * mode under the conformance switch, where no mode means `'default'` as upstream's does.
+   */
   async _ariaSnapshot(
     api: string,
     selector: string | null,
-    options?: SnapshotOptions,
+    options: AriaSnapshotOptions = {},
   ): Promise<string> {
-    return renderSnapshot(await this._snapshot(api, selector, options))
+    const mode = options.mode ?? (upstreamSnapshots ? 'default' : 'ai')
+    if (mode !== 'ai' || upstreamSnapshots)
+      return renderSnapshot(await this._snapshot(api, selector, options, mode))
+    const format = snapshotV1Options(api, options)
+    return renderSnapshotV1(
+      await this._snapshot(api, selector, options, mode),
+      format,
+    )
   }
 
+  /** The tree itself, in upstream's default mode when the script names none. */
   async _ariaSnapshotJSON(
     api: string,
     selector: string | null,
-    options?: SnapshotOptions,
+    options: SnapshotOptions = {},
   ): Promise<AriaSnapshotJSON> {
-    return (await this._snapshot(api, selector, options)).json
+    return (
+      await this._snapshot(api, selector, options, options.mode ?? 'default')
+    ).json
   }
 
   async _screenshot(

@@ -1043,7 +1043,7 @@
           "display": "getByRole('button')"
         },
         "strict": "strict",
-        "mode": "default",
+        "mode": "ai",
         "depth": 1,
         "boxes": false
       },
@@ -2998,7 +2998,7 @@
           "$neo": "page",
           "tab": 1007
         },
-        "mode": "default",
+        "mode": "ai",
         "depth": 1,
         "boxes": false
       },

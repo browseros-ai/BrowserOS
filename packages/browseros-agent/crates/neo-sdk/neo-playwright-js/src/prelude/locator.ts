@@ -14,6 +14,7 @@ import type { ElementHandle } from './element-handle'
 import { internalError, plainError } from './errors'
 import { type EvaluateOptions, pageCall } from './evaluation'
 import type {
+  AriaSnapshotOptions,
   ClickOptions,
   ExactOption,
   Frame,
@@ -693,7 +694,7 @@ export class Locator {
     )
   }
 
-  ariaSnapshot(options?: SnapshotOptions): Promise<string> {
+  ariaSnapshot(options?: AriaSnapshotOptions): Promise<string> {
     return this._frame._ariaSnapshot(
       'locator.ariaSnapshot',
       this._selector,
