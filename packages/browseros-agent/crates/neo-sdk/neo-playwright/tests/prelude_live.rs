@@ -36,10 +36,15 @@ use js_runner::OpHost;
 use live_run::{LiveRun, TestPage, TestResult};
 use neo_playwright::{ErrorCode, PlaywrightError};
 use serde_json::{Value, json};
+use tokio::sync::Semaphore;
 
 /// The goldens recorded from playwright-core 1.64.1: each expression's selector and `toString()`.
 const SELECTOR_GOLDENS: &str =
     include_str!("../../neo-playwright-js/tests/data/selector-goldens.json");
+
+/// One page-opening test at a time where a test waits on a context-wide event: the context lists
+/// every tab of the browser, so another test's new page would answer `context.once('page')`.
+static ALONE: Semaphore = Semaphore::const_new(1);
 
 /// A host for scripts that must not reach Rust: builders are values and send nothing.
 struct NoOps;
@@ -447,6 +452,7 @@ fn pages() -> HashMap<String, Page> {
 #[tokio::test]
 #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
 async fn tests_that_a_playwright_script_runs_through_the_prelude_on_a_live_browser() -> TestResult {
+    let _alone = ALONE.acquire().await?;
     let server = FixtureServer::start(pages()).await?;
     let url = |name: &str| server.url("127.0.0.1", &format!("/prelude/{name}.html"));
     let run = Arc::new(LiveRun::connect().await?);
@@ -800,6 +806,7 @@ fn block(text: &str, name: &str) -> Vec<String> {
 #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
 async fn tests_that_listener_only_elements_print_as_their_pointer_twins_and_the_switch_leaves_them()
 -> TestResult {
+    let _alone = ALONE.acquire().await?;
     let page = Page::html(CLICKABLE_PAGE).with_header("cache-control", "no-store");
     let server =
         FixtureServer::start(HashMap::from([("/clickable.html".to_owned(), page)])).await?;
@@ -950,6 +957,7 @@ fn printed_refs(text: &str) -> HashSet<String> {
 #[tokio::test]
 #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
 async fn tests_that_marking_never_removes_a_ref_the_v1_text_prints() -> TestResult {
+    let _alone = ALONE.acquire().await?;
     let page = Page::html(MARKING_PAGE).with_header("cache-control", "no-store");
     let server = FixtureServer::start(HashMap::from([("/marking.html".to_owned(), page)])).await?;
     let script = format!(
