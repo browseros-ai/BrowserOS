@@ -67,11 +67,57 @@ it('tests rule 1: text pieces at one level join into one line, quoted once, and 
   const json = [
     generic(['Price', generic([], { text: '#1 in Toothpaste' })]),
     button('Buy', 'e2'),
-    generic(['|']),
+    generic(['*']),
   ]
   expect(both(json)).toEqual([
-    '- text: "Price #1 in Toothpaste"\n- button "Buy" [ref=e2]\n- text: "|"',
+    '- text: "Price #1 in Toothpaste"\n- button "Buy" [ref=e2]\n- text: "*"',
     '- button "Buy" [ref=e2]',
+  ])
+})
+
+const link = (name: string, ref: string): Node => ({ role: 'link', name, ref })
+
+it('tests rule 1: a text line of separators alone is dropped, judged on the joined line, so a split price stays', () => {
+  // Hacker News's story line: `|` between links, the site in parentheses.
+  const json = [
+    generic(['|']),
+    link('hide', 'e1'),
+    generic(['|']),
+    link('198 comments', 'e2'),
+    generic(['(']),
+    link('github.com/aws', 'e3'),
+    generic([')', '586 points by']),
+    button('Buy', 'e4'),
+    // A price arrives in pieces; `$` or `.` alone would be dropped, the joined line is not.
+    generic(['$', '7', '.', '49']),
+    button('Add', 'e5'),
+    generic(['·', ' – ', '»', '{ }', '\\', '‐']),
+    button('Next', 'e6'),
+    generic(['#', '|']),
+  ]
+  expect(both(json)).toEqual([
+    '- link "hide" [ref=e1]\n- link "198 comments" [ref=e2]\n- link "github.com/aws" [ref=e3]\n' +
+      '- text: ) 586 points by\n- button "Buy" [ref=e4]\n- text: $ 7 . 49\n- button "Add" [ref=e5]\n' +
+      '- button "Next" [ref=e6]\n- text: "# |"',
+    '- link "hide" [ref=e1]\n- link "198 comments" [ref=e2]\n- link "github.com/aws" [ref=e3]\n' +
+      '- button "Buy" [ref=e4]\n- button "Add" [ref=e5]\n- button "Next" [ref=e6]',
+  ])
+})
+
+it('tests rule 1: a block holding only separator lines is empty, and the text around it joins', () => {
+  const json = [
+    generic(['Before']),
+    // `|` and `·` join into one line of separators: the navigation prints nothing.
+    section('navigation', 'e1', [generic(['|']), generic(['·'])]),
+    generic(['after']),
+    { role: 'status', ref: 'e2', children: [generic(['—'])] },
+    { role: 'alert', name: 'Notice', ref: 'e3', text: '|' },
+    { role: 'iframe', ref: 'e4', children: ['/'] },
+    section('region', 'e5', ['$', generic(['5'])]),
+  ] as Node[]
+  expect(both(json)).toEqual([
+    '- text: Before after\n- alert "Notice"\n- iframe [ref=e4]\n- region [ref=e5]:\n  - text: $ 5',
+    '- alert "Notice"\n- iframe [ref=e4]',
   ])
 })
 
@@ -181,6 +227,72 @@ it('tests rule 5: an actionable node is one line with its value, or its own text
   expect(interactive).toBe(
     '- textbox "Email" [ref=e1]: a@b.c\n- button "Go" [ref=e2]\n- generic [ref=e3] [cursor=pointer]: Add to cart\n' +
       `- generic [ref=e4] [cursor=pointer]: ${long.slice(0, 80).trimEnd()}…\n- button "Details" [ref=e5]`,
+  )
+})
+
+it("tests rule 5: a nameless control's own text takes an image's alt text, never a nested control's name or a heading's", () => {
+  const json = [
+    // A link around a badge: the image's alt text is its only label.
+    {
+      role: 'link',
+      ref: 'e685',
+      url: 'https://badge.fury.io/js/acme',
+      children: [{ role: 'img', name: 'npm version', ref: 'e686' }],
+    },
+    // The image is the nested button's label, not the link's.
+    {
+      role: 'link',
+      ref: 'e1',
+      children: [
+        {
+          role: 'button',
+          ref: 'e2',
+          children: [{ role: 'img', name: 'Close' }],
+        },
+      ],
+    },
+    generic([button('Follow', 'e4')], { ref: 'e3', cursor: 'pointer' }),
+    // The heading prints its own line just below, so the link says only the rest.
+    {
+      role: 'link',
+      ref: 'e5',
+      children: [
+        { role: 'heading', name: 'Amazon Music', level: 5 },
+        generic(['Stream millions of songs']),
+      ],
+    },
+  ] as Node[]
+  const printed =
+    '- link [ref=e685]: npm version\n- link [ref=e1]\n- button [ref=e2]: Close\n' +
+    '- generic [ref=e3] [cursor=pointer]\n- button "Follow" [ref=e4]\n' +
+    '- link [ref=e5]: Stream millions of songs\n- heading "Amazon Music" [level=5]'
+  expect(both(json)).toEqual([printed, printed])
+})
+
+it('tests rule 5: a link with nothing else to say says its url, clipped without text, and not with urls: true', () => {
+  const long = `https://en.wikipedia.org/wiki/Special:Search?search=${'a'.repeat(80)}`
+  const json = [
+    {
+      role: 'link',
+      ref: 'e11',
+      cursor: 'pointer',
+      url: 'https://news.ycombinator.com',
+    },
+    { role: 'link', ref: 'e12', url: long },
+    { role: 'link', ref: 'e13', url: '/item', children: ['Read more'] },
+    { role: 'link', name: 'Docs', ref: 'e14', url: '/docs' },
+    { role: 'button', ref: 'e15' },
+  ] as Node[]
+  const rest =
+    '- link [ref=e13]: Read more\n- link "Docs" [ref=e14]\n- button [ref=e15]'
+  expect(both(json)).toEqual([
+    `- link [ref=e11]: https://news.ycombinator.com\n- link [ref=e12]: ${long}\n${rest}`,
+    `- link [ref=e11]: https://news.ycombinator.com\n- link [ref=e12]: ${long.slice(0, 80)}…\n${rest}`,
+  ])
+  // With urls: true the `/url` line says where it goes, so the label stays empty.
+  expect(render(json.slice(0, 2), { text: false, urls: true })).toBe(
+    '- link [ref=e11]:\n  - /url: https://news.ycombinator.com\n' +
+      `- link [ref=e12]:\n  - /url: ${long}`,
   )
 })
 
@@ -542,33 +654,70 @@ const uncut = (json: Node[]): string[] =>
 const keeping = (json: Node[], count: number): number =>
   Math.ceil(uncut(json).slice(0, count).join('\n').length / 4)
 
-it('tests the cut line offering the outermost open section that fits the cap', () => {
-  const json = [
-    section('banner', 'e1', items(10, 6)),
-    section('main', 'e20', items(21, 4)),
-    section('contentinfo', 'e40', items(41, 2)),
-  ]
-  const lines = uncut(json)
-  // The banner and two of main's buttons fit; main (5 lines) fits the cap on its own.
-  expect(render(json, { text: false, maxTokens: keeping(json, 10) })).toBe(
-    [
-      ...lines.slice(0, 10),
-      "# cut: 5 more lines (5 with refs); the whole snapshot is about 200 tokens. page.getByRef('e20').ariaSnapshot() shows all of main. Or pass a larger maxTokens.",
-    ].join('\n'),
-  )
-})
+// The cut line names a section as `the <role> section`, its quoted name after the role when it
+// has one; each form is checked with a named and an unnamed section.
+for (const [name, named] of [
+  [undefined, 'the main section'],
+  ['Results', 'the main "Results" section'],
+] as const)
+  it(`tests the cut line offering the outermost open section that fits the cap: ${named}`, () => {
+    const json = [
+      section('banner', 'e1', items(10, 6)),
+      section('main', 'e20', items(21, 4), name),
+      section('contentinfo', 'e40', items(41, 2)),
+    ]
+    const lines = uncut(json)
+    // The banner and two of main's buttons fit; main (5 lines) fits the cap on its own.
+    expect(render(json, { text: false, maxTokens: keeping(json, 10) })).toBe(
+      [
+        ...lines.slice(0, 10),
+        `# cut: 5 more lines (5 with refs); the whole snapshot is about 200 tokens. page.getByRef('e20').ariaSnapshot() shows all of ${named}. Or pass a larger maxTokens.`,
+      ].join('\n'),
+    )
+  })
 
-it('tests the cut line offering the next section when the open one is larger than the cap', () => {
-  const json = [
-    section('main', 'e20', items(21, 12)),
-    section('contentinfo', 'e40', items(41, 2), 'Footer'),
+for (const [name, named] of [
+  ['Footer', 'the contentinfo "Footer" section'],
+  [undefined, 'the contentinfo section'],
+] as const)
+  it(`tests the cut line offering the next section when the open one is larger than the cap: ${named}`, () => {
+    const json = [
+      section('main', 'e20', items(21, 12)),
+      section('contentinfo', 'e40', items(41, 2), name),
+    ]
+    const lines = uncut(json)
+    expect(render(json, { text: false, maxTokens: keeping(json, 4) })).toBe(
+      [
+        ...lines.slice(0, 4),
+        '# cut: 12 more lines (12 with refs); the whole snapshot is about 200 tokens. ' +
+          `page.getByRef('e40').ariaSnapshot() shows ${named}, which is not shown above. Or pass a larger maxTokens.`,
+      ].join('\n'),
+    )
+  })
+
+it('tests that separator lines dropped from the text form leave the offered section and the kept block whole', () => {
+  // Six dropped `|` lines sit before main: the cap must still see main's own lines, and print
+  // the dialog after the cut from its first line to its last, the button after it counted.
+  const bars = (ref: number): Child[] => [
+    generic(['|']),
+    button(`Tab ${ref}`, `e${ref}`),
   ]
-  const lines = uncut(json)
-  expect(render(json, { text: false, maxTokens: keeping(json, 4) })).toBe(
+  const json = [
+    ...[1, 2, 3, 4, 5].flatMap(bars),
+    generic(['|']),
+    section('main', 'e20', [generic(['|']), ...items(21, 4)]),
+    section('dialog', 'e50', [generic(['Sure?', '|']), button('OK', 'e51')]),
+    button('Done', 'e60'),
+  ] as Node[]
+  const lines = render(json, { text: true }).split('\n')
+  expect(lines.some((line) => line.includes('"|"'))).toBe(false)
+  expect(lines[5]).toBe('- main [ref=e20]:')
+  const maxTokens = Math.ceil(lines.slice(0, 8).join('\n').length / 4)
+  expect(render(json, { text: true, maxTokens })).toBe(
     [
-      ...lines.slice(0, 4),
-      '# cut: 12 more lines (12 with refs); the whole snapshot is about 200 tokens. ' +
-        'page.getByRef(\'e40\').ariaSnapshot() shows contentinfo "Footer", which is not shown above. Or pass a larger maxTokens.',
+      ...lines.slice(0, 8),
+      "# cut: 3 more lines (3 with refs); the whole snapshot is about 100 tokens. page.getByRef('e20').ariaSnapshot() shows all of the main section. Or pass a larger maxTokens.",
+      '- dialog [ref=e50]:\n  - text: Sure? |\n  - button "OK" [ref=e51]',
     ].join('\n'),
   )
 })

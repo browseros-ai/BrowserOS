@@ -7710,7 +7710,7 @@ ${changes}`;
       return whole;
     const size = `the whole snapshot is about ${aboutTokens(whole.length)} tokens`;
     const open = openSection(lines, cut, limit);
-    const offer = open ? `page.getByRef('${open.ref}').ariaSnapshot() shows all of ${open.label}. Or pass a larger maxTokens.` : later ? `page.getByRef('${later.ref}').ariaSnapshot() shows ${later.label}, which is not shown above. Or pass a larger maxTokens.` : "Pass a larger maxTokens.";
+    const offer = open ? `page.getByRef('${open.ref}').ariaSnapshot() shows all of the ${open.label} section. Or pass a larger maxTokens.` : later ? `page.getByRef('${later.ref}').ariaSnapshot() shows the ${later.label} section, which is not shown above. Or pass a larger maxTokens.` : "Pass a larger maxTokens.";
     const cutLine = `# cut: ${more} more lines (${withRefs} with refs); ${size}. ${offer}`;
     return [...top, ...linesBefore(lines, cut), cutLine, ...blocks].join(`
 `);
@@ -7772,6 +7772,7 @@ ${changes}`;
   var DEFAULT_MAX_TOKENS = 8000;
   var OWN_TEXT_CLIP = 80;
   var LONG_SELECT = 12;
+  var SEPARATORS_ONLY = /^[\s|·•‧∙/\\\-–—‐›»«‹><:;,.()[\]{}]*$/;
   function renderSnapshotV1(result, options) {
     const limit = options.maxTokens * CHARS_PER_TOKEN;
     if (options.text === false)
@@ -7795,7 +7796,7 @@ ${changes}`;
     for (const unplaced of partials.values())
       for (const partial of unplaced)
         printer.comment(partialComment(partial), 0);
-    return printer.lines.map((line) => ({
+    return printer.finish().map((line) => ({
       text: "  ".repeat(line.level) + (line.textLine ? renderAriaSnapshotAsYaml([{ role: "text", text: line.body }]) : line.body),
       ref: line.ref,
       section: line.section,
@@ -7828,6 +7829,23 @@ ${changes}`;
     comment(body, level) {
       this.lines.push({ level, body, textLine: false, comment: true, ref: false });
     }
+    finish() {
+      const printed = [];
+      const moved = [];
+      for (const line of this.lines) {
+        moved.push(printed.length);
+        if (!separatorsOnly(line))
+          printed.push(line);
+      }
+      moved.push(printed.length);
+      for (const line of printed) {
+        if (line.section)
+          line.section.end = moved[line.section.end];
+        if (line.keptEnd !== undefined)
+          line.keptEnd = moved[line.keptEnd];
+      }
+      return printed;
+    }
     node(child, level, text) {
       if (typeof child === "string")
         this.piece(child, level, text);
@@ -7846,7 +7864,7 @@ ${changes}`;
           if (child.name && text)
             this.element(copy(child, { ref: false, urls: false }), level);
         } else {
-          const named = nameAsText(child);
+          const named = nameAsContent(child);
           if (named !== undefined)
             this.piece(named, level, text);
         }
@@ -7882,7 +7900,7 @@ ${changes}`;
     }
     closeKept(node, header, level) {
       const inside = this.lines.slice(header + 1);
-      if (inside.length === 1 && inside[0].textLine) {
+      if (inside.length === 1 && inside[0].textLine && !separatorsOnly(inside[0])) {
         this.lines.length = header;
         this.element(copy(node, { ref: keptRef(node), urls: false, text: inside[0].body }), level);
       } else if (!this.close(header, Boolean(node.name)))
@@ -7921,9 +7939,9 @@ ${changes}`;
       if (node.text !== undefined && node.text !== node.name)
         value = node.text;
       else if (!node.name) {
-        const own = ownText(node);
-        if (own !== "")
-          value = text ? own : clip(own, OWN_TEXT_CLIP);
+        const label = ownText(node) || (node.role === "link" && !this.urls ? node.url ?? "" : "");
+        if (label !== "")
+          value = text ? label : clip(label, OWN_TEXT_CLIP);
       }
       const line = copy(node, { ref: true, urls: this.urls, text: value });
       const choices = node.role === "combobox" || node.role === "listbox" ? nativeOptions(node) : [];
@@ -7971,13 +7989,13 @@ ${changes}`;
     }
     close(header, keepEmpty) {
       const inside = this.lines.slice(header + 1);
-      if (inside.some((line) => !line.comment)) {
+      if (inside.some((line) => !line.comment && !separatorsOnly(line))) {
         this.lines[header].body += ":";
         return true;
       }
-      if (keepEmpty || inside.length > 0)
+      if (keepEmpty || inside.some((line) => line.comment))
         return true;
-      this.lines.pop();
+      this.lines.length = header;
       return false;
     }
   }
@@ -8013,8 +8031,11 @@ ${changes}`;
     visit(select.children);
     return options;
   }
-  function nameAsText(node) {
-    if (node.role === "img" || !node.name || node.text !== undefined)
+  function separatorsOnly(line) {
+    return line.textLine && SEPARATORS_ONLY.test(line.body);
+  }
+  function nameAsContent(node) {
+    if (!node.name || node.text !== undefined)
       return;
     return node.children?.length ? undefined : node.name;
   }
@@ -8034,7 +8055,7 @@ ${changes}`;
         if (typeof child === "string" || child.role === "text")
           stack.push(child);
         else if (!actionable(child))
-          stack.push(nameAsText(child) ?? child);
+          stack.push(child.role === "heading" ? child : nameAsContent(child) ?? child);
       }
     }
     return pieces.filter((piece) => piece !== "").join(" ");
