@@ -100,7 +100,8 @@ impl Op {
             OpKind::Page(op) => op.wire(),
             OpKind::Input(op) => op.wire(),
             OpKind::Read(op) => op.wire(),
-            OpKind::Context(_) | OpKind::Event(_) | OpKind::LocatorHandler(_) => None,
+            OpKind::Context(op) => op.wire(),
+            OpKind::Event(_) | OpKind::LocatorHandler(_) => None,
         }
     }
 

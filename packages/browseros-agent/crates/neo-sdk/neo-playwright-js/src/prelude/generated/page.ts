@@ -7,33 +7,57 @@ import type * as pw from '../../../../neo-playwright/third_party/playwright/pack
 import { invoke } from '../bridge'
 import type { CallSite } from '../call-site'
 import type { SignalLike } from '../signal'
-import type { Assert, UpstreamCheck, VoidIsNull } from '../upstream-check'
+import type { Assert, ExactUpstreamCheck, KeysCheck, UpstreamCheck, VoidIsNull } from '../upstream-check'
 import type { CallHeader } from '../wire'
+import type { AddStyleTagInput } from './types/AddStyleTagInput'
+import type { AddTagInput } from './types/AddTagInput'
+import type { Bytes } from './types/Bytes'
 import type { CloseInput } from './types/CloseInput'
 import type { DocumentInput } from './types/DocumentInput'
 import type { FramesInput } from './types/FramesInput'
 import type { GotoInput } from './types/GotoInput'
 import type { LoadStateInput } from './types/LoadStateInput'
 import type { LoadStateReached } from './types/LoadStateReached'
+import type { MediaInput } from './types/MediaInput'
 import type { NavigateInput } from './types/NavigateInput'
 import type { NavigationReply } from './types/NavigationReply'
 import type { NavigationResult } from './types/NavigationResult'
 import type { OpenerResult } from './types/OpenerResult'
 import type { PageFrames } from './types/PageFrames'
 import type { PageOnlyInput } from './types/PageOnlyInput'
+import type { PdfInput } from './types/PdfInput'
+import type { SaveScreenshotInput } from './types/SaveScreenshotInput'
+import type { ScreenshotInput } from './types/ScreenshotInput'
 import type { SetContentInput } from './types/SetContentInput'
+import type { StorageReadInput } from './types/StorageReadInput'
+import type { StorageValue } from './types/StorageValue'
+import type { StorageWriteInput } from './types/StorageWriteInput'
+import type { Tagged } from './types/Tagged'
 import type { UrlResult } from './types/UrlResult'
+import type { ViewportChanged } from './types/ViewportChanged'
+import type { ViewportSizeInput } from './types/ViewportSizeInput'
 import type { WaitForNavigationInput } from './types/WaitForNavigationInput'
 import type { WaitForUrlInput } from './types/WaitForUrlInput'
 
+export type { AddStyleTagInput } from './types/AddStyleTagInput'
+export type { AddTagInput } from './types/AddTagInput'
+export type { Animations } from './types/Animations'
+export type { Bytes } from './types/Bytes'
+export type { Caret } from './types/Caret'
 export type { CloseInput } from './types/CloseInput'
+export type { Dimensions } from './types/Dimensions'
 export type { DocumentInput } from './types/DocumentInput'
 export type { FrameInfo } from './types/FrameInfo'
 export type { FramesInput } from './types/FramesInput'
 export type { GotoInput } from './types/GotoInput'
+export type { ImageType } from './types/ImageType'
+export type { Length } from './types/Length'
 export type { LoadState } from './types/LoadState'
 export type { LoadStateInput } from './types/LoadStateInput'
 export type { LoadStateReached } from './types/LoadStateReached'
+export type { Margin } from './types/Margin'
+export type { MaskLocator } from './types/MaskLocator'
+export type { MediaInput } from './types/MediaInput'
 export type { NavigateInput } from './types/NavigateInput'
 export type { NavigationPublication } from './types/NavigationPublication'
 export type { NavigationReply } from './types/NavigationReply'
@@ -41,9 +65,21 @@ export type { NavigationResult } from './types/NavigationResult'
 export type { OpenerResult } from './types/OpenerResult'
 export type { PageFrames } from './types/PageFrames'
 export type { PageOnlyInput } from './types/PageOnlyInput'
+export type { PdfInput } from './types/PdfInput'
 export type { ResponseInfo } from './types/ResponseInfo'
+export type { SaveScreenshotInput } from './types/SaveScreenshotInput'
+export type { Scale } from './types/Scale'
+export type { ScreenshotInput } from './types/ScreenshotInput'
 export type { SetContentInput } from './types/SetContentInput'
+export type { StorageItem } from './types/StorageItem'
+export type { StorageReadInput } from './types/StorageReadInput'
+export type { StorageValue } from './types/StorageValue'
+export type { StorageWriteInput } from './types/StorageWriteInput'
+export type { TagElement } from './types/TagElement'
+export type { Tagged } from './types/Tagged'
 export type { UrlResult } from './types/UrlResult'
+export type { ViewportChanged } from './types/ViewportChanged'
+export type { ViewportSizeInput } from './types/ViewportSizeInput'
 export type { WaitForNavigationInput } from './types/WaitForNavigationInput'
 export type { WaitForUrlInput } from './types/WaitForUrlInput'
 
@@ -59,9 +95,19 @@ export type PageInputs = {
   'page.title': DocumentInput
   'page.content': DocumentInput
   'page.setContent': SetContentInput
+  'page.addScriptTag': AddTagInput
+  'page.addStyleTag': AddStyleTagInput
+  'page.emulateMedia': MediaInput
+  'page.requestGC': PageOnlyInput
   'page.close': CloseInput
   'page.opener': PageOnlyInput
   'page.frames': FramesInput
+  'page.screenshot': ScreenshotInput
+  'page.saveScreenshot': SaveScreenshotInput
+  'page.pdf': PdfInput
+  'page.setViewportSize': ViewportSizeInput
+  'webStorage.read': StorageReadInput
+  'webStorage.write': StorageWriteInput
 }
 
 /** Each page op's result. */
@@ -76,9 +122,19 @@ export type PageOutputs = {
   'page.title': string
   'page.content': string
   'page.setContent': null
+  'page.addScriptTag': Tagged
+  'page.addStyleTag': Tagged
+  'page.emulateMedia': null
+  'page.requestGC': null
   'page.close': null
   'page.opener': OpenerResult
   'page.frames': PageFrames
+  'page.screenshot': Bytes
+  'page.saveScreenshot': null
+  'page.pdf': Bytes
+  'page.setViewportSize': ViewportChanged
+  'webStorage.read': StorageValue
+  'webStorage.write': null
 }
 
 /**
@@ -86,7 +142,10 @@ export type PageOutputs = {
  * Rust options struct, for `pick`. Each command row's list is held to upstream's
  * `<Command>Options` below, so a field the prelude computes is never forwarded from a script.
  */
-export const PAGE_OPTION_KEYS = {} as const
+export const PAGE_OPTION_KEYS = {
+  'page.screenshot': ['type', 'quality', 'omitBackground', 'fullPage', 'clip', 'animations', 'caret', 'style', 'scale', 'maskColor', 'mask'],
+  'page.pdf': ['scale', 'displayHeaderFooter', 'headerTemplate', 'footerTemplate', 'printBackground', 'landscape', 'pageRanges', 'format', 'width', 'height', 'preferCSSPageSize', 'margin', 'tagged', 'outline'],
+} as const
 
 /**
  * One typed sender per page op. A class passes its input as an object literal, so every
@@ -153,6 +212,30 @@ export const PAGE_SEND = {
     input: SetContentInput,
     signal?: SignalLike,
   ): Promise<null> => invoke('page.setContent', site, call, input, signal),
+  'page.addScriptTag': (
+    site: CallSite,
+    call: CallHeader,
+    input: AddTagInput,
+    signal?: SignalLike,
+  ): Promise<Tagged> => invoke('page.addScriptTag', site, call, input, signal),
+  'page.addStyleTag': (
+    site: CallSite,
+    call: CallHeader,
+    input: AddStyleTagInput,
+    signal?: SignalLike,
+  ): Promise<Tagged> => invoke('page.addStyleTag', site, call, input, signal),
+  'page.emulateMedia': (
+    site: CallSite,
+    call: CallHeader,
+    input: MediaInput,
+    signal?: SignalLike,
+  ): Promise<null> => invoke('page.emulateMedia', site, call, input, signal),
+  'page.requestGC': (
+    site: CallSite,
+    call: CallHeader,
+    input: PageOnlyInput,
+    signal?: SignalLike,
+  ): Promise<null> => invoke('page.requestGC', site, call, input, signal),
   'page.close': (
     site: CallSite,
     call: CallHeader,
@@ -171,6 +254,42 @@ export const PAGE_SEND = {
     input: FramesInput,
     signal?: SignalLike,
   ): Promise<PageFrames> => invoke('page.frames', site, call, input, signal),
+  'page.screenshot': (
+    site: CallSite,
+    call: CallHeader,
+    input: ScreenshotInput,
+    signal?: SignalLike,
+  ): Promise<Bytes> => invoke('page.screenshot', site, call, input, signal),
+  'page.saveScreenshot': (
+    site: CallSite,
+    call: CallHeader,
+    input: SaveScreenshotInput,
+    signal?: SignalLike,
+  ): Promise<null> => invoke('page.saveScreenshot', site, call, input, signal),
+  'page.pdf': (
+    site: CallSite,
+    call: CallHeader,
+    input: PdfInput,
+    signal?: SignalLike,
+  ): Promise<Bytes> => invoke('page.pdf', site, call, input, signal),
+  'page.setViewportSize': (
+    site: CallSite,
+    call: CallHeader,
+    input: ViewportSizeInput,
+    signal?: SignalLike,
+  ): Promise<ViewportChanged> => invoke('page.setViewportSize', site, call, input, signal),
+  'webStorage.read': (
+    site: CallSite,
+    call: CallHeader,
+    input: StorageReadInput,
+    signal?: SignalLike,
+  ): Promise<StorageValue> => invoke('webStorage.read', site, call, input, signal),
+  'webStorage.write': (
+    site: CallSite,
+    call: CallHeader,
+    input: StorageWriteInput,
+    signal?: SignalLike,
+  ): Promise<null> => invoke('webStorage.write', site, call, input, signal),
 }
 
 // Each route row against Playwright's own protocol at the pin (upstream-check.ts): tsc
@@ -204,6 +323,20 @@ type _page_content_result = Assert<VoidIsNull<'page.content', pw.FrameContentRes
 // page.setContent: Frame.setContent
 type _page_setContent = Assert<UpstreamCheck<'page.setContent', SetContentInput, pw.FrameSetContentParams, never, never, never>>
 type _page_setContent_result = Assert<VoidIsNull<'page.setContent', pw.FrameSetContentResult, null>>
+// page.addScriptTag: Frame.addScriptTag
+//   adds path: the Neo host reads the client's source file before insertion
+type _page_addScriptTag = Assert<UpstreamCheck<'page.addScriptTag', AddTagInput, pw.FrameAddScriptTagParams, 'path', never, never>>
+type _page_addScriptTag_result = Assert<VoidIsNull<'page.addScriptTag', pw.FrameAddScriptTagResult, Tagged>>
+// page.addStyleTag: Frame.addStyleTag
+//   adds path: the Neo host reads the client's stylesheet before insertion
+type _page_addStyleTag = Assert<UpstreamCheck<'page.addStyleTag', AddStyleTagInput, pw.FrameAddStyleTagParams, 'path', never, never>>
+type _page_addStyleTag_result = Assert<VoidIsNull<'page.addStyleTag', pw.FrameAddStyleTagResult, Tagged>>
+// page.emulateMedia: Page.emulateMedia
+type _page_emulateMedia = Assert<UpstreamCheck<'page.emulateMedia', MediaInput, pw.PageEmulateMediaParams, never, never, never>>
+type _page_emulateMedia_result = Assert<VoidIsNull<'page.emulateMedia', pw.PageEmulateMediaResult, null>>
+// page.requestGC: Page.requestGC
+type _page_requestGC = Assert<UpstreamCheck<'page.requestGC', PageOnlyInput, pw.PageRequestGCParams, never, never, never>>
+type _page_requestGC_result = Assert<VoidIsNull<'page.requestGC', pw.PageRequestGCResult, null>>
 // page.close: Page.close
 //   adds runBeforeUnload: upstream sends Page.runBeforeUnload as a command of its own; Neo folds it into close, where the host's policy reads it
 //   omits reason: the script's close reason is not sent; a closed page's errors do not carry it
@@ -211,3 +344,30 @@ type _page_close = Assert<UpstreamCheck<'page.close', CloseInput, pw.PageClosePa
 type _page_close_result = Assert<VoidIsNull<'page.close', pw.PageCloseResult, null>>
 // page.opener: Neo only: upstream reads its initializer state; Neo asks its tab bookkeeping
 // page.frames: Neo only: upstream keeps client-side frame objects; Neo reads the tree for the prelude's synchronous frames()
+// page.screenshot: Page.screenshot
+//   retypes mask: mask locators travel as Neo brands instead of frame channels and selectors
+type _page_screenshot = Assert<ExactUpstreamCheck<'page.screenshot', ScreenshotInput, pw.PageScreenshotParams, never, never, 'mask'>>
+type _page_screenshot_keys = Assert<KeysCheck<'page.screenshot', (typeof PAGE_OPTION_KEYS)['page.screenshot'][number], pw.PageScreenshotOptions>>
+type _page_screenshot_result = Assert<VoidIsNull<'page.screenshot', pw.PageScreenshotResult, Bytes>>
+// page.saveScreenshot: Neo only: the screenshot client's path step writes captured bytes on Neo's disk
+// page.pdf: Page.pdf
+//   retypes width: Rust accepts numeric pixels as well as the client's normalized CSS strings
+//   retypes height: Rust accepts numeric pixels as well as the client's normalized CSS strings
+//   retypes margin: Rust accepts numeric pixels on every margin side as well as normalized CSS strings
+type _page_pdf = Assert<ExactUpstreamCheck<'page.pdf', PdfInput, pw.PagePdfParams, never, never, 'width' | 'height' | 'margin'>>
+type _page_pdf_keys = Assert<KeysCheck<'page.pdf', (typeof PAGE_OPTION_KEYS)['page.pdf'][number], pw.PagePdfOptions>>
+type _page_pdf_result = Assert<VoidIsNull<'page.pdf', pw.PagePdfResult, Bytes>>
+// page.setViewportSize: Page.setViewportSize
+type _page_setViewportSize = Assert<UpstreamCheck<'page.setViewportSize', ViewportSizeInput, pw.PageSetViewportSizeParams, never, never, never>>
+//   result: the existing empty object receipt, preserved until the wire alignment (no void check: Neo answers more than null on purpose)
+// webStorage.read: Page.webStorageGetItem
+//   adds action: one Neo op implements getItem and items
+//   retypes name: items reads all names, so only getItem supplies one
+type _webStorage_read = Assert<UpstreamCheck<'webStorage.read', StorageReadInput, pw.PageWebStorageGetItemParams, 'action', never, 'name'>>
+type _webStorage_read_result = Assert<VoidIsNull<'webStorage.read', pw.PageWebStorageGetItemResult, StorageValue>>
+// webStorage.write: Page.webStorageSetItem
+//   adds action: one Neo op implements setItem, removeItem and clear
+//   retypes name: clear needs no item name
+//   retypes value: only setItem supplies a value
+type _webStorage_write = Assert<UpstreamCheck<'webStorage.write', StorageWriteInput, pw.PageWebStorageSetItemParams, 'action', never, 'name' | 'value'>>
+type _webStorage_write_result = Assert<VoidIsNull<'webStorage.write', pw.PageWebStorageSetItemResult, null>>

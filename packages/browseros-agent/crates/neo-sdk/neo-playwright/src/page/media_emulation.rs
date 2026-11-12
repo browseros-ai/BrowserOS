@@ -9,7 +9,10 @@ use std::sync::Arc;
 use browseros_cdp::CdpError;
 use browseros_core::{CoreError, ProtocolSession};
 use serde::Deserialize;
-use serde_json::{Value, json};
+use serde_json::json;
+use ts_rs::TS;
+
+use crate::wire::{Nothing, options};
 use tokio::runtime::Handle;
 use tokio::sync::OwnedMutexGuard;
 
@@ -47,16 +50,27 @@ impl Default for MediaSettings {
 }
 
 /// Nulls are translated to upstream's `no-override` by the client. Omitted fields stay None.
-#[derive(Deserialize)]
+#[derive(Deserialize, TS)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
+#[ts(optional_fields)]
 pub(crate) struct MediaInput {
     page: PageRef,
+    #[ts(optional, type = "\"screen\" | \"print\" | \"no-override\"")]
     media: Option<String>,
+    #[ts(
+        optional,
+        type = "\"dark\" | \"light\" | \"no-preference\" | \"no-override\""
+    )]
     color_scheme: Option<String>,
+    #[ts(optional, type = "\"reduce\" | \"no-preference\" | \"no-override\"")]
     reduced_motion: Option<String>,
+    #[ts(optional, type = "\"active\" | \"none\" | \"no-override\"")]
     forced_colors: Option<String>,
+    #[ts(optional, type = "\"no-preference\" | \"more\" | \"no-override\"")]
     contrast: Option<String>,
 }
+
+options!(MediaInput);
 
 impl MediaInput {
     fn validate(&self, scope: &OpScope<'_>) -> Result<(), PlaywrightError> {
@@ -225,7 +239,7 @@ pub(crate) async fn emulate(
     pw: &Playwright,
     scope: &OpScope<'_>,
     input: MediaInput,
-) -> Result<Value, PlaywrightError> {
+) -> Result<Nothing, PlaywrightError> {
     // Validate before page admission, so bad values never open the lazy default tab.
     input.validate(scope)?;
     let page_ref = input.page.clone();
@@ -292,7 +306,7 @@ pub(crate) async fn emulate(
     if let Some(mut state) = update.state.take() {
         state.settings = Some(next);
     }
-    Ok(Value::Null)
+    Ok(())
 }
 
 /// Only definitive iframe closure is a no-op for a page-wide broadcast. A root failure,

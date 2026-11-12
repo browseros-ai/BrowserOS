@@ -8,10 +8,12 @@ use browseros_core::{CoreError, TargetId};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::sync::broadcast::error::RecvError;
+use ts_rs::TS;
+
+use crate::wire::{self, Describe, OpWire, Route, Run, options};
 
 use crate::listed_enum::listed_enum;
 use crate::op_input::OpArgs;
-use crate::op_output::to_output;
 use crate::op_scope::OpScope;
 use crate::op_spec::{Capability, OpSpec, OpTarget};
 use crate::page::{PageHandle, init_script};
@@ -31,6 +33,10 @@ listed_enum! {
 }
 
 impl ContextOp {
+    pub(crate) fn wire(self) -> Option<OpWire> {
+        route(self, Describe)
+    }
+
     /// This op's registration metadata.
     pub(crate) const fn spec(self) -> OpSpec {
         match self {
@@ -67,22 +73,41 @@ impl ContextOp {
 }
 
 /// `context.pages` and `context.newPage` take no arguments beyond the call header.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, TS)]
 #[serde(deny_unknown_fields)]
+#[ts(rename = "ContextNoArgs")]
 struct NoArgs {}
+options!(NoArgs);
 
 /// `context.pages()`: every tab the run's view admits, the owner's and other sessions' tabs
 /// included (D8, the owner's decision: no ownership filter).
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, TS)]
+#[ts(rename = "ContextPages")]
 struct Pages {
     pages: Vec<PageEntry>,
 }
 
 /// One tab, with what the prelude caches for its synchronous `url()`.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, TS)]
+#[ts(rename = "ContextPageEntry")]
 struct PageEntry {
     page: PageHandle,
     url: String,
+}
+
+/// Context registration/disposal stays with the page init-script family until PR 12 moves it.
+/// Execution and description share these rows; the policy above remains unchanged.
+fn route<'a, R: Route<'a>>(op: ContextOp, r: R) -> R::Out {
+    match op {
+        ContextOp::Pages => r.op(
+            wire::neo_only("Neo lists live tabs instead of upstream's client-side page objects"),
+            pages,
+        ),
+        ContextOp::NewPage => r.op(wire::command("BrowserContext.newPage"), new_page),
+        op @ (ContextOp::AddInitScript | ContextOp::ExposeBinding | ContextOp::Dispose) => {
+            r.untyped(move |pw, scope, args| run_untyped(pw, scope, op, args))
+        }
+    }
 }
 
 /// Runs one context op.
@@ -92,22 +117,28 @@ pub(crate) async fn invoke(
     op: ContextOp,
     args: OpArgs,
 ) -> Result<Value, PlaywrightError> {
+    route(op, Run { pw, scope, args }).await
+}
+
+async fn run_untyped(
+    pw: &Playwright,
+    scope: &OpScope<'_>,
+    op: ContextOp,
+    args: OpArgs,
+) -> Result<Value, PlaywrightError> {
     match op {
-        ContextOp::Pages => {
-            let NoArgs {} = args.decode(scope)?;
-            pages(scope).await
-        }
-        ContextOp::NewPage => {
-            let NoArgs {} = args.decode(scope)?;
-            new_page(pw, scope).await
-        }
         ContextOp::AddInitScript => init_script::add_to_context(scope, args.decode(scope)?).await,
         ContextOp::ExposeBinding => init_script::expose_on_context(pw, scope, args.decode(scope)?),
         ContextOp::Dispose => init_script::dispose(scope, args.decode(scope)?).await,
+        ContextOp::Pages | ContextOp::NewPage => Err(scope.not_built()),
     }
 }
 
-async fn pages(scope: &OpScope<'_>) -> Result<Value, PlaywrightError> {
+async fn pages(
+    _pw: &Playwright,
+    scope: &OpScope<'_>,
+    _input: NoArgs,
+) -> Result<Pages, PlaywrightError> {
     let listing = scope
         .view()
         .list_pages()
@@ -121,10 +152,14 @@ async fn pages(scope: &OpScope<'_>) -> Result<Value, PlaywrightError> {
             url: page.url,
         })
         .collect();
-    to_output(scope, &Pages { pages })
+    Ok(Pages { pages })
 }
 
-async fn new_page(pw: &Playwright, scope: &OpScope<'_>) -> Result<Value, PlaywrightError> {
+async fn new_page(
+    pw: &Playwright,
+    scope: &OpScope<'_>,
+    _input: NoArgs,
+) -> Result<PageEntry, PlaywrightError> {
     // The list of tabs open at the instance's start must be read before this tab
     // exists, or a newPage right after `Playwright::new` lands in that list and its
     // refs print from the random base (`f250e3`) instead of bare (`e3`). Measured by
@@ -145,13 +180,10 @@ async fn new_page(pw: &Playwright, scope: &OpScope<'_>) -> Result<Value, Playwri
         .await
         .map_err(|error| scope.core_error(&error))?;
     ready(pw, scope, &opened).await;
-    to_output(
-        scope,
-        &PageEntry {
-            page: PageHandle::new(opened.tab_id),
-            url: opened.url,
-        },
-    )
+    Ok(PageEntry {
+        page: PageHandle::new(opened.tab_id),
+        url: opened.url,
+    })
 }
 
 /// Readies the tab `newPage` just opened, as upstream's `newPage` does before it returns:

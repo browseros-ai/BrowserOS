@@ -7,51 +7,68 @@ use browseros_core::CoreError;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use crate::op_output::{Bytes, to_output};
+use crate::op_output::Bytes;
 use crate::op_scope::OpScope;
 use crate::page::document_watch::decode;
 use crate::target::PageRef;
 use crate::{ErrorCode, Playwright, PlaywrightError};
+use ts_rs::TS;
 
 /// `page.pdf(options)` without `path`, which the prelude writes itself.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, TS)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub(crate) struct PdfInput {
     page: PageRef,
     #[serde(default)]
+    #[ts(optional)]
     scale: Option<f64>,
     #[serde(default)]
+    #[ts(optional)]
     display_header_footer: Option<bool>,
     #[serde(default)]
+    #[ts(optional)]
     header_template: Option<String>,
     #[serde(default)]
+    #[ts(optional)]
     footer_template: Option<String>,
     #[serde(default)]
+    #[ts(optional)]
     print_background: Option<bool>,
     #[serde(default)]
+    #[ts(optional)]
     landscape: Option<bool>,
     #[serde(default)]
+    #[ts(optional)]
     page_ranges: Option<String>,
     /// `Letter`, `A4`, ... (case-insensitive); wins over `width` and `height`.
     #[serde(default)]
+    #[ts(optional)]
     format: Option<String>,
     #[serde(default)]
+    #[ts(optional)]
     width: Option<Length>,
     #[serde(default)]
+    #[ts(optional)]
     height: Option<Length>,
-    #[serde(default)]
-    margin: Margin,
     #[serde(default, rename = "preferCSSPageSize")]
+    #[ts(optional)]
     prefer_css_page_size: Option<bool>,
     #[serde(default)]
-    outline: Option<bool>,
+    #[ts(optional, as = "Option<Margin>")]
+    margin: Margin,
     #[serde(default)]
+    #[ts(optional)]
     tagged: Option<bool>,
+    #[serde(default)]
+    #[ts(optional)]
+    outline: Option<bool>,
 }
+
+crate::wire::options!(PdfInput, flat);
 
 /// A length as Playwright takes it: pixels as a number, or text with a `px`, `in`, `cm` or
 /// `mm` unit (text without a known unit is pixels).
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, TS)]
 #[serde(untagged)]
 enum Length {
     Pixels(f64),
@@ -59,16 +76,20 @@ enum Length {
 }
 
 /// Page margins; each side defaults to 0.
-#[derive(Clone, Debug, Default, Deserialize)]
+#[derive(Clone, Debug, Default, Deserialize, TS)]
 #[serde(deny_unknown_fields)]
 struct Margin {
     #[serde(default)]
+    #[ts(optional)]
     top: Option<Length>,
     #[serde(default)]
+    #[ts(optional)]
     right: Option<Length>,
     #[serde(default)]
+    #[ts(optional)]
     bottom: Option<Length>,
     #[serde(default)]
+    #[ts(optional)]
     left: Option<Length>,
 }
 
@@ -171,7 +192,7 @@ pub(crate) async fn print(
     pw: &Playwright,
     scope: &OpScope<'_>,
     input: PdfInput,
-) -> Result<Value, PlaywrightError> {
+) -> Result<Bytes, PlaywrightError> {
     let params = input
         .params()
         .map_err(|message| scope.fail(ErrorCode::InvalidInput, &message))?;
@@ -192,7 +213,7 @@ pub(crate) async fn print(
             ),
             _ => scope.core_error(&error),
         })?;
-    to_output(scope, &Bytes::from_base64(reply.data))
+    Ok(Bytes::from_base64(reply.data))
 }
 
 #[cfg(test)]

@@ -1,8 +1,10 @@
 //! The page's persistent metrics override, shared with core so a takeover can restore it.
 
 use browseros_core::viewport::{Size, ViewportRequest};
-use serde::Deserialize;
-use serde_json::{Value, json};
+use serde::{Deserialize, Serialize};
+use ts_rs::TS;
+
+use crate::wire::options;
 
 use crate::op_scope::OpScope;
 use crate::op_spec::{OpSpec, PAGE};
@@ -17,25 +19,31 @@ pub(crate) const SPEC: OpSpec = OpSpec::write(
 );
 
 /// `page.setViewportSize` uses no Playwright timeout; the run still bounds the operation.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, TS)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub(crate) struct ViewportSizeInput {
     page: PageRef,
     viewport_size: Dimensions,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, TS)]
 #[serde(deny_unknown_fields)]
 struct Dimensions {
     width: i64,
     height: i64,
 }
 
+options!(ViewportSizeInput);
+
+/// The existing viewport write receipt; capture and frame state remain owned by the page.
+#[derive(Debug, Serialize, TS)]
+pub(crate) struct ViewportChanged {}
+
 pub(crate) async fn set(
     pw: &Playwright,
     scope: &OpScope<'_>,
     input: ViewportSizeInput,
-) -> Result<Value, PlaywrightError> {
+) -> Result<ViewportChanged, PlaywrightError> {
     let size = Size {
         width: input.viewport_size.width,
         height: input.viewport_size.height,
@@ -55,5 +63,5 @@ pub(crate) async fn set(
         .apply()
         .await
         .map_err(|error| scope.core_error(&error))?;
-    Ok(json!({}))
+    Ok(ViewportChanged {})
 }
