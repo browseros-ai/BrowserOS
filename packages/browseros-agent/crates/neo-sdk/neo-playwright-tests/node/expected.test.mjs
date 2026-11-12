@@ -322,6 +322,32 @@ test('a listed test that passes twice alone and then fails stays listed: two of 
   )
 })
 
+test('reruns that disagree, or pass after a failed full run, are a flake: the test stays listed', async () => {
+  const tests = run([
+    ['tests/page/a.spec.ts', 'mixed', 'expected'],
+    ['tests/page/a.spec.ts', 'skip listed, full run failed', 'unexpected'],
+  ])
+  const expected = list([
+    ['tests/page/a.spec.ts', 'mixed', 'fail'],
+    ['tests/page/a.spec.ts', 'skip listed, full run failed', 'skip'],
+  ])
+  const verdict = compare(tests, expected, { complete: true })
+  await settle(verdict, async (t, attempt) => ({
+    outcome: t.title === 'mixed' && attempt === 2 ? 'skip' : 'pass',
+  }))
+  assert.equal(verdict.newlyPassing.length, 0)
+  assert.deepEqual(
+    verdict.flaky.map((i) => [i.test.title, i.reruns.map((r) => r.outcome)]),
+    [
+      ['mixed', ['pass', 'skip', 'pass']],
+      ['skip listed, full run failed', ['pass', 'pass', 'pass']],
+    ],
+  )
+  const next = nextExpected(tests, expected, verdict, { complete: true })
+  assert.equal(next.size, 2)
+  assert.deepEqual(refusals(proofOf(tests, expected, next, verdict), next), [])
+})
+
 test('a known flaky test is reported with its outcome and never judged, listed or stale', async () => {
   const tests = run([
     ['tests/page/a.spec.ts', 'flaky, failing', 'unexpected'],

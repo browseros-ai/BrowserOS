@@ -197,6 +197,12 @@ function classify(verdict, item) {
   else verdict.changed.push(item)
 }
 
+/** The proof a listed test needs to leave the list: a passing full run, then PROOF_ATTEMPTS passes alone. */
+const provenPassing = (fullRun, reruns) =>
+  fullRun === 'pass' &&
+  reruns.length >= PROOF_ATTEMPTS &&
+  reruns.every((outcome) => outcome === 'pass')
+
 /** Rerun outcomes that are a test's own; anything else (`not-run`, `error`) says the rerun broke. */
 const TEST_OUTCOMES = ['pass', 'fail', 'skip']
 
@@ -236,18 +242,27 @@ export async function settle(
         if (result.outcome === item.expected) break
       }
       const outcomes = reruns.map((result) => result.outcome)
+      // Reruns that agree outrank the full run, whose result may be a flake of its own.
+      const agreed = outcomes.every((outcome) => outcome === outcomes[0])
+        ? outcomes[0]
+        : undefined
       if (outcomes.includes(item.expected))
         verdict.flaky.push({ ...item, reruns })
       else if (outcomes.some((outcome) => !TEST_OUTCOMES.includes(outcome)))
         verdict.inconclusive.push({ ...item, reruns })
+      else if (
+        item.listed &&
+        (!agreed || agreed === 'pass') &&
+        !provenPassing(item.test.outcome, outcomes)
+      )
+        // A listed test leaves only on proof (the predicate `refusals` checks): reruns that
+        // disagree among themselves, or passing reruns after a failed full run, are a flake.
+        verdict.flaky.push({ ...item, reruns })
       else
         classify(verdict, {
           ...item,
           reruns,
-          // Reruns that agree outrank the full run, whose result may be a flake of its own.
-          settled: outcomes.every((outcome) => outcome === outcomes[0])
-            ? outcomes[0]
-            : item.test.outcome,
+          settled: agreed ?? item.test.outcome,
         })
     }
   }
@@ -377,13 +392,7 @@ export function refusals(proof, after, { knownFlaky = new Map() } = {}) {
       continue
     }
     if (found?.kind === 'passed') {
-      const passes = found.reruns.filter((outcome) => outcome === 'pass').length
-      if (
-        found.fullRun === 'pass' &&
-        passes >= PROOF_ATTEMPTS &&
-        passes === found.reruns.length
-      )
-        continue
+      if (provenPassing(found.fullRun, found.reruns)) continue
       reasons.push(
         `${name}: full run ${found.fullRun}, alone ${found.reruns.join(', ') || 'never rerun'}; leaving the list needs a passing full run and ${PROOF_ATTEMPTS} of ${PROOF_ATTEMPTS} passing reruns alone in one job`,
       )

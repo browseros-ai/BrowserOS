@@ -88,7 +88,8 @@ bun run test:neo-spec --expected-from <run URL or ID>
 then commit `node/expected/linux-x64.tsv`. It prints what it removed, added and changed. It
 refuses, writes nothing and names the test, when the list drops a test without that run's proof:
 a passing full run and three of three passing reruns alone, or the test gone from the corpus, or
-on this checkout's `known-flaky.tsv`. An added test accepts a regression, so the pull request
+on this checkout's `known-flaky.tsv`. A test the run never judged (its list already lacked it)
+may go only if `origin/main`'s list lacks it too: `main` dropped it with its own proof. An added test accepts a regression, so the pull request
 says why. A pull request's run tests it merged into the current `main`, so a test `main` fixed
 since the list last changed shows up as newly passing too; the same command takes it. Two pull
 requests that each fix a test change different lines and merge cleanly. On a Linux machine,
