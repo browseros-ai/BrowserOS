@@ -222,3 +222,44 @@ describe('the full output pop-up on a call', () => {
     expect(text()).toContain('Neo internal')
   })
 })
+
+describe('the full output pop-up on a call not read yet', () => {
+  const run = runSummary(9, { reply: '"done"' })
+  const details = new Map<string, RunDetail>([
+    // Neo's record has no such call (or has not been read): no reply in its place.
+    [run.id, { ...runDetail(run, '"done"'), neo: record([]) }],
+  ])
+  let dom: TestDom
+
+  beforeEach(async () => {
+    dom = await installDom(details)
+    await dom.render(
+      <FullOutput
+        run={run}
+        runs={[run, runSummary(10, { reply: '"next"' })]}
+        onRun={() => {}}
+        operation={{
+          runId: run.id,
+          operationId: 'neo-run.42',
+          place: { line: 3, call: 1, calls: 1 },
+        }}
+        onOperation={() => {}}
+        onClose={() => {}}
+      />,
+    )
+  })
+  afterEach(() => dom.restore())
+
+  it('stays a call: says so, shows no reply, and does not step to other runs', () => {
+    const text = dom.container.querySelector('dialog')?.textContent ?? ''
+    expect(text).toContain('run 9 · line 3')
+    expect(text).toContain("This call is not in Neo's record of the run.")
+    expect(text).not.toContain('"done"')
+    const buttons = [...dom.container.querySelectorAll('button')]
+    const next = buttons.find((button) => button.textContent === 'Next call')
+    expect(next?.hasAttribute('disabled')).toBe(true)
+    expect(buttons.some((button) => button.textContent === 'Next output')).toBe(
+      false,
+    )
+  })
+})

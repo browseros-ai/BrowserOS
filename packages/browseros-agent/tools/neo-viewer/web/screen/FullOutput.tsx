@@ -19,7 +19,7 @@ import {
   placeText,
 } from './operations'
 import { formattedLines, noReplyReason, rawLines, replyParts } from './reply'
-import { codeLines, lineText } from './text-lines'
+import { codeLines, type Line, lineText } from './text-lines'
 import { LineSpans, REPLY_VIEWS, type ReplyView, Switch } from './ui'
 import { clock, count, plural } from './units'
 
@@ -68,17 +68,8 @@ export function FullOutput({
     [run, detail, operation],
   )
   const lines = useMemo(
-    () =>
-      !detail
-        ? []
-        : call
-          ? view === 'formatted'
-            ? call.output.formatted
-            : call.output.raw
-          : view === 'formatted'
-            ? formattedLines(detail)
-            : rawLines(detail),
-    [detail, view, call],
+    () => shownLines(detail, call, operation, view),
+    [detail, call, operation, view],
   )
   const texts = useMemo(() => lines.map(lineText), [lines])
   const matches = useMemo(() => findMatches(texts, query), [texts, query])
@@ -116,13 +107,17 @@ export function FullOutput({
 
   const text = detail?.reply.text ?? null
   const consoleLines = text === null ? 0 : replyParts(text).console.length
-  const frame = framing(run, call, view)
-  const toPrevious = call
-    ? call.previous && (() => call.previous && onOperation(call.previous))
-    : previous && (() => onRun(previous))
-  const toNext = call
-    ? call.next && (() => call.next && onOperation(call.next))
-    : next && (() => onRun(next))
+  const frame =
+    operation && !call
+      ? awaitedCall(run, operation, detail !== null)
+      : framing(run, call, view)
+  const { toPrevious, toNext } = steps(
+    call,
+    operation,
+    { previous, next },
+    onOperation,
+    onRun,
+  )
   const { title } = frame
 
   return (
@@ -211,7 +206,9 @@ export function FullOutput({
         </button>
       </header>
       <div className="flex h-9 shrink-0 items-center gap-[18px] border-line-2 border-b bg-panel-2 px-5 text-ink-2">
-        {call ? (
+        {operation && !call ? (
+          <span>{frame.footer}</span>
+        ) : call ? (
           <>
             <span className="text-ink">
               <span className="font-code text-neo">
@@ -298,6 +295,54 @@ export function FullOutput({
 type Call = NonNullable<ReturnType<typeof callIn>>
 
 /** What the pop-up says: a call's name, place, size and source, or the reply's. */
+/** The lines shown: the call's, nothing while a call is not read, or the run's reply. */
+function shownLines(
+  detail: RunDetail | null,
+  call: Call | null,
+  operation: OperationSelection | null,
+  view: ReplyView,
+): Line[] {
+  // A call's pop-up shows its call or nothing yet, never the run's reply in its place.
+  if (!detail || (operation && !call)) return []
+  if (call)
+    return view === 'formatted' ? call.output.formatted : call.output.raw
+  return view === 'formatted' ? formattedLines(detail) : rawLines(detail)
+}
+
+/** Previous and Next: a call's neighbours once its record is read; a reply's finished runs. */
+function steps(
+  call: Call | null,
+  operation: OperationSelection | null,
+  runs: { previous: RunSummary | null; next: RunSummary | null },
+  onOperation: (selection: OperationSelection) => void,
+  onRun: (run: RunSummary) => void,
+) {
+  const toCall = (to: OperationSelection | null) =>
+    to && (() => onOperation(to))
+  const toRun = (to: RunSummary | null) => to && (() => onRun(to))
+  if (call)
+    return { toPrevious: toCall(call.previous), toNext: toCall(call.next) }
+  if (operation) return { toPrevious: null, toNext: null }
+  return { toPrevious: toRun(runs.previous), toNext: toRun(runs.next) }
+}
+
+/** A call's pop-up before its record is read, or when the record has no such call. */
+function awaitedCall(
+  run: RunSummary,
+  selection: OperationSelection,
+  loaded: boolean,
+) {
+  return {
+    title: 'Call',
+    where: [`run ${run.seq}`, placeText(selection.place)].join(' · '),
+    shownText: '',
+    footer: loaded
+      ? "This call is not in Neo's record of the run."
+      : "Reading Neo's record of this call…",
+    unit: 'call',
+  }
+}
+
 function framing(run: RunSummary, call: Call | null, view: ReplyView) {
   if (!call) {
     return {
