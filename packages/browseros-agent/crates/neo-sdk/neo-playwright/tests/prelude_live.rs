@@ -550,8 +550,11 @@ const BLIND_RESULT: &str = "tests/data/snapshot-v1/blind.json";
 #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
 async fn tests_that_the_blind_page_prints_the_v1_text_on_a_live_browser() -> TestResult {
     let page = Page::html(BLIND_PAGE).with_header("cache-control", "no-store");
-    let server =
-        FixtureServer::start(HashMap::from([("/snapshot-v1/blind.html".to_owned(), page)])).await?;
+    let server = FixtureServer::start(HashMap::from([(
+        "/snapshot-v1/blind.html".to_owned(),
+        page,
+    )]))
+    .await?;
     let run = Arc::new(LiveRun::connect().await?);
     let host: Arc<dyn OpHost> = run;
     let script = format!(
@@ -570,12 +573,21 @@ async fn tests_that_the_blind_page_prints_the_v1_text_on_a_live_browser() -> Tes
     let recorded = json!({ "json": result["json"], "partial": [] });
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(BLIND_RESULT);
     if env::var("NEO_RECORD_SNAPSHOT_V1").is_ok_and(|record| record == "1") {
-        fs::write(&path, format!("{}\n", serde_json::to_string_pretty(&recorded)?))?;
+        fs::write(
+            &path,
+            format!("{}\n", serde_json::to_string_pretty(&recorded)?),
+        )?;
     } else {
         let committed: Value = serde_json::from_str(&fs::read_to_string(&path)?)?;
-        assert_eq!(recorded, committed, "the engine still gives the committed tree");
+        assert_eq!(
+            recorded, committed,
+            "the engine still gives the committed tree"
+        );
     }
-    assert_eq!(result["plain"], BLIND_DEFAULT, "the default is the text form");
+    assert_eq!(
+        result["plain"], BLIND_DEFAULT,
+        "the default is the text form"
+    );
     assert_eq!(result["interactive"], BLIND_INTERACTIVE, "text: false");
     Ok(())
 }
