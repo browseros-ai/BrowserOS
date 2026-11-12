@@ -977,7 +977,7 @@ export class Frame extends EventEmitter {
         ...addressed,
         options: converted.options,
         elements: converted.elements,
-        force: picked.force,
+        ...picked,
       },
       wait.signal,
     )
@@ -998,7 +998,7 @@ export class Frame extends EventEmitter {
     await send['locator.selectText'](
       site,
       this._call(api, wait.timeout),
-      { ...addressed, force: picked.force },
+      { ...addressed, ...picked },
       wait.signal,
     )
   }

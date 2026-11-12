@@ -353,7 +353,7 @@ export class ElementHandle extends EventEmitter {
         strict: 'strict',
         options: converted.options,
         elements: converted.elements,
-        force: picked.force,
+        ...picked,
       },
     )
   }
@@ -371,7 +371,7 @@ export class ElementHandle extends EventEmitter {
     await send['locator.selectText'](
       site,
       { api, timeoutMs: timeoutMs(api, timeout) },
-      { target: this._brand, strict: 'strict', force: picked.force },
+      { target: this._brand, strict: 'strict', ...picked },
     )
   }
 

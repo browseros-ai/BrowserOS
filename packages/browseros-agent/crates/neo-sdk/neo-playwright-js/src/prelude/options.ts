@@ -11,7 +11,10 @@ import type { SelectOption } from '../probe/protocol'
 import { clientError } from './errors'
 import type { ElementBrand } from './wire'
 
-/** The defined values of `keys` in `source`. */
+/**
+ * The defined values of `keys` in `source`. Flat callers spread the result so an omitted
+ * field stays absent even when the script installs a getter on Object.prototype.
+ */
 export function pick<T extends object, K extends keyof T>(
   source: T | undefined,
   keys: readonly K[],
