@@ -28,9 +28,4 @@ pub use option_keys::OptionNesting;
 pub(crate) use option_keys::{ADDRESSING, OptionKeys, options, serde_fields};
 pub(crate) use route::{Describe, Nothing, Route, Run};
 pub use upstream::{Command, Upstream};
-pub(crate) use upstream::{command, neo_only};
-// No op replaces its upstream command since the expect ops carry `Frame.expect`'s params and
-// interception carries `Page.updateSubscription`'s; the row stays for an op whose params cannot,
-// and the machinery's own tests still build one.
-#[cfg(test)]
-pub(crate) use upstream::replaces;
+pub(crate) use upstream::{command, neo_only, replaces};

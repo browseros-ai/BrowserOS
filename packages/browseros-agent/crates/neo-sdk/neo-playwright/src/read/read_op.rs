@@ -303,14 +303,22 @@ fn route<'a, R: Route<'a>>(op: ReadOp, r: R) -> R::Out {
         ReadOp::BoundingBox => r.op(wire::command("ElementHandle.boundingBox"), bounding_box),
         ReadOp::Count => r.op(wire::command("Frame.queryCount"), count),
         ReadOp::AllTextContents => r.op(
-            wire::neo_only(
-                "upstream evaluates all matches in the client; Neo performs a probe read",
+            wire::replaces(
+                "Frame.evalOnSelectorAll",
+                "runs in the isolated world, not the page's: upstream's client evaluates \
+                 `ee => ee.map(e => e.textContent || '')` over every match in the page's main world, and Neo \
+                 reads the same text in its isolated-world probe as a read op, so the page cannot \
+                 tamper with it and the door treats it as a read",
             ),
             all_text_contents,
         ),
         ReadOp::AllInnerTexts => r.op(
-            wire::neo_only(
-                "upstream evaluates all matches in the client; Neo performs a probe read",
+            wire::replaces(
+                "Frame.evalOnSelectorAll",
+                "runs in the isolated world, not the page's: upstream's client evaluates \
+                 `ee => ee.map(e => e.innerText)` over every match in the page's main world, and Neo \
+                 reads the same text in its isolated-world probe as a read op, so the page cannot \
+                 tamper with it and the door treats it as a read",
             ),
             all_inner_texts,
         ),
