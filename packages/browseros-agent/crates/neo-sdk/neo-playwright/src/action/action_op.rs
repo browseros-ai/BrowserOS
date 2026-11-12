@@ -387,13 +387,25 @@ struct DropInput {
     #[ts(optional)]
     files: Option<DropFiles>,
     // The probe names this shape inside its Edit union rather than exporting a second alias.
-    #[ts(type = "Extract<import('../../../probe/protocol').Edit, { kind: 'drop' }>['data']")]
-    data: Vec<DropEntry>,
+    #[serde(default, deserialize_with = "optional_drop_data")]
+    #[ts(
+        optional,
+        type = "Extract<import('../../../probe/protocol').Edit, { kind: 'drop' }>['data']"
+    )]
+    data: Option<Vec<DropEntry>>,
     #[serde(default)]
     #[ts(optional, type = "import('../../../probe/protocol').Point")]
     position: Option<Point>,
 }
 options!(DropInput);
+
+/// Omission means a files-only drop. A present value must still be an array: `null` must not
+/// silently become an empty MIME list at the decode boundary.
+fn optional_drop_data<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<Vec<DropEntry>>, D::Error> {
+    Vec::deserialize(deserializer).map(Some)
+}
 
 /// `locator.fill(value)` and `clear()` (wire.ts `FillOptions`).
 #[derive(Debug, Deserialize)]
@@ -833,7 +845,8 @@ async fn drop(
             .map_err(|_expired| scope.timed_out(ErrorCode::WaitTimeout))??,
         None => Vec::new(),
     };
-    if payloads.is_empty() && input.data.is_empty() {
+    let data = input.data.unwrap_or_default();
+    if payloads.is_empty() && data.is_empty() {
         return Err(scope.fail(
             ErrorCode::InvalidInput,
             "At least one of \"files\" or \"data\" must be provided.",
@@ -845,7 +858,7 @@ async fn drop(
         kind: PointerKind::Drop,
         perform: Perform::Drop(Arc::new(DropData {
             payloads,
-            data: input.data,
+            data,
         })),
         wait_after: WaitAfter::Verdict,
         force: false,

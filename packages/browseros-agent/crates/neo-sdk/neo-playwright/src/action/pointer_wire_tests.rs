@@ -179,3 +179,26 @@ fn tests_that_defaulted_pointer_flags_reject_explicit_null() -> Result<(), Box<d
     }
     Ok(())
 }
+
+#[test]
+fn tests_that_drop_data_can_be_omitted_but_not_null() -> Result<(), Box<dyn Error>> {
+    let recording: Recording =
+        serde_json::from_str(include_str!("../../tests/data/pointer-wire.json"))?;
+    let exchange = recording
+        .scenarios
+        .iter()
+        .flat_map(|s| &s.exchanges)
+        .find(|exchange| exchange.op == "locator.drop")
+        .ok_or("pointer recording is missing drop")?;
+    let mut args: Value = serde_json::from_str(&exchange.args)?;
+    let fields = args.as_object_mut().ok_or("object args")?;
+    fields.remove("call");
+    fields.remove("data");
+    let input: DropInput = serde_json::from_value(args.clone())?;
+    assert!(input.data.is_none(), "files-only drops have no MIME entries");
+    args.as_object_mut()
+        .ok_or("object args")?
+        .insert("data".to_owned(), Value::Null);
+    assert!(serde_json::from_value::<DropInput>(args).is_err());
+    Ok(())
+}
