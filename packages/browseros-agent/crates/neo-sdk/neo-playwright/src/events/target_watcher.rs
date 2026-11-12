@@ -1075,6 +1075,7 @@ impl Watcher {
                     self.worker_sessions.remove(old_session);
                     self.worker_runtime.remove(old_session);
                     self.sessions.remove(old_session);
+                    self.recorded.forget(old_session);
                 }
                 let session = self
                     .browser
