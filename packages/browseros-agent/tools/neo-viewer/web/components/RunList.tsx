@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import type { RunDetail, RunStatus, RunSummary } from '../../shared/api'
+import { decodedNote, returnedString } from '../../shared/run-markdown'
 import { clockTime, duration, prettyJson, tokens } from '../format'
 import { useRunDetail } from '../use-viewer'
 
@@ -115,12 +116,25 @@ function Reply({ detail }: { detail: RunDetail }) {
   )
 }
 
-function FormattedReply({ detail }: { detail: RunDetail }) {
+/**
+ * The reply for a person. A returned string (a snapshot, say) is shown decoded, with a line saying
+ * so; "Reply, raw" keeps the exact bytes.
+ */
+export function FormattedReply({ detail }: { detail: RunDetail }) {
   const { reply } = detail
+  const decoded = returnedString(detail)
   return (
     <div className="space-y-2">
       {reply.rpcError && <Block text={prettyJson(reply.rpcError)} />}
-      {reply.text !== null && <Block text={reply.text} />}
+      {decoded ? (
+        <>
+          <p className="text-xs text-zinc-500">{decodedNote(decoded.json)}</p>
+          <Block text={decoded.value} />
+          {decoded.rest && <Block text={decoded.rest} />}
+        </>
+      ) : (
+        reply.text !== null && <Block text={reply.text} />
+      )}
       {reply.structuredContent !== null && (
         <>
           <p className="text-xs text-zinc-500">structuredContent</p>

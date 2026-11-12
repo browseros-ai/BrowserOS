@@ -63,6 +63,37 @@ export function modelReadText(detail: RunDetail): string | null {
 }
 
 /**
+ * The run's returned value when it is a string, decoded for a person: Neo writes the value as one
+ * line of JSON (`"- link [ref=e1]\n- …"`), so a returned snapshot reaches the model as escaped
+ * `\n` and `\"`. `json` is that line as the model received it; `rest` the console lines and notes
+ * after it, as read. Null for anything else (an error line, an object, no reply text).
+ */
+export function returnedString(
+  detail: RunDetail,
+): { value: string; json: string; rest: string } | null {
+  const text = detail.reply.text
+  if (text === null || detail.reply.isError) return null
+  const parts = replyParts(text)
+  let value: unknown
+  try {
+    value = JSON.parse(parts.value)
+  } catch {
+    return null
+  }
+  if (typeof value !== 'string') return null
+  const rest = [
+    ...(parts.console.length > 0 ? ['console:', ...parts.console] : []),
+    ...parts.notes,
+  ].join('\n')
+  return { value, json: parts.value, rest }
+}
+
+/** The line that says a string is shown decoded, and what the model received instead. */
+export function decodedNote(json: string): string {
+  return `Shown decoded; the model received it as a JSON string of ${plural(json.length, 'character')}.`
+}
+
+/**
  * `text` in a fence no line of it can close: one backtick longer than the longest run of
  * backticks inside, at least three.
  */
@@ -147,7 +178,7 @@ function methodCalls(run: RunSummary): string {
 }
 
 /** `task shop-4b80`, `tasks a, b`, `host task h1`: what the run's tasks were, for the header. */
-export function taskWords(run: RunSummary): string[] {
+function taskWords(run: RunSummary): string[] {
   const words: string[] = []
   if (run.tasks.length > 0)
     words.push(
@@ -301,25 +332,45 @@ function errorSection(
   return parts.length > 0 ? [['## Error', '', parts.join('\n\n')]] : []
 }
 
+/**
+ * What the model read. Its size is always what the model received. A returned string is shown
+ * decoded, so a snapshot reads as lines when a person or an agent reads the Markdown; its exact
+ * text stays in the Raw view, `runs/NNN.json` and the reply file.
+ */
 function modelRead(detail: RunDetail, options: RunMarkdownOptions): string[] {
   const text = modelReadText(detail)
   if (text === null) return [noReplyReason(detail)]
   const size = textSize(text)
+  const sizeLine = `${plural(size.chars, 'char')}, ≈${count(size.tokens)} tok.`
+  const decoded = returnedString(detail)
+  if (!decoded) return [sizeLine, '', ...bounded(text, options)]
   return [
-    `${plural(size.chars, 'char')}, ≈${count(size.tokens)} tok.`,
+    sizeLine,
     '',
-    ...bounded(text, options),
+    decodedNote(decoded.json),
+    '',
+    ...bounded(decoded.value, options, 'decoded'),
+    ...(decoded.rest
+      ? ['', 'Then, as the model read them:', '', fenced(decoded.rest, 'text')]
+      : []),
   ]
 }
 
-/** `text` fenced, cut at the inline limit with a pointer to the file that holds all of it. */
-function bounded(text: string, options: RunMarkdownOptions): string[] {
+/**
+ * `text` fenced, cut at the inline limit with a pointer to the file that holds all of it (for a
+ * decoded string, the file holds the exact text the model received).
+ */
+function bounded(
+  text: string,
+  options: RunMarkdownOptions,
+  decoded?: 'decoded',
+): string[] {
   const limit = options.replyChars
   if (limit === null || text.length <= limit) return [fenced(text, 'text')]
   return [
-    `The first ${count(limit)} characters${
+    `The first ${count(limit)} characters${decoded ? ', decoded' : ''}${
       options.replyFile
-        ? `; the full text is in [${options.replyFile}](${options.replyFile})`
+        ? `; ${decoded ? 'the exact text the model received' : 'the full text'} is in [${options.replyFile}](${options.replyFile})`
         : ''
     }:`,
     '',
