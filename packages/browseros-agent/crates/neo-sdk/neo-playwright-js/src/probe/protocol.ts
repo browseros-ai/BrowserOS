@@ -79,15 +79,13 @@ export type Replaced = Extract<ProbeReply, { kind: 'replaced' }>
 export type ErrorReply = Extract<ProbeReply, { kind: 'error' }>
 export type Uninstalled = Extract<ProbeReply, { kind: 'uninstalled' }>
 
-// These payloads are decoded by private action/read types. They stay here until those
-// families land, then the final PR 16 rebase derives and exports the existing Rust types.
+// These remaining payloads are decoded by private form/read types. They stay here until
+// those families are quiet, then the final rebase derives the existing Rust types.
 export type FilesSet = null | { threw: string }
 
 export type FrameOrigin =
   | { x: number; y: number; scaleX: number; scaleY: number }
   | 'rotated'
-
-export type Checkable = { checked: boolean; radio: boolean }
 
 export type FileInput = { pin: Pin; target: Pin; takesPaths: boolean }
 

@@ -27,7 +27,6 @@ export type { ReadNormalizeInput } from './types/ReadNormalizeInput'
 export type { ReadNormalized } from './types/ReadNormalized'
 export type { ReadWaitForInput } from './types/ReadWaitForInput'
 export type { ReadWaitState } from './types/ReadWaitState'
-export type { Rect } from './types/Rect'
 
 /** Each read op's input, after the `call` header every op shares. */
 export type ReadInputs = {

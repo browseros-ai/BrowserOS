@@ -71,3 +71,4 @@ mod subject;
 pub(crate) use action_op::ActionOp;
 pub(crate) use element_action::ElementRunner;
 pub(crate) use focus_lease::{FocusLease, lease};
+pub(crate) use pointer_action::Checkable;

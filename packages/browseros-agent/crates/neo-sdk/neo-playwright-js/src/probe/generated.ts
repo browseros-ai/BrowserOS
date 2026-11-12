@@ -1,4 +1,4 @@
-// Generated from neo-playwright/src/probe/{probe_request,probe_reply}.rs by ts-rs.
+// Generated from Rust's probe request/reply types and family-decoded value payloads by ts-rs.
 // Do not edit: change Rust's probe types, then run `bun run gen:probe` in neo-playwright-js.
 // PROTOCOL stays hand-bumped in protocol.ts; generating types never changes the wire version.
 
@@ -25,6 +25,12 @@ browserMapped?: boolean, };
  * and document sequences retain their existing runtime validation on both sides.
  */
 export type BootOptions = { frameSeq: FrameSeq, epoch: string, };
+
+/**
+ * A `checkable` read's value (the generated probe `Checkable`): upstream's `elementState(el,
+ * 'checked')`, which follows a label to its control.
+ */
+export type Checkable = { checked: boolean, radio: boolean, };
 
 /**
  * Which text of the document a `document` request reads.

@@ -1,5 +1,6 @@
 //! Renders the page-side probe contract from the Rust types that encode requests and decode
-//! replies. This renderer is separate from the op-family generator: only `probe-gen` writes
+//! replies, plus value payloads decoded by individual families. This renderer is separate
+//! from the op-family generator: only `probe-gen` writes
 //! `src/probe/generated.ts`, while the stale-file test compares without modifying sources.
 
 use std::any::{self, TypeId};
@@ -12,7 +13,7 @@ use super::probe_reply::ProbeReply;
 use super::probe_request::{BootOptions, ProbeRequest};
 
 const HEADER: &str = "\
-// Generated from neo-playwright/src/probe/{probe_request,probe_reply}.rs by ts-rs.
+// Generated from Rust's probe request/reply types and family-decoded value payloads by ts-rs.
 // Do not edit: change Rust's probe types, then run `bun run gen:probe` in neo-playwright-js.
 // PROTOCOL stays hand-bumped in protocol.ts; generating types never changes the wire version.
 ";
@@ -24,6 +25,9 @@ pub fn render() -> Result<String, Box<dyn Error>> {
     declarations.visit::<ProbeRequest>();
     declarations.visit::<ProbeReply>();
     declarations.visit::<BootOptions<'static>>();
+    // `value` replies carry JSON that the owning runner decodes after the envelope. Those
+    // payloads are explicit roots because they are absent from ProbeReply's type graph.
+    declarations.visit::<crate::action::Checkable>();
     declarations.finish()
 }
 

@@ -4,6 +4,7 @@ import type { Caret } from "./Caret";
 import type { ImageType } from "./ImageType";
 import type { MaskLocator } from "./MaskLocator";
 import type { PageHandle } from "./PageHandle";
+import type { Rect } from "./Rect";
 import type { Scale } from "./Scale";
 import type { Strictness } from "./Strictness";
 import type { Target } from "./Target";
@@ -20,7 +21,7 @@ target?: Target, strict?: Strictness, type?: ImageType,
 /**
  * JPEG and WebP, 0 to 100.
  */
-quality?: number, omitBackground?: boolean, fullPage?: boolean, clip?: import('../../../probe/protocol').Rect, animations?: Animations, caret?: Caret, style?: string, scale?: Scale, maskColor?: string, 
+quality?: number, omitBackground?: boolean, fullPage?: boolean, clip?: Rect, animations?: Animations, caret?: Caret, style?: string, scale?: Scale, maskColor?: string, 
 /**
  * Locator objects are converted to brands after the other options have been captured.
  */

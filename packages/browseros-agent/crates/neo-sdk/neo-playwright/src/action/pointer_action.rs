@@ -23,6 +23,7 @@ use std::time::Duration;
 use browseros_core::SessionId;
 use browseros_core::viewport::ViewportMode;
 use serde::Deserialize;
+use ts_rs::TS;
 
 use crate::action::actionability::{PointerKind, Requirements, requirements, state_name};
 use crate::action::arm_guard::ArmGuard;
@@ -172,11 +173,11 @@ enum Inner {
     Reresolve,
 }
 
-/// A `checkable` read's value (protocol.ts `Checkable`): upstream's `elementState(el,
+/// A `checkable` read's value (the generated probe `Checkable`): upstream's `elementState(el,
 /// 'checked')`, which follows a label to its control.
-#[derive(Clone, Copy, Debug, Deserialize)]
+#[derive(Clone, Copy, Debug, Deserialize, TS)]
 #[serde(deny_unknown_fields)]
-struct Checkable {
+pub(crate) struct Checkable {
     checked: bool,
     radio: bool,
 }
