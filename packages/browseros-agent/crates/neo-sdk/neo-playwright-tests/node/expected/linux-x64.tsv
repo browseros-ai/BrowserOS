@@ -81,16 +81,8 @@ NE-050	skip	tests/page/page-network-response.spec.ts	should return body for pref
 NE-041	skip	tests/page/page-network-response.spec.ts	should return non-utf8 body even when content-type says utf8
 RO-135	skip	tests/page/page-request-intercept.spec.ts	should fulfill response with empty body
 RO-048	skip	tests/page/page-route.spec.ts	route abort with times: 1 should not affect second sequential fetch
-SS-024	fail	tests/page/page-screenshot.spec.ts	page screenshot › should capture canvas changes
-SS-027	fail	tests/page/page-screenshot.spec.ts	page screenshot › should work while navigating
-SS-059	fail	tests/page/page-screenshot.spec.ts	page screenshot animations › should capture screenshots after layoutchanges in transitionend event
-SS-052	fail	tests/page/page-screenshot.spec.ts	page screenshot animations › should not capture infinite css animation
-SS-057	fail	tests/page/page-screenshot.spec.ts	page screenshot animations › should not capture infinite web animations
-SS-053	fail	tests/page/page-screenshot.spec.ts	page screenshot animations › should not capture pseudo element css animation
-SS-065	fail	tests/page/page-screenshot.spec.ts	should throw if screenshot size is too large
 PA-036	skip	tests/page/page-set-content.spec.ts	should handle timeout properly
 PA-037	skip	tests/page/page-set-content.spec.ts	should handle timeout properly 2
-IF-002	fail	tests/page/page-set-input-files.spec.ts	should upload a folder
 SE-016	skip	tests/page/selectors-css.spec.ts	should work with :nth-child(of) notation with nested functions
 SE-090	skip	tests/page/selectors-get-by.spec.ts	getBy escaping
 SE-057	skip	tests/page/selectors-role.spec.ts	should support disabled fieldset
