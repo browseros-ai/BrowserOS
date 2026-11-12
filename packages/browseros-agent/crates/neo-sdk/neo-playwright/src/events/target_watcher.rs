@@ -69,7 +69,7 @@ use crate::events::page_event::{
     WindowKind,
 };
 use crate::events::worker_table::WorkerContext;
-use crate::events::{PageEventKind, WatcherProgress, WorkerReports, navigation_event};
+use crate::events::{PageEventKind, WatcherProgress, navigation_event};
 use crate::world::{BackendNodeId, FrameAttachLog, FrameEvent};
 
 /// upstream's `PageBinding.kBindingName`: the CDP binding every exposed binding's stub calls.
@@ -1137,7 +1137,7 @@ impl Watcher {
         let asked = self
             .sessions
             .get(id)
-            .map(|tab| self.worker_reports(tab))
+            .map(|tab| self.writer.hub().worker_reports(tab))
             .unwrap_or_default();
         let checked_ms = match (asked.wanted(), self.worker_runtime.get(id)) {
             // Not a chosen worker session, or already as it should be.
@@ -1177,22 +1177,6 @@ impl Watcher {
             self.worker_runtime
                 .insert(id.clone(), WorkerRuntime::On { _lease: lease });
         }
-    }
-
-    /// What the live runs together ask of `tab`'s workers.
-    fn worker_reports(&self, tab: &TargetId) -> WorkerReports {
-        self.writer
-            .hub()
-            .live_runs()
-            .iter()
-            .map(|run| run.events.worker_reports(tab))
-            .fold(WorkerReports::default(), |all, run| WorkerReports {
-                listening_since: match (all.listening_since, run.listening_since) {
-                    (Some(a), Some(b)) => Some(a.min(b)),
-                    (a, b) => a.or(b),
-                },
-                waiting: all.waiting || run.waiting,
-            })
     }
 
     async fn attached(&mut self, parent: Option<&SessionId>, attached: Attached) {
@@ -1464,7 +1448,9 @@ impl Watcher {
     /// must see only what came after it asked, as it did while `Runtime` stayed on from attach.
     fn replayed(&self, session: &SessionId, params: &Value) -> bool {
         let Some(floor) = self.browser.page_signals.runtime_leases().floor_ms(session) else {
-            // Workers and OOPIFs still keep `Runtime` on without a lease.
+            // Unleased, `Runtime` is off on every session Neo drives (a worker reports only
+            // under its `WorkerRuntime` lease, an OOPIF never), so a page session's report is
+            // core's console harvest replaying history.
             return self.page_sessions.contains(session);
         };
         params
