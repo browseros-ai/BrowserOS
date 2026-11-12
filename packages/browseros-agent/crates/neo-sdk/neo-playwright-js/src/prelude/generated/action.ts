@@ -7,7 +7,7 @@ import type * as pw from '../../../../neo-playwright/third_party/playwright/pack
 import { invoke } from '../bridge'
 import type { CallSite } from '../call-site'
 import type { SignalLike } from '../signal'
-import type { Assert, KeysCheck, UpstreamCheck, VoidIsNull } from '../upstream-check'
+import type { Assert, ExactUpstreamCheck, KeysCheck, UpstreamCheck, VoidIsNull } from '../upstream-check'
 import type { CallHeader } from '../wire'
 import type { CheckInput } from './types/CheckInput'
 import type { ClickInput } from './types/ClickInput'
@@ -19,23 +19,17 @@ import type { HoverInput } from './types/HoverInput'
 import type { UncheckInput } from './types/UncheckInput'
 
 export type { CheckInput } from './types/CheckInput'
-export type { CheckOptions } from './types/CheckOptions'
 export type { ClickInput } from './types/ClickInput'
 export type { Clicked } from './types/Clicked'
 export type { DblclickInput } from './types/DblclickInput'
-export type { DblclickOptions } from './types/DblclickOptions'
 export type { DragInput } from './types/DragInput'
-export type { DragOptions } from './types/DragOptions'
 export type { DropFiles } from './types/DropFiles'
 export type { DropInput } from './types/DropInput'
 export type { DropPath } from './types/DropPath'
 export type { HoverInput } from './types/HoverInput'
-export type { HoverOptions } from './types/HoverOptions'
 export type { NavigationCut } from './types/NavigationCut'
-export type { PointerOptions } from './types/PointerOptions'
 export type { ScrollOption } from './types/ScrollOption'
 export type { UncheckInput } from './types/UncheckInput'
-export type { UncheckOptions } from './types/UncheckOptions'
 export type { WireButton } from './types/WireButton'
 export type { WireModifier } from './types/WireModifier'
 
@@ -127,30 +121,30 @@ export const ACTION_SEND = {
 // Each route row against Playwright's own protocol at the pin (upstream-check.ts): tsc
 // names the op and every key that differs without a reason, or whose reason went stale.
 // locator.click: ElementHandle.click
-type _locator_click = Assert<UpstreamCheck<'locator.click', ClickInput, pw.ElementHandleClickParams, never, never, never>>
+type _locator_click = Assert<ExactUpstreamCheck<'locator.click', ClickInput, pw.ElementHandleClickParams, never, never, never>>
 type _locator_click_keys = Assert<KeysCheck<'locator.click', (typeof ACTION_OPTION_KEYS)['locator.click'][number], pw.ElementHandleClickOptions>>
 //   result: the requested-navigation event cut the prelude publishes before click resolves (no void check: Neo answers more than null on purpose)
 // locator.dblclick: ElementHandle.dblclick
-type _locator_dblclick = Assert<UpstreamCheck<'locator.dblclick', DblclickInput, pw.ElementHandleDblclickParams, never, never, never>>
+type _locator_dblclick = Assert<ExactUpstreamCheck<'locator.dblclick', DblclickInput, pw.ElementHandleDblclickParams, never, never, never>>
 type _locator_dblclick_keys = Assert<KeysCheck<'locator.dblclick', (typeof ACTION_OPTION_KEYS)['locator.dblclick'][number], pw.ElementHandleDblclickOptions>>
 type _locator_dblclick_result = Assert<VoidIsNull<'locator.dblclick', pw.ElementHandleDblclickResult, null>>
 // locator.hover: ElementHandle.hover
-type _locator_hover = Assert<UpstreamCheck<'locator.hover', HoverInput, pw.ElementHandleHoverParams, never, never, never>>
+type _locator_hover = Assert<ExactUpstreamCheck<'locator.hover', HoverInput, pw.ElementHandleHoverParams, never, never, never>>
 type _locator_hover_keys = Assert<KeysCheck<'locator.hover', (typeof ACTION_OPTION_KEYS)['locator.hover'][number], pw.ElementHandleHoverOptions>>
 type _locator_hover_result = Assert<VoidIsNull<'locator.hover', pw.ElementHandleHoverResult, null>>
 // locator.check: ElementHandle.check
-type _locator_check = Assert<UpstreamCheck<'locator.check', CheckInput, pw.ElementHandleCheckParams, never, never, never>>
+type _locator_check = Assert<ExactUpstreamCheck<'locator.check', CheckInput, pw.ElementHandleCheckParams, never, never, never>>
 type _locator_check_keys = Assert<KeysCheck<'locator.check', (typeof ACTION_OPTION_KEYS)['locator.check'][number], pw.ElementHandleCheckOptions>>
 type _locator_check_result = Assert<VoidIsNull<'locator.check', pw.ElementHandleCheckResult, null>>
 // locator.uncheck: ElementHandle.uncheck
-type _locator_uncheck = Assert<UpstreamCheck<'locator.uncheck', UncheckInput, pw.ElementHandleUncheckParams, never, never, never>>
+type _locator_uncheck = Assert<ExactUpstreamCheck<'locator.uncheck', UncheckInput, pw.ElementHandleUncheckParams, never, never, never>>
 type _locator_uncheck_keys = Assert<KeysCheck<'locator.uncheck', (typeof ACTION_OPTION_KEYS)['locator.uncheck'][number], pw.ElementHandleUncheckOptions>>
 type _locator_uncheck_result = Assert<VoidIsNull<'locator.uncheck', pw.ElementHandleUncheckResult, null>>
 // locator.dragTo: Frame.dragAndDrop
-//   adds to: Neo addresses the destination with a branded target
+//   adds to: the destination retains its locator frame; same-page admission covers both endpoints
 //   omits source: the source selector is carried by Neo's target brand
 //   omits target: the destination selector is carried by Neo's to brand
-type _locator_dragTo = Assert<UpstreamCheck<'locator.dragTo', DragInput, pw.FrameDragAndDropParams, 'to', 'source' | 'target', never>>
+type _locator_dragTo = Assert<ExactUpstreamCheck<'locator.dragTo', DragInput, pw.FrameDragAndDropParams, 'to', 'source' | 'target', never>>
 type _locator_dragTo_keys = Assert<KeysCheck<'locator.dragTo', (typeof ACTION_OPTION_KEYS)['locator.dragTo'][number], pw.FrameDragAndDropOptions>>
 type _locator_dragTo_result = Assert<VoidIsNull<'locator.dragTo', pw.FrameDragAndDropResult, null>>
 // locator.drop: Frame.drop

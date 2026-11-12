@@ -3,7 +3,11 @@
     "commit": "edf8d89747b671425b6e393b1577c4cc63a6aba4",
     "bundleSha256": "f45ab7a982abf0de3e28234378ab7a1c6cb741dee3e72784be1230a06fcaaf2e",
     "bootstrapSha256": "b6987f2b8f1b952600ef3bdd410457780780c225eb31c944ee603bc182ba4d6b",
-    "boundary": "real bootstrap native JSON boundary over the deterministic test host; Rust reply serialization is checked against these recorded bodies"
+    "boundary": "real bootstrap native JSON boundary over the deterministic test host; Rust reply serialization is checked against these recorded bodies",
+    "alignment": {
+      "base": "8f7a8361e923a43486c32616d09c1564ffb6cd3c",
+      "transform": "Lift the six pointer options bags into the input; original reply bytes and script results retained."
+    }
   },
   "scenarios": [
     {
@@ -12,19 +16,19 @@
       "exchanges": [
         {
           "op": "locator.click",
-          "args": "{\"call\":{\"api\":\"locator.click\",\"timeoutMs\":1234},\"target\":{\"$neo\":\"locator\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"frame\":null,\"chunks\":[{\"parts\":[{\"name\":\"css\",\"body\":[{\"simples\":[{\"selector\":{\"css\":\"#button\",\"functions\":[]},\"combinator\":\"\"}]}],\"source\":\"#button\"}]}],\"display\":\"locator('#button')\"},\"strict\":\"strict\",\"options\":{\"button\":\"right\",\"clickCount\":3,\"delay\":12,\"force\":true,\"modifiers\":[\"Shift\",\"ControlOrMeta\"],\"noWaitAfter\":true,\"position\":{\"x\":4,\"y\":7},\"scroll\":\"none\",\"steps\":5,\"trial\":true}}",
+          "args": "{\"call\":{\"api\":\"locator.click\",\"timeoutMs\":1234},\"target\":{\"$neo\":\"locator\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"frame\":null,\"chunks\":[{\"parts\":[{\"name\":\"css\",\"body\":[{\"simples\":[{\"selector\":{\"css\":\"#button\",\"functions\":[]},\"combinator\":\"\"}]}],\"source\":\"#button\"}]}],\"display\":\"locator('#button')\"},\"strict\":\"strict\",\"button\":\"right\",\"clickCount\":3,\"delay\":12,\"force\":true,\"modifiers\":[\"Shift\",\"ControlOrMeta\"],\"noWaitAfter\":true,\"position\":{\"x\":4,\"y\":7},\"scroll\":\"none\",\"steps\":5,\"trial\":true}",
           "reply": "{\"pages\":[],\"ok\":null,\"observed\":{\"seq\":2,\"events\":0,\"payloadCurrent\":true}}",
           "body": "null"
         },
         {
           "op": "locator.click",
-          "args": "{\"call\":{\"api\":\"page.click\",\"timeoutMs\":1234},\"target\":{\"$neo\":\"locator\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"frame\":null,\"chunks\":[{\"parts\":[{\"name\":\"css\",\"body\":[{\"simples\":[{\"selector\":{\"css\":\"#button\",\"functions\":[]},\"combinator\":\"\"}]}],\"source\":\"#button\"}]}],\"display\":\"locator('#button')\"},\"strict\":\"strict\",\"options\":{\"button\":\"right\",\"clickCount\":3,\"delay\":12,\"force\":true,\"modifiers\":[\"Shift\",\"ControlOrMeta\"],\"noWaitAfter\":true,\"position\":{\"x\":4,\"y\":7},\"scroll\":\"none\",\"steps\":5,\"trial\":true}}",
+          "args": "{\"call\":{\"api\":\"page.click\",\"timeoutMs\":1234},\"target\":{\"$neo\":\"locator\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"frame\":null,\"chunks\":[{\"parts\":[{\"name\":\"css\",\"body\":[{\"simples\":[{\"selector\":{\"css\":\"#button\",\"functions\":[]},\"combinator\":\"\"}]}],\"source\":\"#button\"}]}],\"display\":\"locator('#button')\"},\"strict\":\"strict\",\"button\":\"right\",\"clickCount\":3,\"delay\":12,\"force\":true,\"modifiers\":[\"Shift\",\"ControlOrMeta\"],\"noWaitAfter\":true,\"position\":{\"x\":4,\"y\":7},\"scroll\":\"none\",\"steps\":5,\"trial\":true}",
           "reply": "{\"pages\":[],\"ok\":null,\"observed\":{\"seq\":3,\"events\":0,\"payloadCurrent\":true}}",
           "body": "null"
         },
         {
           "op": "locator.click",
-          "args": "{\"call\":{\"api\":\"frame.click\",\"timeoutMs\":1234},\"target\":{\"$neo\":\"locator\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"frame\":null,\"chunks\":[{\"parts\":[{\"name\":\"css\",\"body\":[{\"simples\":[{\"selector\":{\"css\":\"#button\",\"functions\":[]},\"combinator\":\"\"}]}],\"source\":\"#button\"}]}],\"display\":\"locator('#button')\"},\"strict\":\"strict\",\"options\":{\"button\":\"right\",\"clickCount\":3,\"delay\":12,\"force\":true,\"modifiers\":[\"Shift\",\"ControlOrMeta\"],\"noWaitAfter\":true,\"position\":{\"x\":4,\"y\":7},\"scroll\":\"none\",\"steps\":5,\"trial\":true}}",
+          "args": "{\"call\":{\"api\":\"frame.click\",\"timeoutMs\":1234},\"target\":{\"$neo\":\"locator\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"frame\":null,\"chunks\":[{\"parts\":[{\"name\":\"css\",\"body\":[{\"simples\":[{\"selector\":{\"css\":\"#button\",\"functions\":[]},\"combinator\":\"\"}]}],\"source\":\"#button\"}]}],\"display\":\"locator('#button')\"},\"strict\":\"strict\",\"button\":\"right\",\"clickCount\":3,\"delay\":12,\"force\":true,\"modifiers\":[\"Shift\",\"ControlOrMeta\"],\"noWaitAfter\":true,\"position\":{\"x\":4,\"y\":7},\"scroll\":\"none\",\"steps\":5,\"trial\":true}",
           "reply": "{\"pages\":[],\"ok\":null,\"observed\":{\"seq\":4,\"events\":0,\"payloadCurrent\":true}}",
           "body": "null"
         },
@@ -36,109 +40,109 @@
         },
         {
           "op": "locator.click",
-          "args": "{\"call\":{\"api\":\"elementHandle.click\",\"timeoutMs\":5000},\"target\":{\"$neo\":\"element\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"seq\":2,\"node\":9,\"display\":\"<button>Target</button>\"},\"strict\":\"strict\",\"options\":{\"noWaitAfter\":false,\"position\":{\"x\":2,\"y\":3}}}",
+          "args": "{\"call\":{\"api\":\"elementHandle.click\",\"timeoutMs\":5000},\"target\":{\"$neo\":\"element\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"seq\":2,\"node\":9,\"display\":\"<button>Target</button>\"},\"strict\":\"strict\",\"noWaitAfter\":false,\"position\":{\"x\":2,\"y\":3}}",
           "reply": "{\"pages\":[],\"ok\":{\"navigation\":{\"at\":1700000000007,\"seq\":17}},\"observed\":{\"seq\":6,\"events\":0,\"payloadCurrent\":true}}",
           "body": "{\"navigation\":{\"at\":1700000000007,\"seq\":17}}"
         },
         {
           "op": "locator.dblclick",
-          "args": "{\"call\":{\"api\":\"locator.dblclick\",\"timeoutMs\":1234},\"target\":{\"$neo\":\"locator\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"frame\":null,\"chunks\":[{\"parts\":[{\"name\":\"css\",\"body\":[{\"simples\":[{\"selector\":{\"css\":\"#button\",\"functions\":[]},\"combinator\":\"\"}]}],\"source\":\"#button\"}]}],\"display\":\"locator('#button')\"},\"strict\":\"strict\",\"options\":{\"button\":\"right\",\"delay\":12,\"force\":true,\"modifiers\":[\"Shift\",\"ControlOrMeta\"],\"position\":{\"x\":4,\"y\":7},\"scroll\":\"none\",\"steps\":5,\"trial\":true}}",
+          "args": "{\"call\":{\"api\":\"locator.dblclick\",\"timeoutMs\":1234},\"target\":{\"$neo\":\"locator\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"frame\":null,\"chunks\":[{\"parts\":[{\"name\":\"css\",\"body\":[{\"simples\":[{\"selector\":{\"css\":\"#button\",\"functions\":[]},\"combinator\":\"\"}]}],\"source\":\"#button\"}]}],\"display\":\"locator('#button')\"},\"strict\":\"strict\",\"button\":\"right\",\"delay\":12,\"force\":true,\"modifiers\":[\"Shift\",\"ControlOrMeta\"],\"position\":{\"x\":4,\"y\":7},\"scroll\":\"none\",\"steps\":5,\"trial\":true}",
           "reply": "{\"pages\":[],\"ok\":null,\"observed\":{\"seq\":7,\"events\":0,\"payloadCurrent\":true}}",
           "body": "null"
         },
         {
           "op": "locator.dblclick",
-          "args": "{\"call\":{\"api\":\"page.dblclick\",\"timeoutMs\":1234},\"target\":{\"$neo\":\"locator\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"frame\":null,\"chunks\":[{\"parts\":[{\"name\":\"css\",\"body\":[{\"simples\":[{\"selector\":{\"css\":\"#button\",\"functions\":[]},\"combinator\":\"\"}]}],\"source\":\"#button\"}]}],\"display\":\"locator('#button')\"},\"strict\":\"strict\",\"options\":{\"button\":\"right\",\"delay\":12,\"force\":true,\"modifiers\":[\"Shift\",\"ControlOrMeta\"],\"position\":{\"x\":4,\"y\":7},\"scroll\":\"none\",\"steps\":5,\"trial\":true}}",
+          "args": "{\"call\":{\"api\":\"page.dblclick\",\"timeoutMs\":1234},\"target\":{\"$neo\":\"locator\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"frame\":null,\"chunks\":[{\"parts\":[{\"name\":\"css\",\"body\":[{\"simples\":[{\"selector\":{\"css\":\"#button\",\"functions\":[]},\"combinator\":\"\"}]}],\"source\":\"#button\"}]}],\"display\":\"locator('#button')\"},\"strict\":\"strict\",\"button\":\"right\",\"delay\":12,\"force\":true,\"modifiers\":[\"Shift\",\"ControlOrMeta\"],\"position\":{\"x\":4,\"y\":7},\"scroll\":\"none\",\"steps\":5,\"trial\":true}",
           "reply": "{\"pages\":[],\"ok\":null,\"observed\":{\"seq\":8,\"events\":0,\"payloadCurrent\":true}}",
           "body": "null"
         },
         {
           "op": "locator.dblclick",
-          "args": "{\"call\":{\"api\":\"elementHandle.dblclick\",\"timeoutMs\":1234},\"target\":{\"$neo\":\"element\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"seq\":2,\"node\":9,\"display\":\"<button>Target</button>\"},\"strict\":\"strict\",\"options\":{\"button\":\"right\",\"delay\":12,\"force\":true,\"modifiers\":[\"Shift\",\"ControlOrMeta\"],\"position\":{\"x\":4,\"y\":7},\"scroll\":\"none\",\"steps\":5,\"trial\":true}}",
+          "args": "{\"call\":{\"api\":\"elementHandle.dblclick\",\"timeoutMs\":1234},\"target\":{\"$neo\":\"element\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"seq\":2,\"node\":9,\"display\":\"<button>Target</button>\"},\"strict\":\"strict\",\"button\":\"right\",\"delay\":12,\"force\":true,\"modifiers\":[\"Shift\",\"ControlOrMeta\"],\"position\":{\"x\":4,\"y\":7},\"scroll\":\"none\",\"steps\":5,\"trial\":true}",
           "reply": "{\"pages\":[],\"ok\":null,\"observed\":{\"seq\":9,\"events\":0,\"payloadCurrent\":true}}",
           "body": "null"
         },
         {
           "op": "locator.hover",
-          "args": "{\"call\":{\"api\":\"locator.hover\",\"timeoutMs\":1234},\"target\":{\"$neo\":\"locator\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"frame\":null,\"chunks\":[{\"parts\":[{\"name\":\"css\",\"body\":[{\"simples\":[{\"selector\":{\"css\":\"#button\",\"functions\":[]},\"combinator\":\"\"}]}],\"source\":\"#button\"}]}],\"display\":\"locator('#button')\"},\"strict\":\"strict\",\"options\":{\"force\":true,\"modifiers\":[\"Shift\",\"ControlOrMeta\"],\"position\":{\"x\":4,\"y\":7},\"scroll\":\"none\",\"trial\":true}}",
+          "args": "{\"call\":{\"api\":\"locator.hover\",\"timeoutMs\":1234},\"target\":{\"$neo\":\"locator\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"frame\":null,\"chunks\":[{\"parts\":[{\"name\":\"css\",\"body\":[{\"simples\":[{\"selector\":{\"css\":\"#button\",\"functions\":[]},\"combinator\":\"\"}]}],\"source\":\"#button\"}]}],\"display\":\"locator('#button')\"},\"strict\":\"strict\",\"force\":true,\"modifiers\":[\"Shift\",\"ControlOrMeta\"],\"position\":{\"x\":4,\"y\":7},\"scroll\":\"none\",\"trial\":true}",
           "reply": "{\"pages\":[],\"ok\":null,\"observed\":{\"seq\":10,\"events\":0,\"payloadCurrent\":true}}",
           "body": "null"
         },
         {
           "op": "locator.hover",
-          "args": "{\"call\":{\"api\":\"page.hover\",\"timeoutMs\":1234},\"target\":{\"$neo\":\"locator\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"frame\":null,\"chunks\":[{\"parts\":[{\"name\":\"css\",\"body\":[{\"simples\":[{\"selector\":{\"css\":\"#button\",\"functions\":[]},\"combinator\":\"\"}]}],\"source\":\"#button\"}]}],\"display\":\"locator('#button')\"},\"strict\":\"strict\",\"options\":{\"force\":true,\"modifiers\":[\"Shift\",\"ControlOrMeta\"],\"position\":{\"x\":4,\"y\":7},\"scroll\":\"none\",\"trial\":true}}",
+          "args": "{\"call\":{\"api\":\"page.hover\",\"timeoutMs\":1234},\"target\":{\"$neo\":\"locator\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"frame\":null,\"chunks\":[{\"parts\":[{\"name\":\"css\",\"body\":[{\"simples\":[{\"selector\":{\"css\":\"#button\",\"functions\":[]},\"combinator\":\"\"}]}],\"source\":\"#button\"}]}],\"display\":\"locator('#button')\"},\"strict\":\"strict\",\"force\":true,\"modifiers\":[\"Shift\",\"ControlOrMeta\"],\"position\":{\"x\":4,\"y\":7},\"scroll\":\"none\",\"trial\":true}",
           "reply": "{\"pages\":[],\"ok\":null,\"observed\":{\"seq\":11,\"events\":0,\"payloadCurrent\":true}}",
           "body": "null"
         },
         {
           "op": "locator.hover",
-          "args": "{\"call\":{\"api\":\"elementHandle.hover\",\"timeoutMs\":1234},\"target\":{\"$neo\":\"element\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"seq\":2,\"node\":9,\"display\":\"<button>Target</button>\"},\"strict\":\"strict\",\"options\":{\"force\":true,\"modifiers\":[\"Shift\",\"ControlOrMeta\"],\"position\":{\"x\":4,\"y\":7},\"scroll\":\"none\",\"trial\":true}}",
+          "args": "{\"call\":{\"api\":\"elementHandle.hover\",\"timeoutMs\":1234},\"target\":{\"$neo\":\"element\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"seq\":2,\"node\":9,\"display\":\"<button>Target</button>\"},\"strict\":\"strict\",\"force\":true,\"modifiers\":[\"Shift\",\"ControlOrMeta\"],\"position\":{\"x\":4,\"y\":7},\"scroll\":\"none\",\"trial\":true}",
           "reply": "{\"pages\":[],\"ok\":null,\"observed\":{\"seq\":12,\"events\":0,\"payloadCurrent\":true}}",
           "body": "null"
         },
         {
           "op": "locator.check",
-          "args": "{\"call\":{\"api\":\"locator.check\",\"timeoutMs\":1234},\"target\":{\"$neo\":\"locator\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"frame\":null,\"chunks\":[{\"parts\":[{\"name\":\"css\",\"body\":[{\"simples\":[{\"selector\":{\"css\":\"#button\",\"functions\":[]},\"combinator\":\"\"}]}],\"source\":\"#button\"}]}],\"display\":\"locator('#button')\"},\"strict\":\"strict\",\"options\":{\"force\":true,\"position\":{\"x\":4,\"y\":7},\"scroll\":\"none\",\"trial\":true}}",
+          "args": "{\"call\":{\"api\":\"locator.check\",\"timeoutMs\":1234},\"target\":{\"$neo\":\"locator\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"frame\":null,\"chunks\":[{\"parts\":[{\"name\":\"css\",\"body\":[{\"simples\":[{\"selector\":{\"css\":\"#button\",\"functions\":[]},\"combinator\":\"\"}]}],\"source\":\"#button\"}]}],\"display\":\"locator('#button')\"},\"strict\":\"strict\",\"force\":true,\"position\":{\"x\":4,\"y\":7},\"scroll\":\"none\",\"trial\":true}",
           "reply": "{\"pages\":[],\"ok\":null,\"observed\":{\"seq\":13,\"events\":0,\"payloadCurrent\":true}}",
           "body": "null"
         },
         {
           "op": "locator.check",
-          "args": "{\"call\":{\"api\":\"page.check\",\"timeoutMs\":1234},\"target\":{\"$neo\":\"locator\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"frame\":null,\"chunks\":[{\"parts\":[{\"name\":\"css\",\"body\":[{\"simples\":[{\"selector\":{\"css\":\"#button\",\"functions\":[]},\"combinator\":\"\"}]}],\"source\":\"#button\"}]}],\"display\":\"locator('#button')\"},\"strict\":\"strict\",\"options\":{\"force\":true,\"position\":{\"x\":4,\"y\":7},\"scroll\":\"none\",\"trial\":true}}",
+          "args": "{\"call\":{\"api\":\"page.check\",\"timeoutMs\":1234},\"target\":{\"$neo\":\"locator\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"frame\":null,\"chunks\":[{\"parts\":[{\"name\":\"css\",\"body\":[{\"simples\":[{\"selector\":{\"css\":\"#button\",\"functions\":[]},\"combinator\":\"\"}]}],\"source\":\"#button\"}]}],\"display\":\"locator('#button')\"},\"strict\":\"strict\",\"force\":true,\"position\":{\"x\":4,\"y\":7},\"scroll\":\"none\",\"trial\":true}",
           "reply": "{\"pages\":[],\"ok\":null,\"observed\":{\"seq\":14,\"events\":0,\"payloadCurrent\":true}}",
           "body": "null"
         },
         {
           "op": "locator.check",
-          "args": "{\"call\":{\"api\":\"elementHandle.check\",\"timeoutMs\":1234},\"target\":{\"$neo\":\"element\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"seq\":2,\"node\":9,\"display\":\"<button>Target</button>\"},\"strict\":\"strict\",\"options\":{\"force\":true,\"position\":{\"x\":4,\"y\":7},\"scroll\":\"none\",\"trial\":true}}",
+          "args": "{\"call\":{\"api\":\"elementHandle.check\",\"timeoutMs\":1234},\"target\":{\"$neo\":\"element\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"seq\":2,\"node\":9,\"display\":\"<button>Target</button>\"},\"strict\":\"strict\",\"force\":true,\"position\":{\"x\":4,\"y\":7},\"scroll\":\"none\",\"trial\":true}",
           "reply": "{\"pages\":[],\"ok\":null,\"observed\":{\"seq\":15,\"events\":0,\"payloadCurrent\":true}}",
           "body": "null"
         },
         {
           "op": "locator.uncheck",
-          "args": "{\"call\":{\"api\":\"locator.uncheck\",\"timeoutMs\":1234},\"target\":{\"$neo\":\"locator\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"frame\":null,\"chunks\":[{\"parts\":[{\"name\":\"css\",\"body\":[{\"simples\":[{\"selector\":{\"css\":\"#button\",\"functions\":[]},\"combinator\":\"\"}]}],\"source\":\"#button\"}]}],\"display\":\"locator('#button')\"},\"strict\":\"strict\",\"options\":{\"force\":true,\"position\":{\"x\":4,\"y\":7},\"scroll\":\"none\",\"trial\":true}}",
+          "args": "{\"call\":{\"api\":\"locator.uncheck\",\"timeoutMs\":1234},\"target\":{\"$neo\":\"locator\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"frame\":null,\"chunks\":[{\"parts\":[{\"name\":\"css\",\"body\":[{\"simples\":[{\"selector\":{\"css\":\"#button\",\"functions\":[]},\"combinator\":\"\"}]}],\"source\":\"#button\"}]}],\"display\":\"locator('#button')\"},\"strict\":\"strict\",\"force\":true,\"position\":{\"x\":4,\"y\":7},\"scroll\":\"none\",\"trial\":true}",
           "reply": "{\"pages\":[],\"ok\":null,\"observed\":{\"seq\":16,\"events\":0,\"payloadCurrent\":true}}",
           "body": "null"
         },
         {
           "op": "locator.uncheck",
-          "args": "{\"call\":{\"api\":\"page.uncheck\",\"timeoutMs\":1234},\"target\":{\"$neo\":\"locator\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"frame\":null,\"chunks\":[{\"parts\":[{\"name\":\"css\",\"body\":[{\"simples\":[{\"selector\":{\"css\":\"#button\",\"functions\":[]},\"combinator\":\"\"}]}],\"source\":\"#button\"}]}],\"display\":\"locator('#button')\"},\"strict\":\"strict\",\"options\":{\"force\":true,\"position\":{\"x\":4,\"y\":7},\"scroll\":\"none\",\"trial\":true}}",
+          "args": "{\"call\":{\"api\":\"page.uncheck\",\"timeoutMs\":1234},\"target\":{\"$neo\":\"locator\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"frame\":null,\"chunks\":[{\"parts\":[{\"name\":\"css\",\"body\":[{\"simples\":[{\"selector\":{\"css\":\"#button\",\"functions\":[]},\"combinator\":\"\"}]}],\"source\":\"#button\"}]}],\"display\":\"locator('#button')\"},\"strict\":\"strict\",\"force\":true,\"position\":{\"x\":4,\"y\":7},\"scroll\":\"none\",\"trial\":true}",
           "reply": "{\"pages\":[],\"ok\":null,\"observed\":{\"seq\":17,\"events\":0,\"payloadCurrent\":true}}",
           "body": "null"
         },
         {
           "op": "locator.uncheck",
-          "args": "{\"call\":{\"api\":\"elementHandle.uncheck\",\"timeoutMs\":1234},\"target\":{\"$neo\":\"element\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"seq\":2,\"node\":9,\"display\":\"<button>Target</button>\"},\"strict\":\"strict\",\"options\":{\"force\":true,\"position\":{\"x\":4,\"y\":7},\"scroll\":\"none\",\"trial\":true}}",
+          "args": "{\"call\":{\"api\":\"elementHandle.uncheck\",\"timeoutMs\":1234},\"target\":{\"$neo\":\"element\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"seq\":2,\"node\":9,\"display\":\"<button>Target</button>\"},\"strict\":\"strict\",\"force\":true,\"position\":{\"x\":4,\"y\":7},\"scroll\":\"none\",\"trial\":true}",
           "reply": "{\"pages\":[],\"ok\":null,\"observed\":{\"seq\":18,\"events\":0,\"payloadCurrent\":true}}",
           "body": "null"
         },
         {
           "op": "locator.uncheck",
-          "args": "{\"call\":{\"api\":\"locator.setChecked\",\"timeoutMs\":1234},\"target\":{\"$neo\":\"locator\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"frame\":null,\"chunks\":[{\"parts\":[{\"name\":\"css\",\"body\":[{\"simples\":[{\"selector\":{\"css\":\"#button\",\"functions\":[]},\"combinator\":\"\"}]}],\"source\":\"#button\"}]}],\"display\":\"locator('#button')\"},\"strict\":\"strict\",\"options\":{\"force\":true,\"position\":{\"x\":4,\"y\":7},\"scroll\":\"none\",\"trial\":true}}",
+          "args": "{\"call\":{\"api\":\"locator.setChecked\",\"timeoutMs\":1234},\"target\":{\"$neo\":\"locator\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"frame\":null,\"chunks\":[{\"parts\":[{\"name\":\"css\",\"body\":[{\"simples\":[{\"selector\":{\"css\":\"#button\",\"functions\":[]},\"combinator\":\"\"}]}],\"source\":\"#button\"}]}],\"display\":\"locator('#button')\"},\"strict\":\"strict\",\"force\":true,\"position\":{\"x\":4,\"y\":7},\"scroll\":\"none\",\"trial\":true}",
           "reply": "{\"pages\":[],\"ok\":null,\"observed\":{\"seq\":19,\"events\":0,\"payloadCurrent\":true}}",
           "body": "null"
         },
         {
           "op": "locator.check",
-          "args": "{\"call\":{\"api\":\"elementHandle.setChecked\",\"timeoutMs\":1234},\"target\":{\"$neo\":\"element\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"seq\":2,\"node\":9,\"display\":\"<button>Target</button>\"},\"strict\":\"strict\",\"options\":{\"force\":true,\"position\":{\"x\":4,\"y\":7},\"scroll\":\"none\",\"trial\":true}}",
+          "args": "{\"call\":{\"api\":\"elementHandle.setChecked\",\"timeoutMs\":1234},\"target\":{\"$neo\":\"element\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"seq\":2,\"node\":9,\"display\":\"<button>Target</button>\"},\"strict\":\"strict\",\"force\":true,\"position\":{\"x\":4,\"y\":7},\"scroll\":\"none\",\"trial\":true}",
           "reply": "{\"pages\":[],\"ok\":null,\"observed\":{\"seq\":20,\"events\":0,\"payloadCurrent\":true}}",
           "body": "null"
         },
         {
           "op": "locator.dragTo",
-          "args": "{\"call\":{\"api\":\"locator.dragTo\",\"timeoutMs\":987},\"target\":{\"$neo\":\"locator\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"frame\":null,\"chunks\":[{\"parts\":[{\"name\":\"css\",\"body\":[{\"simples\":[{\"selector\":{\"css\":\"#button\",\"functions\":[]},\"combinator\":\"\"}]}],\"source\":\"#button\"}]}],\"display\":\"locator('#button')\"},\"strict\":\"strict\",\"to\":{\"$neo\":\"locator\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"frame\":null,\"chunks\":[{\"parts\":[{\"name\":\"css\",\"body\":[{\"simples\":[{\"selector\":{\"css\":\"#destination\",\"functions\":[]},\"combinator\":\"\"}]}],\"source\":\"#destination\"}]}],\"display\":\"locator('#destination')\"},\"options\":{\"force\":true,\"scroll\":\"none\",\"sourcePosition\":{\"x\":1,\"y\":2},\"targetPosition\":{\"x\":3,\"y\":4},\"steps\":8,\"trial\":true}}",
+          "args": "{\"call\":{\"api\":\"locator.dragTo\",\"timeoutMs\":987},\"target\":{\"$neo\":\"locator\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"frame\":null,\"chunks\":[{\"parts\":[{\"name\":\"css\",\"body\":[{\"simples\":[{\"selector\":{\"css\":\"#button\",\"functions\":[]},\"combinator\":\"\"}]}],\"source\":\"#button\"}]}],\"display\":\"locator('#button')\"},\"strict\":\"strict\",\"to\":{\"$neo\":\"locator\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"frame\":null,\"chunks\":[{\"parts\":[{\"name\":\"css\",\"body\":[{\"simples\":[{\"selector\":{\"css\":\"#destination\",\"functions\":[]},\"combinator\":\"\"}]}],\"source\":\"#destination\"}]}],\"display\":\"locator('#destination')\"},\"force\":true,\"scroll\":\"none\",\"sourcePosition\":{\"x\":1,\"y\":2},\"targetPosition\":{\"x\":3,\"y\":4},\"steps\":8,\"trial\":true}",
           "reply": "{\"pages\":[],\"ok\":null,\"observed\":{\"seq\":21,\"events\":0,\"payloadCurrent\":true}}",
           "body": "null"
         },
         {
           "op": "locator.dragTo",
-          "args": "{\"call\":{\"api\":\"page.dragAndDrop\",\"timeoutMs\":987},\"target\":{\"$neo\":\"locator\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"frame\":null,\"chunks\":[{\"parts\":[{\"name\":\"css\",\"body\":[{\"simples\":[{\"selector\":{\"css\":\"#button\",\"functions\":[]},\"combinator\":\"\"}]}],\"source\":\"#button\"}]}],\"display\":\"locator('#button')\"},\"strict\":\"strict\",\"to\":{\"$neo\":\"locator\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"frame\":null,\"chunks\":[{\"parts\":[{\"name\":\"css\",\"body\":[{\"simples\":[{\"selector\":{\"css\":\"#destination\",\"functions\":[]},\"combinator\":\"\"}]}],\"source\":\"#destination\"}]}],\"display\":\"locator('#destination')\"},\"options\":{\"force\":true,\"scroll\":\"none\",\"sourcePosition\":{\"x\":1,\"y\":2},\"targetPosition\":{\"x\":3,\"y\":4},\"steps\":8,\"trial\":true}}",
+          "args": "{\"call\":{\"api\":\"page.dragAndDrop\",\"timeoutMs\":987},\"target\":{\"$neo\":\"locator\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"frame\":null,\"chunks\":[{\"parts\":[{\"name\":\"css\",\"body\":[{\"simples\":[{\"selector\":{\"css\":\"#button\",\"functions\":[]},\"combinator\":\"\"}]}],\"source\":\"#button\"}]}],\"display\":\"locator('#button')\"},\"strict\":\"strict\",\"to\":{\"$neo\":\"locator\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"frame\":null,\"chunks\":[{\"parts\":[{\"name\":\"css\",\"body\":[{\"simples\":[{\"selector\":{\"css\":\"#destination\",\"functions\":[]},\"combinator\":\"\"}]}],\"source\":\"#destination\"}]}],\"display\":\"locator('#destination')\"},\"force\":true,\"scroll\":\"none\",\"sourcePosition\":{\"x\":1,\"y\":2},\"targetPosition\":{\"x\":3,\"y\":4},\"steps\":8,\"trial\":true}",
           "reply": "{\"pages\":[],\"ok\":null,\"observed\":{\"seq\":22,\"events\":0,\"payloadCurrent\":true}}",
           "body": "null"
         },
         {
           "op": "locator.dragTo",
-          "args": "{\"call\":{\"api\":\"frame.dragAndDrop\",\"timeoutMs\":987},\"target\":{\"$neo\":\"locator\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"frame\":null,\"chunks\":[{\"parts\":[{\"name\":\"css\",\"body\":[{\"simples\":[{\"selector\":{\"css\":\"#button\",\"functions\":[]},\"combinator\":\"\"}]}],\"source\":\"#button\"}]}],\"display\":\"locator('#button')\"},\"strict\":\"strict\",\"to\":{\"$neo\":\"locator\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"frame\":null,\"chunks\":[{\"parts\":[{\"name\":\"css\",\"body\":[{\"simples\":[{\"selector\":{\"css\":\"#destination\",\"functions\":[]},\"combinator\":\"\"}]}],\"source\":\"#destination\"}]}],\"display\":\"locator('#destination')\"},\"options\":{\"force\":true,\"scroll\":\"none\",\"sourcePosition\":{\"x\":1,\"y\":2},\"targetPosition\":{\"x\":3,\"y\":4},\"steps\":8,\"trial\":true}}",
+          "args": "{\"call\":{\"api\":\"frame.dragAndDrop\",\"timeoutMs\":987},\"target\":{\"$neo\":\"locator\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"frame\":null,\"chunks\":[{\"parts\":[{\"name\":\"css\",\"body\":[{\"simples\":[{\"selector\":{\"css\":\"#button\",\"functions\":[]},\"combinator\":\"\"}]}],\"source\":\"#button\"}]}],\"display\":\"locator('#button')\"},\"strict\":\"strict\",\"to\":{\"$neo\":\"locator\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"frame\":null,\"chunks\":[{\"parts\":[{\"name\":\"css\",\"body\":[{\"simples\":[{\"selector\":{\"css\":\"#destination\",\"functions\":[]},\"combinator\":\"\"}]}],\"source\":\"#destination\"}]}],\"display\":\"locator('#destination')\"},\"force\":true,\"scroll\":\"none\",\"sourcePosition\":{\"x\":1,\"y\":2},\"targetPosition\":{\"x\":3,\"y\":4},\"steps\":8,\"trial\":true}",
           "reply": "{\"pages\":[],\"ok\":null,\"observed\":{\"seq\":23,\"events\":0,\"payloadCurrent\":true}}",
           "body": "null"
         },
@@ -181,7 +185,7 @@
         },
         {
           "op": "locator.click",
-          "args": "{\"call\":{\"api\":\"page.click\",\"timeoutMs\":5000},\"target\":{\"$neo\":\"locator\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"frame\":null,\"chunks\":[{\"parts\":[{\"name\":\"css\",\"body\":[{\"simples\":[{\"selector\":{\"css\":\"button\",\"functions\":[]},\"combinator\":\"\"}]}],\"source\":\"button\"}]}],\"display\":\"locator('button')\"},\"strict\":\"firstMatch\",\"options\":{}}",
+          "args": "{\"call\":{\"api\":\"page.click\",\"timeoutMs\":5000},\"target\":{\"$neo\":\"locator\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"frame\":null,\"chunks\":[{\"parts\":[{\"name\":\"css\",\"body\":[{\"simples\":[{\"selector\":{\"css\":\"button\",\"functions\":[]},\"combinator\":\"\"}]}],\"source\":\"button\"}]}],\"display\":\"locator('button')\"},\"strict\":\"firstMatch\"}",
           "reply": "{\"pages\":[],\"ok\":null,\"observed\":{\"seq\":4,\"events\":0,\"payloadCurrent\":true}}",
           "body": "null"
         },

@@ -24,12 +24,8 @@ import type { OpName } from './generated/ops'
 // Rust owns these shared shapes now. LocatorBrand is a projection of the tagged Target
 // union, so its fields are never repeated in TypeScript.
 export type {
-  CheckOptions,
-  DblclickOptions,
-  DragOptions,
   ElementBrand,
   FrameInfo,
-  HoverOptions,
   LoadState,
   MouseButton,
   NavigationCut,
@@ -38,7 +34,6 @@ export type {
   PageBrand,
   PageHandle,
   PartialFrame,
-  PointerOptions,
   ResponseInfo,
   ScrollOption,
   SnapshotResult,
@@ -56,6 +51,16 @@ import type {
   Strictness,
   Target,
 } from './generated'
+
+/** Script options are the flat Rust input with its host addressing removed. */
+export type PointerOptions = Omit<
+  GeneratedInputs['locator.click'],
+  'target' | 'strict'
+>
+export type DragOptions = Omit<
+  GeneratedInputs['locator.dragTo'],
+  'target' | 'strict' | 'to'
+>
 
 export type LocatorBrand = Extract<Target, { $neo: 'locator' }>
 export type UnopenedPageBrand = PageHandle & { tab: null }

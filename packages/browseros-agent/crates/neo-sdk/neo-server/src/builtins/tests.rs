@@ -1941,13 +1941,23 @@ async fn an_action_runs_in_the_crate_on_the_tab_its_locator_names() -> Result<()
         "call": { "api": "page.click", "timeoutMs": 200 },
         "target": locator(&handle(&page)),
         "strict": "strict",
-        "options": {},
     });
     let (operation, reply) = harness.submit_op(&run, "locator.click", input).await;
     // The fake browser has no isolated world to click in, so the crate's click stops before it
     // sends anything; `tests/playwright_browseros.rs` clicks on a real one. What is pinned here is
     // that the door let the action through to the crate, on the locator's tab.
     let failure = failure(reply)?;
+    assert_ne!(
+        failure.error.code(),
+        ErrorCode::INVALID_INPUT,
+        "the pointer input must decode before exercising page admission: {}",
+        failure.error
+    );
+    assert!(
+        harness.fake.count("Page.createIsolatedWorld") > 0,
+        "the admitted click must attempt the fake browser's missing isolated world: {}",
+        failure.error
+    );
     assert_eq!(failure.delivery, Delivery::NotSent, "{}", failure.error);
     let message = failure.error.message();
     assert!(

@@ -7672,7 +7672,7 @@ ${value.stack}`;
       const strict = options.strict;
       const picked = pick(options, OPTION_KEYS["locator.click"]);
       const addressed = await this._targetArgs(api, selector, strict);
-      const result = await send["locator.click"](site, this._call(api, wait.timeout), { ...addressed, options: picked }, wait.signal);
+      const result = await send["locator.click"](site, this._call(api, wait.timeout), { ...addressed, ...picked }, wait.signal);
       if (result?.navigation) {
         try {
           await this._page._context._events.publishNavigation(this._page, result.navigation, api, deadline, wait.signal);
@@ -7695,7 +7695,7 @@ ${value.stack}`;
       const wait = this._wait(api, options);
       const picked = pick(options, OPTION_KEYS["locator.dblclick"]);
       const addressed = await this._targetArgs(api, selector, strict);
-      await send["locator.dblclick"](site, this._call(api, wait.timeout), { ...addressed, options: picked }, wait.signal);
+      await send["locator.dblclick"](site, this._call(api, wait.timeout), { ...addressed, ...picked }, wait.signal);
     }
     async _hover(api, selector, options = {}) {
       const site = captureSite();
@@ -7703,7 +7703,7 @@ ${value.stack}`;
       const wait = this._wait(api, options);
       const picked = pick(options, OPTION_KEYS["locator.hover"]);
       const addressed = await this._targetArgs(api, selector, strict);
-      await send["locator.hover"](site, this._call(api, wait.timeout), { ...addressed, options: picked }, wait.signal);
+      await send["locator.hover"](site, this._call(api, wait.timeout), { ...addressed, ...picked }, wait.signal);
     }
     async _check(api, selector, checked, options = {}) {
       const site = captureSite();
@@ -7712,7 +7712,7 @@ ${value.stack}`;
       const wait = this._wait(api, options);
       const picked = pick(options, OPTION_KEYS[op]);
       const addressed = await this._targetArgs(api, selector, strict);
-      await send[op](site, this._call(api, wait.timeout), { ...addressed, options: picked }, wait.signal);
+      await send[op](site, this._call(api, wait.timeout), { ...addressed, ...picked }, wait.signal);
     }
     async _dragAndDrop(api, source, target, options = {}) {
       const site = captureSite();
@@ -7721,7 +7721,7 @@ ${value.stack}`;
       const strict = options.strict;
       const picked = pick(options, OPTION_KEYS["locator.dragTo"]);
       const addressed = await this._targetArgs(api, source, strict);
-      await send["locator.dragTo"](site, this._call(api, wait.timeout), { ...addressed, to, options: picked }, wait.signal);
+      await send["locator.dragTo"](site, this._call(api, wait.timeout), { ...addressed, to, ...picked }, wait.signal);
     }
     async _fill(api, selector, value, options = {}) {
       const site = captureSite();
@@ -8186,7 +8186,7 @@ ${value.stack}`;
       const timeout = this.#timeout(options);
       const picked = pick(options, OPTION_KEYS["locator.click"]);
       this.#live(api);
-      await send["locator.click"](site, { api, timeoutMs: timeoutMs(api, timeout) }, { target: this._brand, strict: "strict", options: picked });
+      await send["locator.click"](site, { api, timeoutMs: timeoutMs(api, timeout) }, { target: this._brand, strict: "strict", ...picked });
     }
     async dblclick(options = {}) {
       const site = captureSite();
@@ -8194,7 +8194,7 @@ ${value.stack}`;
       const timeout = this.#timeout(options);
       const picked = pick(options, OPTION_KEYS["locator.dblclick"]);
       this.#live(api);
-      await send["locator.dblclick"](site, { api, timeoutMs: timeoutMs(api, timeout) }, { target: this._brand, strict: "strict", options: picked });
+      await send["locator.dblclick"](site, { api, timeoutMs: timeoutMs(api, timeout) }, { target: this._brand, strict: "strict", ...picked });
     }
     async hover(options = {}) {
       const site = captureSite();
@@ -8202,7 +8202,7 @@ ${value.stack}`;
       const timeout = this.#timeout(options);
       const picked = pick(options, OPTION_KEYS["locator.hover"]);
       this.#live(api);
-      await send["locator.hover"](site, { api, timeoutMs: timeoutMs(api, timeout) }, { target: this._brand, strict: "strict", options: picked });
+      await send["locator.hover"](site, { api, timeoutMs: timeoutMs(api, timeout) }, { target: this._brand, strict: "strict", ...picked });
     }
     async check(options = {}) {
       const site = captureSite();
@@ -8210,7 +8210,7 @@ ${value.stack}`;
       const timeout = this.#timeout(options);
       const picked = pick(options, OPTION_KEYS["locator.check"]);
       this.#live(api);
-      await send["locator.check"](site, { api, timeoutMs: timeoutMs(api, timeout) }, { target: this._brand, strict: "strict", options: picked });
+      await send["locator.check"](site, { api, timeoutMs: timeoutMs(api, timeout) }, { target: this._brand, strict: "strict", ...picked });
     }
     async uncheck(options = {}) {
       const site = captureSite();
@@ -8218,7 +8218,7 @@ ${value.stack}`;
       const timeout = this.#timeout(options);
       const picked = pick(options, OPTION_KEYS["locator.uncheck"]);
       this.#live(api);
-      await send["locator.uncheck"](site, { api, timeoutMs: timeoutMs(api, timeout) }, { target: this._brand, strict: "strict", options: picked });
+      await send["locator.uncheck"](site, { api, timeoutMs: timeoutMs(api, timeout) }, { target: this._brand, strict: "strict", ...picked });
     }
     async setChecked(checked, options = {}) {
       const site = captureSite();
@@ -8227,7 +8227,7 @@ ${value.stack}`;
       const timeout = this.#timeout(options);
       const picked = pick(options, OPTION_KEYS[op]);
       this.#live(api);
-      await send[op](site, { api, timeoutMs: timeoutMs(api, timeout) }, { target: this._brand, strict: "strict", options: picked });
+      await send[op](site, { api, timeoutMs: timeoutMs(api, timeout) }, { target: this._brand, strict: "strict", ...picked });
     }
     async fill(value, options = {}) {
       const site = captureSite();
