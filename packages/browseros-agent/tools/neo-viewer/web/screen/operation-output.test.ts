@@ -221,7 +221,7 @@ describe('what a call gave the script', () => {
     expect(shown(all[2] as NeoOperation, all).lines).toEqual(['second'])
   })
 
-  it("does not say the script threw a failure of Neo's own bookkeeping", () => {
+  it("says who got a failure of Neo's own bookkeeping", () => {
     const listen = shown(
       operation(1, 'events.listen', {
         outcome: 'error',
@@ -233,10 +233,39 @@ describe('what a call gave the script', () => {
         },
       }),
     )
-    expect(listen.source).toContain(
-      'Neo internal: this bookkeeping step failed',
+    expect(listen.source).toContain('its event bookkeeping failed')
+    expect(listen.source).toContain('the run handles that failure itself')
+    // The snapshot call awaits its own bookkeeping, so its failure reached the script.
+    const pendingFailed = shown(
+      operation(2, 'page.snapshotPending', {
+        outcome: 'error',
+        error: {
+          owner: 'neo',
+          code: 'timeout',
+          message: 'timed out',
+          retryable: true,
+        },
+      }),
     )
-    expect(listen.source).not.toContain("the error the script's await threw")
+    expect(pendingFailed.source).toContain(
+      "the script's ariaSnapshot() await threw this",
+    )
+  })
+
+  it('shows a pending record on its own as the baseline text it records, not the delta', () => {
+    const recorded = shown(
+      operation(1, 'page.snapshotPending', {
+        args: {
+          document: 4,
+          text: 'the whole page',
+          form: 'text',
+          delta: true,
+          returned: '# changes since…',
+        },
+      }),
+    )
+    expect(recorded.lines).toEqual(['the whole page'])
+    expect(recorded.source).toContain('pending delta baseline')
   })
 
   it('says which view Neo cut: a whole text from a cut tree', () => {
@@ -519,6 +548,16 @@ describe('where a call sits', () => {
       '22nd',
       '103rd',
     ])
+  })
+
+  it('counts two calls written side by side once each: the line ran once', () => {
+    const side = [
+      operation(1, 'page.title', { site: { line: 1, column: 9 } }),
+      operation(2, 'page.title', { site: { line: 1, column: 31 } }),
+    ]
+    const places = callPlaces(placeOperations(record(side), 1))
+    expect(places.get('neo-run.1')).toEqual({ line: 1, call: 1, calls: 1 })
+    expect(places.get('neo-run.2')).toEqual({ line: 1, call: 1, calls: 1 })
   })
 
   it("shows a long argument's start under the row: the panel has the whole value", () => {

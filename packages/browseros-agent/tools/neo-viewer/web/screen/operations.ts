@@ -123,9 +123,10 @@ export function isNeoInternal(operation: NeoOperation): boolean {
 }
 
 /**
- * Where a call sits: its display line (null for one not on a line) and, among the calls of the
- * same name there, which one it is. A line in a loop runs again for each pass, so its second
- * `context.newPage` is call 2 of 3.
+ * Where a call sits: its display line (null for one not on a line) and, among the calls made
+ * from the same place in the script, which one it is. A line in a loop runs again for each pass,
+ * so its second `context.newPage` is call 2 of 3; two calls written side by side on one line
+ * (`[await page.title(), await page.title()]`) are two places, each called once.
  */
 export interface CallPlace {
   line: number | null
@@ -138,22 +139,26 @@ export function callPlaces(placed: PlacedOperations): Map<string, CallPlace> {
   const number = (operations: NeoOperation[], line: number | null) => {
     const totals = new Map<string, number>()
     for (const operation of operations) {
-      totals.set(operation.name, (totals.get(operation.name) ?? 0) + 1)
+      const key = callSite(operation)
+      totals.set(key, (totals.get(key) ?? 0) + 1)
     }
     const seen = new Map<string, number>()
     for (const operation of operations) {
-      const call = (seen.get(operation.name) ?? 0) + 1
-      seen.set(operation.name, call)
-      places.set(operation.id, {
-        line,
-        call,
-        calls: totals.get(operation.name) ?? 1,
-      })
+      const key = callSite(operation)
+      const call = (seen.get(key) ?? 0) + 1
+      seen.set(key, call)
+      places.set(operation.id, { line, call, calls: totals.get(key) ?? 1 })
     }
   }
   for (const [line, operations] of placed.byLine) number(operations, line)
   number(placed.unplaced, null)
   return places
+}
+
+/** The method and the script place that called it (one per loop pass, so it repeats). */
+function callSite(operation: NeoOperation): string {
+  const site = operation.site
+  return `${operation.name}@${site ? `${site.line}:${site.column}` : 'none'}`
 }
 
 /** `2nd`, `3rd`, `11th`, `21st`. */

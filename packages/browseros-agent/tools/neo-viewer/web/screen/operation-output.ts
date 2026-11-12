@@ -110,12 +110,21 @@ function recorded(operation: NeoOperation): string {
 
 function failed(operation: NeoOperation): Shown | null {
   if (!operation.error) return null
-  return thrown(
-    operation.error,
-    isNeoInternal(operation)
-      ? 'Neo internal: this bookkeeping step failed. The run handles that itself; the script did not call this, and its await did not throw this.'
-      : "The call failed: the error the script's await threw.",
-  )
+  return thrown(operation.error, failureSource(operation))
+}
+
+/**
+ * Who got an operation's failure. The snapshot's bookkeeping is awaited by the snapshot call,
+ * which throws what it threw; the event pump's failures the run handles itself.
+ */
+function failureSource(operation: NeoOperation): string {
+  if (operation.name.startsWith('page.snapshot')) {
+    return `Neo internal: the snapshot's bookkeeping failed, and the script's ariaSnapshot() await threw this.`
+  }
+  if (isNeoInternal(operation)) {
+    return 'Neo internal: its event bookkeeping failed. The script did not call this; the run handles that failure itself.'
+  }
+  return "The call failed: the error the script's await threw."
 }
 
 function unfinished(operation: NeoOperation): Shown | null {
@@ -296,7 +305,7 @@ function pendingText(match: NeoOperation): Shown | null {
 function pending(operation: NeoOperation): Shown | null {
   if (operation.name !== 'page.snapshotPending' || !isRecord(operation.args))
     return null
-  const text = operation.args.returned ?? operation.args.text
+  const text = operation.args.text
   if (typeof text !== 'string') return null
   return {
     ...lines(text),

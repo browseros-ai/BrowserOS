@@ -344,7 +344,8 @@ mod tests {
     }
 
     #[test]
-    fn a_value_setting_keeps_a_snapshot_whole_and_leaves_everything_else_alone() {
+    fn a_value_setting_keeps_a_snapshot_whole_and_leaves_everything_else_alone()
+    -> Result<(), Box<dyn std::error::Error>> {
         // A whole-page snapshot's text, as `page.snapshotPending` records it: one long string.
         let text = "- link \"Story\" [ref=e1]\n".repeat(1_000);
         let args = json!({ "text": text, "form": "text" });
@@ -372,6 +373,7 @@ mod tests {
             RedactionLimits::new_with_value_bytes(16),
             RedactionLimits::default()
         );
+        Ok(())
     }
 
     #[test]
