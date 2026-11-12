@@ -37,7 +37,8 @@ for embedded widgets; `--fixture-frame-host` changes the frame host. See
 
 Each page gets its own task (`neo.createTask`) and runs as separate `run` calls: open the tab, go
 to the page, wait for the widget (`page.waitForFunction`), `neo.solveCaptcha(page)`, read the token
-length, click submit, wait for the site's own verdict, and close the task. Each script starts with a
+length, click the submit button inside the page (as claw-server's runner did, so a challenge frame
+left over the button cannot swallow the click), wait for the site's own verdict, and close the task. Each script starts with a
 `/* captcha-e2e:<step> {…} */` tag, which the stub reads instead of running JavaScript.
 
 ## Outcomes
@@ -47,8 +48,10 @@ as returned, and `site`: what the page's own server said about the submission. O
 are kept, never tokens.
 
 - A page lists the verdicts that pass (`expect`), and may pin the type, the reason and a paid-task
-  cap. `unsolved` is the SDK's verdict for every definite failure: hCaptcha and the Cloudflare wall
-  pass only as `unsolved` / `unsupported_type` with the right type.
+  cap. `unsolved` is the SDK's verdict for every definite failure, and only its reason keeps
+  claw-server's `unsupported` apart: `unsolved` / `unsupported_type` fails, and is never UNVERIFIED,
+  unless the page allows it. hCaptcha and the Cloudflare wall pass only that way, with the right
+  type; the spotting pages accept it beside any other `unsolved`.
 - `solved`, and `already_clear` on a CAPTCHA page, pass only if the site accepted the submission.
   `token_applied` passes a `solved` page only if the site accepted. A site that accepts a page the
   solver called `unsolved` fails it.
@@ -78,9 +81,12 @@ CapSolver and 2Captcha are the SDK's only providers. `--paid` makes paid paths r
 ## Output
 
 `--out DIR` (default a temporary directory) receives `preflight.json`, `results.json` (one record
-per page) and `results.md`. Each finished page also prints one line. Exit codes: 0 when nothing
-failed, 1 on a FAIL or an unexpected solver during `--expect-tool-missing`, 2 for a setup blocker or
-a usage error.
+per page) and `results.md`. Each finished page also prints one line. The summary's paid tasks count
+what each solve reported; a solve that failed may still have paid, so it is listed as a result
+without a count. `--solve-timeout` (default 150000) is each solve's `run` budget, at most the SDK's
+900000; under the solver's own 120000 it can cut a solve short. Exit codes: 0 when nothing failed,
+1 on a FAIL or an unexpected solver during `--expect-tool-missing`, 2 for a setup blocker or a usage
+error.
 
 ## claw-server
 

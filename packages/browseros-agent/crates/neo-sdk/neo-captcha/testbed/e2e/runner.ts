@@ -84,9 +84,6 @@ function expected(
     (verdict === 'already_clear' && page.family !== 'none')
   if (needsSite && site === 'rejected') return fail('false positive')
   if (needsSite && site === 'error') return fail('independent check failed')
-  // Unsolved is never a guess, so a site that accepts the page proves it wrong.
-  if (verdict === 'unsolved' && site === 'accepted')
-    return fail('the site accepted a page the solver called unsolved')
   if (verdict === 'token_applied' && !page.site)
     return pass('token delivered; no site check, not independently solved')
   return pass(needsSite && site === 'n/a' ? 'no independent check' : '')
@@ -113,6 +110,19 @@ export function classifyOutcome(
   const blocked = precondition(page, solve)
   if (blocked !== null) return fail(blocked)
   const verdict = solve.verdict as Verdict
+  // Unsolved is never a guess, so a site that accepts the page proves it wrong, expected or
+  // not: an unpaid demo must not turn that into UNVERIFIED.
+  if (verdict === 'unsolved' && site === 'accepted')
+    return fail('the site accepted a page the solver called unsolved')
+  // The SDK reports claw-server's `unsupported` as `unsolved`; only the reason tells them apart.
+  const refusalAllowed =
+    page.allowUnsupported || page.expectReason?.includes('unsupported_type')
+  if (
+    verdict === 'unsolved' &&
+    solve.reason === 'unsupported_type' &&
+    !refusalAllowed
+  )
+    return fail('Neo refused this CAPTCHA type as unsupported')
   if (verdict === 'token_applied' && page.expect.includes('solved')) {
     if (site === 'accepted')
       return pass('token applied; site accepted on submit')
@@ -268,8 +278,10 @@ export function summarize(records: readonly ResultRecord[]) {
     detected: answered.filter((r) => r.check === 'detect').length,
     absent: passed.length - answered.length,
     paidTasks: records.reduce((sum, r) => sum + (r.paidTasks ?? 0), 0),
+    // A solve that failed may still have paid before it stopped; only an absent solver did not.
     paidTasksUnreported: records.filter(
-      (r) => r.verdict !== 'n/a' && !r.error && r.paidTasks == null,
+      (r) =>
+        r.verdict !== 'n/a' && r.paidTasks == null && !ABSENT.has(errorCode(r)),
     ).length,
   }
 }

@@ -225,6 +225,25 @@ test('tests that a site accepting a page called unsolved proves the solver wrong
   expect(classifyOutcome(block, solve('unknown'), 'accepted').outcome).toBe(
     'PASS',
   )
+  // Not even an unpaid demo that expects a solve may call the contradiction unverified.
+  const demo = { ...solvePage, mayNeedPaid: true }
+  expect(
+    classifyOutcome(
+      demo,
+      solve('unsolved', { reason: 'provider_error' }),
+      'accepted',
+    ),
+  ).toEqual({
+    outcome: 'FAIL',
+    note: 'the site accepted a page the solver called unsolved',
+  })
+  expect(
+    classifyOutcome(
+      demo,
+      solve('unsolved', { reason: 'provider_error' }),
+      'error',
+    ).outcome,
+  ).toBe('UNVERIFIED')
 })
 
 test('tests that an absent solver passes only when absence is expected', () => {
@@ -554,4 +573,67 @@ test('tests that progress lines carry the exact answer and the outcome', async (
   expect(seen).toEqual([
     '[captcha-e2e] unsupported: unsolved unsupported_type type=hcaptcha paid=0 site=n/a -> PASS',
   ])
+})
+
+test('tests that a type refusal fails unless the page allows it, and is never unverified', () => {
+  const refusal = solve('unsolved', { reason: 'unsupported_type' })
+  const block = {
+    ...solvePage,
+    expect: ['unsolved' as const, 'unknown' as const],
+  }
+  expect(classifyOutcome(block, refusal, 'rejected')).toEqual({
+    outcome: 'FAIL',
+    note: 'Neo refused this CAPTCHA type as unsupported',
+  })
+  const demo = { ...solvePage, mayNeedPaid: true }
+  expect(classifyOutcome(demo, refusal, 'error').outcome).toBe('FAIL')
+  const spotting = {
+    ...block,
+    expect: ['unsolved' as const],
+    allowUnsupported: true,
+  }
+  expect(classifyOutcome(spotting, refusal, 'n/a').outcome).toBe('PASS')
+  expect(
+    classifyOutcome(
+      spotting,
+      solve('unsolved', { reason: 'challenge_not_passed' }),
+      'n/a',
+    ).outcome,
+  ).toBe('PASS')
+  expect(
+    classifyOutcome(
+      refusalPage,
+      solve('unsolved', { type: 'hcaptcha', reason: 'unsupported_type' }),
+      'n/a',
+    ).outcome,
+  ).toBe('PASS')
+})
+
+test('tests that a failed solve may have paid, so it is counted as unreported, unlike an absent solver', () => {
+  const base = {
+    outcome: 'FAIL' as const,
+    check: 'solve' as const,
+    site: 'error' as const,
+    paidTasks: null,
+  }
+  const records = [
+    { ...base, verdict: 'error', error: 'script/run_timeout' },
+    { ...base, verdict: 'error', error: 'host/captcha_unavailable' },
+    { ...base, verdict: 'n/a', error: null },
+    { ...base, verdict: 'solved', error: null, paidTasks: 2 },
+  ] as unknown as ResultRecord[]
+  expect(summarize(records)).toMatchObject({
+    paidTasks: 2,
+    paidTasksUnreported: 1,
+  })
+  expect(renderSummary(records)).toContain(
+    'paid tasks: 2 (+1 results without a count)',
+  )
+})
+
+test('tests that the SDK submits by clicking the form button inside the page', async () => {
+  const { calls } = await run('contract', { pages: [solvePage] })
+  const submit = String(calls.find((call) => call.step === 'submit')?.args.code)
+  expect(submit).toContain('return await page.evaluate(() => {')
+  expect(submit).toContain('button.click()')
 })

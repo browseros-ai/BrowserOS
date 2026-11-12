@@ -41,6 +41,16 @@ test('tests that unsupported families are detections refused as unsupported, nev
   }
 })
 
+test('tests that only detection pages accept a type refusal they do not pin', () => {
+  const all = [...FIXTURE_PAGES, ...SPOTTING_PAGES, ...DEMO_PAGES]
+  expect(all.filter((p) => p.allowUnsupported).map((p) => p.id)).toEqual(
+    SPOTTING_PAGES.map((p) => p.id),
+  )
+  expect(
+    all.find((p) => p.id === 'turnstile-block')?.expectReason,
+  ).toBeUndefined()
+})
+
 test('tests that only pages with a site check can count as independently solved', () => {
   const all = [...FIXTURE_PAGES, ...SPOTTING_PAGES, ...DEMO_PAGES]
   const arkose = all.find((p) => p.id === 'arkose-demo')

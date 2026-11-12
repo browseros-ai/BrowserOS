@@ -19,12 +19,16 @@ import { prepareSdkServer, startSdkServer } from './sdk-server'
 
 /** The per-process paid-task budget a launched server gets with real keys, unless set. */
 export const DEFAULT_REAL_PAID_TASK_LIMIT = 12
-const milliseconds = (value: string, flag: string) => {
+const milliseconds = (value: string, flag: string, max = 2_147_483_647) => {
   const number = Number(value)
-  if (!Number.isInteger(number) || number < 1 || number > 2_147_483_647)
-    throw new Error(`${flag} must be positive milliseconds`)
+  if (!Number.isInteger(number) || number < 1 || number > max)
+    throw new Error(`${flag} must be 1 to ${max} milliseconds`)
   return number
 }
+/** The longest `run` the SDK accepts. */
+const RUN_TIMEOUT_MAX = 900_000
+/** neo-captcha's own limit for one solve. */
+const SOLVER_LIMIT = 120_000
 
 export function parseOptions(argv: string[]) {
   const args = argv[0] === '--' ? argv.slice(1) : argv
@@ -79,7 +83,11 @@ export function parseOptions(argv: string[]) {
     throw new Error('--pages must be fixtures, demo, all, or spotting')
   if (!['placeholder', 'real', 'none'].includes(values.keys))
     throw new Error('--keys must be placeholder, real, or none')
-  const solveTimeout = milliseconds(values['solve-timeout'], '--solve-timeout')
+  const solveTimeout = milliseconds(
+    values['solve-timeout'],
+    '--solve-timeout',
+    RUN_TIMEOUT_MAX,
+  )
   if (values.only?.split(',').some((id) => !id.trim()))
     throw new Error('--only needs catalog ids')
   let paidTaskLimit: number | undefined
@@ -175,6 +183,10 @@ async function main(): Promise<number> {
     ],
     options,
   )
+  if (options.solveTimeout < SOLVER_LIMIT)
+    console.warn(
+      `--solve-timeout ${options.solveTimeout} is under the solver's own ${SOLVER_LIMIT} ms: a solve may be cut short after it paid`,
+    )
   if (!options.mcpUrl && !options.devWatch && !process.env.BROWSEROS_BINARY)
     throw new Error(
       'BROWSEROS_BINARY is required unless --mcp-url or --dev-watch is set',

@@ -111,6 +111,7 @@ test('tests that invalid CLI options are usage errors', () => {
     ['--solve-timeout', '0'],
     ['--solve-timeout', 'NaN'],
     ['--solve-timeout', '2147483648'],
+    ['--solve-timeout', '900001'],
     ['--only', ''],
     ['--unknown'],
     ['--mcp-url', 'file:///tmp/mcp'],
@@ -118,6 +119,7 @@ test('tests that invalid CLI options are usage errors', () => {
     expect(() => parseOptions(args)).toThrow()
   }
   expect(() => selectPages([], parseOptions(['--only', 'missing']))).toThrow()
+  expect(parseOptions(['--solve-timeout', '900000']).solveTimeout).toBe(900_000)
 })
 
 test('tests that dev watch accepts a startup budget and rejects conflicting launch flags', () => {

@@ -4,7 +4,7 @@ import {
 } from '../../../../../contracts/claw-mcp/tests/mcp-client'
 import type { SiteCheck } from '../fixtures/catalog'
 import type { PageSession, Timeouts } from './page-session'
-import { bodyProbe, observationProbe, readyProbe } from './probes'
+import { bodyProbe, observationProbe, readyProbe, submitProbe } from './probes'
 import { notSolved, parseSdkSolve } from './solve-result'
 
 /** A failed `run`: the SDK's `{ owner, code, message }`. */
@@ -145,13 +145,13 @@ return true;`,
       )
     },
     async submit(site: SiteCheck) {
+      // The form's own click, as claw-server's runner did: a challenge frame still drawn over
+      // the button cannot swallow it.
       await run(
         script(
           'submit',
-          `await page.locator(${JSON.stringify(site.submitSelector)}).first().click({ timeout: ${timeouts.probeMs} });
-return true;`,
+          `return await page.evaluate(() => { ${submitProbe(site.submitSelector)} });`,
         ),
-        timeouts.probeMs + 5_000,
       )
       try {
         const found = await run(

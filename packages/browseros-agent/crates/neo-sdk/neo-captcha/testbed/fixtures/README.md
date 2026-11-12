@@ -65,8 +65,9 @@ Both providers passed the live API check; paid solving on these demo pages remai
 Run `bun run test:captcha-e2e -- --dev-watch --pages spotting --keys placeholder`.
 Every row expects verdict `unsolved`, its exact type, and `paidTasks: 0`: it
 proves detection, never a solve. The fake keys make the SDK answer `unsolved` /
-`challenge_not_passed` today; the runner records that reason as returned. These
-pages have no submit check. They are also part of `fixtures` and `all`.
+`challenge_not_passed` today; a type refusal (`unsupported_type`) would pass too.
+The runner records the reason as returned. These pages have no submit check.
+They are also part of `fixtures` and `all`.
 
 | Pages | Family | Real loader |
 | --- | --- | --- |

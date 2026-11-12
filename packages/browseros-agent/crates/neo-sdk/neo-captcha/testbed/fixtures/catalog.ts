@@ -48,6 +48,11 @@ export interface CaptchaPage {
   expect: Verdict[]
   /** When set, a matching verdict also needs one of these reasons. */
   expectReason?: string[]
+  /**
+   * A type refusal (`unsolved` / `unsupported_type`, claw-server's `unsupported`) passes here
+   * too. Elsewhere it fails, unless `expectReason` asks for it.
+   */
+  allowUnsupported?: boolean
   expectType?: CaptchaType
   maxPaidTasks?: number
   mayNeedPaid: boolean
@@ -80,6 +85,7 @@ function spotting(
     path: `/${id}.html`,
     expect: ['unsolved'],
     expectType: family,
+    allowUnsupported: true,
     maxPaidTasks: 0,
     mayNeedPaid: false,
     ready: `(s => s.rendered === true && s.loadedScripts?.length === ${id === 'aws-waf-interstitial' ? 2 : 1} && !s.errors?.includes('script-load-error'))(JSON.parse(document.documentElement.dataset.captchaFixture || '{}'))`,

@@ -100,7 +100,7 @@ export function stubSdkSolve(verdict: Verdict, type: string | null) {
     solved: 'auto_passed',
     token_applied: 'awaiting_submit',
     already_clear: 'no_captcha',
-    unsolved: 'unsupported_type',
+    unsolved: 'provider_error',
     cancelled: 'navigated',
     unknown: 'browser_error',
   }

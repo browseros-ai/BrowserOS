@@ -26,3 +26,12 @@ test('tests that verdict patterns with quotes and backslashes survive transport'
     }),
   ).toBe('accepted')
 })
+
+test('tests that a page without a body yet is no verdict rather than an error', () => {
+  const code = bodyProbe({
+    submitSelector: '#submit',
+    acceptedPattern: 'ACCEPTED',
+    rejectedPattern: 'REJECTED',
+  })
+  expect(new Function('document', code)({ body: null })).toBeNull()
+})
