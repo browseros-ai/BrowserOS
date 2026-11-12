@@ -144,6 +144,12 @@ impl EventHub {
         }
     }
 
+    /// The live runs bound to this hub.
+    pub(crate) fn live_runs(&self) -> Vec<Arc<RunState>> {
+        let runs = self.runs.lock().unwrap_or_else(PoisonError::into_inner);
+        runs.iter().filter_map(Weak::upgrade).collect()
+    }
+
     /// The live runs that listen for, or wait on, `event` on the tab whose target is `target`.
     pub(crate) fn listeners(&self, target: &TargetId, event: PageEventKind) -> Vec<Weak<RunState>> {
         let runs = self.runs.lock().unwrap_or_else(PoisonError::into_inner);

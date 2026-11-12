@@ -1,4 +1,4 @@
-//! Whether a tab Neo drives can tell DevTools is attached, against a real browser.
+//! Whether a tab Neo drives can tell an inspector is attached, against a real browser.
 //!
 //! The fixture runs the checks sites use to spot an open inspector (core's
 //! `devtools_detection_live` detector: `console.table` timing, getters on logged values, a
@@ -28,6 +28,7 @@ mod js_runner;
 mod live_run;
 
 use std::collections::HashMap;
+use std::error::Error;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -38,7 +39,7 @@ use serde_json::{Value, json};
 use tokio::time;
 
 /// Core's detector, as a function each place runs with its own way to report.
-const DETECTOR: &str = r#"
+const DETECTOR: &str = r"
 function detector(report, withDom) {
   const det = { hits: {}, rounds: 0 };
   const hit = (name) => { det.hits[name] = (det.hits[name] || 0) + 1; };
@@ -76,7 +77,7 @@ function detector(report, withDom) {
   }, 100);
   return det;
 }
-"#;
+";
 
 /// The top document on `127.0.0.1`; its iframe loads from `localhost` on the same port, another
 /// site, so Chromium gives it its own process and Neo its own session.
@@ -114,13 +115,12 @@ detector((det) => parent.postMessage({{ frameDet: JSON.parse(JSON.stringify(det)
 
 /// The three detectors' state, read in the top document's own world.
 async fn detections(run: &LiveRun, page: &TestPage) -> TestResult<Value> {
-    Ok(run
-        .eval(
-            page,
-            "({ main: JSON.parse(JSON.stringify(window.__det)), frame: window.__frameDet, \
-             worker: window.__workerDet })",
-        )
-        .await?)
+    run.eval(
+        page,
+        "({ main: JSON.parse(JSON.stringify(window.__det)), frame: window.__frameDet, \
+         worker: window.__workerDet })",
+    )
+    .await
 }
 
 async fn script(run: &Arc<LiveRun>, page: &TestPage, body: &str) -> TestResult<Value> {
@@ -130,6 +130,10 @@ async fn script(run: &Arc<LiveRun>, page: &TestPage, body: &str) -> TestResult<V
 
 #[tokio::test]
 #[ignore = "needs an owned BrowserOS on BROWSEROS_CDP_PORT"]
+#[expect(
+    clippy::print_stderr,
+    reason = "the per-phase counts are the measurement"
+)]
 async fn reports_what_a_neo_driven_tab_detects_per_phase() -> TestResult {
     let mut pages = HashMap::new();
     pages.insert("/top.html".to_owned(), Page::html(&top_html()));
@@ -191,7 +195,7 @@ async fn reports_what_a_neo_driven_tab_detects_per_phase() -> TestResult {
             eprintln!("DETECTION {line}");
             report.push(line);
         }
-        Ok::<_, Box<dyn std::error::Error>>(())
+        Ok::<_, Box<dyn Error>>(())
     }
     .await;
     run.close_page(&page).await;

@@ -445,8 +445,8 @@ async fn subscription(
 
 /// Whether only `Runtime` reports `event` on a page session: console messages and uncaught
 /// errors, and binding calls with the main-world contexts that name their frame. Core attaches
-/// pages with `Runtime` off (a site times the inspector's console serialization to detect
-/// DevTools), so a run that wants these takes a lease ([`lease_runtime`]).
+/// pages with `Runtime` off (a site times the inspector's console serialization to detect an
+/// attached inspector), so a run that wants these takes a lease ([`lease_runtime`]).
 pub(crate) const fn needs_runtime(event: PageEventKind) -> bool {
     matches!(
         event,

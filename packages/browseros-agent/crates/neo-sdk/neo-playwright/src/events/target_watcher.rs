@@ -769,23 +769,9 @@ impl Watcher {
                     self.dialog_closed(&session);
                 }
             }
-            "Runtime.consoleAPICalled" => {
-                if let Some(session) = session_id
-                    && !self.replayed(&session, &params)
-                    && let Some(target) = self.wanted(&session, PageEventKind::Console).await
-                    && let Some(params) = parse::<ConsoleParams>(params)
-                {
-                    self.console(&session, target, params);
-                }
-            }
-            "Runtime.exceptionThrown" => {
-                if let Some(session) = session_id
-                    && !self.replayed(&session, &params)
-                    && let Some(target) = self.wanted(&session, PageEventKind::PageError).await
-                    && let Some(params) = parse::<ExceptionParams>(params)
-                {
-                    let error = PageError::from_params(target, params);
-                    self.writer.record(PageEvent::PageError(error));
+            "Runtime.consoleAPICalled" | "Runtime.exceptionThrown" => {
+                if let Some(session) = session_id {
+                    self.runtime_report(&method, session, params).await;
                 }
             }
             "Browser.downloadWillBegin" => {
@@ -1118,6 +1104,7 @@ impl Watcher {
                 let target = TargetId(target_info.target_id);
                 self.lifecycle_sources.attach(&session_id, &target);
                 self.sessions.insert(session_id.clone(), target.clone());
+                self.lease_for_context_listeners(&session_id);
                 if self.lifecycle_sources.accepts(&session_id) {
                     self.seed_lifecycle(&target, &session_id).await;
                 }
@@ -1257,6 +1244,33 @@ impl Watcher {
             .await;
     }
 
+    /// A page attached after a run began listening on the whole context (`context.on('console')`,
+    /// a context binding) gets that run's `Runtime` lease too, as the pages open at the listen
+    /// did (`event_op::lease_runtime`). Spawned, so the watcher never waits on the enable.
+    fn lease_for_context_listeners(&self, session_id: &SessionId) {
+        let leases = Arc::clone(self.browser.page_signals.runtime_leases());
+        for run in self.writer.hub().live_runs() {
+            for (subscription, since_ms) in run.events.context_runtime_listeners() {
+                let session = self
+                    .browser
+                    .protocol_session(session_id.clone())
+                    .at_connection_epoch();
+                let leases = Arc::clone(&leases);
+                let run = Arc::clone(&run);
+                drop(tokio::spawn(async move {
+                    #[expect(
+                        clippy::cast_precision_loss,
+                        reason = "epoch milliseconds stay far below 2^53"
+                    )]
+                    let floor = since_ms as f64;
+                    if let Ok(lease) = leases.acquire(&session, floor).await {
+                        run.events.hold_runtime(&subscription, vec![lease]);
+                    }
+                }));
+            }
+        }
+    }
+
     /// Sessions can attach to a tab whose documents existed before this watcher. Remember
     /// those frames silently so their first removal still carries a real Frame payload.
     async fn seed_lifecycle(&mut self, target: &TargetId, session: &SessionId) {
@@ -1366,6 +1380,26 @@ impl Watcher {
             .get("timestamp")
             .and_then(Value::as_f64)
             .is_some_and(|stamped| stamped < floor)
+    }
+
+    /// A console message or uncaught exception, for the runs listening on its tab, unless it
+    /// is history the browser replayed when a lease enabled `Runtime`.
+    async fn runtime_report(&mut self, method: &str, session: SessionId, params: Value) {
+        if self.replayed(&session, &params) {
+            return;
+        }
+        if method == "Runtime.consoleAPICalled" {
+            if let Some(target) = self.wanted(&session, PageEventKind::Console).await
+                && let Some(params) = parse::<ConsoleParams>(params)
+            {
+                self.console(&session, target, params);
+            }
+        } else if let Some(target) = self.wanted(&session, PageEventKind::PageError).await
+            && let Some(params) = parse::<ExceptionParams>(params)
+        {
+            let error = PageError::from_params(target, params);
+            self.writer.record(PageEvent::PageError(error));
+        }
     }
 
     async fn wanted(&mut self, session: &SessionId, event: PageEventKind) -> Option<TargetId> {

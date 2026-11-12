@@ -15,6 +15,7 @@ use tokio::sync::Notify;
 use tokio::time;
 
 use crate::events::event_hub::LOG_CAPACITY;
+use crate::events::event_op::needs_runtime;
 use crate::events::page_event::BindingCalled;
 use crate::events::{ListenerKey, PageEventKind, Subscription};
 
@@ -170,6 +171,19 @@ impl RunEvents {
         inner
             .runtime
             .retain(|subscription, _| subscription.key() != *key);
+    }
+
+    /// The run's context listeners (`context.on`) whose events only `Runtime` reports, with
+    /// the script's clock when each began: a page that attaches later takes a lease for them.
+    pub(crate) fn context_runtime_listeners(&self) -> Vec<(Subscription, u64)> {
+        self.lock()
+            .listening
+            .iter()
+            .filter(|(subscription, _)| {
+                matches!(subscription, Subscription::Context(event) if needs_runtime(*event))
+            })
+            .map(|(subscription, listening)| (subscription.clone(), listening.since_ms))
+            .collect()
     }
 
     /// Keeps `leases` for as long as `subscription` listens. One removed while they were taken
