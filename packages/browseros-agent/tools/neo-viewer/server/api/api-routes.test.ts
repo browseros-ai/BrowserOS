@@ -21,7 +21,7 @@ afterEach(async () => {
 
 test('the API lists tasks, a task with its runs, one run in full, and streams each change', async () => {
   const neo = startFakeNeo(() => ({
-    chunks: [sseEvent(runResult(1, '"done"', { value: 'done' }))],
+    chunks: [sseEvent(runResult(1, '### Result\n"done"'))],
   }))
   cleanups.push(() => neo.stop())
   const dataDir = await mkdtemp(join(tmpdir(), 'neo-viewer-api-'))
@@ -90,7 +90,7 @@ test('the API lists tasks, a task with its runs, one run in full, and streams ea
   expect(log.totals).toMatchObject({ runs: 1, running: 0, failed: 0 })
   expect(runs.map((run) => run.status)).toEqual(['ok'])
   const { run } = await get<RunResponse>(apiRoutes.run(runs[0]?.id ?? ''))
-  expect(run.reply.text).toBe('"done"')
+  expect(run.reply.text).toBe('### Result\n"done"')
   const kinds = events.map((event) =>
     event.type === 'run' ? `run:${event.run.status}` : event.type,
   )
@@ -145,7 +145,7 @@ test('the API lists tasks, a task with its runs, one run in full, and streams ea
 /** A viewer whose Neo answers a run at once and whose host API gives its record after `recordDelayMs`. */
 async function viewerWithSlowRecord(recordDelayMs: number, waitMs: number) {
   const neo = startFakeNeo(() => ({
-    chunks: [sseEvent(runResult(1, '1', { value: 1 }))],
+    chunks: [sseEvent(runResult(1, '### Result\n1'))],
   }))
   cleanups.push(() => neo.stop())
   const record = {

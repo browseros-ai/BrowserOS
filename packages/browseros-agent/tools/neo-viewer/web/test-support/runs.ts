@@ -30,7 +30,7 @@ export function runSummary(
     options.reply === undefined
       ? status === 'running'
         ? null
-        : String(seq)
+        : `### Result\n${seq}`
       : options.reply
   return {
     id: `run-${seq}`,

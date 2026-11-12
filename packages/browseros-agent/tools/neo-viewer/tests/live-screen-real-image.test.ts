@@ -26,6 +26,7 @@ import {
   liveRoutes,
   type TakeoverResponse,
 } from '../shared/live-screen'
+import { replyParts } from '../web/screen/reply'
 
 const upstream = process.env.NEO_VIEWER_REAL_UPSTREAM
 const hostUrl = process.env.NEO_VIEWER_REAL_HOST
@@ -186,7 +187,7 @@ describeReal('the live screen on a real image', () => {
     const { text } = await run(
       'return await page.evaluate(() => ({ x: screenX, y: screenY, outerWidth, outerHeight, innerHeight }))',
     )
-    const box = JSON.parse(text) as Record<string, number>
+    const box = JSON.parse(replyParts(text).value) as Record<string, number>
     const chrome = (box.outerHeight ?? 0) - (box.innerHeight ?? 0)
     return {
       x: Math.round((box.x ?? 0) + (box.outerWidth ?? 0) / 2),
@@ -227,7 +228,7 @@ describeReal('the live screen on a real image', () => {
           `await page.setContent(${JSON.stringify(TEST_PAGE)}); return 'ready'`,
         )
       ).text,
-    ).toBe('"ready"')
+    ).toBe('### Result\n"ready"')
     const status = await liveStatus()
     expect(status.host).toEqual({ state: 'up' })
     // The agent named no task: the screen follows the tab its latest run acted on.
@@ -250,7 +251,7 @@ describeReal('the live screen on a real image', () => {
     control.type('neo')
     await Bun.sleep(700)
     control.close()
-    expect(JSON.parse((await run(READ_PAGE)).text)).toEqual({
+    expect(JSON.parse(replyParts((await run(READ_PAGE)).text).value)).toEqual({
       title: 'clicks 1',
       value: 'neo',
     })
@@ -275,7 +276,7 @@ describeReal('the live screen on a real image', () => {
     // Give back: Neo closes the owner's display with 4002 and the agent runs again.
     expect((await post(liveRoutes.release(takeover.id), {})).status).toBe(200)
     expect((await owner.closed).code).toBe(displayClose.released)
-    expect(JSON.parse((await run(READ_PAGE)).text)).toEqual({
+    expect(JSON.parse(replyParts((await run(READ_PAGE)).text).value)).toEqual({
       title: 'clicks 2',
       value: 'neo',
     })
@@ -288,7 +289,7 @@ describeReal('the live screen on a real image', () => {
           task,
         )
       ).text,
-    ).toBe('"ok"')
+    ).toBe('### Result\n"ok"')
     const tasked = await liveStatus()
     expect(tasked.agent?.taskId).toBe(task)
     expect(tasked.agent?.tab.title).toBe('tasked')

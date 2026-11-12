@@ -6,9 +6,9 @@ import { useRunDetail } from './use-viewer'
 
 describe('a run read once', () => {
   it('starts a second view from what its block read, and keeps it when a refetch fails', async () => {
-    const run = runSummary(731, { reply: '"read"' })
+    const run = runSummary(731, { reply: '### Result\n"read"' })
     const details = new Map<string, RunDetail>([
-      [run.id, runDetail(run, '"read"')],
+      [run.id, runDetail(run, '### Result\n"read"')],
     ])
     const dom = await installDom(details)
     function Shown({ name }: { name: string }) {
@@ -20,11 +20,11 @@ describe('a run read once', () => {
       )
     }
     await dom.render(<Shown name="block" />)
-    expect(dom.container.textContent).toBe('block: "read"')
+    expect(dom.container.textContent).toBe('block: ### Result\n"read"')
     // The panel opens on the same run, and its own read fails.
     details.delete(run.id)
     await dom.render(<Shown name="panel" />)
-    expect(dom.container.textContent).toBe('panel: "read"')
+    expect(dom.container.textContent).toBe('panel: ### Result\n"read"')
     dom.restore()
   })
 })

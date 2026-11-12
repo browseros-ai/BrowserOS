@@ -19,7 +19,9 @@ describe("the plain page's reply", () => {
     const json = JSON.stringify(snapshot)
     const shown = text(
       renderToStaticMarkup(
-        <FormattedReply detail={detailWith(1, { text: json, neo: null })} />,
+        <FormattedReply
+          detail={detailWith(1, { text: `### Result\n${json}`, neo: null })}
+        />,
       ),
     )
     expect(shown).toContain(
@@ -31,7 +33,7 @@ describe("the plain page's reply", () => {
     expect(shown).not.toContain('\\n')
   })
 
-  it('shows run 8, and the same value before an unknown line, decoded with the line under it', () => {
+  it('shows the snapshot decoded, followed by its Notes or Tips section', () => {
     for (const [reply, trailer] of TRAILED) {
       const shown = text(
         renderToStaticMarkup(
@@ -49,7 +51,7 @@ describe("the plain page's reply", () => {
     const shown = text(
       renderToStaticMarkup(
         <FormattedReply
-          detail={detailWith(2, { text: '{"a":1}', neo: null })}
+          detail={detailWith(2, { text: '### Result\n{"a":1}', neo: null })}
         />,
       ),
     )
@@ -61,22 +63,32 @@ describe("the plain page's reply", () => {
     const json = JSON.stringify(
       '- link "Hacker News" [ref=e16]\n- text: "|"\n- link "new"',
     )
-    expect(previewText(json)).toBe(
+    expect(previewText(`### Result\n${json}`)).toBe(
       '- link "Hacker News" [ref=e16]\n- text: "|"\n- link "new"',
     )
-    expect(previewText(json.slice(0, 25))).toBe('- link "Hacker News" [')
-    expect(previewText(json.slice(0, json.indexOf('\\n') + 1))).toBe(
-      '- link "Hacker News" [ref=e16]',
+    expect(previewText(`### Result\n${json.slice(0, 25)}`)).toBe(
+      '- link "Hacker News" [',
     )
+    expect(
+      previewText(`### Result\n${json.slice(0, json.indexOf('\\n') + 1)}`),
+    ).toBe('- link "Hacker News" [ref=e16]')
     // Cut right after a whole `\\` escape, and inside a `\u0000` escape.
     const slash = JSON.stringify('path C:\\dir')
-    expect(previewText(slash.slice(0, -1))).toBe('path C:\\dir')
-    expect(previewText(`${JSON.stringify('a\\')}`.slice(0, -1))).toBe('a\\')
+    expect(previewText(`### Result\n${slash.slice(0, -1)}`)).toBe(
+      'path C:\\dir',
+    )
+    expect(
+      previewText(`### Result\n${JSON.stringify('a\\').slice(0, -1)}`),
+    ).toBe('a\\')
     const nul = JSON.stringify('a\u0000b')
     for (let end = 2; end < nul.length; end++)
-      expect(previewText(nul.slice(0, end)).startsWith('a')).toBe(true)
-    expect(previewText(nul.slice(0, 4))).toBe('a')
-    expect(previewText('{"a":1}')).toBe('{"a":1}')
-    expect(previewText('script / no_match: x')).toBe('script / no_match: x')
+      expect(
+        previewText(`### Result\n${nul.slice(0, end)}`).startsWith('a'),
+      ).toBe(true)
+    expect(previewText(`### Result\n${nul.slice(0, 4)}`)).toBe('a')
+    expect(previewText('### Result\n{"a":1}')).toBe('{"a":1}')
+    expect(previewText('### Error\nscript / no_match: x')).toBe(
+      'script / no_match: x',
+    )
   })
 })

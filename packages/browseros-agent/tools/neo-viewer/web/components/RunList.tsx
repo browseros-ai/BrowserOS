@@ -2,6 +2,7 @@ import { useState } from 'react'
 import type { RunDetail, RunStatus, RunSummary } from '../../shared/api'
 import { decodedNote, returnedString } from '../../shared/run-markdown'
 import { clockTime, duration, prettyJson, tokens } from '../format'
+import { replyParts } from '../screen/reply'
 import { useRunDetail } from '../use-viewer'
 
 const STATUS_STYLE: Record<RunStatus, string> = {
@@ -121,8 +122,9 @@ function Reply({ detail }: { detail: RunDetail }) {
  * in the one line), even when the preview cut it short; anything else as the model read it.
  */
 export function previewText(preview: string): string {
-  const first = preview.split('\n', 1)[0] ?? ''
-  if (!first.startsWith('"')) return preview
+  const value = replyParts(preview).value
+  const first = value.split('\n', 1)[0] ?? ''
+  if (!first.startsWith('"')) return value
   // The preview is the reply's first characters (`run-store.ts`), so it can end inside an escape
   // (`\`, `\u00`). Only a cut between escapes parses once closed with a quote, so the first of
   // these that parses is the decoded text up to the cut; an escape is at most 6 characters.
@@ -137,7 +139,7 @@ export function previewText(preview: string): string {
       // cut inside an escape, or not a string: try the next form
     }
   }
-  return preview
+  return value
 }
 
 /**

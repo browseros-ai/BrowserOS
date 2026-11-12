@@ -64,7 +64,7 @@ export function modelReadText(detail: RunDetail): string | null {
 
 /**
  * The run's returned value when it is a string, decoded for a person: Neo writes the value as the
- * reply's first line, one line of JSON (`"- link [ref=e1]\n- …"`), so a returned snapshot reaches
+ * Result section, one line of JSON (`"- link [ref=e1]\n- …"`), so a returned snapshot reaches
  * the model as escaped `\n` and `\"`. `json` is that line as the model received it; `rest` every
  * line after it (console lines, notes, tips), as read. Null for anything else (an error line, an
  * object, no reply text).
@@ -82,9 +82,10 @@ export function returnedString(
     return null
   }
   if (typeof value !== 'string') return null
-  // The text after the value exactly as the model read it (console lines, notes), not rebuilt
-  // from parsed pieces, which could take a console line for one of Neo's notes.
-  const rest = text.slice(parts.value.length).replace(/^\n/, '')
+  // Keep the following sections' headers and escapes exactly as the model read them.
+  const rest = text
+    .slice(text.indexOf(parts.value) + parts.value.length)
+    .replace(/^\n/, '')
   return { value, json: parts.value, rest }
 }
 
@@ -348,7 +349,7 @@ function modelRead(detail: RunDetail, options: RunMarkdownOptions): string[] {
 }
 
 /**
- * A returned string decoded, then the console lines and notes after it as the model read them.
+ * A returned string decoded, then the console, notes and tips sections as the model read them.
  * The two share the one inline allowance a reply has, so an export stays as bounded as before.
  */
 function decodedRead(
@@ -377,7 +378,7 @@ function afterValue(
   const file = options.replyFile
   if (left === 0)
     return [
-      `Console lines or notes follow it${file ? `; they are in [${file}](${file})` : ''}.`,
+      `Console lines, notes or tips follow it${file ? `; they are in [${file}](${file})` : ''}.`,
     ]
   const shown = bounded(rest, { ...options, replyChars: left })
   return ['Then, as the model read them:', '', ...shown]

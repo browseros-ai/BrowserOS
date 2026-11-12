@@ -78,7 +78,7 @@ describe('a run in the store', () => {
         contentType: 'text/event-stream',
         contentEncoding: null,
         raw: '',
-        text: '1',
+        text: '### Result\n1',
         structuredContent: null,
         isError: false,
         meta: replyMeta,

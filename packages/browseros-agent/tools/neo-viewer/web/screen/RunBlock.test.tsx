@@ -280,7 +280,7 @@ describe("an open run's methods", () => {
       operation(4, 'page.ariaSnapshot', { line: 1, startOffsetMs: 20 }),
       operation(5, 'page.snapshotPending', { line: 1, startOffsetMs: 80 }),
     ]
-    const run = runSummary(9, { code: snapshotCode, reply: '"x"' })
+    const run = runSummary(9, { code: snapshotCode, reply: '### Result\n"x"' })
     await show(run, detailWith(run, record(operations, 100)))
     expect(methods()).toEqual([
       'page.ariaSnapshot on line 1',

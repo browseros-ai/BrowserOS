@@ -6,11 +6,23 @@ const seqs = (runs: { seq: number }[]) => runs.map((run) => run.seq)
 
 describe('sorting the runs', () => {
   const runs = [
-    runSummary(1, { roundTripMs: 431, reply: 'y'.repeat(16) }),
-    runSummary(2, { roundTripMs: 47, reply: 'y'.repeat(888) }),
-    runSummary(3, { roundTripMs: 133, reply: 'y'.repeat(48) }),
+    runSummary(1, {
+      roundTripMs: 431,
+      reply: `### Result\n"${'y'.repeat(16)}"`,
+    }),
+    runSummary(2, {
+      roundTripMs: 47,
+      reply: `### Result\n"${'y'.repeat(888)}"`,
+    }),
+    runSummary(3, {
+      roundTripMs: 133,
+      reply: `### Result\n"${'y'.repeat(48)}"`,
+    }),
     runSummary(4, { roundTripMs: null }),
-    runSummary(5, { roundTripMs: 866, reply: 'y'.repeat(32) }),
+    runSummary(5, {
+      roundTripMs: 866,
+      reply: `### Result\n"${'y'.repeat(32)}"`,
+    }),
   ]
 
   it('starts in the order the calls arrived', () => {

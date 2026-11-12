@@ -271,6 +271,8 @@ describeReal('through a real Neo image', () => {
       'claude-code',
       'Bun',
     ])
-    expect(runs[2]?.replyPreview).toBe('7\nconsole:\nhi\n[warn] careful')
+    expect(runs[2]?.replyPreview).toBe(
+      '### Result\n7\n### Console\nhi\n[warn] careful',
+    )
   })
 })

@@ -148,6 +148,7 @@ function completeRun(run: RunDetail) {
       valueText: parts.value,
       console: parts.console,
       notes: parts.notes,
+      tips: parts.tips,
     },
   }
 }

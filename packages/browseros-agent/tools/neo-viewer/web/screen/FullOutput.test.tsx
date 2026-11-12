@@ -7,19 +7,19 @@ import { runDetail, runSummary } from '../test-support/runs'
 import { FullOutput } from './FullOutput'
 import type { OperationSelection } from './operations'
 
-// What `page.ariaSnapshot({ mode: 'ai' })` returned, as Neo writes a value: one line of JSON.
+// What `page.ariaSnapshot({ mode: 'ai' })` returned, as Neo writes a Result section: one line of JSON.
 const snapshot = [
   '- generic [active] [ref=e1]:',
   '  - textbox "Full name" [ref=e5]',
   '  - combobox "Country" [ref=e7]',
 ].join('\n')
-const replyText = JSON.stringify({ snapshot, title: 'Form' })
+const replyText = `### Result\n${JSON.stringify({ snapshot, title: 'Form' })}`
 
 const runs: RunSummary[] = [
-  runSummary(1, { reply: '"first"' }),
+  runSummary(1, { reply: '### Result\n"first"' }),
   runSummary(2, { reply: replyText }),
   runSummary(3, { roundTripMs: null }),
-  runSummary(4, { reply: '"fourth"' }),
+  runSummary(4, { reply: '### Result\n"fourth"' }),
 ]
 
 describe('the full output pop-up', () => {
@@ -116,9 +116,9 @@ describe('the full output pop-up', () => {
   it('searches the raw reply when Raw is chosen', async () => {
     await dom.interact(() => fire(button('Raw'), 'click'))
     await dom.interact(() => typeInto(search(), 'ref=e'))
-    // The raw text is one line of JSON: the three refs are on line 1.
+    // The raw Result header is line 1; the three refs are in the JSON on line 2.
     expect(counter()).toBe('1/3')
-    expect(dialog().textContent).toContain('1 line')
+    expect(dialog().textContent).toContain('2 lines')
   })
 
   it("moves to the previous and next finished run's output, skipping one still running", async () => {
@@ -149,7 +149,7 @@ describe('the full output pop-up on a call', () => {
   ]
   const run = runSummary(8, {
     code: 'for (const i of [1, 2]) shots.push(await page.ariaSnapshot({ text: true }))',
-    reply: '"done"',
+    reply: '### Result\n"done"',
   })
   const operations = [4, 6].flatMap((seq, index) => [
     operation(seq, 'page.ariaSnapshot', {
@@ -224,7 +224,7 @@ describe('the full output pop-up on a call', () => {
 })
 
 describe('the full output pop-up on a call not read yet', () => {
-  const run = runSummary(9, { reply: '"done"' })
+  const run = runSummary(9, { reply: '### Result\n"done"' })
   const details = new Map<string, RunDetail>([
     // Neo's record has no such call (or has not been read): no reply in its place.
     [run.id, { ...runDetail(run, '"done"'), neo: record([]) }],
@@ -236,7 +236,7 @@ describe('the full output pop-up on a call not read yet', () => {
     await dom.render(
       <FullOutput
         run={run}
-        runs={[run, runSummary(10, { reply: '"next"' })]}
+        runs={[run, runSummary(10, { reply: '### Result\n"next"' })]}
         onRun={() => {}}
         operation={{
           runId: run.id,
