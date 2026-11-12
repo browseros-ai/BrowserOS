@@ -12,7 +12,7 @@
  * - `__neo.brands.register(brand, fromJson)`: the reviver for one brand in results.
  * - `__neo.onReply(listener)`: every reply envelope, before its value is revived. Its `pages`
  *   facts keep `page.url()`, `isClosed()` and `context.pages()` current between ops, and its
- *   `defaultPage` names the tab the door opened for the run's lazy page.
+ *   `defaultPage` names the tab the door opened, or a task pick bound, for the run's lazy page.
  * - `__neo.provide(name, build)`: one parameter of the agent's function. `build(init)` runs
  *   once, when the run starts; `init.page` is the run's page brand when it already has a tab,
  *   and `init.pages`, when the run service sends it, lists every tab as reply facts do. A

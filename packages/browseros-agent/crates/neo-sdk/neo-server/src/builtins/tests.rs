@@ -3487,11 +3487,15 @@ async fn a_picked_task_reuses_its_last_used_tab_then_newest_then_opens_one()
     let lazy = json!({ "page": { "$neo": "page", "tab": null } });
     for expected in [&pages[0], &pages[2], &pages[1]] {
         let (run, _guard) = harness.run()?;
-        value(
-            harness
-                .submit(&run, "neo.task", json!({ "id": task["id"] }))
-                .await,
-        )?;
+        let picked = harness
+            .submit(&run, "neo.task", json!({ "id": task["id"] }))
+            .await;
+        assert_eq!(
+            picked.default_page.as_ref(),
+            Some(expected),
+            "the pick binds `page` to the tab its first action would take"
+        );
+        value(picked)?;
         let reply = harness.submit(&run, "page.opener", lazy.clone()).await;
         assert_eq!(reply.default_page.as_ref(), Some(expected));
         assert_eq!(reply.pages[0].task_id.as_deref(), task["id"].as_str());
@@ -3503,17 +3507,167 @@ async fn a_picked_task_reuses_its_last_used_tab_then_newest_then_opens_one()
         )?;
     }
     let (empty, _empty_guard) = harness.run()?;
-    value(
-        harness
-            .submit(&empty, "neo.task", json!({ "id": task["id"] }))
-            .await,
-    )?;
+    let picked = harness
+        .submit(&empty, "neo.task", json!({ "id": task["id"] }))
+        .await;
+    assert_eq!(
+        picked.default_page, None,
+        "a task with no open tab leaves `page` to open one at its first action"
+    );
+    value(picked)?;
     let reply = harness.submit(&empty, "page.opener", lazy).await;
     let fresh = reply.default_page.clone().ok_or("fresh default")?;
     assert!(!pages.contains(&fresh), "no closed tab is reused");
     assert_eq!(reply.pages[0].task_id.as_deref(), task["id"].as_str());
     value(reply)?;
     Ok(())
+}
+
+/// An earlier run's task with one tab showing `url`, as core's cache now lists it.
+async fn task_on(harness: &Harness, url: &str) -> Result<(Value, PageRef), Box<dyn Error>> {
+    let (creator, _guard) = harness.run()?;
+    let task = value(harness.submit(&creator, "neo.createTask", json!({})).await)?;
+    let tab = page_of(&value(
+        harness.submit(&creator, "context.newPage", json!({})).await,
+    )?)?;
+    assert!(harness.fake.navigate_tab(tab.tab, url, "Task"));
+    harness.listed(tab.tab).await?;
+    Ok((task, tab))
+}
+
+#[tokio::test]
+async fn a_task_pick_binds_the_runs_page_and_its_fact_passes_the_read_rules()
+-> Result<(), Box<dyn Error>> {
+    let harness = Harness::new().await?;
+    let (task, tab) = task_on(&harness, "https://task.example/held").await?;
+    let opened = harness.fake.count("Browser.createTab");
+    // Reads blocked: `page` still becomes the task's tab, with nothing of it to read.
+    let lock = harness.lock(tab.tab, Reads::Block).await?;
+    let (blocked, _blocked_guard) = harness.run()?;
+    let picked = harness
+        .submit(&blocked, "neo.task", json!({ "id": task["id"] }))
+        .await;
+    assert_eq!(picked.default_page.as_ref(), Some(&tab));
+    assert!(
+        picked.pages.iter().all(|fact| fact.tab != tab.tab),
+        "a tab held with blocked reads gives no fact: {:?}",
+        picked.pages
+    );
+    value(picked)?;
+    harness.locks.unlock_host(lock.id)?;
+    // Reads allowed: the same pick carries the tab's URL and task.
+    let lock = harness.lock(tab.tab, Reads::Allow).await?;
+    let (allowed, _allowed_guard) = harness.run()?;
+    let picked = harness
+        .submit(&allowed, "neo.task", json!({ "id": task["id"] }))
+        .await;
+    assert_eq!(picked.default_page.as_ref(), Some(&tab));
+    let fact = picked
+        .pages
+        .iter()
+        .find(|fact| fact.tab == tab.tab)
+        .ok_or("the task tab's fact")?;
+    assert_eq!(
+        (fact.url.as_deref(), fact.task_id.as_deref(), fact.closed),
+        (
+            Some("https://task.example/held"),
+            task["id"].as_str(),
+            false
+        )
+    );
+    value(picked)?;
+    harness.locks.unlock_host(lock.id)?;
+    assert_eq!(
+        harness.fake.count("Browser.createTab"),
+        opened,
+        "a pick opens nothing"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn the_first_tab_a_runs_page_gets_holds_for_the_run() -> Result<(), Box<dyn Error>> {
+    let harness = Harness::new().await?;
+    let (first, first_tab) = task_on(&harness, "https://first.example/").await?;
+    let (second, _second_tab) = task_on(&harness, "https://second.example/").await?;
+    let lazy = json!({ "page": { "$neo": "page", "tab": null } });
+    let (run, _guard) = harness.run()?;
+    let empty = value(harness.submit(&run, "neo.createTask", json!({})).await)?;
+    // A task with no open tab binds nothing, so the next pick still can.
+    let none = harness
+        .submit(&run, "neo.task", json!({ "id": empty["id"] }))
+        .await;
+    assert_eq!(none.default_page, None);
+    value(none)?;
+    let bound = harness
+        .submit(&run, "neo.task", json!({ "id": first["id"] }))
+        .await;
+    assert_eq!(bound.default_page.as_ref(), Some(&first_tab));
+    value(bound)?;
+    // Later picks steer new tabs, never the bound `page`.
+    let later = harness
+        .submit(&run, "neo.task", json!({ "id": second["id"] }))
+        .await;
+    assert_eq!(later.default_page, None);
+    value(later)?;
+    let created = value(harness.submit(&run, "neo.createTask", json!({})).await)?;
+    let acted = harness.submit(&run, "page.opener", lazy.clone()).await;
+    assert_eq!(acted.default_page.as_ref(), Some(&first_tab));
+    value(acted)?;
+    let opened = harness.submit(&run, "context.newPage", json!({})).await;
+    assert_eq!(opened.pages[0].task_id.as_deref(), created["id"].as_str());
+    value(opened)?;
+    // A page its first action resolved stays, too.
+    let (resolved, _resolved_guard) = harness.run()?;
+    let fresh = harness.submit(&resolved, "page.opener", lazy.clone()).await;
+    let fresh_tab = fresh.default_page.clone().ok_or("a fresh tab")?;
+    value(fresh)?;
+    let picked = harness
+        .submit(&resolved, "neo.task", json!({ "id": first["id"] }))
+        .await;
+    assert_eq!(picked.default_page, None);
+    value(picked)?;
+    let again = harness.submit(&resolved, "page.opener", lazy).await;
+    assert_eq!(again.default_page, Some(fresh_tab));
+    value(again)?;
+    Ok(())
+}
+
+/// The viewer's report (night 4e58b2527, VIEWER.md 4.5): after `await neo.task(id)` the built-in
+/// `page` read `about:blank` until its first awaited call. Playwright's getters are right as soon
+/// as a script holds a page.
+#[test]
+fn a_task_picks_page_getters_are_its_tabs_before_any_action() -> Result<(), TestError> {
+    on_neo_runtime(async {
+        let harness = Harness::new().await.map_err(|error| error.to_string())?;
+        let (task, tab) = task_on(&harness, "https://task.example/at-once")
+            .await
+            .map_err(|error| error.to_string())?;
+        let id = task["id"].as_str().ok_or("a task id")?;
+        let (run, _guard) = harness.run().map_err(|error| error.to_string())?;
+        let script = Script {
+            code: format!(
+                "const task = await neo.task({id:?});
+                 return {{ url: page.url(), frame: page.mainFrame().url(), tab: page.tabId,
+                   task: page.taskId, closed: page.isClosed(),
+                   listed: context.pages().includes(page), inTask: task.pages().includes(page) }};"
+            ),
+            page: None,
+            pages: Vec::new(),
+            observed: None,
+        };
+        match run_script(&run, &harness.dispatcher, script).await.outcome {
+            ScriptOutcome::Returned(value) => assert_eq!(
+                value,
+                json!({
+                    "url": "https://task.example/at-once", "frame": "https://task.example/at-once",
+                    "tab": tab.tab.0, "task": id, "closed": false, "listed": true, "inTask": true
+                })
+            ),
+            other => return Err(format!("expected the task tab's getters, got {other:?}").into()),
+        }
+        Ok(())
+    })
 }
 
 #[tokio::test]

@@ -36,6 +36,19 @@ pub(crate) enum TaskError {
     InvalidId(#[from] IdError),
 }
 
+impl TaskRecord {
+    /// The tab built-in `page` takes in this task: the last-used one, else the newest, among
+    /// those `usable` admits. The lazy page's open (`Dispatcher::open_default_page`) and
+    /// `neo.task`'s pick both choose through here, so a pick binds `page` to the very tab its
+    /// first action would have taken.
+    pub(crate) fn page_tab(&self, mut usable: impl FnMut(TabId) -> bool) -> Option<TabId> {
+        self.last_used_tab
+            .into_iter()
+            .chain(self.tabs.iter().rev().copied())
+            .find(|tab| usable(*tab))
+    }
+}
+
 /// Updated with the tab registry, so a close removes its owner and task membership together.
 #[derive(Default)]
 pub(super) struct TaskBook {

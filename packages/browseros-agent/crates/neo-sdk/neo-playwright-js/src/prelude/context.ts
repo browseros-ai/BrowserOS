@@ -46,6 +46,14 @@ export class BrowserContext extends EventEmitter {
   readonly #byTab = new Map<number, Page>()
   /** The run's `page` while it has no tab; the reply that names its tab clears it. */
   #unopened: Page | null = null
+  /**
+   * The Page the run's `page` replaced as its tab's entry, when that reply named a tab the
+   * realm already had an object for: the init lists every tab, and the script may hold that
+   * object (from `context.newPage()` or `context.pages()`) when `neo.task` binds `page` to
+   * it. Lookups by tab, results and events name the run's `page` from then on, but the old
+   * object keeps its tab's facts, so its `url()` and `isClosed()` do not freeze.
+   */
+  #displaced: Page | null = null
   /** Set once the run's page exists: a page first seen after it is working (`Page._working`). */
   #started = false
 
@@ -196,6 +204,12 @@ export class BrowserContext extends EventEmitter {
       this.#byTab.set(fact.tab, page)
     }
     page._applyFact(fact, at, approved)
+    const displaced = this.#displaced
+    if (displaced?._tab === fact.tab && displaced !== page) {
+      // Worker facts start worker monitoring for the object they reach: the tab's entry only.
+      const { workers: _workers, ...shared } = fact
+      displaced._applyFact(shared, at, approved)
+    }
     return page
   }
 
@@ -255,6 +269,8 @@ export class BrowserContext extends EventEmitter {
     if (defaultPage && page) {
       this.#unopened = null
       page._tab = defaultPage.tab
+      const held = this.#byTab.get(defaultPage.tab)
+      if (held && held !== page) this.#displaced = held
       this.#byTab.set(defaultPage.tab, page)
     }
     const approved = new Map<number, number>()

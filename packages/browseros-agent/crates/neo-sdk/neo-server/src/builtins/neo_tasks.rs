@@ -135,6 +135,14 @@ impl Method for FetchTask {
             op.report_page(page, PageChange::Linked);
         }
         op.run().picked_task(&task, TaskKind::Fetched);
+        // Built-in `page` takes the task's tab now, not at its first action, so its synchronous
+        // getters (`page.url()`, `page.taskId`) are the tab's as soon as this await returns, as
+        // Playwright's are once a script holds a page. The tab is one of the Linked pages
+        // above, so its fact rides this reply. A task with no open tab leaves `page` lazy: its
+        // first action opens a tab in the task, and `about:blank` is then the truth.
+        if let Some(tab) = task.page_tab(|tab| pages.iter().any(|page| page.tab == tab)) {
+            op.bind_run_page(&PageRef { tab });
+        }
         Ok(TaskPages { id: task.id, pages })
     }
 }

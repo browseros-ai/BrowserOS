@@ -119,7 +119,7 @@ With no task selected by the host or script, built-in `page` opens a new blank b
 
 To keep tabs across runs, call `const task = await neo.createTask(name)` and return `task.id`. Start later runs with `await neo.task(id)`. The latest `neo.createTask` or `neo.task` call picks the script's current task:
 
-- Built-in `page` uses that task's last-used open tab, else another open tab in it, else a new tab in it. It picks the tab at its first action; until then `page.tabId` and `page.taskId` are null and `page.url()` is `about:blank`.
+- Built-in `page` uses that task's last-used open tab, else another open tab in it, else a new tab in it. `neo.task(id)` binds it to that open tab at once, so `page.url()`, `page.tabId` and `page.taskId` are the tab's on the next line (a tab whose host lock blocks reads binds with nothing to read). Without an open tab to bind, it picks the tab at its first action; until then `page.tabId` and `page.taskId` are null and `page.url()` is `about:blank`. Once `page` has a tab it keeps it for the run: later picks steer new tabs only.
 - `context.newPage()` opens in the current task; `task.newPage()` opens in that task. Popups join their opener's task.
 - `task.pages()` lists its tabs oldest first; `task.page(tabId)` picks one. Scripts may declare their own `const page`.
 - `await task.close()` closes the task's tabs and ends it.

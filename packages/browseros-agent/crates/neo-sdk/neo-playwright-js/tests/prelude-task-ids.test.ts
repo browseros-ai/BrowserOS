@@ -22,6 +22,56 @@ it('keeps both identifiers null until the built-in page opens', async () => {
   expect(runtime.calls.map((call) => call.name)).toEqual(['page.title'])
 })
 
+it('keeps a held page current after a reply binds the built-in page to its tab', async () => {
+  // As neo.task's reply does once the script already holds a Page for the task's tab: the
+  // built-in page becomes the tab's entry, and the object the script holds keeps its facts.
+  const open = {
+    tab: 101,
+    taskId: 't-1',
+    url: 'https://a.example/',
+    title: 'A',
+    closed: false,
+  }
+  const replies = [
+    {
+      ok: { $neo: 'page', tab: 101 },
+      pages: [open],
+      observed: { seq: 1, events: 0 },
+    },
+    {
+      ok: null,
+      defaultPage: { tab: 101 },
+      pages: [{ ...open, url: 'https://b.example/' }],
+      observed: { seq: 2, events: 0 },
+    },
+    {
+      ok: null,
+      pages: [{ ...open, url: null, title: null, closed: true }],
+      observed: { seq: 3, events: 1 },
+    },
+  ]
+  const runtime = loadPrelude({ answer: () => replies.shift() })
+  expect(
+    json(
+      await runtime.run(`
+    const held = await __neo.invoke('test.page', {});
+    await __neo.invoke('test.pick', {});
+    const bound = { page: [page.tabId, page.url()], held: held.url(),
+      entry: context.pages().length === 1 && context.pages()[0] === page };
+    await __neo.invoke('test.close', {});
+    return { bound, closed: [page.isClosed(), held.isClosed()] };
+  `),
+    ),
+  ).toEqual({
+    bound: {
+      page: [101, 'https://b.example/'],
+      held: 'https://b.example/',
+      entry: true,
+    },
+    closed: [true, true],
+  })
+})
+
 it('reads task ownership from init facts without changing Page identity', async () => {
   const runtime = loadPrelude({
     seed: {

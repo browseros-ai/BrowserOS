@@ -11782,6 +11782,7 @@ ${changes}`;
     _browser = null;
     #byTab = new Map;
     #unopened = null;
+    #displaced = null;
     #started = false;
     constructor() {
       super();
@@ -11851,6 +11852,11 @@ ${changes}`;
         this.#byTab.set(fact.tab, page);
       }
       page._applyFact(fact, at, approved);
+      const displaced = this.#displaced;
+      if (displaced?._tab === fact.tab && displaced !== page) {
+        const { workers: _workers, ...shared } = fact;
+        displaced._applyFact(shared, at, approved);
+      }
       return page;
     }
     _pageFromResult(value, url) {
@@ -11886,6 +11892,9 @@ ${changes}`;
       if (defaultPage && page) {
         this.#unopened = null;
         page._tab = defaultPage.tab;
+        const held = this.#byTab.get(defaultPage.tab);
+        if (held && held !== page)
+          this.#displaced = held;
         this.#byTab.set(defaultPage.tab, page);
       }
       const approved = new Map;

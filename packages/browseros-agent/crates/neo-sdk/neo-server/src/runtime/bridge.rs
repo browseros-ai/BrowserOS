@@ -95,8 +95,8 @@ impl NavigationReceipt {
 }
 
 /// The JS wire form of an `OpReply`: `{"ok": value, "pages": […]}` or `{"err": {…}, "pages":
-/// […]}`, plus `defaultPage` once the call opened the run's own page and `pumped` once an op
-/// ordered its answer after event-pump replies. Protocol translation only: the door decided
+/// […]}`, plus `defaultPage` once the call opened or bound the run's own page and `pumped` once
+/// an op ordered its answer after event-pump replies. Protocol translation only: the door decided
 /// every value in it. Every field after `ok`/`err` is the same in both shapes.
 //
 // The bootstrap reads `ok` and `err`; bridge.ts reads the rest (`onReply`). Each optional
@@ -116,7 +116,8 @@ pub(crate) enum Envelope<'a> {
         #[serde(skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
         observed: Option<&'a Observation>,
-        /// The run's own page, on the reply of the call that opened it.
+        /// The run's own page, on the reply of the call that opened it or bound it to a tab
+        /// (`neo.task`'s pick).
         #[serde(rename = "defaultPage", skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
         default_page: Option<DefaultPage>,

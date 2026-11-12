@@ -23,8 +23,8 @@ export type Delivery = "not_sent" | "done" | "unknown";
 
 /**
  * The JS wire form of an `OpReply`: `{"ok": value, "pages": […]}` or `{"err": {…}, "pages":
- * […]}`, plus `defaultPage` once the call opened the run's own page and `pumped` once an op
- * ordered its answer after event-pump replies. Protocol translation only: the door decided
+ * […]}`, plus `defaultPage` once the call opened or bound the run's own page and `pumped` once
+ * an op ordered its answer after event-pump replies. Protocol translation only: the door decided
  * every value in it. Every field after `ok`/`err` is the same in both shapes.
  */
 export type Envelope = { 
@@ -41,7 +41,8 @@ pages: Array<PageFact>,
  */
 observed?: Observation, 
 /**
- * The run's own page, on the reply of the call that opened it.
+ * The run's own page, on the reply of the call that opened it or bound it to a tab
+ * (`neo.task`'s pick).
  */
 defaultPage?: DefaultPage, 
 /**

@@ -12,8 +12,10 @@
  * After `neo.createTask()` or `neo.task()`, built-in `page` uses that task's last-used
  * open tab, else another open tab, else a new one. `context.newPage()` opens in the task.
  * The latest task pick wins. Popups join their opener's task. You may declare `const page`.
- * Built-in `page` picks its tab at its first action: before that, `page.tabId` and
- * `page.taskId` are null and `page.url()` is 'about:blank'. `task.pages()` has them at once.
+ * Built-in `page` keeps the first tab it gets for the whole run. `await neo.task(id)` gives it
+ * the task's open tab at once, so `page.url()` is that tab's on the next line. Otherwise
+ * (no task, or none of its tabs open) it picks its tab at its first action: before that,
+ * `page.tabId` and `page.taskId` are null and `page.url()` is 'about:blank'.
  * Tab ids here are short for reading; real ones are large numbers, e.g. 1157427185.
  *
  * The reply is what you return, plus console lines and existing notes. Return `task.id`
@@ -32,10 +34,10 @@ declare module 'playwright-core' {
   /** Playwright's Page, plus: */
   interface Page {
     /** The tab's id. It stays the same across runs. `null` only for the built-in `page`
-     * before its first action picks its tab. */
+     * before it has a tab (see `page`). */
     readonly tabId: number | null
-    /** The tab's task; `null` when it has no task (or for the built-in `page` before its
-     * first action). */
+    /** The tab's task; `null` when it has no task (or for the built-in `page` before it has
+     * a tab). */
     readonly taskId: string | null
   }
 }
@@ -82,8 +84,9 @@ declare global {
   }
 
   const neo: Neo
-  /** Picked at its first action: the picked task's last-used open tab, else another open
-   * tab, else a new one. Without a task: a NEW tab with no task. */
+  /** The picked task's last-used open tab, else another open tab, else a new one; without a
+   * task, a NEW tab with no task. `neo.task(id)` binds it to an open tab of the task at once;
+   * otherwise it picks at its first action. Once it has a tab, it keeps it for the run. */
   const page: Page
   /** `pages()` lists every tab. `newPage()` opens in the picked task, or with no task. */
   const context: pw.BrowserContext

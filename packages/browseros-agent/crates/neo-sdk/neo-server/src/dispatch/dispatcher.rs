@@ -125,7 +125,8 @@ pub(crate) struct OpReply {
     pub(crate) pages: Vec<PageFact>,
     /// Orders this fact batch, absent when the operation completed no observation.
     pub(crate) observed: Option<Observation>,
-    /// Set when the op resolved the run's default page, so the script's `page` learns its id.
+    /// Set when the op resolved the run's default page or bound it to a tab (`neo.task`), so
+    /// the script's `page` learns its id.
     pub(crate) default_page: Option<PageRef>,
     /// The event-pump replies the script dispatches before it takes this one
     /// ([`OpCtx::answer_after_pump`]); 0 for an op that set none.
@@ -330,12 +331,11 @@ impl Dispatcher {
         run: &Arc<RunCtx>,
     ) -> Result<PageRef, OperationError> {
         let task = run.current_task().and_then(|id| self.tabs.task(&id).ok());
-        if let Some(task) = &task {
-            for tab in task.last_used_tab.iter().chain(task.tabs.iter().rev()) {
-                if !run.closed_it(*tab) && self.tabs.is_open(*tab) {
-                    return Ok(PageRef { tab: *tab });
-                }
-            }
+        if let Some(tab) = task
+            .as_ref()
+            .and_then(|task| task.page_tab(|tab| !run.closed_it(tab) && self.tabs.is_open(tab)))
+        {
+            return Ok(PageRef { tab });
         }
         let opened = self
             .invoke_child(run, None, DEFAULT_PAGE_OPENER, json!({}))
@@ -610,6 +610,9 @@ impl Dispatcher {
                 opening_task.as_ref().map(|task| &task.id),
             )
             .await;
+        // The run's page reaches the prelude as this reply's `defaultPage` when the op resolved
+        // it as its target, or when the method bound it to a tab (`neo.task`'s pick).
+        let default_page = default_page.or_else(|| state.bound_page());
         guard.finish(ending, facts.pages, default_page, facts.observed);
     }
 

@@ -62,7 +62,9 @@ With no host or script task, built-in `page` opens a new tab on first use, every
 For work across runs, the agent creates a task with `await neo.createTask(name)`, returns
 `task.id`, then starts later runs with `await neo.task(id)`. The latest task pick wins.
 Built-in `page` uses that task's last-used open tab, else another open tab, else a new tab
-in it, picked at its first action (until then `page.tabId` and `page.taskId` are null). `context.newPage()` opens in the current task; `task.newPage()` opens in that task.
+in it. `neo.task(id)` binds it to that open tab at once; without one, it picks at its first
+action (until then `page.tabId` and `page.taskId` are null), and it keeps its first tab for
+the run. `context.newPage()` opens in the current task; `task.newPage()` opens in that task.
 Popups join their opener's task. `task.pages()` lists its tabs oldest first; `task.page(tabId)`
 picks one. `await task.close()` closes its tabs and ends it. A local `const page` is allowed.
 The [agent handout](../agent.d.ts) has the four-run walkthrough.
