@@ -286,11 +286,11 @@ async fn replay(run: &LiveRun, page: &TestPage, call: &CaseCall) -> Result<Value
             .await
         }
         (Some(selector), "press") => {
-            let fields = json!({ "key": argument });
+            let fields = json!({ "key": argument, "options": {} });
             act(run, "locator.press", &at(page, selector), fields, 5000).await
         }
         (Some(selector), "pressSequentially") => {
-            let fields = json!({ "text": argument });
+            let fields = json!({ "text": argument, "options": {} });
             act(
                 run,
                 "locator.pressSequentially",
