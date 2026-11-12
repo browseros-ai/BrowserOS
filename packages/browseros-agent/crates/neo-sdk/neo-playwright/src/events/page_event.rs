@@ -78,7 +78,9 @@ impl PageEvent {
                     closed: true,
                     ..
                 },
-            ) => page == target,
+            )
+            | (PageEventKind::Close, Self::Closed(page))
+            | (PageEventKind::Crash, Self::Crashed(page)) => page == target,
             (kind, Self::FrameLifecycle(frame)) => frame.target == *target && frame.kind == kind,
             (
                 kind,
@@ -89,8 +91,6 @@ impl PageEvent {
                 },
             ) => page == target && *load == kind,
             (PageEventKind::Popup, Self::Opened(opened)) => opened.opener.as_ref() == Some(target),
-            (PageEventKind::Close, Self::Closed(page))
-            | (PageEventKind::Crash, Self::Crashed(page)) => page == target,
             (PageEventKind::Dialog, Self::Dialog(dialog))
             | (PageEventKind::DialogClosed, Self::DialogClosed(dialog)) => dialog.target == *target,
             (PageEventKind::Console, Self::Console(message)) => message.target == *target,
