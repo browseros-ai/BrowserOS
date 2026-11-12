@@ -65,8 +65,9 @@ workspace manifest or this command, with the browser `neo-server/docker/browser.
 - A skip in the full run is decided by the spec or the harness, not by timing, so it is not
   rerun: an expected pass that skipped is a regression straight away.
 - A listed test that left the corpus is **stale**, and a rerun that produced no result for its
-  test is **inconclusive**; both fail the job. A run that reported an error (Playwright's, a
-  stop signal, browsers that survived cleanup) fails it too.
+  test is **inconclusive**; both fail the job. A run or rerun that reported an error
+  (Playwright's, a stop signal, browsers that survived cleanup, a runner killed before it
+  finished) fails it too, even when another rerun of the same test matched.
 - The job summary has the totals, every regression, newly passing, changed and flaky test by name.
   The results folder (with `verdict.json`, `summary.md` and failure screenshots) is the
   `neo-spec-report` artifact; the list this run supports is `neo-spec-expected`.
@@ -84,6 +85,49 @@ merged into the current `main`, so a test `main` fixed since the list last chang
 newly passing too; the same command takes it. Two pull requests that each fix
 a test change different lines and merge cleanly. On a Linux machine,
 `bun run test:neo-spec --ci --write-expected` writes the list from a local run instead.
+
+### Reading the check (`Neo spec / linux-x64`)
+
+Open the run and read its summary. The first line is the verdict:
+
+```text
+Neo spec suite, linux-x64: ✅ matches its expected list
+Neo spec suite, linux-x64: ❌ 1 regression, 2 newly passing
+```
+
+Under it are the totals (in scope and all tests, passed of counted, skips beside them), the
+size of the list, the suite's wall time and the reruns. Then one section per kind of finding,
+each test with its ID, file and title. What to do about each:
+
+| Section | Meaning | What to do |
+|---|---|---|
+| Regressions | Expected to pass; failed in the full run and in both reruns alone (or skipped) | Fix it. Reproduce it with `bun run test:neo-spec <spec> --grep '<title>'`. |
+| Newly passing | Listed; passed in the full run and in both reruns | Run `--expected-from` with the run's URL and commit the list. |
+| Changed outcome, Stale entries | The list no longer says what the run did | The same command. |
+| Inconclusive, or "The run reported an error" | The run or a rerun broke: no result, an unreadable report, browsers left behind, a runner killed before it finished. A broken rerun fails the job even when another attempt matched | Read the logs in the report; rerun the job once. If it repeats, it is a harness bug. |
+| Flaky | The full run disagreed with the expectation, a rerun alone agreed | Nothing; it does not fail the job. |
+
+A flaky line reads like this: the test was expected to pass, failed in the full run (here under
+the load of 16 workers) and passed the first time it ran alone, so it counts as a pass:
+
+```text
+- EH-085 tests/page/elementhandle-screenshot.spec.ts › element screenshot › should wait for visible:
+  expected pass; full run fail, alone: pass — Test timeout of 30000ms exceeded.
+```
+
+Some tests pass only part of the time on Linux, also alone (SS-054, LH-001). A lucky run can
+take one off the list and an unlucky one then report it as a regression in a pull request that
+cannot reach it. If the regression's test is one your change does not touch and earlier runs
+show it passing and failing, take the run's list with `--expected-from` and say so in the pull
+request; that puts it back as `fail`.
+
+`alone: fail, pass` means it needed both reruns. A listed test can be flaky the other way
+(`expected fail; full run pass, alone: fail`); it stays listed. A test that shows up flaky in
+run after run is worth fixing, but does not block a pull request.
+
+The `neo-spec-report` artifact holds the whole results folder: `summary.md`, `verdict.json`
+(every finding with its reruns), `results.json`, each rerun's log under `reruns/`, and
+Playwright's failure screenshots and diffs under `upstream/test-results/`.
 
 ## The corpus
 

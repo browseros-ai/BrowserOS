@@ -29,6 +29,36 @@ export type Runner = {
   ) => string[]
 }
 
+/**
+ * What went wrong with a run.mjs run itself, apart from test failures: Playwright's top-level
+ * errors, a stop signal, a launcher error, browsers it owned that survived cleanup, or a runner
+ * that never finished. run.mjs writes `endedAt` in its last `finally`, so a run.json without it
+ * belongs to a runner that was killed; its exit code alone cannot say so, because a signal
+ * reaches spec.ts as exit 1, the same code as a failing test.
+ */
+function runErrors(
+  report: { errors?: { message?: string }[] } | undefined,
+  run:
+    | {
+        signal?: string
+        error?: string
+        cleanupError?: string
+        endedAt?: string
+      }
+    | undefined,
+): string[] {
+  const firstLine = (text: unknown) =>
+    stripVTControlCharacters(String(text)).split('\n')[0]
+  return [
+    ...(report?.errors ?? []).map((error) => firstLine(error.message ?? error)),
+    ...(run?.signal ? [`the run was stopped by ${run.signal}`] : []),
+    ...[run?.error, run?.cleanupError].filter(Boolean).map(firstLine),
+    ...(run && !run.endedAt
+      ? ['the runner did not finish (run.json has no endedAt)']
+      : []),
+  ]
+}
+
 type CiTest = {
   key: string
   id: string | null
@@ -43,7 +73,13 @@ async function rerunAlone(
   test: CiTest,
   attempt: number,
   directory: string,
-): Promise<{ outcome: string; output?: string; log: string; note?: string }> {
+): Promise<{
+  outcome: string
+  output?: string
+  log: string
+  note?: string
+  errors: string[]
+}> {
   const { flattenResults, outcome } = await import('./node/report/classify.mjs')
   const { testKey } = await import('./node/expected.mjs')
   fs.mkdirSync(directory, { recursive: true })
@@ -55,22 +91,50 @@ async function rerunAlone(
     rerunArgs(flags, test),
     log,
   )
-  const results = output && path.join(output, 'results.json')
-  if (!results || !fs.existsSync(results))
-    return { outcome: 'not-run', output, log, note: 'no results' }
-  const rows = flattenResults(JSON.parse(fs.readFileSync(results, 'utf8')))
+  // run.json first: a report that cannot be read must not hide the runner's own errors.
+  const errors: string[] = []
+  const read = (file: string) => {
+    const target = output && path.join(output, file)
+    if (!target || !fs.existsSync(target)) return undefined
+    try {
+      return JSON.parse(fs.readFileSync(target, 'utf8'))
+    } catch (error) {
+      errors.push(`${file} is not JSON: ${String(error)}`)
+      return undefined
+    }
+  }
+  const run = read('run.json')
+  const report = read('results.json')
+  errors.push(...runErrors(report, run))
+  if (!report)
+    return { outcome: 'not-run', output, log, note: 'no results', errors }
+  let rows: ReturnType<typeof flattenResults>
+  try {
+    rows = flattenResults(report)
+  } catch (error) {
+    errors.push(`results.json cannot be read: ${String(error)}`)
+    return {
+      outcome: 'not-run',
+      output,
+      log,
+      note: 'unreadable results',
+      errors,
+    }
+  }
   if (rows.length !== 1 || testKey(rows[0].suite, rows[0].title) !== test.key)
     return {
       outcome: 'not-run',
       output,
       log,
       note: `the rerun selected ${rows.length} tests`,
+      errors,
     }
   const result = outcome(rows[0])
   return {
     outcome: result === 'pass' || result === 'skip' ? result : 'fail',
     output,
     log,
+    errors,
   }
 }
 
@@ -85,11 +149,14 @@ export async function ciVerdict({
   output,
   complete,
   writeExpected,
+  listFile: listOverride,
 }: {
   runner: Runner
   output: string
   complete: boolean
   writeExpected: boolean
+  /** The committed list to hold the run to; tests pass their own instead of the platform's. */
+  listFile?: string
 }): Promise<number> {
   const expected = await import('./node/expected.mjs')
   const { loadScope } = await import('./node/scope.mjs')
@@ -99,7 +166,7 @@ export async function ciVerdict({
   const scores = read('scores.json')
   const run = read('run.json')
   const platform = expected.platformKey()
-  const listFile = expected.expectedPath(platform)
+  const listFile = listOverride ?? expected.expectedPath(platform)
   const committed = expected.readExpected(listFile)
   const listed = committed ?? new Map()
   // The run's own copy of scope.json: the policy it was scored with.
@@ -110,18 +177,33 @@ export async function ciVerdict({
   const verdict = expected.compare(tests, listed, { complete })
   const rerunStarted = Date.now()
   let rerunCount = 0
+  const rerunErrors: string[] = []
   if (verdict.rerun.length)
     console.log(
       `\nRerunning ${verdict.rerun.length} tests alone, up to ${expected.RERUN_ATTEMPTS} times each.`,
     )
   await expected.settle(verdict, async (test: CiTest, attempt: number) => {
     rerunCount++
-    const result = await rerunAlone(
-      runner,
-      test,
-      attempt,
-      path.join(output, 'reruns'),
-    )
+    const which = `rerun ${attempt} of ${test.id ?? test.title}`
+    let result: Awaited<ReturnType<typeof rerunAlone>>
+    try {
+      result = await rerunAlone(
+        runner,
+        test,
+        attempt,
+        path.join(output, 'reruns'),
+      )
+    } catch (error) {
+      // settle() records the attempt as broken; the error itself fails the verdict here.
+      rerunErrors.push(`${which}: ${String(error)}`)
+      throw error
+    }
+    for (const error of result.errors)
+      rerunErrors.push(`${which}: ${error} (log ${result.log})`)
+    if (!['pass', 'fail', 'skip'].includes(result.outcome))
+      rerunErrors.push(
+        `${which} produced no result for the test: ${result.note} (log ${result.log})`,
+      )
     console.log(
       `  ${result.outcome.padEnd(7)} ${test.id ?? '-'} ${test.file} › ${test.title} (attempt ${attempt}${result.note ? `; ${result.note}` : ''}; log ${result.log})`,
     )
@@ -134,15 +216,10 @@ export async function ciVerdict({
     expected.formatExpected(next, platform),
   )
   const errors = [
-    ...(report.errors ?? []).map(
-      (error: { message?: string }) =>
-        stripVTControlCharacters(String(error.message ?? error)).split('\n')[0],
-    ),
-    ...(run.signal ? [`the run was stopped by ${run.signal}`] : []),
-    // run.mjs's own failures: a launcher error, or browsers it owned that survived cleanup.
-    ...[run.error, run.cleanupError]
-      .filter(Boolean)
-      .map((error: string) => String(error).split('\n')[0]),
+    ...runErrors(report, run),
+    // A rerun that broke the harness leaves its test's result unproven, even when another
+    // attempt matched: a browser that survived cleanup can disturb the reruns after it.
+    ...rerunErrors,
   ]
   const actions = process.env.GITHUB_ACTIONS === 'true'
   const markdown = expected.summaryMarkdown({

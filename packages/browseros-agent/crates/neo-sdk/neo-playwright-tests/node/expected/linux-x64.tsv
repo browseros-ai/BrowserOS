@@ -127,6 +127,7 @@ RO-008	fail	tests/page/page-route.spec.ts	should properly return navigation resp
 SS-024	fail	tests/page/page-screenshot.spec.ts	page screenshot › should capture canvas changes
 SS-027	fail	tests/page/page-screenshot.spec.ts	page screenshot › should work while navigating
 SS-059	fail	tests/page/page-screenshot.spec.ts	page screenshot animations › should capture screenshots after layoutchanges in transitionend event
+SS-054	fail	tests/page/page-screenshot.spec.ts	page screenshot animations › should not capture css animations in shadow DOM
 SS-052	fail	tests/page/page-screenshot.spec.ts	page screenshot animations › should not capture infinite css animation
 SS-057	fail	tests/page/page-screenshot.spec.ts	page screenshot animations › should not capture infinite web animations
 SS-053	fail	tests/page/page-screenshot.spec.ts	page screenshot animations › should not capture pseudo element css animation
