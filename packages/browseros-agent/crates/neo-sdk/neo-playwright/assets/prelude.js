@@ -7596,8 +7596,14 @@ ${value.stack}`;
       else if (actionable(child))
         this.actionable(child, level, text);
       else {
-        if (child.role === "img" && child.name && text)
-          this.element(copy(child, { ref: false, urls: false }), level);
+        if (child.role === "img") {
+          if (child.name && text)
+            this.element(copy(child, { ref: false, urls: false }), level);
+        } else {
+          const named = nameAsText(child);
+          if (named !== undefined)
+            this.piece(named, level, text);
+        }
         this.content(child, level, text);
       }
     }
@@ -7761,6 +7767,11 @@ ${value.stack}`;
     visit(select.children);
     return options;
   }
+  function nameAsText(node) {
+    if (node.role === "img" || !node.name || node.text !== undefined)
+      return;
+    return node.children?.length ? undefined : node.name;
+  }
   function ownText(node) {
     const pieces = [];
     const stack = [node];
@@ -7774,8 +7785,10 @@ ${value.stack}`;
       const children = item.children ?? [];
       for (let index = children.length - 1;index >= 0; index--) {
         const child = children[index];
-        if (typeof child === "string" || child.role === "text" || !actionable(child))
+        if (typeof child === "string" || child.role === "text")
           stack.push(child);
+        else if (!actionable(child))
+          stack.push(nameAsText(child) ?? child);
       }
     }
     return pieces.filter((piece) => piece !== "").join(" ");

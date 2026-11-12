@@ -207,8 +207,13 @@ class Printer {
     else if (child.role === 'heading') this.heading(child, level)
     else if (actionable(child)) this.actionable(child, level, text)
     else {
-      if (child.role === 'img' && child.name && text)
-        this.element(copy(child, { ref: false, urls: false }), level)
+      if (child.role === 'img') {
+        if (child.name && text)
+          this.element(copy(child, { ref: false, urls: false }), level)
+      } else {
+        const named = nameAsText(child)
+        if (named !== undefined) this.piece(named, level, text)
+      }
       // No line of its own: its text and children belong to the level it sits in.
       this.content(child, level, text)
     }
@@ -447,6 +452,20 @@ function nativeOptions(select: AriaNodeJSON): AriaNodeJSON[] {
   return options
 }
 
+/**
+ * The name of a node that prints no line and holds nothing else, which is then its text. The
+ * engine names a table cell, a list item or a group from its text and drops the text child that
+ * repeats the name: `<td>$7.49</td>` is `cell "$7.49"` with no children, so without this the price
+ * would print nowhere, even with text on. A node with children keeps their own lines instead (a
+ * cell holding a link), so its name, derived from them, is never printed twice. An image's name
+ * prints as its own line (rule 6).
+ */
+function nameAsText(node: AriaNodeJSON): string | undefined {
+  if (node.role === 'img' || !node.name || node.text !== undefined)
+    return undefined
+  return node.children?.length ? undefined : node.name
+}
+
 /** Every text piece under `node` that is not inside a nested actionable node, space-joined. */
 function ownText(node: AriaNodeJSON): string {
   const pieces: string[] = []
@@ -461,12 +480,8 @@ function ownText(node: AriaNodeJSON): string {
     const children = item.children ?? []
     for (let index = children.length - 1; index >= 0; index--) {
       const child = children[index]
-      if (
-        typeof child === 'string' ||
-        child.role === 'text' ||
-        !actionable(child)
-      )
-        stack.push(child)
+      if (typeof child === 'string' || child.role === 'text') stack.push(child)
+      else if (!actionable(child)) stack.push(nameAsText(child) ?? child)
     }
   }
   return pieces.filter((piece) => piece !== '').join(' ')

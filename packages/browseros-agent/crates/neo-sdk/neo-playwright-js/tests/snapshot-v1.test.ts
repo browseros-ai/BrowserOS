@@ -238,6 +238,166 @@ it('tests rule 5: a native select with option groups lists their options, the gr
   expect(both(json)).toEqual([printed, printed])
 })
 
+/**
+ * Recorded from the engine on a live BrowserOS (ariaSnapshotJSON({ mode: 'ai' })): a product table
+ * and a list with a paragraph, a fieldset, an empty named group and a note.
+ */
+const realTable = [
+  {
+    children: [
+      {
+        children: [
+          {
+            children: [
+              { name: 'Item', ref: 'e5', role: 'columnheader' },
+              { name: 'Price', ref: 'e6', role: 'columnheader' },
+              { ref: 'e7', role: 'columnheader' },
+            ],
+            ref: 'e4',
+            role: 'row',
+          },
+        ],
+        ref: 'e3',
+        role: 'rowgroup',
+      },
+      {
+        children: [
+          {
+            children: [
+              { name: 'Sensodyne Repair 3.4oz', ref: 'e10', role: 'cell' },
+              { name: '$7.49', ref: 'e11', role: 'cell' },
+              {
+                children: [{ name: 'Add to cart', ref: 'e13', role: 'button' }],
+                ref: 'e12',
+                role: 'cell',
+              },
+            ],
+            ref: 'e9',
+            role: 'row',
+          },
+          {
+            children: [
+              { name: 'Sensodyne 6-pack', ref: 'e15', role: 'cell' },
+              { name: '$41.00', ref: 'e16', role: 'cell' },
+              {
+                children: [{ name: 'Add to cart', ref: 'e18', role: 'button' }],
+                ref: 'e17',
+                role: 'cell',
+              },
+            ],
+            ref: 'e14',
+            role: 'row',
+          },
+          {
+            children: [
+              {
+                children: [
+                  {
+                    cursor: 'pointer',
+                    name: 'Toothbrush',
+                    ref: 'e21',
+                    role: 'link',
+                    url: '#r',
+                  },
+                ],
+                ref: 'e20',
+                role: 'cell',
+              },
+              { name: '$3.10', ref: 'e22', role: 'cell' },
+              { ref: 'e23', role: 'cell' },
+            ],
+            ref: 'e19',
+            role: 'row',
+          },
+        ],
+        ref: 'e8',
+        role: 'rowgroup',
+      },
+    ],
+    ref: 'e2',
+    role: 'table',
+  },
+] as Node[]
+const realList = [
+  {
+    active: true,
+    children: [
+      {
+        children: [
+          { ref: 'e3', role: 'listitem', text: 'Apples' },
+          {
+            children: [
+              'Pears',
+              {
+                cursor: 'pointer',
+                name: 'details',
+                ref: 'e5',
+                role: 'link',
+                url: '#p',
+              },
+            ],
+            ref: 'e4',
+            role: 'listitem',
+          },
+          {
+            children: [
+              {
+                cursor: 'pointer',
+                name: 'Kiwis',
+                ref: 'e7',
+                role: 'link',
+                url: '#k',
+              },
+            ],
+            ref: 'e6',
+            role: 'listitem',
+          },
+        ],
+        ref: 'e2',
+        role: 'list',
+      },
+      { ref: 'e8', role: 'paragraph', text: 'Paragraph text' },
+      {
+        children: [
+          {
+            children: [
+              { name: 'Standard', ref: 'e12', role: 'radio' },
+              'Standard',
+            ],
+            ref: 'e11',
+            role: 'generic',
+          },
+        ],
+        name: 'Shipping',
+        ref: 'e9',
+        role: 'group',
+      },
+      { name: 'Empty group', role: 'group' },
+      { ref: 'e13', role: 'note', text: 'Note text' },
+    ],
+    ref: 'e1',
+    role: 'generic',
+  },
+] as Node[]
+
+it('tests rule 7: a table cell named by its text keeps the text, and a cell holding a link adds no name', () => {
+  // Each plain cell is `cell "$7.49"` with no children: the engine dropped the text that repeated
+  // the name. The cell around the Toothbrush link has no name, so nothing prints twice.
+  expect(both(realTable)).toEqual([
+    '- text: Item Price Sensodyne Repair 3.4oz $7.49\n- button "Add to cart" [ref=e13]\n- text: Sensodyne 6-pack $41.00\n- button "Add to cart" [ref=e18]\n- link "Toothbrush" [ref=e21]\n- text: $3.10',
+    '- button "Add to cart" [ref=e13]\n- button "Add to cart" [ref=e18]\n- link "Toothbrush" [ref=e21]',
+  ])
+})
+
+it("tests rule 7: list items, a paragraph and a named empty group keep their text; a fieldset's name stays out", () => {
+  // The fieldset's legend is folded into `group "Shipping"`, which has other children: names of
+  // containers with content are not printed in v1 (design section 11).
+  expect(both(realList)).toEqual([
+    '- text: Apples Pears\n- link "details" [ref=e5]\n- link "Kiwis" [ref=e7]\n- text: Paragraph text\n- radio "Standard" [ref=e12]\n- text: Standard Empty group Note text',
+    '- link "details" [ref=e5]\n- link "Kiwis" [ref=e7]\n- radio "Standard" [ref=e12]',
+  ])
+})
+
 it('tests rule 6: a named image prints with text on only', () => {
   const json = [
     { role: 'img', name: 'Logo', ref: 'e1' },
