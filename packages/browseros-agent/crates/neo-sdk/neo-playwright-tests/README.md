@@ -85,6 +85,43 @@ newly passing too; the same command takes it. Two pull requests that each fix
 a test change different lines and merge cleanly. On a Linux machine,
 `bun run test:neo-spec --ci --write-expected` writes the list from a local run instead.
 
+### Reading the check (`Neo spec / linux-x64`)
+
+Open the run and read its summary. The first line is the verdict:
+
+```text
+Neo spec suite, linux-x64: ✅ matches its expected list
+Neo spec suite, linux-x64: ❌ 1 regression, 2 newly passing
+```
+
+Under it are the totals (in scope and all tests, passed of counted, skips beside them), the
+size of the list, the suite's wall time and the reruns. Then one section per kind of finding,
+each test with its ID, file and title. What to do about each:
+
+| Section | Meaning | What to do |
+|---|---|---|
+| Regressions | Expected to pass; failed in the full run and in both reruns alone (or skipped) | Fix it. Reproduce it with `bun run test:neo-spec <spec> --grep '<title>'`. |
+| Newly passing | Listed; passed in the full run and in both reruns | Run `--expected-from` with the run's URL and commit the list. |
+| Changed outcome, Stale entries | The list no longer says what the run did | The same command. |
+| Inconclusive, or "The run reported an error" | A rerun or the run itself broke (no result, browsers left behind) | Read the logs in the report; rerun the job once. If it repeats, it is a harness bug. |
+| Flaky | The full run disagreed with the expectation, a rerun alone agreed | Nothing; it does not fail the job. |
+
+A flaky line reads like this: the test was expected to pass, failed in the full run (here under
+the load of 16 workers) and passed the first time it ran alone, so it counts as a pass:
+
+```text
+- EH-085 tests/page/elementhandle-screenshot.spec.ts › element screenshot › should wait for visible:
+  expected pass; full run fail, alone: pass — Test timeout of 30000ms exceeded.
+```
+
+`alone: fail, pass` means it needed both reruns. A listed test can be flaky the other way
+(`expected fail; full run pass, alone: fail`); it stays listed. A test that shows up flaky in
+run after run is worth fixing, but does not block a pull request.
+
+The `neo-spec-report` artifact holds the whole results folder: `summary.md`, `verdict.json`
+(every finding with its reruns), `results.json`, each rerun's log under `reruns/`, and
+Playwright's failure screenshots and diffs under `upstream/test-results/`.
+
 ## The corpus
 
 **Pin.** The specs are Playwright `v1.64.1`
