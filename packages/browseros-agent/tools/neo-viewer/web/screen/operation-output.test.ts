@@ -65,19 +65,38 @@ describe('what a call gave the script', () => {
     )
     expect(yaml.lines).toEqual(['- heading "Hello" [level=1]'])
     expect(yaml.source).toContain("rendered from Neo's recorded tree")
-    // A frame Neo could not read adds a comment the viewer does not draw: the tree, then.
-    const partial = shown(
-      operation(3, 'page.ariaSnapshot', {
-        args: { mode: 'default' },
-        result: {
-          ...tree,
-          partial: [
-            { ref: 'e7', frame: 'https://pay.example/', reason: 'timeout' },
+    // Frames Neo could not read: the prelude's own text for this tree (renderSnapshot, run once
+    // in neo-playwright-js), each comment under its iframe, or at the end when it is not printed.
+    const checkout = {
+      document: 3,
+      json: [
+        {
+          role: 'main',
+          children: [
+            { role: 'heading', name: 'Checkout', level: 1, children: [] },
+            { role: 'iframe', ref: 'e7', children: [] },
+            { role: 'button', name: 'Pay', ref: 'e9', children: [] },
           ],
         },
+      ],
+      partial: [
+        {
+          ref: 'e7',
+          frame: 'https://pay.example/form',
+          reason: 'timeout after 2000 ms',
+        },
+        { ref: 'e99', frame: 'https://gone.example/', reason: 'detached' },
+      ],
+    }
+    const partial = shown(
+      operation(3, 'locator.ariaSnapshot', {
+        args: { mode: 'default' },
+        result: checkout,
       }),
     )
-    expect(partial.source).toContain('that text is not recorded')
+    expect(partial.formattedText).toBe(
+      '- main:\n  - heading "Checkout" [level=1]\n  - iframe [ref=e7]\n    # partial: https://pay.example/form not read (timeout after 2000 ms)\n  - button "Pay" [ref=e9]\n# partial: https://gone.example/ not read (detached)',
+    )
     const locator = shown(
       operation(3, 'locator.ariaSnapshot', {
         line: 1,

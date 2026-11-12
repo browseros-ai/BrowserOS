@@ -7,10 +7,9 @@
  *                           run renders the text, and the whole page's `page.snapshotPending`
  *                           that follows records it (a delta call's delta as `returned`); the
  *                           script got it only if that operation succeeded.
- *   mode: 'default'         Playwright's YAML: the prelude's `renderSnapshot` is the vendored
- *                           `renderAriaSnapshotAsYaml` on the tree, plus a comment per frame it
- *                           could not read. With every frame read it is that renderer alone,
- *                           which the viewer runs on the recorded tree; otherwise, the tree.
+ *   mode: 'default'         Playwright's YAML, rebuilt from the recorded tree as the prelude's
+ *                           `renderSnapshot` builds it (`snapshot-yaml.ts`), unread frames' comments
+ *                           included.
  *   locator.ariaSnapshot    v1 text rendered with options the wire does not carry: the tree,
  *                           saying the text was not recorded.
  *   page.evaluate           `{ value, frames }`; the evaluate methods below it the serialized
@@ -25,11 +24,11 @@
  */
 
 import type { AriaSnapshotJSON } from '../../../../crates/neo-sdk/neo-playwright/third_party/playwright/packages/isomorphic/ariaSnapshot'
-import { renderAriaSnapshotAsYaml } from '../../../../crates/neo-sdk/neo-playwright/third_party/playwright/packages/isomorphic/ariaSnapshotRenderer'
 import type { NeoOperation, NeoOperationError } from '../../shared/api'
 import { handleText } from './operation-values'
 import { isNeoInternal } from './operations'
 import { pageValueText } from './page-value'
+import { defaultSnapshotText, type PartialFrame } from './snapshot-yaml'
 import { jsonLine, type Line, plainLines, snapshotLine } from './text-lines'
 
 /** The evaluate methods whose result is the page's serialized value itself. */
@@ -159,9 +158,9 @@ function snapshot(
 function rendered(operation: NeoOperation): Shown | null {
   const result = operation.result
   if (modeOf(operation) !== 'default' || operation.resultTruncated) return null
-  if (!isSnapshotResult(result) || result.partial.length > 0) return null
+  if (!isSnapshotResult(result)) return null
   return {
-    ...lines(renderAriaSnapshotAsYaml(result.json)),
+    ...lines(defaultSnapshotText(result.json, result.partial)),
     source:
       "The YAML the script's await got (mode: \"default\"), rendered from Neo's recorded tree by the run's own renderer.",
     cut: false,
@@ -390,9 +389,18 @@ function sameCall(a: NeoOperation, b: NeoOperation): boolean {
 
 function isSnapshotResult(
   value: unknown,
-): value is { json: AriaSnapshotJSON; partial: unknown[] } {
+): value is { json: AriaSnapshotJSON; partial: PartialFrame[] } {
   return (
-    isRecord(value) && Array.isArray(value.json) && Array.isArray(value.partial)
+    isRecord(value) &&
+    Array.isArray(value.json) &&
+    Array.isArray(value.partial) &&
+    value.partial.every(
+      (frame) =>
+        isRecord(frame) &&
+        typeof frame.ref === 'string' &&
+        typeof frame.frame === 'string' &&
+        typeof frame.reason === 'string',
+    )
   )
 }
 
