@@ -52,7 +52,7 @@ listed_enum! {
 
 impl ReadOp {
     /// Describes exactly the inputs and results used by the runtime route.
-    pub(crate) fn wire(self) -> Option<OpWire> {
+    pub(crate) fn wire(self) -> OpWire {
         route(self, Describe)
     }
 

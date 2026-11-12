@@ -747,11 +747,14 @@ mod tests {
             ("page.runBeforeUnload", true, &["page: PageHandle,"][..]),
             ("context.newPage", false, &["page: PageBrand,"][..]),
             ("page.opener", false, &["opener: PageBrand | null,"][..]),
+            (
+                "events.next",
+                false,
+                &["events: Array<EventRecord>,", "lost: number,"][..],
+            ),
         ] {
             let op = Op::from_name(name).ok_or_else(|| format!("no op named {name}"))?;
-            let wire = op
-                .wire()
-                .ok_or_else(|| format!("{name} has no typed route"))?;
+            let wire = op.wire();
             let root = if input { &wire.input } else { &wire.output };
             assert_wire_fields(&wire, root, fields)?;
         }
@@ -759,8 +762,8 @@ mod tests {
         // page_brand follows both target variants, then PageTarget reads the same brand
         // discriminant and tab as the result readers OpenedPage and Linked do.
         let wire = Op::from_name("locator.click")
-            .and_then(Op::wire)
-            .ok_or("locator.click has no wire")?;
+            .ok_or("locator.click is registered")?
+            .wire();
         assert_wire_fields(&wire, "Target", &["LocatorTarget", "ElementTarget"])?;
         assert_wire_fields(&wire, "LocatorTarget", &["page: PageHandle,"])?;
         assert_wire_fields(&wire, "ElementTarget", &["page: PageBrand,"])?;
@@ -771,6 +774,23 @@ mod tests {
         )?;
         assert_wire_fields(&wire, "PageBrand", &["$neo: 'page',", "tab: TabId,"])?;
         assert_wire_fields(&wire, "TabId", &["number"])?;
+
+        // EventRelease filters the pump before releasing its payload. It follows all page
+        // brands and settles withheld closes by event kind and sequence; these must remain
+        // fields of the delivered record, not merely fields of some unrelated event payload.
+        let wire = Op::from_name("events.next")
+            .ok_or("events.next is registered")?
+            .wire();
+        assert_wire_fields(
+            &wire,
+            "EventRecord",
+            &[
+                "seq: number,",
+                "at: number,",
+                "\"event\": \"close\", page: PageBrand,",
+            ],
+        )?;
+        assert_wire_fields(&wire, "PageBrand", &["$neo: 'page',", "tab: TabId,"])?;
         Ok(())
     }
 

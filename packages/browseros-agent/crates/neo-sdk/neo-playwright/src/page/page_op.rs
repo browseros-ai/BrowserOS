@@ -67,7 +67,7 @@ listed_enum! {
 impl PageOp {
     /// Describes the op from the same types the runtime route decodes and encodes: `Some` for
     /// every page op, since all of them are on typed route rows.
-    pub(crate) fn wire(self) -> Option<OpWire> {
+    pub(crate) fn wire(self) -> OpWire {
         route(self, Describe)
     }
 

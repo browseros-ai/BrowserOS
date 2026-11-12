@@ -51,7 +51,7 @@ listed_enum! {
 
 impl SnapshotOp {
     /// Describes the same input and result types the runtime route decodes and encodes.
-    pub(crate) fn wire(self) -> Option<OpWire> {
+    pub(crate) fn wire(self) -> OpWire {
         route(self, Describe)
     }
 

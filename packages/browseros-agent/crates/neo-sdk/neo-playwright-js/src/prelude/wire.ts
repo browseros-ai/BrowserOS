@@ -67,12 +67,6 @@ export type UnopenedPageBrand = PageHandle & { tab: null }
 export type CallHeader = { api: string; timeoutMs: number }
 
 /**
- * The empty object still returned by host bookkeeping. Null results are spelled out per op:
- * changing this alias would misdescribe existing run-record payloads.
- */
-export type Done = Record<string, never>
-
-/**
  * The Playwright events Neo reports. `page` is the context's; the rest are a page's. Rust takes
  * the name as a string and refuses one it does not report; the prelude sends only these
  * (`isReported`).

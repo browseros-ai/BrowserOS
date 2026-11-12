@@ -96,7 +96,7 @@ async fn tests_that_pointer_inputs_and_reply_bytes_match_the_aligned_recording()
         if op == ActionOp::Click {
             click_replies.insert(body.is_null());
         } else {
-            assert_eq!(op.wire().ok_or("pointer op is undescribed")?.output, "null");
+            assert_eq!(op.wire().output, "null");
         }
         let encoded =
             super::wire_reply::encode(op, serde_json::from_str(&exchange.args)?, body).await?;

@@ -51,7 +51,7 @@ listed_enum! {
 
 impl EventOp {
     /// The op's wire, described from the same route rows and handler types `invoke` runs.
-    pub(crate) fn wire(self) -> Option<OpWire> {
+    pub(crate) fn wire(self) -> OpWire {
         route(self, Describe)
     }
 
@@ -931,15 +931,6 @@ mod tests {
         Ok(serde_json::to_string(&to_output(&scope, answer)?)?)
     }
 
-    #[test]
-    fn tests_that_every_event_op_has_a_typed_route() -> Result<(), Box<dyn Error>> {
-        for op in EventOp::ALL {
-            op.wire()
-                .ok_or(format!("{} has no typed route", op.spec().name))?;
-        }
-        Ok(())
-    }
-
     /// Each shape the prelude sends (events.ts `sendListen`) decodes as its variant.
     #[test]
     fn tests_that_listen_decodes_the_two_shapes_the_prelude_sends() -> Result<(), Box<dyn Error>> {
@@ -1043,7 +1034,7 @@ mod tests {
         };
         assert_eq!(wire(&idle)?, r#"{"events":[],"lost":3}"#);
         for op in EventOp::ALL {
-            let output = op.wire().ok_or("typed")?.output;
+            let output = op.wire().output;
             let expected = match op {
                 EventOp::Listen
                 | EventOp::FileChooserIntercept

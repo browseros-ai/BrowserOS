@@ -87,9 +87,9 @@ impl<'a> Route<'a> for Run<'a> {
 pub(crate) struct Describe;
 
 impl<'a> Route<'a> for Describe {
-    type Out = Option<OpWire>;
+    type Out = OpWire;
 
-    fn op<U, I, O, F, Fut>(self, upstream: U, _handler: F) -> Option<OpWire>
+    fn op<U, I, O, F, Fut>(self, upstream: U, _handler: F) -> OpWire
     where
         U: Into<Upstream>,
         I: DeserializeOwned + TS + OptionKeys + Send + 'static,
@@ -97,11 +97,7 @@ impl<'a> Route<'a> for Describe {
         F: FnOnce(&'a Playwright, &'a OpScope<'a>, I) -> Fut + Send + 'a,
         Fut: Future<Output = Result<O, PlaywrightError>> + Send + 'a,
     {
-        Some(OpWire::of::<I, O>(
-            I::NESTING,
-            I::option_keys(),
-            upstream.into(),
-        ))
+        OpWire::of::<I, O>(I::NESTING, I::option_keys(), upstream.into())
     }
 }
 
@@ -232,8 +228,8 @@ mod tests {
     fn assert_send<T: Send>(_: &T) {}
 
     #[test]
-    fn tests_that_describe_reads_the_row_and_the_handler_types() -> Result<(), Box<dyn Error>> {
-        let echo = route(ProbeOp::Echo, Describe).ok_or("a typed row is described")?;
+    fn tests_that_describe_reads_the_row_and_the_handler_types() {
+        let echo = route(ProbeOp::Echo, Describe);
         assert_eq!(
             (echo.input.as_str(), echo.output.as_str()),
             ("EchoInput", "Echoed")
@@ -243,20 +239,19 @@ mod tests {
             echo.upstream,
             Upstream::Command(command("Frame.echo").result("the echoed text"))
         );
-        let quiet = route(ProbeOp::Quiet, Describe).ok_or("a typed row is described")?;
+        let quiet = route(ProbeOp::Quiet, Describe);
         assert_eq!(quiet.output, "null", "a void op answers null");
         assert!(
             quiet.option_keys.is_empty(),
             "options!(QuietInput) has none"
         );
         assert_eq!(quiet.upstream, neo_only("a test op"));
-        let counted = route(ProbeOp::Counted, Describe).ok_or("a typed row is described")?;
+        let counted = route(ProbeOp::Counted, Describe);
         assert_eq!(counted.output, "number");
         assert!(
             counted.references == ["QuietInput"],
             "a primitive result names no type"
         );
-        Ok(())
     }
 
     /// One op through `Run`, as a family's `invoke` sends it.

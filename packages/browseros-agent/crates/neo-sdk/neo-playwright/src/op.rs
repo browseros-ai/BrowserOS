@@ -115,9 +115,8 @@ impl Op {
 
     /// The op's wire: its input and result as TypeScript, its script option keys and its place
     /// in Playwright's protocol, described from its family's route row and handler types.
-    /// `None` until the event family has route rows; its shapes still live in `wire.ts`.
     #[must_use]
-    pub fn wire(self) -> Option<OpWire> {
+    pub fn wire(self) -> OpWire {
         match self.0 {
             OpKind::Snapshot(op) => op.wire(),
             OpKind::Action(op) => op.wire(),
@@ -193,7 +192,7 @@ mod tests {
     #[test]
     fn tests_that_every_upstream_deviation_has_a_reason() {
         for op in Op::all() {
-            let Some(wire) = op.wire() else { continue };
+            let wire = op.wire();
             let unexplained = wire.upstream.unexplained();
             assert!(
                 unexplained.is_empty(),
@@ -208,7 +207,7 @@ mod tests {
     #[test]
     fn tests_that_no_input_or_output_is_unknown() {
         for op in Op::all() {
-            let Some(wire) = op.wire() else { continue };
+            let wire = op.wire();
             for (side, reference) in [("input", &wire.input), ("output", &wire.output)] {
                 let bare = reference.trim_end_matches(" | null");
                 assert!(

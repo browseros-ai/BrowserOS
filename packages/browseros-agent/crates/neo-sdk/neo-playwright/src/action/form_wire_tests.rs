@@ -81,7 +81,7 @@ async fn tests_that_form_inputs_and_reply_bytes_match_the_before_recording()
         };
         decode_form(op, input(&exchange)?)?;
         seen.insert(op.spec().name);
-        let wire = op.wire().ok_or("form op is not described")?;
+        let wire = op.wire();
         if op != ActionOp::SelectOption {
             assert_eq!(
                 wire.output, "null",

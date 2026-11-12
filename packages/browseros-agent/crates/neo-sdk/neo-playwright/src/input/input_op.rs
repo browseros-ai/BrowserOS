@@ -54,7 +54,7 @@ listed_enum! {
 
 impl InputOp {
     /// Describes the same input shapes and null answers the runtime route handles.
-    pub(crate) fn wire(self) -> Option<OpWire> {
+    pub(crate) fn wire(self) -> OpWire {
         route(self, Describe)
     }
 
@@ -511,7 +511,7 @@ mod tests {
         let answer: Nothing = ();
         let env = TestEnv::new();
         for op in InputOp::ALL {
-            let wire = op.wire().ok_or("every input op has a typed route")?;
+            let wire = op.wire();
             let registered = Op::from_name(op.spec().name).ok_or("the input op is registered")?;
             let scope = OpScope::new(&env, registered, CallHeader::default());
             let output = op_output::to_output(&scope, &answer)?;
