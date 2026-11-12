@@ -29,6 +29,23 @@ export type Runner = {
   ) => string[]
 }
 
+/**
+ * What went wrong with a run.mjs run itself, apart from test failures: Playwright's top-level
+ * errors, a stop signal, a launcher error, browsers it owned that survived cleanup.
+ */
+function runErrors(
+  report: { errors?: { message?: string }[] } | undefined,
+  run: { signal?: string; error?: string; cleanupError?: string } | undefined,
+): string[] {
+  const firstLine = (text: unknown) =>
+    stripVTControlCharacters(String(text)).split('\n')[0]
+  return [
+    ...(report?.errors ?? []).map((error) => firstLine(error.message ?? error)),
+    ...(run?.signal ? [`the run was stopped by ${run.signal}`] : []),
+    ...[run?.error, run?.cleanupError].filter(Boolean).map(firstLine),
+  ]
+}
+
 type CiTest = {
   key: string
   id: string | null
@@ -43,7 +60,13 @@ async function rerunAlone(
   test: CiTest,
   attempt: number,
   directory: string,
-): Promise<{ outcome: string; output?: string; log: string; note?: string }> {
+): Promise<{
+  outcome: string
+  output?: string
+  log: string
+  note?: string
+  errors: string[]
+}> {
   const { flattenResults, outcome } = await import('./node/report/classify.mjs')
   const { testKey } = await import('./node/expected.mjs')
   fs.mkdirSync(directory, { recursive: true })
@@ -55,22 +78,31 @@ async function rerunAlone(
     rerunArgs(flags, test),
     log,
   )
-  const results = output && path.join(output, 'results.json')
-  if (!results || !fs.existsSync(results))
-    return { outcome: 'not-run', output, log, note: 'no results' }
-  const rows = flattenResults(JSON.parse(fs.readFileSync(results, 'utf8')))
+  const read = (file: string) => {
+    const target = output && path.join(output, file)
+    return target && fs.existsSync(target)
+      ? JSON.parse(fs.readFileSync(target, 'utf8'))
+      : undefined
+  }
+  const report = read('results.json')
+  const errors = runErrors(report, read('run.json'))
+  if (!report)
+    return { outcome: 'not-run', output, log, note: 'no results', errors }
+  const rows = flattenResults(report)
   if (rows.length !== 1 || testKey(rows[0].suite, rows[0].title) !== test.key)
     return {
       outcome: 'not-run',
       output,
       log,
       note: `the rerun selected ${rows.length} tests`,
+      errors,
     }
   const result = outcome(rows[0])
   return {
     outcome: result === 'pass' || result === 'skip' ? result : 'fail',
     output,
     log,
+    errors,
   }
 }
 
@@ -110,6 +142,7 @@ export async function ciVerdict({
   const verdict = expected.compare(tests, listed, { complete })
   const rerunStarted = Date.now()
   let rerunCount = 0
+  const rerunErrors: string[] = []
   if (verdict.rerun.length)
     console.log(
       `\nRerunning ${verdict.rerun.length} tests alone, up to ${expected.RERUN_ATTEMPTS} times each.`,
@@ -122,6 +155,10 @@ export async function ciVerdict({
       attempt,
       path.join(output, 'reruns'),
     )
+    for (const error of result.errors)
+      rerunErrors.push(
+        `rerun ${attempt} of ${test.id ?? test.title}: ${error} (log ${result.log})`,
+      )
     console.log(
       `  ${result.outcome.padEnd(7)} ${test.id ?? '-'} ${test.file} › ${test.title} (attempt ${attempt}${result.note ? `; ${result.note}` : ''}; log ${result.log})`,
     )
@@ -134,15 +171,10 @@ export async function ciVerdict({
     expected.formatExpected(next, platform),
   )
   const errors = [
-    ...(report.errors ?? []).map(
-      (error: { message?: string }) =>
-        stripVTControlCharacters(String(error.message ?? error)).split('\n')[0],
-    ),
-    ...(run.signal ? [`the run was stopped by ${run.signal}`] : []),
-    // run.mjs's own failures: a launcher error, or browsers it owned that survived cleanup.
-    ...[run.error, run.cleanupError]
-      .filter(Boolean)
-      .map((error: string) => String(error).split('\n')[0]),
+    ...runErrors(report, run),
+    // A rerun that broke the harness leaves its test's result unproven, even when another
+    // attempt matched: a browser that survived cleanup can disturb the reruns after it.
+    ...rerunErrors,
   ]
   const actions = process.env.GITHUB_ACTIONS === 'true'
   const markdown = expected.summaryMarkdown({
