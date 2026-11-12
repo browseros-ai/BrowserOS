@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'bun:test'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { detailWith } from '../../server/test-support/neo-records'
+import { SNAPSHOT, SNAPSHOT_WITH_TIP, TIP_LINE } from '../test-support/replies'
 import { FormattedReply, previewText } from './RunList'
 
 const text = (markup: string) =>
@@ -28,6 +29,20 @@ describe("the plain page's reply", () => {
       '- link "Hacker News" [ref=e16]\n- text: "|"\n- text: ```x```',
     )
     expect(shown).not.toContain('\\n')
+  })
+
+  it("shows run 8, a returned snapshot then Neo's tip, decoded with the tip under it", () => {
+    const shown = text(
+      renderToStaticMarkup(
+        <FormattedReply
+          detail={detailWith(8, { text: SNAPSHOT_WITH_TIP, neo: null })}
+        />,
+      ),
+    )
+    expect(shown).toContain('Shown decoded')
+    expect(shown).toContain(SNAPSHOT.split('\n').slice(0, 3).join('\n'))
+    expect(shown).toContain(TIP_LINE)
+    expect(shown).not.toContain('\\n- ')
   })
 
   it('shows any other value as the model read it', () => {

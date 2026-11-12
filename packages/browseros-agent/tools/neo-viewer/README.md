@@ -226,7 +226,9 @@ paste it into any agent and ask about the run. A closed row's run is fetched at 
 A returned string, such as a snapshot, reaches the model as one line of JSON (`\n`, `\"`). The plain
 page, Copy and `runs/NNN.md` show it decoded, as lines, saying so and giving the JSON string's length;
 the sizes and token counts stay those of what the model received, and the exact text stays in the
-Raw view, `runs/NNN.json` and the reply file.
+Raw view, `runs/NNN.json` and the reply file. The value is the reply's first line: Neo writes it as
+one line of JSON, so every line after it (console output, Neo's notes, its `Tip:` lines, any line
+it adds later) is shown under the value as the model read it, and never stops the value decoding.
 
 ## The API
 

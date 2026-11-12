@@ -19,6 +19,11 @@ import {
   textSize,
   type ViewerInfo,
 } from '../../shared/api'
+import {
+  SNAPSHOT,
+  SNAPSHOT_WITH_TIP,
+  TIP_LINE,
+} from '../../web/test-support/replies'
 import { RunStore } from '../log/run-store'
 import { runResult, sseEvent, startFakeNeo } from '../test-support/fake-neo'
 import { FAKE_TOKEN, startFakeNeoHost } from '../test-support/fake-neo-host'
@@ -274,6 +279,33 @@ describe('an export', () => {
     // A second export in the same second gets a folder of its own.
     const again = await writeExport(await sourceOf(store), { root, now })
     expect(again.dir).toBe(`${written.dir}-2`)
+  })
+
+  test("run 8, a returned snapshot then Neo's tip: runs/NNN.md decoded, the reply file exact", async () => {
+    const dataDir = await tempDir('nv-export-tip-state-')
+    const exportRoot = await tempDir('nv-export-tip-')
+    const store = await storeWith(dataDir, [
+      { text: SNAPSHOT_WITH_TIP, neo: null },
+    ])
+    const result = await writeExport(await sourceOf(store), {
+      root: exportRoot,
+      now: Date.parse('2026-11-12T04:39:45Z'),
+    })
+    const named = (end: string) =>
+      join(result.dir, result.files.find((file) => file.endsWith(end)) ?? end)
+    expect(result.files.filter((file) => file.includes('.reply.'))).toEqual([
+      'runs/001.reply.txt',
+    ])
+    const markdown = await readFile(named('001.md'), 'utf8')
+    const read = markdown.slice(markdown.indexOf('## What the model read'))
+    expect(read).toContain('Shown decoded')
+    expect(read).toContain(SNAPSHOT.slice(0, 1_000))
+    expect(read).not.toContain('\\n- ')
+    // The reply file is the exact text, which is not JSON with the tip after it, so .txt.
+    expect(await readFile(named('.reply.txt'), 'utf8')).toBe(SNAPSHOT_WITH_TIP)
+    const json = JSON.parse(await readFile(named('001.json'), 'utf8'))
+    expect(json.parsed.value).toBe(SNAPSHOT)
+    expect(json.parsed.notes).toEqual([TIP_LINE])
   })
 
   test('README.md stays short with many runs; the rest are listed in session.json', async () => {

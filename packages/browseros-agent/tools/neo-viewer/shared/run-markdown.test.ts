@@ -4,7 +4,12 @@ import {
   TWO_LINES,
   twoLineRecord,
 } from '../server/test-support/neo-records'
-import { clock } from '../web/screen/units'
+import { clock, count } from '../web/screen/units'
+import {
+  SNAPSHOT,
+  SNAPSHOT_WITH_TIP,
+  TIP_LINE,
+} from '../web/test-support/replies'
 import { cell, fenced, runMarkdown, statementPreview } from './run-markdown'
 
 const FULL = { replyChars: null }
@@ -195,6 +200,23 @@ describe('one run as Markdown', () => {
     expect(exported).toContain(
       'Then, as the model read them:\n\nThe first 1,998 characters; the full text is in [016.reply.txt](016.reply.txt):',
     )
+  })
+
+  test("run 8, a returned snapshot then Neo's tip: Copy shows the snapshot decoded and the tip as read", () => {
+    const copy = runMarkdown(
+      detailWith(8, { text: SNAPSHOT_WITH_TIP, neo: null }),
+      FULL,
+    )
+    const read = copy.slice(copy.indexOf('## What the model read'))
+    const json = SNAPSHOT_WITH_TIP.split('\n')[0] ?? ''
+    expect(read).toContain(
+      `Shown decoded; the model received it as a JSON string of ${count(json.length)} characters.`,
+    )
+    expect(read).toContain(`\`\`\`text\n${SNAPSHOT}\n\`\`\``)
+    expect(read).toContain(
+      `Then, as the model read them:\n\n\`\`\`text\n${TIP_LINE}\n\`\`\``,
+    )
+    expect(read).not.toContain('\\n- ')
   })
 
   test('a value that is not a string, or an error, is shown as the model read it', () => {
