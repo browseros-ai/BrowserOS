@@ -1,5 +1,5 @@
 /**
- * The prelude's half of the wire lever: every op input the prelude sends for one script that
+ * The prelude's half of the wire lever: every op input the prelude sends for scripts that
  * calls every Playwright method Neo routes to Rust, recorded through the built prelude.
  *
  * scripts/build.ts writes the recording to
@@ -97,6 +97,14 @@ function hasAnswer(name: string): name is keyof typeof ANSWERS {
   return Object.hasOwn(ANSWERS, name)
 }
 
+/** Put typed prelude results back into host JSON before the bootstrap revives their brands. */
+function cannedAnswer(name: string): unknown {
+  const answer = hasAnswer(name) ? ANSWERS[name] : null
+  return answer instanceof Uint8Array
+    ? { $neo: 'bytes', base64: Buffer.from(answer).toString('base64') }
+    : answer
+}
+
 /**
  * A plausible result for each op, so the script runs to its end. The pump's first pull answers
  * one binding call, which makes the prelude send `bindingCall.resolve`; the locator-handler
@@ -106,6 +114,7 @@ function hasAnswer(name: string): name is keyof typeof ANSWERS {
 function everyOpAnswer(): (call: Call) => unknown {
   let pulled = false
   let triggered = false
+  // A one-use callback can remove itself before another registration receives its id.
   let handlerUid = 0
   return (call) => {
     if (call.name === 'page.addLocatorHandler') return ++handlerUid
@@ -130,12 +139,7 @@ function everyOpAnswer(): (call: Call) => unknown {
       triggered = true
       return { uid: 1 }
     }
-    const answer = hasAnswer(call.name) ? ANSWERS[call.name] : null
-    // OpOutputs describes what the prelude sees after the bootstrap revives brands. This
-    // fixture answers at the host's JSON boundary, so put binary answers back in wire form.
-    return answer instanceof Uint8Array
-      ? { $neo: 'bytes', base64: Buffer.from(answer).toString('base64') }
-      : answer
+    return cannedAnswer(call.name)
   }
 }
 
@@ -280,7 +284,7 @@ export async function recordEveryOp(prelude?: string): Promise<Call[]> {
             { tab: 1007, url: null, title: null, closed: true, workers: [] },
           ],
         }
-      return ANSWERS[call.name] ?? null
+      return cannedAnswer(call.name)
     },
     now: RECORDED_AT,
     ...(prelude === undefined ? {} : { prelude }),

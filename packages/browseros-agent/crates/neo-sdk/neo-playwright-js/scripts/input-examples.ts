@@ -33,7 +33,7 @@ class Sampler {
     readonly enums: Enums,
   ) {}
 
-  /** Read the public export, including a re-export after the last hand input map is removed. */
+  /** Follow the public export whether it is declared locally or re-exported from generated types. */
   async exported(file: SourceFile, name: string): Promise<CompilerSymbol> {
     const module = await this.checker.getSymbolAtLocation(file)
     const symbol = module
