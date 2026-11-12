@@ -25,7 +25,13 @@ import {
   StringMatching,
   stringify,
 } from './expect-equality'
-import { RETRYING, type Retrying, retry, urlPredicate } from './expect-retrying'
+import {
+  hrefOf,
+  RETRYING,
+  type Retrying,
+  retry,
+  urlPredicate,
+} from './expect-retrying'
 import {
   type ExpectConfig,
   fail,
@@ -78,14 +84,8 @@ function retrying(
         'expect.toHaveURL',
         `toHaveURL can be only used with Page object, was called with ${receiverText(actual)}`,
       )
-    // urlPredicate hands the predicate a URL when the page's URL parses, else the string.
     const predicate = isURLPattern(expected)
-      ? (url: unknown) =>
-          expected.test(
-            typeof url === 'string'
-              ? url
-              : String(Reflect.get(Object(url), 'href')),
-          )
+      ? (url: unknown) => expected.test(hrefOf(url))
       : (expected as (url: unknown) => unknown)
     return urlPredicate(
       actual,

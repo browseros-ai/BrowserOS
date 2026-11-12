@@ -427,6 +427,37 @@ describe('retrying matchers', () => {
     expect(runtime.calls).toEqual([])
   })
 
+  it('tests that a URL predicate is tested on every URL the page commits, not only the latest', async () => {
+    const committed = [
+      'https://shop.example/target',
+      'https://shop.example/later',
+    ]
+    const runtime = loadPrelude({
+      seed: {
+        ...SEED,
+        pages: [{ tab: 1007, url: 'https://shop.example/start' }],
+      },
+      answer: (call) =>
+        call.name === 'page.waitForURL'
+          ? { url: committed.shift(), frameSnapshotAttempted: true }
+          : null,
+    })
+    const tested = json(
+      await runtime.run(`
+        const tested = []
+        await expect(page).toHaveURL((url) => {
+          tested.push(url.href)
+          return url.pathname === '/target'
+        }, { timeout: 1000 })
+        return tested
+      `),
+    )
+    expect(tested).toEqual([
+      'https://shop.example/start',
+      'https://shop.example/target',
+    ])
+  })
+
   it('tests that a signal aborted before the assertion fails it at once with the reason, sending nothing', async () => {
     const runtime = loadPrelude({
       seed: {

@@ -18270,10 +18270,11 @@ Expected: predicate to ${state.isNot ? "fail" : "succeed"}
 `, signal);
     const timeout = options?.timeout ?? state.config.timeout;
     const deadline = Date.now() + timeout;
+    let candidate = URL.parse(page.url()) ?? page.url();
     for (;; ) {
       let passed;
       try {
-        passed = Boolean(await predicate(URL.parse(page.url()) ?? page.url()));
+        passed = Boolean(await predicate(candidate));
       } catch (error) {
         throw prefixed("expect.toHaveURL", error);
       }
@@ -18286,16 +18287,24 @@ Expected: predicate to ${state.isNot ? "fail" : "succeed"}
 Expected: predicate to ${state.isNot ? "fail" : "succeed"}
 Received: ${stringify(page.url())}
 Timeout: ${timeout}ms`);
+      const tested = hrefOf(candidate);
+      let committed;
       try {
         await page._waitForURL("expect.toHaveURL", site, page._mainFrame, (url) => {
-          const href = typeof url === "object" && url !== null ? Reflect.get(url, "href") : url;
-          return href !== page.url();
+          if (hrefOf(url) === tested)
+            return false;
+          committed = url;
+          return true;
         }, { timeout: timeout === 0 ? 0 : remaining, waitUntil: "commit" });
       } catch (error) {
         if (Reflect.get(Object(error), "timeout") !== true && !(error instanceof Error && error.name === "TimeoutError"))
           throw error;
       }
+      candidate = committed ?? URL.parse(page.url()) ?? page.url();
     }
+  }
+  function hrefOf(url) {
+    return typeof url === "object" && url !== null ? String(Reflect.get(url, "href")) : String(url);
   }
 
   // crates/neo-sdk/neo-playwright-js/src/prelude/unsupported.ts
@@ -18512,7 +18521,7 @@ Timeout: ${timeout}ms`);
     if (name === "toHaveURL" && (typeof expected === "function" || isURLPattern(expected))) {
       if (!(actual instanceof Page))
         throw plainError("expect.toHaveURL", `toHaveURL can be only used with Page object, was called with ${receiverText(actual)}`);
-      const predicate = isURLPattern(expected) ? (url) => expected.test(typeof url === "string" ? url : String(Reflect.get(Object(url), "href"))) : expected;
+      const predicate = isURLPattern(expected) ? (url) => expected.test(hrefOf(url)) : expected;
       return urlPredicate(actual, site, predicate, state, args[1]);
     }
     const build = RETRYING[name];

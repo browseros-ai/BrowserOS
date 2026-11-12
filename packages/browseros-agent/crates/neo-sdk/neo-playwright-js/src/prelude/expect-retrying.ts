@@ -666,10 +666,12 @@ export async function urlPredicate(
     )
   const timeout = options?.timeout ?? state.config.timeout
   const deadline = Date.now() + timeout
+  // The URL the predicate is tested on: the page's, then each one the page commits after it.
+  let candidate: unknown = URL.parse(page.url()) ?? page.url()
   for (;;) {
     let passed: boolean
     try {
-      passed = Boolean(await predicate(URL.parse(page.url()) ?? page.url()))
+      passed = Boolean(await predicate(candidate))
     } catch (error) {
       throw prefixed('expect.toHaveURL', error)
     }
@@ -680,17 +682,20 @@ export async function urlPredicate(
         state,
         `${header('toHaveURL', state, 'page')} failed\n\nExpected: predicate to ${state.isNot ? 'fail' : 'succeed'}\nReceived: ${stringify(page.url())}\nTimeout: ${timeout}ms`,
       )
+    // Wake on the first committed URL other than the one just tested, and test that one. The
+    // page's own URL is no reference here: reply facts move it to each URL `_waitForURL` hands
+    // this detector, so comparing with it would never wake and skip every URL in between.
+    const tested = hrefOf(candidate)
+    let committed: unknown
     try {
       await page._waitForURL(
         'expect.toHaveURL',
         site,
         page._mainFrame,
         (url) => {
-          const href =
-            typeof url === 'object' && url !== null
-              ? Reflect.get(url, 'href')
-              : url
-          return href !== page.url()
+          if (hrefOf(url) === tested) return false
+          committed = url
+          return true
         },
         { timeout: timeout === 0 ? 0 : remaining, waitUntil: 'commit' },
       )
@@ -701,5 +706,13 @@ export async function urlPredicate(
       )
         throw error
     }
+    candidate = committed ?? URL.parse(page.url()) ?? page.url()
   }
+}
+
+/** A predicate URL's text: a parsed URL's `href`, or the string a URL that did not parse stays. */
+export function hrefOf(url: unknown): string {
+  return typeof url === 'object' && url !== null
+    ? String(Reflect.get(url, 'href'))
+    : String(url)
 }
