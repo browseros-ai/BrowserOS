@@ -3,6 +3,7 @@
 
 use std::collections::BTreeSet;
 use std::error::Error;
+use std::iter;
 
 use serde::Deserialize;
 use serde_json::Value;
@@ -223,7 +224,7 @@ fn tests_that_flat_pointer_inputs_reject_old_nesting_and_other_commands_keys()
             .ok_or("pointer recording is missing an op")?;
         let mut args: Value = serde_json::from_str(&exchange.args)?;
         args.as_object_mut().ok_or("object args")?.remove("call");
-        for key in std::iter::once("options").chain(unsupported.iter().copied()) {
+        for key in iter::once("options").chain(unsupported.iter().copied()) {
             let mut invalid = args.clone();
             invalid
                 .as_object_mut()
