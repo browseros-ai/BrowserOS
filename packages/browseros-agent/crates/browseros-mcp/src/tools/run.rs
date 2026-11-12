@@ -1971,18 +1971,19 @@ mod tests {
         output_file::create_browser_output_file_access,
         tests::{check_fixed_fixture_epoch, select_fixture_tab},
     };
-    use browseros_cdp::{CdpError, CdpEvent};
+    use browseros_cdp::{CdpError, CdpEvent, TargetedEvents};
     use browseros_core::{
         BrowserSession, BrowserSessionHooks, BrowserView, CdpConnection, WindowId,
     };
     use futures_util::future::BoxFuture;
     use serde_json::json;
-    use tokio::sync::broadcast;
+    use tokio::sync::{broadcast, mpsc};
     use tokio_util::sync::CancellationToken;
 
     /// Script fixture with an immutable transport epoch, including guarded creation readbacks.
     struct RunFakeConnection {
         sender: broadcast::Sender<CdpEvent>,
+        targeted: TargetedEvents,
         state: Arc<Mutex<RunFakeState>>,
     }
 
@@ -2000,6 +2001,7 @@ mod tests {
             let (sender, _receiver) = broadcast::channel(8);
             Self {
                 sender,
+                targeted: TargetedEvents::default(),
                 state: Arc::new(Mutex::new(RunFakeState::default())),
             }
         }
@@ -2040,11 +2042,14 @@ mod tests {
         }
 
         fn emit(&self, method: &str, params: Value, session_id: Option<&str>) {
-            let _ = self.sender.send(CdpEvent {
+            let event = CdpEvent {
                 method: method.to_string(),
                 params,
                 session_id: session_id.map(SessionId::from),
-            });
+            };
+            if let Some(event) = self.targeted.deliver(event) {
+                let _ = self.sender.send(event);
+            }
         }
     }
 
@@ -2204,6 +2209,10 @@ mod tests {
 
         fn events(&self) -> broadcast::Receiver<CdpEvent> {
             self.sender.subscribe()
+        }
+
+        fn events_targeted(&self, method: &str) -> mpsc::UnboundedReceiver<CdpEvent> {
+            self.targeted.subscribe(method)
         }
 
         fn is_connected(&self) -> bool {
@@ -3834,6 +3843,25 @@ return seen;
             .ok_or_else(|| anyhow::anyhow!("structured content"))?;
         assert_eq!(structured["value"]["nested"], json!([]));
         assert_eq!(structured["value"]["saveHelper"], json!("function"));
+        Ok(())
+    }
+
+    #[test]
+    fn an_emitted_event_reaches_its_targeted_subscriber_and_not_the_broadcast() -> anyhow::Result<()>
+    {
+        let connection = RunFakeConnection::new();
+        let mut broadcast = connection.events();
+        let mut targeted = connection.events_targeted("Runtime.bindingCalled");
+        connection.emit(
+            "Runtime.bindingCalled",
+            json!({ "name": "probe" }),
+            Some("session-7"),
+        );
+        assert_eq!(targeted.try_recv()?.params["name"], "probe");
+        assert!(
+            broadcast.try_recv().is_err(),
+            "a method with a live targeted subscriber must bypass the broadcast"
+        );
         Ok(())
     }
 

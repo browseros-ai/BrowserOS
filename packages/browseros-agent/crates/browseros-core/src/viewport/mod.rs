@@ -6,16 +6,19 @@
 //! Hosts enable the feature by attaching one [`Viewports`] to their views; every entry point is
 //! on [`BrowserView`], so admission and scope stay where they are.
 
+mod change;
 mod device;
+pub use change::ViewportChange;
 #[cfg(test)]
 mod tests;
 
+use crate::pages::PageSession;
 use crate::{BrowserView, CoreError, PageId, SessionId};
 use device::Fixed;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     sync::{
         Arc, Mutex,
         atomic::{AtomicU64, Ordering},
@@ -42,12 +45,15 @@ pub enum ViewportMode {
 
 /// A validated request. Zoom is a percentage of the mobile preview and exists only for mobile;
 /// a size replaces a fixed mode's device size. Leaving either out means the mode's own value,
-/// never the tab's previous one.
+/// never the tab's previous one. [`Self::playwright`] instead uses the desktop context's
+/// metrics profile and Chromium's full dimension range; fits retain that profile on restore.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ViewportRequest {
     mode: ViewportMode,
     zoom: Option<f64>,
     size: Option<Size>,
+    /// Playwright uses its desktop context defaults, rather than a hosted device preset.
+    playwright: bool,
 }
 
 impl ViewportRequest {
@@ -57,6 +63,7 @@ impl ViewportRequest {
                 mode,
                 zoom: Some(DEFAULT_ZOOM),
                 size: None,
+                playwright: false,
             }),
             (ViewportMode::Mobile, Some(zoom))
                 if zoom.is_finite() && (MIN_ZOOM..=MAX_ZOOM).contains(&zoom) =>
@@ -65,6 +72,7 @@ impl ViewportRequest {
                     mode,
                     zoom: Some(zoom),
                     size: None,
+                    playwright: false,
                 })
             }
             (ViewportMode::Mobile, Some(_)) => Err(format!(
@@ -75,8 +83,26 @@ impl ViewportRequest {
                 mode,
                 zoom: None,
                 size: None,
+                playwright: false,
             }),
         }
+    }
+
+    /// A page's Playwright viewport, using Chromium's own 0..=10,000,000 metric bounds.
+    /// Kept as a request so an owner's fit records and restores the exact same override.
+    pub fn playwright(size: Size) -> Result<Self, String> {
+        if ![size.width, size.height]
+            .iter()
+            .all(|side| (0..=10_000_000).contains(side))
+        {
+            return Err("width and height must be from 0 to 10000000".to_owned());
+        }
+        Ok(Self {
+            mode: ViewportMode::Desktop,
+            zoom: None,
+            size: Some(size),
+            playwright: true,
+        })
     }
 
     #[must_use]
@@ -116,6 +142,9 @@ impl ViewportRequest {
     }
 
     fn fixed(self) -> Option<Fixed> {
+        if self.playwright {
+            return self.size.map(|size| Fixed::Playwright { size });
+        }
         match self.mode {
             ViewportMode::Mobile => Some(Fixed::Mobile {
                 zoom: self.zoom.unwrap_or(DEFAULT_ZOOM),
@@ -156,7 +185,10 @@ pub struct PageMetrics {
     pub mobile: Option<bool>,
 }
 
+/// A width and height, as a page's viewport size is reported. neo-server's run envelope carries
+/// it, and prints it as TypeScript under the `ts-rs` feature.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "ts-rs", derive(ts_rs::TS))]
 #[serde(rename_all = "camelCase")]
 pub struct Size {
     pub width: i64,
@@ -169,6 +201,12 @@ pub struct Size {
 #[derive(Default)]
 pub struct Viewports {
     tabs: Mutex<HashMap<PageId, Tab>>,
+    /// Agent configuration survives a temporary fit and run teardown. Fits replace `tabs`,
+    /// but must not change what the next run's synchronous `page.viewportSize()` reports.
+    playwright_sizes: Mutex<HashMap<PageId, Size>>,
+    /// An initial resize can write metrics before failing, even though the default tab has
+    /// no `Tab` entry. Keep its reset pending until every clearing command acknowledges.
+    pending_defaults: Mutex<HashSet<PageId>>,
     /// One lock per tab: its mode changes and its fixed operations hold it alone, captures and
     /// default operations share it.
     pages: Mutex<HashMap<PageId, Arc<RwLock<()>>>>,
@@ -179,6 +217,9 @@ pub struct Viewports {
 /// A tab in a fixed mode. Default tabs have no entry.
 #[derive(Debug, Clone)]
 struct Tab {
+    /// The request as the caller gave it, which [`BrowserView::current_viewport`] hands back
+    /// so a takeover's fit can later put back exactly what it replaced.
+    request: ViewportRequest,
     fixed: Fixed,
     /// The page session on which the mode is wholly in place: emulation applied and the view
     /// pinned. It dies with that session. `None` while a change is pending: whatever failed or
@@ -228,6 +269,20 @@ impl Viewports {
         self.tab(page).map_or(1.0, |tab| tab.fixed.scale())
     }
 
+    /// The request the tab's fixed mode was set with, applied or still pending; `None` in the
+    /// default mode.
+    pub(crate) fn current(&self, page: &PageId) -> Option<ViewportRequest> {
+        self.tab(page).map(|tab| tab.request)
+    }
+
+    pub(crate) fn playwright_size(&self, page: &PageId) -> Option<Size> {
+        self.playwright_sizes
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(page)
+            .copied()
+    }
+
     pub(crate) async fn set(
         &self,
         view: &BrowserView,
@@ -262,6 +317,8 @@ impl Viewports {
         }
         let admitted = view.page_session(page.clone()).await?;
         let session = admitted.session_id.clone();
+        self.reset_default_pending_locked(view, &page, &admitted)
+            .await?;
         let Some(fixed) = request.fixed() else {
             // Any record may have overrides on this session, including a change that failed or
             // was interrupted after sending them. Forgotten only once cleared: a failed clear
@@ -281,14 +338,15 @@ impl Viewports {
         };
         // Recorded as pending before anything is sent, and applied only once the view is
         // pinned: a step that fails or is cut short leaves the next operation to redo it.
-        let generation = self.begin(&page, fixed);
+        let generation = self.begin(&page, request, fixed);
         let chrome_version = self.chrome_version(view).await?;
         for (method, params) in fixed.commands(&chrome_version) {
             view.send_at_capture(method, params, Some(&session)).await?;
         }
         let metrics = device::settle(&admitted.session, &page, fixed).await?;
-        let (method, params) = fixed.pin();
-        view.send_at_capture(method, params, Some(&session)).await?;
+        if let Some((method, params)) = fixed.pin() {
+            view.send_at_capture(method, params, Some(&session)).await?;
+        }
         self.applied(&page, &session, generation);
         view.page(page.clone()).await?;
         Ok(report(&page, request, metrics))
@@ -305,12 +363,12 @@ impl Viewports {
         if view.signals().pending_dialog(&page).is_some() {
             return Ok(ViewportLease::default());
         }
-        if self.tab(&page).is_none() {
+        if self.tab(&page).is_none() && !self.default_pending(&page) {
             // A default tab changes nothing, but must not act while its mode changes.
             let lease = self.hold(view, page.clone()).await;
             // A setViewport queued ahead of this operation may have made the tab fixed; the
             // shared lease is released here and the fixed path below holds the tab alone.
-            if self.tab(&page).is_none() {
+            if self.tab(&page).is_none() && !self.default_pending(&page) {
                 return Ok(lease);
             }
         }
@@ -319,30 +377,98 @@ impl Viewports {
             _exclusive: Some(self.lock_page(view, &page).await),
         };
         // The dialog may have opened while this operation waited for the tab.
-        if self.tab(&page).is_none() || view.signals().pending_dialog(&page).is_some() {
+        if view.signals().pending_dialog(&page).is_some() {
             return Ok(lease);
         }
         let admitted = view.page_session(page.clone()).await?;
-        let session = admitted.session_id.clone();
+        self.repair_pending_locked(view, &page, &admitted).await?;
+        Ok(lease)
+    }
+
+    /// The raw SDK path admits here without taking a long-lived viewport lease. Retry an
+    /// interrupted reset or restore before it observes the page, under the same tab lock.
+    pub(crate) async fn repair_pending(
+        &self,
+        view: &BrowserView,
+        page: &PageId,
+        admitted: &PageSession,
+    ) -> Result<(), CoreError> {
+        if !self.default_pending(page)
+            && self
+                .tab(page)
+                .is_none_or(|tab| tab.applied.as_ref() == Some(&admitted.session_id))
+        {
+            return Ok(());
+        }
+        let _held = self.lock_page(view, page).await;
+        self.repair_pending_locked(view, page, admitted).await
+    }
+
+    async fn repair_pending_locked(
+        &self,
+        view: &BrowserView,
+        page: &PageId,
+        admitted: &PageSession,
+    ) -> Result<(), CoreError> {
+        self.reset_default_pending_locked(view, page, admitted)
+            .await?;
+        let session = &admitted.session_id;
         // Read after the session: a caller's raw override may have landed meanwhile.
-        let Some(tab) = self.tab(&page) else {
-            return Ok(lease);
+        let Some(tab) = self.tab(page) else {
+            return Ok(());
         };
-        if tab.applied.as_ref() == Some(&session) {
-            return Ok(lease);
+        if tab.applied.as_ref() == Some(session) {
+            return Ok(());
         }
         // Lost with its session or replaced by a caller's raw override. Pending until pinned
         // again: a step that fails or is cut short leaves the next operation to redo it.
-        let generation = self.invalidate(&page);
-        let chrome_version = self.chrome_version(view).await?;
+        let generation = self.invalidate(page);
+        let chrome_version = if matches!(tab.fixed, Fixed::Playwright { .. }) {
+            String::new()
+        } else {
+            self.chrome_version(view).await?
+        };
         for (method, params) in tab.fixed.commands(&chrome_version) {
-            view.send_at_capture(method, params, Some(&session)).await?;
+            view.send_at_capture(method, params, Some(session)).await?;
         }
-        device::settle(&admitted.session, &page, tab.fixed).await?;
-        let (method, params) = tab.fixed.pin();
-        view.send_at_capture(method, params, Some(&session)).await?;
-        self.applied(&page, &session, generation);
-        Ok(lease)
+        if !matches!(tab.fixed, Fixed::Playwright { .. }) {
+            device::settle(&admitted.session, page, tab.fixed).await?;
+        }
+        if let Some((method, params)) = tab.fixed.pin() {
+            view.send_at_capture(method, params, Some(session)).await?;
+        }
+        self.applied(page, session, generation);
+        Ok(())
+    }
+
+    async fn reset_default_pending_locked(
+        &self,
+        view: &BrowserView,
+        page: &PageId,
+        admitted: &PageSession,
+    ) -> Result<(), CoreError> {
+        if self.default_pending(page) {
+            for (method, params) in device::clear_commands() {
+                view.send_at_capture(method, params, Some(&admitted.session_id))
+                    .await?;
+            }
+            self.reset_complete(page);
+        }
+        Ok(())
+    }
+
+    fn default_pending(&self, page: &PageId) -> bool {
+        self.pending_defaults
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .contains(page)
+    }
+
+    fn reset_complete(&self, page: &PageId) {
+        self.pending_defaults
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(page);
     }
 
     /// Shares the page: its mode changes and its fixed operations wait for every holder, other
@@ -381,14 +507,24 @@ impl Viewports {
 
     /// Records `fixed` as the tab's mode, pending, and returns the generation its change runs
     /// under.
-    fn begin(&self, page: &PageId, fixed: Fixed) -> u64 {
+    fn begin(&self, page: &PageId, request: ViewportRequest, fixed: Fixed) -> u64 {
         let generation = self.next_generation();
+        self.reset_complete(page);
+        if request.playwright
+            && let Some(size) = request.size
+        {
+            self.playwright_sizes
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .insert(page.clone(), size);
+        }
         self.tabs
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .insert(
                 page.clone(),
                 Tab {
+                    request,
                     fixed,
                     applied: None,
                     generation,
@@ -446,6 +582,14 @@ impl Viewports {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .retain(|page, _| open.contains(page));
+        self.playwright_sizes
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .retain(|page, _| open.contains(page));
+        self.pending_defaults
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .retain(|page| open.contains(page));
         self.pages
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)

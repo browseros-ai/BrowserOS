@@ -118,7 +118,13 @@ pub(super) async fn find_clickables(
         return Err(FrameReadReason::NotFound);
     }
     let capture = snapshots.capture(session, budget).await?;
-    let selected = match document {
+    let selected = select_document(&capture, document).ok_or(FrameReadReason::NotFound)?;
+    Ok(clickables(selected, &capture.strings))
+}
+
+/// The frame's document within its session's capture.
+fn select_document(capture: &Capture, document: ClickableDocument) -> Option<&Document> {
+    match document {
         // Blink serializes the session's root frame first.
         ClickableDocument::SessionDefault => capture.documents.first(),
         ClickableDocument::BackendNode(id) => capture
@@ -126,9 +132,7 @@ pub(super) async fn find_clickables(
             .iter()
             .find(|document| document.nodes.backend_node_id.first() == Some(&id)),
         ClickableDocument::Unavailable => None,
-    };
-    let selected = selected.ok_or(FrameReadReason::NotFound)?;
-    Ok(clickables(selected, &capture.strings))
+    }
 }
 
 /// The rules over one captured document. A hit is an element that

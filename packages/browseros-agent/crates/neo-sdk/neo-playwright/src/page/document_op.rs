@@ -1,0 +1,140 @@
+//! A frame's document as a whole, in its isolated world: the main frame's, or that of the child
+//! frame a `frame.*` form names. `page.title()` and `page.content()` read it there, as upstream
+//! reads it from its utility world. `page.setContent()` replaces it from there, through the
+//! main-world gateway (`DocumentWrite`), because the HTML's scripts run in the page's main world.
+
+use browseros_core::FrameId;
+use serde::Deserialize;
+use ts_rs::TS;
+
+use crate::op_scope::OpScope;
+use crate::page::evaluate_guard::{self, DocumentWrite, TreeFrame};
+use crate::page::world_call::{self, unexpected, with_world};
+use crate::page::{LoadState, OpPage};
+use crate::probe::{self, DocumentPart, ProbeReply, ProbeRequest};
+use crate::resolve::failed;
+use crate::target::PageRef;
+use crate::wire::{Nothing, options};
+use crate::{ErrorCode, Playwright, PlaywrightError};
+
+/// `page.title()` and `page.content()`: `{ page, frame? }`.
+#[derive(Debug, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct DocumentInput {
+    page: PageRef,
+    /// A child frame, for `frame.title()`; absent is the main frame.
+    #[serde(default)]
+    #[ts(optional)]
+    frame: Option<FrameId>,
+}
+options!(DocumentInput);
+
+/// `page.setContent(html, { waitUntil })`: `{ page, frame?, html, waitUntil? }`.
+#[derive(Debug, Deserialize, TS)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub(crate) struct SetContentInput {
+    page: PageRef,
+    #[serde(default)]
+    #[ts(optional)]
+    frame: Option<FrameId>,
+    html: String,
+    #[serde(default)]
+    wait_until: LoadState,
+}
+options!(SetContentInput);
+
+/// Reads `part` of the frame's document.
+pub(crate) async fn read(
+    pw: &Playwright,
+    scope: &OpScope<'_>,
+    input: DocumentInput,
+    part: DocumentPart,
+) -> Result<String, PlaywrightError> {
+    let page = OpPage::admit_handle(pw, scope, &input.page).await?;
+    let world = match world_call::frame_world(&page, scope, input.frame.as_ref()).await {
+        Ok(world) => world,
+        // upstream's `title()` swallows its failure and answers "" (PW:25766), so a detached
+        // frame's title is "" (measured); its `content()` fails as the frame route does.
+        Err(error)
+            if part == DocumentPart::Title
+                && input.frame.is_some()
+                && error.error_code() == Some(ErrorCode::TargetClosed) =>
+        {
+            return Ok(String::new());
+        }
+        Err(error) => return Err(error),
+    };
+    let TreeFrame { endpoint, place } =
+        evaluate_guard::frame_endpoint(&page, world.session(), world.frame().clone());
+    let request = &ProbeRequest::Document { part };
+    with_world(&page, &endpoint, &place, |world| async move {
+        match probe::call(&world, request).await? {
+            ProbeReply::DocumentText { text } => Ok(text),
+            other => Err(unexpected("document", other)),
+        }
+    })
+    .await
+    .map_err(|failure| failed(scope, failure))
+}
+
+/// The body's aria snapshot in `frame`'s isolated world (the main frame for `None`), as upstream's
+/// `Frame._expectInternal` reads it from its utility world for a matcher that found nothing.
+/// `None` when the frame has no body or cannot answer: the snapshot only describes a failure the
+/// matcher already has, so no failure of its own replaces that one.
+pub(crate) async fn expect_snapshot(
+    page: &OpPage<'_>,
+    scope: &OpScope<'_>,
+    frame: Option<&FrameId>,
+) -> Option<String> {
+    let world = world_call::frame_world(page, scope, frame).await.ok()?;
+    let TreeFrame { endpoint, place } =
+        evaluate_guard::frame_endpoint(page, world.session(), world.frame().clone());
+    let request = &ProbeRequest::Document {
+        part: DocumentPart::ExpectSnapshot,
+    };
+    let text = with_world(page, &endpoint, &place, |world| async move {
+        match probe::call(&world, request).await? {
+            ProbeReply::DocumentText { text } => Ok(text),
+            other => Err(unexpected("document", other)),
+        }
+    })
+    .await
+    .ok()?;
+    Some(text).filter(|text| !text.is_empty())
+}
+
+/// Replaces the frame's document with `html` and waits for `waitUntil`, as upstream does,
+/// through the main-world gateway: the probe writes from the isolated world, but the HTML's scripts
+/// and event handlers run in the main world.
+///
+/// Playwright-core never sees `load` on a hosted BrowserOS, because it waits for a console
+/// message after `document.open()`, which a hosted browser never sends; the write's watch needs
+/// none. The write runs in the isolated world, whose engine and seq outlive document.open as
+/// upstream's utility world does, so the refs a later snapshot prints keep the frame's prefix.
+pub(crate) async fn set_content(
+    pw: &Playwright,
+    scope: &OpScope<'_>,
+    input: SetContentInput,
+) -> Result<Nothing, PlaywrightError> {
+    // Measured: Chromium never fires `networkIdle` again for a written document, so this wait
+    // could only time out.
+    if input.wait_until == LoadState::NetworkIdle {
+        return Err(scope.fail(
+            ErrorCode::Unsupported,
+            "waitUntil \"networkidle\" cannot be observed after setContent in Neo; use \"load\"",
+        ));
+    }
+    // Logged before the frame is looked for, as upstream logs it, so a timeout while the frame's
+    // world installs carries the line in its call log.
+    scope.log(format!(
+        "setting frame content, waiting until \"{}\"",
+        input.wait_until
+    ));
+    DocumentWrite::open(pw, scope, &input.page, input.frame.as_ref())
+        .await?
+        .write(scope, &input.html, input.wait_until)
+        .await
+}
+
+#[cfg(test)]
+mod tests;

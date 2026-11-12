@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Neo display (dev)</title>
+  <link rel="stylesheet" href="/kit/kit.css">
+</head>
+<body class="viewer">
+  <header class="bar">
+    <h1>Neo display</h1>
+    <div class="seg" id="mode">
+      <button data-mode="view">View</button>
+      <button data-mode="control">Control</button>
+    </div>
+    <label>Follow
+      <select id="follow-kind">
+        <option value="">nothing</option>
+        <option value="followTask">task</option>
+        <option value="followTab">tab</option>
+      </select>
+      <input id="follow-value" size="14" placeholder="task or tab id" list="recent-tabs">
+    </label>
+    <button id="connect">Connect</button>
+    <button id="disconnect">Disconnect</button>
+    <span class="spacer"></span>
+    <a href="/trace" target="_blank">Trace</a>
+  </header>
+  <div id="warning" class="notice warn" hidden>
+    <b>Control mode.</b> Your keys, clicks and paste go to Neo.
+    Views and screenshots stay live while you type. Start a takeover to block the agent
+    from acting on the selected tab until you release it.
+  </div>
+  <div class="main">
+    <div id="screen"><div id="overlay" class="overlay"></div></div>
+    <aside class="side">
+      <div>
+        <h2>Display</h2>
+        <div class="status">
+          <div class="row"><span id="status-badge" class="badge">idle</span><span id="status-words"></span></div>
+          <div id="status-why" class="why"></div>
+        </div>
+      </div>
+      <div>
+        <h2>Takeover</h2>
+        <p class="muted" style="margin:0 0 6px">Locks the agent out of the selected tab and opens its control display. Views and screenshots stay live.</p>
+        <div class="row">
+          <input id="takeover-tab" list="recent-tabs" placeholder="tab id" size="14">
+          <button id="takeover-start">Start takeover</button>
+        </div>
+        <div id="takeover-card"></div>
+      </div>
+      <div>
+        <h2>Recent tabs</h2>
+        <div id="recent" class="muted">loading...</div>
+      </div>
+    </aside>
+  </div>
+  <datalist id="recent-tabs"></datalist>
+  <script type="module" src="/kit/viewer.js"></script>
+</body>
+</html>

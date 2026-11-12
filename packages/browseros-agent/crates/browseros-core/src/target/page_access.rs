@@ -259,7 +259,7 @@ impl ProtocolAdmission for PageProtocol {
 mod frame_tests {
     use super::*;
     use crate::{Browser, CdpConnection, NativeCapabilities, TargetBinding, TargetIntent};
-    use browseros_cdp::{CdpError, CdpEvent};
+    use browseros_cdp::{CdpError, CdpEvent, TargetedEvents};
     use std::{
         collections::{HashMap, HashSet},
         sync::{
@@ -267,7 +267,7 @@ mod frame_tests {
             atomic::{AtomicU64, Ordering},
         },
     };
-    use tokio::sync::broadcast;
+    use tokio::sync::{broadcast, mpsc};
 
     type TestResult = Result<(), Box<dyn std::error::Error>>;
     type Calls = Vec<(String, Option<SessionId>)>;
@@ -284,6 +284,7 @@ mod frame_tests {
         mouse: Mutex<Vec<(Option<SessionId>, Value)>>,
         epoch: AtomicU64,
         events: broadcast::Sender<CdpEvent>,
+        targeted: TargetedEvents,
         /// Attachments made per target. Each mints a fresh session id; the first keeps the
         /// plain `session-<target>` name the frame tests address.
         attachments: Mutex<HashMap<String, usize>>,
@@ -313,11 +314,21 @@ mod frame_tests {
                 mouse: Mutex::new(Vec::new()),
                 epoch: AtomicU64::new(1),
                 events: broadcast::channel(32).0,
+                targeted: TargetedEvents::default(),
                 attachments: Mutex::new(HashMap::new()),
                 killed: Mutex::new(HashSet::new()),
                 keys: Mutex::new(Vec::new()),
                 kill_after_key_down: std::sync::atomic::AtomicBool::new(false),
             })
+        }
+
+        /// Offers `event` to its method's targeted subscribers and broadcasts it only when none
+        /// took it, as `CdpClient` does. Fails when the broadcast is needed and no one reads it.
+        fn emit(&self, event: CdpEvent) -> Result<(), broadcast::error::SendError<CdpEvent>> {
+            if let Some(event) = self.targeted.deliver(event) {
+                self.events.send(event)?;
+            }
+            Ok(())
         }
 
         fn called(&self, method: &str) -> Result<bool, Box<dyn std::error::Error>> {
@@ -594,6 +605,9 @@ mod frame_tests {
         fn events(&self) -> broadcast::Receiver<CdpEvent> {
             self.events.subscribe()
         }
+        fn events_targeted(&self, method: &str) -> mpsc::UnboundedReceiver<CdpEvent> {
+            self.targeted.subscribe(method)
+        }
         fn is_connected(&self) -> bool {
             true
         }
@@ -697,7 +711,7 @@ mod frame_tests {
             }
             "session" => {
                 // The OOPIF re-attaches under a new endpoint, as after a detach and recovery.
-                native.events.send(CdpEvent {
+                native.emit(CdpEvent {
                     method: "Target.attachedToTarget".into(),
                     params: json!({"sessionId":"session-cross-2","waitingForDebugger":false,
                         "targetInfo":{"targetId":"cross","type":"iframe","title":"","url":"",
@@ -707,7 +721,7 @@ mod frame_tests {
                 registry_settled(view, "session-cross-2", true).await?;
             }
             "detach" => {
-                native.events.send(CdpEvent {
+                native.emit(CdpEvent {
                     method: "Target.detachedFromTarget".into(),
                     params: json!({"sessionId":"session-cross"}),
                     session_id: Some("session-page".into()),
@@ -1173,6 +1187,25 @@ mod frame_tests {
             delivered_on(&native, &calls, "Page.navigate")?,
             ["session-page-2"],
             "{calls:?}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn tests_that_an_emitted_event_reaches_its_targeted_subscriber_and_not_the_broadcast()
+    -> TestResult {
+        let native = Native::new();
+        let mut broadcast = native.events();
+        let mut targeted = native.events_targeted("Runtime.bindingCalled");
+        native.emit(CdpEvent {
+            method: "Runtime.bindingCalled".into(),
+            params: json!({ "name": "probe" }),
+            session_id: Some("session-page".into()),
+        })?;
+        assert_eq!(targeted.try_recv()?.params["name"], "probe");
+        assert!(
+            broadcast.try_recv().is_err(),
+            "a method with a live targeted subscriber must bypass the broadcast"
         );
         Ok(())
     }

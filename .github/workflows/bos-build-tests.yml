@@ -18,6 +18,7 @@ on:
       - ".github/workflows/build-browseros.yml"
       - ".github/workflows/nightly-macos-browseros.yml"
       - ".github/workflows/nightly-macos-browserclaw.yml"
+      - ".github/workflows/neo-sdk-image.yml"
       - ".github/workflows/reusable-build-macos-nightly.yml"
       - ".github/workflows/publish-server-ota.yml"
       - ".github/workflows/repair-update-feed.yml"

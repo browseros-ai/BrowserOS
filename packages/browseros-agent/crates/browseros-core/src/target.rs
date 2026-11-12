@@ -12,7 +12,7 @@ use crate::{
     pages::{MovePageOptions, NewPageOptions, PageCreation, PageInfo, PageSession},
     pointer::Pointer,
     profiles::{BrowserProfileInfo, LoadProfileOutcome, ProfileSelector, default_profile},
-    screenshot::{ScreenshotCaptureOptions, ScreenshotCaptureResult},
+    screenshot::{ScreenshotBackground, ScreenshotCaptureOptions, ScreenshotCaptureResult},
     windows::WindowInfo,
 };
 use browseros_cdp::{CdpError, CdpEvent};
@@ -389,6 +389,34 @@ impl BrowserView {
             Some(viewports) => viewports.set(self, page, request, cancel).await,
             None => Err(CoreError::Message(
                 "setViewport is only available on a hosted BrowserOS neo server".to_string(),
+            )),
+        }
+    }
+    /// The request this tab's fixed viewport mode was set with, exactly as given, whether or
+    /// not its current page session has it applied yet. `None` while the tab is in the default
+    /// mode, and on a view without `Viewports`. Setting it again restores the same mode, which
+    /// is how a takeover's fit puts back the agent's own emulation when it releases the tab.
+    #[must_use]
+    pub fn current_viewport(&self, page: &PageId) -> Option<crate::viewport::ViewportRequest> {
+        self.viewports.as_ref()?.current(page)
+    }
+    /// The script's configured viewport, independent of a temporary owner fit. It stays
+    /// with the tab across runs; a tab with no Playwright override returns `None`.
+    #[must_use]
+    pub fn playwright_viewport(&self, page: &PageId) -> Option<crate::viewport::Size> {
+        self.viewports.as_ref()?.playwright_size(page)
+    }
+    /// Admits and locks a Playwright resize without sending it. The caller checks permission
+    /// after this await, then immediately applies the change. Fits keep their measured path.
+    pub async fn prepare_playwright_viewport(
+        &self,
+        page: PageId,
+        request: crate::viewport::ViewportRequest,
+    ) -> Result<crate::viewport::ViewportChange, CoreError> {
+        match &self.viewports {
+            Some(viewports) => viewports.prepare_change(self, page, request).await,
+            None => Err(CoreError::Message(
+                "setViewport is only available on a hosted BrowserOS neo server".to_owned(),
             )),
         }
     }
@@ -1029,6 +1057,21 @@ impl BrowserView {
             None => self.session.pages.get_session(page).await,
         }
     }
+    /// Repairs an interrupted viewport before an SDK operation uses its admitted session.
+    /// This configures no new request. Call before taking a viewport lease; legacy callers
+    /// that already hold one continue using `prepare_viewport`'s existing repair path.
+    pub async fn repair_viewport(
+        &self,
+        page: &PageId,
+        session: &PageSession,
+    ) -> Result<(), CoreError> {
+        if let Some(viewports) = &self.viewports
+            && self.signals().pending_dialog(page).is_none()
+        {
+            viewports.repair_pending(self, page, session).await?;
+        }
+        Ok(())
+    }
     /// A frame endpoint admitted through this page capability, including same-process children.
     pub async fn frame_session(
         &self,
@@ -1123,13 +1166,22 @@ impl BrowserView {
             None => observer,
         })
     }
+    /// The factor core multiplies pointer coordinates by before it dispatches them on `page`'s
+    /// root session. A zoomed mobile preview takes them in its scaled on-screen space, so the
+    /// factor is its zoom divided by 100. Every other page, and every view without viewport
+    /// modes, uses 1.0. OOPIF sessions take their own coordinates unscaled. Callers that send
+    /// `Input.dispatchMouseEvent` themselves apply it so their input lands where core's would.
+    /// It reads cached state and does not admit the page.
+    #[must_use]
+    pub fn pointer_scale(&self, page: &PageId) -> f64 {
+        self.viewports
+            .as_ref()
+            .map_or(1.0, |viewports| viewports.pointer_scale(page))
+    }
     pub async fn input(&self, page: PageId) -> Result<Input, CoreError> {
         let access = self.page_access(page.clone()).await?;
         let observer = self.session.observe(page.clone()).await;
-        let scale = self
-            .viewports
-            .as_ref()
-            .map_or(1.0, |viewports| viewports.pointer_scale(&page));
+        let scale = self.pointer_scale(&page);
         let input = match access {
             Some(access) => Input::new(
                 Arc::new(observer.with_access(access.clone())),
@@ -1149,13 +1201,21 @@ impl BrowserView {
             None => nav,
         })
     }
+    /// Captures under this view's target admission and checks freshness before returning pixels.
     pub async fn screenshot(
         &self,
         page: PageId,
         o: ScreenshotCaptureOptions,
     ) -> Result<ScreenshotCaptureResult, CoreError> {
         if self.epoch_guard()?.is_none() {
-            return self.session.screenshot(page, o).await;
+            let session = self.session.pages.get_session(page.clone()).await?;
+            let observer = self.session.observe(page).await;
+            return crate::screenshot::capture_screenshot_with_annotations(
+                session.session,
+                observer,
+                o,
+            )
+            .await;
         }
         let access = self
             .page_access(page.clone())
@@ -1168,6 +1228,54 @@ impl BrowserView {
                 .await?;
         access.fresh().await?;
         Ok(capture)
+    }
+
+    /// Captures caller-normalized `Page.captureScreenshot` parameters, retaining the view's
+    /// native target/profile admission and freshness checks. The SDK uses this when Playwright
+    /// geometry differs from core's viewport/full-page presets; both paths share the capture
+    /// queue and pointer hiding.
+    pub async fn screenshot_cdp(&self, page: PageId, params: Value) -> Result<String, CoreError> {
+        self.screenshot_cdp_with_background(page, params, ScreenshotBackground::Default)
+            .await
+    }
+
+    /// A normalized capture with a temporary background. Core holds its shared capture lock
+    /// through set, capture and reset, so concurrent audit/desktop images cannot see it.
+    pub async fn screenshot_cdp_with_background(
+        &self,
+        page: PageId,
+        params: Value,
+        background: ScreenshotBackground,
+    ) -> Result<String, CoreError> {
+        let capture = self.begin_screenshot(page, background).await?;
+        let data = capture.capture(params).await;
+        capture.finish().await;
+        data
+    }
+
+    /// Begin one admitted capture sequence. The returned lease shares audit/desktop capture
+    /// serialization and can capture multiple PNG tiles without releasing temporary state.
+    pub async fn begin_screenshot(
+        &self,
+        page: PageId,
+        background: ScreenshotBackground,
+    ) -> Result<crate::screenshot::ScreenshotCapture, CoreError> {
+        if self.epoch_guard()?.is_none() {
+            let session = self.session.pages.get_session(page).await?;
+            return crate::screenshot::ScreenshotCapture::acquire(
+                session.session,
+                None,
+                background,
+            )
+            .await;
+        }
+        let access = self
+            .page_access(page)
+            .await?
+            .ok_or_else(|| cdp_policy::unsupported("Page.captureScreenshot"))?;
+        let session = access.session().await?;
+        crate::screenshot::ScreenshotCapture::acquire(session.session, Some(access), background)
+            .await
     }
 
     pub async fn active_page(&self) -> Result<Option<PageInfo>, CoreError> {
@@ -1408,6 +1516,14 @@ impl BrowserView {
     }
     pub async fn tab_id_of(&self, page: PageId) -> Option<TabId> {
         self.session.pages.get_tab_id(page).await
+    }
+    /// Whether core opened this tab for the agent, as
+    /// [`PageManager::is_agent_created`](crate::pages::PageManager::is_agent_created) defines
+    /// it. Any other tab, such as a popup or the user's own tab, keeps its real focus state, so
+    /// a caller that needs focus emulation there turns it on per action. It reads the registry
+    /// and does not admit the page.
+    pub async fn is_agent_created(&self, page: &PageId) -> bool {
+        self.session.pages.is_agent_created(page).await
     }
     pub fn signals(&self) -> &Arc<PageSignals> {
         // This synchronous API exposes a read-only cache projection. Callers must perform the

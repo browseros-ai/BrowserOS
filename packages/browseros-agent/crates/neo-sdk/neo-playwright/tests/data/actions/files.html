@@ -1,0 +1,33 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Files</title></head>
+<body>
+<!-- setInputFiles targets: a single and a multiple file input, an empty one for `[]`, a
+     directory input, a text input and a button (not file inputs), a file input inside a
+     <label> and a <label for> naming #single (upstream's retarget follows both), two inputs
+     one locator matches (strict mode), one input a case removes, and one inside an iframe a
+     case removes. -->
+<input type="file" id="single" aria-label="Single">
+<input type="file" id="multi" multiple aria-label="Multi">
+<input type="file" id="empty" multiple aria-label="Empty">
+<input type="file" id="dir" webkitdirectory aria-label="Dir">
+<input type="text" id="text" aria-label="Text">
+<button id="button">Button</button>
+<label id="wrap">Wrapped <input type="file" id="wrapped"></label>
+<label id="for-label" for="single">Single by for</label>
+<input type="file" class="pair" id="pair-1" aria-label="Pair one">
+<input type="file" class="pair" id="pair-2" aria-label="Pair two">
+<input type="file" id="detachable" aria-label="Detachable">
+<iframe id="child" srcdoc="<input type=file id=inner>"></iframe>
+<script>
+  // Every input, change and cancel event, with what upstream's tests check of them.
+  window.__events = [];
+  for (const type of ['input', 'change', 'cancel'])
+    document.addEventListener(type, (e) => window.__events.push(
+      { type, target: e.target.id, trusted: e.isTrusted, composed: e.composed, bubbles: e.bubbles }), true);
+  window.__takeEvents = () => window.__events.splice(0);
+  // The files an input holds, as the page reads them.
+  window.__files = async (id) => Promise.all([...document.getElementById(id).files].map(async (f) => ({
+    name: f.name, type: f.type, size: f.size, text: f.size <= 64 ? await f.text() : null,
+    relativePath: f.webkitRelativePath, lastModified: f.lastModified,
+  })));
+</script>
+</body></html>

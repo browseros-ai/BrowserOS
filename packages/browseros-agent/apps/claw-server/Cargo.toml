@@ -16,6 +16,8 @@ path = "src/main.rs"
 [dependencies]
 os_info = "3.15.0"
 harness-integrations.workspace = true
+neo-captcha.workspace = true
+neo-capture.workspace = true
 browseros-cdp.workspace = true
 browseros-core.workspace = true
 browseros-mcp.workspace = true

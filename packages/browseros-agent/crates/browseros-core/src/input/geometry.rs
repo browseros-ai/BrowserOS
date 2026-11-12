@@ -303,11 +303,11 @@ fn quad_center(quad: &[f64]) -> Point {
 mod tests {
     use super::{click_blocker_at_point, focus_element_js};
     use crate::{CoreError, ProtocolSession, connection::CdpConnection, input::Point};
-    use browseros_cdp::{CdpError, CdpEvent};
+    use browseros_cdp::{CdpError, CdpEvent, TargetedEvents};
     use futures_util::future::BoxFuture;
     use serde_json::{Value, json};
     use std::sync::{Arc, Mutex};
-    use tokio::sync::broadcast;
+    use tokio::sync::{broadcast, mpsc};
 
     #[derive(Clone, Copy)]
     enum HitTestResponse {
@@ -320,6 +320,7 @@ mod tests {
     struct MockConnection {
         response: HitTestResponse,
         calls: Mutex<Vec<Value>>,
+        targeted: TargetedEvents,
     }
 
     impl CdpConnection for MockConnection {
@@ -369,6 +370,10 @@ mod tests {
             rx
         }
 
+        fn events_targeted(&self, method: &str) -> mpsc::UnboundedReceiver<CdpEvent> {
+            self.targeted.subscribe(method)
+        }
+
         fn is_connected(&self) -> bool {
             true
         }
@@ -382,6 +387,7 @@ mod tests {
         let connection = Arc::new(MockConnection {
             response,
             calls: Mutex::new(Vec::new()),
+            targeted: TargetedEvents::default(),
         });
         (connection.clone(), ProtocolSession::root(connection))
     }

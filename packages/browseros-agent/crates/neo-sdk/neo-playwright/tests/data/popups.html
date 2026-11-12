@@ -1,0 +1,13 @@
+<!doctype html><html><head><meta charset="utf-8"><title>popups</title></head><body>
+<!-- Every way a page opens a page (from spikes/fixtures/popups.html), plus the dialogs. -->
+<button id="open" onclick="window.open('/child.html?open', 'w1', 'width=400,height=300')">window.open popup</button>
+<button id="tab" onclick="window.open('/child.html?tab')">window.open tab</button>
+<button id="noopener" onclick="window.open('/child.html?noopener', '_blank', 'noopener')">window.open noopener</button>
+<a id="blank" href="/child.html?blank" target="_blank">target=_blank link</a>
+<a id="blanknoopener" href="/child.html?blank-noopener" target="_blank" rel="noopener">target=_blank rel=noopener</a>
+<button id="empty" onclick="window.__w = window.open('', 'w2', 'width=400,height=300'); window.__w.document.write('<p>written</p>')">window.open blank</button>
+<button id="confirm" onclick="window.__answer = confirm('Proceed?')">confirm</button>
+<button id="prompt" onclick="window.__answer = prompt('Name?', 'Ada')">prompt</button>
+<button id="alert" onclick="alert('Hello'); window.__answer = 'alerted'">alert</button>
+<button id="log" onclick="console.log('clicked', 7); setTimeout(() => { throw new Error('boom') }, 0)">log</button>
+</body></html>

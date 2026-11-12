@@ -1,7 +1,7 @@
 use super::{OTHER_DOCUMENT, PageJs};
 use crate::{
     CoreError, FrameId, ProtocolSession, SessionId,
-    test_support::{TestCall, TestConnection, cdp_error, cdp_pending},
+    testing::{TestCall, TestConnection, cdp_error, cdp_pending},
 };
 use serde_json::{Value, json};
 use std::sync::Arc;
@@ -131,6 +131,7 @@ async fn tests_that_page_world_eval_sends_a_single_main_world_evaluate()
         vec![TestCall {
             method: "Runtime.evaluate".into(),
             params: json!({ "expression": "6 * 7", "awaitPromise": true, "returnByValue": true }),
+            session: Some(SessionId::from("page-world-eval")),
         }]
     );
     Ok(())

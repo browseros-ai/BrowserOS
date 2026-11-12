@@ -178,7 +178,7 @@ impl BrowserService {
     async fn browser_session(&self, client: CdpClient) -> Arc<BrowserSession> {
         let epoch = client.epoch();
         let ownership = self.ownership.clone();
-        let on_page_detached: OnPageDetached = Arc::new(move |page_id| {
+        let on_page_detached: OnPageDetached = Arc::new(move |page_id, _tab, _target| {
             let ownership = ownership.clone();
             tokio::spawn(async move {
                 ownership.remove_page(&page_id).await;
@@ -327,7 +327,7 @@ impl BrowserService {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use browseros_cdp::{CdpError, CdpEvent, SessionId};
+    use browseros_cdp::{CdpError, CdpEvent, SessionId, TargetedEvents};
     use browseros_core::{BrowserSession, BrowserSessionHooks, CdpConnection};
     use futures_util::future::BoxFuture;
     use serde_json::Value;
@@ -336,11 +336,12 @@ mod tests {
         atomic::{AtomicBool, Ordering},
     };
     use tempfile::TempDir;
-    use tokio::sync::broadcast;
+    use tokio::sync::{broadcast, mpsc};
 
     struct TestConnection {
         connected: AtomicBool,
         events: broadcast::Sender<CdpEvent>,
+        targeted: TargetedEvents,
     }
 
     impl TestConnection {
@@ -349,6 +350,7 @@ mod tests {
             Arc::new(Self {
                 connected: AtomicBool::new(connected),
                 events,
+                targeted: TargetedEvents::default(),
             })
         }
     }
@@ -415,6 +417,10 @@ mod tests {
 
         fn events(&self) -> broadcast::Receiver<CdpEvent> {
             self.events.subscribe()
+        }
+
+        fn events_targeted(&self, method: &str) -> mpsc::UnboundedReceiver<CdpEvent> {
+            self.targeted.subscribe(method)
         }
 
         fn is_connected(&self) -> bool {

@@ -1,0 +1,113 @@
+{
+  "suites": [
+    {
+      "title": "page/page-goto.spec.ts",
+      "file": "page/page-goto.spec.ts",
+      "column": 0,
+      "line": 0,
+      "specs": [
+        {
+          "title": "NA-009 should work with Cross-Origin-Opener-Policy and history state",
+          "file": "page/page-goto.spec.ts",
+          "line": 127,
+          "column": 3,
+          "ok": true,
+          "tests": [
+            {
+              "expectedStatus": "passed",
+              "status": "expected",
+              "results": [
+                {
+                  "status": "passed"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "title": "NA-009 should work with Cross-Origin-Opener-Policy and Cross-Origin-Embedder-Policy and history state",
+          "file": "page/page-goto.spec.ts",
+          "line": 127,
+          "column": 3,
+          "ok": true,
+          "tests": [
+            {
+              "expectedStatus": "passed",
+              "status": "expected",
+              "results": [
+                {
+                  "status": "passed"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "title": "NA-038 js redirect overrides url bar navigation ",
+          "file": "page/page-goto.spec.ts",
+          "line": 511,
+          "column": 1,
+          "ok": true,
+          "tests": [
+            {
+              "expectedStatus": "passed",
+              "status": "expected",
+              "results": [
+                {
+                  "status": "passed"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "title": "NA-054 should reject referer option when setExtraHTTPHeaders provides referer",
+          "file": "page/page-goto.spec.ts",
+          "line": 760,
+          "column": 1,
+          "ok": true,
+          "tests": [
+            {
+              "expectedStatus": "passed",
+              "status": "expected",
+              "results": [
+                {
+                  "status": "passed"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "title": "NA-058 should report raw buffer for main resource",
+          "file": "page/page-goto.spec.ts",
+          "line": 804,
+          "column": 1,
+          "ok": true,
+          "tests": [
+            {
+              "expectedStatus": "failed",
+              "status": "expected",
+              "results": [
+                {
+                  "status": "failed",
+                  "errors": [
+                    {
+                      "location": {
+                        "file": "fixture/tests/page/page-goto.spec.ts",
+                        "column": 27,
+                        "line": 814
+                      },
+                      "message": "Error: \u001b[2mexpect(\u001b[22m\u001b[31mreceived\u001b[39m\u001b[2m).\u001b[22mtoBe\u001b[2m(\u001b[22m\u001b[32mexpected\u001b[39m\u001b[2m) // Object.is equality\u001b[22m\n\nExpected: \u001b[32m\"\u001b[7m\u00dc\u001b[27m (lowercase \u001b[7m\u00fc\u001b[27m)\"\u001b[39m\nReceived: \u001b[31m\"\u001b[7m\u00c3\u0153\u001b[27m (lowercase \u001b[7m\u00c3\u00bc\u001b[27m)\"\u001b[39m\n\n  812 |   const response = await page.goto(server.PREFIX + '/empty.html');\n  813 |   const body = await response.body();\n> 814 |   expect(body.toString()).toBe('\u00dc (lowercase \u00fc)');\n      |                           ^\n  815 | });\n  816 |\n  817 | it('NA-059 should not throw unhandled rejections on invalid url', async ({ page, server }) => {\n    at fixture/tests/page/page-goto.spec.ts:814:27"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "errors": []
+}

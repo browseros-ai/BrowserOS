@@ -1,0 +1,145 @@
+//! The armed hit-target interceptor of one pointer attempt, and its disarm on every exit.
+
+use std::sync::Arc;
+
+use browseros_core::ProtocolSession;
+use tokio::runtime::Handle;
+use tokio::sync::Mutex;
+
+use crate::input::TabInput;
+use crate::probe::{self, ProbeFailure, ProbeReply, ProbeRequest};
+use crate::resolve;
+use crate::world::IsolatedWorld;
+
+/// An interceptor armed in one world. Playwright's interceptor blocks every later pointer
+/// event in its frame once it saw a miss (and every one in a trial), so one left armed would
+/// break the page for its owner too. Every exit stops it:
+/// - the normal path asks for the [`ArmGuard::verdict`], and the probe stops it while
+///   answering;
+/// - an error, a timeout or a dropped future spawns a `disarm` from `Drop`;
+/// - the next arming request in the same world stops a stale one first;
+/// - the probe stops one whose verdict never came by its expiry, which Rust sets 3 s past the
+///   op's timeout (`pointer_action.rs`, `arm_expiry`), once no event of the op can still come; a
+///   verdict asked after that fails instead of vouching for the events it no longer saw.
+///
+/// The spawned disarm first takes the tab's input lock. An interceptor is live only while its
+/// op holds that lock, so a disarm that waits for it can only find a stale one, never stop
+/// another op's live interceptor in the same world. Holding the lock, it first sends the
+/// releases the op's unfinished burst owes (`PageInput`), so they reach the page while the
+/// interceptor still guards it: a cancelled `trial` never turns into a real click.
+#[must_use = "dropping the guard disarms the interceptor, which ends the attempt's hit check"]
+#[derive(Debug)]
+pub(crate) struct ArmGuard {
+    /// `None` once the probe answered the verdict.
+    world: Option<IsolatedWorld>,
+    token: u32,
+    input: Arc<Mutex<TabInput>>,
+    /// The tab's root session and pointer scale, for the owed releases.
+    session: ProtocolSession,
+    pointer_scale: f64,
+}
+
+impl ArmGuard {
+    /// The interceptor `act { arm }` armed with `token` in `world`.
+    pub(crate) fn new(
+        world: IsolatedWorld,
+        token: u32,
+        input: Arc<Mutex<TabInput>>,
+        session: ProtocolSession,
+        pointer_scale: f64,
+    ) -> Self {
+        Self {
+            world: Some(world),
+            token,
+            input,
+            session,
+            pointer_scale,
+        }
+    }
+
+    /// Stops the interceptor and reads what it saw: the interceptor's own description of what
+    /// was in the way, from the trusted event. Once the probe answered (with a verdict or an
+    /// error), or the world is gone, there is nothing left to disarm; any other failure leaves
+    /// it to `Drop`.
+    pub(crate) async fn verdict(&mut self) -> Result<ProbeReply, ProbeFailure> {
+        let Some(world) = self.world.clone() else {
+            return Err(ProbeFailure::Broken(
+                "the interceptor's verdict was already read".to_owned(),
+            ));
+        };
+        let request = ProbeRequest::Verdict { token: self.token };
+        let reply = resolve::ask(&world, &request, None).await;
+        if matches!(reply, Ok(_) | Err(ProbeFailure::Gone(_))) {
+            self.world = None;
+        }
+        reply
+    }
+}
+
+impl ArmGuard {
+    /// Gives up on the verdict without waiting for the page, once the input started a
+    /// navigation in the element's frame, which answers nothing until it ends (upstream does not
+    /// await its `stop()` there either). Unlike `Drop`'s disarm, nothing is held across the
+    /// page's reply: the owed releases go out under the tab's input lock, which is then free for
+    /// the next op, and the interceptor is stopped by its own token (`verdict`), which cannot
+    /// stop an interceptor a later op armed in the same world.
+    pub(crate) fn abandon(mut self) {
+        let Some(world) = self.world.take() else {
+            return;
+        };
+        let Ok(runtime) = Handle::try_current() else {
+            return;
+        };
+        let request = ProbeRequest::Verdict { token: self.token };
+        let input = Arc::clone(&self.input);
+        let session = self.session.clone();
+        let pointer_scale = self.pointer_scale;
+        drop(runtime.spawn(async move {
+            flush_when_idle(&input, &session, pointer_scale).await;
+            // Best effort: a world that is gone took its interceptor with it.
+            let _stopped = probe::call(&world, &request).await;
+        }));
+    }
+}
+
+impl Drop for ArmGuard {
+    fn drop(&mut self) {
+        let Some(world) = self.world.take() else {
+            return;
+        };
+        let Ok(runtime) = Handle::try_current() else {
+            return;
+        };
+        drop(runtime.spawn(disarm_when_idle(
+            world,
+            Arc::clone(&self.input),
+            self.session.clone(),
+            self.pointer_scale,
+        )));
+    }
+}
+
+/// The owed releases alone, under the tab's input lock, which is free again once they are out.
+#[expect(
+    clippy::await_holding_invalid_type,
+    reason = "the releases run while no op holds the tab's input; see ArmGuard"
+)]
+async fn flush_when_idle(input: &Mutex<TabInput>, session: &ProtocolSession, pointer_scale: f64) {
+    input.lock().await.flush_owed(session, pointer_scale).await;
+}
+
+#[expect(
+    clippy::await_holding_invalid_type,
+    reason = "the releases and the disarm run while no op holds the tab's input; see ArmGuard"
+)]
+async fn disarm_when_idle(
+    world: IsolatedWorld,
+    input: Arc<Mutex<TabInput>>,
+    session: ProtocolSession,
+    pointer_scale: f64,
+) {
+    let mut tab = input.lock().await;
+    tab.flush_owed(&session, pointer_scale).await;
+    // Best effort: a world that is gone took its interceptor with it.
+    let _disarmed = probe::call(&world, &ProbeRequest::Disarm).await;
+}

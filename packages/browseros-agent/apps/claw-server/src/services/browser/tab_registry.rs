@@ -402,7 +402,7 @@ fn prune_recently_destroyed(maps: &mut TargetMaps, now: Instant) {
 #[cfg(test)]
 mod tests {
     use super::{TabIdentity, TabRegistry};
-    use browseros_cdp::{CdpError, CdpEvent, SessionId};
+    use browseros_cdp::{CdpError, CdpEvent, SessionId, TargetedEvents};
     use browseros_core::{BrowserSession, BrowserSessionHooks, CdpConnection};
     use futures_util::future::BoxFuture;
     use serde_json::{Value, json};
@@ -413,10 +413,11 @@ mod tests {
         },
         time::Duration,
     };
-    use tokio::sync::broadcast;
+    use tokio::sync::{broadcast, mpsc};
 
     struct TabListConnection {
         events: broadcast::Sender<CdpEvent>,
+        targeted: TargetedEvents,
         list_calls: AtomicUsize,
         list_params: StdMutex<Vec<Value>>,
     }
@@ -426,9 +427,19 @@ mod tests {
             let (events, _) = broadcast::channel(8);
             Arc::new(Self {
                 events,
+                targeted: TargetedEvents::default(),
                 list_calls: AtomicUsize::new(0),
                 list_params: StdMutex::new(Vec::new()),
             })
+        }
+
+        /// Offers `event` to its method's targeted subscribers and broadcasts it only when none
+        /// took it, as `CdpClient` does. Fails when the broadcast is needed and no one reads it.
+        fn emit(&self, event: CdpEvent) -> Result<(), broadcast::error::SendError<CdpEvent>> {
+            if let Some(event) = self.targeted.deliver(event) {
+                self.events.send(event)?;
+            }
+            Ok(())
         }
 
         fn list_params(&self) -> Vec<Value> {
@@ -525,6 +536,10 @@ mod tests {
 
         fn events(&self) -> broadcast::Receiver<CdpEvent> {
             self.events.subscribe()
+        }
+
+        fn events_targeted(&self, method: &str) -> mpsc::UnboundedReceiver<CdpEvent> {
+            self.targeted.subscribe(method)
         }
 
         fn is_connected(&self) -> bool {
@@ -632,7 +647,7 @@ mod tests {
         // The reconnect: same client and session, a new epoch.
         map.observe_session(session.clone(), 2).await?;
 
-        let sent = connection.events.send(CdpEvent {
+        let sent = connection.emit(CdpEvent {
             method: "Target.targetInfoChanged".to_string(),
             params: json!({"targetInfo": {"targetId": "target-after-reconnect", "type": "page", "tabId": 77}}),
             session_id: None,
@@ -838,6 +853,25 @@ mod tests {
         map.rebuild_from_session(&session, 1, true).await?;
         assert_eq!(connection.list_calls.load(Ordering::SeqCst), 2);
         assert_eq!(connection.list_params(), vec![json!({}), json!({})]);
+        Ok(())
+    }
+
+    #[test]
+    fn an_emitted_event_reaches_its_targeted_subscriber_and_not_the_broadcast() -> anyhow::Result<()>
+    {
+        let connection = TabListConnection::new();
+        let mut broadcast = connection.events();
+        let mut targeted = connection.events_targeted("Runtime.bindingCalled");
+        connection.emit(CdpEvent {
+            method: "Runtime.bindingCalled".to_string(),
+            params: json!({ "name": "probe" }),
+            session_id: None,
+        })?;
+        assert_eq!(targeted.try_recv()?.params["name"], "probe");
+        assert!(
+            broadcast.try_recv().is_err(),
+            "a method with a live targeted subscriber must bypass the broadcast"
+        );
         Ok(())
     }
 }

@@ -1,15 +1,12 @@
 use crate::{CoreError, SessionId, TargetError};
 use browseros_cdp::{CdpClient, CdpError, CdpEvent};
 use futures_util::future::BoxFuture;
-use serde::{Serialize, de::DeserializeOwned};
+use serde::Serialize;
+use serde::de::DeserializeOwned;
 use serde_json::Value;
-use std::{
-    fmt,
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    },
-};
+use std::fmt;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::{broadcast, mpsc};
 
 pub const EXCLUDED_URL_PREFIXES: &[&str] = &[
@@ -62,12 +59,44 @@ pub trait CdpConnection: Send + Sync {
 
     fn events(&self) -> broadcast::Receiver<CdpEvent>;
 
-    /// Dedicated single-method event channel that bypasses the broadcast
-    /// ring (see `CdpClient::events_targeted`). Default: a closed channel —
-    /// transports without targeted delivery yield no events here.
-    fn events_targeted(&self, _method: &str) -> mpsc::UnboundedReceiver<CdpEvent> {
-        let (_tx, rx) = mpsc::unbounded_channel();
-        rx
+    /// Every later event of `method` on a dedicated, unbounded channel that bypasses the
+    /// broadcast ring. Each subscriber of a method gets every one of its events, and while any
+    /// subscriber is live, [`Self::events`] does not carry the method: a reader that needs a
+    /// method someone else takes here must take it here too.
+    ///
+    /// Required of every transport, test doubles included, because a closed or unfed channel
+    /// starves its subscriber with no sign. `browseros_cdp::TargetedEvents` is the shared
+    /// router: subscribe through it, and offer each event to it before the broadcast, which
+    /// carries only what no subscriber took. A transport that never emits still subscribes
+    /// through a router it owns, so the channel stays open for as long as the transport lives.
+    fn events_targeted(&self, method: &str) -> mpsc::UnboundedReceiver<CdpEvent>;
+
+    /// How many events [`Self::events`] has carried so far. Read after a reply, it counts every
+    /// event that arrived before that reply, so a reader that numbers what it took knows when
+    /// it has seen them all. A transport that does not count answers 0, and such a reader never
+    /// waits.
+    fn events_broadcast(&self) -> u64 {
+        0
+    }
+
+    /// A receiver of [`Self::events`] and the [`Self::events_broadcast`] count of the events it
+    /// will never receive, taken together so no event is in both or in neither. A transport
+    /// that does not count answers 0.
+    fn events_counted(&self) -> (broadcast::Receiver<CdpEvent>, u64) {
+        (self.events(), 0)
+    }
+
+    /// [`Self::events_targeted`], with the count of `method`'s events its subscribers took
+    /// before this one, as [`Self::events_targeted_delivered`] numbers them. A transport that
+    /// does not count answers 0.
+    fn events_targeted_counted(&self, method: &str) -> (mpsc::UnboundedReceiver<CdpEvent>, u64) {
+        (self.events_targeted(method), 0)
+    }
+
+    /// How many of `method`'s events the targeted subscribers took so far; read after a reply,
+    /// it covers every one that arrived before it. A transport that does not count answers 0.
+    fn events_targeted_delivered(&self, _method: &str) -> u64 {
+        0
     }
 
     fn is_connected(&self) -> bool;
@@ -124,6 +153,22 @@ impl CdpConnection for CdpClient {
 
     fn events_targeted(&self, method: &str) -> mpsc::UnboundedReceiver<CdpEvent> {
         CdpClient::events_targeted(self, method)
+    }
+
+    fn events_broadcast(&self) -> u64 {
+        CdpClient::events_broadcast(self)
+    }
+
+    fn events_counted(&self) -> (broadcast::Receiver<CdpEvent>, u64) {
+        CdpClient::events_counted(self)
+    }
+
+    fn events_targeted_counted(&self, method: &str) -> (mpsc::UnboundedReceiver<CdpEvent>, u64) {
+        CdpClient::events_targeted_counted(self, method)
+    }
+
+    fn events_targeted_delivered(&self, method: &str) -> u64 {
+        CdpClient::events_targeted_delivered(self, method)
     }
 
     fn is_connected(&self) -> bool {
@@ -242,7 +287,8 @@ impl ProtocolSession {
     /// Cleanup must reach the original session even after page-scope admission
     /// has been revoked (for example a moved tab). Retain the socket epoch and
     /// session identity; callers may only use this for idempotent cancellation.
-    pub(crate) fn cancellation_endpoint(&self) -> Self {
+    #[must_use]
+    pub fn cancellation_endpoint(&self) -> Self {
         let mut endpoint = self.clone();
         endpoint.admission = None;
         if endpoint.epoch_guard.is_none() {
@@ -250,6 +296,22 @@ impl ProtocolSession {
                 expected: self.connection.connection_epoch(),
                 invalidated: crate::TargetError::CdpUnsupported {
                     method: "credential cancellation".into(),
+                },
+            });
+        }
+        endpoint
+    }
+
+    /// Pin this endpoint to the current websocket incarnation without changing admission.
+    /// Background renderer setup must never publish an old session id onto a new connection.
+    #[must_use]
+    pub fn at_connection_epoch(&self) -> Self {
+        let mut endpoint = self.clone();
+        if endpoint.epoch_guard.is_none() {
+            endpoint.epoch_guard = Some(EpochGuard {
+                expected: self.connection.connection_epoch(),
+                invalidated: crate::TargetError::CdpUnsupported {
+                    method: "renderer initialization".into(),
                 },
             });
         }

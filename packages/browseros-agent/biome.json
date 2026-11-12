@@ -18,6 +18,14 @@
       "!tools/captcha-testbed/fixtures/pages",
       "!crates/browseros-core/tests/data/captured",
       "!crates/browseros-core/src/assets/agent-cursor.js",
+      "!crates/neo-sdk/neo-playwright/third_party",
+      "!crates/neo-sdk/neo-playwright/assets",
+      "!crates/neo-sdk/neo-playwright/tests/data",
+      "!crates/neo-sdk/neo-server/tests/behavior/pages",
+      "!crates/neo-sdk/neo-server/conformance/inventory.json",
+      "!crates/neo-sdk/neo-playwright-js/tests/data",
+      "!crates/neo-sdk/neo-playwright-js/src/prelude/generated",
+      "!crates/neo-sdk/neo-playwright-js/src/probe/generated.ts",
       "!apps/server/src/lib/db/migrations"
     ]
   },

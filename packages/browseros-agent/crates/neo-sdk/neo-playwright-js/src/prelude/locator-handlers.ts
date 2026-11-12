@@ -1,0 +1,143 @@
+/**
+ * `page.addLocatorHandler` and `removeLocatorHandler`, following playwright-core 1.64.1's
+ * client/page.ts: the script registers a function for an overlay that may appear at any time,
+ * and an action that finds the overlay visible pauses while the script runs it.
+ *
+ *   page.addLocatorHandler(l, fn)   page.addLocatorHandler { target, noWaitAfter } ─▶ uid
+ *   an action's retry, in Rust      l is visible ─ queue uid, pause the action
+ *   pull (one per run)              page.locatorHandlerTriggered {}, a background long poll
+ *                                   ─▶ { uid } ─▶ fn(l), counting `times`
+ *                                   ─▶ page.resolveLocatorHandler { uid, remove }
+ *                                   ─ the action waits for l to be hidden, then retries
+ *   page.removeLocatorHandler(l)    page.removeLocatorHandler { uid }, per matching registration
+ *
+ * Rust owns the checkpoint (crates/neo-sdk/neo-playwright/src/locator_handler.rs), as upstream's
+ * server does, so every retry of every action sees a handler registered while it waited. Nothing
+ * calls into the runtime from Rust (events.ts): the realm hears of a trigger only because the
+ * pull asks. The pull answers `{ uid: null }` once the run has no handler left, and the host cuts
+ * it quietly when the run ends, as it cuts the event pump. Handlers live as long as the run: the
+ * functions they call live in its realm.
+ */
+import { logError } from './bridge'
+import { captureSite, INTERNAL_SITE } from './call-site'
+import { plainError } from './errors'
+import { send } from './generated'
+import { Locator } from './locator'
+import type { Page } from './page'
+
+/** Upstream's client-side record of one registration. */
+type Registration = {
+  page: Page
+  locator: Locator
+  handler: (locator: Locator) => unknown
+  /** How many more runs; undefined runs it every time. */
+  times: number | undefined
+}
+
+export type LocatorHandlerOptions = { times?: number; noWaitAfter?: boolean }
+
+/** The run's locator handlers, by the uid Rust gave each registration. One per context. */
+export class LocatorHandlers {
+  readonly #byUid = new Map<number, Registration>()
+  #pulling = false
+
+  async add(
+    api: string,
+    page: Page,
+    locator: Locator,
+    handler: (locator: Locator) => unknown,
+    options: LocatorHandlerOptions = {},
+  ): Promise<void> {
+    const site = captureSite()
+    if (!(locator instanceof Locator) || locator._frame !== page._mainFrame)
+      throw plainError(
+        api,
+        'Locator must belong to the main frame of this page',
+      )
+    if (options.times === 0) return
+    const target = await locator._frame._locatorBrand(api, locator._selector)
+    const uid = await send['page.addLocatorHandler'](
+      site,
+      { api, timeoutMs: 0 },
+      { target, noWaitAfter: options.noWaitAfter ? true : undefined },
+    )
+    this.#byUid.set(uid, { page, locator, handler, times: options.times })
+    if (!this.#pulling) {
+      this.#pulling = true
+      void this.pull()
+    }
+  }
+
+  /** Every registration of `locator` on `page`, as upstream compares locators: frame and selector. */
+  async remove(api: string, page: Page, locator: Locator): Promise<void> {
+    const site = captureSite()
+    for (const [uid, registration] of this.#byUid) {
+      if (
+        registration.page !== page ||
+        !(locator instanceof Locator) ||
+        registration.locator._frame !== locator._frame ||
+        registration.locator._selector !== locator._selector
+      )
+        continue
+      this.#byUid.delete(uid)
+      await send['page.removeLocatorHandler'](
+        site,
+        { api, timeoutMs: 0 },
+        { uid },
+      ).catch(() => {})
+    }
+  }
+
+  private async pull(): Promise<void> {
+    const site = INTERNAL_SITE
+    try {
+      while (this.#byUid.size > 0) {
+        const { uid } = await send['page.locatorHandlerTriggered'](
+          site,
+          { api: 'page.locatorHandlerTriggered', timeoutMs: 0 },
+          {},
+        )
+        // Not awaited: a handler that waits on another tab's action must not hold back a
+        // trigger that action raises. `#run` never rejects.
+        if (uid !== null) void this.#run(uid)
+      }
+    } catch {
+      // The host cuts the pull quietly when the run ends; one that failed otherwise starts
+      // again with the next registration.
+    } finally {
+      this.#pulling = false
+    }
+  }
+
+  /** Upstream's `_onLocatorHandlerTriggered`: always resolves, so the paused action goes on. */
+  async #run(uid: number): Promise<void> {
+    const site = INTERNAL_SITE
+    let remove = false
+    const registration = this.#byUid.get(uid)
+    try {
+      if (registration && registration.times !== 0) {
+        if (registration.times !== undefined) registration.times--
+        await registration.handler(registration.locator)
+      }
+      remove = registration?.times === 0
+    } catch (error) {
+      // Upstream's rejection goes unhandled, and Node prints it. This realm reports no
+      // unhandled rejection, so the error goes to the run's log, where the caller reads it;
+      // as upstream, the paused action still goes on, and a throw never removes the handler.
+      const thrown =
+        error instanceof Error
+          ? `${error.name}: ${error.message}`
+          : String(error)
+      logError(
+        `page.addLocatorHandler: the handler for ${String(registration?.locator)} threw: ${thrown}`,
+      )
+    } finally {
+      if (remove) this.#byUid.delete(uid)
+      await send['page.resolveLocatorHandler'](
+        site,
+        { api: 'page.resolveLocatorHandler', timeoutMs: 0 },
+        { uid, remove: remove ? true : undefined },
+      ).catch(() => {})
+    }
+  }
+}

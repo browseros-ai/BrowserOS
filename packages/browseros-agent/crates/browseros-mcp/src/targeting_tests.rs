@@ -6,7 +6,7 @@ use crate::{
     StaticTargetStore, TargetStore, ToolCtx, ToolResult, catalog, execute_tool,
     output_file::create_browser_output_file_access, response::ToolResponse,
 };
-use browseros_cdp::{CdpError, CdpEvent};
+use browseros_cdp::{CdpError, CdpEvent, TargetedEvents};
 use browseros_core::{
     BrowserProfileId, BrowserSession, BrowserSessionHooks, BrowserView, CdpConnection,
     NativeCapabilities, SessionId, TargetBinding, TargetIntent, WindowId, WindowSelection,
@@ -18,7 +18,7 @@ use std::sync::{
     Arc, Mutex,
     atomic::{AtomicBool, Ordering},
 };
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, mpsc};
 use tokio_util::sync::CancellationToken;
 
 #[derive(Clone, Debug)]
@@ -46,6 +46,7 @@ struct NativeFixture {
 struct FixtureConnection {
     state: Mutex<NativeFixture>,
     events: broadcast::Sender<CdpEvent>,
+    targeted: TargetedEvents,
     hold_interception_ack: AtomicBool,
 }
 
@@ -85,6 +86,7 @@ impl FixtureConnection {
         let (events, _) = broadcast::channel(64);
         Arc::new(Self {
             events,
+            targeted: TargetedEvents::default(),
             hold_interception_ack: AtomicBool::new(false),
             state: Mutex::new(NativeFixture {
                 epoch: 1,
@@ -147,6 +149,15 @@ impl FixtureConnection {
             .unwrap_or_else(|err| panic!("fixture poisoned: {err}"))
             .calls
             .clone()
+    }
+
+    /// Offers `event` to its method's targeted subscribers and broadcasts it only when none
+    /// took it, as `CdpClient` does. Fails when the broadcast is needed and no one reads it.
+    fn emit(&self, event: CdpEvent) -> Result<(), broadcast::error::SendError<CdpEvent>> {
+        if let Some(event) = self.targeted.deliver(event) {
+            self.events.send(event)?;
+        }
+        Ok(())
     }
 
     async fn dispatch(
@@ -470,6 +481,9 @@ impl CdpConnection for FixtureConnection {
     }
     fn events(&self) -> broadcast::Receiver<CdpEvent> {
         self.events.subscribe()
+    }
+    fn events_targeted(&self, method: &str) -> mpsc::UnboundedReceiver<CdpEvent> {
+        self.targeted.subscribe(method)
     }
     fn is_connected(&self) -> bool {
         true
@@ -1509,7 +1523,7 @@ async fn stale_response_readback_does_not_expose_global_dialog_text() -> anyhow:
     session
         .page_signals
         .attach_page(page.clone(), signal_session.clone());
-    connection.events.send(CdpEvent {
+    connection.emit(CdpEvent {
         method: "Page.javascriptDialogOpening".to_string(),
         params: json!({ "type": "confirm", "message": "private dialog content" }),
         session_id: Some(signal_session),
@@ -2427,7 +2441,7 @@ async fn upload_prepares_existing_frame_sessions_and_restores_the_whole_borrowed
         .ref_id
         .clone();
     let root = captured.browser.page_session(page.clone()).await?;
-    connection.events.send(CdpEvent {
+    connection.emit(CdpEvent {
         method:"Target.attachedToTarget".into(), session_id:Some(root.session_id),
         params:json!({"sessionId":"preexisting-frame-session","waitingForDebugger":false,"targetInfo":{"targetId":"preexisting-frame","type":"iframe","title":"child","url":"https://eng.example.test/child","attached":true,"canAccessOpener":false}}),
     })?;
@@ -2552,6 +2566,24 @@ async fn cancelled_upload_restores_a_borrowed_tab_before_the_setup_ack() -> anyh
             .calls()
             .iter()
             .any(|call| call.method == "DOM.setFileInputFiles")
+    );
+    Ok(())
+}
+
+#[test]
+fn an_emitted_event_reaches_its_targeted_subscriber_and_not_the_broadcast() -> anyhow::Result<()> {
+    let connection = FixtureConnection::new();
+    let mut broadcast = connection.events();
+    let mut targeted = connection.events_targeted("Runtime.bindingCalled");
+    connection.emit(CdpEvent {
+        method: "Runtime.bindingCalled".into(),
+        params: json!({ "name": "probe" }),
+        session_id: None,
+    })?;
+    assert_eq!(targeted.try_recv()?.params["name"], "probe");
+    assert!(
+        broadcast.try_recv().is_err(),
+        "a method with a live targeted subscriber must bypass the broadcast"
     );
     Ok(())
 }

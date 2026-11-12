@@ -8,7 +8,6 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
-	"sort"
 	"strings"
 	"sync"
 	"syscall"
@@ -53,7 +52,15 @@ func init() {
 }
 
 func runWatch(cmd *cobra.Command, args []string) error {
-	mode, err := watchMode()
+	backend, err := selectClawBackend(os.Getenv("BROWSERCLAW_USE_SDK"))
+	if err != nil {
+		return err
+	}
+	sdkMode := backend.Package == sdkServerBackend.Package
+	if sdkMode && !watchClaw {
+		return fmt.Errorf("BROWSERCLAW_USE_SDK=1 needs --claw (bun run dev:claw:watch)")
+	}
+	mode, err := watchMode(sdkMode)
 	if err != nil {
 		return err
 	}
@@ -185,6 +192,10 @@ func runWatch(cmd *cobra.Command, args []string) error {
 
 	fmt.Println()
 	proc.LogMsgf(proc.TagInfo, "Mode: %s", proc.BoldColor.Sprint(mode))
+	if sdkMode {
+		proc.LogMsgf(proc.TagInfo, "Server: %s; MCP at http://127.0.0.1:%d/mcp, one tool: run", backend.Label, p.Server)
+		proc.LogMsg(proc.TagInfo, "The Neo UI's server screens require claw-server. Drive the browser with an MCP client (see CONTRIBUTING.md, SDK server).")
+	}
 	proc.LogMsgf(proc.TagInfo, "Ports: CDP=%d Server=%d Extension=%d", p.CDP, p.Server, p.Extension)
 	proc.LogMsgf(proc.TagInfo, "Profile: %s", userDataDir)
 	proc.LogMsg(proc.TagInfo, proc.DimColor.Sprint("Press Ctrl+C to stop, double Ctrl+C to force kill"))
@@ -210,7 +221,7 @@ func runWatch(cmd *cobra.Command, args []string) error {
 	var procs []*proc.ManagedProc
 
 	if watchClaw {
-		procs = startClawWatch(ctx, &wg, root, env, p, reservations, userDataDir)
+		procs = startClawWatch(ctx, &wg, root, env, p, reservations, userDataDir, backend)
 	} else {
 		procs, err = startBrowserOSWatch(ctx, &wg, root, env, p, reservations, userDataDir, watchManual)
 		if err != nil {
@@ -242,11 +253,14 @@ func runWatch(cmd *cobra.Command, args []string) error {
 }
 
 // watchMode resolves the user-facing mode label for logs.
-func watchMode() (string, error) {
+func watchMode(sdkMode bool) (string, error) {
 	if watchManual && watchClaw {
 		return "", fmt.Errorf("--manual cannot be combined with --claw")
 	}
 	if watchClaw {
+		if sdkMode {
+			return "BrowserOS neo (SDK server)", nil
+		}
 		return "BrowserOS neo", nil
 	}
 	if watchManual {
@@ -474,7 +488,7 @@ func browserOSManualProcConfig(root string, env []string, p proc.Ports, userData
 }
 
 // startClawWatch supervises the BrowserClaw UI plus standalone server.
-func startClawWatch(ctx context.Context, wg *sync.WaitGroup, root string, env []string, p proc.Ports, reservations *proc.PortReservations, userDataDir string) []*proc.ManagedProc {
+func startClawWatch(ctx context.Context, wg *sync.WaitGroup, root string, env []string, p proc.Ports, reservations *proc.PortReservations, userDataDir string, backend clawBackend) []*proc.ManagedProc {
 	var procs []*proc.ManagedProc
 
 	reservations.ReleaseCDP()
@@ -503,36 +517,16 @@ func startClawWatch(ctx context.Context, wg *sync.WaitGroup, root string, env []
 
 	waitForCDP(ctx, p.CDP)
 
-	sidecarPath := watchSidecarConfigPath(userDataDir, "claw-server")
+	sidecarPath := watchSidecarConfigPath(userDataDir, backend.SidecarName)
 	reservations.ReleaseServer()
 	reservations.ReleaseExtension()
-	serverCfg := clawServerProcConfig(root, env, p, userDataDir, sidecarPath, proc.KillPortAndWait)
+	serverCfg := clawBackendProcConfig(backend, root, env, p, userDataDir, sidecarPath, proc.KillPortAndWait)
 	proc.LogMsgf(proc.TagBuild, "Cargo build dir: %s", envValue(serverCfg.Env, "CARGO_BUILD_BUILD_DIR"))
 	serverProc := proc.StartManaged(ctx, wg, serverCfg)
 	procs = append(procs, serverProc)
-	startRustClawSourceWatcher(ctx, wg, root, serverProc)
+	startRustClawSourceWatcher(ctx, wg, root, serverProc, backend)
+	startClawReadinessWatcher(ctx, wg, backend, p.Server)
 	return procs
-}
-
-func clawServerProcConfig(root string, env []string, p proc.Ports, userDataDir string, sidecarPath string, killPort func(int, time.Duration) error) proc.ProcConfig {
-	return proc.ProcConfig{
-		Tag:     proc.TagServer,
-		Dir:     root,
-		Env:     clawServerCargoEnv(root, env),
-		Restart: true,
-		Cmd:     []string{"cargo", "run", "-p", "claw-server", "--", "--config", sidecarPath},
-		BeforeStart: func() error {
-			if err := proc.WriteSidecarConfig(sidecarPath, proc.SidecarConfigOptions{
-				Ports:         p,
-				ResourcesDir:  filepath.Join(root, "apps/claw-server/resources"),
-				ExecutionDir:  userDataDir,
-				BrowserBinary: envValue(env, "BROWSEROS_BINARY"),
-			}); err != nil {
-				return err
-			}
-			return killPort(p.Server, 3*time.Second)
-		},
-	}
 }
 
 // clawServerCargoEnv gives the watch's cargo a build directory no other cargo
@@ -555,43 +549,18 @@ func clawServerCargoEnv(root string, env []string) []string {
 	return env
 }
 
-func startRustClawSourceWatcher(ctx context.Context, wg *sync.WaitGroup, root string, serverProc *proc.ManagedProc) {
-	inputs := rustClawWatchInputs(root)
-	proc.LogMsgf(proc.TagBuild, "Watching Rust claw-server sources (%d inputs)", len(inputs))
+func startRustClawSourceWatcher(ctx context.Context, wg *sync.WaitGroup, root string, serverProc *proc.ManagedProc, backend clawBackend) {
+	inputs := backend.RustWatchInputs(root)
+	proc.LogMsgf(proc.TagBuild, "Watching Rust %s sources (%d inputs)", backend.Label, len(inputs))
 
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		watchRustClawSources(ctx, root, inputs, serverProc)
+		watchRustClawSources(ctx, root, inputs, serverProc, backend.Label)
 	}()
 }
 
-func rustClawWatchInputs(root string) []string {
-	inputs := []string{
-		filepath.Join(root, "apps/claw-server/src"),
-		filepath.Join(root, "apps/claw-server/Cargo.toml"),
-		filepath.Join(root, "apps/claw-server/tests/fixtures/legacy-drizzle"),
-	}
-	for _, pattern := range []string{
-		filepath.Join(root, "crates", "*", "src"),
-		filepath.Join(root, "crates", "*", "Cargo.toml"),
-		filepath.Join(root, "crates", "*", "build.rs"),
-		filepath.Join(root, "crates", "*", "protocol"),
-	} {
-		matches, err := filepath.Glob(pattern)
-		if err == nil {
-			sort.Strings(matches)
-			inputs = append(inputs, matches...)
-		}
-	}
-	inputs = append(inputs,
-		filepath.Join(root, "Cargo.toml"),
-		filepath.Join(root, "Cargo.lock"),
-	)
-	return inputs
-}
-
-func watchRustClawSources(ctx context.Context, root string, inputs []string, serverProc *proc.ManagedProc) {
+func watchRustClawSources(ctx context.Context, root string, inputs []string, serverProc *proc.ManagedProc, label string) {
 	snapshot, err := snapshotRustWatchInputs(inputs)
 	if err != nil {
 		proc.LogMsgf(proc.TagBuild, "Warning: initial Rust watch scan failed: %v", err)
@@ -626,9 +595,9 @@ func watchRustClawSources(ctx context.Context, root string, inputs []string, ser
 					displayPath = path
 				}
 			}
-			proc.LogMsgf(proc.TagBuild, "Rust source changed (%s); restarting claw-server", displayPath)
+			proc.LogMsgf(proc.TagBuild, "Rust source changed (%s); restarting %s", displayPath, label)
 			if !serverProc.Restart() {
-				proc.LogMsg(proc.TagBuild, "Rust claw-server process is not running yet; restart will happen after the current launch attempt")
+				proc.LogMsgf(proc.TagBuild, "Rust %s process is not running yet; restart will happen after the current launch attempt", label)
 			}
 		}
 	}

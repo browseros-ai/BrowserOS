@@ -1,16 +1,64 @@
-use crate::{CoreError, FrameId, PageId, ProtocolSession, SessionId, connection::CdpConnection};
+use crate::connection::CdpConnection;
+use crate::{CoreError, FrameId, PageId, ProtocolSession, SessionId};
 use browseros_cdp::{CdpEvent, target};
+use futures_util::future::BoxFuture;
 use serde_json::{Value, json};
-use std::{
-    collections::{HashMap, HashSet},
-    sync::Arc,
-};
+use std::collections::{HashMap, HashSet};
+use std::sync::{Arc, Mutex as StdMutex, PoisonError, Weak};
 use tokio::sync::{Mutex, broadcast};
 use tracing::warn;
 
+/// Page-owned renderer configuration installed before a new iframe is resumed.
+/// Registrations are weak: the SDK owns the settings and unregisters by dropping its lease.
+pub trait FrameInitializer: Send + Sync {
+    /// Whether a renderer that `parent` auto-attaches inherits configuration it must receive
+    /// before its first script runs. Core pauses new frames under `parent` only then.
+    ///
+    /// A pause is not free: Chromium recomputes a frame's auto-attached children whenever any
+    /// session, from any client, arms auto-attach on it, detaches a child that is still
+    /// navigating, and never releases that child's pause, so its page never loads. Answer
+    /// `true` only while there is something to install.
+    fn configures(&self, _parent: &SessionId) -> bool {
+        true
+    }
+    /// Inherit page configuration from the session that auto-attached this renderer.
+    fn initialize<'a>(
+        &'a self,
+        session: &'a ProtocolSession,
+        parent: Option<&'a SessionId>,
+    ) -> BoxFuture<'a, Result<(), CoreError>>;
+    /// Restore retained page settings when the page receives a new root session.
+    fn page_attached<'a>(
+        &'a self,
+        _session: &'a ProtocolSession,
+        _page: &'a PageId,
+    ) -> BoxFuture<'a, Result<(), CoreError>> {
+        Box::pin(async { Ok(()) })
+    }
+    /// Rediscover descendants after event lag, before unclaimed paused targets are resumed.
+    fn recover(&self) -> BoxFuture<'_, Result<(), CoreError>> {
+        Box::pin(async { Ok(()) })
+    }
+    /// Release endpoint-owned state after a detach, refused command, or lag reconciliation.
+    fn detached(&self, _session: &SessionId) {}
+}
+
+fn frame_auto_attach(wait_for_debugger: bool) -> Value {
+    // Keep worker attach events: Chromium can pause even workers excluded by a target filter,
+    // hiding the event needed to release them. `on_attached` resumes non-frame targets directly.
+    json!({
+        "autoAttach": true,
+        "waitForDebuggerOnStart": wait_for_debugger,
+        "flatten": true,
+    })
+}
+
+/// One frame's CDP endpoint, as [`FrameRegistry::resolve_frame_target`] found it.
 #[derive(Debug, Clone)]
 pub struct FrameTarget {
     pub session: ProtocolSession,
+    /// `{ "frameId": .. }` for a same-process child, whose session also serves its parent, so
+    /// accessibility reads must name the frame. Empty for page and OOPIF sessions.
     pub ax_params: Value,
     /// Root and OOPIF sessions already inspect the intended document. Same-process children share
     /// their nearest parent target session, so cursor acquisition must target the resolved child
@@ -18,11 +66,16 @@ pub struct FrameTarget {
     pub cursor_uses_session_default: bool,
 }
 
-/// Which CDP session reads each page and frame. None of its locks is held across a send on
-/// `cdp`, because a send refused as gone takes them to forget its session (see
+/// Which CDP session reaches each frame of each attached page. A page's own session is
+/// registered when core attaches the tab. Out-of-process iframes (OOPIFs) arrive through
+/// auto-attach events or are attached on demand, and a same-process child shares the session of
+/// the parent it was found through. A new connection epoch clears every entry, because flattened
+/// session ids belong to one websocket. None of its locks is held across a send on `cdp`,
+/// because a send refused as gone takes them to forget its session (see
 /// `BrowserSession::forget_session`).
 pub struct FrameRegistry {
     cdp: Arc<dyn CdpConnection>,
+    initializers: StdMutex<Vec<Weak<dyn FrameInitializer>>>,
     connection_epoch: Mutex<u64>,
     oopif_sessions: Mutex<HashMap<FrameId, SessionId>>,
     same_process_sessions: Mutex<HashMap<FrameId, SessionId>>,
@@ -47,6 +100,7 @@ impl FrameRegistry {
         let connection_epoch = cdp.connection_epoch();
         let registry = Arc::new(Self {
             cdp,
+            initializers: StdMutex::default(),
             connection_epoch: Mutex::new(connection_epoch),
             oopif_sessions: Mutex::new(HashMap::new()),
             same_process_sessions: Mutex::new(HashMap::new()),
@@ -55,6 +109,45 @@ impl FrameRegistry {
         });
         Self::spawn_event_listener(registry.clone());
         registry
+    }
+
+    /// Register renderer setup owned by a higher layer without extending that owner's lifetime.
+    pub fn register_initializer(&self, initializer: &Arc<dyn FrameInitializer>) {
+        self.initializers
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(Arc::downgrade(initializer));
+    }
+
+    fn initializers(&self) -> Vec<Arc<dyn FrameInitializer>> {
+        let mut slots = self
+            .initializers
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let live: Vec<_> = slots.iter().filter_map(Weak::upgrade).collect();
+        slots.retain(|slot| slot.strong_count() > 0);
+        live
+    }
+
+    /// Whether frames `parent` auto-attaches start paused: only when some initializer has
+    /// configuration for them ([`FrameInitializer::configures`]).
+    fn pauses_children_of(
+        initializers: &[Arc<dyn FrameInitializer>],
+        parent: Option<&SessionId>,
+    ) -> bool {
+        parent.is_some_and(|parent| {
+            initializers
+                .iter()
+                .any(|initializer| initializer.configures(parent))
+        })
+    }
+
+    /// Arm recursive attachment before a page with persistent settings can create a renderer.
+    pub async fn enable_initialization(&self, session: &ProtocolSession) -> Result<(), CoreError> {
+        session
+            .send_value("Target.setAutoAttach", frame_auto_attach(true))
+            .await?;
+        Ok(())
     }
 
     pub async fn register_page(
@@ -75,17 +168,17 @@ impl FrameRegistry {
                     return Err(guard.invalidated.clone().into());
                 }
             }
-            sessions.insert(page_id, session_id);
+            sessions.insert(page_id.clone(), session_id.clone());
         }
+        let initialized = page_session.at_connection_epoch();
+        let initializers = self.initializers();
+        for initializer in &initializers {
+            initializer.page_attached(&initialized, &page_id).await?;
+        }
+        // Asked after `page_attached`, which restores a page's retained configuration.
+        let pause = Self::pauses_children_of(&initializers, Some(&session_id));
         let setup = page_session
-            .send::<_, Value>(
-                "Target.setAutoAttach",
-                json!({
-                    "autoAttach": true,
-                    "waitForDebuggerOnStart": false,
-                    "flatten": true
-                }),
-            )
+            .send::<_, Value>("Target.setAutoAttach", frame_auto_attach(pause))
             .await;
         if let Err(error @ CoreError::Target(_)) = setup {
             return Err(error);
@@ -93,6 +186,13 @@ impl FrameRegistry {
         Ok(())
     }
 
+    /// The endpoint for the main frame (`None`) or one of `page_id`'s child frames. A known OOPIF
+    /// answers on its own session. A `cross_process` child (its owner element has no
+    /// `contentDocument` in the parent) that has not attached yet is attached by its target id.
+    /// Any other child shares `same_process_parent`'s session. Without a parent it reuses the
+    /// session it inherited before, else the page's. Passing the parent also records the
+    /// parent-to-child link that frame admission climbs later. The page must already be
+    /// attached. `BrowserView::page_session` attaches it.
     pub async fn resolve_frame_target(
         &self,
         page_id: PageId,
@@ -185,7 +285,14 @@ impl FrameRegistry {
         // the meantime, so re-check the cache after attaching.
         if cross_process {
             if let Some(session_id) = self
-                .attach_oopif_on_demand(&frame_id, guard.clone())
+                .attach_oopif_on_demand(
+                    &frame_id,
+                    same_process_parent
+                        .and_then(ProtocolSession::session_id)
+                        .cloned()
+                        .or_else(|| Some(page_session_id.clone())),
+                    guard.clone(),
+                )
                 .await?
             {
                 return Ok(FrameTarget {
@@ -307,7 +414,7 @@ impl FrameRegistry {
             "Target.attachedToTarget" => {
                 let parsed = serde_json::from_value::<target::AttachedToTargetEvent>(event.params);
                 if let Ok(params) = parsed {
-                    self.on_attached(params).await;
+                    self.on_attached(params, event.session_id).await;
                 }
             }
             "Target.detachedFromTarget" => {
@@ -321,15 +428,28 @@ impl FrameRegistry {
         }
     }
 
-    async fn on_attached(&self, params: target::AttachedToTargetEvent) {
+    async fn on_attached(&self, params: target::AttachedToTargetEvent, parent: Option<SessionId>) {
+        self.clear_sessions_from_prior_connection().await;
         if params.target_info.r#type != "iframe" {
+            // Media belongs to frame renderers. Auto-attach also pauses workers, which must
+            // start immediately rather than waiting for an initializer that never owns them.
+            if params.waiting_for_debugger {
+                let session = ProtocolSession::for_session(
+                    self.cdp.clone(),
+                    SessionId::from(params.session_id),
+                )
+                .at_connection_epoch();
+                let _resumed = session
+                    .send_value("Runtime.runIfWaitingForDebugger", json!({}))
+                    .await;
+            }
             return;
         }
-        self.clear_sessions_from_prior_connection().await;
         self.register_oopif_session(
             FrameId(params.target_info.target_id),
             SessionId::from(params.session_id),
             params.waiting_for_debugger,
+            parent,
         )
         .await;
     }
@@ -342,9 +462,16 @@ impl FrameRegistry {
         frame_id: FrameId,
         session_id: SessionId,
         waiting_for_debugger: bool,
+        parent: Option<SessionId>,
     ) {
         let _ = self
-            .register_oopif_session_with_epoch(frame_id, session_id, waiting_for_debugger, None)
+            .register_oopif_session_with_epoch(
+                frame_id,
+                session_id,
+                waiting_for_debugger,
+                parent,
+                None,
+            )
             .await;
     }
 
@@ -353,8 +480,19 @@ impl FrameRegistry {
         frame_id: FrameId,
         session_id: SessionId,
         waiting_for_debugger: bool,
+        parent: Option<SessionId>,
         guard: Option<crate::connection::EpochGuard>,
     ) -> Result<(), CoreError> {
+        let initializers = self.initializers();
+        let guard = guard.or_else(|| {
+            if initializers.is_empty() {
+                return None;
+            }
+            ProtocolSession::for_session(self.cdp.clone(), session_id.clone())
+                .cancellation_endpoint()
+                .epoch_guard()
+                .cloned()
+        });
         {
             let cached_epoch = self.connection_epoch.lock().await;
             let mut sessions = self.oopif_sessions.lock().await;
@@ -368,7 +506,7 @@ impl FrameRegistry {
         }
         let session = ProtocolSession::for_session(self.cdp.clone(), session_id)
             .with_epoch_guard(guard.clone());
-        if waiting_for_debugger {
+        if waiting_for_debugger && initializers.is_empty() {
             let _ = session
                 .send::<_, Value>("Runtime.runIfWaitingForDebugger", json!({}))
                 .await;
@@ -377,16 +515,30 @@ impl FrameRegistry {
         let _ = session
             .send::<_, Value>("Accessibility.enable", json!({}))
             .await;
+        // A frame that started paused belongs to a page with configuration, and so do its
+        // children; one that did not asks the initializers about the parent it inherits from.
+        let pause =
+            waiting_for_debugger || Self::pauses_children_of(&initializers, parent.as_ref());
         let _ = session
-            .send::<_, Value>(
-                "Target.setAutoAttach",
-                json!({
-                    "autoAttach": true,
-                    "waitForDebuggerOnStart": false,
-                    "flatten": true
-                }),
-            )
+            .send::<_, Value>("Target.setAutoAttach", frame_auto_attach(pause))
             .await;
+        if !initializers.is_empty() {
+            // Recursive auto-attach is armed before initialization and resume, so nested
+            // OOPIF startup scripts cannot outrun their page's persistent configuration.
+            let prepared = async {
+                for initializer in &initializers {
+                    initializer.initialize(&session, parent.as_ref()).await?;
+                }
+                Ok::<(), CoreError>(())
+            }
+            .await;
+            // Always release a paused renderer, even if setup failed or the owner disappeared.
+            let resumed = session
+                .send_value("Runtime.runIfWaitingForDebugger", json!({}))
+                .await;
+            prepared?;
+            resumed?;
+        }
         if let Some(guard) = &guard {
             guard.check(self.cdp.as_ref())?;
         }
@@ -403,6 +555,7 @@ impl FrameRegistry {
     async fn attach_oopif_on_demand(
         &self,
         frame_id: &FrameId,
+        parent: Option<SessionId>,
         guard: Option<crate::connection::EpochGuard>,
     ) -> Result<Option<SessionId>, CoreError> {
         let root = ProtocolSession::root(self.cdp.clone()).with_epoch_guard(guard.clone());
@@ -418,8 +571,14 @@ impl FrameRegistry {
             Err(_) => return Ok(None),
         };
         let session_id = SessionId::from(attached.session_id);
-        self.register_oopif_session_with_epoch(frame_id.clone(), session_id.clone(), false, guard)
-            .await?;
+        self.register_oopif_session_with_epoch(
+            frame_id.clone(),
+            session_id.clone(),
+            false,
+            parent,
+            guard,
+        )
+        .await?;
         Ok(Some(session_id))
     }
 
@@ -449,6 +608,11 @@ impl FrameRegistry {
             .lock()
             .await
             .retain(|_, link| link.parent != *session_id && link.endpoint != *session_id);
+        // Higher layers own their endpoint caches. Notify after releasing registry locks so
+        // the same lifecycle event releases both core routing and inherited page settings.
+        for initializer in self.initializers() {
+            initializer.detached(session_id);
+        }
     }
 
     /// A lagged event stream may have dropped a `detachedFromTarget`, leaving an OOPIF session that
@@ -475,34 +639,107 @@ impl FrameRegistry {
                     .collect()
             })
             .unwrap_or_default();
-        self.oopif_sessions
+        let dead: Vec<_> = self
+            .oopif_sessions
             .lock()
             .await
-            .retain(|frame_id, _| live.contains(&frame_id.0));
+            .iter()
+            .filter(|(frame_id, _)| !live.contains(&frame_id.0))
+            .map(|(_, session)| session.clone())
+            .collect();
+        for session in dead {
+            self.on_detached(&session).await;
+        }
+        // A dropped worker attach event must not leave startup suspended forever. These
+        // short-lived recovery sessions only release the debugger wait; frame initialization
+        // and its inherited page settings still run through the separate path below.
+        for info in result
+            .get("targetInfos")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            if matches!(
+                info.get("type").and_then(Value::as_str),
+                Some("worker" | "shared_worker" | "service_worker")
+            ) && let Some(id) = info.get("targetId").and_then(Value::as_str)
+            {
+                self.resume_worker_after_lag(id).await;
+            }
+        }
+        let initializers = self.initializers();
+        for initializer in &initializers {
+            let _recovered = initializer.recover().await;
+        }
+        if !initializers.is_empty() {
+            let targets = result
+                .get("targetInfos")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten();
+            for target in targets {
+                if target.get("type").and_then(Value::as_str) != Some("iframe") {
+                    continue;
+                }
+                let Some(id) = target.get("targetId").and_then(Value::as_str) else {
+                    continue;
+                };
+                let frame = FrameId(id.to_owned());
+                if !self.oopif_sessions.lock().await.contains_key(&frame) {
+                    let _attached = self.attach_oopif_on_demand(&frame, None, None).await;
+                }
+            }
+        }
+    }
+
+    async fn resume_worker_after_lag(&self, target_id: &str) {
+        let root = ProtocolSession::root(self.cdp.clone()).at_connection_epoch();
+        let Ok(attached) = root
+            .send::<_, target::AttachToTargetResult>(
+                "Target.attachToTarget",
+                json!({"targetId":target_id,"flatten":true}),
+            )
+            .await
+        else {
+            return;
+        };
+        let id = SessionId::from(attached.session_id);
+        let session = ProtocolSession::for_session(self.cdp.clone(), id.clone())
+            .with_epoch_guard(root.epoch_guard().cloned());
+        let _resumed = session
+            .send_value("Runtime.runIfWaitingForDebugger", json!({}))
+            .await;
+        let _detached = root
+            .send_value("Target.detachFromTarget", json!({"sessionId":id}))
+            .await;
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::FrameRegistry;
-    use crate::{FrameId, PageId, ProtocolSession, SessionId, connection::CdpConnection};
-    use browseros_cdp::{CdpError, CdpEvent};
+    use super::{FrameInitializer, FrameRegistry};
+    use crate::connection::CdpConnection;
+    use crate::{FrameId, PageId, ProtocolSession, SessionId};
+    use browseros_cdp::{CdpError, CdpEvent, TargetedEvents};
     use futures_util::future::BoxFuture;
     use serde_json::{Value, json};
-    use std::sync::{
-        Arc,
-        atomic::{AtomicU64, Ordering},
-    };
-    use tokio::sync::broadcast;
+    use std::error::Error;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::{Arc, Mutex as StdMutex, PoisonError};
+    use tokio::sync::{broadcast, mpsc};
 
     struct NoopConnection {
         epoch: AtomicU64,
+        sent: StdMutex<Vec<String>>,
+        targeted: TargetedEvents,
     }
 
     impl Default for NoopConnection {
         fn default() -> Self {
             Self {
                 epoch: AtomicU64::new(1),
+                sent: StdMutex::default(),
+                targeted: TargetedEvents::default(),
             }
         }
     }
@@ -510,11 +747,31 @@ mod tests {
     impl CdpConnection for NoopConnection {
         fn send<'a>(
             &'a self,
-            _method: &'a str,
+            method: &'a str,
             _params: Value,
             _session: Option<&'a SessionId>,
         ) -> BoxFuture<'a, Result<Value, CdpError>> {
+            self.sent
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .push(method.to_owned());
             Box::pin(async { Ok(json!({})) })
+        }
+
+        fn send_at_epoch<'a>(
+            &'a self,
+            expected: u64,
+            method: &'a str,
+            params: Value,
+            session: Option<&'a SessionId>,
+        ) -> BoxFuture<'a, Result<Value, CdpError>> {
+            Box::pin(async move {
+                let actual = self.connection_epoch();
+                if actual != expected {
+                    return Err(CdpError::ConnectionEpochChanged { expected, actual });
+                }
+                self.send(method, params, session).await
+            })
         }
 
         fn send_raw_json<'a>(
@@ -529,6 +786,10 @@ mod tests {
         fn events(&self) -> broadcast::Receiver<CdpEvent> {
             let (_tx, rx) = broadcast::channel(1);
             rx
+        }
+
+        fn events_targeted(&self, method: &str) -> mpsc::UnboundedReceiver<CdpEvent> {
+            self.targeted.subscribe(method)
         }
 
         fn is_connected(&self) -> bool {
@@ -546,6 +807,7 @@ mod tests {
     struct AttachConnection {
         oopif_target: &'static str,
         attach_session: &'static str,
+        targeted: TargetedEvents,
     }
 
     impl CdpConnection for AttachConnection {
@@ -587,6 +849,10 @@ mod tests {
             rx
         }
 
+        fn events_targeted(&self, method: &str) -> mpsc::UnboundedReceiver<CdpEvent> {
+            self.targeted.subscribe(method)
+        }
+
         fn is_connected(&self) -> bool {
             true
         }
@@ -601,6 +867,7 @@ mod tests {
         let cdp = Arc::new(AttachConnection {
             oopif_target: "deep-oopif",
             attach_session: "deep-oopif-session",
+            targeted: TargetedEvents::default(),
         });
         let registry = FrameRegistry::new(cdp.clone());
         let page_id = PageId(1);
@@ -637,6 +904,7 @@ mod tests {
         let cdp = Arc::new(AttachConnection {
             oopif_target: "unused",
             attach_session: "unused",
+            targeted: TargetedEvents::default(),
         });
         let registry = FrameRegistry::new(cdp.clone());
         let page_id = PageId(1);
@@ -767,6 +1035,7 @@ mod tests {
     /// Reports a fixed set of live targets so reconcile can tell a dropped detach from a live frame.
     struct GetTargetsConnection {
         live_targets: Vec<&'static str>,
+        targeted: TargetedEvents,
     }
 
     impl CdpConnection for GetTargetsConnection {
@@ -803,6 +1072,10 @@ mod tests {
             rx
         }
 
+        fn events_targeted(&self, method: &str) -> mpsc::UnboundedReceiver<CdpEvent> {
+            self.targeted.subscribe(method)
+        }
+
         fn is_connected(&self) -> bool {
             true
         }
@@ -816,6 +1089,7 @@ mod tests {
     async fn lag_reconcile_drops_oopifs_whose_target_is_gone() {
         let cdp = Arc::new(GetTargetsConnection {
             live_targets: vec!["live-oopif"],
+            targeted: TargetedEvents::default(),
         });
         let registry = FrameRegistry::new(cdp);
         {
@@ -835,5 +1109,245 @@ mod tests {
         let sessions = registry.oopif_sessions.lock().await;
         assert!(sessions.contains_key(&FrameId("live-oopif".to_string())));
         assert!(!sessions.contains_key(&FrameId("dead-oopif".to_string())));
+    }
+
+    #[tokio::test]
+    async fn lag_recovery_releases_workers_and_detaches_its_temporary_session()
+    -> Result<(), Box<dyn Error>> {
+        let connection = crate::testing::TestConnection::new([
+            (
+                "Target.getTargets",
+                json!({"targetInfos":[{"targetId":"missed-worker","type":"worker"}]}),
+            ),
+            ("Runtime.runIfWaitingForDebugger", json!({})),
+            ("Target.detachFromTarget", json!({})),
+        ]);
+        let registry = FrameRegistry::new(connection.clone());
+        registry.reconcile_oopifs_after_lag().await;
+        let calls = connection.calls()?;
+        let resumed = calls
+            .iter()
+            .find(|call| call.method == "Runtime.runIfWaitingForDebugger")
+            .ok_or("a missed worker attachment must still release startup")?;
+        let detached = calls
+            .iter()
+            .find(|call| call.method == "Target.detachFromTarget")
+            .ok_or("recovery must release its temporary attachment")?;
+        assert!(resumed.session.is_some());
+        assert_eq!(
+            detached.params.get("sessionId"),
+            resumed.session.as_ref().map(|id| json!(id)).as_ref()
+        );
+        Ok(())
+    }
+
+    /// Records the configuration write and can replace the socket at the async handoff.
+    struct TestInitializer {
+        connection: Arc<NoopConnection>,
+        invalidate: bool,
+    }
+
+    impl FrameInitializer for TestInitializer {
+        fn initialize<'a>(
+            &'a self,
+            session: &'a ProtocolSession,
+            parent: Option<&'a SessionId>,
+        ) -> BoxFuture<'a, Result<(), crate::CoreError>> {
+            Box::pin(async move {
+                assert_eq!(
+                    parent,
+                    Some(&SessionId::from("root")),
+                    "initialization inherits the attaching renderer"
+                );
+                if self.invalidate {
+                    self.connection.epoch.fetch_add(1, Ordering::SeqCst);
+                }
+                session
+                    .send_value("Emulation.setEmulatedMedia", json!({"media":"print"}))
+                    .await?;
+                Ok(())
+            })
+        }
+    }
+
+    fn attached_child() -> CdpEvent {
+        CdpEvent {
+            method: "Target.attachedToTarget".to_owned(),
+            session_id: Some(SessionId::from("root")),
+            params: json!({"sessionId":"child","waitingForDebugger":true,"targetInfo":{
+                "targetId":"child-frame","type":"iframe","title":"","url":"about:blank","attached":true,"canAccessOpener":false
+            }}),
+        }
+    }
+
+    #[tokio::test]
+    async fn inherited_renderer_configuration_precedes_resume() -> Result<(), Box<dyn Error>> {
+        let cdp = Arc::new(NoopConnection::default());
+        let registry = FrameRegistry::new(cdp.clone());
+        let lease: Arc<dyn FrameInitializer> = Arc::new(TestInitializer {
+            connection: Arc::clone(&cdp),
+            invalidate: false,
+        });
+        registry.register_initializer(&lease);
+        registry
+            .register_page(
+                ProtocolSession::for_session(cdp.clone(), SessionId::from("root")),
+                PageId::from(1u32),
+                SessionId::from("root"),
+            )
+            .await?;
+        cdp.sent
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clear();
+        let event = attached_child();
+        let _: browseros_cdp::target::AttachedToTargetEvent =
+            serde_json::from_value(event.params.clone())?;
+        registry.handle_event(event).await;
+        let sent = cdp.sent.lock().unwrap_or_else(PoisonError::into_inner);
+        let position = |method| sent.iter().position(|sent| sent == method);
+        assert!(
+            position("Target.setAutoAttach") < position("Emulation.setEmulatedMedia"),
+            "recursive attachment is armed before configuration: {sent:?}"
+        );
+        assert!(
+            position("Emulation.setEmulatedMedia") < position("Runtime.runIfWaitingForDebugger"),
+            "startup scripts only run after inherited preferences: {sent:?}"
+        );
+        assert!(
+            position("Emulation.setEmulatedMedia").is_some(),
+            "the live lease must initialize the renderer"
+        );
+        drop(sent);
+        drop(lease);
+        assert!(
+            registry.initializers().is_empty(),
+            "dropping the SDK removes its weak registration"
+        );
+        Ok(())
+    }
+
+    /// Has configuration only for renderers attached under the session named `0`.
+    struct ConfiguresOnly(&'static str);
+
+    impl FrameInitializer for ConfiguresOnly {
+        fn configures(&self, parent: &SessionId) -> bool {
+            parent.as_str() == self.0
+        }
+
+        fn initialize<'a>(
+            &'a self,
+            _session: &'a ProtocolSession,
+            _parent: Option<&'a SessionId>,
+        ) -> BoxFuture<'a, Result<(), crate::CoreError>> {
+            Box::pin(async { Ok(()) })
+        }
+    }
+
+    #[tokio::test]
+    async fn only_frames_with_configuration_to_install_start_paused() -> Result<(), Box<dyn Error>>
+    {
+        let connection = crate::testing::TestConnection::new([]);
+        for method in [
+            "Target.setAutoAttach",
+            "DOM.enable",
+            "Accessibility.enable",
+            "Runtime.runIfWaitingForDebugger",
+        ] {
+            connection.always(method, json!({}))?;
+        }
+        let registry = FrameRegistry::new(connection.clone());
+        let lease: Arc<dyn FrameInitializer> = Arc::new(ConfiguresOnly("emulated"));
+        registry.register_initializer(&lease);
+        for (page, session) in [(1u32, "plain"), (2, "emulated")] {
+            registry
+                .register_page(
+                    ProtocolSession::for_session(connection.clone(), SessionId::from(session)),
+                    PageId::from(page),
+                    SessionId::from(session),
+                )
+                .await?;
+        }
+        // A child that itself started paused belongs to a configured page, whatever its
+        // parent's initializers say now.
+        for (parent, child, waiting) in [
+            ("plain", "plain-child", false),
+            ("emulated", "emulated-child", false),
+            ("plain", "paused-child", true),
+        ] {
+            registry
+                .handle_event(CdpEvent {
+                    method: "Target.attachedToTarget".to_owned(),
+                    session_id: Some(SessionId::from(parent)),
+                    params: json!({"sessionId": child, "waitingForDebugger": waiting, "targetInfo": {
+                        "targetId": child, "type": "iframe", "title": "", "url": "about:blank",
+                        "attached": true, "canAccessOpener": false
+                    }}),
+                })
+                .await;
+        }
+        let armed: Vec<_> = connection
+            .calls()?
+            .into_iter()
+            .filter(|call| call.method == "Target.setAutoAttach")
+            .map(|call| {
+                let session = call.session.map(|id| id.as_str().to_owned());
+                (session, call.params["waitForDebuggerOnStart"].clone())
+            })
+            .collect();
+        let expected = [
+            ("plain", false),
+            ("emulated", true),
+            ("plain-child", false),
+            ("emulated-child", true),
+            ("paused-child", true),
+        ]
+        .map(|(session, paused)| (Some(session.to_owned()), json!(paused)));
+        // A paused frame Chromium detaches mid-navigation is never resumed, so a page with
+        // nothing to install must never pause one.
+        assert_eq!(armed, expected);
+        drop(lease);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn an_initialization_from_an_old_socket_never_publishes_on_its_replacement()
+    -> Result<(), Box<dyn Error>> {
+        let cdp = Arc::new(NoopConnection::default());
+        let registry = FrameRegistry::new(cdp.clone());
+        let lease: Arc<dyn FrameInitializer> = Arc::new(TestInitializer {
+            connection: Arc::clone(&cdp),
+            invalidate: true,
+        });
+        registry.register_initializer(&lease);
+        registry
+            .register_page(
+                ProtocolSession::for_session(cdp.clone(), SessionId::from("root")),
+                PageId::from(1u32),
+                SessionId::from("root"),
+            )
+            .await?;
+        cdp.sent
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clear();
+        let event = attached_child();
+        let _: browseros_cdp::target::AttachedToTargetEvent =
+            serde_json::from_value(event.params.clone())?;
+        registry.handle_event(event).await;
+        assert_eq!(
+            cdp.connection_epoch(),
+            2,
+            "the initializer must actually replace the socket"
+        );
+        let sent = cdp.sent.lock().unwrap_or_else(PoisonError::into_inner);
+        assert!(
+            !sent
+                .iter()
+                .any(|method| method == "Emulation.setEmulatedMedia"
+                    || method == "Runtime.runIfWaitingForDebugger"),
+            "old-session setup and resume must both fail before transport publication: {sent:?}"
+        );
+        Ok(())
     }
 }

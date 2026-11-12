@@ -1,0 +1,41 @@
+# Dev only: the Neo SDK image as `dev.sh up` runs it, with what the dev kit (devkit/) needs to
+# reach claw-sdk's host API: runs, operations, screenshots, events, locks, takeovers and the
+# display. Nothing here is in the image; the settings reach claw-sdk through the container's
+# environment, which the entrypoint and the browser hand to the server unchanged.
+#
+#   NEO_DEV_HOME=... NEO_IMAGE=... docker compose -p neo-sdk-dev -f compose.dev.yaml up -d --wait
+#
+# The SDK image runs no noVNC server; the kit's gateway serves the viewer.
+services:
+  neo:
+    image: ${NEO_IMAGE:?dev.sh sets NEO_IMAGE}
+    init: false # the image runs tini itself
+    shm_size: 1g
+    hostname: neo
+    stop_grace_period: 20s
+    ports:
+      # MCP for agents on the Mac. Docker's published ports bypass host firewalls, so loopback only.
+      - "127.0.0.1:${NEO_MCP_PORT:-19010}:9010"
+      # The host API, on the Mac's loopback only: whoever reaches this port with the token can
+      # read every trace and take over the browser.
+      - "127.0.0.1:${NEO_HOST_PORT:-19300}:9300"
+    volumes:
+      - "${NEO_DATA:?dev.sh sets NEO_DATA}:/data"
+      # dev.sh creates the token once, 0600, and never prints it. Docker Desktop's file sharing
+      # still lets the container's user read it. Read-only: Neo never writes it.
+      - "${NEO_DEV_HOME:?dev.sh sets NEO_DEV_HOME}/host-token:/run/neo-dev/host-token:ro"
+    environment:
+      PUID: ${PUID:-1000}
+      PGID: ${PGID:-1000}
+      NEO_SCREEN: ${NEO_SCREEN:-1600x1000}
+      # The published MCP port answers peers outside the container only with this (README "Ports").
+      NEO_MCP_REMOTE: "true"
+      # Serve the host API on TCP as well as its Unix socket. 0.0.0.0 inside the container so
+      # Docker's port forward reaches it; the mapping above keeps it off the network.
+      CLAW_HOST_TCP: 0.0.0.0:9300
+      # claw-sdk opens no host listener at all without a usable token.
+      CLAW_HOST_TOKEN_FILE: /run/neo-dev/host-token
+      # Never on the bind mount of the Mac's $NEO_DEV_HOME/data: Docker Desktop's file sharing
+      # cannot hold a Unix socket. The kit uses TCP, so the socket only has to exist.
+      CLAW_HOST_SOCKET: /tmp/claw-sdk-host.sock
+    restart: unless-stopped

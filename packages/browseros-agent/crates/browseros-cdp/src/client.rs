@@ -1,4 +1,6 @@
-use crate::{CdpError, CdpEvent, EventStream, SessionId, discovery::discover_websocket_url};
+use crate::{
+    CdpError, CdpEvent, EventStream, SessionId, TargetedEvents, discovery::discover_websocket_url,
+};
 use futures_util::{
     SinkExt, StreamExt,
     future::BoxFuture,
@@ -30,12 +32,21 @@ use tokio_tungstenite::{
     },
 };
 use tracing::{debug, info, warn};
-use url::Url;
+use url::{Host, Url};
 
 type WsStream = WebSocketStream<TcpStream>;
 type WsSink = SplitSink<WsStream, Message>;
 type WsReader = SplitStream<WsStream>;
 type PendingSender = oneshot::Sender<Result<Value, CdpError>>;
+
+/// A request waiting for its reply, with the flattened session it was sent on. Chromium never
+/// answers a command whose session detached before it replied, so the reader fails those
+/// requests itself when the session's `Target.detachedFromTarget` arrives (see
+/// [`reject_detached`]).
+struct Pending {
+    session: Option<SessionId>,
+    reply: PendingSender,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReconnectPolicy {
@@ -98,12 +109,21 @@ pub struct CdpClient {
 struct Inner {
     opts: ConnectOptions,
     next_id: AtomicU64,
-    pending: Mutex<HashMap<u64, PendingSender>>,
+    pending: Mutex<HashMap<u64, Pending>>,
     /// Serializes socket publication with dispatch. An epoch-bound request must
     /// validate under this guard so reused browser IDs cannot reach a replacement.
     sink: Mutex<Option<WsSink>>,
     events_tx: broadcast::Sender<CdpEvent>,
-    targeted: std::sync::Mutex<HashMap<String, mpsc::UnboundedSender<CdpEvent>>>,
+    /// How many events the reader has put on `events_tx`, ever. The reader handles one message
+    /// at a time, so once a command's reply arrived, every event that came before it is
+    /// counted: a consumer that numbers what its receiver took can tell when it has seen them.
+    /// A std mutex, held only for the count and the non-blocking send together, so
+    /// [`CdpClient::events_counted`] subscribes between two broadcasts, never during one.
+    events_broadcast: std::sync::Mutex<u64>,
+    /// The methods consumers took with [`CdpClient::events_targeted`]. The reader offers every
+    /// event here first, and broadcasts only what no subscriber took. Kept across reconnects,
+    /// so a subscription outlives the socket it started on.
+    targeted: TargetedEvents,
     connected: AtomicBool,
     disconnecting: AtomicBool,
     epoch: AtomicU64,
@@ -128,7 +148,8 @@ impl CdpClient {
             pending: Mutex::new(HashMap::new()),
             sink: Mutex::new(None),
             events_tx,
-            targeted: std::sync::Mutex::new(HashMap::new()),
+            events_broadcast: std::sync::Mutex::new(0),
+            targeted: TargetedEvents::default(),
             connected: AtomicBool::new(false),
             disconnecting: AtomicBool::new(false),
             epoch: AtomicU64::new(0),
@@ -242,6 +263,7 @@ impl CdpClient {
             expected_epoch,
             id,
             method,
+            session,
             Message::Text(Value::Object(frame).to_string().into()),
         )
         .await
@@ -304,7 +326,13 @@ impl CdpClient {
         }
         frame.push('}');
         let response = self
-            .send_frame(expected_epoch, id, method, Message::Text(frame.into()))
+            .send_frame(
+                expected_epoch,
+                id,
+                method,
+                session,
+                Message::Text(frame.into()),
+            )
             .await?;
         serde_json::to_string(&response).map_err(CdpError::from)
     }
@@ -313,24 +341,61 @@ impl CdpClient {
         self.inner.events_tx.subscribe()
     }
 
+    /// How many events [`Self::events`] has carried since the client started, across
+    /// reconnects. Read after a reply, it covers every event that arrived before that reply.
+    pub fn events_broadcast(&self) -> u64 {
+        *self
+            .inner
+            .events_broadcast
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// A receiver of [`Self::events`] and the count of events broadcast before it subscribed,
+    /// which it will never receive. Taken under the broadcast's lock, so an event is either in
+    /// the count or in the receiver, never both and never neither.
+    pub fn events_counted(&self) -> (broadcast::Receiver<CdpEvent>, u64) {
+        let count = self
+            .inner
+            .events_broadcast
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        (self.inner.events_tx.subscribe(), *count)
+    }
+
     pub fn on_event(&self, method: &str) -> EventStream {
         EventStream::new(method, self.events())
     }
 
-    /// Subscribe to one event method on a dedicated channel. Matching events
-    /// are delivered here INSTEAD of the shared broadcast ring and are freed
-    /// as soon as they are consumed — use for high-rate, large-payload events
-    /// (e.g. `Page.screencastFrame`) whose retention in the 4096-slot
-    /// broadcast ring would pin memory. One subscriber per method: a new
-    /// call replaces the previous one (whose channel closes); dropping the
-    /// receiver restores broadcast delivery for the method.
+    /// Subscribes to one event method on a dedicated, unbounded channel, for events too large
+    /// and frequent for the 4096-slot broadcast ring (`Page.screencastFrame`) or too important
+    /// to lose when a reader falls behind it (`Runtime.bindingCalled`).
+    ///
+    /// Every subscriber of a method gets each of its events: two journals read the same binding
+    /// calls (see [`TargetedEvents`]). While any receiver of the method is live, the broadcast
+    /// does not carry it, so another reader of the method must subscribe here as well. Once
+    /// every receiver is dropped, the broadcast carries the method again.
     #[must_use]
     pub fn events_targeted(&self, method: &str) -> mpsc::UnboundedReceiver<CdpEvent> {
-        let (tx, rx) = mpsc::unbounded_channel();
-        if let Ok(mut targeted) = self.inner.targeted.lock() {
-            targeted.insert(method.to_string(), tx);
-        }
-        rx
+        self.inner.targeted.subscribe(method)
+    }
+
+    /// [`Self::events_targeted`], with the count of `method`'s events subscribers took before
+    /// it, which it will never receive ([`TargetedEvents::subscribe_counted`]).
+    #[must_use]
+    pub fn events_targeted_counted(
+        &self,
+        method: &str,
+    ) -> (mpsc::UnboundedReceiver<CdpEvent>, u64) {
+        self.inner.targeted.subscribe_counted(method)
+    }
+
+    /// How many of `method`'s events the targeted subscribers took. The reader routes each
+    /// message before it reads the next, so read after a reply it covers every such event that
+    /// arrived before that reply ([`TargetedEvents::delivered`]).
+    #[must_use]
+    pub fn events_targeted_delivered(&self, method: &str) -> u64 {
+        self.inner.targeted.delivered(method)
     }
 
     async fn send_frame(
@@ -338,10 +403,15 @@ impl CdpClient {
         expected_epoch: Option<u64>,
         id: u64,
         method: &str,
+        session: Option<&SessionId>,
         message: Message,
     ) -> Result<Value, CdpError> {
-        let (tx, rx) = oneshot::channel();
-        self.inner.pending.lock().await.insert(id, tx);
+        let (reply, rx) = oneshot::channel();
+        let pending = Pending {
+            session: session.cloned(),
+            reply,
+        };
+        self.inner.pending.lock().await.insert(id, pending);
         let _slot = PendingSlot {
             inner: Arc::clone(&self.inner),
             id,
@@ -456,6 +526,19 @@ fn open_socket(inner: Arc<Inner>) -> BoxFuture<'static, Result<(), CdpError>> {
     })
 }
 
+/// The host to open the WebSocket's TCP connection to. `Url::host_str` keeps an IPv6
+/// literal's brackets (`[::1]`), which address resolution refuses, so an IPv6 host is taken
+/// bare from the typed host. The URL itself keeps the brackets for the handshake.
+fn tcp_host(url: &Url) -> Result<String, CdpError> {
+    match url.host() {
+        Some(Host::Ipv6(ip)) => Ok(ip.to_string()),
+        Some(host) => Ok(host.to_string()),
+        None => Err(CdpError::Transport(
+            "websocket URL missing host".to_string(),
+        )),
+    }
+}
+
 async fn connect_websocket(url: &Url, connect_timeout: Duration) -> Result<WsStream, CdpError> {
     if url.scheme() != "ws" {
         return Err(CdpError::Transport(format!(
@@ -463,13 +546,11 @@ async fn connect_websocket(url: &Url, connect_timeout: Duration) -> Result<WsStr
             url.scheme()
         )));
     }
-    let host = url
-        .host_str()
-        .ok_or_else(|| CdpError::Transport("websocket URL missing host".to_string()))?;
+    let host = tcp_host(url)?;
     let port = url
         .port_or_known_default()
         .ok_or_else(|| CdpError::Transport("websocket URL missing port".to_string()))?;
-    let stream = timeout(connect_timeout, TcpStream::connect((host, port)))
+    let stream = timeout(connect_timeout, TcpStream::connect((host.as_str(), port)))
         .await
         .map_err(|_| CdpError::Transport(format!("timed out connecting websocket {url}")))?
         .map_err(|err| CdpError::Transport(err.to_string()))?;
@@ -543,8 +624,8 @@ async fn handle_text_message(inner: &Arc<Inner>, text: &str) {
         } else {
             Ok(value.get("result").cloned().unwrap_or_else(|| json!({})))
         };
-        if let Some(sender) = inner.pending.lock().await.remove(&id) {
-            let _ = sender.send(result);
+        if let Some(pending) = inner.pending.lock().await.remove(&id) {
+            let _ = pending.reply.send(result);
         }
         return;
     }
@@ -557,34 +638,25 @@ async fn handle_text_message(inner: &Arc<Inner>, text: &str) {
         .get("sessionId")
         .and_then(Value::as_str)
         .map(SessionId::from);
+    if method == "Target.detachedFromTarget"
+        && let Some(detached) = params.get("sessionId").and_then(Value::as_str)
+    {
+        reject_detached(inner, detached).await;
+    }
     let event = CdpEvent {
         method: method.to_string(),
         params,
         session_id,
     };
-    let Some(event) = send_targeted(inner, event) else {
+    let Some(event) = inner.targeted.deliver(event) else {
         return;
     };
+    let mut count = inner
+        .events_broadcast
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    *count += 1;
     let _ = inner.events_tx.send(event);
-}
-
-/// Hands the event to the method's targeted subscriber if one is live;
-/// returns the event back when it should fall through to the broadcast ring.
-fn send_targeted(inner: &Inner, event: CdpEvent) -> Option<CdpEvent> {
-    let Ok(mut targeted) = inner.targeted.lock() else {
-        return Some(event);
-    };
-    let Some(sender) = targeted.get(&event.method) else {
-        return Some(event);
-    };
-    match sender.send(event) {
-        Ok(()) => None,
-        Err(rejected) => {
-            let event = rejected.0;
-            targeted.remove(&event.method);
-            Some(event)
-        }
-    }
 }
 
 async fn start_keepalive(inner: Arc<Inner>) {
@@ -720,8 +792,36 @@ async fn link_supervisor(inner: Arc<Inner>) {
 
 async fn reject_all_pending(inner: &Arc<Inner>, error: CdpError) {
     let pending = std::mem::take(&mut *inner.pending.lock().await);
-    for sender in pending.into_values() {
-        let _ = sender.send(Err(error.clone()));
+    for request in pending.into_values() {
+        let _ = request.reply.send(Err(error.clone()));
+    }
+}
+
+/// Fails every request still waiting on the flattened session `detached`, as
+/// [`CdpError::SessionGone`]: the error Chromium returns for a command sent a moment later.
+/// Chromium drops a detached session's unanswered commands without a reply (Playwright's and
+/// Puppeteer's sessions reject their callbacks on detach for the same reason). Without this,
+/// each such request holds its caller for the whole `request_timeout`. A frame that detaches
+/// while core is setting it up then blocks the frame registry's event loop, and with it the
+/// release of every out-of-process frame attached paused after it, so their pages never load.
+/// The detach event is read on the same socket after any reply the session sent, so no reply
+/// can still arrive for these requests.
+async fn reject_detached(inner: &Arc<Inner>, detached: &str) {
+    let mut pending = inner.pending.lock().await;
+    let gone: Vec<u64> = pending
+        .iter()
+        .filter(|(_, request)| {
+            request
+                .session
+                .as_ref()
+                .is_some_and(|session| session.as_str() == detached)
+        })
+        .map(|(id, _)| *id)
+        .collect();
+    for id in gone {
+        if let Some(request) = pending.remove(&id) {
+            let _ = request.reply.send(Err(CdpError::SessionGone));
+        }
     }
 }
 

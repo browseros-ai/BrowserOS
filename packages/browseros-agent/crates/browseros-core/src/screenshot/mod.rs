@@ -1,3 +1,6 @@
+mod background;
+
+use crate::target::page_access::PageAccess;
 use crate::{
     CoreError, FrameId, PageJs, ProtocolSession, observer::Observer, pointer, snapshot::RefEntry,
 };
@@ -19,6 +22,16 @@ const SCREENCAST_FRAME_DEADLINE: Duration = Duration::from_secs(2);
 
 const OVERLAY_ATTR: &str = "data-browseros-screenshot-annotation";
 const OVERLAY_SCRIPT: &str = include_str!("../assets/screenshot-overlay.js");
+/// A temporary default-background override, scoped to the shared capture lock.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ScreenshotBackground {
+    /// Leave the browser's current default background in place.
+    #[default]
+    Default,
+    /// Clear the default background only while this capture owns the queue.
+    Transparent,
+}
+
 static OVERLAY_COUNTER: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -130,20 +143,81 @@ struct Frame {
     id: String,
 }
 
+/// A caller-normalized CDP screenshot, serialized with all other captures on this session.
+/// The SDK owns image geometry; core owns the capture queue and agent pointer lifecycle.
+#[cfg(test)]
+pub(crate) async fn capture_cdp(
+    session: &ProtocolSession,
+    params: Value,
+    background: ScreenshotBackground,
+) -> Result<String, CoreError> {
+    let capture = ScreenshotCapture::acquire(session.clone(), None, background).await?;
+    let data = capture.capture(params).await;
+    capture.finish().await;
+    data
+}
+
+/// An admitted, exclusive screenshot sequence. A tiled image retains this lease across all
+/// protocol captures, so audit images cannot interleave with its temporary rendering state.
+/// Dropping it retains the queue through any asynchronous background restoration.
+#[must_use = "finish the capture sequence after restoring caller-owned rendering state"]
+pub struct ScreenshotCapture {
+    session: ProtocolSession,
+    access: Option<Arc<PageAccess>>,
+    state: background::CaptureState,
+}
+
+impl ScreenshotCapture {
+    pub(crate) async fn acquire(
+        session: ProtocolSession,
+        access: Option<Arc<PageAccess>>,
+        background: ScreenshotBackground,
+    ) -> Result<Self, CoreError> {
+        let state = background::CaptureState::acquire(
+            &session,
+            screenshot_mutex(&session),
+            background == ScreenshotBackground::Transparent,
+        )
+        .await?;
+        Ok(Self {
+            session,
+            access,
+            state,
+        })
+    }
+
+    /// Capture normalized CDP parameters, rechecking the admitted target for every tile.
+    pub async fn capture(&self, params: Value) -> Result<String, CoreError> {
+        if let Some(access) = &self.access {
+            access.fresh().await?;
+        }
+        let data = capture_without_pointer(&self.session, params).await?;
+        if let Some(access) = &self.access {
+            access.fresh().await?;
+        }
+        Ok(data)
+    }
+
+    /// Restore core-owned rendering state before releasing the shared capture queue.
+    pub async fn finish(self) {
+        self.state.restore().await;
+    }
+}
+
+/// Serializes overlays and pointer hiding with every other capture on this session, so a
+/// concurrent screenshot cannot observe another capture's temporary rendering state.
 pub async fn capture_screenshot_with_annotations(
     page_session: ProtocolSession,
     observer: Arc<Observer>,
     options: ScreenshotCaptureOptions,
 ) -> Result<ScreenshotCaptureResult, CoreError> {
-    if !options.annotate.unwrap_or(false) {
-        return run_exclusive_screenshot_capture(&page_session, || async {
-            capture_plain_screenshot(&page_session, &options).await
-        })
-        .await;
-    }
-
+    let annotate = options.annotate.unwrap_or(false);
     run_exclusive_screenshot_capture(&page_session, || async {
-        capture_annotated_screenshot(page_session.clone(), observer.clone(), options.clone()).await
+        if annotate {
+            capture_annotated_screenshot(page_session.clone(), observer, options).await
+        } else {
+            capture_plain_screenshot(&page_session, &options).await
+        }
     })
     .await
 }
@@ -153,17 +227,39 @@ async fn capture_plain_screenshot(
     options: &ScreenshotCaptureOptions,
 ) -> Result<ScreenshotCaptureResult, CoreError> {
     let format = options.format.unwrap_or(ScreenshotFormat::Png);
-    let hidden = pointer::hide_for_capture(page_session).await;
-    let result = capture_image(page_session, options).await;
-    if hidden {
-        pointer::restore_after_capture(page_session).await;
-    }
-    let result = result?;
+    let captured = without_pointer(page_session, capture_image(page_session, options)).await?;
     Ok(ScreenshotCaptureResult {
-        data: result.data,
+        data: captured.data,
         mime_type: format!("image/{}", format.as_str()),
         annotations: Vec::new(),
     })
+}
+
+/// One `Page.captureScreenshot` with the SDK's caller-normalized parameters
+/// ([`ScreenshotCapture`]). They go to CDP as given: the screencast fallback in
+/// [`capture_image`] serves only the option-built captures above, whose geometry core owns.
+async fn capture_without_pointer(
+    page_session: &ProtocolSession,
+    params: Value,
+) -> Result<String, CoreError> {
+    let capture = page_session.send::<_, CaptureScreenshotResult>("Page.captureScreenshot", params);
+    without_pointer(page_session, capture)
+        .await
+        .map(|shot| shot.data)
+}
+
+/// Runs `capture` with the agent pointer hidden and restores it even when CDP fails. The
+/// future is lazy, so nothing reaches CDP before the pointer is hidden.
+async fn without_pointer<T>(
+    page_session: &ProtocolSession,
+    capture: impl Future<Output = Result<T, CoreError>>,
+) -> Result<T, CoreError> {
+    let hidden = pointer::hide_for_capture(page_session).await;
+    let captured = capture.await;
+    if hidden {
+        pointer::restore_after_capture(page_session).await;
+    }
+    captured
 }
 
 async fn capture_annotated_screenshot(
@@ -215,12 +311,8 @@ async fn capture_annotated_screenshot(
                 .await?;
             overlay_injected = true;
         }
-        let hidden = pointer::hide_for_capture(&page_session).await;
-        let captured = capture_image(&page_session, &options).await;
-        if hidden {
-            pointer::restore_after_capture(&page_session).await;
-        }
-        let captured = captured?;
+        let captured =
+            without_pointer(&page_session, capture_image(&page_session, &options)).await?;
         Ok(ScreenshotCaptureResult {
             data: captured.data,
             mime_type: format!("image/{}", format.as_str()),
@@ -728,12 +820,25 @@ fn annotation_number(ref_id: &str) -> i64 {
 #[cfg(test)]
 mod tests {
     use super::{
-        ScreenshotCaptureOptions, ScreenshotFormat, Viewport, capture_image,
-        capture_plain_screenshot, capture_screencast_frame,
+        ScreenshotCaptureOptions, ScreenshotCaptureResult, ScreenshotFormat, Viewport,
+        capture_image, capture_plain_screenshot, capture_screencast_frame,
     };
-    use crate::{ProtocolSession, test_support::TestConnection};
-    use browseros_cdp::CdpEvent;
+    use crate::{
+        CoreError, ProtocolSession, SessionId,
+        testing::{TestCall, TestConnection},
+    };
     use serde_json::json;
+
+    async fn capture(session: &ProtocolSession) -> Result<ScreenshotCaptureResult, CoreError> {
+        capture_plain_screenshot(session, &ScreenshotCaptureOptions::default()).await
+    }
+
+    fn is_pointer_call(call: &TestCall, js: &str) -> bool {
+        call.method == "Runtime.evaluate"
+            && call.params["expression"]
+                .as_str()
+                .is_some_and(|expression| expression.contains(js))
+    }
 
     #[tokio::test]
     async fn tests_that_plain_capture_restores_the_pointer_after_success_and_error()
@@ -748,25 +853,16 @@ mod tests {
             }
             let connection = TestConnection::new(replies);
             let session = ProtocolSession::root(connection.clone());
-            let result =
-                capture_plain_screenshot(&session, &ScreenshotCaptureOptions::default()).await;
+            let result = capture(&session).await;
             assert_eq!(result.is_ok(), succeeds);
             if let Ok(capture) = result {
                 assert_eq!(capture.data, "cG5n");
             }
             let calls = connection.calls()?;
             assert_eq!(calls.len(), 3);
-            assert!(
-                calls[0].params["expression"]
-                    .as_str()
-                    .is_some_and(|js| js.contains("p.hide()"))
-            );
+            assert!(is_pointer_call(&calls[0], "p.hide()"));
             assert_eq!(calls[1].method, "Page.captureScreenshot");
-            assert!(
-                calls[2].params["expression"]
-                    .as_str()
-                    .is_some_and(|js| js.contains("p.show()"))
-            );
+            assert!(is_pointer_call(&calls[2], "p.show()"));
         }
         Ok(())
     }
@@ -777,8 +873,7 @@ mod tests {
         let connection =
             TestConnection::new([("Page.captureScreenshot", json!({ "data": "cG5n" }))]);
         let session = ProtocolSession::root(connection.clone());
-        let capture =
-            capture_plain_screenshot(&session, &ScreenshotCaptureOptions::default()).await?;
+        let capture = capture(&session).await?;
         assert_eq!(capture.data, "cG5n");
         let calls = connection.calls()?;
         assert_eq!(calls.len(), 2);
@@ -811,16 +906,16 @@ mod tests {
             tokio::task::yield_now().await;
         }
         // A frame from another CDP session must not count as this tab's screenshot.
-        connection.publish_event(CdpEvent {
-            method: "Page.screencastFrame".into(),
-            params: json!({ "data": "wrong-tab" }),
-            session_id: Some(browseros_cdp::SessionId::from("other-tab")),
-        });
-        connection.publish_event(CdpEvent {
-            method: "Page.screencastFrame".into(),
-            params: json!({ "data": "jpeg-frame" }),
-            session_id: None,
-        });
+        connection.emit(
+            "Page.screencastFrame",
+            json!({ "data": "wrong-tab" }),
+            Some(SessionId::from("other-tab")),
+        );
+        connection.emit(
+            "Page.screencastFrame",
+            json!({ "data": "jpeg-frame" }),
+            None,
+        );
         let screenshot = worker.await??;
         assert_eq!(screenshot.data, "jpeg-frame");
         let calls = connection.calls()?;
@@ -983,11 +1078,11 @@ mod tests {
         {
             tokio::task::yield_now().await;
         }
-        connection.publish_event(CdpEvent {
-            method: "Page.screencastFrame".into(),
-            params: json!({ "data": "device-frame" }),
-            session_id: None,
-        });
+        connection.emit(
+            "Page.screencastFrame",
+            json!({ "data": "device-frame" }),
+            None,
+        );
         let screenshot = worker.await??;
         assert_eq!(screenshot.data, "device-frame");
         let calls = connection.calls()?;

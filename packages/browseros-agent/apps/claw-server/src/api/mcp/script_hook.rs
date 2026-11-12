@@ -355,12 +355,12 @@ mod tests {
     use crate::api::mcp::test_support::tool_call;
     use crate::db::audit_log::ListDispatchesQuery;
     use crate::ids::ConvoId;
-    use browseros_cdp::{CdpError, CdpEvent, SessionId as CdpSessionId};
+    use browseros_cdp::{CdpError, CdpEvent, SessionId as CdpSessionId, TargetedEvents};
     use browseros_core::{BrowserSession, BrowserSessionHooks, CdpConnection};
     use futures_util::future::BoxFuture;
     use serde_json::json;
     use std::sync::Arc;
-    use tokio::sync::broadcast;
+    use tokio::sync::{broadcast, mpsc};
 
     fn hook_for(call: &crate::api::mcp::dispatch::ToolCall) -> ScriptInnerCallHook {
         ScriptInnerCallHook::new(call.clone())
@@ -513,12 +513,16 @@ mod tests {
     /// `pages.get_info` so the hook can open a session-tab window.
     struct OnePageConnection {
         events: broadcast::Sender<CdpEvent>,
+        targeted: TargetedEvents,
     }
 
     impl OnePageConnection {
         fn new() -> Arc<Self> {
             let (events, _) = broadcast::channel(1);
-            Arc::new(Self { events })
+            Arc::new(Self {
+                events,
+                targeted: TargetedEvents::default(),
+            })
         }
     }
 
@@ -592,6 +596,10 @@ mod tests {
 
         fn events(&self) -> broadcast::Receiver<CdpEvent> {
             self.events.subscribe()
+        }
+
+        fn events_targeted(&self, method: &str) -> mpsc::UnboundedReceiver<CdpEvent> {
+            self.targeted.subscribe(method)
         }
 
         fn is_connected(&self) -> bool {

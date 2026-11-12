@@ -1,0 +1,24 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Dialogs</title><script src="events.js"></script></head>
+<body>
+<!-- Each button opens one dialog from a timer, so the gesture that clicks it returns at once,
+     and records the dialog's answer in window.__answers and window.__events.
+     `?beforeunload` also asks before the page is left. -->
+<button id="alert" onclick="ask(() => alert('Hello'))">alert</button>
+<button id="confirm" onclick="ask(() => confirm('Proceed?'))">confirm</button>
+<button id="prompt" onclick="ask(() => prompt('Name?', 'Ada'))">prompt</button>
+<script>
+  window.__answers = []
+  function ask(open) {
+    setTimeout(() => {
+      const answer = open() ?? null
+      window.__answers.push(answer)
+      window.__events.push({ type: 'answer', answer })
+    })
+  }
+  if (location.search.includes('beforeunload'))
+    addEventListener('beforeunload', (event) => {
+      event.preventDefault()
+      event.returnValue = ''
+    })
+</script>
+</body></html>
