@@ -69,11 +69,13 @@ const PAGE_EVENTS: ReadonlySet<string> = new Set([
   'frameattached',
   'framenavigated',
   'framedetached',
+  'crash',
 ])
 /** Events the context reports. */
 const CONTEXT_EVENTS: ReadonlySet<string> = new Set([
   'page',
   'pageload',
+  'dialog',
   'dialogclosed',
   'frameattached',
   'framenavigated',
@@ -93,7 +95,6 @@ const UNREPORTED: Readonly<Record<string, string>> = {
   websocket: 'Neo does not report WebSockets',
   serviceworker: 'Neo does not report service workers',
   backgroundpage: 'Neo does not report extension background pages',
-  crash: 'Neo does not report crashes; a crashed page fails its next call',
   pageclose: 'listen for close on the page itself: page.on("close")',
   weberror:
     'the context reports no weberror events; pageerror listeners are silent in hosted BrowserOS',
@@ -190,6 +191,14 @@ export class EventHub {
   private newestSeen: number | null = null
   /** One object per dialog and download, so every listener and wait answers the same one. */
   private readonly dialogs = new Map<number, Dialog>()
+  /**
+   * Dialogs a listener or a wait received, so the pump never answers one the script holds.
+   * Upstream's `waitForEvent` is a listener on the emitter; Neo's waits are `events.wait` ops,
+   * so the pump counts them here and in `dialogWaits` instead.
+   */
+  private readonly takenDialogs = new WeakSet<Dialog>()
+  /** `waitForEvent('dialog')` calls in flight, by page, or `null` for the context's. */
+  private readonly dialogWaits = new Map<Page | null, number>()
   private readonly downloads = new Map<string, Download>()
   /** A record can reach several waits and the pump; they must share the chooser object. */
   private readonly choosers = new Map<number, FileChooser>()
@@ -339,8 +348,11 @@ export class EventHub {
           }
         : null
     if (publication) this.navigationWaits.add(publication)
+    const dialogWait = event === 'dialog'
+    if (dialogWait)
+      this.dialogWaits.set(page, (this.dialogWaits.get(page) ?? 0) + 1)
     try {
-      return await untilAborted(
+      const value = await untilAborted(
         signal,
         () => abortedError(api, signal as SignalLike),
         async () => {
@@ -357,11 +369,19 @@ export class EventHub {
           )
         },
       )
+      // Before the wait stops counting: a pump batch decoded later must still see it taken.
+      if (dialogWait && value instanceof Dialog) this.takenDialogs.add(value)
+      return value
     } finally {
       // Aborting a wait must not await native setup. The run owns unfinished leases too;
       // this cleanup follows setup and is a barrier for the script's next browser action.
       if (lease) void lease.release().catch(() => {})
       if (publication) this.navigationWaits.delete(publication)
+      if (dialogWait) {
+        const left = (this.dialogWaits.get(page) ?? 1) - 1
+        if (left > 0) this.dialogWaits.set(page, left)
+        else this.dialogWaits.delete(page)
+      }
       finish()
     }
   }
@@ -686,8 +706,15 @@ export class EventHub {
       context &&
       typeof record.at === 'number' &&
       record.at < (this.contextSince.get(record.event) ?? Infinity)
-    )
+    ) {
+      // No context listener of now may hear it, but a dialog still needs an answer: Rust held
+      // it for the listener that is gone, and nothing else would close it before the run ends.
+      if (record.event === 'dialog') {
+        const page = this.page(record.page)
+        this.answerUnheld(page, this.dialog(page, record.dialog), true)
+      }
       return
+    }
     switch (record.event) {
       case 'workerstate': {
         const worker = this.page(record.page)._worker(record.worker)
@@ -759,16 +786,18 @@ export class EventHub {
         return
       }
       case 'dialog': {
+        // One record reaches the context's listeners and the page's as two deliveries, the
+        // context's first (`Delivered::order`), as upstream's BrowserContext dispatches it.
         const page = this.page(record.page)
         const dialog = this.dialog(page, record.dialog)
-        // upstream's client answers a dialog nobody handles, because a listener can be removed
-        // after Rust decided to hold the dialog for it.
-        if (!page.emit('dialog', dialog))
-          void (
-            dialog.type() === 'beforeunload'
-              ? dialog.accept()
-              : dialog.dismiss()
-          ).catch(() => {})
+        const emitter = record.context ? this.owner : page
+        if (emitter.emit('dialog', dialog)) this.takenDialogs.add(dialog)
+        this.answerUnheld(page, dialog, record.context)
+        return
+      }
+      case 'crash': {
+        const page = this.page(record.page)
+        page.emit('crash', page)
         return
       }
       case 'console': {
@@ -852,6 +881,8 @@ export class EventHub {
         page._closeEvent(record.seq, observed)
         return page
       }
+      case 'crash':
+        return this.page(record.page)
       case 'dialog':
       case 'dialogclosed':
         return this.dialog(this.page(record.page), record.dialog)
@@ -867,6 +898,26 @@ export class EventHub {
         // Only the pump receives binding calls; no `waitForEvent` names them.
         return undefined
     }
+  }
+
+  /**
+   * upstream's client answers a dialog nobody handles, because a listener can be removed after
+   * Rust decided to hold the dialog for it: dismissed, or accepted for `beforeunload`. The
+   * script holds it when a listener or a wait received it, a wait for it is still in flight,
+   * or the audience this delivery is not for listens and gets its own delivery of the record.
+   */
+  private answerUnheld(page: Page, dialog: Dialog, context: boolean): void {
+    const other = context ? page : this.owner
+    if (
+      this.takenDialogs.has(dialog) ||
+      this.dialogWaits.has(page) ||
+      this.dialogWaits.has(null) ||
+      other.listenerCount('dialog') > 0
+    )
+      return
+    void (
+      dialog.type() === 'beforeunload' ? dialog.accept() : dialog.dismiss()
+    ).catch(() => {})
   }
 
   private dialog(page: Page, info: DialogInfo): Dialog {

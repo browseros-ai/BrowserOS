@@ -298,6 +298,7 @@ struct Detached {
     session_id: SessionId,
 }
 
+/// `Target.targetDestroyed`'s params, and the target `Target.targetCrashed` names.
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct Destroyed {
@@ -750,6 +751,11 @@ impl Watcher {
                     self.destroyed(&target);
                 }
             }
+            "Target.targetCrashed" => {
+                if let Some(Destroyed { target_id }) = parse(params) {
+                    self.crashed(TargetId(target_id));
+                }
+            }
             "Target.attachedToTarget" => {
                 if let Some(attached) = parse(params) {
                     self.attached(session_id.as_ref(), attached).await;
@@ -917,6 +923,18 @@ impl Watcher {
             }
             // Never reported, so its closing is not news either.
             PageState::Pending { .. } => {}
+        }
+    }
+
+    /// A tab's renderer crashed: `page.on('crash')` news once the tab was reported opened, as
+    /// its close is. Discovery sends it (the signal `newPage`'s readiness wait also ends on);
+    /// the tab stays listed until `Target.targetDestroyed`.
+    fn crashed(&mut self, target: TargetId) {
+        if matches!(
+            self.pages.get(&target).map(|page| &page.state),
+            Some(PageState::Reported)
+        ) {
+            self.writer.record(PageEvent::Crashed(target));
         }
     }
 
