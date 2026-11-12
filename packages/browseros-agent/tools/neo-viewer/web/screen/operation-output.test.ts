@@ -50,71 +50,193 @@ describe('what a call gave the script', () => {
     ])
   })
 
-  it("shows a locator's snapshot, or mode 'default', as the recorded tree and says the text was not recorded", () => {
-    const tree = { document: 4, json: [{ role: 'region' }] }
+  it("renders mode 'default' with the run's own renderer, and shows a locator's v1 snapshot as the tree", () => {
+    const tree = {
+      document: 4,
+      partial: [],
+      json: [{ role: 'heading', name: 'Hello', level: 1, children: [] }],
+    }
+    const yaml = shown(
+      operation(3, 'page.ariaSnapshot', {
+        line: 1,
+        args: { mode: 'default' },
+        result: tree,
+      }),
+    )
+    expect(yaml.lines).toEqual(['- heading "Hello" [level=1]'])
+    expect(yaml.source).toContain("rendered from Neo's recorded tree")
+    // A frame Neo could not read adds a comment the viewer does not draw: the tree, then.
+    const partial = shown(
+      operation(3, 'page.ariaSnapshot', {
+        args: { mode: 'default' },
+        result: {
+          ...tree,
+          partial: [
+            { ref: 'e7', frame: 'https://pay.example/', reason: 'timeout' },
+          ],
+        },
+      }),
+    )
+    expect(partial.source).toContain('that text is not recorded')
     const locator = shown(
-      operation(3, 'locator.ariaSnapshot', { line: 1, result: tree }),
+      operation(3, 'locator.ariaSnapshot', {
+        line: 1,
+        args: { mode: 'ai' },
+        result: tree,
+      }),
     )
     expect(locator.formattedText).toBe(JSON.stringify(tree, null, 2))
     expect(locator.source).toContain('that text is not recorded')
-    // A default-mode snapshot does not borrow the next snapshot's text from the same line.
-    const all = [
-      operation(3, 'page.ariaSnapshot', { line: 1, result: tree }),
-      operation(5, 'page.ariaSnapshot', { line: 1, result: tree }),
-      operation(6, 'page.snapshotPending', {
-        line: 1,
-        args: { document: 4, text: 'later', form: 'text', delta: false },
-      }),
-    ]
-    expect(shown(all[0] as NeoOperation, all).source).toContain(
-      'that text is not recorded',
-    )
-    expect(shown(all[1] as NeoOperation, all).lines).toEqual(['later'])
   })
 
-  it("decodes evaluate's serialized value as the run does, not the { value, frames } envelope", () => {
-    const evaluated = operation(7, 'page.evaluate', {
-      line: 4,
-      result: {
-        frames: [{ id: 'f1', url: 'https://example.com/' }],
-        value: {
-          id: 1,
-          o: [
-            { k: 'title', v: 'Example Domain' },
-            {
-              k: 'links',
-              v: { id: 2, a: [1, { v: 'NaN' }, { v: 'undefined' }] },
-            },
-            { k: 'when', v: { d: '2026-11-12T04:00:00.000Z' } },
-            { k: 'self', v: { ref: 1 } },
-          ],
+  it("never shows another call's text: overlapping snapshots of one tab say so, other tabs keep theirs", () => {
+    const tree = { document: 4, json: [] }
+    const pendingFor = (seq: number, tabId: number, text: string) =>
+      operation(seq, 'page.snapshotPending', {
+        line: 1,
+        tabId,
+        args: { document: 4, text, form: 'text', delta: false },
+      })
+    // Promise.all of two snapshots of one tab: either pending could be either's.
+    const sameTab = [
+      operation(3, 'page.ariaSnapshot', { line: 1, tabId: 1, result: tree }),
+      operation(4, 'page.ariaSnapshot', { line: 1, tabId: 1, result: tree }),
+      pendingFor(5, 1, 'first'),
+      pendingFor(6, 1, 'second'),
+    ]
+    expect(shown(sameTab[0] as NeoOperation, sameTab).source).toContain(
+      'overlapped',
+    )
+    expect(shown(sameTab[1] as NeoOperation, sameTab).source).toContain(
+      'overlapped',
+    )
+    // The same, on two tabs: each snapshot's own text.
+    const twoTabs = [
+      operation(3, 'page.ariaSnapshot', { line: 1, tabId: 1, result: tree }),
+      operation(4, 'page.ariaSnapshot', { line: 1, tabId: 2, result: tree }),
+      pendingFor(5, 1, 'tab one'),
+      pendingFor(6, 2, 'tab two'),
+    ]
+    expect(shown(twoTabs[0] as NeoOperation, twoTabs).lines).toEqual([
+      'tab one',
+    ])
+    expect(shown(twoTabs[1] as NeoOperation, twoTabs).lines).toEqual([
+      'tab two',
+    ])
+  })
+
+  it('says the await threw when recording the snapshot text failed', () => {
+    const all = [
+      operation(3, 'page.ariaSnapshot', {
+        line: 1,
+        result: { document: 4, json: [] },
+      }),
+      operation(4, 'page.snapshotPending', {
+        line: 1,
+        args: {
+          document: 4,
+          text: 'never returned',
+          form: 'text',
+          delta: false,
         },
-      },
-    })
-    const out = shown(evaluated)
-    expect(out.formattedText).toBe(
+        outcome: 'error',
+        error: {
+          owner: 'neo',
+          code: 'timeout',
+          message: 'snapshotPending timed out',
+          retryable: true,
+        },
+      }),
+    ]
+    const out = shown(all[0] as NeoOperation, all)
+    expect(out.lines).toEqual(['neo / timeout: snapshotPending timed out'])
+    expect(out.source).toContain("so the script's await threw this")
+    const cancelled = [
+      all[0] as NeoOperation,
+      { ...(all[1] as NeoOperation), outcome: 'cancelled', error: null },
+    ]
+    expect(shown(cancelled[0] as NeoOperation, cancelled).source).toContain(
+      'got no text',
+    )
+  })
+
+  it('decodes each evaluate method by its own envelope, as the run does', () => {
+    const object = { id: 1, o: [{ k: 'title', v: 'Example Domain' }] }
+    const decoded = '{\n  "title": "Example Domain"\n}'
+    // page.evaluate: { value, frames }.
+    const page = shown(
+      operation(1, 'page.evaluate', { result: { value: object, frames: [] } }),
+    )
+    expect(page.formattedText).toBe(decoded)
+    expect(page.rawText).toContain('"frames"')
+    // locator.evaluate and its kin: the serialized value itself.
+    for (const name of [
+      'locator.evaluate',
+      'worker.evaluate',
+      'page.evalOnSelector',
+      'locator.evaluateAll',
+    ]) {
+      expect(shown(operation(2, name, { result: object })).formattedText).toBe(
+        decoded,
+      )
+    }
+    expect(
+      shown(operation(3, 'locator.evaluate', { result: 'line one\nline two' }))
+        .lines,
+    ).toEqual(['line one', 'line two'])
+    // page.waitForFunction resolves to a JSHandle holding the value.
+    const wait = shown(
+      operation(4, 'page.waitForFunction', {
+        result: { value: { n: 3 }, preview: '3' },
+      }),
+    )
+    expect(wait.formattedText).toBe('{\n  "n": 3\n}')
+    expect(wait.source).toContain('JSHandle')
+    // locator.waitForFunction resolves to nothing.
+    expect(
+      shown(operation(5, 'locator.waitForFunction', { result: null })).source,
+    ).toBe('The call returned no value.')
+  })
+
+  it('prints a shared object as often as the value holds it, a cycle once, and typed arrays as numbers', () => {
+    const shared = { id: 2, o: [{ k: 'n', v: 1 }] }
+    const value = {
+      id: 1,
+      o: [
+        { k: 'first', v: shared },
+        { k: 'again', v: { ref: 2 } },
+        { k: 'self', v: { ref: 1 } },
+        { k: 'bytes', v: { ta: { k: 'ui8', b: 'AQID' } } },
+        { k: 'big', v: { ta: { k: 'bi64', b: 'AQAAAAAAAAA=' } } },
+        {
+          k: 'odd',
+          v: { id: 3, a: [{ v: 'NaN' }, { v: '-0' }, { bi: '12' }, { h: 0 }] },
+        },
+      ],
+    }
+    expect(
+      shown(operation(1, 'page.evaluate', { result: { value } })).formattedText,
+    ).toBe(
       [
         '{',
-        '  "title": "Example Domain",',
-        '  "links": [',
-        '    1,',
+        '  "first": {',
+        '    "n": 1',
+        '  },',
+        '  "again": {',
+        '    "n": 1',
+        '  },',
+        '  "self": [Circular],',
+        '  "bytes": Uint8Array [1, 2, 3],',
+        '  "big": BigInt64Array [1n],',
+        '  "odd": [',
         '    NaN,',
+        '    -0,',
+        '    12n,',
         '    undefined',
-        '  ],',
-        '  "when": Date "2026-11-12T04:00:00.000Z",',
-        '  "self": [Circular]',
+        '  ]',
         '}',
       ].join('\n'),
     )
-    expect(out.source).toContain("The value the script's await got")
-    expect(out.rawText).toContain('"frames"')
-    // A returned string reads as its lines.
-    const text = shown(
-      operation(8, 'locator.evaluate', {
-        result: { value: 'line one\nline two' },
-      }),
-    )
-    expect(text.lines).toEqual(['line one', 'line two'])
   })
 
   it('shows a string as its lines, a handle in words, no value as such, and an error as thrown', () => {

@@ -1,37 +1,43 @@
 /**
  * What one operation gave the script, for the selection panel and "Open full". Neo's trace
  * records an operation's result as it crossed between the prelude (the SDK's JavaScript in the
- * run) and Rust, which is not always what the script's `await` got:
+ * run) and Rust, which is not always what the script's `await` got (frame.ts, evaluation.ts):
  *
- *   page.ariaSnapshot    the engine's tree `{ json, partial, document }`; the prelude renders the
- *                        text. For a whole page in the v1 form the next `page.snapshotPending`
- *                        records that text (and a delta call's delta as `returned`), so that is
- *                        shown. A locator's snapshot and `mode: 'default'` are rendered from the
- *                        tree with nothing recorded, so the tree is shown, saying so.
- *   the evaluate family  `{ value: <the page's serialized form>, … }`, shown as the prelude's
- *                        `parseEvaluationResultValue` decodes it (`page-value.ts`)
- *   a string             its lines
- *   anything else        the recorded result, saying that is what it is
+ *   page.ariaSnapshot       the engine's tree `{ json, partial, document }`. In the v1 form the
+ *                           run renders the text, and the whole page's `page.snapshotPending`
+ *                           that follows records it (a delta call's delta as `returned`); the
+ *                           script got it only if that operation succeeded.
+ *   mode: 'default'         Playwright's YAML: the prelude's `renderSnapshot` is the vendored
+ *                           `renderAriaSnapshotAsYaml` on the tree, plus a comment per frame it
+ *                           could not read. With every frame read it is that renderer alone,
+ *                           which the viewer runs on the recorded tree; otherwise, the tree.
+ *   locator.ariaSnapshot    v1 text rendered with options the wire does not carry: the tree,
+ *                           saying the text was not recorded.
+ *   page.evaluate           `{ value, frames }`; the evaluate methods below it the serialized
+ *                           value itself; page.waitForFunction `{ value, preview }`, which the
+ *                           script gets as a JSHandle. Each decoded as the run decodes it
+ *                           (`page-value.ts`).
+ *   a string                its lines
+ *   anything else           the recorded result, saying that is what it is
  *
- * Formatted is that; Raw is always the recorded result as JSON. Each output carries one
- * sentence saying which it is, so the panel never passes a wire value off as the script's.
+ * Formatted is that; Raw is always the recorded result as JSON. Each output carries one sentence
+ * saying which it is, so the panel never passes a wire value off as the script's.
  */
 
-import type { NeoOperation } from '../../shared/api'
+import type { AriaSnapshotJSON } from '../../../../crates/neo-sdk/neo-playwright/third_party/playwright/packages/isomorphic/ariaSnapshot'
+import { renderAriaSnapshotAsYaml } from '../../../../crates/neo-sdk/neo-playwright/third_party/playwright/packages/isomorphic/ariaSnapshotRenderer'
+import type { NeoOperation, NeoOperationError } from '../../shared/api'
 import { handleText } from './operation-values'
 import { isNeoInternal } from './operations'
 import { pageValueText } from './page-value'
 import { jsonLine, type Line, plainLines, snapshotLine } from './text-lines'
 
-/** The calls whose result is `{ value: <the page's serialized form>, … }` (`Evaluated`). */
-const EVALUATES = new Set([
-  'page.evaluate',
+/** The evaluate methods whose result is the page's serialized value itself. */
+const SERIALIZED = new Set([
   'worker.evaluate',
   'locator.evaluate',
   'page.evalOnSelector',
   'locator.evaluateAll',
-  'page.waitForFunction',
-  'locator.waitForFunction',
 ])
 
 export interface OperationOutput {
@@ -60,7 +66,12 @@ export function operationOutput(
 ): OperationOutput {
   const rawText = recorded(operation)
   return {
-    ...formatted(operation, operations),
+    ...(failed(operation) ??
+      unfinished(operation) ??
+      snapshot(operation, operations) ??
+      pending(operation) ??
+      evaluated(operation) ??
+      recordedValue(operation)),
     raw: rawText.split('\n').map(jsonLine),
     rawText,
   }
@@ -72,70 +83,189 @@ function recorded(operation: NeoOperation): string {
   return JSON.stringify(operation.result, null, 2) ?? 'undefined'
 }
 
-function formatted(operation: NeoOperation, operations: NeoOperation[]): Shown {
-  const cut = operation.resultTruncated
-  if (operation.error) {
-    const text = `${operation.error.owner} / ${operation.error.code}: ${operation.error.message}`
+function failed(operation: NeoOperation): Shown | null {
+  if (!operation.error) return null
+  return thrown(
+    operation.error,
+    "The call failed: the error the script's await threw.",
+  )
+}
+
+function unfinished(operation: NeoOperation): Shown | null {
+  if (operation.outcome !== null) return null
+  return {
+    ...toned('', 'muted'),
+    source: 'The call has not finished.',
+    cut: false,
+  }
+}
+
+function snapshot(
+  operation: NeoOperation,
+  operations: NeoOperation[],
+): Shown | null {
+  if (!operation.name.endsWith('.ariaSnapshot')) return null
+  const text =
+    rendered(operation) ??
+    (operation.name === 'page.ariaSnapshot'
+      ? textOf(operation, operations)
+      : null)
+  return (
+    text ??
+    tree(
+      operation,
+      "The tree the page answered, as Neo recorded it. The run rendered the script's text from it, and that text is not recorded here.",
+    )
+  )
+}
+
+/** `mode: 'default'` with every frame read: the run's own YAML renderer on the recorded tree. */
+function rendered(operation: NeoOperation): Shown | null {
+  const result = operation.result
+  if (modeOf(operation) !== 'default' || operation.resultTruncated) return null
+  if (!isSnapshotResult(result) || result.partial.length > 0) return null
+  return {
+    ...lines(renderAriaSnapshotAsYaml(result.json)),
+    source:
+      "The YAML the script's await got (mode: \"default\"), rendered from Neo's recorded tree by the run's own renderer.",
+    cut: false,
+  }
+}
+
+/** The recorded tree, with the sentence saying why it is shown instead of the text. */
+function tree(operation: NeoOperation, source: string): Shown {
+  return { ...json(operation.result), source, cut: operation.resultTruncated }
+}
+
+/**
+ * A whole-page v1 snapshot's text: the `page.snapshotPending` it recorded, found by walking the
+ * operations of the same tab and call site in order. Each v1 snapshot opens; a pending record
+ * for the same document closes the one snapshot open. When two are open (calls that overlapped),
+ * either could own it, so neither is given a text: the tree is shown, saying so. When the
+ * pending operation failed, the script's await threw instead.
+ */
+function textOf(
+  snapshot: NeoOperation,
+  operations: NeoOperation[],
+): Shown | null {
+  const match = pendingOf(snapshot, operations)
+  if (match !== 'overlapped') return match ? pendingText(match) : null
+  return tree(
+    snapshot,
+    "The tree the page answered, as Neo recorded it: snapshots of this tab from this line overlapped, so Neo's record cannot tell which text was this call's.",
+  )
+}
+
+function pendingOf(
+  snapshot: NeoOperation,
+  operations: NeoOperation[],
+): NeoOperation | 'overlapped' | null {
+  const call = operations
+    .filter((operation) => sameCall(operation, snapshot))
+    .sort((a, b) => a.seq - b.seq)
+  let open: NeoOperation[] = []
+  for (const operation of call) {
+    if (operation.name === 'page.ariaSnapshot') {
+      // `mode: 'default'` never records its text, so it never closes.
+      if (modeOf(operation) !== 'default') open.push(operation)
+      continue
+    }
+    if (operation.name !== 'page.snapshotPending') continue
+    const owners = open.filter(
+      (candidate) => documentOf(candidate) === argsOf(operation).document,
+    )
+    if (owners.length > 1 && owners.includes(snapshot)) return 'overlapped'
+    if (owners.length !== 1) continue
+    if (owners[0] === snapshot) return operation
+    open = open.filter((candidate) => candidate !== owners[0])
+  }
+  return null
+}
+
+function modeOf(operation: NeoOperation): unknown {
+  return argsOf(operation).mode
+}
+
+function documentOf(operation: NeoOperation): unknown {
+  return isRecord(operation.result) ? operation.result.document : undefined
+}
+
+function argsOf(operation: NeoOperation): Record<string, unknown> {
+  return isRecord(operation.args) ? operation.args : {}
+}
+
+/** What the script got from the snapshot whose text `match` recorded. */
+function pendingText(match: NeoOperation): Shown | null {
+  if (match.error) {
+    return thrown(
+      match.error,
+      "The snapshot was taken, but recording its text failed (Neo's page.snapshotPending), so the script's await threw this.",
+    )
+  }
+  if (match.outcome !== 'ok') {
     return {
-      ...toned(text, 'error'),
-      source: "The call failed: the error the script's await threw.",
-      cut: false,
-    }
-  }
-  if (operation.outcome === null) {
-    return {
-      ...toned('', 'muted'),
-      source: 'The call has not finished.',
-      cut: false,
-    }
-  }
-  if (operation.name === 'page.ariaSnapshot') {
-    const text = snapshotText(operation, operations)
-    if (text) {
-      return {
-        ...lines(text.value),
-        source:
-          "The snapshot text the script's await got, as the run rendered it (recorded by Neo's page.snapshotPending).",
-        cut: text.cut,
-      }
-    }
-  }
-  if (operation.name.endsWith('ariaSnapshot')) {
-    return {
-      ...json(operation.result),
-      source: `The tree the page answered, as Neo recorded it: the run rendered the script's text from it, and that text is not recorded (a locator's snapshot, or mode: "default").`,
-      cut,
-    }
-  }
-  if (operation.name === 'page.snapshotPending' && isRecord(operation.args)) {
-    const text = operation.args.returned ?? operation.args.text
-    if (typeof text === 'string') {
-      return {
-        ...lines(text),
-        source:
-          "Neo internal: the snapshot text it records as this tab's pending delta baseline. The script did not call this.",
-        cut: operation.argsTruncated,
-      }
-    }
-  }
-  if (EVALUATES.has(operation.name) && isRecord(operation.result)) {
-    const value = operation.result.value
-    const text = pageValueText(value)
-    return {
-      ...(typeof value === 'string' ? lines(text) : toned(text, 'json')),
+      ...toned(match.outcome === null ? '' : `(${match.outcome})`, 'muted'),
       source:
-        "The value the script's await got, decoded from the page's serialized form as the run decodes it.",
-      cut,
+        match.outcome === null
+          ? 'The snapshot is still recording its text.'
+          : "Recording the snapshot's text did not finish, so the script's await got no text.",
+      cut: false,
     }
   }
-  if (typeof operation.result === 'string') {
-    return {
-      ...lines(operation.result),
-      source: 'The text the call returned.',
-      cut,
-    }
+  const args = isRecord(match.args) ? match.args : {}
+  const value = args.returned ?? args.text
+  if (typeof value !== 'string') return null
+  return {
+    ...lines(value),
+    source:
+      "The snapshot text the script's await got, as the run rendered it (recorded by Neo's page.snapshotPending).",
+    cut: match.argsTruncated,
   }
-  const handle = handleText(operation.result)
+}
+
+function pending(operation: NeoOperation): Shown | null {
+  if (operation.name !== 'page.snapshotPending' || !isRecord(operation.args))
+    return null
+  const text = operation.args.returned ?? operation.args.text
+  if (typeof text !== 'string') return null
+  return {
+    ...lines(text),
+    source:
+      "Neo internal: the snapshot text it records as this tab's pending delta baseline. The script did not call this.",
+    cut: operation.argsTruncated,
+  }
+}
+
+function evaluated(operation: NeoOperation): Shown | null {
+  const result = operation.result
+  const decodedFrom = (value: unknown, source: string): Shown => ({
+    ...(typeof value === 'string'
+      ? lines(value)
+      : toned(pageValueText(value), 'json')),
+    source,
+    cut: operation.resultTruncated,
+  })
+  const got =
+    "The value the script's await got, decoded from the page's serialized form as the run decodes it."
+  if (operation.name === 'page.evaluate' && isRecord(result))
+    return decodedFrom(result.value, got)
+  if (SERIALIZED.has(operation.name)) return decodedFrom(result, got)
+  if (operation.name === 'page.waitForFunction' && isRecord(result)) {
+    return decodedFrom(
+      result.value,
+      "The script's await got a JSHandle: this is the value it holds, decoded as the run decodes it.",
+    )
+  }
+  return null
+}
+
+function recordedValue(operation: NeoOperation): Shown {
+  const result = operation.result
+  const cut = operation.resultTruncated
+  if (typeof result === 'string') {
+    return { ...lines(result), source: 'The text the call returned.', cut }
+  }
+  const handle = handleText(result)
   if (handle !== null) {
     return {
       ...toned(handle, 'plain'),
@@ -143,7 +273,7 @@ function formatted(operation: NeoOperation, operations: NeoOperation[]): Shown {
       cut,
     }
   }
-  if (operation.result === null || operation.result === undefined) {
+  if (result === null || result === undefined) {
     return {
       ...toned('(no value)', 'muted'),
       source: 'The call returned no value.',
@@ -151,7 +281,7 @@ function formatted(operation: NeoOperation, operations: NeoOperation[]): Shown {
     }
   }
   return {
-    ...json(operation.result),
+    ...json(result),
     source: isNeoInternal(operation)
       ? 'Neo internal: its own record of this step. The script did not call this.'
       : "Neo's record of the result as it crossed into the run, not necessarily the value the script got: the run builds that from it.",
@@ -159,37 +289,29 @@ function formatted(operation: NeoOperation, operations: NeoOperation[]): Shown {
   }
 }
 
-/**
- * The text a whole-page v1 snapshot gave the script: the `page.snapshotPending` that follows
- * it from the same call site, for the same document. A loop's snapshots each have their own; one
- * from another call of the same site, or none at all (`mode: 'default'`), is not this one's.
- */
-function snapshotText(
-  snapshot: NeoOperation,
-  operations: NeoOperation[],
-): { value: string; cut: boolean } | null {
-  const document = isRecord(snapshot.result) ? snapshot.result.document : null
-  const later = operations
-    .filter((operation) => operation.seq > snapshot.seq)
-    .sort((a, b) => a.seq - b.seq)
-  for (const operation of later) {
-    if (!sameSite(operation, snapshot)) continue
-    if (operation.name === 'page.ariaSnapshot') return null
-    if (operation.name !== 'page.snapshotPending' || !isRecord(operation.args))
-      continue
-    const { args } = operation
-    if (typeof document === 'number' && typeof args.document === 'number') {
-      if (args.document !== document) continue
-    }
-    const value = args.returned ?? args.text
-    if (typeof value !== 'string') return null
-    return { value, cut: operation.argsTruncated }
+function thrown(error: NeoOperationError, source: string): Shown {
+  return {
+    ...toned(`${error.owner} / ${error.code}: ${error.message}`, 'error'),
+    source,
+    cut: false,
   }
-  return null
 }
 
-function sameSite(a: NeoOperation, b: NeoOperation): boolean {
-  return a.site?.line === b.site?.line && a.site?.column === b.site?.column
+/** The same tab and the same script call site: the snapshot's own bookkeeping, not another's. */
+function sameCall(a: NeoOperation, b: NeoOperation): boolean {
+  return (
+    a.tabId === b.tabId &&
+    a.site?.line === b.site?.line &&
+    a.site?.column === b.site?.column
+  )
+}
+
+function isSnapshotResult(
+  value: unknown,
+): value is { json: AriaSnapshotJSON; partial: unknown[] } {
+  return (
+    isRecord(value) && Array.isArray(value.json) && Array.isArray(value.partial)
+  )
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -211,9 +333,7 @@ function toned(
 ): Pick<Shown, 'formatted' | 'formattedText'> {
   return {
     formatted:
-      tone === 'json'
-        ? text.split('\n').map(jsonLine)
-        : plainLines(text, tone === 'plain' ? 'plain' : tone),
+      tone === 'json' ? text.split('\n').map(jsonLine) : plainLines(text, tone),
     formattedText: text,
   }
 }
