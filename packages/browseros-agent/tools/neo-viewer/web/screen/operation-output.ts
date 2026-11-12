@@ -52,6 +52,11 @@ export interface OperationOutput {
   source: string
   /** Neo kept only the start of what Formatted shows. */
   cut: boolean
+  /**
+   * Neo kept only the start of the recorded result Raw shows. Separate from `cut`: a snapshot's
+   * text comes from its pending record's arguments, which can be whole while its tree was cut.
+   */
+  rawCut: boolean
 }
 
 type Shown = Pick<
@@ -69,6 +74,7 @@ export function operationOutput(
     ...shownOrRecord(operation, operations),
     raw: rawText.split('\n').map(jsonLine),
     rawText,
+    rawCut: operation.error ? false : operation.resultTruncated,
   }
 }
 

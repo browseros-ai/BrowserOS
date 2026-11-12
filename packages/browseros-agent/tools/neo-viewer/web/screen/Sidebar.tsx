@@ -220,7 +220,8 @@ function OperationPanel({
       <OutputLines lines={lines} />
       <p className="shrink-0 text-[11px] text-ink-2 leading-4">
         {formatted ? output?.source : "Neo's record of the result, as JSON."}
-        {output?.cut && ' Neo kept only the start of it.'}{' '}
+        {(formatted ? output?.cut : output?.rawCut) &&
+          ' Neo kept only the start of it.'}{' '}
         <button
           type="button"
           onClick={onShowReply}

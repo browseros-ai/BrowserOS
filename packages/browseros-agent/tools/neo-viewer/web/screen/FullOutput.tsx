@@ -314,7 +314,7 @@ function framing(run: RunSummary, call: Call | null, view: ReplyView) {
     title: call.operation.name,
     where: [`run ${run.seq}`, placeText(call.place), ...internal].join(' · '),
     shownText: formatted ? call.output.formattedText : call.output.rawText,
-    footer: `${formatted ? call.output.source : "Neo's record of the result, as JSON."}${call.output.cut ? ' Neo kept only the start of it.' : ''}`,
+    footer: `${formatted ? call.output.source : "Neo's record of the result, as JSON."}${(formatted ? call.output.cut : call.output.rawCut) ? ' Neo kept only the start of it.' : ''}`,
     unit: 'call',
   }
 }

@@ -125,6 +125,24 @@ describe('what a call gave the script', () => {
     ])
   })
 
+  it('says which view Neo cut: a whole text from a cut tree', () => {
+    const all = [
+      operation(3, 'page.ariaSnapshot', {
+        line: 1,
+        result: { document: 4, json: [{ $more: 900 }] },
+        resultTruncated: true,
+      }),
+      operation(4, 'page.snapshotPending', {
+        line: 1,
+        args: { document: 4, text: 'whole text', form: 'text', delta: false },
+      }),
+    ]
+    const out = operationOutput(all[0] as NeoOperation, all)
+    expect(out.formattedText).toBe('whole text')
+    expect(out.cut).toBe(false)
+    expect(out.rawCut).toBe(true)
+  })
+
   it('says the await threw when recording the snapshot text failed', () => {
     const all = [
       operation(3, 'page.ariaSnapshot', {
