@@ -8,4 +8,4 @@ import type { Target } from "./Target";
  * states are the element-state names. `omitReturnValue` suppresses a handle for
  * `locator.waitFor`, whatever the requested state.
  */
-export type ReadWaitForInput = { target: Target, strict: Strictness, state: ReadWaitState, omitReturnValue: boolean, };
+export type ReadWaitForInput = { target: Target, strict: Strictness, state?: ReadWaitState, omitReturnValue?: boolean, };

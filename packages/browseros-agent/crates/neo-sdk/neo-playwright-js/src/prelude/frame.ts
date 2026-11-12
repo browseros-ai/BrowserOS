@@ -1167,7 +1167,7 @@ export class Frame extends EventEmitter {
       target,
       selector,
     })
-    return resolved.selector
+    return resolved.resolvedSelector
   }
 
   async _boundingBox(
@@ -1216,24 +1216,25 @@ export class Frame extends EventEmitter {
     api: string,
     selector: string,
     strict: boolean,
-    noWait: boolean,
+    immediate: boolean,
     options: TimeoutOption = {},
   ): Promise<ElementHandle | null> {
     const site = captureSite()
-    const wait = noWait ? { timeout: 0 } : this._wait(api, options)
+    const wait = immediate ? { timeout: 0 } : this._wait(api, options)
     const addressed = await this._targetArgs(api, selector, strict)
-    // Preserve the omitted field on waiting calls: noWait:false was never sent.
-    const handle = noWait
+    // Keep timeout and target evaluation in the same order for both public forms. Only
+    // their protocol command differs: querySelector is immediate, waitForSelector polls.
+    const handle = immediate
       ? await send['locator.elementHandle'](
           site,
           this._call(api, wait.timeout),
-          { ...addressed, noWait: true },
+          { ...addressed },
           wait.signal,
         )
-      : await send['locator.elementHandle'](
+      : await send['locator.waitFor'](
           site,
           this._call(api, wait.timeout),
-          { ...addressed },
+          { ...addressed, state: 'attached', omitReturnValue: false },
           wait.signal,
         )
     return this._page._handle(handle)

@@ -1,7 +1,7 @@
 //! The read ops and their registration metadata.
 
-use serde::Deserialize;
 use serde::de::DeserializeOwned;
+use serde::{Deserialize, Deserializer};
 use serde_json::Value;
 use ts_rs::TS;
 
@@ -142,7 +142,7 @@ impl ReadOp {
             Self::ElementHandle => OpSpec::read(
                 "locator.elementHandle",
                 TARGET,
-                "pin the matching element as an ElementHandle; also page.$ and frame.$",
+                "pin the first match now, or null; page.$, frame.$ and elementHandle.$",
             ),
             Self::ElementHandles => OpSpec::read(
                 "locator.elementHandles",
@@ -194,11 +194,23 @@ options!(ElementInput);
 struct WaitForInput {
     target: Target,
     strict: Strictness,
-    state: WaitState,
+    // Selector waits default to visible; an element-state call still requires its state.
+    // Decode a supplied value as the enum so omission does not also admit JSON null.
+    #[serde(default, deserialize_with = "supplied_state")]
+    #[ts(optional)]
+    state: Option<WaitState>,
     // `locator.waitFor`: no handle back, whatever the state.
+    #[serde(default)]
+    #[ts(optional = nullable)]
     omit_return_value: bool,
 }
 options!(WaitForInput);
+
+fn supplied_state<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<WaitState>, D::Error> {
+    WaitState::deserialize(deserializer).map(Some)
+}
 
 /// Every state `locator.waitFor` takes, and `waitForElementState`'s.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, TS)]
@@ -241,18 +253,14 @@ impl WaitState {
     }
 }
 
-/// `locator.elementHandle`, and `page.$` (`noWait`: the first match now, or null).
+/// The immediate query used by `page.$`, `frame.$` and `elementHandle.$`. A locator's
+/// waiting `elementHandle()` uses `locator.waitFor`, like upstream's `waitForSelector`.
 #[derive(Debug, Deserialize, TS)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 #[ts(rename = "ReadElementHandleInput")]
 struct ElementHandleInput {
     target: Target,
     strict: Strictness,
-    // Omission means false without admitting JSON null. Keep the bool at decode time;
-    // this TS attribute retains its type while describing that omission is allowed.
-    #[serde(default)]
-    #[ts(optional = nullable)]
-    no_wait: bool,
 }
 options!(ElementHandleInput);
 
@@ -322,13 +330,7 @@ fn route<'a, R: Route<'a>>(op: ReadOp, r: R) -> R::Out {
             )]),
             wait_for,
         ),
-        ReadOp::ElementHandle => r.op(
-            wire::command("Frame.querySelector").adds(&[(
-                "noWait",
-                "selects the immediate page.$ query instead of a locator wait",
-            )]),
-            handle,
-        ),
+        ReadOp::ElementHandle => r.op(wire::command("Frame.querySelector"), handle),
         ReadOp::ElementHandles => r.op(wire::command("Frame.querySelectorAll"), handles),
     }
 }
@@ -521,30 +523,14 @@ async fn handle(
     scope: &OpScope<'_>,
     input: ElementHandleInput,
 ) -> Result<Option<RootHandle>, PlaywrightError> {
-    let ElementHandleInput {
-        target,
-        strict,
-        no_wait,
-    } = input;
+    let ElementHandleInput { target, strict } = input;
     let Target::Locator(target) = &target else {
         return Err(scope.fail(
             ErrorCode::InvalidInput,
             "target: an element handle is not a selector; query from it with root",
         ));
     };
-    if no_wait {
-        element_handle::find_one(pw, scope, target, strict).await
-    } else {
-        selector_wait::wait_for_match(
-            pw,
-            scope,
-            target,
-            strict,
-            SelectorState::Attached,
-            Returning::Handle,
-        )
-        .await
-    }
+    element_handle::find_one(pw, scope, target, strict).await
 }
 
 async fn handles(
@@ -572,7 +558,10 @@ async fn wait_for(
     let target = match &input.target {
         Target::Locator(target) => target,
         Target::Element(target) => {
-            let Some(state) = input.state.for_element() else {
+            let state = input
+                .state
+                .ok_or_else(|| scope.fail(ErrorCode::InvalidInput, "missing field `state`"))?;
+            let Some(state) = state.for_element() else {
                 return Err(scope.fail(
                     ErrorCode::InvalidInput,
                     "state: expected one of (visible|hidden|stable|enabled|disabled|editable)",
@@ -582,7 +571,7 @@ async fn wait_for(
             return Ok(None);
         }
     };
-    let Some(state) = input.state.for_selector() else {
+    let Some(state) = input.state.unwrap_or(WaitState::Visible).for_selector() else {
         return Err(scope.fail(
             ErrorCode::InvalidInput,
             "state: expected one of (attached|detached|visible|hidden)",

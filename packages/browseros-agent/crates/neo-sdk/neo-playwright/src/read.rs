@@ -14,6 +14,8 @@
 //!    └─ normalize       the generator's selector for the first match, frames included
 //! ```
 
+#[cfg(test)]
+mod alignment_tests;
 mod element_handle;
 mod element_read;
 mod element_wait;

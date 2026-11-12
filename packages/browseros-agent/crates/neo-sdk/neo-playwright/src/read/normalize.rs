@@ -39,12 +39,13 @@ options!(NormalizeInput);
 
 /// The generator's selector for the first match, framed from the main document down.
 #[derive(Debug, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
 #[ts(rename = "ReadNormalized")]
 pub(crate) struct Normalized {
-    selector: String,
+    resolved_selector: String,
 }
 
-/// Runs `locator.normalize`; its output is `{ selector }`. Nothing matching now fails at once,
+/// Runs `locator.normalize`; its output is `{ resolvedSelector }`. Nothing matching now fails at once,
 /// as upstream's query does: `element_detached`, because the page holds no such element and no
 /// wait is involved (upstream throws a plain error, not a timeout).
 pub(crate) async fn normalize(
@@ -86,7 +87,8 @@ pub(crate) async fn normalize(
     let mut parts = frame_selectors(scope, &path, &input.selector).await?;
     parts.push(element);
     Ok(Normalized {
-        selector: parts.join(ENTER_FRAME),
+        // Translate only the op reply; the probe's `selector` protocol stays unchanged.
+        resolved_selector: parts.join(ENTER_FRAME),
     })
 }
 

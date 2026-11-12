@@ -7837,7 +7837,7 @@ ${value.stack}`;
         target,
         selector
       });
-      return resolved.selector;
+      return resolved.resolvedSelector;
     }
     async _boundingBox(api, selector, options = {}) {
       const site = captureSite();
@@ -7857,11 +7857,11 @@ ${value.stack}`;
       const handle = await send["locator.waitFor"](site, this._call(api, wait.timeout), { ...addressed, state, omitReturnValue }, wait.signal);
       return this._page._handle(handle);
     }
-    async _elementHandle(api, selector, strict, noWait, options = {}) {
+    async _elementHandle(api, selector, strict, immediate, options = {}) {
       const site = captureSite();
-      const wait = noWait ? { timeout: 0 } : this._wait(api, options);
+      const wait = immediate ? { timeout: 0 } : this._wait(api, options);
       const addressed = await this._targetArgs(api, selector, strict);
-      const handle = noWait ? await send["locator.elementHandle"](site, this._call(api, wait.timeout), { ...addressed, noWait: true }, wait.signal) : await send["locator.elementHandle"](site, this._call(api, wait.timeout), { ...addressed }, wait.signal);
+      const handle = immediate ? await send["locator.elementHandle"](site, this._call(api, wait.timeout), { ...addressed }, wait.signal) : await send["locator.waitFor"](site, this._call(api, wait.timeout), { ...addressed, state: "attached", omitReturnValue: false }, wait.signal);
       return this._page._handle(handle);
     }
     async _elementHandles(api, selector) {
@@ -8184,8 +8184,7 @@ ${value.stack}`;
       const api = "elementHandle.$";
       const handle = await send["locator.elementHandle"](site, { api, timeoutMs: timeoutMs(api, 0) }, {
         target: this.#rooted(api, selector),
-        strict: "firstMatch",
-        noWait: true
+        strict: "firstMatch"
       });
       return this._page._handle(handle);
     }

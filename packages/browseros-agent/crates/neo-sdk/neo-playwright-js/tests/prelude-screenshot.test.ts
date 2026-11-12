@@ -29,7 +29,7 @@ it('saves element-handle screenshots with their pinned target, explicit type and
   const runtime = loadPrelude({
     seed: SEED,
     answer: ({ name }) => {
-      if (name === 'locator.elementHandle') return element
+      if (name === 'locator.waitFor') return element
       return name === 'page.screenshot' ? IMAGE : null
     },
   })

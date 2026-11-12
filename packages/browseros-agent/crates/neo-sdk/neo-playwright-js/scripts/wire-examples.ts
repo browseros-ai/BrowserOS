@@ -61,7 +61,7 @@ const FRAMES = {
 const ANSWERS: Record<string, unknown> = {
   'locator.selectOption': ['a'],
   'locator.count': 0,
-  'locator.normalize': { selector: 'internal:role=button[name="Go"i]' },
+  'locator.normalize': { resolvedSelector: 'internal:role=button[name="Go"i]' },
   'locator.allTextContents': [],
   'locator.allInnerTexts': [],
   'locator.waitFor': ELEMENT,

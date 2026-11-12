@@ -190,7 +190,6 @@ export class ElementHandle extends EventEmitter {
       {
         target: this.#rooted(api, selector),
         strict: 'firstMatch',
-        noWait: true,
       },
     )
     return this._page._handle(handle)
