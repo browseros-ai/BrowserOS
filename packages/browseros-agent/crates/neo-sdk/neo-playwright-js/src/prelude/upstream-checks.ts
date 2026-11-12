@@ -40,18 +40,3 @@ export type AllOpsChecked = Assert<
       : false
     : false
 >
-
-// All exported option lists now carry generated checks; retain the empty assertion map
-// while the remaining hand op checks still use this module.
-export type OptionChecks = Record<never, never>
-
-/** Private/inline lists refer to these vendored options only through erased type imports. */
-export type PickOptions = {
-  'locator.selectOption': pw.ElementHandleSelectOptionOptions
-  'locator.selectText': pw.ElementHandleSelectTextOptions
-  'page.goto': pw.FrameGotoOptions
-  'page.pdf': pw.PagePdfOptions
-  // path is read on the Neo host; upstream's client converts it to content before sending.
-  'page.addScriptTag': pw.FrameAddScriptTagOptions & { path?: string }
-  'page.addStyleTag': pw.FrameAddStyleTagOptions & { path?: string }
-}

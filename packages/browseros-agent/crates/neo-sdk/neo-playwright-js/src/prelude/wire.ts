@@ -19,6 +19,7 @@
 import type { SerializedValue } from '../../../neo-playwright/third_party/playwright/packages/isomorphic/utilityScriptSerializers'
 import type { GeneratedInputs, GeneratedOutputs } from './generated'
 import type { OpName } from './generated/ops'
+import type { AllOpsChecked } from './upstream-checks'
 
 // Rust owns these shared shapes now. LocatorBrand is a projection of the tagged Target
 // union, so its fields are never repeated in TypeScript.
@@ -162,9 +163,11 @@ type Exact<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false
 type Assert<T extends true> = T
 /**
  * Fails to compile when an op is described both by Rust and by hand, or by neither: every op
- * in `OPS` has exactly one input and one result type.
+ * in `OPS` has exactly one input and one result type, with an upstream classification. Keep
+ * the remaining hand checks connected here until the last family leaves both hand maps.
  */
 type _Partition = [
+  AllOpsChecked,
   Assert<Exact<keyof GeneratedInputs & keyof HandInputs, never>>,
   Assert<Exact<keyof GeneratedOutputs & keyof HandOutputs, never>>,
   Assert<Exact<keyof OpInputs, OpName>>,

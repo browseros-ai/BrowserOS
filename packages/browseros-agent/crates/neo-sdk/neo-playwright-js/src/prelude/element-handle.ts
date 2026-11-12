@@ -32,7 +32,6 @@ import { locatorBrand } from './selectors'
 import { signalOf } from './signal'
 import { type TimeoutOption, timeoutMs } from './timeouts'
 import type { KeyList } from './upstream-check'
-import type { PickOptions } from './upstream-checks'
 import type {
   ElementBrand,
   ElementStateName,
@@ -342,7 +341,7 @@ export class ElementHandle extends EventEmitter {
     const timeout = this.#timeout(options)
     const converted = selectOptionValues(api, values)
     const picked = pick(options, ['force'] satisfies KeyList<
-      PickOptions['locator.selectOption']
+      OpInputs['locator.selectOption']
     >)
     this.#live(api)
     return await send['locator.selectOption'](
@@ -365,7 +364,7 @@ export class ElementHandle extends EventEmitter {
     const api = 'elementHandle.selectText'
     const timeout = this.#timeout(options)
     const picked = pick(options, ['force'] satisfies KeyList<
-      PickOptions['locator.selectText']
+      OpInputs['locator.selectText']
     >)
     this.#live(api)
     await send['locator.selectText'](
