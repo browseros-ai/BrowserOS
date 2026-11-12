@@ -107,6 +107,7 @@ fn operation(
             operation_id: None,
         }),
         page_after: None,
+        main_world: false,
         at: at(i64::from(id.seq) + 1),
     });
 }

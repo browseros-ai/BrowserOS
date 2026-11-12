@@ -203,12 +203,17 @@ async fn old_build_open(path: &Path) -> TestResult {
     Ok(())
 }
 
-/// Extend a frozen S5 fixture to the expected current shape without invoking the migrator.
-async fn expected_site_column(path: &Path) -> TestResult {
+/// Extend a frozen S5 fixture to the expected current shape without invoking the migrator: the
+/// columns later migrations added, in order.
+async fn expected_current_columns(path: &Path) -> TestResult {
     let mut conn = connection(path).await?;
-    sqlx::raw_sql(r#"ALTER TABLE "operations" ADD COLUMN "site" text; PRAGMA user_version = 2"#)
-        .execute(&mut conn)
-        .await?;
+    sqlx::raw_sql(
+        r#"ALTER TABLE "operations" ADD COLUMN "site" text;
+        ALTER TABLE "operations" ADD COLUMN "main_world" integer;
+        PRAGMA user_version = 3"#,
+    )
+    .execute(&mut conn)
+    .await?;
     conn.close().await?;
     Ok(())
 }
@@ -329,11 +334,11 @@ async fn a_fresh_file_has_exactly_the_current_schema() -> TestResult {
     let fresh = tempfile::tempdir()?;
     let path = fresh.path().join("trace.db");
     drop(TraceStore::open(&path).await?);
-    expected_site_column(&old).await?;
+    expected_current_columns(&old).await?;
     assert_eq!(shape(&path).await?, shape(&old).await?);
     let dump = logical_dump(&path).await?;
-    assert_eq!(dump.version, 2);
-    assert_eq!(dump.rows.get("seaql_migrations").map(Vec::len), Some(2));
+    assert_eq!(dump.version, 3);
+    assert_eq!(dump.rows.get("seaql_migrations").map(Vec::len), Some(3));
     assert_eq!(
         dump.rows["seaql_migrations"][0][0],
         "'m0001_trace_baseline'"
@@ -346,12 +351,12 @@ async fn an_existing_v1_file_is_adopted_with_every_row() -> TestResult {
     let (_legacy, path) = fixture("s5", true).await?;
     let (_expected, expected) = fixture("s5", true).await?;
     old_build_open(&expected).await?;
-    expected_site_column(&expected).await?;
+    expected_current_columns(&expected).await?;
     let store = TraceStore::open(&path).await?;
     assert_eq!(
         without_migration(logical_dump(&path).await?),
         logical_dump(&expected).await?,
-        "only documented crash recovery, the nullable site and the migration ledger may change"
+        "only documented crash recovery, the nullable later columns and the migration ledger may change"
     );
     let detail = store.run(A.parse()?).await?.ok_or("missing run")?;
     assert_eq!(detail.summary.status, RunStatus::Ok);
@@ -361,6 +366,10 @@ async fn an_existing_v1_file_is_adopted_with_every_row() -> TestResult {
     assert_eq!(detail.result, Some(json!(1)));
     assert_eq!(detail.operations.len(), 3);
     assert!(detail.operations.iter().all(|op| op.site.is_none()));
+    assert!(
+        detail.operations.iter().all(|op| op.main_world.is_none()),
+        "a row stored before the column does not know"
+    );
     assert_eq!(detail.operations[0].notes, ["looked"]);
     assert_eq!(detail.operations[0].screenshot, Some(ShotState::Stored));
     assert_eq!(
@@ -483,6 +492,7 @@ async fn an_s4_file_gains_notes_and_takes_operation_ends() -> TestResult {
         result: None,
         error: None,
         page_after: None,
+        main_world: false,
         at: EpochMillis::from_millis(41),
     });
     sink.flush().await?;
@@ -520,7 +530,7 @@ async fn an_s3_file_is_adopted_with_its_request_history() -> TestResult {
         Some(B.parse()?)
     );
     let (_old, old) = fixture("s5", false).await?;
-    expected_site_column(&old).await?;
+    expected_current_columns(&old).await?;
     assert_eq!(shape(&path).await?, shape(&old).await?);
     Ok(())
 }
@@ -549,7 +559,7 @@ async fn a_session_era_file_is_refused_untouched() -> TestResult {
 async fn a_newer_user_version_is_refused_untouched() -> TestResult {
     let (_dir, path) = fixture("s5", true).await?;
     let mut conn = connection(&path).await?;
-    sqlx::raw_sql("PRAGMA user_version = 3")
+    sqlx::raw_sql("PRAGMA user_version = 4")
         .execute(&mut conn)
         .await?;
     conn.close().await?;
@@ -789,6 +799,7 @@ async fn legacy_page_ids_stay_inert_while_native_tab_records_round_trip() -> Tes
         result: None,
         error: None,
         page_after: Some(page.clone()),
+        main_world: false,
         at: EpochMillis::from_millis(41),
     });
     sink.flush().await?;
@@ -872,6 +883,83 @@ async fn an_already_migrated_file_gains_sites_without_losing_its_operations() ->
     );
     assert_eq!(
         reopened.operation(old).await?.ok_or("old operation")?.site,
+        None
+    );
+    Ok(())
+}
+
+/// A file the previous build (fence 2, through `m0002_operation_site`) left runs only the
+/// main-world migration: its rows read no answer, and an operation that ends now stores one,
+/// which a reopen keeps.
+#[tokio::test]
+async fn a_site_era_file_gains_main_world_without_losing_its_operations() -> TestResult {
+    let (_dir, path) = fixture("s5", true).await?;
+    let mut conn = connection(&path).await?;
+    sqlx::raw_sql(r#"ALTER TABLE "operations" ADD COLUMN "site" text; PRAGMA user_version = 2; CREATE TABLE seaql_migrations (version TEXT PRIMARY KEY, applied_at BIGINT NOT NULL); INSERT INTO seaql_migrations VALUES ('m0001_trace_baseline', 1), ('m0002_operation_site', 1)"#)
+        .execute(&mut conn)
+        .await?;
+    conn.close().await?;
+    let store = TraceStore::open(&path).await?;
+    let (_expected_dir, expected) = fixture("s5", false).await?;
+    expected_current_columns(&expected).await?;
+    assert_eq!(shape(&path).await?, shape(&expected).await?);
+    assert_eq!(logical_dump(&path).await?.version, 3);
+    let old = OperationId::new(A.parse()?, 1);
+    assert_eq!(
+        store
+            .operation(old)
+            .await?
+            .ok_or("old operation")?
+            .main_world,
+        None
+    );
+    let sink = spawn_writer(
+        &store,
+        Redactor::new(RedactionLimits::default()),
+        WriterConfig::default(),
+        None,
+    );
+    let id = OperationId::new(A.parse()?, 4);
+    sink.op_started(OperationStarted {
+        site: None,
+        id,
+        parent: None,
+        name: "page.evaluate".into(),
+        kind: OperationKind::Builtin,
+        effect: Effect::Write,
+        tab: Some(TabId(3)),
+        args: Value::Null,
+        at: EpochMillis::from_millis(40),
+    });
+    sink.op_ended(OperationEnded {
+        id,
+        outcome: Outcome::Ok,
+        delivery: Delivery::Done,
+        sent_at: Some(EpochMillis::from_millis(40)),
+        result: None,
+        error: None,
+        page_after: None,
+        main_world: true,
+        at: EpochMillis::from_millis(41),
+    });
+    sink.flush().await?;
+    drop(sink);
+    drop(store);
+    let reopened = TraceStore::open(&path).await?;
+    assert_eq!(
+        reopened
+            .operation(id)
+            .await?
+            .ok_or("reopened operation")?
+            .main_world,
+        Some(true)
+    );
+    assert_eq!(
+        reopened
+            .operation(old)
+            .await?
+            .ok_or("old operation")?
+            .main_world,
         None
     );
     Ok(())

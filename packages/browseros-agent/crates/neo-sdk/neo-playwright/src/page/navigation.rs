@@ -209,6 +209,14 @@ fn complete_user_url(url: String) -> String {
     }
 }
 
+/// Whether Chromium runs the completed goto URL `url` as script in the frame's current
+/// document's main world rather than loading it: a `javascript:` URL, its scheme read by the
+/// same parse as [`complete_user_url`], so leading whitespace, tabs, newlines and case cannot
+/// hide it.
+fn runs_script(url: &str) -> bool {
+    url::Url::parse(url).is_ok_and(|url| url.scheme() == "javascript")
+}
+
 /// Runs `navigation` on its addressed frame and waits under one operation deadline.
 pub(crate) async fn navigate(
     pw: &Playwright,
@@ -333,6 +341,9 @@ async fn drive(
     let arrival = match navigation {
         Navigation::Goto { url, referer, .. } => {
             let sent = scope.send_effect()?;
+            if runs_script(&url) {
+                scope.sending_main_world();
+            }
             // Renderer commands can wait behind an uncommitted navigation. Sending the
             // replacement must not depend on their replies: it is what unblocks them.
             // The watch subscribed before both sends, so lifecycle replay cannot lose a commit.
@@ -1008,6 +1019,55 @@ mod tests {
             complete_user_url(" FILE:///tmp/a b.html".to_owned()),
             "file:///tmp/a%20b.html"
         );
+    }
+
+    /// A `javascript:` goto runs its script in the frame's current document, so it reports the
+    /// main world, however its scheme is spelled; an `https:` goto does not. Chromium answers
+    /// both with an error here, after the URL went out.
+    #[tokio::test]
+    async fn tests_that_a_javascript_goto_reports_the_main_world() -> TestResult {
+        use crate::op::Op;
+        use crate::test_env::EnvCall;
+        use crate::test_support::{ProbeAnswer, ScriptedRun, ScriptedTab, TabScript};
+        use crate::{ErrorCode, PlaywrightError};
+        use serde_json::{Value, json};
+
+        struct Aborted;
+        impl TabScript for Aborted {
+            fn probe(&self, _frame: &str, _request: &Value) -> ProbeAnswer {
+                ProbeAnswer::unexpected()
+            }
+            fn cdp_reply(&self, method: &str, _params: &Value) -> Option<Value> {
+                (method == "Page.navigate").then(|| json!({ "errorText": "net::ERR_ABORTED" }))
+            }
+        }
+        let op = Op::from_name("page.goto").ok_or("page.goto is an op")?;
+        for (url, reports) in [
+            (" JavaScript:void(document.title = 'x')", true),
+            ("https://a.test/next", false),
+        ] {
+            let tab = ScriptedTab::new(Aborted);
+            let run = ScriptedRun::over(&tab).await?;
+            let input = json!({ "page": serde_json::to_value(&run.page)?, "url": url });
+            let failed: PlaywrightError = run
+                .playwright
+                .invoke(&run.env, op, input)
+                .await
+                .err()
+                .ok_or("Chromium aborts the navigation")?;
+            assert_eq!(
+                failed.error_code(),
+                Some(ErrorCode::NavigationFailed),
+                "{failed}"
+            );
+            assert_eq!(
+                run.env.calls().contains(&EnvCall::MainWorld),
+                reports,
+                "{url}: {:?}",
+                run.env.calls()
+            );
+        }
+        Ok(())
     }
 
     #[test]

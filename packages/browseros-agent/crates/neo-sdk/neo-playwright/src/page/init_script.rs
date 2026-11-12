@@ -194,9 +194,29 @@ impl Registration {
     /// nothing to remove. The session is let go only once both answered, so a removal cut short
     /// by the op's drop is sent again by `Drop`; a second removal of one identifier, or a second
     /// `removeBinding`, changes nothing.
-    async fn remove(mut self) {
+    async fn remove(self) {
+        self.remove_reporting(|| {}).await;
+    }
+
+    /// [`Registration::remove`] driven by `scope`'s op, which reports the main world right
+    /// before the cleanup goes out to the loaded documents, so a removal that stalls first
+    /// reports nothing. The run's end ([`InitScripts::remove_all`]) and a dropped registration
+    /// remove with no op to report to, so their cleanup goes unflagged.
+    async fn remove_by(self, scope: &OpScope<'_>) {
+        self.remove_reporting(|| scope.sending_main_world()).await;
+    }
+
+    /// The session is cleared only after the removal: a future dropped mid-removal leaves it
+    /// for `Drop` to retry.
+    async fn remove_reporting(mut self, before_cleanup: impl FnOnce()) {
         if let Some(session) = &self.session {
-            remove(session, &self.identifier, self.cleanup.as_deref()).await;
+            remove(
+                session,
+                &self.identifier,
+                self.cleanup.as_deref(),
+                before_cleanup,
+            )
+            .await;
         }
         self.session = None;
     }
@@ -213,12 +233,19 @@ impl Drop for Registration {
         let identifier = mem::take(&mut self.identifier);
         let cleanup = self.cleanup.take();
         drop(runtime.spawn(async move {
-            remove(&session, &identifier, cleanup.as_deref()).await;
+            remove(&session, &identifier, cleanup.as_deref(), || {}).await;
         }));
     }
 }
 
-async fn remove(session: &ProtocolSession, identifier: &str, cleanup: Option<&str>) {
+/// `before_cleanup` runs right before a binding's cleanup is sent into the main world, and not
+/// at all for a script with no cleanup.
+async fn remove(
+    session: &ProtocolSession,
+    identifier: &str,
+    cleanup: Option<&str>,
+    before_cleanup: impl FnOnce(),
+) {
     let _removed = session
         .send::<_, Value>(
             "Page.removeScriptToEvaluateOnNewDocument",
@@ -226,6 +253,7 @@ async fn remove(session: &ProtocolSession, identifier: &str, cleanup: Option<&st
         )
         .await;
     if let Some(cleanup) = cleanup {
+        before_cleanup();
         run_in_loaded_documents(session, cleanup).await;
     }
 }
@@ -485,7 +513,7 @@ pub(crate) async fn dispose(
         (removed, in_flight)
     };
     for added in removed {
-        added.registration.remove().await;
+        added.registration.remove_by(scope).await;
     }
     for cell in in_flight {
         // Waits out an add in progress; with none, this closure runs and initializes nothing.
@@ -556,6 +584,7 @@ impl InitScripts {
             );
             hub.wake();
             let core = |error| scope.core_error(&error);
+            scope.sending_main_world();
             session
                 .send_value(
                     "Runtime.addBinding",
@@ -564,6 +593,7 @@ impl InitScripts {
                 .await
                 .map_err(core)?;
             scope.recheck()?;
+            scope.sending_main_world();
             let controller = add_script(session, BINDINGS_CONTROLLER_JS, RunNow::Yes, None)
                 .await
                 .map_err(core)?;
@@ -589,6 +619,8 @@ impl InitScripts {
             registry.claims.clear();
             mem::take(&mut registry.added)
         };
+        // No op drives the run's end, so a binding's cleanup here runs in the main world with
+        // no op's record to flag (`Registration::remove_by`).
         future::join_all(added.into_iter().map(|added| added.registration.remove())).await;
     }
 
@@ -598,6 +630,9 @@ impl InitScripts {
     /// with the refusal it would meet at its own send. The op is not marked sent: the add is
     /// `context.addInitScript`'s effect, which that op marked, and it happens once per tab
     /// session, so the admitting op stays safe to retry when its own effect never went out.
+    /// It is reported main-world, though, at each add that goes out: the scripts and bindings it
+    /// adds run in the tab's main world, which the admitting op's spec does not declare. A
+    /// binding whose name another run holds on the tab adds nothing and reports nothing.
     pub(crate) async fn add_context_scripts(
         &self,
         scope: &OpScope<'_>,
@@ -629,9 +664,12 @@ impl InitScripts {
                 }
                 scope.recheck()?;
                 let registration = match &reach {
-                    Reach::Script(source) => add_script(&session, source, RunNow::No, None)
-                        .await
-                        .map_err(|error| scope.core_error(&error))?,
+                    Reach::Script(source) => {
+                        scope.sending_main_world();
+                        add_script(&session, source, RunNow::No, None)
+                            .await
+                            .map_err(|error| scope.core_error(&error))?
+                    }
                     Reach::Binding(binding) => {
                         let hub = self.lock().hub.clone().ok_or_else(|| {
                             scope.fail(
@@ -670,7 +708,7 @@ impl InitScripts {
                 if let Some(registration) = disposed {
                     // Disposed while it was being added. Removed before the cell settles, which
                     // is what `dispose` waits for, so dispose resolves only once it is gone.
-                    registration.remove().await;
+                    registration.remove_by(scope).await;
                 }
                 Ok::<(), PlaywrightError>(())
             })
@@ -823,6 +861,7 @@ async fn add_binding(
     scripts.plumb(scope, hub, admitted, session).await?;
     hold_binding_runtime(scope, admitted, session).await?;
     scope.recheck()?;
+    scope.sending_main_world();
     add_script(
         session,
         &binding.stub(),

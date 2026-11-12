@@ -2,7 +2,7 @@ use std::error::Error;
 use std::sync::Arc;
 use std::time::Duration;
 
-use browseros_core::testing::TestConnection;
+use browseros_core::testing::{TestConnection, cdp_pending};
 use browseros_core::{BrowserView, TabId};
 use neo_trace::ErrorOwner;
 use serde_json::{Value, json};
@@ -236,6 +236,245 @@ async fn tests_that_a_script_disposed_after_a_writes_snapshot_is_not_added() -> 
         sent(&connection, ADD)?,
         vec![json!({ "source": "window.one = 1" })],
         "the disposed script never goes out"
+    );
+    Ok(())
+}
+
+/// How many times the crate told the host an op is about to send main-world script.
+fn main_world_reports(env: &TestEnv) -> usize {
+    env.calls()
+        .iter()
+        .filter(|call| **call == EnvCall::MainWorld)
+        .count()
+}
+
+/// A write that declares no `MainWorld` (`page.requestGC` stands in for a `goto` or a click)
+/// reports the main world when its admission adds the context's script to its tab, which then
+/// runs there, and only then: not before the context has one, not on a read, and not once the
+/// tab has it. `context.addInitScript` itself passes the main-world gateway, so it reports too.
+#[tokio::test]
+async fn tests_that_a_write_reports_the_main_world_when_it_adds_a_context_script() -> TestResult {
+    let connection = TestConnection::new([]);
+    let browser = browser(&connection).await?;
+    connection.always("HeapProfiler.collectGarbage", json!({}))?;
+    let playwright = Playwright::new(Arc::clone(&browser));
+    let env = TestEnv::over(BrowserView::unbound(Arc::clone(&browser), None));
+    let page = json!({ "call": {}, "page": { "$neo": "page", "tab": 7 } });
+
+    invoke(&playwright, &env, "page.requestGC", page.clone()).await?;
+    assert_eq!(main_world_reports(&env), 0, "nothing to add yet");
+
+    invoke(
+        &playwright,
+        &env,
+        "context.addInitScript",
+        json!({ "call": {}, "source": "window.c = 1" }),
+    )
+    .await?;
+    assert_eq!(main_world_reports(&env), 1, "the gateway op reports itself");
+
+    invoke(&playwright, &env, "page.opener", page.clone()).await?;
+    assert_eq!(main_world_reports(&env), 1, "a read adds nothing");
+
+    invoke(&playwright, &env, "page.requestGC", page.clone()).await?;
+    assert_eq!(
+        sent(&connection, ADD)?,
+        vec![json!({ "source": "window.c = 1" })]
+    );
+    assert_eq!(
+        main_world_reports(&env),
+        2,
+        "the write that added the context's script reports it"
+    );
+
+    invoke(&playwright, &env, "page.requestGC", page).await?;
+    assert_eq!(
+        main_world_reports(&env),
+        2,
+        "a tab that has the script gets nothing more"
+    );
+    Ok(())
+}
+
+/// A browser like [`browser`]'s that also answers what a binding's plumbing and its runtime
+/// lease send, and the write ops these tests admit.
+async fn binding_browser(
+    connection: &Arc<TestConnection>,
+) -> Result<Arc<browseros_core::BrowserSession>, Box<dyn Error>> {
+    let browser = browser(connection).await?;
+    for method in [
+        "Runtime.addBinding",
+        "Runtime.disable",
+        "HeapProfiler.collectGarbage",
+    ] {
+        connection.always(method, json!({}))?;
+    }
+    Ok(browser)
+}
+
+/// A write admitted on a tab where another live run holds a context binding's name adds nothing
+/// there, so it reports no main world, though its recheck passed. A third run's binding of
+/// another name, on the same tab, is added at its write and reported.
+#[tokio::test]
+async fn tests_that_a_context_binding_another_run_holds_reports_no_main_world() -> TestResult {
+    let connection = TestConnection::new([]);
+    let browser = binding_browser(&connection).await?;
+    let playwright = Playwright::new(Arc::clone(&browser));
+    let run = || TestEnv::over(BrowserView::unbound(Arc::clone(&browser), None));
+    let page = json!({ "$neo": "page", "tab": 7 });
+    let write = json!({ "call": {}, "page": page });
+
+    let holder = run();
+    invoke(
+        &playwright,
+        &holder,
+        "page.exposeBinding",
+        json!({ "call": {}, "page": page, "name": "f" }),
+    )
+    .await?;
+
+    let blocked = run();
+    invoke(
+        &playwright,
+        &blocked,
+        "context.exposeBinding",
+        json!({ "call": {}, "name": "f" }),
+    )
+    .await?;
+    let adds = sent(&connection, ADD)?.len();
+    let before = main_world_reports(&blocked);
+    invoke(&playwright, &blocked, "page.requestGC", write.clone()).await?;
+    assert_eq!(
+        sent(&connection, ADD)?.len(),
+        adds,
+        "the holder's binding stays on the tab, and nothing is added"
+    );
+    assert_eq!(
+        main_world_reports(&blocked),
+        before,
+        "a write that added nothing reports no main world"
+    );
+
+    let other = run();
+    invoke(
+        &playwright,
+        &other,
+        "context.exposeBinding",
+        json!({ "call": {}, "name": "g" }),
+    )
+    .await?;
+    let before = main_world_reports(&other);
+    invoke(&playwright, &other, "page.requestGC", write).await?;
+    assert!(
+        main_world_reports(&other) > before,
+        "a write that added its run's binding reports it"
+    );
+    Ok(())
+}
+
+/// A binding's dispose runs its cleanup (`removeBinding`) in the main world of the documents
+/// loaded now, so it reports the main world. An init script's dispose only unregisters it and
+/// runs nothing in the page, so it reports nothing.
+#[tokio::test]
+async fn tests_that_disposing_a_binding_reports_the_main_world() -> TestResult {
+    let connection = TestConnection::new([]);
+    let browser = binding_browser(&connection).await?;
+    let playwright = Playwright::new(Arc::clone(&browser));
+    let env = TestEnv::over(BrowserView::unbound(Arc::clone(&browser), None));
+    let script = invoke(
+        &playwright,
+        &env,
+        "page.addInitScript",
+        page_input("window.p = 1"),
+    )
+    .await?;
+    let binding = invoke(
+        &playwright,
+        &env,
+        "page.exposeBinding",
+        json!({ "call": {}, "page": { "$neo": "page", "tab": 7 }, "name": "f" }),
+    )
+    .await?;
+
+    let before = main_world_reports(&env);
+    invoke(
+        &playwright,
+        &env,
+        "disposable.dispose",
+        json!({ "call": {}, "id": script }),
+    )
+    .await?;
+    assert_eq!(
+        main_world_reports(&env),
+        before,
+        "an init script's dispose runs nothing in the page"
+    );
+
+    invoke(
+        &playwright,
+        &env,
+        "disposable.dispose",
+        json!({ "call": {}, "id": binding }),
+    )
+    .await?;
+    let cleanup = sent(&connection, ADD)?
+        .into_iter()
+        .last()
+        .ok_or("the dispose added the cleanup")?;
+    assert_eq!(cleanup["runImmediately"], json!(true));
+    assert!(
+        cleanup["source"]
+            .as_str()
+            .is_some_and(|source| source.contains("removeBinding")),
+        "the cleanup removes the binding from the loaded documents: {cleanup}"
+    );
+    assert!(
+        main_world_reports(&env) > before,
+        "the binding's dispose reports the main world its cleanup ran in"
+    );
+    Ok(())
+}
+
+/// A binding's dispose whose script removal never answers is cut off before its cleanup goes
+/// out, so it reports no main world: the report comes right before the cleanup's send.
+#[tokio::test]
+async fn tests_that_a_dispose_stalled_before_its_cleanup_reports_nothing() -> TestResult {
+    let connection = TestConnection::new([]);
+    let browser = binding_browser(&connection).await?;
+    let playwright = Playwright::new(Arc::clone(&browser));
+    let env = TestEnv::over(BrowserView::unbound(Arc::clone(&browser), None));
+    let binding = invoke(
+        &playwright,
+        &env,
+        "page.exposeBinding",
+        json!({ "call": {}, "page": { "$neo": "page", "tab": 7 }, "name": "f" }),
+    )
+    .await?;
+    connection.always(REMOVE, cdp_pending())?;
+    let adds_before = sent(&connection, ADD)?.len();
+    let reports_before = main_world_reports(&env);
+
+    let dispose = invoke(
+        &playwright,
+        &env,
+        "disposable.dispose",
+        json!({ "call": {}, "id": binding }),
+    );
+    assert!(
+        time::timeout(Duration::from_millis(200), dispose)
+            .await
+            .is_err(),
+        "the removal never answers, so the dispose is cut off"
+    );
+    assert_eq!(
+        sent(&connection, ADD)?.len(),
+        adds_before,
+        "no cleanup went out"
+    );
+    assert_eq!(
+        main_world_reports(&env),
+        reports_before,
+        "a cleanup that never went out reports no main world"
     );
     Ok(())
 }

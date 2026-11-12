@@ -77,8 +77,11 @@ pub(crate) const MAIN_WORLD_JS: &str = include_str!("../../assets/main-world.js"
 
 /// [`MAIN_WORLD_JS`] as one document's evaluator: an object whose `run(target, args)` applies
 /// the main-world function to `target`, made by `Runtime.evaluate` as upstream makes its
-/// `UtilityScript` ([`Evaluator`]). Making it runs no page code: it reads no global, so a page's
-/// getter cannot run before the host's recheck; the call reads what the function reads, after.
+/// `UtilityScript` ([`Evaluator`]). Making it runs Neo's script in the document's main world,
+/// which only defines the function and builds that object. It reads no global, so none of the
+/// page's own code (a getter it planted) runs before the host's recheck; the call reads what
+/// the function reads, after. It is still Neo's script in the main world, so the op reports it
+/// there ([`make_evaluator`]).
 static EVALUATOR_JS: LazyLock<String> = LazyLock::new(|| {
     format!(
         "(() => {{ const main = ({MAIN_WORLD_JS}); \
@@ -485,10 +488,11 @@ impl<'op> EvaluateGuard<'op> {
         let session = self.frame.endpoint.session.clone();
         let group = scope.object_group(&session).to_owned();
         let script = &mut self.script;
-        // Beside the document's naming, before the host's recheck: making it runs no page code,
-        // and nothing may await between the recheck and the script's send (STYLE P6).
+        // Beside the document's naming, before the host's recheck, since nothing may await
+        // between the recheck and the script's send (STYLE P6). Making it runs none of the
+        // page's code ([`EVALUATOR_JS`]), though it is Neo's script in the main world.
         if script.evaluator == Evaluator::Unmade {
-            script.evaluator = make_evaluator(&session, &group).await;
+            script.evaluator = make_evaluator(scope, &session, &group).await;
         }
         let objects = if script.mode == CallMode::Poll && script.poller.is_some() {
             Some(Vec::new())
@@ -1244,8 +1248,10 @@ fn not_run<T>(error: CoreError) -> Result<Called<T>, CoreError> {
 
 /// Makes the document's [`Evaluator`] in the session's default context, the main world of the
 /// session's root frame. A same-process child frame's document lives in another context, which
-/// the first call through it finds ([`MainCall::main_world`]).
-async fn make_evaluator(session: &ProtocolSession, group: &str) -> Evaluator {
+/// the first call through it finds ([`MainCall::main_world`]). Reported main-world as it goes
+/// out: a host refusal at the send after it leaves the agent's script unsent, but this ran.
+async fn make_evaluator(scope: &OpScope<'_>, session: &ProtocolSession, group: &str) -> Evaluator {
+    scope.sending_main_world();
     let made = session
         .send_value(
             "Runtime.evaluate",

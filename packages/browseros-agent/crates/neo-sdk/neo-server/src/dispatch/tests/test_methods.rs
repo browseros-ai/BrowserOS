@@ -39,6 +39,7 @@ pub(super) fn test_methods(
     shared: &Shared,
 ) -> Result<(), RegistryError> {
     registry.define(Write)?;
+    registry.define(MainWorldWrite)?;
     registry.define(Read)?;
     registry.define(TakeoverRead {
         lock: Arc::clone(&shared.lock),
@@ -103,6 +104,34 @@ impl Method for Write {
         _input: OnPage,
     ) -> impl Future<Output = Result<Value, LeafError>> + Send {
         future::ready(send(op).map(|()| json!({ "written": true })))
+    }
+}
+
+/// A write whose effect is script in the page's main world, as sdk-playwright reports one
+/// through `OpEnv::main_world`.
+struct MainWorldWrite;
+
+impl Method for MainWorldWrite {
+    type Input = OnPage;
+    type Output = Value;
+
+    fn spec(&self) -> MethodSpec {
+        MethodSpec::new("test.main_world", Effect::Write)
+    }
+
+    fn target(input: &OnPage) -> Option<&PageTarget> {
+        Some(&input.page)
+    }
+
+    fn call(
+        &self,
+        op: &OpCtx<Self>,
+        _input: OnPage,
+    ) -> impl Future<Output = Result<Value, LeafError>> + Send {
+        future::ready(send(op).map(|()| {
+            op.mark_main_world();
+            json!({ "ran": true })
+        }))
     }
 }
 

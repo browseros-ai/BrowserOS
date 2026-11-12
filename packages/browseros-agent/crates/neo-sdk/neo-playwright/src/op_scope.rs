@@ -7,6 +7,7 @@
 //!                                            │ sleep, within  Rust's clock against the op's own timeout
 //!                                            │ require(cap)   at a capability's gateway: declared?
 //!                                            └ send_effect()  recheck, then mark_sent ──▶ Sent
+//!                                                             (then sending_main_world, past MainWorld's gateway)
 //!                                                             └▶ input, navigation, element edits,
 //!                                                                main-world script: each takes &Sent
 //! ```
@@ -18,12 +19,21 @@
 //! to call a function that changes the page. A leaf that never calls it, which is every read,
 //! can neither mark itself sent nor reach an effect.
 //!
+//! The scope also tells the host which ops send script into a page's main world, where a site
+//! can notice it ([`OpScope::sending_main_world`]), right before each such send: a `MainWorld`
+//! gateway's `send_effect`, Neo's own script that gateway sends before its recheck (the evaluate
+//! guard's evaluator, a worker's global lookup), each of the run's context scripts and bindings
+//! a write's admission adds to its tab, a binding's cleanup when `disposable.dispose` removes
+//! it, and a `javascript:` URL a `goto` sends. The op's static capabilities would miss the last
+//! three: a `goto` declares none, yet it carries `context.exposeBinding`'s stub into a new tab.
+//!
 //! The scope also owns the op's CDP object group: every remote object the op asks for (an
 //! iframe it hops through) lives in it, and dropping the scope releases it, whether the op
 //! returned or the host dropped its future.
 
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
 use std::time::Duration;
 
@@ -62,6 +72,9 @@ pub(crate) struct OpScope<'env> {
     /// The page this op acts on, admitted once.
     page: OnceLock<AdmittedPage>,
     objects: ObjectGroup,
+    /// Set once the op passed its `MainWorld` gateway: every effect it sends from then on is
+    /// the gateway's main-world script, so `send_effect` reports it to the host.
+    main_world: AtomicBool,
 }
 
 /// A page admitted for one op through the run's view: the profile and window scope check ran
@@ -95,6 +108,7 @@ impl<'env> OpScope<'env> {
             log: Mutex::default(),
             page: OnceLock::new(),
             objects: ObjectGroup::new(),
+            main_world: AtomicBool::new(false),
         }
     }
 
@@ -224,8 +238,16 @@ impl<'env> OpScope<'env> {
     /// not declare `capability`. Each capability's gateway calls it before anything else. A
     /// host holds and polices ops by their declarations, so an op routed to a gateway without
     /// its declaration would otherwise be served unpoliced; here it fails on first use instead.
+    ///
+    /// Passing the `MainWorld` gateway arms the op's main-world report, which its next
+    /// `send_effect` makes. Not here: the gateway runs before the op's input is checked, its
+    /// page admitted and its element found, and a script that never went out (a refused script,
+    /// a closed tab, an element that never appeared, the owner's takeover) ran nowhere.
     pub(crate) fn require(&self, capability: Capability) -> Result<(), PlaywrightError> {
         if self.op.spec().uses(capability) {
+            if capability == Capability::MainWorld {
+                self.main_world.store(true, Ordering::Relaxed);
+            }
             Ok(())
         } else {
             Err(self.fail(
@@ -245,6 +267,18 @@ impl<'env> OpScope<'env> {
         self.env.recheck().map_err(PlaywrightError::from)
     }
 
+    /// Tells the host this op is about to send script into a page's main world
+    /// (`OpEnv::main_world`). Call it right before the send, once whatever guards the send
+    /// passed (its recheck, a binding name's claim), so a send that never goes out reports
+    /// nothing. A `MainWorld` gateway's [`OpScope::send_effect`] calls it; a send an op makes
+    /// without that gateway's effect calls it itself, as a write's admission does when it adds
+    /// the run's context scripts and bindings to its tab (`page/init_script.rs`): that is how a
+    /// `goto` or a click that carries `context.exposeBinding`'s stub into its tab is seen,
+    /// though its spec declares no `MainWorld`.
+    pub(crate) fn sending_main_world(&self) {
+        self.env.main_world();
+    }
+
     /// Re-runs the host's attempt-stage policies, then marks the op sent, and returns the
     /// proof every effect takes. Call it right before each attempt's effect: an action that
     /// retries its input re-checks before every attempt, because the owner can take over
@@ -259,7 +293,13 @@ impl<'env> OpScope<'env> {
                 ErrorCode::Internal,
                 "a read operation cannot change the page",
             )),
-            Effect::Write => Sent::after_recheck(self.env).map_err(PlaywrightError::from),
+            Effect::Write => {
+                let sent = Sent::after_recheck(self.env).map_err(PlaywrightError::from)?;
+                if self.main_world.load(Ordering::Relaxed) {
+                    self.sending_main_world();
+                }
+                Ok(sent)
+            }
         }
     }
 

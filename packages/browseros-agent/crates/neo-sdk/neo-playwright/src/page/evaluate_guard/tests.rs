@@ -549,3 +549,84 @@ async fn tests_that_a_host_refusal_before_the_fallback_sends_nothing() -> TestRe
     );
     Ok(())
 }
+
+/// How many times the crate told the host the op is about to send main-world script.
+fn main_world_reports(env: &TestEnv) -> usize {
+    env.calls()
+        .iter()
+        .filter(|call| **call == EnvCall::MainWorld)
+        .count()
+}
+
+/// An evaluate reports the main world once Neo's script reaches it. The document's evaluator,
+/// made there before the host's recheck, counts: one the host refuses at its send reports it,
+/// though the agent's script never ran. One refused at its admission, before anything went out
+/// (the context script it was adding meets the owner's takeover), reports nothing.
+#[tokio::test(start_paused = true)]
+async fn tests_that_an_evaluate_reports_the_main_world_once_neo_script_reaches_it() -> TestResult {
+    let op = Op::from_name("page.evaluate").ok_or("page.evaluate is an op")?;
+    let refusal = Refusal {
+        owner: ErrorOwner::Host,
+        code: "owner_has_control".to_owned(),
+        message: "The owner is using this tab.".to_owned(),
+        host_code: None,
+    };
+
+    let tab = ScriptedTab::new(OtherWorld::default());
+    let run = ScriptedRun::over(&tab).await?;
+    run.playwright
+        .invoke(&run.env, op, evaluate_input(&run)?)
+        .await?;
+    assert!(
+        main_world_reports(&run.env) > 0,
+        "an evaluate that ran reports it"
+    );
+
+    let tab = ScriptedTab::new(OtherWorld::default());
+    let run = ScriptedRun::over(&tab).await?;
+    let run = ScriptedRun {
+        env: run.env.with_refusal(refusal.clone()),
+        ..run
+    };
+    let refused = run
+        .playwright
+        .invoke(&run.env, op, evaluate_input(&run)?)
+        .await
+        .err()
+        .ok_or("the host refuses the script")?;
+    assert_eq!(refused.code(), "owner_has_control", "{refused}");
+    assert!(
+        tab.script().log().is_empty(),
+        "the agent's script never ran"
+    );
+    assert!(
+        main_world_reports(&run.env) > 0,
+        "the evaluator went out before the refusal: {:?}",
+        run.env.calls()
+    );
+
+    let tab = ScriptedTab::new(OtherWorld::default());
+    let run = ScriptedRun::over(&tab).await?;
+    let run = ScriptedRun {
+        env: run.env.with_refusal_after(1, refusal),
+        ..run
+    };
+    let context = Op::from_name("context.addInitScript").ok_or("context.addInitScript is an op")?;
+    run.playwright
+        .invoke(&run.env, context, json!({ "source": "window.c = 1" }))
+        .await?;
+    let before = main_world_reports(&run.env);
+    let refused = run
+        .playwright
+        .invoke(&run.env, op, evaluate_input(&run)?)
+        .await
+        .err()
+        .ok_or("the host refuses the admission")?;
+    assert_eq!(refused.code(), "owner_has_control", "{refused}");
+    assert_eq!(
+        main_world_reports(&run.env),
+        before,
+        "nothing went out, so nothing is reported"
+    );
+    Ok(())
+}

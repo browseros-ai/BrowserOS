@@ -108,6 +108,11 @@ impl Method for SolveCaptcha {
         op.recheck()?;
         // The solver may click or inject a token from here on.
         op.mark_sent();
+        // Its widget probes and token writes run in the page's main world (neo-captcha's
+        // `PageJs::page_world`). That is Neo's script, not the agent's, so the spec's
+        // `page_script` stays `Isolated`: it decides how the door releases an agent script's
+        // answer, and this solve returns none.
+        op.mark_main_world();
         // Boxed: the solver's future is about 25 KiB, and the op's own would carry it inline.
         let solve = Box::pin(solver.solve(
             op.run().view().clone(),
