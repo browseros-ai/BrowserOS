@@ -15,6 +15,8 @@ pub(crate) struct TaskRecord {
     pub(crate) id: TaskId,
     pub(crate) name: Option<String>,
     pub(crate) tabs: Vec<TabId>,
+    /// Last operated tab owned by this task, independent of a host's cross-task history.
+    pub(crate) last_used_tab: Option<TabId>,
     /// Serializes opens and closes. A held record also pins an empty task during an open.
     pub(crate) turn: Arc<Mutex<()>>,
 }
@@ -23,7 +25,7 @@ pub(crate) struct TaskRecord {
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum TaskError {
     #[error(
-        "no task `{0}` is open in Neo (tasks live in memory and end with `task.close()` or a Neo restart). Start one with `neo.createTask(name)`, or find your tabs with `neo.tabs()` and read `page.taskId`."
+        "no task `{0}` is open in Neo (tasks live in memory and end with `task.close()` or a Neo restart). Start one with `neo.createTask(name)`, or find your tabs in `context.pages()` and read `page.taskId`."
     )]
     NotFound(TaskId),
     #[error(
@@ -56,6 +58,7 @@ impl TaskBook {
                 id,
                 name,
                 tabs: Vec::new(),
+                last_used_tab: None,
                 turn: Arc::default(),
             };
             self.tasks.push_back(task.clone());
@@ -72,6 +75,7 @@ impl TaskBook {
             id: id.clone(),
             name: None,
             tabs: Vec::new(),
+            last_used_tab: None,
             turn: Arc::default(),
         });
         Ok(())
@@ -99,8 +103,17 @@ impl TaskBook {
             return Ok(());
         }
         task.tabs.push(tab);
+        task.last_used_tab = Some(tab);
         self.owners.insert(tab, id.clone());
         Ok(())
+    }
+
+    pub(super) fn touch(&mut self, tab: TabId) {
+        if let Some(id) = self.owners.get(&tab)
+            && let Some(task) = self.tasks.iter_mut().find(|task| task.id == *id)
+        {
+            task.last_used_tab = Some(tab);
+        }
     }
 
     pub(super) fn detach(&mut self, tab: TabId) {
@@ -108,6 +121,9 @@ impl TaskBook {
             && let Some(task) = self.tasks.iter_mut().find(|task| task.id == id)
         {
             task.tabs.retain(|owned| *owned != tab);
+            if task.last_used_tab == Some(tab) {
+                task.last_used_tab = None;
+            }
         }
     }
 

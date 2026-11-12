@@ -178,8 +178,6 @@ error_codes! {
     INVALID_INPUT = "invalid_input";
     /// The task was closed, forgotten, or belongs to a previous Neo process.
     TASK_NOT_FOUND = "task_not_found";
-    /// A script that fetched a task must choose its page explicitly.
-    TASK_PAGE_REQUIRED = "task_page_required";
     /// All task slots hold live tabs, so none can be evicted.
     TASK_LIMIT_REACHED = "task_limit_reached";
     /// The requested tab is not among this task's open pages.

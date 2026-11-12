@@ -18,7 +18,6 @@ use crate::dispatch::{
 pub(crate) fn neo_tasks(builder: &mut RegistryBuilder) -> Result<(), RegistryError> {
     builder.define(CreateTask)?;
     builder.define(FetchTask)?;
-    builder.define(Tabs)?;
     builder.define(NewPage)?;
     builder.define(CloseTask)
 }
@@ -45,10 +44,6 @@ struct FetchInput {
 struct TaskInput {
     task: TaskId,
 }
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Empty {}
 
 #[derive(Serialize)]
 struct TaskPages {
@@ -94,7 +89,7 @@ impl Method for CreateTask {
             op.tabs()
                 .create_task(name)
                 .map(|task| {
-                    op.run().fetched_task(&task, TaskKind::Created);
+                    op.run().picked_task(&task, TaskKind::Created);
                     TaskPages {
                         id: task.id,
                         pages: Vec::new(),
@@ -139,45 +134,8 @@ impl Method for FetchTask {
         for page in &pages {
             op.report_page(page, PageChange::Linked);
         }
-        op.run().fetched_task(&task, TaskKind::Fetched);
+        op.run().picked_task(&task, TaskKind::Fetched);
         Ok(TaskPages { id: task.id, pages })
-    }
-}
-
-struct Tabs;
-
-impl Method for Tabs {
-    type Input = Empty;
-    type Output = Value;
-
-    fn spec(&self) -> MethodSpec {
-        MethodSpec {
-            listing: Listing::Own(
-                "neo.tabs() -> Page[]: every open tab, each with page.tabId and page.taskId (null for the user's own tabs)",
-            ),
-            ..MethodSpec::new("neo.tabs", Effect::Read)
-        }
-    }
-
-    fn target(_input: &Empty) -> Option<&PageTarget> {
-        None
-    }
-
-    async fn call(&self, op: &OpCtx<Self>, _input: Empty) -> Result<Value, LeafError> {
-        let listing = op.race(op.run().view().list_pages()).await?;
-        // Chromium acknowledges a close before the tab leaves its listing, so a listing taken
-        // right after this run's `task.close()` or `page.close()` can still name the tab.
-        // Playwright drops a page once its close resolves, and so does this list.
-        let pages: Vec<PageRef> = listing
-            .pages
-            .iter()
-            .map(PageRef::from)
-            .filter(|page| !op.run().closed_it(page.tab))
-            .collect();
-        for page in &pages {
-            op.report_page(page, PageChange::Linked);
-        }
-        Ok(json!({ "pages": pages }))
     }
 }
 
