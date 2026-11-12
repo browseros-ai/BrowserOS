@@ -16,10 +16,16 @@
 #                default: the image is keyless and reads key files a host puts at the paths in
 #                README.md. A baked key is readable by anyone who has the image.
 #
+# The image is tagged only once its server is proven to be this checkout's: the binary in the
+# image must carry the digest of the sources this build copied (provenance.json source_digest),
+# and its sha256 and the revision must match provenance.json. Otherwise it exits 1, untagged.
+# NEO_SDK_BUILD_JOBS caps Cargo's parallel jobs; NEO_SDK_CACHE_SCOPE gives this build a Cargo
+# cache of its own instead of the one shared by every checkout (for measurements).
+#
 # Prints TAG=, IMAGE_ID= and the image's provenance.json last, for scripts to read.
 set -euo pipefail
 
-usage() { sed -n '2,19p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+usage() { sed -n '2,25p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
 
 here=$(cd -- "$(dirname -- "$0")" && pwd)
 agent=$(cd -- "$here/../../../.." && pwd)
@@ -37,6 +43,9 @@ while [ $# -gt 0 ]; do
     *) echo "build.sh: unknown argument '$1'" >&2; usage ;;
   esac
 done
+
+command -v jq >/dev/null || { echo "build.sh: needs jq, to check the image's provenance" >&2; exit 2; }
+sha256() { if command -v sha256sum >/dev/null; then sha256sum "$1"; else shasum -a 256 "$1"; fi | cut -d' ' -f1; }
 
 if [ -z "$platform" ]; then
   platform="linux/$(docker version --format '{{.Server.Arch}}')"
@@ -70,7 +79,8 @@ done
 
 echo "build.sh: $tag for $platform from $revision (dirty=$dirty, target $target)" >&2
 iidfile=$(mktemp)
-trap 'rm -f "$iidfile"' EXIT
+binary=$(mktemp)
+trap 'rm -f "$iidfile" "$binary"' EXIT
 # ${key_args[@]+...}: bash 3.2 (macOS) treats an empty array as unset under set -u.
 docker buildx build \
   --platform "$platform" \
@@ -79,17 +89,36 @@ docker buildx build \
   --build-arg "NEO_SDK_REVISION=$revision" \
   --build-arg "NEO_SDK_DIRTY=$dirty" \
   --build-arg "NEO_SDK_VERSION=$version" \
+  --build-arg "NEO_SDK_CACHE_SCOPE=${NEO_SDK_CACHE_SCOPE:-}" \
+  --build-arg "NEO_SDK_BUILD_JOBS=${NEO_SDK_BUILD_JOBS:-}" \
   --target "$target" \
   ${key_args[@]+"${key_args[@]}"} \
   --iidfile "$iidfile" \
   --load \
-  --tag "$tag" \
   "$agent"
+image=$(cat "$iidfile")
 
-# Read provenance without starting the image, which would run under emulation for a foreign arch.
-container=$(docker create "$tag")
+# Read the image without starting it, which would run under emulation for a foreign arch: its
+# provenance, and the server binary it actually installed.
+container=$(docker create "$image")
 provenance=$(docker cp "$container:/usr/share/neo-sdk/provenance.json" - | tar -xO)
+docker cp "$container:$(jq -r .server.path <<<"$provenance")" - | tar -xO >"$binary"
 docker rm "$container" >/dev/null
+
+# The server must be this build's: compiled from the sources this build copied (the digest the
+# server step computed), as installed, under the revision this script read. A server from Cargo's
+# shared cache carries the digest of the sources it was compiled from, not these.
+fail() { echo "build.sh: $*; image $image left untagged" >&2; exit 1; }
+built_from=$(LC_ALL=C grep -aoE 'browseros-claw-sdk-source=[0-9a-f]{64}' "$binary" | head -1 | cut -d= -f2 || true)
+[ "$(jq -r .revision <<<"$provenance")" = "$revision" ] || fail "provenance names revision $(jq -r .revision <<<"$provenance"), not $revision"
+[ "$(jq -r .dirty <<<"$provenance")" = "$dirty" ] || fail "provenance says dirty=$(jq -r .dirty <<<"$provenance"), not $dirty"
+[ -n "$built_from" ] || fail "the image's server carries no source digest"
+[ "$built_from" = "$(jq -r .source_digest <<<"$provenance")" ] \
+  || fail "the image's server was compiled from sources $built_from, not this build's $(jq -r .source_digest <<<"$provenance")"
+[ "$(sha256 "$binary")" = "$(jq -r .server.sha256 <<<"$provenance")" ] \
+  || fail "the image's server is not the binary provenance.json describes"
+
+docker tag "$image" "$tag"
 echo "TAG=$tag"
-echo "IMAGE_ID=$(cat "$iidfile")"
+echo "IMAGE_ID=$image"
 echo "$provenance"
