@@ -14,7 +14,7 @@
 //!  press pressSequentially            Keys           KeyRunner        PageInput (keys)
 //!  fill selectOption selectText       FormEdit       FormRunner       page edit (+ PageInput)
 //!  focus blur dispatchEvent           Edit           ElementRunner    page edit
-//!  scrollIntoViewIfNeeded             (none)         ElementRunner    page scroll
+//!  scrollIntoViewIfNeeded             (none)         ElementRunner    protocol scroll
 //!  setInputFiles                      FilesInput     set_input_files  CDP or page edit
 //! ```
 //!
@@ -33,6 +33,8 @@
 //!    inner loop (the pinned element; waits 0, 20, 100, 100, 500, then 500 ms;
 //!                scroll rotation per attempt: if needed, end, center, start)
 //!      ① act { chunk | pin, states, scroll }        ─ measured { rect } │ state │ detached
+//!         if needed: act with no scroll, then DOM.scrollIntoViewIfNeeded, then act again
+//!         (`protocol_scroll.rs`: the protocol's scroll is instant, the page's may animate)
 //!         16 ms on Rust's clock (never page rAF, which a background tab never runs)
 //!      ── the tab's input lock ──────────────────────────────────────────────────────────
 //!      parents (child frames only): every iframe's origin, then its hit test │ covered
@@ -49,9 +51,10 @@
 //! An element handle runs the same inner loop on its own node, with no outer loop around it:
 //! once its node detaches the action fails (`subject.rs`).
 //!
-//! A warm click is 6 CDP messages (①, ②, three dispatches, ⑥). A tab core did not create for
-//! the agent adds 2 (the focus lease), each parent frame adds 2 (its origin, its hit test), and
-//! an element in an out-of-process frame adds 1 (`reached`) when its first move got there.
+//! A warm click is 9 CDP messages (①, which the protocol's scroll makes 4, ②, three
+//! dispatches, ⑥). A tab core did not create for the agent adds 2 (the focus lease), each
+//! parent frame adds 2 (its origin, its hit test), and an element in an out-of-process frame
+//! adds 1 (`reached`) when its first move got there.
 
 pub(crate) mod action_op;
 mod actionability;
@@ -65,6 +68,7 @@ pub(crate) mod input_files;
 mod key_action;
 mod pointer_action;
 mod pointer_quads;
+mod protocol_scroll;
 mod requested_navigations;
 mod subject;
 

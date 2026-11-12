@@ -255,10 +255,11 @@ export type Retarget = "none" | "follow-label" | "no-follow-label" | "button-lin
 export type Rotated = "rotated";
 
 /**
- * Upstream's scroll rotation by attempt. `AlreadyProtocol`: Rust scrolled with
- * `DOM.scrollIntoViewIfNeeded`, and the probe only measures.
+ * Upstream's scroll rotation by attempt. `Protocol`, the first: Rust scrolls with
+ * `DOM.scrollIntoViewIfNeeded` before the request (`protocol_scroll.rs`), and the probe only
+ * measures. `End`, `Center` and `Start`: the probe's own instant `scrollIntoView`.
  */
-export type ScrollPlan = "none" | "ifNeeded" | "end" | "center" | "start" | "alreadyProtocol";
+export type ScrollPlan = "none" | "protocol" | "end" | "center" | "start";
 
 /**
  * One `selectOptions` option, as upstream's client sends it: an option matches when every

@@ -7,12 +7,14 @@
 //!                                           ── the tab's input lock ──────────────────────
 //!                                           send_effect() → edit { pin, … }   (detached: again)
 //!  scrollIntoViewIfNeeded       outer loop, then upstream's inner retry:
-//!                                           act { scroll: ifNeeded } → 16 ms → act → same rect
+//!                                           act → DOM.scrollIntoViewIfNeeded → act
+//!                                           → 16 ms → act → same rect
 //! ```
 
 use std::time::Duration;
 
 use crate::action::attempt_log::AttemptLog;
+use crate::action::protocol_scroll;
 use crate::action::subject::Subject;
 use crate::backoff::Backoff;
 use crate::locator_handler::Prechecks;
@@ -251,7 +253,9 @@ impl<'a> ElementRunner<'a> {
     }
 
     /// One measurement after optional scrolling. Screenshot callers additionally require
-    /// visibility; ordinary scrollIntoViewIfNeeded waits only for layout and stability.
+    /// visibility; ordinary scrollIntoViewIfNeeded waits only for layout and stability. The
+    /// scroll is the protocol's (`protocol_scroll.rs`), between a request that resolves and
+    /// checks and one that measures.
     async fn measure(
         &self,
         located: &Resolved,
@@ -259,21 +263,32 @@ impl<'a> ElementRunner<'a> {
         scroll: bool,
         required_states: &[ElementState],
     ) -> Result<Measured, PlaywrightError> {
-        let request = ProbeRequest::Act {
+        let act = |target, scroll| ProbeRequest::Act {
             target,
             strictness: self.strictness,
             retarget: Retarget::None,
             states: required_states.to_vec(),
             frame_visible: located.frame_visible(),
-            scroll: if scroll {
-                ScrollPlan::IfNeeded
-            } else {
-                ScrollPlan::None
-            },
+            scroll,
             position: None,
             arm: None,
         };
-        Ok(match self.call(located, &request).await? {
+        let mut reply = self.call(located, &act(target, ScrollPlan::None)).await?;
+        if scroll && let Some(ProbeReply::Measured { pin, .. }) = reply {
+            let scrolled = protocol_scroll::scroll_if_needed(self.scope, located.world(), pin);
+            let Ok(scrolled) = self.scope.within(scrolled).await else {
+                return Err(self.scope.timed_out(ErrorCode::NoMatch));
+            };
+            reply = match scrolled {
+                Ok(()) => {
+                    self.call(located, &act(ProbeTarget::Pin(pin), ScrollPlan::Protocol))
+                        .await?
+                }
+                Err(ProbeFailure::Gone(_)) => self.subject.lost(located).map(|()| None)?,
+                Err(failure) => return Err(resolve::failed(self.scope, failure)),
+            };
+        }
+        Ok(match reply {
             Some(ProbeReply::Measured { pin, rect, .. }) => Measured::Rect(pin, rect),
             Some(ProbeReply::State { .. }) => Measured::Hidden,
             Some(ProbeReply::None { stale_ref: None }) => Measured::Unmatched,

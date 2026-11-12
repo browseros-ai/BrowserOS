@@ -280,17 +280,17 @@ pub(crate) enum ElementState {
     Editable,
 }
 
-/// Upstream's scroll rotation by attempt. `AlreadyProtocol`: Rust scrolled with
-/// `DOM.scrollIntoViewIfNeeded`, and the probe only measures.
+/// Upstream's scroll rotation by attempt. `Protocol`, the first: Rust scrolls with
+/// `DOM.scrollIntoViewIfNeeded` before the request (`protocol_scroll.rs`), and the probe only
+/// measures. `End`, `Center` and `Start`: the probe's own instant `scrollIntoView`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub(crate) enum ScrollPlan {
     None,
-    IfNeeded,
+    Protocol,
     End,
     Center,
     Start,
-    AlreadyProtocol,
 }
 
 /// Which hit-target interceptor to arm.

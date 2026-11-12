@@ -30,6 +30,7 @@ use crate::action::arm_guard::ArmGuard;
 use crate::action::attempt_log::AttemptLog;
 use crate::action::frame_projection::{self, Projection};
 use crate::action::pointer_quads::{self, Placement as QuadPlacement};
+use crate::action::protocol_scroll;
 use crate::action::requested_navigations::{NavigationCut, RequestedNavigations};
 use crate::action::subject::Subject;
 use crate::backoff::Backoff;
@@ -72,7 +73,7 @@ const MAX_TIMER_MS: u64 = 2_147_483_647;
 /// Upstream's scroll alignment per attempt: the protocol's if-needed first, then bottom,
 /// center and top, which gets an element out from under sticky headers and footers.
 const SCROLL_ROTATION: [ScrollPlan; 4] = [
-    ScrollPlan::IfNeeded,
+    ScrollPlan::Protocol,
     ScrollPlan::End,
     ScrollPlan::Center,
     ScrollPlan::Start,
@@ -507,13 +508,20 @@ impl<'a> PointerRunner<'a> {
                 SCROLL_ROTATION
                     .get(retry % SCROLL_ROTATION.len())
                     .copied()
-                    .unwrap_or(ScrollPlan::IfNeeded)
+                    .unwrap_or(ScrollPlan::Protocol)
             } else {
                 ScrollPlan::None
             };
             let target = pin.map_or_else(|| self.subject.first_target(), ProbeTarget::Pin);
-            let measure = self.act_request(located, action, &req, target, scroll, None);
-            let called = self.call(located, &measure).await?;
+            // The protocol's scroll needs the pinned node and, like the probe's own scrolls,
+            // follows the state checks: this request resolves and checks, and
+            // `protocol_scrolled` below scrolls and measures.
+            let first = match scroll {
+                ScrollPlan::Protocol => ScrollPlan::None,
+                other => other,
+            };
+            let measure = self.act_request(located, action, &req, target, first, None);
+            let mut called = self.call(located, &measure).await?;
             match &called {
                 // A pass's first request resolves the locator: upstream logs what it resolved
                 // to before the attempt's own lines.
@@ -526,6 +534,13 @@ impl<'a> PointerRunner<'a> {
                     return Ok(Inner::Reresolve);
                 }
                 _ => {}
+            }
+            if scroll == ScrollPlan::Protocol
+                && let Called::Reply(ProbeReply::Measured { pin: pinned, .. }) = called
+            {
+                called = self
+                    .protocol_scrolled(located, action, &req, pinned)
+                    .await?;
             }
             let measured = match called {
                 Called::Reply(ProbeReply::Measured {
@@ -951,6 +966,35 @@ impl<'a> PointerRunner<'a> {
             position: action.position,
             arm,
         }
+    }
+
+    /// The pinned element after the protocol's scroll (`protocol_scroll.rs`): the `act` that
+    /// measures where the scroll left it.
+    async fn protocol_scrolled(
+        &self,
+        located: &Resolved,
+        action: &PointerAction,
+        req: &Requirements,
+        pin: Pin,
+    ) -> Result<Called, PlaywrightError> {
+        let scrolled = protocol_scroll::scroll_if_needed(self.scope, located.world(), pin);
+        let Ok(scrolled) = self.scope.within(scrolled).await else {
+            return Ok(Called::Expired);
+        };
+        match scrolled {
+            Ok(()) => {}
+            Err(ProbeFailure::Gone(_)) => return Ok(Called::Gone),
+            Err(failure) => return Err(resolve::failed(self.scope, failure)),
+        }
+        let measure = self.act_request(
+            located,
+            action,
+            req,
+            ProbeTarget::Pin(pin),
+            ScrollPlan::Protocol,
+            None,
+        );
+        self.call(located, &measure).await
     }
 
     /// The element's frame-local point in the main viewport, with every parent frame's hit
