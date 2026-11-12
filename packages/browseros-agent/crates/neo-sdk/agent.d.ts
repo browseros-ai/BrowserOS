@@ -3,20 +3,20 @@
  * agent together with Neo's MCP URL.
  *
  * `code` is the body of an async function: `await` each call, `return` a JSON value.
- * Each `run` call starts with fresh JavaScript. Only browser tabs carry over.
- * A task is your own set of tabs. Start one per user request and keep its id.
+ * Each `run` call starts with fresh JavaScript; browser tabs carry over.
+ * With no task, built-in `page` and `context.newPage()` each open a NEW tab with no task.
+ * To keep tabs across runs, create a task and return its id:
  *   first run:        const task = await neo.createTask('hn top 5'); return task.id
  *   every later run:  const task = await neo.task('<that id>')
  *   when finished:    await task.close()
- * Using the built-in `page` without a task creates a new task for it; the reply
- * tells you that task's id. In a script that fetched a task, the built-in `page` is
- * refused: take a tab from the task instead (`const page = task.page(104)` is allowed).
+ * After `neo.createTask()` or `neo.task()`, built-in `page` uses that task's last-used
+ * open tab, else another open tab, else a new one. `context.newPage()` opens in the task.
+ * The latest task pick wins. Popups join their opener's task. You may declare `const page`.
  * Tab ids here are short for reading; real ones are large numbers, e.g. 1157427185.
  *
- * Every reply, a failed one too, ends with one line per task the script touched:
- *   [task hn-top-5-3f9a · tabs: 101 https://news.ycombinator.com/, 102 https://…]
- *   [new task t-7c2e was created for this script's built-in page · tabs: 107 https://…]
- * Lost an id? `(await neo.tabs()).find(p => p.url().includes('ycombinator'))?.taskId`
+ * The reply is what you return, plus console lines and existing notes. Return `task.id`
+ * to keep it. Lost it? `context.pages().find(p => p.url().includes('ycombinator'))?.taskId`
+ * Any script may use any tab or task; `context.pages()` lists every tab.
  * Tasks live in Neo's memory: they end with `task.close()` or a Neo restart.
  */
 
@@ -32,7 +32,7 @@ declare module 'playwright-core' {
     /** The tab's id. It stays the same across runs. `null` only for the built-in `page`
      * before its tab opens. */
     readonly tabId: number | null
-    /** The task that owns this tab; `null` for the user's own tabs. */
+    /** The tab's task; `null` when it has no task. */
     readonly taskId: string | null
   }
 }
@@ -56,12 +56,11 @@ declare global {
   type Page = pw.Page
 
   interface Neo {
-    /** Start a task. `name` is an optional label people see. Keep `task.id`. */
+    /** Create and pick a task. `name` is an optional label. Return `task.id`. */
     createTask(name?: string): Promise<Task>
-    /** Get a task you created in an earlier run. An unknown id throws `task_not_found`. */
+    /** Pick a task. An unknown id throws `task_not_found`; recover with
+     * `context.pages()` and each page's `taskId`. */
     task(id: string): Promise<Task>
-    /** Every open tab, with the task it belongs to. Use it if you lost a task id. */
-    tabs(): Promise<Page[]>
     /** Solves the CAPTCHA on a page. Every verdict, unsolved too, is a value to branch on. */
     solveCaptcha(page: Page): Promise<{
       verdict:
@@ -80,11 +79,10 @@ declare global {
   }
 
   const neo: Neo
-  /** Without a task: a new tab in a new task (the reply names it). After `neo.task()` or
-   * `neo.createTask()`: refused until you declare your own `const page`. */
+  /** The picked task's last-used open tab, else another open tab, else a new one.
+   * Without a task: a NEW tab with no task, opened on first use. */
   const page: Page
-  /** `pages()` lists every tab the run knows. In a script that fetched a task,
-   * `newPage()` is refused: use `task.newPage()`. */
+  /** `pages()` lists every tab. `newPage()` opens in the picked task, or with no task. */
   const context: pw.BrowserContext
   const browser: pw.Browser
   const expect: Expect
@@ -98,7 +96,7 @@ declare global {
   /** Every SDK failure. */
   class NeoError extends Error {
     constructor(message: string)
-    /** e.g. `task_not_found`, `task_page_required`, `page_closed`, `method_unavailable`. */
+    /** e.g. `task_not_found`, `task_page_missing`, `page_closed`, `method_unavailable`. */
     code?: string
     /** Who must fix it. */
     owner?: 'neo' | 'script' | 'website' | 'host'
@@ -115,30 +113,24 @@ declare global {
 }
 
 /**
- * Walkthrough: "open Hacker News and the top five links in five tabs". Four `run` calls.
+ * Walkthrough: Hacker News, top five links in five tabs
  *
- * // Run 1 — create the task
+ * // Run 1 — create the task and return its id
  * const task = await neo.createTask('hn top 5')
  * return task.id                                   // "hn-top-5-3f9a"
  *
- * // Run 2 — open HN, then the five links, all in this task
- * const task = await neo.task('hn-top-5-3f9a')
- * const hn = await task.newPage()
- * await hn.goto('https://news.ycombinator.com')
- * const links = await hn.locator('.titleline > a')
+ * // Run 2 — plain Playwright; every tab lands in the task
+ * await neo.task('hn-top-5-3f9a')
+ * await page.goto('https://news.ycombinator.com')
+ * const links = await page.locator('.titleline > a')
  *   .evaluateAll(as => as.slice(0, 5).map(a => a.href))
- * for (const url of links) {
- *   const tab = await task.newPage()
- *   await tab.goto(url)
- * }
- * return task.pages().map(p => ({ tabId: p.tabId, url: p.url() }))   // six tabs
+ * for (const url of links) await (await context.newPage()).goto(url)
  *
- * // Run 3 — later, work in one of them
+ * // Run 3 — pick one tab of the task
  * const task = await neo.task('hn-top-5-3f9a')
- * const page = task.page(104)      // or task.pages().find(p => p.url().includes('github.com'))
+ * const page = task.pages().find(p => p.url().includes('github.com'))
  * return await page.title()
  *
  * // Run 4 — done
- * const task = await neo.task('hn-top-5-3f9a')
- * await task.close()                                // closes all six tabs
+ * await (await neo.task('hn-top-5-3f9a')).close()
  */

@@ -113,39 +113,26 @@ The model sends `run { code, timeout? }`. `code` is the body of an async functio
 
 The host sends its ids in `_meta["com.browseros.neo/run"]` as `{ requestId?, taskId?, hostData? }`. Neo refuses unknown keys as `host / invalid_meta`. `hostData` is up to 2048 bytes of JSON that Neo stores with the run and never reads.
 
-A host's `taskId` is also a Neo task id. Neo registers the task when a run first opens a tab for it; `neo.task(hostId)` can then fetch it. The default `page` rule is unchanged: the task's last-used tab, from memory or the trace store, or a new background tab on first use.
+A host's `taskId` is also a Neo task id and seeds the run's current task. Neo registers it when a run first opens a tab for it; `neo.task(hostId)` can then fetch it. Hosts retain the last-used-tab fallback from memory or the trace store. The neo-viewer proxy still supplies the host's task metadata.
 
-Without a host `taskId`, built-in `page` opens a blank background tab in a new unnamed task on first use, every run. To keep tabs across runs, create one task per user request with `await neo.createTask(name)` and return `task.id`. Start later runs with `const task = await neo.task(id)`. Use `await task.newPage()`, `task.pages()` (oldest first), or `task.page(tabId)`, then `await task.close()` when done. See [agent.d.ts](../agent.d.ts) for the declarations and a four-run example.
+With no task selected by the host or script, built-in `page` opens a new blank background tab on first use, every run. `context.newPage()` also opens a new tab. Neither reuses an existing tab or creates a task.
 
-After `neo.createTask` or `neo.task`, built-in `page` is refused if it has no tab yet; an existing tab keeps working. A script can declare its own `const page = task.page(tabId)` or `const page = await task.newPage()`. `context.newPage()` is refused after either task call. Before either call, it opens a tab in the host task or the run's unnamed task, shared with built-in `page`. `context.pages()` still lists every tab the run knows. `await neo.tabs()` lists every open tab, each with `tabId` and `taskId`; the user's tabs have no task. Popups join their opener's task.
+To keep tabs across runs, call `const task = await neo.createTask(name)` and return `task.id`. Start later runs with `await neo.task(id)`. The latest `neo.createTask` or `neo.task` call picks the script's current task:
 
-Tasks live in memory until `task.close()` or a Neo restart. Empty tasks remain; above 4096 tasks, Neo forgets the oldest task with no open tabs. The janitor still closes agent-opened tabs idle for 30 minutes. After a restart, surviving tabs remain reachable through `neo.tabs()` but lose their task ownership; host tasks retain the trace fallback for their default page.
+- Built-in `page` uses that task's last-used open tab, else another open tab in it, else a new tab in it.
+- `context.newPage()` opens in the current task; `task.newPage()` opens in that task. Popups join their opener's task.
+- `task.pages()` lists its tabs oldest first; `task.page(tabId)` picks one. Scripts may declare their own `const page`.
+- `await task.close()` closes the task's tabs and ends it.
+
+Any script may use any tab or task. `context.pages()` lists every tab; each page has `tabId` and `taskId` (`null` without a task). Recover a lost id with `context.pages().find(p => p.url().includes('ycombinator'))?.taskId`. An unknown id throws `task_not_found`, whose hint points to `context.pages()` and `page.taskId`. See [agent.d.ts](../agent.d.ts) for the declarations and the four-run walkthrough.
+
+Tasks live in memory, at most 4096. Empty tasks remain until closed or evicted for space. A Neo restart forgets tasks while tabs stay; `context.pages()` still finds those tabs, now without task ownership. Host tasks retain their trace fallback. The janitor closes agent-opened tabs idle for 30 minutes.
 
 The result carries `_meta["com.browseros.neo/run"]` as `{ id, status, effects, error?, unknown, tasks }`. `id` is the run's id in the trace. `status` is `ok`, `error`, `cancelled`, or `timeout`, and `isError` is set unless it is `ok`. `effects` is `none`, `done`, or `unknown`. `unknown` lists the writes that were sent and never confirmed. `structuredContent` is unchanged.
 
-`tasks` is always present, with `[]` when none were created or fetched. Each entry has this shape:
+`tasks` is host metadata, always present (`[]` when no tasks were touched). Each entry carries `id`, `name`, `kind`, and `tabs: { tabId, url }[]`. Tasks appear once, in first-touch order, even when the script failed. Tabs and URLs reflect reply time; a closed task has kind `closed` and no tabs.
 
-```ts
-type TaskNote = {
-  id: string
-  name: string | null
-  kind: 'created' | 'builtinPage' | 'fetched' | 'closed'
-  tabs: { tabId: number; url: string }[]
-}
-```
-
-Tasks appear once, in first-touch order, including those auto-created by built-in `page` or `context.newPage()`. Tabs and URLs reflect reply time. A task closed in the run has kind `closed` and no tabs. A host task appears only if the script fetches it with `neo.task`.
-
-Every reply that ran a script, including a failed one, ends with one text line per reported task. The formats are:
-
-```text
-[task hn-top-5-3f9a · tabs: 101 https://news.ycombinator.com/, 102 https://github.com/x/y]
-[task hn-top-5-3f9a · tabs: none]
-[new task t-7c2e was created for this script's built-in page · tabs: 107 https://example.com/]
-[task hn-top-5-3f9a closed · its tabs were closed]
-```
-
-Each line shows at most 10 tabs, then `, +N more`; URLs are cut at 120 characters with `…`. The metadata keeps the full tab list and URLs. These lines preserve the task id even when a script throws before returning it.
+The agent's reply is exactly what the script returned, plus console lines and existing notes. Task metadata adds no reply text. Return `task.id` explicitly to keep it for later runs.
 
 The script's `page`, `context`, `browser` and `expect` behave as Playwright 1.64.1's, except where Neo says otherwise in the `run` description, which lists each difference a script would trip on. A call that waits gives up after 5 s unless given a `timeout`, and a navigation after 30 s. For the main-world scripts (`page.evaluate`, `page.waitForFunction`, `locator.evaluate`, `locator.evaluateAll`, `locator.waitForFunction`, `elementHandle.evaluate`, `$eval` and `$$eval`, each `frame` form in its own frame) and `setContent`, whose HTML's scripts run in the main world too, those are:
 
