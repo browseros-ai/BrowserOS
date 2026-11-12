@@ -45,6 +45,7 @@ export const TOOL_TO_VERB: Record<string, ReplayVerb> = {
   'input.type': 'type',
   'input.insertText': 'type',
   'input.press': 'type',
+  pursue: 'browse',
 }
 
 export function verbForTool(toolName: string): ReplayVerb {
@@ -178,6 +179,14 @@ function describeSkillSave(args: Args): string {
   if (args.patch !== undefined) return 'Repaired a step of this skill'
   if (args.flow !== undefined) return 'Made this skill ultrafast'
   return 'Saved this as a skill'
+}
+
+/** neo's fast browsing working the page toward the agent's goal. */
+function describePursue(args: Args): string {
+  const goal = stringArg(args, 'goal')
+  return goal
+    ? `neo took over the clicking: “${truncate(goal)}”`
+    : 'neo took over the clicking'
 }
 
 function stringArg(args: Args, key: string): string | undefined {
@@ -379,6 +388,8 @@ export function describeStep(dispatch: ToolDispatchRow): string {
       return 'Waited for you'
     case 'save_skill':
       return describeSkillSave(args)
+    case 'pursue':
+      return describePursue(args)
     case 'run_skill': {
       const name = stringArg(args, 'name')
       return name ? `Ran ${name} the fast way` : 'Ran a skill the fast way'
@@ -404,6 +415,10 @@ export interface DescribedStep {
   hidden: boolean
   /** The page the step ran on (origin and path), when known. */
   pageKey?: string
+  /** neo took the task over here and handed it back partway. */
+  handedBack?: boolean
+  /** The first step after a hand back, where the agent carries on. */
+  afterHandBack?: boolean
 }
 
 export interface DescribedSteps {
@@ -424,6 +439,8 @@ export function describeSteps(
 ): DescribedSteps {
   const steps: DescribedStep[] = []
   let hiddenCount = 0
+  // When the latest hand back ended; the next visible step is where the agent carries on.
+  let handBackEndedAt: number | undefined
   for (const [index, dispatch] of dispatches.entries()) {
     // A script whose own calls were recorded is told through those calls.
     const hidden =
@@ -435,6 +452,9 @@ export function describeSteps(
     }
     const sentence = describeStep(dispatch)
     const verb = verbForCall(dispatch)
+    // pursue is stamped with its start, so the calls it made sort after it.
+    const afterHandBack =
+      handBackEndedAt !== undefined && dispatch.createdAt >= handBackEndedAt
     const pageKey = pageKeyOf(dispatch, normalizeCall(dispatch))
     const meta = parseMeta(dispatch.resultMeta)
     const isError = meta.isError === true
@@ -453,8 +473,15 @@ export function describeSteps(
       !previous.hidden &&
       pageKey !== undefined &&
       previous.pageKey === pageKey
-    if (previous && (repeats || checksPrevious)) {
+    if (afterHandBack) handBackEndedAt = undefined
+    const handsBack = handedBack(dispatch)
+    if (handsBack) {
+      handBackEndedAt =
+        dispatch.createdAt + Math.max(0, dispatch.durationMs ?? 0)
+    }
+    if (previous && !afterHandBack && (repeats || checksPrevious)) {
       previous.dispatchIds.push(dispatch.dispatchId)
+      if (handsBack) previous.handedBack = true
       continue
     }
     steps.push({
@@ -466,9 +493,19 @@ export function describeSteps(
       cancelled,
       hidden,
       pageKey,
+      ...(handsBack ? { handedBack: true } : {}),
+      ...(afterHandBack ? { afterHandBack: true } : {}),
     })
   }
   return { steps, hiddenCount }
+}
+
+/** A pursue call that ended with neo handing the task back to the agent. */
+function handedBack(dispatch: ToolDispatchRow): boolean {
+  return (
+    dispatch.toolName === 'pursue' &&
+    parseMeta(dispatch.resultMeta).outcome === 'handed_back'
+  )
 }
 
 /** What an agent is doing right now on a live tab, in the present tense. */
