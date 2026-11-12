@@ -2259,6 +2259,33 @@ fn a_refused_close_keeps_the_task_usable_and_unknown_tasks_keep_the_server_error
 }
 
 #[test]
+fn a_built_in_page_landing_on_a_task_tab_is_listed_once() -> Result<(), TestError> {
+    on_neo_runtime(async {
+        let rig = task_rig().await?;
+        // The task's reply revived tab 101 first; then the lazy `page` resolves to it (the
+        // task's last tab) and becomes the context's entry. A customer saw it listed twice.
+        let code = r"
+            context._pageFor({ tab: 101, taskId: 'research' });
+            context._pageFor({ tab: 102, taskId: 'research' });
+            const task = await neo.task('research');
+            const revived = task.page(101);
+            context._applyReply({ pages: [{ tab: 101, taskId: 'research' }],
+              defaultPage: { tab: 101 }, observed: null });
+            const after = task.pages().map(p => p.tabId);
+            const builtIn = task.page(101) === page && revived !== page;
+            context._pageFor({ tab: 101, closed: true }, { seq: 100, events: 0 });
+            return { after, builtIn, afterClose: task.pages().map(p => p.tabId) };
+        ";
+        assert_eq!(
+            returned(script(&rig, code).await?)?,
+            json!({ "after": [102, 101], "builtIn": true, "afterClose": [102] }),
+            "one entry per tab, the context's current Page, and its close is seen"
+        );
+        Ok(())
+    })
+}
+
+#[test]
 fn context_pages_returns_shared_pages_with_task_ids_from_facts() -> Result<(), TestError> {
     on_neo_runtime(async {
         let rig = task_rig().await?;

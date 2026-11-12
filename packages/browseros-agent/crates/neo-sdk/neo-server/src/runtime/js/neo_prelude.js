@@ -25,14 +25,18 @@
       pages() {
         if (this.#closed) return []
         // Keep the server's order, then the context's newly learned pages (including popups).
-        // The shared Page cache supplies liveness and identity.
-        return [
-          ...new Set([
-            ...this.#ordered,
-            ...context.pages().filter((page) => page.taskId === this.#id),
-            ...this.#added,
-          ]),
-        ].filter((page) => !page.isClosed())
+        // Each tab counts once, as the context's Page for it now: when the built-in `page`
+        // lands on a tab this task already listed, it takes over that tab's entry.
+        const pages = new Map()
+        for (const listed of [
+          ...this.#ordered,
+          ...context.pages().filter((page) => page.taskId === this.#id),
+          ...this.#added,
+        ]) {
+          const page = context._pageFromResult(listed) ?? listed
+          if (!pages.has(page.tabId)) pages.set(page.tabId, page)
+        }
+        return [...pages.values()].filter((page) => !page.isClosed())
       }
 
       page(tabId) {
