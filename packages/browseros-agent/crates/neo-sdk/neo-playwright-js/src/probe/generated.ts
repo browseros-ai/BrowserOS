@@ -293,9 +293,19 @@ export type SnapshotMode = "ai" | "default";
 export type StorageAction = "items" | "getItem" | "setItem" | "removeItem" | "clear";
 
 /**
+ * One name/value pair in `Storage.items()`, in the document's existing iteration order.
+ */
+export type StorageItem = { name: string, value: string, };
+
+/**
  * Which Storage a `webStorage` request uses.
  */
 export type StorageKind = "local" | "session";
+
+/**
+ * The probe's storage results: item lists, a string, or null, without a wrapper object.
+ */
+export type StorageValue = Array<StorageItem> | string | null;
 
 /**
  * Whether a resolution that matches several elements fails. The probe protocol carries it

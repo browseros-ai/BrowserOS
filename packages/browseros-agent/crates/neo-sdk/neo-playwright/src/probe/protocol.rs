@@ -10,6 +10,7 @@ use std::error::Error;
 use ts_rs::{Config, TS, TypeVisitor};
 
 use crate::action::{Checkable, FileInput, FilesSet, Filled, Selected};
+use crate::page::StorageValue;
 use crate::read::{FrameOrigin, Located, PinnedMatch};
 
 use super::probe_reply::ProbeReply;
@@ -38,6 +39,7 @@ pub fn render() -> Result<String, Box<dyn Error>> {
     declarations.visit::<FilesSet>();
     declarations.visit::<Filled>();
     declarations.visit::<Selected>();
+    declarations.visit::<StorageValue>();
     declarations.finish()
 }
 
