@@ -83,7 +83,7 @@ function keptRef(node: AriaNodeJSON): boolean {
 }
 
 /** 3,000 tokens: the longest text form returned when the script did not choose. */
-export const TEXT_LIMIT_CHARS = 3_000 * CHARS_PER_TOKEN
+const TEXT_LIMIT_CHARS = 3_000 * CHARS_PER_TOKEN
 export const DEFAULT_MAX_TOKENS = 8_000
 /** A nameless control's own text is clipped to this in the interactive form. */
 const OWN_TEXT_CLIP = 80
