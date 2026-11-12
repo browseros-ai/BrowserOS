@@ -306,6 +306,8 @@ async fn tagged(
 
 #[cfg(test)]
 mod tests {
+    use std::error::Error;
+
     use serde::Serialize;
     use serde_json::json;
 
@@ -319,8 +321,7 @@ mod tests {
     use crate::world::FrameSeq;
 
     #[tokio::test]
-    async fn tag_reply_preserves_the_flattened_before_bytes()
-    -> Result<(), Box<dyn std::error::Error>> {
+    async fn tag_reply_preserves_the_flattened_before_bytes() -> Result<(), Box<dyn Error>> {
         #[derive(Serialize)]
         struct Before {
             element: serde_json::Value,

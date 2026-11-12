@@ -269,20 +269,23 @@ async fn send(
 
 #[cfg(test)]
 mod tests {
+    use std::error::Error;
+
     use super::StorageValue;
+    use crate::Op;
+    use crate::op_output::to_output;
+    use crate::op_scope::OpScope;
+    use crate::target::CallHeader;
+    use crate::test_env::TestEnv;
 
     #[tokio::test]
-    async fn storage_replies_keep_their_recorded_json_shapes()
-    -> Result<(), Box<dyn std::error::Error>> {
-        let env = crate::test_env::TestEnv::new();
-        let op = crate::Op::from_name("webStorage.read").ok_or("storage op exists")?;
-        let scope = crate::op_scope::OpScope::new(&env, op, crate::target::CallHeader::default());
+    async fn storage_replies_keep_their_recorded_json_shapes() -> Result<(), Box<dyn Error>> {
+        let env = TestEnv::new();
+        let op = Op::from_name("webStorage.read").ok_or("storage op exists")?;
+        let scope = OpScope::new(&env, op, CallHeader::default());
         for before in [r#"[{"name":"a","value":"b"}]"#, r#""b""#, "null", "[]"] {
             let typed: StorageValue = serde_json::from_str(before)?;
-            assert_eq!(
-                serde_json::to_string(&crate::op_output::to_output(&scope, &typed)?)?,
-                before
-            );
+            assert_eq!(serde_json::to_string(&to_output(&scope, &typed)?)?, before);
         }
         Ok(())
     }
