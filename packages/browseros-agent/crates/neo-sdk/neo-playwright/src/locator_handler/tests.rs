@@ -6,7 +6,7 @@ use serde_json::{Value, json};
 use tokio::{task, time};
 
 use super::{AddInput, LocatorHandlers, ResolveInput};
-use crate::op::Op;
+use crate::op::{Op, OpKind};
 use crate::op_input::OpInput;
 use crate::op_scope::OpScope;
 use crate::target::LocatorTarget;
@@ -56,7 +56,7 @@ async fn tests_that_handler_routes_keep_the_recorded_input_and_reply_bytes()
                 &pw,
                 &scope,
                 match op.kind() {
-                    crate::op::OpKind::LocatorHandler(op) => op,
+                    OpKind::LocatorHandler(op) => op,
                     _ => return Err("fixture must contain only handler ops".into()),
                 },
                 args,
