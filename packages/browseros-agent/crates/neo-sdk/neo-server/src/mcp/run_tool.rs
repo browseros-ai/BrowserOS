@@ -7,7 +7,7 @@ use serde_json::{Map, Value, json};
 use super::RunArgs;
 use super::run_description::run_description;
 use crate::config::Defaults;
-use crate::dispatch::{Registry, TaskKind, TaskNote};
+use crate::dispatch::Registry;
 use crate::run::{OpNote, RUN_META_KEY, ReplyError, RunReply};
 use crate::runtime::{LogLevel, LogLine};
 
@@ -46,7 +46,7 @@ impl RunTool {
     /// - text: the value as JSON, or the error line; then the console lines and one line per
     ///   write that was never confirmed or op the script left running;
     /// - `structuredContent`: `{ "value": … }`, or `{ "error": … }`;
-    /// - `_meta["com.browseros.neo/run"]`: `{ id, status, effects, error?, unknown }`, the
+    /// - `_meta["com.browseros.neo/run"]`: `{ id, status, effects, error?, unknown, tasks }`, the
     ///   committed contract's names (MIGRATION.md: the run id is `.id`);
     /// - `isError` unless the status is `ok`. A failed run is a tool result, never a JSON-RPC
     ///   error, so the model reads why.
@@ -112,42 +112,7 @@ fn text(reply: &RunReply) -> String {
             op_label(note)
         ));
     }
-    lines.extend(reply.tasks.iter().map(task_line));
     lines.join("\n")
-}
-
-fn task_line(task: &TaskNote) -> String {
-    let id = &task.id;
-    if task.kind == TaskKind::Closed {
-        return format!("[task {id} closed · its tabs were closed]");
-    }
-    let mut tabs: Vec<String> = task
-        .tabs
-        .iter()
-        .take(10)
-        .map(|tab| {
-            let mut url: String = tab.url.chars().take(120).collect();
-            if tab.url.chars().count() > 120 {
-                url.push('…');
-            }
-            format!("{} {url}", tab.tab)
-        })
-        .collect();
-    if task.tabs.len() > 10 {
-        tabs.push(format!("+{} more", task.tabs.len() - 10));
-    }
-    let tabs = if tabs.is_empty() {
-        "none".to_owned()
-    } else {
-        tabs.join(", ")
-    };
-    match task.kind {
-        TaskKind::BuiltinPage => {
-            format!("[new task {id} was created for this script's built-in page · tabs: {tabs}]")
-        }
-        TaskKind::Created | TaskKind::Fetched => format!("[task {id} · tabs: {tabs}]"),
-        TaskKind::Closed => format!("[task {id} closed · its tabs were closed]"),
-    }
 }
 
 /// `script / script_error: TypeError: x is not a function (run:2:5)`, plus the op and its
@@ -224,36 +189,33 @@ mod tests {
         Ok(())
     }
     #[test]
-    fn task_lines_bound_urls_and_tab_counts_and_closed_tasks_have_no_tabs()
-    -> Result<(), Box<dyn Error>> {
-        let id = RunId::new();
+    fn task_metadata_never_changes_text_or_structured_content() -> Result<(), Box<dyn Error>> {
         let tabs: Vec<_> = (1..=12)
             .map(|tab| json!({ "tabId": tab, "url": "é".repeat(121) }))
             .collect();
-        let reply: RunReply = serde_json::from_value(json!({
-            "id": id, "status": "ok", "effects": "none", "value": null,
+        let mut reply: RunReply = serde_json::from_value(json!({
+            "id": RunId::new(), "status": "ok", "effects": "none", "value": "one",
             "tasks": [
                 { "id": "one", "name": null, "kind": "fetched", "tabs": tabs },
                 { "id": "two", "name": null, "kind": "closed", "tabs": [] }
             ]
         }))?;
-        let text = text(&reply);
-        assert!(text.contains(&format!("1 {}…", "é".repeat(120))));
-        assert!(text.contains(", +2 more]"));
-        assert!(!text.contains("11 é"));
-        assert!(text.ends_with("[task two closed · its tabs were closed]"));
         let wire = serde_json::to_value(super::RunTool::result(&reply))?;
+        assert_eq!(wire["content"][0]["text"], reply.value.to_string());
         assert_eq!(
-            wire["_meta"][RUN_META_KEY]["tasks"][0]["tabs"]
-                .as_array()
-                .map(Vec::len),
-            Some(12),
-            "only the text is clipped"
+            wire["_meta"][RUN_META_KEY]["tasks"],
+            serde_json::to_value(&reply.tasks)?
         );
+        reply.tasks.clear();
+        let plain = serde_json::to_value(super::RunTool::result(&reply))?;
+        assert_eq!(wire["content"], plain["content"]);
+        assert_eq!(wire["structuredContent"], plain["structuredContent"]);
         Ok(())
     }
+
     #[test]
-    fn an_auto_task_is_named_in_reply_text_metadata_and_replay() -> Result<(), TestError> {
+    fn task_create_fetch_close_failure_and_replay_only_report_tasks_in_metadata()
+    -> Result<(), TestError> {
         use crate::run::{RunMeta, RunRequest, RunTimeout};
         use neo_trace::RequestId;
         use std::time::Duration;
@@ -261,28 +223,88 @@ mod tests {
         test_rig::on_neo_runtime(async {
             let rig = TestRig::new().await?;
             let service = rig.run_service(Duration::from_secs(30));
-            let make_request = || -> Result<RunRequest, TestError> {
+            let request = |code: String, id: &str| -> Result<RunRequest, TestError> {
                 Ok(RunRequest {
-                    code: "await __neo.invoke('test.touch', { page }); throw new Error('after opening');".to_owned(),
+                    code,
                     timeout: RunTimeout::from_millis(None)?,
-                    meta: RunMeta { request_id: Some(RequestId::parse("auto-reply")?), ..RunMeta::default() },
+                    meta: RunMeta {
+                        request_id: Some(RequestId::parse(id)?),
+                        ..RunMeta::default()
+                    },
                 })
             };
-            let reply = service.run(make_request()?).await;
-            assert_eq!(reply.tasks.len(), 1);
-            let task = &reply.tasks[0];
-            let mcp = serde_json::to_value(super::RunTool::result(&reply))?;
-            assert!(mcp["content"][0]["text"].as_str().ok_or("text")?.ends_with(&format!(
-                "[new task {} was created for this script's built-in page · tabs: {} about:blank]",
-                task.id, task.tabs[0].tab,
-            )));
+            let code = "const task = await neo.createTask('reply'); return task.id;";
+            let created = service.run(request(code.to_owned(), "created")?).await;
+            assert!(created.error.is_none(), "{created:?}");
+            let id = created.value.to_string();
+            let fetched = service
+                .run(request(
+                    format!("const task = await neo.task({id}); return task.id;"),
+                    "fetched",
+                )?)
+                .await;
+            let failed = service
+                .run(request(
+                    format!("await neo.task({id}); throw new Error('after fetching');"),
+                    "failed",
+                )?)
+                .await;
+            let closed = service
+                .run(request(
+                    format!(
+                        "const task = await neo.task({id}); await task.close(); return task.id;"
+                    ),
+                    "closed",
+                )?)
+                .await;
+            for (reply, kind) in [
+                (&created, "created"),
+                (&fetched, "fetched"),
+                (&failed, "fetched"),
+                (&closed, "closed"),
+            ] {
+                let mcp = serde_json::to_value(super::RunTool::result(reply))?;
+                let text = mcp["content"][0]["text"].as_str().ok_or("MCP text")?;
+                assert!(
+                    !text.contains("[task"),
+                    "task recovery belongs only in host metadata"
+                );
+                assert_eq!(reply.tasks.len(), 1);
+                assert_eq!(
+                    mcp["_meta"][RUN_META_KEY]["tasks"],
+                    serde_json::to_value(&reply.tasks)?
+                );
+                assert_eq!(mcp["_meta"][RUN_META_KEY]["tasks"][0]["kind"], kind);
+                if reply.error.is_none() {
+                    assert_eq!(
+                        text,
+                        reply.value.to_string(),
+                        "successful text is exactly the JSON value"
+                    );
+                    assert_eq!(mcp["structuredContent"], json!({ "value": reply.value }));
+                } else {
+                    assert_eq!(
+                        text,
+                        super::error_line(reply.error.as_ref().ok_or("error")?)
+                    );
+                    assert_eq!(mcp["structuredContent"], json!({ "error": reply.error }));
+                }
+            }
+            assert!(fetched.error.is_none(), "{fetched:?}");
+            assert!(closed.error.is_none(), "{closed:?}");
             assert_eq!(
-                mcp["_meta"][RUN_META_KEY]["tasks"],
-                serde_json::to_value(&reply.tasks)?
+                failed.error.as_ref().ok_or("script error")?.code,
+                "script_error"
             );
-            assert_eq!(mcp["structuredContent"], json!({ "error": reply.error }));
-            let replay = service.run(make_request()?).await;
-            assert_eq!(serde_json::to_value(super::RunTool::result(&replay))?, mcp);
+            rig.sink.flush().await?;
+            let replay = rig
+                .restarted_service(Duration::from_secs(30))?
+                .run(request(code.to_owned(), "created")?)
+                .await;
+            assert_eq!(
+                serde_json::to_value(super::RunTool::result(&replay))?,
+                serde_json::to_value(super::RunTool::result(&created))?
+            );
             Ok(())
         })
     }
