@@ -40,6 +40,30 @@ export function stringify(value: unknown, seen = new Set<unknown>()): string {
   }
 }
 
+/** jest-get-type's names, which jest-matcher-utils' `printWithType` prints. */
+function typeName(value: unknown): string {
+  if (value === undefined) return 'undefined'
+  if (value === null) return 'null'
+  if (Array.isArray(value)) return 'array'
+  if (typeof value !== 'object') return typeof value
+  const made = Reflect.get(value, 'constructor')
+  if (made === RegExp) return 'regexp'
+  if (made === Map) return 'map'
+  if (made === Set) return 'set'
+  if (made === Date) return 'date'
+  return 'object'
+}
+
+/** jest-matcher-utils' `printWithType`: a value with its type, for an argument refusal. */
+export function printWithType(name: string, value: unknown): string {
+  const type = typeName(value)
+  const hasType =
+    type !== 'null' && type !== 'undefined'
+      ? `${name} has type:  ${type}\n`
+      : ''
+  return `${hasType}${name} has value: ${stringify(value)}`
+}
+
 export function receiverText(receiver: unknown): string {
   if (typeof receiver === 'object' && receiver !== null)
     return `${Object.getPrototypeOf(receiver)?.constructor?.name ?? 'Object'} ${stringify(receiver)}`
