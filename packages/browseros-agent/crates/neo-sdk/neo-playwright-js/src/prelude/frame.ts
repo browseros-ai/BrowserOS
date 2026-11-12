@@ -1443,10 +1443,11 @@ export class Frame extends EventEmitter {
    * for its `'ai'` tree, refs included, with clickable marking; Playwright's YAML for
    * `mode: 'default'`, and for every mode under the conformance switch, where no mode means
    * `'default'` as upstream's does. `mode: 'full'` is Playwright's YAML of the same `'ai'` tree
-   * the v1 format reads, marks included, so it prints every ref the v1 text prints; it is cut at
-   * `maxTokens` (snapshot.ts `renderFullSnapshot`) and never touches the delta baseline. Any
-   * other mode is refused before an op is sent, except under the switch, where the op refuses
-   * it as upstream's server does.
+   * the v1 format reads, marks included, and like the v1 text it prints a frame's content where
+   * the iframe tag holds fallback markup (snapshot-v1.ts `shownText`), so it prints every ref
+   * the v1 text prints; it is cut at `maxTokens` (snapshot.ts `renderFullSnapshot`) and never
+   * touches the delta baseline. Any other mode is refused before an op is sent, except under
+   * the switch, where the op refuses it as upstream's server does.
    *
    * A whole page's v1 text may then become the tab's delta baseline:
    *

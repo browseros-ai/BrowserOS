@@ -7563,6 +7563,9 @@ ${value.stack}`;
     "status"
   ]);
   var KEPT_WITH_REF = new Set(["dialog", "alertdialog"]);
+  function shownText(node) {
+    return node.role === "iframe" ? undefined : node.text;
+  }
   function sectionLabel(node) {
     return node.name ? `${node.role} ${JSON.stringify(node.name)}` : node.role;
   }
@@ -7698,8 +7701,9 @@ ${value.stack}`;
       const children = node.children ?? [];
       for (let index = children.length - 1;index >= 0; index--)
         this.steps.push({ kind: "node", child: children[index], level, text });
-      if ("text" in node && node.text !== undefined)
-        this.steps.push({ kind: "piece", raw: node.text, level, text });
+      const own = "role" in node ? shownText(node) : undefined;
+      if (own !== undefined)
+        this.steps.push({ kind: "piece", raw: own, level, text });
     }
     piece(raw, level, text) {
       if (!text || raw === "")
@@ -7873,7 +7877,7 @@ ${value.stack}`;
       if (typeof item === "string") {
         if (item !== "")
           return false;
-      } else if (item.text || item.name)
+      } else if (shownText(item) || item.name)
         return false;
       else
         add(item.children);
@@ -7888,8 +7892,9 @@ ${value.stack}`;
         pieces.push(item);
         continue;
       }
-      if (item.text !== undefined)
-        pieces.push(item.text);
+      const shown = shownText(item);
+      if (shown !== undefined)
+        pieces.push(shown);
       const children = item.children ?? [];
       for (let index = children.length - 1;index >= 0; index--) {
         const child = children[index];
@@ -7917,7 +7922,7 @@ ${value.stack}`;
   function comment(partial) {
     return `# partial: ${partial.frame} not read (${partial.reason})`;
   }
-  function treeLines(json) {
+  function treeLines(json, keepFallback) {
     const lines = [];
     const steps = [];
     const later = (children, depth) => {
@@ -7935,14 +7940,16 @@ ${value.stack}`;
           lines.push({ text: indent + line });
         continue;
       }
-      const { children, ...own } = child;
-      const [key, ...rest] = renderAriaSnapshotAsYaml([own]).split(`
+      const { children, text: _text, ...own } = child;
+      const text = keepFallback ? child.text : shownText(child);
+      const alone = text === undefined ? own : { ...own, text };
+      const [key, ...rest] = renderAriaSnapshotAsYaml([alone]).split(`
 `);
-      const block = own.text === undefined && own.url === undefined && own.placeholder === undefined && (children?.length ?? 0) > 0;
+      const block = text === undefined && own.url === undefined && own.placeholder === undefined && (children?.length ?? 0) > 0;
       lines.push({ text: indent + key + (block ? ":" : ""), node: child });
       for (const line of rest)
         lines.push({ text: indent + line });
-      if (own.text === undefined && children)
+      if (text === undefined && children)
         later(children, step.depth + 1);
     }
     return lines;
@@ -7954,8 +7961,8 @@ ${value.stack}`;
     const tag = `[ref=${ref}]`;
     return lines.findIndex((line) => /^\s*- /.test(line.text) && line.text.includes(tag));
   }
-  function yamlLines(result) {
-    const lines = treeLines(result.json);
+  function yamlLines(result, keepFallback) {
+    const lines = treeLines(result.json, keepFallback);
     if (result.partial.length === 0)
       return lines;
     const placed = result.partial.map((partial) => ({
@@ -7974,11 +7981,11 @@ ${value.stack}`;
     return [...lines, ...unplaced];
   }
   function renderSnapshot(result) {
-    return yamlLines(result).map((line) => line.text).join(`
+    return yamlLines(result, true).map((line) => line.text).join(`
 `);
   }
   function renderFullSnapshot(result, maxTokens) {
-    return cap(null, printed(yamlLines(result)), maxTokens * CHARS_PER_TOKEN, FULL_CALL);
+    return cap(null, printed(yamlLines(result, false)), maxTokens * CHARS_PER_TOKEN, FULL_CALL);
   }
   function printed(lines) {
     const ends = lines.map(() => lines.length);
