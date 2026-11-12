@@ -112,7 +112,9 @@ function failed(operation: NeoOperation): Shown | null {
   if (!operation.error) return null
   return thrown(
     operation.error,
-    "The call failed: the error the script's await threw.",
+    isNeoInternal(operation)
+      ? 'Neo internal: this bookkeeping step failed. The run handles that itself; the script did not call this, and its await did not throw this.'
+      : "The call failed: the error the script's await threw.",
   )
 }
 
@@ -204,7 +206,7 @@ function pendingOf(
   const overlapped = new Set<NeoOperation>()
   for (const operation of call) {
     if (recordsText(operation)) open.push(operation)
-    if (operation.name !== 'page.snapshotPending') continue
+    if (!closesSnapshot(operation)) continue
     const owners = open.filter(
       (candidate) => documentOf(candidate) === argsOf(operation).document,
     )
@@ -252,11 +254,22 @@ function argsOf(operation: NeoOperation): Record<string, unknown> {
 }
 
 /** What the script got from the snapshot whose text `match` recorded. */
+/**
+ * What ends a snapshot call after the engine answered: the pending record of its text, or for a
+ * delta call a failed read of the stored baseline (the prelude throws before recording any text).
+ */
+function closesSnapshot(operation: NeoOperation): boolean {
+  if (operation.name === 'page.snapshotPending') return true
+  return (
+    operation.name === 'page.snapshotBaseline' && operation.outcome !== 'ok'
+  )
+}
+
 function pendingText(match: NeoOperation): Shown | null {
   if (match.error) {
     return thrown(
       match.error,
-      "The snapshot was taken, but recording its text failed (Neo's page.snapshotPending), so the script's await threw this.",
+      `The snapshot was taken, but ${match.name === 'page.snapshotBaseline' ? "reading this tab's stored baseline for the delta" : 'recording its text'} failed (Neo's ${match.name}), so the script's await threw this.`,
     )
   }
   if (match.outcome !== 'ok') {
@@ -265,7 +278,7 @@ function pendingText(match: NeoOperation): Shown | null {
       source:
         match.outcome === null
           ? 'The snapshot is still recording its text.'
-          : "Recording the snapshot's text did not finish, so the script's await got no text.",
+          : "The snapshot's bookkeeping did not finish, so the script's await got no text.",
       cut: false,
     }
   }

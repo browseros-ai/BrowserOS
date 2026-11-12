@@ -128,8 +128,10 @@ impl EnvConfig {
     /// `CLAW_TRACE_VALUE_BYTES` when it is set.
     #[must_use]
     pub(crate) fn redaction_limits(&self) -> RedactionLimits {
-        self.trace_value_bytes
-            .map_or_else(RedactionLimits::default, RedactionLimits::with_value_bytes)
+        self.trace_value_bytes.map_or_else(
+            RedactionLimits::default,
+            RedactionLimits::new_with_value_bytes,
+        )
     }
 
     /// `$BROWSERCLAW_DIR/claw-sdk`, where `open_trace` keeps the store.
@@ -316,7 +318,7 @@ mod tests {
         assert_eq!(config.log_filter, "debug", "CLAW_LOG");
         assert_eq!(
             config.redaction_limits(),
-            RedactionLimits::with_value_bytes(262_144),
+            RedactionLimits::new_with_value_bytes(262_144),
             "the Neo viewer's whole values"
         );
         assert_eq!(

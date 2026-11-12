@@ -49,7 +49,7 @@ impl RedactionLimits {
     /// production leaves it unset, so its trace stays at the defaults. Nothing else changes:
     /// host data, text, notes and code keep their own limits.
     #[must_use]
-    pub fn with_value_bytes(bytes: usize) -> Self {
+    pub fn new_with_value_bytes(bytes: usize) -> Self {
         let base = Self::default();
         Self {
             string: base.string.max(bytes),
@@ -351,7 +351,7 @@ mod tests {
         let defaults = redactor(RedactionLimits::default());
         assert_eq!(defaults.args(&args).truncation, Truncation::Cut);
 
-        let limits = RedactionLimits::with_value_bytes(256 * 1024);
+        let limits = RedactionLimits::new_with_value_bytes(256 * 1024);
         let raised = redactor(limits);
         assert_eq!(
             raised.args(&args),
@@ -369,7 +369,7 @@ mod tests {
         assert_eq!(limits.host_data, RedactionLimits::default().host_data);
         // Never below the defaults.
         assert_eq!(
-            RedactionLimits::with_value_bytes(16),
+            RedactionLimits::new_with_value_bytes(16),
             RedactionLimits::default()
         );
     }

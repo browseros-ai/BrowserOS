@@ -192,6 +192,53 @@ describe('what a call gave the script', () => {
     expect(shown(after[2] as NeoOperation, after).lines).toEqual(['mine'])
   })
 
+  it('closes a delta call whose stored baseline could not be read, so the next one keeps its text', () => {
+    const tree = { document: 4, json: [] }
+    const all = [
+      operation(1, 'page.ariaSnapshot', { line: 1, result: tree }),
+      operation(2, 'page.snapshotBaseline', {
+        line: 1,
+        args: { document: 4 },
+        outcome: 'error',
+        error: {
+          owner: 'neo',
+          code: 'timeout',
+          message: 'baseline read timed out',
+          retryable: true,
+        },
+      }),
+      operation(3, 'page.ariaSnapshot', { line: 1, result: tree }),
+      operation(4, 'page.snapshotPending', {
+        line: 1,
+        args: { document: 4, text: 'second', form: 'text', delta: false },
+      }),
+    ]
+    const first = shown(all[0] as NeoOperation, all)
+    expect(first.lines).toEqual(['neo / timeout: baseline read timed out'])
+    expect(first.source).toContain(
+      "reading this tab's stored baseline for the delta failed",
+    )
+    expect(shown(all[2] as NeoOperation, all).lines).toEqual(['second'])
+  })
+
+  it("does not say the script threw a failure of Neo's own bookkeeping", () => {
+    const listen = shown(
+      operation(1, 'events.listen', {
+        outcome: 'error',
+        error: {
+          owner: 'neo',
+          code: 'closed',
+          message: 'page closed',
+          retryable: false,
+        },
+      }),
+    )
+    expect(listen.source).toContain(
+      'Neo internal: this bookkeeping step failed',
+    )
+    expect(listen.source).not.toContain("the error the script's await threw")
+  })
+
   it('says which view Neo cut: a whole text from a cut tree', () => {
     const all = [
       operation(3, 'page.ariaSnapshot', {
