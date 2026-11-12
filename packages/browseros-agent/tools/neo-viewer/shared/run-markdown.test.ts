@@ -108,9 +108,111 @@ describe('one run as Markdown', () => {
     const markdown = runMarkdown(run, FULL)
     const read = markdown.slice(markdown.indexOf('## What the model read'))
     const fence = '`````'
-    expect(read).toContain(`${fence}text\n${JSON.stringify(text)}\n${fence}`)
+    // A returned string is shown decoded, in a fence longer than its longest run of backticks.
+    expect(read).toContain(`${fence}text\n${text}\n${fence}`)
+    // A reply that is not a JSON string keeps its exact text, in a longer fence too.
+    const object = runMarkdown(
+      detailWith(4, { text: `{"note":"${'`'.repeat(4)}"}`, neo: null }),
+      FULL,
+    )
+    expect(object).toContain(
+      `${fence}text\n{"note":"${'`'.repeat(4)}"}\n${fence}`,
+    )
     expect(fenced('```')).toBe('````\n```\n````')
     expect(fenced('plain', 'js')).toBe('```js\nplain\n```')
+  })
+
+  test('a returned string is shown decoded, its size still what the model received', () => {
+    // A snapshot as run() returns it: newlines, quotes, and a run of backticks in the page text.
+    const snapshot =
+      '- link "Hacker News" [ref=e16]\n- text: "|"\n- text: use ```code``` here'
+    const json = JSON.stringify(snapshot)
+    const markdown = runMarkdown(
+      detailWith(11, { text: json, neo: null }),
+      FULL,
+    )
+    const read = markdown.slice(markdown.indexOf('## What the model read'))
+    expect(read).toBe(
+      [
+        '## What the model read',
+        '',
+        `${json.length} chars, ≈${Math.floor(json.length / 4)} tok.`,
+        '',
+        `Shown decoded; the model received it as a JSON string of ${json.length} characters.`,
+        '',
+        '````text',
+        '- link "Hacker News" [ref=e16]',
+        '- text: "|"',
+        '- text: use ```code``` here',
+        '````',
+        '',
+      ].join('\n'),
+    )
+    expect(read).not.toContain('\\n')
+  })
+
+  test('a decoded string keeps the console lines after it, and the export cuts it with the exact file named', () => {
+    const value = Array.from(
+      { length: 400 },
+      (_, i) => `- link "Story ${i}" [ref=e${i}]`,
+    ).join('\n')
+    const text = `${JSON.stringify(value)}\nconsole:\nread 400 links`
+    const run = detailWith(12, { text, neo: null })
+    const copy = runMarkdown(run, FULL)
+    expect(copy).toContain(
+      '```text\n- link "Story 0" [ref=e0]\n- link "Story 1" [ref=e1]',
+    )
+    expect(copy).toContain(
+      'Then, as the model read them:\n\n```text\nconsole:\nread 400 links\n```',
+    )
+    const exported = runMarkdown(run, { ...EXPORT, replyFile: '012.reply.txt' })
+    expect(exported).toContain(
+      'The first 2,000 characters, decoded; the exact text the model received is in [012.reply.txt](012.reply.txt):',
+    )
+    expect(exported).toContain('```text\n- link "Story 0" [ref=e0]\n')
+    // The decoded value used the whole allowance: the console lines are named, not shown again.
+    expect(exported).toContain(
+      'Console lines or notes follow it; they are in [012.reply.txt](012.reply.txt).',
+    )
+    const read = exported.slice(exported.indexOf('## What the model read'))
+    expect(read).not.toContain('read 400 links')
+  })
+
+  test("the text after a decoded string is the model's own, and the export cuts it too", () => {
+    // A console line that looks like one of Neo's notes stays a console line, as the model read it.
+    const text = `${JSON.stringify('ok')}\nconsole:\n[not awaited] this is a console log`
+    const copy = runMarkdown(detailWith(15, { text, neo: null }), FULL)
+    expect(copy).toContain(
+      'Then, as the model read them:\n\n```text\nconsole:\n[not awaited] this is a console log\n```',
+    )
+    // Long console output after a short string: the two share the export's one allowance.
+    const long = `${JSON.stringify('ok')}\nconsole:\n${'c'.repeat(50_000)}`
+    const exported = runMarkdown(detailWith(16, { text: long, neo: null }), {
+      ...EXPORT,
+      replyFile: '016.reply.txt',
+    })
+    expect(exported.length).toBeLessThan(8_000)
+    expect(exported).toContain(
+      'Then, as the model read them:\n\nThe first 1,998 characters; the full text is in [016.reply.txt](016.reply.txt):',
+    )
+  })
+
+  test('a value that is not a string, or an error, is shown as the model read it', () => {
+    const object = runMarkdown(
+      detailWith(13, { text: '{"title":"Example","n":2}', neo: null }),
+      FULL,
+    )
+    expect(object).toContain('```text\n{"title":"Example","n":2}\n```')
+    expect(object).not.toContain('Shown decoded')
+    const error = runMarkdown(
+      detailWith(14, {
+        text: 'script / no_match: "a\\nb"',
+        neo: null,
+        isError: true,
+      }),
+      FULL,
+    )
+    expect(error).not.toContain('Shown decoded')
   })
 
   test('a long reply is cut at the limit, with its full size and the file that holds all of it', () => {

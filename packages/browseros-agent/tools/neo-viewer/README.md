@@ -223,6 +223,11 @@ not exported.
 run's Markdown on the clipboard, from the same renderer as `runs/NNN.md` but with the whole reply:
 paste it into any agent and ask about the run. A closed row's run is fetched at the click.
 
+A returned string, such as a snapshot, reaches the model as one line of JSON (`\n`, `\"`). The plain
+page, Copy and `runs/NNN.md` show it decoded, as lines, saying so and giving the JSON string's length;
+the sizes and token counts stay those of what the model received, and the exact text stays in the
+Raw view, `runs/NNN.json` and the reply file.
+
 ## The API
 
 `shared/api.ts` holds the routes and their types; the server owns them and the page imports them.

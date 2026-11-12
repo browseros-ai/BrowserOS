@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import type { RunDetail, RunStatus, RunSummary } from '../../shared/api'
+import { decodedNote, returnedString } from '../../shared/run-markdown'
 import { clockTime, duration, prettyJson, tokens } from '../format'
 import { useRunDetail } from '../use-viewer'
 
@@ -71,7 +72,7 @@ function RunRow({ run }: { run: RunSummary }) {
         ) : (
           run.replyPreview !== null && (
             <p className="truncate font-mono text-xs text-zinc-600">
-              {run.replyPreview}
+              {previewText(run.replyPreview)}
             </p>
           )
         )}
@@ -115,12 +116,52 @@ function Reply({ detail }: { detail: RunDetail }) {
   )
 }
 
-function FormattedReply({ detail }: { detail: RunDetail }) {
+/**
+ * A closed row's one-line preview: a returned string decoded (its line breaks then show as spaces
+ * in the one line), even when the preview cut it short; anything else as the model read it.
+ */
+export function previewText(preview: string): string {
+  const first = preview.split('\n', 1)[0] ?? ''
+  if (!first.startsWith('"')) return preview
+  // The preview is the reply's first characters (`run-store.ts`), so it can end inside an escape
+  // (`\`, `\u00`). Only a cut between escapes parses once closed with a quote, so the first of
+  // these that parses is the decoded text up to the cut; an escape is at most 6 characters.
+  const cuts = [0, 1, 2, 3, 4, 5].map(
+    (drop) => `${first.slice(0, first.length - drop)}"`,
+  )
+  for (const candidate of [first, ...cuts]) {
+    try {
+      const value: unknown = JSON.parse(candidate)
+      if (typeof value === 'string') return value
+    } catch {
+      // cut inside an escape, or not a string: try the next form
+    }
+  }
+  return preview
+}
+
+/**
+ * The reply for a person. A returned string (a snapshot, say) is shown decoded, with a line saying
+ * so; "Reply, raw" keeps the exact bytes.
+ */
+export function FormattedReply({ detail }: { detail: RunDetail }) {
   const { reply } = detail
+  const decoded = returnedString(detail)
   return (
     <div className="space-y-2">
       {reply.rpcError && <Block text={prettyJson(reply.rpcError)} />}
-      {reply.text !== null && <Block text={reply.text} />}
+      {decoded ? (
+        <>
+          <p className="font-medium text-xs text-zinc-700">
+            What the model read
+          </p>
+          <p className="text-xs text-zinc-500">{decodedNote(decoded.json)}</p>
+          <Block text={decoded.value} />
+          {decoded.rest && <Block text={decoded.rest} />}
+        </>
+      ) : (
+        reply.text !== null && <Block text={reply.text} />
+      )}
       {reply.structuredContent !== null && (
         <>
           <p className="text-xs text-zinc-500">structuredContent</p>
