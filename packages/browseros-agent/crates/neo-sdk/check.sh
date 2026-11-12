@@ -46,10 +46,15 @@ for manifest in crates/neo-sdk/*/Cargo.toml; do
     echo "check.sh: no package name in $manifest" >&2
     exit 1
   fi
-  if grep -A1 -x '\[lints\]' "$manifest" | grep -qx 'workspace = true'; then
+  # claw-sdk's lint set restates its tables; the workspace's is one `workspace = true`. A crate
+  # with neither has no lints at all, which no SDK crate may.
+  if grep -qx '\[lints\.rust\]' "$manifest" && grep -qx '\[lints\.clippy\]' "$manifest"; then
+    PACKAGES+=("$package")
+  elif grep -A1 -x '\[lints\]' "$manifest" | grep -qx 'workspace = true'; then
     WORKSPACE_LINTED+=("$package")
   else
-    PACKAGES+=("$package")
+    echo "check.sh: $manifest has no lint table: restate claw-sdk's [lints.rust] and [lints.clippy], or add [lints] workspace = true." >&2
+    exit 1
   fi
 done
 for required in neo-server neo-playwright; do
