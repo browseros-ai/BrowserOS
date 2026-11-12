@@ -29,7 +29,8 @@
 //!
 //! `addScriptTag` holds a plain [`LogLease`] for its insert, for the CSP reports that tell a
 //! blocked tag (`page/add_tag.rs`); counted here, a console release cannot switch them off under
-//! it. Entries only it asked for reach no listener: the watcher records what some run wants.
+//! it. Entries only it asked for reach no listener: the watcher passes an entry on only while a
+//! console lease holds the tab (`target_watcher.rs`, `log_entry`).
 
 use std::collections::HashMap;
 use std::fmt;

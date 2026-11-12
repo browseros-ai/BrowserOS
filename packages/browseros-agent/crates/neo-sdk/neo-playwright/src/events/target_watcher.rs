@@ -41,10 +41,9 @@
 //!   so a chatty page cannot push popups and dialogs out of the ring. In hosted mode they never
 //!   fire, by design: the browser reports neither, even with `Runtime` on (measured: no
 //!   `Runtime.consoleAPICalled` and no `Runtime.exceptionThrown` with
-//!   `BROWSERCLAW_HOSTED_MODE=1`), and Neo leases nothing for them, so `Log` stays off and the
-//!   browser's own log entries do not fire there either, except during an `addScriptTag` or
-//!   `addStyleTag` insert, which holds `Log` on for its CSP reports (`event_op.rs`,
-//!   `lease_runtime`, says why).
+//!   `BROWSERCLAW_HOSTED_MODE=1`), and Neo leases nothing for them. The browser's own log
+//!   entries reach no listener there either: one is passed on only under a console lease on its
+//!   tab (`event_op.rs`, `lease_runtime`, says why).
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::mem;
@@ -1718,7 +1717,17 @@ impl Watcher {
         {
             return;
         }
-        if let Some(target) = self.wanted(&session, PageEventKind::Console).await {
+        // Only under a console lease on the tab. `addScriptTag`'s own `Log` lease is for the CSP
+        // reports it reads itself, and hosted mode takes no console lease, so a hosted script
+        // hears no log entry (`event_op.rs`, `lease_runtime`).
+        if let Some(target) = self.wanted(&session, PageEventKind::Console).await
+            && self
+                .writer
+                .hub()
+                .log_leases()
+                .console_floor(&target)
+                .is_some()
+        {
             let message = ConsoleMessage::from_log_entry(target, entry);
             self.writer.record(PageEvent::Console(message));
             if let Some(key) = key {
@@ -1978,7 +1987,7 @@ mod worker_observation_tests {
     use serde_json::json;
     use tokio::task;
 
-    use super::Watcher;
+    use super::{Watcher, WatcherHandle};
     use crate::events::worker_table::WorkerInfo;
     use crate::events::{EventHub, PageEvent, PageEventKind, Subscription, WatcherProgress};
     use crate::run_state::RunState;
@@ -2450,6 +2459,84 @@ mod worker_observation_tests {
             3,
             "round 4's replay dropped, the new error at its stamp recorded"
         );
+        Ok(())
+    }
+    /// A browser log entry reaches a console listener only while a console lease holds its tab.
+    /// An `addScriptTag` or `addStyleTag` insert holds `Log` alone, for the CSP reports it reads
+    /// itself, and a hosted console listener takes no lease (`event_op.rs`, `lease_runtime`): an
+    /// entry logged then reaches no script, so a hosted one hears none.
+    #[tokio::test]
+    async fn tests_that_a_log_entry_reaches_a_console_listener_only_under_a_console_lease()
+    -> Result<(), Box<dyn Error>> {
+        let connection =
+            TestConnection::new([("Browser.getVersion", json!({"product":"Chrome/143.0"}))]);
+        for method in [
+            "Runtime.enable",
+            "Runtime.disable",
+            "Log.enable",
+            "Log.disable",
+        ] {
+            connection.always(method, json!({}))?;
+        }
+        let (hub, mut watcher) = scripted(&connection);
+        let page = TargetId("page".to_owned());
+        let session = SessionId::from("page-session");
+        watcher.sessions.insert(session.clone(), page.clone());
+        let run = Arc::new(RunState::default());
+        hub.bind(&run);
+        let console = Subscription::Page {
+            tab: TabId(1),
+            target: page.clone(),
+            event: PageEventKind::Console,
+        };
+        // A hosted listener: it listens and leases nothing.
+        run.events.listen(console, 1_000, 0);
+        let protocol = watcher.browser.protocol_session(session.clone());
+        let entry = |text: &str| CdpEvent {
+            method: "Log.entryAdded".to_owned(),
+            params: json!({ "entry": {
+                "source": "security", "level": "error", "text": text, "timestamp": 2_000.0 } }),
+            session_id: Some(session.clone()),
+        };
+        let heard = |hub: &EventHub| -> Vec<String> {
+            hub.read_after(0)
+                .records
+                .into_iter()
+                .filter_map(|record| match record.event {
+                    PageEvent::Console(message) => Some(message.text),
+                    _ => None,
+                })
+                .collect()
+        };
+
+        let insert = hub.log_leases().acquire(&protocol, 1_500.0).await?;
+        watcher
+            .handle(entry("blocked by CSP during the insert"))
+            .await;
+        assert!(
+            heard(&hub).is_empty(),
+            "an entry under the insert's own lease is no listener's: {:?}",
+            heard(&hub)
+        );
+
+        // Outside hosted mode the listener's console lease holds the tab, and the entry is its.
+        let runtime = watcher
+            .browser
+            .page_signals
+            .runtime_leases()
+            .acquire(&protocol, 1_500.0)
+            .await?;
+        let console_lease = hub
+            .log_leases()
+            .acquire_console(runtime, &protocol, page, 1_500.0, WatcherHandle::detached())
+            .await
+            .map_err(|refused| refused.error)?;
+        watcher
+            .handle(entry("blocked by CSP under a console lease"))
+            .await;
+        assert_eq!(heard(&hub), ["blocked by CSP under a console lease"]);
+        drop(console_lease);
+        insert.release().await;
         Ok(())
     }
 }
