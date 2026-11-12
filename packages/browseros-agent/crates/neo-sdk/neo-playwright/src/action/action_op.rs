@@ -428,7 +428,6 @@ struct FillOptions {
 struct PressInput {
     target: Target,
     strict: Strictness,
-    #[ts(type = "string")]
     key: Typed,
     options: KeyOptions,
 }
@@ -440,7 +439,6 @@ options!(PressInput => KeyOptions);
 struct TypeInput {
     target: Target,
     strict: Strictness,
-    #[ts(type = "string")]
     text: Typed,
     options: SequentialOptions,
 }

@@ -2,8 +2,9 @@
 import type { SequentialOptions } from "./SequentialOptions";
 import type { Strictness } from "./Strictness";
 import type { Target } from "./Target";
+import type { Typed } from "./Typed";
 
 /**
  * `locator.pressSequentially(text, options)` and `type`.
  */
-export type TypeInput = { target: Target, strict: Strictness, text: string, options: SequentialOptions, };
+export type TypeInput = { target: Target, strict: Strictness, text: Typed, options: SequentialOptions, };

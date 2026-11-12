@@ -2,8 +2,9 @@
 import type { KeyOptions } from "./KeyOptions";
 import type { Strictness } from "./Strictness";
 import type { Target } from "./Target";
+import type { Typed } from "./Typed";
 
 /**
  * `locator.press(key, options)`.
  */
-export type PressInput = { target: Target, strict: Strictness, key: string, options: KeyOptions, };
+export type PressInput = { target: Target, strict: Strictness, key: Typed, options: KeyOptions, };
