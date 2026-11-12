@@ -1110,6 +1110,10 @@ mod tests {
         assert!(page.scan_dom(Some(&widget()), DOM_PROBE).await.is_err());
         assert!(page.scan_dom(None, DOM_PROBE).await.is_err());
         assert!(
+            !native.calls("Page.createIsolatedWorld")?.is_empty(),
+            "the scan asked for an isolated world before it gave up"
+        );
+        assert!(
             native
                 .calls("DOM.resolveNode")?
                 .iter()

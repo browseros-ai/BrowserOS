@@ -1230,7 +1230,10 @@ mod tests {
                     assert!(!result.complete);
                     assert_eq!(result.challenges[0].state, ChallengeState::Active);
                 }
-                Err(found) => assert_eq!(found, error),
+                Err(found) => {
+                    assert!(matches!(error, PageError::Closed | PageError::Cancelled));
+                    assert_eq!(found, error);
+                }
             }
         }
         Ok(())
@@ -1419,7 +1422,7 @@ mod tests {
         let mut page = FakePage::recaptcha(false);
         let url = page.frames[0].url.clone();
         let mut info = widget("recaptcha_v2", "unknown");
-        info["frameUrl"] = json!(url);
+        info["frameUrls"] = json!([url]);
         let mut main = probe(json!([info]));
         main["frames"] = json!([{"url": url, "visible": true}, {"url": url, "visible": true}]);
         page.main = Mutex::new(VecDeque::from([main]));
