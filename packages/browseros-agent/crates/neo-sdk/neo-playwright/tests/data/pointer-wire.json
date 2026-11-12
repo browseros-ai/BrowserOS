@@ -33,8 +33,8 @@
           "body": "null"
         },
         {
-          "op": "locator.elementHandle",
-          "args": "{\"call\":{\"api\":\"locator.elementHandle\",\"timeoutMs\":5000},\"target\":{\"$neo\":\"locator\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"frame\":null,\"chunks\":[{\"parts\":[{\"name\":\"css\",\"body\":[{\"simples\":[{\"selector\":{\"css\":\"#button\",\"functions\":[]},\"combinator\":\"\"}]}],\"source\":\"#button\"}]}],\"display\":\"locator('#button')\"},\"strict\":\"strict\"}",
+          "op": "locator.waitFor",
+          "args": "{\"call\":{\"api\":\"locator.elementHandle\",\"timeoutMs\":5000},\"target\":{\"$neo\":\"locator\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"frame\":null,\"chunks\":[{\"parts\":[{\"name\":\"css\",\"body\":[{\"simples\":[{\"selector\":{\"css\":\"#button\",\"functions\":[]},\"combinator\":\"\"}]}],\"source\":\"#button\"}]}],\"display\":\"locator('#button')\"},\"strict\":\"strict\",\"state\":\"attached\",\"omitReturnValue\":false}",
           "reply": "{\"pages\":[],\"ok\":{\"$neo\":\"element\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"seq\":2,\"node\":9,\"display\":\"<button>Target</button>\"},\"observed\":{\"seq\":5,\"events\":0,\"payloadCurrent\":true}}",
           "body": "{\"$neo\":\"element\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"seq\":2,\"node\":9,\"display\":\"<button>Target</button>\"}"
         },
