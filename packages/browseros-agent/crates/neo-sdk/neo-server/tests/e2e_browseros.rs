@@ -28,6 +28,7 @@ mod captcha_pages;
 
 use std::error::Error;
 use std::time::Duration;
+use std::{env, fs};
 
 use browseros_rig::{
     CaptchaKey, Client, HOST_TOKEN, PATIENCE, Rig, TestResult, browser_or_skip, get, outcome, run,
@@ -362,8 +363,8 @@ async fn solve_on_captcha_pages(rig: &Rig, pages: &CaptchaPages) -> TestResult {
         logged = log.len();
         observed.push(json!({ "route": route, "solved": solved, "detected": notes }));
     }
-    if let Some(path) = std::env::var_os("CAPTCHA_ENTRY_OUT") {
-        std::fs::write(path, serde_json::to_vec_pretty(&observed)?)?;
+    if let Some(path) = env::var_os("CAPTCHA_ENTRY_OUT") {
+        fs::write(path, serde_json::to_vec_pretty(&observed)?)?;
     }
     for ((route, kind, verdict, reason), seen) in cases.iter().zip(&observed) {
         let solved = &seen["solved"];

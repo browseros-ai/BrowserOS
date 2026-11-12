@@ -2528,6 +2528,10 @@ mod tests {
 
     #[tokio::test]
     #[ignore = "requires an owned dev browser at CAPTCHA_LIVE_CDP_PORT and network access to Google"]
+    #[expect(
+        clippy::print_stderr,
+        reason = "an ignored live test shows what the vendor scripts produced"
+    )]
     async fn tests_that_live_recaptcha_widgets_with_one_key_stay_separate() -> anyhow::Result<()> {
         let html = format!(
             r#"<!doctype html><title>reCAPTCHA</title><body>
@@ -2582,6 +2586,10 @@ window.onRc = function() {{
 
     #[tokio::test]
     #[ignore = "requires an owned dev browser at CAPTCHA_LIVE_CDP_PORT and network access to Cloudflare"]
+    #[expect(
+        clippy::print_stderr,
+        reason = "an ignored live test shows what the vendor scripts produced"
+    )]
     async fn tests_that_live_turnstile_widgets_with_one_key_stay_separate() -> anyhow::Result<()> {
         let html = format!(
             r#"<!doctype html><title>Turnstile</title><body>

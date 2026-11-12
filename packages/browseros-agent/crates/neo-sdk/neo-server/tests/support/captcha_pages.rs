@@ -3,6 +3,7 @@
 //! process. Every page replaces the main world's DOM methods after its setup, so a detector that
 //! scanned the page's own world would read wrong answers. A provider stub counts every request.
 
+use std::error::Error;
 use std::net::Ipv4Addr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -28,14 +29,14 @@ w(window,'getComputedStyle','window.getComputedStyle',()=>({display:'none',visib
 const PDF: &str = "%PDF-1.1\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj\n3 0 obj<</Type/Page/Parent 2 0 R/MediaBox[0 0 200 200]>>endobj\ntrailer<</Root 1 0 R>>\n%%EOF\n";
 
 /// The loopback server and its provider stub.
-pub struct CaptchaPages {
+pub(super) struct CaptchaPages {
     port: u16,
     provider_calls: Arc<AtomicUsize>,
     task: JoinHandle<()>,
 }
 
 impl CaptchaPages {
-    pub async fn start() -> Result<Self, Box<dyn std::error::Error>> {
+    pub(super) async fn start() -> Result<Self, Box<dyn Error>> {
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await?;
         let port = listener.local_addr()?.port();
         let provider_calls = Arc::new(AtomicUsize::new(0));
@@ -82,16 +83,16 @@ impl CaptchaPages {
     }
 
     /// A page's address on the top-level host.
-    pub fn url(&self, route: &str) -> String {
+    pub(super) fn url(&self, route: &str) -> String {
         format!("http://127.0.0.1:{}{route}", self.port)
     }
 
     /// The provider stub, for `BROWSEROS_CAPSOLVER_API_URL`.
-    pub fn provider(&self) -> String {
+    pub(super) fn provider(&self) -> String {
         self.url("/provider")
     }
 
-    pub fn provider_calls(&self) -> usize {
+    pub(super) fn provider_calls(&self) -> usize {
         self.provider_calls.load(Ordering::SeqCst)
     }
 }
