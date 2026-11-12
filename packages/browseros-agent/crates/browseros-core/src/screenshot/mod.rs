@@ -906,8 +906,16 @@ mod tests {
             tokio::task::yield_now().await;
         }
         // A frame from another CDP session must not count as this tab's screenshot.
-        connection.emit("Page.screencastFrame", json!({ "data": "wrong-tab" }), Some(SessionId::from("other-tab")));
-        connection.emit("Page.screencastFrame", json!({ "data": "jpeg-frame" }), None);
+        connection.emit(
+            "Page.screencastFrame",
+            json!({ "data": "wrong-tab" }),
+            Some(SessionId::from("other-tab")),
+        );
+        connection.emit(
+            "Page.screencastFrame",
+            json!({ "data": "jpeg-frame" }),
+            None,
+        );
         let screenshot = worker.await??;
         assert_eq!(screenshot.data, "jpeg-frame");
         let calls = connection.calls()?;
@@ -1070,7 +1078,11 @@ mod tests {
         {
             tokio::task::yield_now().await;
         }
-        connection.emit("Page.screencastFrame", json!({ "data": "device-frame" }), None);
+        connection.emit(
+            "Page.screencastFrame",
+            json!({ "data": "device-frame" }),
+            None,
+        );
         let screenshot = worker.await??;
         assert_eq!(screenshot.data, "device-frame");
         let calls = connection.calls()?;

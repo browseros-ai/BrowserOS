@@ -1,4 +1,7 @@
-use crate::{CoreError, PageId, ProtocolSession, SessionId, connection::CdpConnection};
+use crate::{
+    CoreError, PageId, ProtocolSession, SessionId, connection::CdpConnection,
+    runtime_lease::RuntimeLeases,
+};
 use browseros_cdp::CdpEvent;
 use serde_json::{Value, json};
 use std::{
@@ -187,6 +190,9 @@ pub struct PageSignals {
     /// Bumped after every recorded document event, on any page. Waiters re-read their own
     /// page's state when it moves; scoped projections share it with the source.
     document_changes: Arc<watch::Sender<u64>>,
+    /// Who holds `Runtime` on, per session. Lives here because `harvest_console` toggles the
+    /// domain itself and must leave it on under a lease; projections share the source's.
+    runtime: Arc<RuntimeLeases>,
 }
 
 impl PageSignals {
@@ -197,6 +203,7 @@ impl PageSignals {
             state: Arc::new(Mutex::new(SignalsState::default())),
             scope: None,
             document_changes: Arc::new(watch::channel(0).0),
+            runtime: RuntimeLeases::new(),
         });
         Self::spawn_event_listener(signals.clone());
         signals
@@ -210,7 +217,15 @@ impl PageSignals {
             state: source.state.clone(),
             scope: Some(scope),
             document_changes: source.document_changes.clone(),
+            runtime: source.runtime.clone(),
         })
+    }
+
+    /// The connection's `Runtime` leases: take one to keep `Runtime` events flowing on a
+    /// session (see [`crate::runtime_lease`]).
+    #[must_use]
+    pub fn runtime_leases(&self) -> &Arc<RuntimeLeases> {
+        &self.runtime
     }
     fn allowed(&self, page: &PageId) -> bool {
         self.scope.as_ref().is_none_or(|scope| scope(page))
@@ -316,6 +331,11 @@ impl PageSignals {
         if !self.allowed(page_id) {
             return Ok(());
         }
+        // A held lease keeps reporting on, so the listener below already records the page's
+        // console live; the pair would switch it off under the lease's holder.
+        let Some(_turn) = self.runtime.unleased_turn(&session_id).await else {
+            return Ok(());
+        };
         let mut events = self.cdp.events();
         // Enable, then disable, as an ordered pair on the same session. send_value re-runs
         // page admission before each call, so issuing the two concurrently let their
