@@ -211,6 +211,11 @@
       target: "page",
       lifetime: "operation"
     },
+    "page.snapshotPending": {
+      effect: "read",
+      target: "page",
+      lifetime: "operation"
+    },
     "expect.locator": {
       effect: "read",
       target: "target",
@@ -2026,7 +2031,8 @@
   var SNAPSHOT_SEND = {
     "page.ariaSnapshot": (site, call, input, signal) => invoke("page.ariaSnapshot", site, call, input, signal),
     "locator.ariaSnapshot": (site, call, input, signal) => invoke("locator.ariaSnapshot", site, call, input, signal),
-    "page.snapshotBaseline": (site, call, input, signal) => invoke("page.snapshotBaseline", site, call, input, signal)
+    "page.snapshotBaseline": (site, call, input, signal) => invoke("page.snapshotBaseline", site, call, input, signal),
+    "page.snapshotPending": (site, call, input, signal) => invoke("page.snapshotPending", site, call, input, signal)
   };
 
   // crates/neo-sdk/neo-playwright-js/src/prelude/generated/expect.ts
@@ -8658,18 +8664,15 @@ ${changes}`;
       const text = renderSnapshotV1(result, format);
       if (selector !== null)
         return text;
-      let previous;
+      const { document } = result;
       try {
-        previous = await send["page.snapshotBaseline"](site, this._call(api, deadline.left()), {
-          page: await this._page._brand(api),
-          text,
-          delta,
-          document: result.document
-        }, wait.signal);
+        const page = await this._page._brand(api);
+        const returned = delta ? renderDelta(await send["page.snapshotBaseline"](site, this._call(api, deadline.left()), { page, document }, wait.signal), text) : text;
+        await send["page.snapshotPending"](site, this._call(api, deadline.left()), { page, document, text, delta, returned: delta ? returned : undefined }, wait.signal);
+        return returned;
       } catch (error) {
         throw deadline.named(error);
       }
-      return delta ? renderDelta(previous, text) : text;
     }
     async _ariaSnapshotJSON(api, selector, options = {}) {
       return (await this._snapshot(api, selector, options, options.mode ?? "default")).json;

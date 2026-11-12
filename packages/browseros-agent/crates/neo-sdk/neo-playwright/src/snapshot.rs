@@ -3,16 +3,20 @@
 //!
 //! ```text
 //!  snapshot_op         the ops: reads each frame through its probe, child frames on their own
-//!                      budget; and the baseline swap behind `ariaSnapshot({ delta: true })`
+//!                      budget; and the baseline read and pending record behind
+//!                      `ariaSnapshot({ delta: true })`
 //!  aria_snapshot       pure: stitches the frames' trees as upstream's server does
 //!  snapshot_rules      pure: Neo's rule that a name-prohibited role prints no quoted name
-//!  snapshot_baselines  each tab's last whole-page v1 text, kept across runs
+//!  snapshot_baselines  each tab's last whole-page v1 text its caller was given, across runs
+//!  pending_baselines   one run's texts, committed or dropped when the run ends
 //! ```
 
 mod aria_snapshot;
+mod pending_baselines;
 mod snapshot_baselines;
 pub(crate) mod snapshot_op;
 mod snapshot_rules;
 
+pub(crate) use pending_baselines::PendingBaselines;
 pub(crate) use snapshot_baselines::SnapshotBaselines;
 pub(crate) use snapshot_op::SnapshotOp;

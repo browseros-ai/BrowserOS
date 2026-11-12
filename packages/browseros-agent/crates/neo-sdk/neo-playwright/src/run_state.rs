@@ -12,6 +12,7 @@ use crate::events::{RunDownloads, RunEvents};
 use crate::locator_handler::LocatorHandlers;
 use crate::object_group::ObjectGroup;
 use crate::page::{FrameRoutes, InitScripts};
+use crate::snapshot::PendingBaselines;
 
 /// One run's Playwright state: event cursors, navigation publication receipts, discovered
 /// frame endpoints, retained element objects, downloads, init scripts and what its snapshots
@@ -35,10 +36,13 @@ pub struct RunState {
     pub(crate) downloads: RunDownloads,
     /// `page.addLocatorHandler` registrations; dropping them wakes any action still paused.
     pub(crate) locator_handlers: LocatorHandlers,
-    /// The tabs whose whole-page v1 snapshot, taken without `delta`, found a baseline of the
-    /// same tab and document (`page.snapshotBaseline`): each could have been a delta. In the
+    /// The tabs whose whole-page v1 snapshot, taken without `delta`, found a stored baseline of
+    /// the same tab and document (`page.snapshotPending`): each could have been a delta. In the
     /// order first seen, each once.
     full_snapshot_repeats: Mutex<Vec<TabId>>,
+    /// The run's whole-page v1 texts, which become baselines only when the run ends with them in
+    /// the caller's hands ([`RunState::settle_snapshot_baselines`]).
+    pub(crate) pending_baselines: PendingBaselines,
 }
 
 impl RunState {
@@ -68,9 +72,9 @@ impl RunState {
         self.downloads.facts()
     }
 
-    /// The tabs this run snapshotted in full while a baseline of the same tab and document was
-    /// there, so `{ delta: true }` would have printed only what changed. The host reads it once
-    /// the run's ops drained and decides the reply's tip; the crate keeps no count of tips.
+    /// The tabs this run snapshotted in full while a stored baseline of the same tab and document
+    /// was there, so `{ delta: true }` would have printed only what changed. The host reads it
+    /// once the run's ops drained and decides the reply's tip; the crate keeps no count of tips.
     #[must_use]
     pub fn full_snapshot_repeats(&self) -> Vec<TabId> {
         self.full_snapshot_repeats
@@ -88,6 +92,15 @@ impl RunState {
         if !tabs.contains(&tab) {
             tabs.push(tab);
         }
+    }
+
+    /// Ends the run's whole-page snapshot texts, once its ops drained and its reply is built. When
+    /// `ended_ok` (the run returned a value), each tab's last text whose returned string `given`
+    /// finds in what the caller got (a string of the returned value, or a console line) becomes
+    /// that tab's baseline for later deltas; every other text is dropped. A host that never
+    /// calls it never stores a baseline, so every delta comes back whole.
+    pub fn settle_snapshot_baselines(&self, ended_ok: bool, given: &dyn Fn(&str) -> bool) {
+        self.pending_baselines.settle(ended_ok, given);
     }
 
     /// Removes every init script the run registered, from every tab, and awaits each removal.

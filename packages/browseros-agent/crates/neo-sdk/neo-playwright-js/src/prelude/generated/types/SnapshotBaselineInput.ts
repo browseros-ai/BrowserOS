@@ -6,17 +6,6 @@ import type { PageHandle } from "./PageHandle";
  */
 export type SnapshotBaselineInput = { page: PageHandle, 
 /**
- * The whole page's v1 text, exactly as the script receives it in full: after the notice
- * and the cap, so a delta only ever prints lines the agent has seen or will see.
- */
-text: string, 
-/**
- * The script passed `delta: true`. Without it, a baseline found means a delta was possible,
- * which the run's reply turns into a tip.
- */
-delta: boolean, 
-/**
- * The `document` the page's snapshot answered. A text with none, or of a document the tab
- * has since left, is not kept and finds no baseline.
+ * The `document` the page's snapshot answered. None finds no baseline.
  */
 document?: number, };

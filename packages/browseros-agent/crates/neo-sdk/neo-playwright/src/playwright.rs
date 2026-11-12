@@ -45,8 +45,9 @@ pub struct Playwright {
     pages: Arc<PageRegistry>,
     /// Replays page-owned media into newly attached iframe sessions.
     media: MediaSessions,
-    /// Each tab's last whole-page v1 snapshot text, for `ariaSnapshot({ delta: true })`. It
-    /// outlives runs on purpose; the watcher drops a tab's when its document changes.
+    /// Each tab's last whole-page v1 snapshot text its caller was given, for
+    /// `ariaSnapshot({ delta: true })`. It outlives runs on purpose; the watcher drops a tab's
+    /// when its document changes.
     snapshot_baselines: Arc<SnapshotBaselines>,
 }
 
@@ -159,8 +160,9 @@ impl Playwright {
         &self.pages
     }
 
-    /// Each tab's last whole-page v1 snapshot text.
-    pub(crate) fn snapshot_baselines(&self) -> &SnapshotBaselines {
+    /// Each tab's last whole-page v1 snapshot text its caller was given; shared with the runs'
+    /// pending texts, which commit to it when their runs end.
+    pub(crate) fn snapshot_baselines(&self) -> &Arc<SnapshotBaselines> {
         &self.snapshot_baselines
     }
 

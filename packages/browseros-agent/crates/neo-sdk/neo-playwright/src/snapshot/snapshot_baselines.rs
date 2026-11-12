@@ -1,22 +1,25 @@
-//! The last whole-page v1 snapshot text of each tab: what `ariaSnapshot({ delta: true })`
-//! diffs against.
+//! The last whole-page v1 snapshot text each tab's caller was given: what
+//! `ariaSnapshot({ delta: true })` diffs against.
 //!
 //! ```text
 //!  page.ariaSnapshot      reads the tab's document generation, then the tree
 //!                           → { json, partial, document: <generation> }
 //!  prelude                renders the v1 text
-//!  page.snapshotBaseline  { text, document } → the previous text; stored only while
-//!                           <generation> is still the tab's current one
+//!  page.snapshotBaseline  delta only: the STORED text of that tab and document, never a pending one
+//!  page.snapshotPending   the text and the string the call returned, pending on the run's state
+//!  run service, run end   ok, and the returned string is in the reply → commit the last such text
+//!                         (only while <generation> is still the tab's); otherwise drop them all
 //!  watcher                the main frame commits a new document → a new generation, no text
 //!                         the tab closes → its entry goes; events were lost → every text goes
 //! ```
 //!
 //! It lives here, on the host, because every `run` is a fresh JS realm, and not in the page's
 //! isolated world because the stitched text holds cross-site frames' text, which that frame's
-//! world must never hold. The prelude renders and diffs; Rust only keeps the text and decides
-//! when it stops naming the tab's document. The generation closes the gap between the two ops:
-//! without it, a document that commits after the tree read and before the swap would be handed
-//! the old document's text as its baseline.
+//! world must never hold. The prelude renders and diffs; Rust keeps the text and decides when it
+//! stops naming the tab's document. A text is stored only once the run that took it ended with
+//! the text in the caller's hands (`PendingBaselines`), so a delta is only ever relative to text
+//! the caller holds: a run that threw, or that only inspected the snapshot in code, leaves the
+//! older baseline in place.
 
 use std::collections::HashMap;
 use std::sync::{Mutex, MutexGuard, PoisonError};
@@ -24,16 +27,17 @@ use std::sync::{Mutex, MutexGuard, PoisonError};
 use browseros_core::TargetId;
 
 /// The longest text kept for one tab, in UTF-8 bytes. The v1 text is cut at `maxTokens` (8,000
-/// by default: 32,000 characters), so an ordinary snapshot is far below it; a script that raises
-/// `maxTokens` past it keeps no baseline, and its next delta comes back whole. It is the run
-/// result's own cap (neo-server's `Defaults::MAX_RESULT_BYTES`): a longer text could not come
-/// back as a run's value anyway.
+/// by default: 32,000 characters), so an ordinary snapshot is far below it; a longer one is not
+/// kept, and the tab keeps the baseline it had. It is the run result's own cap (neo-server's
+/// `Defaults::MAX_RESULT_BYTES`): a longer text could not reach the caller as a run's value
+/// anyway.
 pub(crate) const MAX_BASELINE_BYTES: usize = 256 * 1024;
 
 /// Every tab's baseline, by the tab's target (a tab's main frame keeps its target's id across
-/// navigations). Shared by the `Playwright` facade, whose ops read the generation and swap the
-/// text, and the target watcher, which moves the generation on. The lock is held only to read
-/// or change one entry, never across an await.
+/// navigations). Shared by the `Playwright` facade, whose ops read the generation and the
+/// stored text, the runs' pending baselines, which commit to it, and the target watcher, which
+/// moves the generation on. The lock is held only to read or change one entry, never across an
+/// await.
 ///
 /// What is stored is at most one text per open tab, each at most [`MAX_BASELINE_BYTES`]; an
 /// entry goes when its tab closes.
@@ -57,38 +61,49 @@ struct Baselines {
 struct TabBaseline {
     /// The tab's main document, as counted here; 0 until its first commit seen.
     generation: u32,
-    /// The text of the tab's last whole-page v1 snapshot of that document.
+    /// The last text of that document the tab's caller was given.
     text: Option<String>,
 }
 
 impl SnapshotBaselines {
-    /// The tab's current document generation, for a snapshot to read before its tree and hand
-    /// back with its text.
+    /// The tab's current document generation, for a snapshot to read before its tree.
     pub(crate) fn generation(&self, tab: &TargetId) -> u32 {
         self.lock().current(tab)
     }
 
-    /// Stores `text` as the tab's baseline and returns the one it replaces: `None` when the tab
-    /// had none, or its document changed since. `read` is the generation the snapshot read
-    /// before its tree; when the tab has moved on since, the text is of a document that is gone
-    /// and is not kept. A text longer than [`MAX_BASELINE_BYTES`] is not kept either, and the tab
-    /// is left with none.
-    pub(crate) fn swap(&self, tab: &TargetId, read: u32, text: String) -> Option<String> {
-        let mut inner = self.lock();
-        let current = inner.current(tab);
-        let entry = inner.tabs.entry(tab.clone()).or_default();
-        if read != current {
+    /// The tab's stored baseline, if it is of the document generation `document` names.
+    pub(crate) fn stored(&self, tab: &TargetId, document: u32) -> Option<String> {
+        let inner = self.lock();
+        if inner.current(tab) != document {
             return None;
         }
-        if text.len() > MAX_BASELINE_BYTES {
-            return entry.text.take();
+        inner.tabs.get(tab).and_then(|entry| entry.text.clone())
+    }
+
+    /// Whether [`SnapshotBaselines::stored`] would answer a text, without copying it.
+    pub(crate) fn has_stored(&self, tab: &TargetId, document: u32) -> bool {
+        let inner = self.lock();
+        inner.current(tab) == document
+            && inner
+                .tabs
+                .get(tab)
+                .is_some_and(|entry| entry.text.is_some())
+    }
+
+    /// `text` becomes the tab's baseline: its run ended with it in the caller's hands. Kept only
+    /// while the tab is still on the document `document` names, and only up to
+    /// [`MAX_BASELINE_BYTES`]; otherwise the tab keeps what it had, which the caller also holds.
+    pub(crate) fn commit(&self, tab: &TargetId, document: u32, text: String) {
+        let mut inner = self.lock();
+        if inner.current(tab) != document || text.len() > MAX_BASELINE_BYTES {
+            return;
         }
-        entry.text.replace(text)
+        inner.tabs.entry(tab.clone()).or_default().text = Some(text);
     }
 
     /// The tab's main frame committed a new document: its baseline names a document the agent
-    /// can no longer act on, so its next delta starts over, and a snapshot of the old one that
-    /// is still on its way is not kept.
+    /// can no longer act on, so its next delta starts over, and a pending text of the old one is
+    /// not committed.
     pub(crate) fn document_changed(&self, tab: &TargetId) {
         let mut inner = self.lock();
         let generation = inner.next();
@@ -141,82 +156,82 @@ mod tests {
         TargetId(id.to_owned())
     }
 
-    /// One whole-page snapshot of `id` as the ops make it: the generation, then the swap.
-    fn snapshot(baselines: &SnapshotBaselines, id: &str, text: &str) -> Option<String> {
+    /// A snapshot of `id` whose run ended with its text given to the caller.
+    fn given(baselines: &SnapshotBaselines, id: &str, text: &str) {
         let read = baselines.generation(&tab(id));
-        baselines.swap(&tab(id), read, text.to_owned())
+        baselines.commit(&tab(id), read, text.to_owned());
+    }
+
+    fn stored(baselines: &SnapshotBaselines, id: &str) -> Option<String> {
+        baselines.stored(&tab(id), baselines.generation(&tab(id)))
     }
 
     #[test]
-    fn tests_that_a_swap_returns_the_tab_s_previous_text() {
+    fn tests_that_a_committed_text_is_the_tab_s_baseline_until_the_next() {
         let baselines = SnapshotBaselines::default();
-        assert_eq!(snapshot(&baselines, "A", "one"), None);
-        assert_eq!(snapshot(&baselines, "A", "two").as_deref(), Some("one"));
-        assert_eq!(snapshot(&baselines, "A", "three").as_deref(), Some("two"));
+        assert_eq!(stored(&baselines, "A"), None);
+        given(&baselines, "A", "one");
+        assert_eq!(stored(&baselines, "A").as_deref(), Some("one"));
+        assert!(baselines.has_stored(&tab("A"), baselines.generation(&tab("A"))));
+        given(&baselines, "A", "two");
+        assert_eq!(stored(&baselines, "A").as_deref(), Some("two"));
     }
 
     #[test]
     fn tests_that_two_tabs_keep_their_own_baselines() {
         let baselines = SnapshotBaselines::default();
-        snapshot(&baselines, "A", "a");
-        assert_eq!(snapshot(&baselines, "B", "b"), None);
-        assert_eq!(snapshot(&baselines, "A", "a2").as_deref(), Some("a"));
-        assert_eq!(snapshot(&baselines, "B", "b2").as_deref(), Some("b"));
+        given(&baselines, "A", "a");
+        assert_eq!(stored(&baselines, "B"), None);
+        given(&baselines, "B", "b");
+        assert_eq!(stored(&baselines, "A").as_deref(), Some("a"));
+        assert_eq!(stored(&baselines, "B").as_deref(), Some("b"));
     }
 
     #[test]
     fn tests_that_a_new_document_or_a_close_leaves_the_other_tabs() {
         let baselines = SnapshotBaselines::default();
-        snapshot(&baselines, "A", "a");
-        snapshot(&baselines, "B", "b");
-        snapshot(&baselines, "C", "c");
+        given(&baselines, "A", "a");
+        given(&baselines, "B", "b");
+        given(&baselines, "C", "c");
         baselines.document_changed(&tab("A"));
         baselines.tab_closed(&tab("C"));
-        assert_eq!(snapshot(&baselines, "A", "a2"), None);
-        assert_eq!(snapshot(&baselines, "C", "c2"), None);
-        assert_eq!(snapshot(&baselines, "B", "b2").as_deref(), Some("b"));
+        assert_eq!(stored(&baselines, "A"), None);
+        assert_eq!(stored(&baselines, "C"), None);
+        assert_eq!(stored(&baselines, "B").as_deref(), Some("b"));
         baselines.events_lost();
-        assert_eq!(snapshot(&baselines, "A", "a3"), None);
-        assert_eq!(snapshot(&baselines, "B", "b3"), None);
+        assert_eq!(stored(&baselines, "B"), None);
     }
 
     #[test]
-    fn tests_that_a_snapshot_of_a_document_gone_since_its_read_is_not_kept() {
+    fn tests_that_a_text_of_a_document_gone_since_its_read_is_not_committed() {
         let baselines = SnapshotBaselines::default();
-        snapshot(&baselines, "A", "first");
-        // The tree read happens, then the main frame commits before the swap.
+        given(&baselines, "A", "first");
         let read = baselines.generation(&tab("A"));
+        assert_eq!(baselines.stored(&tab("A"), read).as_deref(), Some("first"));
+        // The tree read happens, then the main frame commits before the run ends.
         baselines.document_changed(&tab("A"));
-        assert_eq!(baselines.swap(&tab("A"), read, "old page".to_owned()), None);
+        baselines.commit(&tab("A"), read, "old page".to_owned());
+        assert_eq!(stored(&baselines, "A"), None, "the new document has none");
         assert_eq!(
-            snapshot(&baselines, "A", "new page"),
+            baselines.stored(&tab("A"), read),
             None,
-            "the new document has no baseline: the old one's text was not kept"
-        );
-        assert_eq!(
-            snapshot(&baselines, "A", "new page").as_deref(),
-            Some("new page")
+            "nor does the old generation answer"
         );
         // The same after lost events, on a tab that never committed before.
         let read = baselines.generation(&tab("B"));
         baselines.events_lost();
-        assert_eq!(baselines.swap(&tab("B"), read, "b".to_owned()), None);
-        assert_eq!(snapshot(&baselines, "B", "b2"), None);
+        baselines.commit(&tab("B"), read, "b".to_owned());
+        assert_eq!(stored(&baselines, "B"), None);
     }
 
     #[test]
-    fn tests_that_a_text_over_the_bound_is_not_kept() {
+    fn tests_that_a_text_over_the_bound_leaves_the_baseline_it_had() {
         let baselines = SnapshotBaselines::default();
-        snapshot(&baselines, "A", "small");
-        let huge = "x".repeat(MAX_BASELINE_BYTES + 1);
-        assert_eq!(
-            snapshot(&baselines, "A", &huge).as_deref(),
-            Some("small"),
-            "the previous text still comes back"
-        );
-        assert_eq!(snapshot(&baselines, "A", "next"), None, "nothing was kept");
+        given(&baselines, "A", "small");
+        given(&baselines, "A", &"x".repeat(MAX_BASELINE_BYTES + 1));
+        assert_eq!(stored(&baselines, "A").as_deref(), Some("small"));
         let exact = "x".repeat(MAX_BASELINE_BYTES);
-        snapshot(&baselines, "A", &exact);
-        assert_eq!(snapshot(&baselines, "A", "after"), Some(exact));
+        given(&baselines, "A", &exact);
+        assert_eq!(stored(&baselines, "A"), Some(exact));
     }
 }

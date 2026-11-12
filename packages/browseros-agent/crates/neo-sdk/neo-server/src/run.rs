@@ -8,7 +8,8 @@
 //!        every open tab (the init's `pages`) ─ run_script
 //!          ‖ deadline, shutdown, orphaned (no waiter for the grace) ─▶ RunCtx::stop
 //!        teardown: stop(ScriptReturned), drain ops, abort stragglers
-//!        RunReply::build, then its tips (snapshot_tips: a delta the run could have used)
+//!        RunReply::build, then the run's snapshot texts committed as delta baselines or dropped
+//!          (RunState::settle_snapshot_baselines) and its tips (snapshot_tips)
 //!        RunGuard::finish (run_ended, the reply as replay)
 //!          ─ ticket.finish (waiters, ledger)
 //!    Waiter::reply ◀── the one reply, shared by every caller of the run

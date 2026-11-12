@@ -292,6 +292,10 @@
     "page.snapshotBaseline": [
       "document"
     ],
+    "page.snapshotPending": [
+      "document",
+      "returned"
+    ],
     "page.title": [],
     "page.waitForFunction": [
       "arg",
@@ -3811,9 +3815,22 @@
           "$neo": "page",
           "tab": 1007
         },
-        "text": "",
-        "delta": false,
         "document": 3
+      }
+    ],
+    "page.snapshotPending": [
+      {
+        "call": {
+          "api": "page.ariaSnapshot",
+          "timeoutMs": 5000
+        },
+        "page": {
+          "$neo": "page",
+          "tab": 1007
+        },
+        "document": 3,
+        "text": "",
+        "delta": false
       },
       {
         "call": {
@@ -3824,9 +3841,10 @@
           "$neo": "page",
           "tab": 1007
         },
+        "document": 3,
         "text": "",
         "delta": true,
-        "document": 3
+        "returned": "# full snapshot: too much differs from your last snapshot to list as changes\n"
       }
     ],
     "page.title": [

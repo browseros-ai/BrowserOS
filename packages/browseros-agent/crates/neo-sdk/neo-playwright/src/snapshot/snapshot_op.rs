@@ -16,9 +16,11 @@
 //! A snapshot only reads, so it never calls `send_effect`. Default mode mints no refs and so
 //! prints no iframes to follow: it reads one frame, as upstream's does.
 //!
-//! `page.snapshotBaseline` is Neo's own: after the prelude renders a whole page's v1 text, it
-//! hands the text over and gets the tab's previous one back, which `ariaSnapshot({ delta:
-//! true })` diffs against (`snapshot_baselines.rs`).
+//! `page.snapshotBaseline` and `page.snapshotPending` are Neo's own, behind
+//! `ariaSnapshot({ delta: true })`. After the prelude renders a whole page's v1 text, a delta
+//! call reads the tab's stored baseline to diff against, and every whole-page v1 call records its
+//! text, and the string it returned, as pending on the run's state; the host commits or drops
+//! that when the run ends (`snapshot_baselines.rs`, `pending_baselines.rs`).
 
 use std::fmt;
 use std::time::Duration;
@@ -41,17 +43,18 @@ use crate::probe::{
 };
 use crate::resolve::{self, Hopped, Landed, Resolver};
 use crate::target::{Chunk, PageRef, Strictness, Target};
-use crate::wire::{self, Describe, OpWire, Route, Run, options};
+use crate::wire::{self, Describe, Nothing, OpWire, Route, Run, options};
 use crate::world::{Place, SeqLookup};
 use crate::{ErrorCode, Playwright, PlaywrightError};
 
 listed_enum! {
     /// Aria snapshots of a whole page (every frame stitched in) or of one element, and the
-    /// tab's delta baseline.
+    /// tab's delta baseline: read, and a run's text recorded as pending.
     pub(crate) enum SnapshotOp {
         Page,
         Locator,
         Baseline,
+        Pending,
     }
 }
 
@@ -74,12 +77,18 @@ impl SnapshotOp {
                 TARGET,
                 "an aria snapshot rooted at one element; mode 'ai' prints refs",
             ),
-            // A read: it only swaps text Neo keeps, and never touches the page.
+            // Reads: they touch only text Neo keeps, never the page.
             Self::Baseline => OpSpec::read(
                 "page.snapshotBaseline",
                 PAGE,
-                "stores the whole page's v1 snapshot text as the tab's delta baseline and \
-                 answers the previous one, or null when its document changed",
+                "the tab's delta baseline: the last whole-page v1 snapshot text of that \
+                 document its caller was given, or null",
+            ),
+            Self::Pending => OpSpec::read(
+                "page.snapshotPending",
+                PAGE,
+                "records a whole-page v1 snapshot's text, and the string the call returned, \
+                 as the run's pending baseline for its tab",
             ),
         }
     }
@@ -104,7 +113,15 @@ fn route<'a, R: Route<'a>>(op: SnapshotOp, r: R) -> R::Out {
                  text per tab on the host for ariaSnapshot({ delta: true }), since each run is \
                  a fresh realm and the page's world must not hold cross-site frames' text",
             ),
-            swap_baseline,
+            read_baseline,
+        ),
+        SnapshotOp::Pending => r.op(
+            wire::neo_only(
+                "the delta baseline is the text the caller was given, which only the host \
+                 knows when the run ends, so each whole-page v1 snapshot's text waits on the \
+                 run's state until then",
+            ),
+            record_pending,
         ),
     }
 }
@@ -160,19 +177,35 @@ options!(LocatorInput);
 #[ts(rename = "SnapshotBaselineInput")]
 struct BaselineInput {
     page: PageRef,
-    /// The whole page's v1 text, exactly as the script receives it in full: after the notice
-    /// and the cap, so a delta only ever prints lines the agent has seen or will see.
-    text: String,
-    /// The script passed `delta: true`. Without it, a baseline found means a delta was possible,
-    /// which the run's reply turns into a tip.
-    delta: bool,
-    /// The `document` the page's snapshot answered. A text with none, or of a document the tab
-    /// has since left, is not kept and finds no baseline.
+    /// The `document` the page's snapshot answered. None finds no baseline.
     #[serde(default)]
     #[ts(optional)]
     document: Option<u32>,
 }
 options!(BaselineInput);
+
+/// `page.snapshotPending`.
+#[derive(Debug, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+#[ts(rename = "SnapshotPendingInput")]
+struct PendingInput {
+    page: PageRef,
+    /// The `document` the page's snapshot answered. A text with none is not recorded.
+    #[serde(default)]
+    #[ts(optional)]
+    document: Option<u32>,
+    /// The whole page's v1 text, after the notice and the cap: what the baseline becomes.
+    text: String,
+    /// The script passed `delta: true`. Without it, a stored baseline found means a delta was
+    /// possible, which the run's reply turns into a tip.
+    delta: bool,
+    /// What the call returned, when it was not `text` itself: a delta call's delta. The text
+    /// becomes the baseline only if this string reaches the caller whole.
+    #[serde(default)]
+    #[ts(optional)]
+    returned: Option<String>,
+}
+options!(PendingInput);
 
 /// Runs one snapshot op; its output is `aria_snapshot::SnapshotResult`, `{ json, partial }`.
 pub(crate) async fn invoke(
@@ -196,7 +229,7 @@ async fn page_snapshot(
     let page = input.page.tab();
     let page = OpPage::admit(pw, scope, page).await?;
     // Before the tree: a document that commits after this makes the text stale for the
-    // baseline, so a late swap cannot hand the new document the old one's text.
+    // baseline, so a run that ends later cannot hand the new document the old one's text.
     let document = pw.snapshot_baselines().generation(page.target_id());
     let snapshotter = Snapshotter {
         scope,
@@ -279,26 +312,45 @@ async fn locator_snapshot(
     Err(scope.timed_out(ErrorCode::NoMatch))
 }
 
-/// Swaps the tab's baseline for `input.text`: the previous text, or `null` when the tab has
-/// none (no whole-page v1 snapshot yet, or its main frame committed a new document since, or it
-/// was too long to keep). The page is admitted like any op's, so a tab the run may not touch
-/// keeps its baseline unread.
-async fn swap_baseline(
+/// The tab's stored baseline for the snapshot's document, or `null`: none yet, its main frame
+/// committed a new document since, or no `document` was given. Never a text pending in this run,
+/// so a delta compares against what the caller held when the run started. The page is admitted
+/// like any op's, so a tab the run may not touch keeps its baseline unread.
+async fn read_baseline(
     pw: &Playwright,
     scope: &OpScope<'_>,
     input: BaselineInput,
 ) -> Result<Option<String>, PlaywrightError> {
     let page = OpPage::admit(pw, scope, input.page.tab()).await?;
+    Ok(input
+        .document
+        .and_then(|document| pw.snapshot_baselines().stored(page.target_id(), document)))
+}
+
+/// Records the snapshot's text as pending on the run's state; the host settles it when the run
+/// ends (`RunState::settle_snapshot_baselines`). A full snapshot that finds a stored baseline is
+/// noted for the reply's tip.
+async fn record_pending(
+    pw: &Playwright,
+    scope: &OpScope<'_>,
+    input: PendingInput,
+) -> Result<Nothing, PlaywrightError> {
+    let page = OpPage::admit(pw, scope, input.page.tab()).await?;
     let Some(document) = input.document else {
-        return Ok(None);
+        return Ok(());
     };
-    let previous = pw
-        .snapshot_baselines()
-        .swap(page.target_id(), document, input.text);
-    if previous.is_some() && !input.delta {
+    let store = pw.snapshot_baselines();
+    if !input.delta && store.has_stored(page.target_id(), document) {
         scope.run_state().note_full_snapshot_repeat(page.tab());
     }
-    Ok(previous)
+    scope.run_state().pending_baselines.record(
+        store,
+        page.target_id().clone(),
+        document,
+        input.text,
+        input.returned,
+    );
+    Ok(())
 }
 
 /// What every frame of one snapshot op shares.

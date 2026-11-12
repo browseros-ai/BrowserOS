@@ -1788,8 +1788,12 @@ mod worker_observation_tests {
         let session = SessionId::from("tab-session");
         watcher.sessions.insert(session.clone(), tab.clone());
         watcher.lifecycle_sources.attach(&session, &tab);
+        // A snapshot whose run ended with its text given: the stored text it replaces, then it.
         let snapshot = |target: &TargetId, text: &str| {
-            baselines.swap(target, baselines.generation(target), text.to_owned())
+            let document = baselines.generation(target);
+            let previous = baselines.stored(target, document);
+            baselines.commit(target, document, text.to_owned());
+            previous
         };
         snapshot(&tab, "tab text");
         snapshot(&other, "other text");

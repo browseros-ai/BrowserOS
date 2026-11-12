@@ -1,8 +1,9 @@
 //! The run reply's tip about `page.ariaSnapshot({ delta: true })`.
 //!
 //! ```text
-//!  neo-playwright  page.snapshotBaseline: a full whole-page snapshot found a baseline of its
-//!                  tab and document → RunState::full_snapshot_repeats() lists the tab
+//!  neo-playwright  page.snapshotPending: a full whole-page snapshot found a stored baseline
+//!                  (not a pending one) of its tab and document
+//!                  → RunState::full_snapshot_repeats() lists the tab
 //!  run service     after the ops drained, before the end record: SnapshotTips::decide
 //!                    failed run → none
 //!                    the host's taskId, else the run's Neo task → that task's count
@@ -13,7 +14,7 @@
 //!
 //! The decision is stored in the reply, so a `requestId` replay renders the same text, and the
 //! counts only move for tips a caller was actually given. Under the spec harness's conformance
-//! switch the prelude never sends the baseline op, so no tip can arise there.
+//! switch the prelude never sends the baseline ops, so no tip can arise there.
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicU32, Ordering};

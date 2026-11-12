@@ -183,6 +183,24 @@ impl RunReply {
         }
     }
 
+    /// Whether the caller was given `text` whole: inside one string of the returned value, or
+    /// one console line the reply kept. What decides whether a run's snapshot becomes its tab's
+    /// delta baseline (`neo_playwright::RunState::settle_snapshot_baselines`): a slice, a length
+    /// or a value the script computed from the text does not count, nor a line past the console
+    /// limits.
+    #[must_use]
+    pub(crate) fn shows(&self, text: &str) -> bool {
+        fn within(value: &Value, text: &str) -> bool {
+            match value {
+                Value::String(string) => string.contains(text),
+                Value::Array(items) => items.iter().any(|item| within(item, text)),
+                Value::Object(fields) => fields.values().any(|field| within(field, text)),
+                Value::Null | Value::Bool(_) | Value::Number(_) => false,
+            }
+        }
+        within(&self.value, text) || self.logs.iter().any(|line| line.text.contains(text))
+    }
+
     /// A call refused before it ran: nothing happened, so repeating it is safe.
     #[must_use]
     pub(crate) fn refused(id: RunId, error: &OperationError) -> Self {
@@ -398,6 +416,34 @@ mod tests {
             serde_json::from_value::<RunReply>(stored)?,
             reply,
             "a repeat of the requestId renders exactly what the first call got"
+        );
+        Ok(())
+    }
+
+    /// What decides whether a run's snapshot text becomes its tab's delta baseline: the text
+    /// whole, in one returned string or one kept console line.
+    #[test]
+    fn a_reply_shows_a_text_only_whole_in_its_value_or_its_console() -> Result<(), Box<dyn Error>> {
+        let reply: RunReply = serde_json::from_value(serde_json::json!({
+            "id": RunId::new(),
+            "status": "ok",
+            "effects": "none",
+            "value": { "page": ["intro", "- button \"Go\" [ref=e2]\n- link \"Help\""], "n": 42 },
+            "logs": [{ "level": "log", "text": "seen: - heading \"Cart\"" }],
+        }))?;
+        assert!(reply.shows("- button \"Go\" [ref=e2]\n- link \"Help\""));
+        assert!(reply.shows("- heading \"Cart\""), "a console line counts");
+        assert!(
+            !reply.shows("- button \"Go\" [ref=e2]\n- link \"Help\"\n- link \"More\""),
+            "the returned string holds only part of the text"
+        );
+        assert!(
+            !reply.shows("42"),
+            "a number is not a string the caller read"
+        );
+        assert!(
+            !reply.shows("intro- button"),
+            "two strings are not joined into one"
         );
         Ok(())
     }

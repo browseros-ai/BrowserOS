@@ -276,12 +276,18 @@ impl RunService {
         // exactly what the caller got.
         let mut reply = RunReply::build(&run, end);
         reply.tasks = self.dispatcher.task_notes(&run).await;
-        // Read before the end record drops the run's Playwright state.
+        // Both read the run's Playwright state, before the end record drops it. A snapshot's
+        // text becomes its tab's delta baseline only now, with the reply in hand: when the run
+        // ended ok and what the call returned is in what the caller gets.
+        let playwright = run.slot::<RunState>();
+        playwright.settle_snapshot_baselines(reply.error.is_none(), &|returned: &str| {
+            reply.shows(returned)
+        });
         let task = run.task_id().cloned().or_else(|| run.current_task());
         reply.tips = self.snapshot_tips.decide(
             reply.error.is_some(),
             task.as_ref(),
-            &run.slot::<RunState>().full_snapshot_repeats(),
+            &playwright.full_snapshot_repeats(),
             &self.tabs,
         );
         let reply = Arc::new(reply);

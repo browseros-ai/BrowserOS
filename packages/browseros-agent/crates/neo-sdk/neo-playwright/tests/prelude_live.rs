@@ -532,10 +532,11 @@ async fn tests_that_a_playwright_script_runs_through_the_prelude_on_a_live_brows
 }
 
 /// `ariaSnapshot({ delta: true })` on a real engine, across fresh realms on one host as runs
-/// are: the first snapshot is whole, an unchanged one says so, a collapsed comment lists only
-/// its lines, a locator snapshot in between leaves the baseline, another tab has its own, a new
-/// document starts over, and a full snapshot that could have been a delta is counted for the
-/// server's tip.
+/// are, each ended as the run service ends it (`LiveRun::end_run`): the first snapshot is whole,
+/// an unchanged one says so, a collapsed comment lists only its lines, a locator snapshot in
+/// between leaves the baseline, another tab has its own, a delta later in the same run still
+/// compares against the baseline from the run's start, a new document starts over, and a full
+/// snapshot that could have been a delta is counted for the server's tip.
 #[tokio::test]
 #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
 async fn tests_that_a_delta_snapshot_lists_what_changed_on_a_live_browser() -> TestResult {
@@ -555,6 +556,8 @@ async fn tests_that_a_delta_snapshot_lists_what_changed_on_a_live_browser() -> T
         ),
     )
     .await?;
+    // The run returned its snapshot, so its text is the tab's baseline from here on.
+    run.end_run(Some(&opened));
     let tab = opened["tab"].as_i64().ok_or("the page's tab")?;
     let first = opened["first"].as_str().ok_or("the first snapshot")?;
     assert!(
@@ -618,8 +621,9 @@ async fn tests_that_a_delta_snapshot_lists_what_changed_on_a_live_browser() -> T
     );
     assert_eq!(
         text("again"),
-        "# no change since your last snapshot of this tab",
-        "the other tab's snapshot left this tab's baseline"
+        text("collapsed"),
+        "the same run's snapshots stay pending: this one still compares against the first \
+         run's text, and the other tab's snapshot left it alone"
     );
     assert!(
         text("navigated").starts_with("# full snapshot: no earlier snapshot of this page\n"),
@@ -629,7 +633,7 @@ async fn tests_that_a_delta_snapshot_lists_what_changed_on_a_live_browser() -> T
     assert_eq!(
         run.full_snapshot_repeats(),
         [TabId(tab)],
-        "the full snapshot while a baseline was there is the one a tip is for"
+        "the full snapshot while a baseline was stored is the one a tip is for"
     );
     Ok(())
 }

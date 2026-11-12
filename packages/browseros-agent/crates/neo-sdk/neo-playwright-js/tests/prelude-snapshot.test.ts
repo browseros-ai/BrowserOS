@@ -85,8 +85,8 @@ it('tests that page and locator snapshots send their mode and depth, the text pa
       target: undefined,
     },
     {
-      // A whole page's v1 text becomes the tab's delta baseline; a locator's never does.
-      name: 'page.snapshotBaseline',
+      // A whole page's v1 text is recorded as the run's pending baseline; a locator's never is.
+      name: 'page.snapshotPending',
       // What is left of the snapshot's own 5 s.
       call: { api: 'page.ariaSnapshot', timeoutMs: expect.any(Number) },
       page: { $neo: 'page', tab: 1007 },

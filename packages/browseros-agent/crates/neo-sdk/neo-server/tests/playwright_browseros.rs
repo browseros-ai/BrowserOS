@@ -13,8 +13,10 @@
 //!    Chromium still refuses web pages' own navigations to local files (location, meta refresh,
 //!    a link, an iframe, a popup, a web load's redirect)
 //!  a selector with `:scope` inside `:has()`: its deep parsed brand reaches `$$eval` and `count`
-//!  page.ariaSnapshot({ delta: true }) across runs, and the reply's tip after a full snapshot a
-//!    delta could have answered: at most three per task, or per tab for runs with no task
+//!  page.ariaSnapshot({ delta: true }) across runs: the baseline is the last snapshot a run gave
+//!    its caller (not one a failed run took, one only inspected, nor one earlier in the run);
+//!    and the reply's tip after a full snapshot found a stored one: at most three per task, or
+//!    per tab for runs with no task
 //! ```
 //!
 //! Like `e2e_browseros.rs`, it runs only when `CLAW_SDK_E2E_BROWSER` names a BrowserOS binary.
@@ -30,7 +32,7 @@ use std::path::Path;
 use std::pin::Pin;
 use std::time::Duration;
 
-use browseros_rig::{CaptchaKey, Rig, TestResult, browser_or_skip, outcome, run};
+use browseros_rig::{CaptchaKey, Client, Rig, TestResult, browser_or_skip, outcome, run};
 use neo_trace::RunId;
 use rmcp::model::{CallToolResult, ContentBlock};
 use serde_json::{Value, json};
@@ -240,43 +242,106 @@ fn read(result: &CallToolResult) -> Result<(String, Value), Box<dyn Error>> {
 async fn delta_and_tip(rig: &Rig) -> TestResult {
     rig.until_ready().await?;
     let client = rig.client().await?;
-    let task = json!({ "taskId": "delta-tip" });
-    let snap = |body: &str| format!("{DELTA_PAGE}\n{body}");
-    let first = run(
-        &client,
-        &snap("return await p.ariaSnapshot({ delta: true })"),
-        &task,
-    )
-    .await?;
-    let (text, status) = read(&first)?;
-    assert_eq!(status, json!("ok"), "{first:?}");
-    assert!(
-        text.starts_with("\"# full snapshot: no earlier snapshot of this page\\n- main [ref="),
-        "the first delta is the whole page, as JSON text: {text}"
-    );
-    assert!(!text.contains(DELTA_TIP), "a delta needs no tip: {text}");
+    delta_baselines(&client).await?;
+    delta_tips(&client).await?;
+    client.cancel().await?;
+    Ok(())
+}
 
-    let changed = run(
-        &client,
-        &snap(
-            "await p.evaluate(() => { document.querySelector('button').textContent = 'Expand' })\n\
-             return await p.ariaSnapshot({ delta: true })",
+/// `{DELTA_PAGE}` then `body`: the page's script, with its button's text set to `label` first.
+fn on_delta_page(label: &str, body: &str) -> String {
+    format!(
+        "{DELTA_PAGE}\nawait p.evaluate((label) => {{ document.querySelector('button').textContent = label }}, {label:?})\n{body}"
+    )
+}
+
+/// The delta's value, from a run that must have succeeded.
+async fn delta_of(client: &Client, code: &str, task: &Value) -> Result<String, Box<dyn Error>> {
+    let result = run(client, code, task).await?;
+    let (text, status) = read(&result)?;
+    assert_eq!(status, json!("ok"), "{result:?}");
+    let first = text.lines().next().ok_or("a reply has its value")?;
+    Ok(serde_json::from_str(first)?)
+}
+
+/// The baseline is the last snapshot text a run gave its caller: never one a failed run took,
+/// one the script only inspected, nor one taken earlier in the same run.
+async fn delta_baselines(client: &Client) -> TestResult {
+    let task = json!({ "taskId": "delta-baseline" });
+    let delta = "return await p.ariaSnapshot({ delta: true })";
+    let first = delta_of(client, &on_delta_page("Collapse", delta), &task).await?;
+    assert!(
+        first.starts_with("# full snapshot: no earlier snapshot of this page\n- main [ref="),
+        "the first delta is the whole page: {first}"
+    );
+    // Each of these takes the changed page and never gives it to the caller.
+    let failed = run(
+        client,
+        &on_delta_page(
+            "Expand",
+            "await p.ariaSnapshot()\nthrow new Error('after the snapshot')",
         ),
         &task,
     )
     .await?;
-    let (text, _) = read(&changed)?;
-    let value: String = serde_json::from_str(&text)?;
+    assert_eq!(read(&failed)?.1, json!("error"));
+    let inspected = run(
+        client,
+        &on_delta_page("Expand", "return (await p.ariaSnapshot()).length"),
+        &task,
+    )
+    .await?;
+    assert_eq!(read(&inspected)?.1, json!("ok"), "{inspected:?}");
+    let since_first = delta_of(client, &on_delta_page("Expand", delta), &task).await?;
     assert!(
-        value.starts_with("# changes since your last snapshot of this tab: 1 added, 1 removed\n"),
-        "{value}"
+        since_first
+            .starts_with("# changes since your last snapshot of this tab: 1 added, 1 removed\n")
+            && since_first.contains("\n-  - button \"Collapse\" [ref=")
+            && since_first.contains("\n+  - button \"Expand\" [ref="),
+        "still against the first run's text: {since_first}"
     );
-    assert!(value.contains("\n+  - button \"Expand\" [ref="), "{value}");
+    // A console line counts as given.
+    let logged = on_delta_page("Logged", "console.log(await p.ariaSnapshot())\nreturn 1");
+    run(client, &logged, &task).await?;
+    let after_log = delta_of(client, &on_delta_page("Logged", delta), &task).await?;
+    assert_eq!(
+        after_log,
+        "# no change since your last snapshot of this tab"
+    );
+    // One run: a full snapshot, an act, then a delta, which compares against the text stored
+    // when the run started ("Logged"), not the run's own full snapshot ("Middle").
+    let in_one_run = on_delta_page(
+        "Middle",
+        "const full = await p.ariaSnapshot()\n\
+         await p.evaluate(() => { document.querySelector('button').textContent = 'Last' })\n\
+         return [full.length, await p.ariaSnapshot({ delta: true })]",
+    );
+    let result = run(client, &in_one_run, &task).await?;
+    let (text, _) = read(&result)?;
+    let value: Value = serde_json::from_str(text.lines().next().ok_or("a value")?)?;
+    let one_run = value.get(1).and_then(Value::as_str).unwrap_or_default();
+    assert!(
+        one_run.contains("\n-  - button \"Logged\" [ref=")
+            && one_run.contains("\n+  - button \"Last\" [ref="),
+        "against the run's starting baseline: {one_run}"
+    );
+    Ok(())
+}
 
-    // A full snapshot of the same tab and document: a delta was possible, so the reply ends with
-    // the tip, on its own line after the value.
+/// A full snapshot that found a stored baseline ends the reply with the tip: never on a failed
+/// run, three times per task, and three per tab for runs with no task.
+async fn delta_tips(client: &Client) -> TestResult {
+    let task = json!({ "taskId": "delta-tip" });
+    let snap = |body: &str| on_delta_page("Collapse", body);
+    let given = run(
+        client,
+        &snap("return await p.ariaSnapshot({ delta: true })"),
+        &task,
+    )
+    .await?;
+    assert!(!read(&given)?.0.contains(DELTA_TIP), "a delta needs no tip");
     let failed = run(
-        &client,
+        client,
         &snap("await p.ariaSnapshot()\nthrow new Error('after the snapshot')"),
         &task,
     )
@@ -287,7 +352,7 @@ async fn delta_and_tip(rig: &Rig) -> TestResult {
     let mut tips = 0;
     for _ in 0..5 {
         let full = run(
-            &client,
+            client,
             &snap("return (await p.ariaSnapshot()).length"),
             &task,
         )
@@ -303,23 +368,20 @@ async fn delta_and_tip(rig: &Rig) -> TestResult {
         }
     }
     assert_eq!(tips, 3, "at most three tips per task");
-
     // Runs with no task count per tab: the same tab's three are its own.
     let mut untasked = 0;
     for _ in 0..4 {
         let full = run(
-            &client,
+            client,
             &snap("return (await p.ariaSnapshot()).length"),
             &json!({}),
         )
         .await?;
-        let (text, _) = read(&full)?;
-        if text.ends_with(DELTA_TIP) {
+        if read(&full)?.0.ends_with(DELTA_TIP) {
             untasked += 1;
         }
     }
     assert_eq!(untasked, 3, "a tab with no task has three of its own");
-    client.cancel().await?;
     Ok(())
 }
 

@@ -1,13 +1,15 @@
 /**
- * `page.ariaSnapshot({ delta: true })`: what changed since the agent's last whole-page v1
- * snapshot of the tab, as a line diff of the two texts.
+ * `page.ariaSnapshot({ delta: true })`: what changed since the last whole-page v1 snapshot of
+ * the tab that the caller was given, as a line diff of the two texts.
  *
- *   frame.ts   renders the v1 text (snapshot-v1.ts, capped), then swaps it for the tab's
- *              baseline (`page.snapshotBaseline`, kept by Rust on the host across runs)
- *   here       previous text + current text → one of four first lines, then the hunks
+ *   frame.ts   renders the v1 text (snapshot-v1.ts, capped), reads the tab's stored baseline
+ *              (`page.snapshotBaseline`, kept by Rust on the host across runs), and records the
+ *              text as pending; the host stores it once the run ends with it in the caller's
+ *              hands (neo-playwright's snapshot_baselines.rs and pending_baselines.rs)
+ *   here       stored text + current text → one of four first lines, then the hunks
  *
- * Both texts are what the agent received (after the notice and the cap), so a delta only ever
- * prints lines the agent has seen or is seeing now. The notice line and the cut line are left
+ * Both texts are what the caller received (after the notice and the cap), so a delta only ever
+ * prints lines the caller has seen or is seeing now. The notice line and the cut line are left
  * out of the comparison and of the result: they describe the snapshot's size, not the page.
  */
 
