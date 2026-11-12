@@ -194,21 +194,31 @@ impl Registration {
     /// nothing to remove. The session is let go only once both answered, so a removal cut short
     /// by the op's drop is sent again by `Drop`; a second removal of one identifier, or a second
     /// `removeBinding`, changes nothing.
-    async fn remove(mut self) {
-        if let Some(session) = &self.session {
-            remove(session, &self.identifier, self.cleanup.as_deref()).await;
-        }
-        self.session = None;
+    async fn remove(self) {
+        self.remove_reporting(|| {}).await;
     }
 
-    /// [`Registration::remove`] driven by `scope`'s op, which reports the main world when the
-    /// cleanup runs in the loaded documents. The run's end ([`InitScripts::remove_all`]) and a
-    /// dropped registration remove with no op to report to, so their cleanup goes unflagged.
+    /// [`Registration::remove`] driven by `scope`'s op, which reports the main world right
+    /// before the cleanup goes out to the loaded documents, so a removal that stalls first
+    /// reports nothing. The run's end ([`InitScripts::remove_all`]) and a dropped registration
+    /// remove with no op to report to, so their cleanup goes unflagged.
     async fn remove_by(self, scope: &OpScope<'_>) {
-        if self.session.is_some() && self.cleanup.is_some() {
-            scope.sending_main_world();
+        self.remove_reporting(|| scope.sending_main_world()).await;
+    }
+
+    /// The session is cleared only after the removal: a future dropped mid-removal leaves it
+    /// for `Drop` to retry.
+    async fn remove_reporting(mut self, before_cleanup: impl FnOnce()) {
+        if let Some(session) = &self.session {
+            remove(
+                session,
+                &self.identifier,
+                self.cleanup.as_deref(),
+                before_cleanup,
+            )
+            .await;
         }
-        self.remove().await;
+        self.session = None;
     }
 }
 
@@ -223,12 +233,19 @@ impl Drop for Registration {
         let identifier = mem::take(&mut self.identifier);
         let cleanup = self.cleanup.take();
         drop(runtime.spawn(async move {
-            remove(&session, &identifier, cleanup.as_deref()).await;
+            remove(&session, &identifier, cleanup.as_deref(), || {}).await;
         }));
     }
 }
 
-async fn remove(session: &ProtocolSession, identifier: &str, cleanup: Option<&str>) {
+/// `before_cleanup` runs right before a binding's cleanup is sent into the main world, and not
+/// at all for a script with no cleanup.
+async fn remove(
+    session: &ProtocolSession,
+    identifier: &str,
+    cleanup: Option<&str>,
+    before_cleanup: impl FnOnce(),
+) {
     let _removed = session
         .send::<_, Value>(
             "Page.removeScriptToEvaluateOnNewDocument",
@@ -236,6 +253,7 @@ async fn remove(session: &ProtocolSession, identifier: &str, cleanup: Option<&st
         )
         .await;
     if let Some(cleanup) = cleanup {
+        before_cleanup();
         run_in_loaded_documents(session, cleanup).await;
     }
 }

@@ -434,3 +434,47 @@ async fn tests_that_disposing_a_binding_reports_the_main_world() -> TestResult {
     );
     Ok(())
 }
+
+/// A binding's dispose whose script removal never answers is cut off before its cleanup goes
+/// out, so it reports no main world: the report comes right before the cleanup's send.
+#[tokio::test]
+async fn tests_that_a_dispose_stalled_before_its_cleanup_reports_nothing() -> TestResult {
+    let connection = TestConnection::new([]);
+    let browser = binding_browser(&connection).await?;
+    let playwright = Playwright::new(Arc::clone(&browser));
+    let env = TestEnv::over(BrowserView::unbound(Arc::clone(&browser), None));
+    let binding = invoke(
+        &playwright,
+        &env,
+        "page.exposeBinding",
+        json!({ "call": {}, "page": { "$neo": "page", "tab": 7 }, "name": "f" }),
+    )
+    .await?;
+    connection.always(REMOVE, browseros_core::testing::cdp_pending())?;
+    let adds_before = sent(&connection, ADD)?.len();
+    let reports_before = main_world_reports(&env);
+
+    let dispose = invoke(
+        &playwright,
+        &env,
+        "disposable.dispose",
+        json!({ "call": {}, "id": binding }),
+    );
+    assert!(
+        time::timeout(Duration::from_millis(200), dispose)
+            .await
+            .is_err(),
+        "the removal never answers, so the dispose is cut off"
+    );
+    assert_eq!(
+        sent(&connection, ADD)?.len(),
+        adds_before,
+        "no cleanup went out"
+    );
+    assert_eq!(
+        main_world_reports(&env),
+        reports_before,
+        "a cleanup that never went out reports no main world"
+    );
+    Ok(())
+}
