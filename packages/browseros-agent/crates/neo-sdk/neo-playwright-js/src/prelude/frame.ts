@@ -27,7 +27,7 @@ import {
 } from './evaluation'
 import { EventDeadline } from './event-deadline'
 import { dropFiles, inputFiles, withClientErrors } from './files'
-import { OPTION_KEYS, send } from './generated'
+import { OPTION_KEYS, type Strictness, send } from './generated'
 import type { OpName } from './generated/ops'
 import { FrameLocator, Locator, testIdAttributeName } from './locator'
 import { markHandle, pick, selectOptionValues } from './options'
@@ -77,7 +77,6 @@ import type {
   ScreenshotOptions,
   SerializedValue,
   SnapshotResult,
-  Strictness,
   TargetArgs,
   WaitForState,
 } from './wire'

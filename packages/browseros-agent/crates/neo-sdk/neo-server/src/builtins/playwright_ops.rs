@@ -721,7 +721,7 @@ mod tests {
             .iter()
             .find(|ty| ty.name == name)
             .ok_or_else(|| format!("the wire has no declaration for {name}"))?;
-        let text = ty.text.as_ref().map_err(|error| error.to_owned())?;
+        let text = ty.text.as_ref().map_err(ToOwned::to_owned)?;
         let (_, declaration) = text
             .split_once(&format!("export type {name} = "))
             .ok_or_else(|| format!("the wire has no type body for {name}"))?;

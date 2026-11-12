@@ -38,7 +38,6 @@ export type {
   ResponseInfo,
   ScrollOption,
   SnapshotResult,
-  Strictness,
   Target,
 } from './generated'
 /** Playwright's in-page serialized value (`utilityScriptSerializers.ts`), as JSON. */

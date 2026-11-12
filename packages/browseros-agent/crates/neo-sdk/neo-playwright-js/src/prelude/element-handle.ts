@@ -23,7 +23,7 @@ import {
   type ScreenshotOptionsInput,
   screenshotOptions,
 } from './frame'
-import { OPTION_KEYS, send } from './generated'
+import { OPTION_KEYS, type Strictness, send } from './generated'
 import type { OpName } from './generated/ops'
 import { markHandle, pick, selectOptionValues } from './options'
 import type { Page } from './page'
@@ -40,7 +40,6 @@ import type {
   LocatorBrand,
   OpInputs,
   OpOutputs,
-  Strictness,
 } from './wire'
 
 /** These generated senders all take only an element target and strictness. */
