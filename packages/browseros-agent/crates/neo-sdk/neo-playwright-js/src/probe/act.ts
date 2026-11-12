@@ -262,22 +262,17 @@ export function frameBox(
 }
 
 /**
- * Upstream's scroll rotation by attempt: the protocol's scroll-if-needed (here the same
- * Chromium call made from the page, which also scrolls every ancestor frame, cross-site ones
- * included: measured), then bottom, center and top alignment, for sticky headers and footers.
+ * Upstream's scroll rotation by attempt: the protocol's scroll-if-needed, which Rust sends as
+ * `DOM.scrollIntoViewIfNeeded` before this request (protocol_scroll.rs) because it is instant
+ * where the page's own `scrollIntoViewIfNeeded` follows `scroll-behavior: smooth`; then
+ * bottom, center and top alignment, for sticky headers and footers. Every scroll is instant
+ * and, like the protocol's, scrolls every ancestor frame, cross-site ones included.
  */
 function scroll(element: Element, plan: ScrollPlan): void {
   switch (plan) {
     case 'none':
-    case 'alreadyProtocol':
+    case 'protocol':
       return
-    case 'ifNeeded': {
-      const ifNeeded: unknown = Reflect.get(element, 'scrollIntoViewIfNeeded')
-      if (typeof ifNeeded === 'function')
-        Reflect.apply(ifNeeded, element, [true])
-      else element.scrollIntoView({ block: 'center', inline: 'center' })
-      return
-    }
     case 'end':
     case 'center':
     case 'start':

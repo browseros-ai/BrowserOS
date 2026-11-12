@@ -83,7 +83,7 @@ export const REQUEST_EXAMPLES: { [O in Op]: AtLeastOne<RequestOf<O>> } = {
       retarget: 'button-link',
       states: ['visible', 'enabled'],
       frameVisible: true,
-      scroll: 'ifNeeded',
+      scroll: 'protocol',
     },
     {
       op: 'act',

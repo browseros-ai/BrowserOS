@@ -8269,16 +8269,8 @@ ${value.stack}`;
   function scroll(element, plan) {
     switch (plan) {
       case "none":
-      case "alreadyProtocol":
+      case "protocol":
         return;
-      case "ifNeeded": {
-        const ifNeeded = Reflect.get(element, "scrollIntoViewIfNeeded");
-        if (typeof ifNeeded === "function")
-          Reflect.apply(ifNeeded, element, [true]);
-        else
-          element.scrollIntoView({ block: "center", inline: "center" });
-        return;
-      }
       case "end":
       case "center":
       case "start":
@@ -8606,7 +8598,7 @@ ${value.stack}`;
   }
 
   // crates/neo-sdk/neo-playwright-js/src/probe/protocol.ts
-  var PROTOCOL = 26;
+  var PROTOCOL = 27;
 
   // crates/neo-sdk/neo-playwright-js/src/probe/read.ts
   var XHTML = "http://www.w3.org/1999/xhtml";
