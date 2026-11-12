@@ -59,16 +59,30 @@ struct Baselines {
 
 #[derive(Debug, Default)]
 struct TabBaseline {
-    /// The tab's main document, as counted here; 0 until its first commit seen.
+    /// The tab's main document, as counted here: a fresh generation when the entry is made,
+    /// and another at each commit seen.
     generation: u32,
     /// The last text of that document the tab's caller was given.
     text: Option<String>,
 }
 
 impl SnapshotBaselines {
-    /// The tab's current document generation, for a snapshot to read before its tree.
+    /// The tab's current document generation, for a snapshot to read before its tree. Makes the
+    /// tab's entry on first use, with a generation of its own: a commit needs that entry, so a
+    /// tab that closed (its entry removed) never takes a baseline again.
     pub(crate) fn generation(&self, tab: &TargetId) -> u32 {
-        self.lock().current(tab)
+        let mut inner = self.lock();
+        if !inner.tabs.contains_key(tab) {
+            let generation = inner.next();
+            inner.tabs.insert(
+                tab.clone(),
+                TabBaseline {
+                    generation,
+                    text: None,
+                },
+            );
+        }
+        inner.current(tab)
     }
 
     /// The tab's stored baseline, if it is of the document generation `document` names.
@@ -98,7 +112,23 @@ impl SnapshotBaselines {
         if inner.current(tab) != document || text.len() > MAX_BASELINE_BYTES {
             return;
         }
-        inner.tabs.entry(tab.clone()).or_default().text = Some(text);
+        if let Some(entry) = inner.tabs.get_mut(tab) {
+            entry.text = Some(text);
+        }
+    }
+
+    /// The tab's caller may hold a newer text than the stored one, which the run could not keep
+    /// (`PendingBaselines` dropped it to stay in bound): no baseline is safe to compare against,
+    /// so the next delta comes back whole. Only while the tab is on the document `document`
+    /// names; a newer document has no baseline anyway.
+    pub(crate) fn forget(&self, tab: &TargetId, document: u32) {
+        let mut inner = self.lock();
+        if inner.current(tab) != document {
+            return;
+        }
+        if let Some(entry) = inner.tabs.get_mut(tab) {
+            entry.text = None;
+        }
     }
 
     /// The tab's main frame committed a new document: its baseline names a document the agent
@@ -222,6 +252,26 @@ mod tests {
         baselines.events_lost();
         baselines.commit(&tab("B"), read, "b".to_owned());
         assert_eq!(stored(&baselines, "B"), None);
+    }
+
+    #[test]
+    fn tests_that_a_closed_tab_takes_no_baseline_from_a_run_that_ends_after() {
+        let baselines = SnapshotBaselines::default();
+        let read = baselines.generation(&tab("A"));
+        baselines.tab_closed(&tab("A"));
+        baselines.commit(&tab("A"), read, "of a closed tab".to_owned());
+        assert_eq!(baselines.lock().tabs.len(), 0, "no entry was made again");
+    }
+
+    #[test]
+    fn tests_that_forgetting_drops_only_the_named_document_s_text() {
+        let baselines = SnapshotBaselines::default();
+        given(&baselines, "A", "a");
+        let read = baselines.generation(&tab("A"));
+        baselines.forget(&tab("A"), read.wrapping_sub(1));
+        assert_eq!(stored(&baselines, "A").as_deref(), Some("a"));
+        baselines.forget(&tab("A"), read);
+        assert_eq!(stored(&baselines, "A"), None);
     }
 
     #[test]
