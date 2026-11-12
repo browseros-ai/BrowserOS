@@ -11,13 +11,7 @@ import { send } from './generated'
  */
 
 import { type BindingCallback, exposeOnContext } from './bindings'
-import {
-  invoke,
-  type Observation,
-  type PageFact,
-  type Reply,
-  type RunInit,
-} from './bridge'
+import type { Observation, PageFact, Reply, RunInit } from './bridge'
 import type { Browser } from './browser'
 import { EventEmitter } from './emitter'
 import { internalError } from './errors'
@@ -104,8 +98,7 @@ export class BrowserContext extends EventEmitter {
       {
         register: async (source) =>
           (
-            await invoke(
-              'context.addInitScript',
+            await send['context.addInitScript'](
               site,
               { api, timeoutMs: 0 },
               { script: source },

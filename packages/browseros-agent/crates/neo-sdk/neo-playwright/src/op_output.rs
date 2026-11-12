@@ -37,6 +37,16 @@ impl Bytes {
 
 /// `value` as the op's JSON result. The crate's result types always serialize; a failure would
 /// be a Neo bug, so it is `neo / internal` rather than a panic.
+///
+/// Every typed route row's answer passes through here (`Run::op`), and this step is what puts
+/// its keys in sorted order on the wire, at every level: `to_value` builds `serde_json::Map`s,
+/// which are `BTreeMap`s while `serde_json`'s `preserve_order` feature is off, and whoever writes
+/// the `Value` out walks them in that order. Several reply types declare their fields out of
+/// alphabetical order (`NavigationResult`, `NavigationReply`, `LoadStateReached`, `Response`,
+/// `FrameInfo`, `PartialFrame`, `AriaNode`) and answer the sorted keys the `json!` maps they
+/// replaced did only because of it. Serializing a result straight to text, or any crate in the
+/// build enabling `preserve_order`, would send those replies in declaration order with nothing
+/// else noticing; `wire::route`'s `tests_that_an_answer_leaves_with_sorted_keys` fails first.
 pub(crate) fn to_output<T: Serialize>(
     scope: &OpScope<'_>,
     value: &T,

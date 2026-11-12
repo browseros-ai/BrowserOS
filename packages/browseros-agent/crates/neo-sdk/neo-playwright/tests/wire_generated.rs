@@ -110,6 +110,13 @@ const IMPORTED: &[Imported] = &[
         name: "AriaSnapshotJSON",
         checked_by: "tests/data/snapshot-output.json",
     },
+    // Rust passes the page's value through after holding it to the format's depth and shape;
+    // the recorded values are what Rust writes back for each in-page value.
+    Imported {
+        module: "../../../../../neo-playwright/third_party/playwright/packages/isomorphic/utilityScriptSerializers",
+        name: "SerializedValue",
+        checked_by: "tests/data/in-page-values.json",
+    },
     // The prelude's own parse of a selector; Rust keeps each chunk's JSON and reads only the
     // ref jumps, and the recorded prelude inputs decode in Rust.
     Imported {

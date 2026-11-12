@@ -4,8 +4,6 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use serde_json::Value;
-
 use crate::backoff::Backoff;
 use crate::locator_handler::{self, Prechecks};
 use crate::op_scope::OpScope;
@@ -15,7 +13,7 @@ use crate::read::element_handle::{self, Located};
 use crate::read::element_read;
 use crate::resolve::{Landed, Resolver};
 use crate::target::{LocatorTarget, RootHandle, Strictness};
-use crate::{ErrorCode, Playwright, PlaywrightError, op_output};
+use crate::{ErrorCode, Playwright, PlaywrightError};
 
 /// What a selector wait waits for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -70,22 +68,6 @@ impl SelectorState {
             Self::Detached | Self::Hidden => ErrorCode::WaitTimeout,
         }
     }
-}
-
-/// Temporary JSON boundary for `page/element_evaluate.rs` until page scripts move in PR 12.
-/// Read handlers and screenshot geometry call `wait_for_match` directly.
-pub(crate) async fn wait_for_selector(
-    pw: &Playwright,
-    scope: &OpScope<'_>,
-    target: &LocatorTarget,
-    strict: Strictness,
-    state: SelectorState,
-    returning: Returning,
-) -> Result<Value, PlaywrightError> {
-    op_output::to_output(
-        scope,
-        &wait_for_match(pw, scope, target, strict, state, returning).await?,
-    )
 }
 
 /// Waits until `target`'s first match (the only one under `strict`) is in `state`, on the outer

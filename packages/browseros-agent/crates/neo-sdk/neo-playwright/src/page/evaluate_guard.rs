@@ -44,8 +44,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use browseros_cdp::CdpError;
 use browseros_core::{CoreError, FrameId, ProtocolSession};
 use futures_util::future;
-use serde::{Deserialize, Deserializer};
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Value, json};
+use ts_rs::TS;
 
 use crate::op_scope::{OpScope, Sent};
 use crate::op_spec::Capability;
@@ -56,6 +57,7 @@ use crate::page::world_call::{self, with_world};
 use crate::probe::{NAVIGATED_OR_CLOSED, ProbeFailure, Ran};
 use crate::resolve::{self, HandleSite};
 use crate::target::{ElementTarget, PageRef};
+use crate::wire::options;
 use crate::world::{BackendNodeId, Endpoint, FrameSeq, IsolatedWorld, Place, SeqLookup};
 use crate::{ErrorCode, Playwright, PlaywrightError};
 
@@ -150,7 +152,7 @@ const DELIVER_BINDING_RESULT: &str =
 /// `bindingCall.resolve`: `{ page, context, arg }`, the answer to one call of a binding the run
 /// exposed (`page/init_script.rs`). `arg` is `{ name, seq, result }` or `{ name, seq, error }` in
 /// Playwright's in-page format, as the prelude serialized the agent's function's outcome.
-#[derive(Deserialize)]
+#[derive(Deserialize, TS)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct ResolveBindingInput {
     page: PageRef,
@@ -158,6 +160,13 @@ pub(crate) struct ResolveBindingInput {
     context: i64,
     arg: String,
 }
+options!(ResolveBindingInput);
+
+/// `bindingCall.resolve`'s answer: `{}`, as it has always been. Upstream's command answers
+/// nothing and the prelude reads nothing from it; an empty object rather than `Nothing` keeps
+/// the reply's bytes.
+#[derive(Debug, Serialize, TS)]
+pub(crate) struct BindingResolved {}
 
 /// Answers a binding call where it was made: upstream's `deliverBindingResult` in the execution
 /// context that called, as upstream's `PageBinding.dispatch` evaluates it there, after the door's
@@ -167,7 +176,7 @@ pub(crate) async fn resolve_binding(
     pw: &Playwright,
     scope: &OpScope<'_>,
     input: ResolveBindingInput,
-) -> Result<Value, PlaywrightError> {
+) -> Result<BindingResolved, PlaywrightError> {
     scope.require(Capability::MainWorld)?;
     let admitted = scope.admit(pw.browser(), input.page.tab()).await?;
     let session = pw
@@ -175,7 +184,7 @@ pub(crate) async fn resolve_binding(
         .protocol_session(admitted.session.session_id.clone());
     let sent = scope.send_effect()?;
     deliver_binding_result(&session, input.context, &input.arg, &sent).await;
-    Ok(json!({}))
+    Ok(BindingResolved {})
 }
 
 /// The main-world function's `evaluate` with [`DELIVER_BINDING_RESULT`] and `arg`, in `context`.

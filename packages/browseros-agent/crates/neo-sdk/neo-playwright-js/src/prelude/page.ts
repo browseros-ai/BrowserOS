@@ -13,7 +13,6 @@ import { type CallSite, captureSite, INTERNAL_SITE } from './call-site'
 import type { UrlPattern } from '../probe/protocol'
 import { type BindingCallback, exposeOnPage } from './bindings'
 import {
-  invoke,
   invokeObserved,
   type Observation,
   type PageFact,
@@ -836,8 +835,7 @@ export class Page extends EventEmitter {
       {
         register: async (source) =>
           (
-            await invoke(
-              'page.addInitScript',
+            await send['page.addInitScript'](
               site,
               { api, timeoutMs: 0 },
               { page: await this._brand(api), script: source },

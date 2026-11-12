@@ -7,26 +7,41 @@ import type * as pw from '../../../../neo-playwright/third_party/playwright/pack
 import { invoke } from '../bridge'
 import type { CallSite } from '../call-site'
 import type { SignalLike } from '../signal'
-import type { Assert, UpstreamCheck } from '../upstream-check'
+import type { Assert, UpstreamCheck, VoidIsNull } from '../upstream-check'
 import type { CallHeader } from '../wire'
+import type { ContextBindingInput } from './types/ContextBindingInput'
 import type { ContextNoArgs } from './types/ContextNoArgs'
 import type { ContextPageEntry } from './types/ContextPageEntry'
 import type { ContextPages } from './types/ContextPages'
+import type { ContextScriptInput } from './types/ContextScriptInput'
+import type { DisposeInput } from './types/DisposeInput'
+import type { Disposed } from './types/Disposed'
+import type { Registered } from './types/Registered'
 
+export type { ContextBindingInput } from './types/ContextBindingInput'
 export type { ContextNoArgs } from './types/ContextNoArgs'
 export type { ContextPageEntry } from './types/ContextPageEntry'
 export type { ContextPages } from './types/ContextPages'
+export type { ContextScriptInput } from './types/ContextScriptInput'
+export type { DisposeInput } from './types/DisposeInput'
+export type { Disposed } from './types/Disposed'
 
 /** Each context op's input, after the `call` header every op shares. */
 export type ContextInputs = {
   'context.pages': ContextNoArgs
   'context.newPage': ContextNoArgs
+  'context.addInitScript': ContextScriptInput
+  'context.exposeBinding': ContextBindingInput
+  'disposable.dispose': DisposeInput
 }
 
 /** Each context op's result. */
 export type ContextOutputs = {
   'context.pages': ContextPages
   'context.newPage': ContextPageEntry
+  'context.addInitScript': Registered
+  'context.exposeBinding': Registered
+  'disposable.dispose': Disposed
 }
 
 /**
@@ -53,6 +68,24 @@ export const CONTEXT_SEND = {
     input: ContextNoArgs,
     signal?: SignalLike,
   ): Promise<ContextPageEntry> => invoke('context.newPage', site, call, input, signal),
+  'context.addInitScript': (
+    site: CallSite,
+    call: CallHeader,
+    input: ContextScriptInput,
+    signal?: SignalLike,
+  ): Promise<Registered> => invoke('context.addInitScript', site, call, input, signal),
+  'context.exposeBinding': (
+    site: CallSite,
+    call: CallHeader,
+    input: ContextBindingInput,
+    signal?: SignalLike,
+  ): Promise<Registered> => invoke('context.exposeBinding', site, call, input, signal),
+  'disposable.dispose': (
+    site: CallSite,
+    call: CallHeader,
+    input: DisposeInput,
+    signal?: SignalLike,
+  ): Promise<Disposed> => invoke('disposable.dispose', site, call, input, signal),
 }
 
 // Each route row against Playwright's own protocol at the pin (upstream-check.ts): tsc
@@ -61,3 +94,12 @@ export const CONTEXT_SEND = {
 // context.newPage: BrowserContext.newPage
 type _context_newPage = Assert<UpstreamCheck<'context.newPage', ContextNoArgs, pw.BrowserContextNewPageParams, never, never, never>>
 //   result: the prelude caches url from the new tab so page.url() remains synchronous (no void check: Neo answers more than null on purpose)
+// context.addInitScript: BrowserContext.addInitScript
+//   adds script: the source, or a path Rust reads on Neo's disk as upstream's client reads it
+//   omits source: folded into script
+type _context_addInitScript = Assert<UpstreamCheck<'context.addInitScript', ContextScriptInput, pw.BrowserContextAddInitScriptParams, 'script', 'source', never>>
+type _context_addInitScript_result = Assert<VoidIsNull<'context.addInitScript', pw.BrowserContextAddInitScriptResult, Registered>>
+// context.exposeBinding: BrowserContext.exposeBinding
+type _context_exposeBinding = Assert<UpstreamCheck<'context.exposeBinding', ContextBindingInput, pw.BrowserContextExposeBindingParams, never, never, never>>
+type _context_exposeBinding_result = Assert<VoidIsNull<'context.exposeBinding', pw.BrowserContextExposeBindingResult, Registered>>
+// disposable.dispose: Neo only: Neo disposes a host-owned registration rather than a channel object

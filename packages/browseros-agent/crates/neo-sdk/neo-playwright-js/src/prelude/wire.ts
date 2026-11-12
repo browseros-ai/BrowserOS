@@ -30,6 +30,7 @@ export type {
   FilesInput,
   FillOptions,
   FrameInfo,
+  InitSource,
   KeyOptions,
   LoadState,
   MouseButton,
@@ -38,6 +39,7 @@ export type {
   NavigationResult,
   PageBrand,
   PageHandle,
+  PageScript,
   PartialFrame,
   ResponseInfo,
   ScrollOption,
@@ -210,31 +212,6 @@ export type ElementStateName =
   | 'disabled'
   | 'editable'
 
-/**
- * A main-world script on the wire (evaluation.ts `pageCall`), mirrored by Rust's `ScriptInput`:
- * ready to run, or the message of the server-side check upstream fails first, which Rust raises
- * at its point with nothing sent.
- */
-/**
- * An init script's source as upstream's client builds it (`evaluationScript`), or the path of a
- * file on Neo's disk that Rust reads as upstream's client reads it, `//# sourceURL` appended.
- */
-export type InitSource = { source: string } | { path: string }
-
-export type PageScript =
-  | {
-      run: {
-        /** `normalizeEvaluationExpression(String(pageFunction), isFunction)`. */
-        expression: string
-        isFunction: boolean
-        /** The argument in Playwright's in-page format, as JSON text. */
-        arg: string
-        /** The element handles the argument's `{h: i}` names, in order; left out when none. */
-        handles?: ElementBrand[]
-      }
-    }
-  | { refused: string }
-
 /** The screenshot options Neo captures with; the prelude refuses the others before sending. */
 export type ScreenshotOptions = Omit<
   GeneratedInputs['page.screenshot'],
@@ -256,29 +233,6 @@ export type FrameArgs = PageArgs & { frame?: string }
 export type HandInputs = {
   'events.interceptFileChooser': PageArgs & { lease: number; on: boolean }
 
-  'worker.evaluate': { page: PageHandle; worker: string; script: PageScript }
-  'page.evaluate': FrameArgs & { script: PageScript }
-  /** `noWait` is `$eval`: no waiting for the element, as `locator.evaluate` does. */
-  'locator.evaluate': TargetArgs & {
-    script: PageScript
-    /** `$eval`: the first match now instead of waiting for one. */
-    noWait?: true
-    /** `$eval`'s selector as the script wrote it, which upstream's no-match message quotes. */
-    selector?: string
-  }
-  'locator.evaluateAll': EveryMatchArgs & { script: PageScript }
-  /** `polling` in milliseconds; absent is `'raf'`. */
-  'page.waitForFunction': FrameArgs & { script: PageScript; polling?: number }
-  'locator.waitForFunction': TargetArgs & { script: PageScript }
-  'page.addInitScript': PageArgs & { script: InitSource }
-  /** `noGlobal`: the controller alone knows the binding (`exposeFunctions` callbacks). */
-  'page.exposeBinding': PageArgs & { name: string; noGlobal?: true }
-  /** `arg`: `{ name, seq, result }` or `{ name, seq, error }` as in-page JSON text. */
-  'bindingCall.resolve': PageArgs & { context: number; arg: string }
-  'context.addInitScript': { script: InitSource }
-  'context.exposeBinding': { name: string; noGlobal?: true }
-  /** The id an `addInitScript` returned. */
-  'disposable.dispose': { id: number }
   /**
    * `since` is the script's `Date.now()` when it attached the listener (or removed it). The
    * event ops name no target the door resolves, so their page always has its tab: the
@@ -323,20 +277,6 @@ export type HandInputs = {
 export type HandOutputs = {
   'events.interceptFileChooser': Done
 
-  'worker.evaluate': { value: SerializedValue }
-  'page.evaluate': { value: SerializedValue; frames?: FrameInfo[] }
-  'locator.evaluate': SerializedValue
-  'locator.evaluateAll': SerializedValue
-  /** The predicate's truthy value and upstream's preview of it (`toString()`). */
-  'page.waitForFunction': { value: SerializedValue; preview: string }
-  'locator.waitForFunction': null
-  /** The id `disposable.dispose` takes. */
-  'page.addInitScript': { id: number }
-  'page.exposeBinding': { id: number }
-  'bindingCall.resolve': Done
-  'context.addInitScript': { id: number }
-  'context.exposeBinding': { id: number }
-  'disposable.dispose': Done
   'events.listen': Done
   'events.next': Pumped
   'events.wait': EventRecord

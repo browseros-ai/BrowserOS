@@ -23,6 +23,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use serde::Deserialize;
 use serde_json::Value;
+use ts_rs::TS;
 
 use crate::backoff::Backoff;
 use crate::op_scope::OpScope;
@@ -31,44 +32,52 @@ use crate::page::evaluate_guard::{
     self, DOCUMENT_REPLACED, EvaluateGuard, MainWorldCall, NAVIGATED, Outcome, Script, Subject,
     TreeFrame,
 };
+use crate::page::serialized_value::SerializedValue;
 use crate::page::{OpPage, world_call};
 use crate::read::{self, Returning, SelectorState};
 use crate::resolve::{self, HandleSite};
 use crate::target::{ElementTarget, LocatorTarget, PageRef, RootHandle, Strictness, Target};
+use crate::wire::{Nothing, options};
 use crate::world::{FrameSeq, SeqLookup};
 use crate::{ErrorCode, Playwright, PlaywrightError};
 
 /// `locator.evaluate(fn, arg)`, `elementHandle.evaluate`, and `$eval` with `noWait`.
-#[derive(Deserialize)]
+#[derive(Deserialize, TS)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub(crate) struct EvaluateOnElementInput {
     target: Target,
     strict: Strictness,
     script: ScriptInput,
     /// `$eval`: the first match now, or upstream's failure, instead of waiting for an element.
+    /// The prelude sends it only for `$eval`, so it prints as optional.
     #[serde(default)]
+    #[ts(optional, as = "Option<bool>")]
     no_wait: bool,
     /// `$eval`'s selector as the script wrote it, which upstream's no-match message quotes.
     #[serde(default)]
+    #[ts(optional)]
     selector: Option<String>,
 }
+options!(EvaluateOnElementInput);
 
 /// `locator.evaluateAll(fn, arg)` and `$$eval`.
-#[derive(Deserialize)]
+#[derive(Deserialize, TS)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub(crate) struct EvaluateOnAllInput {
     target: Target,
     script: ScriptInput,
 }
+options!(EvaluateOnAllInput);
 
 /// `locator.waitForFunction(fn, arg)`.
-#[derive(Deserialize)]
+#[derive(Deserialize, TS)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub(crate) struct WaitForFunctionOnElementInput {
     target: Target,
     strict: Strictness,
     script: ScriptInput,
 }
+options!(WaitForFunctionOnElementInput);
 
 /// Runs `fn(element, arg)`. A locator waits for its element as upstream's `_withElement` does
 /// (attached, strict, until the op's timeout), and the script itself has no timeout but the
@@ -78,7 +87,7 @@ pub(crate) async fn evaluate_on_element(
     pw: &Playwright,
     scope: &OpScope<'_>,
     input: EvaluateOnElementInput,
-) -> Result<Value, PlaywrightError> {
+) -> Result<SerializedValue, PlaywrightError> {
     let EvaluateOnElementInput {
         target,
         strict,
@@ -107,7 +116,7 @@ pub(crate) async fn evaluate_on_all(
     pw: &Playwright,
     scope: &OpScope<'_>,
     input: EvaluateOnAllInput,
-) -> Result<Value, PlaywrightError> {
+) -> Result<SerializedValue, PlaywrightError> {
     let EvaluateOnAllInput { target, script } = input;
     let Target::Locator(locator) = target else {
         return Err(scope.fail(
@@ -152,7 +161,7 @@ pub(crate) async fn wait_for_function_on_element(
     pw: &Playwright,
     scope: &OpScope<'_>,
     input: WaitForFunctionOnElementInput,
-) -> Result<Value, PlaywrightError> {
+) -> Result<Nothing, PlaywrightError> {
     let WaitForFunctionOnElementInput {
         target,
         strict,
@@ -193,7 +202,7 @@ async fn truthy_tries(
     strict: Strictness,
     script: &Script,
     matched: &AtomicBool,
-) -> Result<Value, PlaywrightError> {
+) -> Result<Nothing, PlaywrightError> {
     scope.log(format!("waiting for {}", locator.display));
     let backoff = Backoff::outer(scope.timeout());
     for attempt in 0.. {
@@ -201,7 +210,7 @@ async fn truthy_tries(
             return Err(timed_out(scope, matched));
         }
         if truthy_try(pw, scope, locator, strict, script, matched).await? {
-            return Ok(Value::Null);
+            return Ok(());
         }
         // Nothing of a try is used by the next, which matches the locator afresh.
         scope.release_objects().await;
@@ -220,12 +229,11 @@ async fn truthy_try(
     script: &Script,
     matched: &AtomicBool,
 ) -> Result<bool, PlaywrightError> {
-    let found = read::query_one(pw, scope, locator, strict).await?;
-    if found.is_null() {
+    let Some(RootHandle::Element(element)) = read::find_one(pw, scope, locator, strict).await?
+    else {
         return Ok(false);
-    }
+    };
     matched.store(true, Ordering::Relaxed);
-    let element = handle_of(scope, found)?;
     let page = element.page().clone();
     let call = MainWorldCall::truthy(script.clone(), element);
     let mut guard = match EvaluateGuard::open(pw, scope, &page, call).await {
@@ -263,10 +271,10 @@ async fn run_once(
     scope: &OpScope<'_>,
     page: &PageRef,
     call: MainWorldCall,
-) -> Result<Value, PlaywrightError> {
+) -> Result<SerializedValue, PlaywrightError> {
     let mut guard = EvaluateGuard::open(pw, scope, page, call).await?;
     match guard.run(scope).await? {
-        Outcome::Answered(answer) => Ok(answer.finish(scope)?.value),
+        Outcome::Answered(answer) => Ok(SerializedValue(answer.finish(scope)?.value)),
         Outcome::NotRun | Outcome::Destroyed => {
             Err(scope.fail(ErrorCode::PageError, DOCUMENT_REPLACED))
         }
@@ -285,8 +293,8 @@ async fn first_match(
     strict: Strictness,
     selector: Option<&str>,
 ) -> Result<ElementTarget, PlaywrightError> {
-    let found = read::query_one(pw, scope, locator, strict).await?;
-    if found.is_null() {
+    let Some(RootHandle::Element(element)) = read::find_one(pw, scope, locator, strict).await?
+    else {
         return Err(scope.fail(
             ErrorCode::InvalidInput,
             &format!(
@@ -294,8 +302,8 @@ async fn first_match(
                 selector.unwrap_or(&locator.display)
             ),
         ));
-    }
-    handle_of(scope, found)
+    };
+    Ok(element)
 }
 
 /// `locator.evaluate`'s element: `waitForSelector` until a match is attached, its call log and
@@ -306,7 +314,7 @@ async fn attached(
     locator: &LocatorTarget,
     strict: Strictness,
 ) -> Result<ElementTarget, PlaywrightError> {
-    let found = read::wait_for_selector(
+    let found = read::wait_for_match(
         pw,
         scope,
         locator,
@@ -315,18 +323,14 @@ async fn attached(
         Returning::Handle,
     )
     .await?;
-    handle_of(scope, found)
-}
-
-/// The handle a match was made into, read back as the target a script would send it as.
-fn handle_of(scope: &OpScope<'_>, brand: Value) -> Result<ElementTarget, PlaywrightError> {
-    match serde_json::from_value(brand) {
-        Ok(Target::Element(handle)) => Ok(handle),
-        Ok(Target::Locator(_)) | Err(_) => Err(scope.fail(
+    // A wait that meets `attached` with `Returning::Handle` answers the match's handle.
+    let Some(RootHandle::Element(element)) = found else {
+        return Err(scope.fail(
             ErrorCode::Internal,
             "a match did not make an element handle",
-        )),
-    }
+        ));
+    };
+    Ok(element)
 }
 
 /// The frame a query starts from, and its document: the root handle's frame for a query rooted

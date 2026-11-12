@@ -151,13 +151,14 @@ mod tests {
     };
     use crate::{ErrorCode, Playwright, PlaywrightError};
 
-    /// A family of four ops written the way the families write theirs; `Legacy` has not moved
+    /// A family of five ops written the way the families write theirs; `Legacy` has not moved
     /// onto a typed handler yet.
     #[derive(Clone, Copy)]
     enum ProbeOp {
         Echo,
         Quiet,
         Counted,
+        Shuffled,
         Legacy,
     }
 
@@ -186,11 +187,38 @@ mod tests {
         text: String,
     }
 
+    /// A reply declaring its fields out of alphabetical order, nested too, as `NavigationResult`
+    /// and `FrameInfo` do.
+    #[derive(Debug, Serialize, TS)]
+    struct Shuffled {
+        zulu: u8,
+        alpha: ShuffledInner,
+        mike: u8,
+    }
+
+    #[derive(Debug, Serialize, TS)]
+    struct ShuffledInner {
+        yankee: u8,
+        bravo: u8,
+    }
+
+    fn shuffled_reply() -> Shuffled {
+        Shuffled {
+            zulu: 4,
+            alpha: ShuffledInner {
+                yankee: 1,
+                bravo: 2,
+            },
+            mike: 3,
+        }
+    }
+
     fn route<'a, R: Route<'a>>(op: ProbeOp, r: R) -> R::Out {
         match op {
             ProbeOp::Echo => r.op(command("Frame.echo").result("the echoed text"), echo),
             ProbeOp::Quiet => r.op(neo_only("a test op"), quiet),
             ProbeOp::Counted => r.op(replaces("Frame.count", "counts by hand"), counted),
+            ProbeOp::Shuffled => r.op(neo_only("a test op"), shuffled),
             // As a family keeps its old `run` match for the ops it has not moved yet.
             op @ ProbeOp::Legacy => {
                 r.untyped(move |pw, scope, args| async move { run_by_hand(pw, scope, op, args) })
@@ -245,6 +273,14 @@ mod tests {
         _input: QuietInput,
     ) -> Result<u32, PlaywrightError> {
         Ok(3)
+    }
+
+    async fn shuffled(
+        _pw: &Playwright,
+        _scope: &OpScope<'_>,
+        _input: QuietInput,
+    ) -> Result<Shuffled, PlaywrightError> {
+        Ok(shuffled_reply())
     }
 
     fn assert_send<T: Send>(_: &T) {}
@@ -317,6 +353,34 @@ mod tests {
             run(ProbeOp::Legacy, json!({ "count": 2 })).await?,
             json!({ "doubled": 4 }),
             "an untyped row runs its handler on the raw arguments"
+        );
+        Ok(())
+    }
+
+    /// `op_output::to_output`'s guarantee: a reply whose type declares its fields out of order
+    /// leaves the route with its keys sorted at every level. A failure here means a crate in the
+    /// build turned on `serde_json`'s `preserve_order` (the `Map` assertion) or answers stopped
+    /// going through `to_value`, and every reply type declared out of order now sends its keys
+    /// in declaration order. `check.sh` tests neo-playwright together with neo-server, so the
+    /// `Map` assertion sees the server binary's `serde_json` features.
+    #[tokio::test]
+    async fn tests_that_an_answer_leaves_with_sorted_keys() -> Result<(), Box<dyn Error>> {
+        let mut map = serde_json::Map::new();
+        map.insert("b".to_owned(), json!(1));
+        map.insert("a".to_owned(), json!(2));
+        assert!(
+            map.keys().eq(["a", "b"]),
+            "serde_json's Map must not keep insertion order: {map:?}"
+        );
+        let answer = run(ProbeOp::Shuffled, json!({})).await?;
+        assert_eq!(
+            serde_json::to_string(&answer)?,
+            r#"{"alpha":{"bravo":2,"yankee":1},"mike":3,"zulu":4}"#
+        );
+        // The probe is out of order: written straight to text it keeps declaration order.
+        assert_eq!(
+            serde_json::to_string(&shuffled_reply())?,
+            r#"{"zulu":4,"alpha":{"yankee":1,"bravo":2},"mike":3}"#
         );
         Ok(())
     }
