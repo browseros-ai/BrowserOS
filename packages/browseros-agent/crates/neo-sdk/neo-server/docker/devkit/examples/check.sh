@@ -74,7 +74,7 @@ reads() {
     'value.title == "Example Domain"' 'outcome + " title=\(value.title)"'
 
   rec=$(run aria-ref.js --task check-aria)
-  expect "(b) ariaSnapshot({mode:'ai'}), then getByRef on a printed ref" "$rec" \
+  expect "(b) ariaSnapshot(), then getByRef on a printed ref" "$rec" \
     'value.byRef == "Save order" and value.byAriaRef == "Save order" and value.frameByRef == "Frame action"' \
     'outcome + " ref=\(value.ref) frameRef=\(value.frameRef)"'
 

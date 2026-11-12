@@ -20,6 +20,13 @@
  * a kept block after the cut is still printed. Rendering happens in the agent's realm, never in
  * a page, for the reason snapshot.ts gives.
  */
+import {
+  aboutTokens,
+  CHARS_PER_TOKEN,
+  cap,
+  type Printed,
+  type Section,
+} from './snapshot-cap'
 import type { AriaNodeJSON } from './vendored'
 import { renderAriaSnapshotAsYaml } from './vendored'
 import type { PartialFrame, SnapshotResult } from './wire'
@@ -66,8 +73,6 @@ const SECTION = new Set<string>([
 const KEPT = new Set<string>(['dialog', 'alertdialog', 'alert', 'status'])
 const KEPT_WITH_REF = new Set<string>(['dialog', 'alertdialog'])
 
-/** A token is counted as four characters of JS string length, here and in the notice. */
-const CHARS_PER_TOKEN = 4
 /** 3,000 tokens: the longest text form returned when the script did not choose. */
 export const TEXT_LIMIT_CHARS = 3_000 * CHARS_PER_TOKEN
 export const DEFAULT_MAX_TOKENS = 8_000
@@ -97,21 +102,10 @@ export function renderSnapshotV1(
   if (options.text === true || textLength <= TEXT_LIMIT_CHARS)
     return cap(null, textForm, limit)
   const interactiveForm = walk(result, options.urls, false)
-  const left = (textLength - joinedLength(interactiveForm)) / CHARS_PER_TOKEN
-  const about = Math.max(100, Math.round(left / 100) * 100)
+  const left = textLength - joinedLength(interactiveForm)
+  const about = aboutTokens(left)
   const notice = `# text left out: about ${about} tokens. Pass { text: true } to include it.`
   return cap(notice, interactiveForm, limit)
-}
-
-/** One output line, indented, with what the cap needs to know about it. */
-type Printed = {
-  text: string
-  /** It prints a `[ref=…]`. */
-  ref: boolean
-  /** A section line with content: the ref the cut line can suggest. */
-  section?: string
-  /** The first line of a kept block: the index after its last line. */
-  keptEnd?: number
 }
 
 /** One form: the tree walked with page text on or off, then partial frames with no iframe line. */
@@ -144,7 +138,7 @@ type Line = {
   textLine: boolean
   comment: boolean
   ref: boolean
-  section?: string
+  section?: Section
   keptEnd?: number
 }
 
@@ -236,8 +230,18 @@ class Printer {
     }
     this.content(node, level + 1, text)
     // An iframe keeps its line with nothing inside: its `# partial` comment hangs under it.
-    if (this.close(header, iframe) && this.lines[header].body.endsWith(':'))
-      this.lines[header].section = node.ref
+    if (
+      this.close(header, iframe) &&
+      this.lines[header].body.endsWith(':') &&
+      node.ref !== undefined
+    )
+      this.lines[header].section = {
+        ref: node.ref,
+        label: node.name
+          ? `${node.role} ${JSON.stringify(node.name)}`
+          : node.role,
+        end: this.lines.length,
+      }
   }
 
   private heading(node: AriaNodeJSON, level: number): void {
@@ -404,69 +408,4 @@ function joinedLength(lines: readonly Printed[]): number {
     (length, line, index) => length + line.text.length + (index > 0 ? 1 : 0),
     0,
   )
-}
-
-/**
- * `notice` and `lines` within `limit` characters: whole lines from the top while they fit (the
- * notice counts), then one `# cut:` line, then every kept block after the cut, whole and outside
- * the limit. Sites put dialogs at the end of the document; a cut must never hide one.
- */
-function cap(
-  notice: string | null,
-  lines: readonly Printed[],
-  limit: number,
-): string {
-  const head = notice === null ? [] : [notice]
-  const sequence = [...head, ...lines.map((line) => line.text)]
-  const whole = sequence.join('\n')
-  if (whole.length <= limit) return whole
-  // `used` counts the newline before each line but the first.
-  let used = -1
-  let taken = 0
-  while (
-    taken < sequence.length &&
-    used + 1 + sequence[taken].length <= limit
-  ) {
-    used += 1 + sequence[taken].length
-    taken += 1
-  }
-  const top = head.slice(0, taken)
-  let cut = Math.max(0, taken - head.length)
-  // A kept block the cut would split starts after the cut instead, so it prints whole.
-  for (let index = 0; index < cut; index++) {
-    const end = lines[index].keptEnd
-    if (end !== undefined && end > cut) {
-      cut = index
-      break
-    }
-  }
-  const blocks: string[] = []
-  let more = 0
-  let withRefs = 0
-  let section: string | undefined
-  for (let index = cut; index < lines.length; ) {
-    const line = lines[index]
-    if (line.keptEnd !== undefined) {
-      // Moved out of its section, so it starts at the left edge with its inner indentation.
-      const indent = line.text.length - line.text.trimStart().length
-      for (const kept of lines.slice(index, line.keptEnd))
-        blocks.push(kept.text.slice(indent))
-      index = line.keptEnd
-      continue
-    }
-    more += 1
-    if (line.ref) withRefs += 1
-    section ??= line.section
-    index += 1
-  }
-  const shown = [...top, ...lines.slice(0, cut).map((line) => line.text)]
-  if (more > 0) {
-    // The suggested section is the first one the cut left out; with none, only the cap is named.
-    const next =
-      section === undefined
-        ? 'Pass a larger maxTokens.'
-        : `Snapshot one section, e.g. page.getByRef('${section}').ariaSnapshot(), or pass a larger maxTokens.`
-    shown.push(`# cut: ${more} more lines (${withRefs} with refs). ${next}`)
-  }
-  return [...shown, ...blocks].join('\n')
 }

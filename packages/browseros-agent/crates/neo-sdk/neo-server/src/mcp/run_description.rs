@@ -29,9 +29,11 @@ fix it: neo, script, website or host), `delivery`, `retryable` and `operationId`
 subclass `TimeoutError`. `delivery: \"unknown\"` means a write may have happened: look at the \
 page before repeating it.";
 
-/// sdk-playwright's ref hint, shown once its snapshot method is registered.
-const REF_HINT: &str =
-    "`page.ariaSnapshot({ mode: 'ai' })` gives refs, and `page.getByRef('e5')` acts on one.";
+/// sdk-playwright's ref hint, shown once its snapshot method is registered. The prelude's v1
+/// text is the default (`neo-playwright-js/src/prelude/snapshot-v1.ts`): refs on what can be
+/// acted on, page text only while it is short, so the hint names the option that adds it.
+const REF_HINT: &str = "`page.ariaSnapshot()` lists what you can act on, with refs; \
+`page.getByRef('e5')` acts on one; `{ text: true }` adds the page's text.";
 const SNAPSHOT_METHOD: &str = "page.ariaSnapshot";
 
 /// Usage, limits, the error model, then the registry's listed methods: each `Own` line, and
@@ -148,7 +150,9 @@ mod tests {
             "page.ariaSnapshot",
             Listing::Grouped("Playwright's Page API"),
         ))?;
-        assert!(run_description(&builder.build()).contains("page.getByRef('e5')"));
+        let description = run_description(&builder.build());
+        assert!(description.contains("`page.ariaSnapshot()` lists what you can act on"));
+        assert!(description.contains("page.getByRef('e5')"));
         Ok(())
     }
 

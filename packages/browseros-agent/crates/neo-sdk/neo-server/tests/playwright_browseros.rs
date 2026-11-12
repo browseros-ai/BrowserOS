@@ -3,7 +3,7 @@
 //!
 //! ```text
 //!  MCP run ─▶ browseros-claw-sdk ─ neo-playwright's prelude ─▶ the door ─▶ the crate's ops
-//!    page.goto (the run's lazy page: the door opens the tab) ─ page.ariaSnapshot({ mode: 'ai' })
+//!    page.goto (the run's lazy page: the door opens the tab) ─ page.ariaSnapshot(), the v1 text
 //!    ─ getByRef / aria-ref= on a printed ref ─ locator reads ─ reads inside the iframe
 //!  page.on('console') first: page.frames opens the lazy tab ─ events.listen ─ the event pump
 //!  context.pages() first: the run's init lists every tab
@@ -49,11 +49,12 @@ const html = '<title>Neo Playwright</title>'
   + '<button>Save order</button><button>Cancel</button>'
   + '<iframe title="Details" srcdoc="<p>Inside the frame</p><button>Frame action</button>"></iframe>';
 await page.goto('data:text/html,' + encodeURIComponent(html));
-const snapshot = await page.ariaSnapshot({ mode: 'ai' });
+const snapshot = await page.ariaSnapshot();
 const ref = /button "Save order" \[ref=(e\d+)\]/.exec(snapshot)?.[1];
 const frameRef = /button "Frame action" \[ref=(f\d+e\d+)\]/.exec(snapshot)?.[1];
 if (!ref || !frameRef) return { snapshot };
 return {
+  printed: snapshot.replace(/\[ref=(?:f\d+)?e\d+\]/g, '[ref]'),
   ref,
   frameRef,
   byRef: await page.getByRef(ref).textContent(),
@@ -351,6 +352,18 @@ async fn drive(rig: &Rig) -> TestResult {
     assert!(
         text("frameRef").is_some_and(|printed| printed.starts_with('f')),
         "a ref inside the iframe names its document (`f1e2`): {value}"
+    );
+    // The v1 text over MCP: what can be acted on, with refs, and the page's text, since the page
+    // is small; the iframe is a section, its content indented under it.
+    assert_eq!(
+        text("printed"),
+        Some(
+            "- heading \"Orders\" [level=1]\n- text: Two buttons, one frame.\n\
+             - button \"Save order\" [ref]\n- button \"Cancel\" [ref]\n\
+             - iframe \"Details\" [ref]:\n  - text: Inside the frame\n  \
+             - button \"Frame action\" [ref]"
+        ),
+        "the default snapshot is the v1 text: {value}"
     );
     let reads: Vec<(&str, Value)> = [
         "byRef",

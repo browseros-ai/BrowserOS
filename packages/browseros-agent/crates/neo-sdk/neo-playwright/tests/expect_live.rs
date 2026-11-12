@@ -597,7 +597,9 @@ async fn tests_that_every_matcher_passes_and_fails_as_scripts_write_it() -> Test
 /// every page as `<browseros-neo-takeover>`, with an open shadow root holding a `<body>` of its
 /// own; the test waits for BrowserOS to mount it and gives it a button, as an active takeover
 /// shows one. `locator('body')` is still the page's one body, the bar's button matches no role or
-/// text, and neither snapshot lists it, while the page's own content is all there.
+/// text, and neither snapshot lists it, while the page's own content is all there. Playwright's
+/// default text prints a `document` node as such; the v1 text (`mode: 'ai'`) would print the
+/// bar's button, which is actionable, if the engine read the bar.
 #[tokio::test]
 #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
 async fn tests_that_browseros_own_ui_stays_out_of_selectors_and_snapshots() -> TestResult {
@@ -624,7 +626,7 @@ async fn tests_that_browseros_own_ui_stays_out_of_selectors_and_snapshots() -> T
              bodies: await page.locator('body').count(),\n\
              byRole: await page.getByRole('button', {{ name: 'Hand back control' }}).count(),\n\
              byText: await page.getByText('Hand back control').count(),\n\
-             snapshot: await page.ariaSnapshot(),\n\
+             snapshot: await page.ariaSnapshot({{ mode: 'default' }}),\n\
              ai: await page.ariaSnapshot({{ mode: 'ai' }}),\n\
            }}\n\
          }} finally {{\n\

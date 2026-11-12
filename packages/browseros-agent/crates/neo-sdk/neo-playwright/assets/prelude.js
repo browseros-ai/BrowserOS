@@ -7411,6 +7411,80 @@ ${value.stack}`;
 `);
   }
 
+  // crates/neo-sdk/neo-playwright-js/src/prelude/snapshot-cap.ts
+  var CHARS_PER_TOKEN = 4;
+  function aboutTokens(chars) {
+    return Math.max(100, Math.round(chars / CHARS_PER_TOKEN / 100) * 100);
+  }
+  function cap(notice, lines, limit) {
+    const head = notice === null ? [] : [notice];
+    const whole = [...head, ...lines.map((line) => line.text)].join(`
+`);
+    if (whole.length <= limit)
+      return whole;
+    let used = -1;
+    let taken = 0;
+    for (const text of [...head, ...lines.map((line) => line.text)]) {
+      if (used + 1 + text.length > limit)
+        break;
+      used += 1 + text.length;
+      taken += 1;
+    }
+    const top = head.slice(0, taken);
+    let cut = Math.max(0, taken - head.length);
+    for (let index = 0;index < cut; index++) {
+      const end = lines[index].keptEnd;
+      if (end !== undefined && end > cut) {
+        cut = index;
+        break;
+      }
+    }
+    const blocks = [];
+    let more = 0;
+    let withRefs = 0;
+    let later;
+    for (let index = cut;index < lines.length; ) {
+      const line = lines[index];
+      const end = line.keptEnd;
+      if (end !== undefined) {
+        const indent = line.text.length - line.text.trimStart().length;
+        for (const kept of lines.slice(index, end))
+          blocks.push(kept.text.slice(indent));
+        index = end;
+        continue;
+      }
+      more += 1;
+      if (line.ref)
+        withRefs += 1;
+      later ??= line.section;
+      index += 1;
+    }
+    if (more === 0)
+      return [...top, ...linesBefore(lines, cut), ...blocks].join(`
+`);
+    const size = `the whole snapshot is about ${aboutTokens(whole.length)} tokens`;
+    const open = openSection(lines, cut, limit);
+    const offer = open ? `page.getByRef('${open.ref}').ariaSnapshot() shows all of ${open.label}. Or pass a larger maxTokens.` : later ? `page.getByRef('${later.ref}').ariaSnapshot() shows ${later.label}, which is not shown above. Or pass a larger maxTokens.` : "Pass a larger maxTokens.";
+    const cutLine = `# cut: ${more} more lines (${withRefs} with refs); ${size}. ${offer}`;
+    return [...top, ...linesBefore(lines, cut), cutLine, ...blocks].join(`
+`);
+  }
+  function linesBefore(lines, cut) {
+    return lines.slice(0, cut).map((line) => line.text);
+  }
+  function openSection(lines, cut, limit) {
+    for (let index = 0;index < cut; index++) {
+      const section = lines[index].section;
+      if (section === undefined || section.end <= cut)
+        continue;
+      const own = lines.slice(index, section.end).map((line) => line.text);
+      if (own.join(`
+`).length <= limit)
+        return section;
+    }
+    return;
+  }
+
   // crates/neo-sdk/neo-playwright-js/src/prelude/snapshot-v1.ts
   var INTERACTIVE = new Set([
     "button",
@@ -7445,7 +7519,6 @@ ${value.stack}`;
   ]);
   var KEPT = new Set(["dialog", "alertdialog", "alert", "status"]);
   var KEPT_WITH_REF = new Set(["dialog", "alertdialog"]);
-  var CHARS_PER_TOKEN = 4;
   var TEXT_LIMIT_CHARS = 3000 * CHARS_PER_TOKEN;
   var DEFAULT_MAX_TOKENS = 8000;
   var OWN_TEXT_CLIP = 80;
@@ -7459,8 +7532,8 @@ ${value.stack}`;
     if (options.text === true || textLength <= TEXT_LIMIT_CHARS)
       return cap(null, textForm, limit);
     const interactiveForm = walk(result, options.urls, false);
-    const left = (textLength - joinedLength(interactiveForm)) / CHARS_PER_TOKEN;
-    const about = Math.max(100, Math.round(left / 100) * 100);
+    const left = textLength - joinedLength(interactiveForm);
+    const about = aboutTokens(left);
     const notice = `# text left out: about ${about} tokens. Pass { text: true } to include it.`;
     return cap(notice, interactiveForm, limit);
   }
@@ -7555,8 +7628,12 @@ ${value.stack}`;
         this.partials.delete(node.ref);
       }
       this.content(node, level + 1, text);
-      if (this.close(header, iframe) && this.lines[header].body.endsWith(":"))
-        this.lines[header].section = node.ref;
+      if (this.close(header, iframe) && this.lines[header].body.endsWith(":") && node.ref !== undefined)
+        this.lines[header].section = {
+          ref: node.ref,
+          label: node.name ? `${node.role} ${JSON.stringify(node.name)}` : node.role,
+          end: this.lines.length
+        };
     }
     heading(node, level) {
       const own = node.name ? "" : ownText(node);
@@ -7674,55 +7751,6 @@ ${value.stack}`;
   }
   function joinedLength(lines) {
     return lines.reduce((length, line, index) => length + line.text.length + (index > 0 ? 1 : 0), 0);
-  }
-  function cap(notice, lines, limit) {
-    const head = notice === null ? [] : [notice];
-    const sequence = [...head, ...lines.map((line) => line.text)];
-    const whole = sequence.join(`
-`);
-    if (whole.length <= limit)
-      return whole;
-    let used = -1;
-    let taken = 0;
-    while (taken < sequence.length && used + 1 + sequence[taken].length <= limit) {
-      used += 1 + sequence[taken].length;
-      taken += 1;
-    }
-    const top = head.slice(0, taken);
-    let cut = Math.max(0, taken - head.length);
-    for (let index = 0;index < cut; index++) {
-      const end = lines[index].keptEnd;
-      if (end !== undefined && end > cut) {
-        cut = index;
-        break;
-      }
-    }
-    const blocks = [];
-    let more = 0;
-    let withRefs = 0;
-    let section;
-    for (let index = cut;index < lines.length; ) {
-      const line = lines[index];
-      if (line.keptEnd !== undefined) {
-        const indent = line.text.length - line.text.trimStart().length;
-        for (const kept of lines.slice(index, line.keptEnd))
-          blocks.push(kept.text.slice(indent));
-        index = line.keptEnd;
-        continue;
-      }
-      more += 1;
-      if (line.ref)
-        withRefs += 1;
-      section ??= line.section;
-      index += 1;
-    }
-    const shown = [...top, ...lines.slice(0, cut).map((line) => line.text)];
-    if (more > 0) {
-      const next = section === undefined ? "Pass a larger maxTokens." : `Snapshot one section, e.g. page.getByRef('${section}').ariaSnapshot(), or pass a larger maxTokens.`;
-      shown.push(`# cut: ${more} more lines (${withRefs} with refs). ${next}`);
-    }
-    return [...shown, ...blocks].join(`
-`);
   }
 
   // crates/neo-sdk/neo-playwright-js/src/prelude/timeouts.ts
