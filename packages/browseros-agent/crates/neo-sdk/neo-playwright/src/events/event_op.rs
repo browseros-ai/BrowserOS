@@ -699,7 +699,7 @@ async fn wait(
     let run = scope.run_state();
     pw.events().bind(run);
     // While it waits, the watcher records and holds what this wait could receive.
-    let _waiting = run.events.waiting(subscription.clone());
+    let _waiting = run.events.waiting(subscription.clone(), input.since);
     if matches!(subscription, Subscription::Context(_)) {
         observe_context(scope).await?;
     }

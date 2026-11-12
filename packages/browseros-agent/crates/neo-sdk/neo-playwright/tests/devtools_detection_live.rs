@@ -239,6 +239,21 @@ fn judge(report: &[Value]) -> TestResult {
         .iter()
         .take_while(|line| phase(line) != "console listener")
         .collect();
+    for line in report {
+        assert!(
+            line.pointer("/result/Ok").is_some(),
+            "every phase's script ran: {line}"
+        );
+    }
+    let worker_evaluate = report
+        .iter()
+        .find(|line| phase(line) == "worker evaluate")
+        .and_then(|line| line.pointer("/result/Ok"));
+    assert_eq!(
+        worker_evaluate,
+        Some(&json!(5)),
+        "five worker.evaluate calls answered: {report:?}"
+    );
     for line in &quiet {
         assert_eq!(
             line.get("runtimeEnables"),

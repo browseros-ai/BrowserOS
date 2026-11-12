@@ -13,7 +13,7 @@ use crate::RunState;
 use crate::events::dialog_table::{self, DialogAnswer, DialogTable, Unanswerable};
 use crate::events::download_table::DownloadTable;
 use crate::events::page_event::{BindingCalled, DialogId, DialogKind, PageEvent};
-use crate::events::run_events::{QueuedCall, WorkerReports};
+use crate::events::run_events::QueuedCall;
 use crate::events::{PageEventKind, Subscription};
 
 /// How many records the log keeps. A reader that falls further behind is told how many it lost.
@@ -168,21 +168,14 @@ impl EventHub {
         })
     }
 
-    /// What the live runs together ask of the dedicated workers of the tab whose target is
-    /// `target` ([`WorkerReports`]): the earliest `since` of their leased listeners, and whether
-    /// any waits.
-    pub(crate) fn worker_reports(&self, target: &TargetId) -> WorkerReports {
+    /// The earliest moment any live run asked for the console messages and errors of the
+    /// dedicated workers of the tab whose target is `target` (`RunEvents::workers_asked_since`).
+    pub(crate) fn workers_asked_since(&self, target: &TargetId) -> Option<u64> {
         let runs = self.runs.lock().unwrap_or_else(PoisonError::into_inner);
         runs.iter()
             .filter_map(Weak::upgrade)
-            .map(|run| run.events.worker_reports(target))
-            .fold(WorkerReports::default(), |all, run| WorkerReports {
-                listening_since: match (all.listening_since, run.listening_since) {
-                    (Some(a), Some(b)) => Some(a.min(b)),
-                    (a, b) => a.or(b),
-                },
-                waiting: all.waiting || run.waiting,
-            })
+            .filter_map(|run| run.events.workers_asked_since(target))
+            .min()
     }
 
     /// Claims binding `name` on the tab whose target is `target` for `run`: false when another
@@ -504,11 +497,14 @@ mod tests {
         hub.bind(&listening);
         hub.bind(&listening);
         hub.bind(&idle);
-        let _waiting = listening.events.waiting(Subscription::Page {
-            tab: TabId(1),
-            target: target.clone(),
-            event: PageEventKind::Dialog,
-        });
+        let _waiting = listening.events.waiting(
+            Subscription::Page {
+                tab: TabId(1),
+                target: target.clone(),
+                event: PageEventKind::Dialog,
+            },
+            0,
+        );
         assert_eq!(hub.listeners(&target, PageEventKind::Dialog).len(), 1);
         assert!(hub.listeners(&target, PageEventKind::Console).is_empty());
     }

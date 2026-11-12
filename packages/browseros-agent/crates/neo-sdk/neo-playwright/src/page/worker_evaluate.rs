@@ -128,12 +128,14 @@ async fn call_in_worker(
     is_function: bool,
     arg: &str,
 ) -> Result<Value, PlaywrightError> {
-    // Reading `globalThis` runs no worker code, so it comes before the effect is marked.
+    // A script's top-level `this` is the global itself: unlike `globalThis`, a property the
+    // worker can replace with a getter, reading it runs no worker code, so it may come before
+    // the effect is marked.
     let global: Global = session
         .send(
             "Runtime.evaluate",
             json!({
-                "expression": "globalThis",
+                "expression": "this",
                 "objectGroup": scope.object_group(session),
                 "silent": true,
             }),
@@ -177,7 +179,7 @@ struct RemoteObject {
     description: Option<String>,
 }
 
-/// `Runtime.evaluate`'s reply for `globalThis`, by handle.
+/// `Runtime.evaluate`'s reply for the worker's global, by handle.
 #[derive(Deserialize)]
 struct Global {
     result: GlobalHandle,

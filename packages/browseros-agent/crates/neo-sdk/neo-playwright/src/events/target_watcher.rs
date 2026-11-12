@@ -61,7 +61,7 @@ use tokio::task::JoinHandle;
 use tokio::time::{self, Instant, MissedTickBehavior};
 
 use crate::events::dialog_table::{ClosedBy, HeldDialog, Unanswered};
-use crate::events::event_hub::{EventWriter, now_ms};
+use crate::events::event_hub::EventWriter;
 use crate::events::frame_lifecycle::FrameLifecycleTracker;
 use crate::events::page_event::{
     BindingCalled, ConsoleMessage, ConsoleParams, DialogId, DialogKind, DialogOpened,
@@ -201,9 +201,8 @@ struct Watcher {
 /// and a site can time that to detect an open inspector, so it is on only while some run listens for
 /// console messages or page errors on the worker's tab. `worker.evaluate` needs none of it.
 enum WorkerRuntime {
-    /// Off. Nobody listened when the watcher last looked, at `checked_ms` (milliseconds since the
-    /// epoch), so whoever listens now asked after it.
-    Off { checked_ms: f64 },
+    /// Off: no run asks.
+    Off,
     /// On until the lease drops: the session's last lease switches `Runtime` off again.
     On { _lease: RuntimeLease },
 }
@@ -1104,12 +1103,7 @@ impl Watcher {
                 json!({"autoAttach": true, "waitForDebuggerOnStart": true, "flatten": true}),
             )
             .await;
-        self.worker_runtime.insert(
-            id.clone(),
-            WorkerRuntime::Off {
-                checked_ms: wall_ms(),
-            },
-        );
+        self.worker_runtime.insert(id.clone(), WorkerRuntime::Off);
         self.lease_worker(id).await;
         let _ = session
             .send_value("Runtime.runIfWaitingForDebugger", json!({}))
@@ -1130,37 +1124,27 @@ impl Watcher {
     /// workers report exactly when its page does.
     ///
     /// The lease's floor is where the browser's replay of the worker's stored history starts to
-    /// count (`RuntimeLeases::floor_ms`): the earliest `since` of the tab's listeners, which is
-    /// exact; for a `waitForEvent`, whose `since` the run does not keep, the last time the
-    /// watcher saw nobody asking, at most one tick before it began.
+    /// count (`RuntimeLeases::floor_ms`): the `since` of the earliest ask, so a listener or a
+    /// wait still sees everything the worker logged after it began, and nothing from before,
+    /// however long the watcher took to get here.
     async fn lease_worker(&mut self, id: &SessionId) {
-        let asked = self
+        let since = self
             .sessions
             .get(id)
-            .map(|tab| self.writer.hub().worker_reports(tab))
-            .unwrap_or_default();
-        let checked_ms = match (asked.wanted(), self.worker_runtime.get(id)) {
+            .and_then(|tab| self.writer.hub().workers_asked_since(tab));
+        let since = match (since, self.worker_runtime.get(id)) {
             // Not a chosen worker session, or already as it should be.
-            (_, None) | (true, Some(WorkerRuntime::On { .. })) => return,
-            (true, Some(WorkerRuntime::Off { checked_ms })) => *checked_ms,
-            (false, Some(_)) => {
-                // Replacing a held lease drops it.
-                self.worker_runtime.insert(
-                    id.clone(),
-                    WorkerRuntime::Off {
-                        checked_ms: wall_ms(),
-                    },
-                );
+            (_, None)
+            | (Some(_), Some(WorkerRuntime::On { .. }))
+            | (None, Some(WorkerRuntime::Off)) => {
                 return;
             }
-        };
-        let since_ms = asked
-            .listening_since
-            .map(|since| Duration::from_millis(since).as_secs_f64() * 1000.0);
-        let floor_ms = match (since_ms, asked.waiting) {
-            (Some(since), false) => since,
-            (Some(since), true) => since.min(checked_ms),
-            (None, _) => checked_ms,
+            (None, Some(WorkerRuntime::On { .. })) => {
+                // Replacing the held lease drops it.
+                self.worker_runtime.insert(id.clone(), WorkerRuntime::Off);
+                return;
+            }
+            (Some(since), Some(WorkerRuntime::Off)) => since,
         };
         let session = self
             .browser
@@ -1171,7 +1155,10 @@ impl Watcher {
             .browser
             .page_signals
             .runtime_leases()
-            .acquire(&session, floor_ms)
+            .acquire(
+                &session,
+                Duration::from_millis(since).as_secs_f64() * 1000.0,
+            )
             .await
         {
             self.worker_runtime
@@ -1649,12 +1636,6 @@ impl LifecycleSources {
     }
 }
 
-/// The wall clock in milliseconds since the epoch, as `Runtime` stamps the events a lease's floor
-/// is compared with.
-fn wall_ms() -> f64 {
-    Duration::from_millis(now_ms()).as_secs_f64() * 1000.0
-}
-
 /// A browser tab, as opposed to an iframe, a worker, a prerendered page or the browser itself.
 fn is_tab(info: &TargetInfo) -> bool {
     info.kind == "page" && info.subtype.as_deref() != Some("prerender")
@@ -1984,15 +1965,16 @@ mod worker_observation_tests {
             "a listener that asked for nothing leaves the worker quiet"
         );
 
-        // A wait asks.
-        let waiting = run.events.waiting(errors.clone());
+        // A wait asks, from its own start: what the worker logged before it is history.
+        let waiting = run.events.waiting(errors.clone(), 2_000);
         watcher.lease_worker_runtime().await;
-        assert!(
+        assert_eq!(
             watcher
                 .browser
                 .page_signals
                 .runtime_leases()
-                .is_held(&SessionId::from("w"))
+                .floor_ms(&SessionId::from("w")),
+            Some(2_000.0)
         );
         drop(waiting);
         watcher.lease_worker_runtime().await;
