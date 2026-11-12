@@ -130,7 +130,9 @@ async fn call_in_worker(
 ) -> Result<Value, PlaywrightError> {
     // A script's top-level `this` is the global itself: unlike `globalThis`, a property the
     // worker can replace with a getter, reading it runs no worker code, so it may come before
-    // the effect is marked.
+    // the effect is marked. It is still Neo's script in the worker's own realm, which a refusal
+    // at the send below would leave unreported.
+    scope.sending_main_world();
     let global: Global = session
         .send(
             "Runtime.evaluate",
@@ -195,4 +197,82 @@ struct GlobalHandle {
 struct ExceptionDetails {
     text: String,
     exception: Option<RemoteObject>,
+}
+
+#[cfg(test)]
+mod tests {
+    use browseros_core::{SessionId, TargetId};
+    use neo_trace::ErrorOwner;
+    use serde_json::{Value, json};
+
+    use crate::events::worker_table::WorkerInfo;
+    use crate::test_env::EnvCall;
+    use crate::test_support::{
+        ProbeAnswer, SCRIPTED_MAIN, ScriptedRun, ScriptedTab, TabScript, TestResult,
+    };
+    use crate::{Op, Refusal};
+
+    struct NoProbes;
+    impl TabScript for NoProbes {
+        fn probe(&self, _frame: &str, _request: &Value) -> ProbeAnswer {
+            ProbeAnswer::unexpected()
+        }
+    }
+
+    /// A worker evaluate takes the worker's global with a script in the worker's own realm,
+    /// before the host's recheck, so one the host refuses at its send reports the main world,
+    /// though the agent's script never went out.
+    #[tokio::test]
+    async fn tests_that_a_refused_worker_evaluate_reports_its_global_lookup() -> TestResult {
+        let tab = ScriptedTab::new(NoProbes);
+        let run = ScriptedRun::over(&tab).await?;
+        let refusal = Refusal {
+            owner: ErrorOwner::Host,
+            code: "owner_has_control".to_owned(),
+            message: "The owner is using this tab.".to_owned(),
+            host_code: None,
+        };
+        let run = ScriptedRun {
+            env: run.env.with_refusal(refusal),
+            ..run
+        };
+        let session = run
+            .playwright
+            .browser()
+            .protocol_session(SessionId::from("worker-session"));
+        assert!(
+            run.playwright.events().workers.insert(
+                TargetId(SCRIPTED_MAIN.to_owned()),
+                WorkerInfo {
+                    id: "worker".to_owned(),
+                    url: "https://a.test/worker.js".to_owned(),
+                },
+                session,
+                false,
+            ),
+            "the worker is new"
+        );
+        let op = Op::from_name("worker.evaluate").ok_or("worker.evaluate is an op")?;
+        let input = json!({ "page": serde_json::to_value(&run.page)?, "worker": "worker",
+            "expression": "() => 1", "isFunction": true,
+            "arg": { "value": r#"{"v":"undefined"}"#, "handles": [] } });
+        let refused = run
+            .playwright
+            .invoke(&run.env, op, input)
+            .await
+            .err()
+            .ok_or("the host refuses the script")?;
+        assert_eq!(refused.code(), "owner_has_control", "{refused}");
+        assert_eq!(
+            tab.sent("Runtime.callFunctionOn"),
+            0,
+            "the agent's script never went out"
+        );
+        assert!(
+            run.env.calls().contains(&EnvCall::MainWorld),
+            "the global's lookup ran in the worker: {:?}",
+            run.env.calls()
+        );
+        Ok(())
+    }
 }
