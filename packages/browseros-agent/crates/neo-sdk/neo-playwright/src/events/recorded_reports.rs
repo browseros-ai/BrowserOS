@@ -8,14 +8,14 @@
 //! microseconds: a wait made in the millisecond in which the error the previous wait returned
 //! was thrown has a floor at or below that error's stamp (measured: 36 of 40 exceptions reached
 //! Neo while `Date.now()` still read below their stamp). The replay then passed as news, and
-//! the wait took the previous round's error (ER-006). Identity does not depend on two clocks:
-//! within the floor's own millisecond, a report this session's log already recorded is a replay
-//! (`Watcher::replayed`). Outside it the stamp decides, so a page that logs the same text twice
-//! loses neither.
+//! the wait took the previous round's error (ER-006). Nor can the floor stop a replay of what
+//! came after it: a wait whose predicate rejected an event waits again from its first `since`,
+//! under a new lease whose replay brings the rejected event back as a new record. Identity does
+//! not depend on two clocks: a report this session's log already recorded is a replay
+//! (`Watcher::replayed`).
 
 use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::hash::{Hash, Hasher};
 
 use browseros_core::SessionId;
 use serde_json::Value;
@@ -39,7 +39,9 @@ struct Remembered {
 
 /// What identifies one report across its live delivery and its replays: an exception's id with
 /// its stamp (ids start over in a new renderer process, the stamp does not repeat), a console
-/// message's stamp, type and arguments (no id; two calls are told apart by the microsecond).
+/// message's stamp, type and arguments as values (no id; two calls are told apart by the
+/// microsecond). A replay wraps object arguments anew, with another `objectId` and no preview,
+/// so only what the replay carries unchanged identifies an argument.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum ReportKey {
     Exception { id: i64, stamp: u64 },
@@ -50,6 +52,8 @@ impl ReportKey {
     /// The key of a `Runtime.exceptionThrown` or `Runtime.consoleAPICalled` event's params;
     /// `None` for one that carries no timestamp, which nothing could tell apart anyway.
     pub(crate) fn of(method: &str, params: &Value) -> Option<Self> {
+        use std::hash::{Hash, Hasher};
+
         let stamp = params.get("timestamp").and_then(Value::as_f64)?.to_bits();
         if method == "Runtime.exceptionThrown" {
             let id = params
@@ -60,7 +64,23 @@ impl ReportKey {
         let mut hasher = DefaultHasher::new();
         stamp.hash(&mut hasher);
         params.get("type").map(Value::to_string).hash(&mut hasher);
-        params.get("args").map(Value::to_string).hash(&mut hasher);
+        for arg in params
+            .get("args")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            for field in [
+                "type",
+                "subtype",
+                "className",
+                "value",
+                "unserializableValue",
+                "description",
+            ] {
+                arg.get(field).map(Value::to_string).hash(&mut hasher);
+            }
+        }
         Some(Self::Console {
             digest: hasher.finish(),
         })
@@ -108,10 +128,12 @@ mod tests {
 
     use super::{REMEMBERED, RecordedReports, ReportKey};
 
-    /// An exception is its id and exact stamp; a console message its stamp, type and
-    /// arguments. A session forgets its oldest past the cap, and a forgotten session nothing.
+    /// An exception is its id and exact stamp; a console message its stamp, type and argument
+    /// values, whatever handle or preview a replay wraps them in. A session forgets its oldest
+    /// past the cap, and a forgotten session nothing.
     #[test]
-    fn tests_that_a_report_is_known_by_identity_and_the_memory_is_bounded() {
+    fn tests_that_a_report_is_known_by_identity_and_the_memory_is_bounded()
+    -> Result<(), &'static str> {
         let thrown = |id: i64, stamp: f64| {
             ReportKey::of(
                 "Runtime.exceptionThrown",
@@ -127,6 +149,22 @@ mod tests {
         assert_ne!(thrown(3, 1_000.6), thrown(3, 1_000.7), "an id reused later");
         assert_ne!(logged(1_000.6, "a"), logged(1_000.6, "b"));
         assert_eq!(logged(1_000.6, "a"), logged(1_000.6, "a"));
+        let object = |object_id: &str, preview: bool| {
+            let mut arg = json!({ "type": "object", "className": "Object",
+                                  "description": "Object", "objectId": object_id });
+            if preview {
+                arg["preview"] = json!({ "type": "object", "properties": [] });
+            }
+            ReportKey::of(
+                "Runtime.consoleAPICalled",
+                &json!({ "timestamp": 2_000.1, "type": "log", "args": [arg] }),
+            )
+        };
+        assert_eq!(
+            object("live.1", true),
+            object("replay.7", false),
+            "a replay rewraps the object"
+        );
         assert_eq!(
             ReportKey::of("Runtime.consoleAPICalled", &json!({ "type": "log" })),
             None
@@ -134,9 +172,7 @@ mod tests {
 
         let mut reports = RecordedReports::default();
         let page = SessionId::from("page".to_owned());
-        let Some(first) = thrown(1, 1.0) else {
-            panic!("an exception with an id and a stamp has a key");
-        };
+        let first = thrown(1, 1.0).ok_or("an exception with an id and a stamp has a key")?;
         reports.insert(&page, first);
         assert!(reports.contains(&page, first));
         assert!(!reports.contains(&SessionId::from("other".to_owned()), first));
@@ -148,5 +184,6 @@ mod tests {
         assert!(!reports.contains(&page, first), "the oldest is forgotten");
         reports.forget(&page);
         assert!(thrown(2, 1.0).is_some_and(|key| !reports.contains(&page, key)));
+        Ok(())
     }
 }

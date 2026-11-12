@@ -938,6 +938,7 @@ impl Watcher {
         for session in &sessions {
             self.dialog_closed(session);
             self.sessions.remove(session);
+            self.recorded.forget(session);
             self.lifecycle_sources.detach(session);
         }
         match page.state {
@@ -980,6 +981,7 @@ impl Watcher {
                 self.worker_sessions.remove(session);
                 self.worker_runtime.remove(session);
                 self.sessions.remove(session);
+                self.recorded.forget(session);
             }
             self.writer.record(PageEvent::Worker {
                 target: worker.page.clone(),
@@ -1482,11 +1484,11 @@ impl Watcher {
     /// that switched `Runtime` on makes the browser send what it stored before, and a listener
     /// must see only what came after it asked, as it did while `Runtime` stayed on from attach.
     ///
-    /// The floor is the script's `Date.now()`, whole milliseconds, and the browser stamps in
-    /// microseconds, so a replayed report the script saw just before it asked can carry a stamp
-    /// within the floor's own millisecond, past the floor (ER-006). In that millisecond alone a
-    /// report this session's log already recorded is the replay ([`RecordedReports`]); one
-    /// stamped a whole millisecond past the floor came after the script asked, whatever it is.
+    /// The floor alone cannot tell (ER-006): it is the script's `Date.now()`, whole
+    /// milliseconds, while the browser stamps in microseconds, so a report the script saw just
+    /// before it asked can be stamped past it; and a wait that rejected an event waits again from
+    /// its first floor, under a new lease that replays the rejected event. So a report this
+    /// session's log already recorded is a replay, whatever its stamp ([`RecordedReports`]).
     fn replayed(&self, session: &SessionId, key: Option<ReportKey>, params: &Value) -> bool {
         let Some(floor) = self.browser.page_signals.runtime_leases().floor_ms(session) else {
             // Unleased, `Runtime` is off on every session Neo drives (a worker reports only
@@ -1494,12 +1496,11 @@ impl Watcher {
             // core's console harvest replaying history.
             return self.page_sessions.contains(session);
         };
-        let Some(stamped) = params.get("timestamp").and_then(Value::as_f64) else {
-            return false;
-        };
-        stamped < floor
-            || (stamped < floor + 1.0
-                && key.is_some_and(|key| self.recorded.contains(session, key)))
+        params
+            .get("timestamp")
+            .and_then(Value::as_f64)
+            .is_some_and(|stamped| stamped < floor)
+            || key.is_some_and(|key| self.recorded.contains(session, key))
     }
 
     /// A console message or uncaught exception, for the runs listening on its tab, unless it
@@ -2154,9 +2155,10 @@ mod worker_observation_tests {
     /// and the browser stamps with microseconds. Round 3's error, thrown at 1000.6 under a floor
     /// of 1000, is recorded; round 4's wait starts in the same millisecond, its lease opens a new
     /// span, and the browser replays round 3's error, stamped above that floor. It is dropped by
-    /// identity, and round 4's own error, in the same millisecond, still arrives.
+    /// identity, and round 4's own error, in the same millisecond, still arrives. So is the
+    /// replay a predicate's re-wait gets under its next lease, however far past the floor.
     #[tokio::test]
-    async fn tests_that_a_replay_of_a_recorded_error_in_the_floors_millisecond_is_dropped()
+    async fn tests_that_a_replay_of_a_recorded_error_is_dropped_whatever_its_stamp()
     -> Result<(), Box<dyn Error>> {
         let connection =
             TestConnection::new([("Browser.getVersion", json!({"product":"Chrome/143.0"}))]);
@@ -2225,37 +2227,27 @@ mod worker_observation_tests {
             "round 3's error once, then round 4's own"
         );
 
-        // Past the floor's millisecond the stamp decides: the same report again is live news.
+        // A wait whose predicate rejected round 4's error waits again from the same floor, under
+        // a new lease: the replay of an error well past the floor is no news either, and a new
+        // error that shares its stamp but not its id is.
+        let _retry = run.events.waiting(errors_later, 1_000);
+        drop(round_four_lease);
+        settle().await;
+        let _retry_lease = leases.acquire(&protocol, 1_000.0).await?;
         watcher
             .handle(thrown(4, 1_000.8, json!({ "type": "string", "value": "" })))
             .await;
-        assert_eq!(
-            hub.read_after(0).records.len(),
-            2,
-            "in the floor's millisecond a recorded report is the replay"
-        );
-        let _later = run.events.waiting(errors_later.clone(), 1_002);
-        drop(round_four_lease);
-        settle().await;
-        let _later_lease = leases.acquire(&protocol, 1_002.0).await?;
         watcher
             .handle(thrown(
-                9,
-                1_003.5,
-                json!({ "type": "string", "value": "again" }),
-            ))
-            .await;
-        watcher
-            .handle(thrown(
-                9,
-                1_003.5,
+                5,
+                1_000.8,
                 json!({ "type": "string", "value": "again" }),
             ))
             .await;
         assert_eq!(
             hub.read_after(0).records.len(),
-            4,
-            "a whole millisecond past the floor, even an identical report is recorded"
+            3,
+            "round 4's replay dropped, the new error at its stamp recorded"
         );
         Ok(())
     }
