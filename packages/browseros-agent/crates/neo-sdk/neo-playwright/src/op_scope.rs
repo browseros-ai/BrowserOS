@@ -23,9 +23,9 @@
 //! can notice it ([`OpScope::sending_main_world`]), right before each such send: a `MainWorld`
 //! gateway's `send_effect`, Neo's own script that gateway sends before its recheck (the evaluate
 //! guard's evaluator), each of the run's context scripts and bindings a write's admission adds
-//! to its tab, and a binding's cleanup when `disposable.dispose` removes it. The op's static
-//! capabilities would miss the last two: a `goto` declares none, yet it carries
-//! `context.exposeBinding`'s stub into a new tab.
+//! to its tab, a binding's cleanup when `disposable.dispose` removes it, and a `javascript:`
+//! URL a `goto` sends. The op's static capabilities would miss the last three: a `goto`
+//! declares none, yet it carries `context.exposeBinding`'s stub into a new tab.
 //!
 //! The scope also owns the op's CDP object group: every remote object the op asks for (an
 //! iframe it hops through) lives in it, and dropping the scope releases it, whether the op

@@ -283,7 +283,8 @@ mod tests {
     ///
     /// The ops with an empty row send selectors, values or trusted input, or read in the isolated
     /// world. `page.goto` delegates URLs to Chromium, including `javascript:` scripts in the
-    /// current document; it has no separate script gateway. Aliases share their op's row:
+    /// current document; it has no separate script gateway, and reports such a URL to the host
+    /// as main-world script (`page/navigation.rs`). Aliases share their op's row:
     /// `locator.screenshot` and `elementHandle.screenshot` send `page.screenshot`; `page.$eval`,
     /// `frame.$eval` and `elementHandle.$eval` send `page.evalOnSelector`;
     /// `elementHandle.evaluate` sends `locator.evaluate`; `$$eval` sends `locator.evaluateAll`; the
