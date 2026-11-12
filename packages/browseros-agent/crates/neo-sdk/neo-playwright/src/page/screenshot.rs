@@ -281,6 +281,30 @@ async fn capture_pixels(
     // use the normalized core path, which owns background isolation from audit captures.
     // DIAGNOSTIC v5: NEO_DIAG_CLIP=1 sends viewport screenshots with an explicit clip, as Playwright does.
     let force_clip = std::env::var_os("NEO_DIAG_CLIP").is_some();
+    // DIAGNOSTIC v9: the tab's window and its state; NEO_DIAG_NORMAL=1 restores that window to
+    // the normal state before capturing.
+    {
+        let session = page.root_session();
+        let window = session
+            .send::<_, Value>("Browser.getWindowForTarget", json!({}))
+            .await;
+        crate::page::screenshot_preparation::diag_log(&format!("window {}", match &window {
+            Ok(value) => value.to_string(),
+            Err(error) => format!("error:{error}"),
+        }));
+        if std::env::var_os("NEO_DIAG_NORMAL").is_some()
+            && let Ok(value) = &window
+            && let Some(id) = value["windowId"].as_i64()
+        {
+            let normal = session
+                .send::<_, Value>(
+                    "Browser.setWindowBounds",
+                    json!({ "windowId": id, "bounds": { "windowState": "normal" } }),
+                )
+                .await;
+            crate::page::screenshot_preparation::diag_log(&format!("setWindowBounds normal ok={} {}", normal.is_ok(), normal.as_ref().err().map(ToString::to_string).unwrap_or_default()));
+        }
+    }
     // DIAGNOSTIC v6: NEO_DIAG_FRONT=1 makes the tab the window's active tab before capturing.
     if std::env::var_os("NEO_DIAG_FRONT").is_some() {
         let front = page
