@@ -239,3 +239,59 @@ async fn tests_that_a_script_disposed_after_a_writes_snapshot_is_not_added() -> 
     );
     Ok(())
 }
+
+/// How many times the crate told the host an op is about to send main-world script.
+fn main_world_reports(env: &TestEnv) -> usize {
+    env.calls()
+        .iter()
+        .filter(|call| **call == EnvCall::MainWorld)
+        .count()
+}
+
+/// A write that declares no `MainWorld` (`page.requestGC` stands in for a `goto` or a click)
+/// reports the main world when its admission adds the context's script to its tab, which then
+/// runs there, and only then: not before the context has one, not on a read, and not once the
+/// tab has it. `context.addInitScript` itself passes the main-world gateway, so it reports too.
+#[tokio::test]
+async fn tests_that_a_write_reports_the_main_world_when_it_adds_a_context_script() -> TestResult {
+    let connection = TestConnection::new([]);
+    let browser = browser(&connection).await?;
+    connection.always("HeapProfiler.collectGarbage", json!({}))?;
+    let playwright = Playwright::new(Arc::clone(&browser));
+    let env = TestEnv::over(BrowserView::unbound(Arc::clone(&browser), None));
+    let page = json!({ "call": {}, "page": { "$neo": "page", "tab": 7 } });
+
+    invoke(&playwright, &env, "page.requestGC", page.clone()).await?;
+    assert_eq!(main_world_reports(&env), 0, "nothing to add yet");
+
+    invoke(
+        &playwright,
+        &env,
+        "context.addInitScript",
+        json!({ "call": {}, "source": "window.c = 1" }),
+    )
+    .await?;
+    assert_eq!(main_world_reports(&env), 1, "the gateway op reports itself");
+
+    invoke(&playwright, &env, "page.opener", page.clone()).await?;
+    assert_eq!(main_world_reports(&env), 1, "a read adds nothing");
+
+    invoke(&playwright, &env, "page.requestGC", page.clone()).await?;
+    assert_eq!(
+        sent(&connection, ADD)?,
+        vec![json!({ "source": "window.c = 1" })]
+    );
+    assert_eq!(
+        main_world_reports(&env),
+        2,
+        "the write that added the context's script reports it"
+    );
+
+    invoke(&playwright, &env, "page.requestGC", page).await?;
+    assert_eq!(
+        main_world_reports(&env),
+        2,
+        "a tab that has the script gets nothing more"
+    );
+    Ok(())
+}

@@ -19,6 +19,8 @@ use crate::{OpEnv, Refusal, RunState};
 pub(crate) enum EnvCall {
     Recheck,
     MarkSent,
+    /// The op said it is about to send script into a page's main world.
+    MainWorld,
     Note(String),
     /// The close evidence handed to the host with a delivered event.
     ReportClose(TabId, TargetId, u64),
@@ -114,6 +116,10 @@ impl OpEnv for TestEnv {
 
     fn mark_sent(&self) {
         self.record(EnvCall::MarkSent);
+    }
+
+    fn main_world(&self) {
+        self.record(EnvCall::MainWorld);
     }
 
     fn report_close(&self, tab: TabId, target: &TargetId, seq: u64) {

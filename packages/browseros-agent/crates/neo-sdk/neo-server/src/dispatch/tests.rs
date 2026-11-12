@@ -116,6 +116,27 @@ async fn a_childs_send_marks_its_parent_sent() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
+/// An op's trace record says whether it ran script in the page's main world, as the method
+/// marked it, true or false.
+#[tokio::test]
+async fn an_ops_record_says_whether_it_ran_in_the_main_world() -> Result<(), Box<dyn Error>> {
+    let harness = Harness::new().await?;
+    let page = harness.page("https://example.com/").await?;
+    let (run, _guard) = harness.run()?;
+
+    let (main_world, reply) = harness
+        .submit(&run, "test.main_world", json!({ "page": handle(&page) }))
+        .await;
+    assert!(reply.outcome.is_ok(), "{:?}", reply.outcome);
+    let (write, reply) = harness
+        .submit(&run, "test.write", json!({ "page": handle(&page) }))
+        .await;
+    assert!(reply.outcome.is_ok(), "{:?}", reply.outcome);
+    assert_eq!(harness.row(main_world).await?.main_world, Some(true));
+    assert_eq!(harness.row(write).await?.main_world, Some(false));
+    Ok(())
+}
+
 #[tokio::test]
 async fn a_refused_recheck_is_the_ops_error_however_the_method_then_fails()
 -> Result<(), Box<dyn Error>> {

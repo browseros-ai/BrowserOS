@@ -549,3 +549,50 @@ async fn tests_that_a_host_refusal_before_the_fallback_sends_nothing() -> TestRe
     );
     Ok(())
 }
+
+/// The host hears that an evaluate ran in the page's main world once its script goes out, after
+/// the op was marked sent. One the host refuses at its first send passed the gateway too, yet
+/// ran nothing in the page, so it reports nothing.
+#[tokio::test(start_paused = true)]
+async fn tests_that_only_a_script_that_went_out_reports_the_main_world() -> TestResult {
+    let tab = ScriptedTab::new(OtherWorld::default());
+    let run = ScriptedRun::over(&tab).await?;
+    let op = Op::from_name("page.evaluate").ok_or("page.evaluate is an op")?;
+    run.playwright
+        .invoke(&run.env, op, evaluate_input(&run)?)
+        .await?;
+    let calls = run.env.calls();
+    let sent = calls.iter().position(|call| *call == EnvCall::MarkSent);
+    let main_world = calls.iter().position(|call| *call == EnvCall::MainWorld);
+    assert!(
+        matches!((sent, main_world), (Some(sent), Some(main_world)) if sent < main_world),
+        "reported after the op was marked sent: {calls:?}"
+    );
+
+    let tab = ScriptedTab::new(OtherWorld::default());
+    let run = ScriptedRun::over(&tab).await?;
+    let refusal = Refusal {
+        owner: ErrorOwner::Host,
+        code: "owner_has_control".to_owned(),
+        message: "The owner is using this tab.".to_owned(),
+        host_code: None,
+    };
+    let run = ScriptedRun {
+        env: run.env.with_refusal(refusal),
+        ..run
+    };
+    let refused = run
+        .playwright
+        .invoke(&run.env, op, evaluate_input(&run)?)
+        .await
+        .err()
+        .ok_or("the host refuses the script")?;
+    assert_eq!(refused.code(), "owner_has_control", "{refused}");
+    assert!(tab.script().log().is_empty(), "nothing ran in the page");
+    assert!(
+        !run.env.calls().contains(&EnvCall::MainWorld),
+        "a refused script reports no main world: {:?}",
+        run.env.calls()
+    );
+    Ok(())
+}
