@@ -1481,29 +1481,32 @@ impl Watcher {
     /// Whether a console message or exception is the browser's replay of history: a lease
     /// that switched `Runtime` on makes the browser send what it stored before, and a listener
     /// must see only what came after it asked, as it did while `Runtime` stayed on from attach.
-    fn replayed(&self, session: &SessionId, params: &Value) -> bool {
+    ///
+    /// The floor is the script's `Date.now()`, whole milliseconds, and the browser stamps in
+    /// microseconds, so a replayed report the script saw just before it asked can carry a stamp
+    /// within the floor's own millisecond, past the floor (ER-006). In that millisecond alone a
+    /// report this session's log already recorded is the replay ([`RecordedReports`]); one
+    /// stamped a whole millisecond past the floor came after the script asked, whatever it is.
+    fn replayed(&self, session: &SessionId, key: Option<ReportKey>, params: &Value) -> bool {
         let Some(floor) = self.browser.page_signals.runtime_leases().floor_ms(session) else {
             // Unleased, `Runtime` is off on every session Neo drives (a worker reports only
             // under its `WorkerRuntime` lease, an OOPIF never), so a page session's report is
             // core's console harvest replaying history.
             return self.page_sessions.contains(session);
         };
-        params
-            .get("timestamp")
-            .and_then(Value::as_f64)
-            .is_some_and(|stamped| stamped < floor)
+        let Some(stamped) = params.get("timestamp").and_then(Value::as_f64) else {
+            return false;
+        };
+        stamped < floor
+            || (stamped < floor + 1.0
+                && key.is_some_and(|key| self.recorded.contains(session, key)))
     }
 
     /// A console message or uncaught exception, for the runs listening on its tab, unless it
-    /// is history the browser replayed when a lease enabled `Runtime`: stamped before the
-    /// lease's floor, or one this session's log already recorded ([`RecordedReports`]), which
-    /// the floor alone misses when both fall in one millisecond.
+    /// is history the browser replayed when a lease enabled `Runtime` ([`Self::replayed`]).
     async fn runtime_report(&mut self, method: &str, session: SessionId, params: Value) {
-        if self.replayed(&session, &params) {
-            return;
-        }
         let key = ReportKey::of(method, &params);
-        if key.is_some_and(|key| self.recorded.contains(&session, key)) {
+        if self.replayed(&session, key, &params) {
             return;
         }
         let recorded = if method == "Runtime.consoleAPICalled" {
@@ -2193,8 +2196,9 @@ mod worker_observation_tests {
         drop(round_three);
         settle().await;
 
+        let errors_later = errors.clone();
         let _round_four = run.events.waiting(errors, 1_000);
-        let _lease = leases.acquire(&protocol, 1_000.0).await?;
+        let round_four_lease = leases.acquire(&protocol, 1_000.0).await?;
         // The new span's replay, then round 4's own error.
         watcher
             .handle(thrown(
@@ -2219,6 +2223,39 @@ mod worker_observation_tests {
             messages,
             ["0", ""],
             "round 3's error once, then round 4's own"
+        );
+
+        // Past the floor's millisecond the stamp decides: the same report again is live news.
+        watcher
+            .handle(thrown(4, 1_000.8, json!({ "type": "string", "value": "" })))
+            .await;
+        assert_eq!(
+            hub.read_after(0).records.len(),
+            2,
+            "in the floor's millisecond a recorded report is the replay"
+        );
+        let _later = run.events.waiting(errors_later.clone(), 1_002);
+        drop(round_four_lease);
+        settle().await;
+        let _later_lease = leases.acquire(&protocol, 1_002.0).await?;
+        watcher
+            .handle(thrown(
+                9,
+                1_003.5,
+                json!({ "type": "string", "value": "again" }),
+            ))
+            .await;
+        watcher
+            .handle(thrown(
+                9,
+                1_003.5,
+                json!({ "type": "string", "value": "again" }),
+            ))
+            .await;
+        assert_eq!(
+            hub.read_after(0).records.len(),
+            4,
+            "a whole millisecond past the floor, even an identical report is recorded"
         );
         Ok(())
     }

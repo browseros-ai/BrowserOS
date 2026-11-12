@@ -8,8 +8,10 @@
 //! microseconds: a wait made in the millisecond in which the error the previous wait returned
 //! was thrown has a floor at or below that error's stamp (measured: 36 of 40 exceptions reached
 //! Neo while `Date.now()` still read below their stamp). The replay then passed as news, and
-//! the wait took the previous round's error (ER-006). Identity does not depend on two clocks: a
-//! report this session's log already recorded is a replay, whatever its stamp.
+//! the wait took the previous round's error (ER-006). Identity does not depend on two clocks:
+//! within the floor's own millisecond, a report this session's log already recorded is a replay
+//! (`Watcher::replayed`). Outside it the stamp decides, so a page that logs the same text twice
+//! loses neither.
 
 use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, HashSet, VecDeque};

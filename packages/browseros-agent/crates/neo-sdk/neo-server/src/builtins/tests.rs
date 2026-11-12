@@ -2330,13 +2330,14 @@ async fn fill_event_ring(
         })
     ));
     for batch in 1..=64 {
-        for _ in 0..16 {
+        for call in 0..16 {
+            // Each call its own stamp, as Chromium's are: identical reports are one replayed.
             assert!(harness.fake.page_event(
                 noise.tab,
                 "Runtime.consoleAPICalled",
                 json!({
                     "type":"log", "args":[{"type":"string","value":"noise"}],
-                    "executionContextId":1, "timestamp":0
+                    "executionContextId":1, "timestamp": batch * 16 + call
                 })
             ));
         }
