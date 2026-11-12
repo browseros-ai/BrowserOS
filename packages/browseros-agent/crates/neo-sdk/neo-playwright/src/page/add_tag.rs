@@ -67,7 +67,6 @@ pub(crate) struct Tagged {
 }
 
 /// A returned node is pinned to the admitted page and the document that created it.
-// json! sorted the old element keys; keep the declaration sorted for direct serialization too.
 #[derive(Serialize, TS)]
 struct TagElement {
     #[serde(rename = "$neo")]
@@ -311,17 +310,26 @@ mod tests {
     use serde_json::json;
 
     use super::{TagElement, Tagged};
+    use crate::Op;
+    use crate::op_output::to_output;
+    use crate::op_scope::OpScope;
     use crate::page::frame_tree::FrameTree;
+    use crate::target::CallHeader;
+    use crate::test_env::TestEnv;
     use crate::world::FrameSeq;
 
-    #[test]
-    fn tag_reply_preserves_the_flattened_before_bytes() -> Result<(), serde_json::Error> {
+    #[tokio::test]
+    async fn tag_reply_preserves_the_flattened_before_bytes()
+    -> Result<(), Box<dyn std::error::Error>> {
         #[derive(Serialize)]
         struct Before {
             element: serde_json::Value,
             #[serde(flatten)]
             frames: Option<FrameTree>,
         }
+        let env = TestEnv::new();
+        let op = Op::from_name("page.addScriptTag").ok_or("tag op exists")?;
+        let scope = OpScope::new(&env, op, CallHeader::default());
         for has_frames in [false, true] {
             let element = json!({"$neo":"element", "page":{"$neo":"page","tab":7},
                 "seq":3,"node":9,"display":"<script>"});
@@ -339,8 +347,10 @@ mod tests {
                 },
                 frames: has_frames.then(Vec::new),
             };
-            // json! sorted the old node keys. Compare direct serialization so converting the
-            // new struct through Value cannot silently sort an incorrectly ordered declaration.
+            // Run uses this encoder before the host records JSON. It sorts object keys, so
+            // direct struct serialization would measure declaration order instead of wire bytes.
+            let before = to_output(&scope, &before)?;
+            let after = to_output(&scope, &after)?;
             assert_eq!(
                 serde_json::to_string(&after)?,
                 serde_json::to_string(&before)?

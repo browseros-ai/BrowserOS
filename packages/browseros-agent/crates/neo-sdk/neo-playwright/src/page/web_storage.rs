@@ -271,11 +271,18 @@ async fn send(
 mod tests {
     use super::StorageValue;
 
-    #[test]
-    fn storage_replies_keep_their_recorded_json_shapes() -> Result<(), serde_json::Error> {
+    #[tokio::test]
+    async fn storage_replies_keep_their_recorded_json_shapes()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let env = crate::test_env::TestEnv::new();
+        let op = crate::Op::from_name("webStorage.read").ok_or("storage op exists")?;
+        let scope = crate::op_scope::OpScope::new(&env, op, crate::target::CallHeader::default());
         for before in [r#"[{"name":"a","value":"b"}]"#, r#""b""#, "null", "[]"] {
             let typed: StorageValue = serde_json::from_str(before)?;
-            assert_eq!(serde_json::to_string(&typed)?, before);
+            assert_eq!(
+                serde_json::to_string(&crate::op_output::to_output(&scope, &typed)?)?,
+                before
+            );
         }
         Ok(())
     }
