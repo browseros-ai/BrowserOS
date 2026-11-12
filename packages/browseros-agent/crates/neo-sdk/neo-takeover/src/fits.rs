@@ -97,7 +97,9 @@ pub enum Fitted {
     Partial,
 }
 
-/// The boxes of the fields a phone keyboard opens for.
+/// The boxes of the fields a phone keyboard opens for: a field's own box, or for a field with
+/// no size that the page draws with its own elements, the drawing's box, where the owner taps
+/// (`owner_view`'s script).
 #[derive(Clone, Debug, PartialEq)]
 pub struct Keyboard {
     /// The screen size they were measured at. The owner's viewer uses them only at that size.

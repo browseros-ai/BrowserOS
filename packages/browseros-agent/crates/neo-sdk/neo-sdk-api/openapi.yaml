@@ -1339,8 +1339,10 @@ components:
     FitKeyboard:
       type: object
       description: >-
-        Boxes of the fields a phone keyboard opens for, in screen px, `[x, y, width, height]`.
-        Present only while they were measured at `width`×`height`.
+        Boxes of the fields a phone keyboard opens for, in screen px, `[x, y, width, height]`: a
+        field's own box, or for a field with no size that the page draws with its own elements
+        (digit squares over a hidden code input) the drawing's box, where the owner taps. Present
+        only while they were measured at `width`×`height`.
       required: [width, height, boxes, at]
       properties:
         width:
