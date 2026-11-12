@@ -267,13 +267,13 @@ async fn replay(run: &LiveRun, page: &TestPage, call: &CaseCall) -> Result<Value
     let argument = json!(call.argument);
     match (&call.locator, call.method.as_str()) {
         (None, "press") => {
-            let fields = json!({ "key": argument, "options": {} });
+            let fields = json!({ "key": argument });
             device(run, "keyboard.press", page, fields).await
         }
         (None, "down") => device(run, "keyboard.down", page, json!({ "key": argument })).await,
         (None, "up") => device(run, "keyboard.up", page, json!({ "key": argument })).await,
         (None, "type") => {
-            let fields = json!({ "text": argument, "options": {} });
+            let fields = json!({ "text": argument });
             device(run, "keyboard.type", page, fields).await
         }
         (None, "insertText") => {
@@ -286,11 +286,11 @@ async fn replay(run: &LiveRun, page: &TestPage, call: &CaseCall) -> Result<Value
             .await
         }
         (Some(selector), "press") => {
-            let fields = json!({ "key": argument, "options": {} });
+            let fields = json!({ "key": argument });
             act(run, "locator.press", &at(page, selector), fields, 5000).await
         }
         (Some(selector), "pressSequentially") => {
-            let fields = json!({ "text": argument, "options": {} });
+            let fields = json!({ "text": argument });
             act(
                 run,
                 "locator.pressSequentially",
@@ -349,7 +349,7 @@ async fn tests_that_every_recorded_key_call_sends_what_playwright_sent_and_the_p
         "{profile}: sent other input than Playwright: {mismatches:#?}"
     );
     run.eval(&page, FRESH_FIELD).await?;
-    let typed = json!({ "text": "Hi é", "options": {} });
+    let typed = json!({ "text": "Hi é" });
     device(&run, "keyboard.type", &page, typed).await?;
     assert_eq!(
         run.eval(&page, "document.getElementById('field').value")
@@ -391,12 +391,12 @@ async fn tests_that_the_mouse_moves_presses_clicks_and_scrolls_where_it_was_told
     let server = FixtureServer::start(pages()).await?;
     let page = agent_tab(&run, &server.url("127.0.0.1", "/actions/page.html")).await?;
     let (x, y) = center(&run, &page, "#go").await?;
-    let to = json!({ "x": x, "y": y, "options": { "steps": 3 } });
+    let to = json!({ "x": x, "y": y, "steps": 3 });
     device(&run, "mouse.move", &page, to).await?;
-    device(&run, "mouse.down", &page, json!({ "options": {} })).await?;
-    device(&run, "mouse.up", &page, json!({ "options": {} })).await?;
+    device(&run, "mouse.down", &page, json!({})).await?;
+    device(&run, "mouse.up", &page, json!({})).await?;
     let (x, y) = center(&run, &page, "#twice").await?;
-    let twice = json!({ "x": x, "y": y, "options": { "clickCount": 2 } });
+    let twice = json!({ "x": x, "y": y, "clickCount": 2 });
     device(&run, "mouse.click", &page, twice).await?;
     let wheel = json!({ "deltaX": 0, "deltaY": 600 });
     device(&run, "mouse.wheel", &page, wheel).await?;
@@ -706,14 +706,9 @@ async fn tests_that_a_refused_recheck_fills_and_types_nothing() -> TestResult {
     let selected = select(&run, &page, "#color", json!([{ "value": "g" }]))
         .await
         .err();
-    let typed = device(
-        &run,
-        "keyboard.type",
-        &page,
-        json!({ "text": "never", "options": {} }),
-    )
-    .await
-    .err();
+    let typed = device(&run, "keyboard.type", &page, json!({ "text": "never" }))
+        .await
+        .err();
     run.refuse_rechecks(None);
     for refused in [filled, dated, selected, typed] {
         let refused = refused.ok_or("a refused recheck fails the op")?;
@@ -1519,9 +1514,9 @@ async fn tests_that_keys_type_into_focused_password_and_plain_fields() -> TestRe
         )
         .await?;
         for (op, fields) in [
-            ("keyboard.type", json!({ "text": "s3cret", "options": {} })),
+            ("keyboard.type", json!({ "text": "s3cret" })),
             ("keyboard.insertText", json!({ "text": "!" })),
-            ("keyboard.press", json!({ "key": "a", "options": {} })),
+            ("keyboard.press", json!({ "key": "a" })),
         ] {
             run.clear_calls();
             device(&run, op, &page, fields).await?;

@@ -9547,20 +9547,16 @@ ${value.stack}`;
     async press(key, options = {}) {
       const site = captureSite();
       const api = "keyboard.press";
-      await send["keyboard.press"](site, { api, timeoutMs: 0 }, {
-        page: await this.#page._brand(api),
-        key,
-        options: pick(options, OPTION_KEYS["keyboard.press"])
-      });
+      const page = await this.#page._brand(api);
+      const picked = pick(options, OPTION_KEYS["keyboard.press"]);
+      await send["keyboard.press"](site, { api, timeoutMs: 0 }, { page, key, delay: picked.delay });
     }
     async type(text, options = {}) {
       const site = captureSite();
       const api = "keyboard.type";
-      await send["keyboard.type"](site, { api, timeoutMs: 0 }, {
-        page: await this.#page._brand(api),
-        text,
-        options: pick(options, OPTION_KEYS["keyboard.type"])
-      });
+      const page = await this.#page._brand(api);
+      const picked = pick(options, OPTION_KEYS["keyboard.type"]);
+      await send["keyboard.type"](site, { api, timeoutMs: 0 }, { page, text, delay: picked.delay });
     }
     async insertText(text) {
       const site = captureSite();
@@ -9578,28 +9574,23 @@ ${value.stack}`;
     async move(x, y, options = {}) {
       const site = captureSite();
       const api = "mouse.move";
-      await send["mouse.move"](site, { api, timeoutMs: 0 }, {
-        page: await this.#page._brand(api),
-        x,
-        y,
-        options: pick(options, OPTION_KEYS["mouse.move"])
-      });
+      const page = await this.#page._brand(api);
+      const picked = pick(options, OPTION_KEYS["mouse.move"]);
+      await send["mouse.move"](site, { api, timeoutMs: 0 }, { page, x, y, steps: picked.steps });
     }
     async down(options = {}) {
       const site = captureSite();
       const api = "mouse.down";
-      await send["mouse.down"](site, { api, timeoutMs: 0 }, {
-        page: await this.#page._brand(api),
-        options: pick(options, OPTION_KEYS["mouse.down"])
-      });
+      const page = await this.#page._brand(api);
+      const picked = pick(options, OPTION_KEYS["mouse.down"]);
+      await send["mouse.down"](site, { api, timeoutMs: 0 }, { page, button: picked.button, clickCount: picked.clickCount });
     }
     async up(options = {}) {
       const site = captureSite();
       const api = "mouse.up";
-      await send["mouse.up"](site, { api, timeoutMs: 0 }, {
-        page: await this.#page._brand(api),
-        options: pick(options, OPTION_KEYS["mouse.up"])
-      });
+      const page = await this.#page._brand(api);
+      const picked = pick(options, OPTION_KEYS["mouse.up"]);
+      await send["mouse.up"](site, { api, timeoutMs: 0 }, { page, button: picked.button, clickCount: picked.clickCount });
     }
     click(x, y, options = {}) {
       return this.#clickAt("mouse.click", x, y, options);
@@ -9614,11 +9605,15 @@ ${value.stack}`;
     }
     async#clickAt(api, x, y, options) {
       const site = captureSite();
+      const page = await this.#page._brand(api);
+      const picked = pick(options, OPTION_KEYS["mouse.click"]);
       await send["mouse.click"](site, { api, timeoutMs: 0 }, {
-        page: await this.#page._brand(api),
+        page,
         x,
         y,
-        options: pick(options, OPTION_KEYS["mouse.click"])
+        button: picked.button,
+        clickCount: picked.clickCount,
+        delay: picked.delay
       });
     }
   }

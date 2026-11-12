@@ -6,6 +6,9 @@
 //!    ── send_effect ── the typing window (keys) ── the burst, on the page's root session
 //! ```
 //!
+//! Script options share the input's top level with positional params, as in Playwright.
+//! `options!` keeps the positional fields out of generated script option keys.
+//!
 //! Positions are the page's main-viewport CSS pixels, as in Playwright: the root session hit
 //! tests them through every frame, and keys go to the focused frame, out-of-process ones
 //! included (decisions.md, root-session input). The tab's devices take the copy's state only
@@ -109,9 +112,11 @@ options!(KeyInput);
 struct PressInput {
     page: PageRef,
     key: Typed,
-    options: DelayOptions,
+    #[serde(default)]
+    #[ts(optional)]
+    delay: Option<f64>,
 }
-options!(PressInput => DelayOptions);
+options!(PressInput, flat, positional["key"]);
 
 /// `keyboard.type(text, { delay })`.
 #[derive(Debug, Deserialize, TS)]
@@ -120,9 +125,11 @@ options!(PressInput => DelayOptions);
 struct TypeInput {
     page: PageRef,
     text: Typed,
-    options: DelayOptions,
+    #[serde(default)]
+    #[ts(optional)]
+    delay: Option<f64>,
 }
-options!(TypeInput => DelayOptions);
+options!(TypeInput, flat, positional["text"]);
 
 /// `keyboard.insertText(text)`.
 #[derive(Debug, Deserialize, TS)]
@@ -134,15 +141,6 @@ struct InsertTextInput {
 }
 options!(InsertTextInput);
 
-#[derive(Debug, Deserialize, TS)]
-#[serde(deny_unknown_fields)]
-#[ts(rename = "KeyboardDelayOptions")]
-#[ts(optional_fields)]
-struct DelayOptions {
-    /// Milliseconds, as upstream's `delay`.
-    delay: Option<f64>,
-}
-
 /// `mouse.move(x, y, { steps })`.
 #[derive(Debug, Deserialize, TS)]
 #[serde(deny_unknown_fields)]
@@ -151,57 +149,46 @@ struct MoveInput {
     page: PageRef,
     x: f64,
     y: f64,
-    options: StepOptions,
-}
-options!(MoveInput => StepOptions);
-
-#[derive(Debug, Deserialize, TS)]
-#[serde(deny_unknown_fields)]
-#[ts(rename = "MouseStepOptions")]
-#[ts(optional_fields)]
-struct StepOptions {
+    #[serde(default)]
+    #[ts(optional)]
     steps: Option<u32>,
 }
+options!(MoveInput, flat, positional ["x", "y"]);
 
 /// `mouse.down({ button, clickCount })` and `mouse.up(..)`.
 #[derive(Debug, Deserialize, TS)]
-#[serde(deny_unknown_fields)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
 #[ts(rename = "MouseButtonInput")]
 struct ButtonInput {
     page: PageRef,
-    options: ButtonOptions,
-}
-options!(ButtonInput => ButtonOptions);
-
-#[derive(Debug, Deserialize, TS)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-#[ts(rename = "MouseButtonOptions")]
-#[ts(optional_fields)]
-struct ButtonOptions {
+    #[serde(default)]
+    #[ts(optional)]
     button: Option<WireButton>,
+    #[serde(default)]
+    #[ts(optional)]
     click_count: Option<u32>,
 }
+options!(ButtonInput, flat);
 
 /// `mouse.click(x, y, { button, clickCount, delay })` and `mouse.dblclick`.
 #[derive(Debug, Deserialize, TS)]
-#[serde(deny_unknown_fields)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
 #[ts(rename = "MouseClickInput")]
 struct ClickInput {
     page: PageRef,
     x: f64,
     y: f64,
-    options: MouseClickOptions,
-}
-options!(ClickInput => MouseClickOptions);
-
-#[derive(Debug, Deserialize, TS)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-#[ts(optional_fields)]
-struct MouseClickOptions {
+    #[serde(default)]
+    #[ts(optional)]
     button: Option<WireButton>,
+    #[serde(default)]
+    #[ts(optional)]
     click_count: Option<u32>,
+    #[serde(default)]
+    #[ts(optional)]
     delay: Option<f64>,
 }
+options!(ClickInput, flat, positional ["x", "y"]);
 
 /// `mouse.wheel(deltaX, deltaY)`.
 #[derive(Debug, Deserialize, TS)]
@@ -289,7 +276,7 @@ async fn keyboard_press(
     scope: &OpScope<'_>,
     input: PressInput,
 ) -> Result<Nothing, PlaywrightError> {
-    let delay = millis(input.options.delay);
+    let delay = millis(input.delay);
     burst(pw, scope, &input.page, |devices| {
         devices.keyboard.press(&input.key.0, delay)
     })
@@ -301,7 +288,7 @@ async fn keyboard_type(
     scope: &OpScope<'_>,
     input: TypeInput,
 ) -> Result<Nothing, PlaywrightError> {
-    let delay = millis(input.options.delay);
+    let delay = millis(input.delay);
     burst(pw, scope, &input.page, |devices| {
         Ok(devices.keyboard.type_text(&input.text.0, delay))
     })
@@ -328,7 +315,7 @@ async fn mouse_move(
         x: input.x,
         y: input.y,
     };
-    let steps = input.options.steps.unwrap_or(1);
+    let steps = input.steps.unwrap_or(1);
     burst(pw, scope, &input.page, |devices| {
         let held = devices.keyboard.modifiers();
         Ok(devices.mouse.move_to(to, steps, held))
@@ -341,8 +328,8 @@ async fn mouse_down(
     scope: &OpScope<'_>,
     input: ButtonInput,
 ) -> Result<Nothing, PlaywrightError> {
-    let pressed = button(input.options.button);
-    let count = input.options.click_count.unwrap_or(1);
+    let pressed = button(input.button);
+    let count = input.click_count.unwrap_or(1);
     burst(pw, scope, &input.page, |devices| {
         let held = devices.keyboard.modifiers();
         Ok(devices.mouse.down(pressed, count, held))
@@ -355,8 +342,8 @@ async fn mouse_up(
     scope: &OpScope<'_>,
     input: ButtonInput,
 ) -> Result<Nothing, PlaywrightError> {
-    let pressed = button(input.options.button);
-    let count = input.options.click_count.unwrap_or(1);
+    let pressed = button(input.button);
+    let count = input.click_count.unwrap_or(1);
     burst(pw, scope, &input.page, |devices| {
         let held = devices.keyboard.modifiers();
         Ok(devices.mouse.up(pressed, count, held))
@@ -371,9 +358,9 @@ async fn mouse_click(
 ) -> Result<Nothing, PlaywrightError> {
     // 1.64.1's protocol gives `mouse.click` no `steps` (mouse.rs, `ClickOptions`).
     let options = ClickOptions {
-        button: button(input.options.button),
-        click_count: input.options.click_count.unwrap_or(1),
-        delay: millis(input.options.delay),
+        button: button(input.button),
+        click_count: input.click_count.unwrap_or(1),
+        delay: millis(input.delay),
         steps: 1,
     };
     let at = Point {
@@ -454,8 +441,66 @@ pub(crate) fn millis(delay: Option<f64>) -> Duration {
 mod tests {
     use std::error::Error;
 
+    use serde_json::json;
+
     use super::InputOp;
+    use crate::op::Op;
+    use crate::test_env::{self, TestEnv};
     use crate::wire::Nothing;
+    use crate::{ErrorCode, Playwright};
+
+    #[tokio::test]
+    async fn tests_that_bad_options_name_the_flat_parameter() -> Result<(), Box<dyn Error>> {
+        let pw = Playwright::new(test_env::offline_session());
+        let page = json!({ "$neo": "page", "tab": 1007 });
+        // These are the only script-visible error changes in alignment: serde names the
+        // upstream parameter itself instead of the removed options bag.
+        for (name, field, input) in [
+            (
+                "keyboard.press",
+                "delay",
+                json!({ "page": page, "key": "a", "delay": "bad" }),
+            ),
+            (
+                "keyboard.type",
+                "delay",
+                json!({ "page": page, "text": "a", "delay": "bad" }),
+            ),
+            (
+                "mouse.move",
+                "steps",
+                json!({ "page": page, "x": 1, "y": 2, "steps": "bad" }),
+            ),
+            (
+                "mouse.down",
+                "button",
+                json!({ "page": page, "button": "bad" }),
+            ),
+            (
+                "mouse.up",
+                "clickCount",
+                json!({ "page": page, "clickCount": "bad" }),
+            ),
+            (
+                "mouse.click",
+                "delay",
+                json!({ "page": page, "x": 1, "y": 2, "delay": "bad" }),
+            ),
+        ] {
+            let op = Op::from_name(name).ok_or("the input op is registered")?;
+            let error = pw
+                .invoke(&TestEnv::new(), op, input)
+                .await
+                .err()
+                .ok_or("an invalid option must fail at decode, before browser admission")?;
+            assert_eq!(error.error_code(), Some(ErrorCode::InvalidInput));
+            assert!(
+                error.message().starts_with(&format!("{name}: {field}: ")),
+                "the flat parameter owns the decode error: {error}"
+            );
+        }
+        Ok(())
+    }
 
     #[test]
     fn tests_that_every_input_answer_keeps_its_null_bytes() -> Result<(), Box<dyn Error>> {

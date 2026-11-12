@@ -1,9 +1,9 @@
-/** Keyboard/mouse calls retain the baseline JSON bytes, including nested option order. */
+/** Keyboard/mouse calls pin their aligned flat JSON bytes, including nested option order. */
 import { expect, it } from 'bun:test'
 import { readFileSync } from 'node:fs'
 import { loadPrelude, SEED } from './support/prelude-runtime'
 
-it('keeps input bytes for full options, empty options and the dblclick projection', async () => {
+it('pins flat input bytes for full options, empty options and the dblclick projection', async () => {
   const runtime = loadPrelude({ seed: SEED, answer: () => null })
   await runtime.run(`
     await page.keyboard.down('Shift')
@@ -21,11 +21,11 @@ it('keeps input bytes for full options, empty options and the dblclick projectio
     await page.mouse.down()
     await page.mouse.move(9, 10)
   `)
-  // Captured from the pre-migration prelude. Comparing serialized text catches key-order
+  // The aligned recording preserves every value while lifting only the six bags. Text pins key-order
   // drift as well as renamed fields; ignored script keys must never reach Rust.
-  const baseline = readFileSync(
+  const recording = readFileSync(
     new URL('./data/input-wire.json', import.meta.url),
     'utf8',
   )
-  expect(`${JSON.stringify(runtime.calls, null, 2)}\n`).toBe(baseline)
+  expect(`${JSON.stringify(runtime.calls, null, 2)}\n`).toBe(recording)
 })
