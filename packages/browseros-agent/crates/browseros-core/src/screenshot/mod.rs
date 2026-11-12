@@ -273,6 +273,10 @@ async fn without_pointer<T>(
     page_session: &ProtocolSession,
     capture: impl Future<Output = Result<T, CoreError>>,
 ) -> Result<T, CoreError> {
+    // DIAGNOSTIC v7: NEO_DIAG_NOPOINTER=1 captures without hiding/showing the agent pointer.
+    if std::env::var_os("NEO_DIAG_NOPOINTER").is_some() {
+        return capture.await;
+    }
     let hidden = pointer::hide_for_capture(page_session).await;
     let captured = capture.await;
     if hidden {

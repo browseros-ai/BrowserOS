@@ -175,8 +175,10 @@ pub(crate) async fn capture(
             let mut preparation = ScreenshotPreparation::acquire(&page).await;
             // Observe commits before preparation too: a replacement must receive its own
             // styles and font wait, even when the old renderer loses a preparation reply.
+            // DIAGNOSTIC v7: NEO_DIAG_NOPREPARE=1 skips preparation and the fonts wait.
+            let skip_prepare = std::env::var_os("NEO_DIAG_NOPREPARE").is_some();
             let work = async {
-                if !preparation
+                if !skip_prepare && !preparation
                     .prepare(
                         &page,
                         scope,
@@ -191,7 +193,7 @@ pub(crate) async fn capture(
                 {
                     return Ok(screenshot_document::Attempt::RetryPreparation);
                 }
-                if !preparation
+                if !skip_prepare && !preparation
                     .wait_for_fonts(&page, scope, target.as_deref())
                     .await?
                 {
@@ -210,7 +212,12 @@ pub(crate) async fn capture(
                 .map(screenshot_document::Attempt::Captured)
             };
             let began = std::time::Instant::now();
-            let captured = screenshot_document::capture(&page, scope, work).await;
+            // DIAGNOSTIC v7: NEO_DIAG_NOWATCH=1 captures without the document-change watch.
+            let captured = if std::env::var_os("NEO_DIAG_NOWATCH").is_some() {
+                work.await
+            } else {
+                screenshot_document::capture(&page, scope, work).await
+            };
             crate::page::screenshot_preparation::diag_log(&format!("captured in {}ms ok={}", began.elapsed().as_millis(), captured.is_ok()));
             preparation.restore().await;
             crate::page::screenshot_preparation::diag_log(&format!("restored at {}ms", began.elapsed().as_millis()));

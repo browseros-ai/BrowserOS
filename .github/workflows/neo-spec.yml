@@ -139,15 +139,19 @@ jobs:
             tail -4 "$RUNNER_TEMP/$group.log"
           }
           echo '=== A: Neo as it is'; run_group A
-          echo '=== D: Neo, tab brought to front before each capture (NEO_DIAG_FRONT=1)'; NEO_DIAG_FRONT=1 run_group D --skip-build
-          for group in A D; do
+          echo '=== E: no agent-pointer hide/show (NEO_DIAG_NOPOINTER=1)'; NEO_DIAG_NOPOINTER=1 run_group E --skip-build
+          echo '=== F: no preparation or fonts wait (NEO_DIAG_NOPREPARE=1)'; NEO_DIAG_NOPREPARE=1 run_group F --skip-build
+          echo '=== G: no document watch (NEO_DIAG_NOWATCH=1)'; NEO_DIAG_NOWATCH=1 run_group G --skip-build
+          for group in A E F G; do
             for results in "$RUNNER_TEMP"/neo-spec/$group/*/results.json; do
               echo "--- $group"
               node -e 'const r=require(process.argv[1]); const c={}; const v=s=>{for(const sp of s.specs||[])for(const t of sp.tests)for(const x of t.results){const k=sp.title.slice(0,40)+" "+x.status;c[k]=(c[k]||0)+1}; for(const ch of s.suites||[])v(ch)}; r.suites.forEach(v); console.log(c)' "$results"
             done
           done
-          echo '--- slowest captures (A and D)'
-          grep -h "captureScreenshot took" "$RUNNER_TEMP"/neo-spec/*/*/ss054-diag.log | awk '{ for (i=1;i<=NF;i++) if ($i=="took") print $(i+1) }' | sort -n | tail -5
+          for group in A E F G; do
+            echo "--- slowest captures in $group"
+            grep -h "captureScreenshot took" "$RUNNER_TEMP"/neo-spec/$group/*/ss054-diag.log | awk '{ for (i=1;i<=NF;i++) if ($i=="took") print $(i+1) }' | sort -n | tail -3
+          done
           grep -c "plain captureScreenshot .* sent" "$RUNNER_TEMP"/neo-spec/A/*/ss054-diag.log || true
           grep -c "plain captureScreenshot took" "$RUNNER_TEMP"/neo-spec/A/*/ss054-diag.log || true
           find "$RUNNER_TEMP/neo-spec" -type d -name upstream -prune -print | while read -r tree; do
