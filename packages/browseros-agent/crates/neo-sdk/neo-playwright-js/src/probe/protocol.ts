@@ -3,7 +3,7 @@
  * fields live only in Rust; `bun run gen:probe` writes generated.ts and the compare-only test
  * rejects stale output. The examples still guard behavior and recorded protocol bytes.
  */
-import type { Pin, ProbeReply, ProbeRequest } from './generated'
+import type { ProbeReply, ProbeRequest } from './generated'
 // Include the implementation's global ABI for type consumers without importing startup code.
 import type {} from './index'
 
@@ -83,21 +83,6 @@ export type DocumentText = Extract<ProbeReply, { kind: 'documentText' }>
 export type Replaced = Extract<ProbeReply, { kind: 'replaced' }>
 export type ErrorReply = Extract<ProbeReply, { kind: 'error' }>
 export type Uninstalled = Extract<ProbeReply, { kind: 'uninstalled' }>
-
-// These remaining form/file payloads stay here until the form/keys/files family is quiet,
-// then the final rebase derives the existing Rust types.
-export type FilesSet = null | { threw: string }
-
-export type FileInput = { pin: Pin; target: Pin; takesPaths: boolean }
-
-/** A fill's value: done, or ready for Rust's Input.insertText. */
-export type Filled = 'done' | 'needsinput'
-
-/** A selectOptions value: selected values, or the reason upstream retries. */
-export type Selected =
-  | string[]
-  | 'error:optionsnotfound'
-  | 'error:optionnotenabled'
 
 /** Allowed handler outcomes are behavior metadata, not a second copy of reply fields. */
 export const REPLY_KINDS = {

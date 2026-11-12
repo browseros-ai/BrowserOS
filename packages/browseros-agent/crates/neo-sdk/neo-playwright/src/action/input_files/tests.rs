@@ -7,8 +7,8 @@ use neo_trace::ErrorOwner;
 use serde_json::{Value, json};
 
 use super::{
-    FilesInput, HostPath, InputFiles, SetInputFilesInput, client_stat, inspect, recheck,
-    resolve_like_node, set_input_files,
+    FilesInput, FilesSet, HostPath, InputFiles, SetInputFilesInput, Threw, client_stat, inspect,
+    recheck, resolve_like_node, set_input_files,
 };
 use crate::op_scope::OpScope;
 use crate::target::CallHeader;
@@ -16,6 +16,29 @@ use crate::test_env::{TestEnv, offline_session};
 use crate::{ErrorCode, Op, Playwright, PlaywrightError};
 
 type TestResult = Result<(), Box<dyn Error>>;
+
+#[test]
+fn tests_that_the_named_files_reply_keeps_null_values_and_decode_errors() -> TestResult {
+    for value in [
+        Value::Null,
+        json!({ "threw": "the input refused the files" }),
+        json!({ "threw": 1 }),
+        json!({ "extra": true }),
+        json!("not a setFiles reply"),
+    ] {
+        let before = serde_json::from_value::<Option<Threw>>(value.clone())
+            .map(|reply| reply.map(|failure| failure.threw))
+            .map_err(|error| error.to_string());
+        let after = serde_json::from_value::<FilesSet>(value.clone())
+            .map(|FilesSet(reply)| reply.map(|failure| failure.threw))
+            .map_err(|error| error.to_string());
+        assert_eq!(
+            after, before,
+            "naming the transparent reply must preserve values and refusal diagnostics for {value}"
+        );
+    }
+    Ok(())
+}
 
 /// A directory of its own under the system's temp dir, removed when the test ends.
 struct Scratch(PathBuf);

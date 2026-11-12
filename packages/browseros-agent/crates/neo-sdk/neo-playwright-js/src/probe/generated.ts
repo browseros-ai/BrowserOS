@@ -65,6 +65,23 @@ export type ErrorClass = "script" | "selector" | "unsupported" | "internal";
 export type ExpectParams = Omit<import('../../../neo-playwright/third_party/playwright/packages/injected/src/injectedScript').FrameExpectParams, 'selector'>;
 
 /**
+ * A `fileInput` read's value (protocol.ts `FileInput`).
+ */
+export type FileInput = { 
+/**
+ * The `<input>` the files go to: the element, or the control its label names.
+ */
+pin: Pin, 
+/**
+ * The element the locator or handle named, which a directory's `input` wait listens on.
+ */
+target: Pin, 
+/**
+ * `type=file`, without which Chromium refuses paths.
+ */
+takesPaths: boolean, };
+
+/**
  * One in-memory file as upstream's injected `setInputFiles` takes it, and as the prelude's
  * files.ts sends it: `mime_type` already defaulted from the name, and `buffer` the base64 text
  * upstream's server makes of the script's bytes (`buffer.toString('base64')`), which the page
@@ -75,10 +92,21 @@ export type ExpectParams = Omit<import('../../../neo-playwright/third_party/play
 export type FilePayload = { name: string, mimeType: string, buffer: string, lastModifiedMs?: number, };
 
 /**
+ * The probe's setFiles value: null on success, or the injected script's failure. Naming
+ * this transparent wrapper lets the decoder and generated contract share its nullability.
+ */
+export type FilesSet = Threw | null;
+
+/**
  * The text a fill puts into a field, which may be a password. It travels to the page in the
  * request, and never prints (STYLE P4).
  */
 export type FillValue = string;
+
+/**
+ * A fill's answer (protocol.ts `Filled`).
+ */
+export type Filled = "done" | "needsinput";
 
 /**
  * A `frameOrigin` read's value, also used to generate the page-side probe declaration.
@@ -240,6 +268,16 @@ export type ScrollPlan = "none" | "ifNeeded" | "end" | "center" | "start" | "alr
 export type SelectOption = { valueOrLabel?: string, value?: string, label?: string, index?: number, };
 
 /**
+ * Why upstream's selectOptions asks for another attempt.
+ */
+export type SelectRetry = "error:optionsnotfound" | "error:optionnotenabled";
+
+/**
+ * A selectOptions' answer (protocol.ts `Selected`).
+ */
+export type Selected = Array<string> | SelectRetry;
+
+/**
  * A rendered `<iframe>` in one frame's snapshot, for Rust to hop into.
  */
 export type SnapshotIframe = { ref: string, depth: number, src: string, };
@@ -264,6 +302,12 @@ export type StorageKind = "local" | "session";
  * with the same names.
  */
 export type Strictness = "strict" | "firstMatch";
+
+/**
+ * A `setFiles` value other than null (protocol.ts `FilesSet`): what upstream's injected
+ * `setInputFiles` threw, as CDP describes it.
+ */
+export type Threw = { threw: string, };
 
 /**
  * A `waitForURL` pattern: a glob, or a `RegExp`'s source and flags.

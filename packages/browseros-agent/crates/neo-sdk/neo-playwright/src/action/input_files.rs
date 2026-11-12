@@ -153,9 +153,9 @@ enum InputFiles {
 struct HostPath(String);
 
 /// A `fileInput` read's value (protocol.ts `FileInput`).
-#[derive(Deserialize)]
+#[derive(Deserialize, TS)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct FileInput {
+pub(crate) struct FileInput {
     /// The `<input>` the files go to: the element, or the control its label names.
     pin: Pin,
     /// The element the locator or handle named, which a directory's `input` wait listens on.
@@ -166,11 +166,17 @@ struct FileInput {
 
 /// A `setFiles` value other than null (protocol.ts `FilesSet`): what upstream's injected
 /// `setInputFiles` threw, as CDP describes it.
-#[derive(Deserialize)]
+#[derive(Deserialize, TS)]
 #[serde(deny_unknown_fields)]
-struct Threw {
+pub(crate) struct Threw {
     threw: String,
 }
+
+/// The probe's setFiles value: null on success, or the injected script's failure. Naming
+/// this transparent wrapper lets the decoder and generated contract share its nullability.
+#[derive(Deserialize, TS)]
+#[serde(transparent)]
+pub(crate) struct FilesSet(Option<Threw>);
 
 /// One pass's checked files, with what their effect needs.
 enum Ready<'f> {
@@ -459,9 +465,11 @@ async fn set_payloads(
     };
     match edited {
         Ok(ProbeReply::Value { value }) => {
-            match serde_json::from_value::<Option<Threw>>(value.into_value()) {
-                Ok(None) => Ok(Set::Done),
-                Ok(Some(Threw { threw })) => Err(scope.fail(ErrorCode::InvalidInput, &threw)),
+            match serde_json::from_value::<FilesSet>(value.into_value()) {
+                Ok(FilesSet(None)) => Ok(Set::Done),
+                Ok(FilesSet(Some(Threw { threw }))) => {
+                    Err(scope.fail(ErrorCode::InvalidInput, &threw))
+                }
                 Err(error) => Err(scope.fail(
                     ErrorCode::Internal,
                     &format!(
