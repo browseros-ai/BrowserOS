@@ -486,6 +486,16 @@ impl PageEffect {
                         },
                         PageChange::Linked,
                     );
+                    if let Some(popup) = target {
+                        op.report_page(
+                            popup,
+                            PageChange::Popup {
+                                opener: PageRef {
+                                    tab: TabId(page.tab),
+                                },
+                            },
+                        );
+                    }
                 }
             }
             (Self::Navigates | Self::Reloads, _, Some(page)) => {

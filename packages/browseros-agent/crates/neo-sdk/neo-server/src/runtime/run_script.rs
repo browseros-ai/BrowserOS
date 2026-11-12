@@ -291,8 +291,9 @@ fn prepare<'js>(
         .call(())
         .catch(ctx)
         .map_err(|caught| engine(&caught))?;
-    // The body starts on line 2, which the bootstrap's call sites and `agent_site` subtract.
-    let source = format!("(async function ({parameters}) {{\n{code}\n}})");
+    // The inner block lets the script shadow its API parameters. Its body starts on line 3,
+    // which the bootstrap's call sites and `agent_site` subtract.
+    let source = format!("(async function ({parameters}) {{\n{{\n{code}\n}}\n}})");
     let main: Function<'js> = ctx
         .eval_with_options(source, options(AGENT_FILE))
         .catch(ctx)
@@ -512,7 +513,7 @@ fn located(text: &str, site: Option<&str>) -> String {
 }
 
 /// The first `run:LINE:COL` frame in a stack, as a line of the agent's own code: the compiled
-/// source has one line of wrapper before the body.
+/// source has two lines of wrapper before the body.
 fn agent_site(stack: &str) -> Option<String> {
     let mut rest = stack;
     while let Some(at) = rest.find("run:") {
@@ -527,7 +528,7 @@ fn agent_site(stack: &str) -> Option<String> {
             _ => continue,
         };
         let column = numbers.next().and_then(|column| column.parse::<u32>().ok());
-        let line = line.saturating_sub(1).max(1);
+        let line = line.saturating_sub(2).max(1);
         return Some(match column {
             Some(column) => format!("run:{line}:{column}"),
             None => format!("run:{line}"),

@@ -162,6 +162,10 @@ export type PageFact = {
  */
 tab: TabId, 
 /**
+ * The owning task now; task-less tabs serialize as null.
+ */
+taskId: string | null, 
+/**
  * `None` (null) once closed.
  */
 url: string | null, 

@@ -30,7 +30,7 @@ it('carries one public disposal site through every nested cleanup await', () => 
     runInContext(readFileSync(process.argv[2], 'utf8'), realm, { filename: 'prelude.js' });
     const parameters = runInContext('__neo.parameters()', realm);
     const body = "const registration = await page.addInitScript(({ cb }) => cb(), { cb: () => 1 }, { exposeFunctions: true });\\nawait registration.dispose();";
-    const main = runInContext('(async function(' + parameters + ') {\\n' + body + '\\n})', realm, { filename: 'run' });
+    const main = runInContext('(async function(' + parameters + ') {\\n{\\n' + body + '\\n}\\n})', realm, { filename: 'run' });
     const result = JSON.parse(await runInContext('__neo.run', realm)(main,
       JSON.stringify({ page: { $neo: 'page', tab: 1007 }, pages: [], observed: null })));
     const sites = calls.filter(call => call.name === 'disposable.dispose').map(call => call.site);

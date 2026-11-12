@@ -1,7 +1,7 @@
 // Every member real playwright-core 1.64.1 defines (tests/data/api-methods.json, recorded by
 // scripts/capture-goldens.mjs) exists on the prelude's classes: implemented, or listed in the
 // one UNSUPPORTED table with a hint. A Playwright upgrade that adds a member fails here until it
-// is classified, and a member Playwright lacks cannot slip into the script-visible surface.
+// is classified. Neo's deliberate additions are listed separately from upstream's capture.
 import { describe, expect, it } from 'bun:test'
 import { readFileSync } from 'node:fs'
 import { UNSUPPORTED } from '../src/prelude/unsupported'
@@ -18,6 +18,9 @@ type Api = {
 const api: Api = JSON.parse(
   readFileSync(new URL('./data/api-methods.json', import.meta.url), 'utf8'),
 )
+
+/** Neo's task ownership metadata; neither getter is part of Playwright. */
+const NEO_PROPERTIES: Record<string, string[]> = { Page: ['tabId', 'taskId'] }
 
 const ELEMENT = {
   $neo: 'element',
@@ -72,12 +75,15 @@ function members(instance: object): Members {
 describe('the classes', () => {
   for (const [className, golden] of Object.entries(api.classes)) {
     if (className === 'expect') continue
-    it(`tests that ${className} has exactly playwright-core ${api.playwright}'s members`, async () => {
+    it(`tests that ${className} has playwright-core ${api.playwright}'s members and declared Neo additions`, async () => {
       const instance = (await instances())[className]
       if (!instance) throw new Error(`no ${className} instance`)
       expect(members(instance)).toEqual({
         methods: [...(golden as Members).methods].sort(),
-        properties: [...(golden as Members).properties].sort(),
+        properties: [
+          ...(golden as Members).properties,
+          ...(NEO_PROPERTIES[className] ?? []),
+        ].sort(),
       })
     })
   }

@@ -11,7 +11,7 @@ use tokio::time::{self, Instant};
 use tokio_util::sync::CancellationToken;
 
 use super::HostedError;
-use crate::browser::{BrowserLink, PageRef, TabRegistry};
+use crate::browser::BrowserLink;
 use crate::config::Defaults;
 use crate::dispatch::{Dispatcher, RunCtx, RunGuard, RunStart, StopReason};
 use crate::run::{RunReply, RunService};
@@ -22,7 +22,6 @@ pub struct HostedRun {
     context: Arc<RunCtx>,
     bridge: Arc<Bridge>,
     executor: Handle,
-    initial_page: Option<PageRef>,
     init: String,
     completion: Completion,
 }
@@ -55,7 +54,6 @@ impl HostedRun {
     pub(super) fn start(
         dispatcher: &Arc<Dispatcher>,
         browser: &BrowserLink,
-        tabs: &TabRegistry,
         shutdown: CancellationToken,
         timeout: Duration,
     ) -> Result<Self, HostedError> {
@@ -65,9 +63,6 @@ impl HostedRun {
         let deadline = Instant::now()
             .checked_add(timeout)
             .ok_or_else(|| HostedError("the run timeout is too large".to_owned()))?;
-        // RunService::default_page(None, ..) is exactly this lookup: no task history to read.
-        // `initialize` touches it, as `RunService::execute` does, once it can ask core.
-        let page = tabs.default_page(None);
         let (context, guard) = RunCtx::start(
             dispatcher,
             RunStart {
@@ -78,7 +73,7 @@ impl HostedRun {
                 host_data: None,
                 view,
                 deadline,
-                default_page: page.clone(),
+                default_page: None,
             },
         );
         let bridge = Arc::new(Bridge::new(Arc::clone(&context), Arc::clone(dispatcher)));
@@ -91,40 +86,21 @@ impl HostedRun {
             guard,
             shutdown,
             sender,
+            Arc::clone(dispatcher),
         ));
         Ok(Self {
             context,
             bridge,
             executor: Handle::current(),
-            initial_page: page,
             init: String::new(),
             completion: Completion { reply },
         })
     }
 
-    /// The async half of `RunService::execute`'s run start. The default page is touched only
-    /// once core confirms it is open, under a liveness ticket taken just before asking, so the
-    /// idle-tab janitor leaves it alone without a closed tab being revived. The init carries the
-    /// same listing and observation `run_script` hands QuickJS.
-    pub(super) async fn initialize(
-        &mut self,
-        service: &RunService,
-        browser: &BrowserLink,
-        tabs: &TabRegistry,
-    ) {
-        if let Some(page) = &self.initial_page {
-            let seen = tabs.seen();
-            if browser.page(page.tab).await.is_some() {
-                tabs.touched(page, seen, None);
-            }
-        }
+    /// Initializes the product's page facts; a hosted run always opens its default on first use.
+    pub(super) async fn initialize(&mut self, service: &RunService) {
         let facts = service.hosted_open_pages(&self.context).await;
-        self.init = RunInit::new(
-            self.initial_page.as_ref(),
-            &facts.pages,
-            facts.observed.as_ref(),
-        )
-        .to_json();
+        self.init = RunInit::new(None, &facts.pages, facts.observed.as_ref()).to_json();
     }
 
     /// The run's trace identity.
@@ -185,6 +161,7 @@ impl HostedRun {
         guard: RunGuard,
         shutdown: CancellationToken,
         sender: watch::Sender<Option<Arc<RunReply>>>,
+        dispatcher: Arc<Dispatcher>,
     ) {
         tokio::select! {
             () = context.cancel_token().cancelled() => {}
@@ -211,7 +188,8 @@ impl HostedRun {
             logs: bridge.take_logs(),
             blobs: Vec::new(),
         };
-        let reply = RunReply::build(&context, end);
+        let mut reply = RunReply::build(&context, end);
+        reply.tasks = dispatcher.task_notes(&context).await;
         guard.finish(reply.trace_end(None));
         sender.send_replace(Some(Arc::new(reply)));
     }

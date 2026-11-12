@@ -19,8 +19,11 @@ use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 
 use super::operation_guard::Settlement;
-use super::{CallSite, Dispatcher, ErrorCode, Lifetime, MethodSpec, OperationError};
-use crate::browser::{PageRef, RunView};
+use super::run_tasks::RunTasks;
+use super::{
+    CallSite, Dispatcher, ErrorCode, Lifetime, MethodSpec, OperationError, TaskKind, TaskNote,
+};
+use crate::browser::{PageRef, RunView, TaskRecord};
 
 /// One `run` call as the door sees it: its identity, the browser view it captured, its budget,
 /// why it stopped, the ops it started, what they changed, and the state features keep per run.
@@ -45,6 +48,7 @@ pub(crate) struct RunCtx {
     ledger: Mutex<RunLedger>,
     ops: Mutex<OpTasks>,
     slots: Mutex<RunSlots>,
+    tasks: Mutex<RunTasks>,
 }
 
 /// Why a run stopped. Each reason decides who owns the ops it cut short.
@@ -78,7 +82,7 @@ pub(crate) struct RunStart {
     pub(crate) view: RunView,
     /// When the run's budget ends.
     pub(crate) deadline: Instant,
-    /// The task's tab when the run service knows it; otherwise the run opens one on first use.
+    /// The task's tab when the run service knows it; otherwise resolved on first use.
     pub(crate) default_page: Option<PageRef>,
 }
 
@@ -131,7 +135,7 @@ pub(crate) struct RunGuard {
 
 enum DefaultPage {
     Known(PageRef),
-    /// Opened on first use. Single-flight: concurrent ops on the lazy page open one tab.
+    /// Chosen on first use. Single-flight: concurrent ops on the lazy page share one tab.
     Lazy(OnceCell<PageRef>),
 }
 
@@ -180,6 +184,12 @@ impl RunCtx {
             default_page,
         } = start;
         let trace = door.trace();
+        if let Some(task) = &task_id {
+            // Register the host's task once. A missing or full task book must not block opens,
+            // and a task closed later in this run must not be silently recreated.
+            let _ = door.tabs().ensure_task(task);
+        }
+        let tasks = Mutex::new(RunTasks::new(task_id.clone()));
         trace.run_started(RunStarted {
             id,
             code,
@@ -202,6 +212,7 @@ impl RunCtx {
             ledger: Mutex::default(),
             ops: Mutex::default(),
             slots: Mutex::default(),
+            tasks,
         });
         let guard = RunGuard {
             run: Some(Arc::clone(&run)),
@@ -220,6 +231,30 @@ impl RunCtx {
     #[must_use]
     pub(crate) fn task_id(&self) -> Option<&TaskId> {
         self.task_id.as_ref()
+    }
+
+    /// Sets the task used by subsequent opens and the unresolved built-in page.
+    pub(crate) fn picked_task(&self, task: &TaskRecord, kind: TaskKind) {
+        self.lock_tasks().pick(task, kind);
+    }
+
+    /// A closed task retains its first-touch place in the reply.
+    pub(crate) fn closed_task(&self, task: &TaskRecord) {
+        self.lock_tasks().close(task, self.task_id());
+    }
+
+    /// The latest pick, initially the host's task or none. It may have since disappeared.
+    pub(super) fn current_task(&self) -> Option<TaskId> {
+        self.lock_tasks().current().cloned()
+    }
+
+    /// First-touch task metadata, completed with live tabs when the reply is built.
+    pub(super) fn task_notes(&self) -> Vec<TaskNote> {
+        self.lock_tasks().notes()
+    }
+
+    fn lock_tasks(&self) -> MutexGuard<'_, RunTasks> {
+        self.tasks.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
     /// The browser as this run sees it: unbound (every tab), with the process's viewports.
@@ -339,7 +374,7 @@ impl RunCtx {
         drop(refused);
     }
 
-    /// The run's default page, opened on first use by a Neo op (single-flight).
+    /// The run's default page, resolved once on first use through the door.
     pub(super) async fn default_page(
         self: &Arc<Self>,
         dispatcher: &Arc<Dispatcher>,
@@ -397,8 +432,9 @@ impl RunCtx {
         self.lock_ledger().closed_by_run.insert(page);
     }
 
-    /// Whether this run closed `page`, which decides who owns `page_closed`.
-    pub(super) fn closed_it(&self, page: TabId) -> bool {
+    /// Whether this run closed `page`, which decides who owns `page_closed`, and keeps the tab
+    /// out of the run's later tab listings.
+    pub(crate) fn closed_it(&self, page: TabId) -> bool {
         self.lock_ledger().closed_by_run.contains(&page)
     }
 

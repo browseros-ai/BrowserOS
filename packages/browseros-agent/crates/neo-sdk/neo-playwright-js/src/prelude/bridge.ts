@@ -60,9 +60,12 @@ export type Observation = Wire.Observation & { deferWorkers?: boolean }
  * an event or a page brand names its tab alone, or with a `url`.
  */
 export type PageFact = Pick<Wire.PageFact, 'tab'> & {
-  [Field in Exclude<keyof Wire.PageFact, 'tab'>]?: NonNullable<
+  [Field in Exclude<keyof Wire.PageFact, 'tab' | 'taskId'>]?: NonNullable<
     Wire.PageFact[Field]
   >
+} & {
+  /** The tab's task; null says it has none, so it is kept, unlike a closed tab's null url. */
+  taskId?: Wire.PageFact['taskId']
 }
 
 /** What a run starts with: Rust's `RunInit`, its facts as the readers keep them. */
@@ -341,11 +344,13 @@ function readPageFacts(pages: unknown): PageFact[] {
     const tab = field<Wire.PageFact>(page, 'tab')
     if (typeof tab !== 'number') continue
     const fact: PageFact = { tab }
+    const taskId = field<Wire.PageFact>(page, 'taskId')
     const url = field<Wire.PageFact>(page, 'url')
     const title = field<Wire.PageFact>(page, 'title')
     const closed = field<Wire.PageFact>(page, 'closed')
     const viewport = field<Wire.PageFact>(page, 'viewportSize')
     if (typeof url === 'string') fact.url = url
+    if (taskId === null || typeof taskId === 'string') fact.taskId = taskId
     if (typeof title === 'string') fact.title = title
     if (typeof closed === 'boolean') fact.closed = closed
     const width = field<Wire.Size>(viewport, 'width')

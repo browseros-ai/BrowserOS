@@ -136,10 +136,11 @@ fn page(tab: i64) -> PageRef {
     PageRef { tab: TabId(tab) }
 }
 
-/// A live tab with every optional fact: a script-set viewport and one dedicated worker.
+/// A live tab with every optional fact: its task, a script-set viewport and one dedicated worker.
 fn live(tab: i64) -> PageFact {
     PageFact {
         tab: TabId(tab),
+        task_id: Some("hn-top-5-3f9a".to_owned()),
         url: Some("https://facts.example/".to_owned()),
         title: Some("Facts".to_owned()),
         closed: false,
@@ -154,10 +155,11 @@ fn live(tab: i64) -> PageFact {
     }
 }
 
-/// A closed tab: its URL and title gone, no optional facts.
+/// A closed tab: its URL, title and task gone, no optional facts.
 fn closed(tab: i64) -> PageFact {
     PageFact {
         tab: TabId(tab),
+        task_id: None,
         url: None,
         title: None,
         closed: true,

@@ -8,7 +8,8 @@ use browseros_core::{TabId, TargetId};
 use neo_trace::TaskId;
 use tokio::time::{Duration, Instant};
 
-use super::PageRef;
+use super::task_book::TaskBook;
+use super::{PageRef, TaskError, TaskRecord};
 
 /// How many tasks' last tabs memory keeps. A task forgotten here falls back to the trace store's
 /// `task_last_tab`, so the bound costs a lookup, never a wrong tab.
@@ -47,8 +48,9 @@ struct TabState {
     gone: HashMap<TabId, TargetId>,
     /// Each task's last tab, bounded by [`TASKS_REMEMBERED`] (the oldest is forgotten first).
     last_by_task: HashMap<TaskId, LastTab>,
-    /// The last tab any script op touched, for runs without a task.
-    last_any: Option<TabId>,
+    tasks: TaskBook,
+    /// Popup relationships survive an opener whose creating op has not assigned its task yet.
+    popups: HashMap<TabId, TabId>,
     /// Numbers every close. Tickets are sampled immediately before a core-cache read.
     closes: u64,
     closed_at: VecDeque<(TabId, u64)>,
@@ -90,6 +92,7 @@ impl TabRegistry {
             return;
         }
         state.entry(page, now).touched = now;
+        state.tasks.touch(page.tab);
         state.remember(page.tab, task, now);
     }
 
@@ -103,6 +106,7 @@ impl TabRegistry {
         let entry = state.entry(page, now);
         entry.origin = TabOrigin::Agent;
         entry.touched = now;
+        state.tasks.touch(page.tab);
         state.remember(page.tab, task, now);
     }
 
@@ -121,6 +125,10 @@ impl TabRegistry {
                 state.forgotten = evicted;
             }
             state.gone.remove(&tab);
+            state.tasks.detach(tab);
+            state
+                .popups
+                .retain(|popup, opener| *popup != tab && *opener != tab);
             state.open.remove(&tab)
         };
         Box::new(move || {
@@ -180,18 +188,59 @@ impl TabRegistry {
         Arc::clone(slot).downcast::<T>().ok()
     }
 
-    /// The `page` default from memory: the task's last tab while it is still open, or, for a run
-    /// without a task, the last tab any script op touched. With a task this never answers
-    /// another task's tab: a task Neo forgot asks the trace store, and a new task gets a fresh
-    /// tab, so parallel tasks never share one by accident.
+    /// The host task's last touched tab, if still open. No global default is kept.
     #[must_use]
-    pub(crate) fn default_page(&self, task: Option<&TaskId>) -> Option<PageRef> {
+    pub(crate) fn default_page(&self, task: &TaskId) -> Option<PageRef> {
         let state = self.lock();
-        let tab = match task {
-            Some(task) => state.last_by_task.get(task).map(|last| last.tab)?,
-            None => state.last_any?,
-        };
+        let tab = state.last_by_task.get(task)?.tab;
         state.open.contains_key(&tab).then_some(PageRef { tab })
+    }
+
+    /// Starts an agent-named task, evicting only old empty tasks at the bound.
+    pub(crate) fn create_task(&self, name: Option<String>) -> Result<TaskRecord, TaskError> {
+        self.lock().tasks.create(name)
+    }
+
+    /// Registers a host task before its first tab opens.
+    pub(crate) fn ensure_task(&self, id: &TaskId) -> Result<(), TaskError> {
+        self.lock().tasks.ensure(id)
+    }
+
+    /// The task's current ordered membership.
+    pub(crate) fn task(&self, id: &TaskId) -> Result<TaskRecord, TaskError> {
+        self.lock().tasks.get(id).cloned()
+    }
+
+    /// The owner is independent of the last host task to touch this tab.
+    pub(crate) fn owner(&self, tab: TabId) -> Option<TaskId> {
+        self.lock().tasks.owner(tab).cloned()
+    }
+
+    /// Assigns a registered tab synchronously after its child opener returns. A close that
+    /// already removed its entry wins, so assignment cannot revive a closed tab.
+    pub(crate) fn own(&self, page: &PageRef, id: &TaskId) -> Result<(), TaskError> {
+        let mut state = self.lock();
+        if state.open.contains_key(&page.tab) {
+            state.tasks.attach(page.tab, id)?;
+            state.inherit_popups();
+        }
+        Ok(())
+    }
+
+    /// A popup inherits its opener, even if its event preceded the opener's task assignment.
+    pub(crate) fn popup(&self, page: &PageRef, opener: TabId, seen: Seen) {
+        let mut state = self.lock();
+        if !state.proves_open(page.tab, seen) || !state.proves_open(opener, seen) {
+            return;
+        }
+        state.entry(page, Instant::now());
+        state.popups.insert(page.tab, opener);
+        state.inherit_popups();
+    }
+
+    /// A successful task close forgets it only once every owned tab is gone.
+    pub(crate) fn forget_task(&self, id: &TaskId) -> bool {
+        self.lock().tasks.remove_empty(id)
     }
 
     /// Agent-opened tabs that no op touched for `idle`, for the janitor.
@@ -214,6 +263,28 @@ impl TabRegistry {
 }
 
 impl TabState {
+    fn inherit_popups(&mut self) {
+        loop {
+            let inherited: Vec<_> = self
+                .popups
+                .iter()
+                .filter_map(|(tab, opener)| {
+                    if self.tasks.owner(*tab).is_some() {
+                        return None;
+                    }
+                    self.tasks.owner(*opener).map(|id| (*tab, id.clone()))
+                })
+                .collect();
+            if inherited.is_empty() {
+                return;
+            }
+            for (tab, id) in inherited {
+                // The owner was read under this lock, so its task still exists.
+                let _ = self.tasks.attach(tab, &id);
+            }
+        }
+    }
+
     fn proves_open(&self, tab: TabId, seen: Seen) -> bool {
         seen.0 >= self.forgotten
             && !self
@@ -231,7 +302,6 @@ impl TabState {
     }
 
     fn remember(&mut self, tab: TabId, task: Option<&TaskId>, now: Instant) {
-        self.last_any = Some(tab);
         let Some(task) = task else {
             return;
         };
@@ -319,23 +389,18 @@ mod tests {
         let tab = page(1, 101);
         tabs.touched(&tab, tabs.seen(), Some(&first));
         assert_eq!(
-            tabs.default_page(Some(&first)),
+            tabs.default_page(&first),
             Some(tab.clone()),
             "the task's own last tab"
         );
         assert_eq!(
-            tabs.default_page(Some(&second)),
+            tabs.default_page(&second),
             None,
             "a new task gets no one else's tab"
         );
-        assert_eq!(
-            tabs.default_page(None),
-            Some(tab.clone()),
-            "a run without a task gets the last tab"
-        );
         tabs.removing(tab.tab)();
         assert_eq!(
-            tabs.default_page(Some(&first)),
+            tabs.default_page(&first),
             None,
             "a closed tab is no default"
         );
@@ -356,13 +421,13 @@ mod tests {
             );
         }
         assert_eq!(
-            tabs.default_page(Some(&oldest)),
+            tabs.default_page(&oldest),
             None,
             "past the bound the oldest task goes"
         );
         let newest = TaskId::parse(&format!("task-{TASKS_REMEMBERED}"))?;
         assert_eq!(
-            tabs.default_page(Some(&newest)),
+            tabs.default_page(&newest),
             Some(tab),
             "the newest task stays"
         );
@@ -493,7 +558,7 @@ mod tests {
         let target = TargetId("old".into());
         assert!(tabs.note_gone(page.tab, target.clone(), tabs.seen()));
         assert!(!tabs.is_open(page.tab));
-        assert_eq!(tabs.default_page(None), None);
+        assert_eq!(tabs.owner(page.tab), None);
         tabs.touched(&page, tabs.seen(), None);
         assert!(
             tabs.is_open(page.tab),

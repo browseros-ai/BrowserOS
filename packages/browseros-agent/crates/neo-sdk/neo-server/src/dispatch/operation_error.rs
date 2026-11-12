@@ -6,6 +6,8 @@ use std::fmt;
 use neo_trace::{Delivery, ErrorOwner, ErrorRecord, OperationId};
 use serde_json::Value;
 
+use crate::browser::TaskError;
+
 /// How many characters of a script-chosen text the door keeps in an error it builds: a thrown
 /// error's name and its message, and a prelude refusal's reason (FR/RC C4). One constant, so they
 /// cannot drift. The trace writer bounds what it stores on its own.
@@ -174,6 +176,12 @@ error_codes! {
     METHOD_UNAVAILABLE = "method_unavailable";
     /// The input did not decode into the method's input type.
     INVALID_INPUT = "invalid_input";
+    /// The task was closed, forgotten, or belongs to a previous Neo process.
+    TASK_NOT_FOUND = "task_not_found";
+    /// All task slots hold live tabs, so none can be evicted.
+    TASK_LIMIT_REACHED = "task_limit_reached";
+    /// The requested tab is not among this task's open pages.
+    TASK_PAGE_MISSING = "task_page_missing";
     /// The script returned while this op still ran.
     NOT_AWAITED = "not_awaited";
     /// The caller went away, or a crate's own cancel fired.
@@ -333,4 +341,14 @@ pub(crate) struct OpFailure {
     pub(crate) retryable: bool,
     /// The op that failed, `{run}.{seq}`.
     pub(crate) operation: OperationId,
+}
+
+impl From<TaskError> for OperationError {
+    fn from(error: TaskError) -> Self {
+        match &error {
+            TaskError::NotFound(_) => Self::script(ErrorCode::TASK_NOT_FOUND, error),
+            TaskError::Full => Self::neo(ErrorCode::TASK_LIMIT_REACHED, error),
+            TaskError::InvalidId(_) => Self::neo(ErrorCode::INTERNAL_ERROR, error),
+        }
+    }
 }

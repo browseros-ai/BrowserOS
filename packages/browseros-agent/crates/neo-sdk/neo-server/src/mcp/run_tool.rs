@@ -46,7 +46,7 @@ impl RunTool {
     /// - text: the value as JSON, or the error line; then the console lines and one line per
     ///   write that was never confirmed or op the script left running;
     /// - `structuredContent`: `{ "value": … }`, or `{ "error": … }`;
-    /// - `_meta["com.browseros.neo/run"]`: `{ id, status, effects, error?, unknown }`, the
+    /// - `_meta["com.browseros.neo/run"]`: `{ id, status, effects, error?, unknown, tasks }`, the
     ///   committed contract's names (MIGRATION.md: the run id is `.id`);
     /// - `isError` unless the status is `ok`. A failed run is a tool result, never a JSON-RPC
     ///   error, so the model reads why.
@@ -78,6 +78,7 @@ fn run_meta(reply: &RunReply) -> Value {
         .map(|note| json!({ "operationId": note.operation_id, "name": note.name }))
         .collect();
     meta.insert("unknown".to_owned(), Value::Array(unknown));
+    meta.insert("tasks".to_owned(), json!(reply.tasks));
     Value::Object(meta)
 }
 
@@ -159,7 +160,8 @@ mod tests {
     use serde_json::json;
 
     use super::text;
-    use crate::run::RunReply;
+    use crate::run::{RUN_META_KEY, RunReply};
+    use crate::test_rig::{self, TestError, TestRig};
 
     #[test]
     fn a_write_never_confirmed_tells_the_model_to_look_before_repeating_it()
@@ -185,5 +187,125 @@ mod tests {
             "sdk-traces' wording, which zuzu's own warning used"
         );
         Ok(())
+    }
+    #[test]
+    fn task_metadata_never_changes_text_or_structured_content() -> Result<(), Box<dyn Error>> {
+        let tabs: Vec<_> = (1..=12)
+            .map(|tab| json!({ "tabId": tab, "url": "é".repeat(121) }))
+            .collect();
+        let mut reply: RunReply = serde_json::from_value(json!({
+            "id": RunId::new(), "status": "ok", "effects": "none", "value": "one",
+            "tasks": [
+                { "id": "one", "name": null, "kind": "fetched", "tabs": tabs },
+                { "id": "two", "name": null, "kind": "closed", "tabs": [] }
+            ]
+        }))?;
+        let wire = serde_json::to_value(super::RunTool::result(&reply))?;
+        assert_eq!(wire["content"][0]["text"], reply.value.to_string());
+        assert_eq!(
+            wire["_meta"][RUN_META_KEY]["tasks"],
+            serde_json::to_value(&reply.tasks)?
+        );
+        reply.tasks.clear();
+        let plain = serde_json::to_value(super::RunTool::result(&reply))?;
+        assert_eq!(wire["content"], plain["content"]);
+        assert_eq!(wire["structuredContent"], plain["structuredContent"]);
+        Ok(())
+    }
+
+    #[test]
+    fn task_create_fetch_close_failure_and_replay_only_report_tasks_in_metadata()
+    -> Result<(), TestError> {
+        use crate::run::{RunMeta, RunRequest, RunTimeout};
+        use neo_trace::RequestId;
+        use std::time::Duration;
+
+        test_rig::on_neo_runtime(async {
+            let rig = TestRig::new().await?;
+            let service = rig.run_service(Duration::from_secs(30));
+            let request = |code: String, id: &str| -> Result<RunRequest, TestError> {
+                Ok(RunRequest {
+                    code,
+                    timeout: RunTimeout::from_millis(None)?,
+                    meta: RunMeta {
+                        request_id: Some(RequestId::parse(id)?),
+                        ..RunMeta::default()
+                    },
+                })
+            };
+            let code = "const task = await neo.createTask('reply'); return task.id;";
+            let created = service.run(request(code.to_owned(), "created")?).await;
+            assert!(created.error.is_none(), "{created:?}");
+            let id = created.value.to_string();
+            let fetched = service
+                .run(request(
+                    format!("const task = await neo.task({id}); return task.id;"),
+                    "fetched",
+                )?)
+                .await;
+            let failed = service
+                .run(request(
+                    format!("await neo.task({id}); throw new Error('after fetching');"),
+                    "failed",
+                )?)
+                .await;
+            let closed = service
+                .run(request(
+                    format!(
+                        "const task = await neo.task({id}); await task.close(); return task.id;"
+                    ),
+                    "closed",
+                )?)
+                .await;
+            for (reply, kind) in [
+                (&created, "created"),
+                (&fetched, "fetched"),
+                (&failed, "fetched"),
+                (&closed, "closed"),
+            ] {
+                let mcp = serde_json::to_value(super::RunTool::result(reply))?;
+                let text = mcp["content"][0]["text"].as_str().ok_or("MCP text")?;
+                assert!(
+                    !text.contains("[task"),
+                    "task recovery belongs only in host metadata"
+                );
+                assert_eq!(reply.tasks.len(), 1);
+                assert_eq!(
+                    mcp["_meta"][RUN_META_KEY]["tasks"],
+                    serde_json::to_value(&reply.tasks)?
+                );
+                assert_eq!(mcp["_meta"][RUN_META_KEY]["tasks"][0]["kind"], kind);
+                if reply.error.is_none() {
+                    assert_eq!(
+                        text,
+                        reply.value.to_string(),
+                        "successful text is exactly the JSON value"
+                    );
+                    assert_eq!(mcp["structuredContent"], json!({ "value": reply.value }));
+                } else {
+                    assert_eq!(
+                        text,
+                        super::error_line(reply.error.as_ref().ok_or("error")?)
+                    );
+                    assert_eq!(mcp["structuredContent"], json!({ "error": reply.error }));
+                }
+            }
+            assert!(fetched.error.is_none(), "{fetched:?}");
+            assert!(closed.error.is_none(), "{closed:?}");
+            assert_eq!(
+                failed.error.as_ref().ok_or("script error")?.code,
+                "script_error"
+            );
+            rig.sink.flush().await?;
+            let replay = rig
+                .restarted_service(Duration::from_secs(30))?
+                .run(request(code.to_owned(), "created")?)
+                .await;
+            assert_eq!(
+                serde_json::to_value(super::RunTool::result(&replay))?,
+                serde_json::to_value(super::RunTool::result(&created))?
+            );
+            Ok(())
+        })
     }
 }

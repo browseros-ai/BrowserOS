@@ -681,12 +681,11 @@ async fn a_refusal_brand_is_refused_under_its_name_and_never_runs() -> Result<()
 }
 
 /// FR/RC C4, the spoof rule. A script can send the refusal brand itself through `__neo_invoke`, so
-/// a brand claims only the two codes a script's own mistake carries, and its owner is always the
+/// a brand claims only codes a script's own mistake carries, and its owner is always the
 /// script, never Neo, the host or the website. Its other fields are recorded and otherwise ignored.
 #[tokio::test]
 async fn a_refusal_brand_cannot_claim_another_owner_or_code() -> Result<(), Box<dyn Error>> {
-    const MALFORMED: &str =
-        "`page.route`: a refusal may name only method_unavailable or invalid_input";
+    const MALFORMED: &str = "`page.route`: a refusal may name only method_unavailable, invalid_input, task_not_found or task_page_missing";
     let harness = Harness::new().await?;
     let (run, _guard) = harness.run()?;
 

@@ -260,7 +260,7 @@ export function loadPrelude(
   })
   const compile = (body: string) =>
     runInContext(
-      strict(`(async function (${parameters}) {\n${body}\n})`),
+      strict(`(async function (${parameters}) {\n{\n${body}\n}\n})`),
       realm,
       {
         filename: 'run',
@@ -328,7 +328,7 @@ function eventHead(name: string, value: unknown): number {
 
 /**
  * The door's answer to a refusal brand (`__neo.refuse`, claw-sdk's dispatch/refusal_brand.rs):
- * refused under `name` before anything is sent, script-owned, its code one of the two a script
+ * refused under `name` before anything is sent, script-owned, its code one a script
  * may claim and any other `invalid_input`. Null for any other call. `operationId` names the
  * refusal and is drawn only for one, so the run's frames read at its start (FR-1) or the
  * script's other ops do not shift the ids a test expects.
@@ -343,7 +343,10 @@ function refusalReply(
   const code: unknown = Reflect.get(input, 'code')
   const reason: unknown = Reflect.get(input, 'reason')
   const claimed =
-    (code === 'method_unavailable' || code === 'invalid_input') &&
+    (code === 'method_unavailable' ||
+      code === 'invalid_input' ||
+      code === 'task_not_found' ||
+      code === 'task_page_missing') &&
     typeof reason === 'string'
   return {
     err: {
@@ -355,7 +358,7 @@ function refusalReply(
       timeout: false,
       message: claimed
         ? reason
-        : `\`${name}\`: a refusal may name only method_unavailable or invalid_input`,
+        : `\`${name}\`: a refusal may name only method_unavailable, invalid_input, task_not_found or task_page_missing`,
     },
     pages: [],
   }

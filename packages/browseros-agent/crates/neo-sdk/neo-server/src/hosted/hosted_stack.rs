@@ -22,7 +22,6 @@ pub(super) struct HostedStack {
     dispatcher: Arc<Dispatcher>,
     service: Arc<RunService>,
     browser: Arc<BrowserLink>,
-    tabs: Arc<TabRegistry>,
     trace: TraceSink,
     shutdown: CancellationToken,
     completions: Mutex<Vec<Completion>>,
@@ -106,7 +105,6 @@ impl HostedStack {
             dispatcher,
             service,
             browser,
-            tabs,
             trace,
             shutdown,
             completions: Mutex::default(),
@@ -127,15 +125,13 @@ impl HostedStack {
             let run = HostedRun::start(
                 &self.dispatcher,
                 &self.browser,
-                &self.tabs,
                 self.shutdown.clone(),
                 timeout,
             )?;
             completions.push(run.completion());
             run
         };
-        run.initialize(&self.service, &self.browser, &self.tabs)
-            .await;
+        run.initialize(&self.service).await;
         Ok(run)
     }
 

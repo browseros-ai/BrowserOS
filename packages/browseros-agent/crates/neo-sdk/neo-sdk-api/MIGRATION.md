@@ -46,10 +46,43 @@ three are optional, and the two ids are at most 128 bytes each:
 
 - `requestId` is your id for the call (zuzu's tool-call id). A repeat of it never runs again,
   within its task when the run has a `taskId`, else across Neo.
-- `taskId` is your label for the calls of one task. It replaces the session for grouping. You
+- `taskId` is your id for the calls of one task. It replaces the session for grouping. You
   list a task's runs, trace and events by it, and the agent's `page` starts on the task's last
-  tab. An unknown `taskId` is fine, and it never expires.
+  tab. An unknown host `taskId` is accepted; it registers a Neo task when it first opens a tab.
 - `hostData` is stored with the run, bounded for storage, and Neo never reads it.
+
+## Tasks
+
+Each run starts with fresh JavaScript. Hosts that send `taskId` seed its current task;
+the neo-viewer proxy is unchanged. Host ids and `neo.task(id)` use the same task records,
+and hosts retain the last-used-tab fallback from memory or the trace store.
+With no host or script task, built-in `page` opens a new tab on first use, every run;
+`context.newPage()` opens another. Both tabs have no task; neither reuses an existing tab.
+
+For work across runs, the agent creates a task with `await neo.createTask(name)`, returns
+`task.id`, then starts later runs with `await neo.task(id)`. The latest task pick wins.
+Built-in `page` uses that task's last-used open tab, else another open tab, else a new tab
+in it, picked at its first action (until then `page.tabId` and `page.taskId` are null). `context.newPage()` opens in the current task; `task.newPage()` opens in that task.
+Popups join their opener's task. `task.pages()` lists its tabs oldest first; `task.page(tabId)`
+picks one. `await task.close()` closes its tabs and ends it. A local `const page` is allowed.
+The [agent handout](../agent.d.ts) has the four-run walkthrough.
+
+Any script may use any tab or task. `context.pages()` lists every tab, each with `tabId`
+and `taskId` (`null` without a task). Recover a lost id with
+`context.pages().find(p => p.url().includes('ycombinator'))?.taskId`.
+An unknown id throws `task_not_found`, whose hint points to `context.pages()` and `page.taskId`.
+
+Tasks live in memory, at most 4096. A Neo restart forgets them while tabs stay; the tabs
+remain reachable through `context.pages()` without task ownership. Host tasks retain their
+trace fallback. The janitor closes agent-opened tabs idle for 30 minutes.
+
+Hosts get touched tasks in `_meta["com.browseros.neo/run"].tasks`, always present (`[]` when
+empty). Each entry has `id`, `name`, `kind`, and `tabs: { tabId, url }[]`. Tasks appear once,
+in first-touch order, even when the script failed. Tabs and URLs reflect reply time; closed
+tasks have kind `closed` and no tabs. `structuredContent` is unchanged.
+
+The agent's reply is exactly what the script returned, plus console lines and existing notes.
+Task metadata adds no reply text; the agent must return `task.id` to keep it.
 
 ## Call by call
 

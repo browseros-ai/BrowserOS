@@ -26,6 +26,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::app::App;
 use crate::browser::{BrowserLink, PageRef, TabRegistry};
+use crate::builtins;
 use crate::dispatch::{
     Dispatcher, ErrorCode, LeafError, Lifetime, Method, MethodSpec, Observer, OpCtx,
     OperationError, PageChange, PageTarget, RegistryBuilder, RegistryError, RunCtx, RunGuard,
@@ -219,6 +220,7 @@ fn dispatcher(
 ) -> Result<Arc<Dispatcher>, RegistryError> {
     let mut registry = RegistryBuilder::default();
     test_methods(&mut registry, gate)?;
+    builtins::register_tasks(&mut registry)?;
     Ok(Arc::new(Dispatcher::new(
         registry.build(),
         Vec::new(),

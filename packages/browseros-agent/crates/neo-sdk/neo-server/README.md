@@ -111,9 +111,28 @@ The realm provides `URL`, `URLSearchParams`, `atob`, `btoa` and `DOMException`. 
 
 The model sends `run { code, timeout? }`. `code` is the body of an async function whose parameters are the SDK: Playwright's `page`, `context`, `browser`, `expect` and `playwright` (its `selectors` and `errors`), and Node's `Buffer` (neo-playwright's prelude), `neo`, `console`, the timers, and the error classes. `timeout` is in milliseconds, from 1 to 900000, and defaults to 300000. Unknown fields are refused. Each run gets a fresh QuickJS realm. `src/mcp/run_description.rs` builds the text the model reads about all of this.
 
-The host sends its ids in `_meta["com.browseros.neo/run"]` as `{ requestId?, taskId?, hostData? }`. Neo refuses unknown keys as `host / invalid_meta`. `taskId` makes the task's last tab the run's `page`. Without it, `page` opens a background tab on the first call that needs one. `hostData` is up to 2048 bytes of JSON that Neo stores with the run and never reads.
+The host sends its ids in `_meta["com.browseros.neo/run"]` as `{ requestId?, taskId?, hostData? }`. Neo refuses unknown keys as `host / invalid_meta`. `hostData` is up to 2048 bytes of JSON that Neo stores with the run and never reads.
 
-The result carries `_meta["com.browseros.neo/run"]` as `{ id, status, effects, error?, unknown }`. `id` is the run's id in the trace. `status` is `ok`, `error`, `cancelled`, or `timeout`, and `isError` is set unless it is `ok`. `effects` is `none`, `done`, or `unknown`. `unknown` lists the writes that were sent and never confirmed.
+A host's `taskId` is also a Neo task id and seeds the run's current task. Neo registers it when a run first opens a tab for it; `neo.task(hostId)` can then fetch it. Hosts retain the last-used-tab fallback from memory or the trace store. The neo-viewer proxy still supplies the host's task metadata.
+
+With no task selected by the host or script, built-in `page` opens a new blank background tab on first use, every run. `context.newPage()` also opens a new tab. Neither reuses an existing tab or creates a task.
+
+To keep tabs across runs, call `const task = await neo.createTask(name)` and return `task.id`. Start later runs with `await neo.task(id)`. The latest `neo.createTask` or `neo.task` call picks the script's current task:
+
+- Built-in `page` uses that task's last-used open tab, else another open tab in it, else a new tab in it. It picks the tab at its first action; until then `page.tabId` and `page.taskId` are null and `page.url()` is `about:blank`.
+- `context.newPage()` opens in the current task; `task.newPage()` opens in that task. Popups join their opener's task.
+- `task.pages()` lists its tabs oldest first; `task.page(tabId)` picks one. Scripts may declare their own `const page`.
+- `await task.close()` closes the task's tabs and ends it.
+
+Any script may use any tab or task. `context.pages()` lists every tab; each page has `tabId` and `taskId` (`null` without a task). Recover a lost id with `context.pages().find(p => p.url().includes('ycombinator'))?.taskId`. An unknown id throws `task_not_found`, whose hint points to `context.pages()` and `page.taskId`. See [agent.d.ts](../agent.d.ts) for the declarations and the four-run walkthrough.
+
+Tasks live in memory, at most 4096. Empty tasks remain until closed or evicted for space. A Neo restart forgets tasks while tabs stay; `context.pages()` still finds those tabs, now without task ownership. Host tasks retain their trace fallback. The janitor closes agent-opened tabs idle for 30 minutes.
+
+The result carries `_meta["com.browseros.neo/run"]` as `{ id, status, effects, error?, unknown, tasks }`. `id` is the run's id in the trace. `status` is `ok`, `error`, `cancelled`, or `timeout`, and `isError` is set unless it is `ok`. `effects` is `none`, `done`, or `unknown`. `unknown` lists the writes that were sent and never confirmed. `structuredContent` is unchanged.
+
+`tasks` is host metadata, always present (`[]` when no tasks were touched). Each entry carries `id`, `name`, `kind`, and `tabs: { tabId, url }[]`. Tasks appear once, in first-touch order, even when the script failed. Tabs and URLs reflect reply time; a closed task has kind `closed` and no tabs.
+
+The agent's reply is exactly what the script returned, plus console lines and existing notes. Task metadata adds no reply text. Return `task.id` explicitly to keep it for later runs.
 
 The script's `page`, `context`, `browser` and `expect` behave as Playwright 1.64.1's, except where Neo says otherwise in the `run` description, which lists each difference a script would trip on. A call that waits gives up after 5 s unless given a `timeout`, and a navigation after 30 s. For the main-world scripts (`page.evaluate`, `page.waitForFunction`, `locator.evaluate`, `locator.evaluateAll`, `locator.waitForFunction`, `elementHandle.evaluate`, `$eval` and `$$eval`, each `frame` form in its own frame) and `setContent`, whose HTML's scripts run in the main world too, those are:
 

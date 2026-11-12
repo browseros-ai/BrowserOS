@@ -3,11 +3,14 @@
 //! and asserts what the run service reads from it.
 
 use std::collections::BTreeSet;
+use std::future::{self, Future};
 use std::sync::Arc;
 use std::time::Duration;
 
-use neo_trace::{Delivery, ErrorOwner, OperationId, Outcome};
+use neo_trace::{Delivery, Effect, ErrorOwner, OperationId, Outcome};
 use rquickjs::{AsyncContext, AsyncRuntime, Context, Runtime};
+use serde::Deserialize;
+use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 use tokio::time::{self, Instant};
 
@@ -15,7 +18,8 @@ use super::install_web_globals::install_web_globals;
 use super::{LogLevel, LogLine, Script, ScriptEnd, ScriptOutcome, run_script};
 use crate::config::Defaults;
 use crate::dispatch::{
-    CallSite, ErrorCode, Observation, OperationError, PageFact, RunCtx, StopReason,
+    CallSite, Dispatcher, ErrorCode, LeafError, Method, MethodSpec, Observation, Observer, OpCtx,
+    OperationError, PageFact, PageTarget, RegistryBuilder, RunCtx, StopReason,
 };
 use crate::test_rig::{TestError, TestRig, on_neo_runtime, within};
 
@@ -516,16 +520,31 @@ fn a_thrown_error_is_a_script_error_at_its_line() -> Result<(), TestError> {
 }
 
 #[test]
+fn scripts_can_shadow_their_api_parameters() -> Result<(), TestError> {
+    on_neo_runtime(async {
+        let rig = TestRig::new().await?;
+        for code in [
+            "const page = 1; return page;",
+            "let context = 1; return context;",
+            "function neo() { return 1; } return neo();",
+        ] {
+            assert_eq!(returned(script(&rig, code).await?)?, json!(1), "{code}");
+        }
+        Ok(())
+    })
+}
+
+#[test]
 fn code_that_does_not_compile_is_a_syntax_error() -> Result<(), TestError> {
     on_neo_runtime(async {
         let rig = TestRig::new().await?;
-        let error = failed(script(&rig, "const ok = 1;\nreturn (;").await?)?;
+        let error = failed(script(&rig, "const page = 1;\nconst ok = 1;\nreturn (;").await?)?;
         assert_eq!(
             (error.owner(), error.code()),
             (ErrorOwner::Script, ErrorCode::SYNTAX_ERROR)
         );
         assert!(
-            error.message().starts_with("SyntaxError: ") && error.message().contains("run:2"),
+            error.message().starts_with("SyntaxError: ") && error.message().contains("run:3:"),
             "it says where, counting from the script's first line: {error}"
         );
         Ok(())
@@ -1705,6 +1724,7 @@ fn init_observation_orders_the_seed_before_later_replies() -> Result<(), TestErr
             code: "await __neo.invoke('test.title', { page }); return page.url();".into(),
             page: Some(page.clone()),
             pages: vec![PageFact {
+                task_id: None,
                 viewport_size: None,
                 workers: None,
                 tab: page.tab,
@@ -1949,6 +1969,359 @@ fn listener_registration_does_not_give_internal_event_work_a_site() -> Result<()
             "registration starts the prelude's event work"
         );
         assert!(events.iter().all(|op| op.site.is_none()));
+        Ok(())
+    })
+}
+
+/// Contract doubles for the five task ops. Production task storage is outside the runtime;
+/// these tests keep the real QuickJS preludes, dispatcher and trace writer.
+struct TaskOp<I> {
+    name: &'static str,
+    effect: Effect,
+    answer: fn(I) -> Result<Value, LeafError>,
+}
+
+impl<I: DeserializeOwned + Send + 'static> Method for TaskOp<I> {
+    type Input = I;
+    type Output = Value;
+
+    fn spec(&self) -> MethodSpec {
+        MethodSpec::new(self.name, self.effect)
+    }
+
+    fn target(_input: &I) -> Option<&PageTarget> {
+        None
+    }
+
+    fn call(
+        &self,
+        _op: &OpCtx<Self>,
+        input: I,
+    ) -> impl Future<Output = Result<Value, LeafError>> + Send {
+        future::ready((self.answer)(input))
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CreateTaskInput {
+    name: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TaskLookupInput {
+    id: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TaskInput {
+    task: String,
+}
+
+async fn task_rig() -> Result<TestRig, TestError> {
+    let mut rig = TestRig::new().await?;
+    let mut registry = RegistryBuilder::default();
+    registry.define(TaskOp {
+        name: "neo.createTask",
+        effect: Effect::Read,
+        answer: |input: CreateTaskInput| {
+            Ok(json!({ "id": if input.name.is_some() { "research" } else { "empty" }, "pages": [] }))
+        },
+    })?;
+    registry.define(TaskOp {
+        name: "neo.task",
+        effect: Effect::Read,
+        answer: |input: TaskLookupInput| {
+            if input.id == "missing" {
+                return Err(LeafError::definite(OperationError::script(
+                    ErrorCode::TASK_NOT_FOUND,
+                    "no task `missing` is open in Neo",
+                )));
+            }
+            let pages = if input.id == "empty" {
+                json!([])
+            } else {
+                json!([{ "$neo": "page", "tab": 102 }, { "$neo": "page", "tab": 101 }])
+            };
+            Ok(json!({ "id": input.id, "pages": pages }))
+        },
+    })?;
+    registry.define(TaskOp {
+        name: "task.newPage",
+        effect: Effect::Write,
+        answer: |input: TaskInput| {
+            assert_eq!(input.task, "research", "the task handle sends its own id");
+            Ok(json!({ "page": { "$neo": "page", "tab": 103 }, "url": "about:blank" }))
+        },
+    })?;
+    registry.define(TaskOp {
+        name: "task.close",
+        effect: Effect::Write,
+        answer: |input: TaskInput| {
+            if input.task == "blocked" {
+                return Err(LeafError::definite(OperationError::script(
+                    ErrorCode::METHOD_UNAVAILABLE,
+                    "close refused",
+                )));
+            }
+            assert_eq!(input.task, "research", "the task handle sends its own id");
+            Ok(json!({ "closed": [102, 101] }))
+        },
+    })?;
+    rig.dispatcher = Arc::new(Dispatcher::new(
+        registry.build(),
+        Vec::new(),
+        rig.sink.clone(),
+        Arc::clone(&rig.link),
+        Arc::clone(&rig.tabs),
+        Observer::unrecorded(),
+    ));
+    Ok(rig)
+}
+
+#[test]
+fn neo_creates_tasks_and_reuses_one_handle_per_id() -> Result<(), TestError> {
+    on_neo_runtime(async {
+        let rig = task_rig().await?;
+        let (run, _guard) = rig.run(BUDGET, None)?;
+        let code = r"
+            const empty = await neo.createTask();
+            const task = await neo.createTask('Research');
+            const initial = task.pages();
+            const [first, second] = await Promise.all([neo.task(task.id), neo.task(task.id)]);
+            let readonly = false;
+            try { task.id = 'changed'; } catch (e) { readonly = e instanceof TypeError; }
+            return { empty: [empty.id, empty.pages().length], initial, id: task.id,
+              type: task.constructor.name, readonly, same: first === task && second === task,
+              pages: task.pages().map(p => p.tabId), real: task.page(101).context() === context };
+        ";
+        assert_eq!(
+            returned(run_code(&rig, &run, code).await)?,
+            json!({ "empty": ["empty", 0], "initial": [], "id": "research", "type": "Task",
+                "readonly": true, "same": true, "pages": [102, 101], "real": true }),
+            "server order and shared Page/Task identity survive concurrent lookups"
+        );
+        rig.sink.flush().await?;
+        let detail = rig.store.run(run.id()).await?.ok_or("recorded task run")?;
+        let calls: Vec<_> = detail
+            .operations
+            .iter()
+            .map(|op| (&op.name, &op.args))
+            .collect();
+        assert_eq!(
+            serde_json::to_value(calls)?,
+            json!([
+                ["neo.createTask", {}], ["neo.createTask", { "name": "Research" }],
+                ["neo.task", { "id": "research" }], ["neo.task", { "id": "research" }]
+            ]),
+            "each wrapper submits exactly its contracted input"
+        );
+        Ok(())
+    })
+}
+
+#[test]
+fn task_pages_include_new_pages_and_popup_facts_but_not_closed_pages() -> Result<(), TestError> {
+    on_neo_runtime(async {
+        let rig = task_rig().await?;
+        // Feed ownership at the Page cache seam; TS tests cover init/reply/result fact decoding.
+        let code = r"
+            context._pageFor({ tab: 101, taskId: 'research' });
+            context._pageFor({ tab: 102, taskId: 'research' });
+            const task = await neo.task('research');
+            const first = task.pages().map(p => p.tabId);
+            task.pages().pop();
+            const popup = context._pageFor({ tab: 104, taskId: task.id });
+            context._pageFor({ tab: 999, taskId: 'someone-else' });
+            const page = await task.newPage();
+            const added = task.pages().map(p => p.tabId);
+            await neo.task('research');
+            const refreshed = task.pages().map(p => p.tabId);
+            context._pageFor({ tab: 101, closed: true }, { seq: 100, events: 0 });
+            return { first, added, refreshed, afterClose: task.pages().map(p => p.tabId),
+              newPage: task.page(103) === page, popup: task.page(104) === popup,
+              shared: page === context.pages().find(p => p.tabId === 103) };
+        ";
+        assert_eq!(
+            returned(script(&rig, code).await?)?,
+            json!({
+                "first": [102, 101], "added": [102, 101, 104, 103],
+                "refreshed": [102, 101, 104, 103], "afterClose": [102, 104, 103],
+                "newPage": true, "popup": true, "shared": true
+            }),
+            "already known popups precede later newPage additions"
+        );
+        Ok(())
+    })
+}
+
+#[test]
+fn a_missing_task_page_is_a_recorded_script_refusal_with_available_ids() -> Result<(), TestError> {
+    on_neo_runtime(async {
+        let rig = task_rig().await?;
+        let caught = returned(script(&rig, r"
+            const task = await neo.task('research');
+            try { task.page(999); } catch (error) { return { neo: error instanceof NeoError, error }; }
+        ").await?)?;
+        assert_eq!(
+            caught["neo"], true,
+            "sync refusals use the bootstrap's NeoError"
+        );
+        assert_eq!(caught["error"]["code"], "task_page_missing");
+        assert_eq!(caught["error"]["owner"], "script");
+        let (run, _guard) = rig.run(BUDGET, None)?;
+        let end = run_code(
+            &rig,
+            &run,
+            "const task = await neo.task('research');\ntask.page(999);",
+        )
+        .await;
+        let ScriptOutcome::OperationFailed(failure) = end.outcome else {
+            return Err(format!("expected a recorded task refusal, got {:?}", end.outcome).into());
+        };
+        assert_eq!(failure.error.code(), ErrorCode::TASK_PAGE_MISSING);
+        assert_eq!(failure.error.owner(), ErrorOwner::Script);
+        assert_eq!(failure.delivery, Delivery::NotSent);
+        assert_eq!(
+            failure.error.message(),
+            "task research has no tab 999; its open tab ids: 102, 101"
+        );
+        rig.sink.flush().await?;
+        let row = rig
+            .store
+            .operation(failure.operation)
+            .await?
+            .ok_or("recorded refusal")?;
+        assert_eq!(row.name, "task.page");
+        assert_eq!(
+            row.site.map(|site| site.line),
+            Some(2),
+            "refusal sites count the agent's lines"
+        );
+        Ok(())
+    })
+}
+
+#[test]
+fn closing_a_task_empties_its_pages_and_refuses_further_methods() -> Result<(), TestError> {
+    on_neo_runtime(async {
+        let rig = task_rig().await?;
+        let code = r"
+            const task = await neo.task('research');
+            const closed = await task.close();
+            context._pageFor({ tab: 104, taskId: task.id });
+            const errors = [];
+            for (const call of [() => task.page(102), () => task.newPage(), () => task.close()]) {
+              try { await call(); } catch (e) { errors.push([e instanceof NeoError, e.code, e.owner, e.message.includes('context.pages()')]); }
+            }
+            return { id: task.id, pages: task.pages(), void: closed === undefined, errors };
+        ";
+        assert_eq!(
+            returned(script(&rig, code).await?)?,
+            json!({
+                "id": "research", "pages": [], "void": true,
+                "errors": [[true, "task_not_found", "script", true], [true, "task_not_found", "script", true],
+                    [true, "task_not_found", "script", true]]
+            }),
+            "closing is final for the cached handle, including late facts"
+        );
+        Ok(())
+    })
+}
+
+#[test]
+fn a_refused_close_keeps_the_task_usable_and_unknown_tasks_keep_the_server_error()
+-> Result<(), TestError> {
+    on_neo_runtime(async {
+        let rig = task_rig().await?;
+        let code = r"
+            const task = await neo.task('blocked');
+            let refused;
+            try { await task.close(); } catch (e) { refused = e.message; }
+            let missing;
+            try { await neo.task('missing'); } catch (e) {
+              missing = [e instanceof NeoError, e.code, e.owner];
+            }
+            return { refused, pages: task.pages().map(p => p.tabId), tab: task.page(101).tabId, missing };
+        ";
+        assert_eq!(
+            returned(script(&rig, code).await?)?,
+            json!({
+                "refused": "close refused", "pages": [102, 101], "tab": 101,
+                "missing": [true, "task_not_found", "script"]
+            }),
+            "a failed op does not mark the Task handle closed"
+        );
+        Ok(())
+    })
+}
+
+#[test]
+fn a_built_in_page_landing_on_a_task_tab_is_listed_once() -> Result<(), TestError> {
+    on_neo_runtime(async {
+        let rig = task_rig().await?;
+        // The task's reply revived tab 101 first; then the lazy `page` resolves to it (the
+        // task's last tab) and becomes the context's entry. A customer saw it listed twice.
+        let code = r"
+            context._pageFor({ tab: 101, taskId: 'research' });
+            context._pageFor({ tab: 102, taskId: 'research' });
+            const task = await neo.task('research');
+            const revived = task.page(101);
+            context._applyReply({ pages: [{ tab: 101, taskId: 'research' }],
+              defaultPage: { tab: 101 }, observed: null });
+            const after = task.pages().map(p => p.tabId);
+            const builtIn = task.page(101) === page && revived !== page;
+            context._pageFor({ tab: 101, closed: true }, { seq: 100, events: 0 });
+            return { after, builtIn, afterClose: task.pages().map(p => p.tabId) };
+        ";
+        assert_eq!(
+            returned(script(&rig, code).await?)?,
+            json!({ "after": [102, 101], "builtIn": true, "afterClose": [102] }),
+            "one entry per tab, the context's current Page, and its close is seen"
+        );
+        Ok(())
+    })
+}
+
+#[test]
+fn context_pages_returns_shared_pages_with_task_ids_from_facts() -> Result<(), TestError> {
+    on_neo_runtime(async {
+        let rig = task_rig().await?;
+        let code = r"
+            context._pageFor({ tab: 101, taskId: 'research' });
+            context._pageFor({ tab: 102, taskId: 'research' });
+            context._pageFor({ tab: 201, taskId: null });
+            const tabs = context.pages();
+            return { ids: tabs.map(p => [p.tabId, p.taskId]),
+              shared: tabs.every(p => context.pages().includes(p)) };
+        ";
+        assert_eq!(
+            returned(script(&rig, code).await?)?,
+            json!({
+                "ids": [[101, "research"], [102, "research"], [201, null]], "shared": true
+            }),
+            "context pages retain their shared identity and ownership"
+        );
+        Ok(())
+    })
+}
+
+#[test]
+fn removed_tab_listing_is_absent_and_its_operation_is_unknown() -> Result<(), TestError> {
+    on_neo_runtime(async {
+        let rig = TestRig::new().await?;
+        let code = r"
+            let error;
+            try { await __neo.invoke(['neo', 'tabs'].join('.'), {}); }
+            catch (caught) { error = { code: caught.code, owner: caught.owner }; }
+            return { type: typeof neo['tabs'], error };
+        ";
+        assert_eq!(
+            returned(script(&rig, code).await?)?,
+            json!({ "type": "undefined", "error": { "code": "method_unavailable", "owner": "script" } })
+        );
         Ok(())
     })
 }

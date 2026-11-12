@@ -15,6 +15,8 @@ use tokio::sync::broadcast::{self, Receiver};
 use tokio::sync::watch;
 use tokio::time::{self, MissedTickBehavior};
 
+use super::{PageRef, TabRegistry};
+
 /// How often the watch looks for a replaced socket and retries a listing that failed. The
 /// client publishes no reconnect event, and target discovery dies with the old socket, so this
 /// bounds how long closes go unseen after a reconnect.
@@ -91,6 +93,7 @@ pub(crate) struct TabListing {
 /// Runs for the process's life: the session's event channel outlives every reconnect.
 pub(crate) async fn tab_watch(
     session: Arc<BrowserSession>,
+    tabs: Arc<TabRegistry>,
     events: broadcast::Sender<TabEvent>,
     watched: watch::Sender<Option<Watched>>,
 ) {
@@ -99,7 +102,7 @@ pub(crate) async fn tab_watch(
     let mut cdp_events = session.cdp_events();
     let mut checks = time::interval(EPOCH_CHECK);
     checks.set_missed_tick_behavior(MissedTickBehavior::Delay);
-    let mut watch = Watch::new(events, watched);
+    let mut watch = Watch::new(events, watched, tabs);
     loop {
         tokio::select! {
             _ = checks.tick() => {
@@ -185,6 +188,9 @@ struct Watch {
     current: Option<Watched>,
     /// The followed socket's page targets, by target id, with their tab.
     targets: HashMap<String, TabId>,
+    /// CDP reports openerId even when no script subscribed to popup events.
+    openers: HashMap<String, String>,
+    tabs: Arc<TabRegistry>,
     /// Tabs whose page target was destroyed, until a listing says whether each closed or only
     /// changed target.
     closing: BTreeSet<TabId>,
@@ -211,6 +217,8 @@ struct TargetInfo {
     /// BrowserOS adds the tab of a target that belongs to one; stock Chromium does not.
     #[serde(default)]
     tab_id: Option<i64>,
+    #[serde(default)]
+    opener_id: Option<String>,
 }
 
 /// `Target.targetDestroyed`, which names only the target.
@@ -221,12 +229,18 @@ struct TargetDestroyed {
 }
 
 impl Watch {
-    fn new(events: broadcast::Sender<TabEvent>, watched: watch::Sender<Option<Watched>>) -> Self {
+    fn new(
+        events: broadcast::Sender<TabEvent>,
+        watched: watch::Sender<Option<Watched>>,
+        tabs: Arc<TabRegistry>,
+    ) -> Self {
         Self {
             events,
             watched,
             current: None,
             targets: HashMap::new(),
+            openers: HashMap::new(),
+            tabs,
             closing: BTreeSet::new(),
             open: None,
             owes_listing: false,
@@ -242,6 +256,7 @@ impl Watch {
     /// target ids are that browser's, and its closes are the reader's to reconcile now.
     fn start(&mut self, epoch: u64) {
         self.targets.clear();
+        self.openers.clear();
         self.closing.clear();
         self.begin(epoch);
     }
@@ -278,6 +293,9 @@ impl Watch {
                 };
                 if target_info.kind != "page" {
                     return false;
+                }
+                if let Some(opener) = target_info.opener_id {
+                    self.openers.insert(target_info.target_id.clone(), opener);
                 }
                 if let Some(tab) = target_info.tab_id {
                     self.targets.insert(target_info.target_id, TabId(tab));
@@ -322,6 +340,7 @@ impl Watch {
             }
             return;
         };
+        let seen = self.tabs.seen();
         let Some(pages) = watched_pages(session, current.epoch).await else {
             return;
         };
@@ -330,6 +349,17 @@ impl Watch {
             self.targets
                 .insert(page.target_id.as_str().to_owned(), page.tab_id);
         }
+        for page in &pages {
+            if let Some(opener) = self
+                .openers
+                .get(page.target_id.as_str())
+                .and_then(|target| self.targets.get(target))
+            {
+                self.tabs.popup(&PageRef::from(page), *opener, seen);
+            }
+        }
+        self.openers
+            .retain(|target, _| pages.iter().any(|page| page.target_id.as_str() == target));
         let open: BTreeSet<TabId> = pages.iter().map(|page| page.tab_id).collect();
         for tab in mem::take(&mut self.closing) {
             if !open.contains(&tab) {

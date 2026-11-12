@@ -230,7 +230,8 @@ impl BrowserLink {
         // Core's DOM scripts run in BrowserOS's isolated world, never where the page can see
         // them (skeleton D4). Process-wide, and set before any page is touched.
         page_js::set_isolated_world_enabled(true);
-        let on_page_removed = Arc::new(move |info: &PageInfo| tabs.removing(info.tab_id));
+        let removed_tabs = Arc::clone(&tabs);
+        let on_page_removed = Arc::new(move |info: &PageInfo| removed_tabs.removing(info.tab_id));
         let hooks = BrowserSessionHooks {
             page_manager: PageManagerHooks {
                 on_page_removed: Some(on_page_removed),
@@ -240,6 +241,7 @@ impl BrowserLink {
         let session = BrowserSession::new_with_native(connection, hooks, native);
         tokio::spawn(tab_watch::tab_watch(
             Arc::clone(&session),
+            tabs,
             self.tab_events.clone(),
             self.watched.clone(),
         ));

@@ -194,3 +194,38 @@ fn tests_that_hosted_mode_follows_the_hosts_launch_fact() -> Result<(), Box<dyn 
     assert_eq!(options(true).config()?.env.hosted_mode, HostedMode::On);
     Ok(())
 }
+
+#[tokio::test]
+async fn hosted_runs_start_unowned_and_attach_tabs_only_after_picking_a_task()
+-> Result<(), Box<dyn Error>> {
+    let dir = tempfile::tempdir()?;
+    let runtime = connect(&dir, FakeCdp::new()).await?;
+    let first = runtime.open_run(Duration::from_secs(10)).await?;
+    let opened: Value =
+        serde_json::from_str(&first.invoke("context.newPage".to_owned(), "{}", "").await)?;
+    assert_eq!(opened["pages"][0]["taskId"], Value::Null);
+    let first_reply: Value = serde_json::from_str(&first.finish().await?)?;
+    assert_eq!(first_reply["tasks"], json!([]));
+    let second = runtime.open_run(Duration::from_secs(10)).await?;
+    let init: Value = serde_json::from_str(second.init())?;
+    assert_eq!(
+        init["page"],
+        Value::Null,
+        "a new hosted run cannot inherit the first one's default"
+    );
+    assert_eq!(init["pages"][0]["taskId"], Value::Null);
+    let picked: Value =
+        serde_json::from_str(&second.invoke("neo.createTask".to_owned(), "{}", "").await)?;
+    let owned: Value =
+        serde_json::from_str(&second.invoke("context.newPage".to_owned(), "{}", "").await)?;
+    assert_ne!(opened["ok"]["page"], owned["ok"]["page"]);
+    assert_eq!(owned["pages"][0]["taskId"], picked["ok"]["id"]);
+    let second_reply: Value = serde_json::from_str(&second.finish().await?)?;
+    assert_eq!(second_reply["tasks"][0]["kind"], "created");
+    assert_eq!(
+        second_reply["tasks"][0]["tabs"][0]["tabId"],
+        owned["ok"]["page"]["tab"]
+    );
+    runtime.close().await?;
+    Ok(())
+}
