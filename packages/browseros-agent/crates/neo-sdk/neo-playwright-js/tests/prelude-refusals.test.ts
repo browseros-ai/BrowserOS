@@ -90,7 +90,7 @@ const ARGUMENT_CHECKS: [
   [
     'expect.toHaveText',
     'Error',
-    'expected value must be a string or regular expression',
+    "expect(locator).toHaveText(expected) failed\n\nLocator: locator('a')\nError: expected value must be a string or regular expression\nExpected has type:  number\nExpected has value: 5\n",
     "expect(page.locator('a')).toHaveText(5)",
   ],
   [

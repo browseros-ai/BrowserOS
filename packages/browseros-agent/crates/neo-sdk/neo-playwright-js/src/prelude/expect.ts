@@ -25,7 +25,13 @@ import {
   StringMatching,
   stringify,
 } from './expect-equality'
-import { RETRYING, type Retrying, retry, urlPredicate } from './expect-retrying'
+import {
+  hrefOf,
+  RETRYING,
+  type Retrying,
+  retry,
+  urlPredicate,
+} from './expect-retrying'
 import {
   type ExpectConfig,
   fail,
@@ -41,7 +47,26 @@ import { installUnsupportedExpect } from './unsupported'
 /** One assertion's matchers, with `not`, `resolves` and `rejects` as getters. */
 export type Matchers = Record<string, unknown>
 
-/** A retrying matcher's call: the Page predicate form of toHaveURL, or one op. */
+/** What toHaveURL reads of a `URLPattern`: its own `test`. */
+type URLPatternLike = { test(input: string): boolean }
+
+/**
+ * A `URLPattern`, read by its brand since QuickJS has no such global and a script's pattern may
+ * come from another realm (Node's, in the spec harness); upstream checks `instanceof`.
+ */
+function isURLPattern(value: unknown): value is URLPatternLike {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    typeof Reflect.get(value, 'test') === 'function' &&
+    Object.prototype.toString.call(value) === '[object URLPattern]'
+  )
+}
+
+/**
+ * A retrying matcher's call: the Page predicate forms of toHaveURL (a function, or a URLPattern
+ * that upstream turns into one), or one op.
+ */
 function retrying(
   name: string,
   site: CallSite,
@@ -49,16 +74,23 @@ function retrying(
   state: State,
   args: never[],
 ): Promise<void> {
-  if (name === 'toHaveURL' && typeof args[0] === 'function') {
+  const expected: unknown = args[0]
+  if (
+    name === 'toHaveURL' &&
+    (typeof expected === 'function' || isURLPattern(expected))
+  ) {
     if (!(actual instanceof Page))
       throw plainError(
         'expect.toHaveURL',
         `toHaveURL can be only used with Page object, was called with ${receiverText(actual)}`,
       )
+    const predicate = isURLPattern(expected)
+      ? (url: unknown) => expected.test(hrefOf(url))
+      : (expected as (url: unknown) => unknown)
     return urlPredicate(
       actual,
       site,
-      args[0] as (url: unknown) => unknown,
+      predicate,
       state,
       args[1] as TimeoutOption | undefined,
     )

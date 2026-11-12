@@ -6914,7 +6914,7 @@ ${value.stack}`;
   }
 
   // crates/neo-sdk/neo-playwright-js/src/prelude/signal.ts
-  function signalOf(api, options) {
+  function readSignal(api, options) {
     if (typeof options !== "object" || options === null)
       return;
     const signal = Reflect.get(options, "signal");
@@ -6922,9 +6922,17 @@ ${value.stack}`;
       return;
     if (typeof signal !== "object" || signal === null || typeof Reflect.get(signal, "aborted") !== "boolean" || typeof Reflect.get(signal, "addEventListener") !== "function" || typeof Reflect.get(signal, "removeEventListener") !== "function")
       throw clientError(api, "signal: expected an AbortSignal");
-    if (signal.aborted)
+    return signal;
+  }
+  function signalOf(api, options) {
+    const signal = readSignal(api, options);
+    if (signal?.aborted)
       throw abortedError(api, signal);
     return signal;
+  }
+  function assertionAbortedMessage(reason) {
+    const detail = reason instanceof Error ? reason.message : reason === undefined || reason === null ? "" : String(reason);
+    return `The assertion was aborted${detail ? `: ${detail}` : ""}`;
   }
   async function untilAborted(signal, aborted, work) {
     if (signal === undefined)
@@ -11037,6 +11045,32 @@ ${value.stack}`;
     } finally {
       seen.delete(value);
     }
+  }
+  function typeName(value) {
+    if (value === undefined)
+      return "undefined";
+    if (value === null)
+      return "null";
+    if (Array.isArray(value))
+      return "array";
+    if (typeof value !== "object")
+      return typeof value;
+    const made = Reflect.get(value, "constructor");
+    if (made === RegExp)
+      return "regexp";
+    if (made === Map)
+      return "map";
+    if (made === Set)
+      return "set";
+    if (made === Date)
+      return "date";
+    return "object";
+  }
+  function printWithType(name, value) {
+    const type = typeName(value);
+    const hasType = type !== "null" && type !== "undefined" ? `${name} has type:  ${type}
+` : "";
+    return `${hasType}${name} has value: ${stringify(value)}`;
   }
   function receiverText(receiver) {
     if (typeof receiver === "object" && receiver !== null)
@@ -17933,7 +17967,7 @@ ${expected === undefined ? "" : `Expected: ${state.isNot ? "not " : ""}${stringi
       const value = {};
       if (typeof item === "string")
         value.string = item;
-      else {
+      else if (item instanceof RegExp) {
         value.regexSource = item.source;
         value.regexFlags = item.flags;
       }
@@ -17959,9 +17993,17 @@ ${expected === undefined ? "" : `Expected: ${state.isNot ? "not " : ""}${stringi
   function argumentError(matcher, message) {
     return plainError(`expect.${matcher}`, message);
   }
-  function text2(matcher, receiver, expression, expected, values, options, extra = {}) {
+  function text2(receiver, expression, expected, values, options, extra = {}) {
     if (typeof expected !== "string" && !(expected instanceof RegExp))
-      throw argumentError(matcher, "expected value must be a string or regular expression");
+      return {
+        receiver,
+        expectation: "expected",
+        expected: () => "",
+        value: expected,
+        params: { expression, ...extra },
+        options,
+        invalidExpected: true
+      };
     const substring = values[0]?.matchSubstring === true;
     const suffix = typeof expected === "string" ? substring ? " substring" : "" : " pattern";
     const params = {
@@ -18031,20 +18073,20 @@ ${expected === undefined ? "" : `Expected: ${state.isNot ? "not " : ""}${stringi
         normalizeWhiteSpace: true,
         ignoreCase: options?.ignoreCase
       })
-    }) : text2("toContainText", "Locator", "to.have.text", expected, textValues([expected], {
+    }) : text2("Locator", "to.have.text", expected, textValues([expected], {
       matchSubstring: true,
       normalizeWhiteSpace: true,
       ignoreCase: options?.ignoreCase
     }), options),
-    toHaveAccessibleDescription: (expected, options) => text2("toHaveAccessibleDescription", "Locator", "to.have.accessible.description", expected, textValues([expected], {
+    toHaveAccessibleDescription: (expected, options) => text2("Locator", "to.have.accessible.description", expected, textValues([expected], {
       ignoreCase: options?.ignoreCase,
       normalizeWhiteSpace: true
     }), options),
-    toHaveAccessibleName: (expected, options) => text2("toHaveAccessibleName", "Locator", "to.have.accessible.name", expected, textValues([expected], {
+    toHaveAccessibleName: (expected, options) => text2("Locator", "to.have.accessible.name", expected, textValues([expected], {
       ignoreCase: options?.ignoreCase,
       normalizeWhiteSpace: true
     }), options),
-    toHaveAccessibleErrorMessage: (expected, options) => text2("toHaveAccessibleErrorMessage", "Locator", "to.have.accessible.error.message", expected, textValues([expected], {
+    toHaveAccessibleErrorMessage: (expected, options) => text2("Locator", "to.have.accessible.error.message", expected, textValues([expected], {
       ignoreCase: options?.ignoreCase,
       normalizeWhiteSpace: true
     }), options),
@@ -18058,11 +18100,11 @@ ${expected === undefined ? "" : `Expected: ${state.isNot ? "not " : ""}${stringi
           expressionArg: name
         });
       const value = expected;
-      return text2("toHaveAttribute", "Locator", "to.have.attribute.value", value, textValues([value], { ignoreCase: options?.ignoreCase }), options, { expressionArg: name });
+      return text2("Locator", "to.have.attribute.value", value, textValues([value], { ignoreCase: options?.ignoreCase }), options, { expressionArg: name });
     },
     toHaveClass: (expected, options) => Array.isArray(expected) ? equal("to.have.class.array", expected, options, {
       expectedText: textValues(expected)
-    }) : text2("toHaveClass", "Locator", "to.have.class", expected, textValues([expected]), options),
+    }) : text2("Locator", "to.have.class", expected, textValues([expected]), options),
     toContainClass: (expected, options) => {
       if (Array.isArray(expected)) {
         if (expected.some((item) => item instanceof RegExp))
@@ -18073,14 +18115,14 @@ ${expected === undefined ? "" : `Expected: ${state.isNot ? "not " : ""}${stringi
       }
       if (expected instanceof RegExp)
         throw argumentError("toContainClass", '"expected" argument in toContainClass cannot be a RegExp value');
-      return text2("toContainClass", "Locator", "to.contain.class", expected, textValues([expected]), options);
+      return text2("Locator", "to.contain.class", expected, textValues([expected]), options);
     },
     toHaveCount: (expected, options) => equal("to.have.count", expected, options, { expectedNumber: expected }),
-    toHaveCSS: (name, expected, options) => text2("toHaveCSS", "Locator", "to.have.css", expected, textValues([expected]), options, {
+    toHaveCSS: (name, expected, options) => text2("Locator", "to.have.css", expected, textValues([expected]), options, {
       expressionArg: name,
       ...options?.pseudo ? { pseudo: options.pseudo } : {}
     }),
-    toHaveId: (expected, options) => text2("toHaveId", "Locator", "to.have.id", expected, textValues([expected]), options),
+    toHaveId: (expected, options) => text2("Locator", "to.have.id", expected, textValues([expected]), options),
     toHaveJSProperty: (name, expected, options) => equal("to.have.property", expected, options, {
       expressionArg: name,
       expectedValue: expected
@@ -18088,22 +18130,22 @@ ${expected === undefined ? "" : `Expected: ${state.isNot ? "not " : ""}${stringi
     toHaveRole: (expected, options) => {
       if (typeof expected !== "string")
         throw argumentError("toHaveRole", '"role" argument in toHaveRole must be a string');
-      return text2("toHaveRole", "Locator", "to.have.role", expected, textValues([expected]), options);
+      return text2("Locator", "to.have.role", expected, textValues([expected]), options);
     },
     toHaveText: (expected, options) => Array.isArray(expected) ? equal("to.have.text.array", expected, options, {
       expectedText: textValues(expected, {
         normalizeWhiteSpace: true,
         ignoreCase: options?.ignoreCase
       })
-    }) : text2("toHaveText", "Locator", "to.have.text", expected, textValues([expected], {
+    }) : text2("Locator", "to.have.text", expected, textValues([expected], {
       normalizeWhiteSpace: true,
       ignoreCase: options?.ignoreCase
     }), options),
-    toHaveValue: (expected, options) => text2("toHaveValue", "Locator", "to.have.value", expected, textValues([expected]), options),
+    toHaveValue: (expected, options) => text2("Locator", "to.have.value", expected, textValues([expected]), options),
     toHaveValues: (expected, options) => equal("to.have.values", expected, options, {
       expectedText: textValues(expected)
     }),
-    toHaveTitle: (expected, options) => text2("toHaveTitle", "Page", "to.have.title", expected, textValues([expected], { normalizeWhiteSpace: true }), options),
+    toHaveTitle: (expected, options) => text2("Page", "to.have.title", expected, textValues([expected], { normalizeWhiteSpace: true }), options),
     toMatchAriaSnapshot: (expected, options) => {
       if (typeof expected !== "string")
         throw argumentError("toMatchAriaSnapshot", "snapshot files are not available in Neo; pass the expected snapshot as a YAML string");
@@ -18123,7 +18165,7 @@ ${expected === undefined ? "" : `Expected: ${state.isNot ? "not " : ""}${stringi
     },
     toHaveURL: (expected, options) => {
       const value = typeof expected === "string" ? normalizeUrl(expected) : expected;
-      return text2("toHaveURL", "Page", "to.have.url", value, textValues([value], { ignoreCase: options?.ignoreCase }), options);
+      return text2("Page", "to.have.url", value, textValues([value], { ignoreCase: options?.ignoreCase }), options);
     }
   };
   async function retry(name, site, actual, state, matcher) {
@@ -18133,6 +18175,14 @@ ${expected === undefined ? "" : `Expected: ${state.isNot ? "not " : ""}${stringi
     const accepted = matcher.receiver === "Page" ? isPage : matcher.receiver === "Locator" ? isLocator : isPage || isLocator;
     if (!accepted)
       throw argumentError(name, `${name} can be only used with ${matcher.receiver} object${matcher.receiver.includes(" or ") ? "s" : ""}, was called with ${receiverText(actual)}`);
+    if (matcher.invalidExpected)
+      throw argumentError(name, `${failedHead(name, state, actual, matcher.expectation)}Error: expected value must be a string or regular expression
+${printWithType("Expected", matcher.value)}
+`);
+    const signal = readSignal(api, matcher.options);
+    if (signal?.aborted)
+      abortedAssertion(name, state, matcher.value, `${failedHead(name, state, actual, matcher.expectation)}${matcher.expected(state.isNot)}
+`, signal);
     const timeout = matcher.options?.timeout ?? state.config.timeout;
     const call = { api, timeoutMs: timeoutMs(api, timeout) };
     const expectation = matcher.expectation;
@@ -18168,6 +18218,31 @@ ${error.message}`;
       throw error;
     }
   }
+  function failedHead(name, state, actual, expectation) {
+    const locator = actual instanceof Locator ? `Locator: ${actual}
+` : "";
+    return `${header(name, state, actual instanceof Locator ? "locator" : "page", expectation)} failed
+
+${locator}`;
+  }
+  function abortedAssertion(name, state, expected, printed, signal) {
+    const message = `${printed}Error: ${assertionAbortedMessage(signal.reason)}
+`;
+    const error = assertionError(state.message ? `${state.message}
+
+${message}` : message);
+    Reflect.set(error, "matcherResult", {
+      message,
+      pass: state.isNot,
+      actual: undefined,
+      name,
+      expected,
+      log: undefined,
+      timeout: undefined,
+      ariaSnapshot: undefined
+    });
+    throw error;
+  }
   function isMatcherFacts(value) {
     return typeof value === "object" && value !== null && Array.isArray(Reflect.get(value, "log")) && typeof Reflect.get(value, "timedOut") === "boolean";
   }
@@ -18187,12 +18262,19 @@ ${error.message}`;
     });
   }
   async function urlPredicate(page, site, predicate, state, options) {
+    const signal = readSignal("expect.toHaveURL", options);
+    if (signal?.aborted)
+      abortedAssertion("toHaveURL", state, undefined, `${header("toHaveURL", state, "page")} failed
+
+Expected: predicate to ${state.isNot ? "fail" : "succeed"}
+`, signal);
     const timeout = options?.timeout ?? state.config.timeout;
     const deadline = Date.now() + timeout;
+    let candidate = URL.parse(page.url()) ?? page.url();
     for (;; ) {
       let passed;
       try {
-        passed = Boolean(await predicate(URL.parse(page.url()) ?? page.url()));
+        passed = Boolean(await predicate(candidate));
       } catch (error) {
         throw prefixed("expect.toHaveURL", error);
       }
@@ -18205,16 +18287,24 @@ ${error.message}`;
 Expected: predicate to ${state.isNot ? "fail" : "succeed"}
 Received: ${stringify(page.url())}
 Timeout: ${timeout}ms`);
+      const tested = hrefOf(candidate);
+      let committed;
       try {
         await page._waitForURL("expect.toHaveURL", site, page._mainFrame, (url) => {
-          const href = typeof url === "object" && url !== null ? Reflect.get(url, "href") : url;
-          return href !== page.url();
+          if (hrefOf(url) === tested)
+            return false;
+          committed = url;
+          return true;
         }, { timeout: timeout === 0 ? 0 : remaining, waitUntil: "commit" });
       } catch (error) {
         if (Reflect.get(Object(error), "timeout") !== true && !(error instanceof Error && error.name === "TimeoutError"))
           throw error;
       }
+      candidate = committed ?? URL.parse(page.url()) ?? page.url();
     }
+  }
+  function hrefOf(url) {
+    return typeof url === "object" && url !== null ? String(Reflect.get(url, "href")) : String(url);
   }
 
   // crates/neo-sdk/neo-playwright-js/src/prelude/unsupported.ts
@@ -18423,11 +18513,16 @@ Timeout: ${timeout}ms`);
   }
 
   // crates/neo-sdk/neo-playwright-js/src/prelude/expect.ts
+  function isURLPattern(value) {
+    return typeof value === "object" && value !== null && typeof Reflect.get(value, "test") === "function" && Object.prototype.toString.call(value) === "[object URLPattern]";
+  }
   function retrying(name, site, actual, state, args) {
-    if (name === "toHaveURL" && typeof args[0] === "function") {
+    const expected = args[0];
+    if (name === "toHaveURL" && (typeof expected === "function" || isURLPattern(expected))) {
       if (!(actual instanceof Page))
         throw plainError("expect.toHaveURL", `toHaveURL can be only used with Page object, was called with ${receiverText(actual)}`);
-      return urlPredicate(actual, site, args[0], state, args[1]);
+      const predicate = isURLPattern(expected) ? (url) => expected.test(hrefOf(url)) : expected;
+      return urlPredicate(actual, site, predicate, state, args[1]);
     }
     const build = RETRYING[name];
     return retry(name, site, actual, state, Reflect.apply(build, undefined, args));
