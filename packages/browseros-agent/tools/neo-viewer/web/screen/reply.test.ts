@@ -74,6 +74,14 @@ describe("reading a run's reply", () => {
     expect(parts.console).toEqual(['clicked', '[warn] slow'])
     expect(parts.notes).toHaveLength(2)
     expect(parts.notes.at(-1)).toBe(TIP_LINE)
+    // A line Neo adds after its tip one day is a note too, and keeps the tip a note.
+    expect(
+      replyParts(`${text}\nNotice: a line Neo does not write yet`),
+    ).toEqual({
+      value: parts.value,
+      console: ['clicked', '[warn] slow'],
+      notes: [...parts.notes, 'Notice: a line Neo does not write yet'],
+    })
     const detail = runDetail(runSummary(1, { reply: text }), text)
     expect(formattedLines(detail).map(lineText)[0]).toBe(
       '- button "Go" [ref=e2]',

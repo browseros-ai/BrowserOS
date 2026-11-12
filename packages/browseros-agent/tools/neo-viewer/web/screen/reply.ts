@@ -49,13 +49,30 @@ export function replyParts(text: string): ReplyParts {
 /** The lines after a returned value: a console block when the script logged, then notes. */
 function trailer(lines: string[]): Omit<ReplyParts, 'value'> {
   if (lines[0] !== 'console:') return { console: [], notes: lines }
-  const end = neoLinesStart(lines, 1, AFTER_CONSOLE_FORMS)
+  const end = afterConsoleStart(lines)
   return { console: lines.slice(1, end), notes: lines.slice(end) }
+}
+
+/**
+ * Where Neo's lines after console output start. The last line in one of Neo's forms marks them:
+ * the run of its forms just before it is Neo's too, and so is every line after it, since Neo
+ * writes a line it adds later at the end. A console line in one of these forms with more console
+ * output after it is taken for Neo's, which the text cannot tell apart; that changes how lines
+ * are labelled, never the value.
+ */
+function afterConsoleStart(lines: string[]): number {
+  const isNeos = (line: string | undefined) =>
+    AFTER_CONSOLE_FORMS.some((form) => line?.startsWith(form))
+  let start = lines.length - 1
+  while (start > 0 && !isNeos(lines[start])) start--
+  if (start === 0) return lines.length
+  while (start > 1 && isNeos(lines[start - 1])) start--
+  return start
 }
 
 /** An error reply: the error line(s), then the console block and notes, found from the end. */
 function errorParts(lines: string[]): ReplyParts {
-  const end = neoLinesStart(lines, 1, NOTE_FORMS)
+  const end = notesStart(lines)
   const notes = lines.slice(end)
   const consoleAt = lines.indexOf('console:', 1)
   if (consoleAt !== -1 && consoleAt < end) {
@@ -68,10 +85,13 @@ function errorParts(lines: string[]): ReplyParts {
   return { value: lines.slice(0, end).join('\n'), console: [], notes }
 }
 
-/** Where the run of lines in one of `forms` at the end of `lines` starts, no earlier than `from`. */
-function neoLinesStart(lines: string[], from: number, forms: string[]): number {
+/** Where the run of Neo's notes at the end of an error reply's `lines` starts (after line 0). */
+function notesStart(lines: string[]): number {
   let end = lines.length
-  while (end > from && forms.some((form) => lines[end - 1]?.startsWith(form))) {
+  while (
+    end > 1 &&
+    NOTE_FORMS.some((form) => lines[end - 1]?.startsWith(form))
+  ) {
     end--
   }
   return end
