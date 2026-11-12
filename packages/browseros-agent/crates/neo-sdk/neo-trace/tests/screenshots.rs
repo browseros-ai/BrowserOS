@@ -5,9 +5,10 @@
 use browseros_core::TabId;
 use neo_trace::{
     Delivery, Effect, EpochMillis, ErrorOwner, ErrorRecord, OperationEnded, OperationId,
-    OperationKind, OperationStarted, Outcome, RedactionLimits, Redactor, RetentionPolicy, RunEnded,
-    RunId, RunStarted, RunStatus, Shot, ShotJob, ShotJobs, ShotRead, ShotState, TraceRecordEvent,
-    TraceSink, TraceStore, WriterConfig, screenshot_queue, spawn_writer,
+    OperationKind, OperationStarted, Outcome, PageState, RedactionLimits, Redactor,
+    RetentionPolicy, RunEnded, RunId, RunStarted, RunStatus, Shot, ShotJob, ShotJobs, ShotRead,
+    ShotState, TraceRecordEvent, TraceSink, TraceStore, WriterConfig, screenshot_queue,
+    spawn_writer,
 };
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -214,6 +215,92 @@ async fn writes_and_page_failures_get_a_job_and_each_touched_tab_one_at_run_end(
             root.join(format!("{run}/4.jpg"))
         ]
     );
+    Ok(())
+}
+
+/// Records one operation named `name`, start to end: `effect` on `tab`, answered ok.
+fn named(sink: &TraceSink, id: OperationId, name: &str, effect: Effect, tab: i64) {
+    sink.op_started(OperationStarted {
+        site: None,
+        id,
+        parent: None,
+        name: name.into(),
+        kind: OperationKind::Builtin,
+        effect,
+        tab: Some(TabId(tab)),
+        args: serde_json::Value::Null,
+        at: at(i64::from(id.seq)),
+    });
+    sink.op_ended(OperationEnded {
+        id,
+        outcome: Outcome::Ok,
+        delivery: Delivery::Done,
+        sent_at: None,
+        result: None,
+        error: None,
+        page_after: None,
+        main_world: false,
+        at: at(i64::from(id.seq) + 1),
+    });
+}
+
+#[tokio::test]
+async fn neos_own_listeners_make_no_tab_the_runs_for_its_run_end_shots() -> TestResult {
+    // A task tab the script acts on, and three more open tabs it never touches. The prelude's
+    // page.on (events.listen) and event pump (events.next) name every known page.
+    let mut h = harness().await?;
+    let run = start_run(&h.sink, 0);
+    let op = |seq| OperationId::new(run, seq);
+    for (seq, tab) in [(1, 4), (2, 5), (3, 6)] {
+        named(&h.sink, op(seq), "events.listen", Effect::Read, tab);
+    }
+    named(&h.sink, op(4), "locator.click", Effect::Write, 3);
+    named(&h.sink, op(5), "locator.textContent", Effect::Read, 3);
+    named(&h.sink, op(6), "events.listen", Effect::Read, 3);
+    named(&h.sink, op(7), "events.next", Effect::Read, 5);
+    // A tab the script opened and left alone is the run's, so it gets its picture too.
+    h.sink.op_started(OperationStarted {
+        site: None,
+        id: op(8),
+        parent: None,
+        name: "context.newPage".into(),
+        kind: OperationKind::Builtin,
+        effect: Effect::Write,
+        tab: None,
+        args: serde_json::Value::Null,
+        at: at(8),
+    });
+    h.sink.op_ended(OperationEnded {
+        id: op(8),
+        outcome: Outcome::Ok,
+        delivery: Delivery::Done,
+        sent_at: None,
+        result: None,
+        error: None,
+        page_after: Some(PageState {
+            tab_id: Some(TabId(7)),
+            url: Some("about:blank".into()),
+            title: None,
+        }),
+        main_world: false,
+        at: at(9),
+    });
+    let after = waiting_jobs(&mut h).await?;
+    assert_eq!(
+        jobs_of(&after),
+        vec![(4, TabId(3))],
+        "the click on the task tab"
+    );
+    for job in after {
+        job.answer.send(Shot::Dropped);
+    }
+    end_run(&h.sink, run, 100);
+    let at_end = waiting_jobs(&mut h).await?;
+    // The task tab's last operation of the script's (the read) gets the run-end shot; a listener
+    // after it does not move it, and the untouched tabs get none: the same tabs as the run's.
+    assert_eq!(jobs_of(&at_end), vec![(5, TabId(3)), (8, TabId(7))]);
+    let summary = h.store.run_summary(run).await?.ok_or("no such run")?;
+    assert_eq!(summary.tabs, vec![TabId(3), TabId(7)]);
     Ok(())
 }
 

@@ -666,7 +666,13 @@ impl Writer {
             .runs
             .entry(event.id.run)
             .or_insert_with(|| OpenRun::unseen(None));
-        if let Some(tab) = event.tab {
+        // The run-end shots go to the run's tabs as its record names them (`link_tab`): Neo's
+        // own subscriptions (`trace_store::SUBSCRIPTIONS`, its listeners and event pump) name a
+        // tab without acting on it, so they make no tab the run's, nor a tab's last operation.
+        if let Some(tab) = event
+            .tab
+            .filter(|_| !trace_store::is_subscription(&event.name))
+        {
             run.tabs.admitted(tab, event.id.seq);
         }
         run.operations.insert(
@@ -738,12 +744,16 @@ impl Writer {
             }
             return Ok(None);
         }
-        // The tab an opener opened is the run's: it had no target to link at the start.
+        // The tab an opener opened is the run's: it had no target to link at the start. It is a
+        // tab the run touched for the run-end shots too, as for the run's tabs.
         if let (true, Some(tab)) = (
             open.as_ref().is_some_and(|open| open.opens),
             page.as_ref().and_then(|page| page.tab_id),
         ) {
             tx.link_tab(event.id.run, tab).await?;
+            if let Some(run) = self.runs.get_mut(&event.id.run) {
+                run.tabs.admitted(tab, event.id.seq);
+            }
         }
         let shot_tab = open.as_ref().and_then(|open| {
             screenshot_rule::after_op(open.effect, open.tab, event.outcome, error.as_ref())
