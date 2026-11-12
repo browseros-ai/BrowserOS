@@ -30,6 +30,7 @@ use std::time::Duration;
 use browseros_rig::{
     CaptchaKey, Client, HOST_TOKEN, PATIENCE, Rig, TestResult, browser_or_skip, get, outcome, run,
 };
+use neo_server::test_support;
 use neo_trace::{Delivery, Effect, Outcome, RunId, RunStatus, TraceStore};
 use serde_json::{Value, json};
 use tokio::time;
@@ -73,8 +74,8 @@ async fn drive(rig: &mut Rig) -> TestResult {
 
     let first = run(&client, &code, &meta).await?;
     assert_eq!(
-        first.structured_content,
-        Some(json!({ "value": TITLE })),
+        test_support::run_value(&first)?,
+        json!(TITLE),
         "the tab strip's title of the page BrowserOS loaded: {first:?}"
     );
     let first_meta = outcome(&first)?;
@@ -98,8 +99,9 @@ async fn drive(rig: &mut Rig) -> TestResult {
         "a repeated requestId replays the first run instead of running again"
     );
     assert_eq!(
-        repeat.structured_content, first.structured_content,
-        "with its value"
+        serde_json::to_value(&repeat)?,
+        serde_json::to_value(&first)?,
+        "the entire replayed wire reply is identical"
     );
     solve_captcha_without_a_key(&client).await?;
     let (locked_run, locked_tab) = a_hosts_lock_ends_when_its_tab_closes(rig, &client).await?;
@@ -199,12 +201,12 @@ async fn solve_captcha_without_a_key(client: &Client) -> TestResult {
         }";
     let result = run(client, code, &json!({ "taskId": "e2e-captcha-off" })).await?;
     assert_eq!(
-        result.structured_content,
-        Some(json!({ "value": {
+        test_support::run_value(&result)?,
+        json!({
             "code": "captcha_unavailable",
             "owner": "host",
             "delivery": "not_sent",
-        } })),
+        }),
         "{result:?}"
     );
     Ok(())
@@ -238,11 +240,7 @@ async fn solve_on_a_clear_page(rig: &Rig) -> TestResult {
         return solved;"
     );
     let result = run(&client, &code, &json!({ "taskId": "e2e-captcha" })).await?;
-    let solved = result
-        .structured_content
-        .as_ref()
-        .and_then(|content| content.get("value"))
-        .ok_or_else(|| format!("the solve answered a value: {result:?}"))?;
+    let solved = test_support::run_value(&result)?;
     let field = |name: &str| solved.get(name).cloned().unwrap_or(Value::Null);
     assert_eq!(
         (
@@ -282,11 +280,7 @@ async fn a_hosts_lock_ends_when_its_tab_closes(
         return p;"
     );
     let opened = run(client, &code, &json!({ "taskId": "e2e-lock" })).await?;
-    let page = opened
-        .structured_content
-        .as_ref()
-        .and_then(|content| content.get("value"))
-        .ok_or_else(|| format!("the run returns its page: {opened:?}"))?;
+    let page = test_support::run_value(&opened)?;
     let tab = page
         .get("tab")
         .and_then(Value::as_i64)

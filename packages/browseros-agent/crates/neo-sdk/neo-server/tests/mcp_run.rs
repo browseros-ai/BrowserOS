@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use futures_util::future;
 use neo_server::App;
-use neo_server::test_support::{FakeCdp, test_config};
+use neo_server::test_support::{self, FakeCdp, test_config};
 use neo_trace::{
     Delivery, Effect, ErrorOwner, Outcome, RunQuery, RunStatus, RunSummary, TaskId, TraceStore,
 };
@@ -212,7 +212,12 @@ fn both_protocols_list_one_tool_and_run_plain_javascript() -> TestResult {
             );
 
             let result = run(&client, json!({ "code": "return 6 * 7;" }), None).await?;
-            assert_eq!(result.structured_content, Some(json!({ "value": 42 })));
+            assert_eq!(test_support::run_value(&result)?, json!(42));
+            assert!(
+                serde_json::to_value(&result)?
+                    .get("structuredContent")
+                    .is_none()
+            );
             assert_eq!(result.is_error, Some(false));
             let meta = outcome(&result)?;
             assert_eq!(meta.get("status"), Some(&json!("ok")));
@@ -231,6 +236,16 @@ fn both_protocols_list_one_tool_and_run_plain_javascript() -> TestResult {
                 Ok::<_, Box<dyn Error>>(())
             })
             .await??;
+            for code in ["return null;", "return undefined;", ""] {
+                let result = run(&client, json!({ "code": code }), None).await?;
+                assert_eq!(test_support::run_value(&result)?, Value::Null);
+                let wire = serde_json::to_value(&result)?;
+                assert_eq!(
+                    wire["content"],
+                    json!([{ "type": "text", "text": "### Result\nnull" }])
+                );
+                assert!(wire.get("structuredContent").is_none());
+            }
             client.cancel().await?;
         }
         Ok(())
@@ -280,8 +295,9 @@ fn meta_goes_into_the_trace_and_a_repeat_replays_the_first_id() -> TestResult {
             "a repeated requestId is the first run"
         );
         assert_eq!(
-            repeat.structured_content, first.structured_content,
-            "and its value"
+            serde_json::to_value(&repeat)?,
+            serde_json::to_value(&first)?,
+            "the entire replayed wire reply is identical"
         );
         let recorded = neo.until_status("task-1", RunStatus::Ok).await?;
         assert_eq!(
@@ -321,8 +337,8 @@ fn a_script_drives_a_page_through_the_playwright_api() -> TestResult {
         )
         .await?;
         assert_eq!(
-            result.structured_content,
-            Some(json!({ "value": true })),
+            test_support::run_value(&result)?,
+            json!(true),
             "the page knows it closed from the reply's page facts"
         );
         assert_eq!(outcome(&result)?.get("status"), Some(&json!("ok")));
@@ -395,13 +411,13 @@ fn without_a_provider_key_solve_captcha_is_unlisted_and_throws_for_the_host() ->
             }";
         let result = run(&client, json!({ "code": code }), None).await?;
         assert_eq!(
-            result.structured_content,
-            Some(json!({ "value": {
+            test_support::run_value(&result)?,
+            json!({
                 "name": "NeoError",
                 "code": "captcha_unavailable",
                 "owner": "host",
                 "delivery": "not_sent",
-            } })),
+            }),
             "the deployment adds the key, so the host owns the failure: {result:?}"
         );
         client.cancel().await?;
@@ -512,13 +528,11 @@ fn fifty_runs_at_once_all_execute() -> TestResult {
             run(&client, json!({ "code": code }), None)
         });
         let results = future::try_join_all(calls).await?;
-        let values: Vec<Option<Value>> = results
-            .into_iter()
-            .map(|result| result.structured_content)
-            .collect();
-        let expected: Vec<Option<Value>> = (0..50)
-            .map(|index| Some(json!({ "value": index })))
-            .collect();
+        let values: Vec<Value> = results
+            .iter()
+            .map(test_support::run_value)
+            .collect::<Result<_, _>>()?;
+        let expected: Vec<Value> = (0..50).map(|index| json!(index)).collect();
         assert_eq!(values, expected);
         assert!(
             started.elapsed() < Duration::from_secs(10),
@@ -631,11 +645,8 @@ fn screenshots_and_pdfs_work_after_a_trace_store_is_replaced() -> TestResult {
         )
         .await?;
         assert_eq!(
-            result
-                .structured_content
-                .as_ref()
-                .and_then(|reply| reply.get("value")),
-            Some(&json!([6, 8])),
+            test_support::run_value(&result)?,
+            json!([6, 8]),
             "both capture ops stay served after trace replacement: {result:?}"
         );
         client.cancel().await?;

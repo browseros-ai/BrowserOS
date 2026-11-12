@@ -19,6 +19,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use browseros_rig::{CaptchaKey, PATIENCE, Rig, TestResult, browser_or_skip, outcome, run};
+use neo_server::test_support;
 use neo_trace::RunId;
 use serde_json::{Value, json};
 use tokio::time;
@@ -118,11 +119,7 @@ async fn uploads(rig: &Rig) -> TestResult {
         Some(&json!("ok")),
         "{result:?}"
     );
-    let value = result
-        .structured_content
-        .as_ref()
-        .and_then(|content| content.get("value"))
-        .ok_or_else(|| format!("the script returns what it saw: {result:?}"))?;
+    let value = test_support::run_value(&result)?;
 
     let named = host_files.as_object().ok_or("the host files are named")?;
     for (name, path) in named {

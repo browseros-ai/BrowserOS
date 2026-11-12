@@ -18,9 +18,12 @@
 mod envelope_examples;
 mod envelope_types;
 mod fake_cdp;
+mod run_value;
 mod test_config;
 
+pub use crate::mcp::{ReplyText, parse_text};
 pub use envelope_examples::{EnvelopeExample, envelope_examples};
 pub use envelope_types::{EnvelopeType, envelope_types};
 pub use fake_cdp::{FakeCall, FakeCdp};
+pub use run_value::run_value;
 pub use test_config::{CLOSED_XVNC, test_config};

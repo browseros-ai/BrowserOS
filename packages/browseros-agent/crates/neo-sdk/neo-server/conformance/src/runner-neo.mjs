@@ -85,6 +85,33 @@ export function traceCodeEvidence(code, trace) {
   if (trace.code === preview) return 'truncated'
 }
 
+const REPLY_HEADERS = new Set([
+  '### Result',
+  '### Error',
+  '### Console',
+  '### Notes',
+  '### Tips',
+])
+
+export function parseRunText(text) {
+  const [header, ...lines] = (text ?? '').split('\n')
+  if (header === '### Result') return { value: JSON.parse(lines[0]) }
+  if (header === '### Error') {
+    const end = lines.findIndex((line) => REPLY_HEADERS.has(line))
+    return {
+      error: lines
+        .slice(0, end < 0 ? lines.length : end)
+        .map((line) =>
+          line.startsWith('\\') && REPLY_HEADERS.has(line.slice(1))
+            ? line.slice(1)
+            : line,
+        )
+        .join('\n'),
+    }
+  }
+  throw new Error('not a run reply: expected ### Result or ### Error')
+}
+
 export async function runNeo({
   file,
   row,
@@ -110,7 +137,8 @@ export async function runNeo({
       { timeout: timeout + 30000, signal },
     )
     runId = raw?._meta?.['com.browseros.neo/run']?.id
-    record = raw.structuredContent?.value
+    const reply = parseRunText(raw.content?.[0]?.text)
+    record = reply.value
     if (
       raw.isError ||
       !record ||
@@ -119,10 +147,7 @@ export async function runNeo({
     )
       record = {
         transport: {
-          error:
-            record?.harnessError ||
-            JSON.stringify(raw.structuredContent?.error) ||
-            'no returned record',
+          error: record?.harnessError || reply.error || 'no returned record',
         },
       }
     if (runId)

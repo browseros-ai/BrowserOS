@@ -64,6 +64,8 @@ def describe(url: str) -> dict:
 
 
 def call_run(client, code: str, meta: dict) -> dict:
+    from smoke_sdk import run_value
+
     result = client.call(
         "tools/call",
         {
@@ -76,7 +78,7 @@ def call_run(client, code: str, meta: dict) -> dict:
     return {
         "isError": bool(result.get("isError")),
         "meta": result.get("_meta", {}).get(RUN_META, {}),
-        "value": result.get("structuredContent"),
+        "value": None if result.get("isError") else run_value(result),
         "text": text[:400],
     }
 
@@ -187,7 +189,7 @@ def downloads(url: str, socket_path: str, token_file: str) -> dict:
     client = connect(url)
     problems = []
     got = call_run(client, DOWNLOAD_CODE.replace("ORIGIN", origin), {"taskId": "accept-downloads"})
-    value = (got["value"] or {}).get("value") or {}
+    value = got["value"] or {}
     run_id = got["meta"].get("id", "")
     path = value.get("path") or ""
     if got["meta"].get("status") != "ok" or not path.startswith("/data/downloads/"):
@@ -212,7 +214,7 @@ def downloads(url: str, socket_path: str, token_file: str) -> dict:
         problems.append(f"saveAs copy: {saved}")
     upload_code = f"const args = {json.dumps({'path': path})};\n" + UPLOAD_CODE.replace("ORIGIN", origin)
     uploaded = call_run(client, upload_code, {"taskId": "accept-downloads"})
-    sent = (uploaded["value"] or {}).get("value") or {}
+    sent = uploaded["value"] or {}
     if (sent.get("name"), sent.get("sha256")) != (os.path.basename(path), want):
         problems.append(f"upload: {uploaded['meta'].get('status')} {sent or uploaded['text'][:200]}")
     server.shutdown()
@@ -313,7 +315,7 @@ def blobs(url: str, socket_path: str, token_file: str) -> dict:
     client = connect(url)
     problems = []
     got = call_run(client, BLOBS_CODE, {"taskId": "accept-blobs"})
-    value = (got["value"] or {}).get("value") or {}
+    value = got["value"] or {}
     run_id = got["meta"].get("id", "")
     sizes = value.get("sizes") or {}
     if got["meta"].get("status") != "ok":
@@ -334,7 +336,7 @@ def blobs(url: str, socket_path: str, token_file: str) -> dict:
             problems.append(f"{name} blob: {status}, {len(body)} bytes, starts {body[:8]!r}")
         read[name] = f"{marker.get('id')} {len(body)} B"
     text = call_run(client, "return 'x'.repeat(300 * 1024);", {"taskId": "accept-blobs"})
-    error = ((text["value"] or {}).get("error") or {})
+    error = text["meta"].get("error") or {}
     if error.get("code") != "result_too_large" or "Buffer.from" not in error.get("message", ""):
         problems.append(f"large text: {text['meta'].get('status')} {str(error)[:200]}")
     return {

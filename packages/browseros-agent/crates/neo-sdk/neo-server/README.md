@@ -128,11 +128,11 @@ Any script may use any tab or task. `context.pages()` lists every tab; each page
 
 Tasks live in memory, at most 4096. Empty tasks remain until closed or evicted for space. A Neo restart forgets tasks while tabs stay; `context.pages()` still finds those tabs, now without task ownership. Host tasks retain their trace fallback. The janitor closes agent-opened tabs idle for 30 minutes.
 
-The result carries `_meta["com.browseros.neo/run"]` as `{ id, status, effects, error?, unknown, tasks }`. `id` is the run's id in the trace. `status` is `ok`, `error`, `cancelled`, or `timeout`, and `isError` is set unless it is `ok`. `effects` is `none`, `done`, or `unknown`. `unknown` lists the writes that were sent and never confirmed. `structuredContent` is unchanged.
+The result carries `_meta["com.browseros.neo/run"]` as `{ id, status, effects, error?, unknown, tasks }`. `id` is the run's id in the trace. `status` is `ok`, `error`, `cancelled`, or `timeout`, and `isError` is set unless it is `ok`. `effects` is `none`, `done`, or `unknown`. `unknown` lists the writes that were sent and never confirmed. The reply is one text block: `### Result` (the returned value as JSON) or `### Error`, then `### Console`, `### Notes`, `### Tips` when present. There is no `structuredContent`.
 
 `tasks` is host metadata, always present (`[]` when no tasks were touched). Each entry carries `id`, `name`, `kind`, and `tabs: { tabId, url }[]`. Tasks appear once, in first-touch order, even when the script failed. Tabs and URLs reflect reply time; a closed task has kind `closed` and no tabs.
 
-The agent's reply is exactly what the script returned, plus console lines and existing notes. Task metadata adds no reply text. Return `task.id` explicitly to keep it for later runs.
+Task metadata adds no reply text. Return `task.id` explicitly to keep it for later runs.
 
 The script's `page`, `context`, `browser` and `expect` behave as Playwright 1.64.1's, except where Neo says otherwise in the `run` description, which lists each difference a script would trip on. A call that waits gives up after 5 s unless given a `timeout`, and a navigation after 30 s. For the main-world scripts (`page.evaluate`, `page.waitForFunction`, `locator.evaluate`, `locator.evaluateAll`, `locator.waitForFunction`, `elementHandle.evaluate`, `$eval` and `$$eval`, each `frame` form in its own frame) and `setContent`, whose HTML's scripts run in the main world too, those are:
 

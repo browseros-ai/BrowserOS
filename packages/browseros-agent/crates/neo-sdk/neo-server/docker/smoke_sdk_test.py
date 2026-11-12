@@ -11,20 +11,23 @@ import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
+from smoke_sdk import REPLY_HEADERS, run_value
+
 SMOKE = Path(__file__).with_name("smoke_sdk.py")
 TITLE = re.compile(r"<title>(.*?)</title>")
 
 # How the fake's run answers, given the value a real run would return and the submitted code.
 RUN_REPLIES = {
-    "text": lambda value, code: {"content": [{"type": "text", "text": value}], "isError": False},
-    # run's result shape is not pinned, so the smoke must also find the value here.
-    "structured": lambda value, code: {"content": [], "structuredContent": {"value": value}, "isError": False},
-    # Carries the right value, so only isError can fail it.
+    "text": lambda value, code: {"content": [{"type": "text", "text": f"### Result\n{json.dumps(value)}"}], "isError": False},
+    # An error may echo the expected value; it is still a failed run.
     "error": lambda value, code: {
-        "content": [{"type": "text", "text": f"{value}\nneo / browser_disconnected"}], "isError": True,
+        "content": [{"type": "text", "text": f"### Error\nneo / browser_disconnected\n{value}"}], "isError": True,
     },
     # Not an error, and the code holds only the lower-case title.
     "echo": lambda value, code: {"content": [{"type": "text", "text": code}], "isError": False},
+    "console_only": lambda value, code: {
+        "content": [{"type": "text", "text": f"### Result\nnull\n### Console\n{value}"}],
+    },
 }
 
 
@@ -114,6 +117,26 @@ def serve(peer: Peer):
 
 
 class SmokeSdkTests(unittest.TestCase):
+    def test_reads_json_values_before_console_notes_and_tips(self):
+        for value in (None, 42, {"a": 1}, "line one\n### Console\nline two"):
+            with self.subTest(value=value):
+                result = {"content": [{"type": "text", "text":
+                    f"### Result\n{json.dumps(value)}\n### Console\nhello\n### Notes\nnote\n### Tips\ntip"}]}
+                self.assertEqual(run_value(result), value)
+
+    def test_errors_keep_multiline_messages_and_escaped_headers(self):
+        headers = sorted(REPLY_HEADERS)
+        body = "failed\n" + "\n".join("\\" + header for header in headers) + "\ncall log"
+        result = {"content": [{"type": "text", "text": f"### Error\n{body}\n### Console\nhello"}], "isError": True}
+        with self.assertRaises(ValueError) as raised:
+            run_value(result)
+        self.assertEqual(str(raised.exception), "failed\n" + "\n".join(headers) + "\ncall log")
+
+    def test_rejects_missing_headers_and_invalid_json(self):
+        for text in ("", "{}", "### Result", "### Result\nbroken", "### Console\nhello"):
+            with self.subTest(text=text), self.assertRaises(ValueError):
+                run_value({"content": [{"type": "text", "text": text}]})
+
     def smoke(self, peer: Peer) -> subprocess.CompletedProcess:
         with serve(peer) as port:
             return subprocess.run([sys.executable, str(SMOKE), "--mcp-port", str(port)],
@@ -130,12 +153,11 @@ class SmokeSdkTests(unittest.TestCase):
 
     def test_passes_against_a_stateless_claw_sdk_over_json_and_sse(self):
         for sse in (False, True):
-            for reply in ("text", "structured"):
-                with self.subTest(sse=sse, reply=reply):
-                    result = self.smoke(Peer(sse=sse, reply=reply))
-                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-                    lines = result.stdout.splitlines()
-                    self.assertTrue(lines and all(line.startswith("ok") for line in lines), result.stdout)
+            with self.subTest(sse=sse):
+                result = self.smoke(Peer(sse=sse))
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                lines = result.stdout.splitlines()
+                self.assertTrue(lines and all(line.startswith("ok") for line in lines), result.stdout)
 
     def test_fails_until_health_and_ready_answer_200(self):
         for path, status in (("/system/ready", 503), ("/system/health", 404)):
@@ -163,6 +185,9 @@ class SmokeSdkTests(unittest.TestCase):
         line = self.fail_line(peer)
         (code,) = peer.runs
         self.assertIn(TITLE.search(code).group(1), line)
+
+    def test_fails_when_only_console_contains_the_expected_value(self):
+        self.fail_line(Peer(reply="console_only"))
 
 
 if __name__ == "__main__":

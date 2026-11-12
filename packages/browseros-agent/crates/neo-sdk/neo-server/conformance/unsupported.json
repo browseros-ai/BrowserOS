@@ -47,7 +47,6 @@
   "expect.soft",
   "expect.toBeOK",
   "expect.toHaveScreenshot",
-  "expect.toMatchAriaSnapshot",
   "expect.toMatchSnapshot",
   "frame.evaluateHandle",
   "frame.frameElement",

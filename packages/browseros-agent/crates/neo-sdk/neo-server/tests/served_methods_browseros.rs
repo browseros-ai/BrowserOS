@@ -16,7 +16,7 @@ use std::pin::Pin;
 use std::time::Duration;
 
 use browseros_rig::{CaptchaKey, HOST_TOKEN, Rig, TestResult};
-use rmcp::model::ContentBlock;
+use neo_server::test_support;
 use serde_json::{Value, json};
 use tokio::time;
 
@@ -73,17 +73,11 @@ async fn refusal_on_the_record(rig: &Rig) -> TestResult {
         .rsplit_once('.')
         .map(|(_, seq)| seq)
         .ok_or_else(|| format!("an op id is `<run>.<seq>`: {operation}"))?;
-    let text = result
-        .content
-        .first()
-        .and_then(ContentBlock::as_text)
-        .map(|content| content.text.as_str());
     assert_eq!(
-        text.and_then(|text| text.lines().next()),
-        Some(
-            format!("script / method_unavailable: {ROUTE_REASON} (op {seq}, delivery not_sent)")
-                .as_str()
-        ),
+        test_support::run_value(&result),
+        Err(format!(
+            "script / method_unavailable: {ROUTE_REASON} (op {seq}, delivery not_sent)"
+        )),
         "what the model reads"
     );
 

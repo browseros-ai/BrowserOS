@@ -27,6 +27,27 @@ TITLE = "neo-sdk-smoke"
 # case. So the result can carry EXPECTED only if a tab really loaded the page.
 # Error text that echoes the code cannot match it.
 EXPECTED = TITLE.upper()
+REPLY_HEADERS = {"### Result", "### Error", "### Console", "### Notes", "### Tips"}
+
+
+def run_value(result: dict):
+    """Read Neo's Result JSON or raise with its complete Error section."""
+    content = result.get("content", [])
+    if len(content) != 1 or content[0].get("type") != "text":
+        raise ValueError("not a run reply: expected one text block")
+    header, *lines = content[0]["text"].split("\n")
+    if header == "### Result" and lines and not result.get("isError"):
+        return json.loads(lines[0])
+    if header == "### Error":
+        message = []
+        for line in lines:
+            if line in REPLY_HEADERS:
+                break
+            message.append(line[1:] if line.startswith("\\") and line[1:] in REPLY_HEADERS else line)
+        raise ValueError("\n".join(message))
+    raise ValueError("not a run reply: expected ### Result or ### Error")
+
+
 # The script calls only the four placeholder built-ins (sdk-skeleton plan step
 # 9), so it passes before sdk-playwright plugs in. It names its tab `tab` so it
 # never redeclares the `page` global.
@@ -81,10 +102,12 @@ def main() -> None:
 
     # Not client.tool(): it adds claw-server's agentName, which run's input lacks.
     result = client.call("tools/call", {"name": "run", "arguments": {"code": CODE, "timeout": RUN_TIMEOUT_MS}})
-    # Where run's result puts the returned value is not pinned yet, so the
-    # check looks for it anywhere in the result.
-    text = json.dumps(result)
-    check("a run opened a tab, read its title and closed it", not result.get("isError") and EXPECTED in text, text[:300])
+    try:
+        value = run_value(result)
+        detail = json.dumps(result)[:300]
+    except ValueError as error:
+        value, detail = None, f"{json.dumps(str(error))}: {json.dumps(result)[:300]}"
+    check("a run opened a tab, read its title and closed it", value == EXPECTED, detail)
 
 
 if __name__ == "__main__":

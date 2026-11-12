@@ -25,7 +25,8 @@ command -v jq >/dev/null || { echo "check.sh: needs jq" >&2; exit 1; }
 # taskId, code, timeoutMs, timing, response, transportError).
 DEFS='
 def meta: .response._meta["com.browseros.neo/run"] // {};
-def value: .response.structuredContent.value;
+def value: .response.content[0].text | split("\n") |
+  if .[0] == "### Result" then .[1] | fromjson else error("run has no Result section") end;
 def outcome: if .transportError then "transport error: \(.transportError)"
   else "run \(meta.id) \(meta.status)"
     + (if meta.error then " \(meta.error.owner)/\(meta.error.code) delivery=\(meta.error.delivery)" else "" end)

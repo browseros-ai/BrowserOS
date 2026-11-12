@@ -47,7 +47,7 @@ impl ReplyTip {
     pub(crate) fn line(self) -> &'static str {
         match self {
             Self::SnapshotDelta => {
-                "Tip: page.ariaSnapshot({ delta: true }) returns only what changed since your \
+                "page.ariaSnapshot({ delta: true }) returns only what changed since your \
                  last snapshot."
             }
         }
@@ -252,7 +252,7 @@ mod tests {
     fn tests_the_tip_s_wording() {
         assert_eq!(
             ReplyTip::SnapshotDelta.line(),
-            "Tip: page.ariaSnapshot({ delta: true }) returns only what changed since your last \
+            "page.ariaSnapshot({ delta: true }) returns only what changed since your last \
              snapshot."
         );
     }
