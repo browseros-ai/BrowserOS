@@ -289,7 +289,7 @@ type _locator_blur_result = Assert<VoidIsNull<'locator.blur', pw.FrameBlurResult
 type _locator_setInputFiles = Assert<UpstreamCheck<'locator.setInputFiles', SetInputFilesInput, pw.ElementHandleSetInputFilesParams, 'files', 'directoryStream' | 'localDirectory' | 'localPaths' | 'payloads' | 'streams', never>>
 type _locator_setInputFiles_result = Assert<VoidIsNull<'locator.setInputFiles', pw.ElementHandleSetInputFilesResult, null>>
 // locator.dispatchEvent: ElementHandle.dispatchEvent
-//   retypes eventInit: Neo transports JSON rather than upstream SerializedArgument
+//   retypes eventInit: JSON init keeps dispatch in Neo's isolated world instead of the page's world
 type _locator_dispatchEvent = Assert<UpstreamCheck<'locator.dispatchEvent', DispatchEventInput, pw.ElementHandleDispatchEventParams, never, never, 'eventInit'>>
 type _locator_dispatchEvent_result = Assert<VoidIsNull<'locator.dispatchEvent', pw.ElementHandleDispatchEventResult, null>>
 // locator.scrollIntoViewIfNeeded: ElementHandle.scrollIntoViewIfNeeded
