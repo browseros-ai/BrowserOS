@@ -65,8 +65,9 @@ workspace manifest or this command, with the browser `neo-server/docker/browser.
 - A skip in the full run is decided by the spec or the harness, not by timing, so it is not
   rerun: an expected pass that skipped is a regression straight away.
 - A listed test that left the corpus is **stale**, and a rerun that produced no result for its
-  test is **inconclusive**; both fail the job. A run that reported an error (Playwright's, a
-  stop signal, browsers that survived cleanup) fails it too.
+  test is **inconclusive**; both fail the job. A run or rerun that reported an error
+  (Playwright's, a stop signal, browsers that survived cleanup, a runner killed before it
+  finished) fails it too, even when another rerun of the same test matched.
 - The job summary has the totals, every regression, newly passing, changed and flaky test by name.
   The results folder (with `verdict.json`, `summary.md` and failure screenshots) is the
   `neo-spec-report` artifact; the list this run supports is `neo-spec-expected`.
@@ -103,7 +104,7 @@ each test with its ID, file and title. What to do about each:
 | Regressions | Expected to pass; failed in the full run and in both reruns alone (or skipped) | Fix it. Reproduce it with `bun run test:neo-spec <spec> --grep '<title>'`. |
 | Newly passing | Listed; passed in the full run and in both reruns | Run `--expected-from` with the run's URL and commit the list. |
 | Changed outcome, Stale entries | The list no longer says what the run did | The same command. |
-| Inconclusive, or "The run reported an error" | A rerun or the run itself broke (no result, browsers left behind) | Read the logs in the report; rerun the job once. If it repeats, it is a harness bug. |
+| Inconclusive, or "The run reported an error" | The run or a rerun broke: no result, an unreadable report, browsers left behind, a runner killed before it finished. A broken rerun fails the job even when another attempt matched | Read the logs in the report; rerun the job once. If it repeats, it is a harness bug. |
 | Flaky | The full run disagreed with the expectation, a rerun alone agreed | Nothing; it does not fail the job. |
 
 A flaky line reads like this: the test was expected to pass, failed in the full run (here under

@@ -31,11 +31,21 @@ export type Runner = {
 
 /**
  * What went wrong with a run.mjs run itself, apart from test failures: Playwright's top-level
- * errors, a stop signal, a launcher error, browsers it owned that survived cleanup.
+ * errors, a stop signal, a launcher error, browsers it owned that survived cleanup, or a runner
+ * that never finished. run.mjs writes `endedAt` in its last `finally`, so a run.json without it
+ * belongs to a runner that was killed; its exit code alone cannot say so, because a signal
+ * reaches spec.ts as exit 1, the same code as a failing test.
  */
 function runErrors(
   report: { errors?: { message?: string }[] } | undefined,
-  run: { signal?: string; error?: string; cleanupError?: string } | undefined,
+  run:
+    | {
+        signal?: string
+        error?: string
+        cleanupError?: string
+        endedAt?: string
+      }
+    | undefined,
 ): string[] {
   const firstLine = (text: unknown) =>
     stripVTControlCharacters(String(text)).split('\n')[0]
@@ -43,6 +53,9 @@ function runErrors(
     ...(report?.errors ?? []).map((error) => firstLine(error.message ?? error)),
     ...(run?.signal ? [`the run was stopped by ${run.signal}`] : []),
     ...[run?.error, run?.cleanupError].filter(Boolean).map(firstLine),
+    ...(run && !run.endedAt
+      ? ['the runner did not finish (run.json has no endedAt)']
+      : []),
   ]
 }
 
@@ -78,17 +91,36 @@ async function rerunAlone(
     rerunArgs(flags, test),
     log,
   )
+  // run.json first: a report that cannot be read must not hide the runner's own errors.
+  const errors: string[] = []
   const read = (file: string) => {
     const target = output && path.join(output, file)
-    return target && fs.existsSync(target)
-      ? JSON.parse(fs.readFileSync(target, 'utf8'))
-      : undefined
+    if (!target || !fs.existsSync(target)) return undefined
+    try {
+      return JSON.parse(fs.readFileSync(target, 'utf8'))
+    } catch (error) {
+      errors.push(`${file} is not JSON: ${String(error)}`)
+      return undefined
+    }
   }
+  const run = read('run.json')
   const report = read('results.json')
-  const errors = runErrors(report, read('run.json'))
+  errors.push(...runErrors(report, run))
   if (!report)
     return { outcome: 'not-run', output, log, note: 'no results', errors }
-  const rows = flattenResults(report)
+  let rows: ReturnType<typeof flattenResults>
+  try {
+    rows = flattenResults(report)
+  } catch (error) {
+    errors.push(`results.json cannot be read: ${String(error)}`)
+    return {
+      outcome: 'not-run',
+      output,
+      log,
+      note: 'unreadable results',
+      errors,
+    }
+  }
   if (rows.length !== 1 || testKey(rows[0].suite, rows[0].title) !== test.key)
     return {
       outcome: 'not-run',
@@ -149,15 +181,25 @@ export async function ciVerdict({
     )
   await expected.settle(verdict, async (test: CiTest, attempt: number) => {
     rerunCount++
-    const result = await rerunAlone(
-      runner,
-      test,
-      attempt,
-      path.join(output, 'reruns'),
-    )
+    const which = `rerun ${attempt} of ${test.id ?? test.title}`
+    let result: Awaited<ReturnType<typeof rerunAlone>>
+    try {
+      result = await rerunAlone(
+        runner,
+        test,
+        attempt,
+        path.join(output, 'reruns'),
+      )
+    } catch (error) {
+      // settle() records the attempt as broken; the error itself fails the verdict here.
+      rerunErrors.push(`${which}: ${String(error)}`)
+      throw error
+    }
     for (const error of result.errors)
+      rerunErrors.push(`${which}: ${error} (log ${result.log})`)
+    if (!['pass', 'fail', 'skip'].includes(result.outcome))
       rerunErrors.push(
-        `rerun ${attempt} of ${test.id ?? test.title}: ${error} (log ${result.log})`,
+        `${which} produced no result for the test: ${result.note} (log ${result.log})`,
       )
     console.log(
       `  ${result.outcome.padEnd(7)} ${test.id ?? '-'} ${test.file} › ${test.title} (attempt ${attempt}${result.note ? `; ${result.note}` : ''}; log ${result.log})`,
