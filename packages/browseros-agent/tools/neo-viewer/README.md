@@ -148,8 +148,9 @@ The page at `/` (the approved design, "Viewer C v2"):
   it returned, titled where it sits (`page.ariaSnapshot · run 8 · line 7 · call 2 of 3`), with
   its size. **Formatted** is what the script's `await` got wherever that can be recovered: a
   whole-page snapshot's text (recorded by the `page.snapshotPending` after it), an `evaluate`
-  value decoded from the page's serialized form, a string as lines; a locator's snapshot and
-  `mode: 'default'` show the recorded tree, and any other result Neo's record of it, and the
+  value decoded from the page's serialized form, a string as lines, and `mode: 'default'`'s
+  YAML rebuilt from the recorded tree as the run builds it; a locator's v1 snapshot (its options
+  never reach the wire) shows the recorded tree, and any other result Neo's record of it, and the
   panel says which. **Raw** is Neo's record of the result, as JSON. Otherwise the panel is
   **What the model read**: the selected run's whole reply, exactly as the agent got it,
   formatted (keys aligned, a snapshot line by line) or raw. Until you click a row it follows the
