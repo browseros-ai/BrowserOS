@@ -3932,3 +3932,84 @@ async fn an_evicted_pick_and_a_full_task_book_never_block_plain_opens() -> Resul
     assert_eq!(harness.fake.count("Browser.createTab"), 2);
     Ok(())
 }
+
+/// The op `$eval` (`page.$eval`, `frame.$eval`, `elementHandle.$eval`) sends, and its input on
+/// `page`: a script that names the first `h1`, matched now.
+const DOLLAR_EVAL: &str = "locator.evaluate";
+
+fn dollar_eval(page: &PageRef) -> Value {
+    json!({
+        "target": {
+            "$neo": "locator",
+            "page": handle(page),
+            "frame": null,
+            "chunks": [{ "parts": [{ "name": "internal:role", "body": "heading", "source": "heading" }] }],
+            "display": "getByRole('heading')",
+        },
+        "strict": "firstMatch",
+        "noWait": true,
+        "selector": "h1",
+        "script": { "run": { "expression": "(el) => el.textContent", "isFunction": true, "arg": "{\"v\":\"undefined\"}" } },
+    })
+}
+
+/// How the door answered one call: the value, or who failed, with what code and delivery, and the
+/// message with the op's own name and the lock's random id left out.
+fn door_outcome(reply: OpReply) -> String {
+    match reply.outcome {
+        Ok(value) => format!("value {value}"),
+        Err(failure) => {
+            let message = failure.error.message();
+            let message = message.strip_prefix(DOLLAR_EVAL).unwrap_or(message);
+            let message = message.split(" (lock ").next().unwrap_or(message);
+            format!(
+                "{:?} {:?} {:?} retryable={}: {message}",
+                failure.error.owner(),
+                failure.error.code(),
+                failure.delivery,
+                failure.retryable,
+            )
+        }
+    }
+}
+
+/// `$eval` meets the door as the main-world script it is, whatever op carries it: the same answer
+/// with no lock (the door lets it through, and the fake browser's reply ends it in the crate),
+/// with an owner's lock that lets reads through and with one that blocks them (refused, nothing
+/// sent). Pinned on `locator.evaluate`'s `noWait` form before `$eval` became its own op (task
+/// 006); the expectations stay as they are after.
+#[tokio::test]
+async fn tests_that_dollar_eval_meets_the_door_as_a_main_world_script() -> Result<(), Box<dyn Error>>
+{
+    let harness = Harness::new().await?;
+    let owners = harness.owner_tab("https://bank.example/").await?;
+    let (run, _guard) = harness.run()?;
+    let mut seen = Vec::new();
+    for reads in [None, Some(Reads::Allow), Some(Reads::Block)] {
+        let lock = match reads {
+            Some(reads) => Some(harness.lock(owners.tab, reads).await?),
+            None => None,
+        };
+        let reply = harness
+            .submit(&run, DOLLAR_EVAL, dollar_eval(&owners))
+            .await;
+        seen.push(format!("{reads:?}: {}", door_outcome(reply)));
+        if let Some(lock) = lock {
+            harness.locks.unlock_host(lock.id)?;
+        }
+    }
+    let owner_has_control = "Host ErrorCode(\"owner_has_control\") NotSent retryable=true: The \
+                             owner has control of this tab. Nothing was done. Wait for them to give \
+                             control back.";
+    assert_eq!(
+        seen,
+        [
+            "None: Neo ErrorCode(\"internal_error\") NotSent retryable=true: : missing field \
+             `executionContextId`"
+                .to_owned(),
+            format!("Some(Allow): {owner_has_control}"),
+            format!("Some(Block): {owner_has_control}"),
+        ]
+    );
+    Ok(())
+}
