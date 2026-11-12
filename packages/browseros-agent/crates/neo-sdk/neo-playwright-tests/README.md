@@ -26,40 +26,6 @@ work too. Other flags go to `node/run.mjs` unchanged: `--grep`, `--workers 1` to
 worker owns one browser; keep the default 4 on a machine that runs other builds), `--skip-build`,
 `--hosted-mode`, `--no-curation`. `--list` lists the selected tests and needs no browser.
 
-## CI
-
-`.github/workflows/neo-spec.yml` runs `bun run test:neo-spec --ci --workers 16` on WarpBuild's
-32-vCPU Linux runner for every pull request and push to `main` that touches `crates/`, the
-workspace manifest or this command, with the browser `neo-server/docker/browser.lock` pins
-(headless, the SDK image's fonts). `--ci` is the same run plus a verdict (`ci.ts`, rules in
-`node/expected.mjs`):
-
-- `node/expected/<platform>.tsv` (`linux-x64` in CI) lists the in-scope tests that do not pass
-  there, each `fail` or `skip`. The runner writes it; nobody edits it by hand.
-- A test outside the list that fails is rerun alone, up to twice. Passing once makes it flaky,
-  reported but not failing the job; failing both is a **regression**. A test outside the list
-  that is skipped is a regression too (a skip does not depend on timing, so it is not rerun).
-- A listed test that passes is rerun alone twice. Passing both makes it **newly passing**: the
-  job fails until the pull request takes it off the list, so the count only ratchets up. Failing
-  a rerun makes it flaky; it stays listed.
-- A listed test whose outcome changed between `fail` and `skip`, or that left the corpus, fails
-  the job the same way: the list must say what the run did.
-- The job summary has the totals, every regression, newly passing, changed and flaky test by name.
-  The results folder (with `verdict.json`, `summary.md` and failure screenshots) is the
-  `neo-spec-report` artifact; the list this run supports is `neo-spec-expected`.
-
-**Updating the list**, when your pull request fixes or (deliberately) changes a test: take the
-list your pull request's CI run wrote, with the GitHub CLI signed in,
-
-```sh
-bun run test:neo-spec --expected-from <run URL or ID>
-```
-
-then commit `node/expected/linux-x64.tsv`. It prints what it removed, added and changed; an
-added test accepts a regression, so the pull request says why. Two pull requests that each fix
-a test change different lines and merge cleanly. On a Linux machine,
-`bun run test:neo-spec --ci --write-expected` writes the list from a local run instead.
-
 Overrides:
 
 - `NEO_E2E_BROWSER`: the browser executable. Default: `/Applications/BrowserOS neo.app/Contents/MacOS/BrowserOS neo`
@@ -78,6 +44,44 @@ run directly with the variables above set, e.g.
 v2's fixture implementation but fails immediately: `Neo v2's SDK is not on this branch`.
 Claw builds `node/claw-addon` with `cargo build --release --locked`, then installs
 `claw_node.node`. `--skip-build` reuses it.
+
+## CI
+
+`.github/workflows/neo-spec.yml` runs `bun run test:neo-spec --ci --workers 16` on WarpBuild's
+32-vCPU Linux runner for every pull request and push to `main` that touches `crates/`, the
+workspace manifest or this command, with the browser `neo-server/docker/browser.lock` pins
+(headless, the SDK image's fonts). `--ci` is the same run plus a verdict (`ci.ts`, rules in
+`node/expected.mjs`):
+
+- `node/expected/<platform>.tsv` (`linux-x64` in CI) lists the in-scope tests that do not pass
+  there, each `fail` or `skip`. The runner writes it; nobody edits it by hand.
+- A test whose full-run result differs from its expectation (pass, or its listed outcome) is
+  rerun alone, up to twice, stopping at the first rerun that matches. Matching once makes it
+  **flaky**: reported, not failing the job, and it keeps its expectation. Never matching settles
+  it at what its reruns agree on: an expected pass that does not pass is a **regression**; a
+  listed test that passed every rerun is **newly passing**, and the job fails until the pull
+  request takes it off the list, so the count only ratchets up; a listed `fail` that now skips
+  (or the reverse) has a **changed outcome**.
+- A skip in the full run is decided by the spec or the harness, not by timing, so it is not
+  rerun: an expected pass that skipped is a regression straight away.
+- A listed test that left the corpus is **stale**, and a rerun that produced no result for its
+  test is **inconclusive**; both fail the job. A run that reported an error (Playwright's, a
+  stop signal, browsers that survived cleanup) fails it too.
+- The job summary has the totals, every regression, newly passing, changed and flaky test by name.
+  The results folder (with `verdict.json`, `summary.md` and failure screenshots) is the
+  `neo-spec-report` artifact; the list this run supports is `neo-spec-expected`.
+
+**Updating the list**, when your pull request fixes or (deliberately) changes a test: take the
+list your pull request's CI run wrote, with the GitHub CLI signed in,
+
+```sh
+bun run test:neo-spec --expected-from <run URL or ID>
+```
+
+then commit `node/expected/linux-x64.tsv`. It prints what it removed, added and changed; an
+added test accepts a regression, so the pull request says why. Two pull requests that each fix
+a test change different lines and merge cleanly. On a Linux machine,
+`bun run test:neo-spec --ci --write-expected` writes the list from a local run instead.
 
 ## The corpus
 

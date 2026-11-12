@@ -247,20 +247,55 @@ test('a rerun that broke proves nothing: the test is inconclusive and the run fa
     [
       ['expected pass', ['error', 'error']],
       ['listed', ['pass', 'not-run']],
-      ['listed, fails later', ['not-run']],
     ],
   )
-  assert.equal(
-    verdict.regressions.length +
-      verdict.flaky.length +
-      verdict.newlyPassing.length,
-    0,
+  // A broken rerun followed by one that fails as listed still confirms the list.
+  assert.deepEqual(
+    verdict.flaky.map((i) => i.test.title),
+    ['listed, fails later'],
   )
+  assert.equal(verdict.regressions.length + verdict.newlyPassing.length, 0)
   assert.ok(!passed(verdict))
   const next = nextExpected(tests, expected, verdict, { complete: true })
   assert.deepEqual(
     [...next.values()].map((e) => e.title),
     ['listed', 'listed, fails later'],
+  )
+})
+
+test('a full-run failure that skips alone settles as the skip it is', async () => {
+  // A fixture (here the test server's port) can fail before the spec's own skip runs.
+  const tests = run([
+    ['tests/page/a.spec.ts', 'listed skip', 'unexpected'],
+    ['tests/page/a.spec.ts', 'new skip', 'unexpected'],
+  ])
+  const expected = list([['tests/page/a.spec.ts', 'listed skip', 'skip']])
+  const verdict = compare(tests, expected, { complete: true })
+  const calls = []
+  await settle(verdict, async (t, attempt) => {
+    calls.push([t.title, attempt])
+    return { outcome: 'skip' }
+  })
+  assert.deepEqual(calls.sort(), [
+    ['listed skip', 1],
+    ['new skip', 1],
+    ['new skip', 2],
+  ])
+  assert.deepEqual(
+    verdict.flaky.map((i) => i.test.title),
+    ['listed skip'],
+  )
+  assert.deepEqual(
+    verdict.regressions.map((i) => [i.test.title, i.settled]),
+    [['new skip', 'skip']],
+  )
+  const next = nextExpected(tests, expected, verdict, { complete: true })
+  assert.deepEqual(
+    [...next.values()].map((e) => [e.title, e.outcome]),
+    [
+      ['listed skip', 'skip'],
+      ['new skip', 'skip'],
+    ],
   )
 })
 
@@ -337,7 +372,10 @@ test('the summary names every test the verdict names and how to update the list'
     },
   })
   assert.match(text, /❌ 1 regression, 1 newly passing/)
-  assert.match(text, /broke \\<b\\>\\\|: fail, alone: fail, fail — boom/)
+  assert.match(
+    text,
+    /broke \\<b\\>\\\|: fail; full run fail, alone: fail, fail — boom/,
+  )
   assert.match(
     text,
     /--expected-from https:\/\/github.com\/o\/r\/actions\/runs\/7/,

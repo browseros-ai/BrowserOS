@@ -140,10 +140,13 @@ export function inScopeTests(report, scope) {
 }
 
 /**
- * The verdict one full run can give. `rerun` holds what it cannot settle by itself: an expected
- * pass that failed (a regression, or flaky) and a listed test that passed (fixed, or flaky the
- * other way). A skip is decided by the spec or the harness, not by timing, so it is never rerun.
- * `complete` says the run selected the whole corpus, so a listed test it lacks is stale.
+ * The verdict one full run can give. A test whose result differs from its expectation (pass, or
+ * its listed outcome) goes to `rerun`, because one run cannot tell a real change from a flake:
+ * an expected pass that failed, a listed test that passed, a listed skip that failed (a fixture
+ * can fail before the spec's own skip runs). A skip in the full run is decided by the spec or
+ * the harness, not by timing, so it is never rerun: an expected pass that skipped is a
+ * regression, a listed failure that skipped has changed. `complete` says the run selected the
+ * whole corpus, so a listed test it lacks is stale.
  */
 export function compare(tests, expected, { complete }) {
   const verdict = {
@@ -157,15 +160,11 @@ export function compare(tests, expected, { complete }) {
   }
   for (const test of tests.values()) {
     const listed = expected.get(test.key)
-    if (!listed) {
-      if (test.outcome === 'fail') verdict.rerun.push({ test })
-      else if (test.outcome === 'skip')
-        verdict.regressions.push({ test, reruns: [] })
-    } else if (test.outcome === 'pass') verdict.rerun.push({ test, listed })
-    // fail <-> skip: still not passing, but a newly skipped test leaves the rate's denominator,
-    // so the list records the change and review sees it.
-    else if (test.outcome !== listed.outcome)
-      verdict.changed.push({ test, listed })
+    const item = { test, listed, expected: listed?.outcome ?? 'pass' }
+    if (test.outcome === item.expected) continue
+    if (test.outcome === 'skip')
+      classify(verdict, { ...item, settled: 'skip', reruns: [] })
+    else verdict.rerun.push(item)
   }
   if (complete)
     for (const [key, entry] of expected)
@@ -173,16 +172,27 @@ export function compare(tests, expected, { complete }) {
   return verdict
 }
 
+/** Where a test lands once its outcome is settled and differs from its expectation. */
+function classify(verdict, item) {
+  if (item.expected === 'pass') verdict.regressions.push(item)
+  else if (item.settled === 'pass') verdict.newlyPassing.push(item)
+  // fail <-> skip: still not passing, but a newly skipped test leaves the rate's denominator,
+  // so the list records the change and review sees it.
+  else verdict.changed.push(item)
+}
+
 /** Rerun outcomes that are a test's own; anything else (`not-run`, `error`) says the rerun broke. */
 const TEST_OUTCOMES = ['pass', 'fail', 'skip']
 
 /**
- * Reruns every unsettled test alone, `concurrency` at a time; `rerun(test, attempt)` resolves to
- * `{ outcome }`. An expected pass that passes a rerun is flaky, one that fails all
- * RERUN_ATTEMPTS is a regression. A listed test is newly passing only if it passes every rerun as
- * well; one that fails a rerun is flaky and stays listed, so the list never drops a test that
- * still fails sometimes. A rerun that broke (no result for the test) proves neither, so a test
- * left without a verdict is inconclusive, which fails the run instead of passing it as flaky.
+ * Reruns every unsettled test alone, `concurrency` at a time, until a rerun matches its
+ * expectation or RERUN_ATTEMPTS are spent; `rerun(test, attempt)` resolves to `{ outcome }`.
+ * A test that matches once is flaky and keeps its expectation: an expected pass is not a
+ * regression, and a listed test stays listed, so the list never drops a test that still fails
+ * sometimes. A test that never matches has changed, to the outcome its reruns agree on: a
+ * regression, newly passing (it passed every time), or a changed outcome. A rerun that broke
+ * (no result for the test) proves nothing, so a test left without a verdict is inconclusive,
+ * which fails the run instead of passing it as flaky.
  */
 export async function settle(
   verdict,
@@ -201,27 +211,22 @@ export async function settle(
           result = { outcome: 'error', error: error.message }
         }
         reruns.push(result)
-        const passed = result.outcome === 'pass'
-        if (item.listed ? !passed : passed) break
+        if (result.outcome === item.expected) break
       }
-      const count = (test) => reruns.filter((result) => test(result.outcome))
-      const passes = count((outcome) => outcome === 'pass').length
-      const failures = count(
-        (outcome) => outcome !== 'pass' && TEST_OUTCOMES.includes(outcome),
-      ).length
-      const broken = reruns.length - passes - failures
-      const settled = item.listed
-        ? failures
-          ? verdict.flaky
-          : broken
-            ? verdict.inconclusive
-            : verdict.newlyPassing
-        : passes
-          ? verdict.flaky
-          : broken
-            ? verdict.inconclusive
-            : verdict.regressions
-      settled.push({ ...item, reruns })
+      const outcomes = reruns.map((result) => result.outcome)
+      if (outcomes.includes(item.expected))
+        verdict.flaky.push({ ...item, reruns })
+      else if (outcomes.some((outcome) => !TEST_OUTCOMES.includes(outcome)))
+        verdict.inconclusive.push({ ...item, reruns })
+      else
+        classify(verdict, {
+          ...item,
+          reruns,
+          // Reruns that agree outrank the full run, whose result may be a flake of its own.
+          settled: outcomes.every((outcome) => outcome === outcomes[0])
+            ? outcomes[0]
+            : item.test.outcome,
+        })
     }
   }
   await Promise.all(
@@ -242,25 +247,34 @@ export const passed = (verdict) =>
 
 /**
  * The list this run supports: the committed one, less the tests that now pass and the entries
- * for tests no longer in the corpus, plus the regressions, each with this run's outcome. A
- * flaky listed test keeps its entry. A filtered run keeps the entries it did not select.
+ * for tests no longer in the corpus, plus the regressions and changed outcomes with their
+ * settled outcome. A flaky or inconclusive listed test keeps its entry. A filtered run keeps
+ * the entries it did not select.
  */
 export function nextExpected(tests, expected, verdict, { complete }) {
   const dropped = new Set(verdict.newlyPassing.map((item) => item.test.key))
-  const added = new Set(verdict.regressions.map((item) => item.test.key))
+  const settled = new Map(
+    [...verdict.regressions, ...verdict.changed].map((item) => [
+      item.test.key,
+      item.settled,
+    ]),
+  )
   const next = new Map()
   if (!complete)
     for (const [key, entry] of expected)
       if (!tests.has(key)) next.set(key, entry)
   for (const test of tests.values()) {
     const listed = expected.get(test.key)
-    if (!(listed && !dropped.has(test.key)) && !added.has(test.key)) continue
-    next.set(test.key, {
-      id: test.id,
-      outcome: test.outcome === 'pass' ? listed.outcome : test.outcome,
-      file: test.file,
-      title: test.title,
-    })
+    const outcome =
+      settled.get(test.key) ??
+      (dropped.has(test.key) ? undefined : listed?.outcome)
+    if (outcome)
+      next.set(test.key, {
+        id: test.id,
+        outcome,
+        file: test.file,
+        title: test.title,
+      })
   }
   return next
 }
@@ -355,10 +369,10 @@ export function summaryMarkdown({ verdict, scores, run, committed, next }) {
   }
   section(
     'Regressions',
-    'Expected to pass; did not pass in the full run or in any rerun alone.',
+    'Expected to pass; did not pass in the full run or in any rerun alone (a skip is not rerun).',
     verdict.regressions,
     (item) =>
-      `- ${name(item.test)}: ${item.test.outcome}, ${reruns(item)}${errorOf(item)}`,
+      `- ${name(item.test)}: ${item.settled}; full run ${item.test.outcome}, ${reruns(item)}${errorOf(item)}`,
   )
   section(
     'Newly passing',
@@ -371,7 +385,7 @@ export function summaryMarkdown({ verdict, scores, run, committed, next }) {
     `Still not passing, but no longer as listed. Update the list: ${update}.`,
     verdict.changed,
     (item) =>
-      `- ${name(item.test)}: ${item.listed.outcome} → ${item.test.outcome}`,
+      `- ${name(item.test)}: ${item.listed.outcome} → ${item.settled}; full run ${item.test.outcome}, ${reruns(item)}`,
   )
   section(
     'Stale entries',
@@ -384,14 +398,14 @@ export function summaryMarkdown({ verdict, scores, run, committed, next }) {
     'A rerun alone produced no result for the test (see its log in the report), so neither its full-run result nor the list can be confirmed.',
     verdict.inconclusive,
     (item) =>
-      `- ${name(item.test)}: ${item.listed ? 'listed' : 'expected to pass'}; full run ${item.test.outcome}, ${item.reruns.map((result) => `${result.outcome}${result.note ? ` (${markdown(result.note)})` : ''}`).join(', ')}`,
+      `- ${name(item.test)}: expected ${item.expected}; full run ${item.test.outcome}, ${item.reruns.map((result) => `${result.outcome}${result.note ? ` (${markdown(result.note)})` : ''}`).join(', ')}`,
   )
   section(
     'Flaky',
-    'Their full-run result differed from a rerun alone; not counted against this run.',
+    'Their full-run result differed from their expectation and a rerun alone matched it; not counted against this run.',
     verdict.flaky,
     (item) =>
-      `- ${name(item.test)}: ${item.listed ? 'listed' : 'expected to pass'}; full run ${item.test.outcome}, ${reruns(item)}${errorOf(item)}`,
+      `- ${name(item.test)}: expected ${item.expected}; full run ${item.test.outcome}, ${reruns(item)}${errorOf(item)}`,
   )
   if (run.artifacts)
     lines.push(
