@@ -1,7 +1,7 @@
 {
   "origin": {
-    "commit": "8f7a8361e923a43486c32616d09c1564ffb6cd3c",
-    "bundleSha256": "6e070f41304138f6547c986e96f30f1027fea845b057aca7d32a3c2886604af1",
+    "commit": "ab6e90324e9fc31c0e888e0ed37cf4b116b6a068",
+    "bundleSha256": "883c042099ecc3569b4bd8b24a7813bab5408ce83ef5572c1147b1eb87f890c7",
     "bootstrapSha256": "b6987f2b8f1b952600ef3bdd410457780780c225eb31c944ee603bc182ba4d6b",
     "boundary": "real bootstrap native JSON boundary over the deterministic test host; typed Rust decoders/reply serialization are checked separately"
   },
@@ -23,8 +23,8 @@
           "body": "null"
         },
         {
-          "op": "locator.elementHandle",
-          "args": "{\"call\":{\"api\":\"locator.elementHandle\",\"timeoutMs\":5000},\"target\":{\"$neo\":\"locator\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"frame\":null,\"chunks\":[{\"parts\":[{\"name\":\"css\",\"body\":[{\"simples\":[{\"selector\":{\"css\":\"#input\",\"functions\":[]},\"combinator\":\"\"}]}],\"source\":\"#input\"}]}],\"display\":\"locator('#input')\"},\"strict\":\"strict\"}",
+          "op": "locator.waitFor",
+          "args": "{\"call\":{\"api\":\"locator.elementHandle\",\"timeoutMs\":5000},\"target\":{\"$neo\":\"locator\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"frame\":null,\"chunks\":[{\"parts\":[{\"name\":\"css\",\"body\":[{\"simples\":[{\"selector\":{\"css\":\"#input\",\"functions\":[]},\"combinator\":\"\"}]}],\"source\":\"#input\"}]}],\"display\":\"locator('#input')\"},\"strict\":\"strict\",\"state\":\"attached\",\"omitReturnValue\":false}",
           "reply": "{\"pages\":[],\"ok\":{\"$neo\":\"element\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"seq\":2,\"node\":9,\"display\":\"<input>\"},\"observed\":{\"seq\":4,\"events\":0,\"payloadCurrent\":true}}",
           "body": "{\"$neo\":\"element\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"seq\":2,\"node\":9,\"display\":\"<input>\"}"
         },
@@ -199,8 +199,8 @@
           "body": "null"
         },
         {
-          "op": "locator.elementHandle",
-          "args": "{\"call\":{\"api\":\"locator.elementHandle\",\"timeoutMs\":5000},\"target\":{\"$neo\":\"locator\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"frame\":null,\"chunks\":[{\"parts\":[{\"name\":\"css\",\"body\":[{\"simples\":[{\"selector\":{\"css\":\"#input\",\"functions\":[]},\"combinator\":\"\"}]}],\"source\":\"#input\"}]}],\"display\":\"locator('#input')\"},\"strict\":\"strict\"}",
+          "op": "locator.waitFor",
+          "args": "{\"call\":{\"api\":\"locator.elementHandle\",\"timeoutMs\":5000},\"target\":{\"$neo\":\"locator\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"frame\":null,\"chunks\":[{\"parts\":[{\"name\":\"css\",\"body\":[{\"simples\":[{\"selector\":{\"css\":\"#input\",\"functions\":[]},\"combinator\":\"\"}]}],\"source\":\"#input\"}]}],\"display\":\"locator('#input')\"},\"strict\":\"strict\",\"state\":\"attached\",\"omitReturnValue\":false}",
           "reply": "{\"pages\":[],\"ok\":{\"$neo\":\"element\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"seq\":2,\"node\":9,\"display\":\"<input>\"},\"observed\":{\"seq\":25,\"events\":0,\"payloadCurrent\":true}}",
           "body": "{\"$neo\":\"element\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"seq\":2,\"node\":9,\"display\":\"<input>\"}"
         },
@@ -326,8 +326,8 @@
           "body": "null"
         },
         {
-          "op": "locator.elementHandle",
-          "args": "{\"call\":{\"api\":\"locator.elementHandle\",\"timeoutMs\":5000},\"target\":{\"$neo\":\"locator\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"frame\":null,\"chunks\":[{\"parts\":[{\"name\":\"css\",\"body\":[{\"simples\":[{\"selector\":{\"css\":\"#input\",\"functions\":[]},\"combinator\":\"\"}]}],\"source\":\"#input\"}]}],\"display\":\"locator('#input')\"},\"strict\":\"strict\"}",
+          "op": "locator.waitFor",
+          "args": "{\"call\":{\"api\":\"locator.elementHandle\",\"timeoutMs\":5000},\"target\":{\"$neo\":\"locator\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"frame\":null,\"chunks\":[{\"parts\":[{\"name\":\"css\",\"body\":[{\"simples\":[{\"selector\":{\"css\":\"#input\",\"functions\":[]},\"combinator\":\"\"}]}],\"source\":\"#input\"}]}],\"display\":\"locator('#input')\"},\"strict\":\"strict\",\"state\":\"attached\",\"omitReturnValue\":false}",
           "reply": "{\"pages\":[],\"ok\":{\"$neo\":\"element\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"seq\":2,\"node\":9,\"display\":\"<input>\"},\"observed\":{\"seq\":12,\"events\":0,\"payloadCurrent\":true}}",
           "body": "{\"$neo\":\"element\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"seq\":2,\"node\":9,\"display\":\"<input>\"}"
         },
