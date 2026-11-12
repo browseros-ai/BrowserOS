@@ -576,6 +576,10 @@ impl<M> OpEnv for OpCtxEnv<'_, M> {
         self.op.mark_sent();
     }
 
+    fn main_world(&self) {
+        self.op.mark_main_world();
+    }
+
     fn note(&self, line: String) {
         self.op.note(line);
     }

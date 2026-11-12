@@ -53,6 +53,15 @@ pub trait OpEnv: Send + Sync {
     /// `recheck`.
     fn mark_sent(&self);
 
+    /// The op is about to send script into a page's main world, the page's own JavaScript world,
+    /// where a site can notice it, rather than Neo's isolated world. The host records it as a
+    /// write-once fact of the op, as it records `mark_sent`. The crate calls it right after the
+    /// host's recheck passed for such a send, so an op refused or failed before its script went
+    /// out never reports it: at a `Capability::MainWorld` gateway's `send_effect`, and when a
+    /// write op's admission adds the run's context scripts or bindings to its tab, which that op
+    /// does without declaring `MainWorld`. The default ignores it.
+    fn main_world(&self) {}
+
     /// One line of Playwright's call log, mirrored into the op's trace record. Lines never
     /// carry a typed value.
     fn note(&self, line: String);

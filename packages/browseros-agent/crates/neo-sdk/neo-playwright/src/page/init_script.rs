@@ -598,6 +598,8 @@ impl InitScripts {
     /// with the refusal it would meet at its own send. The op is not marked sent: the add is
     /// `context.addInitScript`'s effect, which that op marked, and it happens once per tab
     /// session, so the admitting op stays safe to retry when its own effect never went out.
+    /// It is reported main-world, though: the scripts it adds run in the tab's main world, which
+    /// the admitting op's spec does not declare, and each add's recheck says so to the host.
     pub(crate) async fn add_context_scripts(
         &self,
         scope: &OpScope<'_>,

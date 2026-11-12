@@ -3,7 +3,7 @@
 use std::future::{self, Future};
 use std::marker::PhantomData;
 use std::mem;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
 
 use browseros_cdp::CdpError;
@@ -92,6 +92,10 @@ pub(super) struct OpState {
     /// When the op, or one of its children, marked itself sent. Write-once: the first mark
     /// wins, and nothing unsets it.
     sent_at: OnceLock<EpochMillis>,
+    /// Whether the op sent script into a page's main world, for its trace record. Set-once,
+    /// like the sent flag, and the op's own: a child op that ran the script has its own record
+    /// saying so, and the parent's effect is not script of its own.
+    main_world: AtomicBool,
     /// The latest `recheck` refusal, until a later `recheck` passes. However the method then
     /// ends, a value included, this is the op's error, so a refusal survives a crate's own error
     /// mapping (sdk-playwright returns its own marker type and never names the app's error).
@@ -207,6 +211,13 @@ impl<M> OpCtx<M> {
     /// a parent's effect happened through its child.
     pub(crate) fn mark_sent(&self) {
         self.core.state.mark_sent(EpochMillis::now());
+    }
+
+    /// The op is about to send script into a page's main world, the page's own JavaScript
+    /// world, rather than Neo's isolated world: sdk-playwright's `OpEnv::main_world`, and a
+    /// `neo.*` method whose browser work runs there. Only the trace reads it.
+    pub(crate) fn mark_main_world(&self) {
+        self.core.state.main_world.store(true, Ordering::Release);
     }
 
     /// One call-log line for the op's record. The first lines are kept; a runaway method
@@ -428,6 +439,7 @@ impl OpState {
             parent,
             abort,
             sent_at: OnceLock::new(),
+            main_world: AtomicBool::new(false),
             refusal: Mutex::new(None),
             notes: Mutex::new(Vec::new()),
             reports: Mutex::new(Vec::new()),
@@ -459,6 +471,11 @@ impl OpState {
     /// When the op, or one of its children, marked itself sent.
     pub(super) fn sent_at(&self) -> Option<EpochMillis> {
         self.sent_at.get().copied()
+    }
+
+    /// Whether the op marked itself main-world ([`OpCtx::mark_main_world`]).
+    pub(super) fn main_world(&self) -> bool {
+        self.main_world.load(Ordering::Acquire)
     }
 
     pub(super) fn take_publications(&self) -> Vec<u64> {

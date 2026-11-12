@@ -7,6 +7,7 @@
 //!                                            │ sleep, within  Rust's clock against the op's own timeout
 //!                                            │ require(cap)   at a capability's gateway: declared?
 //!                                            └ send_effect()  recheck, then mark_sent ──▶ Sent
+//!                                                             (then main_world, past MainWorld's gateway)
 //!                                                             └▶ input, navigation, element edits,
 //!                                                                main-world script: each takes &Sent
 //! ```
@@ -18,12 +19,19 @@
 //! to call a function that changes the page. A leaf that never calls it, which is every read,
 //! can neither mark itself sent nor reach an effect.
 //!
+//! The scope also tells the host which ops send script into a page's main world, where a site
+//! can notice it (`OpEnv::main_world`), from the two places that send it: a `MainWorld`
+//! gateway's `send_effect`, and the run's context scripts and bindings a write's admission adds
+//! to its tab ([`OpScope::recheck`]). The op's static capabilities would miss the second: a
+//! `goto` declares none, yet it carries `context.exposeBinding`'s stub into a new tab.
+//!
 //! The scope also owns the op's CDP object group: every remote object the op asks for (an
 //! iframe it hops through) lives in it, and dropping the scope releases it, whether the op
 //! returned or the host dropped its future.
 
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
 use std::time::Duration;
 
@@ -62,6 +70,9 @@ pub(crate) struct OpScope<'env> {
     /// The page this op acts on, admitted once.
     page: OnceLock<AdmittedPage>,
     objects: ObjectGroup,
+    /// Set once the op passed its `MainWorld` gateway: every effect it sends from then on is
+    /// the gateway's main-world script, so `send_effect` reports it to the host.
+    main_world: AtomicBool,
 }
 
 /// A page admitted for one op through the run's view: the profile and window scope check ran
@@ -95,6 +106,7 @@ impl<'env> OpScope<'env> {
             log: Mutex::default(),
             page: OnceLock::new(),
             objects: ObjectGroup::new(),
+            main_world: AtomicBool::new(false),
         }
     }
 
@@ -224,8 +236,16 @@ impl<'env> OpScope<'env> {
     /// not declare `capability`. Each capability's gateway calls it before anything else. A
     /// host holds and polices ops by their declarations, so an op routed to a gateway without
     /// its declaration would otherwise be served unpoliced; here it fails on first use instead.
+    ///
+    /// Passing the `MainWorld` gateway arms the op's main-world report, which its next
+    /// `send_effect` makes. Not here: the gateway runs before the op's input is checked, its
+    /// page admitted and its element found, and a script that never went out (a refused script,
+    /// a closed tab, an element that never appeared, the owner's takeover) ran nowhere.
     pub(crate) fn require(&self, capability: Capability) -> Result<(), PlaywrightError> {
         if self.op.spec().uses(capability) {
+            if capability == Capability::MainWorld {
+                self.main_world.store(true, Ordering::Relaxed);
+            }
             Ok(())
         } else {
             Err(self.fail(
@@ -241,8 +261,14 @@ impl<'env> OpScope<'env> {
     /// for a write's preparation that changes no document the page has now, a context init
     /// script added at the op's admission. The op's own effect still goes through
     /// [`OpScope::send_effect`].
+    ///
+    /// Only the run's context registrations call it (`page/init_script.rs`), before they add a
+    /// script or a binding to the tab's main world, so a pass reports the op main-world. That is how a `goto` or a click that carries `context.exposeBinding`'s stub
+    /// into its tab is seen: its spec declares no `MainWorld`, so no gateway reports it.
     pub(crate) fn recheck(&self) -> Result<(), PlaywrightError> {
-        self.env.recheck().map_err(PlaywrightError::from)
+        self.env.recheck().map_err(PlaywrightError::from)?;
+        self.env.main_world();
+        Ok(())
     }
 
     /// Re-runs the host's attempt-stage policies, then marks the op sent, and returns the
@@ -259,7 +285,13 @@ impl<'env> OpScope<'env> {
                 ErrorCode::Internal,
                 "a read operation cannot change the page",
             )),
-            Effect::Write => Sent::after_recheck(self.env).map_err(PlaywrightError::from),
+            Effect::Write => {
+                let sent = Sent::after_recheck(self.env).map_err(PlaywrightError::from)?;
+                if self.main_world.load(Ordering::Relaxed) {
+                    self.env.main_world();
+                }
+                Ok(sent)
+            }
         }
     }
 
