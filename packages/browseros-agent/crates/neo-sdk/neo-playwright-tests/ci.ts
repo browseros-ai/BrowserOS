@@ -218,8 +218,18 @@ export async function ciVerdict({
     complete,
     knownFlaky,
   })
-  // The update command lets a test leave the list only with this evidence from the same job.
-  const proof = expected.proofOf(tests, listed, next, verdict, { knownFlaky })
+  const errors = [
+    ...runErrors(report, run),
+    // A rerun that broke the harness leaves its test's result unproven, even when another
+    // attempt matched: a browser that survived cleanup can disturb the reruns after it.
+    ...rerunErrors,
+  ]
+  // The update command lets a test leave the list only with this evidence from the same job;
+  // the job's errors travel with it, so a broken run proves no pass.
+  const proof = expected.proofOf(tests, listed, next, verdict, {
+    knownFlaky,
+    errors,
+  })
   fs.mkdirSync(path.join(output, 'expected'), { recursive: true })
   fs.writeFileSync(
     path.join(output, 'expected', `${platform}.tsv`),
@@ -229,12 +239,6 @@ export async function ciVerdict({
     path.join(output, 'expected', `${platform}.proof.json`),
     JSON.stringify(proof, null, 2),
   )
-  const errors = [
-    ...runErrors(report, run),
-    // A rerun that broke the harness leaves its test's result unproven, even when another
-    // attempt matched: a browser that survived cleanup can disturb the reruns after it.
-    ...rerunErrors,
-  ]
   const actions = process.env.GITHUB_ACTIONS === 'true'
   const markdown = expected.summaryMarkdown({
     verdict,

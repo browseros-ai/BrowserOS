@@ -89,7 +89,8 @@ then commit `node/expected/linux-x64.tsv`. It prints what it removed, added and 
 refuses, writes nothing and names the test, when the list drops a test without that run's proof:
 a passing full run and three of three passing reruns alone, or the test gone from the corpus, or
 on this checkout's `known-flaky.tsv`. A test the run never judged (its list already lacked it)
-may go only if `origin/main`'s list lacks it too: `main` dropped it with its own proof. An added test accepts a regression, so the pull request
+may go only if `origin/main`'s list lacks it too: `main` dropped it with its own proof. A run
+that reported an error (a broken rerun, browsers left behind) proves no pass. An added test accepts a regression, so the pull request
 says why. A pull request's run tests it merged into the current `main`, so a test `main` fixed
 since the list last changed shows up as newly passing too; the same command takes it. Two pull
 requests that each fix a test change different lines and merge cleanly. On a Linux machine,
@@ -114,12 +115,13 @@ one section per kind of finding, each test with its ID, file and title:
 | Newly passing | Listed; passed in the full run and in three of three reruns | Run `--expected-from` with the run's URL and commit the list. |
 | Changed outcome, Stale entries | The list no longer says what the run did | The same command. |
 | Inconclusive, or "The run reported an error" | The run or a rerun broke: no result, an unreadable report, browsers left behind, a runner killed before it finished; a broken rerun fails the job even when another attempt matched | Read the logs in the report; rerun the job once. If it repeats, it is a harness bug. |
-| Flaky | The full run disagreed with the expectation, a rerun alone agreed | Nothing; it does not fail the job. |
+| Flaky | The full run disagreed with the expectation; a rerun alone agreed, or the reruns disagreed among themselves | Nothing; it does not fail the job. |
 | Known flaky | On `known-flaky.tsv`; this run's outcome for each | Nothing. A test that passes run after run here can come off that file once its fix lands. |
 
-**A flake or a regression?** Read the test's rerun results after `alone:`. A flake has at least
-one rerun that agrees with its expectation, and it is under **Flaky**, which never fails the
-job:
+**A flake or a regression?** Read the test's rerun results after `alone:`. A flake is under
+**Flaky**, which never fails the job: at least one rerun agrees with its expectation, or the
+reruns disagree among themselves (a listed test with `alone: pass, skip, pass` is no proof that
+it passes, so it stays listed):
 
 ```text
 - EH-085 tests/page/elementhandle-screenshot.spec.ts › element screenshot › should wait for visible:

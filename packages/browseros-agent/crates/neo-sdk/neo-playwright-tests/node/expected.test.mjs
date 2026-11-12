@@ -431,6 +431,15 @@ test('the update proof: three of three alone after a passing full run, or the te
     refusals(short, next)[0],
     /alone pass, pass; leaving the list needs a passing full run and 3 of 3/,
   )
+  // A run that reported an error proves no pass, however many reruns passed.
+  const broken = proofOf(tests, expected, next, verdict, {
+    errors: ['rerun 2 of fixed: browsers survived cleanup'],
+  })
+  assert.match(
+    refusals(broken, next)[0],
+    /fixed: the run that passed it reported an error/,
+  )
+  assert.equal(refusals(broken, next).length, 1)
   const unproven = { ...proof, removed: proof.removed.slice(1) }
   assert.match(
     refusals(unproven, next)[0],

@@ -326,15 +326,15 @@ export function nextExpected(
 /**
  * Why the run dropped each test the list it judged (`expected`) had: the full-run outcome and
  * every rerun of a test that now passes, or that the test is gone from the corpus, or on
- * known-flaky.tsv. CI uploads it beside the list, and the update command checks it with
- * `refusals` before it lets a test leave.
+ * known-flaky.tsv; and the run's own errors, which void every pass it recorded. CI uploads it
+ * beside the list, and the update command checks it with `refusals` before it lets a test leave.
  */
 export function proofOf(
   tests,
   expected,
   next,
   verdict,
-  { knownFlaky = new Map() } = {},
+  { knownFlaky = new Map(), errors = [] } = {},
 ) {
   const passing = new Map(
     verdict.newlyPassing.map((item) => [item.test.key, item]),
@@ -361,7 +361,7 @@ export function proofOf(
       evidence,
     })
   }
-  return { schemaVersion: 1, base: [...expected.values()], removed }
+  return { schemaVersion: 1, base: [...expected.values()], removed, errors }
 }
 
 /**
@@ -392,6 +392,12 @@ export function refusals(proof, after, { knownFlaky = new Map() } = {}) {
       continue
     }
     if (found?.kind === 'passed') {
+      if (proof.errors?.length) {
+        reasons.push(
+          `${name}: the run that passed it reported an error (${proof.errors[0]}), so it proves nothing; rerun the job`,
+        )
+        continue
+      }
       if (provenPassing(found.fullRun, found.reruns)) continue
       reasons.push(
         `${name}: full run ${found.fullRun}, alone ${found.reruns.join(', ') || 'never rerun'}; leaving the list needs a passing full run and ${PROOF_ATTEMPTS} of ${PROOF_ATTEMPTS} passing reruns alone in one job`,
@@ -526,7 +532,7 @@ export function summaryMarkdown({ verdict, scores, run, committed, next }) {
   )
   section(
     'Flaky',
-    'Their full-run result differed from their expectation and a rerun alone matched it; not counted against this run.',
+    "Their full-run result differed from their expectation, and a rerun alone matched it or the reruns disagreed among themselves (a listed test's `pass, skip, pass` is no proof); not counted against this run.",
     verdict.flaky,
     (item) =>
       `- ${name(item.test)}: expected ${item.expected}; full run ${item.test.outcome}, ${reruns(item)}${errorOf(item)}`,
