@@ -3205,8 +3205,9 @@ fn captured_bytes_can_be_saved_from_quickjs_without_admitting_a_tab() -> Result<
     })
 }
 
-/// Hosted mode cannot produce these events; a valid wait fails before spending its timeout,
-/// while ordinary listeners retain their existing accepted-but-silent behavior.
+/// Hosted mode shows no console messages or page errors, by design (`neo-playwright`'s
+/// `events/event_op.rs`, `lease_runtime`): a valid wait fails before spending its timeout, and
+/// listeners are accepted and stay silent.
 #[tokio::test]
 async fn hosted_console_and_pageerror_waits_refuse_without_changing_listeners()
 -> Result<(), Box<dyn Error>> {
