@@ -10,7 +10,7 @@ This is a migration map, not a claim that each new check has already passed. Val
 | actions-click.js | Upstream `tests/page/page-click-react.spec.ts › should timeout when click opens alert` and the remaining assertions in that selected spec |
 | actions-hover-dblclick.js | Upstream locator-misc-1.spec.ts › should hover @smoke; locator-click.spec.ts › should double click the button |
 | captures.js | captures-and-popups.js plus conformance/screenshots/screenshots.spec.ts |
-| console-events.js | Retired: console suppression is no longer a product requirement |
+| console-events.js | Retired. Hosted mode hearing no console messages or page errors is the design (owner, 2026-11-12), enforced by the browser; Neo's side is checked in `neo-server/src/builtins/tests.rs` and `neo-playwright/tests/events_live.rs` |
 | context-pages.js | ownership-and-refusals.js |
 | covered-f9-nested-frame.js | covered-and-unreadable.js |
 | dialogs-beforeunload.js | beforeunload.js |

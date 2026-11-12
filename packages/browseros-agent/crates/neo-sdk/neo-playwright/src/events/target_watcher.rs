@@ -38,9 +38,13 @@
 //!   site can time to detect an open inspector. A worker session takes a `Runtime` lease only while some
 //!   run listens for console messages or page errors on its tab ([`WorkerRuntime`]).
 //! - **Console and page errors** are recorded only while some run listens for them on that tab,
-//!   so a chatty page cannot push popups and dialogs out of the ring. BrowserOS in hosted mode
-//!   sends neither (measured: no `Runtime.consoleAPICalled` and no `Runtime.exceptionThrown`
-//!   with `BROWSERCLAW_HOSTED_MODE=1`), so there those events never fire.
+//!   so a chatty page cannot push popups and dialogs out of the ring. In hosted mode they never
+//!   fire, by design: the browser reports neither, even with `Runtime` on (measured: no
+//!   `Runtime.consoleAPICalled` and no `Runtime.exceptionThrown` with
+//!   `BROWSERCLAW_HOSTED_MODE=1`), and Neo leases nothing for them, so `Log` stays off and the
+//!   browser's own log entries do not fire there either, except during an `addScriptTag` or
+//!   `addStyleTag` insert, which holds `Log` on for its CSP reports (`event_op.rs`,
+//!   `lease_runtime`, says why).
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::mem;
