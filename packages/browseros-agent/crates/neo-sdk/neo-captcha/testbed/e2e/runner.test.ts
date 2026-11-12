@@ -387,6 +387,16 @@ for (const [bodyText, siteVerdict, note] of [
 test('tests that an absent SDK solver passes every page only when absence is expected', async () => {
   const expected = await run('no-tool', { expectToolMissing: true })
   expect(expected.records.every((r) => r.outcome === 'PASS')).toBe(true)
+  expect(summarize(expected.records)).toMatchObject({
+    pass: 19,
+    siteAccepted: 0,
+    deliveredOnly: 0,
+    detected: 0,
+    absent: 19,
+  })
+  expect(renderSummary(expected.records)).toContain(
+    'solver absent as expected: 19',
+  )
   expect(
     expected.records.every((r) => r.error === 'host/captcha_unavailable'),
   ).toBe(true)

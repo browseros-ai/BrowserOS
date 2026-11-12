@@ -255,15 +255,18 @@ export const exitCode = (records: readonly ResultRecord[]) =>
 /** Counts that keep site-accepted submissions apart from detections and paid work. */
 export function summarize(records: readonly ResultRecord[]) {
   const passed = records.filter((r) => r.outcome === 'PASS')
+  // A pass on an absent solver proves the absence only: no solve, delivery or detection.
+  const answered = passed.filter((r) => !r.error)
   return {
     pass: passed.length,
     fail: records.filter((r) => r.outcome === 'FAIL').length,
     unverified: records.filter((r) => r.outcome === 'UNVERIFIED').length,
-    siteAccepted: passed.filter(
+    siteAccepted: answered.filter(
       (r) => r.check === 'solve' && r.site === 'accepted',
     ).length,
-    deliveredOnly: passed.filter((r) => r.check === 'deliver').length,
-    detected: passed.filter((r) => r.check === 'detect').length,
+    deliveredOnly: answered.filter((r) => r.check === 'deliver').length,
+    detected: answered.filter((r) => r.check === 'detect').length,
+    absent: passed.length - answered.length,
     paidTasks: records.reduce((sum, r) => sum + (r.paidTasks ?? 0), 0),
     paidTasksUnreported: records.filter(
       (r) => r.verdict !== 'n/a' && !r.error && r.paidTasks == null,
@@ -278,6 +281,7 @@ export function renderSummary(records: readonly ResultRecord[]): string {
     `site-accepted submissions: ${s.siteAccepted}`,
     `token deliveries without a site check: ${s.deliveredOnly}`,
     `detections and refusals: ${s.detected}`,
+    ...(s.absent ? [`solver absent as expected: ${s.absent}`] : []),
     `paid tasks: ${s.paidTasks}${s.paidTasksUnreported ? ` (+${s.paidTasksUnreported} results without a count)` : ''}`,
   ].join(' · ')
 }
