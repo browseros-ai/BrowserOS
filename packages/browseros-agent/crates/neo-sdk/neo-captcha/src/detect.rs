@@ -2554,6 +2554,7 @@ window.onRc = function() {{
         )
         .await?;
         server.abort();
+        eprintln!("live recaptcha: {}", serde_json::to_string(&result)?);
         assert!(result.complete, "{result:#?}");
         assert_eq!(result.challenges.len(), 3, "{result:#?}");
         let frames: std::collections::HashSet<_> = result
@@ -2603,6 +2604,7 @@ window.onTs = function() {{
             })
             .await?;
         server.abort();
+        eprintln!("live turnstile: {}", serde_json::to_string(&result)?);
         assert_eq!(result.challenges.len(), 2, "{result:#?}");
         let frames: std::collections::HashSet<_> = result
             .challenges
