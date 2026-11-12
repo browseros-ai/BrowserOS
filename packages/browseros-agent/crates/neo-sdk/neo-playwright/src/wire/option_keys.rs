@@ -7,6 +7,12 @@
 //! `noWait`, ...) are never options: they live outside the bag, and on a flat input they are the
 //! row's `adds`. The keys are what the prelude's `pick` may forward, and the generated file holds
 //! each list to upstream's `<Command>Options` type.
+//!
+//! Aligning a family (task 006): move the op's options struct's fields into its input, read them
+//! there in the handler, and write `options!(Input, flat)`, naming the method's positional
+//! arguments (`fill`'s `value`) in `positional [..]`; the prelude then spreads the picked options
+//! beside the addressing, `{ ...addressed, ...pick(options, OPTION_KEYS[op]) }`. Regenerate and
+//! record the wire examples again: an option or a positional left out fails `KeysCheck`.
 
 use serde::Deserialize;
 use serde::de::{self, Deserializer, Visitor};
@@ -40,8 +46,10 @@ pub(crate) trait OptionKeys {
 
 /// Declares an input's options. `options!(ClickInput => ClickOptions)` reads the keys from
 /// `ClickOptions`, and fails to compile unless `ClickInput` has an `options` field of that type;
-/// `options!(ClickInput, flat)` declares the input's own fields as the options, as upstream's
-/// params are; `options!(TitleInput)` declares an input without options.
+/// `options!(FillInput, flat, positional ["value"])` declares the input's own fields as the
+/// options, as upstream's params are, but for the method's positional arguments, named in wire
+/// spelling (upstream's `<Command>Options` lacks them, and `KeysCheck` names one left in);
+/// `options!(TitleInput)` declares an input without options.
 macro_rules! options {
     ($input:ty => $options:ty) => {
         impl $crate::wire::OptionKeys for $input {
@@ -55,12 +63,16 @@ macro_rules! options {
             }
         }
     };
-    ($input:ty,flat) => {
+    ($input:ty, flat $(, positional [$($positional:literal),* $(,)?])?) => {
         impl $crate::wire::OptionKeys for $input {
             const NESTING: $crate::wire::OptionNesting = $crate::wire::OptionNesting::Flat;
 
             fn option_keys() -> Vec<&'static str> {
+                let positional: &[&str] = &[$($($positional),*)?];
                 $crate::wire::serde_fields::<$input>()
+                    .into_iter()
+                    .filter(|field| !positional.contains(field))
+                    .collect()
             }
         }
     };
@@ -165,6 +177,18 @@ mod tests {
     }
     options!(FlatInput, flat);
 
+    /// `fill`'s shape: a positional argument beside the options.
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields, rename_all = "camelCase")]
+    #[expect(dead_code, reason = "only the field list is read")]
+    struct FlatFillInput {
+        target: (),
+        value: String,
+        no_wait_after: Option<bool>,
+        force: Option<bool>,
+    }
+    options!(FlatFillInput, flat, positional["value"]);
+
     #[test]
     fn tests_that_option_keys_are_the_options_struct_fields_in_wire_spelling() {
         assert_eq!(
@@ -199,6 +223,11 @@ mod tests {
             "every wire field, in wire spelling; Describe sets the addressing aside"
         );
         assert_eq!(WithOptions::NESTING, OptionNesting::Nested);
+        assert_eq!(
+            FlatFillInput::option_keys(),
+            ["target", "noWaitAfter", "force"],
+            "a positional argument is no option: upstream's <Command>Options lacks it"
+        );
     }
 
     #[test]

@@ -59,7 +59,7 @@ impl OpWire {
         fields: Vec<&'static str>,
         upstream: Upstream,
     ) -> Self {
-        let option_keys = match option_nesting {
+        let option_keys: Vec<&'static str> = match option_nesting {
             OptionNesting::Flat => {
                 let adds = match upstream {
                     Upstream::Command(command) => command.adds,
