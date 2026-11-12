@@ -161,9 +161,9 @@ impl Subscription {
     }
 
     /// Whether this subscription asks for `event` on the tab whose target is `target`: a page
-    /// subscription for that tab, or the context's for every tab. The watcher holds a dialog
-    /// open for the runs this says want it, so `context.waitForEvent('dialog')` holds one as
-    /// `page.on('dialog')` does.
+    /// subscription for that tab, or the context's for every tab (`RunEvents::wants` narrows
+    /// that to the tabs the run's view admitted). The watcher holds a dialog open for the runs
+    /// that want it, so `context.waitForEvent('dialog')` holds one as `page.on('dialog')` does.
     pub(crate) fn wants(&self, target: &TargetId, event: PageEventKind) -> bool {
         match self {
             Self::Page {
