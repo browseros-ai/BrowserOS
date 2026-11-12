@@ -105,7 +105,7 @@ impl Harness {
         let takeover = Arc::new(TakeoverLock::default());
         takeover.arm(Arc::clone(&locks));
         let claims = Arc::new(CaptchaClaims::default());
-        let playwright = PlaywrightFacade::start(Arc::clone(&link), hosted);
+        let playwright = PlaywrightFacade::start(Arc::clone(&link), hosted, Arc::default());
         let mut registry = RegistryBuilder::default();
         let deps = BuiltinDeps {
             solver,
@@ -1489,7 +1489,7 @@ impl Method for EnvProbe {
         op: &OpCtx<Self>,
         input: EnvProbeInput,
     ) -> impl Future<Output = Result<Value, LeafError>> + Send {
-        let env = OpCtxEnv::new(op, false);
+        let env = OpCtxEnv::new(op, false, Arc::default());
         let shares_the_runs_state = Arc::ptr_eq(env.run_state(), &op.run().slot::<RunState>());
         future::ready(match env.recheck() {
             Ok(()) => {
@@ -2291,7 +2291,7 @@ impl Method for InFlightClose {
                 "missing event operation",
             ))
         })?;
-        let env = OpCtxEnv::new(op, false);
+        let env = OpCtxEnv::new(op, false, Arc::default());
         let value = self
             .playwright
             .get()
@@ -2589,7 +2589,7 @@ impl Method for InFlightPayload {
                 "missing payload operation",
             ))
         })?;
-        let env = OpCtxEnv::new(op, false);
+        let env = OpCtxEnv::new(op, false, Arc::default());
         let result = self
             .playwright
             .get()

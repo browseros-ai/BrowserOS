@@ -104,6 +104,25 @@ async fn a_stalled_tree_read_does_not_block_an_otherwise_ready_capture()
     .await
     .map_err(|_elapsed| "baseline tree read blocked capture behind stalled renderer metadata")??;
     assert_eq!(result["base64"], "AQID");
+    assert_eq!(
+        run.env.forwarded(),
+        [run.page.tab()],
+        "a capture asks the host to bring its tab forward first"
+    );
+    Ok(())
+}
+
+/// Trusted input asks the host to bring its tab forward before anything is sent: a mouse move
+/// is acked at the tab's next frame, which a background tab on Linux gets once a second.
+#[tokio::test(start_paused = true)]
+async fn input_asks_the_host_to_bring_its_tab_forward() -> Result<(), Box<dyn Error>> {
+    let tab = ScriptedTab::new(LostCapture::default());
+    let run = ScriptedRun::over(&tab).await?;
+    let op = Op::from_name("mouse.move").ok_or("mouse.move is registered")?;
+    run.playwright
+        .invoke(&run.env, op, json!({ "page": run.page, "x": 10, "y": 20 }))
+        .await?;
+    assert_eq!(run.env.forwarded(), [run.page.tab()]);
     Ok(())
 }
 

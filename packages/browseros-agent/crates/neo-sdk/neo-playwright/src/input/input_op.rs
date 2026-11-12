@@ -407,11 +407,13 @@ async fn burst(
         .map_err(|failure| burst_failed(scope, failure))
 }
 
-/// The tab's input lock, within the op's timeout.
+/// The tab's input lock, within the op's timeout, with the tab brought forward first: a mouse
+/// move or wheel is acked at the tab's next frame.
 pub(crate) async fn hold(
     scope: &OpScope<'_>,
     page: &OpPage<'_>,
 ) -> Result<PageInput, PlaywrightError> {
+    scope.bring_forward(page.tab()).await;
     let scale = scope.view().pointer_scale(page.core_page());
     let held = PageInput::hold(Arc::clone(page.state().input()), page.root_session(), scale);
     scope
