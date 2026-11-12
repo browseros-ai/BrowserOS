@@ -123,7 +123,13 @@ function Reply({ detail }: { detail: RunDetail }) {
 export function previewText(preview: string): string {
   const first = preview.split('\n', 1)[0] ?? ''
   if (!first.startsWith('"')) return preview
-  for (const candidate of [first, `${first.replace(/\\$/, '')}"`]) {
+  // The preview is the reply's first characters (`run-store.ts`), so it can end inside an escape
+  // (`\`, `\u00`). Only a cut between escapes parses once closed with a quote, so the first of
+  // these that parses is the decoded text up to the cut; an escape is at most 6 characters.
+  const cuts = [0, 1, 2, 3, 4, 5].map(
+    (drop) => `${first.slice(0, first.length - drop)}"`,
+  )
+  for (const candidate of [first, ...cuts]) {
     try {
       const value: unknown = JSON.parse(candidate)
       if (typeof value === 'string') return value

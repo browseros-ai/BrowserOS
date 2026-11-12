@@ -343,21 +343,43 @@ function modelRead(detail: RunDetail, options: RunMarkdownOptions): string[] {
   const sizeLine = `${plural(size.chars, 'char')}, ≈${count(size.tokens)} tok.`
   const decoded = returnedString(detail)
   if (!decoded) return [sizeLine, '', ...bounded(text, options)]
+  return [sizeLine, '', ...decodedRead(decoded, options)]
+}
+
+/**
+ * A returned string decoded, then the console lines and notes after it as the model read them.
+ * The two share the one inline allowance a reply has, so an export stays as bounded as before.
+ */
+function decodedRead(
+  decoded: { value: string; json: string; rest: string },
+  options: RunMarkdownOptions,
+): string[] {
+  const after = decoded.rest
+    ? ['', ...afterValue(decoded.rest, decoded.value.length, options)]
+    : []
   return [
-    sizeLine,
-    '',
     decodedNote(decoded.json),
     '',
     ...bounded(decoded.value, options, 'decoded'),
-    ...(decoded.rest
-      ? [
-          '',
-          'Then, as the model read them:',
-          '',
-          ...bounded(decoded.rest, options),
-        ]
-      : []),
+    ...after,
   ]
+}
+
+/** The text after a decoded string, in what the string left of the reply's inline allowance. */
+function afterValue(
+  rest: string,
+  used: number,
+  options: RunMarkdownOptions,
+): string[] {
+  const limit = options.replyChars
+  const left = limit === null ? null : Math.max(0, limit - used)
+  const file = options.replyFile
+  if (left === 0)
+    return [
+      `Console lines or notes follow it${file ? `; they are in [${file}](${file})` : ''}.`,
+    ]
+  const shown = bounded(rest, { ...options, replyChars: left })
+  return ['Then, as the model read them:', '', ...shown]
 }
 
 /**

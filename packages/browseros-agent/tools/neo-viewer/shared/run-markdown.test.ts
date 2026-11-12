@@ -170,6 +170,12 @@ describe('one run as Markdown', () => {
       'The first 2,000 characters, decoded; the exact text the model received is in [012.reply.txt](012.reply.txt):',
     )
     expect(exported).toContain('```text\n- link "Story 0" [ref=e0]\n')
+    // The decoded value used the whole allowance: the console lines are named, not shown again.
+    expect(exported).toContain(
+      'Console lines or notes follow it; they are in [012.reply.txt](012.reply.txt).',
+    )
+    const read = exported.slice(exported.indexOf('## What the model read'))
+    expect(read).not.toContain('read 400 links')
   })
 
   test("the text after a decoded string is the model's own, and the export cuts it too", () => {
@@ -179,7 +185,7 @@ describe('one run as Markdown', () => {
     expect(copy).toContain(
       'Then, as the model read them:\n\n```text\nconsole:\n[not awaited] this is a console log\n```',
     )
-    // Long console output after a short string: the export keeps to its limit.
+    // Long console output after a short string: the two share the export's one allowance.
     const long = `${JSON.stringify('ok')}\nconsole:\n${'c'.repeat(50_000)}`
     const exported = runMarkdown(detailWith(16, { text: long, neo: null }), {
       ...EXPORT,
@@ -187,7 +193,7 @@ describe('one run as Markdown', () => {
     })
     expect(exported.length).toBeLessThan(8_000)
     expect(exported).toContain(
-      'Then, as the model read them:\n\nThe first 2,000 characters; the full text is in [016.reply.txt](016.reply.txt):',
+      'Then, as the model read them:\n\nThe first 1,998 characters; the full text is in [016.reply.txt](016.reply.txt):',
     )
   })
 
