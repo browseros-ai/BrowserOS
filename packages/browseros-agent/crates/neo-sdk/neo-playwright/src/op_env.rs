@@ -37,8 +37,9 @@ pub trait OpEnv: Send + Sync {
 
     /// Whether this browser runs in hosted mode. Hosted BrowserOS suppresses console and
     /// page-error events by design (`events/event_op.rs`, `lease_runtime`), so listeners for
-    /// them stay silent and a one-shot wait is refused. Hosts supply their startup mode;
-    /// the library never reads process environment. Existing hosts default to non-hosted.
+    /// them stay silent, browser log entries included, and a one-shot wait is refused. Hosts
+    /// supply their startup mode; the library never reads process environment. Existing hosts
+    /// default to non-hosted.
     fn hosted_mode(&self) -> bool {
         false
     }

@@ -41,8 +41,9 @@
 //!   so a chatty page cannot push popups and dialogs out of the ring. In hosted mode they never
 //!   fire, by design: the browser reports neither, even with `Runtime` on (measured: no
 //!   `Runtime.consoleAPICalled` and no `Runtime.exceptionThrown` with
-//!   `BROWSERCLAW_HOSTED_MODE=1`), and Neo leases nothing for them (`event_op.rs`,
-//!   `lease_runtime`, says why).
+//!   `BROWSERCLAW_HOSTED_MODE=1`), and Neo leases nothing for them, so `Log` stays off and the
+//!   browser's own log entries never fire there either (`event_op.rs`, `lease_runtime`, says
+//!   why).
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::mem;
