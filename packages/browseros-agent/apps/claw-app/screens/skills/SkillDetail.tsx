@@ -33,6 +33,7 @@ import {
   CollapsibleIndicator,
   CollapsibleTrigger,
 } from '@/components/motion/collapsible'
+import { SkillPicture } from '@/components/pro/UltrafastPictures'
 import { Phrase } from '@/components/skills/Phrase'
 import { RunSkillButton } from '@/components/skills/RunSkillButton'
 import { RunsChoiceDialog } from '@/components/skills/RunsChoiceDialog'
@@ -403,6 +404,11 @@ function RunsChoiceBlock({
           Skills that pay, place an order, send a message or delete something
           always run with your agent, so it can check each page first.
         </Note>
+      ) : null}
+      {choice.state === 'locked' ? (
+        <div className="max-w-sm">
+          <SkillPicture />
+        </div>
       ) : null}
       {choice.state === 'locked' ? (
         <Link
