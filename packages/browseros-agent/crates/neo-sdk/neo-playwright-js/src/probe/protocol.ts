@@ -4,8 +4,13 @@
  * rejects stale output. The examples still guard behavior and recorded protocol bytes.
  */
 import type { Pin, ProbeReply, ProbeRequest } from './generated'
+// Include the implementation's global ABI for type consumers without importing startup code.
+import type {} from './index'
 
 export * from './generated'
+
+/** The named ABI view follows the implementation's declared global. */
+export type NeoProbe = NonNullable<typeof globalThis.__neoProbe>
 
 /**
  * Bumped on any shape change, and on any change to what Rust relies on the probe doing. `boot`
@@ -79,11 +84,20 @@ export type Replaced = Extract<ProbeReply, { kind: 'replaced' }>
 export type ErrorReply = Extract<ProbeReply, { kind: 'error' }>
 export type Uninstalled = Extract<ProbeReply, { kind: 'uninstalled' }>
 
-// These remaining file payloads stay here until the form/keys/files family is quiet,
+// These remaining form/file payloads stay here until the form/keys/files family is quiet,
 // then the final rebase derives the existing Rust types.
 export type FilesSet = null | { threw: string }
 
 export type FileInput = { pin: Pin; target: Pin; takesPaths: boolean }
+
+/** A fill's value: done, or ready for Rust's Input.insertText. */
+export type Filled = 'done' | 'needsinput'
+
+/** A selectOptions value: selected values, or the reason upstream retries. */
+export type Selected =
+  | string[]
+  | 'error:optionsnotfound'
+  | 'error:optionnotenabled'
 
 /** Allowed handler outcomes are behavior metadata, not a second copy of reply fields. */
 export const REPLY_KINDS = {
