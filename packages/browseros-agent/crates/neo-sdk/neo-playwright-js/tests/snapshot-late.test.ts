@@ -17,7 +17,10 @@ import { type Call, loadPrelude, SEED } from './support/prelude-runtime'
 
 /** The realm's `Date.now()` when each call starts. */
 const START = 100_000
-/** Neo's default timeout, which the tree op and its deadline take. */
+/**
+ * Run 2's timeout, Neo's default then; the default is now 30 s (#3528), so every call here passes
+ * it, and the tree op and its deadline take it.
+ */
 const TIMEOUT = 5_000
 
 /** The committed prelude (A), and the same build with `LATE_SNAPSHOT` set to B. */
@@ -154,8 +157,8 @@ class Host {
 const names = (sent: Call[]) => sent.map((call) => call.name)
 const timeoutsSent = (sent: Call[]) =>
   sent.map((call) => (call.input.call as { timeoutMs: number }).timeoutMs)
-const SNAPSHOT = 'return await page.ariaSnapshot()'
-const DELTA = 'return await page.ariaSnapshot({ delta: true })'
+const SNAPSHOT = `return await page.ariaSnapshot({ timeout: ${TIMEOUT} })`
+const DELTA = `return await page.ariaSnapshot({ delta: true, timeout: ${TIMEOUT} })`
 /** The run's error under B: Rust's timeout of the call, with its op and the phase named. */
 const failedB = (phase: string) => ({
   operation: rustTimeout(phase, TIMEOUT).err,
@@ -268,7 +271,7 @@ describe('B: the call fails with the timeout Rust decided, naming the phase', ()
     const host = new Host()
     await host.run(SNAPSHOT)
     const { settled } = await host.run(
-      `try { await page.ariaSnapshot({ delta: true }) } catch (error) {
+      `try { await page.ariaSnapshot({ delta: true, timeout: ${TIMEOUT} }) } catch (error) {
         return [error.name, error.code, error.owner, error.operationId, error.message]
       }`,
       { snapshot: 5_640 },
