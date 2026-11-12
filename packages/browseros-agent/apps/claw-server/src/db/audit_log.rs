@@ -230,6 +230,14 @@ impl From<agent_session_ends::Model> for SessionEndEvent {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, FromQueryResult)]
+pub struct AuditAgentSummary {
+    pub slug: String,
+    pub label: String,
+    pub task_count: i64,
+    pub last_started_at: i64,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ListTasksResult {
@@ -653,6 +661,30 @@ impl AuditLog {
             None
         };
         Ok(ListTasksResult { tasks, next_cursor })
+    }
+
+    /// Every agent with a listable task, most tasks first. Covers the whole history rather than a
+    /// page, so History can offer all of them as filters.
+    pub async fn list_agents(&self) -> AppResult<Vec<AuditAgentSummary>> {
+        // SQLite fills a bare column in a MAX() aggregate from the row holding the maximum, so
+        // `label` is the one from the agent's most recent task.
+        let statement = Statement::from_sql_and_values(
+            DbBackend::Sqlite,
+            r"
+            SELECT slug,
+                   agent_label AS label,
+                   COUNT(*) AS task_count,
+                   MAX(started_at) AS last_started_at
+            FROM tasks
+            WHERE dispatch_count > 0
+            GROUP BY slug
+            ORDER BY task_count DESC, last_started_at DESC
+            ",
+            [],
+        );
+        Ok(AuditAgentSummary::find_by_statement(statement)
+            .all(self.db.connection())
+            .await?)
     }
 
     pub async fn session_lifecycle(&self, session_id: &str) -> AppResult<SessionLifecycle> {
@@ -1079,7 +1111,7 @@ pub fn redacted_args_json(
     // prevented the handler from supplying runtime hints. Scrub before bounding,
     // since truncation can otherwise persist a prefix of the secret.
     let mut redacted = value.clone();
-    redact_password_fields(&mut redacted);
+    redact_secret_fields(&mut redacted);
     if let Some(hints) = hints {
         redact_args(&mut redacted, hints);
     }
@@ -1087,12 +1119,12 @@ pub fn redacted_args_json(
 }
 
 /// Script CDP parameters can be malformed, so parsing cannot authorize keeping
-/// their bytes. Credential params are omitted wholesale at this string boundary;
-/// typed tool options still retain metadata and scrub explicit password fields.
+/// their bytes. Password and card params are omitted wholesale at this string
+/// boundary; typed tool options keep metadata and scrub password and card fields.
 pub fn redacted_script_args(method: &str, args: &serde_json::Value) -> String {
     let mut sanitized = args.clone();
     if let Some(values) = sanitized.as_array_mut()
-        && browseros_mcp::tools::credentials::is_credential_primitive(method, values)
+        && browseros_mcp::tools::sensitive::is_sensitive_primitive(method, values)
     {
         let parameter = match method {
             "cdp" => Some(1),
@@ -1106,22 +1138,23 @@ pub fn redacted_script_args(method: &str, args: &serde_json::Value) -> String {
     redacted_args_json(&sanitized, None)
 }
 
-fn redact_password_fields(value: &mut serde_json::Value) -> bool {
+fn redact_secret_fields(value: &mut serde_json::Value) -> bool {
     let mut changed = false;
     match value {
         serde_json::Value::Object(object) => {
             for (key, value) in object {
-                if key == "password" {
+                // `card` holds a card number and security code.
+                if key == "password" || key == "card" {
                     *value = json!(REDACTED_MARKER);
                     changed = true;
                 } else {
-                    changed |= redact_password_fields(value);
+                    changed |= redact_secret_fields(value);
                 }
             }
         }
         serde_json::Value::Array(values) => {
             for value in values {
-                changed |= redact_password_fields(value);
+                changed |= redact_secret_fields(value);
             }
         }
         serde_json::Value::String(text) => {
@@ -1130,7 +1163,7 @@ fn redact_password_fields(value: &mut serde_json::Value) -> bool {
             // formatting the script might rely on. Parent source uses its hint.
             if let Ok(mut nested) = serde_json::from_str::<serde_json::Value>(text)
                 && (nested.is_object() || nested.is_array())
-                && redact_password_fields(&mut nested)
+                && redact_secret_fields(&mut nested)
                 && let Ok(scrubbed) = serde_json::to_string(&nested)
             {
                 *text = scrubbed;
@@ -1201,6 +1234,15 @@ pub fn result_meta(
         .and_then(serde_json::Value::as_str)
     {
         summary["cancellationKind"] = json!(bounded_json_string(cancellation_kind));
+    }
+    // Preserve only the interruption marker, never filesystem paths or chooser node ids.
+    // The extension renders selection as a separate step from opening the chooser.
+    if structured_content
+        .get("fileChooserOpen")
+        .and_then(serde_json::Value::as_bool)
+        == Some(true)
+    {
+        summary["fileChooserOpen"] = json!(true);
     }
     let serialized = summary.to_string();
     debug_assert!(serialized.len() <= RESULT_META_MAX);
@@ -1273,20 +1315,45 @@ mod tests {
     fn malformed_credential_cdp_parameters_are_redacted_before_parsing() {
         let args = json!([
             1,
-            "Autofill.fillCredential",
+            "Passwords.fillCredential",
             "{\"password\":\"synthetic-malformed-secret\",}"
         ]);
         let out = super::redacted_script_args("cdpJsonForPage", &args);
         assert!(!out.contains("synthetic-malformed-secret"));
-        assert!(out.contains("Autofill.fillCredential"));
+        assert!(out.contains("Passwords.fillCredential"));
         assert!(out.contains("[redacted]"));
+    }
+
+    #[test]
+    fn malformed_card_cdp_parameters_are_redacted_before_parsing() {
+        for method in ["Payments.fillCard", "Autofill.trigger"] {
+            let args = json!([1, method, "{\"card\":{\"number\":\"4111111111111111\",}"]);
+            let out = super::redacted_script_args("cdpJsonForPage", &args);
+            assert!(!out.contains("4111111111111111"));
+            assert!(out.contains(method));
+            assert!(out.contains("[redacted]"));
+        }
+    }
+
+    #[test]
+    fn redacts_card_objects_in_tool_options() {
+        let args = json!({
+            "action": "fill",
+            "page": 1,
+            "card": {"number": "4111111111111111", "expiryMonth": 12, "expiryYear": 2030, "cvc": "987"}
+        });
+        let output = redacted_args_json(&args, None);
+        assert!(!output.contains("4111111111111111"));
+        assert!(!output.contains("987"));
+        assert!(output.contains("\"action\":\"fill\""));
+        assert!(output.contains("[redacted]"));
     }
 
     #[test]
     fn redacts_passwords_in_script_arrays_and_serialized_cdp_parameters() {
         let args = json!([
             1,
-            "Autofill.fillCredential",
+            "Passwords.fillCredential",
             json!({"username":"synthetic-user", "password":"synthetic-cdp-secret"}).to_string()
         ]);
         let output = redacted_args_json(&args, None);
@@ -1844,6 +1911,51 @@ mod tests {
             .await?;
         assert_eq!(failed.tasks.len(), 1);
         assert_eq!(failed.tasks[0].session_id, "b1");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn agents_cover_the_whole_history_with_their_latest_label() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let audit = AuditLog::new(Database::open(dir.path().join(DATABASE_FILENAME)).await?);
+        for (session, slug, label, at) in [
+            ("c1", "claude-code", "Claude", 1_000),
+            ("x1", "codex", "Codex", 2_000),
+            ("c2", "claude-code", "Claude Code", 3_000),
+        ] {
+            audit
+                .record_tool_dispatch(RecordToolDispatchInput {
+                    slug: slug.to_string(),
+                    agent_label: label.to_string(),
+                    created_at: Some(at),
+                    ..dispatch(session, "https://example.com", false)
+                })
+                .await?;
+        }
+        // A session that never dispatched has no task in History, so its agent is left out.
+        audit
+            .record_session_start("z1", "agent-z", "zed", "Zed", "zed", "1.0")
+            .await?;
+
+        let agents = audit.list_agents().await?;
+        let rows = agents
+            .iter()
+            .map(|agent| {
+                (
+                    agent.slug.as_str(),
+                    agent.label.as_str(),
+                    agent.task_count,
+                    agent.last_started_at,
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            rows,
+            [
+                ("claude-code", "Claude Code", 2, 3_000),
+                ("codex", "Codex", 1, 2_000),
+            ]
+        );
         Ok(())
     }
 

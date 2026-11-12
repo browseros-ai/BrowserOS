@@ -1,0 +1,6 @@
+# Spec tests that flake, so `bun run test:neo-spec --ci` never judges them, in either direction, on
+# any platform: the job summary shows each one's outcome on every run, and none is on an expected
+# list. Edit this file by hand in a pull request; no command adds or removes an entry. Each entry
+# says why the test flakes and where its fix is tracked. Take it off when the fix lands.
+# id	file	title	reason	tracked
+SS-054	tests/page/page-screenshot.spec.ts	page screenshot animations › should not capture css animations in shadow DOM	page.screenshot with animations disabled, of an infinite CSS animation inside a shadow root: on headless Linux Page.captureScreenshot sometimes never returns and the test times out at 30 s, also when run alone. Its siblings SS-052, SS-053, SS-057 and SS-059 time out on every run. Seen flaky on four branches on 2026-11-12.	Not tracked yet: no task exists for the headless-Linux screenshot hang (asked of the claw-sdk lead on 2026-11-12); it is the same cause as the listed SS-024, SS-027, SS-052, SS-053, SS-057, SS-059 and SS-065.

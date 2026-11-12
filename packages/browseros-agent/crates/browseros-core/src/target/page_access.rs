@@ -1,6 +1,6 @@
 //! Reusable page capabilities retain both the call's scope and the page's target incarnation.
 //! Observer state remains shared; only acquisition and protocol dispatch carry these guards.
-use super::{BrowserView, CapturedScope, NativeWindow, cdp_policy, contains_frame};
+use super::{BrowserView, CapturedScope, NativeWindow, cdp_policy};
 use crate::{
     CoreError, FrameId, PageAdmission, ProtocolSession, SessionId, TargetError, TargetId,
     connection::ProtocolAdmission,
@@ -51,33 +51,92 @@ impl PageAccess {
         session.session = session.session.with_admission(Arc::new(PageProtocol {
             access: self.clone(),
             root_session: session.session_id.clone(),
-            frame: None,
         }));
         Ok(session)
     }
-    pub(crate) async fn frame_session(
+    /// The endpoint for the main frame (`None`) or one of this page's child frames. A child
+    /// is bound to this page through the parents that resolved it: Page.getFrameTree omits
+    /// remote frames, so each parent must keep reporting the frame's owner element instead
+    /// (see `FrameProtocol`). A same-process child shares its parent's endpoint and admission.
+    pub(crate) fn frame_session(
         self: &Arc<Self>,
         session: ProtocolSession,
         frame: Option<FrameId>,
+    ) -> BoxFuture<'_, Result<ProtocolSession, CoreError>> {
+        // Boxed: ref resolution, input and the run bridge embed this future, and inlining the
+        // owner climb grew them enough to overflow a worker stack in debug builds.
+        Box::pin(async move {
+            let root = self.session().await?;
+            let Some(frame) = frame else {
+                return if session.same_session(&root.session) {
+                    Ok(root.session)
+                } else {
+                    Err(cdp_policy::unsupported("frame_session"))
+                };
+            };
+            self.child_session(root.session, session, frame).await
+        })
+    }
+
+    async fn child_session(
+        self: &Arc<Self>,
+        root: ProtocolSession,
+        session: ProtocolSession,
+        frame: FrameId,
     ) -> Result<ProtocolSession, CoreError> {
-        let root = self.session().await?;
-        if session.same_session(&root.session) {
-            return Ok(root.session);
+        let frames = self.view.session.frames();
+        let foreign = |frame: &FrameId| {
+            CoreError::Message(format!(
+                "Frame {} is no longer part of page {:?}",
+                frame.as_str(),
+                self.page
+            ))
+        };
+        // Climb the recorded parents to this page's root. Each frame must still be on the
+        // endpoint its parent read it through. An OOPIF that detached or re-attached waits for
+        // a new capture rather than lending its node ids to another process, including the
+        // page's own endpoint the registry falls back to. An intermediate parent must be an
+        // OOPIF's own endpoint, so the climb only reaches targets recorded under this page.
+        let mut child = frame.clone();
+        let mut endpoint = session.session_id().cloned();
+        let mut chain = vec![(frame, session)];
+        loop {
+            let link = frames
+                .frame_link(&child)
+                .await
+                .filter(|link| endpoint.as_ref() == Some(&link.endpoint))
+                .ok_or_else(|| foreign(&child))?;
+            if root.session_id() == Some(&link.parent) {
+                break;
+            }
+            let owner = frames
+                .oopif_for_session(&link.parent)
+                .await
+                .filter(|owner| chain.iter().all(|(seen, _)| seen != owner))
+                .ok_or_else(|| foreign(&child))?;
+            let parent =
+                ProtocolSession::for_session(self.view.session.connection(), link.parent.clone());
+            chain.push((owner.clone(), parent));
+            child = owner;
+            endpoint = Some(link.parent);
         }
-        let frame_id = frame.ok_or_else(|| cdp_policy::unsupported("frame_session"))?;
-        let endpoint = session
-            .session_id()
-            .cloned()
-            .ok_or_else(|| cdp_policy::unsupported("frame_session"))?;
-        // OOPIFs are internal descendants, never independent page capabilities. Bind the child
-        // endpoint to a frame still present in this page's tree and its current registry session.
-        Ok(session
-            .with_epoch_guard(self.view.epoch_guard()?)
-            .with_admission(Arc::new(PageProtocol {
-                access: self.clone(),
-                root_session: root.session_id,
-                frame: Some((frame_id, endpoint)),
-            })))
+        let mut admitted = root;
+        for (frame, session) in chain.into_iter().rev() {
+            // A same-process child shares its parent's endpoint and so its admission.
+            if session.same_session(&admitted) {
+                continue;
+            }
+            let owner = admitted
+                .send_value("DOM.getFrameOwner", json!({"frameId":frame.as_str()}))
+                .await?;
+            let backend = owner["backendNodeId"]
+                .as_i64()
+                .ok_or_else(|| CoreError::Message("Frame owner has no backend node".into()))?;
+            admitted = self
+                .frame_capability(session, frame, admitted, backend)
+                .await?;
+        }
+        Ok(admitted)
     }
 
     pub(crate) fn epoch_guard(&self) -> Result<Option<crate::connection::EpochGuard>, CoreError> {
@@ -169,7 +228,6 @@ impl PageAdmission for Admission<'_> {
 struct PageProtocol {
     access: Arc<PageAccess>,
     root_session: SessionId,
-    frame: Option<(FrameId, SessionId)>,
 }
 impl ProtocolAdmission for PageProtocol {
     fn check<'a>(
@@ -192,26 +250,6 @@ impl ProtocolAdmission for PageProtocol {
             }) {
                 return Err(TargetError::PageTargetChanged(fresh.page_id).into());
             }
-            if let Some((frame, endpoint)) = &self.frame {
-                let root = ProtocolSession::for_session(
-                    self.access.view.session.connection(),
-                    self.root_session.clone(),
-                )
-                .with_epoch_guard(self.access.epoch_guard()?);
-                let tree = root.send_value("Page.getFrameTree", json!({})).await?;
-                if !contains_frame(&tree["frameTree"], frame.as_str())
-                    || !self
-                        .access
-                        .view
-                        .session
-                        .frames()
-                        .frame_session_matches(frame, endpoint)
-                        .await
-                {
-                    return Err(TargetError::PageTargetChanged(fresh.page_id).into());
-                }
-                self.access.fresh().await?;
-            }
             Ok(())
         })
     }
@@ -221,30 +259,50 @@ impl ProtocolAdmission for PageProtocol {
 mod frame_tests {
     use super::*;
     use crate::{Browser, CdpConnection, NativeCapabilities, TargetBinding, TargetIntent};
-    use browseros_cdp::{CdpError, CdpEvent};
-    use std::sync::{
-        Mutex,
-        atomic::{AtomicU64, Ordering},
+    use browseros_cdp::{CdpError, CdpEvent, TargetedEvents};
+    use std::{
+        collections::{HashMap, HashSet},
+        sync::{
+            Mutex,
+            atomic::{AtomicU64, Ordering},
+        },
     };
-    use tokio::sync::broadcast;
+    use tokio::sync::{broadcast, mpsc};
 
     type TestResult = Result<(), Box<dyn std::error::Error>>;
+    type Calls = Vec<(String, Option<SessionId>)>;
 
+    /// A page `root` embedding the OOPIF `cross`, which holds the same-process frame `same`
+    /// and the OOPIF `deep`: A -> B -> {B, A}. `split_tree` answers Page.getFrameTree as
+    /// Chromium does, without remote frames, so only DOM owners connect the sessions.
     struct Native {
         tree: Mutex<Value>,
         split_tree: std::sync::atomic::AtomicBool,
         owner_changed: std::sync::atomic::AtomicBool,
         tab: Mutex<Value>,
-        calls: Mutex<Vec<(String, Option<SessionId>)>>,
+        calls: Mutex<Calls>,
+        mouse: Mutex<Vec<(Option<SessionId>, Value)>>,
         epoch: AtomicU64,
         events: broadcast::Sender<CdpEvent>,
+        targeted: TargetedEvents,
+        /// Attachments made per target. Each mints a fresh session id; the first keeps the
+        /// plain `session-<target>` name the frame tests address.
+        attachments: Mutex<HashMap<String, usize>>,
+        /// Sessions Chromium dropped without Neo hearing: every command sent on one is refused
+        /// as gone, and no detach event is emitted for it.
+        killed: Mutex<HashSet<SessionId>>,
+        /// Key events the page received, with the session that delivered each.
+        keys: Mutex<Vec<(Option<SessionId>, Value)>>,
+        /// Kills the session that delivers the next keyDown, right after delivering it: a
+        /// session that dies in the middle of an action.
+        kill_after_key_down: std::sync::atomic::AtomicBool,
     }
 
     impl Native {
         fn new() -> Arc<Self> {
             Arc::new(Self {
                 tree: Mutex::new(json!({"frame":{"id":"root"},"childFrames":[{
-                    "frame":{"id":"cross"},"childFrames":[{"frame":{"id":"same"}}]
+                    "frame":{"id":"cross"},"childFrames":[{"frame":{"id":"same"}},{"frame":{"id":"deep"}}]
                 }]})),
                 split_tree: std::sync::atomic::AtomicBool::new(false),
                 owner_changed: std::sync::atomic::AtomicBool::new(false),
@@ -253,9 +311,88 @@ mod frame_tests {
                     "loadProgress":1.0,"isPinned":false,"isHidden":false,
                     "browserProfileId":"eng","liveBrowserContextId":"live-eng"})),
                 calls: Mutex::new(Vec::new()),
+                mouse: Mutex::new(Vec::new()),
                 epoch: AtomicU64::new(1),
                 events: broadcast::channel(32).0,
+                targeted: TargetedEvents::default(),
+                attachments: Mutex::new(HashMap::new()),
+                killed: Mutex::new(HashSet::new()),
+                keys: Mutex::new(Vec::new()),
+                kill_after_key_down: std::sync::atomic::AtomicBool::new(false),
             })
+        }
+
+        /// Offers `event` to its method's targeted subscribers and broadcasts it only when none
+        /// took it, as `CdpClient` does. Fails when the broadcast is needed and no one reads it.
+        fn emit(&self, event: CdpEvent) -> Result<(), broadcast::error::SendError<CdpEvent>> {
+            if let Some(event) = self.targeted.deliver(event) {
+                self.events.send(event)?;
+            }
+            Ok(())
+        }
+
+        fn called(&self, method: &str) -> Result<bool, Box<dyn std::error::Error>> {
+            Ok(self
+                .calls
+                .lock()
+                .map_err(|_| "poisoned")?
+                .iter()
+                .any(|(called, _)| called == method))
+        }
+
+        /// Drops `session` the way a lost `Target.detachedFromTarget` leaves it.
+        fn kill(&self, session: &str) -> TestResult {
+            self.killed
+                .lock()
+                .map_err(|_| "poisoned")?
+                .insert(session.into());
+            Ok(())
+        }
+
+        /// Every command sent since the last take, refused ones included.
+        fn take_calls(&self) -> Result<Calls, Box<dyn std::error::Error>> {
+            Ok(std::mem::take(
+                &mut *self.calls.lock().map_err(|_| "poisoned")?,
+            ))
+        }
+
+        fn mint_session(&self, target: &str) -> Result<String, CdpError> {
+            let mut attachments = self.attachments.lock().map_err(|_| CdpError::SessionGone)?;
+            let count = attachments.entry(target.to_owned()).or_default();
+            *count += 1;
+            Ok(if *count == 1 {
+                format!("session-{target}")
+            } else {
+                format!("session-{target}-{count}")
+            })
+        }
+
+        /// The document each session or same-process frame shows: its controls, then owners.
+        fn ax_tree(params: &Value, session: Option<&SessionId>) -> Value {
+            let (button, name, backend, owners): (_, _, _, &[(&str, i64)]) =
+                match (session.map(SessionId::as_str), params["frameId"].as_str()) {
+                    (Some("session-cross"), Some("same")) => {
+                        ("same-button", "Nested frame target", 21, &[])
+                    }
+                    (Some("session-cross"), None) => (
+                        "cross-button",
+                        "Remote frame target",
+                        11,
+                        &[("same-owner", 2), ("deep-owner", 3)],
+                    ),
+                    (Some("session-deep"), None) => ("deep-button", "Deep frame target", 31, &[]),
+                    _ => ("root-button", "Root target", 10, &[("cross-owner", 1)]),
+                };
+            let mut children = vec![button];
+            children.extend(owners.iter().map(|(id, _)| *id));
+            let mut nodes = vec![
+                json!({"nodeId":"document","role":{"type":"internalRole","value":"RootWebArea"},"childIds":children}),
+                json!({"nodeId":button,"backendDOMNodeId":backend,"role":{"type":"internalRole","value":"button"},"name":{"type":"computedString","value":name}}),
+            ];
+            nodes.extend(owners.iter().map(|(id, backend)| {
+                json!({"nodeId":id,"backendDOMNodeId":backend,"role":{"type":"internalRole","value":"Iframe"},"name":{"type":"computedString","value":id}})
+            }));
+            json!({ "nodes": nodes })
         }
 
         fn reply(
@@ -275,6 +412,15 @@ mod frame_tests {
                 .lock()
                 .map_err(|_| CdpError::SessionGone)?
                 .push((method.into(), session.cloned()));
+            if let Some(session) = session
+                && self
+                    .killed
+                    .lock()
+                    .map_err(|_| CdpError::SessionGone)?
+                    .contains(session)
+            {
+                return Err(CdpError::SessionGone);
+            }
             Ok(match method {
                 "Browser.getProfiles" => {
                     json!({"profiles":[{"browserProfileId":"eng","name":"eng","directory":"directory-eng","loaded":true,"browserContextId":"live-eng"}]})
@@ -289,14 +435,16 @@ mod frame_tests {
                     json!({"tab":self.tab.lock().map_err(|_| CdpError::SessionGone)?.clone()})
                 }
                 "Target.attachToTarget" => {
-                    json!({"sessionId":format!("session-{}", params["targetId"].as_str().unwrap_or_default())})
+                    json!({"sessionId":self.mint_session(params["targetId"].as_str().unwrap_or_default())?})
                 }
                 "Page.getFrameTree" => {
                     if self.split_tree.load(Ordering::SeqCst) {
-                        if session.is_some_and(|id| id.as_str() == "session-cross") {
-                            json!({"frameTree":{"frame":{"id":"cross"},"childFrames":[{"frame":{"id":"same"}}]}})
-                        } else {
-                            json!({"frameTree":{"frame":{"id":"root"}}})
+                        match session.map(SessionId::as_str) {
+                            Some("session-cross") => {
+                                json!({"frameTree":{"frame":{"id":"cross"},"childFrames":[{"frame":{"id":"same"}}]}})
+                            }
+                            Some("session-deep") => json!({"frameTree":{"frame":{"id":"deep"}}}),
+                            _ => json!({"frameTree":{"frame":{"id":"root"}}}),
                         }
                     } else {
                         json!({"frameTree":self.tree.lock().map_err(|_| CdpError::SessionGone)?.clone()})
@@ -304,7 +452,12 @@ mod frame_tests {
                 }
                 "DOM.getDocument" => {
                     if session.is_some_and(|id| id.as_str() == "session-cross") {
-                        json!({"root":{"nodeType":9,"children":[{"nodeName":"IFRAME","frameId":"same","backendNodeId":2,"contentDocument":{"nodeType":9}}]}})
+                        json!({"root":{"nodeType":9,"children":[
+                            {"nodeName":"IFRAME","frameId":"same","backendNodeId":2,"contentDocument":{"nodeType":9}},
+                            {"nodeName":"IFRAME","frameId":"deep","backendNodeId":3}
+                        ]}})
+                    } else if session.is_some_and(|id| id.as_str() == "session-deep") {
+                        json!({"root":{"nodeType":9}})
                     } else if self.tree.lock().map_err(|_| CdpError::SessionGone)?["childFrames"]
                         .is_array()
                     {
@@ -319,12 +472,97 @@ mod frame_tests {
                     {
                         return Err(CdpError::SessionGone);
                     }
-                    json!({"backendNodeId":if self.owner_changed.load(Ordering::SeqCst) { 99 } else if params["frameId"] == "same" { 2 } else { 1 }})
+                    // Like Chromium, only the endpoint whose document holds the owner answers.
+                    let backend = match (session.map(SessionId::as_str), params["frameId"].as_str())
+                    {
+                        // Any attachment of the page, including one made after its first died.
+                        (Some(page), Some("cross")) if page.starts_with("session-page") => 1,
+                        (Some("session-cross"), Some("same")) => 2,
+                        (Some("session-cross"), Some("deep")) => 3,
+                        _ => {
+                            return Err(CdpError::Protocol {
+                                code: -32000,
+                                message: "Frame with the given id does not belong to the target."
+                                    .into(),
+                            });
+                        }
+                    };
+                    json!({"backendNodeId":if self.owner_changed.load(Ordering::SeqCst) { 99 } else { backend }})
                 }
-                "DOM.describeNode" if params["backendNodeId"] == 2 => {
-                    json!({"node":{"contentDocument":{"frameId":"same"}}})
+                "DOM.describeNode" => match params["backendNodeId"].as_i64() {
+                    Some(1) => json!({"node":{"frameId":"cross"}}),
+                    Some(2) => json!({"node":{"contentDocument":{"frameId":"same"}}}),
+                    Some(3) => json!({"node":{"frameId":"deep"}}),
+                    _ => json!({"node":{}}),
+                },
+                "Accessibility.getFullAXTree" => Self::ax_tree(&params, session),
+                "DOM.resolveNode" => json!({"object":{"objectId":"node"}}),
+                "DOM.getContentQuads" => {
+                    // Centered on (backend, backend) in the endpoint's own coordinates.
+                    let at = params["backendNodeId"].as_f64().unwrap_or_default();
+                    json!({"quads":[[at - 1.0, at - 1.0, at + 1.0, at - 1.0, at + 1.0, at + 1.0, at - 1.0, at + 1.0]]})
                 }
-                "DOM.describeNode" => json!({"node":{"frameId":"cross"}}),
+                "Runtime.callFunctionOn"
+                    if params["functionDeclaration"]
+                        .as_str()
+                        .is_some_and(|function| function.contains("browserosProbeClick")) =>
+                {
+                    // This fixture tests admission and endpoint routing. Browser
+                    // contracts cover the probe's actual DOM/hit-test behavior.
+                    let forced = &params["arguments"][1]["value"];
+                    let points = if forced.is_array() {
+                        forced.clone()
+                    } else {
+                        let quad = &params["arguments"][0]["value"][0];
+                        let x = (quad[0]["x"].as_f64().unwrap_or_default()
+                            + quad[2]["x"].as_f64().unwrap_or_default())
+                            / 2.0;
+                        let y = (quad[0]["y"].as_f64().unwrap_or_default()
+                            + quad[2]["y"].as_f64().unwrap_or_default())
+                            / 2.0;
+                        json!([{ "x": x, "y": y }])
+                    };
+                    json!({"result":{"value":{"points": points, "viewport":{"width":800,"height":600}}}})
+                }
+                "Input.dispatchMouseEvent" => {
+                    self.mouse
+                        .lock()
+                        .map_err(|_| CdpError::SessionGone)?
+                        .push((session.cloned(), params));
+                    json!({})
+                }
+                "Input.dispatchKeyEvent" => {
+                    if params["type"] == "keyDown"
+                        && self.kill_after_key_down.swap(false, Ordering::SeqCst)
+                        && let Some(session) = session
+                    {
+                        self.killed
+                            .lock()
+                            .map_err(|_| CdpError::SessionGone)?
+                            .insert(session.clone());
+                    }
+                    self.keys
+                        .lock()
+                        .map_err(|_| CdpError::SessionGone)?
+                        .push((session.cloned(), params));
+                    json!({})
+                }
+                // The focused element is a password field.
+                "Runtime.evaluate"
+                    if params["expression"]
+                        .as_str()
+                        .is_some_and(|expression| expression.contains("activeElement")) =>
+                {
+                    json!({"result":{"value":true}})
+                }
+                // A settled page, so a load wait ends on its first quiet interval.
+                "Runtime.evaluate"
+                    if params["expression"]
+                        .as_str()
+                        .is_some_and(|expression| expression.contains("__browseros_ready")) =>
+                {
+                    json!({"result":{"value":{"n":0,"installed":false,"showing":true,"complete":true}}})
+                }
                 "Runtime.evaluate" => json!({"result":{"value":session.map(SessionId::as_str)}}),
                 _ => json!({}),
             })
@@ -366,6 +604,9 @@ mod frame_tests {
         }
         fn events(&self) -> broadcast::Receiver<CdpEvent> {
             self.events.subscribe()
+        }
+        fn events_targeted(&self, method: &str) -> mpsc::UnboundedReceiver<CdpEvent> {
+            self.targeted.subscribe(method)
         }
         fn is_connected(&self) -> bool {
             true
@@ -456,29 +697,274 @@ mod frame_tests {
         Ok(())
     }
 
+    /// Breaks one link a frame endpoint's admission depends on.
+    async fn apply_change(native: &Native, view: &BrowserView, change: &str) -> TestResult {
+        match change {
+            "owner" => native.owner_changed.store(true, Ordering::SeqCst),
+            "tree" => *native.tree.lock().map_err(|_| "poisoned")? = json!({"frame":{"id":"root"}}),
+            "scope" => {
+                native.tab.lock().map_err(|_| "poisoned")?["liveBrowserContextId"] = json!("other")
+            }
+            "target" => native.tab.lock().map_err(|_| "poisoned")?["targetId"] = json!("replaced"),
+            "epoch" => {
+                native.epoch.fetch_add(1, Ordering::SeqCst);
+            }
+            "session" => {
+                // The OOPIF re-attaches under a new endpoint, as after a detach and recovery.
+                native.emit(CdpEvent {
+                    method: "Target.attachedToTarget".into(),
+                    params: json!({"sessionId":"session-cross-2","waitingForDebugger":false,
+                        "targetInfo":{"targetId":"cross","type":"iframe","title":"","url":"",
+                            "attached":true,"canAccessOpener":false}}),
+                    session_id: Some("session-page".into()),
+                })?;
+                registry_settled(view, "session-cross-2", true).await?;
+            }
+            "detach" => {
+                native.emit(CdpEvent {
+                    method: "Target.detachedFromTarget".into(),
+                    params: json!({"sessionId":"session-cross"}),
+                    session_id: Some("session-page".into()),
+                })?;
+                registry_settled(view, "session-cross", false).await?;
+            }
+            other => return Err(format!("unknown change {other}").into()),
+        }
+        Ok(())
+    }
+
+    /// Waits for the registry's event listener to map `cross` to `session`, or to drop it.
+    async fn registry_settled(view: &BrowserView, session: &str, mapped: bool) -> TestResult {
+        let (frame, session) = (FrameId("cross".into()), SessionId::from(session));
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while view
+                .session
+                .frames()
+                .frame_session_matches(&frame, &session)
+                .await
+                != mapped
+            {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await?;
+        Ok(())
+    }
+
+    fn ref_named(
+        snapshot: &crate::observer::SnapshotResult,
+        name: &str,
+    ) -> Result<crate::Ref, String> {
+        snapshot
+            .refs
+            .entries_in_order()
+            .into_iter()
+            .find(|entry| entry.name == name)
+            .map(|entry| entry.ref_id.clone())
+            .ok_or_else(|| format!("no ref for {name:?} in:\n{}", snapshot.text))
+    }
+
+    #[tokio::test]
+    async fn tests_that_scoped_snapshots_read_frames_missing_from_the_page_tree() -> TestResult {
+        let (native, view, page) = fixture().await?;
+        native.split_tree.store(true, Ordering::SeqCst);
+        let snapshot = view.observe(page).await?.snapshot().await?;
+        for (name, frame) in [
+            ("Root target", None),
+            ("Remote frame target", Some("cross")),
+            ("Nested frame target", Some("same")),
+            ("Deep frame target", Some("deep")),
+        ] {
+            let reference = ref_named(&snapshot, name)?;
+            let entry = snapshot.refs.get(&reference).ok_or("ref vanished")?;
+            assert_eq!(
+                entry.frame_id.as_ref().map(FrameId::as_str),
+                frame,
+                "{name}"
+            );
+        }
+        // Owners are proven through DOM.getFrameOwner, never by serializing whole documents.
+        assert!(!native.called("DOM.getDocument")?);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_scoped_frame_refs_click_natively_through_their_own_session() -> TestResult {
+        let (native, view, page) = fixture().await?;
+        native.split_tree.store(true, Ordering::SeqCst);
+        let observer = view.observe(page.clone()).await?;
+        let snapshot = observer.snapshot().await?;
+        let input = view.input(page).await?;
+        for (name, session, backend) in [
+            ("Root target", "session-page", 10.0),
+            ("Remote frame target", "session-cross", 11.0),
+            // Same-process frames inside an OOPIF share their OOPIF's endpoint.
+            ("Nested frame target", "session-cross", 21.0),
+            ("Deep frame target", "session-deep", 31.0),
+        ] {
+            let reference = ref_named(&snapshot, name)?;
+            let resolved = observer.resolve_ref(&reference).await?;
+            assert_eq!(
+                resolved.session.session_id().map(SessionId::as_str),
+                Some(session),
+                "{name}"
+            );
+            native.mouse.lock().map_err(|_| "poisoned")?.clear();
+            let point = input
+                .click(&reference, crate::input::ClickOptions::default())
+                .await?;
+            // The default pointer method returns its dispatched point; DOM
+            // activation is available only as a separate explicit method.
+            let expected = crate::input::Point {
+                x: backend,
+                y: backend,
+            };
+            assert_eq!(point, Some(expected), "{name}");
+            let mouse = native.mouse.lock().map_err(|_| "poisoned")?.clone();
+            let pressed = mouse
+                .iter()
+                .find(|(_, event)| event["type"] == "mousePressed")
+                .ok_or_else(|| format!("{name}: no mousePressed in {mouse:?}"))?;
+            // Frame-local coordinates go to the same endpoint, untransformed.
+            assert_eq!(pressed.0.as_ref().map(SessionId::as_str), Some(session));
+            assert_eq!(
+                (pressed.1["x"].as_f64(), pressed.1["y"].as_f64()),
+                (Some(backend), Some(backend))
+            );
+            assert!(
+                mouse
+                    .iter()
+                    .all(|(endpoint, _)| endpoint.as_ref().map(SessionId::as_str) == Some(session)),
+                "{name}: {mouse:?}"
+            );
+        }
+        assert!(!native.called("DOM.getDocument")?);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_retained_frame_refs_recheck_owner_scope_session_and_epoch() -> TestResult {
+        for name in [
+            "Remote frame target",
+            "Nested frame target",
+            "Deep frame target",
+        ] {
+            for change in [
+                "owner", "tree", "scope", "target", "epoch", "session", "detach",
+            ] {
+                let (native, view, page) = fixture().await?;
+                native.split_tree.store(true, Ordering::SeqCst);
+                let observer = view.observe(page.clone()).await?;
+                let reference = ref_named(&observer.snapshot().await?, name)?;
+                let resolved = observer.resolve_ref(&reference).await?;
+                apply_change(&native, &view, change).await?;
+                let result = resolved
+                    .session
+                    .send_value("Runtime.evaluate", json!({"expression":"1"}))
+                    .await;
+                assert!(result.is_err(), "{name}/{change}: {result:?}");
+                assert!(!native.called("Runtime.evaluate")?, "{name}/{change}");
+                if change == "owner" {
+                    // The frame is still this page's through its current owner, which a fresh
+                    // resolution verifies anew; only the retained endpoint was bound to the old one.
+                    continue;
+                }
+                // Re-resolving is refused too: nothing rebinds the ref to whatever is there now.
+                let again = match view.observe(page).await {
+                    Ok(observer) => observer.resolve_ref(&reference).await.map(|_| ()),
+                    Err(error) => Err(error),
+                };
+                assert!(again.is_err(), "{name}/{change}: {again:?}");
+            }
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_detached_oopif_refs_never_fall_back_to_the_page_session() -> TestResult {
+        let (native, view, page) = fixture().await?;
+        native.split_tree.store(true, Ordering::SeqCst);
+        let snapshot = view.observe(page.clone()).await?.snapshot().await?;
+        apply_change(&native, &view, "detach").await?;
+        native.calls.lock().map_err(|_| "poisoned")?.clear();
+        let input = view.input(page).await?;
+        // With the OOPIF gone the registry answers with the page's own endpoint, where these
+        // node ids would name unrelated nodes of another process.
+        for name in [
+            "Remote frame target",
+            "Nested frame target",
+            "Deep frame target",
+        ] {
+            let reference = ref_named(&snapshot, name)?;
+            let result = input
+                .click(&reference, crate::input::ClickOptions::default())
+                .await;
+            assert!(
+                matches!(result, Err(CoreError::Message(_))),
+                "{name}: {result:?}"
+            );
+        }
+        let calls = native.calls.lock().map_err(|_| "poisoned")?.clone();
+        assert!(
+            !calls.iter().any(|(method, _)| method.starts_with("DOM.")
+                || method.starts_with("Input.")
+                || method.starts_with("Runtime.")),
+            "{calls:?}"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_frames_without_a_parent_in_this_page_are_refused() -> TestResult {
+        let (native, view, page) = fixture().await?;
+        let access = Arc::new(PageAccess::new(
+            view.clone(),
+            view.page(page.clone()).await?,
+        ));
+        let foreign = ProtocolSession::for_session(native.clone(), "session-foreign".into());
+        assert!(matches!(
+            access
+                .frame_session(foreign.clone(), Some(FrameId("foreign".into())))
+                .await,
+            Err(CoreError::Message(_))
+        ));
+        // A parent the registry knows but that no OOPIF of this page owns vouches for nothing.
+        let other_page = ProtocolSession::for_session(native.clone(), "session-other".into());
+        view.session
+            .frames()
+            .resolve_frame_target(
+                page,
+                Some(FrameId("foreign".into())),
+                Some(&other_page),
+                false,
+            )
+            .await?;
+        assert!(matches!(
+            access
+                .frame_session(foreign, Some(FrameId("foreign".into())))
+                .await,
+            Err(CoreError::Message(_))
+        ));
+        assert!(
+            !native
+                .calls
+                .lock()
+                .map_err(|_| "poisoned")?
+                .iter()
+                .any(|(_, session)| session.as_ref().is_some_and(|id| {
+                    matches!(id.as_str(), "session-foreign" | "session-other")
+                }))
+        );
+        Ok(())
+    }
+
     #[tokio::test]
     async fn tests_that_retained_frames_recheck_membership_scope_and_epoch() -> TestResult {
         for frame in ["same", "cross"] {
             for change in ["tree", "scope", "epoch", "target", "owner"] {
                 let (native, view, page) = fixture().await?;
                 let session = view.frame_session(page, FrameId(frame.into())).await?;
-                match change {
-                    "owner" => native.owner_changed.store(true, Ordering::SeqCst),
-                    "tree" => {
-                        *native.tree.lock().map_err(|_| "poisoned")? =
-                            json!({"frame":{"id":"root"}})
-                    }
-                    "scope" => {
-                        native.tab.lock().map_err(|_| "poisoned")?["liveBrowserContextId"] =
-                            json!("other")
-                    }
-                    "target" => {
-                        native.tab.lock().map_err(|_| "poisoned")?["targetId"] = json!("replaced")
-                    }
-                    _ => {
-                        native.epoch.fetch_add(1, Ordering::SeqCst);
-                    }
-                }
+                apply_change(&native, &view, change).await?;
                 let result = session
                     .send_value("Runtime.evaluate", json!({"expression":"1"}))
                     .await;
@@ -499,6 +985,228 @@ mod frame_tests {
                 );
             }
         }
+        Ok(())
+    }
+
+    fn count(calls: &Calls, method: &str) -> usize {
+        calls.iter().filter(|(called, _)| called == method).count()
+    }
+
+    /// The sessions that received `method`: sent there and not refused as gone.
+    fn delivered_on(
+        native: &Native,
+        calls: &Calls,
+        method: &str,
+    ) -> Result<Vec<String>, Box<dyn std::error::Error>> {
+        let killed = native.killed.lock().map_err(|_| "poisoned")?;
+        Ok(calls
+            .iter()
+            .filter(|(called, _)| called == method)
+            .filter_map(|(_, session)| session.as_ref())
+            .filter(|session| !killed.contains(*session))
+            .map(|session| session.as_str().to_owned())
+            .collect())
+    }
+
+    #[tokio::test]
+    async fn tests_that_a_snapshot_recovers_in_call_when_its_page_session_dies() -> TestResult {
+        let (native, view, page) = fixture().await?;
+        native.split_tree.store(true, Ordering::SeqCst);
+        let healthy = view.observe(page.clone()).await?.snapshot().await?;
+        native.kill("session-page")?;
+        native.take_calls()?;
+
+        let recovered = view.observe(page.clone()).await?.snapshot().await?;
+        for name in [
+            "Root target",
+            "Remote frame target",
+            "Nested frame target",
+            "Deep frame target",
+        ] {
+            ref_named(&recovered, name)?;
+        }
+        // The fixture has no clickable scan, so even a healthy capture reports that stage.
+        assert_eq!(recovered.coverage, healthy.coverage);
+        let calls = native.take_calls()?;
+        assert_eq!(count(&calls, "Target.attachToTarget"), 1, "{calls:?}");
+        assert!(
+            delivered_on(&native, &calls, "Accessibility.getFullAXTree")?
+                .iter()
+                .any(|session| session == "session-page-2"),
+            "{calls:?}"
+        );
+
+        view.observe(page).await?.snapshot().await?;
+        let calls = native.take_calls()?;
+        assert_eq!(count(&calls, "Target.attachToTarget"), 0, "{calls:?}");
+        assert!(
+            calls.iter().all(|(_, session)| session
+                .as_ref()
+                .is_none_or(|id| id.as_str() != "session-page")),
+            "{calls:?}"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_a_late_refusal_for_a_dead_session_keeps_its_replacement() -> TestResult {
+        let (native, view, page) = fixture().await?;
+        view.observe(page.clone()).await?.snapshot().await?;
+        native.kill("session-page")?;
+        view.observe(page.clone()).await?.snapshot().await?;
+        let late = view
+            .session
+            .cdp(
+                "Runtime.evaluate",
+                json!({"expression":"1"}),
+                Some(&SessionId::from("session-page")),
+            )
+            .await;
+        assert!(
+            matches!(late, Err(CoreError::Cdp(CdpError::SessionGone))),
+            "{late:?}"
+        );
+        native.take_calls()?;
+
+        view.observe(page).await?.snapshot().await?;
+        let calls = native.take_calls()?;
+        assert_eq!(count(&calls, "Target.attachToTarget"), 0, "{calls:?}");
+        assert!(
+            delivered_on(&native, &calls, "Accessibility.getFullAXTree")?
+                .iter()
+                .any(|session| session == "session-page-2"),
+            "{calls:?}"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_a_ref_click_recovers_in_call_when_its_page_session_dies() -> TestResult {
+        let (native, view, page) = fixture().await?;
+        native.split_tree.store(true, Ordering::SeqCst);
+        let snapshot = view.observe(page.clone()).await?.snapshot().await?;
+        let root = ref_named(&snapshot, "Root target")?;
+        native.kill("session-page")?;
+        native.mouse.lock().map_err(|_| "poisoned")?.clear();
+
+        view.input(page)
+            .await?
+            .click(&root, crate::input::ClickOptions::default())
+            .await?;
+        let mouse = native.mouse.lock().map_err(|_| "poisoned")?.clone();
+        let pressed = mouse
+            .iter()
+            .filter(|(_, event)| event["type"] == "mousePressed")
+            .map(|(session, _)| session.as_ref().map(SessionId::as_str))
+            .collect::<Vec<_>>();
+        assert_eq!(pressed, [Some("session-page-2")], "{mouse:?}");
+        Ok(())
+    }
+
+    /// The key events the page received, as `(session, type)` pairs.
+    fn key_events(native: &Native) -> Result<Vec<(String, String)>, Box<dyn std::error::Error>> {
+        Ok(native
+            .keys
+            .lock()
+            .map_err(|_| "poisoned")?
+            .iter()
+            .map(|(session, event)| {
+                (
+                    session
+                        .as_ref()
+                        .map(SessionId::as_str)
+                        .unwrap_or_default()
+                        .to_owned(),
+                    event["type"].as_str().unwrap_or_default().to_owned(),
+                )
+            })
+            .collect())
+    }
+
+    #[tokio::test]
+    async fn tests_that_a_key_press_recovers_in_call_when_its_page_session_was_dead() -> TestResult
+    {
+        let (native, view, page) = fixture().await?;
+        view.page_session(page.clone()).await?;
+        native.kill("session-page")?;
+
+        view.input(page).await?.press("Enter").await?;
+        assert_eq!(
+            key_events(&native)?,
+            [
+                ("session-page-2".to_owned(), "keyDown".to_owned()),
+                ("session-page-2".to_owned(), "keyUp".to_owned()),
+            ]
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_a_key_press_is_not_replayed_when_its_session_dies_midway() -> TestResult {
+        let (native, view, page) = fixture().await?;
+        view.page_session(page.clone()).await?;
+        native.kill_after_key_down.store(true, Ordering::SeqCst);
+
+        let pressed = view.input(page).await?.press("Enter").await;
+        assert!(
+            matches!(pressed, Err(CoreError::Cdp(CdpError::SessionGone))),
+            "{pressed:?}"
+        );
+        // Enter reached the page once. Pressing it again on a new attachment could submit a
+        // form twice, so the press reports the lost session instead.
+        assert_eq!(
+            key_events(&native)?,
+            [("session-page".to_owned(), "keyDown".to_owned())]
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_the_focused_field_check_survives_a_dead_page_session() -> TestResult {
+        let (native, view, page) = fixture().await?;
+        view.page_session(page.clone()).await?;
+        native.kill("session-page")?;
+
+        assert!(view.input(page).await?.focused_field_is_sensitive().await);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_goto_resends_a_navigation_its_dead_session_refused() -> TestResult {
+        let (native, view, page) = fixture().await?;
+        view.page_session(page.clone()).await?;
+        native.kill("session-page")?;
+        native.take_calls()?;
+
+        view.nav(page)
+            .await?
+            .goto("https://local.test/next")
+            .await?;
+        let calls = native.take_calls()?;
+        assert_eq!(
+            delivered_on(&native, &calls, "Page.navigate")?,
+            ["session-page-2"],
+            "{calls:?}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn tests_that_an_emitted_event_reaches_its_targeted_subscriber_and_not_the_broadcast()
+    -> TestResult {
+        let native = Native::new();
+        let mut broadcast = native.events();
+        let mut targeted = native.events_targeted("Runtime.bindingCalled");
+        native.emit(CdpEvent {
+            method: "Runtime.bindingCalled".into(),
+            params: json!({ "name": "probe" }),
+            session_id: Some("session-page".into()),
+        })?;
+        assert_eq!(targeted.try_recv()?.params["name"], "probe");
+        assert!(
+            broadcast.try_recv().is_err(),
+            "a method with a live targeted subscriber must bypass the broadcast"
+        );
         Ok(())
     }
 }

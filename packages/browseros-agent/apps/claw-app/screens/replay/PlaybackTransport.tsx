@@ -1,4 +1,4 @@
-import { Pause, Play, RotateCcw } from 'lucide-react'
+import { Maximize2, Minimize2, Pause, Play, RotateCcw } from 'lucide-react'
 import { ActionSwapRollIcon } from '@/components/motion/action-swap-roll'
 import { Button } from '@/components/motion/button/base'
 import { RangeSlider } from '@/components/motion/range-slider'
@@ -18,6 +18,10 @@ interface PlaybackTransportProps {
   onSeek: (seconds: number) => void
   /** Shown but inert, while the recording is still loading. */
   disabled?: boolean
+  /** Adds the full-screen toggle at the end of the row. */
+  onToggleFullScreen?: () => void
+  /** This row sits in the full-screen player, so the toggle exits it. */
+  fullScreen?: boolean
 }
 
 /**
@@ -31,6 +35,8 @@ export function PlaybackTransport({
   actions,
   onSeek,
   disabled = false,
+  onToggleFullScreen,
+  fullScreen = false,
 }: PlaybackTransportProps) {
   const { time, isPlaying, speed, setSpeed, togglePlay } = playback
   const finished = time >= totalSeconds
@@ -124,6 +130,22 @@ export function PlaybackTransport({
           ))}
         </TabsList>
       </Tabs>
+      {onToggleFullScreen ? (
+        <Button
+          size="icon"
+          variant="outline"
+          onClick={onToggleFullScreen}
+          disabled={disabled}
+          aria-label={fullScreen ? 'Exit full screen' : 'Full screen'}
+          className="size-9 shrink-0 border-border-2"
+        >
+          {fullScreen ? (
+            <Minimize2 aria-hidden className="size-4" />
+          ) : (
+            <Maximize2 aria-hidden className="size-4" />
+          )}
+        </Button>
+      ) : null}
     </div>
   )
 }

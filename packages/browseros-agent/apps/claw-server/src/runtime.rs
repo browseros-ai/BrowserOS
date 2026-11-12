@@ -139,6 +139,34 @@ impl AppRuntime {
                 }),
             },
             BackgroundTask {
+                name: "daily tool usage report",
+                handle: tokio::spawn({
+                    let state = state.clone();
+                    let cancel = shutdown.child_token();
+                    async move {
+                        let mut ticker = tokio::time::interval(Duration::from_secs(60 * 60));
+                        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+                        loop {
+                            tokio::select! {
+                                () = cancel.cancelled() => return,
+                                _ = ticker.tick() => {
+                                    if let Err(error) =
+                                        crate::services::tool_usage::flush_finished_days(
+                                            &state.tool_calls_daily,
+                                            &state.analytics,
+                                            crate::clock::now_epoch_ms(),
+                                        )
+                                        .await
+                                    {
+                                        warn!(error = %error, "daily tool usage report failed");
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }),
+            },
+            BackgroundTask {
                 name: "recording payload migration",
                 handle: state
                     .recordings
@@ -164,6 +192,18 @@ impl AppRuntime {
                 }),
             },
             BackgroundTask {
+                name: "skill file sync",
+                handle: tokio::spawn({
+                    let skills = state.skills.clone();
+                    let enabled = state.ultrafast_enabled();
+                    async move {
+                        if let Err(error) = skills.sync_skill_md(enabled).await {
+                            warn!(error = %error, "skill file sync failed");
+                        }
+                    }
+                }),
+            },
+            BackgroundTask {
                 name: "skill run reconciliation",
                 handle: tokio::spawn({
                     let skill_runs = state.skill_runs.clone();
@@ -181,12 +221,10 @@ impl AppRuntime {
                 }),
             },
         ];
-        // Reads the cohort from PostHog remote configuration using the analytics
-        // credentials this build already embeds, so shipping it needs nothing else
-        // configured. A build with no PostHog key reaches no source, the cohort stays
-        // empty and nobody is invited, which is the same silent outcome as an unreachable
-        // one, so there is nothing to report.
+        // The cohort module resolves deployment policy and source precedence together; no source
+        // means this process must not start a refresh task, even with embedded analytics keys.
         if let Some(source) = crate::services::feedback_cohort::configured_source(
+            state.config.mode,
             state.analytics.remote_config_credentials(),
         ) {
             tasks.push(BackgroundTask {
@@ -383,6 +421,7 @@ mod tests {
             native: Default::default(),
             mode: Default::default(),
             behavior: Default::default(),
+            behavior_ignored: Vec::new(),
         });
         let state = AppState::new_with_home(config, root.path().join("home")).await?;
         let audit_log = state.audit_log.clone();
@@ -438,6 +477,7 @@ mod tests {
             native: Default::default(),
             mode: Default::default(),
             behavior: Default::default(),
+            behavior_ignored: Vec::new(),
         });
         let state = AppState::new_with_home(config, root.path().join("home")).await?;
         let preview_started = Arc::new(Notify::new());
@@ -487,6 +527,7 @@ mod tests {
             native: Default::default(),
             mode: Default::default(),
             behavior: Default::default(),
+            behavior_ignored: Vec::new(),
         });
         let state = AppState::new_with_home(config, root.path().join("home")).await?;
         state
@@ -541,6 +582,7 @@ mod tests {
             native: Default::default(),
             mode: Default::default(),
             behavior: Default::default(),
+            behavior_ignored: Vec::new(),
         });
         let listener = TcpListener::bind("127.0.0.1:0").await?;
         let host = format!("http://{}", listener.local_addr()?);
@@ -697,6 +739,7 @@ mod tests {
             native: Default::default(),
             mode: Default::default(),
             behavior: Default::default(),
+            behavior_ignored: Vec::new(),
         });
         let mut state = AppState::new_with_home(config.clone(), root.path().join("home")).await?;
         let analytics = Arc::new(

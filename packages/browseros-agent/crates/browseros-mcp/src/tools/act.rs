@@ -1,11 +1,13 @@
 use crate::format::diff::DiffDetail;
 use crate::framework::{
     AuditHints, ToolCtx, ToolExecResult, ToolResult, error_result, parse_args,
-    pending_dialog_result, text_result,
+    pending_dialog_result, pending_file_chooser_result, text_result,
 };
+use crate::response::FieldTarget;
 use browseros_core::{
     PageId, Ref,
     input::{ClickOptions, Point, PublicMouseButton as MouseButton, ScrollDirection},
+    snapshot::RefMap,
 };
 use futures_util::future::BoxFuture;
 use schemars::JsonSchema;
@@ -15,12 +17,20 @@ use std::time::Duration;
 
 const DESCRIPTION: &str = "\
 Act on the page using refs from the last snapshot. \
+Click scrolls, briefly waits, and finds an uncovered point before sending native input. \
+If native preparation fails before a press is sent, a single left click uses DOM fallback once: it presses the element itself, \
+through banners, overlays and open dialogs. Disabled, invisible and detached targets are refused. \
+DOM fallback is reported, with inert=true when the target was behind a dialog: verify application state. \
+If neither path can dispatch, handle the blocker ref/reason and retry. An unknown click outcome must not be automatically retried. \
 kinds: click, type (into focused element), fill (ref+value, or many via fields[]), \
 press (key/combo), hover, focus, check, uncheck, select (option value), scroll, drag. \
 dialog_accept/dialog_dismiss handle pending JavaScript dialogs. \
 ALWAYS fill a whole form in one call via fields[], never field-by-field. \
-Fill replaces text by default (clear=false appends) and verifies the field value; \
-use type/press for keyboard handlers and wait for application-specific readiness. \
+Fill types each value, replacing the field's text by default (clear=false appends), and \
+reads every filled field back as the snapshot shows it, even when diff is \"none\". \
+A page may reformat a value (\"440 212\") or reject it; compare what the field shows \
+with what you meant before submitting. \
+Use type/press for keyboard handlers and wait for application-specific readiness. \
 Reads back a post-settle diff - no follow-up diff/snapshot needed; \
 re-snapshot only for fresh refs. \
 Control that readback with diff: \"full\" (default) whole diff, \"summary\" change counts, \
@@ -138,7 +148,8 @@ struct ActArgs {
     r#ref: Option<String>,
     /// Text for kind=type.
     text: Option<String>,
-    /// Value for kind=fill/select.
+    /// Value for kind=fill/select. Date, time, color and range inputs take their own format,
+    /// such as 2026-10-29, 14:30 or #ff8800.
     value: Option<String>,
     /// Multiple fields for kind=fill, filled in order.
     fields: Option<Vec<FillField>>,
@@ -181,8 +192,8 @@ struct ActArgs {
     sensitive: Option<bool>,
 }
 
-/// Collects which filled refs resolved to a sensitive field so the audit layer can
-/// redact only those values, plus a page-wide flag for targets with no ref to key on.
+/// Audit redaction survives a dialog race even when a partially entered field
+/// interrupts the action before it returns.
 #[derive(Default)]
 struct ActSensitivity {
     refs: Vec<String>,
@@ -207,6 +218,9 @@ fn handler<'a>(
             return Ok(Some(result));
         }
         let console_start = ctx.browser.signals().console_mark(&page_id);
+        // Marked before the input goes out: a link click's navigation event can arrive before
+        // the input's own reply does.
+        let document_start = ctx.browser.signals().document_mark(&page_id);
         let input = ctx.browser.input(page_id.clone()).await?;
         let mut sensitivity = ActSensitivity::default();
         // Honor an explicit sensitive flag before the action runs: a value must
@@ -259,14 +273,54 @@ fn handler<'a>(
                 skip_screenshot: true,
             });
         }
+        // The core records its handoff before awaiting the browser. Attach this
+        // before all early returns, including dialogs, choosers and failed acks.
+        if let Some((delivery, notice)) =
+            super::click_feedback::fallback_feedback(input.dom_fallback_status())
+        {
+            response.click_data(delivery);
+            response.text(notice);
+        }
+        let filled = field_targets(ctx, &page_id, filled_refs(&args)).await;
         match outcome {
             Ok(Some(early)) => return Ok(Some(early)),
             Ok(None) => {}
-            Err(err) => return Err(err),
+            Err(err) => {
+                // A fill that stopped partway has typed into the fields before it; show them
+                // so the caller knows what the page holds before trying again.
+                if !filled.is_empty() {
+                    response.include_fields(args.page, filled, document_start);
+                }
+                return Err(err);
+            }
+        }
+        // Typing emits native keys and fill clicks to focus; both can open a picker just
+        // like an explicit click. Hover/focus/scroll/semantic selection create no activation.
+        let activates = matches!(
+            args.kind,
+            ActKind::Click
+                | ActKind::ClickAt
+                | ActKind::Press
+                | ActKind::Type
+                | ActKind::TypeAt
+                | ActKind::Fill
+                | ActKind::Check
+                | ActKind::Uncheck
+                | ActKind::Drag
+                | ActKind::DragAt
+        );
+        if let Some(chooser) = pending_file_chooser_result(ctx, page_id.clone(), activates).await? {
+            return Ok(Some(chooser));
         }
         response.data(json!({ "kind": args.kind.as_str() }));
+        if matches!(args.kind, ActKind::Click) && input.dom_fallback_status().is_none() {
+            response.click_data(json!({ "status": "dispatched", "domFallback": false }));
+        }
         if let Some(detail) = resolve_diff_detail(args.diff) {
-            response.include_diff(args.page, true, detail);
+            response.include_diff(args.page, true, detail, document_start);
+        }
+        if !filled.is_empty() {
+            response.include_fields(args.page, filled, document_start);
         }
         response.include_console_summary(args.page, console_start);
         Ok(Some(text_result(
@@ -274,6 +328,43 @@ fn handler<'a>(
             None,
         )))
     })
+}
+
+/// Each filled ref with the DOM node it names now: the fill resolved it, recovering a node the
+/// page replaced since the snapshot. The readback finds each field by that node.
+async fn field_targets(ctx: &ToolCtx, page_id: &PageId, refs: Vec<Ref>) -> Vec<FieldTarget> {
+    if refs.is_empty() {
+        return Vec::new();
+    }
+    let known = match ctx.browser.observe(page_id.clone()).await {
+        Ok(observer) => observer.last_refs().await,
+        Err(_) => RefMap::new(),
+    };
+    refs.into_iter()
+        .map(|ref_id| {
+            let entry = known.get(&ref_id);
+            FieldTarget {
+                node: entry.map(|entry| entry.backend_node_id),
+                frame: entry.and_then(|entry| entry.frame_id.clone()),
+                ref_id,
+            }
+        })
+        .collect()
+}
+
+/// The fields a fill targets, in order, for the readback after it.
+fn filled_refs(args: &ActArgs) -> Vec<Ref> {
+    if !matches!(args.kind, ActKind::Fill) {
+        return Vec::new();
+    }
+    match (&args.fields, &args.r#ref) {
+        (Some(fields), _) => fields
+            .iter()
+            .map(|field| Ref(field.r#ref.clone()))
+            .collect(),
+        (None, Some(ref_id)) => vec![Ref(ref_id.clone())],
+        (None, None) => Vec::new(),
+    }
 }
 
 async fn run_kind(

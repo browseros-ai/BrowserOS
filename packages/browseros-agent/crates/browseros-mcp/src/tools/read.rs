@@ -72,6 +72,11 @@ fn handler<'a>(
             .map(|info| info.url)
             .unwrap_or_else(|| "unknown".to_string());
         if matches!(args.format, ReadFormat::Console) {
+            let page = ctx.browser.page_session(PageId(args.page)).await?;
+            ctx.browser
+                .signals()
+                .harvest_console(&PageId(args.page), &page.session)
+                .await?;
             let entries = ctx.browser.signals().console_entries(&PageId(args.page));
             let text = if entries.is_empty() {
                 "(no console errors or warnings)".to_string()
@@ -111,7 +116,7 @@ fn handler<'a>(
             .and_then(|value| value.as_str().map(ToString::to_string))
             .or(result.description)
             .unwrap_or_default();
-        if text.len() <= INLINE_PAGE_CONTENT_MAX_CHARS {
+        if ctx.within_script || text.len() <= INLINE_PAGE_CONTENT_MAX_CHARS {
             return Ok(Some(text_result(
                 wrap_untrusted(if text.is_empty() { "(empty)" } else { &text }, &origin),
                 Some(json!({

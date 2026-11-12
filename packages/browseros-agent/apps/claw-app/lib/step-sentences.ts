@@ -30,7 +30,6 @@ export const TOOL_TO_VERB: Record<string, ReplayVerb> = {
   wait: 'read',
   run: 'type',
   evaluate: 'type',
-  pursue: 'click',
   'pages.newPage': 'navigate',
   'nav.goto': 'navigate',
   'nav.back': 'navigate',
@@ -44,6 +43,7 @@ export const TOOL_TO_VERB: Record<string, ReplayVerb> = {
   'input.scroll': 'click',
   'input.fill': 'type',
   'input.type': 'type',
+  'input.insertText': 'type',
   'input.press': 'type',
 }
 
@@ -100,6 +100,7 @@ const INPUT_KINDS: Record<string, string> = {
   'input.click': 'click',
   'input.fill': 'fill',
   'input.type': 'type',
+  'input.insertText': 'type',
   'input.press': 'press',
   'input.hover': 'hover',
   'input.selectOption': 'select',
@@ -170,6 +171,13 @@ function clicksInPage(args: Args): boolean {
 
 function parseMeta(resultMeta: string | undefined | null): Args {
   return parseArgs(resultMeta)
+}
+
+/** A save_skill call: the first save, the flow that makes it ultrafast, or a repair. */
+function describeSkillSave(args: Args): string {
+  if (args.patch !== undefined) return 'Repaired a step of this skill'
+  if (args.flow !== undefined) return 'Made this skill ultrafast'
+  return 'Saved this as a skill'
 }
 
 function stringArg(args: Args, key: string): string | undefined {
@@ -271,6 +279,12 @@ function describeAct(args: Args, onPage: string): string {
   }
 }
 
+function describeFileSelection(args: Args, onPage: string): string {
+  return Array.isArray(args.files) && args.files.length === 0
+    ? `Cleared file selection on ${onPage}`
+    : `Selected files on ${onPage}`
+}
+
 /** One recorded call as a past-tense sentence. */
 export function describeStep(dispatch: ToolDispatchRow): string {
   const meta = parseMeta(dispatch.resultMeta)
@@ -285,6 +299,9 @@ export function describeStep(dispatch: ToolDispatchRow): string {
 
   const { tool, args } = normalizeCall(dispatch)
   const onPage = page ?? 'the page'
+  // Chooser interception completes the click, but file selection is a later call.
+  // Keep the history from claiming a file was attached before that call succeeds.
+  if (meta.fileChooserOpen === true) return `Opened a file chooser on ${onPage}`
 
   if (
     LISTING_TOOLS.has(tool) &&
@@ -316,10 +333,6 @@ export function describeStep(dispatch: ToolDispatchRow): string {
       return `Read ${onPage}`
     case 'evaluate':
       return clicksInPage(args) ? `Clicked on ${onPage}` : `Read ${onPage}`
-    case 'pursue': {
-      const goal = stringArg(args, 'goal')?.replace(/[.\s]+$/, '')
-      return goal ? `Set out to ${goal}` : `Worked on ${onPage}`
-    }
     case 'history':
       return 'Looked through your browsing history'
     // Behind-the-scenes calls, seen only when the person asks to show them.
@@ -357,7 +370,7 @@ export function describeStep(dispatch: ToolDispatchRow): string {
     case 'act':
       return describeAct(args, onPage)
     case 'upload':
-      return `Uploaded a file to ${onPage}`
+      return describeFileSelection(args, onPage)
     case 'download':
       return 'Downloaded a file'
     case 'request_human_help':
@@ -365,7 +378,11 @@ export function describeStep(dispatch: ToolDispatchRow): string {
     case 'await_human_help':
       return 'Waited for you'
     case 'save_skill':
-      return 'Saved this as a saved task'
+      return describeSkillSave(args)
+    case 'run_skill': {
+      const name = stringArg(args, 'name')
+      return name ? `Ran ${name} the fast way` : 'Ran a skill the fast way'
+    }
     case 'credentials':
       return `Used a saved sign-in on ${onPage}`
     default:
@@ -455,6 +472,18 @@ export function describeSteps(
 }
 
 /** What an agent is doing right now on a live tab, in the present tense. */
+/**
+ * The line for a live task whose agent has gone quiet: where it last worked, without claiming it
+ * is still busy. The agent may be thinking, waiting on its user, or finished; the session ends
+ * when its connection closes.
+ */
+export function describeIdleStep(
+  tab: Pick<SessionBrowserTab, 'title' | 'url'> | undefined,
+): string {
+  if (!tab) return 'No recent activity'
+  return `Last active on ${pageLabel(tab.title, tab.url) ?? 'a page'}`
+}
+
 export function describeLiveStep(
   tab: Pick<SessionBrowserTab, 'title' | 'url' | 'lastToolName'> | undefined,
 ): string {

@@ -42,6 +42,8 @@ import type { MemoryApi } from './domain-apis/memory'
 import type { NetworkApi } from './domain-apis/network'
 import type { OverlayApi } from './domain-apis/overlay'
 import type { PageApi } from './domain-apis/page'
+import type { PasswordsApi } from './domain-apis/passwords'
+import type { PaymentsApi } from './domain-apis/payments'
 import type { PerformanceApi } from './domain-apis/performance'
 import type { PerformanceTimelineApi } from './domain-apis/performance-timeline'
 import type { PreloadApi } from './domain-apis/preload'
@@ -68,6 +70,8 @@ export interface ProtocolApi {
   readonly Audits: AuditsApi
   readonly Autofill: AutofillApi
   readonly Bookmarks: BookmarksApi
+  readonly Passwords: PasswordsApi
+  readonly Payments: PaymentsApi
   readonly BackgroundService: BackgroundServiceApi
   readonly BluetoothEmulation: BluetoothEmulationApi
   readonly Browser: BrowserApi

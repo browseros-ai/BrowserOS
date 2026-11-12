@@ -22,9 +22,9 @@ export interface NavItem {
 /** Daily destinations, in the order people use them. */
 export const primaryNavItems: NavItem[] = [
   { name: 'Home', to: '/', icon: House },
+  { name: 'Skills', to: '/skills', icon: Bookmark },
   { name: 'Connected agents', to: '/mcp', icon: Plug },
   { name: 'History', to: '/audit', icon: History },
-  { name: 'Saved tasks', to: '/skills', icon: Bookmark },
 ]
 
 export const secondaryNavItems: NavItem[] = [

@@ -409,6 +409,7 @@ async fn test_app(root: &Path) -> anyhow::Result<TestApp> {
         native: Default::default(),
         mode: Default::default(),
         behavior: Default::default(),
+        behavior_ignored: Vec::new(),
     });
     let state = AppState::new_with_home(config, root.join("home")).await?;
     Ok(TestApp {

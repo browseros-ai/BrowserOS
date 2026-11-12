@@ -1,5 +1,6 @@
 use crate::{CdpError, ConnectOptions};
 use serde::Deserialize;
+use std::net::IpAddr;
 use std::time::Duration;
 use tokio::time::sleep;
 use url::Url;
@@ -62,10 +63,24 @@ async fn try_discover(
 
     let mut url = Url::parse(&response.web_socket_debugger_url)
         .map_err(|err| CdpError::Discovery(err.to_string()))?;
-    let rewritten_host = host.trim_start_matches('[').trim_end_matches(']');
-    url.set_host(Some(rewritten_host))
-        .map_err(|_| CdpError::Discovery(format!("invalid debugger host {rewritten_host}")))?;
+    point_at_host(&mut url, host)?;
     Ok(url)
+}
+
+/// Rewrites the host of the browser's reported WebSocket URL to the loopback host discovery
+/// just reached, so the socket opens where discovery succeeded.
+///
+/// `Url::set_host` parses URL host syntax, in which an IPv6 literal must keep its brackets:
+/// a bare `::1` is refused, and discovery failed whenever `::1` was the host that answered.
+/// So an IP address, bracketed or not, is set as an address, and only a name goes through
+/// `set_host`.
+fn point_at_host(url: &mut Url, host: &str) -> Result<(), CdpError> {
+    let bare = host.trim_start_matches('[').trim_end_matches(']');
+    let set = match bare.parse::<IpAddr>() {
+        Ok(ip) => url.set_ip_host(ip),
+        Err(_) => url.set_host(Some(bare)).map_err(|_| ()),
+    };
+    set.map_err(|()| CdpError::Discovery(format!("invalid debugger host {host}")))
 }
 
 fn candidate_hosts(explicit: Option<&str>, last_successful: Option<&str>) -> Vec<&'static str> {
@@ -90,5 +105,32 @@ fn push_host(hosts: &mut Vec<&'static str>, host: Option<&str>) {
         && !hosts.iter().any(|existing| existing == known)
     {
         hosts.push(known);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::point_at_host;
+    use url::Url;
+
+    #[test]
+    fn the_debugger_url_points_at_every_spelling_of_the_loopback_host()
+    -> Result<(), Box<dyn std::error::Error>> {
+        for reported in [
+            "ws://127.0.0.1:9222/devtools/browser/abc",
+            "ws://[::1]:9222/devtools/browser/abc",
+        ] {
+            for (host, expected) in [
+                ("localhost", "ws://localhost:9222/devtools/browser/abc"),
+                ("127.0.0.1", "ws://127.0.0.1:9222/devtools/browser/abc"),
+                ("::1", "ws://[::1]:9222/devtools/browser/abc"),
+                ("[::1]", "ws://[::1]:9222/devtools/browser/abc"),
+            ] {
+                let mut url = Url::parse(reported)?;
+                point_at_host(&mut url, host)?;
+                assert_eq!(url.as_str(), expected, "{host} on {reported}");
+            }
+        }
+        Ok(())
     }
 }

@@ -16,7 +16,7 @@ export function StatusBadge({ status, className }: StatusBadgeProps) {
   return (
     <span
       className={cn(
-        'inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full px-2 py-0.5 font-semibold text-[11px] tracking-wide',
+        'inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md px-2 py-0.5 font-semibold text-[11px] tracking-wide',
         meta.bgClass,
         meta.textClass,
         className,

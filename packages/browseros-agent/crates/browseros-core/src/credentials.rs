@@ -1,8 +1,7 @@
 //! Transport-independent password operations. Native owns secret storage, site
 //! matching and opaque handles; adapters receive metadata and acknowledged fills.
 //! Requests intentionally have no Debug implementation because they may hold secrets.
-use crate::{BrowserProfileId, CoreError};
-use browseros_cdp::CdpError;
+use crate::BrowserProfileId;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -133,19 +132,5 @@ impl CredentialFailure {
             _ => ("store_error", "The native credential operation failed."),
         };
         Self { code, message }
-    }
-}
-impl From<CoreError> for CredentialFailure {
-    fn from(error: CoreError) -> Self {
-        match error {
-            CoreError::NativeFeatureUnavailable { .. } => Self::new("not_supported"),
-            CoreError::Target(_) => Self::new("page_out_of_scope"),
-            CoreError::Cdp(CdpError::Protocol { message, .. }) => Self::new(
-                message
-                    .strip_prefix("credentials:")
-                    .unwrap_or("store_error"),
-            ),
-            _ => Self::new("store_error"),
-        }
     }
 }

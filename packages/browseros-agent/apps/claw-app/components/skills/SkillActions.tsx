@@ -8,41 +8,54 @@ import type { Skill } from '@browseros/claw-api'
 import { Pencil, Trash2 } from 'lucide-react'
 import { useState } from 'react'
 import { RowMenu } from '@/components/actions/RowMenu'
+import { cn } from '@/lib/utils'
 import { useSkill } from '@/modules/api/skills.hooks'
 import { DeleteSkillDialog } from './DeleteSkillDialog'
 import { SkillFormDialog } from './SkillFormDialog'
 
 interface SkillActionsProps {
   skill: Pick<Skill, 'name' | 'description' | 'site'>
-  /** The saved task's file, when the page already has it. */
+  /** The skill's file, when the page already has it. */
   body?: string
   onDeleted?: () => void
+  /**
+   * Styles the menu button only. The dialogs render in place (the edit one
+   * does not portal), so hiding a wrapper around this component hides them too.
+   */
+  menuClassName?: string
 }
 
-/** Edit and Delete behind one button, so the row leads with Copy phrase. */
-export function SkillActions({ skill, body, onDeleted }: SkillActionsProps) {
+/** Edit and Delete behind one button, so the row leads with Copy. */
+export function SkillActions({
+  skill,
+  body,
+  onDeleted,
+  menuClassName,
+}: SkillActionsProps) {
   const [editing, setEditing] = useState(false)
   const [deleting, setDeleting] = useState(false)
 
   return (
     <>
-      <RowMenu
-        label={skill.description}
-        actions={[
-          {
-            id: 'edit',
-            label: 'Edit',
-            icon: <Pencil className="size-4" />,
-            onClick: () => setEditing(true),
-          },
-          {
-            id: 'delete',
-            label: 'Delete',
-            icon: <Trash2 className="size-4" />,
-            onClick: () => setDeleting(true),
-          },
-        ]}
-      />
+      <span className={cn('flex shrink-0', menuClassName)}>
+        <RowMenu
+          label={skill.description}
+          actions={[
+            {
+              id: 'edit',
+              label: 'Edit',
+              icon: <Pencil className="size-4" />,
+              onClick: () => setEditing(true),
+            },
+            {
+              id: 'delete',
+              label: 'Delete',
+              icon: <Trash2 className="size-4" />,
+              onClick: () => setDeleting(true),
+            },
+          ]}
+        />
+      </span>
       {editing ? (
         body === undefined ? (
           <EditLoader skill={skill} onClose={() => setEditing(false)} />

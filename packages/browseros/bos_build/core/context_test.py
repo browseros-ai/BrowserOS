@@ -9,6 +9,7 @@ from unittest import mock
 
 from . import context as context_mod
 from .context import Context
+from ..lib.testing import MockBrowserOSRoot
 from .products import (
     BROWSEROS_AGENT_EXTENSION_ID,
     BROWSEROS_BUG_REPORTER_EXTENSION_ID,
@@ -19,8 +20,16 @@ from .products import (
 
 
 class GetAppPathTest(unittest.TestCase):
+    def setUp(self):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        self.package = MockBrowserOSRoot(Path(temp.name))
+
+    def _context(self, **kwargs):
+        return Context(root_dir=self.package.root, **kwargs)
+
     def test_extensions_manifest_url_uses_dedicated_bundled_manifest(self):
-        ctx = Context(
+        ctx = self._context(
             chromium_src=Path("/nonexistent-src"),
             architecture="arm64",
             build_type="release",
@@ -32,7 +41,7 @@ class GetAppPathTest(unittest.TestCase):
         )
 
     def test_resource_mode_defaults_to_published(self):
-        ctx = Context(
+        ctx = self._context(
             chromium_src=Path("/nonexistent-src"),
             architecture="arm64",
             build_type="release",
@@ -43,7 +52,7 @@ class GetAppPathTest(unittest.TestCase):
 
     def test_source_identity_is_carried_without_mutating_it(self):
         prepared = Path("/tmp/prepared")
-        ctx = Context(
+        ctx = self._context(
             chromium_src=Path("/nonexistent-src"),
             architecture="arm64",
             build_type="release",
@@ -61,7 +70,7 @@ class GetAppPathTest(unittest.TestCase):
         # an arch-specific build's sign/package stages.
         with tempfile.TemporaryDirectory() as tmp:
             chromium_src = Path(tmp)
-            ctx = Context(
+            ctx = self._context(
                 chromium_src=chromium_src,
                 architecture="arm64",
                 build_type="release",
@@ -81,7 +90,7 @@ class GetAppPathTest(unittest.TestCase):
             self.assertEqual(ctx.get_app_path(), fresh_arm64)
 
     def test_universal_architecture_resolves_universal_out_dir(self):
-        ctx = Context(
+        ctx = self._context(
             chromium_src=Path("/nonexistent-src"),
             architecture="universal",
             build_type="release",
@@ -96,7 +105,7 @@ class GetAppPathTest(unittest.TestCase):
             mock.patch.object(context_mod, "IS_MACOS", return_value=True),
             mock.patch.object(context_mod, "IS_WINDOWS", return_value=False),
         ):
-            ctx = Context(
+            ctx = self._context(
                 chromium_src=Path("/nonexistent-src"),
                 architecture="arm64",
                 build_type="release",
@@ -120,7 +129,7 @@ class GetAppPathTest(unittest.TestCase):
             mock.patch.object(context_mod, "IS_MACOS", return_value=True),
             mock.patch.object(context_mod, "IS_WINDOWS", return_value=False),
         ):
-            ctx = Context(
+            ctx = self._context(
                 chromium_src=Path("/nonexistent-src"),
                 architecture="arm64",
                 build_type="release",
@@ -131,7 +140,7 @@ class GetAppPathTest(unittest.TestCase):
             self.assertEqual(ctx.BROWSEROS_APP_NAME, "BrowserOS neo.app")
 
     def test_context_accepts_product_id_string(self):
-        ctx = Context(
+        ctx = self._context(
             chromium_src=Path("/nonexistent-src"),
             architecture="arm64",
             build_type="release",
@@ -143,7 +152,7 @@ class GetAppPathTest(unittest.TestCase):
         self.assertEqual(ctx.BROWSEROS_APP_BASE_NAME, "BrowserOS neo")
 
     def test_debug_gn_args_allow_override_and_package_all(self):
-        ctx = Context(
+        ctx = self._context(
             chromium_src=Path("/nonexistent-src"),
             architecture="x64",
             build_type="debug",
@@ -161,7 +170,7 @@ class GetAppPathTest(unittest.TestCase):
     def test_release_gn_args_select_product_for_baked_identity(self):
         for product in ("browseros", "browserclaw"):
             with self.subTest(product=product):
-                ctx = Context(
+                ctx = self._context(
                     chromium_src=Path("/nonexistent-src"),
                     architecture="arm64",
                     build_type="release",
@@ -191,7 +200,7 @@ class GetAppPathTest(unittest.TestCase):
 
         for product, required in expected.items():
             with self.subTest(product=product):
-                ctx = Context(
+                ctx = self._context(
                     chromium_src=Path("/nonexistent-src"),
                     architecture="arm64",
                     build_type="release",
@@ -209,7 +218,7 @@ class GetAppPathTest(unittest.TestCase):
 
         for product in ("browseros", "browserclaw"):
             with self.subTest(product=product):
-                ctx = Context(
+                ctx = self._context(
                     chromium_src=Path("/nonexistent-src"),
                     architecture="arm64",
                     build_type="debug",

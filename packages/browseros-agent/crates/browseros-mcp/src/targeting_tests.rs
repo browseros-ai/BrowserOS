@@ -6,7 +6,7 @@ use crate::{
     StaticTargetStore, TargetStore, ToolCtx, ToolResult, catalog, execute_tool,
     output_file::create_browser_output_file_access, response::ToolResponse,
 };
-use browseros_cdp::{CdpError, CdpEvent};
+use browseros_cdp::{CdpError, CdpEvent, TargetedEvents};
 use browseros_core::{
     BrowserProfileId, BrowserSession, BrowserSessionHooks, BrowserView, CdpConnection,
     NativeCapabilities, SessionId, TargetBinding, TargetIntent, WindowId, WindowSelection,
@@ -18,7 +18,7 @@ use std::sync::{
     Arc, Mutex,
     atomic::{AtomicBool, Ordering},
 };
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, mpsc};
 use tokio_util::sync::CancellationToken;
 
 #[derive(Clone, Debug)]
@@ -40,11 +40,14 @@ struct NativeFixture {
     /// Applied under the reply lock once metrics are answered, so the change lands between
     /// a screenshot's viewport measurement and its capture without timing-dependent sleeps.
     after_layout_metrics: Option<FixtureChange>,
+    after_interception: Option<FixtureChange>,
 }
 
 struct FixtureConnection {
     state: Mutex<NativeFixture>,
     events: broadcast::Sender<CdpEvent>,
+    targeted: TargetedEvents,
+    hold_interception_ack: AtomicBool,
 }
 
 fn profile(id: &str, name: &str, loaded: bool) -> Value {
@@ -83,6 +86,8 @@ impl FixtureConnection {
         let (events, _) = broadcast::channel(64);
         Arc::new(Self {
             events,
+            targeted: TargetedEvents::default(),
+            hold_interception_ack: AtomicBool::new(false),
             state: Mutex::new(NativeFixture {
                 epoch: 1,
                 profiles: vec![
@@ -111,6 +116,7 @@ impl FixtureConnection {
                 ],
                 calls: Vec::new(),
                 after_layout_metrics: None,
+                after_interception: None,
             }),
         })
     }
@@ -143,6 +149,34 @@ impl FixtureConnection {
             .unwrap_or_else(|err| panic!("fixture poisoned: {err}"))
             .calls
             .clone()
+    }
+
+    /// Offers `event` to its method's targeted subscribers and broadcasts it only when none
+    /// took it, as `CdpClient` does. Fails when the broadcast is needed and no one reads it.
+    fn emit(&self, event: CdpEvent) -> Result<(), broadcast::error::SendError<CdpEvent>> {
+        if let Some(event) = self.targeted.deliver(event) {
+            self.events.send(event)?;
+        }
+        Ok(())
+    }
+
+    async fn dispatch(
+        &self,
+        expected_epoch: Option<u64>,
+        method: &str,
+        params: Value,
+        session: Option<&SessionId>,
+    ) -> Result<Value, CdpError> {
+        let hold_ack = method == "Page.setInterceptFileChooserDialog"
+            && params["enabled"] == true
+            && self.hold_interception_ack.load(Ordering::SeqCst);
+        let reply = self.reply(expected_epoch, method, params, session)?;
+        // Model a native mutation whose acknowledgement never arrives. Dropping the caller
+        // must still undo the override on the original session, without waiting for this ack.
+        if hold_ack {
+            std::future::pending::<()>().await;
+        }
+        Ok(reply)
     }
 
     fn reply(
@@ -339,6 +373,42 @@ impl FixtureConnection {
                 }))
             }
             "Page.captureScreenshot" => Ok(json!({ "data": "cG5n" })),
+            // One plain `div` the accessibility tree calls generic; only the DOM capture
+            // shows it is a pointer-cursor click target.
+            "Accessibility.getFullAXTree" => Ok(json!({ "nodes": [
+                { "nodeId": "1", "ignored": false, "role": { "type": "role", "value": "RootWebArea" },
+                  "name": { "type": "computedString", "value": "eng" }, "childIds": ["2"], "backendDOMNodeId": 1 },
+                { "nodeId": "2", "ignored": false, "role": { "type": "role", "value": "generic" },
+                  "childIds": ["3"], "backendDOMNodeId": 7, "parentId": "1" },
+                { "nodeId": "3", "ignored": false, "role": { "type": "role", "value": "StaticText" },
+                  "name": { "type": "computedString", "value": "Open card" }, "parentId": "2" }
+            ] })),
+            "DOMSnapshot.captureSnapshot" => Ok(json!({
+                "documents": [{
+                    "nodes": {
+                        "parentIndex": [-1, 0, 1, 2],
+                        "nodeType": [9, 1, 1, 1],
+                        "nodeName": [0, 1, 2, 3],
+                        "backendNodeId": [1, 5, 6, 7],
+                        "attributes": [[], [], [], []]
+                    },
+                    "layout": {
+                        "nodeIndex": [1, 2, 3],
+                        "styles": [[4], [4], [5]],
+                        "bounds": [[0, 0, 800, 600], [0, 0, 800, 600], [0, 0, 80, 20]]
+                    }
+                }],
+                "strings": ["#document", "HTML", "BODY", "DIV", "auto", "pointer"]
+            })),
+            "DOM.describeNode" => Ok(json!({"node":{"nodeName":"BUTTON","attributes":[]}})),
+            "Page.setInterceptFileChooserDialog" => {
+                if params["enabled"] == true
+                    && let Some(change) = state.after_interception.take()
+                {
+                    change(&mut state);
+                }
+                Ok(json!({}))
+            }
             "Page.enable"
             | "DOM.enable"
             | "Runtime.enable"
@@ -364,7 +434,7 @@ impl CdpConnection for FixtureConnection {
         params: Value,
         session: Option<&'a SessionId>,
     ) -> BoxFuture<'a, Result<Value, CdpError>> {
-        Box::pin(async move { self.reply(None, method, params, session) })
+        Box::pin(async move { self.dispatch(None, method, params, session).await })
     }
     fn send_at_epoch<'a>(
         &'a self,
@@ -373,7 +443,10 @@ impl CdpConnection for FixtureConnection {
         params: Value,
         session: Option<&'a SessionId>,
     ) -> BoxFuture<'a, Result<Value, CdpError>> {
-        Box::pin(async move { self.reply(Some(expected_epoch), method, params, session) })
+        Box::pin(async move {
+            self.dispatch(Some(expected_epoch), method, params, session)
+                .await
+        })
     }
     fn send_raw_json<'a>(
         &'a self,
@@ -408,6 +481,9 @@ impl CdpConnection for FixtureConnection {
     }
     fn events(&self) -> broadcast::Receiver<CdpEvent> {
         self.events.subscribe()
+    }
+    fn events_targeted(&self, method: &str) -> mpsc::UnboundedReceiver<CdpEvent> {
+        self.targeted.subscribe(method)
     }
     fn is_connected(&self) -> bool {
         true
@@ -804,7 +880,7 @@ async fn granular_and_script_paths_project_normal_windows_after_global_reconcili
     {
         let rejected = call(
             &ctx,
-            "evaluate",
+            "evaluate_in_page",
             json!({ "page": tab.page_id.0, "code": "return 1" }),
         )
         .await?;
@@ -1185,9 +1261,10 @@ async fn bound_viewport_screenshot_measures_and_captures_only_through_guarded_pa
             "{call:?}"
         );
     }
+    // The fixture display is 2x, and the default capture is one image pixel per CSS pixel.
     assert_eq!(
         page_calls[1].params["clip"],
-        json!({ "x": 3.0, "y": 4.0, "width": 1280.0, "height": 800.0, "scale": 1.0 })
+        json!({ "x": 3.0, "y": 4.0, "width": 1280.0, "height": 800.0, "scale": 0.5 })
     );
 
     let before = connection.calls().len();
@@ -1406,47 +1483,6 @@ async fn granular_creation_default_group_checks_its_actual_window() -> anyhow::R
 }
 
 #[tokio::test]
-async fn downloads_adapter_evaluates_only_captured_extension_workers_and_detaches()
--> anyhow::Result<()> {
-    let connection = FixtureConnection::new();
-    let session = BrowserSession::new_with_native(
-        connection.clone(),
-        BrowserSessionHooks::default(),
-        crate::tests::current_native(),
-    );
-    let store = Arc::new(StaticTargetStore::new());
-    store.set(intent("eng")).await.map_err(anyhow::Error::msg)?;
-    let captured = ctx(session, store).await?;
-    let records = crate::downloads_api::read_recent_downloads(&captured.browser).await?;
-    assert_eq!(records[0].filename, "/synthetic/download.txt");
-    let calls = connection.calls();
-    assert!(!calls.iter().any(
-        |call| call.method == "Target.attachToTarget" && call.params["targetId"] == "sw-sales"
-    ));
-    for call in calls
-        .iter()
-        .filter(|call| call.method == "Runtime.evaluate")
-    {
-        assert!(
-            call.session
-                .as_ref()
-                .is_some_and(|session| session.contains("sw-eng-"))
-        );
-    }
-    assert_eq!(
-        calls
-            .iter()
-            .filter(|call| call.method == "Target.attachToTarget")
-            .count(),
-        calls
-            .iter()
-            .filter(|call| call.method == "Target.detachFromTarget")
-            .count()
-    );
-    Ok(())
-}
-
-#[tokio::test]
 async fn static_store_serializes_revisions_and_clear_does_not_reuse_them() -> anyhow::Result<()> {
     let store = StaticTargetStore::new();
     let (a, b) = tokio::join!(store.set(intent("eng")), store.set(intent("sales")));
@@ -1487,7 +1523,7 @@ async fn stale_response_readback_does_not_expose_global_dialog_text() -> anyhow:
     session
         .page_signals
         .attach_page(page.clone(), signal_session.clone());
-    connection.events.send(CdpEvent {
+    connection.emit(CdpEvent {
         method: "Page.javascriptDialogOpening".to_string(),
         params: json!({ "type": "confirm", "message": "private dialog content" }),
         session_id: Some(signal_session),
@@ -2025,7 +2061,16 @@ async fn default_without_a_window_gets_one_from_tabs_and_run() -> anyhow::Result
     assert_eq!(window["isActive"], json!(false));
     assert_eq!(created[1].0, "Browser.createTab");
     assert_eq!(created[1].1["windowId"], window["windowId"]);
-    assert_eq!(created[1].1["url"], json!("https://first.test/"));
+    // The tab opens on about:blank and is then navigated to the requested URL.
+    assert_eq!(created[1].1["url"], json!("about:blank"));
+    assert!(
+        connection
+            .calls()
+            .iter()
+            .any(|call| call.method == "Page.navigate"
+                && call.params["url"] == "https://first.test/"),
+        "tabs new did not navigate the new tab"
+    );
 
     // The next call captures that window as Default's placement and creates tabs there.
     let run_ctx = ctx(session, Arc::new(StaticTargetStore::new())).await?;
@@ -2242,6 +2287,303 @@ async fn one_run_without_a_default_window_opens_one_window_for_all_pages() -> an
             .count(),
         1,
         "{created:?}"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn bound_snapshots_find_clickables_through_the_dom_capture() -> anyhow::Result<()> {
+    let connection = FixtureConnection::new();
+    let session = BrowserSession::new_with_native(
+        connection.clone(),
+        BrowserSessionHooks::default(),
+        crate::tests::current_native(),
+    );
+    let global = session.pages.list().await?;
+    let store = Arc::new(StaticTargetStore::new());
+    store.set(intent("eng")).await.map_err(anyhow::Error::msg)?;
+    let ctx = ctx(session.clone(), store).await?;
+    let page = global
+        .iter()
+        .find(|tab| tab.tab_id.0 == 102)
+        .ok_or_else(|| anyhow::anyhow!("eng tab missing"))?
+        .page_id
+        .0;
+
+    let snapshot = call(&ctx, "snapshot", json!({ "page": page })).await?;
+
+    let output = text(&snapshot);
+    assert!(!snapshot.is_error, "{output}");
+    assert!(output.contains("[cursor=pointer]"), "{output}");
+    let calls = connection.calls();
+    assert!(
+        calls
+            .iter()
+            .any(|call| call.method == "DOMSnapshot.captureSnapshot"),
+        "the bound scope refused the DOM capture"
+    );
+    assert!(
+        !calls
+            .iter()
+            .any(|call| call.method == "Runtime.callFunctionOn"),
+        "snapshot ran a page function"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn upload_restores_borrowed_interception_after_the_tab_leaves_scope() -> anyhow::Result<()> {
+    let connection = FixtureConnection::new();
+    let session = BrowserSession::new_with_native(
+        connection.clone(),
+        BrowserSessionHooks::default(),
+        crate::tests::current_native(),
+    );
+    let page = session
+        .pages
+        .list()
+        .await?
+        .into_iter()
+        .find(|page| page.tab_id.0 == 102)
+        .ok_or_else(|| anyhow::anyhow!("fixture tab"))?
+        .page_id;
+    let store = Arc::new(StaticTargetStore::new());
+    let mut pinned = intent("eng");
+    pinned.window = Some(WindowSelection::Pinned {
+        window_id: WindowId(20),
+    });
+    store.set(pinned).await.map_err(anyhow::Error::msg)?;
+    let captured = ctx(session, store).await?;
+    let snapshot = captured
+        .browser
+        .observe(page.clone())
+        .await?
+        .snapshot()
+        .await?;
+    let reference = snapshot
+        .refs
+        .entries_in_order()
+        .first()
+        .ok_or_else(|| anyhow::anyhow!("fixture ref"))?
+        .ref_id
+        .clone();
+    connection.change(|state| {
+        state.after_interception = Some(Box::new(|state| {
+            if let Some(tab) = state.tabs.iter_mut().find(|tab| tab["tabId"] == 102) {
+                tab["windowId"] = json!(10);
+            }
+        }))
+    });
+    let file = std::env::temp_dir().join(format!("chooser-{}.txt", uuid::Uuid::new_v4()));
+    tokio::fs::write(&file, b"private fixture bytes").await?;
+    let result = call(
+        &captured,
+        "upload",
+        json!({"page":page.0,"ref":reference.0,"file":file.to_string_lossy()}),
+    )
+    .await;
+    tokio::fs::remove_file(file).await?;
+    let result = result?;
+    assert!(result.is_error, "a moved tab must not receive files");
+    let settings = connection
+        .calls()
+        .into_iter()
+        .filter(|call| call.method == "Page.setInterceptFileChooserDialog")
+        .collect::<Vec<_>>();
+    assert_eq!(
+        settings.len(),
+        2,
+        "enable must be paired with cancellation despite scope revocation: {settings:?}"
+    );
+    assert_eq!(settings[0].params["enabled"], true);
+    assert_eq!(settings[1].params["enabled"], false);
+    assert_eq!(settings[0].session, settings[1].session);
+    assert!(
+        !connection
+            .calls()
+            .iter()
+            .any(|call| call.method == "DOM.setFileInputFiles")
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn upload_prepares_existing_frame_sessions_and_restores_the_whole_borrowed_tree()
+-> anyhow::Result<()> {
+    let connection = FixtureConnection::new();
+    let session = BrowserSession::new_with_native(
+        connection.clone(),
+        BrowserSessionHooks::default(),
+        crate::tests::current_native(),
+    );
+    let page = session
+        .pages
+        .list()
+        .await?
+        .into_iter()
+        .find(|page| page.tab_id.0 == 102)
+        .ok_or_else(|| anyhow::anyhow!("fixture tab"))?
+        .page_id;
+    let store = Arc::new(StaticTargetStore::new());
+    store.set(intent("eng")).await.map_err(anyhow::Error::msg)?;
+    let captured = ctx(session, store).await?;
+    let snapshot = captured
+        .browser
+        .observe(page.clone())
+        .await?
+        .snapshot()
+        .await?;
+    let reference = snapshot
+        .refs
+        .entries_in_order()
+        .first()
+        .ok_or_else(|| anyhow::anyhow!("fixture ref"))?
+        .ref_id
+        .clone();
+    let root = captured.browser.page_session(page.clone()).await?;
+    connection.emit(CdpEvent {
+        method:"Target.attachedToTarget".into(), session_id:Some(root.session_id),
+        params:json!({"sessionId":"preexisting-frame-session","waitingForDebugger":false,"targetInfo":{"targetId":"preexisting-frame","type":"iframe","title":"child","url":"https://eng.example.test/child","attached":true,"canAccessOpener":false}}),
+    })?;
+    tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        while !connection.calls().iter().any(|call| {
+            call.method == "DOM.enable"
+                && call.session.as_deref() == Some("preexisting-frame-session")
+        }) {
+            tokio::task::yield_now().await;
+        }
+        tokio::task::yield_now().await;
+    })
+    .await?;
+    assert!(
+        !connection
+            .calls()
+            .iter()
+            .any(|call| call.method == "Page.setInterceptFileChooserDialog")
+    );
+    let file = std::env::temp_dir().join(format!("frame-{}.txt", uuid::Uuid::new_v4()));
+    tokio::fs::write(&file, b"fixture bytes").await?;
+    // This protocol fixture deliberately stops before mouse dispatch. Selection's setup and
+    // error cleanup still cross the public upload interface, including the pre-attached child.
+    let result = call(
+        &captured,
+        "upload",
+        json!({"page":page.0,"ref":reference.0,"file":file.to_string_lossy()}),
+    )
+    .await;
+    tokio::fs::remove_file(file).await?;
+    assert!(result?.is_error);
+    let settings = connection
+        .calls()
+        .into_iter()
+        .filter(|call| {
+            call.method == "Page.setInterceptFileChooserDialog"
+                && call.session.as_deref() == Some("preexisting-frame-session")
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        settings.len(),
+        2,
+        "existing child must be enabled and restored: {settings:?}"
+    );
+    assert_eq!(settings[0].params["enabled"], true);
+    assert_eq!(settings[1].params["enabled"], false);
+    Ok(())
+}
+
+#[tokio::test]
+async fn cancelled_upload_restores_a_borrowed_tab_before_the_setup_ack() -> anyhow::Result<()> {
+    let connection = FixtureConnection::new();
+    let session = BrowserSession::new_with_native(
+        connection.clone(),
+        BrowserSessionHooks::default(),
+        crate::tests::current_native(),
+    );
+    let page = session
+        .pages
+        .list()
+        .await?
+        .into_iter()
+        .find(|page| page.tab_id.0 == 102)
+        .ok_or_else(|| anyhow::anyhow!("fixture tab"))?
+        .page_id;
+    let store = Arc::new(StaticTargetStore::new());
+    store.set(intent("eng")).await.map_err(anyhow::Error::msg)?;
+    let captured = ctx(session, store).await?;
+    let snapshot = captured
+        .browser
+        .observe(page.clone())
+        .await?
+        .snapshot()
+        .await?;
+    let reference = snapshot
+        .refs
+        .entries_in_order()
+        .first()
+        .ok_or_else(|| anyhow::anyhow!("fixture ref"))?
+        .ref_id
+        .clone();
+    let file = std::env::temp_dir().join(format!("cancelled-upload-{}.txt", uuid::Uuid::new_v4()));
+    tokio::fs::write(&file, b"fixture bytes").await?;
+    connection
+        .hold_interception_ack
+        .store(true, Ordering::SeqCst);
+    let mut upload = Box::pin(call(
+        &captured,
+        "upload",
+        json!({"page":page.0,"ref":reference.0,"file":file.to_string_lossy()}),
+    ));
+    let installed = async {
+        while !connection.calls().iter().any(|call| {
+            call.method == "Page.setInterceptFileChooserDialog" && call.params["enabled"] == true
+        }) {
+            tokio::task::yield_now().await;
+        }
+    };
+    tokio::select! {
+        result = &mut upload => anyhow::bail!("upload completed before cancellation: {result:?}"),
+        result = tokio::time::timeout(std::time::Duration::from_secs(1), installed) => result?,
+    }
+    drop(upload);
+    tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        while !connection.calls().iter().any(|call| {
+            call.method == "Page.setInterceptFileChooserDialog" && call.params["enabled"] == false
+        }) {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await?;
+    tokio::fs::remove_file(file).await?;
+    let settings = connection
+        .calls()
+        .into_iter()
+        .filter(|call| call.method == "Page.setInterceptFileChooserDialog")
+        .collect::<Vec<_>>();
+    assert_eq!(settings.len(), 2);
+    assert_eq!(settings[0].session, settings[1].session);
+    assert!(
+        !connection
+            .calls()
+            .iter()
+            .any(|call| call.method == "DOM.setFileInputFiles")
+    );
+    Ok(())
+}
+
+#[test]
+fn an_emitted_event_reaches_its_targeted_subscriber_and_not_the_broadcast() -> anyhow::Result<()> {
+    let connection = FixtureConnection::new();
+    let mut broadcast = connection.events();
+    let mut targeted = connection.events_targeted("Runtime.bindingCalled");
+    connection.emit(CdpEvent {
+        method: "Runtime.bindingCalled".into(),
+        params: json!({ "name": "probe" }),
+        session_id: None,
+    })?;
+    assert_eq!(targeted.try_recv()?.params["name"], "probe");
+    assert!(
+        broadcast.try_recv().is_err(),
+        "a method with a live targeted subscriber must bypass the broadcast"
     );
     Ok(())
 }

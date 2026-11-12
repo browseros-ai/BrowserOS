@@ -26,7 +26,7 @@ use tracing::warn;
 /// Whether this server groups pages the agent did not place itself.
 ///
 /// Explicit grouping is enforced here, at the two entry points every server-made group comes
-/// through: this effect (every dispatched call, pursue's moves included) and
+/// through: this effect (every dispatched call) and
 /// [`run_tab_group_work`], which the script hook also spawns. Nothing else records a session
 /// group, so with both closed the session never has one, and the rest falls away on its own:
 /// core gets no default group to open pages into, renames have no group to retitle, and
@@ -1068,7 +1068,7 @@ mod tests {
         ids::SessionId as AppSessionId,
         services::sessions::{RetainedGroupAction, Sessions},
     };
-    use browseros_cdp::{CdpError, CdpEvent};
+    use browseros_cdp::{CdpError, CdpEvent, TargetedEvents};
     use browseros_core::{CdpConnection, SessionId};
     use std::{
         collections::{BTreeSet, HashMap},
@@ -1078,7 +1078,7 @@ mod tests {
         },
         time::Duration,
     };
-    use tokio::sync::{Notify, broadcast};
+    use tokio::sync::{Notify, broadcast, mpsc};
 
     #[tokio::test]
     async fn dragged_group_is_detached_from_placement_but_retained_for_cleanup()
@@ -1914,6 +1914,7 @@ mod tests {
 
     struct GroupDispatchRecorder {
         sender: broadcast::Sender<CdpEvent>,
+        targeted: TargetedEvents,
         calls: StdMutex<Vec<(String, Value)>>,
         members: StdMutex<HashMap<String, BTreeSet<i64>>>,
         titles: StdMutex<HashMap<String, String>>,
@@ -1935,6 +1936,7 @@ mod tests {
             let (sender, _) = broadcast::channel(8);
             Self {
                 sender,
+                targeted: TargetedEvents::default(),
                 calls: StdMutex::new(Vec::new()),
                 members: StdMutex::new(HashMap::new()),
                 titles: StdMutex::new(HashMap::new()),
@@ -2291,6 +2293,10 @@ mod tests {
 
         fn events(&self) -> broadcast::Receiver<CdpEvent> {
             self.sender.subscribe()
+        }
+
+        fn events_targeted(&self, method: &str) -> mpsc::UnboundedReceiver<CdpEvent> {
+            self.targeted.subscribe(method)
         }
 
         fn is_connected(&self) -> bool {

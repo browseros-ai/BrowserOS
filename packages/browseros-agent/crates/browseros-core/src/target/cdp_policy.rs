@@ -23,19 +23,22 @@ fn validate_parameters(method: &str, params: &Value, allowed: &[&str]) -> Result
 
 fn page_parameters(method: &str) -> Option<&'static [&'static str]> {
     match method {
-        "Autofill.getCredentialContext" => Some(&[]),
-        "Autofill.listCredentials" => {
+        "Passwords.getContext" | "Payments.getContext" => Some(&[]),
+        "Passwords.listCredentials" => {
             Some(&["operationId", "documentId", "query", "limit", "cursor"])
         }
-        "Autofill.addCredential" => Some(&["operationId", "documentId", "username", "password"]),
-        "Autofill.fillCredential" => Some(&[
+        "Passwords.addCredential" => Some(&["operationId", "documentId", "username", "password"]),
+        "Passwords.fillCredential" => Some(&[
             "operationId",
             "documentId",
             "credentialId",
             "username",
             "password",
         ]),
-        "Autofill.cancelCredentialOperation" => Some(&["operationId"]),
+        "Payments.listCards" => Some(&["operationId", "documentId"]),
+        "Payments.addCard" => Some(&["operationId", "documentId", "card"]),
+        "Payments.fillCard" => Some(&["operationId", "documentId", "cardId", "card"]),
+        "Passwords.cancelOperation" | "Payments.cancelOperation" => Some(&["operationId"]),
         "Runtime.enable" => Some(&[]),
         "Runtime.disable" => Some(&[]),
         "Runtime.evaluate" => Some(&[
@@ -137,9 +140,12 @@ fn page_parameters(method: &str) -> Option<&'static [&'static str]> {
         "DOM.pushNodeByPathToFrontend" => Some(&["path"]),
         "DOM.scrollIntoViewIfNeeded" => Some(&["nodeId", "backendNodeId", "objectId", "rect"]),
         "DOM.focus" => Some(&["nodeId", "backendNodeId", "objectId"]),
+        // BrowserOS's press for the click fallback; older builds answer method-not-found.
+        "DOM.click" => Some(&["backendNodeId"]),
         "DOM.setFileInputFiles" => Some(&["files", "nodeId", "backendNodeId", "objectId"]),
         "Page.enable" => Some(&["enableFileChooserOpenedEvent"]),
         "Page.disable" => Some(&[]),
+        "Page.setInterceptFileChooserDialog" => Some(&["enabled", "cancel"]),
         "Page.navigate" => Some(&[
             "url",
             "referrer",
@@ -152,6 +158,15 @@ fn page_parameters(method: &str) -> Option<&'static [&'static str]> {
         "Page.navigateToHistoryEntry" => Some(&["entryId"]),
         "Page.getFrameTree" => Some(&[]),
         "Page.getLayoutMetrics" => Some(&[]),
+        "Page.startScreencast" => Some(&[
+            "format",
+            "quality",
+            "maxWidth",
+            "maxHeight",
+            "everyNthFrame",
+            "maxFramesInFlight",
+        ]),
+        "Page.stopScreencast" => Some(&[]),
         "Page.captureScreenshot" => Some(&[
             "format",
             "quality",
@@ -229,6 +244,8 @@ fn page_parameters(method: &str) -> Option<&'static [&'static str]> {
             "pointerType",
         ]),
         "Input.dispatchTouchEvent" => Some(&["type", "touchPoints", "modifiers", "timestamp"]),
+        // Native HTML drag-and-drop: drag drives these once the browser intercepts a drag.
+        "Input.cancelDragging" => Some(&[]),
         "Input.insertText" => Some(&["text"]),
         "Input.synthesizeScrollGesture" => Some(&[
             "x",
@@ -269,6 +286,15 @@ fn page_parameters(method: &str) -> Option<&'static [&'static str]> {
         "Accessibility.enable" => Some(&[]),
         "Accessibility.disable" => Some(&[]),
         "Accessibility.getFullAXTree" => Some(&["depth", "frameId"]),
+        // Read-only inspector capture; a snapshot finds clickable elements with it instead of
+        // running a script in the page.
+        "DOMSnapshot.captureSnapshot" => Some(&[
+            "computedStyles",
+            "includePaintOrder",
+            "includeDOMRects",
+            "includeBlendedBackgroundColors",
+            "includeTextColorOpacities",
+        ]),
         "Accessibility.getPartialAXTree" => {
             Some(&["nodeId", "backendNodeId", "objectId", "fetchRelatives"])
         }

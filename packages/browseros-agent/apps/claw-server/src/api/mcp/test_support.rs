@@ -68,6 +68,7 @@ pub async fn tool_call_with_behavior(
         },
         mode,
         behavior,
+        behavior_ignored: Vec::new(),
     });
     let state = AppState::new_with_home(config, home).await?;
     let session = Session::new(
@@ -125,6 +126,7 @@ pub async fn tool_call_with_behavior(
 /// tab/window identity and group movement so routing errors have visible effects.
 pub(crate) struct ProfileConnection {
     events: tokio::sync::broadcast::Sender<browseros_cdp::CdpEvent>,
+    targeted: browseros_cdp::TargetedEvents,
     pub profiles: std::sync::Mutex<Vec<Value>>,
     pub windows: std::sync::Mutex<Vec<Value>>,
     pub tabs: std::sync::Mutex<Vec<Value>>,
@@ -157,6 +159,7 @@ impl ProfileConnection {
         let (events, _) = tokio::sync::broadcast::channel(8);
         Arc::new(Self {
             events,
+            targeted: browseros_cdp::TargetedEvents::default(),
             profiles: std::sync::Mutex::new(vec![
                 serde_json::json!({"browserProfileId":"eng", "name":"eng", "directory":"Synthetic-eng", "loaded":true, "browserContextId":"ctx-eng"}),
                 serde_json::json!({"browserProfileId":"ops", "name":"ops", "directory":"Synthetic-ops", "loaded":true, "browserContextId":"ctx-ops"}),
@@ -202,7 +205,7 @@ impl ProfileConnection {
         expected_epoch: Option<u64>,
         method: &'a str,
         params: Value,
-        _session: Option<&'a browseros_core::SessionId>,
+        session: Option<&'a browseros_core::SessionId>,
     ) -> futures_util::future::BoxFuture<'a, Result<Value, browseros_cdp::CdpError>> {
         Box::pin(async move {
             use serde_json::json;
@@ -389,10 +392,26 @@ impl ProfileConnection {
                     Ok(json!({}))
                 }
                 "Target.detachFromTarget" => Ok(json!({})),
+                // A new tab opens on about:blank and is then navigated; the navigation commits
+                // the requested URL on the tab whose session sent it.
+                "Page.navigate" => {
+                    let target = session
+                        .and_then(|session| session.as_str().strip_prefix("S-"))
+                        .map(|target| target.trim_matches('"').to_string());
+                    let mut tabs = self.tabs.lock().unwrap_or_else(|p| p.into_inner());
+                    if let Some(tab) = tabs
+                        .iter_mut()
+                        .find(|tab| target.as_deref() == tab["targetId"].as_str())
+                    {
+                        tab["url"] = params["url"].clone();
+                    }
+                    Ok(json!({"frameId":"F","loaderId":"L"}))
+                }
                 "Target.attachToTarget" => {
                     Ok(json!({"sessionId":format!("S-{}", params["targetId"])}))
                 }
                 "Page.enable"
+                | "Page.setInterceptFileChooserDialog"
                 | "DOM.enable"
                 | "Runtime.enable"
                 | "Accessibility.enable"
@@ -517,6 +536,12 @@ impl browseros_core::CdpConnection for ProfileConnection {
     }
     fn events(&self) -> tokio::sync::broadcast::Receiver<browseros_cdp::CdpEvent> {
         self.events.subscribe()
+    }
+    fn events_targeted(
+        &self,
+        method: &str,
+    ) -> tokio::sync::mpsc::UnboundedReceiver<browseros_cdp::CdpEvent> {
+        self.targeted.subscribe(method)
     }
     fn is_connected(&self) -> bool {
         true

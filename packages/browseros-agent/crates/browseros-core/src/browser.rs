@@ -167,27 +167,6 @@ impl Browser {
         })
     }
 
-    pub async fn evaluate(
-        &self,
-        page_id: PageId,
-        expression: &str,
-    ) -> Result<EvaluateOutput, CoreError> {
-        let session = self.resolve_session(page_id).await?;
-        match PageJs::page_world(&session).eval_value(expression).await {
-            Ok(result) => Ok(EvaluateOutput {
-                value: result.value,
-                error: None,
-                description: result.description,
-            }),
-            Err(CoreError::PageScript(error)) => Ok(EvaluateOutput {
-                value: None,
-                error: Some(error),
-                description: None,
-            }),
-            Err(error) => Err(error),
-        }
-    }
-
     async fn resolve_session(&self, page_id: PageId) -> Result<ProtocolSession, CoreError> {
         Ok(self.view().await.page_session(page_id).await?.session)
     }
@@ -213,13 +192,6 @@ pub struct BrowserScreenshot {
     pub data: String,
     pub mime_type: String,
     pub device_pixel_ratio: f64,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct EvaluateOutput {
-    pub value: Option<Value>,
-    pub error: Option<String>,
-    pub description: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

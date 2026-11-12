@@ -33,6 +33,8 @@ export function createProtocolApi(send: RawSend, on: RawOn): ProtocolApi {
     Audits: createDomainProxy('Audits', send, on),
     Autofill: createDomainProxy('Autofill', send, on),
     Bookmarks: createDomainProxy('Bookmarks', send, on),
+    Passwords: createDomainProxy('Passwords', send, on),
+    Payments: createDomainProxy('Payments', send, on),
     BackgroundService: createDomainProxy('BackgroundService', send, on),
     BluetoothEmulation: createDomainProxy('BluetoothEmulation', send, on),
     Browser: createDomainProxy('Browser', send, on),

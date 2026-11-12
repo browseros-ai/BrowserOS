@@ -83,6 +83,17 @@ describe('computeAffectedSuites', () => {
     ).toEqual(['agent-cursor', 'build'])
   })
 
+  it('tests that a vendored Playwright or engine asset change selects the engine freshness suite', () => {
+    for (const changed of [
+      'packages/browseros-agent/crates/neo-sdk/neo-playwright/assets/injected.js',
+      'packages/browseros-agent/crates/neo-sdk/neo-playwright/assets/prelude.js',
+      'packages/browseros-agent/crates/neo-sdk/neo-playwright/tests/data/probe-protocol.json',
+      'packages/browseros-agent/crates/neo-sdk/neo-playwright/third_party/playwright/packages/injected/src/injectedScript.ts',
+    ]) {
+      expect(suiteNames([], [changed])).toEqual(['browseros-playwright-js'])
+    }
+  })
+
   it('maps any affected Rust crate to all three Rust suites', () => {
     expect(
       suiteNames([
@@ -95,6 +106,17 @@ describe('computeAffectedSuites', () => {
     expect(
       suiteNames([pkg('@browseros/claw-server', 'apps/claw-server')]),
     ).toEqual(['claw-server', 'claw-server-quality', 'claw-mcp'])
+  })
+
+  it('runs the Rust suites and its own check script for a claw-sdk change', () => {
+    expect(
+      suiteNames([pkg('@browseros/neo-server', 'crates/neo-sdk/neo-server')]),
+    ).toEqual([
+      'claw-server',
+      'claw-server-quality',
+      'claw-sdk-quality',
+      'claw-mcp',
+    ])
   })
 
   it('adds the build suite when scripts change', () => {
@@ -173,6 +195,12 @@ describe('computeAffectedSuites', () => {
     })
   })
 
+  it('tests that a change to the shipped behaviour file selects the claw-server suite', () => {
+    expect(suiteNames([], ['packages/browseros/docker/neo/neo.toml'])).toEqual([
+      'claw-server',
+    ])
+  })
+
   it('unions and de-duplicates across packages and paths, in declared order', () => {
     const result = suiteNames(
       [
@@ -204,7 +232,9 @@ describe('computeAffectedSuites', () => {
       pkg('@browseros/app-onboard', 'apps/app-onboard'),
       pkg('@browseros/build-server-tools', 'packages/build-server-tools'),
       pkg('@browseros/claw-server', 'apps/claw-server'),
+      pkg('@browseros/neo-server', 'crates/neo-sdk/neo-server'),
       pkg('@browseros/agent-cursor', 'packages/agent-cursor'),
+      pkg('@browseros/neo-playwright-js', 'crates/neo-sdk/neo-playwright-js'),
     ]
     expect(new Set(suiteNames(allPackages))).toEqual(
       new Set(

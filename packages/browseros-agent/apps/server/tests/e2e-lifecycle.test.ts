@@ -279,7 +279,8 @@ process.exit(17);`,
             const stat = await readFile(`/proc/${descendantPid}/stat`, 'utf8')
             return stat.slice(stat.lastIndexOf(')') + 2).split(' ')[0] !== 'Z'
           } catch (error) {
-            if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false
+            const code = (error as NodeJS.ErrnoException).code
+            if (code === 'ENOENT' || code === 'ESRCH') return false
             throw error
           }
         }

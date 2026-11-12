@@ -20,6 +20,14 @@ export interface CaseContext {
   browser: BrowserHandle
   /** Primary MCP session, shared across cases within one server run. */
   mcp: McpSession
+  /**
+   * A session on a second server told the browser's BrowserOS version, as BrowserOS launches
+   * it in production. Its views are profile-scoped, so page access runs through the scoped
+   * admission guards; the primary server treats the browser as an unknown native and skips
+   * them. Started on first use and shared by later cases. On a browser without native
+   * profile targeting this is the primary session: such a BrowserOS runs unbound too.
+   */
+  scopedMcp(): Promise<McpSession>
   /** Extra sessions (ownership/naming/audit cases); auto-closed at run end. */
   openSession(clientName?: string): Promise<McpSession>
   /** URL on the primary fixture origin. */
@@ -33,6 +41,10 @@ export interface CaseContext {
 
 export interface ContractCase {
   name: string
+  /** Browser arguments scoped to this case; changing them restarts the isolated runtime. */
+  browserArgs?: string[]
+  /** Override the suite's launch mode; visual batches can match hosted Neo's headed X server. */
+  headless?: boolean
   /** ~12 cases carry true: the <60s tier run by test:claw-mcp-smoke. */
   smoke?: boolean
   run(ctx: CaseContext): Promise<void>
@@ -41,12 +53,24 @@ export interface ContractCase {
 import { actCases } from './cases-act'
 import { captureIoCases } from './cases-capture-io'
 import { clawLayerCases } from './cases-claw-layer'
+import { clickRecoveryCases } from './cases-click-recovery'
 import { fillCases } from './cases-fill'
+import { fillReadbackCases } from './cases-fill-readback'
+import { frameRefCases } from './cases-frame-refs'
+import { isolationCases } from './cases-isolation'
+import { labelCases } from './cases-labels'
 import { navigateSnapshotCases } from './cases-navigate-snapshot'
+import { outputCases } from './cases-outputs'
 import { readEvalCases } from './cases-read-eval'
+import { runBudgetCases } from './cases-run-budget'
+import { screenshotScaleCases } from './cases-screenshot-scale'
+import { sdkInputCases } from './cases-sdk-input'
+import { sdkNavigationCases } from './cases-sdk-navigation'
+import { sdkReadEvalCases } from './cases-sdk-read-eval'
 import { snapshotConcurrencyCases } from './cases-snapshot-concurrency'
 import { tabsCases } from './cases-tabs'
 import { transportCases } from './cases-transport'
+import { ultrafastCases } from './cases-ultrafast'
 
 // Order is load-bearing: clawLayerCases ends with the browser-kill case,
 // which must be the final case per server run — it poisons the browser.
@@ -54,10 +78,22 @@ export const contractCases: ContractCase[] = [
   ...transportCases,
   ...tabsCases,
   ...navigateSnapshotCases,
+  ...labelCases,
   ...snapshotConcurrencyCases,
+  ...frameRefCases,
   ...actCases,
+  ...clickRecoveryCases,
   ...fillCases,
+  ...fillReadbackCases,
   ...readEvalCases,
+  ...isolationCases,
   ...captureIoCases,
+  ...outputCases,
+  ...runBudgetCases,
+  ...sdkInputCases,
+  ...sdkNavigationCases,
+  ...sdkReadEvalCases,
+  ...screenshotScaleCases,
+  ...ultrafastCases,
   ...clawLayerCases,
 ]

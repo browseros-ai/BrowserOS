@@ -1,0 +1,9 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Far C</title></head>
+<body style="margin:0">
+<button id="c-button" style="margin:40px">C button</button>
+<script>
+  window.__log = [];
+  for (const type of ['mousedown', 'click'])
+    document.addEventListener(type, (e) => window.__log.push(`${type} ${e.target.id || e.target.tagName}`), true);
+</script>
+</body></html>

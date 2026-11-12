@@ -53,7 +53,13 @@ const bookmarks: ReplayAction[] = [
   },
 ]
 
-function TransportHarness() {
+function TransportHarness({
+  fullScreen,
+  onToggleFullScreen,
+}: {
+  fullScreen?: boolean
+  onToggleFullScreen?: () => void
+} = {}) {
   const playback = usePlayback(10)
   return (
     <>
@@ -62,6 +68,8 @@ function TransportHarness() {
         totalSeconds={10}
         actions={bookmarks}
         onSeek={playback.seek}
+        fullScreen={fullScreen}
+        onToggleFullScreen={onToggleFullScreen}
       />
       <button type="button" data-command-pause onClick={playback.pause}>
         Explicit pause
@@ -227,5 +235,34 @@ describe('PlaybackTransport', () => {
     expect(
       container.querySelector('button[aria-label]')?.getAttribute('aria-label'),
     ).toBe('Pause')
+  })
+
+  it('offers full screen only when the page can open it', async () => {
+    const fullScreenButton = () =>
+      container.querySelector('button[aria-label$="full screen" i]')
+
+    await act(async () => root.render(<TransportHarness />))
+    expect(fullScreenButton()).toBeNull()
+
+    let toggles = 0
+    await act(async () =>
+      root.render(<TransportHarness onToggleFullScreen={() => toggles++} />),
+    )
+    expect(fullScreenButton()?.getAttribute('aria-label')).toBe('Full screen')
+    await act(async () => {
+      fullScreenButton()?.dispatchEvent(
+        new window.Event('click', { bubbles: true }),
+      )
+    })
+    expect(toggles).toBe(1)
+
+    await act(async () =>
+      root.render(
+        <TransportHarness fullScreen onToggleFullScreen={() => toggles++} />,
+      ),
+    )
+    expect(fullScreenButton()?.getAttribute('aria-label')).toBe(
+      'Exit full screen',
+    )
   })
 })

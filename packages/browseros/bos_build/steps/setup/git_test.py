@@ -69,6 +69,7 @@ class GitSetupExecuteTest(unittest.TestCase):
             self.ctx.chromium_version,
             strategy="full",
             branch=BROWSEROS_BRANCH,
+            patch_root=self.ctx.get_patch_root(),
         )
 
     def test_missing_tag_stops_before_checkout(self):

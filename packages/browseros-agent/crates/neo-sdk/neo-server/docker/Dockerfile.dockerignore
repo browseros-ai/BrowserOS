@@ -1,0 +1,20 @@
+# The context is packages/browseros-agent. Send only what Cargo needs to load the workspace and
+# build the server: every member's manifest and sources (Cargo refuses a member it cannot read),
+# the lockfile, and this folder. node_modules alone is about 2 GB.
+*
+!Cargo.toml
+!Cargo.lock
+!crates
+!apps/claw-server
+**/node_modules
+# Only Cargo's output at the root: `**/target` would also drop source modules such as
+# browseros-core/src/target/.
+target
+# This folder's scripts and docs are not build inputs, so editing them leaves the image cached.
+# The browser pin, the server's build step and the supervisor (supervisor/, its tests aside) are.
+crates/neo-sdk/neo-server/docker
+!crates/neo-sdk/neo-server/docker/browser.lock
+!crates/neo-sdk/neo-server/docker/build-server.sh
+!crates/neo-sdk/neo-server/docker/supervisor
+crates/neo-sdk/neo-server/docker/supervisor/*_test.py
+**/__pycache__

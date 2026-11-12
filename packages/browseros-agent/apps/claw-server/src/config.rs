@@ -1,3 +1,7 @@
+mod behavior;
+
+pub use behavior::{Behavior, Ignored, TabGrouping};
+
 use anyhow::Context;
 use browseros_core::NativeCapabilities;
 use clap::Parser;
@@ -13,8 +17,6 @@ use std::{
 const DEFAULT_SERVER_PORT: u16 = 9200;
 const DEFAULT_CDP_PORT: u16 = 49337;
 const DEFAULT_SESSION_IDLE_MS: u64 = 30 * 60 * 1000;
-// Retain results so users can inspect agent-opened tabs and browser-side work can settle.
-const DEFAULT_SESSION_RETENTION_MS: u64 = 60 * 60 * 1000;
 const DEFAULT_SESSION_SWEEP_INTERVAL_MS: u64 = 60 * 1000;
 const DEFAULT_REPLAY_RETENTION_DAYS: u64 = 7;
 const BROWSERCLAW_DIR_NAME: &str = ".browserclaw";
@@ -72,13 +74,15 @@ pub struct Config {
     pub resources_dir: PathBuf,
     pub browserclaw_dir: PathBuf,
     pub session_idle: Duration,
+    /// The resolved `behavior.tab_close_after`, shared by retained-session/group cleanup
+    /// and durable individual-tab cleanup so neither can close tabs before the chosen grace.
     pub session_retention: Duration,
     pub session_sweep_interval: Duration,
     pub replay_retention_days: u64,
     /// A dev server is a guest beside the installed BrowserOS neo, which owns the shared
     /// agent configs (MCP entries and skills under `$HOME`, all named `browseros-neo`). It
-    /// keeps its own default state dir and never provisions those configs on its own; an
-    /// explicit Connect still does. Set by the sidecar's `flags.devMode`, else debug builds.
+    /// keeps its own default state dir and never changes those configs, even on explicit
+    /// Connect/Disconnect. Set by the sidecar's `flags.devMode`, else debug builds.
     pub dev_mode: bool,
     /// Read once per process. Every discovery and execution path gates native features on
     /// this one value, which `BrowserService` copies into each browser session.
@@ -87,6 +91,9 @@ pub struct Config {
     pub mode: ServerMode,
     /// Read once per process: `mode`'s defaults, overridden by [`BEHAVIOR_FILE_ENV`].
     pub behavior: Behavior,
+    /// What the behaviour file said that this build could not apply. Config is read before
+    /// logging starts, so startup logs these once it can.
+    pub behavior_ignored: Vec<Ignored>,
 }
 
 /// How this server is deployed, fixed for the process by [`HOSTED_MODE_ENV`].
@@ -116,93 +123,6 @@ impl ServerMode {
     pub fn is_hosted(self) -> bool {
         self == Self::Hosted
     }
-}
-
-/// What a deployment can tune about how this server behaves, fixed for the process.
-///
-/// [`ServerMode`] supplies every default and the file named by [`BEHAVIOR_FILE_ENV`] may
-/// override any of them. Code asks these fields, not the mode, so a new knob is one field here,
-/// one key in `BehaviorFile` and one commented line in the Docker image's `neo.toml`, rather
-/// than another environment variable for every deployment to carry.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Behavior {
-    pub tab_grouping: TabGrouping,
-    /// Whether BrowserOS's DOM-only page scripts run in its isolated JavaScript world, which the
-    /// page cannot see or tamper with (`browseros_core::page_js`). Off runs every script in the
-    /// page's own world, as before isolated worlds; it is the rollout's off switch.
-    pub isolated_world: bool,
-}
-
-impl Behavior {
-    #[must_use]
-    pub fn defaults(mode: ServerMode) -> Self {
-        Self {
-            tab_grouping: match mode {
-                ServerMode::Desktop => TabGrouping::Automatic,
-                ServerMode::Hosted => TabGrouping::Explicit,
-            },
-            isolated_world: true,
-        }
-    }
-}
-
-/// The desktop defaults, matching [`ServerMode`]'s own default.
-impl Default for Behavior {
-    fn default() -> Self {
-        Self::defaults(ServerMode::Desktop)
-    }
-}
-
-/// Who decides which tab group an agent's page joins.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum TabGrouping {
-    /// The server keeps each session's pages in a `<client>/<task>` group that it creates,
-    /// titles, collapses and closes. The desktop app's behaviour.
-    #[serde(rename = "auto")]
-    Automatic,
-    /// The server never creates, moves, titles or closes a group: a page joins one only when the
-    /// call names `groupId`. For hosts whose own harness owns the tab layout.
-    Explicit,
-}
-
-impl TabGrouping {
-    /// The spelling the behaviour file uses.
-    #[must_use]
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Automatic => "auto",
-            Self::Explicit => "explicit",
-        }
-    }
-
-    #[must_use]
-    pub fn is_automatic(self) -> bool {
-        self == Self::Automatic
-    }
-}
-
-/// The behaviour file as written. Every key is optional; unknown keys are rejected, so a typo
-/// stops startup instead of being ignored while the default it meant to change stays on.
-#[derive(Debug, Default, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct BehaviorFile {
-    #[serde(default)]
-    tabs: TabsSection,
-    #[serde(default)]
-    scripts: ScriptsSection,
-}
-
-#[derive(Debug, Default, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct TabsSection {
-    grouping: Option<TabGrouping>,
-}
-
-#[derive(Debug, Default, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct ScriptsSection {
-    isolated_world: Option<bool>,
 }
 
 /// The connected browser's native identity as this process learned it.
@@ -328,7 +248,10 @@ impl Config {
         let browserclaw_dir = resolve_browserclaw_dir(env, dev_mode, &cwd);
         let native = resolve_native_identity(env, sidecar.instance.as_ref());
         let mode = resolve_mode(env)?;
-        let behavior = resolve_behavior(env, mode)?;
+        let behavior::Applied {
+            behavior,
+            ignored: behavior_ignored,
+        } = resolve_behavior(env, mode)?;
 
         Ok(Self {
             server_port,
@@ -341,11 +264,7 @@ impl Config {
                 "CLAW_SESSION_IDLE_MS",
                 DEFAULT_SESSION_IDLE_MS,
             )),
-            session_retention: Duration::from_millis(read_positive_ms(
-                env,
-                "CLAW_SESSION_RETENTION_MS",
-                DEFAULT_SESSION_RETENTION_MS,
-            )),
+            session_retention: behavior.tab_close_after,
             session_sweep_interval: Duration::from_millis(read_positive_ms(
                 env,
                 "CLAW_SESSION_SWEEP_INTERVAL_MS",
@@ -359,6 +278,7 @@ impl Config {
             native,
             mode,
             behavior,
+            behavior_ignored,
         })
     }
 
@@ -420,24 +340,27 @@ fn resolve_mode(env: &ConfigEnv) -> anyhow::Result<ServerMode> {
     }
 }
 
-/// The mode's defaults with the behaviour file's keys applied. A file that cannot be read or
-/// parsed fails startup, naming the file; toml's error carries the offending line and key.
-fn resolve_behavior(env: &ConfigEnv, mode: ServerMode) -> anyhow::Result<Behavior> {
-    let defaults = Behavior::defaults(mode);
+/// The mode's defaults with the behaviour file applied. A file that cannot be read or is not
+/// TOML fails startup, naming the file; toml's error carries the offending line. Anything else
+/// this build cannot apply comes back as ignored rather than failing (see [`behavior`]).
+fn resolve_behavior(env: &ConfigEnv, mode: ServerMode) -> anyhow::Result<behavior::Applied> {
+    let mut defaults = Behavior::defaults(mode);
+    // Preserve the legacy millisecond override as a fallback. The file is applied last so
+    // a deployment's tab policy has one effective value for both browser cleanup paths.
+    defaults.tab_close_after = Duration::from_millis(read_positive_ms(
+        env,
+        "CLAW_SESSION_RETENTION_MS",
+        defaults.tab_close_after.as_secs() * 1_000,
+    ));
     let Some(path) = env.get(BEHAVIOR_FILE_ENV).and_then(clean_string) else {
-        return Ok(defaults);
+        return Ok(behavior::Applied {
+            behavior: defaults,
+            ignored: Vec::new(),
+        });
     };
     let raw = fs::read_to_string(&path)
         .with_context(|| format!("{BEHAVIOR_FILE_ENV} names {path}, which cannot be read"))?;
-    let file: BehaviorFile =
-        toml::from_str(&raw).with_context(|| format!("invalid behaviour file {path}"))?;
-    Ok(Behavior {
-        tab_grouping: file.tabs.grouping.unwrap_or(defaults.tab_grouping),
-        isolated_world: file
-            .scripts
-            .isolated_world
-            .unwrap_or(defaults.isolated_world),
-    })
+    behavior::read(&raw, defaults).with_context(|| format!("invalid behaviour file {path}"))
 }
 
 fn resolve_path(cwd: &Path, path: PathBuf) -> PathBuf {
@@ -492,18 +415,9 @@ fn clean_string(value: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    /// A blank or whitespace credential is no credential, which is what keeps a
-    /// half-set variable from advertising a tool that cannot run. Asserted as a
-    /// shape rather than through the environment, which no test here owns.
-    #[test]
-    fn the_offering_is_a_yes_or_a_no() {
-        assert!(super::PursueOffering::Offered.is_offered());
-        assert!(!super::PursueOffering::Absent.is_offered());
-    }
-
     use super::{
-        BEHAVIOR_FILE_ENV, Cli, CliAction, Config, ConfigEnv, HOSTED_MODE_ENV, NATIVE_VERSION_ENV,
-        ServerMode, TabGrouping,
+        BEHAVIOR_FILE_ENV, Behavior, Cli, CliAction, Config, ConfigEnv, HOSTED_MODE_ENV,
+        NATIVE_VERSION_ENV, ServerMode, TabGrouping,
     };
     use browseros_core::{BrowserOsVersion, NativeFeature};
     use clap::{Parser, error::ErrorKind};
@@ -865,6 +779,94 @@ mod tests {
     }
 
     #[test]
+    fn tab_close_grace_defaults_to_30_minutes_when_hosted_and_one_hour_on_desktop()
+    -> anyhow::Result<()> {
+        for (mode, expected_seconds) in [("1", 1_800), ("0", 3_600)] {
+            let config = load_native("{}", &[(HOSTED_MODE_ENV, mode)])?;
+            assert_eq!(
+                config.session_retention,
+                Duration::from_secs(expected_seconds)
+            );
+            assert_eq!(config.session_idle, Duration::from_secs(1_800));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn the_behavior_file_sets_tab_close_grace_independently_of_grouping_and_idle_expiry()
+    -> anyhow::Result<()> {
+        for mode in ["0", "1"] {
+            for grouping in ["auto", "explicit"] {
+                for (minutes, expected_seconds) in [(1, 60), (30, 1_800), (90, 5_400)] {
+                    let config = load_with_behavior_file(
+                        mode,
+                        &format!(
+                            "[tabs]\ngrouping = {grouping:?}\nclose_after_minutes = {minutes}\n"
+                        ),
+                    )?;
+                    assert_eq!(
+                        config.session_retention,
+                        Duration::from_secs(expected_seconds),
+                        "mode={mode}, grouping={grouping}, minutes={minutes}"
+                    );
+                    assert_eq!(config.session_idle, Duration::from_secs(1_800));
+                    assert!(config.behavior_ignored.is_empty());
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn invalid_tab_close_grace_is_reported_and_keeps_the_mode_default() -> anyhow::Result<()> {
+        for mode in ["0", "1"] {
+            let defaults = load_native("{}", &[(HOSTED_MODE_ENV, mode)])?;
+            for value in ["0", "-1", "1.5", "\"30\"", "true", "{}", "4_294_967_296"] {
+                let config = load_with_behavior_file(
+                    mode,
+                    &format!("[tabs]\ngrouping = \"auto\"\nclose_after_minutes = {value}\n"),
+                )?;
+                assert_eq!(
+                    config.session_retention, defaults.session_retention,
+                    "{value}"
+                );
+                assert_eq!(config.behavior.tab_grouping, TabGrouping::Automatic);
+                assert_eq!(config.behavior_ignored.len(), 1, "{value}");
+                assert_eq!(config.behavior_ignored[0].key, "tabs.close_after_minutes");
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn a_file_tab_close_grace_overrides_the_legacy_environment_fallback() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let file = dir.path().join("neo.toml");
+        let file_path = file.to_string_lossy().to_string();
+        for (contents, expected_millis) in [
+            ("[tabs]\n", 1_500),
+            ("[tabs]\nclose_after_minutes = 2\n", 120_000),
+            ("[tabs]\nclose_after_minutes = 0\n", 1_500),
+        ] {
+            fs::write(&file, contents)?;
+            let config = load_native(
+                "{}",
+                &[
+                    (HOSTED_MODE_ENV, "1"),
+                    (BEHAVIOR_FILE_ENV, file_path.as_str()),
+                    ("CLAW_SESSION_RETENTION_MS", "1500"),
+                ],
+            )?;
+            assert_eq!(
+                config.session_retention,
+                Duration::from_millis(expected_millis),
+                "{contents}"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
     fn tab_grouping_defaults_to_automatic_on_desktop_and_explicit_when_hosted() -> anyhow::Result<()>
     {
         assert_eq!(
@@ -953,20 +955,37 @@ mod tests {
     }
 
     #[test]
-    fn an_unknown_key_or_value_in_the_behavior_file_fails_startup() {
+    fn an_unknown_key_or_value_keeps_its_default_and_is_reported_instead_of_failing_startup()
+    -> anyhow::Result<()> {
         for (contents, culprit) in [
-            ("[tabs]\ngrouping = \"off\"\n", "off"),
-            ("[tabs]\ngroupng = \"auto\"\n", "groupng"),
+            ("[tabs]\ngrouping = \"off\"\n", "tabs.grouping"),
+            ("[tabs]\ngroupng = \"auto\"\n", "tabs.groupng"),
             ("[tab]\ngrouping = \"auto\"\n", "tab"),
             ("grouping = \"auto\"\n", "grouping"),
         ] {
-            let error = load_with_behavior_file("1", contents)
-                .err()
-                .map(|error| format!("{error:#}"))
-                .unwrap_or_default();
-            assert!(error.contains("neo.toml"), "{contents:?}: {error}");
-            assert!(error.contains(culprit), "{contents:?}: {error}");
+            let config = load_with_behavior_file("1", contents)?;
+            assert_eq!(config.behavior, Behavior::defaults(ServerMode::Hosted));
+            assert_eq!(
+                config
+                    .behavior_ignored
+                    .iter()
+                    .map(|ignored| ignored.key.as_str())
+                    .collect::<Vec<_>>(),
+                [culprit],
+                "{contents:?}"
+            );
         }
+        Ok(())
+    }
+
+    #[test]
+    fn a_behavior_file_that_is_not_toml_fails_startup_naming_the_file() {
+        let error = load_with_behavior_file("1", "[tabs\ngrouping = auto\n")
+            .err()
+            .map(|error| format!("{error:#}"))
+            .unwrap_or_default();
+        assert!(error.contains("invalid behaviour file"), "{error}");
+        assert!(error.contains("neo.toml"), "{error}");
     }
 
     #[test]
@@ -981,65 +1000,3 @@ mod tests {
         }
     }
 }
-
-// The decision loop is one environment variable away from being a different
-// product, and more than one layer needs the answer: the MCP catalogue, the
-// server instructions, run's own description and the managed skill all behave
-// differently when it is present. It sits with the other configuration because
-// the skill loader is a service and must not reach up into the API layer to ask.
-/// Where the decision model credential comes from.
-///
-/// Three states rather than two, because the environment case is real and a boolean cannot say
-/// it: the loop works, the page shows nothing, and the user pastes a token they did not need.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TokenSource {
-    /// Saved through the API. Takes precedence.
-    Settings,
-    /// `JEV_TOKEN` in the server's environment.
-    Environment,
-    /// Neither, so the pursue tool is not offered.
-    None,
-}
-
-impl TokenSource {
-    /// Whether a credential exists at all, by either route.
-    #[must_use]
-    pub fn is_present(self) -> bool {
-        self != Self::None
-    }
-}
-
-/// Whether the decision loop is offered by this server.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PursueOffering {
-    /// There is a credential, so the loop can run and is advertised.
-    Offered,
-    /// There is none. Everything behaves exactly as it did before the loop
-    /// existed, which is what every production install sees.
-    Absent,
-}
-
-impl PursueOffering {
-    /// Reads the answer off the credential's source.
-    ///
-    /// A token saved in the settings and `JEV_TOKEN` both offer the loop. Which of the two wins
-    /// is decided in the settings store, so that nothing here has to know there are two places
-    /// to look, and so the answer cannot differ between layers.
-    #[must_use]
-    pub fn of(source: TokenSource) -> Self {
-        if source.is_present() {
-            Self::Offered
-        } else {
-            Self::Absent
-        }
-    }
-
-    #[must_use]
-    pub fn is_offered(self) -> bool {
-        self == Self::Offered
-    }
-}
-
-// The credential itself is read from the settings store, which owns the precedence between a
-// saved token and JEV_TOKEN. A second reader of the environment here is how the two answers
-// drift apart, so there is not one.

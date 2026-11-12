@@ -1,7 +1,7 @@
 use super::{OTHER_DOCUMENT, PageJs};
 use crate::{
     CoreError, FrameId, ProtocolSession, SessionId,
-    test_support::{TestCall, TestConnection, cdp_error, cdp_pending},
+    testing::{TestCall, TestConnection, cdp_error, cdp_pending},
 };
 use serde_json::{Value, json};
 use std::sync::Arc;
@@ -26,6 +26,97 @@ fn top_frame(id: &str) -> Value {
 }
 
 #[tokio::test]
+async fn a_single_dispatch_call_uses_the_isolated_wrapper_without_replay()
+-> Result<(), Box<dyn std::error::Error>> {
+    for failure in [false, true] {
+        let connection = TestConnection::new([
+            (
+                "Page.createIsolatedWorld",
+                json!({ "executionContextId": 7 }),
+            ),
+            (
+                "DOM.resolveNode",
+                json!({ "object": { "objectId": "isolated-node" } }),
+            ),
+            (
+                "Runtime.callFunctionOn",
+                if failure {
+                    cdp_error("Execution context was destroyed")
+                } else {
+                    json!({ "result": { "value": null } })
+                },
+            ),
+            ("Runtime.releaseObject", json!({})),
+        ]);
+        let session = session(
+            &connection,
+            if failure {
+                "once-lost-context"
+            } else {
+                "once-isolated"
+            },
+        );
+        let frame = FrameId("main".into());
+        let result = isolated(&session)
+            .in_frame(&frame)
+            .call_once::<Value>(42, "function(){this.click()}", &[])
+            .await;
+        assert_eq!(result.is_err(), failure);
+        let calls = connection.calls()?;
+        assert_eq!(
+            calls
+                .iter()
+                .filter(|call| call.method == "Runtime.callFunctionOn")
+                .count(),
+            1
+        );
+        assert_eq!(calls[1].params["executionContextId"], 7);
+        assert_eq!(calls[2].params["objectId"], "isolated-node");
+        assert_eq!(
+            calls.last().map(|call| call.method.as_str()),
+            Some("Runtime.releaseObject")
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_single_dispatch_call_can_fall_back_when_world_selection_refused_before_dispatch()
+-> Result<(), Box<dyn std::error::Error>> {
+    let connection = TestConnection::new([
+        (
+            "Page.createIsolatedWorld",
+            cdp_error("No frame for given id found"),
+        ),
+        (
+            "DOM.resolveNode",
+            json!({ "object": { "objectId": "page-node" } }),
+        ),
+        (
+            "Runtime.callFunctionOn",
+            json!({ "result": { "value": null } }),
+        ),
+        ("Runtime.releaseObject", json!({})),
+    ]);
+    let session = session(&connection, "once-world-refused");
+    let frame = FrameId("main".into());
+    isolated(&session)
+        .in_frame(&frame)
+        .call_once::<Value>(42, "function(){this.click()}", &[])
+        .await?;
+    let calls = connection.calls()?;
+    assert_eq!(
+        calls
+            .iter()
+            .filter(|call| call.method == "Runtime.callFunctionOn")
+            .count(),
+        1
+    );
+    assert!(calls[1].params.get("executionContextId").is_none());
+    Ok(())
+}
+
+#[tokio::test]
 async fn tests_that_page_world_eval_sends_a_single_main_world_evaluate()
 -> Result<(), Box<dyn std::error::Error>> {
     let connection =
@@ -40,6 +131,7 @@ async fn tests_that_page_world_eval_sends_a_single_main_world_evaluate()
         vec![TestCall {
             method: "Runtime.evaluate".into(),
             params: json!({ "expression": "6 * 7", "awaitPromise": true, "returnByValue": true }),
+            session: Some(SessionId::from("page-world-eval")),
         }]
     );
     Ok(())
@@ -139,6 +231,26 @@ async fn tests_that_isolated_eval_falls_back_to_the_page_world_when_chromium_ref
     let calls = connection.calls()?;
     assert_eq!(calls[2].method, "Runtime.evaluate");
     assert!(calls[2].params.get("contextId").is_none());
+    Ok(())
+}
+
+#[tokio::test]
+async fn tests_that_an_isolated_only_eval_never_falls_back_to_the_page_world()
+-> Result<(), Box<dyn std::error::Error>> {
+    let connection = TestConnection::new([
+        ("Page.getFrameTree", top_frame("main")),
+        (
+            "Page.createIsolatedWorld",
+            cdp_error("No frame for given id found"),
+        ),
+        ("Runtime.evaluate", json!({ "result": { "value": 3 } })),
+    ]);
+    let session = session(&connection, "isolated-only-refused");
+
+    let refused = PageJs::isolated_only(&session).eval::<i64>("count()").await;
+
+    assert!(refused.is_err(), "{refused:?}");
+    assert!(!methods(&connection.calls()?).contains(&"Runtime.evaluate"));
     Ok(())
 }
 

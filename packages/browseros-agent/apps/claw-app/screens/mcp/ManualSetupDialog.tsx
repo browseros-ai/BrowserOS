@@ -37,7 +37,7 @@ export function ManualSetupDialog({
       <CenterMorphModalContent
         ariaLabel="Connect another agent by hand"
         showCloseButton
-        className="max-w-[600px] rounded-[22px] border-border-2 bg-card"
+        className="max-w-[600px] border-border-2 bg-card"
       >
         <div className="flex max-h-[min(760px,calc(100dvh-64px))] flex-col">
           <header className="flex flex-col gap-1 px-6 pt-6 pr-16 pb-4">

@@ -28,7 +28,16 @@ use crate::{
     storage::JsonStore,
 };
 use axum::{Router, middleware};
-use std::{env, ffi::OsString, path::PathBuf, sync::Arc, time::Duration};
+use std::{
+    env,
+    ffi::OsString,
+    path::PathBuf,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::Duration,
+};
 
 #[derive(Clone)]
 pub struct AppState {
@@ -48,10 +57,13 @@ pub struct AppState {
     pub harness: Arc<HarnessService>,
     pub skills: Arc<SkillService>,
     pub skill_runs: Arc<SkillRunService>,
+    /// Read through `ultrafast_enabled`, which also keeps hosted servers out.
+    pub ultrafast: Arc<AtomicBool>,
     pub analytics: Arc<AnalyticsService>,
     pub error_reporter: Arc<crate::services::error_reporting::ErrorReporter>,
     pub feedback_cohort: Arc<crate::services::feedback_cohort::FeedbackCohort>,
     pub feedback_invites: Arc<crate::db::feedback_invite::FeedbackInviteRepository>,
+    pub tool_calls_daily: Arc<crate::db::tool_calls_daily::ToolCallsDailyRepository>,
     pub profiles: Arc<ProfileService>,
     pub sessions: Arc<Sessions>,
     /// Saved native-profile intent is separate from agent profiles and live browser state.
@@ -59,6 +71,8 @@ pub struct AppState {
     pub session_efficiency: Arc<SessionEfficiencyService>,
     pub browser: Arc<BrowserService>,
     pub captcha: Option<Arc<crate::services::captcha::CaptchaService>>,
+    /// Per-tab viewport modes; hosted only, so desktop page geometry is never touched.
+    pub viewports: Option<Arc<browseros_core::viewport::Viewports>>,
     pub visuals: Arc<SessionVisualService>,
     /// Live screencast and video of session tabs for the hosted `/v1` API; idle (no browser
     /// connection, no captures) until someone watches.
@@ -109,7 +123,8 @@ impl AppState {
             config.browserclaw_dir.join("screenshots"),
             audit_log.clone(),
         ));
-        let analytics = Arc::new(AnalyticsService::new(&config.browserclaw_dir).await?);
+        let analytics =
+            Arc::new(AnalyticsService::new(&config.browserclaw_dir, config.mode).await?);
         let analytics_sink: Arc<dyn AnalyticsSink> = analytics.clone();
         // Shares the analytics install id, so a failure report and a product event are
         // the same anonymous install and neither adds a new identifier.
@@ -122,26 +137,24 @@ impl AppState {
         let feedback_invites = Arc::new(crate::db::feedback_invite::FeedbackInviteRepository::new(
             database.clone(),
         ));
-        // Read once, here, because the installed skill is a file on disk that
-        // reconcile keeps in step with whatever this decided at launch. A
-        // server that gains the credential later needs a restart for installed
-        // skills to follow it.
-        let skill = load_browserclaw_skill(
-            &config.resources_dir,
-            crate::config::PursueOffering::of(agent_settings.jev_token_source()),
-            config.behavior.tab_grouping,
-        )?;
+        let tool_calls_daily = Arc::new(
+            crate::db::tool_calls_daily::ToolCallsDailyRepository::new(database.clone()),
+        );
+        let skill = load_browserclaw_skill(&config.resources_dir, config.behavior.tab_grouping)?;
         let claude_desktop = Arc::new(crate::services::claude_desktop::ClaudeDesktop::new(
             &home_dir,
             config.browserclaw_dir.join("claude-desktop"),
         ));
-        let harness = Arc::new(HarnessService::new_with_managed_skill(
-            config.browserclaw_dir.join("mcp-manager"),
-            config.browserclaw_dir.join("harness-integrations"),
-            home_dir,
-            skill,
-            analytics_sink.clone(),
-        ));
+        let harness = Arc::new(
+            HarnessService::new_with_managed_skill(
+                config.browserclaw_dir.join("mcp-manager"),
+                config.browserclaw_dir.join("harness-integrations"),
+                home_dir,
+                skill,
+                analytics_sink.clone(),
+            )
+            .with_read_only(config.dev_mode),
+        );
         let skills = Arc::new(SkillService::new(
             SkillsRepository::new(database.clone()),
             harness.clone(),
@@ -188,11 +201,16 @@ impl AppState {
             live_recordings.clone(),
         );
         let tab_activity = Arc::new(TabActivityService::default());
+        let viewports = config
+            .mode
+            .is_hosted()
+            .then(|| Arc::new(browseros_core::viewport::Viewports::default()));
         let visuals = SessionVisualService::new(
             sessions.clone(),
             session_tabs.clone(),
             browser.clone(),
             tab_activity.clone(),
+            viewports.clone(),
         );
         let shutdown = ShutdownHandle::new();
         let capture = CaptureHub::new(
@@ -245,16 +263,19 @@ impl AppState {
             harness,
             skills,
             skill_runs,
+            ultrafast: Arc::default(),
             analytics,
             error_reporter,
             feedback_cohort,
             feedback_invites,
+            tool_calls_daily,
             profiles,
             sessions,
             targets,
             session_efficiency,
             browser,
             captcha,
+            viewports,
             visuals,
             capture,
             cockpit,
@@ -264,6 +285,13 @@ impl AppState {
             shutdown,
             migration,
         })
+    }
+
+    /// Whether saved skills compile into ultrafast flows. Off by default, so skills save and run
+    /// the regular way; hosted servers never offer them.
+    #[must_use]
+    pub fn ultrafast_enabled(&self) -> bool {
+        self.ultrafast.load(Ordering::Relaxed) && !self.config.mode.is_hosted()
     }
 
     pub async fn live_tab_activity(&self) -> Vec<TabActivityRecord> {
@@ -346,6 +374,7 @@ mod tests {
             native: Default::default(),
             mode: Default::default(),
             behavior: Default::default(),
+            behavior_ignored: Vec::new(),
         });
 
         let state = AppState::new_with_home(config, dir.path().join("home")).await?;

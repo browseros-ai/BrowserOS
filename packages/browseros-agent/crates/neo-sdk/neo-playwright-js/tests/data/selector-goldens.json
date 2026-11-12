@@ -1,0 +1,385 @@
+{
+  "playwright": "1.64.1",
+  "cases": [
+    {
+      "code": "page.getByRole('button')",
+      "selector": "internal:role=button",
+      "toString": "getByRole('button')"
+    },
+    {
+      "code": "page.getByRole('button', { name: 'Sign in' })",
+      "selector": "internal:role=button[name=\"Sign in\"i]",
+      "toString": "getByRole('button', { name: 'Sign in' })"
+    },
+    {
+      "code": "page.getByRole('button', { name: 'Sign in', exact: true })",
+      "selector": "internal:role=button[name=\"Sign in\"s]",
+      "toString": "getByRole('button', { name: 'Sign in', exact: true })"
+    },
+    {
+      "code": "page.getByRole('button', { name: /sign in/i })",
+      "selector": "internal:role=button[name=/sign in/i]",
+      "toString": "getByRole('button', { name: /sign in/i })"
+    },
+    {
+      "code": "page.getByRole('button', { name: 'Say \"hi\"' })",
+      "selector": "internal:role=button[name=\"Say \\\"hi\\\"\"i]",
+      "toString": "getByRole('button', { name: 'Say \"hi\"' })"
+    },
+    {
+      "code": "page.getByRole('checkbox', { checked: true })",
+      "selector": "internal:role=checkbox[checked=true]",
+      "toString": "getByRole('checkbox', { checked: true })"
+    },
+    {
+      "code": "page.getByRole('checkbox', { checked: false })",
+      "selector": "internal:role=checkbox[checked=false]",
+      "toString": "getByRole('checkbox', { checked: false })"
+    },
+    {
+      "code": "page.getByRole('checkbox', { checked: 'mixed' })",
+      "selector": "internal:role=checkbox[checked=mixed]",
+      "toString": "getByRole('checkbox', { checked: 'mixed' })"
+    },
+    {
+      "code": "page.getByRole('button', { disabled: true })",
+      "selector": "internal:role=button[disabled=true]",
+      "toString": "getByRole('button', { disabled: true })"
+    },
+    {
+      "code": "page.getByRole('treeitem', { expanded: true })",
+      "selector": "internal:role=treeitem[expanded=true]",
+      "toString": "getByRole('treeitem', { expanded: true })"
+    },
+    {
+      "code": "page.getByRole('heading', { level: 2 })",
+      "selector": "internal:role=heading[level=2]",
+      "toString": "getByRole('heading', { level: 2 })"
+    },
+    {
+      "code": "page.getByRole('button', { pressed: true })",
+      "selector": "internal:role=button[pressed=true]",
+      "toString": "getByRole('button', { pressed: true })"
+    },
+    {
+      "code": "page.getByRole('button', { pressed: 'mixed' })",
+      "selector": "internal:role=button[pressed=mixed]",
+      "toString": "getByRole('button', { pressed: 'mixed' })"
+    },
+    {
+      "code": "page.getByRole('tab', { selected: true })",
+      "selector": "internal:role=tab[selected=true]",
+      "toString": "getByRole('tab', { selected: true })"
+    },
+    {
+      "code": "page.getByRole('button', { includeHidden: true })",
+      "selector": "internal:role=button[include-hidden=true]",
+      "toString": "getByRole('button', { includeHidden: true })"
+    },
+    {
+      "code": "page.getByRole('link', { description: 'Opens in a new tab' })",
+      "selector": "internal:role=link[description=\"Opens in a new tab\"i]",
+      "toString": "getByRole('link', { description: 'Opens in a new tab' })"
+    },
+    {
+      "code": "page.getByRole('link', { description: /new tab/ })",
+      "selector": "internal:role=link[description=/new tab/]",
+      "toString": "getByRole('link', { description: /new tab/ })"
+    },
+    {
+      "code": "page.getByRole('heading', { name: 'Docs', level: 1, exact: true })",
+      "selector": "internal:role=heading[level=1][name=\"Docs\"s]",
+      "toString": "getByRole('heading', { name: 'Docs', exact: true, level: 1 })"
+    },
+    {
+      "code": "page.getByText('Hello')",
+      "selector": "internal:text=\"Hello\"i",
+      "toString": "getByText('Hello')"
+    },
+    {
+      "code": "page.getByText('Hello', { exact: true })",
+      "selector": "internal:text=\"Hello\"s",
+      "toString": "getByText('Hello', { exact: true })"
+    },
+    {
+      "code": "page.getByText(/hel+o/i)",
+      "selector": "internal:text=/hel+o/i",
+      "toString": "getByText(/hel+o/i)"
+    },
+    {
+      "code": "page.getByText('It\\'s \"quoted\"')",
+      "selector": "internal:text=\"It's \\\"quoted\\\"\"i",
+      "toString": "getByText('It\\'s \"quoted\"')"
+    },
+    {
+      "code": "page.getByLabel('Email')",
+      "selector": "internal:label=\"Email\"i",
+      "toString": "getByLabel('Email')"
+    },
+    {
+      "code": "page.getByLabel('Email', { exact: true })",
+      "selector": "internal:label=\"Email\"s",
+      "toString": "getByLabel('Email', { exact: true })"
+    },
+    {
+      "code": "page.getByLabel(/e-?mail/i)",
+      "selector": "internal:label=/e-?mail/i",
+      "toString": "getByLabel(/e-?mail/i)"
+    },
+    {
+      "code": "page.getByPlaceholder('Search')",
+      "selector": "internal:attr=[placeholder=\"Search\"i]",
+      "toString": "getByPlaceholder('Search')"
+    },
+    {
+      "code": "page.getByPlaceholder('Search', { exact: true })",
+      "selector": "internal:attr=[placeholder=\"Search\"s]",
+      "toString": "getByPlaceholder('Search', { exact: true })"
+    },
+    {
+      "code": "page.getByPlaceholder(/search/i)",
+      "selector": "internal:attr=[placeholder=/search/i]",
+      "toString": "getByPlaceholder(/search/i)"
+    },
+    {
+      "code": "page.getByAltText('Logo')",
+      "selector": "internal:attr=[alt=\"Logo\"i]",
+      "toString": "getByAltText('Logo')"
+    },
+    {
+      "code": "page.getByAltText('Logo', { exact: true })",
+      "selector": "internal:attr=[alt=\"Logo\"s]",
+      "toString": "getByAltText('Logo', { exact: true })"
+    },
+    {
+      "code": "page.getByAltText(/logo/i)",
+      "selector": "internal:attr=[alt=/logo/i]",
+      "toString": "getByAltText(/logo/i)"
+    },
+    {
+      "code": "page.getByTitle('Close')",
+      "selector": "internal:attr=[title=\"Close\"i]",
+      "toString": "getByTitle('Close')"
+    },
+    {
+      "code": "page.getByTitle('Close', { exact: true })",
+      "selector": "internal:attr=[title=\"Close\"s]",
+      "toString": "getByTitle('Close', { exact: true })"
+    },
+    {
+      "code": "page.getByTitle(/close/i)",
+      "selector": "internal:attr=[title=/close/i]",
+      "toString": "getByTitle(/close/i)"
+    },
+    {
+      "code": "page.getByTestId('save')",
+      "selector": "internal:testid=[data-testid=\"save\"s]",
+      "toString": "getByTestId('save')"
+    },
+    {
+      "code": "page.getByTestId(/save-\\d+/)",
+      "selector": "internal:testid=[data-testid=/save-\\d+/]",
+      "toString": "getByTestId(/save-\\d+/)"
+    },
+    {
+      "code": "page.locator('.card')",
+      "selector": ".card",
+      "toString": "locator('.card')"
+    },
+    {
+      "code": "page.locator('#main >> text=Hello')",
+      "selector": "#main >> text=Hello",
+      "toString": "locator('#main').locator('text=Hello')"
+    },
+    {
+      "code": "page.locator('xpath=//div[@id=\"main\"]')",
+      "selector": "xpath=//div[@id=\"main\"]",
+      "toString": "locator('//div[@id=\"main\"]')"
+    },
+    {
+      "code": "page.locator('//div')",
+      "selector": "//div",
+      "toString": "locator('//div')"
+    },
+    {
+      "code": "page.locator('li', { hasText: 'two' })",
+      "selector": "li >> internal:has-text=\"two\"i",
+      "toString": "locator('li').filter({ hasText: 'two' })"
+    },
+    {
+      "code": "page.locator('li', { has: page.locator('a') })",
+      "selector": "li >> internal:has=\"a\"",
+      "toString": "locator('li').filter({ has: locator('a') })"
+    },
+    {
+      "code": "page.locator('li').filter({ hasText: 'two' })",
+      "selector": "li >> internal:has-text=\"two\"i",
+      "toString": "locator('li').filter({ hasText: 'two' })"
+    },
+    {
+      "code": "page.locator('li').filter({ hasText: /two/i })",
+      "selector": "li >> internal:has-text=/two/i",
+      "toString": "locator('li').filter({ hasText: /two/i })"
+    },
+    {
+      "code": "page.locator('li').filter({ hasNotText: 'three' })",
+      "selector": "li >> internal:has-not-text=\"three\"i",
+      "toString": "locator('li').filter({ hasNotText: 'three' })"
+    },
+    {
+      "code": "page.locator('li').filter({ hasNotText: /three/ })",
+      "selector": "li >> internal:has-not-text=/three/",
+      "toString": "locator('li').filter({ hasNotText: /three/ })"
+    },
+    {
+      "code": "page.locator('li').filter({ has: page.getByRole('link', { name: 'Docs' }) })",
+      "selector": "li >> internal:has=\"internal:role=link[name=\\\"Docs\\\"i]\"",
+      "toString": "locator('li').filter({ has: getByRole('link', { name: 'Docs' }) })"
+    },
+    {
+      "code": "page.locator('li').filter({ hasNot: page.getByRole('img') })",
+      "selector": "li >> internal:has-not=\"internal:role=img\"",
+      "toString": "locator('li').filter({ hasNot: getByRole('img') })"
+    },
+    {
+      "code": "page.locator('li').filter({ visible: true })",
+      "selector": "li >> visible=true",
+      "toString": "locator('li').visible()"
+    },
+    {
+      "code": "page.locator('li').filter({ visible: false })",
+      "selector": "li >> visible=false",
+      "toString": "locator('li').filter({ visible: false })"
+    },
+    {
+      "code": "page.locator('li').filter({ hasText: 'a', hasNotText: 'b' })",
+      "selector": "li >> internal:has-text=\"a\"i >> internal:has-not-text=\"b\"i",
+      "toString": "locator('li').filter({ hasText: 'a' }).filter({ hasNotText: 'b' })"
+    },
+    {
+      "code": "page.locator('li').nth(2)",
+      "selector": "li >> nth=2",
+      "toString": "locator('li').nth(2)"
+    },
+    {
+      "code": "page.locator('li').nth(-1)",
+      "selector": "li >> nth=-1",
+      "toString": "locator('li').last()"
+    },
+    {
+      "code": "page.locator('li').first()",
+      "selector": "li >> nth=0",
+      "toString": "locator('li').first()"
+    },
+    {
+      "code": "page.locator('li').last()",
+      "selector": "li >> nth=-1",
+      "toString": "locator('li').last()"
+    },
+    {
+      "code": "page.getByRole('button').and(page.getByTitle('Save'))",
+      "selector": "internal:role=button >> internal:and=\"internal:attr=[title=\\\"Save\\\"i]\"",
+      "toString": "getByRole('button').and(getByTitle('Save'))"
+    },
+    {
+      "code": "page.getByRole('button').or(page.getByRole('link'))",
+      "selector": "internal:role=button >> internal:or=\"internal:role=link\"",
+      "toString": "getByRole('button').or(getByRole('link'))"
+    },
+    {
+      "code": "page.locator('.card').getByRole('button', { name: 'Save' })",
+      "selector": ".card >> internal:role=button[name=\"Save\"i]",
+      "toString": "locator('.card').getByRole('button', { name: 'Save' })"
+    },
+    {
+      "code": "page.getByRole('listitem').getByText('Docs')",
+      "selector": "internal:role=listitem >> internal:text=\"Docs\"i",
+      "toString": "getByRole('listitem').getByText('Docs')"
+    },
+    {
+      "code": "page.locator('#a').locator('#b')",
+      "selector": "#a >> #b",
+      "toString": "locator('#a').locator('#b')"
+    },
+    {
+      "code": "page.locator('.card').locator(page.getByRole('button'))",
+      "selector": ".card >> internal:chain=\"internal:role=button\"",
+      "toString": "locator('.card').locator(getByRole('button'))"
+    },
+    {
+      "code": "page.getByRole('button').describe('the save button')",
+      "selector": "internal:role=button >> internal:describe=\"the save button\"",
+      "toString": "the save button"
+    },
+    {
+      "code": "page.frameLocator('#pay').getByRole('button')",
+      "selector": "#pay >> internal:control=enter-frame >> internal:role=button",
+      "toString": "locator('#pay').contentFrame().getByRole('button')"
+    },
+    {
+      "code": "page.frameLocator('#outer').frameLocator('#inner').getByLabel('Card number')",
+      "selector": "#outer >> internal:control=enter-frame >> #inner >> internal:control=enter-frame >> internal:label=\"Card number\"i",
+      "toString": "locator('#outer').contentFrame().locator('#inner').contentFrame().getByLabel('Card number')"
+    },
+    {
+      "code": "page.frameLocator('#pay').locator('input').first()",
+      "selector": "#pay >> internal:control=enter-frame >> input >> nth=0",
+      "toString": "locator('#pay').contentFrame().locator('input').first()"
+    },
+    {
+      "code": "page.frameLocator('iframe').first().getByText('Pay')",
+      "selector": "iframe >> nth=0 >> internal:control=enter-frame >> internal:text=\"Pay\"i",
+      "toString": "locator('iframe').first().contentFrame().getByText('Pay')"
+    },
+    {
+      "code": "page.frameLocator('iframe').nth(1).getByText('Pay')",
+      "selector": "iframe >> nth=1 >> internal:control=enter-frame >> internal:text=\"Pay\"i",
+      "toString": "locator('iframe').nth(1).contentFrame().getByText('Pay')"
+    },
+    {
+      "code": "page.frameLocator('#pay').owner()",
+      "selector": "#pay",
+      "toString": "locator('#pay')"
+    },
+    {
+      "code": "page.locator('#pay').contentFrame().getByRole('button')",
+      "selector": "#pay >> internal:control=enter-frame >> internal:role=button",
+      "toString": "locator('#pay').contentFrame().getByRole('button')"
+    },
+    {
+      "code": "page.locator('#pay').contentFrame().owner()",
+      "selector": "#pay",
+      "toString": "locator('#pay')"
+    },
+    {
+      "code": "page.getByRef('e5')",
+      "selector": "aria-ref=e5",
+      "toString": "locator('aria-ref=e5')"
+    },
+    {
+      "code": "page.getByRef('f2e7')",
+      "selector": "aria-ref=f2e7",
+      "toString": "locator('aria-ref=f2e7')"
+    },
+    {
+      "code": "page.getByRef('e5').getByRole('button')",
+      "selector": "aria-ref=e5 >> internal:role=button",
+      "toString": "locator('aria-ref=e5').getByRole('button')"
+    },
+    {
+      "code": "page.locator('li').filter({ has: page.getByRef('e7') })",
+      "selector": "li >> internal:has=\"aria-ref=e7\"",
+      "toString": "locator('li').filter({ has: locator('aria-ref=e7') })"
+    },
+    {
+      "code": "page.locator('ref=e12').getByRole('button')",
+      "selector": "ref=e12 >> internal:role=button",
+      "toString": "locator('ref=e12').getByRole('button')"
+    },
+    {
+      "code": "page.mainFrame().getByRole('button', { name: 'Go' })",
+      "selector": "internal:role=button[name=\"Go\"i]",
+      "toString": "getByRole('button', { name: 'Go' })"
+    }
+  ]
+}

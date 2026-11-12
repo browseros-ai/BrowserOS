@@ -18,6 +18,7 @@ on:
       - ".github/workflows/build-browseros.yml"
       - ".github/workflows/nightly-macos-browseros.yml"
       - ".github/workflows/nightly-macos-browserclaw.yml"
+      - ".github/workflows/neo-sdk-image.yml"
       - ".github/workflows/reusable-build-macos-nightly.yml"
       - ".github/workflows/publish-server-ota.yml"
       - ".github/workflows/repair-update-feed.yml"
@@ -68,7 +69,9 @@ jobs:
           uv run browseros build --list > /dev/null
           # Runner has no chromium checkout — this smoke IS the
           # no-checkout regression test for --show-plan.
-          uv run browseros build --preset release --show-plan
+          # The public package retains its older pin for local debug builds.
+          # Release-floor acceptance/rejection is covered by build_test.py.
+          uv run browseros build --preset debug --show-plan
           uv run browseros product doctor
 
       - name: Run vendor_uploads tests

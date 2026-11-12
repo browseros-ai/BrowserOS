@@ -1,6 +1,17 @@
 import { describe, expect, it } from 'bun:test'
-import { isNavItemActive } from './app-sidebar.data'
+import { isNavItemActive, primaryNavItems } from './app-sidebar.data'
 import { pageKeyFor } from './PageTransition'
+
+describe('primaryNavItems', () => {
+  it('lists Skills right after Home', () => {
+    expect(primaryNavItems.map((item) => item.name)).toEqual([
+      'Home',
+      'Skills',
+      'Connected agents',
+      'History',
+    ])
+  })
+})
 
 describe('isNavItemActive', () => {
   it('matches Home only on the root', () => {

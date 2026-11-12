@@ -1,0 +1,1533 @@
+openapi: 3.0.3
+info:
+  title: BrowserOS claw-sdk API
+  version: 1.0.0
+  description: |
+    The host-facing API of hosted BrowserOS Neo (claw-sdk): run and operation records,
+    screenshots, the live view, the VNC display and owner takeover. Takeover is offered as small
+    stable parts (locks, fits and `/display`) and one
+    thin flow over them (`/v1/takeovers`); a host may compose its own flow from the parts.
+
+    It is served on Neo's host listener, never on the agent's MCP port. That is a Unix socket by
+    default (`CLAW_HOST_SOCKET`, or `$BROWSERCLAW_DIR/host.sock` when unset), with a TCP bind
+    only when `CLAW_HOST_TCP` is set. The same listener serves sdk-extensions' host API under
+    `/host/v1`. Every request needs `Authorization: Bearer <token>`, with the token from the file
+    `CLAW_HOST_TOKEN_FILE` names; on the socket the peer's uid is checked too. Tokens are never
+    accepted in query strings.
+
+    Locks belong to a browser tab, and a host groups its runs with ids of its own.
+    Ids: a run id is a UUIDv7 Neo creates for every run and returns in the result's
+    `_meta["com.browseros.neo/run"].id`; an operation id is `<runId>.<seq>`, where `seq` counts
+    the run's operations in start order; a tab id is the browser's own (`PageRef.tabId`),
+    unique among the browser's tabs until the browser restarts. An old number may then name
+    a different tab. A host
+    may send two optional ids of its own with a run
+    (`_meta["com.browseros.neo/run"] = {requestId?, taskId?, hostData?}`), each at most 128
+    bytes. `requestId` names one call. Runs can be looked up by it, and a repeat of it never
+    runs again (within its task when the run has a `taskId`, else across Neo). `taskId` groups
+    the calls of one task, so its runs, events and trace can be listed together.
+
+    Delivery keeps three answers apart so a client never repeats a write blindly: `not_sent`
+    (no side effect was attempted), `done` (Neo has a definite answer) and `unknown` (sent,
+    never confirmed).
+
+    Compatibility: changes within `/v1` are additive. New response fields and new values of an
+    extensible enum (`x-extensible-enum`) can appear at any time, so clients must ignore fields
+    and values they do not know. Fields are never removed or renamed within `/v1`.
+servers:
+  - url: http://localhost
+    description: >-
+      Over the Unix socket named by `CLAW_HOST_SOCKET` (the Host header is ignored), or over TCP
+      at `CLAW_HOST_TCP` when that is set.
+security:
+  - bearer: []
+paths:
+  /v1/runs:
+    get:
+      operationId: listRuns
+      summary: Runs, newest first. `requestId` finds the run a host request produced.
+      description: The filters combine with AND.
+      parameters:
+        - name: requestId
+          in: query
+          description: The host's own id it sent with the run, if it sent one.
+          schema:
+            type: string
+            maxLength: 128
+        - $ref: '#/components/parameters/TaskId'
+        - name: tab
+          in: query
+          description: Only runs with an operation that targeted this tab.
+          schema:
+            type: integer
+            format: int64
+        - name: status
+          in: query
+          schema:
+            type: string
+            x-extensible-enum: [running, ok, error, cancelled, timeout, interrupted]
+        - $ref: '#/components/parameters/Since'
+        - $ref: '#/components/parameters/Until'
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: One page of runs.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RunList'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /v1/runs/{runId}:
+    get:
+      operationId: getRun
+      summary: One run with every operation in start order.
+      parameters:
+        - name: runId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: wait
+          in: query
+          description: >-
+            Seconds to hold the request until the run is `complete`. The response is 200 either
+            way; check `complete`.
+          schema:
+            type: integer
+            format: int32
+            minimum: 0
+            maximum: 60
+            default: 0
+        - name: include
+          in: query
+          description: '`screenshots` inlines each operation''s screenshot as base64 JPEG.'
+          schema:
+            type: string
+            x-extensible-enum: [screenshots]
+      responses:
+        '200':
+          description: The run.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Run'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /v1/runs/{runId}/downloads/{index}:
+    get:
+      operationId: getRunDownload
+      summary: The bytes of one file the run downloaded.
+      description: >-
+        The copy Neo kept of download `index` of the run (`Run.downloads[].index`), taken when
+        the run ended. It is there once the run's reply has been sent, for as long as the run's
+        record is kept, and goes when retention removes the run. A download that was not
+        `completed` when the run ended has no bytes: 404. The script's own copy is
+        `Run.downloads[].path`, the file the browser saved, which stays where it is.
+      parameters:
+        - name: runId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: index
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int32
+            minimum: 0
+      responses:
+        '200':
+          description: The file's bytes, with its suggested name in `Content-Disposition`.
+          headers:
+            Content-Disposition:
+              description: '`attachment`, with the suggested file name when the record has one.'
+              schema:
+                type: string
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /v1/runs/{runId}/blobs/{blobId}:
+    get:
+      operationId: getRunBlob
+      summary: The bytes a run's reply names as a blob.
+      description: >-
+        A run whose returned value would be over the 256 KiB inline limit keeps its largest byte
+        values (a `Buffer` or `Uint8Array`, which travel as `{"$neo":"bytes","base64"}`) with the
+        run, largest first until the value fits, and the reply carries
+        `{"$neo":"blob","id":"b0","size":N}` in each one's place. This reads one. It is there
+        once the reply has been sent, for as long as the run's record is kept, and goes when
+        retention removes the run. Text is never kept this way: a value that does not fit once
+        every byte value moved fails `script / result_too_large`.
+      parameters:
+        - name: runId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: blobId
+          in: path
+          required: true
+          description: The marker's `id`, such as `b0`.
+          schema:
+            type: string
+      responses:
+        '200':
+          description: The blob's bytes, `size` of them.
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /v1/operations/{operationId}:
+    get:
+      operationId: getOperation
+      summary: One operation.
+      parameters:
+        - $ref: '#/components/parameters/OperationId'
+      responses:
+        '200':
+          description: The operation.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Operation'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /v1/operations/{operationId}/screenshot:
+    get:
+      operationId: getOperationScreenshot
+      summary: The page after the operation, as JPEG.
+      parameters:
+        - $ref: '#/components/parameters/OperationId'
+      responses:
+        '200':
+          description: The image.
+          content:
+            image/jpeg:
+              schema:
+                type: string
+                format: binary
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '410':
+          $ref: '#/components/responses/Expired'
+  /v1/trace:
+    get:
+      operationId: getTrace
+      summary: The latest operations of a task, a tab or all of Neo, with their runs.
+      description: |
+        Keeps the last `tail` operations that match `taskId` and `tab`, oldest first, with the
+        summaries of their runs. Both filters are optional; given together, an operation must
+        match both. `truncated` says whether older matching operations were cut. `screenshots`
+        inlines stored images: `none`, `all`, or `last:N` (N from 1 to 50).
+      parameters:
+        - $ref: '#/components/parameters/TaskId'
+        - name: tab
+          in: query
+          description: Only operations that targeted this tab.
+          schema:
+            type: integer
+            format: int64
+        - name: tail
+          in: query
+          schema:
+            type: integer
+            format: int32
+            minimum: 1
+            maximum: 1000
+            default: 100
+        - name: screenshots
+          in: query
+          schema:
+            type: string
+            default: none
+      responses:
+        '200':
+          description: The trace.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TraceTail'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /v1/events:
+    get:
+      operationId: streamEvents
+      summary: Server-sent events, for one task, one tab, or all of Neo.
+      description: |
+        `text/event-stream`; each event's `data` is one `Event`, and its `event` field is that
+        Event's `type`. Event ids are `<boot>-<n>`: send the last one back as `Last-Event-ID` to
+        resume within the same Neo process, while Neo still holds it (the last 1024 events).
+        An id from another Neo process (after a restart), an older one, or one Neo never sent
+        starts the stream with `stream.reset`, then live events; read the state endpoints
+        again. A client that falls more than 1024 events behind gets `stream.reset` too.
+
+        `taskId` keeps the run and operation events of that task's runs. `tab` keeps the events
+        about that tab: the operations that target it, and its `tab.closed`,
+        `lock.state` and `takeover.state` events. Given together, an event must match both.
+        `stream.reset` passes every filter.
+      parameters:
+        - $ref: '#/components/parameters/TaskId'
+        - name: tab
+          in: query
+          description: Only events about this tab.
+          schema:
+            type: integer
+            format: int64
+        - name: Last-Event-ID
+          in: header
+          schema:
+            type: string
+      responses:
+        '200':
+          description: The stream.
+          content:
+            text/event-stream:
+              schema:
+                $ref: '#/components/schemas/Event'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /v1/tabs:
+    get:
+      operationId: listTabs
+      summary: Every open tab, its DevTools target and its task associations.
+      description: |
+        Lists the live native browser inventory, including tabs no task has touched, in the
+        browser's order. Metadata comes from one browser listing over Neo's existing connection.
+        `taskIds` are distinct, sorted ids whose retained, committed runs touched the tab;
+        untasked runs add no id. Trace writes are asynchronous, so a just-started operation may
+        appear after its batch commits. Retention removes associations with their runs.
+        These are historical associations, not exclusive ownership or a permission check.
+        Tab ids can be reused after a browser restart. The list is a point-in-time observation;
+        a tab may close or navigate after the listing. No separate host CDP connection is needed.
+      responses:
+        '200':
+          description: All currently open tabs, or an empty list when none are open.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TabList'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          description: Neo could not read the tab/task associations (`internal_error`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+  /v1/tabs/{tabId}/screencast:
+    get:
+      operationId: getScreencast
+      summary: A live MJPEG view of one tab.
+      description: |
+        `multipart/x-mixed-replace`; each part carries `Content-Type: image/jpeg`,
+        `Content-Length`, `X-Tab-Id`, `X-Url` and `X-Frame-At` (Unix epoch ms, the browser's
+        capture time). The stream ends when the tab closes, and `tab.closed` on `/v1/events`
+        reports the closure. Capture runs only while someone watches;
+        viewers of one tab and quality share one capture. A capture that cannot start is
+        `503 browser_unavailable`, before any byte is sent.
+      parameters:
+        - $ref: '#/components/parameters/TabId'
+        - $ref: '#/components/parameters/Quality'
+      responses:
+        '200':
+          description: The frame stream.
+          content:
+            multipart/x-mixed-replace:
+              schema:
+                type: string
+                format: binary
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+  /v1/tabs/{tabId}/video:
+    get:
+      operationId: getVideo
+      summary: A live AV1 video (fragmented MP4) of one tab.
+      description: |
+        The initialization segment first, then one keyframe-led fragment about every 2 seconds,
+        for Media Source Extensions or WebCodecs. It ends when the tab closes.
+        A client that falls behind skips whole fragments. On a page that does not
+        repaint, no bytes arrive, not even the initialization segment, until it repaints. A
+        capture that cannot start is `503 browser_unavailable`, before any byte is sent.
+      parameters:
+        - $ref: '#/components/parameters/TabId'
+        - $ref: '#/components/parameters/Quality'
+      responses:
+        '200':
+          description: The video stream.
+          content:
+            video/mp4:
+              schema:
+                type: string
+                format: binary
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+  /v1/display:
+    get:
+      operationId: openDisplay
+      summary: Neo's whole screen as RFB over WebSocket (noVNC-compatible).
+      description: |
+        Binary frames carry RFB 3.8 both ways. No subprotocol is required, and `binary` is echoed
+        when the client offers it.
+
+        `view` drops every input message. `control` forwards input. View displays remain
+        available and keep streaming during control input and takeovers. The tab's screencast,
+        video and trace screenshots keep serving.
+        While no owner has control, `followTab` keeps that tab in front, and `followTask` keeps
+        the task's current page in front (the tab its latest operation targeted). Both pause
+        while the owner holds the screen or a lock holds their target tab. `followTab` and
+        `followTask` are mutually exclusive; sending both is `400 invalid_request`. A control
+        display takes neither, and a view display takes no `release`. `release` ties a control
+        display to a takeover: releasing the takeover closes it. A `release` that names no
+        takeover is `404 not_found`, and one whose takeover's release has begun is
+        `409 takeover_released`.
+
+        A display ends with a WebSocket close frame that says why:
+        - `4002` released: the display's takeover was released;
+        - `1008`: the client sent something the display refuses: an RFB message it does not
+          know, a paste over 1 MiB, or a handshake other than RFB 3.8 with no security;
+        - `1003`: the client sent a text frame;
+        - `1011`: Neo's screen closed the connection.
+
+        A client that went away is sent no code.
+      parameters:
+        - name: mode
+          in: query
+          required: true
+          schema:
+            type: string
+            x-extensible-enum: [view, control]
+        - name: followTab
+          in: query
+          description: A tab to keep in front. Not with `followTask`.
+          schema:
+            type: integer
+            format: int64
+        - name: followTask
+          in: query
+          description: >-
+            A host task (`_meta["com.browseros.neo/run"].taskId`) whose current page to keep in
+            front. Not with `followTab`.
+          schema:
+            type: string
+            maxLength: 128
+        - name: release
+          in: query
+          description: A takeover id. Releasing that takeover closes this display.
+          schema:
+            type: string
+      responses:
+        '101':
+          description: Switching protocols.
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+  /v1/locks:
+    post:
+      operationId: createLock
+      summary: Lock the agent out of a tab. A takeover part.
+      description: |
+        While the lock is held, the agent's operations on the tab fail with `host /
+        owner_has_control` and delivery `not_sent`. Writes are always refused; with
+        `reads: block` (the default), operations that read the tab are refused too. Operations
+        on other tabs, and operations with no tab, still run; a host that wants to pause a whole
+        task stops sending that task's runs. Taking a lock waits up to 2 s for the agent's
+        in-flight writes on the tab; `settled` says whether they finished. Every lock has a TTL,
+        so a host that dies cannot lock a tab forever.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LockRequest'
+      responses:
+        '200':
+          description: The lock, held.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Lock'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+  /v1/locks/{lockId}:
+    get:
+      operationId: getLock
+      summary: One lock.
+      parameters:
+        - $ref: '#/components/parameters/LockId'
+      responses:
+        '200':
+          description: The lock.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Lock'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    delete:
+      operationId: releaseLock
+      summary: Release a lock. Idempotent. A takeover's lock is released with the takeover.
+      parameters:
+        - $ref: '#/components/parameters/LockId'
+      responses:
+        '200':
+          description: The lock, released.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Lock'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /v1/tabs/{tabId}/fit:
+    post:
+      operationId: fitTab
+      summary: Fit a tab to a viewer's screen. A takeover part.
+      description: |
+        Brings the tab to the front, sizes Neo's screen to the viewer, resets the tab's zoom,
+        and sets it to mobile (a screen 600 px wide or less: mobile emulation at the screen's
+        size with touch, in a fullscreen window) or desktop (a maximized window, no emulation).
+        Neo has one screen and one window, so the window's state is recorded once, by the first
+        fit while no other is active, and put back at the last restore. Each tab's viewport mode
+        is recorded by its own first fit. The first fit of a tab returns a new fit; while that
+        fit is active, fitting the tab again refits it and returns the same fit. While a mobile
+        fit is active, pages the tab opens are pulled into it.
+      parameters:
+        - $ref: '#/components/parameters/TabId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ViewerSize'
+      responses:
+        '200':
+          description: The fit.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Fit'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+  /v1/fits/{fitId}:
+    get:
+      operationId: getFit
+      summary: One fit, with the geometry the owner's page needs. Never values, labels or text.
+      parameters:
+        - $ref: '#/components/parameters/FitId'
+      responses:
+        '200':
+          description: The fit.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Fit'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /v1/fits/{fitId}/navigate:
+    post:
+      operationId: navigateFit
+      summary: The owner's browser bar, on the fitted tab. A lock does not refuse it.
+      parameters:
+        - $ref: '#/components/parameters/FitId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NavigateRequest'
+      responses:
+        '200':
+          description: Done, or a notice for the owner.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NavigateResult'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+  /v1/fits/{fitId}/restore:
+    post:
+      operationId: restoreFit
+      summary: Put the tab back exactly as the fit found it. Idempotent.
+      description: |
+        Resets zoom and puts back the tab's recorded viewport mode. The last restore, with no
+        other fit active, also puts Neo's screen back to its configured size and the window back
+        to the state the first fit recorded.
+      parameters:
+        - $ref: '#/components/parameters/FitId'
+      responses:
+        '200':
+          description: The fit, restored.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Fit'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+  /v1/takeovers:
+    post:
+      operationId: startTakeover
+      summary: The v1 takeover flow, a thin composition of the parts. Start it when the owner opens the link.
+      description: |
+        The flow locks the agent out of the tab using `reads` and the TTL, and fits the
+        tab to `viewer` when given. A fit that fails gives back the lock. The answer names
+        the parts it holds and `display`, the control display to open for the owner. A tab that already
+        has an active takeover gets that takeover back as it is. A host may compose its own flow
+        from the parts instead.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TakeoverRequest'
+      responses:
+        '200':
+          description: The takeover, active.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Takeover'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+  /v1/takeovers/{takeoverId}:
+    get:
+      operationId: getTakeover
+      summary: One takeover. `wait` holds the request until its state differs from `state`.
+      description: |
+        Release is the only change a takeover goes through, so `wait` with `state=active` (the
+        default) answers as soon as the takeover is released, and `state=released` never waits.
+        A released takeover stays readable for an hour.
+      parameters:
+        - $ref: '#/components/parameters/TakeoverId'
+        - name: wait
+          in: query
+          schema:
+            type: integer
+            format: int32
+            minimum: 0
+            maximum: 60
+            default: 0
+        - name: state
+          in: query
+          description: The state the host last saw.
+          schema:
+            type: string
+            x-extensible-enum: [active, released]
+            default: active
+      responses:
+        '200':
+          description: The takeover.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Takeover'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /v1/takeovers/{takeoverId}/release:
+    post:
+      operationId: releaseTakeover
+      summary: Give the browser back. Idempotent; returns once the agent's lock is lifted.
+      description: |
+        The flow closes the takeover's display, restores the fit, and releases the lock
+        last. The steps share a 10 s budget. A step that fails does not stop the rest,
+        and once the budget is spent the lock is released while a step still running finishes.
+        A second release answers as the first did. Neo releases a takeover itself 10 s before
+        `expiresAt` (`expired`), so the steps run while the agent is still locked out, and when
+        its tab closes (`tab_closed`).
+
+        View displays can open again after the takeover and its control displays end. The
+        tab's screencast, video and trace screenshots keep serving.
+      parameters:
+        - $ref: '#/components/parameters/TakeoverId'
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReleaseRequest'
+      responses:
+        '200':
+          description: The takeover, released.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Takeover'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+components:
+  securitySchemes:
+    bearer:
+      type: http
+      scheme: bearer
+  parameters:
+    OperationId:
+      name: operationId
+      in: path
+      required: true
+      description: '`<runId>.<seq>`.'
+      schema:
+        type: string
+    TakeoverId:
+      name: takeoverId
+      in: path
+      required: true
+      schema:
+        type: string
+    LockId:
+      name: lockId
+      in: path
+      required: true
+      schema:
+        type: string
+    FitId:
+      name: fitId
+      in: path
+      required: true
+      schema:
+        type: string
+    TabId:
+      name: tabId
+      in: path
+      required: true
+      description: The browser's tab id (`PageRef.tabId`).
+      schema:
+        type: integer
+        format: int64
+    TaskId:
+      name: taskId
+      in: query
+      description: >-
+        A host task (`_meta["com.browseros.neo/run"].taskId`). Only what belongs to its runs.
+      schema:
+        type: string
+        maxLength: 128
+    Since:
+      name: since
+      in: query
+      description: At or after this time (Unix epoch ms).
+      schema:
+        type: integer
+        format: int64
+        minimum: 0
+    Until:
+      name: until
+      in: query
+      description: At or before this time (Unix epoch ms).
+      schema:
+        type: integer
+        format: int64
+        minimum: 0
+    Cursor:
+      name: cursor
+      in: query
+      description: Opaque `nextCursor` from the previous page.
+      schema:
+        type: string
+    Limit:
+      name: limit
+      in: query
+      schema:
+        type: integer
+        format: int32
+        minimum: 1
+        maximum: 100
+        default: 25
+    Quality:
+      name: quality
+      in: query
+      description: >-
+        `low` is 640×400 at up to 4 frames per second (10 for `/video`); `high` is 1280×800 at
+        up to 10 (15 for `/video`). Frames keep the tab's aspect ratio.
+      schema:
+        type: string
+        x-extensible-enum: [low, high]
+        default: high
+  responses:
+    BadRequest:
+      description: A parameter or body is invalid (`invalid_request`).
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Unauthorized:
+      description: No token, a wrong token, or a peer uid outside the socket's group (`unauthorized`).
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    NotFound:
+      description: >-
+        Nothing has this id (`not_found`): a run, operation, lock, fit or takeover. Or retention
+        deleted it (`expired`), or no open tab has the `tabId` (`tab_not_found`).
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Expired:
+      description: Retention deleted the image (`expired`).
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Conflict:
+      description: >-
+        A part was already given back: the fit was restored (`fit_restored`), the lock released
+        (`lock_released`), or the takeover released (`takeover_released`). Or a takeover is in
+        the way: the lock belongs to one, so release the takeover instead (`takeover_lock`).
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Unavailable:
+      description: >-
+        Neo could not start the takeover (`internal_error`), the display is unavailable
+        (`display_unavailable`), or Neo could not reach the browser (`browser_unavailable`).
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+  schemas:
+    OperationError:
+      type: object
+      required: [owner, code, message, retryable]
+      properties:
+        owner:
+          type: string
+          description: >-
+            Whose behavior must change to fix it: `neo` (browser, OS or Neo itself), `script`
+            (the agent's own code: a syntax error, `invalid_input`, `strict_mode_violation`,
+            `no_match`, `method_unavailable`), `website` (what the page did) or `host` (the
+            host's rules, services or owner, including `owner_has_control`).
+          x-extensible-enum: [neo, script, website, host]
+        code:
+          type: string
+          description: >-
+            Stable snake_case, e.g. `owner_has_control`, `strict_mode_violation`, `target_closed`.
+        hostCode:
+          type: string
+          description: The host's own code when `code` is `host_error`, e.g. `needs_owner`.
+        message:
+          type: string
+        retryable:
+          type: boolean
+          description: True only when delivery is `not_sent` or the operation is a read.
+        operationId:
+          type: string
+          description: On a run's error, the operation it came from.
+    TabList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Tab'
+    Tab:
+      type: object
+      required: [tabId, targetId, url, title, taskIds]
+      properties:
+        tabId:
+          type: integer
+          format: int64
+          description: The browser's native tab id.
+        targetId:
+          type: string
+          description: The tab's current DevTools target id.
+        url:
+          type: string
+        title:
+          type: string
+        taskIds:
+          type: array
+          description: Distinct sorted task ids from retained committed runs that touched this tab.
+          items:
+            type: string
+    PageRef:
+      type: object
+      properties:
+        tabId:
+          type: integer
+          format: int64
+        url:
+          type: string
+        title:
+          type: string
+    TraceTail:
+      type: object
+      required: [runs, operations, truncated]
+      properties:
+        runs:
+          type: array
+          description: The runs of `operations`, oldest first.
+          items:
+            $ref: '#/components/schemas/RunSummary'
+        operations:
+          type: array
+          description: The matching operations by start, oldest first.
+          items:
+            $ref: '#/components/schemas/Operation'
+        truncated:
+          type: boolean
+          description: True when `tail` cut older matching operations.
+    RunSummary:
+      type: object
+      required: [id, status, startedAt, operationCount, complete, tabs]
+      properties:
+        id:
+          type: string
+        taskId:
+          type: string
+          description: The host's task it sent with the run (`_meta["com.browseros.neo/run"].taskId`), if any.
+        tabs:
+          type: array
+          description: The tabs its operations targeted, ascending.
+          items:
+            type: integer
+            format: int64
+        status:
+          type: string
+          description: '`interrupted`: Neo stopped (crashed or restarted) before the run ended.'
+          x-extensible-enum: [running, ok, error, cancelled, timeout, interrupted]
+        effects:
+          type: string
+          description: >-
+            `none`: no write was sent. `done`: every write that was sent got a definite answer.
+            `unknown`: at least one write was sent and never confirmed; check the page before
+            repeating anything. Absent while the run is `running`: Neo reports what the dispatcher
+            decided and never guesses an answer before the run ends.
+          x-extensible-enum: [none, done, unknown]
+        error:
+          $ref: '#/components/schemas/OperationError'
+        requestId:
+          type: string
+          description: The host's own id it sent with the run (`_meta["com.browseros.neo/run"].requestId`), if any.
+        startedAt:
+          type: integer
+          format: int64
+        endedAt:
+          type: integer
+          format: int64
+        operationCount:
+          type: integer
+          format: int64
+        complete:
+          type: boolean
+          description: Ended, and its screenshot work finished; a re-read returns the same data.
+        traceGaps:
+          type: integer
+          format: int64
+          description: Operation events Neo dropped under disk pressure; zero or absent normally.
+    Run:
+      type: object
+      required: [id, status, startedAt, operationCount, complete, tabs, operations]
+      properties:
+        id:
+          type: string
+        taskId:
+          type: string
+          description: The host's task it sent with the run (`_meta["com.browseros.neo/run"].taskId`), if any.
+        tabs:
+          type: array
+          description: The tabs its operations targeted, ascending.
+          items:
+            type: integer
+            format: int64
+        status:
+          type: string
+          x-extensible-enum: [running, ok, error, cancelled, timeout, interrupted]
+        effects:
+          type: string
+          description: As on `RunSummary`; absent while the run is `running`.
+          x-extensible-enum: [none, done, unknown]
+        error:
+          $ref: '#/components/schemas/OperationError'
+        requestId:
+          type: string
+          description: The host's own id it sent with the run (`_meta["com.browseros.neo/run"].requestId`), if any.
+        startedAt:
+          type: integer
+          format: int64
+        endedAt:
+          type: integer
+          format: int64
+        operationCount:
+          type: integer
+          format: int64
+        complete:
+          type: boolean
+        traceGaps:
+          type: integer
+          format: int64
+        hostData:
+          type: object
+          description: >-
+            The host data the run was started with (`_meta["com.browseros.neo/run"].hostData`), if
+            any; bounded for storage. Present once the run has ended, so a running run, or one
+            cut short by a restart, has none.
+        code:
+          type: string
+          description: >-
+            The script, bounded for storage. Stored when the run ends, so it is absent while the run is
+            `running`. Older runs may also have no stored code.
+        codeWithheld:
+          type: string
+          description: >-
+            Restart marker: Neo stopped before the run ended, so its code was never stored.
+            The field name is retained for compatibility; new runs do not withhold code for field contents.
+          x-extensible-enum: [unavailable]
+        result:
+          description: >-
+            The script's return value, bounded for storage. A byte value the reply could not carry
+            inline is `{"$neo":"blob","id","size"}` here too; read it at
+            `GET /v1/runs/{runId}/blobs/{blobId}`.
+        resultTruncated:
+          type: boolean
+        unknown:
+          type: array
+          description: Write operations that were sent and never confirmed.
+          items:
+            $ref: '#/components/schemas/UnknownOperation'
+        operations:
+          type: array
+          items:
+            $ref: '#/components/schemas/Operation'
+        downloads:
+          type: array
+          description: >-
+            The files the run's `download` events handed its script, in the order it first saw
+            each. Recorded when the run ends: absent while it runs, and when it was handed none.
+          items:
+            $ref: '#/components/schemas/RunDownload'
+    RunDownload:
+      type: object
+      required: [index, url, suggestedFilename, state]
+      properties:
+        index:
+          type: integer
+          format: int32
+          description: Its place among the run's downloads, from 0; `GET /v1/runs/{runId}/downloads/{index}` reads its bytes.
+        url:
+          type: string
+          description: The URL it came from, cut to 4,096 characters.
+        suggestedFilename:
+          type: string
+        path:
+          type: string
+          description: >-
+            Where the browser saved it, on Neo's disk: what `download.path()` returned. A later
+            run may upload it with `setInputFiles`. Present when `completed`, and when Neo could
+            not keep a copy.
+        size:
+          type: integer
+          format: int64
+          description: The bytes Neo kept. Present when `completed`.
+        state:
+          type: string
+          description: >-
+            `completed`: finished, and its bytes are kept. `in_progress`: still being written
+            when the run ended, so nothing was kept; a script that needs the file awaits
+            `download.path()` before it returns. `failed`: canceled or interrupted, or Neo could
+            not keep a copy; `failure` says which.
+          x-extensible-enum: [in_progress, completed, failed]
+        failure:
+          type: string
+          description: Why it failed, such as the browser's `canceled`.
+    UnknownOperation:
+      type: object
+      required: [operationId, name]
+      properties:
+        operationId:
+          type: string
+        name:
+          type: string
+    RunList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/RunSummary'
+        nextCursor:
+          type: string
+    Operation:
+      type: object
+      required: [id, runId, name, kind, effect, startedAt, hasScreenshot]
+      properties:
+        id:
+          type: string
+        runId:
+          type: string
+        parentId:
+          type: string
+          description: The operation this one ran inside; absent for the agent's own calls.
+        name:
+          type: string
+          description: e.g. `page.goto`, `locator.click`, `zuzu.auth.fill`, `host.call`, `host.protectedFill`.
+        site:
+          description: Absent for operations without a script call site and historical records.
+          allOf:
+            - $ref: '#/components/schemas/OperationSite'
+        kind:
+          type: string
+          x-extensible-enum: [builtin, defined, next, host_call, protected]
+        attempt:
+          type: integer
+          format: int32
+          description: For `next`, which call of `next()` this was, from 1.
+        effect:
+          type: string
+          x-extensible-enum: [read, write]
+        tabId:
+          type: integer
+          format: int64
+          description: >-
+            The tab it targeted, when it had one. `page` is how the page looked after the
+            operation.
+        page:
+          $ref: '#/components/schemas/PageRef'
+        args:
+          description: >-
+            Original arguments, bounded for storage. Page and locator
+            handles appear as their branded JSON, e.g. `{"$neo":"locator","page":3,"selector":"…"}`.
+            Present once the operation has ended, so an operation still running, or one whose end Neo
+            never recorded, has none.
+        argsTruncated:
+          type: boolean
+        result:
+          description: Result, bounded for storage.
+        resultTruncated:
+          type: boolean
+        outcome:
+          type: string
+          description: Absent while the operation runs.
+          x-extensible-enum: [ok, error, cancelled]
+        delivery:
+          type: string
+          description: >-
+            `not_sent`: no side effect was attempted. `done`: Neo has a definite answer.
+            `unknown`: sent and never confirmed; never repeat it blindly. Absent while the operation
+            runs: delivery is what the dispatcher decided when it ended, never a guess.
+          x-extensible-enum: [not_sent, done, unknown]
+        error:
+          $ref: '#/components/schemas/OperationError'
+        notes:
+          type: array
+          description: >-
+            Its call-log lines, oldest first, e.g. `waiting for getByRole('button')`. Bounded: a long line ends in `…[+N bytes]`, and lines past the limit are counted in one
+            last `…[+N lines]` line. They are stored with the operation's end, so the field is
+            absent while it runs and when it noted nothing.
+          items:
+            type: string
+        startedAt:
+          type: integer
+          format: int64
+        sentAt:
+          type: integer
+          format: int64
+        endedAt:
+          type: integer
+          format: int64
+        durationMs:
+          type: integer
+          format: int64
+        hasScreenshot:
+          type: boolean
+        screenshot:
+          $ref: '#/components/schemas/Screenshot'
+    OperationSite:
+      type: object
+      description: The call location in the agent script, with 1-based line and column numbers.
+      required: [line, column]
+      properties:
+        line:
+          type: integer
+          format: int64
+          minimum: 1
+        column:
+          type: integer
+          format: int64
+          minimum: 1
+    Screenshot:
+      type: object
+      required: [contentType, data]
+      properties:
+        contentType:
+          type: string
+          x-extensible-enum: [image/jpeg]
+        data:
+          type: string
+          description: The image bytes, base64 with the standard alphabet and padding.
+    LockRequest:
+      type: object
+      required: [tabId, ttlSeconds]
+      properties:
+        tabId:
+          type: integer
+          format: int64
+        reads:
+          type: string
+          description: '`block` refuses the agent''s reads of the tab too; `allow` refuses only writes.'
+          x-extensible-enum: [block, allow]
+          default: block
+        ttlSeconds:
+          type: integer
+          format: int32
+          minimum: 1
+          maximum: 1200
+          description: >-
+            The lock releases itself after this long. At most 20 minutes, a fixed cap, so a
+            host that crashes cannot hold a tab for longer.
+    Lock:
+      type: object
+      required: [id, tabId, reads, settled, createdAt, expiresAt]
+      properties:
+        id:
+          type: string
+        tabId:
+          type: integer
+          format: int64
+        reads:
+          type: string
+          x-extensible-enum: [block, allow]
+        settled:
+          type: boolean
+          description: Whether the agent's in-flight writes on the tab finished within 2 s of locking.
+        createdAt:
+          type: integer
+          format: int64
+        expiresAt:
+          type: integer
+          format: int64
+        releasedAt:
+          type: integer
+          format: int64
+          description: Present once released, by the host or by the TTL.
+    Fit:
+      type: object
+      required: [id, tabId, screen, fit, createdAt]
+      properties:
+        id:
+          type: string
+        tabId:
+          type: integer
+          format: int64
+        screen:
+          $ref: '#/components/schemas/ViewerSize'
+        mode:
+          type: string
+          x-extensible-enum: [mobile, desktop]
+        fit:
+          type: string
+          description: '`partial` when the page did not report the size asked for; Neo does not retry.'
+          x-extensible-enum: [pending, fitted, partial]
+        keyboard:
+          $ref: '#/components/schemas/FitKeyboard'
+        browser:
+          $ref: '#/components/schemas/FitBrowserBar'
+        popups:
+          type: array
+          description: Pages the tab opened that stay where they are.
+          items:
+            type: string
+        createdAt:
+          type: integer
+          format: int64
+        restoredAt:
+          type: integer
+          format: int64
+          description: Present once restored.
+    FitKeyboard:
+      type: object
+      description: >-
+        Boxes of the fields a phone keyboard opens for, in screen px, `[x, y, width, height]`.
+        Present only while they were measured at `width`×`height`.
+      required: [width, height, boxes, at]
+      properties:
+        width:
+          type: integer
+          format: int32
+        height:
+          type: integer
+          format: int32
+        at:
+          type: integer
+          format: int64
+        boxes:
+          type: array
+          maxItems: 128
+          items:
+            type: array
+            minItems: 4
+            maxItems: 4
+            items:
+              type: number
+    FitBrowserBar:
+      type: object
+      description: The tab's place, for the owner page's browser bar. Mobile fits only.
+      required: [url, back, forward]
+      properties:
+        url:
+          type: string
+        back:
+          type: boolean
+        forward:
+          type: boolean
+    TakeoverRequest:
+      type: object
+      required: [tabId]
+      properties:
+        tabId:
+          type: integer
+          format: int64
+        viewer:
+          $ref: '#/components/schemas/ViewerSize'
+        reads:
+          type: string
+          description: The lock's `reads`, as on `LockRequest`.
+          x-extensible-enum: [block, allow]
+          default: block
+        ttlSeconds:
+          type: integer
+          format: int32
+          minimum: 60
+          maximum: 1200
+          default: 1200
+          description: >-
+            The takeover lock's TTL. At most 20 minutes, the same fixed cap as a lock's. Neo
+            releases the takeover 10 s before it ends.
+    Takeover:
+      type: object
+      required: [id, tabId, state, lockId, display, createdAt, expiresAt]
+      properties:
+        id:
+          type: string
+        tabId:
+          type: integer
+          format: int64
+        state:
+          type: string
+          x-extensible-enum: [active, released]
+        releaseReason:
+          type: string
+          x-extensible-enum: [done, idle, host, expired, tab_closed]
+        lockId:
+          type: string
+        fitId:
+          type: string
+          description: Present when the takeover was started with a viewer size.
+        display:
+          type: string
+          description: The control display to open for the owner; it closes at release.
+        createdAt:
+          type: integer
+          format: int64
+        releasedAt:
+          type: integer
+          format: int64
+        expiresAt:
+          type: integer
+          format: int64
+          description: When the takeover's lock ends. Neo releases the takeover 10 s before.
+    ViewerSize:
+      type: object
+      required: [width, height]
+      properties:
+        width:
+          type: integer
+          format: int32
+          minimum: 100
+          maximum: 4096
+        height:
+          type: integer
+          format: int32
+          minimum: 100
+          maximum: 4096
+    NavigateRequest:
+      type: object
+      required: [action]
+      properties:
+        action:
+          type: string
+          x-extensible-enum: [back, forward, reload, open]
+        input:
+          type: string
+          maxLength: 2000
+          description: >-
+            For `open`: what the owner typed. A web address opens as is (https added); other text
+            is searched; a non-http scheme or embedded credentials is refused.
+    NavigateResult:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          x-extensible-enum: [completed, refused, failed]
+        notice:
+          type: string
+          description: A sentence for the owner when the bar did not move.
+    ReleaseRequest:
+      type: object
+      properties:
+        reason:
+          type: string
+          x-extensible-enum: [done, idle, host]
+          default: done
+    Event:
+      type: object
+      required: [type, at]
+      properties:
+        type:
+          type: string
+          description: >-
+            What happened. `stream.reset` carries nothing else: events were missed, so re-read
+            the state endpoints.
+          x-extensible-enum:
+            [
+              run.started,
+              run.ended,
+              operation.started,
+              operation.ended,
+              tab.closed,
+              lock.state,
+              takeover.state,
+              stream.reset,
+            ]
+        at:
+          type: integer
+          format: int64
+        taskId:
+          type: string
+          description: The task of the run the event is about, when it has one.
+        tabId:
+          type: integer
+          format: int64
+          description: >-
+            The tab the event is about: an operation's target tab, or the tab of `tab.closed`,
+            `lock.state` and `takeover.state`.
+        run:
+          $ref: '#/components/schemas/RunSummary'
+        operation:
+          $ref: '#/components/schemas/Operation'
+        lock:
+          $ref: '#/components/schemas/Lock'
+        takeover:
+          $ref: '#/components/schemas/Takeover'
+    Error:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+          x-extensible-enum:
+            [
+              invalid_request,
+              unauthorized,
+              not_found,
+              expired,
+              tab_not_found,
+              lock_released,
+              fit_restored,
+              takeover_released,
+              takeover_lock,
+              display_unavailable,
+              browser_unavailable,
+              internal_error,
+            ]
+        message:
+          type: string
+        requestId:
+          type: string
+          description: Also sent as the `x-request-id` response header.

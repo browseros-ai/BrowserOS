@@ -4,6 +4,7 @@ pub mod connection;
 pub mod content_markdown;
 pub mod credentials;
 pub mod error;
+pub mod file_transfers;
 pub mod frames;
 pub mod input;
 pub mod navigation;
@@ -11,14 +12,19 @@ pub mod observer;
 pub mod page_js;
 pub mod page_signals;
 pub mod pages;
+pub mod payment_cards;
 pub mod pointer;
 pub mod profiles;
+pub mod runtime_lease;
 pub mod screenshot;
 pub mod settle;
 pub mod snapshot;
 pub mod target;
+#[doc(hidden)]
+pub mod testing;
 pub mod timeouts;
 pub mod types;
+pub mod viewport;
 pub mod windows;
 
 pub use browser::Browser;
@@ -26,20 +32,21 @@ pub use capabilities::{BrowserOsVersion, NativeCapabilities, NativeFeature};
 pub use connection::{CdpConnection, ProtocolSession};
 pub use error::{CoreError, CoveredElementTarget, TargetError};
 pub use page_js::PageJs;
-pub use page_signals::{ConsoleEntry, ConsoleLevel, PageDialog, PageSignals};
+pub use page_signals::{
+    ConsoleEntry, ConsoleLevel, ConsoleMark, DocumentMark, DocumentSince, PageDialog, PageSignals,
+};
 pub use profiles::{
     BrowserProfileInfo, DEFAULT_PROFILE_DIRECTORY, LoadProfileOutcome, ProfileCandidate,
     ProfileMeta, ProfileSelector, default_profile, resolve_profile,
 };
+pub use runtime_lease::{RuntimeLease, RuntimeLeases};
 pub use session::{BrowserSession, BrowserSessionHooks};
 pub use target::{
-    BrowserView, CapturedScope, PageAdmission, PageListing, TargetBinding, TargetIntent,
-    TargetSource, TargetStatus, WindowSelection,
+    BrowserView, CapturedScope, OpenedPage, PageAdmission, PageListing, TargetBinding,
+    TargetIntent, TargetSource, TargetStatus, WindowSelection,
 };
 pub use types::{
     BrowserContextId, BrowserProfileId, FrameId, PageId, Ref, SessionId, TabId, TargetId, WindowId,
 };
 
 mod session;
-#[cfg(test)]
-mod test_support;

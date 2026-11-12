@@ -36,8 +36,10 @@ export function DemoTerminalWindow({
   spinGlyph: string
 }) {
   const started = frame.switched
+  // macOS draws this window frame, not neo, so it keeps the OS's 12px
+  // corners instead of following the app's radius scale.
   return (
-    <div className="flex size-full flex-col overflow-hidden rounded-xl bg-[#01123F] font-mono text-white shadow-[0_0_0_1px_rgb(1_18_63/0.4),0_34px_60px_-28px_rgb(1_18_63/0.6),0_10px_24px_-12px_rgb(1_18_63/0.35)]">
+    <div className="flex size-full flex-col overflow-hidden rounded-[12px] bg-[#01123F] font-mono text-white shadow-[0_0_0_1px_rgb(1_18_63/0.4),0_34px_60px_-28px_rgb(1_18_63/0.6),0_10px_24px_-12px_rgb(1_18_63/0.35)]">
       <div className="relative flex h-8 flex-none items-center border-[#EAF1FF]/8 border-b px-3">
         <TrafficLights size={11} />
         <span className="absolute inset-x-0 top-[9px] text-center text-[#8C97B3] text-[11.5px] leading-[14px]">
@@ -54,7 +56,7 @@ export function DemoTerminalWindow({
             </span>
           </div>
           {started && (
-            <div className="flex flex-none animate-demo-rise items-center gap-3 rounded-lg border border-[#F5B957]/70 px-3 py-2">
+            <div className="flex flex-none animate-demo-rise items-center gap-3 rounded-[8px] border border-[#F5B957]/70 px-3 py-2">
               <svg aria-hidden width="18" height="18" viewBox="0 0 18 18">
                 <path
                   d="M9 2v14M2.9 5.5l12.2 7M2.9 12.5l12.2-7"
@@ -87,7 +89,7 @@ export function DemoTerminalWindow({
                 <div
                   key={tool.name}
                   className={cn(
-                    'flex h-[30px] flex-none animate-demo-rise items-center gap-1.5 whitespace-nowrap rounded-md border px-[7px] text-[11.5px] leading-4 transition-[background-color,border-color] duration-500 ease-out',
+                    'flex h-[30px] flex-none animate-demo-rise items-center gap-1.5 whitespace-nowrap rounded-[6px] border px-[7px] text-[11.5px] leading-4 transition-[background-color,border-color] duration-500 ease-out',
                     lit
                       ? 'border-[#0254EC] bg-[#0254EC]/30'
                       : 'border-transparent',

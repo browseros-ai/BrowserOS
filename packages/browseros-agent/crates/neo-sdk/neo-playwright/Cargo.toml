@@ -1,0 +1,114 @@
+[package]
+name = "neo-playwright"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Playwright-compatible locators and actions for BrowserOS Neo's run tool (claw-sdk)"
+
+[dependencies]
+browseros-cdp.workspace = true
+# `ts-rs`: the three core ids on the wire (`TabId`, `FrameId`, `TargetId`) print as TypeScript.
+browseros-core = { workspace = true, features = ["ts-rs"] }
+neo-trace.workspace = true
+# Tall native-tab screenshots are joined one PNG row at a time, without a full RGBA bitmap.
+png.workspace = true
+base64.workspace = true
+# Asks frames at once (`join_all`): a snapshot's child frames, an action's parent frames.
+futures-util.workspace = true
+serde.workspace = true
+# `raw_value`: a selector chunk is the prelude's parsed selector, passed to the page untouched.
+# `float_roundtrip`: a number the probe measured comes back to it bit for bit. Without it,
+# serde_json parses a 17-digit float (most rects of a transformed element) one ULP off, the
+# probe's `===` stability check against the echoed rect never passes, and the click times out.
+# Features unify per build, so this also covers the CDP client's own parse of each reply.
+# `unbounded_depth`: a main-world result in Playwright's format nests up to 297 levels (spike
+# S-depth), past serde's default limit of 128; page_value.rs caps the depth before it parses.
+serde_json = { workspace = true, features = ["float_roundtrip", "raw_value", "unbounded_depth"] }
+# Names the failing field in `invalid_input` messages (`target.chunks[0]: ...`).
+serde_path_to_error.workspace = true
+tokio.workspace = true
+# Prints each op's input and result types as the prelude's TypeScript (`src/wire/`,
+# tests/wire_generated.rs). A normal dependency because the route rows' bounds name `TS`; outside
+# the generator its impls are never called. Default features only (`serde-compat`): no impl for
+# `serde_json::Value`, so a handler cannot answer an untyped value.
+ts-rs.workspace = true
+# Normalizes navigation URLs using the URL parser before dispatch.
+url.workspace = true
+# The random epoch and seq base a `Playwright` boots worlds with; core already builds it.
+uuid.workspace = true
+
+[dev-dependencies]
+# Runner N (tests/support/js_runner.rs) runs the real prelude in the engine claw-sdk ships it
+# in, at the workspace pin claw-sdk's runtime uses. Dev-only: the crate itself never runs JS.
+rquickjs.workspace = true
+# tests/engine_sources.rs checks the vendored bytes against third_party's SHA256SUMS.
+sha2.workspace = true
+# Filesystem-save tests isolate their outputs, including relative-path cases.
+tempfile.workspace = true
+tokio = { workspace = true, features = ["test-util"] }
+
+# claw-sdk's lint table: paste below `[package]` in crates/neo-sdk/neo-server/Cargo.toml.
+#
+# Cargo forbids `[lints] workspace = true` plus extra lints in one crate, so the workspace's
+# lints are restated first. `tests/style_boundaries.rs` fails if a workspace lint is missing here
+# or if crates/neo-sdk/neo-playwright's table drifts from this one, so "keep in sync" is checked.
+#
+# Levels: additions are "warn"; check.sh and CI run clippy with `-D warnings`, so a warning
+# fails the gate while editing stays unblocked. The workspace's "deny" entries stay "deny".
+# Every name exists on rustc/clippy 1.96 and 1.98 (local stable and the CI pin).
+# Evidence for each choice: sdk-style/spikes/lint-counts*.txt and design.md.
+
+[lints.rust]
+# Workspace, restated.
+unsafe_code = "deny"                    # no unsafe in a server that parses untrusted input
+# Documentation (Google: document public APIs; owner: docs at seams).
+missing_docs = "warn"                   # every exported item says its job in the system
+unreachable_pub = "warn"                # `pub` means exported; internal items say `pub(crate)`
+missing_debug_implementations = "warn"  # exported types are loggable; secret types write a redacting Debug
+# Imports (Google: one module per `use`, types unqualified).
+unused_qualifications = "warn"          # no `a::B` when `B` is already in scope
+# Idioms.
+rust_2018_idioms = { level = "warn", priority = -1 }  # `Formatter<'_>`: borrows visible in types
+
+[lints.clippy]
+# Workspace, restated.
+unwrap_used = "deny"                    # a server must not panic on input
+expect_used = "deny"                    # stricter than Google's "prefer expect", on purpose
+print_stdout = "warn"                   # logs go through tracing; main's --version is the one expect
+print_stderr = "warn"
+dbg_macro = "warn"
+
+# Pedantic, on as a group (decisions.md 1). New pedantic lints on a toolchain bump show up
+# as warnings and get a deliberate decision.
+pedantic = { level = "warn", priority = -1 }
+missing_errors_doc = "allow"            # `# Errors` would restate the error type, which carries owner + code
+similar_names = "allow"                 # flags pairs like `req`/`res`; noise, no Google rule behind it
+
+# Restriction lints, each tied to a rule. The group is never enabled whole.
+# No panics on input (workspace rule, extended). Tests are exempt via clippy.toml.
+panic = "warn"                          # return an OperationError; panics are for broken invariants only
+todo = "warn"                           # unfinished code does not ship
+unimplemented = "warn"                  # unsupported methods fail with method_unavailable, not a panic
+unreachable = "warn"                    # prove it with types or return an error
+indexing_slicing = "warn"               # `v[i]` panics; use `.get()`, patterns, or a typed struct
+string_slice = "warn"                   # `&s[..n]` panics inside a UTF-8 char; cutting page text is common here
+exit = "warn"                           # only `main` decides exit codes (Chromium reads 0/1/2)
+# Error ownership: keep the cause.
+map_err_ignore = "warn"                 # `.map_err(|_| ..)` drops the source that says who failed
+# Suppressions are rare and explained.
+allow_attributes = "warn"               # `#[expect]` fails once the lint stops firing; `#[allow]` rots
+allow_attributes_without_reason = "warn"  # every exception says why
+# Google: imports and qualification.
+absolute_paths = "warn"                 # `std::mem::take(..)` -> `use std::mem; mem::take(..)` (max 2 segments, clippy.toml)
+# Google: borrows over deep copies.
+clone_on_ref_ptr = "warn"               # `Arc::clone(&x)` for refcounts, so every `.clone()` is a deep copy to justify
+# Google: format!/write! over `+`.
+string_add = "warn"
+# Google: docs use capitalization and punctuation.
+doc_paragraphs_missing_punctuation = "warn"
+# Layout (Google: leaf modules named after their item): `dispatch.rs` + `dispatch/`, never `mod.rs`.
+mod_module_files = "warn"
+# Types: either a plain data bag (all fields pub) or an encapsulated type (none pub).
+partial_pub_fields = "warn"

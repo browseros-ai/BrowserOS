@@ -1,0 +1,204 @@
+{
+  "base": "1ced1c020",
+  "scenarios": [
+    {
+      "name": "media and viewport",
+      "script": "await page.requestGC(); await page.emulateMedia(); await page.emulateMedia({media:'print', colorScheme:'dark', reducedMotion:'reduce',forcedColors:'active',contrast:'more'}); await page.emulateMedia({media:null,colorScheme:null,reducedMotion:null,forcedColors:null,contrast:null}); await page.setViewportSize({width:600,height:400}); return page.viewportSize()",
+      "exchanges": [
+        {
+          "op": "page.requestGC",
+          "args": "{\"call\":{\"api\":\"page.requestGC\",\"timeoutMs\":0},\"page\":{\"$neo\":\"page\",\"tab\":1007}}",
+          "reply": "{\"pages\":[],\"ok\":null,\"observed\":{\"seq\":2,\"events\":0,\"payloadCurrent\":true}}"
+        },
+        {
+          "op": "page.emulateMedia",
+          "args": "{\"call\":{\"api\":\"page.emulateMedia\",\"timeoutMs\":0},\"page\":{\"$neo\":\"page\",\"tab\":1007}}",
+          "reply": "{\"pages\":[],\"ok\":null,\"observed\":{\"seq\":3,\"events\":0,\"payloadCurrent\":true}}"
+        },
+        {
+          "op": "page.emulateMedia",
+          "args": "{\"call\":{\"api\":\"page.emulateMedia\",\"timeoutMs\":0},\"page\":{\"$neo\":\"page\",\"tab\":1007},\"media\":\"print\",\"colorScheme\":\"dark\",\"reducedMotion\":\"reduce\",\"forcedColors\":\"active\",\"contrast\":\"more\"}",
+          "reply": "{\"pages\":[],\"ok\":null,\"observed\":{\"seq\":4,\"events\":0,\"payloadCurrent\":true}}"
+        },
+        {
+          "op": "page.emulateMedia",
+          "args": "{\"call\":{\"api\":\"page.emulateMedia\",\"timeoutMs\":0},\"page\":{\"$neo\":\"page\",\"tab\":1007},\"media\":\"no-override\",\"colorScheme\":\"no-override\",\"reducedMotion\":\"no-override\",\"forcedColors\":\"no-override\",\"contrast\":\"no-override\"}",
+          "reply": "{\"pages\":[],\"ok\":null,\"observed\":{\"seq\":5,\"events\":0,\"payloadCurrent\":true}}"
+        },
+        {
+          "op": "page.setViewportSize",
+          "args": "{\"call\":{\"api\":\"page.setViewportSize\",\"timeoutMs\":0},\"page\":{\"$neo\":\"page\",\"tab\":1007},\"viewportSize\":{\"width\":600,\"height\":400}}",
+          "reply": "{\"pages\":[],\"ok\":null,\"observed\":{\"seq\":6,\"events\":0,\"payloadCurrent\":true}}"
+        }
+      ],
+      "result": "{\"width\":600,\"height\":400}"
+    },
+    {
+      "name": "page and frame tags",
+      "script": "await page.addScriptTag({url:'https://example.test/a.js',path:'a.js',content:'hi',type:'module'}); await page.addStyleTag({url:'https://example.test/a.css',path:'a.css',content:'body{}',type:'ignored'}); await page.mainFrame().addScriptTag({content:'window.x=1'}); await page.mainFrame().addStyleTag({content:'body{}'});",
+      "exchanges": [
+        {
+          "op": "page.addScriptTag",
+          "args": "{\"call\":{\"api\":\"page.addScriptTag\",\"timeoutMs\":0},\"page\":{\"$neo\":\"page\",\"tab\":1007},\"url\":\"https://example.test/a.js\",\"path\":\"a.js\",\"content\":\"hi\",\"type\":\"module\"}",
+          "reply": "{\"pages\":[],\"ok\":{\"element\":{\"$neo\":\"element\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"seq\":0,\"node\":9,\"display\":\"<script>\"}},\"observed\":{\"seq\":2,\"events\":0,\"payloadCurrent\":true}}"
+        },
+        {
+          "op": "page.addStyleTag",
+          "args": "{\"call\":{\"api\":\"page.addStyleTag\",\"timeoutMs\":0},\"page\":{\"$neo\":\"page\",\"tab\":1007},\"url\":\"https://example.test/a.css\",\"path\":\"a.css\",\"content\":\"body{}\"}",
+          "reply": "{\"pages\":[],\"ok\":{\"element\":{\"$neo\":\"element\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"seq\":0,\"node\":9,\"display\":\"<script>\"}},\"observed\":{\"seq\":3,\"events\":0,\"payloadCurrent\":true}}"
+        },
+        {
+          "op": "page.addScriptTag",
+          "args": "{\"call\":{\"api\":\"frame.addScriptTag\",\"timeoutMs\":0},\"page\":{\"$neo\":\"page\",\"tab\":1007},\"content\":\"window.x=1\"}",
+          "reply": "{\"pages\":[],\"ok\":{\"element\":{\"$neo\":\"element\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"seq\":0,\"node\":9,\"display\":\"<script>\"}},\"observed\":{\"seq\":4,\"events\":0,\"payloadCurrent\":true}}"
+        },
+        {
+          "op": "page.addStyleTag",
+          "args": "{\"call\":{\"api\":\"frame.addStyleTag\",\"timeoutMs\":0},\"page\":{\"$neo\":\"page\",\"tab\":1007},\"content\":\"body{}\"}",
+          "reply": "{\"pages\":[],\"ok\":{\"element\":{\"$neo\":\"element\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"seq\":0,\"node\":9,\"display\":\"<script>\"}},\"observed\":{\"seq\":5,\"events\":0,\"payloadCurrent\":true}}"
+        }
+      ],
+      "result": "null"
+    },
+    {
+      "name": "screenshots",
+      "script": "await page.screenshot(); await page.screenshot({type:'jpeg',quality:76,fullPage:true,clip:{x:2,y:3,width:80,height:90},scale:'css',animations:'disabled',caret:'initial',style:'body{}',omitBackground:true,mask:[page.locator('#secret')],maskColor:'#000',path:'capture.jpg'}); await page.locator('#go').screenshot({type:'webp',quality:80}); const e=await page.locator('#go').elementHandle(); await e.screenshot({fullPage:true,scale:'device',mask:[]});",
+      "exchanges": [
+        {
+          "op": "page.screenshot",
+          "args": "{\"call\":{\"api\":\"page.screenshot\",\"timeoutMs\":5000},\"page\":{\"$neo\":\"page\",\"tab\":1007}}",
+          "reply": "{\"pages\":[],\"ok\":{\"$neo\":\"bytes\",\"base64\":\"aGVsbG8=\"},\"observed\":{\"seq\":2,\"events\":0,\"payloadCurrent\":true}}"
+        },
+        {
+          "op": "page.screenshot",
+          "args": "{\"call\":{\"api\":\"page.screenshot\",\"timeoutMs\":5000},\"page\":{\"$neo\":\"page\",\"tab\":1007},\"type\":\"jpeg\",\"quality\":76,\"omitBackground\":true,\"fullPage\":true,\"clip\":{\"x\":2,\"y\":3,\"width\":80,\"height\":90},\"animations\":\"disabled\",\"caret\":\"initial\",\"style\":\"body{}\",\"scale\":\"css\",\"maskColor\":\"#000\",\"mask\":[{\"$neo\":\"locator\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"frame\":null,\"chunks\":[{\"parts\":[{\"name\":\"css\",\"body\":[{\"simples\":[{\"selector\":{\"css\":\"#secret\",\"functions\":[]},\"combinator\":\"\"}]}],\"source\":\"#secret\"}]}],\"display\":\"locator('#secret')\"}]}",
+          "reply": "{\"pages\":[],\"ok\":{\"$neo\":\"bytes\",\"base64\":\"aGVsbG8=\"},\"observed\":{\"seq\":3,\"events\":0,\"payloadCurrent\":true}}"
+        },
+        {
+          "op": "page.saveScreenshot",
+          "args": "{\"call\":{\"api\":\"page.screenshot\",\"timeoutMs\":0},\"path\":\"capture.jpg\",\"base64\":\"aGVsbG8=\"}",
+          "reply": "{\"pages\":[],\"ok\":null,\"observed\":{\"seq\":4,\"events\":0,\"payloadCurrent\":true}}"
+        },
+        {
+          "op": "page.screenshot",
+          "args": "{\"call\":{\"api\":\"locator.screenshot\",\"timeoutMs\":5000},\"page\":{\"$neo\":\"page\",\"tab\":1007},\"target\":{\"$neo\":\"locator\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"frame\":null,\"chunks\":[{\"parts\":[{\"name\":\"css\",\"body\":[{\"simples\":[{\"selector\":{\"css\":\"#go\",\"functions\":[]},\"combinator\":\"\"}]}],\"source\":\"#go\"}]}],\"display\":\"locator('#go')\"},\"strict\":\"strict\",\"type\":\"webp\",\"quality\":80}",
+          "reply": "{\"pages\":[],\"ok\":{\"$neo\":\"bytes\",\"base64\":\"aGVsbG8=\"},\"observed\":{\"seq\":5,\"events\":0,\"payloadCurrent\":true}}"
+        },
+        {
+          "op": "locator.waitFor",
+          "args": "{\"call\":{\"api\":\"locator.elementHandle\",\"timeoutMs\":5000},\"target\":{\"$neo\":\"locator\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"frame\":null,\"chunks\":[{\"parts\":[{\"name\":\"css\",\"body\":[{\"simples\":[{\"selector\":{\"css\":\"#go\",\"functions\":[]},\"combinator\":\"\"}]}],\"source\":\"#go\"}]}],\"display\":\"locator('#go')\"},\"strict\":\"strict\",\"state\":\"attached\",\"omitReturnValue\":false}",
+          "reply": "{\"pages\":[],\"ok\":{\"$neo\":\"element\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"seq\":0,\"node\":9,\"display\":\"<button>\"},\"observed\":{\"seq\":6,\"events\":0,\"payloadCurrent\":true}}"
+        },
+        {
+          "op": "page.screenshot",
+          "args": "{\"call\":{\"api\":\"elementHandle.screenshot\",\"timeoutMs\":5000},\"page\":{\"$neo\":\"page\",\"tab\":1007},\"target\":{\"$neo\":\"element\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"seq\":0,\"node\":9,\"display\":\"<button>\"},\"strict\":\"strict\",\"fullPage\":true,\"scale\":\"device\",\"mask\":[]}",
+          "reply": "{\"pages\":[],\"ok\":{\"$neo\":\"bytes\",\"base64\":\"aGVsbG8=\"},\"observed\":{\"seq\":7,\"events\":0,\"payloadCurrent\":true}}"
+        }
+      ],
+      "result": "null"
+    },
+    {
+      "name": "pdf",
+      "script": "await page.pdf(); await page.pdf({scale:1.2,displayHeaderFooter:true,headerTemplate:'hi',footerTemplate:'bye',printBackground:true,landscape:true,pageRanges:'1-2',format:'A4',width:800,height:'11in',preferCSSPageSize:true,margin:{top:24,right:'1cm',bottom:4,left:'2px'},tagged:true,outline:true});",
+      "exchanges": [
+        {
+          "op": "page.pdf",
+          "args": "{\"call\":{\"api\":\"page.pdf\",\"timeoutMs\":0},\"page\":{\"$neo\":\"page\",\"tab\":1007}}",
+          "reply": "{\"pages\":[],\"ok\":{\"$neo\":\"bytes\",\"base64\":\"aGVsbG8=\"},\"observed\":{\"seq\":2,\"events\":0,\"payloadCurrent\":true}}"
+        },
+        {
+          "op": "page.pdf",
+          "args": "{\"call\":{\"api\":\"page.pdf\",\"timeoutMs\":0},\"page\":{\"$neo\":\"page\",\"tab\":1007},\"scale\":1.2,\"displayHeaderFooter\":true,\"headerTemplate\":\"hi\",\"footerTemplate\":\"bye\",\"printBackground\":true,\"landscape\":true,\"pageRanges\":\"1-2\",\"format\":\"A4\",\"width\":\"800px\",\"height\":\"11in\",\"preferCSSPageSize\":true,\"margin\":{\"top\":\"24px\",\"right\":\"1cm\",\"bottom\":\"4px\",\"left\":\"2px\"},\"tagged\":true,\"outline\":true}",
+          "reply": "{\"pages\":[],\"ok\":{\"$neo\":\"bytes\",\"base64\":\"aGVsbG8=\"},\"observed\":{\"seq\":3,\"events\":0,\"payloadCurrent\":true}}"
+        }
+      ],
+      "result": "null"
+    },
+    {
+      "name": "storage",
+      "script": "const l=page.localStorage; const s=page.sessionStorage; await l.setItem('a','b'); await s.removeItem('a'); await s.clear(); return [await l.items(),await l.getItem('present'),await l.getItem('absent')];",
+      "exchanges": [
+        {
+          "op": "webStorage.setItem",
+          "args": "{\"call\":{\"api\":\"webStorage.setItem\",\"timeoutMs\":0},\"page\":{\"$neo\":\"page\",\"tab\":1007},\"kind\":\"local\",\"name\":\"a\",\"value\":\"b\"}",
+          "reply": "{\"pages\":[],\"ok\":null,\"observed\":{\"seq\":2,\"events\":0,\"payloadCurrent\":true}}"
+        },
+        {
+          "op": "webStorage.removeItem",
+          "args": "{\"call\":{\"api\":\"webStorage.removeItem\",\"timeoutMs\":0},\"page\":{\"$neo\":\"page\",\"tab\":1007},\"kind\":\"session\",\"name\":\"a\"}",
+          "reply": "{\"pages\":[],\"ok\":null,\"observed\":{\"seq\":3,\"events\":0,\"payloadCurrent\":true}}"
+        },
+        {
+          "op": "webStorage.clear",
+          "args": "{\"call\":{\"api\":\"webStorage.clear\",\"timeoutMs\":0},\"page\":{\"$neo\":\"page\",\"tab\":1007},\"kind\":\"session\"}",
+          "reply": "{\"pages\":[],\"ok\":null,\"observed\":{\"seq\":4,\"events\":0,\"payloadCurrent\":true}}"
+        },
+        {
+          "op": "webStorage.items",
+          "args": "{\"call\":{\"api\":\"webStorage.items\",\"timeoutMs\":0},\"page\":{\"$neo\":\"page\",\"tab\":1007},\"kind\":\"local\"}",
+          "reply": "{\"pages\":[],\"ok\":[{\"name\":\"a\",\"value\":\"b\"}],\"observed\":{\"seq\":5,\"events\":0,\"payloadCurrent\":true}}"
+        },
+        {
+          "op": "webStorage.getItem",
+          "args": "{\"call\":{\"api\":\"webStorage.getItem\",\"timeoutMs\":0},\"page\":{\"$neo\":\"page\",\"tab\":1007},\"kind\":\"local\",\"name\":\"present\"}",
+          "reply": "{\"pages\":[],\"ok\":\"b\",\"observed\":{\"seq\":6,\"events\":0,\"payloadCurrent\":true}}"
+        },
+        {
+          "op": "webStorage.getItem",
+          "args": "{\"call\":{\"api\":\"webStorage.getItem\",\"timeoutMs\":0},\"page\":{\"$neo\":\"page\",\"tab\":1007},\"kind\":\"local\",\"name\":\"absent\"}",
+          "reply": "{\"pages\":[],\"ok\":null,\"observed\":{\"seq\":7,\"events\":0,\"payloadCurrent\":true}}"
+        }
+      ],
+      "result": "[[{\"name\":\"a\",\"value\":\"b\"}],\"b\",null]"
+    },
+    {
+      "name": "context scripts and disposables",
+      "script": "const a=await context.addInitScript('window.x=1'); const b=await context.addInitScript({path:'init.js'}); await a.dispose(); await b.dispose(); const p=await context.newPage(); return p.url();",
+      "exchanges": [
+        {
+          "op": "context.addInitScript",
+          "args": "{\"call\":{\"api\":\"browserContext.addInitScript\",\"timeoutMs\":0},\"source\":\"window.x=1\"}",
+          "reply": "{\"pages\":[],\"ok\":1,\"observed\":{\"seq\":2,\"events\":0,\"payloadCurrent\":true}}"
+        },
+        {
+          "op": "context.addInitScript",
+          "args": "{\"call\":{\"api\":\"browserContext.addInitScript\",\"timeoutMs\":0},\"path\":\"init.js\"}",
+          "reply": "{\"pages\":[],\"ok\":2,\"observed\":{\"seq\":3,\"events\":0,\"payloadCurrent\":true}}"
+        },
+        {
+          "op": "disposable.dispose",
+          "args": "{\"call\":{\"api\":\"disposable.dispose\",\"timeoutMs\":0},\"id\":1}",
+          "reply": "{\"pages\":[],\"ok\":null,\"observed\":{\"seq\":4,\"events\":0,\"payloadCurrent\":true}}"
+        },
+        {
+          "op": "disposable.dispose",
+          "args": "{\"call\":{\"api\":\"disposable.dispose\",\"timeoutMs\":0},\"id\":2}",
+          "reply": "{\"pages\":[],\"ok\":null,\"observed\":{\"seq\":5,\"events\":0,\"payloadCurrent\":true}}"
+        },
+        {
+          "op": "context.newPage",
+          "args": "{\"call\":{\"api\":\"browserContext.newPage\",\"timeoutMs\":0}}",
+          "reply": "{\"pages\":[],\"ok\":{\"page\":{\"$neo\":\"page\",\"tab\":1008},\"url\":\"about:blank\"},\"observed\":{\"seq\":6,\"events\":0,\"payloadCurrent\":true}}"
+        }
+      ],
+      "result": "\"about:blank\""
+    },
+    {
+      "name": "context binding",
+      "script": "const b=await context.exposeBinding('echo', (_source,x)=>x); await b.dispose();",
+      "exchanges": [
+        {
+          "op": "context.exposeBinding",
+          "args": "{\"call\":{\"api\":\"browserContext.exposeBinding\",\"timeoutMs\":0},\"name\":\"echo\"}",
+          "reply": "{\"pages\":[],\"ok\":3,\"observed\":{\"seq\":2,\"events\":0,\"payloadCurrent\":true}}"
+        },
+        {
+          "op": "disposable.dispose",
+          "args": "{\"call\":{\"api\":\"disposable.dispose\",\"timeoutMs\":0},\"id\":3}",
+          "reply": "{\"pages\":[],\"ok\":null,\"observed\":{\"seq\":3,\"events\":0,\"payloadCurrent\":true}}"
+        }
+      ],
+      "result": "null"
+    }
+  ]
+}

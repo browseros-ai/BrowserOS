@@ -12,7 +12,7 @@
 //! `service`, rather than leaving a promise the server no longer keeps.
 
 use crate::{
-    api::mcp::{effects::page_ownership_notice, hosted, prompt, service},
+    api::mcp::{effects::page_ownership_notice, hosted, prompt, service, session_handle},
     config::TabGrouping,
 };
 use browseros_mcp::tools::{tab_groups, tabs};
@@ -35,7 +35,7 @@ pub(super) const EXPLICIT_REWRITES: [(&str, &str); 10] = [
         "; omit it to open the page ungrouped.",
     ),
     (tab_groups::RESUME_GUIDANCE, ""),
-    (service::SESSION_GROUP_CONTINUITY, ""),
+    (session_handle::SESSION_GROUP_CONTINUITY, ""),
     (service::NAME_SESSION_GROUPING, "The label"),
     (hosted::TASK_NAME_GROUPING, "."),
     (

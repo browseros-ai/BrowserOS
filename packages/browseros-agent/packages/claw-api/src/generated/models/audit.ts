@@ -15,6 +15,52 @@
 /**
  *
  * @export
+ * @interface AuditAgent
+ */
+export interface AuditAgent {
+    /**
+     * The agent's slug, the value the session list's `slug` filter takes.
+     * @type {string}
+     * @memberof AuditAgent
+     */
+    slug: string;
+    /**
+     * The display label from the agent's most recent task.
+     * @type {string}
+     * @memberof AuditAgent
+     */
+    label: string;
+    /**
+     *
+     * @type {number}
+     * @memberof AuditAgent
+     */
+    taskCount: number;
+    /**
+     * Start of the agent's most recent task, in epoch milliseconds.
+     * @type {number}
+     * @memberof AuditAgent
+     */
+    lastStartedAt: number;
+}
+
+/**
+ *
+ * @export
+ * @interface AuditAgentList
+ */
+export interface AuditAgentList {
+    /**
+     * Ordered by task count, then by the most recent task.
+     * @type {Array<AuditAgent>}
+     * @memberof AuditAgentList
+     */
+    items: Array<AuditAgent>;
+}
+
+/**
+ *
+ * @export
  * @interface AuditCleanupResult
  */
 export interface AuditCleanupResult {

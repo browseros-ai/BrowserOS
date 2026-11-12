@@ -15,10 +15,12 @@ use super::{
     naming::{SESSION_NAME_INPUT_MAX_LEN, normalize_small_name},
     service::{
         AWAIT_HELP_TOOL_NAME, MARK_SKILL_RUN_TOOL_NAME, NAME_SESSION_TOOL_NAME,
-        REQUEST_HELP_TOOL_NAME, SAVE_SKILL_TOOL_NAME,
+        REQUEST_HELP_TOOL_NAME, RUN_SKILL_TOOL_NAME, SAVE_SKILL_TOOL_NAME,
     },
 };
 use crate::config::ServerMode;
+use browseros_core::target::BrowserView;
+use browseros_mcp::ToolDef;
 use rmcp::model::{JsonObject, Tool};
 use serde_json::{Value, json};
 use std::sync::Arc;
@@ -34,6 +36,45 @@ const NAME_SESSION_REFUSAL: &str = "name_session is not available on this hosted
 const SKILLS_REFUSAL: &str = "Skills are not available on this hosted BrowserOS neo server: nothing was saved or recorded. Keep repeatable workflows in your own agent instead.";
 const HUMAN_HELP_REFUSAL: &str = "Human help is not available on this hosted BrowserOS neo server. Do not wait for a human here: stop and tell the user in your chat what you need.";
 
+/// The browser tools this mode offers. Hosted adds `setViewport`, whose per-tab device
+/// emulation only makes sense where the browser is infrastructure.
+#[must_use]
+pub fn catalog(mode: ServerMode) -> Vec<ToolDef> {
+    let mut tools = browseros_mcp::catalog();
+    if mode.is_hosted() {
+        tools.push(browseros_mcp::tools::viewport::definition());
+    }
+    tools
+}
+
+/// A captured view with this server's viewport state attached, when it has any (hosted).
+#[must_use]
+pub fn with_viewports(
+    view: BrowserView,
+    viewports: Option<&std::sync::Arc<browseros_core::viewport::Viewports>>,
+) -> BrowserView {
+    match viewports {
+        Some(viewports) => view.with_viewports(viewports.clone()),
+        None => view,
+    }
+}
+
+/// Teaches `run` the hosted SDK member that only hosted scripts get.
+#[must_use]
+pub fn with_viewport_sdk_note(mut tool: Tool) -> Tool {
+    if tool.name == "run"
+        && let Some(description) = &tool.description
+    {
+        tool.description = Some(
+            format!(
+                "{description}\n\nHosted: page.setViewport({{ mode: 'mobile' | 'desktop' | 'default', zoom?, width?, height? }}) sets the tab's viewport like the setViewport tool and returns the same report. width and height (CSS px, 100-4096) go together and only with mobile or desktop."
+            )
+            .into(),
+        );
+    }
+    tool
+}
+
 /// Why the server refuses `tool` in `mode`, or `None` when the mode offers it.
 ///
 /// Listing filters on this, and calls are refused with the returned text. Hidden tools stay
@@ -46,7 +87,9 @@ pub fn refusal(mode: ServerMode, tool: &str) -> Option<&'static str> {
     }
     match tool {
         NAME_SESSION_TOOL_NAME => Some(NAME_SESSION_REFUSAL),
-        SAVE_SKILL_TOOL_NAME | MARK_SKILL_RUN_TOOL_NAME => Some(SKILLS_REFUSAL),
+        SAVE_SKILL_TOOL_NAME | MARK_SKILL_RUN_TOOL_NAME | RUN_SKILL_TOOL_NAME => {
+            Some(SKILLS_REFUSAL)
+        }
         REQUEST_HELP_TOOL_NAME | AWAIT_HELP_TOOL_NAME => Some(HUMAN_HELP_REFUSAL),
         _ => None,
     }
@@ -127,7 +170,7 @@ mod tests {
 
     #[test]
     fn desktop_refuses_nothing() {
-        for tool in HIDDEN.into_iter().chain(["tabs", "run", "pursue"]) {
+        for tool in HIDDEN.into_iter().chain(["tabs", "run"]) {
             assert_eq!(refusal(ServerMode::Desktop, tool), None, "{tool}");
         }
     }
@@ -137,8 +180,7 @@ mod tests {
         for tool in HIDDEN {
             assert!(refusal(ServerMode::Hosted, tool).is_some(), "{tool}");
         }
-        // pursue keeps its own gate, the decision-model credential.
-        for tool in ["tabs", "run", "act", "pursue"] {
+        for tool in ["tabs", "run", "act"] {
             assert_eq!(refusal(ServerMode::Hosted, tool), None, "{tool}");
         }
     }

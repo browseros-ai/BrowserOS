@@ -17,6 +17,7 @@ import {
 } from '@/components/motion/select'
 import { Skeleton } from '@/components/ui/skeleton'
 import {
+  useAuditAgents,
   useAuditStorage,
   useRunAuditCleanup,
   useSessions,
@@ -52,9 +53,10 @@ export function StorageSettings() {
   const setRetention = useSetAuditRetention({ onSuccess: invalidateStorage })
   const runCleanup = useRunAuditCleanup({
     onSuccess: () => {
-      // The cleanup pruned History too, so refresh both.
+      // The cleanup pruned History too, so refresh its tasks and agents.
       invalidateStorage()
       void queryClient.invalidateQueries({ queryKey: useSessions.getKey() })
+      void queryClient.invalidateQueries({ queryKey: useAuditAgents.getKey() })
     },
   })
 
@@ -196,7 +198,7 @@ export function StorageSettings() {
         <CenterMorphModalContent
           ariaLabel="Clean up task history now?"
           showCloseButton={false}
-          className="ph-no-capture max-w-[440px] rounded-[22px] border-border-2 bg-card"
+          className="ph-no-capture max-w-[440px] border-border-2 bg-card"
         >
           <div className="flex flex-col gap-5 p-6">
             <div className="flex flex-col gap-2">

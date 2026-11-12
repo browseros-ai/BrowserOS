@@ -18,6 +18,16 @@ const testSuites = {
       argv: [bun, 'run', 'test'],
     },
     {
+      label: 'neo-playwright engine tests',
+      cwd: resolve(projectRoot, 'crates/neo-sdk/neo-playwright-js'),
+      argv: [bun, 'run', 'test'],
+    },
+    {
+      label: 'Neo conformance harness tests',
+      cwd: resolve(projectRoot, 'crates/neo-sdk/neo-server'),
+      argv: [bun, 'run', 'test:conformance'],
+    },
+    {
       label: 'diagnostics tests',
       cwd: resolve(projectRoot, 'packages/diagnostics'),
       argv: [bun, 'run', 'test'],

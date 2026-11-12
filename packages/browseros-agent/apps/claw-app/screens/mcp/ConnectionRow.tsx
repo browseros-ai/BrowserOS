@@ -6,7 +6,7 @@ import type { Harness } from '@/components/harness/harness.types'
 import { StatefulButton } from '@/components/motion/button/stateful'
 import { cn } from '@/lib/utils'
 import type { ConnectionState } from '@/modules/api/connections.hooks'
-import { toast } from '@/modules/toast/toast'
+import { toastApiError, toastSuccess } from '@/modules/toast/toast'
 
 interface ConnectionRowProps {
   state: ConnectionState
@@ -25,6 +25,7 @@ export function ConnectionRow({
   onDisconnect,
 }: ConnectionRowProps) {
   const name = state.harness as Harness
+  const configPath = state.configPath
 
   return (
     <AgentRow
@@ -42,18 +43,14 @@ export function ConnectionRow({
             <RowMenu
               label={name}
               actions={[
-                ...(state.configPath
+                ...(configPath
                   ? [
                       {
                         id: 'settings-file',
                         label: 'Settings file',
-                        ariaLabel: `Show ${name}’s settings file`,
+                        ariaLabel: `Copy where ${name}’s settings file is`,
                         icon: <FileText className="size-4" />,
-                        onClick: () =>
-                          toast({
-                            title: `${name} keeps its neo settings here`,
-                            description: state.configPath,
-                          }),
+                        onClick: () => void copySettingsFile(configPath),
                       },
                     ]
                   : []),
@@ -112,7 +109,7 @@ export function AgentRow({
     >
       <span
         aria-hidden
-        className="grid size-11 place-items-center rounded-xl border border-border-2 bg-card"
+        className="grid size-11 place-items-center rounded-md border border-border-2 bg-card"
       >
         {logo}
       </span>
@@ -135,4 +132,14 @@ export function AgentRow({
       ) : null}
     </li>
   )
+}
+
+async function copySettingsFile(path: string) {
+  try {
+    await navigator.clipboard.writeText(path)
+  } catch (error) {
+    toastApiError('Couldn’t copy that', error)
+    return
+  }
+  toastSuccess('Copied to clipboard', path)
 }

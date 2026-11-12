@@ -2940,102 +2940,6 @@
                             "$ref": "DOM.BackendNodeId"
                         }
                     ]
-                },
-                {
-                    "id": "CredentialInfo",
-                    "description": "BrowserOS saved password metadata. Passwords are never returned.",
-                    "type": "object",
-                    "properties": [
-                        {
-                            "name": "credentialId",
-                            "type": "string"
-                        },
-                        {
-                            "name": "username",
-                            "type": "string"
-                        },
-                        {
-                            "name": "site",
-                            "type": "string"
-                        },
-                        {
-                            "name": "stores",
-                            "type": "array",
-                            "items": {
-                                "type": "string"
-                            }
-                        }
-                    ]
-                },
-                {
-                    "id": "CredentialContext",
-                    "type": "object",
-                    "properties": [
-                        {
-                            "name": "browserProfileId",
-                            "$ref": "Browser.BrowserProfileID"
-                        },
-                        {
-                            "name": "origin",
-                            "type": "string"
-                        },
-                        {
-                            "name": "documentId",
-                            "description": "Opaque current-document identity; required by page credential operations.",
-                            "type": "string"
-                        }
-                    ]
-                },
-                {
-                    "id": "CredentialResult",
-                    "type": "object",
-                    "properties": [
-                        {
-                            "name": "browserProfileId",
-                            "$ref": "Browser.BrowserProfileID"
-                        },
-                        {
-                            "name": "origin",
-                            "optional": true,
-                            "type": "string"
-                        },
-                        {
-                            "name": "status",
-                            "optional": true,
-                            "type": "string"
-                        },
-                        {
-                            "name": "credentials",
-                            "optional": true,
-                            "type": "array",
-                            "items": {
-                                "$ref": "CredentialInfo"
-                            }
-                        },
-                        {
-                            "name": "credential",
-                            "optional": true,
-                            "$ref": "CredentialInfo"
-                        },
-                        {
-                            "name": "total",
-                            "optional": true,
-                            "type": "integer"
-                        },
-                        {
-                            "name": "nextCursor",
-                            "optional": true,
-                            "type": "string"
-                        },
-                        {
-                            "name": "filledFields",
-                            "optional": true,
-                            "type": "array",
-                            "items": {
-                                "type": "string"
-                            }
-                        }
-                    ]
                 }
             ],
             "events": [
@@ -3109,130 +3013,6 @@
                 {
                     "name": "enable",
                     "description": "Enables autofill domain notifications."
-                },
-                {
-                    "name": "getCredentialContext",
-                    "description": "Captures the main-frame document before a credential operation is queued.",
-                    "returns": [
-                        {
-                            "name": "context",
-                            "$ref": "CredentialContext"
-                        }
-                    ]
-                },
-                {
-                    "name": "listCredentials",
-                    "description": "Page target: native site matches, documentId required. Browser target: an\nexplicit live regular browserContextId is required, even without open tabs.",
-                    "parameters": [
-                        {
-                            "name": "operationId",
-                            "type": "string"
-                        },
-                        {
-                            "name": "documentId",
-                            "optional": true,
-                            "type": "string"
-                        },
-                        {
-                            "name": "browserContextId",
-                            "optional": true,
-                            "$ref": "Browser.BrowserContextID"
-                        },
-                        {
-                            "name": "query",
-                            "optional": true,
-                            "type": "string"
-                        },
-                        {
-                            "name": "limit",
-                            "optional": true,
-                            "type": "integer"
-                        },
-                        {
-                            "name": "cursor",
-                            "optional": true,
-                            "type": "string"
-                        }
-                    ],
-                    "returns": [
-                        {
-                            "name": "result",
-                            "$ref": "CredentialResult"
-                        }
-                    ]
-                },
-                {
-                    "name": "addCredential",
-                    "description": "Explicitly adds to the profile/device store. No pending form is required.",
-                    "parameters": [
-                        {
-                            "name": "operationId",
-                            "type": "string"
-                        },
-                        {
-                            "name": "documentId",
-                            "type": "string"
-                        },
-                        {
-                            "name": "username",
-                            "type": "string"
-                        },
-                        {
-                            "name": "password",
-                            "type": "string"
-                        }
-                    ],
-                    "returns": [
-                        {
-                            "name": "result",
-                            "$ref": "CredentialResult"
-                        }
-                    ]
-                },
-                {
-                    "name": "fillCredential",
-                    "description": "Exactly one source: credentialId or username AND password. Does not submit\nor save. Only acknowledged fields in a recognized main-frame login form\nare reported. Native filling policy and reauthentication remain in force.",
-                    "parameters": [
-                        {
-                            "name": "operationId",
-                            "type": "string"
-                        },
-                        {
-                            "name": "documentId",
-                            "type": "string"
-                        },
-                        {
-                            "name": "credentialId",
-                            "optional": true,
-                            "type": "string"
-                        },
-                        {
-                            "name": "username",
-                            "optional": true,
-                            "type": "string"
-                        },
-                        {
-                            "name": "password",
-                            "optional": true,
-                            "type": "string"
-                        }
-                    ],
-                    "returns": [
-                        {
-                            "name": "result",
-                            "$ref": "CredentialResult"
-                        }
-                    ]
-                },
-                {
-                    "name": "cancelCredentialOperation",
-                    "description": "Cancels outstanding store reads / renderer work before its next handoff.\nAlready dispatched writes or field mutations cannot be undone.",
-                    "parameters": [
-                        {
-                            "name": "operationId",
-                            "type": "string"
-                        }
-                    ]
                 }
             ]
         },
@@ -3445,6 +3225,528 @@
                         {
                             "name": "id",
                             "$ref": "BookmarkID"
+                        }
+                    ]
+                }
+            ]
+        },
+        {
+            "domain": "Passwords",
+            "description": "BrowserOS saved passwords for agents. Passwords are accepted as input but\nnever returned. Page commands take the documentId from getContext, so a\nnavigation in between fails with credentials:page_changed instead of acting\non the new page. Errors are credentials:<code> from a fixed vocabulary.",
+            "experimental": true,
+            "dependencies": [
+                "Browser"
+            ],
+            "types": [
+                {
+                    "id": "Credential",
+                    "description": "Saved login metadata.",
+                    "type": "object",
+                    "properties": [
+                        {
+                            "name": "credentialId",
+                            "description": "Opaque handle, retired when the saved login changes.",
+                            "type": "string"
+                        },
+                        {
+                            "name": "username",
+                            "type": "string"
+                        },
+                        {
+                            "name": "site",
+                            "type": "string"
+                        },
+                        {
+                            "name": "stores",
+                            "description": "Where the login is saved: profile and/or account.",
+                            "type": "array",
+                            "items": {
+                                "type": "string"
+                            }
+                        }
+                    ]
+                },
+                {
+                    "id": "Context",
+                    "type": "object",
+                    "properties": [
+                        {
+                            "name": "browserProfileId",
+                            "$ref": "Browser.BrowserProfileID"
+                        },
+                        {
+                            "name": "origin",
+                            "type": "string"
+                        },
+                        {
+                            "name": "documentId",
+                            "description": "Opaque identity of the page's current main-frame document.",
+                            "type": "string"
+                        }
+                    ]
+                },
+                {
+                    "id": "CredentialResult",
+                    "type": "object",
+                    "properties": [
+                        {
+                            "name": "browserProfileId",
+                            "$ref": "Browser.BrowserProfileID"
+                        },
+                        {
+                            "name": "origin",
+                            "optional": true,
+                            "type": "string"
+                        },
+                        {
+                            "name": "status",
+                            "optional": true,
+                            "type": "string"
+                        },
+                        {
+                            "name": "credentials",
+                            "optional": true,
+                            "type": "array",
+                            "items": {
+                                "$ref": "Credential"
+                            }
+                        },
+                        {
+                            "name": "credential",
+                            "optional": true,
+                            "$ref": "Credential"
+                        },
+                        {
+                            "name": "total",
+                            "optional": true,
+                            "type": "integer"
+                        },
+                        {
+                            "name": "nextCursor",
+                            "optional": true,
+                            "type": "string"
+                        },
+                        {
+                            "name": "filledFields",
+                            "optional": true,
+                            "type": "array",
+                            "items": {
+                                "type": "string"
+                            }
+                        }
+                    ]
+                }
+            ],
+            "commands": [
+                {
+                    "name": "getContext",
+                    "description": "Captures the page's main-frame document before an operation is queued.",
+                    "returns": [
+                        {
+                            "name": "context",
+                            "$ref": "Context"
+                        }
+                    ]
+                },
+                {
+                    "name": "listCredentials",
+                    "description": "Page target: saved logins for the page's site; documentId is required.\nBrowser target: every saved login in the profile; an explicit live regular\nbrowserContextId is required, even without open tabs.",
+                    "parameters": [
+                        {
+                            "name": "operationId",
+                            "type": "string"
+                        },
+                        {
+                            "name": "documentId",
+                            "optional": true,
+                            "type": "string"
+                        },
+                        {
+                            "name": "browserContextId",
+                            "optional": true,
+                            "$ref": "Browser.BrowserContextID"
+                        },
+                        {
+                            "name": "query",
+                            "optional": true,
+                            "type": "string"
+                        },
+                        {
+                            "name": "limit",
+                            "optional": true,
+                            "type": "integer"
+                        },
+                        {
+                            "name": "cursor",
+                            "optional": true,
+                            "type": "string"
+                        }
+                    ],
+                    "returns": [
+                        {
+                            "name": "result",
+                            "$ref": "CredentialResult"
+                        }
+                    ]
+                },
+                {
+                    "name": "addCredential",
+                    "description": "Saves to the profile store for the page's site. No pending form is needed.",
+                    "parameters": [
+                        {
+                            "name": "operationId",
+                            "type": "string"
+                        },
+                        {
+                            "name": "documentId",
+                            "type": "string"
+                        },
+                        {
+                            "name": "username",
+                            "type": "string"
+                        },
+                        {
+                            "name": "password",
+                            "type": "string"
+                        }
+                    ],
+                    "returns": [
+                        {
+                            "name": "result",
+                            "$ref": "CredentialResult"
+                        }
+                    ]
+                },
+                {
+                    "name": "fillCredential",
+                    "description": "Exactly one source: credentialId, or username and password. Does not save\nor submit. Reports only fields the renderer acknowledged in the page's one\nrecognized main-frame login form. Native filling policy and device\nreauthentication still apply.",
+                    "parameters": [
+                        {
+                            "name": "operationId",
+                            "type": "string"
+                        },
+                        {
+                            "name": "documentId",
+                            "type": "string"
+                        },
+                        {
+                            "name": "credentialId",
+                            "optional": true,
+                            "type": "string"
+                        },
+                        {
+                            "name": "username",
+                            "optional": true,
+                            "type": "string"
+                        },
+                        {
+                            "name": "password",
+                            "optional": true,
+                            "type": "string"
+                        }
+                    ],
+                    "returns": [
+                        {
+                            "name": "result",
+                            "$ref": "CredentialResult"
+                        }
+                    ]
+                },
+                {
+                    "name": "cancelOperation",
+                    "description": "Cancels the operation before its next handoff. A write or field fill that\nwas already dispatched can't be undone.",
+                    "parameters": [
+                        {
+                            "name": "operationId",
+                            "type": "string"
+                        }
+                    ]
+                }
+            ]
+        },
+        {
+            "domain": "Payments",
+            "description": "BrowserOS payment cards for agents. Card numbers and security codes are\naccepted as input but never returned. Page commands take the documentId from\ngetContext, so a navigation in between fails with payments:page_changed\ninstead of acting on the new page. Errors are payments:<code> from a fixed\nvocabulary.",
+            "experimental": true,
+            "dependencies": [
+                "Browser"
+            ],
+            "types": [
+                {
+                    "id": "Card",
+                    "description": "Saved card metadata.",
+                    "type": "object",
+                    "properties": [
+                        {
+                            "name": "cardId",
+                            "description": "card_<autofill GUID>; stable across restarts and edits.",
+                            "type": "string"
+                        },
+                        {
+                            "name": "network",
+                            "description": "visa, mastercard, amex, discover, jcb, diners, unionpay, elo, mir,\ntroy, verve or generic.",
+                            "type": "string"
+                        },
+                        {
+                            "name": "lastFour",
+                            "type": "string"
+                        },
+                        {
+                            "name": "expiryMonth",
+                            "type": "integer"
+                        },
+                        {
+                            "name": "expiryYear",
+                            "type": "integer"
+                        },
+                        {
+                            "name": "expired",
+                            "type": "boolean"
+                        },
+                        {
+                            "name": "name",
+                            "description": "Name on the card; may be empty.",
+                            "type": "string"
+                        },
+                        {
+                            "name": "nickname",
+                            "optional": true,
+                            "type": "string"
+                        },
+                        {
+                            "name": "kind",
+                            "description": "local, or google_pay for a masked Google Pay card.",
+                            "type": "string"
+                        },
+                        {
+                            "name": "cvcSaved",
+                            "description": "Whether Chrome has this card's security code saved.",
+                            "type": "boolean"
+                        }
+                    ]
+                },
+                {
+                    "id": "SuppliedCard",
+                    "description": "Card data supplied by the client, typically from a partner vault.",
+                    "type": "object",
+                    "properties": [
+                        {
+                            "name": "number",
+                            "type": "string"
+                        },
+                        {
+                            "name": "expiryMonth",
+                            "type": "integer"
+                        },
+                        {
+                            "name": "expiryYear",
+                            "description": "Four digits.",
+                            "type": "integer"
+                        },
+                        {
+                            "name": "name",
+                            "optional": true,
+                            "type": "string"
+                        },
+                        {
+                            "name": "cvc",
+                            "optional": true,
+                            "type": "string"
+                        }
+                    ]
+                },
+                {
+                    "id": "Context",
+                    "type": "object",
+                    "properties": [
+                        {
+                            "name": "browserProfileId",
+                            "$ref": "Browser.BrowserProfileID"
+                        },
+                        {
+                            "name": "origin",
+                            "type": "string"
+                        },
+                        {
+                            "name": "documentId",
+                            "description": "Opaque identity of the page's current main-frame document.",
+                            "type": "string"
+                        }
+                    ]
+                },
+                {
+                    "id": "CardResult",
+                    "type": "object",
+                    "properties": [
+                        {
+                            "name": "browserProfileId",
+                            "$ref": "Browser.BrowserProfileID"
+                        },
+                        {
+                            "name": "origin",
+                            "optional": true,
+                            "type": "string"
+                        },
+                        {
+                            "name": "status",
+                            "description": "saved, unchanged or filled.",
+                            "optional": true,
+                            "type": "string"
+                        },
+                        {
+                            "name": "cards",
+                            "optional": true,
+                            "type": "array",
+                            "items": {
+                                "$ref": "Card"
+                            }
+                        },
+                        {
+                            "name": "card",
+                            "optional": true,
+                            "$ref": "Card"
+                        },
+                        {
+                            "name": "source",
+                            "description": "fillCard: saved or supplied.",
+                            "optional": true,
+                            "type": "string"
+                        },
+                        {
+                            "name": "network",
+                            "description": "fillCard: the filled card's network and last four digits.",
+                            "optional": true,
+                            "type": "string"
+                        },
+                        {
+                            "name": "lastFour",
+                            "optional": true,
+                            "type": "string"
+                        },
+                        {
+                            "name": "filledFields",
+                            "description": "fillCard: card field kinds filled, and kinds with a field left empty,\nas number, name, expiry and cvc. A partly filled kind is in both; a\nfield already showing a value the person typed is in neither.",
+                            "optional": true,
+                            "type": "array",
+                            "items": {
+                                "type": "string"
+                            }
+                        },
+                        {
+                            "name": "missingFields",
+                            "optional": true,
+                            "type": "array",
+                            "items": {
+                                "type": "string"
+                            }
+                        }
+                    ]
+                }
+            ],
+            "commands": [
+                {
+                    "name": "getContext",
+                    "description": "Captures the page's main-frame document before an operation is queued.",
+                    "returns": [
+                        {
+                            "name": "context",
+                            "$ref": "Context"
+                        }
+                    ]
+                },
+                {
+                    "name": "listCards",
+                    "description": "Saved cards in the profile, most recently used first. Page target:\ndocumentId is required. Browser target: an explicit live regular\nbrowserContextId is required.",
+                    "parameters": [
+                        {
+                            "name": "operationId",
+                            "type": "string"
+                        },
+                        {
+                            "name": "documentId",
+                            "optional": true,
+                            "type": "string"
+                        },
+                        {
+                            "name": "browserContextId",
+                            "optional": true,
+                            "$ref": "Browser.BrowserContextID"
+                        }
+                    ],
+                    "returns": [
+                        {
+                            "name": "result",
+                            "$ref": "CardResult"
+                        }
+                    ]
+                },
+                {
+                    "name": "addCard",
+                    "description": "Saves a local card after validating it. Saving an identical card is\nunchanged; the same number with different details conflicts. The security\ncode is kept only when Chrome saves security codes.",
+                    "parameters": [
+                        {
+                            "name": "operationId",
+                            "type": "string"
+                        },
+                        {
+                            "name": "documentId",
+                            "optional": true,
+                            "type": "string"
+                        },
+                        {
+                            "name": "browserContextId",
+                            "optional": true,
+                            "$ref": "Browser.BrowserContextID"
+                        },
+                        {
+                            "name": "card",
+                            "$ref": "SuppliedCard"
+                        }
+                    ],
+                    "returns": [
+                        {
+                            "name": "result",
+                            "$ref": "CardResult"
+                        }
+                    ]
+                },
+                {
+                    "name": "fillCard",
+                    "description": "Exactly one source: cardId, or card. Fills the page's one card form\nwithout submitting it; a supplied card is never saved. Saved cards keep\nChrome's payment checks. A form still holding an earlier card fill fails\nwith form_already_filled, since Chrome would replace only its number.",
+                    "parameters": [
+                        {
+                            "name": "operationId",
+                            "type": "string"
+                        },
+                        {
+                            "name": "documentId",
+                            "type": "string"
+                        },
+                        {
+                            "name": "cardId",
+                            "optional": true,
+                            "type": "string"
+                        },
+                        {
+                            "name": "card",
+                            "optional": true,
+                            "$ref": "SuppliedCard"
+                        }
+                    ],
+                    "returns": [
+                        {
+                            "name": "result",
+                            "$ref": "CardResult"
+                        }
+                    ]
+                },
+                {
+                    "name": "cancelOperation",
+                    "description": "Cancels the operation before its next handoff. A save or field fill that\nwas already dispatched can't be undone.",
+                    "parameters": [
+                        {
+                            "name": "operationId",
+                            "type": "string"
                         }
                     ]
                 }

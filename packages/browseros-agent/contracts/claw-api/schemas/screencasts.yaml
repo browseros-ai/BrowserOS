@@ -1,0 +1,54 @@
+ScreencastWatch:
+  type: object
+  additionalProperties: false
+  description: >-
+    One live view a cockpit card asks for on the `/api/v1/screencasts` WebSocket: a session's
+    current tab, or one tab of it.
+  required: [sessionId]
+  properties:
+    sessionId:
+      type: string
+    browserTabId:
+      type: integer
+      format: int64
+      minimum: 1
+      description: Show this tab of the session; omitted follows the session's current tab.
+ScreencastWatchMessage:
+  type: object
+  additionalProperties: false
+  description: >-
+    Client-to-server text message on the `/api/v1/screencasts` WebSocket. It names every watch
+    the page wants and replaces the previous set; the server sends frames only for watches in
+    the latest set.
+  required: [watch]
+  properties:
+    watch:
+      type: array
+      items:
+        $ref: '#/ScreencastWatch'
+ScreencastFrameHeader:
+  type: object
+  additionalProperties: false
+  description: >-
+    The JSON header of one server-to-client binary message on the `/api/v1/screencasts`
+    WebSocket. A message is a big-endian u32 header length, this header, then the JPEG.
+  required: [sessionId, tabId, url, capturedAt]
+  properties:
+    sessionId:
+      type: string
+      description: The watched session, as the watch named it.
+    browserTabId:
+      type: integer
+      format: int64
+      minimum: 1
+      description: The watched tab, as the watch named it; omitted when the watch follows the session.
+    tabId:
+      type: integer
+      format: int64
+      description: The browser tab the frame shows.
+    url:
+      type: string
+    capturedAt:
+      type: integer
+      format: int64
+      description: When the browser captured the frame, Unix epoch ms.

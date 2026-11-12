@@ -1,0 +1,395 @@
+//! The element actions without pointer input: `focus`, `blur` and `dispatchEvent`, which wait
+//! only for the element to be attached (D6), and `scrollIntoViewIfNeeded`, which waits for it
+//! to be stable and then scrolls it once.
+//!
+//! ```text
+//!  focus, blur, dispatchEvent   outer loop: resolve { want: element } → pin
+//!                                           ── the tab's input lock ──────────────────────
+//!                                           send_effect() → edit { pin, … }   (detached: again)
+//!  scrollIntoViewIfNeeded       outer loop, then upstream's inner retry:
+//!                                           act → 16 ms → act → same rect
+//!                                           → act → DOM.scrollIntoViewIfNeeded → act
+//! ```
+
+use std::time::Duration;
+
+use crate::action::attempt_log::AttemptLog;
+use crate::action::protocol_scroll;
+use crate::action::subject::Subject;
+use crate::backoff::Backoff;
+use crate::locator_handler::Prechecks;
+use crate::op_scope::{OpScope, Sent};
+use crate::page::OpPage;
+use crate::probe::{
+    Edit, ElementState, ProbeFailure, ProbeReply, ProbeRequest, ProbeTarget, Rect, Retarget,
+    ScrollPlan, Want,
+};
+use crate::resolve::{self, Resolved};
+use crate::target::{Strictness, Target};
+use crate::world::Pin;
+use crate::{ErrorCode, PlaywrightError, input};
+
+/// Whether a scroll's error log starts over once its element is found.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Restart {
+    /// `scrollIntoViewIfNeeded`, which upstream's client runs as a selector wait and then the
+    /// handle's method: its error shows the handle call's lines alone.
+    AtHandle,
+    /// A screenshot's scroll, whose op logged its own preparation first (fonts), kept.
+    Never,
+}
+
+/// Two measurements this far apart with the same rect make a scrolled element stable.
+const STABLE_GAP: Duration = Duration::from_millis(16);
+
+/// Runs one element action on one locator or element handle; the page applies it, and no device
+/// input is sent.
+pub(crate) struct ElementRunner<'a> {
+    scope: &'a OpScope<'a>,
+    page: &'a OpPage<'a>,
+    subject: Subject<'a>,
+    strictness: Strictness,
+}
+
+impl<'a> ElementRunner<'a> {
+    pub(crate) fn new(
+        scope: &'a OpScope<'a>,
+        page: &'a OpPage<'a>,
+        target: &'a Target,
+        strictness: Strictness,
+    ) -> Self {
+        Self {
+            scope,
+            page,
+            subject: Subject::new(page, scope, target, strictness),
+            strictness,
+        }
+    }
+
+    /// Resolves the element, then applies `edit` to it: upstream's `focus`, `blur` and
+    /// `dispatchEvent`, retried while the element is missing or detaches in between. A
+    /// locator's focus and blur run the locator handlers first; `dispatchEvent` never does, as
+    /// upstream runs it as a selector wait.
+    pub(crate) async fn edit(&self, edit: Edit) -> Result<(), PlaywrightError> {
+        self.subject.log_waiting();
+        let prechecks = if matches!(edit, Edit::DispatchEvent { .. }) {
+            Prechecks::Skip
+        } else {
+            Prechecks::LocatorPasses
+        };
+        let backoff = Backoff::outer(self.scope.timeout());
+        for attempt in 0.. {
+            if self.scope.sleep(backoff.wait(attempt)).await.is_err() {
+                return Err(self.scope.timed_out(ErrorCode::NoMatch));
+            }
+            let Some(located) = self.locate(attempt, prechecks).await? else {
+                continue;
+            };
+            let resolve = ProbeRequest::Resolve {
+                target: self.subject.first_target(),
+                strictness: self.strictness,
+                want: Want::Element,
+            };
+            let pin = match self.call(&located, &resolve).await? {
+                Some(ProbeReply::Element { pin, resolved, .. }) => {
+                    // What the pass's locator resolved to, as upstream's focus and blur log it.
+                    // dispatchEvent's selector wait logs its line only once the event went out,
+                    // which ends the op, so no error of it ever shows one.
+                    if let Some(resolved) = resolved.filter(|_| prechecks != Prechecks::Skip) {
+                        self.scope.log(resolved.log_line());
+                    }
+                    pin
+                }
+                // The locator matches nothing yet: polled again with nothing logged, as
+                // upstream's `continuePolling`.
+                Some(ProbeReply::None { stale_ref: None }) | None => continue,
+                Some(ProbeReply::Detached) => {
+                    self.subject.detached()?;
+                    continue;
+                }
+                Some(other) => return Err(self.subject.refused(other)),
+            };
+            // The edit can move the focus (a focus, a blur, a page handler of the event), so it
+            // waits for the tab's input, as keys and a fill hold it: between a fill's select and
+            // its insertText, or between a delayed type's keys, it would send the rest of the
+            // keys into another field.
+            let input = input::hold(self.scope, self.page).await?;
+            // The edit changes the page, so the host's policies run again right before it.
+            let sent = self.scope.send_effect()?;
+            let edited = self.edit_pinned(&sent, &located, pin, edit.clone()).await?;
+            drop(input);
+            match edited {
+                Some(ProbeReply::Value { .. }) => return Ok(()),
+                Some(ProbeReply::Detached) => self.subject.detached()?,
+                None => {}
+                // The probe threw before the edit changed anything (a bad event init).
+                Some(other) => return Err(self.subject.refused(other)),
+            }
+        }
+        Err(self.scope.timed_out(ErrorCode::NoMatch))
+    }
+
+    /// Sends `edit` to the pinned element. It changes the page, so it takes the op's [`Sent`].
+    async fn edit_pinned(
+        &self,
+        _sent: &Sent<'_>,
+        located: &Resolved,
+        pin: Pin,
+        edit: Edit,
+    ) -> Result<Option<ProbeReply>, PlaywrightError> {
+        self.call(located, &ProbeRequest::Edit { pin, edit }).await
+    }
+
+    /// `scrollIntoViewIfNeeded`, as upstream's `_waitAndScrollIntoViewIfNeeded`: wait until the
+    /// element has a box and holds still, then scroll it once. Scrolling inside a frame scrolls
+    /// every frame above it too, cross-site ones included (measured).
+    pub(crate) async fn scroll_into_view(&self) -> Result<(), PlaywrightError> {
+        self.scroll(&[], Restart::AtHandle).await
+    }
+
+    /// Screenshot handles must be visible as well as stable before their box is captured.
+    pub(crate) async fn scroll_for_screenshot(&self) -> Result<(), PlaywrightError> {
+        self.scroll(&[ElementState::Visible], Restart::Never).await
+    }
+
+    async fn scroll(
+        &self,
+        required_states: &[ElementState],
+        restart: Restart,
+    ) -> Result<(), PlaywrightError> {
+        self.subject.log_waiting();
+        let outer = Backoff::outer(self.scope.timeout());
+        let mut matched = false;
+        let timed_out = |matched: bool| {
+            self.scope.timed_out(if matched {
+                ErrorCode::NotActionable
+            } else {
+                ErrorCode::NoMatch
+            })
+        };
+        for attempt in 0.. {
+            if self.scope.sleep(outer.wait(attempt)).await.is_err() {
+                return Err(timed_out(matched));
+            }
+            let Some(located) = self.locate(attempt, Prechecks::Run).await? else {
+                continue;
+            };
+            let inner = Backoff::inner();
+            let mut target = self.subject.first_target();
+            // The attempt's lines wait until the element is seen (`attempt_log.rs`).
+            let mut attempt = AttemptLog::new(self.scope, false);
+            for retry in 0.. {
+                let wait = inner.wait(retry);
+                attempt.log(if retry == 0 {
+                    "attempting scroll into view action".to_owned()
+                } else {
+                    "retrying scroll into view action".to_owned()
+                });
+                if retry > 0 && !wait.is_zero() {
+                    attempt.log(format!("  waiting {}ms", wait.as_millis()));
+                }
+                if self.scope.sleep(wait).await.is_err() {
+                    return Err(timed_out(matched));
+                }
+                // The outer pass ran the first attempt's checkpoint just before it.
+                if retry > 0 {
+                    match self.scope.within(self.subject.run_handlers()).await {
+                        Ok(checked) => checked?,
+                        Err(_expired) => return Err(timed_out(matched)),
+                    }
+                }
+                attempt.log("  waiting for element to be stable".to_owned());
+                let measured = self
+                    .measure(&located, target.clone(), false, required_states)
+                    .await?;
+                match measured {
+                    Measured::Rect(..) | Measured::Hidden => {
+                        // Upstream's client finds the element with a selector wait first, then
+                        // calls the handle's own method: the error shows that call alone.
+                        if restart == Restart::AtHandle && !attempt.is_found() {
+                            self.scope.restart_log();
+                        }
+                        attempt.found();
+                    }
+                    // Nothing matched, or its world went: the next outer pass, with nothing
+                    // logged until the element was seen.
+                    Measured::Unmatched | Measured::Gone if !attempt.is_found() => break,
+                    Measured::Unmatched | Measured::Gone => {}
+                }
+                let (pin, rect) = match measured {
+                    Measured::Rect(pin, rect) => (pin, rect),
+                    Measured::Hidden => {
+                        matched = true;
+                        self.scope.log("  element is not visible".to_owned());
+                        continue;
+                    }
+                    Measured::Gone | Measured::Unmatched => {
+                        self.subject.detached()?;
+                        break;
+                    }
+                };
+                matched = true;
+                target = ProbeTarget::Pin(pin);
+                match self
+                    .stable_then_scroll(&located, pin, rect, required_states)
+                    .await?
+                {
+                    Settled::Scrolled => return Ok(()),
+                    Settled::Retry => {}
+                    Settled::Detached => break,
+                }
+            }
+        }
+        Err(timed_out(matched))
+    }
+
+    /// The rest of a scroll attempt once the pinned element measured `rect`: upstream's order,
+    /// stable first, then one scroll, and done. Done is safe because the protocol's scroll is
+    /// instant (`protocol_scroll.rs`); a page-side scroll under `scroll-behavior: smooth` would
+    /// still be moving. Scrolling before the stability check would scroll again whenever the
+    /// scroll itself changes the element (a lazy load that grows it once it is in view), moving
+    /// the page further than upstream does.
+    async fn stable_then_scroll(
+        &self,
+        located: &Resolved,
+        pin: Pin,
+        rect: Rect,
+        required_states: &[ElementState],
+    ) -> Result<Settled, PlaywrightError> {
+        if self.scope.sleep(STABLE_GAP).await.is_err() {
+            return Err(self.scope.timed_out(ErrorCode::NotActionable));
+        }
+        match self
+            .measure(located, ProbeTarget::Pin(pin), false, required_states)
+            .await?
+        {
+            Measured::Rect(_, again) if again == rect => {}
+            Measured::Rect(..) => {
+                self.scope.log("  element is not stable".to_owned());
+                return Ok(Settled::Retry);
+            }
+            Measured::Hidden => {
+                self.scope.log("  element is not visible".to_owned());
+                return Ok(Settled::Retry);
+            }
+            Measured::Gone | Measured::Unmatched => {
+                self.subject.detached()?;
+                return Ok(Settled::Detached);
+            }
+        }
+        match self
+            .measure(located, ProbeTarget::Pin(pin), true, required_states)
+            .await?
+        {
+            Measured::Rect(..) => Ok(Settled::Scrolled),
+            Measured::Hidden => {
+                self.scope.log("  element is not visible".to_owned());
+                Ok(Settled::Retry)
+            }
+            Measured::Gone | Measured::Unmatched => {
+                self.subject.detached()?;
+                Ok(Settled::Detached)
+            }
+        }
+    }
+
+    /// One measurement after optional scrolling. Screenshot callers additionally require
+    /// visibility; ordinary scrollIntoViewIfNeeded waits only for layout and stability. The
+    /// scroll is the protocol's (`protocol_scroll.rs`), between a request that resolves and
+    /// checks and one that measures.
+    async fn measure(
+        &self,
+        located: &Resolved,
+        target: ProbeTarget,
+        scroll: bool,
+        required_states: &[ElementState],
+    ) -> Result<Measured, PlaywrightError> {
+        let act = |target, scroll| ProbeRequest::Act {
+            target,
+            strictness: self.strictness,
+            retarget: Retarget::None,
+            states: required_states.to_vec(),
+            frame_visible: located.frame_visible(),
+            scroll,
+            position: None,
+            arm: None,
+        };
+        let mut reply = self.call(located, &act(target, ScrollPlan::None)).await?;
+        if scroll && let Some(ProbeReply::Measured { pin, .. }) = reply {
+            let scrolled = protocol_scroll::scroll_if_needed(self.scope, located.world(), pin);
+            let Ok(scrolled) = self.scope.within(scrolled).await else {
+                return Err(self.scope.timed_out(ErrorCode::NoMatch));
+            };
+            reply = match scrolled {
+                Ok(()) => {
+                    self.call(located, &act(ProbeTarget::Pin(pin), ScrollPlan::Protocol))
+                        .await?
+                }
+                Err(ProbeFailure::Gone(_)) => self.subject.lost(located).map(|()| None)?,
+                Err(failure) => return Err(resolve::failed(self.scope, failure)),
+            };
+        }
+        Ok(match reply {
+            Some(ProbeReply::Measured { pin, rect, .. }) => Measured::Rect(pin, rect),
+            Some(ProbeReply::State { .. }) => Measured::Hidden,
+            Some(ProbeReply::None { stale_ref: None }) => Measured::Unmatched,
+            Some(ProbeReply::Detached) | None => Measured::Gone,
+            Some(other) => return Err(self.subject.refused(other)),
+        })
+    }
+
+    /// One resolution on outer pass `pass`, after the locator handlers unless `prechecks`
+    /// skips them, bounded by the op's timeout. `None` while nothing matches yet.
+    async fn locate(
+        &self,
+        pass: usize,
+        prechecks: Prechecks,
+    ) -> Result<Option<Resolved>, PlaywrightError> {
+        match self
+            .scope
+            .within(self.subject.locate(pass, prechecks))
+            .await
+        {
+            Ok(located) => located,
+            Err(_expired) => Err(self.scope.timed_out(ErrorCode::NoMatch)),
+        }
+    }
+
+    /// One probe call in the located world; `None` once that world went away, after the
+    /// liveness rule forgot it.
+    async fn call(
+        &self,
+        located: &Resolved,
+        request: &ProbeRequest,
+    ) -> Result<Option<ProbeReply>, PlaywrightError> {
+        let Ok(asked) = self.scope.within(self.subject.call(located, request)).await else {
+            return Err(self.scope.timed_out(ErrorCode::NoMatch));
+        };
+        match asked {
+            Ok(reply) => Ok(Some(reply)),
+            Err(ProbeFailure::Gone(_)) => self.subject.lost(located).map(|()| None),
+            Err(failure) => Err(resolve::failed(self.scope, failure)),
+        }
+    }
+}
+
+/// How a scroll attempt ended after its element was measured once.
+enum Settled {
+    /// Stable, then scrolled: the op is done.
+    Scrolled,
+    /// Moved or lost its box: the inner loop's next retry.
+    Retry,
+    /// It left the page: resolve again.
+    Detached,
+}
+
+/// One measurement of a scrolled element.
+enum Measured {
+    Rect(Pin, Rect),
+    /// It has no box: upstream's `error:notvisible`.
+    Hidden,
+    /// It left the page, or its frame did: resolve again.
+    Gone,
+    /// The locator matches nothing: resolve again; a detach once the element was seen.
+    Unmatched,
+}

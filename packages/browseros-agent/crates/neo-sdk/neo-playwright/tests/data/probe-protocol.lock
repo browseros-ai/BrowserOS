@@ -1,0 +1,6 @@
+# The probe protocol version and the sha256 of the probe-protocol.json it was recorded with.
+# probe_reply.rs's test fails when the contract changes without a version bump. To change the
+# contract: bump PROTOCOL (protocol.ts) and PROBE_PROTOCOL (probe_reply.rs), rebuild with
+# scripts/build.ts, then replace the line below with the one the test prints. Never edit the
+# hash alone: a world that kept the old probe would answer the old shapes.
+28 916b16b7b6c5adca8e04a78a4e4b7f62642bc04a0897254e387ca559039f12de

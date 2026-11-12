@@ -1,0 +1,5567 @@
+{
+  "playwright": "1.64.1",
+  "capture": "scripts/capture-goldens.mjs, a CDP proxy between playwright-core and the browser",
+  "note": "Each case runs in a focused <input>. linux omits ControlOrMeta, which Playwright resolves by its own host OS (darwin when captured), not by the browser.",
+  "profiles": {
+    "mac": [
+      {
+        "call": "page.keyboard.press('a')",
+        "messages": [
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyDown",
+              "modifiers": 0,
+              "windowsVirtualKeyCode": 65,
+              "code": "KeyA",
+              "commands": [],
+              "key": "a",
+              "text": "a",
+              "unmodifiedText": "a",
+              "autoRepeat": false,
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 0,
+              "key": "a",
+              "windowsVirtualKeyCode": 65,
+              "code": "KeyA",
+              "location": 0,
+              "isKeypad": false
+            }
+          }
+        ]
+      },
+      {
+        "call": "page.keyboard.press('A')",
+        "messages": [
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyDown",
+              "modifiers": 0,
+              "windowsVirtualKeyCode": 65,
+              "code": "KeyA",
+              "commands": [],
+              "key": "A",
+              "text": "A",
+              "unmodifiedText": "A",
+              "autoRepeat": false,
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 0,
+              "key": "A",
+              "windowsVirtualKeyCode": 65,
+              "code": "KeyA",
+              "location": 0,
+              "isKeypad": false
+            }
+          }
+        ]
+      },
+      {
+        "call": "page.keyboard.press('Shift+A')",
+        "messages": [
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "rawKeyDown",
+              "modifiers": 8,
+              "windowsVirtualKeyCode": 16,
+              "code": "ShiftLeft",
+              "commands": [],
+              "key": "Shift",
+              "text": "",
+              "unmodifiedText": "",
+              "autoRepeat": false,
+              "location": 1,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyDown",
+              "modifiers": 8,
+              "windowsVirtualKeyCode": 65,
+              "code": "KeyA",
+              "commands": [],
+              "key": "A",
+              "text": "A",
+              "unmodifiedText": "A",
+              "autoRepeat": false,
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 8,
+              "key": "A",
+              "windowsVirtualKeyCode": 65,
+              "code": "KeyA",
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 0,
+              "key": "Shift",
+              "windowsVirtualKeyCode": 16,
+              "code": "ShiftLeft",
+              "location": 1,
+              "isKeypad": false
+            }
+          }
+        ]
+      },
+      {
+        "call": "page.keyboard.press('Shift+a')",
+        "messages": [
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "rawKeyDown",
+              "modifiers": 8,
+              "windowsVirtualKeyCode": 16,
+              "code": "ShiftLeft",
+              "commands": [],
+              "key": "Shift",
+              "text": "",
+              "unmodifiedText": "",
+              "autoRepeat": false,
+              "location": 1,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyDown",
+              "modifiers": 8,
+              "windowsVirtualKeyCode": 65,
+              "code": "KeyA",
+              "commands": [],
+              "key": "a",
+              "text": "a",
+              "unmodifiedText": "a",
+              "autoRepeat": false,
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 8,
+              "key": "a",
+              "windowsVirtualKeyCode": 65,
+              "code": "KeyA",
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 0,
+              "key": "Shift",
+              "windowsVirtualKeyCode": 16,
+              "code": "ShiftLeft",
+              "location": 1,
+              "isKeypad": false
+            }
+          }
+        ]
+      },
+      {
+        "call": "page.keyboard.press('KeyA')",
+        "messages": [
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyDown",
+              "modifiers": 0,
+              "windowsVirtualKeyCode": 65,
+              "code": "KeyA",
+              "commands": [],
+              "key": "a",
+              "text": "a",
+              "unmodifiedText": "a",
+              "autoRepeat": false,
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 0,
+              "key": "a",
+              "windowsVirtualKeyCode": 65,
+              "code": "KeyA",
+              "location": 0,
+              "isKeypad": false
+            }
+          }
+        ]
+      },
+      {
+        "call": "page.keyboard.press('Shift+KeyA')",
+        "messages": [
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "rawKeyDown",
+              "modifiers": 8,
+              "windowsVirtualKeyCode": 16,
+              "code": "ShiftLeft",
+              "commands": [],
+              "key": "Shift",
+              "text": "",
+              "unmodifiedText": "",
+              "autoRepeat": false,
+              "location": 1,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyDown",
+              "modifiers": 8,
+              "windowsVirtualKeyCode": 65,
+              "code": "KeyA",
+              "commands": [],
+              "key": "A",
+              "text": "A",
+              "unmodifiedText": "A",
+              "autoRepeat": false,
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 8,
+              "key": "A",
+              "windowsVirtualKeyCode": 65,
+              "code": "KeyA",
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 0,
+              "key": "Shift",
+              "windowsVirtualKeyCode": 16,
+              "code": "ShiftLeft",
+              "location": 1,
+              "isKeypad": false
+            }
+          }
+        ]
+      },
+      {
+        "call": "page.keyboard.press('1')",
+        "messages": [
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyDown",
+              "modifiers": 0,
+              "windowsVirtualKeyCode": 49,
+              "code": "Digit1",
+              "commands": [],
+              "key": "1",
+              "text": "1",
+              "unmodifiedText": "1",
+              "autoRepeat": false,
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 0,
+              "key": "1",
+              "windowsVirtualKeyCode": 49,
+              "code": "Digit1",
+              "location": 0,
+              "isKeypad": false
+            }
+          }
+        ]
+      },
+      {
+        "call": "page.keyboard.press('!')",
+        "messages": [
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyDown",
+              "modifiers": 0,
+              "windowsVirtualKeyCode": 49,
+              "code": "Digit1",
+              "commands": [],
+              "key": "!",
+              "text": "!",
+              "unmodifiedText": "!",
+              "autoRepeat": false,
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 0,
+              "key": "!",
+              "windowsVirtualKeyCode": 49,
+              "code": "Digit1",
+              "location": 0,
+              "isKeypad": false
+            }
+          }
+        ]
+      },
+      {
+        "call": "page.keyboard.press('Digit1')",
+        "messages": [
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyDown",
+              "modifiers": 0,
+              "windowsVirtualKeyCode": 49,
+              "code": "Digit1",
+              "commands": [],
+              "key": "1",
+              "text": "1",
+              "unmodifiedText": "1",
+              "autoRepeat": false,
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 0,
+              "key": "1",
+              "windowsVirtualKeyCode": 49,
+              "code": "Digit1",
+              "location": 0,
+              "isKeypad": false
+            }
+          }
+        ]
+      },
+      {
+        "call": "page.keyboard.press('Shift+Digit1')",
+        "messages": [
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "rawKeyDown",
+              "modifiers": 8,
+              "windowsVirtualKeyCode": 16,
+              "code": "ShiftLeft",
+              "commands": [],
+              "key": "Shift",
+              "text": "",
+              "unmodifiedText": "",
+              "autoRepeat": false,
+              "location": 1,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyDown",
+              "modifiers": 8,
+              "windowsVirtualKeyCode": 49,
+              "code": "Digit1",
+              "commands": [],
+              "key": "!",
+              "text": "!",
+              "unmodifiedText": "!",
+              "autoRepeat": false,
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 8,
+              "key": "!",
+              "windowsVirtualKeyCode": 49,
+              "code": "Digit1",
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 0,
+              "key": "Shift",
+              "windowsVirtualKeyCode": 16,
+              "code": "ShiftLeft",
+              "location": 1,
+              "isKeypad": false
+            }
+          }
+        ]
+      },
+      {
+        "call": "page.keyboard.press(' ')",
+        "messages": [
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyDown",
+              "modifiers": 0,
+              "windowsVirtualKeyCode": 32,
+              "code": "Space",
+              "commands": [],
+              "key": " ",
+              "text": " ",
+              "unmodifiedText": " ",
+              "autoRepeat": false,
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 0,
+              "key": " ",
+              "windowsVirtualKeyCode": 32,
+              "code": "Space",
+              "location": 0,
+              "isKeypad": false
+            }
+          }
+        ]
+      },
+      {
+        "call": "page.keyboard.press('Space')",
+        "messages": [
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyDown",
+              "modifiers": 0,
+              "windowsVirtualKeyCode": 32,
+              "code": "Space",
+              "commands": [],
+              "key": " ",
+              "text": " ",
+              "unmodifiedText": " ",
+              "autoRepeat": false,
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 0,
+              "key": " ",
+              "windowsVirtualKeyCode": 32,
+              "code": "Space",
+              "location": 0,
+              "isKeypad": false
+            }
+          }
+        ]
+      },
+      {
+        "call": "page.keyboard.press('Enter')",
+        "messages": [
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyDown",
+              "modifiers": 0,
+              "windowsVirtualKeyCode": 13,
+              "code": "Enter",
+              "commands": [],
+              "key": "Enter",
+              "text": "\r",
+              "unmodifiedText": "\r",
+              "autoRepeat": false,
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 0,
+              "key": "Enter",
+              "windowsVirtualKeyCode": 13,
+              "code": "Enter",
+              "location": 0,
+              "isKeypad": false
+            }
+          }
+        ]
+      },
+      {
+        "call": "page.keyboard.press('Shift+Enter')",
+        "messages": [
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "rawKeyDown",
+              "modifiers": 8,
+              "windowsVirtualKeyCode": 16,
+              "code": "ShiftLeft",
+              "commands": [],
+              "key": "Shift",
+              "text": "",
+              "unmodifiedText": "",
+              "autoRepeat": false,
+              "location": 1,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyDown",
+              "modifiers": 8,
+              "windowsVirtualKeyCode": 13,
+              "code": "Enter",
+              "commands": [],
+              "key": "Enter",
+              "text": "\r",
+              "unmodifiedText": "\r",
+              "autoRepeat": false,
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 8,
+              "key": "Enter",
+              "windowsVirtualKeyCode": 13,
+              "code": "Enter",
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 0,
+              "key": "Shift",
+              "windowsVirtualKeyCode": 16,
+              "code": "ShiftLeft",
+              "location": 1,
+              "isKeypad": false
+            }
+          }
+        ]
+      },
+      {
+        "call": "page.keyboard.press('NumpadEnter')",
+        "messages": [
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyDown",
+              "modifiers": 0,
+              "windowsVirtualKeyCode": 13,
+              "code": "NumpadEnter",
+              "commands": [],
+              "key": "Enter",
+              "text": "\r",
+              "unmodifiedText": "\r",
+              "autoRepeat": false,
+              "location": 3,
+              "isKeypad": true
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 0,
+              "key": "Enter",
+              "windowsVirtualKeyCode": 13,
+              "code": "NumpadEnter",
+              "location": 3,
+              "isKeypad": true
+            }
+          }
+        ]
+      },
+      {
+        "call": "page.keyboard.press('Numpad1')",
+        "messages": [
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "rawKeyDown",
+              "modifiers": 0,
+              "windowsVirtualKeyCode": 35,
+              "code": "Numpad1",
+              "commands": [],
+              "key": "End",
+              "text": "",
+              "unmodifiedText": "",
+              "autoRepeat": false,
+              "location": 3,
+              "isKeypad": true
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 0,
+              "key": "End",
+              "windowsVirtualKeyCode": 35,
+              "code": "Numpad1",
+              "location": 3,
+              "isKeypad": true
+            }
+          }
+        ]
+      },
+      {
+        "call": "page.keyboard.press('Tab')",
+        "messages": [
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "rawKeyDown",
+              "modifiers": 0,
+              "windowsVirtualKeyCode": 9,
+              "code": "Tab",
+              "commands": [],
+              "key": "Tab",
+              "text": "",
+              "unmodifiedText": "",
+              "autoRepeat": false,
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 0,
+              "key": "Tab",
+              "windowsVirtualKeyCode": 9,
+              "code": "Tab",
+              "location": 0,
+              "isKeypad": false
+            }
+          }
+        ]
+      },
+      {
+        "call": "page.keyboard.press('Shift+Tab')",
+        "messages": [
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "rawKeyDown",
+              "modifiers": 8,
+              "windowsVirtualKeyCode": 16,
+              "code": "ShiftLeft",
+              "commands": [],
+              "key": "Shift",
+              "text": "",
+              "unmodifiedText": "",
+              "autoRepeat": false,
+              "location": 1,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "rawKeyDown",
+              "modifiers": 8,
+              "windowsVirtualKeyCode": 9,
+              "code": "Tab",
+              "commands": [],
+              "key": "Tab",
+              "text": "",
+              "unmodifiedText": "",
+              "autoRepeat": false,
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 8,
+              "key": "Tab",
+              "windowsVirtualKeyCode": 9,
+              "code": "Tab",
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 0,
+              "key": "Shift",
+              "windowsVirtualKeyCode": 16,
+              "code": "ShiftLeft",
+              "location": 1,
+              "isKeypad": false
+            }
+          }
+        ]
+      },
+      {
+        "call": "page.keyboard.press('ArrowLeft')",
+        "messages": [
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "rawKeyDown",
+              "modifiers": 0,
+              "windowsVirtualKeyCode": 37,
+              "code": "ArrowLeft",
+              "commands": [
+                "moveLeft"
+              ],
+              "key": "ArrowLeft",
+              "text": "",
+              "unmodifiedText": "",
+              "autoRepeat": false,
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 0,
+              "key": "ArrowLeft",
+              "windowsVirtualKeyCode": 37,
+              "code": "ArrowLeft",
+              "location": 0,
+              "isKeypad": false
+            }
+          }
+        ]
+      },
+      {
+        "call": "page.keyboard.press('ArrowRight')",
+        "messages": [
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "rawKeyDown",
+              "modifiers": 0,
+              "windowsVirtualKeyCode": 39,
+              "code": "ArrowRight",
+              "commands": [
+                "moveRight"
+              ],
+              "key": "ArrowRight",
+              "text": "",
+              "unmodifiedText": "",
+              "autoRepeat": false,
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 0,
+              "key": "ArrowRight",
+              "windowsVirtualKeyCode": 39,
+              "code": "ArrowRight",
+              "location": 0,
+              "isKeypad": false
+            }
+          }
+        ]
+      },
+      {
+        "call": "page.keyboard.press('ArrowUp')",
+        "messages": [
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "rawKeyDown",
+              "modifiers": 0,
+              "windowsVirtualKeyCode": 38,
+              "code": "ArrowUp",
+              "commands": [
+                "moveUp"
+              ],
+              "key": "ArrowUp",
+              "text": "",
+              "unmodifiedText": "",
+              "autoRepeat": false,
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 0,
+              "key": "ArrowUp",
+              "windowsVirtualKeyCode": 38,
+              "code": "ArrowUp",
+              "location": 0,
+              "isKeypad": false
+            }
+          }
+        ]
+      },
+      {
+        "call": "page.keyboard.press('ArrowDown')",
+        "messages": [
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "rawKeyDown",
+              "modifiers": 0,
+              "windowsVirtualKeyCode": 40,
+              "code": "ArrowDown",
+              "commands": [
+                "moveDown"
+              ],
+              "key": "ArrowDown",
+              "text": "",
+              "unmodifiedText": "",
+              "autoRepeat": false,
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 0,
+              "key": "ArrowDown",
+              "windowsVirtualKeyCode": 40,
+              "code": "ArrowDown",
+              "location": 0,
+              "isKeypad": false
+            }
+          }
+        ]
+      },
+      {
+        "call": "page.keyboard.press('Shift+ArrowLeft')",
+        "messages": [
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "rawKeyDown",
+              "modifiers": 8,
+              "windowsVirtualKeyCode": 16,
+              "code": "ShiftLeft",
+              "commands": [],
+              "key": "Shift",
+              "text": "",
+              "unmodifiedText": "",
+              "autoRepeat": false,
+              "location": 1,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "rawKeyDown",
+              "modifiers": 8,
+              "windowsVirtualKeyCode": 37,
+              "code": "ArrowLeft",
+              "commands": [
+                "moveLeftAndModifySelection"
+              ],
+              "key": "ArrowLeft",
+              "text": "",
+              "unmodifiedText": "",
+              "autoRepeat": false,
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 8,
+              "key": "ArrowLeft",
+              "windowsVirtualKeyCode": 37,
+              "code": "ArrowLeft",
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 0,
+              "key": "Shift",
+              "windowsVirtualKeyCode": 16,
+              "code": "ShiftLeft",
+              "location": 1,
+              "isKeypad": false
+            }
+          }
+        ]
+      },
+      {
+        "call": "page.keyboard.press('Alt+ArrowLeft')",
+        "messages": [
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "rawKeyDown",
+              "modifiers": 1,
+              "windowsVirtualKeyCode": 18,
+              "code": "AltLeft",
+              "commands": [],
+              "key": "Alt",
+              "text": "",
+              "unmodifiedText": "",
+              "autoRepeat": false,
+              "location": 1,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "rawKeyDown",
+              "modifiers": 1,
+              "windowsVirtualKeyCode": 37,
+              "code": "ArrowLeft",
+              "commands": [
+                "moveWordLeft"
+              ],
+              "key": "ArrowLeft",
+              "text": "",
+              "unmodifiedText": "",
+              "autoRepeat": false,
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 1,
+              "key": "ArrowLeft",
+              "windowsVirtualKeyCode": 37,
+              "code": "ArrowLeft",
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 0,
+              "key": "Alt",
+              "windowsVirtualKeyCode": 18,
+              "code": "AltLeft",
+              "location": 1,
+              "isKeypad": false
+            }
+          }
+        ]
+      },
+      {
+        "call": "page.keyboard.press('Meta+ArrowLeft')",
+        "messages": [
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "rawKeyDown",
+              "modifiers": 4,
+              "windowsVirtualKeyCode": 91,
+              "code": "MetaLeft",
+              "commands": [],
+              "key": "Meta",
+              "text": "",
+              "unmodifiedText": "",
+              "autoRepeat": false,
+              "location": 1,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "rawKeyDown",
+              "modifiers": 4,
+              "windowsVirtualKeyCode": 37,
+              "code": "ArrowLeft",
+              "commands": [
+                "moveToLeftEndOfLine"
+              ],
+              "key": "ArrowLeft",
+              "text": "",
+              "unmodifiedText": "",
+              "autoRepeat": false,
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 4,
+              "key": "ArrowLeft",
+              "windowsVirtualKeyCode": 37,
+              "code": "ArrowLeft",
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 0,
+              "key": "Meta",
+              "windowsVirtualKeyCode": 91,
+              "code": "MetaLeft",
+              "location": 1,
+              "isKeypad": false
+            }
+          }
+        ]
+      },
+      {
+        "call": "page.keyboard.press('Shift+Home')",
+        "messages": [
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "rawKeyDown",
+              "modifiers": 8,
+              "windowsVirtualKeyCode": 16,
+              "code": "ShiftLeft",
+              "commands": [],
+              "key": "Shift",
+              "text": "",
+              "unmodifiedText": "",
+              "autoRepeat": false,
+              "location": 1,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "rawKeyDown",
+              "modifiers": 8,
+              "windowsVirtualKeyCode": 36,
+              "code": "Home",
+              "commands": [
+                "moveToBeginningOfDocumentAndModifySelection"
+              ],
+              "key": "Home",
+              "text": "",
+              "unmodifiedText": "",
+              "autoRepeat": false,
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 8,
+              "key": "Home",
+              "windowsVirtualKeyCode": 36,
+              "code": "Home",
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 0,
+              "key": "Shift",
+              "windowsVirtualKeyCode": 16,
+              "code": "ShiftLeft",
+              "location": 1,
+              "isKeypad": false
+            }
+          }
+        ]
+      },
+      {
+        "call": "page.keyboard.press('Home')",
+        "messages": [
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "rawKeyDown",
+              "modifiers": 0,
+              "windowsVirtualKeyCode": 36,
+              "code": "Home",
+              "commands": [
+                "scrollToBeginningOfDocument"
+              ],
+              "key": "Home",
+              "text": "",
+              "unmodifiedText": "",
+              "autoRepeat": false,
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 0,
+              "key": "Home",
+              "windowsVirtualKeyCode": 36,
+              "code": "Home",
+              "location": 0,
+              "isKeypad": false
+            }
+          }
+        ]
+      },
+      {
+        "call": "page.keyboard.press('End')",
+        "messages": [
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "rawKeyDown",
+              "modifiers": 0,
+              "windowsVirtualKeyCode": 35,
+              "code": "End",
+              "commands": [
+                "scrollToEndOfDocument"
+              ],
+              "key": "End",
+              "text": "",
+              "unmodifiedText": "",
+              "autoRepeat": false,
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 0,
+              "key": "End",
+              "windowsVirtualKeyCode": 35,
+              "code": "End",
+              "location": 0,
+              "isKeypad": false
+            }
+          }
+        ]
+      },
+      {
+        "call": "page.keyboard.press('PageDown')",
+        "messages": [
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "rawKeyDown",
+              "modifiers": 0,
+              "windowsVirtualKeyCode": 34,
+              "code": "PageDown",
+              "commands": [
+                "scrollPageDown"
+              ],
+              "key": "PageDown",
+              "text": "",
+              "unmodifiedText": "",
+              "autoRepeat": false,
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 0,
+              "key": "PageDown",
+              "windowsVirtualKeyCode": 34,
+              "code": "PageDown",
+              "location": 0,
+              "isKeypad": false
+            }
+          }
+        ]
+      },
+      {
+        "call": "page.keyboard.press('Backspace')",
+        "messages": [
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "rawKeyDown",
+              "modifiers": 0,
+              "windowsVirtualKeyCode": 8,
+              "code": "Backspace",
+              "commands": [
+                "deleteBackward"
+              ],
+              "key": "Backspace",
+              "text": "",
+              "unmodifiedText": "",
+              "autoRepeat": false,
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 0,
+              "key": "Backspace",
+              "windowsVirtualKeyCode": 8,
+              "code": "Backspace",
+              "location": 0,
+              "isKeypad": false
+            }
+          }
+        ]
+      },
+      {
+        "call": "page.keyboard.press('Alt+Backspace')",
+        "messages": [
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "rawKeyDown",
+              "modifiers": 1,
+              "windowsVirtualKeyCode": 18,
+              "code": "AltLeft",
+              "commands": [],
+              "key": "Alt",
+              "text": "",
+              "unmodifiedText": "",
+              "autoRepeat": false,
+              "location": 1,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "rawKeyDown",
+              "modifiers": 1,
+              "windowsVirtualKeyCode": 8,
+              "code": "Backspace",
+              "commands": [
+                "deleteWordBackward"
+              ],
+              "key": "Backspace",
+              "text": "",
+              "unmodifiedText": "",
+              "autoRepeat": false,
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 1,
+              "key": "Backspace",
+              "windowsVirtualKeyCode": 8,
+              "code": "Backspace",
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 0,
+              "key": "Alt",
+              "windowsVirtualKeyCode": 18,
+              "code": "AltLeft",
+              "location": 1,
+              "isKeypad": false
+            }
+          }
+        ]
+      },
+      {
+        "call": "page.keyboard.press('Delete')",
+        "messages": [
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "rawKeyDown",
+              "modifiers": 0,
+              "windowsVirtualKeyCode": 46,
+              "code": "Delete",
+              "commands": [
+                "deleteForward"
+              ],
+              "key": "Delete",
+              "text": "",
+              "unmodifiedText": "",
+              "autoRepeat": false,
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 0,
+              "key": "Delete",
+              "windowsVirtualKeyCode": 46,
+              "code": "Delete",
+              "location": 0,
+              "isKeypad": false
+            }
+          }
+        ]
+      },
+      {
+        "call": "page.keyboard.press('Escape')",
+        "messages": [
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "rawKeyDown",
+              "modifiers": 0,
+              "windowsVirtualKeyCode": 27,
+              "code": "Escape",
+              "commands": [
+                "cancelOperation"
+              ],
+              "key": "Escape",
+              "text": "",
+              "unmodifiedText": "",
+              "autoRepeat": false,
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 0,
+              "key": "Escape",
+              "windowsVirtualKeyCode": 27,
+              "code": "Escape",
+              "location": 0,
+              "isKeypad": false
+            }
+          }
+        ]
+      },
+      {
+        "call": "page.keyboard.press('F2')",
+        "messages": [
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "rawKeyDown",
+              "modifiers": 0,
+              "windowsVirtualKeyCode": 113,
+              "code": "F2",
+              "commands": [],
+              "key": "F2",
+              "text": "",
+              "unmodifiedText": "",
+              "autoRepeat": false,
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 0,
+              "key": "F2",
+              "windowsVirtualKeyCode": 113,
+              "code": "F2",
+              "location": 0,
+              "isKeypad": false
+            }
+          }
+        ]
+      },
+      {
+        "call": "page.keyboard.press('ControlOrMeta+A')",
+        "messages": [
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "rawKeyDown",
+              "modifiers": 4,
+              "windowsVirtualKeyCode": 91,
+              "code": "MetaLeft",
+              "commands": [],
+              "key": "Meta",
+              "text": "",
+              "unmodifiedText": "",
+              "autoRepeat": false,
+              "location": 1,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "rawKeyDown",
+              "modifiers": 4,
+              "windowsVirtualKeyCode": 65,
+              "code": "KeyA",
+              "commands": [
+                "selectAll"
+              ],
+              "key": "A",
+              "text": "",
+              "unmodifiedText": "",
+              "autoRepeat": false,
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 4,
+              "key": "A",
+              "windowsVirtualKeyCode": 65,
+              "code": "KeyA",
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 0,
+              "key": "Meta",
+              "windowsVirtualKeyCode": 91,
+              "code": "MetaLeft",
+              "location": 1,
+              "isKeypad": false
+            }
+          }
+        ]
+      },
+      {
+        "call": "page.keyboard.press('ControlOrMeta+C')",
+        "messages": [
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "rawKeyDown",
+              "modifiers": 4,
+              "windowsVirtualKeyCode": 91,
+              "code": "MetaLeft",
+              "commands": [],
+              "key": "Meta",
+              "text": "",
+              "unmodifiedText": "",
+              "autoRepeat": false,
+              "location": 1,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "rawKeyDown",
+              "modifiers": 4,
+              "windowsVirtualKeyCode": 67,
+              "code": "KeyC",
+              "commands": [
+                "copy"
+              ],
+              "key": "C",
+              "text": "",
+              "unmodifiedText": "",
+              "autoRepeat": false,
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 4,
+              "key": "C",
+              "windowsVirtualKeyCode": 67,
+              "code": "KeyC",
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 0,
+              "key": "Meta",
+              "windowsVirtualKeyCode": 91,
+              "code": "MetaLeft",
+              "location": 1,
+              "isKeypad": false
+            }
+          }
+        ]
+      },
+      {
+        "call": "page.keyboard.press('ControlOrMeta+V')",
+        "messages": [
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "rawKeyDown",
+              "modifiers": 4,
+              "windowsVirtualKeyCode": 91,
+              "code": "MetaLeft",
+              "commands": [],
+              "key": "Meta",
+              "text": "",
+              "unmodifiedText": "",
+              "autoRepeat": false,
+              "location": 1,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "rawKeyDown",
+              "modifiers": 4,
+              "windowsVirtualKeyCode": 86,
+              "code": "KeyV",
+              "commands": [
+                "paste"
+              ],
+              "key": "V",
+              "text": "",
+              "unmodifiedText": "",
+              "autoRepeat": false,
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 4,
+              "key": "V",
+              "windowsVirtualKeyCode": 86,
+              "code": "KeyV",
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 0,
+              "key": "Meta",
+              "windowsVirtualKeyCode": 91,
+              "code": "MetaLeft",
+              "location": 1,
+              "isKeypad": false
+            }
+          }
+        ]
+      },
+      {
+        "call": "page.keyboard.press('ControlOrMeta+Z')",
+        "messages": [
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "rawKeyDown",
+              "modifiers": 4,
+              "windowsVirtualKeyCode": 91,
+              "code": "MetaLeft",
+              "commands": [],
+              "key": "Meta",
+              "text": "",
+              "unmodifiedText": "",
+              "autoRepeat": false,
+              "location": 1,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "rawKeyDown",
+              "modifiers": 4,
+              "windowsVirtualKeyCode": 90,
+              "code": "KeyZ",
+              "commands": [
+                "undo"
+              ],
+              "key": "Z",
+              "text": "",
+              "unmodifiedText": "",
+              "autoRepeat": false,
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 4,
+              "key": "Z",
+              "windowsVirtualKeyCode": 90,
+              "code": "KeyZ",
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 0,
+              "key": "Meta",
+              "windowsVirtualKeyCode": 91,
+              "code": "MetaLeft",
+              "location": 1,
+              "isKeypad": false
+            }
+          }
+        ]
+      },
+      {
+        "call": "page.keyboard.press('Control+A')",
+        "messages": [
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "rawKeyDown",
+              "modifiers": 2,
+              "windowsVirtualKeyCode": 17,
+              "code": "ControlLeft",
+              "commands": [],
+              "key": "Control",
+              "text": "",
+              "unmodifiedText": "",
+              "autoRepeat": false,
+              "location": 1,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "rawKeyDown",
+              "modifiers": 2,
+              "windowsVirtualKeyCode": 65,
+              "code": "KeyA",
+              "commands": [
+                "moveToBeginningOfParagraph"
+              ],
+              "key": "A",
+              "text": "",
+              "unmodifiedText": "",
+              "autoRepeat": false,
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 2,
+              "key": "A",
+              "windowsVirtualKeyCode": 65,
+              "code": "KeyA",
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 0,
+              "key": "Control",
+              "windowsVirtualKeyCode": 17,
+              "code": "ControlLeft",
+              "location": 1,
+              "isKeypad": false
+            }
+          }
+        ]
+      },
+      {
+        "call": "page.keyboard.press('Meta+A')",
+        "messages": [
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "rawKeyDown",
+              "modifiers": 4,
+              "windowsVirtualKeyCode": 91,
+              "code": "MetaLeft",
+              "commands": [],
+              "key": "Meta",
+              "text": "",
+              "unmodifiedText": "",
+              "autoRepeat": false,
+              "location": 1,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "rawKeyDown",
+              "modifiers": 4,
+              "windowsVirtualKeyCode": 65,
+              "code": "KeyA",
+              "commands": [
+                "selectAll"
+              ],
+              "key": "A",
+              "text": "",
+              "unmodifiedText": "",
+              "autoRepeat": false,
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 4,
+              "key": "A",
+              "windowsVirtualKeyCode": 65,
+              "code": "KeyA",
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 0,
+              "key": "Meta",
+              "windowsVirtualKeyCode": 91,
+              "code": "MetaLeft",
+              "location": 1,
+              "isKeypad": false
+            }
+          }
+        ]
+      },
+      {
+        "call": "page.keyboard.press('Control+Shift+K')",
+        "messages": [
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "rawKeyDown",
+              "modifiers": 2,
+              "windowsVirtualKeyCode": 17,
+              "code": "ControlLeft",
+              "commands": [],
+              "key": "Control",
+              "text": "",
+              "unmodifiedText": "",
+              "autoRepeat": false,
+              "location": 1,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "rawKeyDown",
+              "modifiers": 10,
+              "windowsVirtualKeyCode": 16,
+              "code": "ShiftLeft",
+              "commands": [],
+              "key": "Shift",
+              "text": "",
+              "unmodifiedText": "",
+              "autoRepeat": false,
+              "location": 1,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "rawKeyDown",
+              "modifiers": 10,
+              "windowsVirtualKeyCode": 75,
+              "code": "KeyK",
+              "commands": [],
+              "key": "K",
+              "text": "",
+              "unmodifiedText": "",
+              "autoRepeat": false,
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 10,
+              "key": "K",
+              "windowsVirtualKeyCode": 75,
+              "code": "KeyK",
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 2,
+              "key": "Shift",
+              "windowsVirtualKeyCode": 16,
+              "code": "ShiftLeft",
+              "location": 1,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 0,
+              "key": "Control",
+              "windowsVirtualKeyCode": 17,
+              "code": "ControlLeft",
+              "location": 1,
+              "isKeypad": false
+            }
+          }
+        ]
+      },
+      {
+        "call": "page.keyboard.down('Shift').then(() => page.keyboard.press('ArrowLeft')).then(() => page.keyboard.up('Shift'))",
+        "messages": [
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "rawKeyDown",
+              "modifiers": 8,
+              "windowsVirtualKeyCode": 16,
+              "code": "ShiftLeft",
+              "commands": [],
+              "key": "Shift",
+              "text": "",
+              "unmodifiedText": "",
+              "autoRepeat": false,
+              "location": 1,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "rawKeyDown",
+              "modifiers": 8,
+              "windowsVirtualKeyCode": 37,
+              "code": "ArrowLeft",
+              "commands": [
+                "moveLeftAndModifySelection"
+              ],
+              "key": "ArrowLeft",
+              "text": "",
+              "unmodifiedText": "",
+              "autoRepeat": false,
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 8,
+              "key": "ArrowLeft",
+              "windowsVirtualKeyCode": 37,
+              "code": "ArrowLeft",
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 0,
+              "key": "Shift",
+              "windowsVirtualKeyCode": 16,
+              "code": "ShiftLeft",
+              "location": 1,
+              "isKeypad": false
+            }
+          }
+        ]
+      },
+      {
+        "call": "page.keyboard.down('a').then(() => page.keyboard.down('a')).then(() => page.keyboard.up('a'))",
+        "messages": [
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyDown",
+              "modifiers": 0,
+              "windowsVirtualKeyCode": 65,
+              "code": "KeyA",
+              "commands": [],
+              "key": "a",
+              "text": "a",
+              "unmodifiedText": "a",
+              "autoRepeat": false,
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyDown",
+              "modifiers": 0,
+              "windowsVirtualKeyCode": 65,
+              "code": "KeyA",
+              "commands": [],
+              "key": "a",
+              "text": "a",
+              "unmodifiedText": "a",
+              "autoRepeat": true,
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 0,
+              "key": "a",
+              "windowsVirtualKeyCode": 65,
+              "code": "KeyA",
+              "location": 0,
+              "isKeypad": false
+            }
+          }
+        ]
+      },
+      {
+        "call": "page.keyboard.type('Hi there!')",
+        "messages": [
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyDown",
+              "modifiers": 0,
+              "windowsVirtualKeyCode": 72,
+              "code": "KeyH",
+              "commands": [],
+              "key": "H",
+              "text": "H",
+              "unmodifiedText": "H",
+              "autoRepeat": false,
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 0,
+              "key": "H",
+              "windowsVirtualKeyCode": 72,
+              "code": "KeyH",
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyDown",
+              "modifiers": 0,
+              "windowsVirtualKeyCode": 73,
+              "code": "KeyI",
+              "commands": [],
+              "key": "i",
+              "text": "i",
+              "unmodifiedText": "i",
+              "autoRepeat": false,
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 0,
+              "key": "i",
+              "windowsVirtualKeyCode": 73,
+              "code": "KeyI",
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyDown",
+              "modifiers": 0,
+              "windowsVirtualKeyCode": 32,
+              "code": "Space",
+              "commands": [],
+              "key": " ",
+              "text": " ",
+              "unmodifiedText": " ",
+              "autoRepeat": false,
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 0,
+              "key": " ",
+              "windowsVirtualKeyCode": 32,
+              "code": "Space",
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyDown",
+              "modifiers": 0,
+              "windowsVirtualKeyCode": 84,
+              "code": "KeyT",
+              "commands": [],
+              "key": "t",
+              "text": "t",
+              "unmodifiedText": "t",
+              "autoRepeat": false,
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 0,
+              "key": "t",
+              "windowsVirtualKeyCode": 84,
+              "code": "KeyT",
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyDown",
+              "modifiers": 0,
+              "windowsVirtualKeyCode": 72,
+              "code": "KeyH",
+              "commands": [],
+              "key": "h",
+              "text": "h",
+              "unmodifiedText": "h",
+              "autoRepeat": false,
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 0,
+              "key": "h",
+              "windowsVirtualKeyCode": 72,
+              "code": "KeyH",
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyDown",
+              "modifiers": 0,
+              "windowsVirtualKeyCode": 69,
+              "code": "KeyE",
+              "commands": [],
+              "key": "e",
+              "text": "e",
+              "unmodifiedText": "e",
+              "autoRepeat": false,
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 0,
+              "key": "e",
+              "windowsVirtualKeyCode": 69,
+              "code": "KeyE",
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyDown",
+              "modifiers": 0,
+              "windowsVirtualKeyCode": 82,
+              "code": "KeyR",
+              "commands": [],
+              "key": "r",
+              "text": "r",
+              "unmodifiedText": "r",
+              "autoRepeat": false,
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 0,
+              "key": "r",
+              "windowsVirtualKeyCode": 82,
+              "code": "KeyR",
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyDown",
+              "modifiers": 0,
+              "windowsVirtualKeyCode": 69,
+              "code": "KeyE",
+              "commands": [],
+              "key": "e",
+              "text": "e",
+              "unmodifiedText": "e",
+              "autoRepeat": false,
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 0,
+              "key": "e",
+              "windowsVirtualKeyCode": 69,
+              "code": "KeyE",
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyDown",
+              "modifiers": 0,
+              "windowsVirtualKeyCode": 49,
+              "code": "Digit1",
+              "commands": [],
+              "key": "!",
+              "text": "!",
+              "unmodifiedText": "!",
+              "autoRepeat": false,
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 0,
+              "key": "!",
+              "windowsVirtualKeyCode": 49,
+              "code": "Digit1",
+              "location": 0,
+              "isKeypad": false
+            }
+          }
+        ]
+      },
+      {
+        "call": "page.keyboard.type('Mixed é 👋 123')",
+        "messages": [
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyDown",
+              "modifiers": 0,
+              "windowsVirtualKeyCode": 77,
+              "code": "KeyM",
+              "commands": [],
+              "key": "M",
+              "text": "M",
+              "unmodifiedText": "M",
+              "autoRepeat": false,
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 0,
+              "key": "M",
+              "windowsVirtualKeyCode": 77,
+              "code": "KeyM",
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyDown",
+              "modifiers": 0,
+              "windowsVirtualKeyCode": 73,
+              "code": "KeyI",
+              "commands": [],
+              "key": "i",
+              "text": "i",
+              "unmodifiedText": "i",
+              "autoRepeat": false,
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 0,
+              "key": "i",
+              "windowsVirtualKeyCode": 73,
+              "code": "KeyI",
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyDown",
+              "modifiers": 0,
+              "windowsVirtualKeyCode": 88,
+              "code": "KeyX",
+              "commands": [],
+              "key": "x",
+              "text": "x",
+              "unmodifiedText": "x",
+              "autoRepeat": false,
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 0,
+              "key": "x",
+              "windowsVirtualKeyCode": 88,
+              "code": "KeyX",
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyDown",
+              "modifiers": 0,
+              "windowsVirtualKeyCode": 69,
+              "code": "KeyE",
+              "commands": [],
+              "key": "e",
+              "text": "e",
+              "unmodifiedText": "e",
+              "autoRepeat": false,
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 0,
+              "key": "e",
+              "windowsVirtualKeyCode": 69,
+              "code": "KeyE",
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyDown",
+              "modifiers": 0,
+              "windowsVirtualKeyCode": 68,
+              "code": "KeyD",
+              "commands": [],
+              "key": "d",
+              "text": "d",
+              "unmodifiedText": "d",
+              "autoRepeat": false,
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 0,
+              "key": "d",
+              "windowsVirtualKeyCode": 68,
+              "code": "KeyD",
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyDown",
+              "modifiers": 0,
+              "windowsVirtualKeyCode": 32,
+              "code": "Space",
+              "commands": [],
+              "key": " ",
+              "text": " ",
+              "unmodifiedText": " ",
+              "autoRepeat": false,
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 0,
+              "key": " ",
+              "windowsVirtualKeyCode": 32,
+              "code": "Space",
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.insertText",
+            "params": {
+              "text": "é"
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyDown",
+              "modifiers": 0,
+              "windowsVirtualKeyCode": 32,
+              "code": "Space",
+              "commands": [],
+              "key": " ",
+              "text": " ",
+              "unmodifiedText": " ",
+              "autoRepeat": false,
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 0,
+              "key": " ",
+              "windowsVirtualKeyCode": 32,
+              "code": "Space",
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.insertText",
+            "params": {
+              "text": "👋"
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyDown",
+              "modifiers": 0,
+              "windowsVirtualKeyCode": 32,
+              "code": "Space",
+              "commands": [],
+              "key": " ",
+              "text": " ",
+              "unmodifiedText": " ",
+              "autoRepeat": false,
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 0,
+              "key": " ",
+              "windowsVirtualKeyCode": 32,
+              "code": "Space",
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyDown",
+              "modifiers": 0,
+              "windowsVirtualKeyCode": 49,
+              "code": "Digit1",
+              "commands": [],
+              "key": "1",
+              "text": "1",
+              "unmodifiedText": "1",
+              "autoRepeat": false,
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 0,
+              "key": "1",
+              "windowsVirtualKeyCode": 49,
+              "code": "Digit1",
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyDown",
+              "modifiers": 0,
+              "windowsVirtualKeyCode": 50,
+              "code": "Digit2",
+              "commands": [],
+              "key": "2",
+              "text": "2",
+              "unmodifiedText": "2",
+              "autoRepeat": false,
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 0,
+              "key": "2",
+              "windowsVirtualKeyCode": 50,
+              "code": "Digit2",
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyDown",
+              "modifiers": 0,
+              "windowsVirtualKeyCode": 51,
+              "code": "Digit3",
+              "commands": [],
+              "key": "3",
+              "text": "3",
+              "unmodifiedText": "3",
+              "autoRepeat": false,
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 0,
+              "key": "3",
+              "windowsVirtualKeyCode": 51,
+              "code": "Digit3",
+              "location": 0,
+              "isKeypad": false
+            }
+          }
+        ]
+      },
+      {
+        "call": "page.keyboard.insertText('héllo 👋')",
+        "messages": [
+          {
+            "method": "Input.insertText",
+            "params": {
+              "text": "héllo 👋"
+            }
+          }
+        ]
+      },
+      {
+        "call": "page.locator('#field').pressSequentially('Ab 1é!')",
+        "messages": [
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyDown",
+              "modifiers": 0,
+              "windowsVirtualKeyCode": 65,
+              "code": "KeyA",
+              "commands": [],
+              "key": "A",
+              "text": "A",
+              "unmodifiedText": "A",
+              "autoRepeat": false,
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 0,
+              "key": "A",
+              "windowsVirtualKeyCode": 65,
+              "code": "KeyA",
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyDown",
+              "modifiers": 0,
+              "windowsVirtualKeyCode": 66,
+              "code": "KeyB",
+              "commands": [],
+              "key": "b",
+              "text": "b",
+              "unmodifiedText": "b",
+              "autoRepeat": false,
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 0,
+              "key": "b",
+              "windowsVirtualKeyCode": 66,
+              "code": "KeyB",
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyDown",
+              "modifiers": 0,
+              "windowsVirtualKeyCode": 32,
+              "code": "Space",
+              "commands": [],
+              "key": " ",
+              "text": " ",
+              "unmodifiedText": " ",
+              "autoRepeat": false,
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 0,
+              "key": " ",
+              "windowsVirtualKeyCode": 32,
+              "code": "Space",
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyDown",
+              "modifiers": 0,
+              "windowsVirtualKeyCode": 49,
+              "code": "Digit1",
+              "commands": [],
+              "key": "1",
+              "text": "1",
+              "unmodifiedText": "1",
+              "autoRepeat": false,
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 0,
+              "key": "1",
+              "windowsVirtualKeyCode": 49,
+              "code": "Digit1",
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.insertText",
+            "params": {
+              "text": "é"
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyDown",
+              "modifiers": 0,
+              "windowsVirtualKeyCode": 49,
+              "code": "Digit1",
+              "commands": [],
+              "key": "!",
+              "text": "!",
+              "unmodifiedText": "!",
+              "autoRepeat": false,
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 0,
+              "key": "!",
+              "windowsVirtualKeyCode": 49,
+              "code": "Digit1",
+              "location": 0,
+              "isKeypad": false
+            }
+          }
+        ]
+      },
+      {
+        "call": "page.locator('#field').press('Enter')",
+        "messages": [
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyDown",
+              "modifiers": 0,
+              "windowsVirtualKeyCode": 13,
+              "code": "Enter",
+              "commands": [],
+              "key": "Enter",
+              "text": "\r",
+              "unmodifiedText": "\r",
+              "autoRepeat": false,
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 0,
+              "key": "Enter",
+              "windowsVirtualKeyCode": 13,
+              "code": "Enter",
+              "location": 0,
+              "isKeypad": false
+            }
+          }
+        ]
+      },
+      {
+        "call": "page.locator('#area').press('Shift+Enter')",
+        "messages": [
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "rawKeyDown",
+              "modifiers": 8,
+              "windowsVirtualKeyCode": 16,
+              "code": "ShiftLeft",
+              "commands": [],
+              "key": "Shift",
+              "text": "",
+              "unmodifiedText": "",
+              "autoRepeat": false,
+              "location": 1,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyDown",
+              "modifiers": 8,
+              "windowsVirtualKeyCode": 13,
+              "code": "Enter",
+              "commands": [],
+              "key": "Enter",
+              "text": "\r",
+              "unmodifiedText": "\r",
+              "autoRepeat": false,
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 8,
+              "key": "Enter",
+              "windowsVirtualKeyCode": 13,
+              "code": "Enter",
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 0,
+              "key": "Shift",
+              "windowsVirtualKeyCode": 16,
+              "code": "ShiftLeft",
+              "location": 1,
+              "isKeypad": false
+            }
+          }
+        ]
+      },
+      {
+        "call": "page.locator('#field').fill('filled')",
+        "messages": [
+          {
+            "method": "Input.insertText",
+            "params": {
+              "text": "filled"
+            }
+          }
+        ]
+      },
+      {
+        "call": "page.locator('#field').fill('')",
+        "messages": [
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "rawKeyDown",
+              "modifiers": 0,
+              "windowsVirtualKeyCode": 46,
+              "code": "Delete",
+              "commands": [
+                "deleteForward"
+              ],
+              "key": "Delete",
+              "text": "",
+              "unmodifiedText": "",
+              "autoRepeat": false,
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 0,
+              "key": "Delete",
+              "windowsVirtualKeyCode": 46,
+              "code": "Delete",
+              "location": 0,
+              "isKeypad": false
+            }
+          }
+        ]
+      }
+    ],
+    "linux": [
+      {
+        "call": "page.keyboard.press('a')",
+        "messages": [
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyDown",
+              "modifiers": 0,
+              "windowsVirtualKeyCode": 65,
+              "code": "KeyA",
+              "commands": [],
+              "key": "a",
+              "text": "a",
+              "unmodifiedText": "a",
+              "autoRepeat": false,
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 0,
+              "key": "a",
+              "windowsVirtualKeyCode": 65,
+              "code": "KeyA",
+              "location": 0,
+              "isKeypad": false
+            }
+          }
+        ]
+      },
+      {
+        "call": "page.keyboard.press('A')",
+        "messages": [
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyDown",
+              "modifiers": 0,
+              "windowsVirtualKeyCode": 65,
+              "code": "KeyA",
+              "commands": [],
+              "key": "A",
+              "text": "A",
+              "unmodifiedText": "A",
+              "autoRepeat": false,
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 0,
+              "key": "A",
+              "windowsVirtualKeyCode": 65,
+              "code": "KeyA",
+              "location": 0,
+              "isKeypad": false
+            }
+          }
+        ]
+      },
+      {
+        "call": "page.keyboard.press('Shift+A')",
+        "messages": [
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "rawKeyDown",
+              "modifiers": 8,
+              "windowsVirtualKeyCode": 16,
+              "code": "ShiftLeft",
+              "commands": [],
+              "key": "Shift",
+              "text": "",
+              "unmodifiedText": "",
+              "autoRepeat": false,
+              "location": 1,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyDown",
+              "modifiers": 8,
+              "windowsVirtualKeyCode": 65,
+              "code": "KeyA",
+              "commands": [],
+              "key": "A",
+              "text": "A",
+              "unmodifiedText": "A",
+              "autoRepeat": false,
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 8,
+              "key": "A",
+              "windowsVirtualKeyCode": 65,
+              "code": "KeyA",
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 0,
+              "key": "Shift",
+              "windowsVirtualKeyCode": 16,
+              "code": "ShiftLeft",
+              "location": 1,
+              "isKeypad": false
+            }
+          }
+        ]
+      },
+      {
+        "call": "page.keyboard.press('Shift+a')",
+        "messages": [
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "rawKeyDown",
+              "modifiers": 8,
+              "windowsVirtualKeyCode": 16,
+              "code": "ShiftLeft",
+              "commands": [],
+              "key": "Shift",
+              "text": "",
+              "unmodifiedText": "",
+              "autoRepeat": false,
+              "location": 1,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyDown",
+              "modifiers": 8,
+              "windowsVirtualKeyCode": 65,
+              "code": "KeyA",
+              "commands": [],
+              "key": "a",
+              "text": "a",
+              "unmodifiedText": "a",
+              "autoRepeat": false,
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 8,
+              "key": "a",
+              "windowsVirtualKeyCode": 65,
+              "code": "KeyA",
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 0,
+              "key": "Shift",
+              "windowsVirtualKeyCode": 16,
+              "code": "ShiftLeft",
+              "location": 1,
+              "isKeypad": false
+            }
+          }
+        ]
+      },
+      {
+        "call": "page.keyboard.press('KeyA')",
+        "messages": [
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyDown",
+              "modifiers": 0,
+              "windowsVirtualKeyCode": 65,
+              "code": "KeyA",
+              "commands": [],
+              "key": "a",
+              "text": "a",
+              "unmodifiedText": "a",
+              "autoRepeat": false,
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 0,
+              "key": "a",
+              "windowsVirtualKeyCode": 65,
+              "code": "KeyA",
+              "location": 0,
+              "isKeypad": false
+            }
+          }
+        ]
+      },
+      {
+        "call": "page.keyboard.press('Shift+KeyA')",
+        "messages": [
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "rawKeyDown",
+              "modifiers": 8,
+              "windowsVirtualKeyCode": 16,
+              "code": "ShiftLeft",
+              "commands": [],
+              "key": "Shift",
+              "text": "",
+              "unmodifiedText": "",
+              "autoRepeat": false,
+              "location": 1,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyDown",
+              "modifiers": 8,
+              "windowsVirtualKeyCode": 65,
+              "code": "KeyA",
+              "commands": [],
+              "key": "A",
+              "text": "A",
+              "unmodifiedText": "A",
+              "autoRepeat": false,
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 8,
+              "key": "A",
+              "windowsVirtualKeyCode": 65,
+              "code": "KeyA",
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 0,
+              "key": "Shift",
+              "windowsVirtualKeyCode": 16,
+              "code": "ShiftLeft",
+              "location": 1,
+              "isKeypad": false
+            }
+          }
+        ]
+      },
+      {
+        "call": "page.keyboard.press('1')",
+        "messages": [
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyDown",
+              "modifiers": 0,
+              "windowsVirtualKeyCode": 49,
+              "code": "Digit1",
+              "commands": [],
+              "key": "1",
+              "text": "1",
+              "unmodifiedText": "1",
+              "autoRepeat": false,
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 0,
+              "key": "1",
+              "windowsVirtualKeyCode": 49,
+              "code": "Digit1",
+              "location": 0,
+              "isKeypad": false
+            }
+          }
+        ]
+      },
+      {
+        "call": "page.keyboard.press('!')",
+        "messages": [
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyDown",
+              "modifiers": 0,
+              "windowsVirtualKeyCode": 49,
+              "code": "Digit1",
+              "commands": [],
+              "key": "!",
+              "text": "!",
+              "unmodifiedText": "!",
+              "autoRepeat": false,
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 0,
+              "key": "!",
+              "windowsVirtualKeyCode": 49,
+              "code": "Digit1",
+              "location": 0,
+              "isKeypad": false
+            }
+          }
+        ]
+      },
+      {
+        "call": "page.keyboard.press('Digit1')",
+        "messages": [
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyDown",
+              "modifiers": 0,
+              "windowsVirtualKeyCode": 49,
+              "code": "Digit1",
+              "commands": [],
+              "key": "1",
+              "text": "1",
+              "unmodifiedText": "1",
+              "autoRepeat": false,
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 0,
+              "key": "1",
+              "windowsVirtualKeyCode": 49,
+              "code": "Digit1",
+              "location": 0,
+              "isKeypad": false
+            }
+          }
+        ]
+      },
+      {
+        "call": "page.keyboard.press('Shift+Digit1')",
+        "messages": [
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "rawKeyDown",
+              "modifiers": 8,
+              "windowsVirtualKeyCode": 16,
+              "code": "ShiftLeft",
+              "commands": [],
+              "key": "Shift",
+              "text": "",
+              "unmodifiedText": "",
+              "autoRepeat": false,
+              "location": 1,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyDown",
+              "modifiers": 8,
+              "windowsVirtualKeyCode": 49,
+              "code": "Digit1",
+              "commands": [],
+              "key": "!",
+              "text": "!",
+              "unmodifiedText": "!",
+              "autoRepeat": false,
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 8,
+              "key": "!",
+              "windowsVirtualKeyCode": 49,
+              "code": "Digit1",
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 0,
+              "key": "Shift",
+              "windowsVirtualKeyCode": 16,
+              "code": "ShiftLeft",
+              "location": 1,
+              "isKeypad": false
+            }
+          }
+        ]
+      },
+      {
+        "call": "page.keyboard.press(' ')",
+        "messages": [
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyDown",
+              "modifiers": 0,
+              "windowsVirtualKeyCode": 32,
+              "code": "Space",
+              "commands": [],
+              "key": " ",
+              "text": " ",
+              "unmodifiedText": " ",
+              "autoRepeat": false,
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 0,
+              "key": " ",
+              "windowsVirtualKeyCode": 32,
+              "code": "Space",
+              "location": 0,
+              "isKeypad": false
+            }
+          }
+        ]
+      },
+      {
+        "call": "page.keyboard.press('Space')",
+        "messages": [
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyDown",
+              "modifiers": 0,
+              "windowsVirtualKeyCode": 32,
+              "code": "Space",
+              "commands": [],
+              "key": " ",
+              "text": " ",
+              "unmodifiedText": " ",
+              "autoRepeat": false,
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 0,
+              "key": " ",
+              "windowsVirtualKeyCode": 32,
+              "code": "Space",
+              "location": 0,
+              "isKeypad": false
+            }
+          }
+        ]
+      },
+      {
+        "call": "page.keyboard.press('Enter')",
+        "messages": [
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyDown",
+              "modifiers": 0,
+              "windowsVirtualKeyCode": 13,
+              "code": "Enter",
+              "commands": [],
+              "key": "Enter",
+              "text": "\r",
+              "unmodifiedText": "\r",
+              "autoRepeat": false,
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 0,
+              "key": "Enter",
+              "windowsVirtualKeyCode": 13,
+              "code": "Enter",
+              "location": 0,
+              "isKeypad": false
+            }
+          }
+        ]
+      },
+      {
+        "call": "page.keyboard.press('Shift+Enter')",
+        "messages": [
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "rawKeyDown",
+              "modifiers": 8,
+              "windowsVirtualKeyCode": 16,
+              "code": "ShiftLeft",
+              "commands": [],
+              "key": "Shift",
+              "text": "",
+              "unmodifiedText": "",
+              "autoRepeat": false,
+              "location": 1,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyDown",
+              "modifiers": 8,
+              "windowsVirtualKeyCode": 13,
+              "code": "Enter",
+              "commands": [],
+              "key": "Enter",
+              "text": "\r",
+              "unmodifiedText": "\r",
+              "autoRepeat": false,
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 8,
+              "key": "Enter",
+              "windowsVirtualKeyCode": 13,
+              "code": "Enter",
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 0,
+              "key": "Shift",
+              "windowsVirtualKeyCode": 16,
+              "code": "ShiftLeft",
+              "location": 1,
+              "isKeypad": false
+            }
+          }
+        ]
+      },
+      {
+        "call": "page.keyboard.press('NumpadEnter')",
+        "messages": [
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyDown",
+              "modifiers": 0,
+              "windowsVirtualKeyCode": 13,
+              "code": "NumpadEnter",
+              "commands": [],
+              "key": "Enter",
+              "text": "\r",
+              "unmodifiedText": "\r",
+              "autoRepeat": false,
+              "location": 3,
+              "isKeypad": true
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 0,
+              "key": "Enter",
+              "windowsVirtualKeyCode": 13,
+              "code": "NumpadEnter",
+              "location": 3,
+              "isKeypad": true
+            }
+          }
+        ]
+      },
+      {
+        "call": "page.keyboard.press('Numpad1')",
+        "messages": [
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "rawKeyDown",
+              "modifiers": 0,
+              "windowsVirtualKeyCode": 35,
+              "code": "Numpad1",
+              "commands": [],
+              "key": "End",
+              "text": "",
+              "unmodifiedText": "",
+              "autoRepeat": false,
+              "location": 3,
+              "isKeypad": true
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 0,
+              "key": "End",
+              "windowsVirtualKeyCode": 35,
+              "code": "Numpad1",
+              "location": 3,
+              "isKeypad": true
+            }
+          }
+        ]
+      },
+      {
+        "call": "page.keyboard.press('Tab')",
+        "messages": [
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "rawKeyDown",
+              "modifiers": 0,
+              "windowsVirtualKeyCode": 9,
+              "code": "Tab",
+              "commands": [],
+              "key": "Tab",
+              "text": "",
+              "unmodifiedText": "",
+              "autoRepeat": false,
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 0,
+              "key": "Tab",
+              "windowsVirtualKeyCode": 9,
+              "code": "Tab",
+              "location": 0,
+              "isKeypad": false
+            }
+          }
+        ]
+      },
+      {
+        "call": "page.keyboard.press('Shift+Tab')",
+        "messages": [
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "rawKeyDown",
+              "modifiers": 8,
+              "windowsVirtualKeyCode": 16,
+              "code": "ShiftLeft",
+              "commands": [],
+              "key": "Shift",
+              "text": "",
+              "unmodifiedText": "",
+              "autoRepeat": false,
+              "location": 1,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "rawKeyDown",
+              "modifiers": 8,
+              "windowsVirtualKeyCode": 9,
+              "code": "Tab",
+              "commands": [],
+              "key": "Tab",
+              "text": "",
+              "unmodifiedText": "",
+              "autoRepeat": false,
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 8,
+              "key": "Tab",
+              "windowsVirtualKeyCode": 9,
+              "code": "Tab",
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 0,
+              "key": "Shift",
+              "windowsVirtualKeyCode": 16,
+              "code": "ShiftLeft",
+              "location": 1,
+              "isKeypad": false
+            }
+          }
+        ]
+      },
+      {
+        "call": "page.keyboard.press('ArrowLeft')",
+        "messages": [
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "rawKeyDown",
+              "modifiers": 0,
+              "windowsVirtualKeyCode": 37,
+              "code": "ArrowLeft",
+              "commands": [],
+              "key": "ArrowLeft",
+              "text": "",
+              "unmodifiedText": "",
+              "autoRepeat": false,
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 0,
+              "key": "ArrowLeft",
+              "windowsVirtualKeyCode": 37,
+              "code": "ArrowLeft",
+              "location": 0,
+              "isKeypad": false
+            }
+          }
+        ]
+      },
+      {
+        "call": "page.keyboard.press('ArrowRight')",
+        "messages": [
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "rawKeyDown",
+              "modifiers": 0,
+              "windowsVirtualKeyCode": 39,
+              "code": "ArrowRight",
+              "commands": [],
+              "key": "ArrowRight",
+              "text": "",
+              "unmodifiedText": "",
+              "autoRepeat": false,
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 0,
+              "key": "ArrowRight",
+              "windowsVirtualKeyCode": 39,
+              "code": "ArrowRight",
+              "location": 0,
+              "isKeypad": false
+            }
+          }
+        ]
+      },
+      {
+        "call": "page.keyboard.press('ArrowUp')",
+        "messages": [
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "rawKeyDown",
+              "modifiers": 0,
+              "windowsVirtualKeyCode": 38,
+              "code": "ArrowUp",
+              "commands": [],
+              "key": "ArrowUp",
+              "text": "",
+              "unmodifiedText": "",
+              "autoRepeat": false,
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 0,
+              "key": "ArrowUp",
+              "windowsVirtualKeyCode": 38,
+              "code": "ArrowUp",
+              "location": 0,
+              "isKeypad": false
+            }
+          }
+        ]
+      },
+      {
+        "call": "page.keyboard.press('ArrowDown')",
+        "messages": [
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "rawKeyDown",
+              "modifiers": 0,
+              "windowsVirtualKeyCode": 40,
+              "code": "ArrowDown",
+              "commands": [],
+              "key": "ArrowDown",
+              "text": "",
+              "unmodifiedText": "",
+              "autoRepeat": false,
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 0,
+              "key": "ArrowDown",
+              "windowsVirtualKeyCode": 40,
+              "code": "ArrowDown",
+              "location": 0,
+              "isKeypad": false
+            }
+          }
+        ]
+      },
+      {
+        "call": "page.keyboard.press('Shift+ArrowLeft')",
+        "messages": [
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "rawKeyDown",
+              "modifiers": 8,
+              "windowsVirtualKeyCode": 16,
+              "code": "ShiftLeft",
+              "commands": [],
+              "key": "Shift",
+              "text": "",
+              "unmodifiedText": "",
+              "autoRepeat": false,
+              "location": 1,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "rawKeyDown",
+              "modifiers": 8,
+              "windowsVirtualKeyCode": 37,
+              "code": "ArrowLeft",
+              "commands": [],
+              "key": "ArrowLeft",
+              "text": "",
+              "unmodifiedText": "",
+              "autoRepeat": false,
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 8,
+              "key": "ArrowLeft",
+              "windowsVirtualKeyCode": 37,
+              "code": "ArrowLeft",
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 0,
+              "key": "Shift",
+              "windowsVirtualKeyCode": 16,
+              "code": "ShiftLeft",
+              "location": 1,
+              "isKeypad": false
+            }
+          }
+        ]
+      },
+      {
+        "call": "page.keyboard.press('Alt+ArrowLeft')",
+        "messages": [
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "rawKeyDown",
+              "modifiers": 1,
+              "windowsVirtualKeyCode": 18,
+              "code": "AltLeft",
+              "commands": [],
+              "key": "Alt",
+              "text": "",
+              "unmodifiedText": "",
+              "autoRepeat": false,
+              "location": 1,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "rawKeyDown",
+              "modifiers": 1,
+              "windowsVirtualKeyCode": 37,
+              "code": "ArrowLeft",
+              "commands": [],
+              "key": "ArrowLeft",
+              "text": "",
+              "unmodifiedText": "",
+              "autoRepeat": false,
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 1,
+              "key": "ArrowLeft",
+              "windowsVirtualKeyCode": 37,
+              "code": "ArrowLeft",
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 0,
+              "key": "Alt",
+              "windowsVirtualKeyCode": 18,
+              "code": "AltLeft",
+              "location": 1,
+              "isKeypad": false
+            }
+          }
+        ]
+      },
+      {
+        "call": "page.keyboard.press('Meta+ArrowLeft')",
+        "messages": [
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "rawKeyDown",
+              "modifiers": 4,
+              "windowsVirtualKeyCode": 91,
+              "code": "MetaLeft",
+              "commands": [],
+              "key": "Meta",
+              "text": "",
+              "unmodifiedText": "",
+              "autoRepeat": false,
+              "location": 1,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "rawKeyDown",
+              "modifiers": 4,
+              "windowsVirtualKeyCode": 37,
+              "code": "ArrowLeft",
+              "commands": [],
+              "key": "ArrowLeft",
+              "text": "",
+              "unmodifiedText": "",
+              "autoRepeat": false,
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 4,
+              "key": "ArrowLeft",
+              "windowsVirtualKeyCode": 37,
+              "code": "ArrowLeft",
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 0,
+              "key": "Meta",
+              "windowsVirtualKeyCode": 91,
+              "code": "MetaLeft",
+              "location": 1,
+              "isKeypad": false
+            }
+          }
+        ]
+      },
+      {
+        "call": "page.keyboard.press('Shift+Home')",
+        "messages": [
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "rawKeyDown",
+              "modifiers": 8,
+              "windowsVirtualKeyCode": 16,
+              "code": "ShiftLeft",
+              "commands": [],
+              "key": "Shift",
+              "text": "",
+              "unmodifiedText": "",
+              "autoRepeat": false,
+              "location": 1,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "rawKeyDown",
+              "modifiers": 8,
+              "windowsVirtualKeyCode": 36,
+              "code": "Home",
+              "commands": [],
+              "key": "Home",
+              "text": "",
+              "unmodifiedText": "",
+              "autoRepeat": false,
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 8,
+              "key": "Home",
+              "windowsVirtualKeyCode": 36,
+              "code": "Home",
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 0,
+              "key": "Shift",
+              "windowsVirtualKeyCode": 16,
+              "code": "ShiftLeft",
+              "location": 1,
+              "isKeypad": false
+            }
+          }
+        ]
+      },
+      {
+        "call": "page.keyboard.press('Home')",
+        "messages": [
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "rawKeyDown",
+              "modifiers": 0,
+              "windowsVirtualKeyCode": 36,
+              "code": "Home",
+              "commands": [],
+              "key": "Home",
+              "text": "",
+              "unmodifiedText": "",
+              "autoRepeat": false,
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 0,
+              "key": "Home",
+              "windowsVirtualKeyCode": 36,
+              "code": "Home",
+              "location": 0,
+              "isKeypad": false
+            }
+          }
+        ]
+      },
+      {
+        "call": "page.keyboard.press('End')",
+        "messages": [
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "rawKeyDown",
+              "modifiers": 0,
+              "windowsVirtualKeyCode": 35,
+              "code": "End",
+              "commands": [],
+              "key": "End",
+              "text": "",
+              "unmodifiedText": "",
+              "autoRepeat": false,
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 0,
+              "key": "End",
+              "windowsVirtualKeyCode": 35,
+              "code": "End",
+              "location": 0,
+              "isKeypad": false
+            }
+          }
+        ]
+      },
+      {
+        "call": "page.keyboard.press('PageDown')",
+        "messages": [
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "rawKeyDown",
+              "modifiers": 0,
+              "windowsVirtualKeyCode": 34,
+              "code": "PageDown",
+              "commands": [],
+              "key": "PageDown",
+              "text": "",
+              "unmodifiedText": "",
+              "autoRepeat": false,
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 0,
+              "key": "PageDown",
+              "windowsVirtualKeyCode": 34,
+              "code": "PageDown",
+              "location": 0,
+              "isKeypad": false
+            }
+          }
+        ]
+      },
+      {
+        "call": "page.keyboard.press('Backspace')",
+        "messages": [
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "rawKeyDown",
+              "modifiers": 0,
+              "windowsVirtualKeyCode": 8,
+              "code": "Backspace",
+              "commands": [],
+              "key": "Backspace",
+              "text": "",
+              "unmodifiedText": "",
+              "autoRepeat": false,
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 0,
+              "key": "Backspace",
+              "windowsVirtualKeyCode": 8,
+              "code": "Backspace",
+              "location": 0,
+              "isKeypad": false
+            }
+          }
+        ]
+      },
+      {
+        "call": "page.keyboard.press('Alt+Backspace')",
+        "messages": [
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "rawKeyDown",
+              "modifiers": 1,
+              "windowsVirtualKeyCode": 18,
+              "code": "AltLeft",
+              "commands": [],
+              "key": "Alt",
+              "text": "",
+              "unmodifiedText": "",
+              "autoRepeat": false,
+              "location": 1,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "rawKeyDown",
+              "modifiers": 1,
+              "windowsVirtualKeyCode": 8,
+              "code": "Backspace",
+              "commands": [],
+              "key": "Backspace",
+              "text": "",
+              "unmodifiedText": "",
+              "autoRepeat": false,
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 1,
+              "key": "Backspace",
+              "windowsVirtualKeyCode": 8,
+              "code": "Backspace",
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 0,
+              "key": "Alt",
+              "windowsVirtualKeyCode": 18,
+              "code": "AltLeft",
+              "location": 1,
+              "isKeypad": false
+            }
+          }
+        ]
+      },
+      {
+        "call": "page.keyboard.press('Delete')",
+        "messages": [
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "rawKeyDown",
+              "modifiers": 0,
+              "windowsVirtualKeyCode": 46,
+              "code": "Delete",
+              "commands": [],
+              "key": "Delete",
+              "text": "",
+              "unmodifiedText": "",
+              "autoRepeat": false,
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 0,
+              "key": "Delete",
+              "windowsVirtualKeyCode": 46,
+              "code": "Delete",
+              "location": 0,
+              "isKeypad": false
+            }
+          }
+        ]
+      },
+      {
+        "call": "page.keyboard.press('Escape')",
+        "messages": [
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "rawKeyDown",
+              "modifiers": 0,
+              "windowsVirtualKeyCode": 27,
+              "code": "Escape",
+              "commands": [],
+              "key": "Escape",
+              "text": "",
+              "unmodifiedText": "",
+              "autoRepeat": false,
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 0,
+              "key": "Escape",
+              "windowsVirtualKeyCode": 27,
+              "code": "Escape",
+              "location": 0,
+              "isKeypad": false
+            }
+          }
+        ]
+      },
+      {
+        "call": "page.keyboard.press('F2')",
+        "messages": [
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "rawKeyDown",
+              "modifiers": 0,
+              "windowsVirtualKeyCode": 113,
+              "code": "F2",
+              "commands": [],
+              "key": "F2",
+              "text": "",
+              "unmodifiedText": "",
+              "autoRepeat": false,
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 0,
+              "key": "F2",
+              "windowsVirtualKeyCode": 113,
+              "code": "F2",
+              "location": 0,
+              "isKeypad": false
+            }
+          }
+        ]
+      },
+      {
+        "call": "page.keyboard.press('Control+A')",
+        "messages": [
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "rawKeyDown",
+              "modifiers": 2,
+              "windowsVirtualKeyCode": 17,
+              "code": "ControlLeft",
+              "commands": [],
+              "key": "Control",
+              "text": "",
+              "unmodifiedText": "",
+              "autoRepeat": false,
+              "location": 1,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "rawKeyDown",
+              "modifiers": 2,
+              "windowsVirtualKeyCode": 65,
+              "code": "KeyA",
+              "commands": [],
+              "key": "A",
+              "text": "",
+              "unmodifiedText": "",
+              "autoRepeat": false,
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 2,
+              "key": "A",
+              "windowsVirtualKeyCode": 65,
+              "code": "KeyA",
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 0,
+              "key": "Control",
+              "windowsVirtualKeyCode": 17,
+              "code": "ControlLeft",
+              "location": 1,
+              "isKeypad": false
+            }
+          }
+        ]
+      },
+      {
+        "call": "page.keyboard.press('Meta+A')",
+        "messages": [
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "rawKeyDown",
+              "modifiers": 4,
+              "windowsVirtualKeyCode": 91,
+              "code": "MetaLeft",
+              "commands": [],
+              "key": "Meta",
+              "text": "",
+              "unmodifiedText": "",
+              "autoRepeat": false,
+              "location": 1,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "rawKeyDown",
+              "modifiers": 4,
+              "windowsVirtualKeyCode": 65,
+              "code": "KeyA",
+              "commands": [],
+              "key": "A",
+              "text": "",
+              "unmodifiedText": "",
+              "autoRepeat": false,
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 4,
+              "key": "A",
+              "windowsVirtualKeyCode": 65,
+              "code": "KeyA",
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 0,
+              "key": "Meta",
+              "windowsVirtualKeyCode": 91,
+              "code": "MetaLeft",
+              "location": 1,
+              "isKeypad": false
+            }
+          }
+        ]
+      },
+      {
+        "call": "page.keyboard.press('Control+Shift+K')",
+        "messages": [
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "rawKeyDown",
+              "modifiers": 2,
+              "windowsVirtualKeyCode": 17,
+              "code": "ControlLeft",
+              "commands": [],
+              "key": "Control",
+              "text": "",
+              "unmodifiedText": "",
+              "autoRepeat": false,
+              "location": 1,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "rawKeyDown",
+              "modifiers": 10,
+              "windowsVirtualKeyCode": 16,
+              "code": "ShiftLeft",
+              "commands": [],
+              "key": "Shift",
+              "text": "",
+              "unmodifiedText": "",
+              "autoRepeat": false,
+              "location": 1,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "rawKeyDown",
+              "modifiers": 10,
+              "windowsVirtualKeyCode": 75,
+              "code": "KeyK",
+              "commands": [],
+              "key": "K",
+              "text": "",
+              "unmodifiedText": "",
+              "autoRepeat": false,
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 10,
+              "key": "K",
+              "windowsVirtualKeyCode": 75,
+              "code": "KeyK",
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 2,
+              "key": "Shift",
+              "windowsVirtualKeyCode": 16,
+              "code": "ShiftLeft",
+              "location": 1,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 0,
+              "key": "Control",
+              "windowsVirtualKeyCode": 17,
+              "code": "ControlLeft",
+              "location": 1,
+              "isKeypad": false
+            }
+          }
+        ]
+      },
+      {
+        "call": "page.keyboard.down('Shift').then(() => page.keyboard.press('ArrowLeft')).then(() => page.keyboard.up('Shift'))",
+        "messages": [
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "rawKeyDown",
+              "modifiers": 8,
+              "windowsVirtualKeyCode": 16,
+              "code": "ShiftLeft",
+              "commands": [],
+              "key": "Shift",
+              "text": "",
+              "unmodifiedText": "",
+              "autoRepeat": false,
+              "location": 1,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "rawKeyDown",
+              "modifiers": 8,
+              "windowsVirtualKeyCode": 37,
+              "code": "ArrowLeft",
+              "commands": [],
+              "key": "ArrowLeft",
+              "text": "",
+              "unmodifiedText": "",
+              "autoRepeat": false,
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 8,
+              "key": "ArrowLeft",
+              "windowsVirtualKeyCode": 37,
+              "code": "ArrowLeft",
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 0,
+              "key": "Shift",
+              "windowsVirtualKeyCode": 16,
+              "code": "ShiftLeft",
+              "location": 1,
+              "isKeypad": false
+            }
+          }
+        ]
+      },
+      {
+        "call": "page.keyboard.down('a').then(() => page.keyboard.down('a')).then(() => page.keyboard.up('a'))",
+        "messages": [
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyDown",
+              "modifiers": 0,
+              "windowsVirtualKeyCode": 65,
+              "code": "KeyA",
+              "commands": [],
+              "key": "a",
+              "text": "a",
+              "unmodifiedText": "a",
+              "autoRepeat": false,
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyDown",
+              "modifiers": 0,
+              "windowsVirtualKeyCode": 65,
+              "code": "KeyA",
+              "commands": [],
+              "key": "a",
+              "text": "a",
+              "unmodifiedText": "a",
+              "autoRepeat": true,
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 0,
+              "key": "a",
+              "windowsVirtualKeyCode": 65,
+              "code": "KeyA",
+              "location": 0,
+              "isKeypad": false
+            }
+          }
+        ]
+      },
+      {
+        "call": "page.keyboard.type('Hi there!')",
+        "messages": [
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyDown",
+              "modifiers": 0,
+              "windowsVirtualKeyCode": 72,
+              "code": "KeyH",
+              "commands": [],
+              "key": "H",
+              "text": "H",
+              "unmodifiedText": "H",
+              "autoRepeat": false,
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 0,
+              "key": "H",
+              "windowsVirtualKeyCode": 72,
+              "code": "KeyH",
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyDown",
+              "modifiers": 0,
+              "windowsVirtualKeyCode": 73,
+              "code": "KeyI",
+              "commands": [],
+              "key": "i",
+              "text": "i",
+              "unmodifiedText": "i",
+              "autoRepeat": false,
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 0,
+              "key": "i",
+              "windowsVirtualKeyCode": 73,
+              "code": "KeyI",
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyDown",
+              "modifiers": 0,
+              "windowsVirtualKeyCode": 32,
+              "code": "Space",
+              "commands": [],
+              "key": " ",
+              "text": " ",
+              "unmodifiedText": " ",
+              "autoRepeat": false,
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 0,
+              "key": " ",
+              "windowsVirtualKeyCode": 32,
+              "code": "Space",
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyDown",
+              "modifiers": 0,
+              "windowsVirtualKeyCode": 84,
+              "code": "KeyT",
+              "commands": [],
+              "key": "t",
+              "text": "t",
+              "unmodifiedText": "t",
+              "autoRepeat": false,
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 0,
+              "key": "t",
+              "windowsVirtualKeyCode": 84,
+              "code": "KeyT",
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyDown",
+              "modifiers": 0,
+              "windowsVirtualKeyCode": 72,
+              "code": "KeyH",
+              "commands": [],
+              "key": "h",
+              "text": "h",
+              "unmodifiedText": "h",
+              "autoRepeat": false,
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 0,
+              "key": "h",
+              "windowsVirtualKeyCode": 72,
+              "code": "KeyH",
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyDown",
+              "modifiers": 0,
+              "windowsVirtualKeyCode": 69,
+              "code": "KeyE",
+              "commands": [],
+              "key": "e",
+              "text": "e",
+              "unmodifiedText": "e",
+              "autoRepeat": false,
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 0,
+              "key": "e",
+              "windowsVirtualKeyCode": 69,
+              "code": "KeyE",
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyDown",
+              "modifiers": 0,
+              "windowsVirtualKeyCode": 82,
+              "code": "KeyR",
+              "commands": [],
+              "key": "r",
+              "text": "r",
+              "unmodifiedText": "r",
+              "autoRepeat": false,
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 0,
+              "key": "r",
+              "windowsVirtualKeyCode": 82,
+              "code": "KeyR",
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyDown",
+              "modifiers": 0,
+              "windowsVirtualKeyCode": 69,
+              "code": "KeyE",
+              "commands": [],
+              "key": "e",
+              "text": "e",
+              "unmodifiedText": "e",
+              "autoRepeat": false,
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 0,
+              "key": "e",
+              "windowsVirtualKeyCode": 69,
+              "code": "KeyE",
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyDown",
+              "modifiers": 0,
+              "windowsVirtualKeyCode": 49,
+              "code": "Digit1",
+              "commands": [],
+              "key": "!",
+              "text": "!",
+              "unmodifiedText": "!",
+              "autoRepeat": false,
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 0,
+              "key": "!",
+              "windowsVirtualKeyCode": 49,
+              "code": "Digit1",
+              "location": 0,
+              "isKeypad": false
+            }
+          }
+        ]
+      },
+      {
+        "call": "page.keyboard.type('Mixed é 👋 123')",
+        "messages": [
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyDown",
+              "modifiers": 0,
+              "windowsVirtualKeyCode": 77,
+              "code": "KeyM",
+              "commands": [],
+              "key": "M",
+              "text": "M",
+              "unmodifiedText": "M",
+              "autoRepeat": false,
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 0,
+              "key": "M",
+              "windowsVirtualKeyCode": 77,
+              "code": "KeyM",
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyDown",
+              "modifiers": 0,
+              "windowsVirtualKeyCode": 73,
+              "code": "KeyI",
+              "commands": [],
+              "key": "i",
+              "text": "i",
+              "unmodifiedText": "i",
+              "autoRepeat": false,
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 0,
+              "key": "i",
+              "windowsVirtualKeyCode": 73,
+              "code": "KeyI",
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyDown",
+              "modifiers": 0,
+              "windowsVirtualKeyCode": 88,
+              "code": "KeyX",
+              "commands": [],
+              "key": "x",
+              "text": "x",
+              "unmodifiedText": "x",
+              "autoRepeat": false,
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 0,
+              "key": "x",
+              "windowsVirtualKeyCode": 88,
+              "code": "KeyX",
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyDown",
+              "modifiers": 0,
+              "windowsVirtualKeyCode": 69,
+              "code": "KeyE",
+              "commands": [],
+              "key": "e",
+              "text": "e",
+              "unmodifiedText": "e",
+              "autoRepeat": false,
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 0,
+              "key": "e",
+              "windowsVirtualKeyCode": 69,
+              "code": "KeyE",
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyDown",
+              "modifiers": 0,
+              "windowsVirtualKeyCode": 68,
+              "code": "KeyD",
+              "commands": [],
+              "key": "d",
+              "text": "d",
+              "unmodifiedText": "d",
+              "autoRepeat": false,
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 0,
+              "key": "d",
+              "windowsVirtualKeyCode": 68,
+              "code": "KeyD",
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyDown",
+              "modifiers": 0,
+              "windowsVirtualKeyCode": 32,
+              "code": "Space",
+              "commands": [],
+              "key": " ",
+              "text": " ",
+              "unmodifiedText": " ",
+              "autoRepeat": false,
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 0,
+              "key": " ",
+              "windowsVirtualKeyCode": 32,
+              "code": "Space",
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.insertText",
+            "params": {
+              "text": "é"
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyDown",
+              "modifiers": 0,
+              "windowsVirtualKeyCode": 32,
+              "code": "Space",
+              "commands": [],
+              "key": " ",
+              "text": " ",
+              "unmodifiedText": " ",
+              "autoRepeat": false,
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 0,
+              "key": " ",
+              "windowsVirtualKeyCode": 32,
+              "code": "Space",
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.insertText",
+            "params": {
+              "text": "👋"
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyDown",
+              "modifiers": 0,
+              "windowsVirtualKeyCode": 32,
+              "code": "Space",
+              "commands": [],
+              "key": " ",
+              "text": " ",
+              "unmodifiedText": " ",
+              "autoRepeat": false,
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 0,
+              "key": " ",
+              "windowsVirtualKeyCode": 32,
+              "code": "Space",
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyDown",
+              "modifiers": 0,
+              "windowsVirtualKeyCode": 49,
+              "code": "Digit1",
+              "commands": [],
+              "key": "1",
+              "text": "1",
+              "unmodifiedText": "1",
+              "autoRepeat": false,
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 0,
+              "key": "1",
+              "windowsVirtualKeyCode": 49,
+              "code": "Digit1",
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyDown",
+              "modifiers": 0,
+              "windowsVirtualKeyCode": 50,
+              "code": "Digit2",
+              "commands": [],
+              "key": "2",
+              "text": "2",
+              "unmodifiedText": "2",
+              "autoRepeat": false,
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 0,
+              "key": "2",
+              "windowsVirtualKeyCode": 50,
+              "code": "Digit2",
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyDown",
+              "modifiers": 0,
+              "windowsVirtualKeyCode": 51,
+              "code": "Digit3",
+              "commands": [],
+              "key": "3",
+              "text": "3",
+              "unmodifiedText": "3",
+              "autoRepeat": false,
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 0,
+              "key": "3",
+              "windowsVirtualKeyCode": 51,
+              "code": "Digit3",
+              "location": 0,
+              "isKeypad": false
+            }
+          }
+        ]
+      },
+      {
+        "call": "page.keyboard.insertText('héllo 👋')",
+        "messages": [
+          {
+            "method": "Input.insertText",
+            "params": {
+              "text": "héllo 👋"
+            }
+          }
+        ]
+      },
+      {
+        "call": "page.locator('#field').pressSequentially('Ab 1é!')",
+        "messages": [
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyDown",
+              "modifiers": 0,
+              "windowsVirtualKeyCode": 65,
+              "code": "KeyA",
+              "commands": [],
+              "key": "A",
+              "text": "A",
+              "unmodifiedText": "A",
+              "autoRepeat": false,
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 0,
+              "key": "A",
+              "windowsVirtualKeyCode": 65,
+              "code": "KeyA",
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyDown",
+              "modifiers": 0,
+              "windowsVirtualKeyCode": 66,
+              "code": "KeyB",
+              "commands": [],
+              "key": "b",
+              "text": "b",
+              "unmodifiedText": "b",
+              "autoRepeat": false,
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 0,
+              "key": "b",
+              "windowsVirtualKeyCode": 66,
+              "code": "KeyB",
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyDown",
+              "modifiers": 0,
+              "windowsVirtualKeyCode": 32,
+              "code": "Space",
+              "commands": [],
+              "key": " ",
+              "text": " ",
+              "unmodifiedText": " ",
+              "autoRepeat": false,
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 0,
+              "key": " ",
+              "windowsVirtualKeyCode": 32,
+              "code": "Space",
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyDown",
+              "modifiers": 0,
+              "windowsVirtualKeyCode": 49,
+              "code": "Digit1",
+              "commands": [],
+              "key": "1",
+              "text": "1",
+              "unmodifiedText": "1",
+              "autoRepeat": false,
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 0,
+              "key": "1",
+              "windowsVirtualKeyCode": 49,
+              "code": "Digit1",
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.insertText",
+            "params": {
+              "text": "é"
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyDown",
+              "modifiers": 0,
+              "windowsVirtualKeyCode": 49,
+              "code": "Digit1",
+              "commands": [],
+              "key": "!",
+              "text": "!",
+              "unmodifiedText": "!",
+              "autoRepeat": false,
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 0,
+              "key": "!",
+              "windowsVirtualKeyCode": 49,
+              "code": "Digit1",
+              "location": 0,
+              "isKeypad": false
+            }
+          }
+        ]
+      },
+      {
+        "call": "page.locator('#field').press('Enter')",
+        "messages": [
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyDown",
+              "modifiers": 0,
+              "windowsVirtualKeyCode": 13,
+              "code": "Enter",
+              "commands": [],
+              "key": "Enter",
+              "text": "\r",
+              "unmodifiedText": "\r",
+              "autoRepeat": false,
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 0,
+              "key": "Enter",
+              "windowsVirtualKeyCode": 13,
+              "code": "Enter",
+              "location": 0,
+              "isKeypad": false
+            }
+          }
+        ]
+      },
+      {
+        "call": "page.locator('#area').press('Shift+Enter')",
+        "messages": [
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "rawKeyDown",
+              "modifiers": 8,
+              "windowsVirtualKeyCode": 16,
+              "code": "ShiftLeft",
+              "commands": [],
+              "key": "Shift",
+              "text": "",
+              "unmodifiedText": "",
+              "autoRepeat": false,
+              "location": 1,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyDown",
+              "modifiers": 8,
+              "windowsVirtualKeyCode": 13,
+              "code": "Enter",
+              "commands": [],
+              "key": "Enter",
+              "text": "\r",
+              "unmodifiedText": "\r",
+              "autoRepeat": false,
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 8,
+              "key": "Enter",
+              "windowsVirtualKeyCode": 13,
+              "code": "Enter",
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 0,
+              "key": "Shift",
+              "windowsVirtualKeyCode": 16,
+              "code": "ShiftLeft",
+              "location": 1,
+              "isKeypad": false
+            }
+          }
+        ]
+      },
+      {
+        "call": "page.locator('#field').fill('filled')",
+        "messages": [
+          {
+            "method": "Input.insertText",
+            "params": {
+              "text": "filled"
+            }
+          }
+        ]
+      },
+      {
+        "call": "page.locator('#field').fill('')",
+        "messages": [
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "rawKeyDown",
+              "modifiers": 0,
+              "windowsVirtualKeyCode": 46,
+              "code": "Delete",
+              "commands": [],
+              "key": "Delete",
+              "text": "",
+              "unmodifiedText": "",
+              "autoRepeat": false,
+              "location": 0,
+              "isKeypad": false
+            }
+          },
+          {
+            "method": "Input.dispatchKeyEvent",
+            "params": {
+              "type": "keyUp",
+              "modifiers": 0,
+              "key": "Delete",
+              "windowsVirtualKeyCode": 46,
+              "code": "Delete",
+              "location": 0,
+              "isKeypad": false
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

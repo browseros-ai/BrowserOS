@@ -23,6 +23,8 @@ export interface UsageComparison {
   withNeo: number
   /** The estimate for the same tasks done from screenshots. */
   withoutNeo: number
+  /** The difference: tokens neo kept the agents from using. */
+  saved: number
   percentLess: number
 }
 
@@ -37,7 +39,9 @@ export function usageComparison(
     return null
   }
   const percentLess = Math.round((1 - withNeo / withoutNeo) * 100)
-  return percentLess > 0 ? { withNeo, withoutNeo, percentLess } : null
+  return percentLess > 0
+    ? { withNeo, withoutNeo, saved: withoutNeo - withNeo, percentLess }
+    : null
 }
 
 /** A bar's width against the longest one, never so thin it disappears. */

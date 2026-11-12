@@ -1,3 +1,6 @@
+mod background;
+
+use crate::target::page_access::PageAccess;
 use crate::{
     CoreError, FrameId, PageJs, ProtocolSession, observer::Observer, pointer, snapshot::RefEntry,
 };
@@ -9,12 +12,26 @@ use std::{
         Arc, Mutex as StdMutex, OnceLock,
         atomic::{AtomicU64, Ordering},
     },
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use tokio::sync::Mutex;
+use tokio::time::timeout;
+
+const SCREENSHOT_CAPTURE_DEADLINE: Duration = Duration::from_millis(1_200);
+const SCREENCAST_FRAME_DEADLINE: Duration = Duration::from_secs(2);
 
 const OVERLAY_ATTR: &str = "data-browseros-screenshot-annotation";
 const OVERLAY_SCRIPT: &str = include_str!("../assets/screenshot-overlay.js");
+/// A temporary default-background override, scoped to the shared capture lock.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ScreenshotBackground {
+    /// Leave the browser's current default background in place.
+    #[default]
+    Default,
+    /// Clear the default background only while this capture owns the queue.
+    Transparent,
+}
+
 static OVERLAY_COUNTER: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -52,8 +69,10 @@ pub struct ScreenshotCaptureOptions {
     pub clip: Option<Viewport>,
 }
 
-/// Viewport boxes are viewport-relative and apply the clip scale. Full-page
-/// boxes add the sampled scroll offsets when that best-effort read succeeds.
+/// Boxes are in the image's own pixels, so they line up with what the caller sees: CSS
+/// boxes times the clip scale and the device pixel ratio. Viewport boxes are
+/// viewport-relative; full-page boxes add the sampled scroll offsets when that best-effort
+/// read succeeds.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ScreenshotAnnotationBox {
     pub x: i64,
@@ -124,20 +143,81 @@ struct Frame {
     id: String,
 }
 
+/// A caller-normalized CDP screenshot, serialized with all other captures on this session.
+/// The SDK owns image geometry; core owns the capture queue and agent pointer lifecycle.
+#[cfg(test)]
+pub(crate) async fn capture_cdp(
+    session: &ProtocolSession,
+    params: Value,
+    background: ScreenshotBackground,
+) -> Result<String, CoreError> {
+    let capture = ScreenshotCapture::acquire(session.clone(), None, background).await?;
+    let data = capture.capture(params).await;
+    capture.finish().await;
+    data
+}
+
+/// An admitted, exclusive screenshot sequence. A tiled image retains this lease across all
+/// protocol captures, so audit images cannot interleave with its temporary rendering state.
+/// Dropping it retains the queue through any asynchronous background restoration.
+#[must_use = "finish the capture sequence after restoring caller-owned rendering state"]
+pub struct ScreenshotCapture {
+    session: ProtocolSession,
+    access: Option<Arc<PageAccess>>,
+    state: background::CaptureState,
+}
+
+impl ScreenshotCapture {
+    pub(crate) async fn acquire(
+        session: ProtocolSession,
+        access: Option<Arc<PageAccess>>,
+        background: ScreenshotBackground,
+    ) -> Result<Self, CoreError> {
+        let state = background::CaptureState::acquire(
+            &session,
+            screenshot_mutex(&session),
+            background == ScreenshotBackground::Transparent,
+        )
+        .await?;
+        Ok(Self {
+            session,
+            access,
+            state,
+        })
+    }
+
+    /// Capture normalized CDP parameters, rechecking the admitted target for every tile.
+    pub async fn capture(&self, params: Value) -> Result<String, CoreError> {
+        if let Some(access) = &self.access {
+            access.fresh().await?;
+        }
+        let data = capture_without_pointer(&self.session, params).await?;
+        if let Some(access) = &self.access {
+            access.fresh().await?;
+        }
+        Ok(data)
+    }
+
+    /// Restore core-owned rendering state before releasing the shared capture queue.
+    pub async fn finish(self) {
+        self.state.restore().await;
+    }
+}
+
+/// Serializes overlays and pointer hiding with every other capture on this session, so a
+/// concurrent screenshot cannot observe another capture's temporary rendering state.
 pub async fn capture_screenshot_with_annotations(
     page_session: ProtocolSession,
     observer: Arc<Observer>,
     options: ScreenshotCaptureOptions,
 ) -> Result<ScreenshotCaptureResult, CoreError> {
-    if !options.annotate.unwrap_or(false) {
-        return run_exclusive_screenshot_capture(&page_session, || async {
-            capture_plain_screenshot(&page_session, &options).await
-        })
-        .await;
-    }
-
+    let annotate = options.annotate.unwrap_or(false);
     run_exclusive_screenshot_capture(&page_session, || async {
-        capture_annotated_screenshot(page_session.clone(), observer.clone(), options.clone()).await
+        if annotate {
+            capture_annotated_screenshot(page_session.clone(), observer, options).await
+        } else {
+            capture_plain_screenshot(&page_session, &options).await
+        }
     })
     .await
 }
@@ -147,23 +227,39 @@ async fn capture_plain_screenshot(
     options: &ScreenshotCaptureOptions,
 ) -> Result<ScreenshotCaptureResult, CoreError> {
     let format = options.format.unwrap_or(ScreenshotFormat::Png);
-    let full_page = options.full_page.unwrap_or(false);
-    let hidden = pointer::hide_for_capture(page_session).await;
-    let result = page_session
-        .send::<_, CaptureScreenshotResult>(
-            "Page.captureScreenshot",
-            screenshot_params(format, options.quality, full_page, options.clip),
-        )
-        .await;
-    if hidden {
-        pointer::restore_after_capture(page_session).await;
-    }
-    let result = result?;
+    let captured = without_pointer(page_session, capture_image(page_session, options)).await?;
     Ok(ScreenshotCaptureResult {
-        data: result.data,
+        data: captured.data,
         mime_type: format!("image/{}", format.as_str()),
         annotations: Vec::new(),
     })
+}
+
+/// One `Page.captureScreenshot` with the SDK's caller-normalized parameters
+/// ([`ScreenshotCapture`]). They go to CDP as given: the screencast fallback in
+/// [`capture_image`] serves only the option-built captures above, whose geometry core owns.
+async fn capture_without_pointer(
+    page_session: &ProtocolSession,
+    params: Value,
+) -> Result<String, CoreError> {
+    let capture = page_session.send::<_, CaptureScreenshotResult>("Page.captureScreenshot", params);
+    without_pointer(page_session, capture)
+        .await
+        .map(|shot| shot.data)
+}
+
+/// Runs `capture` with the agent pointer hidden and restores it even when CDP fails. The
+/// future is lazy, so nothing reaches CDP before the pointer is hidden.
+async fn without_pointer<T>(
+    page_session: &ProtocolSession,
+    capture: impl Future<Output = Result<T, CoreError>>,
+) -> Result<T, CoreError> {
+    let hidden = pointer::hide_for_capture(page_session).await;
+    let captured = capture.await;
+    if hidden {
+        pointer::restore_after_capture(page_session).await;
+    }
+    captured
 }
 
 async fn capture_annotated_screenshot(
@@ -198,34 +294,29 @@ async fn capture_annotated_screenshot(
         } else {
             None
         };
+        // Boxes are measured in CSS pixels; the image has clip.scale times the device pixel
+        // ratio of them per CSS pixel (a full-page capture has no clip and keeps device pixels).
+        let image_scale = if annotations.is_empty() {
+            1.0
+        } else {
+            read_device_pixel_ratio(&page_session).await
+                * if full_page {
+                    1.0
+                } else {
+                    options.clip.map_or(1.0, |clip| clip.scale)
+                }
+        };
         if !annotations.is_empty() {
             inject_annotation_overlay(&page_session, &token, full_page, &annotations, scroll)
                 .await?;
             overlay_injected = true;
         }
-        let hidden = pointer::hide_for_capture(&page_session).await;
-        let captured = page_session
-            .send::<_, CaptureScreenshotResult>(
-                "Page.captureScreenshot",
-                screenshot_params(format, options.quality, full_page, options.clip),
-            )
-            .await;
-        if hidden {
-            pointer::restore_after_capture(&page_session).await;
-        }
-        let captured = captured?;
+        let captured =
+            without_pointer(&page_session, capture_image(&page_session, &options)).await?;
         Ok(ScreenshotCaptureResult {
             data: captured.data,
             mime_type: format!("image/{}", format.as_str()),
-            annotations: project_annotations(
-                &annotations,
-                scroll,
-                if full_page {
-                    None
-                } else {
-                    options.clip.map(|clip| clip.scale)
-                },
-            ),
+            annotations: project_annotations(&annotations, scroll, Some(image_scale)),
         })
     }
     .await;
@@ -234,6 +325,138 @@ async fn capture_annotated_screenshot(
         let _ = remove_annotation_overlay(&page_session, &token).await;
     }
     result
+}
+
+async fn capture_image(
+    page_session: &ProtocolSession,
+    options: &ScreenshotCaptureOptions,
+) -> Result<CaptureScreenshotResult, CoreError> {
+    let format = options.format.unwrap_or(ScreenshotFormat::Png);
+    let full_page = options.full_page.unwrap_or(false);
+    let params = screenshot_params(format, options.quality, full_page, options.clip);
+
+    // Some minimized Windows cloud desktops never return from Chromium's surface capture.
+    // Only JPEG viewport captures get the short wait and the fallback; every other format
+    // keeps the original format, clip, and CDP behavior.
+    if format != ScreenshotFormat::Jpeg || full_page {
+        return page_session.send("Page.captureScreenshot", params).await;
+    }
+    // Bound the native capture, then fall back to the screencast. The two are not raced:
+    // the fallback owns a Page.startScreencast/stopScreencast pair, and dropping it
+    // mid-flight to take a late native result would leave the screencast running on the page.
+    match timeout(
+        SCREENSHOT_CAPTURE_DEADLINE,
+        page_session.send("Page.captureScreenshot", params),
+    )
+    .await
+    {
+        Ok(result) => result,
+        Err(_) => capture_screencast_frame(page_session, options).await,
+    }
+}
+
+async fn capture_screencast_frame(
+    page_session: &ProtocolSession,
+    options: &ScreenshotCaptureOptions,
+) -> Result<CaptureScreenshotResult, CoreError> {
+    let mut params = json!({
+        "format": "jpeg",
+        "quality": options.quality.unwrap_or(80),
+        "maxFramesInFlight": 1
+    });
+    if let Some(clip) = options.clip {
+        // A screencast returns the current viewport and cannot honor an arbitrary sub-rect
+        // clip, so reject a clip whose origin or size no longer matches the viewport (an
+        // offset clip, or a scroll during the native wait) rather than silently returning
+        // the wrong region.
+        let metrics: Value = page_session
+            .send("Page.getLayoutMetrics", json!({}))
+            .await?;
+        let css = metrics.get("cssLayoutViewport");
+        let device = metrics.get("layoutViewport");
+        let viewport = css.or(device);
+        let field = |source: Option<&Value>, key: &str| {
+            source
+                .and_then(|value| value.get(key))
+                .and_then(Value::as_f64)
+        };
+        let width = field(viewport, "clientWidth");
+        let height = field(viewport, "clientHeight");
+        let page_x = field(viewport, "pageX");
+        let page_y = field(viewport, "pageY");
+        if width.is_none_or(|width| (width - clip.width).abs() > 1.0)
+            || height.is_none_or(|height| (height - clip.height).abs() > 1.0)
+            || page_x.is_none_or(|x| (x - clip.x).abs() > 1.0)
+            || page_y.is_none_or(|y| (y - clip.y).abs() > 1.0)
+        {
+            return Err(CoreError::Message(
+                "CDP screenshot timed out; screencast cannot preserve a partial clip".into(),
+            ));
+        }
+        // captureScreenshot preserves device pixel density (clip scale 1 is 2x on Retina),
+        // so fold the device ratio into the caps or the fallback returns a lower-resolution
+        // image than the native path for the same request.
+        let dpr = match (field(device, "clientWidth"), field(css, "clientWidth")) {
+            (Some(device_width), Some(css_width)) if css_width > 0.0 => device_width / css_width,
+            _ => 1.0,
+        };
+        params["maxWidth"] = json!((clip.width * clip.scale * dpr).round().max(1.0) as u32);
+        params["maxHeight"] = json!((clip.height * clip.scale * dpr).round().max(1.0) as u32);
+    }
+
+    // Subscribe before sending the start command so Chromium's first frame is not lost.
+    let mut events = page_session.subscribe_events();
+    let started = timeout(
+        SCREENCAST_FRAME_DEADLINE,
+        page_session.send::<_, Value>("Page.startScreencast", params),
+    )
+    .await;
+
+    // Once the start has been attempted, always stop before returning: a start whose reply
+    // timed out may still have begun the screencast on the page.
+    let frame = match started {
+        Err(_) => Err(CoreError::Message(
+            "timed out starting screenshot screencast".into(),
+        )),
+        Ok(Err(error)) => Err(error),
+        Ok(Ok(_)) => timeout(SCREENCAST_FRAME_DEADLINE, async {
+            loop {
+                let event = match events.recv().await {
+                    Ok(event) => event,
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(error) => {
+                        return Err(CoreError::Message(format!(
+                            "screencast event stream: {error}"
+                        )));
+                    }
+                };
+                if event.method != "Page.screencastFrame"
+                    || event.session_id.as_ref() != page_session.session_id()
+                {
+                    continue;
+                }
+                if let Some(data) = event.params.get("data").and_then(Value::as_str)
+                    && !data.is_empty()
+                {
+                    return Ok(CaptureScreenshotResult {
+                        data: data.to_string(),
+                    });
+                }
+            }
+        })
+        .await
+        .map_err(|_| CoreError::Message("timed out waiting for screenshot screencast frame".into()))
+        .and_then(|frame| frame),
+    };
+
+    // Always stop the screencast, best effort, and never let it hang on the 60s CDP default.
+    // A slow or failing stop must not discard a frame we already captured.
+    let _ = timeout(
+        Duration::from_millis(500),
+        page_session.send::<_, Value>("Page.stopScreencast", json!({})),
+    )
+    .await;
+    frame
 }
 
 fn screenshot_params(
@@ -400,6 +623,16 @@ async fn read_viewport_rect(session: &ProtocolSession) -> Result<Rect, CoreError
         width: 0.0,
         height: 0.0,
     }))
+}
+
+async fn read_device_pixel_ratio(session: &ProtocolSession) -> f64 {
+    PageJs::isolated(session)
+        .eval::<Option<f64>>("window.devicePixelRatio")
+        .await
+        .ok()
+        .flatten()
+        .filter(|ratio| ratio.is_finite() && *ratio > 0.0)
+        .unwrap_or(1.0)
 }
 
 async fn read_scroll_offsets(session: &ProtocolSession) -> Result<PointOffset, CoreError> {
@@ -586,9 +819,26 @@ fn annotation_number(ref_id: &str) -> i64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{ScreenshotCaptureOptions, capture_plain_screenshot};
-    use crate::{ProtocolSession, test_support::TestConnection};
+    use super::{
+        ScreenshotCaptureOptions, ScreenshotCaptureResult, ScreenshotFormat, Viewport,
+        capture_image, capture_plain_screenshot, capture_screencast_frame,
+    };
+    use crate::{
+        CoreError, ProtocolSession, SessionId,
+        testing::{TestCall, TestConnection},
+    };
     use serde_json::json;
+
+    async fn capture(session: &ProtocolSession) -> Result<ScreenshotCaptureResult, CoreError> {
+        capture_plain_screenshot(session, &ScreenshotCaptureOptions::default()).await
+    }
+
+    fn is_pointer_call(call: &TestCall, js: &str) -> bool {
+        call.method == "Runtime.evaluate"
+            && call.params["expression"]
+                .as_str()
+                .is_some_and(|expression| expression.contains(js))
+    }
 
     #[tokio::test]
     async fn tests_that_plain_capture_restores_the_pointer_after_success_and_error()
@@ -603,25 +853,16 @@ mod tests {
             }
             let connection = TestConnection::new(replies);
             let session = ProtocolSession::root(connection.clone());
-            let result =
-                capture_plain_screenshot(&session, &ScreenshotCaptureOptions::default()).await;
+            let result = capture(&session).await;
             assert_eq!(result.is_ok(), succeeds);
             if let Ok(capture) = result {
                 assert_eq!(capture.data, "cG5n");
             }
             let calls = connection.calls()?;
             assert_eq!(calls.len(), 3);
-            assert!(
-                calls[0].params["expression"]
-                    .as_str()
-                    .is_some_and(|js| js.contains("p.hide()"))
-            );
+            assert!(is_pointer_call(&calls[0], "p.hide()"));
             assert_eq!(calls[1].method, "Page.captureScreenshot");
-            assert!(
-                calls[2].params["expression"]
-                    .as_str()
-                    .is_some_and(|js| js.contains("p.show()"))
-            );
+            assert!(is_pointer_call(&calls[2], "p.show()"));
         }
         Ok(())
     }
@@ -632,13 +873,226 @@ mod tests {
         let connection =
             TestConnection::new([("Page.captureScreenshot", json!({ "data": "cG5n" }))]);
         let session = ProtocolSession::root(connection.clone());
-        let capture =
-            capture_plain_screenshot(&session, &ScreenshotCaptureOptions::default()).await?;
+        let capture = capture(&session).await?;
         assert_eq!(capture.data, "cG5n");
         let calls = connection.calls()?;
         assert_eq!(calls.len(), 2);
         assert_eq!(calls[0].method, "Runtime.evaluate");
         assert_eq!(calls[1].method, "Page.captureScreenshot");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn stalled_jpeg_can_use_a_session_scoped_screencast_frame()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let connection = TestConnection::new([
+            ("Page.startScreencast", json!({})),
+            ("Page.stopScreencast", json!({})),
+        ]);
+        let session = ProtocolSession::root(connection.clone());
+        let options = ScreenshotCaptureOptions {
+            format: Some(ScreenshotFormat::Jpeg),
+            quality: Some(45),
+            ..Default::default()
+        };
+        let worker =
+            tokio::spawn(async move { capture_screencast_frame(&session, &options).await });
+
+        while !connection
+            .calls()?
+            .iter()
+            .any(|call| call.method == "Page.startScreencast")
+        {
+            tokio::task::yield_now().await;
+        }
+        // A frame from another CDP session must not count as this tab's screenshot.
+        connection.emit(
+            "Page.screencastFrame",
+            json!({ "data": "wrong-tab" }),
+            Some(SessionId::from("other-tab")),
+        );
+        connection.emit(
+            "Page.screencastFrame",
+            json!({ "data": "jpeg-frame" }),
+            None,
+        );
+        let screenshot = worker.await??;
+        assert_eq!(screenshot.data, "jpeg-frame");
+        let calls = connection.calls()?;
+        assert_eq!(calls[0].params["quality"], 45);
+        assert_eq!(calls[0].params["maxFramesInFlight"], 1);
+        assert_eq!(calls[1].method, "Page.stopScreencast");
+        Ok(())
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn missing_screencast_frame_still_stops_capture() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let connection = TestConnection::new([
+            ("Page.startScreencast", json!({})),
+            ("Page.stopScreencast", json!({})),
+        ]);
+        let session = ProtocolSession::root(connection.clone());
+        let worker = tokio::spawn(async move {
+            capture_screencast_frame(&session, &ScreenshotCaptureOptions::default()).await
+        });
+        while !connection
+            .calls()?
+            .iter()
+            .any(|call| call.method == "Page.startScreencast")
+        {
+            tokio::task::yield_now().await;
+        }
+        tokio::time::advance(super::SCREENCAST_FRAME_DEADLINE).await;
+        assert!(worker.await?.is_err());
+        let calls = connection.calls()?;
+        assert_eq!(
+            calls.last().map(|call| call.method.as_str()),
+            Some("Page.stopScreencast")
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn non_jpeg_capture_skips_the_screencast_fallback()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let connection =
+            TestConnection::new([("Page.captureScreenshot", json!({ "data": "png-bytes" }))]);
+        let session = ProtocolSession::root(connection.clone());
+        let options = ScreenshotCaptureOptions {
+            format: Some(ScreenshotFormat::Png),
+            ..Default::default()
+        };
+        let result = capture_image(&session, &options).await?;
+        assert_eq!(result.data, "png-bytes");
+        let calls = connection.calls()?;
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].method, "Page.captureScreenshot");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn partial_clip_rejects_the_screencast_fallback() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let connection = TestConnection::new([(
+            "Page.getLayoutMetrics",
+            json!({ "cssLayoutViewport": { "pageX": 0, "pageY": 0, "clientWidth": 800, "clientHeight": 600 } }),
+        )]);
+        let session = ProtocolSession::root(connection.clone());
+        let options = ScreenshotCaptureOptions {
+            format: Some(ScreenshotFormat::Jpeg),
+            clip: Some(Viewport {
+                x: 0.0,
+                y: 0.0,
+                width: 400.0,
+                height: 300.0,
+                scale: 1.0,
+            }),
+            ..Default::default()
+        };
+        let result = capture_screencast_frame(&session, &options).await;
+        assert!(result.is_err(), "a partial clip must be rejected");
+        let message = result
+            .err()
+            .map(|error| error.to_string())
+            .unwrap_or_default();
+        assert!(message.contains("partial clip"));
+        // Rejected before any screencast command is sent.
+        let calls = connection.calls()?;
+        assert!(
+            calls
+                .iter()
+                .all(|call| call.method == "Page.getLayoutMetrics")
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn offset_clip_rejects_the_screencast_fallback() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let connection = TestConnection::new([(
+            "Page.getLayoutMetrics",
+            json!({ "cssLayoutViewport": { "pageX": 0, "pageY": 0, "clientWidth": 800, "clientHeight": 600 } }),
+        )]);
+        let session = ProtocolSession::root(connection.clone());
+        // Same size as the viewport but a different origin (a scroll during the native wait).
+        let options = ScreenshotCaptureOptions {
+            format: Some(ScreenshotFormat::Jpeg),
+            clip: Some(Viewport {
+                x: 0.0,
+                y: 200.0,
+                width: 800.0,
+                height: 600.0,
+                scale: 1.0,
+            }),
+            ..Default::default()
+        };
+        let result = capture_screencast_frame(&session, &options).await;
+        assert!(result.is_err(), "an offset clip must be rejected");
+        let message = result
+            .err()
+            .map(|error| error.to_string())
+            .unwrap_or_default();
+        assert!(message.contains("partial clip"));
+        let calls = connection.calls()?;
+        assert!(
+            calls
+                .iter()
+                .all(|call| call.method == "Page.getLayoutMetrics")
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn matching_clip_scales_screencast_by_device_ratio()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let connection = TestConnection::new([
+            (
+                "Page.getLayoutMetrics",
+                json!({
+                    "cssLayoutViewport": { "pageX": 0, "pageY": 0, "clientWidth": 800, "clientHeight": 600 },
+                    "layoutViewport": { "pageX": 0, "pageY": 0, "clientWidth": 1600, "clientHeight": 1200 }
+                }),
+            ),
+            ("Page.startScreencast", json!({})),
+            ("Page.stopScreencast", json!({})),
+        ]);
+        let session = ProtocolSession::root(connection.clone());
+        let options = ScreenshotCaptureOptions {
+            format: Some(ScreenshotFormat::Jpeg),
+            clip: Some(Viewport {
+                x: 0.0,
+                y: 0.0,
+                width: 800.0,
+                height: 600.0,
+                scale: 1.0,
+            }),
+            ..Default::default()
+        };
+        let worker =
+            tokio::spawn(async move { capture_screencast_frame(&session, &options).await });
+        while !connection
+            .calls()?
+            .iter()
+            .any(|call| call.method == "Page.startScreencast")
+        {
+            tokio::task::yield_now().await;
+        }
+        connection.emit(
+            "Page.screencastFrame",
+            json!({ "data": "device-frame" }),
+            None,
+        );
+        let screenshot = worker.await??;
+        assert_eq!(screenshot.data, "device-frame");
+        let calls = connection.calls()?;
+        let start = calls
+            .iter()
+            .find(|call| call.method == "Page.startScreencast")
+            .ok_or("no Page.startScreencast call")?;
+        // Device ratio 1600/800 = 2 is folded into the caps so the fallback matches native.
+        assert_eq!(start.params["maxWidth"], 1600);
+        assert_eq!(start.params["maxHeight"], 1200);
         Ok(())
     }
 }

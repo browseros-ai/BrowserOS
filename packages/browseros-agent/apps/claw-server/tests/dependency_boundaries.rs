@@ -283,6 +283,7 @@ fn analytics_catalog_and_sdk_have_single_source_boundaries()
         "agent_session_efficiency_computed",
         "harness_connected",
         "harness_disconnected",
+        "tool_calls_daily",
     ];
     let mut wire_locations = wire_names
         .iter()
@@ -323,7 +324,16 @@ fn analytics_catalog_and_sdk_have_single_source_boundaries()
         sdk_locations,
         ["analytics/aliases.rs", "analytics/service.rs"]
     );
-    assert_eq!(claw_server::analytics::events::ALL.len(), 8);
+    let mut catalog_names = claw_server::analytics::events::ALL
+        .map(|definition| definition.name())
+        .to_vec();
+    let mut checked_names = wire_names.to_vec();
+    catalog_names.sort_unstable();
+    checked_names.sort_unstable();
+    assert_eq!(
+        catalog_names, checked_names,
+        "every catalog event is checked for a single source"
+    );
     Ok(())
 }
 
@@ -443,6 +453,8 @@ fn classify(relative: &Path) -> Result<Layer, String> {
         [db, ..] if db == "db" => Ok(Layer::Db),
         [identity, ..] if identity == "identity" => Ok(Layer::Identity),
         [analytics, ..] if analytics == "analytics" => Ok(Layer::Support),
+        // `config.rs`'s submodules, such as the behaviour file reader.
+        [config, ..] if config == "config" => Ok(Layer::Support),
         [file] if matches!(file.as_str(), "app.rs" | "runtime.rs" | "main.rs") => {
             Ok(Layer::Composition)
         }
@@ -551,6 +563,8 @@ fn allowed_service_edge(source: &str, target: &str) -> bool {
             | ("replay", "recordings")
             | ("tab_cleanup", "browser")
             | ("skills", "harness")
+            // SKILL.md is rendered from the prose a skill's ultrafast flow is numbered against.
+            | ("skills", "flow")
     )
 }
 

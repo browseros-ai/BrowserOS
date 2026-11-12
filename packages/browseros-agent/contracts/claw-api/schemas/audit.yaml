@@ -84,3 +84,33 @@ AuditCleanupResult:
       description: On-disk bytes reclaimed by the sweep, including database file shrink.
     usage:
       $ref: '#/AuditStorageUsage'
+AuditAgent:
+  type: object
+  additionalProperties: false
+  required: [slug, label, taskCount, lastStartedAt]
+  properties:
+    slug:
+      type: string
+      description: The agent's slug, the value the session list's `slug` filter takes.
+    label:
+      type: string
+      description: The display label from the agent's most recent task.
+    taskCount:
+      type: integer
+      format: int64
+      minimum: 1
+    lastStartedAt:
+      type: integer
+      format: int64
+      minimum: 0
+      description: Start of the agent's most recent task, in epoch milliseconds.
+AuditAgentList:
+  type: object
+  additionalProperties: false
+  required: [items]
+  properties:
+    items:
+      type: array
+      description: Ordered by task count, then by the most recent task.
+      items:
+        $ref: '#/AuditAgent'

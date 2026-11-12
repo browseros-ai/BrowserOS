@@ -88,6 +88,67 @@ struct Bounds {
     h: f64,
 }
 
+/// Native content quads retain transformed and multi-line geometry. A missing
+/// rectangle is a typed preparation failure; the click transaction owns recovery.
+pub(super) async fn get_element_quads(
+    session: &ProtocolSession,
+    backend_node_id: i64,
+) -> Result<Vec<Vec<Point>>, CoreError> {
+    let result = session
+        .send::<_, QuadsResult>(
+            "DOM.getContentQuads",
+            json!({ "backendNodeId": backend_node_id }),
+        )
+        .await;
+    if let Ok(result) = result {
+        let quads: Vec<_> = result
+            .quads
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|quad| quad.len() == 8 && quad.iter().all(|n| n.is_finite()))
+            .map(|quad| {
+                quad.as_chunks::<2>()
+                    .0
+                    .iter()
+                    .map(|&[x, y]| Point { x, y })
+                    .collect()
+            })
+            .collect();
+        if !quads.is_empty() {
+            return Ok(quads);
+        }
+    }
+    let rect: Option<Bounds> = PageJs::isolated(session)
+        .call(backend_node_id, BOUNDS_JS, &[])
+        .await?;
+    let rect = rect
+        .filter(|rect| rect.w > 0.0 && rect.h > 0.0)
+        .ok_or_else(|| {
+            CoreError::ClickPointUnavailable(
+                "Element has no visible click area; take a new snapshot. No click was sent."
+                    .to_string(),
+            )
+        })?;
+    Ok(vec![vec![
+        Point {
+            x: rect.x,
+            y: rect.y,
+        },
+        Point {
+            x: rect.x + rect.w,
+            y: rect.y,
+        },
+        Point {
+            x: rect.x + rect.w,
+            y: rect.y + rect.h,
+        },
+        Point {
+            x: rect.x,
+            y: rect.y + rect.h,
+        },
+    ]])
+}
+
 /// The point is in `session`'s coordinate basis. Dispatch input through the same
 /// session so OOPIF coordinates remain valid without a manual transform.
 pub async fn get_element_center(
@@ -177,7 +238,7 @@ pub async fn focus_element(
 // `DOM.focus` needs `DOM.getDocument` to have run for the session first, which
 // fresh MCP sessions have not done, so it fails with "Document needs to be
 // requested first" (#2640). `HTMLElement.focus()` over `Runtime.callFunctionOn`
-// has no such dependency, the same runtime path `js_click` already uses.
+// has no such dependency and uses the shared PageJs runtime path.
 //
 // Success is confirmed against the resulting active element, not merely that a
 // `focus` method exists: every HTMLElement exposes `focus()`, but disabled or
@@ -203,13 +264,6 @@ pub async fn focus_element_js(
             "Element cannot receive focus.".to_string(),
         ))
     }
-}
-
-pub async fn js_click(session: &ProtocolSession, backend_node_id: i64) -> Result<(), CoreError> {
-    let _: Value = PageJs::isolated(session)
-        .call(backend_node_id, "function(){this.click()}", &[])
-        .await?;
-    Ok(())
 }
 
 /// Read the connected field, preserving the distinction between empty and unreadable.
@@ -249,11 +303,11 @@ fn quad_center(quad: &[f64]) -> Point {
 mod tests {
     use super::{click_blocker_at_point, focus_element_js};
     use crate::{CoreError, ProtocolSession, connection::CdpConnection, input::Point};
-    use browseros_cdp::{CdpError, CdpEvent};
+    use browseros_cdp::{CdpError, CdpEvent, TargetedEvents};
     use futures_util::future::BoxFuture;
     use serde_json::{Value, json};
     use std::sync::{Arc, Mutex};
-    use tokio::sync::broadcast;
+    use tokio::sync::{broadcast, mpsc};
 
     #[derive(Clone, Copy)]
     enum HitTestResponse {
@@ -266,6 +320,7 @@ mod tests {
     struct MockConnection {
         response: HitTestResponse,
         calls: Mutex<Vec<Value>>,
+        targeted: TargetedEvents,
     }
 
     impl CdpConnection for MockConnection {
@@ -315,6 +370,10 @@ mod tests {
             rx
         }
 
+        fn events_targeted(&self, method: &str) -> mpsc::UnboundedReceiver<CdpEvent> {
+            self.targeted.subscribe(method)
+        }
+
         fn is_connected(&self) -> bool {
             true
         }
@@ -328,6 +387,7 @@ mod tests {
         let connection = Arc::new(MockConnection {
             response,
             calls: Mutex::new(Vec::new()),
+            targeted: TargetedEvents::default(),
         });
         (connection.clone(), ProtocolSession::root(connection))
     }

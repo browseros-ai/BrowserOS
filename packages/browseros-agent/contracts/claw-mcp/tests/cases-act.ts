@@ -1,7 +1,7 @@
 /**
  * act (20) — every kind and every failure path. Snapshots are taken
  * before each action to mint fresh refs; DOM state is verified through
- * evaluate (`return …`, since evaluate runs the code as a function body).
+ * evaluate_in_page (`return …`, since it runs the code as a function body).
  */
 
 import type { CaseContext, ContractCase } from './cases'
@@ -28,8 +28,8 @@ async function evalIn(
   code: string,
 ): Promise<string> {
   return expectOk(
-    await ctx.mcp.callTool('evaluate', { page, code }),
-    'evaluate',
+    await ctx.mcp.callTool('evaluate_in_page', { page, code }),
+    'evaluate_in_page',
   )
 }
 
@@ -62,7 +62,7 @@ export const actCases: ContractCase[] = [
     },
   },
   {
-    name: 'act: click on a covered element names the blocker',
+    name: 'act: covered double click names the blocker without changing the gesture',
     async run(ctx) {
       const page = await ctx.openPage(ctx.fixture('/overlay.html'))
       const snap = await snapshot(ctx, page)
@@ -70,8 +70,9 @@ export const actCases: ContractCase[] = [
         page,
         kind: 'click',
         ref: refFor(snap, 'Covered button'),
+        clickCount: 2,
       })
-      // The click must be refused with enough context to identify the blocker.
+      // DOM fallback cannot reproduce a double click; retain actionable coverage context.
       const text = textOf(result)
       const namesBlocker = /overlay|cover|intercept|obscur/i.test(text)
       const stillUntouched = (
@@ -591,7 +592,7 @@ export const actCases: ContractCase[] = [
       // click off-stack so the dialog opens between CDP calls, then let
       // the dialog kinds resolve it.
       const openConfirm = () =>
-        ctx.mcp.callTool('evaluate', {
+        ctx.mcp.callTool('evaluate_in_page', {
           page,
           code: 'setTimeout(() => document.getElementById("trigger-confirm").click(), 0); return "scheduled"',
         })

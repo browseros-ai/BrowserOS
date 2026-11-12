@@ -47,7 +47,7 @@ mod tests {
 
     #[tokio::test]
     async fn tests_that_only_reserved_snapshots_get_an_appended_status() -> anyhow::Result<()> {
-        for tool in ["snapshot", "read", "screenshot", "evaluate"] {
+        for tool in ["snapshot", "read", "screenshot", "evaluate_in_page"] {
             let mut call = tool_call(tool, json!({"page":42})).await?;
             enable_captcha(&mut call)?;
             let service = call

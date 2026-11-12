@@ -34,8 +34,11 @@ export default defineConfig({
       'browserOS',
       'alarms',
       'webNavigation',
+      // Older packaged servers still query this worker for download metadata. New servers
+      // use CDP and work with the extension disabled; retain permission during that rollout.
       'downloads',
       'notifications',
+      'favicon',
     ],
     // Recording is universal; the local server owns tab attribution.
     host_permissions: ['http://127.0.0.1/*', '<all_urls>'],
@@ -51,5 +54,11 @@ export default defineConfig({
   },
   vite: () => ({
     plugins: [tailwindcss()],
+    // Vite's default dependency scan crawls every .html under the root and
+    // skips build.outDir, but WXT passes outDir as an absolute path, so the
+    // skip never matches. A previous run's dist/chrome-mv3-dev/newtab.html is
+    // then scanned while WXT deletes it, the scan fails with ENOENT, and dev
+    // starts without pre-bundled dependencies. Scan only the source pages.
+    optimizeDeps: { entries: ['entrypoints/**/*.html'] },
   }),
 })

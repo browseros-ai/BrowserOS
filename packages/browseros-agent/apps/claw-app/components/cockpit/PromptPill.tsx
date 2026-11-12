@@ -39,7 +39,7 @@ export function PromptPill({ prompt, onCopied }: PromptPillProps) {
       type="button"
       onClick={copy}
       aria-label={`Copy: ${prompt}`}
-      className="inline-flex max-w-full cursor-pointer items-center gap-2.5 rounded-xl border border-border bg-card px-3.5 py-2.5 text-left text-[15px] text-cyanotype-ink leading-5 transition-colors hover:border-border-strong hover:bg-bg-canvas focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-accent/25"
+      className="inline-flex max-w-full cursor-pointer items-center gap-2.5 rounded-md border border-border bg-card px-3.5 py-2.5 text-left text-[15px] text-cyanotype-ink leading-5 transition-colors hover:border-border-strong hover:bg-bg-canvas focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-accent/25"
     >
       <span>{prompt}</span>
       <span

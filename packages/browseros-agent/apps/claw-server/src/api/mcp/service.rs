@@ -10,22 +10,20 @@ use crate::{
         naming::{SESSION_NAME_INPUT_MAX_LEN, normalize_small_name, session_group_title},
         observers::audit::{LocalToolDispatch, record_local_tool_dispatch},
         prompt::mcp_instructions,
-        pursue::PursueOffering,
-        tab_grouping,
+        session_handle, tab_grouping,
     },
     config::{ServerMode, TabGrouping},
     identity::{ClientIdentity, ClientInfo, ProfileView},
     ids::{DispatchId, SessionId},
     services::{
         agent_settings::HumanHelp,
-        cockpit::LiveSessionFilters,
         help::{HelpEntry, HelpOpenParams, HelpWaitOutcome},
         sessions::{ClawTargetStore, RetirementCause, Session},
         skills::{CreateSkill, SkillOrigin},
     },
 };
-use browseros_core::target::BrowserView;
-use browseros_mcp::{OutputFileAccess, TargetStore, ToolDef, ToolResult, catalog};
+use browseros_core::{PageId, target::BrowserView};
+use browseros_mcp::{OutputFileAccess, TargetStore, ToolDef, ToolResult};
 use claw_api::models::HelpRequestKind;
 use rmcp::{
     ErrorData as McpError, RoleServer,
@@ -33,8 +31,8 @@ use rmcp::{
     model::{
         CacheScope, CallToolRequestMethod, CallToolRequestParams, CallToolResponse, CallToolResult,
         Implementation, InitializeRequestParams, InitializeResult, JsonObject, ListToolsResult,
-        MetaObject, PaginatedRequestParams, ProtocolVersion, ServerCapabilities,
-        SubscriptionFilter, Tool, ToolAnnotations,
+        PaginatedRequestParams, ProtocolVersion, ServerCapabilities, SubscriptionFilter, Tool,
+        ToolAnnotations,
     },
     service::{NotificationContext, RequestContext},
 };
@@ -51,7 +49,6 @@ use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 use tracing::warn;
 use ulid::Ulid;
-use uuid::Uuid;
 
 const SERVER_NAME: &str = "browseros-neo";
 const SERVER_TITLE: &str = "BrowserOS neo";
@@ -60,107 +57,25 @@ const NAME_SESSION_DESCRIPTION: &str = "Name this browser session at the start o
 const NAME_SESSION_CATEGORY_DESCRIPTION: &str = "The kind of task, for anonymous aggregate analytics only; the free-form name is never sent. Pick the closest fit from the list.";
 const NAME_SESSION_SUMMARY_DESCRIPTION: &str = "One or two short lines saying what this task is, phrased so you can find it again by searching later. No names, emails, URLs, file paths, or account numbers.";
 const SUMMARY_MAX_LEN: usize = 200;
-/// `_meta` key the stateless session handle is returned under, per the MCP `_meta`
-/// convention (namespaced by owner). Clients read it from a tool result and echo it
-/// as the `session` argument on subsequent calls.
-const SESSION_META_KEY: &str = "com.browseros.neo/session";
 const AGENT_NAME_ARG: &str = "agentName";
-// Scoped to the path that actually emits it. The handle rides only on connections
-// without a transport session id; the other path withholds it and ignores one that
-// is presented, so promising it to every client pointed those agents at a control
-// they do not have and away from the tab group id, which is the signal that works
-// for them. Naming the alternative here matters because this text is read at the
-// moment an agent is deciding how to keep continuity.
-pub const SESSION_ARG_DESCRIPTION: &str = "Opaque logical task handle, including its browser_target binding. You receive one only if your client connects without its own transport session id: the server returns it in every tool result's `_meta` under `com.browseros.neo/session` and in result text. Pass it as `session` on later calls; natural successors retain the task's latest target even across server restart. If you never see one, your continuity across a remade connection is your tab group id instead: pass a known groupId on tabs action=\"new\" to recover its task binding before creation. Existing tabs keep their actual ownership. Omit session on the first call or to start a separate task after Stop; a stopped handle stays stopped. Stale browser targets require explicit browser_target reselection or clear.";
-/// The sentences of [`SESSION_ARG_DESCRIPTION`] and [`NAME_SESSION_DESCRIPTION`] that promise the
-/// server's own tab group. `tab_grouping` rewrites them under explicit grouping.
-pub(super) const SESSION_GROUP_CONTINUITY: &str = "If you never see one, your continuity across a remade connection is your tab group id instead: pass a known groupId on tabs action=\"new\" to recover its task binding before creation. Existing tabs keep their actual ownership. ";
+/// The sentence of [`NAME_SESSION_DESCRIPTION`] that promises the server's own tab group.
+/// `tab_grouping` rewrites it under explicit grouping.
 pub(super) const NAME_SESSION_GROUPING: &str = "Tabs are grouped as <client>/<name>; the label";
 const AGENT_NAME_ARG_DESCRIPTION: &str = "Optional fallback identifying your client application: claude, codex, cursor, opencode, antigravity, vscode, or zed. For another application, use its short product name. Put your task name in name_session, not here. BrowserOS prefers recognized MCP client metadata for the visible prefix; this fallback is used when that metadata does not identify a known product.";
 /// The sentence of [`AGENT_NAME_ARG_DESCRIPTION`] a hosted server rewrites, since it offers
 /// `taskName` instead of `name_session`.
 const AGENT_NAME_TASK_SENTENCE: &str = "Put your task name in name_session, not here.";
 const HOSTED_AGENT_NAME_TASK_SENTENCE: &str = "Put your task name in taskName, not here.";
+mod ultrafast;
+
+pub(super) use ultrafast::RUN_SKILL_TOOL_NAME;
 pub(super) const SAVE_SKILL_TOOL_NAME: &str = "save_skill";
 const SAVE_SKILL_DESCRIPTION: &str = "When you finish a repeatable browser task the user is likely to run again, save it as a BrowserOS neo skill so it can be re-run by name later; save genuinely repeatable, user-valuable tasks, not one-offs. Give a lowercase-hyphen name, a one-line description, the ordered steps, and any shortcuts learned this run. In the steps, name the exact browser SDK calls you actually used this session (e.g. browser.wait, browser.read, browser.pages.newPage) so a later run reuses them verbatim; never invent, rename, or guess a method that is not in the run tool's SDK (there is no browser.waitFor, for example). The skill is saved and linked into your agents under a neo- prefix (neo-<name>) so it never clobbers your own skills and you can list them all by typing /neo; a name given without the prefix is namespaced automatically. Call again with the same name to update it in place.";
 pub(super) const MARK_SKILL_RUN_TOOL_NAME: &str = "mark_skill_run";
-const RUN_TOOL_NAME: &str = "run";
 const MARK_SKILL_RUN_DESCRIPTION: &str = "Mark this browser session as a run of a saved skill so BrowserOS neo records the run and its cost once the session ends. Call this once, at the start, when you are running a skill, with the skill's name.";
 pub(super) const REQUEST_HELP_TOOL_NAME: &str = "request_human_help";
-const REQUEST_HELP_DESCRIPTION: &str = "Ask a human to take over this page when you hit something only a person can do: a sign-in, a one-time code, a captcha, an account choice, or an approval you should not make yourself. Give a short `reason` (what you need), optional `details` (what the human should know), an optional `resumeHint` (what you will do after, so the human knows the task continues), and an optional `kind` (login, captcha, approval, other). This blocks for a short while and returns a status. If the status is \"waiting\", call await_human_help to keep waiting; do nothing else on the page until the status is \"resolved\". The cockpit shows your request so a human can take over the tab and hand control back.";
+const REQUEST_HELP_DESCRIPTION: &str = "Ask a human to take over a page when you hit something only a person can do: a sign-in, a one-time code, a captcha, an account choice, or an approval you should not make yourself. Pass `page` (the id of the page that needs the person, the same number you use with snapshot and act) and a short `reason` (what you need); optionally `details` (what the human should know), a `resumeHint` (what you will do after, so the human knows the task continues), and a `kind` (login, captcha, approval, other). This blocks for a short while and returns a status. If the status is \"waiting\", call await_human_help to keep waiting; do nothing else on the page until the status is \"resolved\". The cockpit shows your request so a human can take over that tab and hand control back.";
 pub(super) const AWAIT_HELP_TOOL_NAME: &str = "await_human_help";
-const PURSUE_TOOL_NAME: &str = "pursue";
-/// What the caller is told about `pursue`, and it has to earn every line.
-///
-/// Written against what was measured rather than against what sounds good. Each
-/// paragraph exists because a run failed without it: goals arriving one step at
-/// a time, fields that could not be typed because nothing supplied the text,
-/// callers reading a bare status word and learning nothing, and a caller that
-/// split an errand into "get there" and "read it", wrote the first half as the
-/// whole goal, and got a run that correctly stopped without reporting.
-const PURSUE_DESCRIPTION: &str = "\
-Pursue a whole outcome on one page. Every step is decided on the server, so one \
-call does the work of a snapshot, your reasoning, an act, and another snapshot, \
-repeated until it is done.
-
-STATE THE OUTCOME, NOT THE STEP. Say \"narrow these results to the Corsair \
-brand and sort them by price, lowest first\" rather than \"click the Corsair \
-checkbox\". It plans each step against the page as it is now. If you already \
-know the single control you want, `act` is cheaper and more direct.
-
-ASK FOR WHAT YOU WANT TO KNOW, AND READ THE PAGE YOURSELF. A goal may describe \
-the whole outcome, including the part you want to find out: \"find the docs page \
-about the secure tunnel and get me to it\" works. It gets the page into the state \
-where the answer is visible, stops, and tells you which page to read. Then read \
-it, with whatever selector and format you want. It does not read for you, \
-because you know the goal and are not working to a byte budget.
-
-DO NOT SPLIT AN ERRAND IN TWO. \"Get there\" and then \"read it\" costs two calls \
-and gets no report from the first. One call does the first part and tells you to \
-do the second.
-
-IT CANNOT INVENT STRINGS, SO SUPPLY THEM. It chooses between things you give \
-it and never writes text of its own.
- - `values`: anything that must be typed, named by what it is, for instance \
-{\"pincode\": \"600042\", \"search term\": \"wireless headphones\"}. Without \
-this a run that needs to type will stop and ask you.
- - `destinations`: anywhere it may go, as label and url. Without this it cannot \
-leave the page, because it will not invent a url. It can also go back and \
-reload without being told.
-Never put a password, API key, token or card number in `values`. The text is \
-typed into the page and recorded with the call like any other argument. For a \
-secret, use request_human_help so a person enters it in the browser.
-
-IT STOPS RATHER THAN GUESSING. Anything consequential needs high confidence \
-before it runs, so a run will hand back rather than submit, pay or delete on a \
-hunch. Read `status` to see which happened:
- - `satisfied`: the page now holds what the goal asked for. That is a claim, not \
-evidence: read the page to check it, and check `url` and `story`.
- - `too_risky_to_guess`, `nothing_offered`, `no_field_named`: it came back to \
-you, and the sentence says what it needs.
- - `not_confident`, `nothing_changed`, `budget_spent`: it stopped making \
-progress. The sentence says what it tried.
- - `cancelled`: something outside the run stopped it. Not the same as running \
-out of steps, and worth retrying.
-
-WHAT THE RESULT TELLS YOU. Read `story` first: it is what the run did, in \
-order, in sentences, including what observably moved on the page, so \"clicked \
-Add to cart, and \\\"0 items in cart\\\" became \\\"2 items in cart\\\"\". If the run did \
-not finish, `tryNext` is one line saying what to change about the goal before \
-you try again. `decided` is the same information as `story` with the numbers \
-attached: each decision's `margin` against the `needed` bar it had to clear, and \
-`weakest`, which names the judgement that decided the outcome. Compare `margin` \
-with `needed` rather than reading either alone.
-
-`actions` is what it ran and `changed` is how many of those moved the page; the \
-two differing is the signal that something is not working. `omitted` is how much \
-of the page would not fit in one decision, so a large number means the answer \
-may not have been in front of it. `page.obstructed` says what is covering the \
-page, if anything: read the page only once nothing is. `unlabelledImages` counts \
-pictures with no text label, which nothing here can read: take a screenshot \
-yourself if the goal depends on them.
-
-Needs JEV_TOKEN in the server's environment, and is not listed without one.";
 const AWAIT_HELP_DESCRIPTION: &str = "Keep waiting on an open human-help request. Call this repeatedly after request_human_help until the status is \"resolved\" (the human handed control back), \"cancelled\" (the run was stopped), or \"timed_out\" (no human responded in time). Do nothing else on the page while waiting.";
 /// For an agent whose cached tool list still offers request_human_help after the user turned
 /// human help off.
@@ -179,7 +94,6 @@ pub struct ClawMcpService {
     mark_skill_run_tool: Tool,
     request_help_tool: Tool,
     await_help_tool: Tool,
-    pursue_tool: Tool,
     output_files: OutputFileAccess,
     lifecycle: Arc<Mutex<ServiceLifecycle>>,
     fallback_session_id: SessionId,
@@ -236,14 +150,13 @@ impl ClawMcpService {
     #[must_use]
     pub fn new(state: AppState) -> Self {
         Self {
+            catalog: Arc::new(hosted::catalog(state.config.mode)),
             state,
-            catalog: Arc::new(catalog()),
             name_session_tool: name_session_tool(),
             save_skill_tool: save_skill_tool(),
             mark_skill_run_tool: mark_skill_run_tool(),
             request_help_tool: request_help_tool(),
             await_help_tool: await_help_tool(),
-            pursue_tool: pursue_tool(),
             output_files: browseros_mcp::output_file::create_browser_output_file_access(),
             lifecycle: Arc::new(Mutex::new(ServiceLifecycle::default())),
             fallback_session_id: SessionId::new(format!("stdio-{}", Ulid::new())),
@@ -280,23 +193,13 @@ impl ClawMcpService {
     /// `declare_agent_name` gates the optional `agentName` fallback to clients on
     /// 2026-07-28 or later. Older peers negotiated `initialize`, still carry their
     /// identity in the handshake, and must keep receiving the schema unchanged.
-    /// Whether the loop is offered, asked of the settings store each time.
-    ///
-    /// Read rather than cached, so a token saved in the settings page shows up in the next
-    /// `tools/list` without a restart. Caching it here is the one way to make the setting look
-    /// like it did not work.
-    fn pursue_offering(&self) -> PursueOffering {
-        PursueOffering::of(self.state.agent_settings.jev_token_source())
-    }
-
     fn listed_tools(&self, declare_agent_name: bool) -> Vec<Tool> {
-        let pursue = self.pursue_offering();
         let mode = self.mode();
         let tab_grouping = self.tab_grouping();
         let decorate = |tool: Tool| {
-            let mut tool = with_session_arg(with_pursue_fallback_note(tool, pursue));
+            let mut tool = session_handle::offer(tool);
             if mode.is_hosted() {
-                tool = hosted::with_task_name_arg(tool);
+                tool = hosted::with_viewport_sdk_note(hosted::with_task_name_arg(tool));
             }
             if declare_agent_name {
                 tool = with_agent_name_arg(tool, mode);
@@ -311,18 +214,21 @@ impl ClawMcpService {
             .catalog
             .iter()
             .filter(|tool| tool.available(native))
-            .map(|tool| tool.to_mcp_tool(native))
+            .map(|tool| {
+                browseros_mcp::tools::run::with_policy(
+                    tool.to_mcp_tool(native),
+                    self.state.config.behavior.run_policy,
+                )
+            })
             .map(&decorate)
             .collect::<Vec<_>>();
         let mut local = vec![
             self.name_session_tool.clone(),
-            self.save_skill_tool.clone(),
+            self.save_skill_offer(),
             self.mark_skill_run_tool.clone(),
         ];
-        // Offered only when the server has a credential for the decision model.
-        // A tool that can only fail is worse than one that is not there.
-        if pursue.is_offered() {
-            local.push(self.pursue_tool.clone());
+        if self.ultrafast() {
+            local.push(ultrafast::run_skill_tool());
         }
         if self.state.captcha.is_some() {
             local.push(super::captcha::solve_captcha_tool());
@@ -357,277 +263,6 @@ impl ClawMcpService {
             started.session.child_token(),
         )
         .await;
-    }
-
-    /// Pursues a whole outcome on one page, deciding each step here.
-    ///
-    /// Every move the loop makes goes down the same dispatch path a connected
-    /// agent uses, so it gets the same guards, effects and audit record as
-    /// anything else.
-    async fn call_pursue(
-        &self,
-        started: &StartedSession,
-        raw_args: &Value,
-        client_cancel: CancellationToken,
-    ) -> CallToolResult {
-        // Registered and recorded like any other local tool. Without this the run
-        // is invisible in the audit: its inner actions appear as though the
-        // caller made them directly, and the one call that explains them does
-        // not appear at all. Measured the hard way, on a session where pursue
-        // ran twice and the timeline showed eight bare acts.
-        let dispatch_id = DispatchId::new();
-        let dispatch_registration = CancellationToken::new();
-        if !started
-            .session
-            .try_register_dispatch(dispatch_id.clone(), dispatch_registration)
-            .await
-        {
-            return CallToolResult::error(vec![rmcp::model::ContentBlock::text(
-                "BrowserOS neo session is no longer live",
-            )]);
-        }
-        let started_at = StdInstant::now();
-
-        let Some(token) = self.state.agent_settings.jev_credential() else {
-            return self
-                .refuse_pursue(
-                    started,
-                    raw_args,
-                    "this server has no credential for the decision model".to_string(),
-                    started_at,
-                    &dispatch_id,
-                )
-                .await;
-        };
-        let Some(page) = raw_args.get("page").and_then(Value::as_u64) else {
-            return self
-                .refuse_pursue(
-                    started,
-                    raw_args,
-                    "pursue needs the page to work on".to_string(),
-                    started_at,
-                    &dispatch_id,
-                )
-                .await;
-        };
-        let Some(goal) = raw_args.get("goal").and_then(Value::as_str) else {
-            return self
-                .refuse_pursue(
-                    started,
-                    raw_args,
-                    "pursue needs a goal".to_string(),
-                    started_at,
-                    &dispatch_id,
-                )
-                .await;
-        };
-        if goal.trim().is_empty() {
-            return self
-                .refuse_pursue(
-                    started,
-                    raw_args,
-                    "the goal was empty".to_string(),
-                    started_at,
-                    &dispatch_id,
-                )
-                .await;
-        }
-
-        let browser_session = self.state.browser.session().await;
-        let Some(browser_session) = browser_session else {
-            return self
-                .refuse_pursue(
-                    started,
-                    raw_args,
-                    "no browser is connected".to_string(),
-                    started_at,
-                    &dispatch_id,
-                )
-                .await;
-        };
-        // Captured once for the whole run. Every tool call a decision makes
-        // needs these, and they describe which window and tab group the session
-        // is bound to, which does not move under a run working one page.
-        let binding = self
-            .state
-            .targets
-            .binding_for_execution(started.session.id())
-            .await
-            .ok()
-            .flatten();
-        let view = Some(BrowserView::capture(browser_session.clone(), binding, None).await);
-        let target_store: Arc<dyn TargetStore> = Arc::new(ClawTargetStore {
-            bindings: self.state.targets.clone(),
-            session: started.session.id().clone(),
-        });
-        let ownership_key = started.session.convo_id().clone();
-        let default_tab_group_id = self
-            .state
-            .sessions
-            .ownership()
-            .tab_group_ref(&ownership_key)
-            .await;
-        let dispatch_cancel = CancellationToken::new();
-        let cancel = linked_cancel_token(
-            started.session.child_token(),
-            client_cancel,
-            dispatch_cancel.clone(),
-        );
-        let identity = ToolIdentity {
-            session: started.session.clone(),
-            agent: started.session.agent().clone(),
-            ownership_key,
-            agent_label: started.agent_label.clone(),
-        };
-
-        let Some(driver) = crate::api::mcp::pursue::PageDriver::new(
-            browser_session,
-            page as u32,
-            self.catalog.clone(),
-            started.session.id().clone(),
-            identity,
-            view,
-            target_store,
-            default_tab_group_id,
-            self.state.clone(),
-            self.output_files.clone(),
-            cancel,
-        ) else {
-            return self
-                .refuse_pursue(
-                    started,
-                    raw_args,
-                    "this browser does not offer the act tool".to_string(),
-                    started_at,
-                    &dispatch_id,
-                )
-                .await;
-        };
-
-        let offered = browseros_decide::run::Offered {
-            destinations: destinations_from(raw_args),
-            values: values_from(raw_args),
-            tabs: Vec::new(),
-            // Whatever this browser cannot do is never offered as a choice, so
-            // the model is not asked for a move that would only fail.
-            unavailable: driver.unavailable(),
-        };
-        let budget = browseros_decide::run::Budget {
-            max_steps: raw_args
-                .get("maxSteps")
-                .and_then(Value::as_u64)
-                .unwrap_or(12)
-                .clamp(1, 40) as u32,
-            max_seconds: 120,
-        };
-        let run = browseros_decide::run::Run::new(goal, budget).offering(offered);
-
-        let jev = browseros_decide::client::Jev::new(token);
-        let outcome = browseros_decide::pursue::advance(&jev, &driver, run).await;
-        let told = browseros_decide::report::tell(&outcome);
-
-        let mut said = vec![told.said.clone()];
-        if told.omitted > 0 {
-            said.push(format!(
-                "\nIt chose between {} controls; {} more were on the page and did not fit.",
-                told.offered, told.omitted
-            ));
-        }
-        if told.unlabelled_images > 0 {
-            said.push(format!(
-                "\n{} images on this page carry no text label, so nothing here could read them. Take a screenshot if the goal depends on them.",
-                told.unlabelled_images
-            ));
-        }
-
-        // The line stays, because a caller reading text gets something it can
-        // branch on without parsing JSON. What is new is beside it.
-        said.push(format!(
-            "\nstatus={} actions={} changed={} decisions={} batches={} offered={} omitted={} retired={} tokens={} url={}",
-            told.status,
-            told.actions,
-            told.changed,
-            told.decisions,
-            told.batches,
-            told.offered,
-            told.omitted,
-            told.retired,
-            told.input_tokens,
-            told.url,
-        ));
-
-        // The page, as structured content, which is the whole point. A caller
-        // that gets `not_confident` and a sentence can only reword its goal and
-        // hope; one holding control names can change the goal to something the
-        // page can satisfy.
-        //
-        // An earlier version of this tool returned text alone and explained
-        // that dispatch strips structured content from a tool with no output
-        // schema. That is true of `wire_result`, which is on the browser-tool
-        // dispatch path. A local tool returns through `into_call_tool_result`,
-        // which keeps structured content unconditionally, so the constraint was
-        // never on this path. The output schema is declared anyway, for the
-        // better reason: it puts the shape in `tools/list` where a caller can
-        // see it, and makes the field contractual rather than incidental.
-        let result = ToolResult::text(said.join("\n"), Some(pursue_structured(&told)));
-        self.record_pursue(started, raw_args, &result, started_at, &dispatch_id)
-            .await;
-        finish_local_dispatch(started.session.as_ref(), &dispatch_id, result)
-            .await
-            .into_call_tool_result()
-    }
-
-    /// A refusal that still appears in the audit.
-    ///
-    /// A run that never started is the one most worth seeing, because the
-    /// caller is about to try again and the reason is the only thing that would
-    /// stop it.
-    async fn refuse_pursue(
-        &self,
-        started: &StartedSession,
-        raw_args: &Value,
-        said: String,
-        started_at: StdInstant,
-        dispatch_id: &DispatchId,
-    ) -> CallToolResult {
-        let result = ToolResult {
-            content: vec![rmcp::model::ContentBlock::text(said)],
-            is_error: true,
-            structured_content: None,
-            audit_hints: None,
-        };
-        self.record_pursue(started, raw_args, &result, started_at, dispatch_id)
-            .await;
-        finish_local_dispatch(started.session.as_ref(), dispatch_id, result)
-            .await
-            .into_call_tool_result()
-    }
-
-    /// Puts one pursue run in the audit, beside the actions it took.
-    async fn record_pursue(
-        &self,
-        started: &StartedSession,
-        raw_args: &Value,
-        result: &ToolResult,
-        started_at: StdInstant,
-        dispatch_id: &DispatchId,
-    ) {
-        if let Err(error) = record_local_tool_dispatch(
-            &self.state,
-            LocalToolDispatch {
-                session: &started.session,
-                agent_label: &started.agent_label,
-                tool_name: PURSUE_TOOL_NAME,
-                raw_args,
-                result,
-                duration_ms: i64::try_from(started_at.elapsed().as_millis()).unwrap_or(i64::MAX),
-                dispatch_id: dispatch_id.clone(),
-            },
-        )
-        .await
-        {
-            warn!(error = %error, "local tool audit submission failed");
-        }
     }
 
     async fn call_name_session(
@@ -741,7 +376,12 @@ impl ClawMcpService {
             .into_call_tool_result()
     }
 
-    async fn call_save_skill(&self, started: &StartedSession, raw_args: &Value) -> CallToolResult {
+    async fn call_save_skill(
+        &self,
+        started: &StartedSession,
+        raw_args: &Value,
+        client_cancel: CancellationToken,
+    ) -> CallToolResult {
         let dispatch_id = DispatchId::new();
         let dispatch_cancel = CancellationToken::new();
         if !started
@@ -755,12 +395,17 @@ impl ClawMcpService {
         }
         let started_at = StdInstant::now();
         let session_id = started.session.id().as_str().to_string();
-        let result = match parse_save_skill(raw_args, session_id) {
-            Ok(input) => match self.state.skills.upsert(input).await {
-                Ok(view) => ToolResult::text(format!("saved skill /{}", view.model.name), None),
-                Err(error) => ToolResult::error(error.to_string()),
-            },
-            Err(message) => ToolResult::error(message),
+        let result = if self.ultrafast() {
+            self.save_skill_ultrafast(started, raw_args, client_cancel)
+                .await
+        } else {
+            match parse_save_skill(raw_args, session_id) {
+                Ok(input) => match self.state.skills.upsert(input).await {
+                    Ok(view) => ToolResult::text(format!("saved skill /{}", view.model.name), None),
+                    Err(error) => ToolResult::error(error.to_string()),
+                },
+                Err(message) => ToolResult::error(message),
+            }
         };
         if let Err(error) = record_local_tool_dispatch(
             &self.state,
@@ -807,7 +452,14 @@ impl ClawMcpService {
                 // run is still recorded if the agent drops the prefix.
                 let name = crate::services::skills::neo_prefixed(&name);
                 match self.state.skill_runs.mark(&session_id, &name).await {
-                    Ok(()) => ToolResult::text(format!("recording this run of /{name}"), None),
+                    Ok(()) => {
+                        let mut text = format!("recording this run of /{name}");
+                        if let Some(nudge) = self.upgrade_nudge(&name).await {
+                            text.push_str(". ");
+                            text.push_str(&nudge);
+                        }
+                        ToolResult::text(text, None)
+                    }
                     Err(error) => ToolResult::error(error.to_string()),
                 }
             }
@@ -873,9 +525,26 @@ impl ClawMcpService {
                 .filter(|value| !value.is_empty())
                 .map(str::to_string)
         };
-        // Pin the tab the agent is on right now, so takeover targets the blocked page even when the
-        // agent has several tabs open and the poll-time attribution later drifts or empties.
-        let (browser_tab_id, url, title) = self.resolve_active_tab(started.session.id()).await;
+        // The page the agent is blocked on. Mandatory: help is always about one page, and the cockpit
+        // brings exactly this tab to the front, so it is the page the agent names, never a guess from
+        // whichever tab was touched most recently.
+        let Some(page) = browseros_mcp::extract_page_id(true, raw_args) else {
+            return CallToolResult::error(vec![rmcp::model::ContentBlock::text(
+                "request_human_help: \"page\" is required (the id of the page that needs a person, the same number you pass to snapshot and act).",
+            )]);
+        };
+        // Resolve the named page now and refuse the request if it cannot be: an unresolved page would
+        // leave the tab, url and title empty, and the cockpit fills empty fields from the session's
+        // most-recently-active tab, which would point the banner and takeover at an unrelated page.
+        let (browser_tab_id, url, title) = match self
+            .resolve_help_page(started.session.id(), PageId(page))
+            .await
+        {
+            Ok((browser_tab_id, url, title)) => (Some(browser_tab_id), Some(url), Some(title)),
+            Err(message) => {
+                return CallToolResult::error(vec![rmcp::model::ContentBlock::text(message)]);
+            }
+        };
         let params = HelpOpenParams {
             request_id: format!("help-{}", Ulid::new()),
             reason: reason.to_string(),
@@ -893,36 +562,36 @@ impl ClawMcpService {
         self.run_help_wait(started, &entry, request_ct).await
     }
 
-    /// The session's most-recently-active owned tab, as the live projection sees it now. Captured at
-    /// request time so a help request pins the exact blocked tab. Returns all-None when the session
-    /// has no attributed tab, in which case the snapshot falls back to the poll-time pick.
-    async fn resolve_active_tab(
+    /// The tab, url and title of the page the agent named for its help request, so takeover brings the
+    /// exact page the agent is blocked on to the front rather than whatever tab was touched most
+    /// recently. Errors when the page cannot be resolved (browser not connected, page already gone):
+    /// the caller refuses the request rather than opening it with empty fields the cockpit would fill
+    /// from an unrelated tab.
+    async fn resolve_help_page(
         &self,
         session_id: &SessionId,
-    ) -> (Option<i64>, Option<String>, Option<String>) {
-        let filters = LiveSessionFilters {
-            profile_id: None,
-            slug: None,
-            site: None,
-            search: None,
-            since: None,
+        page: PageId,
+    ) -> Result<(i64, String, String), String> {
+        let page_id = page.0;
+        let Some(browser) = self.state.browser.session().await else {
+            return Err(format!(
+                "request_human_help: the browser is not connected, so page {page_id} could not be brought to the front. Start BrowserOS neo, then ask again."
+            ));
         };
-        let Ok(sessions) = self.state.cockpit.list(&filters).await else {
-            return (None, None, None);
-        };
-        let tab = sessions
-            .into_iter()
-            .find(|projection| projection.task.session_id == session_id.as_str())
-            .and_then(|projection| {
-                projection
-                    .live
-                    .browser_tabs
-                    .into_iter()
-                    .max_by_key(|tab| tab.last_activity_at.unwrap_or(0))
-            });
-        match tab {
-            Some(tab) => (Some(tab.browser_tab_id), Some(tab.url), Some(tab.title)),
-            None => (None, None, None),
+        let binding = self
+            .state
+            .targets
+            .binding_for_execution(session_id)
+            .await
+            .map_err(|error| {
+                format!("request_human_help: could not resolve page {page_id}: {error}")
+            })?;
+        let view = BrowserView::capture(browser, binding, None).await;
+        match view.page(page).await {
+            Ok(info) => Ok((info.tab_id.0, info.url, info.title)),
+            Err(_) => Err(format!(
+                "request_human_help: page {page_id} is not one of your open pages. Pass the id of a page that is still open, the same number you use with snapshot and act."
+            )),
         }
     }
 
@@ -1082,12 +751,8 @@ impl ClawMcpService {
             }
             // A new session rather than the old id revived, so the work the user stopped
             // stays stopped and closed in the audit instead of gaining a second life.
-            let replacement = SessionId::new(Uuid::new_v4().to_string());
-            let started = self
-                .start_session_in_store(
-                    replacement.clone(),
-                    SessionClient::resolve(Some(client), None),
-                )
+            let (started, replacement) = self
+                .mint_session(SessionClient::resolve(Some(client), None))
                 .await?;
             lifecycle.session_id = Some(replacement);
             lifecycle.stop_reported = false;
@@ -1268,9 +933,46 @@ impl ClawMcpService {
         &self,
         client: SessionClient,
     ) -> Result<(StartedSession, SessionId), McpError> {
-        let handle = SessionId::new(Uuid::new_v4().to_string());
-        let started = self.start_session_in_store(handle.clone(), client).await?;
-        Ok((started, handle))
+        self.mint_session_from(client, session_handle::candidate)
+            .await
+    }
+
+    /// Randomness is the only injected boundary. A live-map check alone cannot reserve
+    /// a short id across async minting or restart, so durable reservation precedes both
+    /// the audit start and publication. A failed/cancelled mint leaves its id reserved.
+    async fn mint_session_from(
+        &self,
+        client: SessionClient,
+        mut next: impl FnMut() -> SessionId,
+    ) -> Result<(StartedSession, SessionId), McpError> {
+        for _ in 0..session_handle::MAX_MINT_ATTEMPTS {
+            let handle = next();
+            if self.state.sessions.contains(&handle).await
+                || self.state.sessions.retirement_of(&handle).await.is_some()
+            {
+                continue;
+            }
+            if !self
+                .state
+                .targets
+                .reserve_handle(&handle)
+                .await
+                .map_err(|error| {
+                    McpError::internal_error(
+                        format!("mcp session reservation failed: {error}"),
+                        None,
+                    )
+                })?
+            {
+                continue;
+            }
+            let started = self.start_session_in_store(handle.clone(), client).await?;
+            return Ok((started, handle));
+        }
+        Err(McpError::internal_error(
+            "could not allocate a unique mcp session handle",
+            None,
+        ))
     }
 
     async fn learn_session_from_request(
@@ -1360,7 +1062,7 @@ impl ServerHandler for ClawMcpService {
             .with_instructions(mcp_instructions(
                 self.mode(),
                 self.human_help(),
-                self.pursue_offering(),
+                self.ultrafast(),
                 self.native(),
                 self.tab_grouping(),
             ))
@@ -1425,30 +1127,25 @@ impl ServerHandler for ClawMcpService {
 
     fn get_tool(&self, name: &str) -> Option<Tool> {
         if name == "solve_captcha" && self.state.captcha.is_some() {
-            return Some(with_session_arg(super::captcha::solve_captcha_tool()));
+            return Some(session_handle::offer(super::captcha::solve_captcha_tool()));
         }
         if name == NAME_SESSION_TOOL_NAME {
-            return Some(with_session_arg(self.name_session_tool.clone()));
+            return Some(session_handle::offer(self.name_session_tool.clone()));
         }
         if name == SAVE_SKILL_TOOL_NAME {
-            return Some(with_session_arg(self.save_skill_tool.clone()));
+            return Some(session_handle::offer(self.save_skill_offer()));
         }
         if name == MARK_SKILL_RUN_TOOL_NAME {
-            return Some(with_session_arg(self.mark_skill_run_tool.clone()));
+            return Some(session_handle::offer(self.mark_skill_run_tool.clone()));
         }
-        if name == PURSUE_TOOL_NAME && self.pursue_offering().is_offered() {
-            return Some(with_session_arg(self.pursue_tool.clone()));
+        if name == RUN_SKILL_TOOL_NAME {
+            return self.run_skill_offer();
         }
         // Catalog-wide even for hidden tools: rmcp caches these input schemas by name, and a
         // cached caller should reach execute_tool's explanation, not method-not-found.
-        let pursue = self.pursue_offering();
         let native = self.native();
-        self.find_tool_index(name).map(|index| {
-            with_session_arg(with_pursue_fallback_note(
-                self.catalog[index].to_mcp_tool(native),
-                pursue,
-            ))
-        })
+        self.find_tool_index(name)
+            .map(|index| session_handle::offer(self.catalog[index].to_mcp_tool(native)))
     }
 
     async fn call_tool(
@@ -1467,7 +1164,7 @@ impl ServerHandler for ClawMcpService {
         let is_mark_skill_run = request.name == MARK_SKILL_RUN_TOOL_NAME;
         let is_request_help = request.name == REQUEST_HELP_TOOL_NAME;
         let is_await_help = request.name == AWAIT_HELP_TOOL_NAME;
-        let is_pursue = request.name == PURSUE_TOOL_NAME && self.pursue_offering().is_offered();
+        let is_run_skill = request.name == RUN_SKILL_TOOL_NAME && self.ultrafast();
         let is_solve_captcha = request.name == "solve_captcha" && self.state.captcha.is_some();
         let tool_index = self.find_tool_index(&request.name);
         if !is_name_session
@@ -1475,7 +1172,7 @@ impl ServerHandler for ClawMcpService {
             && !is_mark_skill_run
             && !is_request_help
             && !is_await_help
-            && !is_pursue
+            && !is_run_skill
             && !is_solve_captcha
             && tool_index.is_none()
         {
@@ -1485,12 +1182,7 @@ impl ServerHandler for ClawMcpService {
             .arguments
             .map(Value::Object)
             .unwrap_or_else(|| Value::Object(JsonObject::new()));
-        let provided_handle = raw_args
-            .get("session")
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(SessionId::new);
+        let provided_handle = session_handle::take(&mut raw_args);
         // Stripped on every path, including legacy, so no tool ever receives it as an
         // argument even if an agent sends it against a schema that never offered it.
         let declared_agent_name = raw_args
@@ -1500,7 +1192,6 @@ impl ServerHandler for ClawMcpService {
             .filter(|value| !value.is_empty())
             .map(str::to_string);
         if let Value::Object(map) = &mut raw_args {
-            map.remove("session");
             map.remove(AGENT_NAME_ARG);
         }
         // Accepted in every mode though only hosted advertises it; see `hosted`.
@@ -1516,7 +1207,7 @@ impl ServerHandler for ClawMcpService {
         let modern = protocol_version_from_extensions(&context.extensions)
             .is_some_and(|version| version >= ProtocolVersion::V_2026_07_28)
             && session_id_from_extensions(&context.extensions).is_none();
-        let (started, session_handle) = if modern {
+        let (started, modern_handle) = if modern {
             // rmcp extracts wire _meta into RequestContext during decoding;
             // typed request.meta is empty even when the client supplied it.
             let modern_client = context
@@ -1564,7 +1255,9 @@ impl ServerHandler for ClawMcpService {
         let result = if is_name_session {
             Ok(self.call_name_session(&started, &raw_args).await)
         } else if is_save_skill {
-            Ok(self.call_save_skill(&started, &raw_args).await)
+            Ok(self
+                .call_save_skill(&started, &raw_args, context.ct.clone())
+                .await)
         } else if is_mark_skill_run {
             Ok(self.call_mark_skill_run(&started, &raw_args).await)
         } else if is_request_help {
@@ -1585,29 +1278,37 @@ impl ServerHandler for ClawMcpService {
                 self.human_help() == HumanHelp::On,
             )
             .await)
-        } else if is_pursue {
+        } else if is_run_skill {
             Ok(self
-                .call_pursue(&started, &raw_args, context.ct.clone())
+                .call_run_skill(&started, &raw_args, context.ct.clone())
                 .await)
         } else {
             let Some(tool_index) = tool_index else {
                 unreachable!("catalog tool was validated before session resolution");
             };
             let browser_session = self.state.browser.session().await;
-            let binding = self
-                .state
-                .targets
-                .binding_for_execution(started.session.id())
-                .await
-                .map_err(|error| McpError::invalid_request(error.to_string(), None))?;
-            // Profile management must not load the Default profile as a side effect of admission.
-            let manages_target = self.catalog[tool_index].metadata.manages_target;
-            let view = match &browser_session {
-                Some(browser) if manages_target => {
-                    Some(BrowserView::capture_for_management(browser.clone(), binding, None).await)
+            // Execution requirements come from the registered handler. Reading saved
+            // output must not load a profile or depend on the current browser binding.
+            let view = if self.catalog[tool_index].requires_browser() {
+                let binding = self
+                    .state
+                    .targets
+                    .binding_for_execution(started.session.id())
+                    .await
+                    .map_err(|error| McpError::invalid_request(error.to_string(), None))?;
+                let manages_target = self.catalog[tool_index].metadata.manages_target;
+                match &browser_session {
+                    Some(browser) if manages_target => Some(
+                        BrowserView::capture_for_management(browser.clone(), binding, None).await,
+                    ),
+                    Some(browser) => {
+                        Some(BrowserView::capture(browser.clone(), binding, None).await)
+                    }
+                    None => None,
                 }
-                Some(browser) => Some(BrowserView::capture(browser.clone(), binding, None).await),
-                None => None,
+                .map(|view| hosted::with_viewports(view, self.state.viewports.as_ref()))
+            } else {
+                None
             };
             let target_store: Arc<dyn TargetStore> = Arc::new(ClawTargetStore {
                 bindings: self.state.targets.clone(),
@@ -1667,7 +1368,18 @@ impl ServerHandler for ClawMcpService {
             result,
         )
         .await;
-        let mut result = attach_session_handle(finished, session_handle, presented_handle)?;
+        if !self.mode().is_hosted() {
+            crate::services::tool_usage::record_tool_call(
+                &self.state.tool_calls_daily,
+                &self.state.analytics,
+                &tool_name,
+                started.session.client_name(),
+                !matches!(&finished, Ok(result) if !result.is_error.unwrap_or(false)),
+                crate::clock::now_epoch_ms(),
+            )
+            .await;
+        }
+        let mut result = session_handle::attach(finished, modern_handle, presented_handle)?;
         // The tip asks the agent to close the group the server made for it, so it has no place
         // where the server makes none.
         if self.tab_grouping().is_automatic()
@@ -1860,278 +1572,15 @@ fn mark_skill_run_tool() -> Tool {
     )
 }
 
-/// Destinations the caller authored, which is the only way this run may move.
-fn destinations_from(raw_args: &Value) -> Vec<browseros_decide::offer::Destination> {
-    raw_args
-        .get("destinations")
-        .and_then(Value::as_array)
-        .map(|listed| {
-            listed
-                .iter()
-                .filter_map(|entry| {
-                    Some(browseros_decide::offer::Destination {
-                        label: entry.get("label")?.as_str()?.to_string(),
-                        url: entry.get("url")?.as_str()?.to_string(),
-                        new_tab: entry
-                            .get("newTab")
-                            .and_then(Value::as_bool)
-                            .unwrap_or(false),
-                    })
-                })
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
-/// Values the caller supplied, which is the only way this run may type.
-fn values_from(raw_args: &Value) -> Vec<browseros_decide::offer::NamedValue> {
-    raw_args
-        .get("values")
-        .and_then(Value::as_object)
-        .map(|given| {
-            given
-                .iter()
-                .filter_map(|(name, text)| {
-                    Some(browseros_decide::offer::NamedValue::new(
-                        name.clone(),
-                        text.as_str()?.to_string(),
-                    ))
-                })
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
-/// What `pursue` hands back beside its text.
-///
-/// Built by hand rather than derived, because `Told` is the decision layer's
-/// shape and this is the wire's. Keeping them apart means a field can be
-/// renamed in one without silently changing the other's contract.
-fn pursue_structured(told: &browseros_decide::report::Told) -> Value {
-    let mut body = json!({
-        "status": told.status,
-        "said": told.said,
-        "actions": told.actions,
-        "changed": told.changed,
-        "decisions": told.decisions,
-        "batches": told.batches,
-        "retired": told.retired,
-        "inputTokens": told.input_tokens,
-        "url": told.url,
-        "title": told.title,
-        "offered": told.offered,
-        "unlabelledImages": told.unlabelled_images,
-        "story": told.story,
-        "tryNext": told.try_next,
-        "decided": told
-            .decided
-            .iter()
-            .map(|decided| {
-                let mut one = json!({
-                    "operation": decided.operation,
-                    "verdict": decided.verdict,
-                    "batch": decided.batch,
-                    "inputTokens": decided.input_tokens,
-                });
-                if let Some(how) = decided.how {
-                    one["how"] = json!(how);
-                }
-                if let Some(target) = &decided.target {
-                    one["target"] = json!(target);
-                }
-                if let Some(name) = &decided.target_name {
-                    one["targetName"] = json!(name);
-                }
-                if let Some(weakest) = decided.weakest {
-                    one["weakest"] = json!(weakest);
-                }
-                if let Some(margin) = decided.margin {
-                    one["margin"] = json!(margin);
-                }
-                if let Some(needed) = decided.needed {
-                    one["needed"] = json!(needed);
-                }
-                if let Some(share) = decided.share {
-                    one["share"] = json!(share);
-                }
-                if let Some(why) = &decided.why {
-                    one["why"] = json!(why);
-                }
-                one
-            })
-            .collect::<Vec<_>>(),
-    });
-    if let Some(goal_met) = told.goal_met {
-        body["goalMet"] = json!(goal_met);
-    }
-    if let Some(page) = &told.page {
-        body["page"] = json!({
-            "url": page.url,
-            "title": page.title,
-            "omitted": page.omitted,
-            "obstructed": page.obstructed,
-            "controls": page
-                .controls
-                .iter()
-                .map(|control| {
-                    let mut shown = json!({
-                        "ref": control.reference,
-                        "role": control.role,
-                        "name": control.name,
-                    });
-                    if let Some(state) = &control.state {
-                        shown["state"] = json!(state);
-                    }
-                    shown
-                })
-                .collect::<Vec<_>>(),
-        });
-    }
-    body
-}
-
-/// The shape `pursue` promises to return.
-///
-/// Declared so the shape is visible in `tools/list` rather than discovered by
-/// a caller parsing what arrives. `run` is the precedent on this server for a
-/// tool that promises structured content and delivers it.
-fn pursue_output_schema() -> Value {
-    json!({
-        "type": "object",
-        "properties": {
-            "status": {
-                "type": "string",
-                "description": "One word to branch on: satisfied, blocked, budget_spent, cancelled, nothing_changed, not_confident, going_in_circles, browser_kept_failing, only_waiting, nothing_offered, too_risky_to_guess, no_field_named, asked_too_often, unverifiable. On satisfied the page holds what the goal asked for: read it."
-            },
-            "said": { "type": "string", "description": "One sentence, true of what actually happened." },
-            "page": {
-                "type": "object",
-                "description": "The page it ended on. Read the controls: if it could not finish, these are what it had to choose between, and naming one of them in a new goal is how you get further than rewording.",
-                "properties": {
-                    "url": { "type": "string" },
-                    "title": { "type": "string" },
-                    "obstructed": { "type": ["string", "null"], "description": "What is covering the page, if anything. A page with a dialog over it is not the page you would be reading." },
-                    "omitted": { "type": "integer", "description": "Controls that exist and are not listed, so you know the list is partial." },
-                    "controls": {
-                        "type": "array",
-                        "items": {
-                            "type": "object",
-                            "properties": {
-                                "ref": { "type": "string", "description": "Name this back in a goal, or pass it to act." },
-                                "role": { "type": "string" },
-                                "name": { "type": "string" },
-                                "state": { "type": "string", "description": "Present when the control has one: checked, unchecked, selected, expanded, collapsed." }
-                            },
-                            "required": ["ref", "role", "name"]
-                        }
-                    }
-                },
-                "required": ["url", "title", "controls", "omitted"]
-            },
-            "offered": { "type": "integer", "description": "How many controls the deciding question could choose between." },
-            "unlabelledImages": { "type": "integer", "description": "Images carrying no text label, which nothing here could read." },
-            "tryNext": {
-                "type": ["string", "null"],
-                "description": "One line saying what to change and try again, derived from how the run ended and which judgement was weakest. Present only when the run did not finish. Read this before rewording a goal."
-            },
-            "story": {
-                "type": "array",
-                "description": "What the run did, in order, as sentences. Read this first: it is the same information as `decided` in a form a person can read, including what observably moved on the page.",
-                "items": { "type": "string" }
-            },
-            "decided": {
-                "type": "array",
-                "description": "Every decision the run paid for, in order, including the ones that never ran. Read `verdict` and `why` to see why a run did nothing.",
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "operation": { "type": "string" },
-                        "how": { "type": "string" },
-                        "target": { "type": "string" },
-                        "targetName": { "type": "string" },
-                        "verdict": { "type": "string", "description": "ran, explored, or handed_back." },
-                        "weakest": { "type": "string", "description": "Which judgement was least certain, in words." },
-                        "margin": { "type": "number", "description": "How far the weakest judgement led its runner-up by." },
-                        "needed": { "type": "number", "description": "The margin it had to clear. Compare with `margin`: a margin alone says nothing, because 0.23 is comfortable for a report and refused for a submit." },
-                        "share": { "type": "number" },
-                        "why": { "type": "string", "description": "What the gate made of it, where it had something to say." },
-                        "batch": { "type": "integer", "description": "Which part of the page this decision was asked about, from one." },
-                        "inputTokens": { "type": "integer" }
-                    },
-                    "required": ["operation", "verdict", "batch", "inputTokens"]
-                }
-            },
-            "actions": { "type": "integer", "description": "Actions that ran, which is not the same as decisions asked for." },
-            "changed": { "type": "integer", "description": "How many of those changed the page." },
-            "decisions": { "type": "integer" },
-            "batches": { "type": "integer", "description": "Questions asked about part of a page. More than one per decision when a page is larger than one question." },
-            "retired": { "type": "integer", "description": "Controls set aside for changing nothing when acted on." },
-            "goalMet": { "type": "number", "description": "How likely the last decision thought the goal was already satisfied. Reported, never acted on: a completion claim is not evidence." },
-            "inputTokens": { "type": "integer" },
-            "url": { "type": "string" },
-            "title": { "type": "string" }
-        },
-        "required": ["status", "said", "actions", "changed", "decisions", "batches", "retired", "inputTokens", "url", "title"]
-    })
-}
-
-fn pursue_tool() -> Tool {
-    let Value::Object(input_schema) = json!({
-        "type": "object",
-        "properties": {
-            "page": {
-                "type": "integer",
-                "description": "The page to work on, from tabs or navigate. It is already yours, and it stays yours."
-            },
-            "goal": {
-                "type": "string",
-                "description": "The whole outcome you want, for instance \"sort these results by price, lowest first, and narrow them to the Corsair brand\". Not a single step."
-            },
-            "maxSteps": {
-                "type": "integer",
-                "description": "Stop after this many actions. Defaults to 12."
-            },
-            "destinations": {
-                "type": "array",
-                "description": "Pages this run may move to. It picks one by label and never invents a url, so moving stays inside the set you wrote.",
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "label": { "type": "string", "description": "What this page is, in the words your goal uses." },
-                        "url": { "type": "string" },
-                        "newTab": { "type": "boolean", "description": "Open it beside this page instead of moving this one." }
-                    },
-                    "required": ["label", "url"]
-                }
-            },
-            "values": {
-                "type": "object",
-                "description": "Values this run may type, named by what they are, for instance {\"pincode\": \"600042\"}. It picks which one belongs in a field it chose and never invents a string. Never put a password, key, token or card number here.",
-                "additionalProperties": { "type": "string" }
-            }
-        },
-        "required": ["page", "goal"]
-    }) else {
-        unreachable!();
-    };
-    let Value::Object(output_schema) = pursue_output_schema() else {
-        unreachable!();
-    };
-    Tool::new(PURSUE_TOOL_NAME, PURSUE_DESCRIPTION, input_schema)
-        .with_raw_output_schema(std::sync::Arc::new(output_schema))
-        .with_annotations(
-            ToolAnnotations::with_title("Pursue a goal")
-                .read_only(false)
-                .destructive(false)
-                .idempotent(false)
-                .open_world(true),
-        )
-}
-
 fn request_help_tool() -> Tool {
     let Value::Object(input_schema) = json!({
         "type": "object",
         "properties": {
+            "page": {
+                "type": "integer",
+                "minimum": 1,
+                "description": "The id of the page that needs a person, the same number you pass to snapshot and act. Help is always about one page: pass the one they must act on, so the cockpit brings that exact tab to the front."
+            },
             "reason": {
                 "type": "string",
                 "description": "A short line saying what you need a human to do, e.g. \"Enter the LinkedIn verification code\"."
@@ -2150,7 +1599,7 @@ fn request_help_tool() -> Tool {
                 "description": "The kind of help, used for the cockpit icon."
             }
         },
-        "required": ["reason"]
+        "required": ["page", "reason"]
     }) else {
         unreachable!();
     };
@@ -2365,50 +1814,6 @@ fn started_session_from(session: Arc<Session>, client: &ClientInfo) -> StartedSe
     }
 }
 
-/// The opening sentence of `run`'s own description, which ranks it first.
-///
-/// Owned by the tool crate, which knows nothing about the decision loop and
-/// should not: a production build has no loop to rank. So the sentence is
-/// recast here, at the edge that already knows whether the loop is offered.
-const RUN_RANKED_FIRST: &str = "The primary way to drive the browser - prefer run for any task; the granular tools are the fallback.";
-
-/// What it is recast as while the decision loop is offered.
-const RUN_RANKED_AFTER_PURSUE: &str = "The fallback once two pursue calls have come back with a status other than satisfied, and the right first call for work that is a script rather than an outcome: pagination over many pages, bulk extraction, or anything needing a saved helper. The granular tools are the fallback to this.";
-
-/// Demotes `run` below `pursue` in its own description, leaving the rest of it.
-///
-/// A catalogue entry that still calls itself the primary way to drive the
-/// browser outranks any amount of instruction text that says otherwise: the
-/// description travels with the tool and the instructions do not.
-fn with_pursue_fallback_note(mut tool: Tool, pursue: PursueOffering) -> Tool {
-    if !pursue.is_offered() || tool.name != RUN_TOOL_NAME {
-        return tool;
-    }
-    if let Some(description) = tool.description.as_deref() {
-        tool.description = Some(
-            description
-                .replace(RUN_RANKED_FIRST, RUN_RANKED_AFTER_PURSUE)
-                .into(),
-        );
-    }
-    tool
-}
-
-fn with_session_arg(mut tool: Tool) -> Tool {
-    let mut schema = tool.input_schema.as_ref().clone();
-    let properties = schema
-        .entry("properties")
-        .or_insert_with(|| Value::Object(JsonObject::new()));
-    if let Value::Object(properties) = properties {
-        properties.insert(
-            "session".to_string(),
-            json!({ "type": "string", "description": SESSION_ARG_DESCRIPTION }),
-        );
-    }
-    tool.input_schema = Arc::new(schema);
-    tool
-}
-
 /// Offers a product-name fallback to modern clients in one consistent schema.
 /// Metadata is optional per request, so tools/list never caches a caller identity
 /// or changes the schema based on whether that request happened to identify it.
@@ -2444,46 +1849,6 @@ fn session_was_stopped() -> McpError {
          not resend this handle.",
         None,
     )
-}
-
-fn attach_session_handle(
-    result: Result<CallToolResult, McpError>,
-    handle: Option<SessionId>,
-    presented: Option<SessionId>,
-) -> Result<CallToolResult, McpError> {
-    let Some(handle) = handle else {
-        return result;
-    };
-    // An agent that presented a handle and got a different one back has changed session
-    // without asking to. Saying so is the difference between an agent that adopts the new
-    // handle and one that keeps resending a dead one, which is what fills the cockpit with
-    // one-call sessions.
-    let replaced = presented.is_some_and(|presented| presented != handle);
-    let handle = handle.to_string();
-    result.map(|mut call_result| {
-        // The stateless handle is transport identity, not tool output, so it rides in
-        // `_meta` (never colliding with a tool's output_schema). But MCP clients do not
-        // surface result `_meta` to the model, so also append it as a content line the
-        // model always sees, otherwise the agent never learns the handle to echo back
-        // and loses tab ownership across stateless calls.
-        call_result
-            .meta
-            .get_or_insert_with(MetaObject::new)
-            .insert(SESSION_META_KEY.to_string(), Value::String(handle.clone()));
-        let line = if replaced {
-            format!(
-                "[browseros-neo session: {handle}. The handle you sent is no longer active, so this call continued in a new session. Pass this exact value as the `session` argument from now on, and stop sending the previous one.]"
-            )
-        } else {
-            format!(
-                "[browseros-neo session: {handle}. Pass this exact value as the `session` argument on every following call to keep this browser session and its tab ownership.]"
-            )
-        };
-        call_result
-            .content
-            .push(rmcp::model::ContentBlock::text(line));
-        call_result
-    })
 }
 
 fn session_id_from_extensions(extensions: &rmcp::model::Extensions) -> Option<SessionId> {
@@ -2586,6 +1951,113 @@ mod tests {
             .await;
         assert!(matches!(result, Err(error) if error.code.0 == -32601));
         running.cancel().await?;
+        Ok(())
+    }
+
+    async fn viewport_test_service(mode: ServerMode) -> anyhow::Result<ClawMcpService> {
+        use crate::api::mcp::test_support::{ProfileConnection, current_session};
+        let call =
+            crate::api::mcp::test_support::tool_call_in_mode("tabs", json!({}), mode).await?;
+        call.state
+            .browser
+            .set_session_for_testing(current_session(
+                ProfileConnection::new().with_default_profile(),
+            ))
+            .await;
+        Ok(ClawMcpService::new(call.state))
+    }
+
+    async fn call_tool_value(
+        service: ClawMcpService,
+        name: &'static str,
+        args: Value,
+    ) -> anyhow::Result<Result<Value, rmcp::ErrorData>> {
+        let (_client, transport) = tokio::io::duplex(4096);
+        let running = rmcp::service::serve_directly(service, transport, None);
+        let context =
+            RequestContext::new(rmcp::model::RequestId::Number(1), running.peer().clone());
+        let response = running
+            .service()
+            .call_tool(
+                CallToolRequestParams::new(name).with_arguments(serde_json::from_value(args)?),
+                context,
+            )
+            .await;
+        running.cancel().await?;
+        Ok(match response {
+            Ok(CallToolResponse::Complete(result)) => Ok(serde_json::to_value(result)?),
+            Ok(_) => anyhow::bail!("unexpected task response"),
+            Err(error) => Err(error),
+        })
+    }
+
+    #[tokio::test]
+    async fn tests_that_only_hosted_servers_offer_set_viewport() -> anyhow::Result<()> {
+        let hosted = viewport_test_service(ServerMode::Hosted).await?;
+        let tool = hosted
+            .listed_tools(true)
+            .into_iter()
+            .find(|tool| tool.name == "setViewport")
+            .ok_or_else(|| anyhow::anyhow!("setViewport missing from the hosted list"))?;
+        assert!(tool.input_schema["properties"].get("taskName").is_some());
+        assert!(hosted.get_tool("setViewport").is_some());
+        let run = hosted
+            .listed_tools(true)
+            .into_iter()
+            .find(|tool| tool.name == "run")
+            .ok_or_else(|| anyhow::anyhow!("run missing from the hosted list"))?;
+        let run_description = run.description.as_deref().unwrap_or_default();
+        assert!(
+            run_description.contains(
+                "page.setViewport({ mode: 'mobile' | 'desktop' | 'default', zoom?, width?, height? })"
+            ),
+            "{run_description}"
+        );
+        // Dispatched to the tool, which admits the page before anything else.
+        let refused = call_tool_value(hosted, "setViewport", json!({"page": 1, "mode": "mobile"}))
+            .await?
+            .map_err(|error| anyhow::anyhow!("{error:?}"))?;
+        assert_eq!(refused["isError"], true);
+        let text = refused["content"][0]["text"].as_str().unwrap_or_default();
+        assert!(
+            text.starts_with("setViewport failed: page_out_of_scope"),
+            "{text}"
+        );
+
+        let desktop = viewport_test_service(ServerMode::Desktop).await?;
+        assert!(
+            !desktop
+                .listed_tools(true)
+                .iter()
+                .any(|tool| tool.name == "setViewport")
+        );
+        assert!(desktop.get_tool("setViewport").is_none());
+        let missing =
+            call_tool_value(desktop, "setViewport", json!({"page": 1, "mode": "mobile"})).await?;
+        assert!(matches!(missing, Err(error) if error.code.0 == -32601));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_only_hosted_run_scripts_get_page_set_viewport() -> anyhow::Result<()> {
+        let code = "try { return typeof browser.page(1).setViewport } catch (e) { return 'refused: ' + e.message }";
+        for (mode, expected) in [
+            (ServerMode::Hosted, "function"),
+            (
+                ServerMode::Desktop,
+                "refused: page.setViewport is not a method",
+            ),
+        ] {
+            let service = viewport_test_service(mode).await?;
+            let result = call_tool_value(service, "run", json!({"code": code}))
+                .await?
+                .map_err(|error| anyhow::anyhow!("{error:?}"))?;
+            let value = result["structuredContent"]["value"]
+                .as_str()
+                .unwrap_or_default()
+                .to_string();
+            assert!(value.starts_with(expected), "{mode:?}: {result}");
+        }
         Ok(())
     }
 
@@ -2799,16 +2271,6 @@ mod tests {
         assert!(SUPPORTED_PROTOCOL_VERSIONS.contains(&ProtocolVersion::V_2025_11_25));
     }
 
-    /// `pursue` is listed only when the server holds a credential for the
-    /// decision model, so an exact tool list has to say so. Asked of this
-    /// service's own settings store rather than of the ambient environment,
-    /// which is what used to make the suite pass or fail by whose shell ran it.
-    fn expect_pursue_if_credentialled(service: &ClawMcpService, expected: &mut Vec<String>) {
-        if service.pursue_offering().is_offered() {
-            expected.push(PURSUE_TOOL_NAME.to_string());
-        }
-    }
-
     #[tokio::test]
     async fn subscriptions_listen_is_accepted_not_method_not_found() -> anyhow::Result<()> {
         // rmcp turns a None subscription filter into JSON-RPC -32601 for subscriptions/listen,
@@ -2827,37 +2289,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn with_session_arg_adds_an_optional_session_property_to_every_tool() -> anyhow::Result<()>
-    {
+    async fn every_listed_tool_offers_the_session_handle() -> anyhow::Result<()> {
         let call = crate::api::mcp::test_support::tool_call("tabs", json!({})).await?;
         let service = ClawMcpService::new(call.state);
-
-        let injected = with_session_arg(service.name_session_tool.clone());
-        let schema = Value::Object(injected.input_schema.as_ref().clone());
-        assert_eq!(
-            schema["properties"]["session"],
-            json!({ "type": "string", "description": SESSION_ARG_DESCRIPTION })
-        );
-        assert!(
-            !schema["required"]
-                .as_array()
-                .is_some_and(|required| required.contains(&json!("session")))
-        );
-        // The promise has to stay conditional and has to keep naming the fallback:
-        // an unconditional version of this text is what sent a legacy client after
-        // a handle it never receives.
-        assert!(
-            SESSION_ARG_DESCRIPTION.contains("only if your client connects without"),
-            "the handle must not be promised unconditionally"
-        );
-        assert!(
-            SESSION_ARG_DESCRIPTION.contains("your tab group id instead"),
-            "a client that gets no handle must be told what to use"
-        );
-        assert!(
-            !SESSION_ARG_DESCRIPTION.contains("and its tab ownership"),
-            "tab ownership continuity comes from the group id, not this handle"
-        );
 
         for tool in service.listed_tools(false) {
             let schema = Value::Object(tool.input_schema.as_ref().clone());
@@ -2867,8 +2301,49 @@ mod tests {
                 "tool {} is missing the session property",
                 tool.name
             );
+            if let Some(output) = &tool.output_schema {
+                let output = Value::Object(output.as_ref().clone());
+                assert_eq!(
+                    output["properties"]["session"]["type"],
+                    json!("string"),
+                    "tool {} does not admit the handle in its structured result",
+                    tool.name
+                );
+            }
+        }
+
+        // The structured `session` field belongs to the server. A tool whose own output
+        // already had one would have it overwritten by the handle.
+        assert!(declares_session(
+            &json!({ "oneOf": [{ "properties": { "session": {} } }] })
+        ));
+        let native = service.native();
+        let own = service
+            .catalog
+            .iter()
+            .map(|tool| tool.to_mcp_tool(native))
+            .chain([super::super::captcha::solve_captcha_tool()]);
+        for tool in own {
+            if let Some(output) = &tool.output_schema {
+                assert!(
+                    !declares_session(&Value::Object(output.as_ref().clone())),
+                    "tool {} already returns a `session` field",
+                    tool.name
+                );
+            }
         }
         Ok(())
+    }
+
+    /// Whether an object schema's own fields include `session`, at the root or in any of the
+    /// union branches the target schemas declare their fields in.
+    fn declares_session(schema: &Value) -> bool {
+        schema["properties"].get("session").is_some()
+            || ["oneOf", "anyOf", "allOf"].iter().any(|key| {
+                schema[*key]
+                    .as_array()
+                    .is_some_and(|branches| branches.iter().any(declares_session))
+            })
     }
 
     #[tokio::test]
@@ -2881,6 +2356,13 @@ mod tests {
             .resolve_modern_session(None, None, None)
             .await
             .map_err(|error| anyhow::anyhow!("{error:?}"))?;
+        assert_eq!(minted.as_str().len(), 8);
+        assert!(
+            minted
+                .as_str()
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        );
 
         let (again, reused) = service
             .resolve_modern_session(Some(minted.clone()), None, None)
@@ -2902,6 +2384,81 @@ mod tests {
             other.session.id().to_string(),
             first.session.id().to_string()
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn minting_retries_live_retired_reserved_and_persisted_handle_collisions()
+    -> anyhow::Result<()> {
+        let call = crate::api::mcp::test_support::tool_call("tabs", json!({})).await?;
+        let service = ClawMcpService::new(call.state.clone());
+        for value in ["00000001", "00000002"] {
+            service
+                .start_session_in_store(SessionId::new(value), SessionClient::resolve(None, None))
+                .await
+                .map_err(|error| anyhow::anyhow!("{error:?}"))?;
+        }
+        call.state
+            .sessions
+            .remove(&SessionId::new("00000002"), "closed", None)
+            .await?;
+        call.state
+            .targets
+            .reserve_handle(&SessionId::new("00000003"))
+            .await?;
+        call.state
+            .targets
+            .clear(&SessionId::new("00000004"))
+            .await?;
+        call.state
+            .targets
+            .inherit(&SessionId::new("00000004"), &SessionId::new("00000005"))
+            .await?;
+
+        let mut candidate = 0_u32;
+        let (started, handle) = service
+            .mint_session_from(SessionClient::resolve(None, None), || {
+                candidate += 1;
+                SessionId::new(format!("{candidate:08x}"))
+            })
+            .await
+            .map_err(|error| anyhow::anyhow!("{error:?}"))?;
+        assert_eq!(handle.as_str(), "00000006");
+        assert_eq!(started.session.id(), &handle);
+        assert!(call.state.sessions.contains(&handle).await);
+        assert!(!call.state.targets.reserve_handle(&handle).await?);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn minting_repeated_collisions_fails_without_reusing_a_live_session() -> anyhow::Result<()>
+    {
+        let call = crate::api::mcp::test_support::tool_call("tabs", json!({})).await?;
+        let service = ClawMcpService::new(call.state.clone());
+        let before = call.state.sessions.count().await;
+        let result = service
+            .mint_session_from(SessionClient::resolve(None, None), || SessionId::new("s1"))
+            .await;
+        assert!(result.is_err());
+        assert_eq!(call.state.sessions.count().await, before);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn modern_calls_still_accept_existing_full_uuid_handles() -> anyhow::Result<()> {
+        let call = crate::api::mcp::test_support::tool_call("tabs", json!({})).await?;
+        let service = ClawMcpService::new(call.state.clone());
+        let legacy = SessionId::new("11111111-2222-4333-8444-555555555555");
+        let original = service
+            .start_session_in_store(legacy.clone(), SessionClient::resolve(None, None))
+            .await
+            .map_err(|error| anyhow::anyhow!("{error:?}"))?;
+        let (reused, handle) = service
+            .resolve_modern_session(Some(legacy.clone()), None, None)
+            .await
+            .map_err(|error| anyhow::anyhow!("{error:?}"))?;
+        assert_eq!(handle, legacy);
+        assert_eq!(reused.session.convo_id(), original.session.convo_id());
         Ok(())
     }
 
@@ -3125,36 +2682,6 @@ mod tests {
         Ok(())
     }
 
-    /// The agent has to be able to see that its session changed. `_meta` is not surfaced to
-    /// the model by MCP clients, so the difference has to be in the content.
-    #[test]
-    fn a_replaced_handle_says_so_in_the_content() -> anyhow::Result<()> {
-        let replaced = attach_session_handle(
-            Ok(CallToolResult::success(vec![
-                rmcp::model::ContentBlock::text("ok"),
-            ])),
-            Some(SessionId::new("successor")),
-            Some(SessionId::new("dead-handle")),
-        )
-        .map_err(|error| anyhow::anyhow!("{error:?}"))?;
-        let text = text_of(&replaced);
-        assert!(text.contains("no longer active"), "{text}");
-        assert!(text.contains("stop sending the previous one"), "{text}");
-
-        // An agent that presented the handle it got back is not told anything unusual.
-        let unchanged = attach_session_handle(
-            Ok(CallToolResult::success(vec![
-                rmcp::model::ContentBlock::text("ok"),
-            ])),
-            Some(SessionId::new("same")),
-            Some(SessionId::new("same")),
-        )
-        .map_err(|error| anyhow::anyhow!("{error:?}"))?;
-        let text = text_of(&unchanged);
-        assert!(!text.contains("no longer active"), "{text}");
-        Ok(())
-    }
-
     fn text_of(result: &CallToolResult) -> String {
         result
             .content
@@ -3251,52 +2778,6 @@ mod tests {
             .await
             .map_err(|error| anyhow::anyhow!("{error:?}"))?;
         assert_eq!(anon.session.agent().slug(), "agent");
-        Ok(())
-    }
-
-    #[test]
-    fn attach_session_handle_puts_the_handle_in_meta_not_structured_content() -> anyhow::Result<()>
-    {
-        // The handle must ride in `_meta`, never in `structured_content`, so it cannot
-        // collide with a tool's output_schema or overwrite the tool's real result.
-        let modern = attach_session_handle(
-            Ok(CallToolResult::success(vec![
-                rmcp::model::ContentBlock::text("ok"),
-            ])),
-            Some(SessionId::new("handle-xyz")),
-            None,
-        )
-        .map_err(|error| anyhow::anyhow!("{error:?}"))?;
-        assert!(
-            modern.structured_content.is_none(),
-            "handle must not touch structured_content"
-        );
-        let handle = modern
-            .meta
-            .as_ref()
-            .and_then(|meta| meta.get(SESSION_META_KEY))
-            .and_then(Value::as_str);
-        assert_eq!(handle, Some("handle-xyz"));
-        // The handle is also appended to content so the model (which does not see _meta)
-        // reads and echoes it.
-        let content_has_handle = modern.content.iter().any(|block| {
-            block
-                .as_text()
-                .is_some_and(|text| text.text.contains("handle-xyz"))
-        });
-        assert!(content_has_handle, "handle must also appear in content");
-
-        // Legacy calls (no handle) get neither _meta nor structured_content touched.
-        let legacy = attach_session_handle(
-            Ok(CallToolResult::success(vec![
-                rmcp::model::ContentBlock::text("ok"),
-            ])),
-            None,
-            None,
-        )
-        .map_err(|error| anyhow::anyhow!("{error:?}"))?;
-        assert!(legacy.structured_content.is_none());
-        assert!(legacy.meta.is_none());
         Ok(())
     }
 
@@ -3418,7 +2899,7 @@ mod tests {
                 mcp_instructions(
                     ServerMode::Desktop,
                     HumanHelp::On,
-                    service.pursue_offering(),
+                    service.ultrafast(),
                     native,
                     service.tab_grouping()
                 )
@@ -3430,13 +2911,7 @@ mod tests {
             .as_deref()
             .ok_or_else(|| anyhow::anyhow!("BrowserOS neo instructions missing"))?;
         assert!(instructions.contains("BrowserOS neo — the browser for agents"));
-        // Which tool the instructions name depends on whether the loop is
-        // offered, which this service's own settings store answers.
-        if service.pursue_offering().is_offered() {
-            assert!(instructions.contains("Reach for pursue first"));
-        } else {
-            assert!(instructions.contains("Reach for run first"));
-        }
+        assert!(instructions.contains("Reach for run first"));
         assert!(instructions.contains("optional fallback for your client"));
         assert!(instructions.contains("Put your task\n  name in name_session."));
         assert!(instructions.contains("tabs group as <client>/<name>."));
@@ -3532,7 +3007,7 @@ mod tests {
         Ok(())
     }
 
-    /// Hosted lists the browser catalog (plus pursue when credentialled) and nothing that
+    /// Hosted lists the browser catalog and nothing that
     /// assumes a local harness or a watching person, even with human help on in settings.
     #[tokio::test]
     async fn hosted_surface_is_the_catalog_with_task_name_on_every_tool() -> anyhow::Result<()> {
@@ -3546,13 +3021,12 @@ mod tests {
             .iter()
             .map(|tool| tool.name.to_string())
             .collect::<Vec<_>>();
-        let mut expected = service
+        let expected = service
             .catalog
             .iter()
             .filter(|tool| tool.available(service.native()))
             .map(|tool| tool.name.to_string())
             .collect::<Vec<_>>();
-        expect_pursue_if_credentialled(&service, &mut expected);
         assert_eq!(names, expected);
         for tool in &tools {
             let schema = Value::Object(tool.input_schema.as_ref().clone());
@@ -3576,7 +3050,7 @@ mod tests {
                 mcp_instructions(
                     ServerMode::Hosted,
                     HumanHelp::Off,
-                    service.pursue_offering(),
+                    service.ultrafast(),
                     service.native(),
                     service.tab_grouping()
                 )
@@ -3731,7 +3205,6 @@ mod tests {
         expected.push(NAME_SESSION_TOOL_NAME.to_string());
         expected.push(SAVE_SKILL_TOOL_NAME.to_string());
         expected.push(MARK_SKILL_RUN_TOOL_NAME.to_string());
-        expect_pursue_if_credentialled(&service, &mut expected);
         expected.push(REQUEST_HELP_TOOL_NAME.to_string());
         expected.push(AWAIT_HELP_TOOL_NAME.to_string());
         assert_eq!(names, expected);
@@ -3741,61 +3214,6 @@ mod tests {
         assert!(names.contains(&"mark_skill_run".to_string()));
         assert!(names.contains(&"request_human_help".to_string()));
         assert!(names.contains(&"await_human_help".to_string()));
-        Ok(())
-    }
-
-    /// The recast is a string replace against a description owned by another
-    /// crate. If that crate rewords its opening sentence, the replace silently
-    /// does nothing and run keeps calling itself the primary way to drive the
-    /// browser while pursue is offered. This is the test that catches it.
-    #[tokio::test]
-    async fn run_still_opens_with_the_sentence_that_gets_recast() -> anyhow::Result<()> {
-        let call = crate::api::mcp::test_support::tool_call("tabs", json!({})).await?;
-        let service = ClawMcpService::new(call.state);
-        let run = service
-            .catalog
-            .iter()
-            .find(|tool| tool.name == RUN_TOOL_NAME)
-            .map(|tool| tool.to_mcp_tool(service.native()))
-            .ok_or_else(|| anyhow::anyhow!("run is missing from the catalogue"))?;
-        let description = run
-            .description
-            .as_deref()
-            .ok_or_else(|| anyhow::anyhow!("run has no description"))?;
-        assert_eq!(description.matches(RUN_RANKED_FIRST).count(), 1);
-
-        let absent = with_pursue_fallback_note(run.clone(), PursueOffering::Absent);
-        assert_eq!(absent.description.as_deref(), Some(description));
-
-        let offered = with_pursue_fallback_note(run, PursueOffering::Offered);
-        let offered = offered
-            .description
-            .as_deref()
-            .ok_or_else(|| anyhow::anyhow!("recast run has no description"))?;
-        assert!(offered.starts_with(RUN_RANKED_AFTER_PURSUE));
-        assert!(!offered.contains(RUN_RANKED_FIRST));
-        // Everything past the first sentence is the SDK reference, which the
-        // fallback still needs in full.
-        assert!(offered.contains("a bare engine, not Node and not a page"));
-        assert!(offered.contains("browser.open(url)"));
-        Ok(())
-    }
-
-    /// Only run is recast. A granular tool keeps its own description, because
-    /// its ranking relative to run did not change.
-    #[tokio::test]
-    async fn a_granular_tool_is_left_alone_by_the_recast() -> anyhow::Result<()> {
-        let call = crate::api::mcp::test_support::tool_call("tabs", json!({})).await?;
-        let service = ClawMcpService::new(call.state);
-        let native = service.native();
-        for tool in service.catalog.iter().map(|tool| tool.to_mcp_tool(native)) {
-            if tool.name == RUN_TOOL_NAME {
-                continue;
-            }
-            let before = tool.description.clone();
-            let after = with_pursue_fallback_note(tool, PursueOffering::Offered);
-            assert_eq!(after.description, before);
-        }
         Ok(())
     }
 
@@ -3814,6 +3232,54 @@ mod tests {
 
         assert_eq!(result.is_error, Some(true));
         assert!(text_of(&result).contains("reason"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn request_human_help_requires_a_page() -> anyhow::Result<()> {
+        let call = crate::api::mcp::test_support::tool_call("tabs", json!({})).await?;
+        let service = ClawMcpService::new(call.state);
+        let started = service
+            .ensure_session_started(SessionId::new("mcp-help-no-page"))
+            .await
+            .map_err(|error| anyhow::anyhow!("{error:?}"))?;
+
+        let result = service
+            .call_request_human_help(
+                &started,
+                &json!({ "reason": "Enter the code" }),
+                CancellationToken::new(),
+            )
+            .await;
+
+        assert_eq!(result.is_error, Some(true));
+        assert!(text_of(&result).contains("page"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn request_human_help_errors_when_the_page_cannot_be_resolved() -> anyhow::Result<()> {
+        let call = crate::api::mcp::test_support::tool_call("tabs", json!({})).await?;
+        let service = ClawMcpService::new(call.state.clone());
+        let started = service
+            .ensure_session_started(SessionId::new("mcp-help-bad-page"))
+            .await
+            .map_err(|error| anyhow::anyhow!("{error:?}"))?;
+
+        // No browser is connected in this harness, so page 1 cannot be resolved. The request must be
+        // refused, not opened: an opened request with no tab is filled by the cockpit from the
+        // most-recently-active tab, which would point the banner and takeover at an unrelated page.
+        let result = service
+            .call_request_human_help(
+                &started,
+                &json!({ "reason": "Enter the code", "page": 1 }),
+                CancellationToken::new(),
+            )
+            .await;
+
+        assert_eq!(result.is_error, Some(true));
+        assert!(text_of(&result).contains("page"));
+        assert!(call.state.help.get(started.session.id()).await.is_none());
         Ok(())
     }
 
@@ -3959,7 +3425,6 @@ mod tests {
         expected.push(NAME_SESSION_TOOL_NAME.to_string());
         expected.push(SAVE_SKILL_TOOL_NAME.to_string());
         expected.push(MARK_SKILL_RUN_TOOL_NAME.to_string());
-        expect_pursue_if_credentialled(&service, &mut expected);
         for declare_agent_name in [false, true] {
             assert_eq!(tool_names(&service, declare_agent_name), expected);
         }
@@ -3981,7 +3446,7 @@ mod tests {
                 mcp_instructions(
                     ServerMode::Desktop,
                     HumanHelp::Off,
-                    service.pursue_offering(),
+                    service.ultrafast(),
                     call.state.config.native.capabilities,
                     service.tab_grouping()
                 )
@@ -4037,12 +3502,29 @@ mod tests {
             .await
             .map_err(|error| anyhow::anyhow!("{error:?}"))?;
         let session_id = started.session.id().clone();
+        // Open the request directly: resolving a live page needs a bound browser tab, which this
+        // harness has none of, and the behavior under test is that an already-open request survives
+        // the switch flipping off, not how it was opened.
+        call.state
+            .help
+            .open(
+                &session_id,
+                HelpOpenParams {
+                    request_id: "help-flip".to_string(),
+                    reason: "Enter the code".to_string(),
+                    details: None,
+                    resume_hint: None,
+                    kind: None,
+                    browser_tab_id: Some(7),
+                    url: Some("https://blocked.example".to_string()),
+                    title: Some("Blocked".to_string()),
+                },
+            )
+            .await;
         // An ended call token returns the first wait chunk at once and leaves the request open.
         let call_ended = CancellationToken::new();
         call_ended.cancel();
-        let opened = service
-            .call_request_human_help(&started, &json!({ "reason": "Enter the code" }), call_ended)
-            .await;
+        let opened = service.call_await_human_help(&started, call_ended).await;
         assert_eq!(status_of(&opened), Some("waiting"));
 
         call.state
@@ -4129,7 +3611,7 @@ mod tests {
                         "maxLength": SUMMARY_MAX_LEN,
                         "description": NAME_SESSION_SUMMARY_DESCRIPTION
                     },
-                    "session": { "type": "string", "description": SESSION_ARG_DESCRIPTION }
+                    "session": { "type": "string", "description": session_handle::SESSION_ARG_DESCRIPTION }
                 },
                 "required": ["name"]
             })
@@ -4194,7 +3676,15 @@ mod tests {
             .ok_or_else(|| anyhow::anyhow!("save_skill missing from get_tool"))?;
 
         assert_eq!(listed, fetched);
-        assert_eq!(listed.description.as_deref(), Some(SAVE_SKILL_DESCRIPTION));
+        // Ultrafast extends the description and schema; the base tool is the same either way.
+        assert!(
+            listed
+                .description
+                .as_deref()
+                .is_some_and(|description| description.starts_with(SAVE_SKILL_DESCRIPTION))
+        );
+        let properties = &listed.input_schema["properties"];
+        assert_eq!(properties.get("flow").is_some(), service.ultrafast());
         assert_eq!(
             listed.annotations,
             Some(
@@ -4291,6 +3781,7 @@ mod tests {
                     "learnedNotes": ["Read the DOM snapshot, not screenshots"],
                     "site": "mail.google.com"
                 }),
+                CancellationToken::new(),
             )
             .await;
 
@@ -4318,6 +3809,7 @@ mod tests {
                     "description": "Check the inbox and reply",
                     "steps": ["Open the inbox", "Draft and send"]
                 }),
+                CancellationToken::new(),
             )
             .await;
         let updated = call.state.skills.get("neo-inbox-sweep").await?;
@@ -4325,6 +3817,70 @@ mod tests {
         assert_eq!(updated.view.model.description, "Check the inbox and reply");
         assert!(updated.body.contains("Draft and send"));
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn run_skill_and_flow_fields_follow_the_ultrafast_switch() -> anyhow::Result<()> {
+        let call = crate::api::mcp::test_support::tool_call("tabs", json!({})).await?;
+        let service = ClawMcpService::new(call.state.clone());
+        let offered = |service: &ClawMcpService| {
+            let names = tool_names(service, false);
+            let save = service
+                .get_tool(SAVE_SKILL_TOOL_NAME)
+                .map(|tool| tool.input_schema["properties"].get("flow").is_some());
+            (
+                names.contains(&RUN_SKILL_TOOL_NAME.to_string()),
+                service.get_tool(RUN_SKILL_TOOL_NAME).is_some(),
+                save,
+            )
+        };
+
+        assert_eq!(offered(&service), (false, false, Some(false)));
+        call.state
+            .ultrafast
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+        assert_eq!(offered(&service), (true, true, Some(true)));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn save_skill_saves_in_one_call_while_ultrafast_is_off() -> anyhow::Result<()> {
+        let call = crate::api::mcp::test_support::tool_call("tabs", json!({})).await?;
+        let session = call
+            .identity
+            .as_ref()
+            .map(|identity| identity.session.clone())
+            .ok_or_else(|| anyhow::anyhow!("session missing"))?;
+        let service = ClawMcpService::new(call.state.clone());
+        let started = StartedSession {
+            session,
+            agent_label: "codex".to_string(),
+        };
+
+        let result = service
+            .call_save_skill(
+                &started,
+                &json!({
+                    "name": "shop-add",
+                    "description": "Add a product to the cart",
+                    "steps": ["Open the search", "Add the first match"]
+                }),
+                CancellationToken::new(),
+            )
+            .await;
+
+        assert_ne!(result.is_error, Some(true), "{result:?}");
+        let text = result
+            .content
+            .first()
+            .and_then(|block| block.as_text())
+            .map(|text| text.text.clone())
+            .unwrap_or_default();
+        assert_eq!(text, "saved skill /neo-shop-add");
+        let saved = call.state.skills.get("neo-shop-add").await?;
+        assert!(!saved.body.contains("run_skill"), "{}", saved.body);
+        assert!(call.state.skills.flow_row("neo-shop-add").await?.is_none());
         Ok(())
     }
 
@@ -4351,6 +3907,7 @@ mod tests {
                     "description": "Check the weather",
                     "steps": ["Open the forecast"]
                 }),
+                CancellationToken::new(),
             )
             .await;
         assert!(call.state.skills.get("neo-weather").await.is_ok());

@@ -102,7 +102,7 @@ export async function startStubMcp(options: {
         return response({
           tools: [
             'tabs',
-            'evaluate',
+            'evaluate_in_page',
             ...(options.scenario === 'no-tool' ? [] : ['solve_captcha']),
           ].map((name) => ({ name, inputSchema: { type: 'object' } })),
         })
@@ -148,7 +148,7 @@ export async function startStubMcp(options: {
           ),
         )
       }
-      if (name !== 'evaluate') return failure(-32601)
+      if (name !== 'evaluate_in_page') return failure(-32601)
       const value = evaluateProbe(
         state,
         options.scenario,

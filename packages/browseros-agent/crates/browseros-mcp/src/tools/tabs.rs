@@ -39,6 +39,8 @@ Manage browser tabs: list open pages (with their page ids), show the active page
 open a new page in the background (snapshot attached), or close one. \
 A new page is handed back once it has stopped changing, not merely once it has \
 loaded, so do not pause afterwards to let it catch up. \
+If its url cannot load, is a file download or answers with an HTTP error, the page \
+still opens and the reply says so; navigate it elsewhere or close it. \
 Use the returned page id with snapshot/act/navigate.",
     group_recovery_guidance!()
 );
@@ -161,10 +163,11 @@ fn handler<'a>(
                 let tab_group_id =
                     super::page_creation::tab_group_for_creation(ctx, args.group_id.clone(), None)
                         .await?;
-                let page = ctx
+                let url = args.url.as_deref().unwrap_or("about:blank");
+                let opened = ctx
                     .browser
-                    .new_page(
-                        args.url.as_deref().unwrap_or("about:blank"),
+                    .open_page(
+                        url,
                         NewPageOptions {
                             // Never foreground: focus decisions belong to the user
                             // (cockpit Watch), not to the agent.
@@ -175,6 +178,7 @@ fn handler<'a>(
                         },
                     )
                     .await?;
+                let page = opened.page;
                 // A mistyped or half-remembered group id used to be silently
                 // ignored, which produced the very outcome the group argument
                 // exists to avoid: the page continues in the session's own
@@ -193,9 +197,35 @@ fn handler<'a>(
                         page.page_id.0
                     ));
                 }
-                response.text(format!("opened page {}", page.page_id.0));
-                // Claw-server hooks key ownership/grouping off this "page" field.
-                response.data(json!({ "page": page.page_id.0 }));
+                // Claw-server hooks key ownership/grouping off this "page" field, so the result
+                // stays a success whatever the load did: the tab is open either way.
+                let mut data = json!({ "page": page.page_id.0 });
+                let mut opened_line = format!("opened page {}", page.page_id.0);
+                match opened.load {
+                    Some(Ok(outcome)) if outcome.download => {
+                        opened_line.push_str(&format!(
+                            ". {url} is a file, so the browser downloaded it; the page stayed on about:blank."
+                        ));
+                        data["download"] = json!(true);
+                    }
+                    Some(Ok(outcome)) => {
+                        if let Some(status) = outcome.status {
+                            if status >= 400 {
+                                opened_line.push_str(&format!(" (HTTP {status})"));
+                            }
+                            data["status"] = json!(status);
+                        }
+                    }
+                    Some(Err(error)) => {
+                        opened_line.push_str(&format!(
+                            ". {error}. The tab stays open; navigate it or close it."
+                        ));
+                        data["loadError"] = json!(error.to_string());
+                    }
+                    None => {}
+                }
+                response.text(opened_line);
+                response.data(data);
                 response.include_snapshot(page.page_id.0);
                 return Ok(None);
             }

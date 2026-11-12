@@ -1,6 +1,6 @@
 //! Exercises the coordinator through its CDP boundary. Chrome's staged status is
 //! scripted; the actual guard and scheduling policy run in ExtensionUpdates.
-use browseros_cdp::{CdpError, CdpEvent};
+use browseros_cdp::{CdpError, CdpEvent, TargetedEvents};
 use browseros_core::{BrowserSession, BrowserSessionHooks, CdpConnection, SessionId};
 use claw_server::services::extension_updates::{ExtensionUpdates, UpdateOutcome};
 use futures_util::future::BoxFuture;
@@ -9,7 +9,7 @@ use std::sync::{
     Arc, Mutex, MutexGuard,
     atomic::{AtomicBool, Ordering},
 };
-use tokio::sync::{Notify, broadcast};
+use tokio::sync::{Notify, broadcast, mpsc};
 
 // Poisoning means this scripted boundary itself failed, not a product error.
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -25,6 +25,7 @@ struct Fixture {
     workers: Mutex<Vec<Value>>,
     calls: Mutex<Vec<String>>,
     events: broadcast::Sender<CdpEvent>,
+    targeted: TargetedEvents,
     hang_evaluation: AtomicBool,
     evaluating: Notify,
     detached: Notify,
@@ -40,6 +41,7 @@ impl Fixture {
             ]),
             calls: Mutex::default(),
             events: broadcast::channel(8).0,
+            targeted: TargetedEvents::default(),
             hang_evaluation: AtomicBool::new(false),
             evaluating: Notify::new(),
             detached: Notify::new(),
@@ -143,6 +145,11 @@ impl CdpConnection for Fixture {
     fn events(&self) -> broadcast::Receiver<CdpEvent> {
         self.events.subscribe()
     }
+
+    fn events_targeted(&self, method: &str) -> mpsc::UnboundedReceiver<CdpEvent> {
+        self.targeted.subscribe(method)
+    }
+
     fn is_connected(&self) -> bool {
         true
     }
@@ -300,6 +307,7 @@ async fn running_coordinator_reads_sessions_and_recovers_on_notification_and_tim
         native: Default::default(),
         mode: Default::default(),
         behavior: Default::default(),
+        behavior_ignored: Vec::new(),
     });
     let state = AppState::new_with_home(config, dir.path().join("home")).await?;
     let fixture = Fixture::new();

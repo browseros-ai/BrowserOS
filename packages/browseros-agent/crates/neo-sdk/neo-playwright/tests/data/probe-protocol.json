@@ -1,0 +1,1451 @@
+{
+  "protocol": 28,
+  "callFunction": "function (request, root, ...nodes) { const probe = globalThis.__neoProbe; return probe ? probe.call(request, root ?? this, nodes) : { kind: \"uninstalled\" }; }",
+  "replyKinds": {
+    "describe": [
+      "described"
+    ],
+    "resolve": [
+      "element",
+      "frame",
+      "notFrame",
+      "none",
+      "strict",
+      "detached"
+    ],
+    "act": [
+      "measured",
+      "armed",
+      "covered",
+      "state",
+      "detached",
+      "none",
+      "strict"
+    ],
+    "verdict": [
+      "verdict"
+    ],
+    "moves": [
+      "moves"
+    ],
+    "disarm": [
+      "verdict"
+    ],
+    "frameBox": [
+      "frameBox",
+      "detached",
+      "none",
+      "strict"
+    ],
+    "edit": [
+      "value",
+      "detached"
+    ],
+    "read": [
+      "read",
+      "none",
+      "strict",
+      "detached"
+    ],
+    "readAll": [
+      "values"
+    ],
+    "selector": [
+      "selector",
+      "none",
+      "detached"
+    ],
+    "snapshot": [
+      "snapshot",
+      "none",
+      "strict",
+      "detached"
+    ],
+    "expect": [
+      "expect",
+      "none",
+      "strict",
+      "detached"
+    ],
+    "matchUrl": [
+      "urlMatch"
+    ],
+    "document": [
+      "documentText"
+    ],
+    "setContent": [
+      "replaced"
+    ],
+    "armInput": [
+      "value",
+      "detached"
+    ],
+    "inputArrived": [
+      "value",
+      "detached"
+    ],
+    "screenshotMask": [
+      "value"
+    ],
+    "screenshotMaskCleanup": [
+      "value"
+    ],
+    "webStorage": [
+      "value"
+    ]
+  },
+  "byHandle": [
+    "pinned"
+  ],
+  "anyRequest": [
+    "error",
+    "uninstalled"
+  ],
+  "requests": [
+    {
+      "op": "describe"
+    },
+    {
+      "op": "screenshotMask",
+      "target": {
+        "chunk": {
+          "parts": [
+            {
+              "name": "internal:role",
+              "body": "button[name=\"Go\"i]",
+              "source": "button[name=\"Go\"i]"
+            }
+          ]
+        }
+      },
+      "color": "#F0F"
+    },
+    {
+      "op": "screenshotMaskCleanup"
+    },
+    {
+      "op": "webStorage",
+      "kind": "local",
+      "action": "items"
+    },
+    {
+      "op": "webStorage",
+      "kind": "session",
+      "action": "getItem",
+      "name": "token"
+    },
+    {
+      "op": "webStorage",
+      "kind": "local",
+      "action": "setItem",
+      "name": "token",
+      "value": "abc"
+    },
+    {
+      "op": "webStorage",
+      "kind": "local",
+      "action": "removeItem",
+      "name": "token"
+    },
+    {
+      "op": "webStorage",
+      "kind": "session",
+      "action": "clear"
+    },
+    {
+      "op": "resolve",
+      "target": {
+        "chunk": {
+          "parts": [
+            {
+              "name": "internal:role",
+              "body": "button[name=\"Go\"i]",
+              "source": "button[name=\"Go\"i]"
+            }
+          ]
+        }
+      },
+      "strictness": "strict",
+      "want": "element"
+    },
+    {
+      "op": "resolve",
+      "target": {
+        "chunk": {
+          "parts": [
+            {
+              "name": "css",
+              "body": [
+                {
+                  "simples": [
+                    {
+                      "selector": {
+                        "css": "#pay",
+                        "functions": []
+                      },
+                      "combinator": ""
+                    }
+                  ]
+                }
+              ],
+              "source": "#pay"
+            }
+          ]
+        }
+      },
+      "strictness": "strict",
+      "want": "frame"
+    },
+    {
+      "op": "resolve",
+      "target": {
+        "chunk": {
+          "parts": [
+            {
+              "name": "internal:role",
+              "body": "listitem",
+              "source": "listitem"
+            },
+            {
+              "name": "internal:has",
+              "source": "\"aria-ref=e7\"",
+              "body": {
+                "parsed": {
+                  "parts": [
+                    {
+                      "name": "aria-ref",
+                      "body": "e7",
+                      "source": "e7"
+                    }
+                  ]
+                }
+              }
+            }
+          ]
+        }
+      },
+      "strictness": "firstMatch",
+      "want": "element"
+    },
+    {
+      "op": "resolve",
+      "target": {
+        "chunk": {
+          "parts": [
+            {
+              "name": "ref",
+              "body": "e5",
+              "source": "e5"
+            }
+          ]
+        }
+      },
+      "strictness": "strict",
+      "want": "element"
+    },
+    {
+      "op": "resolve",
+      "target": {
+        "pin": 3
+      },
+      "strictness": "strict",
+      "want": "element"
+    },
+    {
+      "op": "resolve",
+      "target": "document",
+      "strictness": "strict",
+      "want": "element"
+    },
+    {
+      "op": "act",
+      "target": {
+        "chunk": {
+          "parts": [
+            {
+              "name": "internal:role",
+              "body": "button[name=\"Go\"i]",
+              "source": "button[name=\"Go\"i]"
+            }
+          ]
+        }
+      },
+      "strictness": "strict",
+      "retarget": "button-link",
+      "states": [
+        "visible",
+        "enabled"
+      ],
+      "frameVisible": true,
+      "scroll": "protocol"
+    },
+    {
+      "op": "act",
+      "target": {
+        "pin": 3
+      },
+      "strictness": "strict",
+      "retarget": "none",
+      "states": [],
+      "frameVisible": true,
+      "scroll": "none",
+      "position": {
+        "x": 5,
+        "y": 5
+      },
+      "arm": {
+        "action": "mouse",
+        "blockAll": false,
+        "token": 11,
+        "expiryMs": 8000,
+        "expectRect": {
+          "x": 8,
+          "y": 8,
+          "width": 60,
+          "height": 20
+        },
+        "browserMapped": true
+      }
+    },
+    {
+      "op": "verdict",
+      "token": 11
+    },
+    {
+      "op": "moves"
+    },
+    {
+      "op": "disarm"
+    },
+    {
+      "op": "frameBox",
+      "iframe": {
+        "chunk": {
+          "parts": [
+            {
+              "name": "aria-ref",
+              "body": "#1",
+              "source": "#1"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "op": "frameBox",
+      "iframe": {
+        "pin": 4
+      },
+      "point": {
+        "x": 40.5,
+        "y": 12
+      }
+    },
+    {
+      "op": "edit",
+      "pin": 3,
+      "edit": {
+        "kind": "fill",
+        "value": "hello"
+      }
+    },
+    {
+      "op": "edit",
+      "pin": 3,
+      "edit": {
+        "kind": "selectOptions",
+        "options": [
+          {
+            "valueOrLabel": "Blue"
+          },
+          {
+            "value": "r"
+          },
+          {
+            "label": "Green"
+          },
+          {
+            "index": 2
+          }
+        ]
+      }
+    },
+    {
+      "op": "edit",
+      "pin": 3,
+      "edit": {
+        "kind": "selectText"
+      }
+    },
+    {
+      "op": "edit",
+      "pin": 3,
+      "edit": {
+        "kind": "focus",
+        "resetSelection": true
+      }
+    },
+    {
+      "op": "edit",
+      "pin": 3,
+      "edit": {
+        "kind": "blur"
+      }
+    },
+    {
+      "op": "edit",
+      "pin": 3,
+      "edit": {
+        "kind": "dispatchEvent",
+        "type": "click",
+        "init": {
+          "bubbles": true
+        }
+      }
+    },
+    {
+      "op": "edit",
+      "pin": 3,
+      "edit": {
+        "kind": "setFiles",
+        "payloads": [
+          {
+            "name": "note.txt",
+            "mimeType": "text/plain",
+            "buffer": "aGVsbG8="
+          }
+        ]
+      }
+    },
+    {
+      "op": "edit",
+      "pin": 3,
+      "edit": {
+        "kind": "setFiles",
+        "payloads": []
+      }
+    },
+    {
+      "op": "edit",
+      "pin": 3,
+      "edit": {
+        "kind": "drop",
+        "payloads": [],
+        "data": [
+          {
+            "mimeType": "text/plain",
+            "value": "external"
+          }
+        ],
+        "point": {
+          "x": 20,
+          "y": 30
+        }
+      }
+    },
+    {
+      "op": "read",
+      "target": {
+        "chunk": {
+          "parts": [
+            {
+              "name": "internal:role",
+              "body": "button[name=\"Go\"i]",
+              "source": "button[name=\"Go\"i]"
+            }
+          ]
+        }
+      },
+      "strictness": "strict",
+      "frameVisible": true,
+      "read": {
+        "kind": "textContent"
+      }
+    },
+    {
+      "op": "read",
+      "target": {
+        "chunk": {
+          "parts": [
+            {
+              "name": "css",
+              "body": [
+                {
+                  "simples": [
+                    {
+                      "selector": {
+                        "css": "#pw",
+                        "functions": []
+                      },
+                      "combinator": ""
+                    }
+                  ]
+                }
+              ],
+              "source": "#pw"
+            }
+          ]
+        }
+      },
+      "strictness": "strict",
+      "frameVisible": true,
+      "read": {
+        "kind": "inputValue"
+      }
+    },
+    {
+      "op": "read",
+      "target": {
+        "chunk": {
+          "parts": [
+            {
+              "name": "internal:role",
+              "body": "button[name=\"Go\"i]",
+              "source": "button[name=\"Go\"i]"
+            }
+          ]
+        }
+      },
+      "strictness": "strict",
+      "frameVisible": true,
+      "read": {
+        "kind": "attribute",
+        "name": "aria-label"
+      }
+    },
+    {
+      "op": "read",
+      "target": {
+        "chunk": {
+          "parts": [
+            {
+              "name": "internal:role",
+              "body": "button[name=\"Go\"i]",
+              "source": "button[name=\"Go\"i]"
+            }
+          ]
+        }
+      },
+      "strictness": "strict",
+      "frameVisible": true,
+      "read": {
+        "kind": "state",
+        "state": "checked"
+      }
+    },
+    {
+      "op": "read",
+      "target": {
+        "pin": 3
+      },
+      "strictness": "strict",
+      "frameVisible": true,
+      "read": {
+        "kind": "checkable"
+      }
+    },
+    {
+      "op": "read",
+      "target": "root",
+      "strictness": "strict",
+      "frameVisible": true,
+      "read": {
+        "kind": "fileInput",
+        "multiple": false,
+        "directory": false
+      }
+    },
+    {
+      "op": "read",
+      "target": {
+        "chunk": {
+          "parts": [
+            {
+              "name": "css",
+              "body": [
+                {
+                  "simples": [
+                    {
+                      "selector": {
+                        "css": "#upload",
+                        "functions": []
+                      },
+                      "combinator": ""
+                    }
+                  ]
+                }
+              ],
+              "source": "#upload"
+            }
+          ]
+        }
+      },
+      "strictness": "strict",
+      "frameVisible": true,
+      "read": {
+        "kind": "fileInput",
+        "multiple": true,
+        "directory": true
+      }
+    },
+    {
+      "op": "read",
+      "target": {
+        "pin": 3
+      },
+      "strictness": "strict",
+      "frameVisible": false,
+      "read": {
+        "kind": "boundingBox"
+      }
+    },
+    {
+      "op": "read",
+      "target": {
+        "chunk": {
+          "parts": [
+            {
+              "name": "css",
+              "body": [
+                {
+                  "simples": [
+                    {
+                      "selector": {
+                        "css": "main",
+                        "functions": []
+                      },
+                      "combinator": ""
+                    }
+                  ]
+                }
+              ],
+              "source": "main"
+            }
+          ]
+        }
+      },
+      "strictness": "firstMatch",
+      "frameVisible": true,
+      "read": {
+        "kind": "innerText"
+      }
+    },
+    {
+      "op": "read",
+      "target": {
+        "chunk": {
+          "parts": [
+            {
+              "name": "css",
+              "body": [
+                {
+                  "simples": [
+                    {
+                      "selector": {
+                        "css": "main",
+                        "functions": []
+                      },
+                      "combinator": ""
+                    }
+                  ]
+                }
+              ],
+              "source": "main"
+            }
+          ]
+        }
+      },
+      "strictness": "strict",
+      "frameVisible": true,
+      "read": {
+        "kind": "innerHtml"
+      }
+    },
+    {
+      "op": "read",
+      "target": {
+        "chunk": {
+          "parts": [
+            {
+              "name": "css",
+              "body": [
+                {
+                  "simples": [
+                    {
+                      "selector": {
+                        "css": "#pay",
+                        "functions": []
+                      },
+                      "combinator": ""
+                    }
+                  ]
+                }
+              ],
+              "source": "#pay"
+            }
+          ]
+        }
+      },
+      "strictness": "strict",
+      "frameVisible": true,
+      "read": {
+        "kind": "frameOrigin"
+      }
+    },
+    {
+      "op": "read",
+      "target": {
+        "chunk": {
+          "parts": [
+            {
+              "name": "css",
+              "body": [
+                {
+                  "simples": [
+                    {
+                      "selector": {
+                        "css": "li",
+                        "functions": []
+                      },
+                      "combinator": ""
+                    }
+                  ]
+                }
+              ],
+              "source": "li"
+            }
+          ]
+        }
+      },
+      "strictness": "firstMatch",
+      "frameVisible": true,
+      "read": {
+        "kind": "located"
+      }
+    },
+    {
+      "op": "read",
+      "target": "root",
+      "strictness": "strict",
+      "frameVisible": true,
+      "read": {
+        "kind": "state",
+        "state": "visible"
+      }
+    },
+    {
+      "op": "readAll",
+      "target": {
+        "chunk": {
+          "parts": [
+            {
+              "name": "internal:role",
+              "body": "listitem",
+              "source": "listitem"
+            }
+          ]
+        }
+      },
+      "read": "count"
+    },
+    {
+      "op": "readAll",
+      "target": {
+        "chunk": {
+          "parts": [
+            {
+              "name": "css",
+              "body": [
+                {
+                  "simples": [
+                    {
+                      "selector": {
+                        "css": "li",
+                        "functions": []
+                      },
+                      "combinator": ""
+                    }
+                  ]
+                }
+              ],
+              "source": "li"
+            }
+          ]
+        }
+      },
+      "read": "textContents"
+    },
+    {
+      "op": "readAll",
+      "target": {
+        "chunk": {
+          "parts": [
+            {
+              "name": "css",
+              "body": [
+                {
+                  "simples": [
+                    {
+                      "selector": {
+                        "css": "li",
+                        "functions": []
+                      },
+                      "combinator": ""
+                    }
+                  ]
+                }
+              ],
+              "source": "li"
+            }
+          ]
+        }
+      },
+      "read": "innerTexts"
+    },
+    {
+      "op": "readAll",
+      "target": {
+        "chunk": {
+          "parts": [
+            {
+              "name": "css",
+              "body": [
+                {
+                  "simples": [
+                    {
+                      "selector": {
+                        "css": "li",
+                        "functions": []
+                      },
+                      "combinator": ""
+                    }
+                  ]
+                }
+              ],
+              "source": "li"
+            }
+          ]
+        }
+      },
+      "read": "pins"
+    },
+    {
+      "op": "selector",
+      "target": {
+        "chunk": {
+          "parts": [
+            {
+              "name": "internal:role",
+              "body": "button",
+              "source": "button"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "op": "selector",
+      "target": {
+        "pin": 4
+      }
+    },
+    {
+      "op": "snapshot",
+      "root": "document",
+      "mode": "ai"
+    },
+    {
+      "op": "snapshot",
+      "root": {
+        "chunk": {
+          "parts": [
+            {
+              "name": "css",
+              "body": [
+                {
+                  "simples": [
+                    {
+                      "selector": {
+                        "css": "main",
+                        "functions": []
+                      },
+                      "combinator": ""
+                    }
+                  ]
+                }
+              ],
+              "source": "main"
+            }
+          ]
+        }
+      },
+      "mode": "default",
+      "depth": 3
+    },
+    {
+      "op": "snapshot",
+      "root": "document",
+      "mode": "default",
+      "boxes": true
+    },
+    {
+      "op": "expect",
+      "target": {
+        "chunk": {
+          "parts": [
+            {
+              "name": "css",
+              "body": [
+                {
+                  "simples": [
+                    {
+                      "selector": {
+                        "css": "#greeting",
+                        "functions": []
+                      },
+                      "combinator": ""
+                    }
+                  ]
+                }
+              ],
+              "source": "#greeting"
+            }
+          ]
+        }
+      },
+      "strictness": "strict",
+      "frameVisible": true,
+      "params": {
+        "expression": "to.have.text",
+        "expectedText": [
+          {
+            "string": "Welcome",
+            "matchSubstring": false,
+            "normalizeWhiteSpace": true
+          }
+        ],
+        "isNot": false,
+        "useInnerText": false
+      }
+    },
+    {
+      "op": "expect",
+      "target": {
+        "chunk": {
+          "parts": [
+            {
+              "name": "internal:role",
+              "body": "listitem",
+              "source": "listitem"
+            }
+          ]
+        }
+      },
+      "strictness": "firstMatch",
+      "frameVisible": true,
+      "params": {
+        "expression": "to.have.count",
+        "expectedNumber": 3,
+        "isNot": true
+      }
+    },
+    {
+      "op": "expect",
+      "target": "document",
+      "strictness": "strict",
+      "frameVisible": true,
+      "params": {
+        "expression": "to.have.title",
+        "expectedText": [
+          {
+            "regexSource": "done$",
+            "regexFlags": "i",
+            "normalizeWhiteSpace": true
+          }
+        ],
+        "isNot": false
+      }
+    },
+    {
+      "op": "matchUrl",
+      "pattern": {
+        "glob": "**/done"
+      },
+      "url": "https://example.com/done"
+    },
+    {
+      "op": "matchUrl",
+      "pattern": {
+        "regexSource": "done$",
+        "regexFlags": "i"
+      },
+      "url": "https://example.com/DONE"
+    },
+    {
+      "op": "pinned",
+      "pin": 4
+    },
+    {
+      "op": "document",
+      "part": "title"
+    },
+    {
+      "op": "document",
+      "part": "content"
+    },
+    {
+      "op": "document",
+      "part": "content",
+      "includeShadow": true
+    },
+    {
+      "op": "document",
+      "part": "expectSnapshot"
+    },
+    {
+      "op": "armInput",
+      "pin": 4
+    },
+    {
+      "op": "inputArrived",
+      "pin": 4
+    },
+    {
+      "op": "setContent",
+      "html": "<!doctype html><title>Set</title><p>new</p>"
+    }
+  ],
+  "replies": [
+    {
+      "kind": "described",
+      "protocol": 28,
+      "seq": 0,
+      "url": "https://example.com/"
+    },
+    {
+      "kind": "described",
+      "protocol": 28,
+      "seq": 347,
+      "url": "https://pay.example/frame"
+    },
+    {
+      "kind": "described",
+      "protocol": 28,
+      "seq": 512340,
+      "url": "https://example.com/",
+      "retired": 0
+    },
+    {
+      "kind": "none"
+    },
+    {
+      "kind": "none",
+      "staleRef": "f2e5"
+    },
+    {
+      "kind": "strict",
+      "message": "strict mode violation: getByRole('button') resolved to 2 elements:\n    1) <button>Go</button> aka getByRole('button', { name: 'Go' })\n    2) <button>Stop</button> aka getByRole('button', { name: 'Stop' })\n"
+    },
+    {
+      "kind": "element",
+      "pin": 3,
+      "preview": "<button>Go</button>"
+    },
+    {
+      "kind": "element",
+      "pin": 3,
+      "preview": "<button>Go</button>",
+      "resolved": {
+        "preview": "<button>Go</button>",
+        "count": 2
+      }
+    },
+    {
+      "kind": "frame",
+      "pin": 4,
+      "key": "#1",
+      "visible": true,
+      "src": "https://pay.example/frame"
+    },
+    {
+      "kind": "notFrame",
+      "preview": "<div id=\"pay\">…</div>"
+    },
+    {
+      "kind": "detached"
+    },
+    {
+      "kind": "state",
+      "missing": "visible"
+    },
+    {
+      "kind": "state",
+      "missing": "enabled",
+      "resolved": {
+        "preview": "<button disabled>Go</button>",
+        "count": 1
+      }
+    },
+    {
+      "kind": "measured",
+      "pin": 3,
+      "rect": {
+        "x": 8,
+        "y": 8,
+        "width": 60,
+        "height": 20
+      },
+      "point": {
+        "x": 38,
+        "y": 18
+      },
+      "inView": true,
+      "transformed": false,
+      "borderOffset": {
+        "x": 5,
+        "y": 5
+      }
+    },
+    {
+      "kind": "measured",
+      "pin": 3,
+      "rect": {
+        "x": 8,
+        "y": 8,
+        "width": 60,
+        "height": 20
+      },
+      "point": {
+        "x": 38,
+        "y": 18
+      },
+      "inView": true,
+      "transformed": false,
+      "resolved": {
+        "preview": "<button>Go</button>",
+        "count": 1
+      }
+    },
+    {
+      "kind": "covered",
+      "by": "<div id=\"consent\">…</div> intercepts pointer events"
+    },
+    {
+      "kind": "armed",
+      "rect": {
+        "x": 8,
+        "y": 8,
+        "width": 60,
+        "height": 20
+      },
+      "point": {
+        "x": 38,
+        "y": 18
+      },
+      "token": 11
+    },
+    {
+      "kind": "verdict",
+      "hit": "done"
+    },
+    {
+      "kind": "verdict",
+      "hit": {
+        "hitTargetDescription": "<div id=\"consent\">…</div>"
+      }
+    },
+    {
+      "kind": "moves",
+      "moves": 3
+    },
+    {
+      "kind": "frameBox",
+      "origin": {
+        "x": 8,
+        "y": 120
+      },
+      "hit": null
+    },
+    {
+      "kind": "frameBox",
+      "origin": null,
+      "hit": "done"
+    },
+    {
+      "kind": "value",
+      "value": "Welcome"
+    },
+    {
+      "kind": "value",
+      "value": "Ada"
+    },
+    {
+      "kind": "value",
+      "value": null
+    },
+    {
+      "kind": "value",
+      "value": {
+        "x": 8,
+        "y": 8,
+        "width": 60,
+        "height": 20
+      }
+    },
+    {
+      "kind": "value",
+      "value": [
+        "r",
+        "g"
+      ]
+    },
+    {
+      "kind": "value",
+      "value": "needsinput"
+    },
+    {
+      "kind": "value",
+      "value": "error:optionsnotfound"
+    },
+    {
+      "kind": "value",
+      "value": {
+        "threw": "DOMException"
+      }
+    },
+    {
+      "kind": "value",
+      "value": [
+        {
+          "name": "token",
+          "value": "abc"
+        }
+      ]
+    },
+    {
+      "kind": "value",
+      "value": true
+    },
+    {
+      "kind": "read",
+      "value": "Welcome"
+    },
+    {
+      "kind": "read",
+      "value": {
+        "multiple": false,
+        "webkitdirectory": false
+      },
+      "resolved": {
+        "preview": "<input type=\"file\"/>",
+        "count": 1
+      }
+    },
+    {
+      "kind": "read",
+      "value": null
+    },
+    {
+      "kind": "read",
+      "value": {
+        "x": 8,
+        "y": 8,
+        "width": 60,
+        "height": 20
+      }
+    },
+    {
+      "kind": "read",
+      "value": {
+        "x": 8,
+        "y": 120,
+        "scaleX": 1,
+        "scaleY": 1
+      }
+    },
+    {
+      "kind": "read",
+      "value": "rotated"
+    },
+    {
+      "kind": "read",
+      "value": {
+        "checked": true,
+        "radio": true
+      }
+    },
+    {
+      "kind": "read",
+      "value": {
+        "pin": 7,
+        "target": 8,
+        "takesPaths": true
+      }
+    },
+    {
+      "kind": "read",
+      "value": {
+        "pin": 6,
+        "preview": "<li>One</li>",
+        "visible": true,
+        "count": 2
+      }
+    },
+    {
+      "kind": "values",
+      "count": 2,
+      "values": [
+        "One",
+        "Two"
+      ]
+    },
+    {
+      "kind": "values",
+      "count": 2,
+      "values": []
+    },
+    {
+      "kind": "values",
+      "count": 2,
+      "values": [
+        {
+          "pin": 6,
+          "preview": "<li>One</li>"
+        },
+        {
+          "pin": 7,
+          "preview": "<li>Two</li>"
+        }
+      ]
+    },
+    {
+      "kind": "selector",
+      "selector": "internal:role=button[name=\"Go\"i]"
+    },
+    {
+      "kind": "selector",
+      "selector": "iframe[name=\"pay\"]"
+    },
+    {
+      "kind": "snapshot",
+      "json": [
+        {
+          "role": "heading",
+          "name": "Pay",
+          "level": 1
+        },
+        {
+          "role": "button",
+          "name": "Go",
+          "ref": "e2",
+          "cursor": "pointer"
+        },
+        {
+          "role": "iframe",
+          "ref": "e3"
+        }
+      ],
+      "iframes": [
+        {
+          "ref": "e3",
+          "depth": 1,
+          "src": "https://pay.example/frame"
+        }
+      ]
+    },
+    {
+      "kind": "snapshot",
+      "json": [
+        {
+          "role": "generic",
+          "ref": "e1",
+          "text": "Open menu"
+        }
+      ],
+      "iframes": [],
+      "marksSkipped": true
+    },
+    {
+      "kind": "expect",
+      "matches": true,
+      "resolved": "<h1 id=\"greeting\">Hello</h1>",
+      "received": "Hello"
+    },
+    {
+      "kind": "expect",
+      "matches": false,
+      "resolved": "3 elements",
+      "received": [
+        "one",
+        "two",
+        "three"
+      ]
+    },
+    {
+      "kind": "expect",
+      "matches": false,
+      "resolved": "<input id=\"name\"/>",
+      "received": null
+    },
+    {
+      "kind": "expect",
+      "matches": false,
+      "resolved": "<div id=\"x\">…</div>"
+    },
+    {
+      "kind": "expect",
+      "matches": false,
+      "resolved": "<h1 id=\"greeting\">Hello</h1>",
+      "received": "Hello",
+      "ariaSnapshot": "- heading \"Hello\" [level=1]"
+    },
+    {
+      "kind": "urlMatch",
+      "matches": true,
+      "url": "https://example.com/done"
+    },
+    {
+      "kind": "documentText",
+      "text": "Pay"
+    },
+    {
+      "kind": "documentText",
+      "text": "<!DOCTYPE html><html><head></head><body><input type=\"password\" value=\"hunter2\"></body></html>"
+    },
+    {
+      "kind": "replaced"
+    },
+    {
+      "kind": "error",
+      "class": "selector",
+      "message": "Unknown selector engine \"ref\". Use page.getByRef('e5') or 'aria-ref=e5'."
+    },
+    {
+      "kind": "error",
+      "class": "script",
+      "message": "Not a checkbox or radio button"
+    },
+    {
+      "kind": "error",
+      "class": "unsupported",
+      "message": "toHaveValue(RegExp) is not supported on password, card and one-time-code fields; use an exact string."
+    },
+    {
+      "kind": "error",
+      "class": "script",
+      "message": "Node is not an HTMLInputElement",
+      "resolved": {
+        "preview": "<div id=\"notfile\">Not a file input</div>",
+        "count": 1
+      }
+    },
+    {
+      "kind": "error",
+      "class": "internal",
+      "message": "not built yet"
+    },
+    {
+      "kind": "uninstalled"
+    }
+  ]
+}

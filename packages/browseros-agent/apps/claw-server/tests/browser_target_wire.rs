@@ -2,7 +2,7 @@
 //! A disposable native peer supplies identity and loading state; all requests go
 //! through the real router, task store, tool dispatch, effects, and wire envelope.
 
-use browseros_cdp::{CdpError, CdpEvent};
+use browseros_cdp::{CdpError, CdpEvent, TargetedEvents};
 use browseros_core::{
     BrowserSession, BrowserSessionHooks, CdpConnection, NativeCapabilities, SessionId,
 };
@@ -14,7 +14,11 @@ use std::{
     time::Duration,
 };
 use tempfile::TempDir;
-use tokio::{net::TcpListener, sync::broadcast, task::JoinHandle};
+use tokio::{
+    net::TcpListener,
+    sync::{broadcast, mpsc},
+    task::JoinHandle,
+};
 
 /// The first native release with profile targeting, which this wire test models.
 fn current_native() -> NativeCapabilities {
@@ -25,6 +29,7 @@ struct NativeProfiles {
     profiles: Mutex<Vec<Value>>,
     windows: Mutex<Vec<Value>>,
     events: broadcast::Sender<CdpEvent>,
+    targeted: TargetedEvents,
 }
 
 impl NativeProfiles {
@@ -51,6 +56,7 @@ impl NativeProfiles {
                     .collect(),
             ),
             events: broadcast::channel(8).0,
+            targeted: TargetedEvents::default(),
         })
     }
 }
@@ -153,6 +159,11 @@ impl CdpConnection for NativeProfiles {
     fn events(&self) -> broadcast::Receiver<CdpEvent> {
         self.events.subscribe()
     }
+
+    fn events_targeted(&self, method: &str) -> mpsc::UnboundedReceiver<CdpEvent> {
+        self.targeted.subscribe(method)
+    }
+
     fn is_connected(&self) -> bool {
         true
     }
@@ -189,6 +200,7 @@ impl HttpPeer {
             },
             mode: Default::default(),
             behavior: Default::default(),
+            behavior_ignored: Vec::new(),
         });
         let state = AppState::new_with_home(config, dir.path().join("home")).await?;
         let native = NativeProfiles::new();
@@ -278,10 +290,21 @@ fn task_handle(result: &Value) -> anyhow::Result<&str> {
         .ok_or_else(|| anyhow::anyhow!("application handle missing: {result}"))
 }
 
-fn structured(result: &Value) -> anyhow::Result<&Value> {
-    result
+/// The tool's own structured result. The server adds the task handle to it as `session`,
+/// the copy Claude Code shows the model; it has to match `_meta`, and is set aside so the
+/// assertions below stay about the tool's wire contract.
+fn structured(result: &Value) -> anyhow::Result<Value> {
+    let mut data = result
         .get("structuredContent")
-        .ok_or_else(|| anyhow::anyhow!("structured metadata missing on HTTP wire: {result}"))
+        .cloned()
+        .ok_or_else(|| anyhow::anyhow!("structured metadata missing on HTTP wire: {result}"))?;
+    let session = data.as_object_mut().and_then(|data| data.remove("session"));
+    assert_eq!(
+        session.as_ref().and_then(Value::as_str),
+        Some(task_handle(result)?),
+        "{result}"
+    );
+    Ok(data)
 }
 
 #[tokio::test]
@@ -296,7 +319,7 @@ async fn browser_target_http_roundtrip_preserves_window_revision_and_native_stat
     // focused Engineering window and not browser-wide routing.
     let default_target = json!({"action":"get", "bound":false, "default":{"directory":"Default",
         "status":{"profile":original_profile(), "windows":[21], "placementWindowId":21, "error":null}}});
-    assert_eq!(structured(&unbound)?, &default_target);
+    assert_eq!(structured(&unbound)?, default_target);
     peer.call(
         "browser_target",
         json!({"action":"set", "browserProfileId":"native-eng"}),
@@ -341,7 +364,9 @@ async fn browser_target_http_roundtrip_preserves_window_revision_and_native_stat
     let tabs = peer
         .call("tabs", json!({"action":"list"}), Some(handle))
         .await?;
-    assert!(tabs.get("structuredContent").is_none(), "{tabs}");
+    // Public metadata survives even without outputSchema; saved-output producers
+    // rely on this same envelope to expose their output references.
+    assert_eq!(structured(&tabs)?, json!({"pages":[]}));
     assert!(tabs["content"].is_array());
 
     // get remains a recovery operation after pin closure. Its wire status exposes
@@ -375,7 +400,7 @@ async fn browser_target_http_roundtrip_preserves_window_revision_and_native_stat
     let cleared = peer
         .call("browser_target", json!({"action":"get"}), Some(handle))
         .await?;
-    assert_eq!(structured(&cleared)?, &default_target);
+    assert_eq!(structured(&cleared)?, default_target);
     Ok(())
 }
 
@@ -390,7 +415,7 @@ async fn browser_profiles_http_roundtrip_preserves_descriptors_and_load_outcome(
     let listed = structured(&first)?;
     assert_eq!(
         listed,
-        &json!({"action":"list", "profiles":[loaded_engineering_profile(),
+        json!({"action":"list", "profiles":[loaded_engineering_profile(),
         {"browserProfileId":"native-ops", "name":"Operations", "directory":"Synthetic-Ops", "loaded":false},
         original_profile()]})
     );
@@ -415,7 +440,7 @@ async fn browser_profiles_http_roundtrip_preserves_descriptors_and_load_outcome(
             .await?;
         assert_eq!(
             structured(&loaded)?,
-            &json!({"action":"load", "loaded":initiated,
+            json!({"action":"load", "loaded":initiated,
             "profile":{"browserProfileId":"native-ops", "name":"Operations", "directory":"Synthetic-Ops",
                 "loaded":true, "browserContextId":"ctx-ops"}})
         );

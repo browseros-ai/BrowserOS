@@ -20,7 +20,7 @@ AgentSettings:
   type: object
   description: User settings for the tools BrowserOS neo offers to agents.
   additionalProperties: false
-  required: [humanHelpEnabled, taskCleanupTipEnabled, jevTokenSource]
+  required: [humanHelpEnabled, taskCleanupTipEnabled]
   properties:
     humanHelpEnabled:
       type: boolean
@@ -30,27 +30,6 @@ AgentSettings:
     taskCleanupTipEnabled:
       type: boolean
       description: Whether successful MCP tool replies include a tip to close the task's tab group when finished.
-    jevTokenSource:
-      $ref: '#/JevTokenSource'
-JevTokenSource:
-  type: string
-  enum: [settings, environment, none]
-  description: >-
-    Where the decision model credential comes from, which decides whether the pursue tool is
-    offered at all. "settings" is a token saved through this API, which takes precedence.
-    "environment" is JEV_TOKEN in the server's environment. "none" means pursue is not offered.
-    The token itself is never returned.
-SaveJevTokenRequest:
-  type: object
-  additionalProperties: false
-  required: [token]
-  properties:
-    token:
-      type: string
-      minLength: 1
-      description: >-
-        The decision model credential. Write only: no endpoint returns it. Saving one takes
-        precedence over JEV_TOKEN in the server's environment.
 UpdateAgentSettingsRequest:
   type: object
   additionalProperties: false

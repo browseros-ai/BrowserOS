@@ -7,7 +7,7 @@ use crate::{
     },
 };
 use serde_json::Value;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 const IFRAME_ROLES: &[&str] = &["Iframe", "iframe"];
 
@@ -52,13 +52,15 @@ pub fn render_snapshot<'a>(nodes: &'a [AxNode], opts: &mut RenderOptions<'a>) ->
         .collect::<HashMap<_, _>>();
     let mut ctx = RenderContext {
         by_id,
+        card_forms: card_form_scopes(nodes),
+        control_labels: labels_of_rendered_controls(nodes),
         lines: Vec::new(),
         iframes: Vec::new(),
         opts,
     };
 
     for root_id in entry_node_ids(nodes) {
-        ctx.visit(&root_id, 0);
+        ctx.visit(&root_id, 0, false);
     }
 
     RenderResult {
@@ -82,16 +84,21 @@ pub fn apply_snapshot_options(text: &str, options: SnapshotOptions) -> String {
 
 struct RenderContext<'a, 'b> {
     by_id: HashMap<String, &'a AxNode>,
+    /// See [`card_form_scopes`].
+    card_forms: HashSet<String>,
+    /// See [`labels_of_rendered_controls`].
+    control_labels: HashSet<i64>,
     lines: Vec<String>,
     iframes: Vec<IframeStitch>,
     opts: &'b mut RenderOptions<'a>,
 }
 
 impl RenderContext<'_, '_> {
-    fn visit(&mut self, node_id: &str, depth: usize) {
+    fn visit(&mut self, node_id: &str, depth: usize, in_card_form: bool) {
         let Some(node) = self.by_id.get(node_id).copied() else {
             return;
         };
+        let in_card_form = in_card_form || self.card_forms.contains(node_id);
 
         let role = if node.ignored.unwrap_or(false) {
             None
@@ -99,19 +106,23 @@ impl RenderContext<'_, '_> {
             str_val(node.role.as_ref())
         };
         let name = str_val(node.name.as_ref()).unwrap_or_default();
-        let is_cursor_hit = node
-            .backend_dom_node_id
-            .and_then(|id| {
-                self.opts
+        let is_cursor_hit = node.backend_dom_node_id.is_some_and(|id| {
+            !self.control_labels.contains(&id)
+                && self
+                    .opts
                     .cursor_hits
                     .as_ref()
-                    .map(|hits| hits.contains_key(&id))
-            })
-            .unwrap_or(false);
+                    .is_some_and(|hits| hits.contains_key(&id))
+        });
+        // Chromium leaves a label's own name empty and puts its words in text children, which
+        // an interactive snapshot drops. A label that is its own target needs them to be read.
+        // Only the line shows them: the ref keeps the tree's name, which ref recovery matches.
+        let label_text = (is_cursor_hit && name.is_empty() && role.as_deref() == Some("LabelText"))
+            .then(|| self.text_of(node));
 
         if is_dropped(role.as_deref(), &name, is_cursor_hit) {
             for child_id in node.child_ids.as_deref().unwrap_or(&[]) {
-                self.visit(child_id, depth);
+                self.visit(child_id, depth, in_card_form);
             }
             return;
         }
@@ -137,12 +148,93 @@ impl RenderContext<'_, '_> {
             return;
         }
 
-        let line = format_line(node, &role, &name, absolute_depth, self.opts);
+        let value = self.shown_value(node, &role, &name, in_card_form);
+        let line = format_line(
+            node,
+            &role,
+            LineName {
+                tree: &name,
+                shown: label_text.as_deref().unwrap_or(&name),
+            },
+            absolute_depth,
+            value.as_deref(),
+            is_cursor_hit,
+            self.opts,
+        );
         self.lines.push(line);
         for child_id in node.child_ids.as_deref().unwrap_or(&[]) {
-            self.visit(child_id, depth + 1);
+            self.visit(child_id, depth + 1, in_card_form);
         }
     }
+
+    /// The value a value-role node shows, using the desktop heuristic ([`visible_value`]).
+    fn shown_value(
+        &mut self,
+        node: &AxNode,
+        role: &str,
+        name: &str,
+        in_card_form: bool,
+    ) -> Option<String> {
+        // A slider's value arrives as a number, so it is displayed rather than read as a string.
+        let value = node
+            .value
+            .as_ref()
+            .and_then(|value| value.value.as_ref())
+            .map(value_display)
+            .filter(|value| is_value_role(role) && !value.is_empty())?;
+        Some(visible_value(name, &value, in_card_form).into_owned())
+    }
+
+    /// The words under `node`, as one line short enough to serve as a name.
+    fn text_of(&self, node: &AxNode) -> String {
+        const MAX_CHARS: usize = 100;
+        let mut words = Vec::new();
+        let mut pending = node.child_ids.clone().unwrap_or_default();
+        pending.reverse();
+        while let Some(id) = pending.pop() {
+            let Some(child) = self.by_id.get(&id) else {
+                continue;
+            };
+            if str_val(child.role.as_ref()).as_deref() == Some("StaticText") {
+                let text = str_val(child.name.as_ref()).unwrap_or_default();
+                words.extend(text.split_whitespace().map(str::to_string));
+            } else {
+                pending.extend(child.child_ids.iter().flatten().rev().cloned());
+            }
+        }
+        let text = words.join(" ");
+        match text.char_indices().nth(MAX_CHARS) {
+            Some((end, _)) => format!("{}…", &text[..end]),
+            None => text,
+        }
+    }
+}
+
+/// Labels that name a control the tree renders. Clicking a `<label>` clicks its control, so
+/// Chromium reports the label as clickable; when that control is in the tree with a ref of its
+/// own, the label is the same target and gets no second ref. A control the tree leaves out
+/// (`display: none`, or ignored like `aria-hidden`) has no ref, so its label stays the target.
+/// Only HTML label sources count: an `aria-labelledby` element is a node of its own.
+fn labels_of_rendered_controls(nodes: &[AxNode]) -> HashSet<i64> {
+    nodes
+        .iter()
+        .filter(|node| {
+            !node.ignored.unwrap_or(false)
+                && node.backend_dom_node_id.is_some()
+                && str_val(node.role.as_ref()).is_some_and(|role| is_interactive_role(&role))
+        })
+        .filter_map(|node| node.name.as_ref()?.sources.as_ref())
+        .flatten()
+        .filter(|source| {
+            matches!(
+                source.native_source.as_deref(),
+                Some("labelfor" | "labelwrapped")
+            )
+        })
+        .filter_map(|source| source.native_source_value.as_ref())
+        .flat_map(|value| &value.related_nodes)
+        .filter_map(|related| related.backend_dom_node_id)
+        .collect()
 }
 
 fn entry_node_ids(nodes: &[AxNode]) -> Vec<String> {
@@ -173,6 +265,37 @@ fn is_dropped(role: Option<&str>, name: &str, is_cursor_hit: bool) -> bool {
         return true;
     }
     (role == "generic" || role == "group") && name.is_empty() && !is_cursor_hit
+}
+
+/// The line a rendered snapshot shows for `ref_id`, without its indent and list marker.
+/// The tag counts only outside quotes: names, urls and values are page text, quoted and
+/// escaped by [`json_quote`], so a page cannot write a line that passes for another ref's.
+#[must_use]
+pub fn ref_line<'t>(text: &'t str, ref_id: &str) -> Option<&'t str> {
+    let tag = format!("[ref={ref_id}]");
+    split_rendered_lines(text)
+        .into_iter()
+        .find(|line| unquoted(line).contains(&tag))
+        .map(|line| {
+            let line = line.trim_start();
+            line.strip_prefix("- ").unwrap_or(line)
+        })
+}
+
+/// `line` with every quoted string removed.
+fn unquoted(line: &str) -> String {
+    let mut out = String::with_capacity(line.len());
+    let (mut quoted, mut escaped) = (false, false);
+    for ch in line.chars() {
+        match (quoted, escaped, ch) {
+            (true, true, _) => escaped = false,
+            (true, false, '\\') => escaped = true,
+            (_, _, '"') => quoted = !quoted,
+            (false, _, _) => out.push(ch),
+            (true, false, _) => {}
+        }
+    }
+    out
 }
 
 fn filter_interactive_lines(text: &str) -> String {
@@ -246,17 +369,26 @@ fn has_ref(line: &str) -> bool {
     line.contains(" [ref=e")
 }
 
+/// A node's name as the tree has it, which refs are minted and recovered by, and as its line
+/// shows it, which differs only for a nameless label read by its text.
+struct LineName<'a> {
+    tree: &'a str,
+    shown: &'a str,
+}
+
 fn format_line(
     node: &AxNode,
     role: &str,
-    name: &str,
+    name: LineName<'_>,
     depth: usize,
+    value: Option<&str>,
+    cursor_hit: bool,
     opts: &mut RenderOptions<'_>,
 ) -> String {
     let mut line = format!("{}- {role}", "  ".repeat(depth));
-    if !name.is_empty() {
+    if !name.shown.is_empty() {
         line.push(' ');
-        line.push_str(&json_quote(name));
+        line.push_str(&json_quote(name.shown));
     }
 
     for state in format_states(node) {
@@ -265,17 +397,14 @@ fn format_line(
         line.push(']');
     }
 
-    let cursor_reasons = node
-        .backend_dom_node_id
-        .and_then(|id| opts.cursor_hits.as_ref().and_then(|hits| hits.get(&id)));
-    let actionable = node.backend_dom_node_id.is_some()
-        && (is_interactive_role(role) || cursor_reasons.is_some());
+    let actionable =
+        node.backend_dom_node_id.is_some() && (is_interactive_role(role) || cursor_hit);
 
     if actionable && let Some(backend_node_id) = node.backend_dom_node_id {
         let ref_id = opts.refs.mint(MintRef {
             backend_node_id,
             role,
-            name,
+            name: name.tree,
             document_id: opts.document_id.as_deref(),
             frame_id: opts.frame_id.as_ref(),
         });
@@ -283,7 +412,7 @@ fn format_line(
         line.push_str(ref_id.as_str());
         line.push(']');
     }
-    if cursor_reasons.is_some() {
+    if cursor_hit {
         line.push_str(" [cursor=pointer]");
     }
 
@@ -302,15 +431,102 @@ fn format_line(
         line.push(']');
     }
 
-    if is_value_role(role)
-        && let Some(value) = str_val(node.value.as_ref())
-        && !value.is_empty()
-    {
+    if let Some(value) = value {
         line.push_str(": ");
-        line.push_str(&json_quote(&value));
+        line.push_str(&json_quote(value));
     }
 
     line
+}
+
+/// Card numbers and security codes stay out of snapshots. After a payment card
+/// fill they sit in plain text fields, unlike passwords, which the browser
+/// already masks. A card number keeps its last four digits. A 3-4 digit value
+/// is hidden inside a card form, whatever its field is called, and elsewhere
+/// in a field named like a security code.
+fn visible_value<'a>(name: &str, value: &'a str, in_card_form: bool) -> std::borrow::Cow<'a, str> {
+    let Some(digits) = digit_run(value) else {
+        return value.into();
+    };
+    if is_card_number(&digits) {
+        let last_four: String = digits[digits.len() - 4..]
+            .iter()
+            .map(|digit| char::from_digit(*digit, 10).unwrap_or('0'))
+            .collect();
+        return format!("•••• {last_four}").into();
+    }
+    let name = name.to_ascii_lowercase();
+    if (3..=4).contains(&digits.len())
+        && (in_card_form
+            || [
+                "cvc",
+                "cvv",
+                "csc",
+                "security code",
+                "card code",
+                "verification",
+            ]
+            .iter()
+            .any(|label| name.contains(label)))
+    {
+        return "•••".into();
+    }
+    value.into()
+}
+
+/// The digits of a value made only of digits, spaces and dashes.
+fn digit_run(value: &str) -> Option<Vec<u32>> {
+    value
+        .chars()
+        .all(|c| c.is_ascii_digit() || c == ' ' || c == '-')
+        .then(|| value.chars().filter_map(|c| c.to_digit(10)).collect())
+}
+
+fn is_card_number(digits: &[u32]) -> bool {
+    (13..=19).contains(&digits.len()) && passes_luhn(digits)
+}
+
+/// The nodes whose subtrees are card forms: for each value holding a card
+/// number, its nearest `form` ancestor, or its root when it has none.
+fn card_form_scopes(nodes: &[AxNode]) -> HashSet<String> {
+    let parents: HashMap<&str, &str> = nodes
+        .iter()
+        .flat_map(|node| {
+            node.child_ids
+                .iter()
+                .flatten()
+                .map(move |child| (child.as_str(), node.node_id.as_str()))
+        })
+        .collect();
+    let roles: HashMap<&str, Option<String>> = nodes
+        .iter()
+        .map(|node| (node.node_id.as_str(), str_val(node.role.as_ref())))
+        .collect();
+    let mut scopes = HashSet::new();
+    for node in nodes {
+        let holds_card = str_val(node.value.as_ref())
+            .and_then(|value| digit_run(&value))
+            .is_some_and(|digits| is_card_number(&digits));
+        if !holds_card {
+            continue;
+        }
+        let mut scope = node.node_id.as_str();
+        // Bounded by the node count, so a malformed cyclic tree can't spin.
+        for _ in 0..nodes.len() {
+            let Some(parent) = parents.get(scope) else {
+                break;
+            };
+            scope = parent;
+            if roles
+                .get(scope)
+                .is_some_and(|role| role.as_deref() == Some("form"))
+            {
+                break;
+            }
+        }
+        scopes.insert(scope.to_owned());
+    }
+    scopes
 }
 
 fn format_states(node: &AxNode) -> Vec<String> {
@@ -377,12 +593,33 @@ fn json_quote(value: &str) -> String {
     }
 }
 
+/// The Luhn checksum over a card number's digits.
+fn passes_luhn(digits: &[u32]) -> bool {
+    let sum: u32 = digits
+        .iter()
+        .rev()
+        .enumerate()
+        .map(|(index, &digit)| {
+            if index % 2 == 1 {
+                let doubled = digit * 2;
+                if doubled > 9 { doubled - 9 } else { doubled }
+            } else {
+                digit
+            }
+        })
+        .sum();
+    sum.is_multiple_of(10)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        RenderOptions, SnapshotMode, SnapshotOptions, apply_snapshot_options, render_snapshot,
+        RenderOptions, SnapshotMode, SnapshotOptions, apply_snapshot_options, ref_line,
+        render_snapshot,
     };
-    use crate::snapshot::{AxNode, AxProperty, AxValue, refs::RefMap};
+    use crate::snapshot::{
+        AxNode, AxProperty, AxRelatedNode, AxRelatedValue, AxValue, AxValueSource, refs::RefMap,
+    };
     use serde_json::json;
     use std::collections::HashMap;
 
@@ -409,6 +646,55 @@ mod tests {
             base_depth: 0,
         };
         render_snapshot(nodes, &mut opts).text
+    }
+
+    /// A form with password, card, code and plain fields, and a paragraph that echoes the code.
+    fn sign_in_form() -> Vec<AxNode> {
+        let mut nodes = vec![
+            ax("1", "RootWebArea", &["2", "7"]),
+            ax("2", "form", &["3", "4", "5", "6"]),
+            ax("3", "textbox", &[]),
+            ax("4", "textbox", &[]),
+            ax("5", "textbox", &[]),
+            ax("6", "textbox", &[]),
+            ax("7", "paragraph", &["8"]),
+            ax("8", "StaticText", &[]),
+        ];
+        let fields = [
+            ("Password", "••••••••••••", 201),
+            ("Card number", "4111111111111111", 202),
+            ("One-time code", "482913", 203),
+            ("Notes", "NOTES_visible_ok", 204),
+        ];
+        for (index, (label, value, backend)) in fields.into_iter().enumerate() {
+            let node = &mut nodes[index + 2];
+            node.name = Some(name(label));
+            node.backend_dom_node_id = Some(backend);
+            node.value = Some(AxValue {
+                value_type: "string".to_string(),
+                value: Some(json!(value)),
+                sources: None,
+            });
+        }
+        nodes[6].name = Some(name("We sent code 482913 to your phone"));
+        nodes
+    }
+
+    #[test]
+    fn the_heuristic_render_is_unchanged() {
+        let text = render(&sign_in_form(), &mut RefMap::new());
+        assert!(
+            text.contains(r#""Password" [ref=e1]: "••••••••••••""#),
+            "{text}"
+        );
+        assert!(
+            text.contains(r#""Card number" [ref=e2]: "•••• 1111""#),
+            "{text}"
+        );
+        assert!(
+            text.contains(r#""One-time code" [ref=e3]: "482913""#),
+            "{text}"
+        );
     }
 
     fn render_with_snapshot_options(
@@ -440,6 +726,7 @@ mod tests {
             value: AxValue {
                 value_type: "integer".to_string(),
                 value: Some(json!(1)),
+                sources: None,
             },
         }]);
         nodes[5].name = Some(name("Load more"));
@@ -449,6 +736,7 @@ mod tests {
             value: AxValue {
                 value_type: "boolean".to_string(),
                 value: Some(json!(true)),
+                sources: None,
             },
         }]);
         nodes[7].name = Some(name("Search"));
@@ -456,6 +744,7 @@ mod tests {
         nodes[7].value = Some(AxValue {
             value_type: "string".to_string(),
             value: Some(json!("abc")),
+            sources: None,
         });
 
         let text = render(&nodes, &mut RefMap::new());
@@ -468,6 +757,63 @@ mod tests {
                 "  - heading \"Results\" [level=1]",
                 "  - button \"Load more\" [disabled] [ref=e2]",
                 "  - textbox \"Search\" [ref=e3]: \"abc\"",
+            ]
+            .join("\n")
+        );
+    }
+
+    #[test]
+    fn a_slider_shows_its_numeric_value() {
+        let mut nodes = vec![ax("1", "RootWebArea", &["2"]), ax("2", "slider", &[])];
+        nodes[1].name = Some(name("Volume"));
+        nodes[1].backend_dom_node_id = Some(200);
+        nodes[1].value = Some(AxValue {
+            value_type: "number".to_string(),
+            value: Some(json!(75)),
+            sources: None,
+        });
+        assert_eq!(
+            render(&nodes, &mut RefMap::new()),
+            "- slider \"Volume\" [ref=e1]: \"75\""
+        );
+    }
+
+    #[test]
+    fn date_time_and_color_inputs_get_refs_and_show_their_value() {
+        let mut nodes = vec![
+            ax("1", "RootWebArea", &["2", "3", "4", "5"]),
+            ax("2", "Date", &[]),
+            ax("3", "DateTime", &[]),
+            ax("4", "InputTime", &[]),
+            ax("5", "ColorWell", &[]),
+        ];
+        for (index, (label, value)) in [
+            ("Start", "2026-10-29"),
+            ("Meeting", "2026-10-29T14:30"),
+            ("Alarm", "07:15"),
+            ("Accent", "#ff8800"),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let node = &mut nodes[index + 1];
+            node.name = Some(name(label));
+            node.backend_dom_node_id = Some(200 + index as i64);
+            node.value = Some(AxValue {
+                value_type: "string".to_string(),
+                value: Some(json!(value)),
+                sources: None,
+            });
+        }
+
+        let text = render(&nodes, &mut RefMap::new());
+        assert_eq!(
+            text,
+            [
+                "- Date \"Start\" [ref=e1]: \"2026-10-29\"",
+                "- DateTime \"Meeting\" [ref=e2]: \"2026-10-29T14:30\"",
+                "- InputTime \"Alarm\" [ref=e3]: \"07:15\"",
+                "- ColorWell \"Accent\" [ref=e4]: \"#ff8800\"",
             ]
             .join("\n")
         );
@@ -702,6 +1048,148 @@ mod tests {
         );
     }
 
+    /// A control's name as Chromium reports it when a `<label>` supplies it: the source names the
+    /// label node by backend id.
+    fn named_by_label(native_source: &str, label: i64, text: &str) -> AxValue {
+        AxValue {
+            sources: Some(vec![AxValueSource {
+                native_source: Some(native_source.to_string()),
+                native_source_value: Some(AxRelatedValue {
+                    related_nodes: vec![AxRelatedNode {
+                        backend_dom_node_id: Some(label),
+                    }],
+                }),
+            }]),
+            ..AxValue::string(text)
+        }
+    }
+
+    fn render_with_hits(nodes: &[AxNode], hits: &[i64]) -> String {
+        let mut refs = RefMap::new();
+        let mut opts = RenderOptions {
+            refs: &mut refs,
+            frame_id: None,
+            document_id: None,
+            cursor_hits: Some(
+                hits.iter()
+                    .map(|&id| (id, vec!["clickable".to_string()]))
+                    .collect(),
+            ),
+            base_depth: 0,
+        };
+        render_snapshot(nodes, &mut opts).text
+    }
+
+    #[test]
+    fn ref_line_finds_exactly_that_ref() {
+        let text = "- form\n  - textbox \"Phone\" [ref=e2]: \"(555) 123-4567\"\n  - textbox \"Name\" [ref=e20]";
+        assert_eq!(
+            ref_line(text, "e2"),
+            Some("textbox \"Phone\" [ref=e2]: \"(555) 123-4567\"")
+        );
+        assert_eq!(ref_line(text, "e20"), Some("textbox \"Name\" [ref=e20]"));
+        assert_eq!(ref_line(text, "e3"), None);
+        assert_eq!(ref_line("- textbox \"Name\" [ref=e20]", "e2"), None);
+    }
+
+    #[test]
+    fn ref_line_ignores_a_ref_tag_inside_page_text() {
+        // A page can name a heading or link anything; quoted text never stands for a ref.
+        let text = "- heading \"Code [ref=e2]: \\\"000 000\\\"\" [level=1]\n- link \"x\" [ref=e1] [url=\"https://a.test/[ref=e2]\"]\n- textbox \"Code\" [ref=e2]: \"440 212\"";
+        assert_eq!(
+            ref_line(text, "e2"),
+            Some("textbox \"Code\" [ref=e2]: \"440 212\"")
+        );
+    }
+
+    #[test]
+    fn a_label_is_part_of_the_control_it_names() {
+        // <label for="email">Email</label><input id="email">: Chromium calls the label
+        // clickable because clicking it clicks the input, which has a ref of its own.
+        let mut nodes = vec![
+            ax("1", "RootWebArea", &["2", "4"]),
+            ax("2", "LabelText", &["3"]),
+            ax("3", "StaticText", &[]),
+            ax("4", "textbox", &[]),
+        ];
+        nodes[1].backend_dom_node_id = Some(6);
+        nodes[2].name = Some(name("Email"));
+        nodes[3].backend_dom_node_id = Some(7);
+        nodes[3].name = Some(named_by_label("labelfor", 6, "Email"));
+        assert_eq!(
+            render_with_hits(&nodes, &[6]),
+            "- LabelText\n- textbox \"Email\" [ref=e1]"
+        );
+
+        // <label>Wrapped <input></label>
+        let mut nodes = vec![
+            ax("1", "RootWebArea", &["2"]),
+            ax("2", "LabelText", &["3", "4"]),
+            ax("3", "StaticText", &[]),
+            ax("4", "checkbox", &[]),
+        ];
+        nodes[1].backend_dom_node_id = Some(6);
+        nodes[2].name = Some(name("Wrapped"));
+        nodes[3].backend_dom_node_id = Some(7);
+        nodes[3].name = Some(named_by_label("labelwrapped", 6, "Wrapped"));
+        assert_eq!(
+            render_with_hits(&nodes, &[6]),
+            "- LabelText\n  - checkbox \"Wrapped\" [ref=e1]"
+        );
+    }
+
+    #[test]
+    fn a_label_whose_control_is_not_rendered_keeps_a_ref_named_by_its_text() {
+        // <input type="checkbox" id="remember" hidden><label for="remember">Remember me</label>:
+        // the hidden input is not in the tree, so the label is the only thing to click.
+        let mut nodes = vec![
+            ax("1", "RootWebArea", &["2"]),
+            ax("2", "LabelText", &["3"]),
+            ax("3", "StaticText", &[]),
+        ];
+        nodes[1].backend_dom_node_id = Some(9);
+        nodes[2].name = Some(name("Remember  me"));
+        let mut refs = RefMap::new();
+        let mut opts = RenderOptions {
+            refs: &mut refs,
+            frame_id: None,
+            document_id: None,
+            cursor_hits: Some(HashMap::from([(9, vec!["clickable".to_string()])])),
+            base_depth: 0,
+        };
+        assert_eq!(
+            render_snapshot(&nodes, &mut opts).text,
+            "- LabelText \"Remember me\" [ref=e1] [cursor=pointer]"
+        );
+        // The shown name is for reading. The ref keeps the tree's own (empty) name, which is what
+        // recovering a ref whose node was replaced matches against.
+        assert_eq!(
+            refs.get(&crate::Ref("e1".to_string()))
+                .map(|entry| entry.name.as_str()),
+            Some("")
+        );
+    }
+
+    #[test]
+    fn a_label_of_an_ignored_control_keeps_its_ref() {
+        // aria-hidden on the input takes it out of the tree's controls: no ref of its own.
+        let mut nodes = vec![
+            ax("1", "RootWebArea", &["2", "4"]),
+            ax("2", "LabelText", &["3"]),
+            ax("3", "StaticText", &[]),
+            ax("4", "checkbox", &[]),
+        ];
+        nodes[1].backend_dom_node_id = Some(6);
+        nodes[2].name = Some(name("Agree"));
+        nodes[3].backend_dom_node_id = Some(7);
+        nodes[3].ignored = Some(true);
+        nodes[3].name = Some(named_by_label("labelfor", 6, "Agree"));
+        assert_eq!(
+            render_with_hits(&nodes, &[6]),
+            "- LabelText \"Agree\" [ref=e1] [cursor=pointer]"
+        );
+    }
+
     #[test]
     fn interactive_mode_keeps_refs_headings_first_line_and_ancestors() {
         let mut nodes = vec![
@@ -857,5 +1345,70 @@ mod tests {
         let with_defaults = apply_snapshot_options(&full, SnapshotOptions::default());
 
         assert_eq!(with_defaults, full);
+    }
+
+    #[test]
+    fn snapshots_mask_card_numbers_and_security_codes() {
+        let field = |id: &str, label: &str, value: &str| {
+            let mut node = ax(id, "textbox", &[]);
+            node.name = Some(name(label));
+            node.value = Some(AxValue {
+                value_type: "string".to_string(),
+                value: Some(json!(value)),
+                sources: None,
+            });
+            node
+        };
+        let mut refs = RefMap::default();
+        let text = render(
+            &[
+                ax("1", "RootWebArea", &["6", "7"]),
+                ax("6", "form", &["2"]),
+                field("2", "Card number", "4111 1111 1111 1111"),
+                // Outside the card form, only a security-code name hides a value.
+                ax("7", "form", &["3", "4", "5"]),
+                field("3", "CVC", "123"),
+                field("4", "Quantity", "123"),
+                field("5", "Order number", "4111111111111112"),
+            ],
+            &mut refs,
+        );
+        assert!(text.contains("\"•••• 1111\""), "{text}");
+        assert!(!text.contains("4111 1111 1111 1111"), "{text}");
+        assert!(text.contains("\"CVC\": \"•••\""), "{text}");
+        assert!(text.contains("\"Quantity\": \"123\""), "{text}");
+        // Not checksum-valid, so not a card number.
+        assert!(text.contains("4111111111111112"), "{text}");
+    }
+
+    #[test]
+    fn card_forms_hide_short_numbers_whatever_the_field_is_called() {
+        let field = |id: &str, label: &str, value: &str| {
+            let mut node = ax(id, "textbox", &[]);
+            node.name = Some(name(label));
+            node.value = Some(AxValue {
+                value_type: "string".to_string(),
+                value: Some(json!(value)),
+                sources: None,
+            });
+            node
+        };
+        let mut refs = RefMap::default();
+        let text = render(
+            &[
+                ax("1", "RootWebArea", &["2", "6"]),
+                ax("2", "form", &["3", "4", "5"]),
+                field("3", "Numéro de carte", "4111 1111 1111 1111"),
+                field("4", "Code", "123"),
+                field("5", "Mois", "12"),
+                ax("6", "form", &["7"]),
+                field("7", "Quantity", "123"),
+            ],
+            &mut refs,
+        );
+        assert!(text.contains("\"Code\": \"•••\""), "{text}");
+        assert!(text.contains("\"Mois\": \"12\""), "{text}");
+        // Another form on the page keeps its numbers.
+        assert!(text.contains("\"Quantity\": \"123\""), "{text}");
     }
 }
