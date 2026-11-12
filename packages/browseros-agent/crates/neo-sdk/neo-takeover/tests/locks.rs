@@ -89,6 +89,7 @@ fn write_done(sink: &TraceSink, op: OperationId) {
         result: None,
         error: None,
         page_after: None,
+        main_world: false,
         at: EpochMillis::now(),
     });
 }

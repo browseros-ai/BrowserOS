@@ -445,6 +445,7 @@ impl Harness {
             result: None,
             error: None,
             page_after: None,
+            main_world: false,
             at,
         });
     }

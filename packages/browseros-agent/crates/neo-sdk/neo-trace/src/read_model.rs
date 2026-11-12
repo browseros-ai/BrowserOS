@@ -55,6 +55,11 @@ pub struct OperationRow {
     pub ended_at: Option<EpochMillis>,
     /// What became of the screenshot taken after it; `None` when it has none.
     pub screenshot: Option<ShotState>,
+    /// Whether it sent script into a page's main world ([`OperationEnded::main_world`]).
+    /// `None` while it runs, when its end never arrived, and for rows stored before the column.
+    ///
+    /// [`OperationEnded::main_world`]: crate::OperationEnded::main_world
+    pub main_world: Option<bool>,
 }
 
 /// What became of an operation's screenshot, as its row records it. An operation with none (no

@@ -321,6 +321,7 @@ fn settle(
         result,
         error,
         page_after,
+        main_world: false,
         at: EpochMillis::now(),
     });
     let line = OpLine {

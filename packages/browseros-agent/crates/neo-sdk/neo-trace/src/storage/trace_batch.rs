@@ -84,6 +84,7 @@ pub(crate) struct OperationEndRow<'a> {
     pub(crate) error: Option<&'a ErrorRecord>,
     pub(crate) notes: &'a [String],
     pub(crate) page: Option<&'a PageState>,
+    pub(crate) main_world: bool,
 }
 
 /// The recoverable request-id portion of a damaged run; salvage has already validated it.
@@ -335,6 +336,7 @@ impl TraceBatch {
             tab_id: Set(page.tab_id.map(|tab| tab.0)),
             url: Set(page.url),
             title: Set(page.title),
+            main_world: Set(Some(op.main_world)),
             ..Default::default()
         };
         if let Some((args, cut)) = op.args {

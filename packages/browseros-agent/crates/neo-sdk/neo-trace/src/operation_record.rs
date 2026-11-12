@@ -183,6 +183,10 @@ pub struct OperationEnded {
     pub error: Option<ErrorRecord>,
     /// The page after it, from the browser's cached target info.
     pub page_after: Option<PageState>,
+    /// Whether it sent script into a page's main world, the page's own JavaScript world, rather
+    /// than Neo's isolated world: the work a site can notice. The host sets it where the op
+    /// reaches that world, so an op refused or failed before its script went out stays false.
+    pub main_world: bool,
     /// When it ended.
     pub at: EpochMillis,
 }

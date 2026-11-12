@@ -13,11 +13,12 @@ use crate::TraceError;
 
 mod m0001_trace_baseline;
 mod m0002_operation_site;
+mod m0003_operation_main_world;
 
 /// The ordered schema history, applied only inside prepare's owned SQLite transaction.
 pub(crate) struct TraceMigrator;
 
-const USER_VERSION_FENCE: i64 = 2;
+const USER_VERSION_FENCE: i64 = 3;
 
 #[async_trait::async_trait]
 impl MigratorTrait for TraceMigrator {
@@ -25,6 +26,7 @@ impl MigratorTrait for TraceMigrator {
         vec![
             Box::new(m0001_trace_baseline::Migration),
             Box::new(m0002_operation_site::Migration),
+            Box::new(m0003_operation_main_world::Migration),
         ]
     }
 }

@@ -36,6 +36,7 @@ pub struct Model {
     pub notes: Option<String>,
     pub screenshot: Option<String>,
     pub screenshot_bytes: Option<i64>,
+    pub main_world: Option<bool>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

@@ -378,6 +378,7 @@ pub(crate) fn op_ended(
         result,
         error: None,
         page_after: None,
+        main_world: false,
         at: at(10_000),
     });
 }

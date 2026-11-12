@@ -365,6 +365,7 @@ async fn record_values_read_back_as_given_in_every_channel() -> TestResult {
             url: Some(format!("https://b.test/?name={value}")),
             title: Some(format!("Welcome {value}")),
         }),
+        main_world: false,
         at: at(2),
     });
     h.sink.run_ended(RunEnded {
@@ -477,6 +478,7 @@ async fn starts_defer_input_and_ends_publish_the_original_values() -> TestResult
         result: None,
         error: None,
         page_after: None,
+        main_world: false,
         at: at(2),
     });
     h.sink.run_ended(RunEnded {

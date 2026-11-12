@@ -132,6 +132,7 @@ fn op_ended(sink: &TraceSink, id: OperationId, delivery: Delivery, result: Optio
             url: Some("https://x.example/done".into()),
             title: Some("Done".into()),
         }),
+        main_world: false,
         at: at(i64::from(id.seq) * 10 + 5),
     });
 }
@@ -189,6 +190,7 @@ fn answered(
         result: None,
         error: None,
         page_after,
+        main_world: false,
         at: at(millis + 5),
     }
 }
@@ -787,6 +789,61 @@ async fn an_operations_notes_reach_its_record_with_its_end_bounded_and_in_order(
             .any(|file| holds(file, "hunter2-swordfish")),
         "the completed note is stored as given"
     );
+    Ok(())
+}
+
+async fn main_world_of(
+    store: &TraceStore,
+    id: OperationId,
+) -> Result<Option<bool>, Box<dyn std::error::Error + Send + Sync>> {
+    let row = store
+        .operation(id)
+        .await?
+        .ok_or_else(|| format!("{id} not found"))?;
+    Ok(row.main_world)
+}
+
+/// An operation's end stores whether it sent script into a page's main world, as the host said,
+/// true or false. A row with no end has no answer: one still running, and one a crash cut off,
+/// which recovery ends as cancelled without inventing one.
+#[tokio::test]
+async fn an_operations_main_world_flag_reads_back_as_its_end_gave_it()
+-> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let h = harness(WriterConfig::default()).await;
+    let run = start_in(&h.sink, None, 0);
+    let evaluate = OperationId::new(run, 1);
+    let click = OperationId::new(run, 2);
+    let goto = OperationId::new(run, 3);
+    op_started(&h.sink, simple(evaluate, "page.evaluate", Effect::Write));
+    op_started(&h.sink, simple(click, "locator.click", Effect::Write));
+    op_started(&h.sink, simple(goto, "page.goto", Effect::Write));
+    h.sink.op_ended(OperationEnded {
+        main_world: true,
+        ..answered(evaluate, 10, None, None)
+    });
+    h.sink.op_ended(answered(click, 20, None, None));
+    flushed(&h).await;
+    assert_eq!(main_world_of(&h.store, evaluate).await?, Some(true));
+    assert_eq!(main_world_of(&h.store, click).await?, Some(false));
+    assert_eq!(
+        main_world_of(&h.store, goto).await?,
+        None,
+        "a running operation has no answer yet"
+    );
+    let detail = h.store.run(run).await?.ok_or("run not found")?;
+    let in_run: Vec<Option<bool>> = detail.operations.iter().map(|op| op.main_world).collect();
+    assert_eq!(in_run, [Some(true), Some(false), None]);
+
+    let Harness { dir, sink, .. } = h;
+    drop(sink);
+    let reopened = open(&dir).await;
+    let recovered = reopened.operation(goto).await?.ok_or("recovered op")?;
+    assert_eq!(recovered.outcome, Some(Outcome::Cancelled));
+    assert_eq!(
+        recovered.main_world, None,
+        "recovery does not invent an answer"
+    );
+    assert_eq!(main_world_of(&reopened, evaluate).await?, Some(true));
     Ok(())
 }
 
@@ -1429,6 +1486,7 @@ fn ended(id: OperationId) -> OperationEnded {
         result: None,
         error: None,
         page_after: None,
+        main_world: false,
         at: at(i64::from(id.seq) * 10 + 5),
     }
 }

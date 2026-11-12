@@ -729,6 +729,7 @@ impl Writer {
                 error: error.as_ref(),
                 notes: &notes,
                 page: page.as_ref(),
+                main_world: event.main_world,
             })
             .await?;
         if !matched {
@@ -1084,6 +1085,7 @@ mod tests {
             result: None,
             error: None,
             page_after: None,
+            main_world: false,
             at: EpochMillis::from_millis(3),
         });
         let lost = sink.flush().await;
@@ -1161,6 +1163,7 @@ mod tests {
                 result: None,
                 error: None,
                 page_after: None,
+                main_world: false,
                 at: EpochMillis::from_millis(3),
             });
         }

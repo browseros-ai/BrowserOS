@@ -485,6 +485,7 @@ impl SurfaceCalls {
             result: None,
             error: None,
             page_after: None,
+            main_world: false,
             at: EpochMillis::now(),
         });
     }
@@ -640,6 +641,7 @@ async fn record_fake_writes(sink: TraceSink, tab: TabId) {
                 url: None,
                 title: None,
             }),
+            main_world: false,
             at: EpochMillis::now(),
         });
         sink.run_ended(RunEnded {
@@ -715,6 +717,7 @@ async fn record_fake_runs(sink: TraceSink) {
                     url: Some("https://example.com/".into()),
                     title: Some("Example Domain".into()),
                 }),
+                main_world: false,
                 at: EpochMillis::now(),
             });
         }
