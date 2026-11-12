@@ -15,9 +15,10 @@ use crate::{ErrorCode, Playwright};
 
 /// The JS oracle records reply order: a pending pull can finish before remove's reply, even
 /// though remove already unregistered it. Reproduce that registry state before each pull.
+/// The recorded add envelope supplies the bare uid; every other reply retains its bytes.
 #[tokio::test]
-async fn tests_that_handler_routes_keep_the_recorded_input_and_reply_bytes()
--> Result<(), Box<dyn Error>> {
+async fn tests_that_handler_routes_only_unwrap_the_recorded_add_reply() -> Result<(), Box<dyn Error>>
+{
     #[derive(Deserialize)]
     struct Fixture {
         scenarios: Vec<Scenario>,
@@ -43,7 +44,11 @@ async fn tests_that_handler_routes_keep_the_recorded_input_and_reply_bytes()
                 OpInput::decode(op, serde_json::from_str(&exchange.args)?)?;
             let scope = OpScope::new(&env, op, call);
             let expected: Value = serde_json::from_str(&exchange.reply)?;
-            let expected = &expected["ok"];
+            let expected = if exchange.op == "page.addLocatorHandler" {
+                &expected["ok"]["uid"]
+            } else {
+                &expected["ok"]
+            };
             let handlers = &scope.run_state().locator_handlers;
             if exchange.op == "page.locatorHandlerTriggered" {
                 if let Some(uid) = expected["uid"].as_u64() {

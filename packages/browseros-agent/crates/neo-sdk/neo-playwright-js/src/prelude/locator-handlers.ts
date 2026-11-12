@@ -3,7 +3,7 @@
  * client/page.ts: the script registers a function for an overlay that may appear at any time,
  * and an action that finds the overlay visible pauses while the script runs it.
  *
- *   page.addLocatorHandler(l, fn)   page.addLocatorHandler { target, noWaitAfter } ─▶ { uid }
+ *   page.addLocatorHandler(l, fn)   page.addLocatorHandler { target, noWaitAfter } ─▶ uid
  *   an action's retry, in Rust      l is visible ─ queue uid, pause the action
  *   pull (one per run)              page.locatorHandlerTriggered {}, a background long poll
  *                                   ─▶ { uid } ─▶ fn(l), counting `times`
@@ -56,7 +56,7 @@ export class LocatorHandlers {
       )
     if (options.times === 0) return
     const target = await locator._frame._locatorBrand(api, locator._selector)
-    const { uid } = await send['page.addLocatorHandler'](
+    const uid = await send['page.addLocatorHandler'](
       site,
       { api, timeoutMs: 0 },
       { target, noWaitAfter: options.noWaitAfter ? true : undefined },

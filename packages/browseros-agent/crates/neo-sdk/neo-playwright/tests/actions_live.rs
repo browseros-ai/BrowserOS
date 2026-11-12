@@ -663,13 +663,7 @@ async fn tests_that_a_refused_click_leaves_the_mouse_where_it_was() -> TestResul
     let server = FixtureServer::start(pages()).await?;
     let page = agent_tab(&run, &server.url("127.0.0.1", "/actions/page.html")).await?;
     let (x, y) = center(&run, &page, "#dst").await?;
-    device(
-        &run,
-        "mouse.move",
-        &page,
-        json!({ "x": x, "y": y, "options": {} }),
-    )
-    .await?;
+    device(&run, "mouse.move", &page, json!({ "x": x, "y": y })).await?;
     run.refuse_rechecks(Some(Refusal {
         owner: ErrorOwner::Host,
         code: "owner_has_control".to_owned(),
@@ -680,8 +674,8 @@ async fn tests_that_a_refused_click_leaves_the_mouse_where_it_was() -> TestResul
     let refused = click(&run, &at(&page, "#go"), json!({ "force": true })).await;
     run.refuse_rechecks(None);
     assert!(refused.is_err(), "the recheck refused the click");
-    device(&run, "mouse.down", &page, json!({ "options": {} })).await?;
-    device(&run, "mouse.up", &page, json!({ "options": {} })).await?;
+    device(&run, "mouse.down", &page, json!({})).await?;
+    device(&run, "mouse.up", &page, json!({})).await?;
     assert_eq!(
         page_log(&run, &page).await?,
         [
@@ -937,13 +931,7 @@ fn drag_to_missing(page: &TestPage, options: &Value, timeout_ms: u64) -> Value {
 /// `mouse.move` onto `#dst`, which takes nothing when pressed.
 async fn move_over_dst(run: &LiveRun, page: &TestPage) -> TestResult {
     let (x, y) = center(run, page, "#dst").await?;
-    device(
-        run,
-        "mouse.move",
-        page,
-        json!({ "x": x, "y": y, "options": {} }),
-    )
-    .await?;
+    device(run, "mouse.move", page, json!({ "x": x, "y": y })).await?;
     Ok(())
 }
 

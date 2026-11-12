@@ -1,9 +1,9 @@
-/** Keyboard/mouse calls retain the baseline JSON bytes, including nested option order. */
+/** Keyboard/mouse calls pin their aligned flat JSON bytes, including nested option order. */
 import { expect, it } from 'bun:test'
 import { readFileSync } from 'node:fs'
 import { loadPrelude, SEED } from './support/prelude-runtime'
 
-it('keeps input bytes for full options, empty options and the dblclick projection', async () => {
+it('pins flat input bytes for full options, empty options and the dblclick projection', async () => {
   const runtime = loadPrelude({ seed: SEED, answer: () => null })
   await runtime.run(`
     await page.keyboard.down('Shift')
@@ -21,11 +21,35 @@ it('keeps input bytes for full options, empty options and the dblclick projectio
     await page.mouse.down()
     await page.mouse.move(9, 10)
   `)
-  // Captured from the pre-migration prelude. Comparing serialized text catches key-order
+  // The aligned recording preserves every value while lifting only the six bags. Text pins key-order
   // drift as well as renamed fields; ignored script keys must never reach Rust.
-  const baseline = readFileSync(
+  const recording = readFileSync(
     new URL('./data/input-wire.json', import.meta.url),
     'utf8',
   )
-  expect(`${JSON.stringify(runtime.calls, null, 2)}\n`).toBe(baseline)
+  expect(`${JSON.stringify(runtime.calls, null, 2)}\n`).toBe(recording)
+})
+
+it('does not read inherited option fields when the script omits their values', async () => {
+  const runtime = loadPrelude({ seed: SEED, answer: () => null })
+  const reads = await runtime.run(`
+    let reads = 0;
+    for (const key of ['delay', 'steps', 'button', 'clickCount'])
+      Object.defineProperty(Object.prototype, key, { configurable: true, get() { reads++; return 7; } });
+    await page.keyboard.press('a', { delay: undefined });
+    await page.keyboard.type('a', { delay: undefined });
+    await page.mouse.move(1, 2, { steps: undefined });
+    await page.mouse.down({ button: undefined, clickCount: undefined });
+    await page.mouse.up({ button: undefined, clickCount: undefined });
+    await page.mouse.click(1, 2, { button: undefined, clickCount: undefined, delay: undefined });
+    return reads;
+  `)
+  expect(reads).toBe(0)
+  expect(runtime.calls).toHaveLength(6)
+  for (const call of runtime.calls)
+    expect(
+      ['delay', 'steps', 'button', 'clickCount'].filter((key) =>
+        Object.hasOwn(call.input, key),
+      ),
+    ).toEqual([])
 })

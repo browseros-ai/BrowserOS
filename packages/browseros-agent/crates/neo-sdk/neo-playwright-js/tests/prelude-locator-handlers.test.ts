@@ -13,7 +13,7 @@ function host() {
   const pulls: ((uid: number | null) => void)[] = []
   let uid = 0
   const answer: Answer = ({ name }) => {
-    if (name === 'page.addLocatorHandler') return { uid: ++uid }
+    if (name === 'page.addLocatorHandler') return ++uid
     if (name === 'page.locatorHandlerTriggered')
       return new Promise((resolve) =>
         pulls.push((next) => resolve({ uid: next })),

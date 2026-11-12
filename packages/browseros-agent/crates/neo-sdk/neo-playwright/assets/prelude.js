@@ -9471,7 +9471,7 @@ ${value.stack}`;
       if (options.times === 0)
         return;
       const target = await locator._frame._locatorBrand(api, locator._selector);
-      const { uid } = await send["page.addLocatorHandler"](site, { api, timeoutMs: 0 }, { target, noWaitAfter: options.noWaitAfter ? true : undefined });
+      const uid = await send["page.addLocatorHandler"](site, { api, timeoutMs: 0 }, { target, noWaitAfter: options.noWaitAfter ? true : undefined });
       this.#byUid.set(uid, { page, locator, handler, times: options.times });
       if (!this.#pulling) {
         this.#pulling = true;
@@ -9522,6 +9522,11 @@ ${value.stack}`;
   }
 
   // crates/neo-sdk/neo-playwright-js/src/prelude/input.ts
+  var hasOwn = Object.hasOwn;
+  function ownOption(picked, key) {
+    return hasOwn(picked, key) ? picked[key] : undefined;
+  }
+
   class Keyboard {
     #page;
     constructor(page) {
@@ -9541,20 +9546,16 @@ ${value.stack}`;
     async press(key, options = {}) {
       const site = captureSite();
       const api = "keyboard.press";
-      await send["keyboard.press"](site, { api, timeoutMs: 0 }, {
-        page: await this.#page._brand(api),
-        key,
-        options: pick(options, OPTION_KEYS["keyboard.press"])
-      });
+      const page = await this.#page._brand(api);
+      const picked = pick(options, OPTION_KEYS["keyboard.press"]);
+      await send["keyboard.press"](site, { api, timeoutMs: 0 }, { page, key, delay: ownOption(picked, "delay") });
     }
     async type(text, options = {}) {
       const site = captureSite();
       const api = "keyboard.type";
-      await send["keyboard.type"](site, { api, timeoutMs: 0 }, {
-        page: await this.#page._brand(api),
-        text,
-        options: pick(options, OPTION_KEYS["keyboard.type"])
-      });
+      const page = await this.#page._brand(api);
+      const picked = pick(options, OPTION_KEYS["keyboard.type"]);
+      await send["keyboard.type"](site, { api, timeoutMs: 0 }, { page, text, delay: ownOption(picked, "delay") });
     }
     async insertText(text) {
       const site = captureSite();
@@ -9572,27 +9573,30 @@ ${value.stack}`;
     async move(x, y, options = {}) {
       const site = captureSite();
       const api = "mouse.move";
-      await send["mouse.move"](site, { api, timeoutMs: 0 }, {
-        page: await this.#page._brand(api),
-        x,
-        y,
-        options: pick(options, OPTION_KEYS["mouse.move"])
-      });
+      const page = await this.#page._brand(api);
+      const picked = pick(options, OPTION_KEYS["mouse.move"]);
+      await send["mouse.move"](site, { api, timeoutMs: 0 }, { page, x, y, steps: ownOption(picked, "steps") });
     }
     async down(options = {}) {
       const site = captureSite();
       const api = "mouse.down";
+      const page = await this.#page._brand(api);
+      const picked = pick(options, OPTION_KEYS["mouse.down"]);
       await send["mouse.down"](site, { api, timeoutMs: 0 }, {
-        page: await this.#page._brand(api),
-        options: pick(options, OPTION_KEYS["mouse.down"])
+        page,
+        button: ownOption(picked, "button"),
+        clickCount: ownOption(picked, "clickCount")
       });
     }
     async up(options = {}) {
       const site = captureSite();
       const api = "mouse.up";
+      const page = await this.#page._brand(api);
+      const picked = pick(options, OPTION_KEYS["mouse.up"]);
       await send["mouse.up"](site, { api, timeoutMs: 0 }, {
-        page: await this.#page._brand(api),
-        options: pick(options, OPTION_KEYS["mouse.up"])
+        page,
+        button: ownOption(picked, "button"),
+        clickCount: ownOption(picked, "clickCount")
       });
     }
     click(x, y, options = {}) {
@@ -9608,11 +9612,15 @@ ${value.stack}`;
     }
     async#clickAt(api, x, y, options) {
       const site = captureSite();
+      const page = await this.#page._brand(api);
+      const picked = pick(options, OPTION_KEYS["mouse.click"]);
       await send["mouse.click"](site, { api, timeoutMs: 0 }, {
-        page: await this.#page._brand(api),
+        page,
         x,
         y,
-        options: pick(options, OPTION_KEYS["mouse.click"])
+        button: ownOption(picked, "button"),
+        clickCount: ownOption(picked, "clickCount"),
+        delay: ownOption(picked, "delay")
       });
     }
   }

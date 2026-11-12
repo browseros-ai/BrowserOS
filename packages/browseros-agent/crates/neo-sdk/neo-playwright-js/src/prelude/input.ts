@@ -6,16 +6,44 @@
 
 import { captureSite } from './call-site'
 import type {
-  KeyboardDelayOptions,
-  MouseButtonOptions,
-  MouseClickOptions,
-  MouseStepOptions,
+  KeyboardPressInput,
+  MouseButtonInput,
+  MouseClickInput,
+  MouseMoveInput,
 } from './generated'
 import { OPTION_KEYS, send } from './generated'
 import { markHandle, pick } from './options'
 import type { Page } from './page'
 
-export type ButtonOptions = MouseButtonOptions
+// Script option types project the generated wire and its non-positional keys. No option
+// fields are restated here, and positional call arguments cannot become script options.
+type KeyboardDelayOptions = Pick<
+  KeyboardPressInput,
+  (typeof OPTION_KEYS)['keyboard.press'][number]
+>
+type MouseStepOptions = Pick<
+  MouseMoveInput,
+  (typeof OPTION_KEYS)['mouse.move'][number]
+>
+export type ButtonOptions = Pick<
+  MouseButtonInput,
+  (typeof OPTION_KEYS)['mouse.down'][number]
+>
+type MouseClickOptions = Pick<
+  MouseClickInput,
+  (typeof OPTION_KEYS)['mouse.click'][number]
+>
+
+// The former nested JSON emitted only the picked object's own fields. Reading a missing
+// option while flattening must not invoke an inherited getter. Capture the intrinsic before
+// agent code can replace Object.hasOwn.
+const hasOwn = Object.hasOwn
+function ownOption<T extends object, K extends keyof T>(
+  picked: T,
+  key: K,
+): T[K] | undefined {
+  return hasOwn(picked, key) ? picked[key] : undefined
+}
 
 export class Keyboard {
   readonly #page: Page
@@ -48,28 +76,24 @@ export class Keyboard {
   async press(key: string, options: KeyboardDelayOptions = {}): Promise<void> {
     const site = captureSite()
     const api = 'keyboard.press'
+    const page = await this.#page._brand(api)
+    const picked = pick(options, OPTION_KEYS['keyboard.press'])
     await send['keyboard.press'](
       site,
       { api, timeoutMs: 0 },
-      {
-        page: await this.#page._brand(api),
-        key,
-        options: pick(options, OPTION_KEYS['keyboard.press']),
-      },
+      { page, key, delay: ownOption(picked, 'delay') },
     )
   }
 
   async type(text: string, options: KeyboardDelayOptions = {}): Promise<void> {
     const site = captureSite()
     const api = 'keyboard.type'
+    const page = await this.#page._brand(api)
+    const picked = pick(options, OPTION_KEYS['keyboard.type'])
     await send['keyboard.type'](
       site,
       { api, timeoutMs: 0 },
-      {
-        page: await this.#page._brand(api),
-        text,
-        options: pick(options, OPTION_KEYS['keyboard.type']),
-      },
+      { page, text, delay: ownOption(picked, 'delay') },
     )
   }
 
@@ -99,27 +123,27 @@ export class Mouse {
   ): Promise<void> {
     const site = captureSite()
     const api = 'mouse.move'
+    const page = await this.#page._brand(api)
+    const picked = pick(options, OPTION_KEYS['mouse.move'])
     await send['mouse.move'](
       site,
       { api, timeoutMs: 0 },
-      {
-        page: await this.#page._brand(api),
-        x,
-        y,
-        options: pick(options, OPTION_KEYS['mouse.move']),
-      },
+      { page, x, y, steps: ownOption(picked, 'steps') },
     )
   }
 
   async down(options: ButtonOptions = {}): Promise<void> {
     const site = captureSite()
     const api = 'mouse.down'
+    const page = await this.#page._brand(api)
+    const picked = pick(options, OPTION_KEYS['mouse.down'])
     await send['mouse.down'](
       site,
       { api, timeoutMs: 0 },
       {
-        page: await this.#page._brand(api),
-        options: pick(options, OPTION_KEYS['mouse.down']),
+        page,
+        button: ownOption(picked, 'button'),
+        clickCount: ownOption(picked, 'clickCount'),
       },
     )
   }
@@ -127,12 +151,15 @@ export class Mouse {
   async up(options: ButtonOptions = {}): Promise<void> {
     const site = captureSite()
     const api = 'mouse.up'
+    const page = await this.#page._brand(api)
+    const picked = pick(options, OPTION_KEYS['mouse.up'])
     await send['mouse.up'](
       site,
       { api, timeoutMs: 0 },
       {
-        page: await this.#page._brand(api),
-        options: pick(options, OPTION_KEYS['mouse.up']),
+        page,
+        button: ownOption(picked, 'button'),
+        clickCount: ownOption(picked, 'clickCount'),
       },
     )
   }
@@ -167,14 +194,18 @@ export class Mouse {
     options: MouseClickOptions,
   ): Promise<void> {
     const site = captureSite()
+    const page = await this.#page._brand(api)
+    const picked = pick(options, OPTION_KEYS['mouse.click'])
     await send['mouse.click'](
       site,
       { api, timeoutMs: 0 },
       {
-        page: await this.#page._brand(api),
+        page,
         x,
         y,
-        options: pick(options, OPTION_KEYS['mouse.click']),
+        button: ownOption(picked, 'button'),
+        clickCount: ownOption(picked, 'clickCount'),
+        delay: ownOption(picked, 'delay'),
       },
     )
   }

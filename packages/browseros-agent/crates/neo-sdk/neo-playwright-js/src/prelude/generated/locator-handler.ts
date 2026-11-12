@@ -10,14 +10,12 @@ import type { SignalLike } from '../signal'
 import type { Assert, UpstreamCheck, VoidIsNull } from '../upstream-check'
 import type { CallHeader } from '../wire'
 import type { LocatorHandlerAddInput } from './types/LocatorHandlerAddInput'
-import type { LocatorHandlerAdded } from './types/LocatorHandlerAdded'
 import type { LocatorHandlerRemoveInput } from './types/LocatorHandlerRemoveInput'
 import type { LocatorHandlerResolveInput } from './types/LocatorHandlerResolveInput'
 import type { LocatorHandlerTriggered } from './types/LocatorHandlerTriggered'
 import type { LocatorHandlerTriggeredInput } from './types/LocatorHandlerTriggeredInput'
 
 export type { LocatorHandlerAddInput } from './types/LocatorHandlerAddInput'
-export type { LocatorHandlerAdded } from './types/LocatorHandlerAdded'
 export type { LocatorHandlerRemoveInput } from './types/LocatorHandlerRemoveInput'
 export type { LocatorHandlerResolveInput } from './types/LocatorHandlerResolveInput'
 export type { LocatorHandlerTriggered } from './types/LocatorHandlerTriggered'
@@ -33,7 +31,7 @@ export type LocatorHandlerInputs = {
 
 /** Each locator-handler op's result. */
 export type LocatorHandlerOutputs = {
-  'page.addLocatorHandler': LocatorHandlerAdded
+  'page.addLocatorHandler': number
   'page.removeLocatorHandler': null
   'page.locatorHandlerTriggered': LocatorHandlerTriggered
   'page.resolveLocatorHandler': null
@@ -56,7 +54,7 @@ export const LOCATOR_HANDLER_SEND = {
     call: CallHeader,
     input: LocatorHandlerAddInput,
     signal?: SignalLike,
-  ): Promise<LocatorHandlerAdded> => invoke('page.addLocatorHandler', site, call, input, signal),
+  ): Promise<number> => invoke('page.addLocatorHandler', site, call, input, signal),
   'page.removeLocatorHandler': (
     site: CallSite,
     call: CallHeader,
@@ -81,7 +79,7 @@ export const LOCATOR_HANDLER_SEND = {
 // names the op and every key that differs without a reason, or whose reason went stale.
 // page.addLocatorHandler: Page.registerLocatorHandler
 type _page_addLocatorHandler = Assert<UpstreamCheck<'page.addLocatorHandler', LocatorHandlerAddInput, pw.PageRegisterLocatorHandlerParams, never, never, never>>
-type _page_addLocatorHandler_result = Assert<VoidIsNull<'page.addLocatorHandler', pw.PageRegisterLocatorHandlerResult, LocatorHandlerAdded>>
+type _page_addLocatorHandler_result = Assert<VoidIsNull<'page.addLocatorHandler', pw.PageRegisterLocatorHandlerResult, number>>
 // page.removeLocatorHandler: Page.unregisterLocatorHandler
 type _page_removeLocatorHandler = Assert<UpstreamCheck<'page.removeLocatorHandler', LocatorHandlerRemoveInput, pw.PageUnregisterLocatorHandlerParams, never, never, never>>
 type _page_removeLocatorHandler_result = Assert<VoidIsNull<'page.removeLocatorHandler', pw.PageUnregisterLocatorHandlerResult, null>>
