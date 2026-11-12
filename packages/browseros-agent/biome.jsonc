@@ -22,6 +22,8 @@
       "!crates/neo-sdk/neo-playwright/assets",
       "!crates/neo-sdk/neo-playwright/tests/data",
       "!crates/neo-sdk/neo-server/tests/behavior/pages",
+      // run() bodies: a function body with top-level await and return, which Biome cannot parse as a module
+      "!crates/neo-sdk/neo-server/docker/devkit/examples/*.js",
       "!crates/neo-sdk/neo-server/conformance/inventory.json",
       "!crates/neo-sdk/neo-playwright-js/tests/data",
       "!crates/neo-sdk/neo-playwright-js/src/prelude/generated",

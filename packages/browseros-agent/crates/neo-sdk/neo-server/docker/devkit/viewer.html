@@ -10,8 +10,8 @@
   <header class="bar">
     <h1>Neo display</h1>
     <div class="seg" id="mode">
-      <button data-mode="view">View</button>
-      <button data-mode="control">Control</button>
+      <button type="button" data-mode="view">View</button>
+      <button type="button" data-mode="control">Control</button>
     </div>
     <label>Follow
       <select id="follow-kind">
@@ -21,8 +21,8 @@
       </select>
       <input id="follow-value" size="14" placeholder="task or tab id" list="recent-tabs">
     </label>
-    <button id="connect">Connect</button>
-    <button id="disconnect">Disconnect</button>
+    <button type="button" id="connect">Connect</button>
+    <button type="button" id="disconnect">Disconnect</button>
     <span class="spacer"></span>
     <a href="/trace" target="_blank">Trace</a>
   </header>
@@ -46,7 +46,7 @@
         <p class="muted" style="margin:0 0 6px">Locks the agent out of the selected tab and opens its control display. Views and screenshots stay live.</p>
         <div class="row">
           <input id="takeover-tab" list="recent-tabs" placeholder="tab id" size="14">
-          <button id="takeover-start">Start takeover</button>
+          <button type="button" id="takeover-start">Start takeover</button>
         </div>
         <div id="takeover-card"></div>
       </div>
