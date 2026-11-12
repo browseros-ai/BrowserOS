@@ -24,7 +24,8 @@ export function browserLaunch(
   return {
     executable,
     flags: [
-      '--headless=new',
+      // DIAGNOSTIC (diag/lh001-flags, never lands): NEO_DIAG_HEADED=1 runs headed under Xvfb.
+      ...(process.env.NEO_DIAG_HEADED === '1' ? [] : ['--headless=new']),
       '--disable-browseros-server',
       '--disable-browseros-extensions',
       '--remote-debugging-port=0',

@@ -34,9 +34,9 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: "together: control and all three flags; each: one flag per group"
+        description: "together: control vs three flags; each: one flag per group; xvfb: headless vs headed under Xvfb; xvfb-full: whole suite headed"
         type: choice
-        options: [together, each]
+        options: [together, each, xvfb, xvfb-full]
         default: together
 
 permissions:
@@ -148,22 +148,39 @@ jobs:
           T=--disable-background-timer-throttling
           O=--disable-backgrounding-occluded-windows
           build=""
+          # Headed groups run under Xvfb (no window manager), with NEO_DIAG_HEADED=1 dropping
+          # --headless=new from the launch; the screen fits the 1520x801 window.
+          XVFB=(xvfb-run -a -s "-screen 0 1920x1080x24")
+          if [ "${MODE#xvfb}" != "$MODE" ]; then
+            command -v xvfb-run >/dev/null || sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q --no-install-recommends xvfb > /dev/null
+            "${XVFB[@]}" sh -c 'echo "Xvfb display: $DISPLAY"'
+          fi
           run_group() {
-            group=$1; flags=$2
+            group=$1; flags=$2; headed=${3:-0}
             mkdir -p "$RUNNER_TEMP/neo-spec/$group"
-            echo "=== $group: flags [${flags}]"
-            NEO_DIAG_CHROME_FLAGS="$flags" NEO_NODE_OUTPUT_DIR="$RUNNER_TEMP/neo-spec/$group" \
-              bun run test:neo-spec page-add-locator-handler page-screenshot elementhandle-screenshot \
+            echo "=== $group: flags [${flags}] headed=$headed"
+            wrap=()
+            [ "$headed" = 1 ] && wrap=("${XVFB[@]}")
+            NEO_DIAG_HEADED="$headed" NEO_DIAG_CHROME_FLAGS="$flags" NEO_NODE_OUTPUT_DIR="$RUNNER_TEMP/neo-spec/$group" \
+              "${wrap[@]}" bun run test:neo-spec page-add-locator-handler page-screenshot elementhandle-screenshot \
               --workers 8 --repeat-each 12 --grep "$GREP" $build > "$RUNNER_TEMP/neo-spec/$group.log" 2>&1 || true
             tail -4 "$RUNNER_TEMP/neo-spec/$group.log"
             build=--skip-build
           }
-          if [ "$MODE" = each ]; then
-            run_group R "$R"; run_group T "$T"; run_group O "$O"
-          else
-            run_group C ""; run_group F "$R $T $O"
-          fi
-          python3 crates/neo-sdk/neo-playwright-tests/diag-lh001-summary.py "$RUNNER_TEMP/neo-spec" | tee -a "$GITHUB_STEP_SUMMARY"
+          case "$MODE" in
+            each) run_group R "$R"; run_group T "$T"; run_group O "$O" ;;
+            xvfb) run_group H ""; run_group X "" 1 ;;
+            xvfb-full)
+              # The gate's own command, headed: its verdict is against the committed lists.
+              mkdir -p "$RUNNER_TEMP/neo-spec/full"
+              NEO_DIAG_HEADED=1 NEO_NODE_OUTPUT_DIR="$RUNNER_TEMP/neo-spec/full" \
+                "${XVFB[@]}" bun run test:neo-spec --ci --workers "$NEO_SPEC_WORKERS" > "$RUNNER_TEMP/neo-spec/full.log" 2>&1 || true
+              tail -3 "$RUNNER_TEMP/neo-spec/full.log"
+              sed -n '/^## Neo spec suite/,$p' "$RUNNER_TEMP/neo-spec/full.log" | head -150
+              ;;
+            *) run_group C ""; run_group F "$R $T $O" ;;
+          esac
+          [ "$MODE" = xvfb-full ] || python3 crates/neo-sdk/neo-playwright-tests/diag-lh001-summary.py "$RUNNER_TEMP/neo-spec" | tee -a "$GITHUB_STEP_SUMMARY"
           find "$RUNNER_TEMP/neo-spec" -type d -name upstream -prune -print | while read -r tree; do
             rm -rf "$tree/tests" "$tree/packages" "$tree/node_modules"
           done
