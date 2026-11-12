@@ -62,7 +62,7 @@ impl PlaywrightFacade {
     pub(crate) async fn get(&self) -> &Arc<Playwright> {
         self.playwright
             .get_or_init(|| async {
-                Playwright::with_page_placement(self.link.linked().await, self.page_placement)
+                Playwright::new_with_page_placement(self.link.linked().await, self.page_placement)
             })
             .await
     }

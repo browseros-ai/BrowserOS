@@ -563,12 +563,16 @@ impl PageManager {
         self.ensure_connected().await?;
         let epoch = self.cdp.connection_epoch();
         let root = ProtocolSession::root(self.cdp.clone());
-        let target: Value = root
-            .send(
-                "Target.createTarget",
-                json!({ "url": BLANK_URL, "newWindow": true, "background": true }),
-            )
-            .await?;
+        // A new window takes Chromium's default size, not the size the owner's window was
+        // given, so the page's viewport would differ from a background tab's. Open it at the
+        // size of the window a background tab would have joined: the active normal window.
+        let windows: Value = root.send("Browser.getWindows", json!({})).await?;
+        let mut params = json!({ "url": BLANK_URL, "newWindow": true, "background": true });
+        if let Some(bounds) = sizing_window(&windows).map(|window| &window["bounds"]) {
+            params["width"] = bounds["width"].clone();
+            params["height"] = bounds["height"].clone();
+        }
+        let target: Value = root.send("Target.createTarget", params).await?;
         let target_id = target["targetId"]
             .as_str()
             .ok_or_else(|| CoreError::Message("Target.createTarget returned no targetId".into()))?;
@@ -977,6 +981,22 @@ impl PageManager {
     }
 }
 
+/// The window whose size a page in a window of its own copies: the active normal window, else
+/// the first normal one. `None` leaves the size to Chromium.
+fn sizing_window(windows: &Value) -> Option<&Value> {
+    let normal = || {
+        windows["windows"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|window| window["windowType"] == "normal")
+    };
+    normal()
+        .find(|window| window["isActive"] == true)
+        .or_else(|| normal().next())
+        .filter(|window| window["bounds"]["width"].is_u64() && window["bounds"]["height"].is_u64())
+}
+
 /// Where every new tab starts. It is ready at once, so creation never waits on the page; the
 /// requested URL is loaded afterwards by a navigation whose outcome the caller can see.
 pub(crate) const BLANK_URL: &str = "about:blank";
@@ -1161,6 +1181,15 @@ mod tests {
     async fn own_window_tab_opens_in_a_new_inactive_window_as_an_agent_tab()
     -> Result<(), Box<dyn Error>> {
         let mut responses = vec![
+            (
+                "Browser.getWindows",
+                json!({ "windows": [
+                    { "windowId": 1, "windowType": "normal", "isActive": false,
+                      "bounds": { "width": 800, "height": 600 } },
+                    { "windowId": 2, "windowType": "normal", "isActive": true,
+                      "bounds": { "width": 1520, "height": 801 } },
+                ] }),
+            ),
             ("Target.createTarget", json!({ "targetId": "target-7" })),
             (
                 "Browser.getTabInfo",
@@ -1183,13 +1212,14 @@ mod tests {
         assert_eq!(creation.original.tab_id, crate::TabId(7));
         assert_eq!(
             calls
-                .first()
-                .map(|call| (call.method.as_str(), &call.params)),
-            Some((
-                "Target.createTarget",
-                &json!({ "url": "about:blank", "newWindow": true, "background": true })
-            )),
-            "the tab is the only one of its own window, shown inactive"
+                .iter()
+                .find(|call| call.method == "Target.createTarget")
+                .map(|call| &call.params),
+            Some(
+                &json!({ "url": "about:blank", "newWindow": true, "background": true,
+                          "width": 1520, "height": 801 })
+            ),
+            "the only tab of its own window, shown inactive, at the active window's size"
         );
         assert!(
             !calls.iter().any(|call| call.method == "Browser.createTab"),

@@ -86,12 +86,12 @@ impl Playwright {
     /// where an already-open tab's seqs start. Needs a tokio runtime, as `BrowserSession` does.
     #[must_use]
     pub fn new(browser: Arc<BrowserSession>) -> Arc<Self> {
-        Self::with_page_placement(browser, PagePlacement::default())
+        Self::new_with_page_placement(browser, PagePlacement::default())
     }
 
     /// [`Playwright::new`], with new pages opened at `page_placement`.
     #[must_use]
-    pub fn with_page_placement(
+    pub fn new_with_page_placement(
         browser: Arc<BrowserSession>,
         page_placement: PagePlacement,
     ) -> Arc<Self> {

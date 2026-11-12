@@ -5,10 +5,19 @@ import { cleanupCdp } from './cdp-cleanup.mjs'
 /** Playwright's default viewport, which every engine's pages must start with. */
 const VIEWPORT = { width: 1280, height: 720 }
 
-export async function verifyViewport(port) {
+/**
+ * `ownWindowPages` (the add-on's option, run.mjs's `NEO_NODE_OWN_WINDOW_PAGES`) also verifies the
+ * page Neo opens in a window of its own: core sizes that window like the active normal window
+ * (browseros-core `new_page_info_in_own_window`), so after the fit it must measure 1280x720 too.
+ */
+export async function verifyViewport(
+  port,
+  { ownWindowPages = process.env.NEO_NODE_OWN_WINDOW_PAGES === '1' } = {},
+) {
   const response = await fetch(`http://127.0.0.1:${port}/json/version`)
   const cdp = await Cdp.connect((await response.json()).webSocketDebuggerUrl)
   let nativeTarget
+  let ownWindowTarget
   async function read(targetId) {
     const { sessionId } = await cdp.send('Target.attachToTarget', {
       targetId,
@@ -57,11 +66,29 @@ export async function verifyViewport(port) {
       background: true,
     })
     nativeTarget = tab.targetId
-    return { fitted, initial, native: await measure(nativeTarget) }
+    const native = await measure(nativeTarget)
+    if (!ownWindowPages) return { fitted, initial, native }
+    // The same request core sends for PagePlacement::OwnWindow.
+    const { windows } = await cdp.send('Browser.getWindows')
+    const normal = windows.filter((window) => window.windowType === 'normal')
+    const sizing = normal.find((window) => window.isActive) ?? normal[0]
+    ;({ targetId: ownWindowTarget } = await cdp.send('Target.createTarget', {
+      url: 'about:blank',
+      newWindow: true,
+      background: true,
+      width: sizing?.bounds.width,
+      height: sizing?.bounds.height,
+    }))
+    return {
+      fitted,
+      initial,
+      native,
+      ownWindow: await measure(ownWindowTarget),
+    }
   } finally {
     try {
-      if (nativeTarget)
-        await cleanupCdp(cdp, 'Target.closeTarget', { targetId: nativeTarget })
+      for (const targetId of [nativeTarget, ownWindowTarget].filter(Boolean))
+        await cleanupCdp(cdp, 'Target.closeTarget', { targetId })
     } finally {
       await cdp.close()
     }

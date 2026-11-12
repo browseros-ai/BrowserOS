@@ -32,12 +32,12 @@ mod live_run;
 mod locator;
 
 use std::collections::HashMap;
-use std::fmt::Debug;
 use std::time::{Duration, Instant};
 
 use fixture_server::{FixtureServer, Page};
 use live_run::{LiveRun, TestPage, TestResult, brand};
 use locator::{css, locator};
+use neo_playwright::{PlaywrightError, TimedOut};
 use serde_json::{Value, json};
 
 /// Playwright's `input/handle-locator.html` without its interstitial: a place to hover, and a
@@ -72,6 +72,18 @@ async fn a_background_agent_tab_stays_fast_on_linux() {
         Ok(times) => times,
         Err(error) => panic!("the measurement did not run: {error}"),
     };
+    // Only a Playwright timeout is the slowness measured here (a stalled screenshot); any other
+    // failure means the test itself broke, which must not pass for the expected Linux failure.
+    let broken: Vec<String> = times
+        .iter()
+        .filter(|call| call.failed.is_some() && !call.timed_out)
+        .map(Call::line)
+        .collect();
+    assert!(
+        broken.is_empty(),
+        "the measurement did not run: {}",
+        broken.join("\n")
+    );
     let settled: Vec<Duration> = times
         .iter()
         .filter(|call| call.round >= SETTLED_FROM && call.round <= ROUNDS)
@@ -99,6 +111,8 @@ struct Call {
     what: &'static str,
     took: Duration,
     failed: Option<String>,
+    /// The failure was the op's own Playwright timeout: slow, counted at the time it took.
+    timed_out: bool,
 }
 
 impl Call {
@@ -108,6 +122,7 @@ impl Call {
             what,
             took,
             failed,
+            ..
         } = self;
         match failed {
             Some(error) => format!("{round:>2} {what}: failed after {took:?}: {error}"),
@@ -157,17 +172,26 @@ fn at(page: &TestPage, selector: &str) -> Value {
     locator(page, &[css(selector)], &format!("locator('{selector}')"))
 }
 
-fn timed<E: Debug>(
+fn timed(
     round: usize,
     what: &'static str,
     started: Instant,
-    outcome: Result<Value, E>,
+    outcome: Result<Value, PlaywrightError>,
 ) -> Call {
+    let took = started.elapsed();
+    let (failed, timed_out) = match outcome {
+        Ok(_) => (None, false),
+        Err(error) => (
+            Some(format!("{error:?}")),
+            error.timed_out() == TimedOut::Yes,
+        ),
+    };
     Call {
         round,
         what,
-        took: started.elapsed(),
-        failed: outcome.err().map(|error| format!("{error:?}")),
+        took,
+        failed,
+        timed_out,
     }
 }
 
