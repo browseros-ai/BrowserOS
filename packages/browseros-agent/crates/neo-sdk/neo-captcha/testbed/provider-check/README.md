@@ -6,7 +6,7 @@ From `packages/browseros-agent`:
 bun run captcha:provider-check
 bun run captcha:provider-check --balance-only
 bun run captcha:provider-check --json
-bun test tools/captcha-testbed/provider-check
+bun test crates/neo-sdk/neo-captcha/testbed/provider-check
 ```
 
 Reads and trims keys from these files:
@@ -20,7 +20,8 @@ Reads and trims keys from these files:
 `https://api.capsolver.com` and `https://api.2captcha.com` for local tests.
 These names follow the solver contract; unprefixed names are ignored.
 Each HTTP request has a 15-second timeout. 2Captcha polls every three seconds
-for at most 60 seconds; pending requests share that remaining time budget.
+for at most 60 seconds; pending requests share that remaining time budget, and a
+request that budget cuts short reports `POLL_TIMEOUT`, not `REQUEST_TIMEOUT`.
 
 CapSolver is required. A missing 2Captcha key file skips that optional vendor:
 

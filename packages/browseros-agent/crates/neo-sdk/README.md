@@ -47,7 +47,7 @@ host / MCP run
 | `neo-takeover` | Tab locks, display control, viewport fitting and owner handoff. |
 | `neo-trace` | Run and operation records, storage and bounded trace values. |
 | `neo-sdk-api` | Host API specification, generated Rust models and migration notes. |
-| `neo-captcha` | Shared CAPTCHA solver, also used by desktop. |
+| `neo-captcha` | Shared CAPTCHA solver, also used by desktop. `testbed/` checks it end to end through `run` ([README](neo-captcha/testbed/README.md)). |
 | `neo-capture` | Shared capture hub, also used by desktop. |
 
 `neo-server/docker/` builds the Neo SDK image, the browser plus this server, for hosts such as

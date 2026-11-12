@@ -1,107 +1,48 @@
 # Docker CAPTCHA E2E
 
-From `packages/browseros-agent`:
+The test bed against the Neo SDK image (`crates/neo-sdk/neo-server/docker`): the released neo
+browser and this checkout's `browseros-claw-sdk`, in a throwaway container. From
+`packages/browseros-agent`:
 
 ```sh
-bun run test:captcha-docker-e2e -- --keys none --expect-tool-missing
-bun run test:captcha-docker-e2e -- --keys placeholder --keep
+bun run test:captcha-docker-e2e -- --keys placeholder
 bun run test:captcha-docker-e2e -- --keys placeholder --pages spotting
+bun run test:captcha-docker-e2e -- --keys none --expect-tool-missing --only no-captcha
+bun run test:captcha-docker-e2e -- --image neo-sdk:<tag> --keep
 
-# Paid run: central operator only
-BROWSEROS_2CAPTCHA_API_KEY_FILE="$HOME/.config/browseros/captcha/2captcha-api-key" \
-  bun run test:captcha-docker-e2e -- --keys real --paid --out ../../.llm/captcha-paid
+# Paid run: real CapSolver and 2Captcha keys, at most 12 paid tasks unless --paid-task-limit
+bun run test:captcha-docker-e2e -- --keys real --paid --out ../../.llm/captcha-paid
 ```
 
-Requires Bun 1.4.2, Docker Desktop with Linux arm64 support, and the merged
-`test:captcha-e2e` runner. No Chromium build. The command builds the published
-Neo image, compiles the checkout's claw-server, overlays it, checks health and
-the running executable's SHA-256, lists MCP tools, then runs every fixture/demo.
-It checks the executable again afterward. Results and step timings are saved
-under `../../.llm/captcha-docker-results` by default.
+Needs Docker with Linux support for the engine's architecture, jq, and Bun. No Chromium build.
 
-`--neo-version VERSION` overrides the pinned release. `--rebuild` rebuilds the
-base image. `--keep` preserves the container and its temporary mounts, including
-on failure; open its printed noVNC URL to watch. It prints a cleanup command.
-Without `--keep`, the container and temporary files are removed on exit.
-`--clean` also removes the base and overlay images; it conflicts with `--keep`.
-Other flags, such as `--only no-captcha` or `--solve-timeout 150000`, go to the
-`tools/captcha-testbed/e2e` runner.
+1. **Image.** Builds this checkout's image with `build.sh --tag neo-captcha-e2e:<run>`, which tags
+   it only once its server is proven to be this checkout's. `--image TAG` uses an existing SDK
+   image instead.
+2. **Identity, before starting it.** `neo-server-info kind` must say `claw-sdk` and
+   `/usr/share/neo-sdk/provenance.json` must name `browseros-claw-sdk`; a built image must also carry
+   this checkout's revision. A claw-server image (the production Neo image) is refused.
+3. **Container.** Its own Docker network, `NEO_MCP_REMOTE=true` with 9010 published on
+   `127.0.0.1` only, a fresh `/data`, and `host.docker.internal` and `captcha-frame.test` mapped to
+   the host, where the fixtures listen on two sites. The harness owns these addresses and refuses
+   `--mcp-url`, `--server` and fixture-address overrides.
+4. **Running server.** After the healthcheck, and again after the pages, it hashes every process
+   running the bundled server path (`/proc/PID/exe`, as user `neo`, since root cannot read another
+   uid's executable) against `provenance.json`'s sha256.
+5. **Pages.** `bun run test:captcha-e2e -- --mcp-url <container>/mcp --pages all`, plus every other
+   flag given here, such as `--only`, `--pages spotting` or `--expect-tool-missing`.
 
-The harness maps both `host.docker.internal` and `captcha-frame.test` to
-`host-gateway`. Top fixtures use the first host; cross-site widgets use the
-second, on another listener port. It forwards `--fixture-frame-host
-captcha-frame.test` to the E2E runner. The harness owns these addresses and
-rejects caller overrides. `--pages spotting` selects the eleven fake-key
-GeeTest/AWS/FunCaptcha pages; they require the right type and zero paid tasks.
-They are excluded from the normal `fixtures`/`all` groups pending detection.
+Keys are mounted read-only under `/run/neo-keys/`, outside `/home/neo` as the image's README
+requires, and `BROWSEROS_CAPSOLVER_API_KEY_FILE` and `BROWSEROS_2CAPTCHA_API_KEY_FILE` are always
+set, blank for a provider without a key, so a key baked into an image is never read. `placeholder`
+mounts one fake CapSolver file; `none` mounts nothing, so `neo.solveCaptcha` is unlisted and the
+runner stops with a setup blocker unless `--expect-tool-missing` is given; `real` mounts the files
+named by those variables, else `~/.config/browseros/captcha/{capsolver,2captcha}-api-key`, and sets
+`BROWSEROS_CAPTCHA_PAID_TASK_LIMIT` (default 12). Key contents are never read, copied, baked into
+an image or passed as build arguments.
 
-## Server build and keys
-
-On macOS, automatic builder selection uses installed `cargo-zigbuild` and Zig:
-
-```sh
-CARGO_TARGET_DIR=/Volumes/extssd/cargo-target/captcha-docker-e2e \
-  cargo install --locked cargo-zigbuild --version 0.23.0
-rustup target add aarch64-unknown-linux-gnu
-```
-
-The build uses `cargo zigbuild --release --locked --target
-aarch64-unknown-linux-gnu.2.17 -p claw-server --bin browseros-claw-server-rs`.
-`--builder container` forces the `rust:1.96-bookworm` fallback; it mounts the
-checkout read-only and keeps target/registry caches on the external disk.
-Override `CARGO_TARGET_DIR` when needed. Remove that directory after testing
-when the compilation cache is no longer useful.
-
-`none` mounts no keys. `placeholder` mounts one fake CapSolver file. `real`
-mounts `BROWSEROS_CAPSOLVER_API_KEY_FILE` read-only, defaulting to
-`~/.config/browseros/captcha/capsolver-api-key`, at
-`/run/captcha/capsolver-api-key` in the container. Any other populated
-`BROWSEROS_*_API_KEY_FILE` in the runner's environment is forwarded unchanged,
-with its existing file mounted read-only at the same absolute path. There are
-no default backup paths. Contents are never read/copied by the harness, baked
-into images, or passed in build arguments. Paid tests are reserved for the
-mediator's central run. Worker proofs use `none` or `placeholder`.
-
-## Image and OTA
-
-The default `0.51.1.4` was selected on 2026-10-22 from the Linux
-[release metadata](https://cdn.browseros.com/releases/browserclaw/0.51.1.4/linux/release.json):
-it has `arm64_deb`; `0.51.1.2` does not. The public GitHub releases and macOS
-appcast still named `0.51.1.2`. Candidate `0.51.1.5`, `0.51.1.6` and `0.52.0*`
-Linux metadata returned 404.
-
-The package installs its server at
-`/usr/lib/browserclaw/BrowserClawServer/default/resources/bin/browseros-claw-server`
-(found using `find` in the image). The overlay copies the newly built Rust
-binary there. Neo can choose downloaded server versions under its profile's
-`.browseros/BrowserClawServer/versions/`. A fresh `/data` and
-`NEO_ARGS=--disable-browseros-server-updater` prevent that during tests. Hashes
-come from `/proc/PID/exe` as user `neo`, before and after testing: container root
-cannot read another UID's executable under Docker's default capabilities.
-
-The first base build took about 110 seconds; the cold server cross-build took
-178 seconds. The container builder took 510 seconds including image/dependency
-downloads. Both produced matching running-binary hashes and responsive MCP.
-The overlay reports 2.26 GB in `docker image ls`, sharing base layers, with a
-28.2 MB server binary.
-
-Final missing-tool proof after the runner merged (2026-10-22, keys `none`):
-
-| Step | Time |
-| --- | ---: |
-| Cached base lookup | 0.03 s |
-| Server rebuild from updated main | 133.76 s |
-| Overlay image | 1.54 s |
-| Container healthy | 5.34 s |
-| Running binary proof | 0.08 s |
-| Eleven page checks | 72.74 s |
-
-All eleven pages returned `tool_not_found` / PASS, with 19 tools listed over
-MCP and matching executable hashes before and after testing. This checks tool
-absence; rejected submissions and external verdict timeouts do not prove a solve.
-Each run records fresh measurements in `proof.json`. Docker's reported image
-total changed from 17.61 to 17.68 GB during the final run. Earlier testing of both
-builders peaked about 5.9 GB above the initial image total. Cargo/registry caches
-used 1.4 GB on the external disk.
-Temporary profiles and redundant development image tags are cleaned afterward;
-the base and useful overlay images stay cached unless `--clean` is requested.
+Results and `proof.json` (image, provenance, running-server hashes, tools, step timings) go to
+`../../.llm/captcha-docker-results` unless `--out` is set. `--keep` leaves the container, its
+network and its mounts for inspection and prints the cleanup commands; otherwise all three are
+removed on exit. `--clean` also removes the image this run built. A setup blocker from the runner
+exits 2; any other failure exits 1.

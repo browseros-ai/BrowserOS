@@ -159,10 +159,12 @@ export async function keyMounts(
 export interface Runtime {
   env: NodeJS.ProcessEnv
   home: string
+  /** Runs a command; `stream` shows its output live instead of returning it. */
   exec: (
     args: string[],
     env?: NodeJS.ProcessEnv,
     signal?: AbortSignal,
+    stream?: boolean,
   ) => Promise<string>
   tools: (origin: string) => Promise<string[]>
 }
@@ -171,18 +173,19 @@ async function command(
   args: string[],
   env: NodeJS.ProcessEnv = process.env,
   signal?: AbortSignal,
+  stream = false,
 ) {
   signal?.throwIfAborted()
   const child = Bun.spawn(args, {
     cwd: root,
     env,
-    stdout: 'pipe',
+    stdout: stream ? 'inherit' : 'pipe',
     stderr: 'inherit',
   })
   const stop = () => child.kill('SIGTERM')
   signal?.addEventListener('abort', stop, { once: true })
   try {
-    const output = await new Response(child.stdout).text()
+    const output = stream ? '' : await new Response(child.stdout).text()
     const code = await child.exited
     if (code) throw new CommandError(code, `${args[0]} ${args[1]} failed`)
     signal?.throwIfAborted()
@@ -250,7 +253,8 @@ export async function runDockerE2e(
     }
   }
   const controller = new AbortController()
-  const execute = (args: string[]) => exec(args, env, controller.signal)
+  const execute = (args: string[], stream = false) =>
+    exec(args, env, controller.signal, stream)
   const docker = (...args: string[]) => execute(['docker', ...args])
   const cleanupDocker = (...args: string[]) => exec(['docker', ...args], env)
   const writeProof = (extra: Record<string, unknown> = {}) =>
@@ -387,27 +391,30 @@ export async function runDockerE2e(
     proof.tools = await tools(String(proof.origin))
     await writeProof()
     await timed('page tests', () =>
-      execute([
-        'bun',
-        'run',
-        'test:captcha-e2e',
-        '--',
-        '--mcp-url',
-        `${proof.origin}/mcp`,
-        '--fixture-bind',
-        '0.0.0.0',
-        '--fixture-host',
-        'host.docker.internal',
-        '--fixture-frame-host',
-        'captcha-frame.test',
-        '--pages',
-        'all',
-        '--keys',
-        options.keys,
-        ...options.passthrough,
-        '--out',
-        options.out,
-      ]),
+      execute(
+        [
+          'bun',
+          'run',
+          'test:captcha-e2e',
+          '--',
+          '--mcp-url',
+          `${proof.origin}/mcp`,
+          '--fixture-bind',
+          '0.0.0.0',
+          '--fixture-host',
+          'host.docker.internal',
+          '--fixture-frame-host',
+          'captcha-frame.test',
+          '--pages',
+          'all',
+          '--keys',
+          options.keys,
+          ...options.passthrough,
+          '--out',
+          options.out,
+        ],
+        true,
+      ),
     )
     proof.runningServerAfter = await identity(serverPath, sha256)
     succeeded = true

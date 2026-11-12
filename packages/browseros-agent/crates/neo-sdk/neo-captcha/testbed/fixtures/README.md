@@ -6,7 +6,7 @@ From `packages/browseros-agent`:
 bun run captcha:fixtures
 bun run captcha:fixtures --host 0.0.0.0 --public-host host.docker.internal --port 18080
 bun run captcha:fixtures --host 0.0.0.0 --public-host host.docker.internal --frame-host captcha-frame.test
-bun test tools/captcha-testbed/fixtures
+bun test crates/neo-sdk/neo-captcha/testbed/fixtures
 ```
 
 The CLI prints fixture and demo URLs plus the frame origin. Both listeners bind
@@ -29,7 +29,7 @@ Each standalone page loads its vendor's real script. It mirrors widget state int
 | `turnstile-block.html` | Failure without a token | `2x00000000000000000000AB` |
 | `turnstile-interactive.html` | Completion after checkbox interaction | `3x00000000000000000000FF` |
 | `no-captcha.html` | Ordinary form; always accepted | None |
-| `hcaptcha.html` | hCaptcha detection and unsupported-family handling in solver v1 | `10000000-ffff-ffff-ffff-000000000001` |
+| `hcaptcha.html` | hCaptcha detection; the SDK refuses it as `unsolved` / `unsupported_type` | `10000000-ffff-ffff-ffff-000000000001` |
 
 Public test secrets, verified against vendor documentation:
 
@@ -39,7 +39,7 @@ Public test secrets, verified against vendor documentation:
 
 ## Browser checks
 
-Checked with a temporary BrowserOS neo profile over CDP, without using the owner's browser. reCAPTCHA, Turnstile pass/interactive, hCaptcha and the ordinary form returned `ACCEPTED`. Turnstile block rendered, reported `600010`, produced no token, and returned `REJECTED: missing-input-response`. The hCaptcha test checkbox was completed manually; solver v1 still does not support it.
+Checked with a temporary BrowserOS neo profile over CDP, without using the owner's browser. reCAPTCHA, Turnstile pass/interactive, hCaptcha and the ordinary form returned `ACCEPTED`. Turnstile block rendered, reported `600010`, produced no token, and returned `REJECTED: missing-input-response`. The hCaptcha test checkbox was completed manually; the solver still does not support it.
 
 [hCaptcha recommends a named local host](https://docs.hcaptcha.com/#local-development). This build rendered and accepted the test token on both `127.0.0.1` and `captcha.test`. For environments enforcing its localhost/IP restrictions, serve with `--public-host captcha.test` and launch your test Chromium with `--host-resolver-rules="MAP captcha.test 127.0.0.1"`.
 
@@ -63,10 +63,10 @@ Both providers passed the live API check; paid solving on these demo pages remai
 ## Spotting fixtures
 
 Run `bun run test:captcha-e2e -- --dev-watch --pages spotting --keys placeholder`.
-Every row expects `unsupported` or `needs_human`, its exact family, and
-`paidTasks: 0`. These pages have no submit verdict and stay out of `fixtures`
-and `all`. The `spotting()` helper's `kind` controls their group; detection can
-move them into the default fixtures by changing it from `spotting` to `fixture`.
+Every row expects verdict `unsolved`, its exact type, and `paidTasks: 0`: it
+proves detection, never a solve. The fake keys make the SDK answer `unsolved` /
+`challenge_not_passed` today; the runner records that reason as returned. These
+pages have no submit check. They are also part of `fixtures` and `all`.
 
 | Pages | Family | Real loader |
 | --- | --- | --- |
@@ -127,8 +127,9 @@ Inspected in the isolated dev-watch BrowserOS browser, without provider calls:
 ### GeeTest demo verdicts
 
 `2captcha-geetest-demo` and `2captcha-geetest-v4-demo` wait for a visible
-`.geetest_holder`, expect type `geetest` and status
-`unsupported`, and permit future paid solving. In both deployed pages,
+`.geetest_holder`, expect type `geetest` and verdict `solved` (a
+`token_applied` the demo then accepts passes too), and need a paid solve: without
+`--paid`, an `unsolved` or `unknown` answer is UNVERIFIED. In both deployed pages,
 `main form button[type="submit"]` is **Check**. Their client posts to
 `/api/v1/captcha-demo/gee-test/verify` (v3) and
 `/api/v1/captcha-demo/gee-test-v4/verify` (v4), then renders the returned JSON.

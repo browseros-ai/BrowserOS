@@ -170,7 +170,9 @@ function fakeCommands(failure: string) {
       return `${failure === 'hash' ? 'b'.repeat(64) : SHA}  /proc/42/exe\n`
     return ''
   }
-  const exec = async (input: string[]) => {
+  const streamed: string[] = []
+  const exec = async (input: string[], ...rest: unknown[]) => {
+    if (rest[2] === true) streamed.push(input[0] ?? '')
     const args = input.flatMap((arg) => {
       const at = arg.startsWith('--') ? arg.indexOf('=') : -1
       return at < 0 ? [arg] : [arg.slice(0, at), arg.slice(at + 1)]
@@ -183,7 +185,7 @@ function fakeCommands(failure: string) {
       throw new CommandError(2, 'bun run failed')
     return args[0] === 'docker' ? docker(args) : ''
   }
-  return { calls, state, exec }
+  return { calls, state, exec, streamed }
 }
 
 async function harness(failure = '', extra: string[] = []) {
@@ -197,6 +199,7 @@ async function harness(failure = '', extra: string[] = []) {
   return {
     execute,
     calls: fake.calls,
+    streamed: fake.streamed,
     out,
     data: () => fake.state.dataDir,
     container: () => fake.state.container,
@@ -215,6 +218,7 @@ test('tests that a healthy run builds the SDK image, proves its server and forwa
   const build = h.calls.find((args) => args[0] === 'bash') ?? []
   expect(build[1]).toBe('crates/neo-sdk/neo-server/docker/build.sh')
   const runner = h.calls.find((args) => args[0] === 'bun') ?? []
+  expect(h.streamed).toEqual(['bun'])
   expect(runner).toContain('http://127.0.0.1:40123/mcp')
   expect(runner).not.toContain('--server')
   expect(runner).toContain('host.docker.internal')
