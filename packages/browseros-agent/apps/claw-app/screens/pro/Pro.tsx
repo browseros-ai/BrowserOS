@@ -19,8 +19,9 @@ import {
 } from '@/components/motion/collapsible'
 import { CancelProDialog } from '@/components/pro/CancelProDialog'
 import { KeySection } from '@/components/pro/KeySection'
+import { UltrafastPicture } from '@/components/pro/UltrafastPictures'
+import { UltrafastTour } from '@/components/pro/UltrafastTour'
 import { UseKeyDialog } from '@/components/pro/UseKeyDialog'
-import { WelcomeProDialog } from '@/components/pro/WelcomeProDialog'
 import { Skeleton } from '@/components/ui/skeleton'
 import { AnalyticsEvent, track } from '@/modules/analytics/events'
 import { PlanPanel } from './PlanPanel'
@@ -31,11 +32,10 @@ import {
   type BillingPeriod,
   formatPrice,
   isPro,
-  keyHasEnded,
   PLAN_UNCHECKED,
-  PRO_FEATURES,
   type ProPrices,
   pickPeriod,
+  ULTRAFAST_STEPS,
 } from './pro.helpers'
 
 const TITLE = (
@@ -51,6 +51,8 @@ export function Pro() {
   const [keyDialogOpen, setKeyDialogOpen] = useState(false)
   const [keyDialogOpens, setKeyDialogOpens] = useState(0)
   const [cancelOpen, setCancelOpen] = useState(false)
+  const [tourAt, setTourAt] = useState<number | null>(null)
+  const [tourOpens, setTourOpens] = useState(0)
 
   if (plan.isPending) {
     return (
@@ -79,18 +81,23 @@ export function Pro() {
   const buy = () => {
     const price = prices?.[period]
     if (!prices || !price) return
-    checkout.start({
-      plan: prices.plan,
-      interval: price.interval,
-      sameKey: keyHasEnded(current),
-    })
+    checkout.start({ plan: prices.plan, interval: price.interval })
   }
 
   return (
     <Page>
       <PageHeader title={TITLE} lede={lede(current, prices)} />
       <div className="grid items-start gap-6 lg:grid-cols-[minmax(0,1.35fr)_minmax(300px,1fr)]">
-        <FeatureList />
+        <PictureTiles
+          onShowMe={
+            pro
+              ? (step) => {
+                  setTourOpens((count) => count + 1)
+                  setTourAt(step)
+                }
+              : undefined
+          }
+        />
         <Card
           aria-live="polite"
           className="gap-[18px] border-border-2 bg-card-tint p-6 shadow-card lg:sticky lg:top-6"
@@ -136,10 +143,15 @@ export function Pro() {
           onOpenChange={setCancelOpen}
         />
       ) : null}
-      <WelcomeProDialog
-        open={checkout.welcome !== null}
-        welcome={checkout.welcome}
-        onClose={checkout.closeWelcome}
+      <UltrafastTour
+        key={`tour-${tourOpens}`}
+        open={checkout.welcoming || tourAt !== null}
+        startAt={tourAt ?? 0}
+        welcome={checkout.welcoming}
+        onClose={() => {
+          if (checkout.welcoming) checkout.closeWelcome()
+          setTourAt(null)
+        }}
       />
     </Page>
   )
@@ -156,36 +168,46 @@ function lede(plan: Plan, prices: ProPrices | null): string | null {
 
 // ---------------------------------------------------------------------------
 
-function FeatureList() {
+/** What ultrafast adds: the welcome's three pictures, each with its headline. */
+function PictureTiles({
+  onShowMe,
+}: {
+  /** Set once ultrafast is on: opens the welcome at that picture. */
+  onShowMe?: (step: number) => void
+}) {
   return (
-    <Card
-      aria-label="What ultrafast adds"
-      className="gap-0 border-border-2 bg-card py-2 shadow-card"
-    >
-      <ul className="flex flex-col divide-y divide-border-2">
-        {PRO_FEATURES.map((feature) => (
-          <li
-            key={feature.title}
-            className="grid grid-cols-[44px_minmax(0,1fr)] gap-4 px-6 py-[18px]"
-          >
-            <span
-              aria-hidden
-              className="grid size-11 place-items-center rounded-xl bg-accent-tint text-primary"
-            >
-              <feature.icon className="size-5" />
+    <section aria-label="What ultrafast adds" className="flex flex-col gap-4">
+      {ULTRAFAST_STEPS.map((step, index) => (
+        <Card
+          key={step.name}
+          className="gap-0 overflow-hidden border-border-2 bg-card p-0 shadow-card"
+        >
+          <div className="flex flex-col items-start gap-1.5 px-[22px] pt-5 pb-4">
+            <span className="inline-flex items-center gap-2 font-semibold text-[13.5px] text-accent-ink">
+              <step.icon aria-hidden className="size-4" />
+              {step.name}
             </span>
-            <div>
-              <div className="font-bold text-base text-cyanotype-ink">
-                {feature.title}
-              </div>
-              <p className="mt-0.5 text-[14.5px] text-ink-2">
-                {feature.description}
-              </p>
-            </div>
-          </li>
-        ))}
-      </ul>
-    </Card>
+            <h2 className="font-bold text-[21px] text-cyanotype-ink leading-[1.2] tracking-[-0.015em]">
+              {step.title}
+            </h2>
+            <p className="text-[15px] text-ink-2">{step.line}</p>
+            {onShowMe ? (
+              <button
+                type="button"
+                aria-label={`Show me ${step.name}`}
+                onClick={() => onShowMe(index)}
+                className="mt-1 rounded-sm font-semibold text-[14px] text-accent-ink underline-offset-4 outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                Show me
+              </button>
+            ) : null}
+          </div>
+          <div className="border-border-2 border-t bg-accent-tint px-[22px] py-5">
+            <UltrafastPicture step={index} />
+          </div>
+        </Card>
+      ))}
+    </section>
   )
 }
 
