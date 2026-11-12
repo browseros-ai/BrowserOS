@@ -78,7 +78,7 @@ function handlerHost(acknowledgment: object | null) {
   const pulls: ((next: { uid: number | null }) => void)[] = []
   return {
     answer: ({ name }: { name: string }) => {
-      if (name === 'page.addLocatorHandler') return { uid: 1 }
+      if (name === 'page.addLocatorHandler') return 1
       if (name === 'page.locatorHandlerTriggered')
         return new Promise((resolve) => pulls.push(resolve))
       return acknowledgment
