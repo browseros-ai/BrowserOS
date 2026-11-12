@@ -5,7 +5,10 @@ import type { PdfOptions } from './wire'
 
 type Margin = NonNullable<PdfOptions['margin']>
 type MarginInput = { [Side in keyof Margin]: Margin[Side] | number }
-export type PdfOptionsInput = Omit<PdfOptions, 'width' | 'height' | 'margin'> & {
+export type PdfOptionsInput = Omit<
+  PdfOptions,
+  'width' | 'height' | 'margin'
+> & {
   width?: PdfOptions['width'] | number
   height?: PdfOptions['height'] | number
   margin?: MarginInput

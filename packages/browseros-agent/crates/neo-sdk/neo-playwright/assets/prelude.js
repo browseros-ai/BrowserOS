@@ -9539,32 +9539,6 @@ ${value.stack}`;
     }
   }
 
-  // crates/neo-sdk/neo-playwright-js/src/prelude/pdf-options.ts
-  function length(value) {
-    return typeof value === "number" ? `${value}px` : value;
-  }
-  function normalizeMargin(value) {
-    if (typeof value !== "object" || value === null)
-      return value;
-    const margin = { ...value };
-    return {
-      ...margin,
-      top: length(margin.top),
-      right: length(margin.right),
-      bottom: length(margin.bottom),
-      left: length(margin.left)
-    };
-  }
-  function normalizePdfOptions(options) {
-    const wire = pick(options, OPTION_KEYS["page.pdf"]);
-    return {
-      ...wire,
-      width: length(wire.width),
-      height: length(wire.height),
-      margin: normalizeMargin(wire.margin)
-    };
-  }
-
   // crates/neo-sdk/neo-playwright-js/src/prelude/input.ts
   var hasOwn = Object.hasOwn;
   function ownOption(picked, key) {
@@ -9667,6 +9641,32 @@ ${value.stack}`;
         delay: ownOption(picked, "delay")
       });
     }
+  }
+
+  // crates/neo-sdk/neo-playwright-js/src/prelude/pdf-options.ts
+  function length(value) {
+    return typeof value === "number" ? `${value}px` : value;
+  }
+  function normalizeMargin(value) {
+    if (typeof value !== "object" || value === null)
+      return value;
+    const margin = { ...value };
+    return {
+      ...margin,
+      top: length(margin.top),
+      right: length(margin.right),
+      bottom: length(margin.bottom),
+      left: length(margin.left)
+    };
+  }
+  function normalizePdfOptions(options) {
+    const wire = pick(options, OPTION_KEYS["page.pdf"]);
+    return {
+      ...wire,
+      width: length(wire.width),
+      height: length(wire.height),
+      margin: normalizeMargin(wire.margin)
+    };
   }
 
   // crates/neo-sdk/neo-playwright-js/src/prelude/response.ts

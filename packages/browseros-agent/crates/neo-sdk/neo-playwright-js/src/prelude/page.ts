@@ -1,4 +1,3 @@
-import { normalizePdfOptions, type PdfOptionsInput } from './pdf-options'
 import { type CallSite, captureSite, INTERNAL_SITE } from './call-site'
 /**
  * Playwright's Page over one tab.
@@ -62,12 +61,13 @@ import {
   type WaitForSelectorOptions,
   type WaitHandle,
 } from './frame'
-import { OPTION_KEYS, send } from './generated'
+import { send } from './generated'
 import { addInitScript, type Disposable } from './init-script'
 import { Keyboard, Mouse } from './input'
 import type { FrameLocator, Locator } from './locator'
 import type { LocatorHandlerOptions } from './locator-handlers'
-import { markHandle, pick } from './options'
+import { markHandle } from './options'
+import { normalizePdfOptions, type PdfOptionsInput } from './pdf-options'
 import { Publications } from './publication'
 import { Response } from './response'
 import type { LocatorOptions } from './selectors'
@@ -987,7 +987,9 @@ export class Page extends EventEmitter {
   }
 
   /** upstream's client turns numeric sizes and margins into CSS pixel strings. */
-  async pdf(options: PdfOptionsInput & { path?: string } = {}): Promise<unknown> {
+  async pdf(
+    options: PdfOptionsInput & { path?: string } = {},
+  ): Promise<unknown> {
     const site = captureSite()
     const api = 'page.pdf'
     if (options.path !== undefined)

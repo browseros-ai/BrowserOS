@@ -95,8 +95,7 @@ describe('WebStorage', () => {
     // The refusal is a door call of its own; no storage op went out.
     expect(
       runtime.calls.filter(
-        (call) =>
-          call.name.startsWith('webStorage.') && !isRefusal(call),
+        (call) => call.name.startsWith('webStorage.') && !isRefusal(call),
       ),
     ).toEqual([])
   })

@@ -26,7 +26,10 @@ it('changes only storage command packaging and the void viewport receipt', () =>
   const expected = structuredClone(before)
   for (const scenario of expected.scenarios) {
     for (const exchange of scenario.exchanges) {
-      if (exchange.op === 'webStorage.read' || exchange.op === 'webStorage.write') {
+      if (
+        exchange.op === 'webStorage.read' ||
+        exchange.op === 'webStorage.write'
+      ) {
         const args = JSON.parse(exchange.args)
         exchange.op = `webStorage.${args.action}`
         delete args.action
