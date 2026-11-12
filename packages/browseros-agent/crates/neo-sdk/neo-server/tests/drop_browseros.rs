@@ -7,6 +7,7 @@ use std::fs;
 use std::time::Duration;
 
 use browseros_rig::{CaptchaKey, Rig, TestResult, browser_or_skip, outcome, run};
+use neo_server::test_support;
 use serde_json::json;
 use tokio::time;
 
@@ -58,19 +59,16 @@ return await (await page.waitForFunction(() => window.dropped)).jsonValue();
         Some(&json!("ok")),
         "{result:?}"
     );
-    let value = result
-        .structured_content
-        .as_ref()
-        .and_then(|content| content.get("value"));
+    let value = test_support::run_value(&result)?;
     assert_eq!(
         value,
-        Some(&json!({
+        json!({
             "files": [
                 { "name": "note.xml", "type": "application/xml", "text": "<note/>" },
                 { "name": "note.md", "type": "text/markdown", "text": "# note" }
             ],
             "text": "last"
-        })),
+        }),
         "{result:?}"
     );
     Ok(())

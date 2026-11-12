@@ -1,11 +1,117 @@
 import { expect, test } from 'bun:test'
 import { once } from 'node:events'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import http from 'node:http'
 import net from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { classify } from './judge.mjs'
-import { hostGet, runNeo, traceCodeEvidence } from './runner-neo.mjs'
+import {
+  hostGet,
+  parseRunText,
+  runNeo,
+  traceCodeEvidence,
+} from './runner-neo.mjs'
+
+test('reads JSON only from Result, including null and multiline strings', () => {
+  for (const value of [
+    null,
+    42,
+    'line one\n### Console\nline two',
+    { status: 'passed' },
+  ]) {
+    expect(
+      parseRunText(
+        `### Result\n${JSON.stringify(value)}\n### Console\nhello\n### Tips\nadvice`,
+      ),
+    ).toEqual({ value })
+  }
+})
+
+test('reads the whole Error section and unescapes header lines', () => {
+  expect(
+    parseRunText(
+      '### Error\nscript / script_error: failed\n\\### Result\n\\### Error\n\\### Console\n\\### Notes\n\\### Tips\ncall log\n### Console\nhello\n### Notes\nnote',
+    ),
+  ).toEqual({
+    error:
+      'script / script_error: failed\n### Result\n### Error\n### Console\n### Notes\n### Tips\ncall log',
+  })
+})
+
+test('rejects missing headers and malformed JSON', () => {
+  for (const text of [
+    undefined,
+    '',
+    '{}',
+    '### Console\nhello',
+    '### Result\nbroken',
+  ]) {
+    expect(() => parseRunText(text)).toThrow()
+  }
+})
+
+test('text-only values and errors survive the complete conformance run path', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'conformance-reply-'))
+  const hostSocket = join(dir, 'host.sock')
+  const file = join(dir, 'program.js')
+  const code = 'return { status: "passed" }'
+  writeFileSync(file, code)
+  const server = http.createServer((_request, response) => {
+    response.end(
+      JSON.stringify({
+        id: 'run',
+        requestId: 'request',
+        taskId: 'task',
+        code,
+        complete: true,
+        operations: [],
+      }),
+    )
+  })
+  try {
+    server.listen(hostSocket)
+    await once(server, 'listening')
+    for (const isError of [false, true]) {
+      const record = await runNeo({
+        env: { hostSocket },
+        row: { id: 'test' },
+        file,
+        output: join(dir, 'record.json'),
+        taskId: 'task',
+        requestId: 'request',
+        client: {
+          callTool: async () => ({
+            content: [
+              {
+                type: 'text',
+                text: isError
+                  ? '### Error\nscript / script_error: failed\n\\### Notes\n### Console\nhello'
+                  : '### Result\n{"status":"passed"}\n### Console\nhello',
+              },
+            ],
+            isError,
+            _meta: {
+              'com.browseros.neo/run': {
+                id: 'run',
+                status: isError ? 'error' : 'ok',
+              },
+            },
+          }),
+        },
+      })
+      expect(record.provenance.neo.traceVerified).toBe(true)
+      if (isError)
+        expect(record.transport.error).toBe(
+          'script / script_error: failed\n### Notes',
+        )
+      else expect(record.status).toBe('passed')
+    }
+  } finally {
+    await new Promise((resolve) => server.close(resolve))
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
 
 test('verifies complete source and rejects missing source evidence', () => {
   expect(traceCodeEvidence('return 1', { code: 'return 1' })).toBe('full')
@@ -80,7 +186,9 @@ test('a truncated trace becomes a harness error and the peer closes', async () =
         client: {
           callTool: async () => ({
             _meta: { 'com.browseros.neo/run': { id: 'run' } },
-            structuredContent: { value: { status: 'passed' } },
+            content: [
+              { type: 'text', text: '### Result\n{"status":"passed"}' },
+            ],
           }),
         },
       })

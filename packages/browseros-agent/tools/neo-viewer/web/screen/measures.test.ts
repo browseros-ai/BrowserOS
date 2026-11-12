@@ -43,19 +43,22 @@ describe('the run bars', () => {
   })
 
   it('stacks the code and reply tokens on one scale, the largest run filling the track', () => {
-    const small = runSummary(1, { code: 'x'.repeat(40), reply: 'y'.repeat(8) })
+    const small = runSummary(1, {
+      code: 'x'.repeat(40),
+      reply: `### Result\n"${'y'.repeat(8)}"`,
+    })
     const large = runSummary(2, {
       code: 'x'.repeat(120),
-      reply: 'y'.repeat(888),
+      reply: `### Result\n"${'y'.repeat(888)}"`,
     })
     const running = runSummary(3, { code: 'x'.repeat(164), roundTripMs: null })
     const scale = barScale([small, large, running])
-    // ≈30 + ≈222 tokens = 252, the widest bar.
-    expect(scale.tokens).toBe(252)
-    expect(tokenBar(large, scale)).toEqual({ code: 30 / 252, reply: 222 / 252 })
-    expect(tokenBar(small, scale)).toEqual({ code: 10 / 252, reply: 2 / 252 })
+    // ≈30 + ≈225 tokens = 255, the widest bar.
+    expect(scale.tokens).toBe(255)
+    expect(tokenBar(large, scale)).toEqual({ code: 30 / 255, reply: 225 / 255 })
+    expect(tokenBar(small, scale)).toEqual({ code: 10 / 255, reply: 5 / 255 })
     // A running run has written its code but not read a reply yet.
-    expect(tokenBar(running, scale)).toEqual({ code: 41 / 252, reply: 0 })
+    expect(tokenBar(running, scale)).toEqual({ code: 41 / 255, reply: 0 })
   })
 
   it('totals the rows on screen, a running run adding only what it has so far', () => {
@@ -64,14 +67,14 @@ describe('the run bars', () => {
         roundTripMs: 431,
         proxyMs: 19,
         code: 'x'.repeat(88),
-        reply: 'y'.repeat(16),
+        reply: `### Result\n"${'y'.repeat(16)}"`,
       }),
       runSummary(2, {
         roundTripMs: 47,
         proxyMs: 13,
         gapMs: 6_400,
         code: 'x'.repeat(120),
-        reply: 'y'.repeat(888),
+        reply: `### Result\n"${'y'.repeat(888)}"`,
       }),
       runSummary(3, {
         roundTripMs: null,
@@ -84,7 +87,7 @@ describe('the run bars', () => {
       neoMs: 412 + 34,
       roundTripMs: 431 + 47,
       codeTokens: 22 + 30 + 41,
-      replyTokens: 4 + 222,
+      replyTokens: 7 + 225,
       gapMs: 6_400 + 12_100,
       calls: null,
     })

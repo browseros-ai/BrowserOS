@@ -94,25 +94,20 @@ export function sseEvent(message: unknown): string {
 }
 
 /** A `run` result as Neo builds it (`neo-server/src/mcp/run_tool.rs`). */
-export function runResult(
-  id: number | string,
-  text: string,
-  structured: unknown,
-  isError = false,
-) {
+export function runResult(id: number | string, text: string, isError = false) {
   return {
     jsonrpc: '2.0',
     id,
     result: {
       content: [{ type: 'text', text }],
-      structuredContent: structured,
-      isError,
+      ...(isError ? { isError: true } : {}),
       _meta: {
         'com.browseros.neo/run': {
           effects: 'none',
           id: '01a1cc18-ed14-78b3-a30d-2cb4ef81d9f4',
           status: isError ? 'error' : 'ok',
           unknown: [],
+          tasks: [],
         },
       },
     },

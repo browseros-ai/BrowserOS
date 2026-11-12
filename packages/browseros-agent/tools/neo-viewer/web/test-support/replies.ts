@@ -1,36 +1,32 @@
-/** Real reply texts from Neo, exactly as the model read them, for the reply rules' tests. */
+/** Snapshot reply fixtures in Neo's markdown section format. */
 
 import { readFileSync } from 'node:fs'
 
-/**
- * Run 8 of the 4e58b2527 night check: MUI's data grid page as `page.ariaSnapshot({ text: true })`
- * returned it, one line of JSON, then the delta tip Neo appends on a later snapshot of a tab.
- */
+/** The snapshot from run 8 of the 4e58b2527 night check, followed by Neo's delta tip. */
 export const SNAPSHOT_WITH_TIP = readFileSync(
   new URL('./reply-snapshot-with-tip.txt', import.meta.url),
   'utf8',
 )
 
 export const TIP_LINE =
-  'Tip: page.ariaSnapshot({ delta: true }) returns only what changed since your last snapshot.'
+  'page.ariaSnapshot({ delta: true }) returns only what changed since your last snapshot.'
 
 /** The returned snapshot of `SNAPSHOT_WITH_TIP`, decoded. */
-export const SNAPSHOT = JSON.parse(
-  SNAPSHOT_WITH_TIP.split('\n')[0] ?? '""',
-) as string
+const snapshot: unknown = JSON.parse(SNAPSHOT_WITH_TIP.split('\n')[1] ?? '""')
+if (typeof snapshot !== 'string') throw new Error('Expected a snapshot string')
+export const SNAPSHOT = snapshot
 
-/** A line Neo does not write today, standing for whatever it appends after the value later. */
-const UNKNOWN_TRAILER = 'Notice: a line Neo does not write yet'
+const NOTE_LINE =
+  '[not awaited] page.goto at run:4:1 (op 9) was still running when the script returned; it was cancelled.'
 
-/**
- * Each reply with a line after its returned value, and that line: run 8 as it was, and run 8's
- * value followed by `UNKNOWN_TRAILER`.
- */
-export const TRAILED: ReadonlyArray<readonly [reply: string, trailer: string]> =
+/** The same returned snapshot followed by either a Tips or a Notes section. */
+export const TRAILED: ReadonlyArray<
+  readonly [reply: string, trailer: string, section: 'tips' | 'notes']
+> = [
+  [SNAPSHOT_WITH_TIP, TIP_LINE, 'tips'],
   [
-    [SNAPSHOT_WITH_TIP, TIP_LINE],
-    [
-      `${SNAPSHOT_WITH_TIP.split('\n')[0]}\n${UNKNOWN_TRAILER}`,
-      UNKNOWN_TRAILER,
-    ],
-  ]
+    `### Result\n${JSON.stringify(SNAPSHOT)}\n### Notes\n${NOTE_LINE}`,
+    NOTE_LINE,
+    'notes',
+  ],
+]

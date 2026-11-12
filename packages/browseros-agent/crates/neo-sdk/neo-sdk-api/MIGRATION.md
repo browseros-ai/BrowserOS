@@ -81,9 +81,11 @@ trace fallback. The janitor closes agent-opened tabs idle for 30 minutes.
 Hosts get touched tasks in `_meta["com.browseros.neo/run"].tasks`, always present (`[]` when
 empty). Each entry has `id`, `name`, `kind`, and `tabs: { tabId, url }[]`. Tasks appear once,
 in first-touch order, even when the script failed. Tabs and URLs reflect reply time; closed
-tasks have kind `closed` and no tabs. `structuredContent` is unchanged.
+tasks have kind `closed` and no tabs.
 
-The agent's reply is exactly what the script returned, plus console lines and existing notes.
+The reply is one text block: `### Result` (the returned value as JSON) or `### Error`, then
+`### Console`, `### Notes`, `### Tips` when present. There is no `structuredContent`.
+
 Task metadata adds no reply text; the agent must return `task.id` to keep it.
 
 ## Call by call

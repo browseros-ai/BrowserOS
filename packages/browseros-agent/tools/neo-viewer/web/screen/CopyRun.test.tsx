@@ -10,9 +10,9 @@ import { runTotals } from './measures'
 import { RunTable } from './RunTable'
 import { DEFAULT_SORT } from './sort'
 
-const REPLY = `{"title":"Example","rows":"${'r'.repeat(5_000)}"}`
+const REPLY = `### Result\n{"title":"Example","rows":"${'r'.repeat(5_000)}"}`
 const first = detailWith(1, { text: REPLY, neo: twoLineRecord() })
-const second = detailWith(2, { text: '2', neo: null })
+const second = detailWith(2, { text: '### Result\n2', neo: null })
 
 /** A clipboard that records what it was handed, as the browser's would hold it. */
 function fakeClipboard() {
@@ -141,7 +141,7 @@ describe('Copy on a run row', () => {
     // The run changes after its row closed: the row's cached detail no longer matches it.
     const later = {
       ...second,
-      reply: { ...second.reply, text: 'finished later' },
+      reply: { ...second.reply, text: '### Result\n"finished later"' },
     }
     details.set(second.id, later)
     await dom.render(<Table openIds={new Set()} />)
@@ -157,7 +157,7 @@ describe('Copy on a run row', () => {
     // The server's run moves on; the open row's cached detail has not been refetched yet.
     details.set(second.id, {
       ...second,
-      reply: { ...second.reply, text: 'finished since' },
+      reply: { ...second.reply, text: '### Result\n"finished since"' },
     })
     await dom.interact(() => fire(copyButton(2), 'click'))
     expect(await written[0]).toContain('finished since')

@@ -24,6 +24,7 @@ use std::time::Duration;
 use browseros_rig::{
     CaptchaKey, Client, HOST_TOKEN, Rig, TestResult, browser_or_skip, get, outcome, run,
 };
+use neo_server::test_support;
 use rmcp::model::CallToolResult;
 use serde_json::{Value, json};
 use tokio::time;
@@ -217,7 +218,7 @@ async fn a_lock_refuses_the_agent(rig: &Rig, client: &Client, tab: i64) -> TestR
     let refused = run(client, &goto_and_report(), &json!({ "taskId": TASK })).await?;
     assert_eq!(
         value(&refused)?,
-        &json!({ "code": "owner_has_control", "owner": "host", "delivery": "not_sent" }),
+        json!({ "code": "owner_has_control", "owner": "host", "delivery": "not_sent" }),
         "the door refuses the write for the host: {refused:?}"
     );
     let (refused_id, status, effects) = run_meta(&refused)?;
@@ -273,7 +274,7 @@ async fn the_write_lands_once_released(
     client: &Client,
 ) -> Result<String, Box<dyn Error>> {
     let landed = run(client, &goto_and_report(), &json!({ "taskId": TASK })).await?;
-    assert_eq!(value(&landed)?, &json!("navigated"), "{landed:?}");
+    assert_eq!(value(&landed)?, json!("navigated"), "{landed:?}");
     let (id, status, effects) = run_meta(&landed)?;
     assert_eq!(
         (status.as_str(), effects.as_str()),
@@ -436,12 +437,8 @@ fn operation_id(run: &Value, name: &str) -> Result<String, Box<dyn Error>> {
 }
 
 /// The run's returned value.
-fn value(result: &CallToolResult) -> Result<&Value, Box<dyn Error>> {
-    result
-        .structured_content
-        .as_ref()
-        .and_then(|content| content.get("value"))
-        .ok_or_else(|| format!("the run returned a value: {result:?}").into())
+fn value(result: &CallToolResult) -> Result<Value, Box<dyn Error>> {
+    test_support::run_value(result).map_err(Into::into)
 }
 
 /// `_meta["com.browseros.neo/run"]`'s id, status and effects.

@@ -139,7 +139,7 @@ async function brokenLinks(dir: string, file: string): Promise<string[]> {
     .filter((link) => !existsSync(join(dir, dirname(file), link)))
 }
 
-const HUGE = `"${'a'.repeat(300_000)}"`
+const HUGE = `### Result\n"${'a'.repeat(300_000)}"`
 const FAILED_TEXT =
   'script / strict_mode_violation: locator.click: strict mode violation: 2 elements'
 
@@ -148,13 +148,17 @@ describe('an export', () => {
     const stateDir = await tempDir('neo-viewer-export-state-')
     const store = await storeWith(stateDir, [
       {
-        text: '{"title":"Example"}',
+        text: '### Result\n{"title":"Example"}',
         neo: twoLineRecord(),
         agentTaskId: 'zuzu-7',
       },
-      { text: FAILED_TEXT, isError: true, neo: twoLineRecord(true) },
+      {
+        text: `### Error\n${FAILED_TEXT}`,
+        isError: true,
+        neo: twoLineRecord(true),
+      },
       { code: 'return big', text: HUGE, neo: twoLineRecord() },
-      { code: '// no record\nreturn 1', text: '1', neo: null },
+      { code: '// no record\nreturn 1', text: '### Result\n1', neo: null },
     ])
     const root = await tempDir('neo-viewer-export-root-')
     const now = new Date(2026, 10, 11, 22, 45, 1).getTime()
@@ -167,16 +171,16 @@ describe('an export', () => {
       'session.json',
       'runs/001.md',
       'runs/001.json',
-      'runs/001.reply.json',
+      'runs/001.reply.txt',
       'runs/002.md',
       'runs/002.json',
       'runs/002.reply.txt',
       'runs/003.md',
       'runs/003.json',
-      'runs/003.reply.json',
+      'runs/003.reply.txt',
       'runs/004.md',
       'runs/004.json',
-      'runs/004.reply.json',
+      'runs/004.reply.txt',
       'log.jsonl',
     ])
     for (const file of written.files)
@@ -241,7 +245,7 @@ describe('an export', () => {
         (await readFile(join(written.dir, file), 'utf8')).length,
       ).toBeLessThan(12_000)
     expect(
-      await readFile(join(written.dir, 'runs/003.reply.json'), 'utf8'),
+      await readFile(join(written.dir, 'runs/003.reply.txt'), 'utf8'),
     ).toBe(HUGE)
     expect(
       (await readFile(join(written.dir, 'session.json'), 'utf8')).length,
@@ -277,7 +281,7 @@ describe('an export', () => {
     expect(again.dir).toBe(`${written.dir}-2`)
   })
 
-  test('run 8, and the same value before an unknown line: runs/NNN.md decoded, the reply file exact', async () => {
+  test('snapshot replies with Notes or Tips: Markdown decoded, reply files exact', async () => {
     const dataDir = await tempDir('nv-export-tip-state-')
     const exportRoot = await tempDir('nv-export-tip-')
     const store = await storeWith(
@@ -288,12 +292,12 @@ describe('an export', () => {
       root: exportRoot,
       now: Date.parse('2026-11-12T04:39:45Z'),
     })
-    // Each reply file is the exact text, which is not JSON with a line after the value: .txt.
+    // Each reply file preserves the markdown section headers: .txt.
     expect(result.files.filter((file) => file.includes('.reply.'))).toEqual([
       'runs/001.reply.txt',
       'runs/002.reply.txt',
     ])
-    for (const [index, [reply, trailer]] of TRAILED.entries()) {
+    for (const [index, [reply, trailer, section]] of TRAILED.entries()) {
       const run = join(result.dir, 'runs', String(index + 1).padStart(3, '0'))
       const markdown = await readFile(`${run}.md`, 'utf8')
       const read = markdown.slice(markdown.indexOf('## What the model read'))
@@ -303,14 +307,68 @@ describe('an export', () => {
       expect(await readFile(`${run}.reply.txt`, 'utf8')).toBe(reply)
       const json = JSON.parse(await readFile(`${run}.json`, 'utf8'))
       expect(json.parsed.value).toBe(SNAPSHOT)
-      expect(json.parsed.notes).toEqual([trailer])
+      expect(json.parsed[section]).toEqual([trailer])
+      expect(json.parsed[section === 'notes' ? 'tips' : 'notes']).toEqual([])
     }
+  })
+
+  test('exports section contents decoded, raw replies exact, and old replies whole', async () => {
+    const note = '[unknown outcome] locator.click was sent but not confirmed.'
+    const error = 'script / script_error: failed\n### Notes'
+    const legacy = '7\nconsole:\nhello\nTip: take a snapshot'
+    const replies = [
+      `### Result\nnull\n### Console\n\\### Error\n### Notes\n${note}\n### Tips\nTake a snapshot.`,
+      `### Error\nscript / script_error: failed\n\\### Notes\n### Console\n\\### Result\n### Notes\n${note}`,
+      legacy,
+    ]
+    const expected = [
+      {
+        value: null,
+        valueIsJson: true,
+        valueText: 'null',
+        console: ['### Error'],
+        notes: [note],
+        tips: ['Take a snapshot.'],
+      },
+      {
+        value: null,
+        valueIsJson: false,
+        valueText: error,
+        console: ['### Result'],
+        notes: [note],
+        tips: [],
+      },
+      {
+        value: null,
+        valueIsJson: false,
+        valueText: legacy,
+        console: [],
+        notes: [],
+        tips: [],
+      },
+    ]
+    const store = await storeWith(
+      await tempDir('nv-export-sections-state-'),
+      replies.map((text, index) => ({ text, isError: index === 1, neo: null })),
+    )
+    const result = await writeExport(await sourceOf(store), {
+      root: await tempDir('nv-export-sections-'),
+      now: Date.parse('2026-11-12T04:39:45Z'),
+    })
+    for (const [index, reply] of replies.entries()) {
+      const run = join(result.dir, 'runs', String(index + 1).padStart(3, '0'))
+      const json = JSON.parse(await readFile(`${run}.json`, 'utf8'))
+      expect(json.parsed).toEqual(expected[index])
+      expect(await readFile(`${run}.reply.txt`, 'utf8')).toBe(reply)
+    }
+    const markdown = await readFile(join(result.dir, 'runs/002.md'), 'utf8')
+    expect(markdown).toContain(`## Error\n\n\`\`\`text\n${error}\n\`\`\``)
   })
 
   test('README.md stays short with many runs; the rest are listed in session.json', async () => {
     const runs = Array.from({ length: TABLE_ROWS + 50 }, (_, index) => ({
       code: `return ${index}`,
-      text: String(index),
+      text: `### Result\n${index}`,
       neo: null,
     }))
     const store = await storeWith(
@@ -337,8 +395,8 @@ describe('an export stays one coherent, separate thing', () => {
   test('a Clear and a new run during an export change none of its files', async () => {
     const stateDir = await tempDir('neo-viewer-export-state-')
     const store = await storeWith(stateDir, [
-      { text: '1', neo: null },
-      { text: '2', neo: null },
+      { text: '### Result\n1', neo: null },
+      { text: '### Result\n2', neo: null },
     ])
     const { runs, log, toolsList, rawLog } = store.snapshot()
     // Between the click and the files: the list is cleared and a new run arrives.
@@ -385,7 +443,7 @@ describe('an export stays one coherent, separate thing', () => {
 
   test('an export refuses to be written inside the state folder, or around it', async () => {
     const store = await storeWith(await tempDir('neo-viewer-export-state-'), [
-      { text: '1', neo: null },
+      { text: '### Result\n1', neo: null },
     ])
     const root = await tempDir('neo-viewer-export-root-')
     for (const dataDir of [
@@ -401,7 +459,7 @@ describe('an export stays one coherent, separate thing', () => {
 
   test('an export refuses a shared or linked /tmp/neo-viewer: only a private folder of this user', async () => {
     const store = await storeWith(await tempDir('neo-viewer-export-state-'), [
-      { text: '1', neo: null },
+      { text: '### Result\n1', neo: null },
     ])
     const base = await tempDir('neo-viewer-export-base-')
     // Writable by others: anyone could swap the export's folder.
@@ -474,9 +532,7 @@ describe('an export stays one coherent, separate thing', () => {
 
 test('POST /api/export: only from the viewer’s own page, and nothing of the host token or an Authorization header in any file', async () => {
   const neo = startFakeNeo(() => ({
-    chunks: [
-      sseEvent(runResult(1, '{"title":"Example"}', { title: 'Example' })),
-    ],
+    chunks: [sseEvent(runResult(1, '### Result\n{"title":"Example"}'))],
   }))
   cleanups.push(() => neo.stop())
   const host = startFakeNeoHost()

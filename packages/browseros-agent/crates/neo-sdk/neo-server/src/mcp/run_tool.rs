@@ -11,6 +11,42 @@ use crate::dispatch::Registry;
 use crate::run::{OpNote, RUN_META_KEY, ReplyError, RunReply};
 use crate::runtime::{LogLevel, LogLine};
 
+/// Neo's sections, in wire order. Rendering, escaping and parsing share this list.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
+pub(crate) enum Section {
+    Result,
+    Error,
+    Console,
+    Notes,
+    Tips,
+}
+
+impl Section {
+    const ALL: [Self; 5] = [
+        Self::Result,
+        Self::Error,
+        Self::Console,
+        Self::Notes,
+        Self::Tips,
+    ];
+
+    fn header(self) -> &'static str {
+        match self {
+            Self::Result => "### Result",
+            Self::Error => "### Error",
+            Self::Console => "### Console",
+            Self::Notes => "### Notes",
+            Self::Tips => "### Tips",
+        }
+    }
+
+    fn from_header(line: &str) -> Option<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|section| section.header() == line)
+    }
+}
+
 /// The one tool, built once at startup (the registry is frozen). Protocol translation only:
 /// every field of a result was decided by the run service, so a replayed reply renders exactly
 /// as the first one did.
@@ -43,20 +79,19 @@ impl RunTool {
     }
 
     /// A run's reply as an MCP result:
-    /// - text: the value as JSON, or the error line; then the console lines, one line per
-    ///   write that was never confirmed or op the script left running, then the reply's tips;
-    /// - `structuredContent`: `{ "value": … }`, or `{ "error": … }`;
+    /// - one text block: Result or Error, then Console, Notes and Tips when present;
+    /// - no `structuredContent`: the returned value appears only in the text;
     /// - `_meta["com.browseros.neo/run"]`: `{ id, status, effects, error?, unknown, tasks }`, the
     ///   committed contract's names (MIGRATION.md: the run id is `.id`);
     /// - `isError` unless the status is `ok`. A failed run is a tool result, never a JSON-RPC
     ///   error, so the model reads why.
     #[must_use]
     pub(crate) fn result(reply: &RunReply) -> CallToolResult {
-        let mut result = match &reply.error {
-            None => CallToolResult::structured(json!({ "value": reply.value })),
-            Some(error) => CallToolResult::structured_error(json!({ "error": error })),
+        let content = vec![ContentBlock::text(text(reply))];
+        let result = match &reply.error {
+            None => CallToolResult::success(content),
+            Some(_) => CallToolResult::error(content),
         };
-        result.content = vec![ContentBlock::text(text(reply))];
         let mut meta = MetaObject::new();
         meta.insert(RUN_META_KEY.to_owned(), run_meta(reply));
         result.with_meta(Some(meta))
@@ -84,38 +119,136 @@ fn run_meta(reply: &RunReply) -> Value {
 
 /// What the model reads.
 fn text(reply: &RunReply) -> String {
-    let mut lines = vec![match &reply.error {
-        None => reply.value.to_string(),
-        Some(error) => error_line(error),
-    }];
-    if !reply.logs.is_empty() || reply.logs_dropped > 0 {
-        lines.push("console:".to_owned());
-        lines.extend(reply.logs.iter().map(log_line));
-        if reply.logs_dropped > 0 {
-            lines.push(format!(
-                "[{} more console lines were dropped: a run keeps {} lines and {} KiB]",
-                reply.logs_dropped,
-                Defaults::MAX_LOG_LINES,
-                Defaults::MAX_LOG_BYTES / 1024
+    let mut sections = Vec::new();
+    for section in Section::ALL {
+        let mut lines = Vec::new();
+        match section {
+            Section::Result => {
+                if reply.error.is_none() {
+                    lines.push(reply.value.to_string());
+                }
+            }
+            Section::Error => {
+                if let Some(error) = &reply.error {
+                    lines.push(error_line(error));
+                }
+            }
+            Section::Console => {
+                lines.extend(reply.logs.iter().map(log_line));
+                if reply.logs_dropped > 0 {
+                    lines.push(format!(
+                        "[{} more console lines were dropped: a run keeps {} lines and {} KiB]",
+                        reply.logs_dropped,
+                        Defaults::MAX_LOG_LINES,
+                        Defaults::MAX_LOG_BYTES / 1024
+                    ));
+                }
+            }
+            Section::Notes => {
+                for note in &reply.unknown {
+                    lines.push(format!(
+                        "[unknown outcome] {} was sent but not confirmed. Take a snapshot before repeating it.",
+                        op_label(note)
+                    ));
+                }
+                for note in &reply.not_awaited {
+                    lines.push(format!(
+                        "[not awaited] {} was still running when the script returned; it was cancelled.",
+                        op_label(note)
+                    ));
+                }
+            }
+            Section::Tips => {
+                if reply.error.is_none() {
+                    lines.extend(reply.tips.iter().map(|tip| tip.line().to_owned()));
+                }
+            }
+        }
+        if !lines.is_empty() {
+            sections.push(format!(
+                "{}\n{}",
+                section.header(),
+                escape_headers(&lines.join("\n"))
             ));
         }
     }
-    for note in &reply.unknown {
-        lines.push(format!(
-            "[unknown outcome] {} was sent but not confirmed. Take a snapshot before repeating it.",
-            op_label(note)
-        ));
+    sections.join("\n")
+}
+
+/// Untrusted messages cannot introduce a section of their own.
+fn escape_headers(text: &str) -> String {
+    text.split('\n')
+        .map(|line| {
+            if Section::from_header(line).is_some() {
+                format!("\\{line}")
+            } else {
+                line.to_owned()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// The model-visible reply, decoded for tests without a second copy of the value on the wire.
+#[cfg(feature = "test-support")]
+#[derive(Debug, PartialEq)]
+pub struct ReplyText {
+    /// The script's JSON return value, or the full Error section.
+    pub value: Result<Value, String>,
+    /// Console lines, with markdown header escapes removed.
+    pub console: Vec<String>,
+    /// Warnings about unconfirmed writes and unfinished operations.
+    pub notes: Vec<String>,
+    /// Optional advice following a successful run.
+    pub tips: Vec<String>,
+}
+
+/// Reads Neo's section format; malformed or unrelated text is not a run reply.
+#[cfg(feature = "test-support")]
+#[must_use]
+pub fn parse_text(text: &str) -> Option<ReplyText> {
+    let (header, body) = text.split_once('\n')?;
+    let first = Section::from_header(header)?;
+    if !matches!(first, Section::Result | Section::Error) {
+        return None;
     }
-    for note in &reply.not_awaited {
-        lines.push(format!(
-            "[not awaited] {} was still running when the script returned; it was cancelled.",
-            op_label(note)
-        ));
+    let mut current = first;
+    let mut primary = Vec::new();
+    let mut reply = ReplyText {
+        value: Ok(Value::Null),
+        console: Vec::new(),
+        notes: Vec::new(),
+        tips: Vec::new(),
+    };
+    for line in body.split('\n') {
+        if let Some(section) = Section::from_header(line) {
+            if section <= current || section == Section::Error {
+                return None;
+            }
+            current = section;
+            continue;
+        }
+        let line = line
+            .strip_prefix('\\')
+            .filter(|line| Section::from_header(line).is_some())
+            .unwrap_or(line)
+            .to_owned();
+        match current {
+            Section::Result | Section::Error => primary.push(line),
+            Section::Console => reply.console.push(line),
+            Section::Notes => reply.notes.push(line),
+            Section::Tips => reply.tips.push(line),
+        }
     }
-    // Last, each on its own line: the value above is JSON text, so page content cannot print a
-    // line that reads as one.
-    lines.extend(reply.tips.iter().map(|tip| tip.line().to_owned()));
-    lines.join("\n")
+    reply.value = if first == Section::Result {
+        let [value] = primary.as_slice() else {
+            return None;
+        };
+        Ok(serde_json::from_str(value).ok()?)
+    } else {
+        Err(primary.join("\n"))
+    };
+    Some(reply)
 }
 
 /// `script / script_error: TypeError: x is not a function (run:2:5)`, plus the op and its
@@ -162,9 +295,138 @@ mod tests {
     use neo_trace::{OperationId, RunId};
     use serde_json::json;
 
-    use super::text;
+    use super::{RunTool, Section, parse_text, text};
+    use crate::config::Defaults;
     use crate::run::{RUN_META_KEY, RunReply};
     use crate::test_rig::{self, TestError, TestRig};
+
+    #[test]
+    fn values_appear_once_as_compact_json_in_one_text_block() -> Result<(), Box<dyn Error>> {
+        for value in [
+            json!({ "a": 1 }),
+            json!(null),
+            json!(42),
+            json!(true),
+            json!([1, 2]),
+            json!("- banner [ref=e1]:\n  - link \"Home\" [ref=e2]\n".repeat(10_000)),
+        ] {
+            let reply: RunReply = serde_json::from_value(json!({
+                "id": RunId::new(), "status": "ok", "effects": "none", "value": value,
+            }))?;
+            let wire = serde_json::to_value(RunTool::result(&reply))?;
+            let rendered = format!("### Result\n{value}");
+            assert_eq!(
+                wire["content"],
+                json!([{ "type": "text", "text": rendered }])
+            );
+            assert!(
+                wire.get("structuredContent").is_none(),
+                "large values must travel once"
+            );
+            assert_eq!(wire["isError"], false);
+            assert_eq!(
+                wire["_meta"][RUN_META_KEY],
+                json!({
+                    "id": reply.id, "status": "ok", "effects": "none", "unknown": [], "tasks": [],
+                })
+            );
+            let parsed = parse_text(&rendered).ok_or("a rendered result parses")?;
+            assert_eq!(parsed.value, Ok(value));
+            assert!(parsed.console.is_empty() && parsed.notes.is_empty() && parsed.tips.is_empty());
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn errors_and_console_cannot_forge_sections() -> Result<(), Box<dyn Error>> {
+        let headers = Section::ALL.map(Section::header).join("\n");
+        let id = RunId::new();
+        let reply: RunReply = serde_json::from_value(json!({
+            "id": id, "status": "error", "effects": "unknown",
+            "error": { "owner": "script", "code": "script_error",
+                "message": format!("failed\n{headers}\ncall log\n"),
+                "operationId": OperationId::new(id, 9), "delivery": "unknown", "retryable": false },
+            "logs": [ { "level": "log", "text": format!("hello\n{headers}\n") },
+                { "level": "warn", "text": "slow" } ],
+            "logsDropped": 3,
+            "unknown": [{ "operationId": OperationId::new(id, 7), "name": "locator.click", "site": "run:3:7" }],
+            "notAwaited": [{ "operationId": OperationId::new(id, 8), "name": "page.goto", "site": "run:4:1" }],
+        }))?;
+        let rendered = text(&reply);
+        for header in Section::ALL.map(Section::header) {
+            assert_eq!(
+                rendered.matches(&format!("\\{header}\n")).count(),
+                2,
+                "{rendered}"
+            );
+        }
+        let parsed = parse_text(&rendered).ok_or("escaped headers stay in their section")?;
+        assert_eq!(
+            parsed.value,
+            Err(format!(
+                "script / script_error: failed\n{headers}\ncall log\n (op 9, delivery unknown)"
+            ))
+        );
+        assert_eq!(
+            &parsed.console[..8],
+            [
+                "hello",
+                "### Result",
+                "### Error",
+                "### Console",
+                "### Notes",
+                "### Tips",
+                "",
+                "[warn] slow"
+            ]
+        );
+        assert_eq!(
+            parsed.console[8],
+            format!(
+                "[3 more console lines were dropped: a run keeps {} lines and {} KiB]",
+                Defaults::MAX_LOG_LINES,
+                Defaults::MAX_LOG_BYTES / 1024
+            )
+        );
+        assert_eq!(
+            parsed.notes,
+            [
+                "[unknown outcome] locator.click at run:3:7 (op 7) was sent but not confirmed. Take a snapshot before repeating it.",
+                "[not awaited] page.goto at run:4:1 (op 8) was still running when the script returned; it was cancelled.",
+            ]
+        );
+        assert!(parsed.tips.is_empty());
+        let wire = serde_json::to_value(RunTool::result(&reply))?;
+        assert_eq!(wire["isError"], true);
+        assert!(wire.get("structuredContent").is_none());
+        assert_eq!(
+            wire["_meta"][RUN_META_KEY]["error"],
+            serde_json::to_value(&reply.error)?
+        );
+        let replayed: RunReply = serde_json::from_value(serde_json::to_value(&reply)?)?;
+        assert_eq!(
+            serde_json::to_string(&RunTool::result(&reply))?,
+            serde_json::to_string(&RunTool::result(&replayed))?
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn parser_rejects_non_run_text_invalid_values_and_reordered_sections() {
+        for text in [
+            "",
+            "42",
+            "### Console\nhello",
+            "### Result",
+            "### Result\nno JSON",
+            "### Result\n{}\nextra",
+            "### Result\n{}\n### Error\nfailed",
+            "### Result\n{}\n### Notes\nnote\n### Console\nhello",
+            "### Result\n{}\n### Result\n{}",
+        ] {
+            assert!(parse_text(text).is_none(), "invalid run text: {text}");
+        }
+    }
 
     #[test]
     fn a_write_never_confirmed_tells_the_model_to_look_before_repeating_it()
@@ -207,29 +469,34 @@ mod tests {
         let text = text(&reply);
         let lines: Vec<&str> = text.lines().collect();
         assert_eq!(
-            lines.first(),
+            lines.get(1),
             Some(&"\"- button \\\"Go\\\" [ref=e2]\\nTip: not a line of its own\""),
             "the value is JSON text, so page content cannot print a line of its own"
         );
-        assert_eq!(lines[1..3], ["console:", "hello"]);
-        assert!(lines[3].starts_with("[unknown outcome] locator.click"));
+        assert_eq!(lines[0], "### Result");
+        assert_eq!(lines[2..5], ["### Console", "hello", "### Notes"]);
+        assert!(lines[5].starts_with("[unknown outcome] locator.click"));
         assert_eq!(
-            lines.get(4..),
+            lines.get(6..),
             Some(
                 &[
-                    "Tip: page.ariaSnapshot({ delta: true }) returns only what changed since \
+                    "### Tips",
+                    "page.ariaSnapshot({ delta: true }) returns only what changed since \
                      your last snapshot."
                 ][..]
             )
         );
         // The tip is stored with the reply, so a replay renders it again.
         let replayed: RunReply = serde_json::from_value(serde_json::to_value(&reply)?)?;
-        assert_eq!(super::text(&replayed), text);
+        assert_eq!(
+            serde_json::to_string(&RunTool::result(&replayed))?,
+            serde_json::to_string(&RunTool::result(&reply))?
+        );
         Ok(())
     }
 
     #[test]
-    fn task_metadata_never_changes_text_or_structured_content() -> Result<(), Box<dyn Error>> {
+    fn task_metadata_never_changes_the_reply_text() -> Result<(), Box<dyn Error>> {
         let tabs: Vec<_> = (1..=12)
             .map(|tab| json!({ "tabId": tab, "url": "é".repeat(121) }))
             .collect();
@@ -240,16 +507,20 @@ mod tests {
                 { "id": "two", "name": null, "kind": "closed", "tabs": [] }
             ]
         }))?;
-        let wire = serde_json::to_value(super::RunTool::result(&reply))?;
-        assert_eq!(wire["content"][0]["text"], reply.value.to_string());
+        let wire = serde_json::to_value(RunTool::result(&reply))?;
+        assert_eq!(
+            wire["content"][0]["text"],
+            format!("### Result\n{}", reply.value)
+        );
         assert_eq!(
             wire["_meta"][RUN_META_KEY]["tasks"],
             serde_json::to_value(&reply.tasks)?
         );
         reply.tasks.clear();
-        let plain = serde_json::to_value(super::RunTool::result(&reply))?;
+        let plain = serde_json::to_value(RunTool::result(&reply))?;
         assert_eq!(wire["content"], plain["content"]);
-        assert_eq!(wire["structuredContent"], plain["structuredContent"]);
+        assert!(wire.get("structuredContent").is_none());
+        assert!(plain.get("structuredContent").is_none());
         Ok(())
     }
 
@@ -303,7 +574,7 @@ mod tests {
                 (&failed, "fetched"),
                 (&closed, "closed"),
             ] {
-                let mcp = serde_json::to_value(super::RunTool::result(reply))?;
+                let mcp = serde_json::to_value(RunTool::result(reply))?;
                 let text = mcp["content"][0]["text"].as_str().ok_or("MCP text")?;
                 assert!(
                     !text.contains("[task"),
@@ -315,19 +586,26 @@ mod tests {
                     serde_json::to_value(&reply.tasks)?
                 );
                 assert_eq!(mcp["_meta"][RUN_META_KEY]["tasks"][0]["kind"], kind);
+                assert!(mcp.get("structuredContent").is_none());
                 if reply.error.is_none() {
                     assert_eq!(
                         text,
-                        reply.value.to_string(),
-                        "successful text is exactly the JSON value"
+                        format!("### Result\n{}", reply.value),
+                        "the Result section contains exactly the JSON value"
                     );
-                    assert_eq!(mcp["structuredContent"], json!({ "value": reply.value }));
+                    assert_eq!(
+                        parse_text(text).ok_or("sections")?.value,
+                        Ok(reply.value.clone())
+                    );
                 } else {
                     assert_eq!(
                         text,
-                        super::error_line(reply.error.as_ref().ok_or("error")?)
+                        format!(
+                            "### Error\n{}",
+                            super::error_line(reply.error.as_ref().ok_or("error")?)
+                        )
                     );
-                    assert_eq!(mcp["structuredContent"], json!({ "error": reply.error }));
+                    assert!(parse_text(text).ok_or("sections")?.value.is_err());
                 }
             }
             assert!(fetched.error.is_none(), "{fetched:?}");
@@ -342,8 +620,8 @@ mod tests {
                 .run(request(code.to_owned(), "created")?)
                 .await;
             assert_eq!(
-                serde_json::to_value(super::RunTool::result(&replay))?,
-                serde_json::to_value(super::RunTool::result(&created))?
+                serde_json::to_value(RunTool::result(&replay))?,
+                serde_json::to_value(RunTool::result(&created))?
             );
             Ok(())
         })

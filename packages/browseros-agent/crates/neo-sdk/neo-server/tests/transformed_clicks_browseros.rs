@@ -6,6 +6,7 @@ pub mod browseros_rig;
 use std::time::Duration;
 
 use browseros_rig::{CaptchaKey, Rig, TestResult, browser_or_skip, outcome, run};
+use neo_server::test_support;
 use serde_json::json;
 use tokio::time;
 
@@ -63,15 +64,12 @@ async fn transformed_clicks(rig: &Rig) -> TestResult {
         Some(&json!("ok")),
         "{result:?}"
     );
-    let value = result
-        .structured_content
-        .as_ref()
-        .and_then(|content| content.get("value"));
+    let value = test_support::run_value(&result)?;
     assert_eq!(
         value,
-        Some(&json!({
+        json!({
             "inline": ["span"], "clipped": ["target"], "tiny": ["small", "small"]
-        })),
+        }),
         "the actual trusted clicks must reach the mapped targets: {result:?}"
     );
     Ok(())

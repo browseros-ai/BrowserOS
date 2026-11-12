@@ -21,3 +21,5 @@ mod run_tool;
 pub(crate) use mcp_server::McpServer;
 use run_args::RunArgs;
 use run_tool::RunTool;
+#[cfg(feature = "test-support")]
+pub use run_tool::{ReplyText, parse_text};

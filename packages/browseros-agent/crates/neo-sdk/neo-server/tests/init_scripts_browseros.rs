@@ -21,6 +21,7 @@ use std::pin::Pin;
 use std::time::Duration;
 
 use browseros_rig::{CaptchaKey, HOST_TOKEN, Rig, TestResult};
+use neo_server::test_support;
 use rmcp::model::CallToolResult;
 use serde_json::{Value, json};
 use tokio::time;
@@ -270,10 +271,5 @@ fn returned(result: &CallToolResult) -> Result<Value, Box<dyn Error>> {
     if meta.get("status") != Some(&json!("ok")) {
         return Err(format!("the run ends ok: {result:?}").into());
     }
-    result
-        .structured_content
-        .as_ref()
-        .and_then(|content| content.get("value"))
-        .cloned()
-        .ok_or_else(|| format!("the script returns what it saw: {result:?}").into())
+    test_support::run_value(result).map_err(Into::into)
 }

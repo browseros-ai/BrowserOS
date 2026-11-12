@@ -106,7 +106,7 @@ async function sameBytes(neo: FakeNeo, viewer: RunningViewer, body: string) {
 
 describe('a reply through the viewer is the direct reply, byte for byte', () => {
   test('a plain value, and the run is logged as sent and as received', async () => {
-    const reply = sseEvent(runResult(1, '42', { value: 42 }))
+    const reply = sseEvent(runResult(1, '### Result\n42'))
     const { neo, viewer } = await setup(() => ({ chunks: [reply] }))
     const body = runCall(1, 'return 42')
     await sameBytes(neo, viewer, body)
@@ -117,11 +117,14 @@ describe('a reply through the viewer is the direct reply, byte for byte', () => 
       client: { name: 'claude-code', version: '2.1.322' },
       agentTaskId: null,
       codeSize: { chars: 9, tokens: 2 },
-      replySize: { chars: 2, tokens: 0 },
+      replySize: { chars: 13, tokens: 3 },
       neoRunId: '01a1cc18-ed14-78b3-a30d-2cb4ef81d9f4',
     })
     expect(run.reply.raw).toBe(reply)
-    expect(run.reply.structuredContent).toEqual({ value: 42 })
+    expect(run.reply.structuredContent).toBeNull()
+    expect(JSON.parse(reply.slice(6)).result).not.toHaveProperty(
+      'structuredContent',
+    )
     expect(run.request.raw).toBe(body)
     // Neo got the agent's bytes, every one: the viewer adds nothing.
     expect(neo.requests.at(-1)?.body).toBe(body)
@@ -133,8 +136,7 @@ describe('a reply through the viewer is the direct reply, byte for byte', () => 
         sseEvent(
           runResult(
             2,
-            'script / script_error: TypeError: x is not a function (run:1:1)',
-            { error: {} },
+            '### Error\nscript / script_error: TypeError: x is not a function (run:1:1)',
             true,
           ),
         ),
@@ -145,9 +147,9 @@ describe('a reply through the viewer is the direct reply, byte for byte', () => 
   })
 
   test('a reply with console lines', async () => {
-    const text = '7\nconsole:\nhi\n[warn] careful'
+    const text = '### Result\n7\n### Console\nhi\n[warn] careful'
     const { neo, viewer } = await setup(() => ({
-      chunks: [sseEvent(runResult(3, text, { value: 7 }))],
+      chunks: [sseEvent(runResult(3, text))],
     }))
     await sameBytes(
       neo,
@@ -160,9 +162,10 @@ describe('a reply through the viewer is the direct reply, byte for byte', () => 
   test('a large reply with a blob marker, in many chunks', async () => {
     const marker = { $neo: 'blob', id: 'b0', size: 300000 }
     const big = sseEvent(
-      runResult(4, `${JSON.stringify(marker)}${'x'.repeat(400_000)}`, {
-        value: marker,
-      }),
+      runResult(
+        4,
+        `### Result\n${JSON.stringify({ marker, padding: 'x'.repeat(400_000) })}`,
+      ),
     )
     const pieces = big.match(/[\s\S]{1,16384}/g) ?? []
     const { neo, viewer } = await setup(() => ({ chunks: pieces }))
@@ -188,7 +191,7 @@ describe('a reply through the viewer is the direct reply, byte for byte', () => 
         250,
         ':\n\n',
         250,
-        sseEvent(runResult(5, '1', { value: 1 })),
+        sseEvent(runResult(5, '### Result\n1')),
       ],
     }))
     const body = runCall(5, 'await page.waitForTimeout(6000); return 1')
@@ -257,7 +260,7 @@ describe('a reply through the viewer is the direct reply, byte for byte', () => 
 })
 
 test('a compressed reply passes through compressed, as Neo sent it', async () => {
-  const gzipped = Bun.gzipSync(sseEvent(runResult(7, '7', { value: 7 })))
+  const gzipped = Bun.gzipSync(sseEvent(runResult(7, '### Result\n7')))
   const { viewer } = await setup(() => ({
     headers: {
       'content-type': 'text/event-stream',
@@ -282,17 +285,17 @@ test('a compressed reply passes through compressed, as Neo sent it', async () =>
     neoRunId: '01a1cc18-ed14-78b3-a30d-2cb4ef81d9f4',
   })
   expect(run.reply).toMatchObject({
-    text: '7',
-    structuredContent: { value: 7 },
+    text: '### Result\n7',
+    structuredContent: null,
     contentEncoding: 'gzip',
   })
-  expect(run.reply.raw).toBe(sseEvent(runResult(7, '7', { value: 7 })))
+  expect(run.reply.raw).toBe(sseEvent(runResult(7, '### Result\n7')))
 })
 
 test('a sized reply still streams: the first bytes reach the agent before the rest is sent', async () => {
   // Bun's server always frames a streamed body as chunked, so this Neo writes HTTP by hand.
   const first = ':\n\n'
-  const rest = sseEvent(runResult(8, '8', { value: 8 }))
+  const rest = sseEvent(runResult(8, '### Result\n8'))
   let restSentAt = 0
   const neo = Bun.listen({
     hostname: '127.0.0.1',
@@ -342,7 +345,7 @@ describe('one log', () => {
   test('thirteen calls from thirteen processes are thirteen runs in one list, in order, each reaching Neo as sent', async () => {
     const { neo, viewer } = await setup((body) => {
       const id = (JSON.parse(body) as { id: number }).id
-      return { chunks: [sseEvent(runResult(id, String(id), { value: id }))] }
+      return { chunks: [sseEvent(runResult(id, `### Result\n${id}`))] }
     })
     // Like an agent that calls the MCP URL from a new curl or Python process every time.
     const sent: string[] = []
@@ -395,7 +398,7 @@ describe('one log', () => {
 
   test('a call that carries its own taskId passes through unchanged, and the run keeps it as a label', async () => {
     const { neo, viewer } = await setup(() => ({
-      chunks: [sseEvent(runResult(1, '1', { value: 1 }))],
+      chunks: [sseEvent(runResult(1, '### Result\n1'))],
     }))
     const body = runCall(1, 'return 1', {
       'com.browseros.neo/run': { taskId: 'zuzu-42', requestId: 'rq-1' },
@@ -410,7 +413,7 @@ describe('one log', () => {
 
   test('a legacy client is labelled from its initialize, an unnamed one from its User-Agent', async () => {
     const { viewer } = await setup(() => ({
-      chunks: [sseEvent(runResult(1, '1', { value: 1 }))],
+      chunks: [sseEvent(runResult(1, '### Result\n1'))],
     }))
     const legacy = { ...MCP_HEADERS, 'user-agent': 'Python-urllib/3.12' }
     await post(
@@ -472,9 +475,10 @@ describe('one log', () => {
         : {
             chunks: [
               sseEvent(
-                runResult((JSON.parse(body) as { id: number }).id, '1', {
-                  value: 1,
-                }),
+                runResult(
+                  (JSON.parse(body) as { id: number }).id,
+                  '### Result\n1',
+                ),
               ),
             ],
           },
@@ -514,7 +518,7 @@ describe('one log', () => {
     const dataDir = await mkdtemp(join(tmpdir(), 'neo-viewer-test-'))
     cleanups.push(() => rm(dataDir, { recursive: true, force: true }))
     const respond = () => ({
-      chunks: [sseEvent(runResult(1, '1', { value: 1 }))],
+      chunks: [sseEvent(runResult(1, '### Result\n1'))],
     })
     const first = await setup(respond, { dataDir })
     await post(first.viewer.mcpUrl, runCall(1, 'return 1'))
@@ -533,7 +537,7 @@ describe('one log', () => {
 describe('the agent going away', () => {
   test('closes the upstream request, so Neo stops the run', async () => {
     const { neo, viewer } = await setup(() => ({
-      chunks: [':\n\n', 5000, sseEvent(runResult(1, '1', { value: 1 }))],
+      chunks: [':\n\n', 5000, sseEvent(runResult(1, '### Result\n1'))],
     }))
     const abort = new AbortController()
     const response = await fetch(viewer.mcpUrl, {

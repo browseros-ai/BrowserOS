@@ -22,6 +22,7 @@ pub mod browseros_rig;
 use std::time::Duration;
 
 use browseros_rig::{CaptchaKey, Rig, TestResult};
+use neo_server::test_support;
 use serde_json::{Value, json};
 use tokio::time;
 
@@ -142,40 +143,37 @@ async fn drive(rig: &Rig) -> TestResult {
     client.cancel().await?;
     // The text the model reads: the value, then the run's console lines.
     let console = serde_json::to_string(&result.content)?;
-    let reply = result
-        .structured_content
-        .ok_or("a run's reply is its structured content")?;
-    let value = reply.get("value").ok_or("the script returns")?;
+    let value = test_support::run_value(&result)?;
     assert_eq!(
         value.get("afterClick"),
         Some(&json!({ "handled": 1, "bought": 1 })),
-        "the click waited for the handler, then landed: {reply}"
+        "the click waited for the handler, then landed: {value}"
     );
     assert_eq!(
         value.get("afterExpect"),
         Some(&json!(2)),
-        "the matcher ran the handler before it read: {reply}"
+        "the matcher ran the handler before it read: {value}"
     );
     assert_eq!(
         value.get("afterDrag"),
         Some(&json!({ "handled": 3, "dropped": true })),
-        "the drag let the handler's click through before its press: {reply}"
+        "the drag let the handler's click through before its press: {value}"
     );
     assert_eq!(
         value.get("afterHandleFocus"),
         Some(&json!(3)),
-        "a handle's focus runs no handler: {reply}"
+        "a handle's focus runs no handler: {value}"
     );
     let text = |name: &str| value.get(name).and_then(Value::as_str).unwrap_or_default();
     assert!(
         text("stuck")
             .contains("locator handler has finished, waiting for locator('#stuck') to be hidden"),
-        "a handler's locator that never hides times the matcher out, logged: {reply}"
+        "a handler's locator that never hides times the matcher out, logged: {value}"
     );
     for name in ["closedByHandler", "closedMeanwhile"] {
         assert!(
             text(name).contains("Target page, context or browser has been closed"),
-            "{name}: a closed page fails the paused action: {reply}"
+            "{name}: a closed page fails the paused action: {value}"
         );
     }
     assert!(
@@ -189,7 +187,7 @@ async fn drive(rig: &Rig) -> TestResult {
     assert!(
         took.is_some_and(|ms| ms < 5_000),
         "a page closed while its handler runs fails the action at once, not at its timeout: \
-         {reply}"
+         {value}"
     );
     Ok(())
 }

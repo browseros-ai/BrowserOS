@@ -39,6 +39,7 @@ use std::pin::Pin;
 use std::time::Duration;
 
 use browseros_rig::{CaptchaKey, Client, Rig, TestResult, browser_or_skip, outcome, run};
+use neo_server::test_support;
 use neo_trace::RunId;
 use rmcp::model::{CallToolResult, ContentBlock};
 use serde_json::{Value, json};
@@ -217,7 +218,7 @@ async fn a_delta_snapshot_and_its_tip_reach_the_model_over_mcp() -> TestResult {
 
 /// The delta tip's line, as the run reply's text ends with it.
 const DELTA_TIP: &str =
-    "Tip: page.ariaSnapshot({ delta: true }) returns only what changed since your last snapshot.";
+    "page.ariaSnapshot({ delta: true }) returns only what changed since your last snapshot.";
 
 /// A page long enough that one changed line is well under half of its snapshot, and a script
 /// that opens it in the run's page, or finds the tab that has it.
@@ -265,10 +266,8 @@ fn on_delta_page(label: &str, body: &str) -> String {
 /// The delta's value, from a run that must have succeeded.
 async fn delta_of(client: &Client, code: &str, task: &Value) -> Result<String, Box<dyn Error>> {
     let result = run(client, code, task).await?;
-    let (text, status) = read(&result)?;
-    assert_eq!(status, json!("ok"), "{result:?}");
-    let first = text.lines().next().ok_or("a reply has its value")?;
-    Ok(serde_json::from_str(first)?)
+    assert_eq!(read(&result)?.1, json!("ok"), "{result:?}");
+    Ok(serde_json::from_value(test_support::run_value(&result)?)?)
 }
 
 /// The baseline is the last snapshot text a run gave its caller: never one a failed run took,
@@ -324,8 +323,7 @@ async fn delta_baselines(client: &Client) -> TestResult {
          return [full.length, await p.ariaSnapshot({ delta: true })]",
     );
     let result = run(client, &in_one_run, &task).await?;
-    let (text, _) = read(&result)?;
-    let value: Value = serde_json::from_str(text.lines().next().ok_or("a value")?)?;
+    let value = test_support::run_value(&result)?;
     let one_run = value.get(1).and_then(Value::as_str).unwrap_or_default();
     assert!(
         one_run.contains("\n-  - button \"Logged\" [ref=")
@@ -446,10 +444,11 @@ async fn delta_tips(client: &Client) -> TestResult {
         assert_eq!(status, json!("ok"), "{full:?}");
         let lines: Vec<&str> = text.lines().collect();
         if lines.last() == Some(&DELTA_TIP) {
-            assert_eq!(lines.len(), 2, "the value, then the tip: {text}");
+            assert_eq!(lines.len(), 4, "the Result and Tips sections: {text}");
+            assert_eq!(lines.get(2), Some(&"### Tips"));
             tips += 1;
         } else {
-            assert_eq!(lines.len(), 1, "the value alone: {text}");
+            assert_eq!(lines.len(), 2, "the Result section alone: {text}");
         }
     }
     assert_eq!(tips, 3, "at most three tips per task");
@@ -486,9 +485,11 @@ fn not_from_this_tab(r#ref: &str) -> String {
 /// A run's failure line: the text the model reads up to the call log.
 async fn failure_of(client: &Client, code: &str, meta: &Value) -> Result<String, Box<dyn Error>> {
     let result = run(client, code, meta).await?;
-    let (text, status) = read(&result)?;
-    assert_eq!(status, json!("error"), "{result:?}");
-    Ok(text.lines().next().unwrap_or_default().to_owned())
+    assert_eq!(read(&result)?.1, json!("error"), "{result:?}");
+    let error = test_support::run_value(&result)
+        .err()
+        .ok_or("a failed run has Error text")?;
+    Ok(error.lines().next().unwrap_or_default().to_owned())
 }
 
 /// Design section 5, "A ref used in a tab this run opened": each run with no task starts on a
@@ -598,11 +599,7 @@ async fn value_of(client: &Client, code: &str, meta: &Value) -> Result<Value, Bo
         Some(&json!("ok")),
         "{result:?}"
     );
-    result
-        .structured_content
-        .as_ref()
-        .and_then(|reply| reply.get("value").cloned())
-        .ok_or_else(|| format!("the script returns: {result:?}").into())
+    test_support::run_value(&result).map_err(Into::into)
 }
 
 /// The host locks `tab` with `reads`, runs `code`, and releases the lock. Returns the run's value.
@@ -828,25 +825,31 @@ async fn reply_of(rig: &Rig, code: &str, task: &str) -> Result<Value, Box<dyn Er
     let meta = outcome(&result)?;
     assert_eq!(meta.get("status"), Some(&json!("ok")), "{result:?}");
     client.cancel().await?;
-    let reply = result
-        .structured_content
-        .ok_or("a run's reply is its structured content")?;
-    Ok(reply)
+    test_support::run_value(&result).map_err(Into::into)
 }
 
 async fn listen_first(rig: &Rig) -> TestResult {
-    let reply = reply_of(rig, LISTENER_FIRST, "listener-first").await?;
-    let value = reply.get("value").ok_or("the script returns")?;
-    assert_eq!(value.get("title"), Some(&json!("Console")), "{reply}");
+    rig.until_ready().await?;
+    let client = rig.client().await?;
+    let result = run(
+        &client,
+        LISTENER_FIRST,
+        &json!({ "taskId": "listener-first" }),
+    )
+    .await?;
+    client.cancel().await?;
+    let value = test_support::run_value(&result)?;
+    assert_eq!(value.get("title"), Some(&json!("Console")), "{value}");
     assert_eq!(
         value.get("heard"),
         Some(&json!([])),
-        "a hosted console listener is accepted and hears nothing: {reply}"
+        "a hosted console listener is accepted and hears nothing: {value}"
     );
-    assert_eq!(
-        reply.get("notAwaited"),
-        None,
-        "the event pump still pending at the end is cut quietly: {reply}"
+    let (text, _) = read(&result)?;
+    let parsed = test_support::parse_text(&text).ok_or("a run's reply has sections")?;
+    assert!(
+        parsed.notes.is_empty(),
+        "the event pump still pending at the end is cut quietly: {text}"
     );
     Ok(())
 }
@@ -859,8 +862,8 @@ async fn tabs_first(rig: &Rig) -> TestResult {
     )
     .await?;
     assert_eq!(
-        reply.get("value"),
-        Some(&json!(["about:blank"])),
+        reply,
+        json!(["about:blank"]),
         "the tab the browser started with, listed before any op: {reply}"
     );
     Ok(())
@@ -875,11 +878,7 @@ async fn drive(rig: &Rig) -> TestResult {
         Some(&json!("ok")),
         "{result:?}"
     );
-    let value = result
-        .structured_content
-        .as_ref()
-        .and_then(|content| content.get("value"))
-        .ok_or_else(|| format!("the script returns its reads: {result:?}"))?;
+    let value = test_support::run_value(&result)?;
     let snapshot = value.get("snapshot").and_then(Value::as_str);
     assert_eq!(
         snapshot, None,
@@ -943,7 +942,7 @@ async fn drive(rig: &Rig) -> TestResult {
 
 async fn fill_and_click(rig: &Rig) -> TestResult {
     let reply = reply_of(rig, FORM, "form").await?;
-    let value = reply.get("value").ok_or("the script returns")?;
+    let value = &reply;
     let text = |name: &str| value.get(name).and_then(Value::as_str);
     assert_eq!(
         (text("value"), text("greeting")),
@@ -1013,8 +1012,8 @@ async fn scope_inside_has(rig: &Rig) -> TestResult {
     );
     let reply = reply_of(rig, &script, "scope-inside-has").await?;
     assert_eq!(
-        reply.get("value"),
-        Some(&json!({ "isScope": 1, "counted": 1, "notHasScope": ["inner"] })),
+        reply,
+        json!({ "isScope": 1, "counted": 1, "notHasScope": ["inner"] }),
         "the parsed selector reaches each op whole: {reply}"
     );
     Ok(())
@@ -1061,9 +1060,7 @@ async fn local_navigations(rig: &Rig) -> TestResult {
         json!(view_source),
     );
     let reply = reply_of(rig, &code, "local-reads").await?;
-    let tried = reply
-        .get("value")
-        .ok_or("the script returns what it tried")?;
+    let tried = &reply;
 
     let refused = json!({ "owner": "script", "code": "invalid_input", "delivery": "not_sent" });
     for url in ["chrome://version", view_source.as_str()] {

@@ -19,8 +19,9 @@
  * `page.taskId` are null and `page.url()` is 'about:blank'.
  * Tab ids here are short for reading; real ones are large numbers, e.g. 1157427185.
  *
- * The reply is what you return, plus console lines and existing notes. Return `task.id`
- * to keep it. Lost it? `context.pages().find(p => p.url().includes('ycombinator'))?.taskId`
+ * The reply is `### Result` (JSON) or `### Error`, then `### Console`, `### Notes`, `### Tips`
+ * when present. Return `task.id` to keep it.
+ * Lost it? `context.pages().find(p => p.url().includes('ycombinator'))?.taskId`
  * Any script may use any tab or task; `context.pages()` lists every tab.
  * Tasks live in Neo's memory: they end with `task.close()` or a Neo restart.
  */

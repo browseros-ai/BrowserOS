@@ -21,7 +21,8 @@ The function's parameters are the SDK: Playwright's `page`, `context`, `browser`
 (`screenshot` and `pdf` resolve to one, and a `setInputFiles` payload takes one), then `neo` \
 (the `neo.*` methods listed below), `console` (its lines come back with the result), \
 `setTimeout`, `clearTimeout`, `NeoError` and `TimeoutError`. The realm is QuickJS, which has no \
-`Intl`.";
+`Intl`. The reply is markdown: `### Result` (the returned value as JSON) or `### Error`, \
+then `### Console`, `### Notes`, `### Tips` when present.";
 
 /// The error model, which the agent needs before it retries anything.
 const ERRORS: &str = "An SDK call that fails throws a `NeoError` with `code`, `owner` (who must \

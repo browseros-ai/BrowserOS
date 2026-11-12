@@ -18,12 +18,12 @@ const EXPORT = {
 describe('one run as Markdown', () => {
   test('an ok run: the header, the code as sent, each line’s methods, then all the model read', () => {
     const run = detailWith(1, {
-      text: '{"title":"Example"}',
+      text: '### Result\n{"title":"Example"}',
       neo: twoLineRecord(),
     })
     const markdown = runMarkdown(run, FULL)
     expect(markdown.split('\n')[0]).toBe(
-      `# Run 001 · ${clock(run.sentAt)} · claude-code · ok · round trip 1.00 s · Neo 900 ms · 4 method calls · code ≈15 tok · reply ≈4 tok`,
+      `# Run 001 · ${clock(run.sentAt)} · claude-code · ok · round trip 1.00 s · Neo 900 ms · 4 method calls · code ≈15 tok · reply ≈7 tok`,
     )
     expect(markdown).toContain(
       `one statement per line, as the viewer shows it (whitespace only); \`L<n>\` below is a line of it.\n\n\`\`\`js\n${TWO_LINES}\n\`\`\``,
@@ -38,14 +38,14 @@ describe('one run as Markdown', () => {
       markdown
         .trimEnd()
         .endsWith(
-          '## What the model read\n\n19 chars, ≈4 tok.\n\n```text\n{"title":"Example"}\n```',
+          '## What the model read\n\n30 chars, ≈7 tok.\n\n```text\n### Result\n{"title":"Example"}\n```',
         ),
     ).toBe(true)
   })
 
   test('the export’s form adds every operation, the ones on no line, and the console lines', () => {
     const run = detailWith(1, {
-      text: '7\nconsole:\nhi\n[warn] careful',
+      text: '### Result\n7\n### Console\nhi\n[warn] careful',
       neo: twoLineRecord(),
     })
     const markdown = runMarkdown(run, EXPORT)
@@ -60,7 +60,11 @@ describe('one run as Markdown', () => {
   test('a failed run says why, in Neo’s words, and marks the operation that failed', () => {
     const text =
       'script / strict_mode_violation: locator.click: strict mode violation: 2 elements'
-    const run = detailWith(2, { text, neo: twoLineRecord(true), isError: true })
+    const run = detailWith(2, {
+      text: `### Error\n${text}`,
+      neo: twoLineRecord(true),
+      isError: true,
+    })
     const markdown = runMarkdown(run, EXPORT)
     expect(markdown.split('\n')[0]).toContain(' · failed · ')
     expect(markdown).toContain(
@@ -73,7 +77,7 @@ describe('one run as Markdown', () => {
     // When Neo's record adds something the model did not read, it is said too.
     const vague = runMarkdown(
       detailWith(2, {
-        text: 'neo / internal: run failed',
+        text: '### Error\nneo / internal: run failed',
         neo: twoLineRecord(true),
         isError: true,
       }),
@@ -88,7 +92,7 @@ describe('one run as Markdown', () => {
   })
 
   test('a run Neo has no record of says so, and still shows its code and reply', () => {
-    const run = detailWith(3, { text: '1', neo: null })
+    const run = detailWith(3, { text: '### Result\n1', neo: null })
     const markdown = runMarkdown(run, EXPORT)
     // Neo answered (it named the run), but its record was not read in time.
     expect(markdown.split('\n')[0]).toContain(
@@ -100,12 +104,15 @@ describe('one run as Markdown', () => {
     const none = runMarkdown({ ...run, neoRunId: null }, EXPORT)
     expect(none.split('\n')[0]).toContain(' · method calls unknown · ')
     expect(markdown).toContain('```js\n')
-    expect(markdown).toContain('1 char, ≈0 tok.')
+    expect(markdown).toContain('12 chars, ≈3 tok.')
   })
 
   test('a reply holding triple backticks gets a longer fence, so it cannot end early', () => {
     const text = 'here:\n```js\nconst a = 1\n```\nand ````four````'
-    const run = detailWith(4, { text: JSON.stringify(text), neo: null })
+    const run = detailWith(4, {
+      text: `### Result\n${JSON.stringify(text)}`,
+      neo: null,
+    })
     const markdown = runMarkdown(run, FULL)
     const read = markdown.slice(markdown.indexOf('## What the model read'))
     const fence = '`````'
@@ -113,11 +120,14 @@ describe('one run as Markdown', () => {
     expect(read).toContain(`${fence}text\n${text}\n${fence}`)
     // A reply that is not a JSON string keeps its exact text, in a longer fence too.
     const object = runMarkdown(
-      detailWith(4, { text: `{"note":"${'`'.repeat(4)}"}`, neo: null }),
+      detailWith(4, {
+        text: `### Result\n{"note":"${'`'.repeat(4)}"}`,
+        neo: null,
+      }),
       FULL,
     )
     expect(object).toContain(
-      `${fence}text\n{"note":"${'`'.repeat(4)}"}\n${fence}`,
+      `${fence}text\n### Result\n{"note":"${'`'.repeat(4)}"}\n${fence}`,
     )
     expect(fenced('```')).toBe('````\n```\n````')
     expect(fenced('plain', 'js')).toBe('```js\nplain\n```')
@@ -129,7 +139,7 @@ describe('one run as Markdown', () => {
       '- link "Hacker News" [ref=e16]\n- text: "|"\n- text: use ```code``` here'
     const json = JSON.stringify(snapshot)
     const markdown = runMarkdown(
-      detailWith(11, { text: json, neo: null }),
+      detailWith(11, { text: `### Result\n${json}`, neo: null }),
       FULL,
     )
     const read = markdown.slice(markdown.indexOf('## What the model read'))
@@ -137,7 +147,7 @@ describe('one run as Markdown', () => {
       [
         '## What the model read',
         '',
-        `${json.length} chars, ≈${Math.floor(json.length / 4)} tok.`,
+        `${json.length + 11} chars, ≈${Math.floor((json.length + 11) / 4)} tok.`,
         '',
         `Shown decoded; the model received it as a JSON string of ${json.length} characters.`,
         '',
@@ -157,14 +167,14 @@ describe('one run as Markdown', () => {
       { length: 400 },
       (_, i) => `- link "Story ${i}" [ref=e${i}]`,
     ).join('\n')
-    const text = `${JSON.stringify(value)}\nconsole:\nread 400 links`
+    const text = `### Result\n${JSON.stringify(value)}\n### Console\nread 400 links`
     const run = detailWith(12, { text, neo: null })
     const copy = runMarkdown(run, FULL)
     expect(copy).toContain(
       '```text\n- link "Story 0" [ref=e0]\n- link "Story 1" [ref=e1]',
     )
     expect(copy).toContain(
-      'Then, as the model read them:\n\n```text\nconsole:\nread 400 links\n```',
+      'Then, as the model read them:\n\n```text\n### Console\nread 400 links\n```',
     )
     const exported = runMarkdown(run, { ...EXPORT, replyFile: '012.reply.txt' })
     expect(exported).toContain(
@@ -173,7 +183,7 @@ describe('one run as Markdown', () => {
     expect(exported).toContain('```text\n- link "Story 0" [ref=e0]\n')
     // The decoded value used the whole allowance: the console lines are named, not shown again.
     expect(exported).toContain(
-      'Console lines or notes follow it; they are in [012.reply.txt](012.reply.txt).',
+      'Console lines, notes or tips follow it; they are in [012.reply.txt](012.reply.txt).',
     )
     const read = exported.slice(exported.indexOf('## What the model read'))
     expect(read).not.toContain('read 400 links')
@@ -181,13 +191,13 @@ describe('one run as Markdown', () => {
 
   test("the text after a decoded string is the model's own, and the export cuts it too", () => {
     // A console line that looks like one of Neo's notes stays a console line, as the model read it.
-    const text = `${JSON.stringify('ok')}\nconsole:\n[not awaited] this is a console log`
+    const text = `### Result\n${JSON.stringify('ok')}\n### Console\n[not awaited] this is a console log\n\\### Notes`
     const copy = runMarkdown(detailWith(15, { text, neo: null }), FULL)
     expect(copy).toContain(
-      'Then, as the model read them:\n\n```text\nconsole:\n[not awaited] this is a console log\n```',
+      'Then, as the model read them:\n\n```text\n### Console\n[not awaited] this is a console log\n\\### Notes\n```',
     )
     // Long console output after a short string: the two share the export's one allowance.
-    const long = `${JSON.stringify('ok')}\nconsole:\n${'c'.repeat(50_000)}`
+    const long = `### Result\n${JSON.stringify('ok')}\n### Console\n${'c'.repeat(50_000)}`
     const exported = runMarkdown(detailWith(16, { text: long, neo: null }), {
       ...EXPORT,
       replyFile: '016.reply.txt',
@@ -198,17 +208,17 @@ describe('one run as Markdown', () => {
     )
   })
 
-  test('run 8 and the same value before an unknown line: Copy shows the snapshot decoded, the line as read', () => {
-    for (const [reply, trailer] of TRAILED) {
+  test('Copy shows the snapshot decoded, followed by its Notes or Tips section as read', () => {
+    for (const [reply] of TRAILED) {
       const copy = runMarkdown(detailWith(8, { text: reply, neo: null }), FULL)
       const read = copy.slice(copy.indexOf('## What the model read'))
-      const json = reply.split('\n')[0] ?? ''
+      const json = reply.split('\n')[1] ?? ''
       expect(read).toContain(
         `Shown decoded; the model received it as a JSON string of ${count(json.length)} characters.`,
       )
       expect(read).toContain(`\`\`\`text\n${SNAPSHOT}\n\`\`\``)
       expect(read).toContain(
-        `Then, as the model read them:\n\n\`\`\`text\n${trailer}\n\`\`\``,
+        `Then, as the model read them:\n\n\`\`\`text\n${reply.split('\n').slice(2).join('\n')}\n\`\`\``,
       )
       expect(read).not.toContain('\\n- ')
     }
@@ -216,14 +226,19 @@ describe('one run as Markdown', () => {
 
   test('a value that is not a string, or an error, is shown as the model read it', () => {
     const object = runMarkdown(
-      detailWith(13, { text: '{"title":"Example","n":2}', neo: null }),
+      detailWith(13, {
+        text: '### Result\n{"title":"Example","n":2}',
+        neo: null,
+      }),
       FULL,
     )
-    expect(object).toContain('```text\n{"title":"Example","n":2}\n```')
+    expect(object).toContain(
+      '```text\n### Result\n{"title":"Example","n":2}\n```',
+    )
     expect(object).not.toContain('Shown decoded')
     const error = runMarkdown(
       detailWith(14, {
-        text: 'script / no_match: "a\\nb"',
+        text: '### Error\nscript / no_match: "a\\nb"',
         neo: null,
         isError: true,
       }),
@@ -233,21 +248,21 @@ describe('one run as Markdown', () => {
   })
 
   test('a long reply is cut at the limit, with its full size and the file that holds all of it', () => {
-    const text = 'x'.repeat(10_000)
+    const text = `### Result\n${JSON.stringify({ data: 'x'.repeat(10_000) })}`
     const markdown = runMarkdown(detailWith(5, { text, neo: null }), {
       ...EXPORT,
       replyFile: '005.reply.txt',
     })
     expect(markdown).toContain(
-      '10,000 chars, ≈2,500 tok.\n\nThe first 2,000 characters; the full text is in [005.reply.txt](005.reply.txt):',
+      '10,022 chars, ≈2,505 tok.\n\nThe first 2,000 characters; the full text is in [005.reply.txt](005.reply.txt):',
     )
-    expect(markdown).toContain(`\`\`\`text\n${'x'.repeat(2_000)}\n\`\`\``)
+    expect(markdown).toContain(`\`\`\`text\n${text.slice(0, 2_000)}\n\`\`\``)
     expect(markdown.length).toBeLessThan(4_000)
   })
 
   test('the header and the facts name the tasks: the script’s, and the host’s', () => {
     const run = {
-      ...detailWith(9, { text: '1', neo: null }),
+      ...detailWith(9, { text: '### Result\n1', neo: null }),
       tasks: [
         { id: 'shop-4b80', name: 'shop' },
         { id: 't-91c2', name: null },
@@ -276,9 +291,10 @@ describe('one run as Markdown', () => {
       ' · claude-code · task shop-4b80 · ok · ',
     )
     expect(
-      runMarkdown(detailWith(10, { text: '1', neo: null }), FULL).split(
-        '\n',
-      )[0],
+      runMarkdown(
+        detailWith(10, { text: '### Result\n1', neo: null }),
+        FULL,
+      ).split('\n')[0],
     ).toContain(' · claude-code · ok · ')
   })
 
@@ -300,7 +316,7 @@ describe('one run as Markdown', () => {
         operation.site = { line: 1, column: 51 }
     }
     const markdown = runMarkdown(
-      detailWith(6, { code, text: '1', neo: record }),
+      detailWith(6, { code, text: '### Result\n1', neo: record }),
       FULL,
     )
     expect(markdown).toContain(
@@ -312,7 +328,7 @@ describe('one run as Markdown', () => {
   })
 
   test('a failed run’s error is cut at the limit too, pointing to the full text', () => {
-    const text = `script / huge: ${'e'.repeat(300_000)}`
+    const text = `### Error\nscript / huge: ${'e'.repeat(300_000)}`
     const markdown = runMarkdown(
       detailWith(7, { text, neo: null, isError: true }),
       { ...EXPORT, replyFile: '007.reply.txt' },
@@ -324,7 +340,7 @@ describe('one run as Markdown', () => {
   })
 
   test('the export cuts long console output at the limit too', () => {
-    const text = `1\nconsole:\n${'c'.repeat(50_000)}`
+    const text = `### Result\n1\n### Console\n${'c'.repeat(50_000)}`
     const markdown = runMarkdown(detailWith(8, { text, neo: null }), {
       ...EXPORT,
       replyFile: '008.reply.txt',

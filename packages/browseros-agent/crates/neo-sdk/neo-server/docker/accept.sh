@@ -160,8 +160,8 @@ probe() { # target-ip port scheme, from a throwaway sibling on the same network
     - probe "$1" "$2" "$3" < "$here/accept_client.py"
 }
 run_ok() { # json from run_call: status ok and the page really filled
-  [ "$(jget "$1" 'd["meta"]["status"]')" = ok ] && [ "$(jget "$1" 'd["value"]["value"]["value"]')" = zuzu ] \
-    && [ "$(jget "$1" 'd["value"]["value"]["title"]')" = neo-sdk-accept ]
+  [ "$(jget "$1" 'd["meta"]["status"]')" = ok ] && [ "$(jget "$1" 'd["value"]["value"]')" = zuzu ] \
+    && [ "$(jget "$1" 'd["value"]["title"]')" = neo-sdk-accept ]
 }
 runs_for() { jget "$(host_get "$1" "/v1/runs?requestId=$2")" 'len(d["body"]["items"])'; }
 lists_captcha() { # name: whether the run tool offers neo.solveCaptcha

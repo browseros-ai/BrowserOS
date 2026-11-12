@@ -1,14 +1,7 @@
 /**
- * Reading a run's reply text, the exact text the model read. Neo writes it as (`run_tool.rs`,
- * `text()`): the returned value as one line of compact JSON, or an error line; then, if the
- * script logged, a `console:` line and the console lines; then Neo's own lines: one
- * `[unknown outcome]` or `[not awaited]` note per operation the script left unconfirmed, then
- * tips (`Tip: …`), and whatever Neo appends there later.
- *
- * The one rule: a returned value is the reply's leading JSON value, its first line, and every
- * line after it is a trailer. So a line Neo adds after the value can never be read as part of it,
- * and the value always decodes. An error's message can span lines (Playwright's call logs), so
- * an error reply's parts are found from the end inward.
+ * Neo's reply sections: Result (one JSON line) or Error, then Console, Notes and Tips when
+ * present. Headers match whole lines. Neo escapes matching console/error lines with a
+ * backslash, so their text cannot start a section. Older replies remain whole as the value.
  */
 
 import type { RunDetail, TextSize } from '../../shared/api'
@@ -25,81 +18,49 @@ export interface ReplyParts {
   /** The value's JSON line, or the error line(s). */
   value: string
   console: string[]
-  /** Trailer lines that are not console output: Neo's notes, its tips, any line it adds later. */
+  /** Neo's notes on operations the script left unconfirmed. */
   notes: string[]
+  tips: string[]
 }
 
-/** Neo's notes on operations the script left unconfirmed; they can follow a failed run too. */
-const NOTE_FORMS = ['[unknown outcome] ', '[not awaited] ']
-
-/**
- * The forms of the lines Neo writes after a returned value's console output: its notes, then
- * tips. Used only to find where console output ends, which the text does not mark (a script can
- * log any line); never to find the value, and never on an error, which gets no tips.
- */
-const AFTER_CONSOLE_FORMS = [...NOTE_FORMS, 'Tip: ']
+const SECTIONS = new Map<string, keyof ReplyParts>([
+  ['### Result', 'value'],
+  ['### Error', 'value'],
+  ['### Console', 'console'],
+  ['### Notes', 'notes'],
+  ['### Tips', 'tips'],
+])
 
 export function replyParts(text: string): ReplyParts {
-  const lines = text.split('\n')
-  const first = lines[0] ?? ''
-  if (parseValue(first)) return { value: first, ...trailer(lines.slice(1)) }
-  return errorParts(lines)
-}
-
-/** The lines after a returned value: a console block when the script logged, then notes. */
-function trailer(lines: string[]): Omit<ReplyParts, 'value'> {
-  if (lines[0] !== 'console:') return { console: [], notes: lines }
-  const end = afterConsoleStart(lines)
-  return { console: lines.slice(1, end), notes: lines.slice(end) }
-}
-
-/**
- * Where Neo's lines after console output start. The last line in one of Neo's forms marks them:
- * the run of its forms just before it is Neo's too, and so is every line after it, since Neo
- * writes a line it adds later at the end. A console line in one of these forms with more console
- * output after it is taken for Neo's, which the text cannot tell apart; that changes how lines
- * are labelled, never the value.
- */
-function afterConsoleStart(lines: string[]): number {
-  const isNeos = (line: string | undefined) =>
-    AFTER_CONSOLE_FORMS.some((form) => line?.startsWith(form))
-  let start = lines.length - 1
-  while (start > 0 && !isNeos(lines[start])) start--
-  if (start === 0) return lines.length
-  while (start > 1 && isNeos(lines[start - 1])) start--
-  return start
-}
-
-/** An error reply: the error line(s), then the console block and notes, found from the end. */
-function errorParts(lines: string[]): ReplyParts {
-  const end = notesStart(lines)
-  const notes = lines.slice(end)
-  const consoleAt = lines.indexOf('console:', 1)
-  if (consoleAt !== -1 && consoleAt < end) {
-    return {
-      value: lines.slice(0, consoleAt).join('\n'),
-      console: lines.slice(consoleAt + 1, end),
-      notes,
+  const parts: Record<keyof ReplyParts, string[]> = {
+    value: [],
+    console: [],
+    notes: [],
+    tips: [],
+  }
+  let section: keyof ReplyParts | undefined
+  for (const line of text.split('\n')) {
+    const header = SECTIONS.get(line)
+    if (header !== undefined) {
+      section = header
+    } else if (section !== undefined) {
+      const escaped =
+        (section === 'value' || section === 'console') &&
+        line.startsWith('\\') &&
+        SECTIONS.has(line.slice(1))
+      parts[section].push(escaped ? line.slice(1) : line)
     }
   }
-  return { value: lines.slice(0, end).join('\n'), console: [], notes }
-}
-
-/** Where the run of Neo's notes at the end of an error reply's `lines` starts (after line 0). */
-function notesStart(lines: string[]): number {
-  let end = lines.length
-  while (
-    end > 1 &&
-    NOTE_FORMS.some((form) => lines[end - 1]?.startsWith(form))
-  ) {
-    end--
+  return {
+    ...parts,
+    value: section === undefined ? text : parts.value.join('\n'),
   }
-  return end
 }
 
 /** `owner / code: message`, Neo's error line; the code names the failure in a closed row. */
 export function errorCode(text: string | null): string | null {
-  const match = text?.match(/^[\w-]+ \/ ([\w.-]+):/)
+  const match =
+    text === null ? null : replyParts(text).value.match(/^[\w-]+ \/ ([\w.-]+):/)
   return match?.[1] ?? null
 }
 
@@ -121,7 +82,7 @@ function lineCount(text: string): number {
 
 /**
  * The formatted reply: an object's keys aligned beside their values, a multi-line string (an
- * aria snapshot) under its key line by line, then the console lines and Neo's notes.
+ * aria snapshot) under its key line by line, then the console lines, notes and tips.
  */
 export function formattedLines(detail: RunDetail): Line[] {
   const { reply } = detail
@@ -152,6 +113,7 @@ export function formattedLines(detail: RunDetail): Line[] {
     }
   }
   for (const note of parts.notes) lines.push([{ text: note, tone: 'note' }])
+  for (const tip of parts.tips) lines.push([{ text: tip, tone: 'note' }])
   return lines
 }
 
