@@ -276,7 +276,7 @@ async fn delta_baselines(client: &Client) -> TestResult {
     let delta = "return await p.ariaSnapshot({ delta: true })";
     let first = delta_of(client, &on_delta_page("Collapse", delta), &task).await?;
     assert!(
-        first.starts_with("# full snapshot: no earlier snapshot of this page\n- main [ref="),
+        first.starts_with("# whole page: no earlier snapshot of this page\n- main [ref="),
         "the first delta is the whole page: {first}"
     );
     // Each of these takes the changed page and never gives it to the caller.
@@ -403,7 +403,7 @@ async fn delta_after_text(client: &Client) -> TestResult {
     .await?;
     assert!(
         without.starts_with(
-            "# full snapshot: too much differs from your last snapshot to list as changes\n\
+            "# whole page: too much differs from your last snapshot to list as changes\n\
              - main [ref="
         ) && !without.contains("- text: Paragraph"),
         "{without}"

@@ -58,8 +58,11 @@ const INTERACTIVE = new Set<string>([
   'treeitem',
 ])
 
-/** Regions an agent can scope a snapshot to (the cut line names one), so their refs print. */
-const SECTION = new Set<string>([
+/**
+ * Regions an agent can scope a snapshot to (the cut line names one), so their refs print. The
+ * cap of `mode: 'full'` (snapshot.ts) offers the same regions, so both formats name one thing.
+ */
+export const SECTION = new Set<string>([
   'banner',
   'navigation',
   'main',
@@ -74,10 +77,20 @@ const SECTION = new Set<string>([
 
 /**
  * Blocks whose text says what the controls around them mean (an error, a confirm question), so
- * their text prints even in the interactive form, and a cut never hides them.
+ * their text prints even in the interactive form, and a cut never hides them, in either format.
  */
-const KEPT = new Set<string>(['dialog', 'alertdialog', 'alert', 'status'])
+export const KEPT = new Set<string>([
+  'dialog',
+  'alertdialog',
+  'alert',
+  'status',
+])
 const KEPT_WITH_REF = new Set<string>(['dialog', 'alertdialog'])
+
+/** How the cut line names a section: its role, and its quoted name when it has one. */
+export function sectionLabel(node: AriaNodeJSON): string {
+  return node.name ? `${node.role} ${JSON.stringify(node.name)}` : node.role
+}
 
 /**
  * Whether a kept block's line prints its ref: always for a dialog, which an agent scopes to; for
@@ -384,9 +397,7 @@ class Printer {
     )
       this.lines[header].section = {
         ref: node.ref,
-        label: node.name
-          ? `${node.role} ${JSON.stringify(node.name)}`
-          : node.role,
+        label: sectionLabel(node),
         end: this.lines.length,
       }
   }

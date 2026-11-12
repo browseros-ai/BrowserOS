@@ -51,9 +51,14 @@ import {
   signalOf,
   untilAborted,
 } from './signal'
-import { renderSnapshot, upstreamSnapshots } from './snapshot'
+import {
+  renderFullSnapshot,
+  renderSnapshot,
+  upstreamSnapshots,
+} from './snapshot'
 import { renderDelta } from './snapshot-delta'
 import {
+  DEFAULT_MAX_TOKENS,
   type PassedV1Options,
   type RenderedV1,
   renderSnapshotV1,
@@ -123,8 +128,11 @@ export type SnapshotOptions = TimeoutOption &
  * `ariaSnapshot()`'s options: the engine's, plus the v1 format's own (snapshot-v1.ts). Those
  * never reach the snapshot op, since the prelude renders, and `mode: 'default'` ignores them.
  * `delta` (snapshot-delta.ts) applies to a whole page's v1 text only; a locator ignores it.
+ * `mode: 'full'` is Playwright's text of the engine's `'ai'` tree, capped at `maxTokens`; it
+ * reads no other v1 option and never crosses the wire, which sends `'ai'` for it.
  */
-export type AriaSnapshotOptions = SnapshotOptions & {
+export type AriaSnapshotOptions = Omit<SnapshotOptions, 'mode'> & {
+  mode?: SnapshotOptions['mode'] | 'full'
   text?: boolean
   urls?: boolean
   maxTokens?: number
@@ -210,6 +218,16 @@ function snapshotV1Options(
   ] as const)
     if (value !== undefined && typeof value !== 'boolean')
       throw clientError(api, `${name}: expected boolean, got ${typeof value}`)
+  return {
+    text,
+    urls,
+    maxTokens: maxTokensOption(api, maxTokens),
+    delta: delta ?? false,
+  }
+}
+
+/** The cap a script passed, refused unless it is a positive number; `undefined` when left out. */
+function maxTokensOption(api: string, maxTokens: unknown): number | undefined {
   if (
     maxTokens !== undefined &&
     !(
@@ -222,7 +240,7 @@ function snapshotV1Options(
       api,
       `maxTokens: expected a positive number, got ${String(maxTokens)}`,
     )
-  return { text, urls, maxTokens, delta: delta ?? false }
+  return maxTokens
 }
 
 /** The grouped reads share an identical target/strict input; each sender retains its result. */
@@ -1386,7 +1404,7 @@ export class Frame extends EventEmitter {
   async _snapshot(
     api: string,
     selector: string | null,
-    options: SnapshotOptions,
+    options: Omit<SnapshotOptions, 'mode'>,
     mode: NonNullable<SnapshotOptions['mode']>,
     clickable = false,
   ): Promise<SnapshotResult> {
@@ -1427,7 +1445,11 @@ export class Frame extends EventEmitter {
    * The text: the v1 format (snapshot-v1.ts) for `mode: 'ai'` or no mode, which asks the engine
    * for its `'ai'` tree, refs included, with clickable marking; Playwright's YAML for
    * `mode: 'default'`, and for every mode under the conformance switch, where no mode means
-   * `'default'` as upstream's does.
+   * `'default'` as upstream's does. `mode: 'full'` is Playwright's YAML of the same `'ai'` tree
+   * the v1 format reads, marks included, so it prints every ref the v1 text prints; it is cut at
+   * `maxTokens` (snapshot.ts `renderFullSnapshot`) and never touches the delta baseline. Any
+   * other mode is refused before an op is sent, except under the switch, where the op refuses
+   * it as upstream's server does.
    *
    * A whole page's v1 text may then become the tab's delta baseline:
    *
@@ -1453,8 +1475,25 @@ export class Frame extends EventEmitter {
   ): Promise<string> {
     const site = captureSite()
     const mode = options.mode ?? (upstreamSnapshots ? 'default' : 'ai')
-    if (mode !== 'ai' || upstreamSnapshots)
+    if (upstreamSnapshots)
+      // The script's value as it passed it, `'full'` included: only Neo's own format knows
+      // that mode, so the op refuses any value Playwright's server does not take.
+      return renderSnapshot(
+        await this._snapshot(api, selector, options, mode as 'ai' | 'default'),
+      )
+    if (mode === 'default')
       return renderSnapshot(await this._snapshot(api, selector, options, mode))
+    if (mode === 'full') {
+      // Read before the op, as the v1 options are; text, urls and delta are not read at all.
+      const maxTokens =
+        maxTokensOption(api, options.maxTokens) ?? DEFAULT_MAX_TOKENS
+      return renderFullSnapshot(
+        await this._snapshot(api, selector, options, 'ai', true),
+        maxTokens,
+      )
+    }
+    if (mode !== 'ai')
+      throw clientError(api, 'mode: expected one of (ai|default|full)')
     const { delta, ...passed } = snapshotV1Options(api, options)
     // The script's timeout and signal cover the whole call, the baseline ops included.
     const wait = this._wait(api, options)
