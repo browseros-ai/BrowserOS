@@ -19,13 +19,14 @@ type TestResult = Result<(), Box<dyn Error>>;
 
 #[test]
 fn tests_that_the_named_files_reply_keeps_null_values_and_decode_errors() -> TestResult {
-    for value in [
-        Value::Null,
-        json!({ "threw": "the input refused the files" }),
-        json!({ "threw": 1 }),
-        json!({ "extra": true }),
-        json!("not a setFiles reply"),
+    for encoded in [
+        "null",
+        r#"{"threw":"the input refused the files"}"#,
+        r#"{"threw":1}"#,
+        r#"{"extra":true}"#,
+        r#""not a setFiles reply""#,
     ] {
+        let value: Value = serde_json::from_str(encoded)?;
         let before = serde_json::from_value::<Option<Threw>>(value.clone())
             .map(|reply| reply.map(|failure| failure.threw))
             .map_err(|error| error.to_string());
