@@ -7,9 +7,11 @@
  *
  *   full run ─▶ compare(tests, list) ─▶ settle: rerun the unsettled ones alone ─▶ verdict
  *                                                                                ├─▶ summary.md
- *                                                                                └─▶ the list this run supports
+ *                                                                                ├─▶ the list this run supports
+ *                                                                                └─▶ the proof for each test it drops
  *
- * scope.json alone decides which tests count; nothing here changes selection, scope or curation.
+ * Tests on known-flaky.tsv (known-flaky.mjs) are reported, never judged. scope.json alone decides
+ * which tests count; nothing here changes selection, scope or curation.
  */
 import fs from 'node:fs'
 import { fileURLToPath } from 'node:url'
@@ -27,6 +29,11 @@ export const ARTIFACTS = {
 }
 /** A failing test is rerun alone at most this often before its verdict stands. */
 export const RERUN_ATTEMPTS = 2
+/**
+ * A listed test leaves the list only on proof, not luck: it passed in the full run and then passes
+ * this many reruns alone out of this many, in the same job. The update command checks the proof.
+ */
+export const PROOF_ATTEMPTS = 3
 const OUTCOMES = ['fail', 'skip']
 const COLUMNS = 'id\toutcome\tfile\ttitle'
 
@@ -146,9 +153,10 @@ export function inScopeTests(report, scope) {
  * can fail before the spec's own skip runs). A skip in the full run is decided by the spec or
  * the harness, not by timing, so it is never rerun: an expected pass that skipped is a
  * regression, a listed failure that skipped has changed. `complete` says the run selected the
- * whole corpus, so a listed test it lacks is stale.
+ * whole corpus, so a listed test it lacks is stale. A test on `knownFlaky` only has its outcome
+ * reported (`knownFlaky`; `test` is absent when a complete run lacks it).
  */
-export function compare(tests, expected, { complete }) {
+export function compare(tests, expected, { complete, knownFlaky = new Map() }) {
   const verdict = {
     regressions: [],
     newlyPassing: [],
@@ -156,9 +164,14 @@ export function compare(tests, expected, { complete }) {
     changed: [],
     stale: [],
     inconclusive: [],
+    knownFlaky: [],
     rerun: [],
   }
   for (const test of tests.values()) {
+    if (knownFlaky.has(test.key)) {
+      verdict.knownFlaky.push({ entry: knownFlaky.get(test.key), test })
+      continue
+    }
     const listed = expected.get(test.key)
     const item = { test, listed, expected: listed?.outcome ?? 'pass' }
     if (test.outcome === item.expected) continue
@@ -166,9 +179,12 @@ export function compare(tests, expected, { complete }) {
       classify(verdict, { ...item, settled: 'skip', reruns: [] })
     else verdict.rerun.push(item)
   }
-  if (complete)
+  if (complete) {
     for (const [key, entry] of expected)
-      if (!tests.has(key)) verdict.stale.push(entry)
+      if (!tests.has(key) && !knownFlaky.has(key)) verdict.stale.push(entry)
+    for (const [key, entry] of knownFlaky)
+      if (!tests.has(key)) verdict.knownFlaky.push({ entry })
+  }
   return verdict
 }
 
@@ -181,29 +197,41 @@ function classify(verdict, item) {
   else verdict.changed.push(item)
 }
 
+/** The proof a listed test needs to leave the list: a passing full run, then PROOF_ATTEMPTS passes alone. */
+const provenPassing = (fullRun, reruns) =>
+  fullRun === 'pass' &&
+  reruns.length >= PROOF_ATTEMPTS &&
+  reruns.every((outcome) => outcome === 'pass')
+
 /** Rerun outcomes that are a test's own; anything else (`not-run`, `error`) says the rerun broke. */
 const TEST_OUTCOMES = ['pass', 'fail', 'skip']
 
 /**
  * Reruns every unsettled test alone, `concurrency` at a time, until a rerun matches its
- * expectation or RERUN_ATTEMPTS are spent; `rerun(test, attempt)` resolves to `{ outcome }`.
- * A test that matches once is flaky and keeps its expectation: an expected pass is not a
- * regression, and a listed test stays listed, so the list never drops a test that still fails
- * sometimes. A test that never matches has changed, to the outcome its reruns agree on: a
- * regression, newly passing (it passed every time), or a changed outcome. A rerun that broke
- * (no result for the test) proves nothing, so a test left without a verdict is inconclusive,
- * which fails the run instead of passing it as flaky.
+ * expectation or its attempts are spent: RERUN_ATTEMPTS for an expected pass, PROOF_ATTEMPTS
+ * for a listed test; `rerun(test, attempt)` resolves to `{ outcome }`. A test that matches once
+ * is flaky and keeps its expectation: an expected pass is not a regression, and a listed test
+ * stays listed, so the list never drops a test that still fails sometimes. A test that never
+ * matches has changed, to the outcome its reruns agree on: a regression, newly passing (it
+ * passed every time), or a changed outcome. A rerun that broke (no result for the test) proves
+ * nothing, so a test left without a verdict is inconclusive, which fails the run instead of
+ * passing it as flaky.
  */
 export async function settle(
   verdict,
   rerun,
-  { attempts = RERUN_ATTEMPTS, concurrency = 4 } = {},
+  {
+    attempts = RERUN_ATTEMPTS,
+    proofAttempts = PROOF_ATTEMPTS,
+    concurrency = 4,
+  } = {},
 ) {
   const queue = [...verdict.rerun]
   const work = async () => {
     for (let item = queue.shift(); item; item = queue.shift()) {
       const reruns = []
-      while (reruns.length < attempts) {
+      const limit = item.listed ? proofAttempts : attempts
+      while (reruns.length < limit) {
         let result
         try {
           result = await rerun(item.test, reruns.length + 1)
@@ -214,18 +242,27 @@ export async function settle(
         if (result.outcome === item.expected) break
       }
       const outcomes = reruns.map((result) => result.outcome)
+      // Reruns that agree outrank the full run, whose result may be a flake of its own.
+      const agreed = outcomes.every((outcome) => outcome === outcomes[0])
+        ? outcomes[0]
+        : undefined
       if (outcomes.includes(item.expected))
         verdict.flaky.push({ ...item, reruns })
       else if (outcomes.some((outcome) => !TEST_OUTCOMES.includes(outcome)))
         verdict.inconclusive.push({ ...item, reruns })
+      else if (
+        item.listed &&
+        (!agreed || agreed === 'pass') &&
+        !provenPassing(item.test.outcome, outcomes)
+      )
+        // A listed test leaves only on proof (the predicate `refusals` checks): reruns that
+        // disagree among themselves, or passing reruns after a failed full run, are a flake.
+        verdict.flaky.push({ ...item, reruns })
       else
         classify(verdict, {
           ...item,
           reruns,
-          // Reruns that agree outrank the full run, whose result may be a flake of its own.
-          settled: outcomes.every((outcome) => outcome === outcomes[0])
-            ? outcomes[0]
-            : item.test.outcome,
+          settled: agreed ?? item.test.outcome,
         })
     }
   }
@@ -233,9 +270,10 @@ export async function settle(
     Array.from({ length: Math.min(concurrency, queue.length) }, work),
   )
   verdict.rerun = []
+  const named = (item) => item.test ?? item.entry ?? item
   const order = (a, b) =>
-    (a.test ?? a).file.localeCompare((b.test ?? b).file, 'en') ||
-    (a.test ?? a).title.localeCompare((b.test ?? b).title, 'en')
+    named(a).file.localeCompare(named(b).file, 'en') ||
+    named(a).title.localeCompare(named(b).title, 'en')
   for (const list of Object.values(verdict)) list.sort(order)
   return verdict
 }
@@ -246,12 +284,17 @@ export const passed = (verdict) =>
   )
 
 /**
- * The list this run supports: the committed one, less the tests that now pass and the entries
- * for tests no longer in the corpus, plus the regressions and changed outcomes with their
- * settled outcome. A flaky or inconclusive listed test keeps its entry. A filtered run keeps
- * the entries it did not select.
+ * The list this run supports: the committed one, less the tests that now pass, the entries for
+ * tests no longer in the corpus and the tests on known-flaky.tsv, plus the regressions and
+ * changed outcomes with their settled outcome. A flaky or inconclusive listed test keeps its
+ * entry. A filtered run keeps the entries it did not select.
  */
-export function nextExpected(tests, expected, verdict, { complete }) {
+export function nextExpected(
+  tests,
+  expected,
+  verdict,
+  { complete, knownFlaky = new Map() },
+) {
   const dropped = new Set(verdict.newlyPassing.map((item) => item.test.key))
   const settled = new Map(
     [...verdict.regressions, ...verdict.changed].map((item) => [
@@ -262,8 +305,9 @@ export function nextExpected(tests, expected, verdict, { complete }) {
   const next = new Map()
   if (!complete)
     for (const [key, entry] of expected)
-      if (!tests.has(key)) next.set(key, entry)
+      if (!tests.has(key) && !knownFlaky.has(key)) next.set(key, entry)
   for (const test of tests.values()) {
+    if (knownFlaky.has(test.key)) continue
     const listed = expected.get(test.key)
     const outcome =
       settled.get(test.key) ??
@@ -277,6 +321,92 @@ export function nextExpected(tests, expected, verdict, { complete }) {
       })
   }
   return next
+}
+
+/**
+ * Why the run dropped each test the list it judged (`expected`) had: the full-run outcome and
+ * every rerun of a test that now passes, or that the test is gone from the corpus, or on
+ * known-flaky.tsv; and the run's own errors, which void every pass it recorded. CI uploads it
+ * beside the list, and the update command checks it with `refusals` before it lets a test leave.
+ */
+export function proofOf(
+  tests,
+  expected,
+  next,
+  verdict,
+  { knownFlaky = new Map(), errors = [] } = {},
+) {
+  const passing = new Map(
+    verdict.newlyPassing.map((item) => [item.test.key, item]),
+  )
+  const removed = []
+  for (const [key, entry] of expected) {
+    if (next.has(key)) continue
+    const item = passing.get(key)
+    const evidence = item
+      ? {
+          kind: 'passed',
+          fullRun: item.test.outcome,
+          reruns: item.reruns.map((result) => result.outcome),
+        }
+      : knownFlaky.has(key)
+        ? { kind: 'known-flaky' }
+        : !tests.has(key)
+          ? { kind: 'absent' }
+          : { kind: 'unexplained' }
+    removed.push({
+      id: entry.id,
+      file: entry.file,
+      title: entry.title,
+      evidence,
+    })
+  }
+  return { schemaVersion: 1, base: [...expected.values()], removed, errors }
+}
+
+/**
+ * The tests a new list drops from the one its run judged without proof, each with why. A test
+ * that passed must have passed the full run and PROOF_ATTEMPTS of PROOF_ATTEMPTS reruns alone;
+ * one on known-flaky.tsv must be on this checkout's list; one gone from the corpus needs nothing
+ * more. Empty when every removal is proven.
+ */
+export function refusals(proof, after, { knownFlaky = new Map() } = {}) {
+  const evidence = new Map(
+    (proof.removed ?? []).map((item) => [
+      testKey(item.file, item.title),
+      item.evidence,
+    ]),
+  )
+  const reasons = []
+  for (const entry of proof.base ?? []) {
+    const key = testKey(entry.file, entry.title)
+    if (after.has(key)) continue
+    const name = `${entry.id ?? '-'} ${entry.file} › ${entry.title}`
+    const found = evidence.get(key)
+    if (found?.kind === 'absent') continue
+    if (found?.kind === 'known-flaky') {
+      if (!knownFlaky.has(key))
+        reasons.push(
+          `${name}: the run dropped it as known flaky, but it is not on this checkout's known-flaky.tsv`,
+        )
+      continue
+    }
+    if (found?.kind === 'passed') {
+      if (proof.errors?.length) {
+        reasons.push(
+          `${name}: the run that passed it reported an error (${proof.errors[0]}), so it proves nothing; rerun the job`,
+        )
+        continue
+      }
+      if (provenPassing(found.fullRun, found.reruns)) continue
+      reasons.push(
+        `${name}: full run ${found.fullRun}, alone ${found.reruns.join(', ') || 'never rerun'}; leaving the list needs a passing full run and ${PROOF_ATTEMPTS} of ${PROOF_ATTEMPTS} passing reruns alone in one job`,
+      )
+      continue
+    }
+    reasons.push(`${name}: the run gives no proof that it passes`)
+  }
+  return reasons
 }
 
 /** What `--write-expected` or `--expected-from` changes, for the person committing it. */
@@ -346,7 +476,7 @@ export function summaryMarkdown({ verdict, scores, run, committed, next }) {
     `| In scope | ${scores.inScope.passed} | ${scores.inScope.total} | ${rate(scores.inScope)} | ${scores.inScope.skipped} (${scores.inScope.skippedByHarness} by the harness) |`,
     `| All | ${scores.all.passed} | ${scores.all.total} | ${rate(scores.all)} | ${scores.all.skipped} |`,
     '',
-    `Expected not to pass: ${committed ? committed.size : 'no list committed'}; this run supports ${next.size}. Flaky: ${verdict.flaky.length}.`,
+    `Expected not to pass: ${committed ? committed.size : 'no list committed'}; this run supports ${next.size}. Flaky this run: ${verdict.flaky.length}. Known flaky, not judged: ${verdict.knownFlaky.length}.`,
     `Suite ${seconds(run.suiteMs)} on ${run.workers} workers${run.rerunCount ? `; ${run.rerunCount} reruns alone in ${seconds(run.rerunMs)}` : ''}.${run.browser ? ` Browser: ${markdown(run.browser)}.` : ''}`,
   ]
   if (!committed)
@@ -376,7 +506,7 @@ export function summaryMarkdown({ verdict, scores, run, committed, next }) {
   )
   section(
     'Newly passing',
-    `Listed as not passing; passed in the full run and in every rerun alone. Take them off the list in this pull request: ${update}.`,
+    `Listed as not passing; passed in the full run and in all ${PROOF_ATTEMPTS} reruns alone, the proof a test needs to leave the list. Take them off the list in this pull request: ${update}.`,
     verdict.newlyPassing,
     (item) => `- ${name(item.test)} (was ${item.listed.outcome})`,
   )
@@ -402,10 +532,17 @@ export function summaryMarkdown({ verdict, scores, run, committed, next }) {
   )
   section(
     'Flaky',
-    'Their full-run result differed from their expectation and a rerun alone matched it; not counted against this run.',
+    "Their full-run result differed from their expectation, and a rerun alone matched it or the reruns disagreed among themselves (a listed test's `pass, skip, pass` is no proof); not counted against this run.",
     verdict.flaky,
     (item) =>
       `- ${name(item.test)}: expected ${item.expected}; full run ${item.test.outcome}, ${reruns(item)}${errorOf(item)}`,
+  )
+  section(
+    'Known flaky',
+    "On `node/known-flaky.tsv`, so not judged either way. This run's outcome for each, so a test that has stopped flaking shows:",
+    verdict.knownFlaky,
+    (item) =>
+      `- ${name(item.entry)}: ${item.test ? `${item.test.outcome} this run${errorOf(item).replace(/\.$/, '')}` : 'not in this run (take it off known-flaky.tsv)'}. ${markdown(item.entry.reason)} Tracked: ${markdown(item.entry.tracked)}`,
   )
   if (run.artifacts)
     lines.push(

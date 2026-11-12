@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, spyOn } from 'bun:test'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { ciVerdict, type Runner } from './ci'
+import { adoptLists, ciVerdict, pullExpected, type Runner } from './ci'
 
 const title = 'a test the full run failed'
 
@@ -151,5 +151,162 @@ describe('ciVerdict', () => {
     expect(result.code).toBe(1)
     expect(result.summary).toMatch(/results\.json is not JSON/)
     expect(result.summary).toMatch(/launcher failed/)
+  })
+})
+
+describe('adoptLists (--expected-from)', () => {
+  const line = (title: string) =>
+    `-\tfail\ttests/page/page-goto.spec.ts\t${title}`
+  const entry = (title: string) => ({
+    id: null,
+    outcome: 'fail',
+    file: 'tests/page/page-goto.spec.ts',
+    title,
+  })
+  /** A downloaded artifact: the new list and the proof its run wrote, judged against `base`. */
+  function artifact(after: string[], base: string[], removed: unknown[]) {
+    const dir = path.join(root, 'artifact')
+    fs.mkdirSync(dir)
+    fs.writeFileSync(
+      path.join(dir, 'linux-x64.tsv'),
+      `# list\n${after.map(line).join('\n')}\n`,
+    )
+    fs.writeFileSync(
+      path.join(dir, 'linux-x64.proof.json'),
+      JSON.stringify({ schemaVersion: 1, base: base.map(entry), removed }),
+    )
+    return dir
+  }
+  const target = () => path.join(root, 'committed.tsv')
+  const quietErrors = () => spyOn(console, 'error').mockImplementation(() => {})
+
+  it('takes a list whose dropped test passed the full run and three of three alone', async () => {
+    const dir = artifact(
+      ['kept'],
+      ['kept', 'fixed'],
+      [
+        {
+          ...entry('fixed'),
+          evidence: {
+            kind: 'passed',
+            fullRun: 'pass',
+            reruns: ['pass', 'pass', 'pass'],
+          },
+        },
+      ],
+    )
+    expect(await adoptLists(dir, { target, mainList: () => undefined })).toBe(0)
+    expect(fs.readFileSync(target(), 'utf8')).toContain('\tkept')
+  })
+
+  it('refuses, and writes nothing, when a dropped test has only two passing reruns', async () => {
+    const errors = quietErrors()
+    const dir = artifact(
+      ['kept'],
+      ['kept', 'lucky'],
+      [
+        {
+          ...entry('lucky'),
+          evidence: {
+            kind: 'passed',
+            fullRun: 'pass',
+            reruns: ['pass', 'pass'],
+          },
+        },
+      ],
+    )
+    expect(await adoptLists(dir, { target, mainList: () => undefined })).toBe(1)
+    expect(fs.existsSync(target())).toBe(false)
+    expect(String(errors.mock.calls[0][0])).toMatch(
+      /lucky: full run pass, alone pass, pass; leaving the list needs a passing full run and 3 of 3/,
+    )
+    errors.mockRestore()
+  })
+
+  it('refuses a run that wrote no proof', async () => {
+    const errors = quietErrors()
+    const dir = artifact(['kept'], ['kept'], [])
+    fs.rmSync(path.join(dir, 'linux-x64.proof.json'))
+    expect(await adoptLists(dir, { target, mainList: () => undefined })).toBe(1)
+    expect(String(errors.mock.calls[0][0])).toMatch(/predates proofs/)
+    errors.mockRestore()
+  })
+})
+
+describe('the update command against the checkout and main', () => {
+  const list = (titles: string[]) =>
+    `# list\n${titles.map((title) => `-\tfail\ttests/page/page-goto.spec.ts\t${title}`).join('\n')}\n`
+  const proof = (base: string[]) =>
+    JSON.stringify({
+      schemaVersion: 1,
+      base: base.map((title) => ({
+        id: null,
+        outcome: 'fail',
+        file: 'tests/page/page-goto.spec.ts',
+        title,
+      })),
+      removed: [],
+    })
+  const committed = () => path.join(root, 'committed.tsv')
+  const fakeRun =
+    (after: string[], base: string[]) =>
+    (_id: string, _repo: string | undefined, dir: string) => {
+      fs.writeFileSync(path.join(dir, 'linux-x64.tsv'), list(after))
+      fs.writeFileSync(path.join(dir, 'linux-x64.proof.json'), proof(base))
+    }
+
+  it('downloads, then adopts before the download is cleaned up', async () => {
+    fs.writeFileSync(committed(), list(['kept']))
+    const code = await pullExpected('https://github.com/o/r/actions/runs/7', {
+      download: fakeRun(['kept', 'new'], ['kept']),
+      target: committed,
+      mainList: () => list(['kept']),
+    })
+    expect(code).toBe(0)
+    expect(fs.readFileSync(committed(), 'utf8')).toContain('\tnew')
+  })
+
+  it('refuses a run that never judged a test main still lists, so an artifact cannot erase it', async () => {
+    const errors = spyOn(console, 'error').mockImplementation(() => {})
+    fs.writeFileSync(committed(), list(['kept']))
+    const code = await pullExpected('7', {
+      download: fakeRun([], []),
+      target: committed,
+      mainList: () => list(['kept']),
+    })
+    expect(code).toBe(1)
+    expect(fs.readFileSync(committed(), 'utf8')).toContain('\tkept')
+    expect(String(errors.mock.calls[0][0])).toMatch(
+      /kept: the run did not judge it .* origin\/main still lists it/,
+    )
+    errors.mockRestore()
+  })
+
+  it('lets go of a test the run never judged when main already dropped it', async () => {
+    fs.writeFileSync(committed(), list(['kept', 'fixed on main']))
+    const code = await pullExpected('7', {
+      download: fakeRun(['kept'], ['kept']),
+      target: committed,
+      mainList: () => list(['kept']),
+    })
+    expect(code).toBe(0)
+    expect(fs.readFileSync(committed(), 'utf8')).not.toContain('fixed on main')
+  })
+})
+
+describe('known-flaky.tsv', () => {
+  it('parses the committed file, every entry with a reason and a tracked fix', async () => {
+    const { readKnownFlaky, parseKnownFlaky } = await import(
+      './node/known-flaky.mjs'
+    )
+    const entries = [...readKnownFlaky().values()]
+    expect(entries.map((entry) => entry.id)).toEqual(['ER-006', 'SS-054'])
+    for (const entry of entries) {
+      expect(entry.reason.length).toBeGreaterThan(20)
+      expect(entry.tracked.length).toBeGreaterThan(10)
+    }
+    expect(() =>
+      parseKnownFlaky('ER-006\ttests/page/a.spec.ts\tt\treason\t'),
+    ).toThrow(/each filled in/)
   })
 })
