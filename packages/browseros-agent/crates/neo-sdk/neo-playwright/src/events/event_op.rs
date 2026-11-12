@@ -485,8 +485,8 @@ pub(crate) const fn needs_runtime(event: PageEventKind) -> bool {
 /// The `Runtime` lease a page listener for console messages or page errors needs, floored at
 /// the script's `since_ms`. Context listeners cover lifecycle events only
 /// (`PageEventKind::context`), and a context binding is plumbed, and leased, per page as each is
-/// admitted (`page/init_script.rs`). Hosted mode leases too: a script that listens is asking
-/// for the events, and only a run that listens makes its tab detectable.
+/// admitted (`page/init_script.rs`). Hosted BrowserOS sends no console or exception events, so
+/// there a listener for them leases nothing.
 async fn lease_runtime(
     pw: &Playwright,
     scope: &OpScope<'_>,
@@ -496,7 +496,9 @@ async fn lease_runtime(
     let Subscription::Page { tab, event, .. } = subscription else {
         return Ok(Vec::new());
     };
-    if !needs_runtime(*event) {
+    let hosted_silent =
+        scope.hosted_mode() && matches!(event, PageEventKind::Console | PageEventKind::PageError);
+    if !needs_runtime(*event) || hosted_silent {
         return Ok(Vec::new());
     }
     #[expect(
