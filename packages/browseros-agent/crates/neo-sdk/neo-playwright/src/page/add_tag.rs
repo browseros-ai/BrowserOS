@@ -67,16 +67,17 @@ pub(crate) struct Tagged {
 }
 
 /// A returned node is pinned to the admitted page and the document that created it.
+// json! sorted the old element keys; keep the declaration sorted for direct serialization too.
 #[derive(Serialize, TS)]
 struct TagElement {
     #[serde(rename = "$neo")]
     #[ts(type = "\"element\"")]
     brand: &'static str,
+    display: String,
+    node: i64,
     #[ts(as = "crate::page::PageHandle")]
     page: PageRef,
     seq: FrameSeq,
-    node: i64,
-    display: String,
 }
 
 pub(crate) async fn script(
@@ -324,11 +325,11 @@ mod tests {
         for has_frames in [false, true] {
             let element = json!({"$neo":"element", "page":{"$neo":"page","tab":7},
                 "seq":3,"node":9,"display":"<script>"});
-            let before = serde_json::to_value(Before {
+            let before = Before {
                 element,
                 frames: has_frames.then(FrameTree::default),
-            })?;
-            let after = serde_json::to_value(Tagged {
+            };
+            let after = Tagged {
                 element: TagElement {
                     brand: "element",
                     page: serde_json::from_value(json!({"$neo":"page","tab":7}))?,
@@ -337,8 +338,9 @@ mod tests {
                     display: "<script>".to_owned(),
                 },
                 frames: has_frames.then(Vec::new),
-            })?;
-            // Run encodes into a Value before the host records JSON, just as the old helper did.
+            };
+            // json! sorted the old node keys. Compare direct serialization so converting the
+            // new struct through Value cannot silently sort an incorrectly ordered declaration.
             assert_eq!(
                 serde_json::to_string(&after)?,
                 serde_json::to_string(&before)?
