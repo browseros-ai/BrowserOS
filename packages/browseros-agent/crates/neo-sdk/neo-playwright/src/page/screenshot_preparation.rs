@@ -27,6 +27,20 @@ use crate::{ErrorCode, PlaywrightError};
 const FRAME_STALL: Duration = Duration::from_secs(1);
 
 const PREPARE: &str = include_str!("../../assets/screenshot-prepare.js");
+/// DIAGNOSTIC only (diag/ss054-fonts).
+const DIAG_FONTS: &str = r#"async function() {
+  const t0 = performance.now();
+  const state = () => ({ status: document.fonts.status, size: document.fonts.size, vis: document.visibilityState, focus: document.hasFocus(), anims: document.getAnimations().map(a => a.playState).join(',') });
+  const ready = document.fonts.ready.then(() => 'ready');
+  const first = await Promise.race([ready, new Promise(r => setTimeout(() => r('pending'), 2000))]);
+  if (first === 'ready') return null;
+  const before = state();
+  const raf = await new Promise(r => { requestAnimationFrame(() => r('raf-fired')); setTimeout(() => r('raf-silent'), 1000); });
+  const mid = state();
+  document.documentElement.getBoundingClientRect();
+  const afterLayout = await Promise.race([ready, new Promise(r => setTimeout(() => r('still-pending'), 1000))]);
+  return { before, raf, mid, afterLayout, after: state(), waitedMs: Math.round(performance.now() - t0) };
+}"#;
 const RESTORE: &str = "function() { window.__pwCleanupScreenshot?.(); }";
 
 /// One screenshot's utility-world mutations and exclusive place in the tab's capture queue.
@@ -155,6 +169,27 @@ impl ScreenshotPreparation {
             scope.log("waiting for fonts to load...".to_owned());
             // A pending promise keeps the original screenshot deadline. A retired world
             // restarts preparation so the replacement's own fonts are awaited as well.
+            // DIAGNOSTIC (throwaway branch diag/ss054-fonts, never to land): when fonts.ready is
+            // still pending after 2 s, record why, and whether rAF fires and a forced layout settles it.
+            let probe = world
+                .call_for_screenshot(DIAG_FONTS, &json!([]))
+                .await;
+            if let Ok(found) = &probe
+                && !found.is_null()
+            {
+                let line = format!("SS054-DIAG {:?} {}\n", world.frame(), found);
+                eprint!("{line}");
+                if let Ok(dir) = std::env::var("NEO_NODE_OUTPUT") {
+                    use std::io::Write as _;
+                    if let Ok(mut file) = std::fs::OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .open(std::path::Path::new(&dir).join("ss054-diag.log"))
+                    {
+                        let _written = file.write_all(line.as_bytes());
+                    }
+                }
+            }
             let fonts = world
                 .call_for_screenshot(
                     "function() { return document.fonts.ready.then(() => {}); }",

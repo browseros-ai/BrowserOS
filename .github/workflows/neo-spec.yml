@@ -127,41 +127,23 @@ jobs:
           path: ~/.cache/browseros/neo-spec
           key: neo-spec-playwright-${{ hashFiles('packages/browseros-agent/crates/neo-sdk/neo-playwright-tests/corpus.json', 'packages/browseros-agent/crates/neo-sdk/neo-playwright-tests/js/prepare.mjs') }}-node26
 
-      - name: Run the spec suite
-        id: spec
+      # DIAGNOSTIC branch diag/ss054-fonts (never to land): SS-054 and two siblings, repeated.
+      - name: Run the screenshot animation tests repeatedly
         env:
           NEO_NODE_OUTPUT_DIR: ${{ runner.temp }}/neo-spec
-        # Sets the step output `results` to the run's results folder.
-        run: bun run test:neo-spec --ci --workers "$NEO_SPEC_WORKERS"
-
-      - name: Leave the copied Playwright tree out of the report
-        if: always() && steps.spec.outputs.results != ''
-        env:
-          RESULTS: ${{ steps.spec.outputs.results }}
-        # Each run's `upstream/` holds a 240 MB copy of the tests and links to the cached source,
-        # which upload-artifact would follow. Its test-results/ (failure screenshots and diffs)
-        # stays.
         run: |
-          set -euo pipefail
-          find "$RESULTS" -type d -name upstream -prune -print | while read -r tree; do
+          bun run test:neo-spec page-screenshot --workers 8 --repeat-each 12 \
+            --grep 'should not capture css animations in shadow DOM|should not capture infinite css animation|should capture canvas changes' || true
+          echo '--- diagnostics'
+          cat "$RUNNER_TEMP"/neo-spec/*/ss054-diag.log 2>/dev/null || echo 'no fonts.ready stall recorded'
+          find "$RUNNER_TEMP/neo-spec" -type d -name upstream -prune -print | while read -r tree; do
             rm -rf "$tree/tests" "$tree/packages" "$tree/node_modules"
           done
-          du -sh "$RESULTS"
 
-      - name: Upload the report
-        if: always() && steps.spec.outputs.results != ''
+      - name: Upload the diagnostic results
+        if: always()
         uses: actions/upload-artifact@v7
         with:
-          # Names match ARTIFACTS in neo-playwright-tests/node/expected.mjs.
-          name: neo-spec-report
-          path: ${{ steps.spec.outputs.results }}
-          retention-days: 14
-
-      - name: Upload the list this run supports
-        if: always() && steps.spec.outputs.results != ''
-        uses: actions/upload-artifact@v7
-        with:
-          name: neo-spec-expected
-          path: ${{ steps.spec.outputs.results }}/expected/
-          if-no-files-found: ignore
-          retention-days: 30
+          name: neo-spec-ss054-diag
+          path: ${{ runner.temp }}/neo-spec
+          retention-days: 7
