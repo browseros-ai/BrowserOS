@@ -5,6 +5,7 @@
 //! connection passes through a [`Tap`], so a test can step in at one CDP command of an op.
 
 use std::error::Error;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 use std::{env, future};
@@ -267,6 +268,10 @@ pub(crate) struct LiveRun {
     playwright: Arc<Playwright>,
     env: LiveEnv,
     tap: Arc<Tap>,
+    /// Whether page facts list each tab's workers, as the door's do. Off by default: the
+    /// prelude starts observing workers once facts carry them, which suites written before
+    /// worker facts existed do not expect ([`LiveRun::report_workers`]).
+    worker_facts: AtomicBool,
 }
 
 impl LiveRun {
@@ -310,6 +315,7 @@ impl LiveRun {
             playwright,
             env,
             tap,
+            worker_facts: AtomicBool::new(false),
         })
     }
 
@@ -339,6 +345,12 @@ impl LiveRun {
         lock(&self.tap.file_inputs).clone()
     }
 
+    /// Page facts list each tab's live workers from now on, as the door's do, so the script's
+    /// `page.workers()` has them.
+    pub(crate) fn report_workers(&self) {
+        self.worker_facts.store(true, Ordering::Relaxed);
+    }
+
     /// Starts recording the method of every command the crate sends, forgetting earlier ones.
     pub(crate) fn record_methods(&self) {
         *lock(&self.tap.methods) = Some(Vec::new());
@@ -366,10 +378,17 @@ impl LiveRun {
                 .filter(|info| self.playwright.closed_target(&info.target_id).is_none());
             facts.push(match info {
                 Some(info) => {
-                    // The door lists the tab's live workers too, so `page.workers()` has them.
-                    let workers = self.playwright.workers(&info.target_id);
-                    json!({ "tab": tab.0, "url": info.url, "title": info.title, "closed": false,
-                            "workers": workers })
+                    let mut fact = json!({ "tab": tab.0, "url": info.url, "title": info.title,
+                                           "closed": false });
+                    if self.worker_facts.load(Ordering::Relaxed)
+                        && let Some(fields) = fact.as_object_mut()
+                    {
+                        fields.insert(
+                            "workers".to_owned(),
+                            json!(self.playwright.workers(&info.target_id)),
+                        );
+                    }
+                    fact
                 }
                 None => json!({ "tab": tab.0, "url": null, "title": null, "closed": true }),
             });

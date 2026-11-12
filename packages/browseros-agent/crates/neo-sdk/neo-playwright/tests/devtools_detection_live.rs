@@ -144,6 +144,8 @@ async fn reports_what_a_neo_driven_tab_detects_per_phase() -> TestResult {
     let top_url = server.url("127.0.0.1", "/top.html");
 
     let run = Arc::new(LiveRun::connect().await?);
+    // The `worker.evaluate` phase finds the detector's worker through `page.workers()`.
+    run.report_workers();
     let page = run.new_page().await?;
     let mut report = Vec::new();
     let phases = phases(&top_url);
