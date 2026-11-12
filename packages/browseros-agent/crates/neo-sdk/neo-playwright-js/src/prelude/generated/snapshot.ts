@@ -11,23 +11,27 @@ import type { Assert, UpstreamCheck } from '../upstream-check'
 import type { CallHeader } from '../wire'
 import type { LocatorSnapshotInput } from './types/LocatorSnapshotInput'
 import type { PageSnapshotInput } from './types/PageSnapshotInput'
+import type { SnapshotBaselineInput } from './types/SnapshotBaselineInput'
 import type { SnapshotResult } from './types/SnapshotResult'
 
 export type { LocatorSnapshotInput } from './types/LocatorSnapshotInput'
 export type { PageSnapshotInput } from './types/PageSnapshotInput'
 export type { PartialFrame } from './types/PartialFrame'
+export type { SnapshotBaselineInput } from './types/SnapshotBaselineInput'
 export type { SnapshotResult } from './types/SnapshotResult'
 
 /** Each snapshot op's input, after the `call` header every op shares. */
 export type SnapshotInputs = {
   'page.ariaSnapshot': PageSnapshotInput
   'locator.ariaSnapshot': LocatorSnapshotInput
+  'page.snapshotBaseline': SnapshotBaselineInput
 }
 
 /** Each snapshot op's result. */
 export type SnapshotOutputs = {
   'page.ariaSnapshot': SnapshotResult
   'locator.ariaSnapshot': SnapshotResult
+  'page.snapshotBaseline': string | null
 }
 
 /**
@@ -54,6 +58,12 @@ export const SNAPSHOT_SEND = {
     input: LocatorSnapshotInput,
     signal?: SignalLike,
   ): Promise<SnapshotResult> => invoke('locator.ariaSnapshot', site, call, input, signal),
+  'page.snapshotBaseline': (
+    site: CallSite,
+    call: CallHeader,
+    input: SnapshotBaselineInput,
+    signal?: SignalLike,
+  ): Promise<string | null> => invoke('page.snapshotBaseline', site, call, input, signal),
 }
 
 // Each route row against Playwright's own protocol at the pin (upstream-check.ts): tsc
@@ -64,3 +74,4 @@ type _page_ariaSnapshot = Assert<UpstreamCheck<'page.ariaSnapshot', PageSnapshot
 // locator.ariaSnapshot: Frame.ariaSnapshot
 type _locator_ariaSnapshot = Assert<UpstreamCheck<'locator.ariaSnapshot', LocatorSnapshotInput, pw.FrameAriaSnapshotParams, never, never, never>>
 //   result: Rust stitches the child frames and answers the JSON tree plus the frames it could not read; the prelude renders the text, upstream's YAML for mode 'default' and Neo's condensed list of actionable lines for 'ai', each line upstream's own, and annotates the partial frames (no void check: Neo answers more than null on purpose)
+// page.snapshotBaseline: Neo only: Playwright keeps no snapshot between calls; Neo keeps the last whole-page v1 text per tab on the host for ariaSnapshot({ delta: true }), since each run is a fresh realm and the page's world must not hold cross-site frames' text

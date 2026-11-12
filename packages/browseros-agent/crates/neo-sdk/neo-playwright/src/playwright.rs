@@ -17,7 +17,7 @@ use crate::op_input::OpInput;
 use crate::op_scope::OpScope;
 use crate::page::{MediaSessions, PageRegistry, context_op, page_op};
 use crate::read::read_op;
-use crate::snapshot::snapshot_op;
+use crate::snapshot::{SnapshotBaselines, snapshot_op};
 use crate::world::{Epoch, FrameAttachLog};
 use crate::{OpEnv, PlaywrightError, locator_handler};
 
@@ -45,6 +45,9 @@ pub struct Playwright {
     pages: Arc<PageRegistry>,
     /// Replays page-owned media into newly attached iframe sessions.
     media: MediaSessions,
+    /// Each tab's last whole-page v1 snapshot text, for `ariaSnapshot({ delta: true })`. It
+    /// outlives runs on purpose; the watcher drops a tab's when its document changes.
+    snapshot_baselines: Arc<SnapshotBaselines>,
 }
 
 // A hand-written `Debug`: the session is not worth printing.
@@ -63,11 +66,13 @@ impl Playwright {
         let (events, writer) = EventHub::new();
         let attach_log = Arc::new(FrameAttachLog::default());
         let progress = Arc::new(WatcherProgress::default());
+        let snapshot_baselines = Arc::new(SnapshotBaselines::default());
         let watcher = TargetWatcher::spawn(
             Arc::clone(&browser),
             writer,
             Arc::clone(&attach_log),
             Arc::clone(&progress),
+            Arc::clone(&snapshot_baselines),
         );
         let pages = Arc::new(PageRegistry::new(attach_log));
         let (registry, reader) = (Arc::clone(&pages), Arc::clone(&browser));
@@ -83,6 +88,7 @@ impl Playwright {
             epoch: Epoch::random(),
             pages,
             media,
+            snapshot_baselines,
         })
     }
 
@@ -151,6 +157,11 @@ impl Playwright {
     /// Every tab the instance acted on.
     pub(crate) fn pages(&self) -> &PageRegistry {
         &self.pages
+    }
+
+    /// Each tab's last whole-page v1 snapshot text.
+    pub(crate) fn snapshot_baselines(&self) -> &SnapshotBaselines {
+        &self.snapshot_baselines
     }
 
     /// Runs one operation. `input` is the JSON the prelude sent: its `call` header opens the

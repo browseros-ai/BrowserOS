@@ -244,7 +244,7 @@ impl RunCtx {
     }
 
     /// The latest pick, initially the host's task or none. It may have since disappeared.
-    pub(super) fn current_task(&self) -> Option<TaskId> {
+    pub(crate) fn current_task(&self) -> Option<TaskId> {
         self.lock_tasks().current().cloned()
     }
 

@@ -90,6 +90,19 @@ run 01a1acf4-cf1f-7102-8a53-f7b39569a66e ok effects=done 73ms tabs=[1276814799]
 
 On a bigger page its first line says how much text it left out. `{ text: true }` always includes the text and `{ text: false }` never does; `{ urls: true }` prints each link's url; `{ maxTokens: 20000 }` raises the 8,000-token cap. `page.getByRef('e5').ariaSnapshot()` reads one section. `{ mode: 'default' }` is Playwright's full default YAML, unchanged.
 
+`page.ariaSnapshot({ delta: true })` returns only what changed since your last whole-page snapshot of the tab, in this run or an earlier one. Its first line says which case it is: `# full snapshot: no earlier snapshot of this page` (then the whole text), `# no change since your last snapshot of this tab`, `# full snapshot: too much differs from your last snapshot to list as changes` (then the whole text), or `# changes since your last snapshot of this tab: 1 added, 1 removed`, then the changes with three lines of context, each block headed by the section it is in:
+
+```
+@@ main [ref=e2]
+ - main [ref=e2]:
+   - heading "Cart" [level=2]
+-  - button "Add to cart" [ref=e16]
++  - button "Remove from cart" [ref=e31]
+   - link "Checkout" [ref=e17]
+```
+
+A new document in the tab (a navigation, a reload) starts over. A locator's snapshot and `{ mode: 'default' }` ignore `delta`. When a run takes a second full snapshot of the same page without `delta`, its reply ends with a one-line tip saying so, at most three times per task.
+
 ```sh
 ./dev.sh run --task howto-aria -f devkit/examples/aria-ref.js
 ```

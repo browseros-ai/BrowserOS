@@ -52,6 +52,7 @@ import {
   untilAborted,
 } from './signal'
 import { renderSnapshot, upstreamSnapshots } from './snapshot'
+import { renderDelta } from './snapshot-delta'
 import {
   DEFAULT_MAX_TOKENS,
   renderSnapshotV1,
@@ -119,12 +120,14 @@ export type SnapshotOptions = TimeoutOption &
   }
 /**
  * `ariaSnapshot()`'s options: the engine's, plus the v1 format's own (snapshot-v1.ts). Those
- * never reach the wire, since the prelude renders, and `mode: 'default'` ignores them.
+ * never reach the snapshot op, since the prelude renders, and `mode: 'default'` ignores them.
+ * `delta` (snapshot-delta.ts) applies to a whole page's v1 text only; a locator ignores it.
  */
 export type AriaSnapshotOptions = SnapshotOptions & {
   text?: boolean
   urls?: boolean
   maxTokens?: number
+  delta?: boolean
 }
 export type NavigateOptions = TimeoutOption &
   SignalOption & {
@@ -195,11 +198,12 @@ export function loadState(
 function snapshotV1Options(
   api: string,
   options: AriaSnapshotOptions,
-): SnapshotV1Options {
-  const { text, urls, maxTokens } = options
+): SnapshotV1Options & { delta: boolean } {
+  const { text, urls, maxTokens, delta } = options
   for (const [name, value] of [
     ['text', text],
     ['urls', urls],
+    ['delta', delta],
   ] as const)
     if (value !== undefined && typeof value !== 'boolean')
       throw clientError(api, `${name}: expected boolean, got ${typeof value}`)
@@ -219,6 +223,7 @@ function snapshotV1Options(
     text,
     urls: urls ?? false,
     maxTokens: maxTokens ?? DEFAULT_MAX_TOKENS,
+    delta: delta ?? false,
   }
 }
 
@@ -1418,20 +1423,38 @@ export class Frame extends EventEmitter {
    * The text: the v1 format (snapshot-v1.ts) for `mode: 'ai'` or no mode, which asks the engine
    * for its `'ai'` tree, refs included; Playwright's YAML for `mode: 'default'`, and for every
    * mode under the conformance switch, where no mode means `'default'` as upstream's does.
+   *
+   * A whole page's v1 text then becomes the tab's delta baseline:
+   *
+   *   page.ariaSnapshot      → { json, partial } → v1 text, capped (what the agent receives)
+   *   page.snapshotBaseline  → stores that text on the host, answers the tab's previous one
+   *   delta: true            → renderDelta(previous, text); otherwise the text itself
+   *
+   * Every whole-page v1 snapshot swaps, `delta` or not, so the baseline is always the text the
+   * agent got last. A locator's text is one section, so it never touches the baseline, and
+   * Playwright's YAML is another format, so neither does `mode: 'default'` or the switch.
    */
   async _ariaSnapshot(
     api: string,
     selector: string | null,
     options: AriaSnapshotOptions = {},
   ): Promise<string> {
+    const site = captureSite()
     const mode = options.mode ?? (upstreamSnapshots ? 'default' : 'ai')
     if (mode !== 'ai' || upstreamSnapshots)
       return renderSnapshot(await this._snapshot(api, selector, options, mode))
-    const format = snapshotV1Options(api, options)
-    return renderSnapshotV1(
+    const { delta, ...format } = snapshotV1Options(api, options)
+    const text = renderSnapshotV1(
       await this._snapshot(api, selector, options, mode),
       format,
     )
+    if (selector !== null) return text
+    const previous = await send['page.snapshotBaseline'](
+      site,
+      this._call(api, 0),
+      { page: await this._page._brand(api), text, delta },
+    )
+    return delta ? renderDelta(previous, text) : text
   }
 
   /** The tree itself, in upstream's default mode when the script names none. */

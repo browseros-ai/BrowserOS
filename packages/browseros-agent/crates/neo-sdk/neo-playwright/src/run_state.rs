@@ -2,6 +2,9 @@
 
 mod navigation_publications;
 
+use std::sync::{Mutex, PoisonError};
+
+use browseros_core::TabId;
 use navigation_publications::NavigationPublications;
 
 use crate::DownloadFacts;
@@ -11,7 +14,8 @@ use crate::object_group::ObjectGroup;
 use crate::page::{FrameRoutes, InitScripts};
 
 /// One run's Playwright state: event cursors, navigation publication receipts, discovered
-/// frame endpoints, retained element objects, downloads and init scripts. The host creates it
+/// frame endpoints, retained element objects, downloads, init scripts and what its snapshots
+/// tell the run's reply. The host creates it
 /// with `Default`, keeps it in its run slot and drops it with the run; the crate reaches it through
 /// `OpEnv::run_state`. Opaque, so its contents can change without the host noticing.
 ///
@@ -31,6 +35,10 @@ pub struct RunState {
     pub(crate) downloads: RunDownloads,
     /// `page.addLocatorHandler` registrations; dropping them wakes any action still paused.
     pub(crate) locator_handlers: LocatorHandlers,
+    /// The tabs whose whole-page v1 snapshot, taken without `delta`, found a baseline of the
+    /// same tab and document (`page.snapshotBaseline`): each could have been a delta. In the
+    /// order first seen, each once.
+    full_snapshot_repeats: Mutex<Vec<TabId>>,
 }
 
 impl RunState {
@@ -58,6 +66,28 @@ impl RunState {
     #[must_use]
     pub fn downloads(&self) -> Vec<DownloadFacts> {
         self.downloads.facts()
+    }
+
+    /// The tabs this run snapshotted in full while a baseline of the same tab and document was
+    /// there, so `{ delta: true }` would have printed only what changed. The host reads it once
+    /// the run's ops drained and decides the reply's tip; the crate keeps no count of tips.
+    #[must_use]
+    pub fn full_snapshot_repeats(&self) -> Vec<TabId> {
+        self.full_snapshot_repeats
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
+    /// `tab` goes on [`RunState::full_snapshot_repeats`], once.
+    pub(crate) fn note_full_snapshot_repeat(&self, tab: TabId) {
+        let mut tabs = self
+            .full_snapshot_repeats
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if !tabs.contains(&tab) {
+            tabs.push(tab);
+        }
     }
 
     /// Removes every init script the run registered, from every tab, and awaits each removal.

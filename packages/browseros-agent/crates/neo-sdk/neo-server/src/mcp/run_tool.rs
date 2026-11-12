@@ -43,8 +43,8 @@ impl RunTool {
     }
 
     /// A run's reply as an MCP result:
-    /// - text: the value as JSON, or the error line; then the console lines and one line per
-    ///   write that was never confirmed or op the script left running;
+    /// - text: the value as JSON, or the error line; then the console lines, one line per
+    ///   write that was never confirmed or op the script left running, then the reply's tips;
     /// - `structuredContent`: `{ "value": … }`, or `{ "error": … }`;
     /// - `_meta["com.browseros.neo/run"]`: `{ id, status, effects, error?, unknown, tasks }`, the
     ///   committed contract's names (MIGRATION.md: the run id is `.id`);
@@ -112,6 +112,9 @@ fn text(reply: &RunReply) -> String {
             op_label(note)
         ));
     }
+    // Last, each on its own line: the value above is JSON text, so page content cannot print a
+    // line that reads as one.
+    lines.extend(reply.tips.iter().map(|tip| tip.line().to_owned()));
     lines.join("\n")
 }
 
@@ -188,6 +191,43 @@ mod tests {
         );
         Ok(())
     }
+    #[test]
+    fn the_delta_tip_is_the_last_line_after_the_console_and_the_notes() -> Result<(), Box<dyn Error>>
+    {
+        let id = RunId::new();
+        let reply: RunReply = serde_json::from_value(json!({
+            "id": id,
+            "status": "ok",
+            "effects": "unknown",
+            "value": "- button \"Go\" [ref=e2]\nTip: not a line of its own",
+            "logs": [{ "level": "log", "text": "hello" }],
+            "unknown": [{ "operationId": OperationId::new(id, 3), "name": "locator.click" }],
+            "tips": ["snapshotDelta"],
+        }))?;
+        let text = text(&reply);
+        let lines: Vec<&str> = text.lines().collect();
+        assert_eq!(
+            lines.first(),
+            Some(&"\"- button \\\"Go\\\" [ref=e2]\\nTip: not a line of its own\""),
+            "the value is JSON text, so page content cannot print a line of its own"
+        );
+        assert_eq!(lines[1..3], ["console:", "hello"]);
+        assert!(lines[3].starts_with("[unknown outcome] locator.click"));
+        assert_eq!(
+            lines.get(4..),
+            Some(
+                &[
+                    "Tip: page.ariaSnapshot({ delta: true }) returns only what changed since \
+                     your last snapshot."
+                ][..]
+            )
+        );
+        // The tip is stored with the reply, so a replay renders it again.
+        let replayed: RunReply = serde_json::from_value(serde_json::to_value(&reply)?)?;
+        assert_eq!(super::text(&replayed), text);
+        Ok(())
+    }
+
     #[test]
     fn task_metadata_never_changes_text_or_structured_content() -> Result<(), Box<dyn Error>> {
         let tabs: Vec<_> = (1..=12)

@@ -15,6 +15,10 @@
 //!
 //! A snapshot only reads, so it never calls `send_effect`. Default mode mints no refs and so
 //! prints no iframes to follow: it reads one frame, as upstream's does.
+//!
+//! `page.snapshotBaseline` is Neo's own: after the prelude renders a whole page's v1 text, it
+//! hands the text over and gets the tab's previous one back, which `ariaSnapshot({ delta:
+//! true })` diffs against (`snapshot_baselines.rs`).
 
 use std::fmt;
 use std::time::Duration;
@@ -42,10 +46,12 @@ use crate::world::{Place, SeqLookup};
 use crate::{ErrorCode, Playwright, PlaywrightError};
 
 listed_enum! {
-    /// Aria snapshots of a whole page (every frame stitched in) or of one element.
+    /// Aria snapshots of a whole page (every frame stitched in) or of one element, and the
+    /// tab's delta baseline.
     pub(crate) enum SnapshotOp {
         Page,
         Locator,
+        Baseline,
     }
 }
 
@@ -68,6 +74,13 @@ impl SnapshotOp {
                 TARGET,
                 "an aria snapshot rooted at one element; mode 'ai' prints refs",
             ),
+            // A read: it only swaps text Neo keeps, and never touches the page.
+            Self::Baseline => OpSpec::read(
+                "page.snapshotBaseline",
+                PAGE,
+                "stores the whole page's v1 snapshot text as the tab's delta baseline and \
+                 answers the previous one, or null when its document changed",
+            ),
         }
     }
 }
@@ -84,6 +97,14 @@ fn route<'a, R: Route<'a>>(op: SnapshotOp, r: R) -> R::Out {
     match op {
         SnapshotOp::Page => r.op(command, page_snapshot),
         SnapshotOp::Locator => r.op(command, locator_snapshot),
+        SnapshotOp::Baseline => r.op(
+            wire::neo_only(
+                "Playwright keeps no snapshot between calls; Neo keeps the last whole-page v1 \
+                 text per tab on the host for ariaSnapshot({ delta: true }), since each run is \
+                 a fresh realm and the page's world must not hold cross-site frames' text",
+            ),
+            swap_baseline,
+        ),
     }
 }
 
@@ -131,6 +152,21 @@ struct LocatorInput {
     boxes: bool,
 }
 options!(LocatorInput);
+
+/// `page.snapshotBaseline`.
+#[derive(Debug, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+#[ts(rename = "SnapshotBaselineInput")]
+struct BaselineInput {
+    page: PageRef,
+    /// The whole page's v1 text, exactly as the script receives it in full: after the notice
+    /// and the cap, so a delta only ever prints lines the agent has seen or will see.
+    text: String,
+    /// The script passed `delta: true`. Without it, a baseline found means a delta was possible,
+    /// which the run's reply turns into a tip.
+    delta: bool,
+}
+options!(BaselineInput);
 
 /// Runs one snapshot op; its output is `aria_snapshot::SnapshotResult`, `{ json, partial }`.
 pub(crate) async fn invoke(
@@ -228,6 +264,23 @@ async fn locator_snapshot(
         }
     }
     Err(scope.timed_out(ErrorCode::NoMatch))
+}
+
+/// Swaps the tab's baseline for `input.text`: the previous text, or `null` when the tab has
+/// none (no whole-page v1 snapshot yet, or its main frame committed a new document since, or it
+/// was too long to keep). The page is admitted like any op's, so a tab the run may not touch
+/// keeps its baseline unread.
+async fn swap_baseline(
+    pw: &Playwright,
+    scope: &OpScope<'_>,
+    input: BaselineInput,
+) -> Result<Option<String>, PlaywrightError> {
+    let page = OpPage::admit(pw, scope, input.page.tab()).await?;
+    let previous = pw.snapshot_baselines().swap(page.target_id(), input.text);
+    if previous.is_some() && !input.delta {
+        scope.run_state().note_full_snapshot_repeat(page.tab());
+    }
+    Ok(previous)
 }
 
 /// What every frame of one snapshot op shares.

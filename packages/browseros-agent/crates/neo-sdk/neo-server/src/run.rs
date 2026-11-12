@@ -8,7 +8,7 @@
 //!        every open tab (the init's `pages`) ─ run_script
 //!          ‖ deadline, shutdown, orphaned (no waiter for the grace) ─▶ RunCtx::stop
 //!        teardown: stop(ScriptReturned), drain ops, abort stragglers
-//!        RunReply::build
+//!        RunReply::build, then its tips (snapshot_tips: a delta the run could have used)
 //!        RunGuard::finish (run_ended, the reply as replay)
 //!          ─ ticket.finish (waiters, ledger)
 //!    Waiter::reply ◀── the one reply, shared by every caller of the run
@@ -30,6 +30,7 @@ mod run_meta;
 mod run_reply;
 mod run_request;
 mod run_service;
+mod snapshot_tips;
 #[cfg(test)]
 mod tests;
 
@@ -39,3 +40,4 @@ pub(crate) use run_meta::{HostData, RUN_META_KEY, RunMeta};
 pub(crate) use run_reply::{OpNote, ReplyError, RunReply};
 pub(crate) use run_request::{RunRequest, RunTimeout};
 pub(crate) use run_service::{RunService, RunServiceParts};
+pub(crate) use snapshot_tips::ReplyTip;

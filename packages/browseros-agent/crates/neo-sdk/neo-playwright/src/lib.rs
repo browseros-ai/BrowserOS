@@ -65,13 +65,6 @@ mod target;
 mod test_env;
 #[cfg(test)]
 mod test_support;
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "route metadata helpers remain unused until their families migrate"
-    )
-)]
 mod wire;
 mod world;
 

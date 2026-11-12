@@ -289,6 +289,7 @@
     ],
     "page.setContent": [],
     "page.setViewportSize": [],
+    "page.snapshotBaseline": [],
     "page.title": [],
     "page.waitForFunction": [
       "arg",
@@ -3004,6 +3005,17 @@
       },
       {
         "call": {
+          "api": "page.ariaSnapshot",
+          "timeoutMs": 5000
+        },
+        "page": {
+          "$neo": "page",
+          "tab": 1007
+        },
+        "mode": "ai"
+      },
+      {
+        "call": {
           "api": "page.ariaSnapshotJSON",
           "timeoutMs": 5000
         },
@@ -3785,6 +3797,32 @@
           "width": 640,
           "height": 480
         }
+      }
+    ],
+    "page.snapshotBaseline": [
+      {
+        "call": {
+          "api": "page.ariaSnapshot",
+          "timeoutMs": 0
+        },
+        "page": {
+          "$neo": "page",
+          "tab": 1007
+        },
+        "text": "",
+        "delta": false
+      },
+      {
+        "call": {
+          "api": "page.ariaSnapshot",
+          "timeoutMs": 0
+        },
+        "page": {
+          "$neo": "page",
+          "tab": 1007
+        },
+        "text": "",
+        "delta": true
       }
     ],
     "page.title": [

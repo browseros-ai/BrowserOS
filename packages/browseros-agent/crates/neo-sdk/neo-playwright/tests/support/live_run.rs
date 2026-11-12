@@ -319,6 +319,13 @@ impl LiveRun {
         })
     }
 
+    /// The tabs this host's scripts snapshotted in full while a delta was possible: what the
+    /// server's tip reads (`RunState::full_snapshot_repeats`). Every script on this host shares
+    /// one run state.
+    pub(crate) fn full_snapshot_repeats(&self) -> Vec<TabId> {
+        self.env.run_state.full_snapshot_repeats()
+    }
+
     /// The browser session the crate runs over, for a test that reads core's registries.
     pub(crate) fn browser(&self) -> &BrowserSession {
         &self.browser

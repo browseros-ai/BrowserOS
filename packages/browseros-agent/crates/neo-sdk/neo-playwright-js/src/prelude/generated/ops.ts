@@ -199,6 +199,11 @@ export const OPS = {
     target: 'target',
     lifetime: 'operation',
   },
+  'page.snapshotBaseline': {
+    effect: 'read',
+    target: 'page',
+    lifetime: 'operation',
+  },
   'expect.locator': {
     effect: 'read',
     target: 'target',

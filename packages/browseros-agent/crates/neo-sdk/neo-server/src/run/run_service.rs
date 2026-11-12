@@ -8,6 +8,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use std::{future, mem};
 
+use neo_playwright::RunState;
 use neo_trace::{
     EpochMillis, RunEnded, RunId, RunOutputs, RunStarted, TaskId, TraceSink, TraceStore,
 };
@@ -16,6 +17,7 @@ use tokio::time::{self, Instant};
 use tokio_util::sync::CancellationToken;
 
 use super::request_ledger::{Admission, LedgerLimits, RunTicket};
+use super::snapshot_tips::SnapshotTips;
 use super::{HostData, RequestLedger, RunHandle, RunMeta, RunReply, RunRequest};
 use crate::browser::{BrowserLink, PageRef, RunView, TabRegistry};
 use crate::builtins;
@@ -39,6 +41,8 @@ pub(crate) struct RunService {
     shutdown: CancellationToken,
     /// How long a run with a `requestId` outlives its last caller.
     orphan_grace: Duration,
+    /// How many delta tips each task was given (`snapshot_tips.rs`).
+    snapshot_tips: SnapshotTips,
     /// Makes the next run's task panic right after its start record, so tests can watch the
     /// panic boundary hold.
     #[cfg(test)]
@@ -92,6 +96,7 @@ impl RunService {
             trace,
             shutdown,
             orphan_grace,
+            snapshot_tips: SnapshotTips::default(),
             #[cfg(test)]
             crash_next_run: AtomicBool::new(false),
         })
@@ -271,6 +276,14 @@ impl RunService {
         // exactly what the caller got.
         let mut reply = RunReply::build(&run, end);
         reply.tasks = self.dispatcher.task_notes(&run).await;
+        // Read before the end record drops the run's Playwright state.
+        let task = run.task_id().cloned().or_else(|| run.current_task());
+        reply.tips = self.snapshot_tips.decide(
+            reply.error.is_some(),
+            task.as_ref(),
+            &run.slot::<RunState>().full_snapshot_repeats(),
+            &self.tabs,
+        );
         let reply = Arc::new(reply);
         guard.finish(reply.trace_end(request_id.as_ref()));
         ticket.finish(reply);

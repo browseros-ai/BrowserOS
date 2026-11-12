@@ -85,6 +85,15 @@ it('tests that page and locator snapshots send their mode and depth, the text pa
       target: undefined,
     },
     {
+      // A whole page's v1 text becomes the tab's delta baseline; a locator's never does.
+      name: 'page.snapshotBaseline',
+      call: { api: 'page.ariaSnapshot', timeoutMs: 0 },
+      page: { $neo: 'page', tab: 1007 },
+      text: expect.any(String),
+      delta: false,
+      target: undefined,
+    },
+    {
       name: 'locator.ariaSnapshot',
       call: { api: 'locator.ariaSnapshot', timeoutMs: 900 },
       strict: 'strict',
@@ -199,6 +208,7 @@ it('tests that text, urls and maxTokens never reach the wire, and mode default i
     ),
   ).toEqual([
     ['call', 'page', 'mode'],
+    ['call', 'page', 'text', 'delta'],
     ['call', 'strict', 'mode'],
     ['call', 'page', 'mode'],
   ])

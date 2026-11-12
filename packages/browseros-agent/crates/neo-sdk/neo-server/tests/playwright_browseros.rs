@@ -13,6 +13,8 @@
 //!    Chromium still refuses web pages' own navigations to local files (location, meta refresh,
 //!    a link, an iframe, a popup, a web load's redirect)
 //!  a selector with `:scope` inside `:has()`: its deep parsed brand reaches `$$eval` and `count`
+//!  page.ariaSnapshot({ delta: true }) across runs, and the reply's tip after a full snapshot a
+//!    delta could have answered: at most three per task, or per tab for runs with no task
 //! ```
 //!
 //! Like `e2e_browseros.rs`, it runs only when `CLAW_SDK_E2E_BROWSER` names a BrowserOS binary.
@@ -30,6 +32,7 @@ use std::time::Duration;
 
 use browseros_rig::{CaptchaKey, Rig, TestResult, browser_or_skip, outcome, run};
 use neo_trace::RunId;
+use rmcp::model::{CallToolResult, ContentBlock};
 use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
@@ -197,6 +200,127 @@ async fn a_script_loads_local_files_but_web_pages_cannot_navigate_to_them() -> T
 #[tokio::test(flavor = "multi_thread")]
 async fn a_selector_with_scope_inside_has_reaches_its_op() -> TestResult {
     on_browseros(|rig| Box::pin(scope_inside_has(rig))).await
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_delta_snapshot_and_its_tip_reach_the_model_over_mcp() -> TestResult {
+    on_browseros(|rig| Box::pin(delta_and_tip(rig))).await
+}
+
+/// The delta tip's line, as the run reply's text ends with it.
+const DELTA_TIP: &str =
+    "Tip: page.ariaSnapshot({ delta: true }) returns only what changed since your last snapshot.";
+
+/// A page long enough that one changed line is well under half of its snapshot, and a script
+/// that opens it in the run's page, or finds the tab that has it.
+const DELTA_PAGE: &str = r##"
+const items = Array.from({ length: 40 }, (_, n) => `<li><a href="#s${n}">Story ${n}</a></li>`).join('');
+const html = '<title>Delta tip</title><main><button>Collapse</button><ul>' + items + '</ul></main>';
+const url = 'data:text/html,' + encodeURIComponent(html);
+const tab = context.pages().find((tab) => tab.url() === url);
+const p = tab ?? page;
+if (!tab) await p.goto(url);
+"##;
+
+/// The text the model reads, and the run's status.
+fn read(result: &CallToolResult) -> Result<(String, Value), Box<dyn Error>> {
+    let text = result
+        .content
+        .first()
+        .and_then(ContentBlock::as_text)
+        .map(|content| content.text.clone())
+        .ok_or("a reply has its text")?;
+    let status = outcome(result)?
+        .get("status")
+        .cloned()
+        .unwrap_or(Value::Null);
+    Ok((text, status))
+}
+
+async fn delta_and_tip(rig: &Rig) -> TestResult {
+    rig.until_ready().await?;
+    let client = rig.client().await?;
+    let task = json!({ "taskId": "delta-tip" });
+    let snap = |body: &str| format!("{DELTA_PAGE}\n{body}");
+    let first = run(
+        &client,
+        &snap("return await p.ariaSnapshot({ delta: true })"),
+        &task,
+    )
+    .await?;
+    let (text, status) = read(&first)?;
+    assert_eq!(status, json!("ok"), "{first:?}");
+    assert!(
+        text.starts_with("\"# full snapshot: no earlier snapshot of this page\\n- main [ref="),
+        "the first delta is the whole page, as JSON text: {text}"
+    );
+    assert!(!text.contains(DELTA_TIP), "a delta needs no tip: {text}");
+
+    let changed = run(
+        &client,
+        &snap(
+            "await p.evaluate(() => { document.querySelector('button').textContent = 'Expand' })\n\
+             return await p.ariaSnapshot({ delta: true })",
+        ),
+        &task,
+    )
+    .await?;
+    let (text, _) = read(&changed)?;
+    let value: String = serde_json::from_str(&text)?;
+    assert!(
+        value.starts_with("# changes since your last snapshot of this tab: 1 added, 1 removed\n"),
+        "{value}"
+    );
+    assert!(value.contains("\n+  - button \"Expand\" [ref="), "{value}");
+
+    // A full snapshot of the same tab and document: a delta was possible, so the reply ends with
+    // the tip, on its own line after the value.
+    let failed = run(
+        &client,
+        &snap("await p.ariaSnapshot()\nthrow new Error('after the snapshot')"),
+        &task,
+    )
+    .await?;
+    let (text, status) = read(&failed)?;
+    assert_eq!(status, json!("error"));
+    assert!(!text.contains(DELTA_TIP), "never on a failed run: {text}");
+    let mut tips = 0;
+    for _ in 0..5 {
+        let full = run(
+            &client,
+            &snap("return (await p.ariaSnapshot()).length"),
+            &task,
+        )
+        .await?;
+        let (text, status) = read(&full)?;
+        assert_eq!(status, json!("ok"), "{full:?}");
+        let lines: Vec<&str> = text.lines().collect();
+        if lines.last() == Some(&DELTA_TIP) {
+            assert_eq!(lines.len(), 2, "the value, then the tip: {text}");
+            tips += 1;
+        } else {
+            assert_eq!(lines.len(), 1, "the value alone: {text}");
+        }
+    }
+    assert_eq!(tips, 3, "at most three tips per task");
+
+    // Runs with no task count per tab: the same tab's three are its own.
+    let mut untasked = 0;
+    for _ in 0..4 {
+        let full = run(
+            &client,
+            &snap("return (await p.ariaSnapshot()).length"),
+            &json!({}),
+        )
+        .await?;
+        let (text, _) = read(&full)?;
+        if text.ends_with(DELTA_TIP) {
+            untasked += 1;
+        }
+    }
+    assert_eq!(untasked, 3, "a tab with no task has three of its own");
+    client.cancel().await?;
+    Ok(())
 }
 
 /// Every task starts its own worker monitors when its first page operation opens a tab.

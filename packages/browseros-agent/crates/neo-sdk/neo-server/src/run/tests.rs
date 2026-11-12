@@ -161,6 +161,7 @@ async fn run_once(
         logs_dropped: 0,
         unknown: Vec::new(),
         not_awaited: Vec::new(),
+        tips: Vec::new(),
     });
     let end = reply.trace_end(Some(&request_id));
     rig.sink.run_ended(RunEnded {

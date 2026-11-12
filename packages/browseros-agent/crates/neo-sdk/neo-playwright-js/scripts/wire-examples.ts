@@ -72,6 +72,7 @@ const ANSWERS = {
   'locator.elementHandles': [ELEMENT],
   'page.ariaSnapshot': { json: [], partial: [] },
   'locator.ariaSnapshot': { json: [], partial: [] },
+  'page.snapshotBaseline': '- button "Go" [ref=e1]',
   'page.frames': FRAMES,
   'page.opener': { opener: null },
   'page.evaluate': { value: { v: 'null' } },
@@ -185,6 +186,7 @@ const EVERY_OP = `
   await l.selectOption(['a', handle], sample('locator.selectOption'))
   await handle.$('b'); await handle.$$('b')
   await page.ariaSnapshot(sample('page.ariaSnapshot')); await l.ariaSnapshot(sample('locator.ariaSnapshot'))
+  await page.ariaSnapshot({ delta: true })
   await page.ariaSnapshotJSON(sample('page.ariaSnapshot')); await l.ariaSnapshotJSON(sample('locator.ariaSnapshot'))
   await expect(l).toBeVisible(); await expect(page).toHaveTitle('x')
   // A single generic matcher cannot produce Frame.expect's different optional params.

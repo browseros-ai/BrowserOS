@@ -531,6 +531,120 @@ async fn tests_that_a_playwright_script_runs_through_the_prelude_on_a_live_brows
     Ok(())
 }
 
+/// `ariaSnapshot({ delta: true })` on a real engine, across fresh realms on one host as runs
+/// are: the first snapshot is whole, an unchanged one says so, a collapsed comment lists only
+/// its lines, a locator snapshot in between leaves the baseline, another tab has its own, a new
+/// document starts over, and a full snapshot that could have been a delta is counted for the
+/// server's tip.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_delta_snapshot_lists_what_changed_on_a_live_browser() -> TestResult {
+    let page = Page::html(include_str!("data/prelude/delta.html"))
+        .with_header("cache-control", "no-store");
+    let server =
+        FixtureServer::start(HashMap::from([("/prelude/delta.html".to_owned(), page)])).await?;
+    let url = json!(server.url("127.0.0.1", "/prelude/delta.html"));
+    let run = Arc::new(LiveRun::connect().await?);
+    let host: Arc<dyn OpHost> = Arc::clone(&run) as Arc<dyn OpHost>;
+    let opened = js_runner::run_script(
+        &host,
+        &json!({ "page": null }),
+        &format!(
+            "await page.goto({url})\n\
+             return {{ first: await page.ariaSnapshot({{ delta: true }}), tab: page.toJSON().tab }}"
+        ),
+    )
+    .await?;
+    let tab = opened["tab"].as_i64().ok_or("the page's tab")?;
+    let first = opened["first"].as_str().ok_or("the first snapshot")?;
+    assert!(
+        first.starts_with("# full snapshot: no earlier snapshot of this page\n- main [ref="),
+        "{first}"
+    );
+    // A second run is a fresh realm on the same tab: the baseline is the host's.
+    let script = format!(
+        "try {{\n\
+           const unchanged = await page.ariaSnapshot({{ delta: true }})\n\
+           await page.getByRole('article').ariaSnapshot()\n\
+           await page.getByRole('button', {{ name: 'Collapse' }}).click()\n\
+           const collapsed = await page.ariaSnapshot({{ delta: true }})\n\
+           const full = await page.ariaSnapshot()\n\
+           const other = await context.newPage()\n\
+           await other.goto({url})\n\
+           const otherFirst = await other.ariaSnapshot({{ delta: true }})\n\
+           await other.close()\n\
+           const again = await page.ariaSnapshot({{ delta: true }})\n\
+           await page.goto({url})\n\
+           const navigated = await page.ariaSnapshot({{ delta: true }})\n\
+           return {{ unchanged, collapsed, full, otherFirst, again, navigated }}\n\
+         }} finally {{\n\
+           await page.close()\n\
+         }}"
+    );
+    let result = js_runner::run_script(
+        &host,
+        &json!({ "page": { "$neo": "page", "tab": tab } }),
+        &script,
+    )
+    .await?;
+    let text = |key: &str| result[key].as_str().unwrap_or_default().to_owned();
+    assert_eq!(
+        text("unchanged"),
+        "# no change since your last snapshot of this tab"
+    );
+    assert_eq!(
+        without_refs(&text("collapsed")),
+        "# changes since your last snapshot of this tab: 1 added, 3 removed\n\
+         @@ article \"First comment\" [ref]\n \
+         - main [ref]:\n   \
+         - heading \"Thread\" [level=1]\n   \
+         - article \"First comment\" [ref]:\n\
+         -    - button \"Collapse\" [expanded] [ref]\n\
+         -    - link \"Reply one\" [ref]\n\
+         -    - link \"Reply two\" [ref]\n\
+         +    - button \"Expand\" [active] [ref]\n   \
+         - link \"Story 0\" [ref]\n   \
+         - link \"Story 1\" [ref]\n   \
+         - link \"Story 2\" [ref]",
+        "the collapse, and nothing else: the clicked button also has focus now"
+    );
+    assert!(
+        text("full").starts_with("- main [ref="),
+        "without delta the text is whole"
+    );
+    assert!(
+        text("otherFirst").starts_with("# full snapshot: no earlier snapshot of this page\n"),
+        "another tab has no baseline of its own yet"
+    );
+    assert_eq!(
+        text("again"),
+        "# no change since your last snapshot of this tab",
+        "the other tab's snapshot left this tab's baseline"
+    );
+    assert!(
+        text("navigated").starts_with("# full snapshot: no earlier snapshot of this page\n"),
+        "a new document starts over: {}",
+        text("navigated")
+    );
+    assert_eq!(
+        run.full_snapshot_repeats(),
+        [TabId(tab)],
+        "the full snapshot while a baseline was there is the one a tip is for"
+    );
+    Ok(())
+}
+
+/// `text` with every `[ref=…]` printed as `[ref]`: refs differ per process.
+fn without_refs(text: &str) -> String {
+    text.split("[ref=")
+        .enumerate()
+        .map(|(index, part)| match (index, part.split_once(']')) {
+            (0, _) | (_, None) => part.to_owned(),
+            (_, Some((_, rest))) => format!("[ref]{rest}"),
+        })
+        .collect()
+}
+
 /// The v1 format's test page: a block notice beside a button, a form error, prices beside
 /// buttons and a dialog, the cases a list of controls alone would leave unexplained.
 const BLIND_PAGE: &str = include_str!("data/snapshot-v1/blind.html");
