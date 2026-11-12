@@ -14,4 +14,6 @@
 <button id="log" onclick="console.log('clicked', 7); setTimeout(() => { throw new Error('boom') }, 0)">log</button>
 <button id="closed" onclick="window.open('/child.html?closed').close()">window.open then close</button>
 <button id="refused" onclick="fetch('http://127.0.0.1:1/refused').catch(() => {})">a fetch the browser refuses (a log entry)</button>
+<!-- Large tables every 100 ms, as the DevTools detector logs them: 50 rows of 400 columns. -->
+<button id="tables" onclick="const rows = Array.from({ length: 50 }, (_, i) => Object.fromEntries(Array.from({ length: 400 }, (_, k) => ['k' + k, 'v' + i + '_' + k]))); window.__tables = setInterval(() => console.table(rows), 100)">log large tables</button>
 </body></html>

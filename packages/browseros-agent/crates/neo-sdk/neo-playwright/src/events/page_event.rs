@@ -318,13 +318,14 @@ struct PropertyPreview {
     /// The member as text; V8 abbreviates a long string with a `…` in its middle.
     #[serde(default)]
     value: Option<String>,
-    #[serde(default)]
-    value_preview: Option<ObjectPreview>,
+    // No `valuePreview`: V8 nests one only in `console.table`'s preview, which lists every
+    // column of every row (50 rows of 400 columns report as 20,000 properties, 1 MB, measured).
+    // Read, it made each such call a value that size on its way to the script.
 }
 
 /// The most items of an array V8 lists in a preview. Upstream reads every index of an array, so a
 /// longer one is never read from its preview, however sparse, and its length alone cannot make
-/// Neo build a large value.
+/// Neo build a large value. No preview with more members than this is read either.
 const ARRAY_PREVIEW_ITEMS: usize = 100;
 
 /// `Log.entryAdded`, reduced to what upstream's `_onLogEntryAdded` reads.
@@ -649,7 +650,7 @@ impl ObjectPreview {
     /// `{a, id}` over every index (a hole reads as `undefined`), `{o: [{k, v}], id}` over the
     /// own keys. `ids` is the last object number used.
     fn serialized(&self, ids: &mut u64) -> Option<Value> {
-        if self.overflow {
+        if self.overflow || self.properties.len() > ARRAY_PREVIEW_ITEMS {
             return None;
         }
         match self.subtype.as_deref() {
@@ -670,7 +671,7 @@ impl ObjectPreview {
                 for property in &self.properties {
                     // Upstream reads indices only; other keys of an array are not its value.
                     if let Ok(index) = property.name.parse::<usize>() {
-                        *items.get_mut(index)? = property.serialized(ids)?;
+                        *items.get_mut(index)? = property.serialized()?;
                     }
                 }
                 Some(json!({ "a": items, "id": id }))
@@ -690,7 +691,7 @@ impl ObjectPreview {
                         let value = if property.name == "toJSON" && property.kind == "function" {
                             json!({ "o": [], "id": 0 })
                         } else {
-                            property.serialized(ids)?
+                            property.serialized()?
                         };
                         Some(json!({ "k": property.name, "v": value }))
                     })
@@ -703,7 +704,7 @@ impl ObjectPreview {
 }
 
 impl PropertyPreview {
-    fn serialized(&self, ids: &mut u64) -> Option<Value> {
+    fn serialized(&self) -> Option<Value> {
         let text = self.value.as_deref();
         match self.kind.as_str() {
             "undefined" | "symbol" | "function" => Some(json!({ "v": "undefined" })),
@@ -729,8 +730,8 @@ impl PropertyPreview {
             }
             "bigint" => bigint(text?),
             "object" if self.subtype.as_deref() == Some("null") => Some(json!({ "v": "null" })),
-            "object" => self.value_preview.as_ref()?.serialized(ids),
-            // A getter (`accessor`) runs page code to read.
+            // A nested object or array: a preview lists only its description. A getter
+            // (`accessor`) runs page code to read.
             _ => None,
         }
     }
@@ -954,7 +955,7 @@ mod tests {
     /// `args()` values in Playwright's format, read from the console call's report alone:
     /// primitives and flat objects and arrays whole, with each argument numbering its objects
     /// from 1; anything V8's preview cut (a nested object, overflow, an abbreviated string, a
-    /// getter) has no value.
+    /// getter) has no value, nor has `console.table`'s preview, which nests every row.
     #[test]
     fn tests_that_console_arguments_keep_only_values_their_preview_holds_whole()
     -> Result<(), serde_json::Error> {
@@ -972,11 +973,19 @@ mod tests {
                     "properties": [
                       { "name": "foo", "type": "string", "value": "bar" },
                       { "name": "n", "type": "number", "value": "NaN" },
-                      { "name": "list", "type": "object", "subtype": "array", "value": "Array(2)",
-                        "valuePreview": { "type": "object", "subtype": "array",
-                          "description": "Array(2)", "overflow": false,
-                          "properties": [{ "name": "1", "type": "boolean", "value": "true" }] } },
                     ] } },
+                { "type": "object", "subtype": "array", "description": "Array(2)",
+                  "preview": { "type": "object", "subtype": "array", "description": "Array(2)",
+                    "overflow": false,
+                    "properties": [{ "name": "1", "type": "boolean", "value": "true" }] } },
+                // `console.table`'s preview nests every row's columns: no value is read from it.
+                { "type": "object", "subtype": "array", "description": "Array(1)",
+                  "preview": { "type": "object", "subtype": "array", "description": "Array(1)",
+                    "overflow": false,
+                    "properties": [{ "name": "0", "type": "object", "value": "Object",
+                      "valuePreview": { "type": "object", "description": "Object",
+                        "overflow": false,
+                        "properties": [{ "name": "k0", "type": "string", "value": "v" }] } }] } },
                 { "type": "object", "description": "Object",
                   "preview": { "type": "object", "description": "Object", "overflow": false,
                     "properties": [{ "name": "deep", "type": "object", "value": "Object" }] } },
@@ -1010,8 +1019,9 @@ mod tests {
                 Some(json!({ "o": [
                     { "k": "foo", "v": "bar" },
                     { "k": "n", "v": { "v": "NaN" } },
-                    { "k": "list", "v": { "a": [{ "v": "undefined" }, true], "id": 2 } },
                 ], "id": 1 })),
+                Some(json!({ "a": [{ "v": "undefined" }, true], "id": 1 })),
+                None,
                 None,
                 None,
                 None,

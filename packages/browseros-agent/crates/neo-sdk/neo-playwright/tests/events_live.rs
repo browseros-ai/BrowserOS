@@ -9,6 +9,12 @@
 //! starts it: then the console test checks that nothing arrives. Every test opens its own tabs
 //! and closes them.
 
+#[path = "support/js_runner.rs"]
+#[expect(
+    dead_code,
+    reason = "the shared runner also serves selector and detector tests"
+)]
+mod js_runner;
 #[path = "support/live_run.rs"]
 #[expect(
     dead_code,
@@ -27,6 +33,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use browseros_cdp::{CdpClient, CdpError, CdpEvent};
 use browseros_core::{CdpConnection, SessionId};
 use futures_util::future::BoxFuture;
+use js_runner::OpHost;
 use live_run::{LiveRun, TestPage, TestResult, brand, test_page};
 use neo_playwright::{ErrorCode, PlaywrightError};
 use neo_trace::ErrorOwner;
@@ -965,4 +972,44 @@ async fn tests_that_a_browser_log_entry_reaches_a_console_listener_as_a_message(
         (run, result)
     })
     .await
+}
+
+/// A click whose handler logs, while a script holds a console listener and the page logs large
+/// tables all the while, as the `DevTools` detector's page does: the click completes in its
+/// timeout, and the listener hears the handler's message exactly once. Through the prelude, so
+/// the pump delivers every console message to the script as a run's would. `console.table`'s
+/// preview lists every column of every row; read as a value, each such call carried 1 MB to the
+/// script, and an op that ends waits for the pump in flight, so the click timed out after its
+/// action and the message came too late.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_click_that_logs_completes_under_a_console_listener_and_is_heard_once()
+-> TestResult {
+    if env::var("BROWSERCLAW_HOSTED_MODE").is_ok_and(|mode| mode == "1") {
+        // Hosted mode sends no console events, so there is nothing to hear.
+        return Ok(());
+    }
+    let run = Arc::new(LiveRun::connect().await?);
+    let server = PageServer::start().await?;
+    let page = run.new_page().await?;
+    let result = async {
+        open(&run, &page, &server.url("/popups.html")).await?;
+        run.click(&page, "#tables").await?;
+        // Tables stored before the listener: its lease's `Runtime.enable` replays them too.
+        time::sleep(Duration::from_millis(1000)).await;
+        let host: Arc<dyn OpHost> = Arc::clone(&run) as Arc<dyn OpHost>;
+        let heard = js_runner::run_script(
+            &host,
+            &json!({ "page": brand(&page) }),
+            "const seen = []; page.on('console', (message) => seen.push(message.text())); \
+             await page.locator('#log').click({ timeout: 5000 }); await page.waitForTimeout(2000); \
+             return seen.filter((text) => text === 'clicked 7').length;",
+        )
+        .await?;
+        assert_eq!(heard, json!(1), "the handler's message, exactly once");
+        Ok(())
+    }
+    .await;
+    run.close_page(&page).await;
+    result
 }
