@@ -79,24 +79,11 @@ export type Replaced = Extract<ProbeReply, { kind: 'replaced' }>
 export type ErrorReply = Extract<ProbeReply, { kind: 'error' }>
 export type Uninstalled = Extract<ProbeReply, { kind: 'uninstalled' }>
 
-// These remaining payloads are decoded by private form/read types. They stay here until
-// those families are quiet, then the final rebase derives the existing Rust types.
+// These remaining file payloads stay here until the form/keys/files family is quiet,
+// then the final rebase derives the existing Rust types.
 export type FilesSet = null | { threw: string }
 
-export type FrameOrigin =
-  | { x: number; y: number; scaleX: number; scaleY: number }
-  | 'rotated'
-
 export type FileInput = { pin: Pin; target: Pin; takesPaths: boolean }
-
-export type Located = {
-  pin: Pin
-  preview: string
-  visible: boolean
-  count: number
-}
-
-export type PinnedMatch = { pin: Pin; preview: string }
 
 /** Allowed handler outcomes are behavior metadata, not a second copy of reply fields. */
 export const REPLY_KINDS = {

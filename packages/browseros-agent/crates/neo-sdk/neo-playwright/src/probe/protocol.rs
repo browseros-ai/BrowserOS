@@ -10,6 +10,7 @@ use std::error::Error;
 use ts_rs::{Config, TS, TypeVisitor};
 
 use crate::action::Checkable;
+use crate::read::{FrameOrigin, Located, PinnedMatch};
 
 use super::probe_reply::ProbeReply;
 use super::probe_request::{BootOptions, ProbeRequest};
@@ -30,6 +31,9 @@ pub fn render() -> Result<String, Box<dyn Error>> {
     // `value` replies carry JSON that the owning runner decodes after the envelope. Those
     // payloads are explicit roots because they are absent from ProbeReply's type graph.
     declarations.visit::<Checkable>();
+    declarations.visit::<FrameOrigin>();
+    declarations.visit::<Located>();
+    declarations.visit::<PinnedMatch>();
     declarations.finish()
 }
 

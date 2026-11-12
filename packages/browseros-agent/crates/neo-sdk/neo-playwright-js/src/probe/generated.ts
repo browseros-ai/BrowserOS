@@ -81,6 +81,11 @@ export type FilePayload = { name: string, mimeType: string, buffer: string, last
 export type FillValue = string;
 
 /**
+ * A `frameOrigin` read's value, also used to generate the page-side probe declaration.
+ */
+export type FrameOrigin = { x: number, y: number, scaleX: number, scaleY: number, } | Rotated;
+
+/**
  * One frame document of a page. Refs print it (`f7e3` is element 3 of document 7; the main
  * frame's first document is 0 and prints bare, `e3`). A seq is never reused, and every new
  * document, of the main frame or a child frame, gets a new one (decisions.md), so a ref can
@@ -105,6 +110,12 @@ export type HitAction = "mouse" | "hover" | "drag";
 export type HitDone = "done";
 
 /**
+ * A `located` read's value: the first match, pinned, and what `waitForSelector` checks and
+ * logs on each poll.
+ */
+export type Located = { pin: Pin, preview: string, visible: boolean, count: number, };
+
+/**
  * A value as the probe sent it: the page's own text. It prints as `[page text]`, so no log line carries a value the page
  * shows (STYLE P4); [`PageText::into_value`] hands it to the op's output, and [`PageText::pin`]
  * takes only the probe's pin and drops the text unread.
@@ -126,6 +137,11 @@ export type ParsedSelector = import('../../../neo-playwright/third_party/playwri
  * another element.
  */
 export type Pin = number;
+
+/**
+ * One value of a `readAll` `pins`.
+ */
+export type PinnedMatch = { pin: Pin, preview: string, };
 
 /**
  * A point in one frame's CSS pixels.
@@ -204,6 +220,11 @@ export type Resolution = { preview: string, count: number, };
  * Upstream's retarget behaviors (`InjectedScript.retarget`).
  */
 export type Retarget = "none" | "follow-label" | "no-follow-label" | "button-link";
+
+/**
+ * The string `"rotated"`.
+ */
+export type Rotated = "rotated";
 
 /**
  * Upstream's scroll rotation by attempt. `AlreadyProtocol`: Rust scrolled with
