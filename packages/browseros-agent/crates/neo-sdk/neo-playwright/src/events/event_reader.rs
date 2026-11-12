@@ -50,14 +50,15 @@ pub(crate) struct Delivered {
 
 impl Delivered {
     /// Same-record mirrors follow Playwright's emitter ownership: frames reach the page
-    /// before the context, while dialog closure reaches the context before the page.
+    /// before the context, while a dialog and its closure reach the context before the page.
     pub(crate) fn order(&self) -> (u64, bool) {
         let context = match &self.payload {
             Payload::FrameAttached { context, .. }
             | Payload::FrameNavigated { context, .. }
             | Payload::FrameDetached { context, .. } => *context,
-            // Playwright's BrowserContext owns dialog dispatch and emits its close first.
-            Payload::DialogClosed { context, .. } => !context,
+            // Playwright's BrowserContext owns dialog dispatch: it emits a dialog, and its
+            // close, on itself first, then on the page.
+            Payload::Dialog { context, .. } | Payload::DialogClosed { context, .. } => !context,
             _ => false,
         };
         (self.seq, context)
@@ -97,6 +98,8 @@ enum Payload {
     },
     #[serde(rename = "close")]
     Close { page: PageHandle },
+    #[serde(rename = "crash")]
+    Crash { page: PageHandle },
     #[serde(rename = "load")]
     Load { page: PageHandle, frame: EventFrame },
     #[serde(rename = "domcontentloaded")]
@@ -121,8 +124,13 @@ enum Payload {
         frame: EventFrame,
         context: bool,
     },
+    /// `context` marks the copy for the context's listeners, as on `dialogclosed`.
     #[serde(rename = "dialog")]
-    Dialog { page: PageHandle, dialog: Dialog },
+    Dialog {
+        page: PageHandle,
+        dialog: Dialog,
+        context: bool,
+    },
     #[serde(rename = "dialogclosed")]
     DialogClosed {
         page: PageHandle,
@@ -306,12 +314,15 @@ pub(crate) async fn deliver(
     let listener = match subscription {
         Subscription::Page { tab, .. } => Some(PageHandle::new(*tab)),
         Subscription::ContextPage => None,
-        Subscription::Context(PageEventKind::DialogClosed) => {
-            let PageEvent::DialogClosed(dialog) = &record.event else {
+        Subscription::Context(PageEventKind::Dialog | PageEventKind::DialogClosed) => {
+            let (PageEvent::Dialog(dialog) | PageEvent::DialogClosed(dialog)) = &record.event
+            else {
                 return Ok(None);
             };
             // A dialog's closing can be delivered after its page closed. Never require a
             // live tab to recover an identity this run already approved while it existed.
+            // A dialog can open in a tab no op admitted yet (a popup's `alert`): the listing
+            // names it, as it names the context's new pages.
             if let Some(tab) = scope.run_state().events.known_page(&dialog.target) {
                 Some(PageHandle::new(tab))
             } else {
@@ -375,6 +386,11 @@ fn lifecycle_payload(
     context: bool,
 ) -> Option<Payload> {
     let payload = match (event, listener) {
+        (PageEvent::Dialog(dialog), Some(page)) => Payload::Dialog {
+            page,
+            dialog: dialog_info(dialog),
+            context,
+        },
         (PageEvent::DialogClosed(dialog), Some(page)) => Payload::DialogClosed {
             page,
             dialog: dialog_info(dialog),
@@ -535,10 +551,7 @@ fn plain(event: &PageEvent, page: PageHandle) -> Option<Payload> {
                 }
             }
         }
-        PageEvent::Dialog(dialog) => Payload::Dialog {
-            page,
-            dialog: dialog_info(dialog),
-        },
+        PageEvent::Crashed(_) => Payload::Crash { page },
         PageEvent::Console(message) => Payload::Console {
             page,
             message: ConsoleMessage {
@@ -569,6 +582,7 @@ fn plain(event: &PageEvent, page: PageHandle) -> Option<Payload> {
         | PageEvent::FrameDetached(_)
         | PageEvent::FrameSwapped(_)
         | PageEvent::FrameLifecycle(_)
+        | PageEvent::Dialog(_)
         | PageEvent::DialogClosed(_)
         | PageEvent::Load { .. }
         | PageEvent::Opened(_)
@@ -588,12 +602,19 @@ fn dialog_info(dialog: &DialogOpened) -> Dialog {
 }
 
 /// A console/dialog/etc. can follow renderer-initiated navigation. Delivery synchronizes
-/// `page.url()` even when no SDK navigation ran, while a close carries its own terminal facts.
+/// `page.url()` even when no SDK navigation ran, while a close carries its own terminal facts
+/// and a crashed renderer navigated nowhere.
 fn report_navigation(scope: &OpScope<'_>, page: Option<&PageHandle>, event: &PageEvent) {
     if let Some(page) = page
         // Lifecycle records already carry their event-time state. A fresh browser read here
         // both overwrites it and can delay a navigation event past the action that caused it.
-        && !matches!(event, PageEvent::Closed(_) | PageEvent::FrameLifecycle(_) | PageEvent::Load { .. })
+        && !matches!(
+            event,
+            PageEvent::Closed(_)
+                | PageEvent::Crashed(_)
+                | PageEvent::FrameLifecycle(_)
+                | PageEvent::Load { .. }
+        )
     {
         scope.report_navigation(page.tab());
     }
@@ -632,7 +653,7 @@ mod tests {
     use super::{ConsoleMessage, Delivered, Dialog, Download, NewTab, Payload, Tabs, WindowPopup};
     use crate::Playwright;
     use crate::events::event_hub::EventRecord;
-    use crate::events::page_event::{DialogId, DialogKind, Location, PageEvent};
+    use crate::events::page_event::{DialogId, DialogKind, DialogOpened, Location, PageEvent};
     use crate::events::{PageEventKind, Subscription};
     use crate::op::Op;
     use crate::op_scope::OpScope;
@@ -741,6 +762,96 @@ mod tests {
         Ok(())
     }
 
+    /// `context.waitForEvent('dialog')` gets a dialog of any tab the run's view admits, on the
+    /// page it opened in (upstream's `dialog.page()`), marked for the context and ordered
+    /// before the page's copy of the same record; `page.on('crash')` gets its page's crash,
+    /// which leaves the tab open.
+    #[tokio::test]
+    async fn tests_that_the_context_receives_a_dialog_and_a_page_its_crash()
+    -> Result<(), Box<dyn Error>> {
+        let env = TestEnv::new();
+        let op = Op::from_name("events.wait").ok_or("events.wait is an op")?;
+        let scope = OpScope::new(&env, op, CallHeader::default());
+        let pw = Playwright::new(test_env::offline_session());
+        let popup = TargetId("P".to_owned());
+        scope.run_state().events.remember_page(&popup, TabId(900));
+        let opened = EventRecord {
+            seq: 4,
+            at_ms: 1_700_000_000_004,
+            event: PageEvent::Dialog(DialogOpened {
+                id: DialogId(5),
+                target: popup.clone(),
+                kind: DialogKind::Alert,
+                message: "hello".to_owned(),
+                default_value: String::new(),
+            }),
+        };
+        let context = super::deliver(
+            &pw,
+            &scope,
+            &Subscription::Context(PageEventKind::Dialog),
+            &opened,
+            &mut Tabs::default(),
+            WindowPopup::Fail,
+        )
+        .await?
+        .ok_or("the context receives a dialog of any admitted tab")?;
+        assert_eq!(
+            serde_json::to_value(&context)?,
+            json!({ "seq": 4, "at": 1_700_000_000_004_u64, "event": "dialog",
+                    "page": { "$neo": "page", "tab": 900 },
+                    "dialog": { "id": 5, "type": "alert", "message": "hello",
+                                "defaultValue": "" },
+                    "context": true })
+        );
+        let page = super::deliver(
+            &pw,
+            &scope,
+            &Subscription::Page {
+                tab: TabId(900),
+                target: popup.clone(),
+                event: PageEventKind::Dialog,
+            },
+            &opened,
+            &mut Tabs::default(),
+            WindowPopup::Fail,
+        )
+        .await?
+        .ok_or("the page receives its own dialog")?;
+        assert!(context.order() < page.order(), "the context's copy first");
+
+        let crashed = EventRecord {
+            seq: 6,
+            at_ms: 1_700_000_000_006,
+            event: PageEvent::Crashed(popup.clone()),
+        };
+        let crash = super::deliver(
+            &pw,
+            &scope,
+            &Subscription::Page {
+                tab: TabId(900),
+                target: popup,
+                event: PageEventKind::Crash,
+            },
+            &crashed,
+            &mut Tabs::default(),
+            WindowPopup::Fail,
+        )
+        .await?
+        .ok_or("a page's crash reaches its listener")?;
+        assert_eq!(
+            serde_json::to_value(&crash)?,
+            json!({ "seq": 6, "at": 1_700_000_000_006_u64, "event": "crash",
+                    "page": { "$neo": "page", "tab": 900 } })
+        );
+        assert!(
+            env.calls().is_empty(),
+            "a crash does not report its tab closed: {:?}",
+            env.calls()
+        );
+        Ok(())
+    }
+
     /// The payloads the earlier test leaves out, with the shapes generated/event.ts declares:
     /// a dialog's typed `type`, a download, and a binding call's camelCase fields.
     #[test]
@@ -757,6 +868,7 @@ mod tests {
                     message: "Leave?".to_owned(),
                     default_value: String::new(),
                 },
+                context: false,
             },
         };
         assert_eq!(
@@ -764,7 +876,8 @@ mod tests {
             json!({ "seq": 3, "at": 1_700_000_000_003_u64, "event": "dialog",
                     "page": { "$neo": "page", "tab": 700 },
                     "dialog": { "id": 41, "type": "beforeunload", "message": "Leave?",
-                                "defaultValue": "" } })
+                                "defaultValue": "" },
+                    "context": false })
         );
         let download = Delivered {
             seq: 4,

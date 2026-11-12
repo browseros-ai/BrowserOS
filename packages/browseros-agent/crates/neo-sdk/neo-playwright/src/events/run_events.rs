@@ -251,11 +251,22 @@ impl RunEvents {
             })
     }
 
-    /// Whether the run listens for, or waits on, `event` on the tab whose target is `target`.
+    /// Whether the run listens for, or waits on, `event` on the tab whose target is `target`,
+    /// on that page or on the context ([`Subscription::wants`]). The context's subscriptions
+    /// count only for a tab the run's view admitted (`known_page`): a run bound to a profile or
+    /// window can neither receive nor answer a dialog of a tab outside its view, and holding one
+    /// for it would block that tab until the run ends. Context listeners and waits admit every
+    /// listed tab as they start (`observe_context`); a newer tab is admitted when an event of it
+    /// reaches the run, before a dialog's grace ends asks again.
     pub(crate) fn wants(&self, target: &TargetId, event: PageEventKind) -> bool {
         let inner = self.lock();
-        let wanted =
-            |subscription: &Subscription| subscription.page_event() == Some((target, event));
+        let admitted = inner.known_pages.iter().any(|page| page.target == *target);
+        let wanted = |subscription: &Subscription| match subscription {
+            Subscription::Context(_) => admitted && subscription.wants(target, event),
+            Subscription::Page { .. } | Subscription::ContextPage => {
+                subscription.wants(target, event)
+            }
+        };
         inner.listening.keys().any(wanted) || inner.waiting.keys().any(wanted)
     }
 
@@ -439,6 +450,33 @@ mod tests {
         drop(second);
         assert!(!events.wants(&target, PageEventKind::Dialog));
         assert!(!events.wants(&target, PageEventKind::Popup));
+    }
+
+    /// `context.waitForEvent('dialog')` and `context.on('dialog')` hold a dialog of every tab
+    /// the run's view admitted open for the script (`EventHub::listeners`), as a page's own
+    /// listener holds its own, and never one of a tab outside the view.
+    #[test]
+    fn tests_that_a_context_dialog_wait_or_listener_wants_every_admitted_tabs_dialogs() {
+        let events = RunEvents::default();
+        let target = TargetId("T".to_owned());
+        let wait = events.waiting(Subscription::Context(PageEventKind::Dialog), 10);
+        assert!(
+            !events.wants(&target, PageEventKind::Dialog),
+            "a tab the run's view never admitted is not the run's to hold"
+        );
+        events.remember_page(&target, TabId(1));
+        events.remember_page(&TargetId("U".to_owned()), TabId(2));
+        assert!(events.wants(&target, PageEventKind::Dialog));
+        assert!(
+            !events.wants(&target, PageEventKind::DialogClosed),
+            "only the event it names"
+        );
+        drop(wait);
+        assert!(!events.wants(&target, PageEventKind::Dialog));
+        events.listen(Subscription::Context(PageEventKind::Dialog), 10, 0);
+        assert!(events.wants(&TargetId("U".to_owned()), PageEventKind::Dialog));
+        events.unlisten(&ListenerKey::Context(PageEventKind::Dialog));
+        assert!(!events.wants(&target, PageEventKind::Dialog));
     }
 
     #[test]
