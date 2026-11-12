@@ -467,7 +467,7 @@ export const RETRYING: Record<string, (...args: never[]) => Retrying> = {
     if (!template)
       throw argumentError(
         'toMatchAriaSnapshot',
-        'the expected snapshot is empty, and Neo writes no baselines; read the current one with await locator.ariaSnapshot()',
+        "the expected snapshot is empty, and Neo writes no baselines; read the current one with await locator.ariaSnapshot({ mode: 'default' })",
       )
     const parsed = parseTemplate(template)
     return {

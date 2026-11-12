@@ -7654,7 +7654,7 @@ ${value.stack}`;
           value = text ? own : clip(own, OWN_TEXT_CLIP);
       }
       const line = copy(node, { ref: true, urls: this.urls, text: value });
-      const choices = node.role === "combobox" || node.role === "listbox" ? (node.children ?? []).filter((child) => typeof child !== "string" && child.role === "option" && !child.ref) : [];
+      const choices = node.role === "combobox" || node.role === "listbox" ? nativeOptions(node) : [];
       if (choices.length === 0)
         this.element(line, level);
       else {
@@ -7725,6 +7725,21 @@ ${value.stack}`;
     if (keep.text !== undefined)
       copied.text = keep.text;
     return copied;
+  }
+  function nativeOptions(select) {
+    const options = [];
+    const visit = (children) => {
+      for (const child of children ?? []) {
+        if (typeof child === "string")
+          continue;
+        if (child.role === "option" && !child.ref)
+          options.push(child);
+        else if (child.role === "group" && !actionable(child))
+          visit(child.children);
+      }
+    };
+    visit(select.children);
+    return options;
   }
   function ownText(node) {
     const pieces = [];
@@ -18461,7 +18476,7 @@ ${expected === undefined ? "" : `Expected: ${state.isNot ? "not " : ""}${stringi
         throw argumentError("toMatchAriaSnapshot", "snapshot files are not available in Neo; pass the expected snapshot as a YAML string");
       const template = unshift(expected);
       if (!template)
-        throw argumentError("toMatchAriaSnapshot", "the expected snapshot is empty, and Neo writes no baselines; read the current one with await locator.ariaSnapshot()");
+        throw argumentError("toMatchAriaSnapshot", "the expected snapshot is empty, and Neo writes no baselines; read the current one with await locator.ariaSnapshot({ mode: 'default' })");
       const parsed = parseTemplate(template);
       return {
         receiver: "Page or Locator",

@@ -476,7 +476,7 @@ describe('toMatchAriaSnapshot', () => {
     const files =
       'snapshot files are not available in Neo; pass the expected snapshot as a YAML string'
     const empty =
-      'the expected snapshot is empty, and Neo writes no baselines; read the current one with await locator.ariaSnapshot()'
+      "the expected snapshot is empty, and Neo writes no baselines; read the current one with await locator.ariaSnapshot({ mode: 'default' })"
     const receiver =
       'toMatchAriaSnapshot can be only used with Page or Locator objects, was called with 42'
     expect(

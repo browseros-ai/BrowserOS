@@ -269,12 +269,7 @@ class Printer {
     const line = copy(node, { ref: true, urls: this.urls, text: value })
     const choices =
       node.role === 'combobox' || node.role === 'listbox'
-        ? (node.children ?? []).filter(
-            (child): child is AriaNodeJSON =>
-              typeof child !== 'string' &&
-              child.role === 'option' &&
-              !child.ref,
-          )
+        ? nativeOptions(node)
         : []
     if (choices.length === 0) this.element(line, level)
     else {
@@ -378,6 +373,24 @@ function copy(
   if (keep.urls && url !== undefined) copied.url = url
   if (keep.text !== undefined) copied.text = keep.text
   return copied
+}
+
+/**
+ * A native select's options, which carry no refs, in document order: `<optgroup>`s are `group`
+ * nodes, which print no line, so their options are collected through them.
+ */
+function nativeOptions(select: AriaNodeJSON): AriaNodeJSON[] {
+  const options: AriaNodeJSON[] = []
+  const visit = (children: AriaNodeJSON['children']): void => {
+    for (const child of children ?? []) {
+      if (typeof child === 'string') continue
+      if (child.role === 'option' && !child.ref) options.push(child)
+      else if (child.role === 'group' && !actionable(child))
+        visit(child.children)
+    }
+  }
+  visit(select.children)
+  return options
 }
 
 /** Every text piece under `node` that is not inside a nested actionable node, space-joined. */

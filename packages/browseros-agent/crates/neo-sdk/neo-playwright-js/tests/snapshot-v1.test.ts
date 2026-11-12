@@ -188,6 +188,32 @@ it('tests rule 5: a native select with 30 options lists only the selected one wi
   )
 })
 
+it('tests rule 5: a native select with option groups lists their options, the groups printing no line', () => {
+  const group = (name: string, options: string[], selected?: string): Node => ({
+    role: 'group',
+    name,
+    children: options.map((option) => ({
+      role: 'option',
+      name: option,
+      ...(option === selected ? { selected: true } : {}),
+    })) as Node[],
+  })
+  const json = [
+    {
+      role: 'combobox',
+      name: 'Destination',
+      ref: 'e1',
+      children: [
+        group('Europe', ['France', 'Germany'], 'France'),
+        group('Asia', ['Japan']),
+      ],
+    },
+  ] as Node[]
+  const printed =
+    '- combobox "Destination" [ref=e1]:\n  - option "France" [selected]\n  - option "Germany"\n  - option "Japan"'
+  expect(both(json)).toEqual([printed, printed])
+})
+
 it('tests rule 6: a named image prints with text on only', () => {
   const json = [
     { role: 'img', name: 'Logo', ref: 'e1' },
