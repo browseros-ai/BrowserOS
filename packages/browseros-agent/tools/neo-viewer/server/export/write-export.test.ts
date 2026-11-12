@@ -19,6 +19,7 @@ import {
   textSize,
   type ViewerInfo,
 } from '../../shared/api'
+import { SNAPSHOT, TRAILED } from '../../web/test-support/replies'
 import { RunStore } from '../log/run-store'
 import { runResult, sseEvent, startFakeNeo } from '../test-support/fake-neo'
 import { FAKE_TOKEN, startFakeNeoHost } from '../test-support/fake-neo-host'
@@ -274,6 +275,36 @@ describe('an export', () => {
     // A second export in the same second gets a folder of its own.
     const again = await writeExport(await sourceOf(store), { root, now })
     expect(again.dir).toBe(`${written.dir}-2`)
+  })
+
+  test('run 8, and the same value before an unknown line: runs/NNN.md decoded, the reply file exact', async () => {
+    const dataDir = await tempDir('nv-export-tip-state-')
+    const exportRoot = await tempDir('nv-export-tip-')
+    const store = await storeWith(
+      dataDir,
+      TRAILED.map(([reply]) => ({ text: reply, neo: null })),
+    )
+    const result = await writeExport(await sourceOf(store), {
+      root: exportRoot,
+      now: Date.parse('2026-11-12T04:39:45Z'),
+    })
+    // Each reply file is the exact text, which is not JSON with a line after the value: .txt.
+    expect(result.files.filter((file) => file.includes('.reply.'))).toEqual([
+      'runs/001.reply.txt',
+      'runs/002.reply.txt',
+    ])
+    for (const [index, [reply, trailer]] of TRAILED.entries()) {
+      const run = join(result.dir, 'runs', String(index + 1).padStart(3, '0'))
+      const markdown = await readFile(`${run}.md`, 'utf8')
+      const read = markdown.slice(markdown.indexOf('## What the model read'))
+      expect(read).toContain('Shown decoded')
+      expect(read).toContain(SNAPSHOT.slice(0, 1_000))
+      expect(read).not.toContain('\\n- ')
+      expect(await readFile(`${run}.reply.txt`, 'utf8')).toBe(reply)
+      const json = JSON.parse(await readFile(`${run}.json`, 'utf8'))
+      expect(json.parsed.value).toBe(SNAPSHOT)
+      expect(json.parsed.notes).toEqual([trailer])
+    }
   })
 
   test('README.md stays short with many runs; the rest are listed in session.json', async () => {

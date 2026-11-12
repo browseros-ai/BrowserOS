@@ -63,10 +63,11 @@ export function modelReadText(detail: RunDetail): string | null {
 }
 
 /**
- * The run's returned value when it is a string, decoded for a person: Neo writes the value as one
- * line of JSON (`"- link [ref=e1]\n- …"`), so a returned snapshot reaches the model as escaped
- * `\n` and `\"`. `json` is that line as the model received it; `rest` the console lines and notes
- * after it, as read. Null for anything else (an error line, an object, no reply text).
+ * The run's returned value when it is a string, decoded for a person: Neo writes the value as the
+ * reply's first line, one line of JSON (`"- link [ref=e1]\n- …"`), so a returned snapshot reaches
+ * the model as escaped `\n` and `\"`. `json` is that line as the model received it; `rest` every
+ * line after it (console lines, notes, tips), as read. Null for anything else (an error line, an
+ * object, no reply text).
  */
 export function returnedString(
   detail: RunDetail,
