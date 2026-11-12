@@ -6,15 +6,16 @@ use crate::dispatch::{Listing, Registry};
 /// How a script is written and what it gets, true of every build.
 const USAGE: &str = "Runs JavaScript against the user's browser and returns what the script \
 returns. `code` is the body of an async function: `await` each SDK call and `return` a JSON \
-value. Each run starts with fresh JavaScript; only browser tabs carry over.\n\n\
-A task is your own set of tabs. Start one per user request and keep its id. First run: \
-`const task = await neo.createTask('hn top 5'); return task.id`. Every later run: \
-`const task = await neo.task('<that id>')`, then `await task.newPage()`, `task.pages()` (oldest \
-first) or `task.page(tabId)`. When finished: `await task.close()`. Every reply ends with one \
-`[task <id> · tabs: <tabId> <url>, …]` line per task the script touched. The built-in `page` \
-without a task opens a tab in a new task, and the reply names that task; in a script that \
-fetched a task it is refused, so take a tab from the task (`const page = task.page(tabId)` is \
-allowed). `neo.tabs()` lists every open tab with `page.tabId` and `page.taskId`.\n\n\
+value. Each run starts with fresh JavaScript. With no task, built-in `page` opens a new tab \
+on first use; `context.newPage()` opens another. Neither reuses a tab or creates a task.\n\n\
+To keep tabs across runs, create a task and return its id. First run: \
+`const task = await neo.createTask('hn top 5'); return task.id`. Start later scripts with \
+`await neo.task('<id>')`; then `page` uses the task's last-used open tab (else another open \
+tab, else a new one), and `context.newPage()` opens in the task. The latest task pick wins. \
+Use `task.pages()` (oldest first), `task.page(tabId)` or `task.newPage()` as needed. \
+When finished: `await task.close()`. Popups join their opener's task. `context.pages()` \
+lists every tab with `page.tabId` and `page.taskId` (null without a task); use it to recover \
+a lost task id.\n\n\
 The function's parameters are the SDK: Playwright's `page`, `context`, `browser`, `expect` and \
 `playwright` (`selectors.setTestIdAttribute`, `errors.TimeoutError`), Node's `Buffer` \
 (`screenshot` and `pdf` resolve to one, and a `setInputFiles` payload takes one), then `neo` \
@@ -152,18 +153,22 @@ mod tests {
     }
 
     #[test]
-    fn the_usage_teaches_tasks_before_the_first_script() {
+    fn the_usage_teaches_task_selection_and_plain_playwright() -> Result<(), TestError> {
         let description = run_description(&RegistryBuilder::default().build());
         for sentence in [
-            "Each run starts with fresh JavaScript; only browser tabs carry over.",
-            "Start one per user request and keep its id.",
+            "returns what the script returns.",
+            "Each run starts with fresh JavaScript.",
+            "With no task, built-in `page` opens a new tab on first use; `context.newPage()` opens another.",
+            "Neither reuses a tab or creates a task.",
+            "To keep tabs across runs, create a task and return its id.",
             "First run: `const task = await neo.createTask('hn top 5'); return task.id`.",
-            "Every later run: `const task = await neo.task('<that id>')`",
+            "Start later scripts with `await neo.task('<id>')`",
+            "`page` uses the task's last-used open tab (else another open tab, else a new one)",
+            "`context.newPage()` opens in the task.",
+            "The latest task pick wins.",
             "When finished: `await task.close()`.",
-            "`[task <id> · tabs: <tabId> <url>, …]` line per task the script touched.",
-            "The built-in `page` without a task opens a tab in a new task, and the reply names that task;",
-            "in a script that fetched a task it is refused",
-            "`neo.tabs()` lists every open tab with `page.tabId` and `page.taskId`.",
+            "Popups join their opener's task.",
+            "`context.pages()` lists every tab with `page.tabId` and `page.taskId` (null without a task)",
         ] {
             assert!(
                 description.contains(sentence),
@@ -171,10 +176,21 @@ mod tests {
                  recipe and the built-in page rule here: {sentence}"
             );
         }
+        let recipe = description
+            .find("To keep tabs across runs")
+            .ok_or("missing task recipe")?;
+        let first_script = description
+            .find("`const task =")
+            .ok_or("missing first script")?;
         assert!(
-            !description.contains("this task's tab"),
-            "`page` is no longer a task's tab without a task; the old promise misled agents"
+            recipe < first_script,
+            "the model learns how to keep tabs before copying its first script"
         );
+        assert!(
+            !description.contains(concat!("neo.", "tabs")),
+            "tab discovery uses Playwright's context"
+        );
+        Ok(())
     }
 
     /// The prose is hand-written, so the realm checks it: a parameter a prelude adds, or an

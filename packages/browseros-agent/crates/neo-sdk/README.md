@@ -7,6 +7,24 @@ the lint or formatting rules of sibling crates.
 
 Give agents [agent.d.ts](agent.d.ts) with the MCP URL for the task API, script globals, and a four-run example.
 
+Each `run` starts with fresh JavaScript. With no task, built-in `page` and
+`context.newPage()` each open a new tab with no task, never an existing tab.
+To keep tabs across runs, create a task with `await neo.createTask(name)`, return `task.id`,
+and start later scripts with `await neo.task(id)`. The latest task pick wins: built-in
+`page` uses its last-used open tab, else another open tab, else a new one;
+`context.newPage()` opens in the picked task, and `task.newPage()` opens in that task.
+Popups join their opener's task. `task.pages()` lists its tabs oldest first;
+`task.page(tabId)` picks one. Finish with `await task.close()` to close its tabs and end it.
+
+Any script may use any tab or task. `context.pages()` lists every tab with `tabId` and
+`taskId` (`null` without a task). Recover a lost id with
+`context.pages().find(p => p.url().includes('ycombinator'))?.taskId`.
+An unknown id throws `task_not_found`, whose hint points to `context.pages()` and `page.taskId`.
+The reply is exactly what the script returned, plus console lines and existing notes.
+Hosts get touched tasks in `_meta["com.browseros.neo/run"].tasks`; host task ids and the
+neo-viewer proxy keep their existing behavior. Tasks live in memory (at most 4096);
+a restart forgets them while tabs stay. The janitor closes agent-opened tabs idle for 30 minutes.
+
 ```text
 host / MCP run
       |
