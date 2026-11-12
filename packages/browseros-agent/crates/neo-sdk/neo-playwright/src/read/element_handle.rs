@@ -138,7 +138,7 @@ pub(crate) async fn every_match(
     let ProbeReply::Values { count, values, .. } = reply else {
         return Err(resolver.refused(reply));
     };
-    let mut nodes = Vec::with_capacity(values.len());
+    let mut pins = Vec::with_capacity(values.len());
     for value in values {
         let pin = value.pin().ok_or_else(|| {
             scope.fail(
@@ -146,18 +146,18 @@ pub(crate) async fn every_match(
                 "a pins read sent a match without its pin",
             )
         })?;
-        let Some(node) = backend_node(scope, &world, pin).await? else {
+        pins.push(pin);
+    }
+    let nodes = match probe::pinned_nodes(scope, &world, pins).await {
+        Ok(Some(nodes)) => nodes,
+        Ok(None) | Err(ProbeFailure::Gone(_)) => {
             return Err(scope.fail(
                 ErrorCode::TargetClosed,
-                &format!(
-                    "{count} elements matched, but match {} left the page before the script \
-                     ran; call it again",
-                    nodes.len() + 1
-                ),
+                &format!("{count} elements matched, but the page changed before the script ran; call it again"),
             ));
-        };
-        nodes.push(node);
-    }
+        }
+        Err(failure) => return Err(resolve::failed(scope, failure)),
+    };
     Ok(Some((world, nodes)))
 }
 

@@ -128,7 +128,6 @@ RO-008	fail	tests/page/page-route.spec.ts	should properly return navigation resp
 SS-024	fail	tests/page/page-screenshot.spec.ts	page screenshot › should capture canvas changes
 SS-027	fail	tests/page/page-screenshot.spec.ts	page screenshot › should work while navigating
 SS-059	fail	tests/page/page-screenshot.spec.ts	page screenshot animations › should capture screenshots after layoutchanges in transitionend event
-SS-054	fail	tests/page/page-screenshot.spec.ts	page screenshot animations › should not capture css animations in shadow DOM
 SS-052	fail	tests/page/page-screenshot.spec.ts	page screenshot animations › should not capture infinite css animation
 SS-057	fail	tests/page/page-screenshot.spec.ts	page screenshot animations › should not capture infinite web animations
 SS-053	fail	tests/page/page-screenshot.spec.ts	page screenshot animations › should not capture pseudo element css animation
@@ -144,7 +143,6 @@ WA-032	fail	tests/page/page-wait-for-selector-1.spec.ts	elementHandle.waitForSel
 WA-072	fail	tests/page/page-wait-for-selector-2.spec.ts	should work when navigating before node adoption
 RE-013	fail	tests/page/retarget.spec.ts	direct actions retargeting
 SE-016	skip	tests/page/selectors-css.spec.ts	should work with :nth-child(of) notation with nested functions
-SE-001	fail	tests/page/selectors-css.spec.ts	should work with large DOM @smoke
 SE-090	skip	tests/page/selectors-get-by.spec.ts	getBy escaping
 SE-157	fail	tests/page/selectors-register.spec.ts	getAttribute should be atomic
 SE-156	fail	tests/page/selectors-register.spec.ts	innerHTML should be atomic

@@ -20,8 +20,8 @@ mod probe_request;
 pub(crate) mod protocol;
 
 pub(crate) use probe_call::{
-    NAVIGATED_OR_CLOSED, ProbeFailure, Ran, call, call_on, call_with_gesture, pinned_object,
-    reply_of,
+    NAVIGATED_OR_CLOSED, ProbeFailure, Ran, call, call_on, call_with_gesture, pinned_nodes,
+    pinned_object, reply_of,
 };
 pub(crate) use probe_reply::{
     ErrorClass, Hit, PROBE_PROTOCOL, PageText, Point, ProbeReply, Rect, Resolution, SnapshotIframe,
