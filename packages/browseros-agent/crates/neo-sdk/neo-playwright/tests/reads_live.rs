@@ -500,12 +500,14 @@ async fn tests_that_every_match_reads_never_wait_and_read_each_match() -> TestRe
     live.close(&nest).await
 }
 
-/// `locator.elementHandle` on `target`, which must hand back a handle.
+/// `locator.elementHandle()` waits through the selector-wait command and returns its handle.
 async fn handle_of(live: &LiveBrowser, target: &Value) -> TestResult<Value> {
     let handle = live
         .invoke(
-            "locator.elementHandle",
-            call("locator.elementHandle", target, 5_000),
+            "locator.waitFor",
+            json!({ "call": { "api": "locator.elementHandle", "timeoutMs": 5_000 },
+                "target": target, "strict": "strict", "state": "attached",
+                "omitReturnValue": false }),
         )
         .await??;
     assert_eq!(
@@ -667,7 +669,7 @@ async fn tests_that_a_handles_dollar_and_dollar_dollar_query_under_its_node() ->
     let (_server, page) = reads_page(&live).await?;
     let first = |target: Value| {
         json!({ "call": { "api": "elementHandle.$", "timeoutMs": 0 }, "target": target,
-                "strict": "firstMatch", "noWait": true })
+                "strict": "firstMatch" })
     };
     let every = |target: Value| json!({ "call": { "api": "elementHandle.$$", "timeoutMs": 0 }, "target": target });
     let nav = handle_of(&live, &at(&page, "nav")).await?;
@@ -757,7 +759,7 @@ async fn tests_that_dollar_answers_now_and_dollar_dollar_hands_every_match() -> 
     let (_server, page) = reads_page(&live).await?;
     let first_now = |selector: &str| {
         json!({ "call": { "api": "page.$", "timeoutMs": 0 }, "target": at(&page, selector),
-                "strict": "firstMatch", "noWait": true })
+                "strict": "firstMatch" })
     };
     let started = Instant::now();
     assert_eq!(
