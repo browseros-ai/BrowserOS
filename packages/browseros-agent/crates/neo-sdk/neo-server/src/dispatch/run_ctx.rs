@@ -23,7 +23,7 @@ use super::run_tasks::RunTasks;
 use super::{
     CallSite, Dispatcher, ErrorCode, Lifetime, MethodSpec, OperationError, TaskKind, TaskNote,
 };
-use crate::browser::{PageRef, RunView, TabRegistry, TaskRecord};
+use crate::browser::{PageRef, RunView, TaskRecord};
 
 /// One `run` call as the door sees it: its identity, the browser view it captured, its budget,
 /// why it stopped, the ops it started, what they changed, and the state features keep per run.
@@ -82,7 +82,7 @@ pub(crate) struct RunStart {
     pub(crate) view: RunView,
     /// When the run's budget ends.
     pub(crate) deadline: Instant,
-    /// The task's tab when the run service knows it; otherwise the run opens one on first use.
+    /// The task's tab when the run service knows it; otherwise resolved on first use.
     pub(crate) default_page: Option<PageRef>,
 }
 
@@ -135,7 +135,7 @@ pub(crate) struct RunGuard {
 
 enum DefaultPage {
     Known(PageRef),
-    /// Opened on first use. Single-flight: concurrent ops on the lazy page open one tab.
+    /// Chosen on first use. Single-flight: concurrent ops on the lazy page share one tab.
     Lazy(OnceCell<PageRef>),
 }
 
@@ -184,6 +184,12 @@ impl RunCtx {
             default_page,
         } = start;
         let trace = door.trace();
+        if let Some(task) = &task_id {
+            // Register the host's task once. A missing or full task book must not block opens,
+            // and a task closed later in this run must not be silently recreated.
+            let _ = door.tabs().ensure_task(task);
+        }
+        let tasks = Mutex::new(RunTasks::new(task_id.clone()));
         trace.run_started(RunStarted {
             id,
             code,
@@ -206,7 +212,7 @@ impl RunCtx {
             ledger: Mutex::default(),
             ops: Mutex::default(),
             slots: Mutex::default(),
-            tasks: Mutex::default(),
+            tasks,
         });
         let guard = RunGuard {
             run: Some(Arc::clone(&run)),
@@ -227,24 +233,19 @@ impl RunCtx {
         self.task_id.as_ref()
     }
 
-    /// Remembers an explicit fetch, independently of the host's default-page task.
-    pub(crate) fn fetched_task(&self, task: &TaskRecord, kind: TaskKind) {
-        self.lock_tasks().fetch(task, kind);
+    /// Sets the task used by subsequent opens and the unresolved built-in page.
+    pub(crate) fn picked_task(&self, task: &TaskRecord, kind: TaskKind) {
+        self.lock_tasks().pick(task, kind);
     }
 
     /// A closed task retains its first-touch place in the reply.
     pub(crate) fn closed_task(&self, task: &TaskRecord) {
-        self.lock_tasks().touch(task, TaskKind::Closed);
+        self.lock_tasks().close(task, self.task_id());
     }
 
-    /// One ambient task shared by the lazy page and script context.newPage calls.
-    pub(crate) fn ambient_task(&self, tabs: &TabRegistry) -> Result<TaskId, OperationError> {
-        self.lock_tasks().ambient(tabs, self.task_id())
-    }
-
-    /// A script that fetched a task must name where a new page belongs.
-    pub(super) fn check_new_page(&self) -> Result<(), OperationError> {
-        self.lock_tasks().check_new_page()
+    /// The latest pick, initially the host's task or none. It may have since disappeared.
+    pub(super) fn current_task(&self) -> Option<TaskId> {
+        self.lock_tasks().current().cloned()
     }
 
     /// First-touch task metadata, completed with live tabs when the reply is built.
@@ -373,7 +374,7 @@ impl RunCtx {
         drop(refused);
     }
 
-    /// The run's default page, opened on first use by a Neo op (single-flight).
+    /// The run's default page, resolved once on first use through the door.
     pub(super) async fn default_page(
         self: &Arc<Self>,
         dispatcher: &Arc<Dispatcher>,
@@ -381,14 +382,7 @@ impl RunCtx {
         match &self.default_page {
             DefaultPage::Known(page) => Ok(page.clone()),
             DefaultPage::Lazy(cell) => cell
-                .get_or_try_init(|| async {
-                    if let Some(id) = self.lock_tasks().fetched() {
-                        return Err(OperationError::script(ErrorCode::TASK_PAGE_REQUIRED, format!(
-                            "this script uses task {id}, so the built-in `page` is off. Pick a tab from the task (`task.pages()[0]`, `task.page(tabId)`) or open one (`await task.newPage()`), or declare your own `const page = ...`."
-                        )));
-                    }
-                    dispatcher.open_default_page(self).await
-                })
+                .get_or_try_init(|| dispatcher.open_default_page(self))
                 .await
                 .cloned(),
         }

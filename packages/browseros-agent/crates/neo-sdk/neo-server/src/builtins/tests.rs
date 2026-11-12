@@ -3295,8 +3295,7 @@ async fn worker_bookkeeping_can_unsubscribe_after_its_page_closed() -> Result<()
 }
 
 #[tokio::test]
-async fn parallel_unhosted_runs_get_distinct_default_tabs_and_tasks() -> Result<(), Box<dyn Error>>
-{
+async fn parallel_unhosted_runs_get_distinct_unowned_default_tabs() -> Result<(), Box<dyn Error>> {
     let harness = Harness::new().await?;
     let owner = harness.owner_tab("https://owner.example/").await?;
     let (first, _first_guard) = harness.run()?;
@@ -3316,9 +3315,8 @@ async fn parallel_unhosted_runs_get_distinct_default_tabs_and_tasks() -> Result<
     );
     assert_ne!(one_page, owner);
     assert_ne!(two_page, owner);
-    let first_task = harness.tabs.owner(one_page.tab).ok_or("first auto task")?;
-    let second_task = harness.tabs.owner(two_page.tab).ok_or("second auto task")?;
-    assert_ne!(first_task, second_task);
+    assert_eq!(harness.tabs.owner(one_page.tab), None);
+    assert_eq!(harness.tabs.owner(two_page.tab), None);
     assert_eq!(
         harness
             .submit(&first, "page.opener", lazy)
@@ -3444,53 +3442,90 @@ async fn a_partial_task_close_keeps_refused_tabs_and_closes_the_rest() -> Result
 }
 
 #[tokio::test]
-async fn a_fetch_requires_explicit_new_pages_and_never_opens_a_lazy_default()
+async fn a_picked_task_reuses_its_last_used_tab_then_newest_then_opens_one()
 -> Result<(), Box<dyn Error>> {
     let harness = Harness::new().await?;
     let (creator, _creator_guard) = harness.run()?;
     let task = value(harness.submit(&creator, "neo.createTask", json!({})).await)?;
-    let (fetcher, _fetcher_guard) = harness.run()?;
+    let mut pages = Vec::new();
+    for _ in 0..3 {
+        pages.push(page_of(&value(
+            harness.submit(&creator, "context.newPage", json!({})).await,
+        )?)?);
+    }
+    let (other, _other_guard) = harness.run()?;
     value(
         harness
-            .submit(&fetcher, "neo.task", json!({ "id": task["id"] }))
+            .submit(&other, "page.opener", json!({ "page": pages[0] }))
             .await,
     )?;
-    for run in [&creator, &fetcher] {
-        for (name, input) in [
-            (
-                "page.opener",
-                json!({ "page": { "$neo": "page", "tab": null } }),
-            ),
-            ("context.newPage", json!({})),
-        ] {
-            let refused = failure(harness.submit(run, name, input).await)?;
-            assert_eq!(refused.error.owner(), ErrorOwner::Script);
-            assert_eq!(refused.error.code(), ErrorCode::TASK_PAGE_REQUIRED);
-            assert!(
-                refused
-                    .error
-                    .message()
-                    .contains(task["id"].as_str().ok_or("id")?)
-            );
-            assert_eq!(refused.delivery, Delivery::NotSent);
-        }
+    let lazy = json!({ "page": { "$neo": "page", "tab": null } });
+    for expected in [&pages[0], &pages[2], &pages[1]] {
+        let (run, _guard) = harness.run()?;
+        value(
+            harness
+                .submit(&run, "neo.task", json!({ "id": task["id"] }))
+                .await,
+        )?;
+        let reply = harness.submit(&run, "page.opener", lazy.clone()).await;
+        assert_eq!(reply.default_page.as_ref(), Some(expected));
+        assert_eq!(reply.pages[0].task_id.as_deref(), task["id"].as_str());
+        value(reply)?;
+        value(
+            harness
+                .submit(&run, "page.close", json!({ "page": expected }))
+                .await,
+        )?;
     }
-    assert!(
-        harness.fake.tabs().is_empty(),
-        "both slips fail before any tab opens"
-    );
-    let explicit = harness
-        .submit(&creator, "task.newPage", json!({ "task": task["id"] }))
-        .await;
-    assert_eq!(explicit.pages.len(), 1);
-    assert_eq!(explicit.pages[0].task_id.as_deref(), task["id"].as_str());
-    value(explicit)?;
+    let (empty, _empty_guard) = harness.run()?;
+    value(
+        harness
+            .submit(&empty, "neo.task", json!({ "id": task["id"] }))
+            .await,
+    )?;
+    let reply = harness.submit(&empty, "page.opener", lazy).await;
+    let fresh = reply.default_page.clone().ok_or("fresh default")?;
+    assert!(!pages.contains(&fresh), "no closed tab is reused");
+    assert_eq!(reply.pages[0].task_id.as_deref(), task["id"].as_str());
+    value(reply)?;
     Ok(())
 }
 
 #[tokio::test]
-async fn an_already_open_default_survives_a_fetch_and_shares_its_ambient_task()
--> Result<(), Box<dyn Error>> {
+async fn the_latest_pick_owns_new_tabs_and_closing_it_clears_the_pick() -> Result<(), Box<dyn Error>>
+{
+    let harness = Harness::new().await?;
+    let (run, _guard) = harness.run()?;
+    let first = value(harness.submit(&run, "neo.createTask", json!({})).await)?;
+    let second = value(harness.submit(&run, "neo.createTask", json!({})).await)?;
+    let opened = harness.submit(&run, "context.newPage", json!({})).await;
+    assert_eq!(opened.pages[0].task_id.as_deref(), second["id"].as_str());
+    value(opened)?;
+    value(
+        harness
+            .submit(&run, "task.close", json!({ "task": second["id"] }))
+            .await,
+    )?;
+    let plain = harness.submit(&run, "context.newPage", json!({})).await;
+    assert_eq!(
+        plain.pages[0].task_id, None,
+        "close does not restore an older script pick"
+    );
+    value(plain)?;
+    value(
+        harness
+            .submit(&run, "neo.task", json!({ "id": first["id"] }))
+            .await,
+    )?;
+    let picked = harness.submit(&run, "context.newPage", json!({})).await;
+    assert_eq!(picked.pages[0].task_id.as_deref(), first["id"].as_str());
+    value(picked)?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn an_already_resolved_default_stays_unowned_after_a_task_pick() -> Result<(), Box<dyn Error>>
+{
     let harness = Harness::new().await?;
     let (run, _guard) = harness.run()?;
     let opened = page_of(&value(
@@ -3501,73 +3536,119 @@ async fn an_already_open_default_survives_a_fetch_and_shares_its_ambient_task()
     let default_page = default.default_page.clone().ok_or("default")?;
     value(default)?;
     assert_ne!(opened, default_page);
-    assert_eq!(
-        harness.tabs.owner(opened.tab),
-        harness.tabs.owner(default_page.tab)
-    );
-    value(harness.submit(&run, "neo.createTask", json!({})).await)?;
+    assert_eq!(harness.tabs.owner(opened.tab), None);
+    assert_eq!(harness.tabs.owner(default_page.tab), None);
+    let task = value(harness.submit(&run, "neo.createTask", json!({})).await)?;
     let after = harness.submit(&run, "page.opener", lazy).await;
     assert_eq!(after.default_page, Some(default_page));
+    assert_eq!(after.pages[0].task_id, None);
     value(after)?;
+    let owned = harness.submit(&run, "context.newPage", json!({})).await;
+    assert_eq!(owned.pages[0].task_id.as_deref(), task["id"].as_str());
+    value(owned)?;
     Ok(())
 }
 
 #[tokio::test]
-async fn neo_tabs_reaches_user_tabs_with_null_task_facts() -> Result<(), Box<dyn Error>> {
+async fn a_task_fetch_never_lists_a_tab_this_run_closed() -> Result<(), Box<dyn Error>> {
+    // Chromium can acknowledge a close while its next listing still includes that tab.
     let harness = Harness::new().await?;
-    let owner = harness.owner_tab("https://owner.example/").await?;
     let (run, _guard) = harness.run()?;
-    let tabs = harness.submit(&run, "neo.tabs", json!({})).await;
-    assert_eq!(tabs.pages.len(), 1);
-    assert_eq!(serde_json::to_value(&tabs.pages[0])?["taskId"], Value::Null);
-    assert_eq!(value(tabs)?["pages"], json!([owner]));
-    assert_eq!(harness.tabs.owner(owner.tab), None);
-    value(
-        harness
-            .submit(&run, "page.opener", json!({ "page": owner }))
-            .await,
-    )?;
-    Ok(())
-}
-
-#[tokio::test]
-async fn neo_tabs_never_lists_a_tab_this_run_closed() -> Result<(), Box<dyn Error>> {
-    // Chromium acknowledges a close before the tab leaves `Browser.getTabs`, so a listing can
-    // still name a tab whose close already resolved (customer check, 2026-11-11: run 4's
-    // `neo.tabs()` right after `task.close()` listed the six closed tabs). The fake holds that
-    // moment still: closed tabs stay in its listing.
-    let harness = Harness::new().await?;
-    let owner = harness.owner_tab("https://owner.example/").await?;
-    let (creator, _creator_guard) = harness.run()?;
-    let task = value(harness.submit(&creator, "neo.createTask", json!({})).await)?;
-    let tab = page_of(&value(
-        harness
-            .submit(&creator, "task.newPage", json!({ "task": task["id"] }))
-            .await,
+    let task = value(harness.submit(&run, "neo.createTask", json!({})).await)?;
+    let closed = page_of(&value(
+        harness.submit(&run, "context.newPage", json!({})).await,
     )?)?;
-    let (run, _guard) = harness.run()?;
+    let open = page_of(&value(
+        harness.submit(&run, "context.newPage", json!({})).await,
+    )?)?;
+    harness.fake.linger_closed_tabs();
     value(
         harness
-            .submit(&run, "neo.task", json!({ "id": task["id"] }))
+            .submit(&run, "page.close", json!({ "page": closed }))
             .await,
     )?;
-    harness.fake.linger_closed_tabs();
-    let closed = value(
-        harness
-            .submit(&run, "task.close", json!({ "task": task["id"] }))
-            .await,
-    )?;
-    assert_eq!(closed["closed"], json!([tab.tab]));
-    let listed = harness.submit(&run, "neo.tabs", json!({})).await;
+    let listed = harness
+        .submit(&run, "neo.task", json!({ "id": task["id"] }))
+        .await;
     assert!(
-        listed.pages.iter().all(|fact| fact.tab != tab.tab),
-        "no fact revives the closed tab as an open page"
+        listed.pages.iter().all(|fact| fact.tab != closed.tab),
+        "no fact revives the closed tab"
     );
-    assert_eq!(
-        value(listed)?["pages"],
-        json!([owner]),
-        "the user's tab stays listed; the tab this run closed does not"
-    );
+    assert_eq!(value(listed)?["pages"], json!([open]));
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_task_closed_by_another_run_leaves_context_and_default_opens_unowned()
+-> Result<(), Box<dyn Error>> {
+    for lazy in [false, true] {
+        let harness = Harness::new().await?;
+        let (run, _guard) = harness.run()?;
+        let task = value(harness.submit(&run, "neo.createTask", json!({})).await)?;
+        let (closer, _closer_guard) = harness.run()?;
+        value(
+            harness
+                .submit(&closer, "task.close", json!({ "task": task["id"] }))
+                .await,
+        )?;
+        let reply = if lazy {
+            harness
+                .submit(
+                    &run,
+                    "page.opener",
+                    json!({ "page": { "$neo": "page", "tab": null } }),
+                )
+                .await
+        } else {
+            harness.submit(&run, "context.newPage", json!({})).await
+        };
+        assert_eq!(reply.pages[0].task_id, None);
+        value(reply)?;
+        assert_eq!(harness.fake.count("Browser.createTab"), 1);
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_task_closing_during_an_open_leaves_the_new_tab_unowned() -> Result<(), Box<dyn Error>> {
+    for lazy in [false, true] {
+        let harness = Harness::new().await?;
+        let (run, _guard) = harness.run()?;
+        let task = value(harness.submit(&run, "neo.createTask", json!({})).await)?;
+        harness.fake.hold_next("Browser.createTab");
+        let (name, input) = if lazy {
+            (
+                "page.opener",
+                json!({ "page": { "$neo": "page", "tab": null } }),
+            )
+        } else {
+            ("context.newPage", json!({}))
+        };
+        let opening = harness
+            .dispatcher
+            .submit(&run, Call::script(name.to_owned(), input, None));
+        within(async {
+            while harness.fake.count("Browser.createTab") == 0 {
+                time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await?;
+        let (closer, _closer_guard) = harness.run()?;
+        value(
+            harness
+                .submit(&closer, "task.close", json!({ "task": task["id"] }))
+                .await,
+        )?;
+        harness.fake.release_held();
+        let reply = within(opening.wait()).await?;
+        assert_eq!(reply.pages[0].task_id, None);
+        value(reply)?;
+        assert_eq!(
+            harness.fake.tabs().len(),
+            1,
+            "the successful open survives its former task"
+        );
+    }
     Ok(())
 }
 
@@ -3584,7 +3665,7 @@ async fn missing_tasks_fail_before_any_browser_write() -> Result<(), Box<dyn Err
         assert_eq!(refused.error.owner(), ErrorOwner::Script);
         assert_eq!(refused.error.code(), ErrorCode::TASK_NOT_FOUND);
         assert_eq!(refused.delivery, Delivery::NotSent);
-        assert!(refused.error.message().contains("neo.tabs()"));
+        assert!(refused.error.message().contains("context.pages()"));
     }
     assert!(harness.fake.tabs().is_empty());
     Ok(())
@@ -3755,5 +3836,76 @@ async fn a_popup_event_assigns_ownership_before_its_first_fact() -> Result<(), B
         task["id"].as_str()
     );
     value(reply)?;
+    Ok(())
+}
+
+#[test]
+fn task_pages_stay_closed_after_a_stale_browser_listing() -> Result<(), TestError> {
+    on_neo_runtime(async {
+        let harness = Harness::new().await.map_err(|error| error.to_string())?;
+        harness.fake.linger_closed_tabs();
+        let (run, _guard) = harness.run().map_err(|error| error.to_string())?;
+        let script = Script {
+            code: r"
+                const task = await neo.createTask();
+                const first = await context.newPage();
+                const second = await context.newPage();
+                await first.close();
+                const fetched = await neo.task(task.id);
+                const remaining = fetched.pages().map(p => p.tabId);
+                await task.close();
+                return { remaining, expected: [second.tabId], after: task.pages(),
+                    closed: [first.isClosed(), second.isClosed()],
+                    plain: (await context.newPage()).taskId };
+            "
+            .to_owned(),
+            page: None,
+            pages: Vec::new(),
+            observed: None,
+        };
+        match run_script(&run, &harness.dispatcher, script).await.outcome {
+            ScriptOutcome::Returned(value) => {
+                assert_eq!(value["remaining"], value["expected"]);
+                assert_eq!(value["after"], json!([]));
+                assert_eq!(value["closed"], json!([true, true]));
+                assert_eq!(value["plain"], Value::Null);
+            }
+            other => return Err(format!("expected closed pages, got {other:?}").into()),
+        }
+        Ok(())
+    })
+}
+
+#[tokio::test]
+async fn an_evicted_pick_and_a_full_task_book_never_block_plain_opens() -> Result<(), Box<dyn Error>>
+{
+    let harness = Harness::new().await?;
+    let (run, _guard) = harness.run()?;
+    let picked = value(harness.submit(&run, "neo.createTask", json!({})).await)?;
+    // Keep the remaining empty tasks pinned so this pick is the only eviction candidate.
+    let mut pinned = Vec::new();
+    for _ in 0..4096 {
+        pinned.push(harness.tabs.create_task(None)?);
+    }
+    let absent = failure(
+        harness
+            .submit(&run, "neo.task", json!({ "id": picked["id"] }))
+            .await,
+    )?;
+    assert_eq!(absent.error.code(), ErrorCode::TASK_NOT_FOUND);
+    let full = failure(harness.submit(&run, "neo.createTask", json!({})).await)?;
+    assert_eq!(full.error.code(), ErrorCode::TASK_LIMIT_REACHED);
+    for (name, input) in [
+        ("context.newPage", json!({})),
+        (
+            "page.opener",
+            json!({ "page": { "$neo": "page", "tab": null } }),
+        ),
+    ] {
+        let reply = harness.submit(&run, name, input).await;
+        assert_eq!(reply.pages[0].task_id, None);
+        value(reply)?;
+    }
+    assert_eq!(harness.fake.count("Browser.createTab"), 2);
     Ok(())
 }

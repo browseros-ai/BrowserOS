@@ -24,13 +24,13 @@
 
       pages() {
         if (this.#closed) return []
-        // Keep the server's order, then newPage's additions, then pages learned from facts
-        // (including popups). The shared Page cache supplies liveness and identity.
+        // Keep the server's order, then the context's newly learned pages (including popups).
+        // The shared Page cache supplies liveness and identity.
         return [
           ...new Set([
             ...this.#ordered,
-            ...this.#added,
             ...context.pages().filter((page) => page.taskId === this.#id),
+            ...this.#added,
           ]),
         ].filter((page) => !page.isClosed())
       }
@@ -77,7 +77,7 @@
         throw refuse(
           api,
           'task_not_found',
-          `no task \`${this.#id}\` is open in Neo (tasks live in memory and end with \`task.close()\` or a Neo restart). Start one with \`neo.createTask(name)\`, or find your tabs with \`neo.tabs()\` and read \`page.taskId\`.`,
+          `no task \`${this.#id}\` is open in Neo (tasks live in memory and end with \`task.close()\` or a Neo restart). Start one with \`neo.createTask(name)\`, or find your tabs in \`context.pages()\` and read \`page.taskId\`.`,
         )
       }
     }
@@ -88,9 +88,6 @@
           await invoke('neo.createTask', name === undefined ? {} : { name }),
         ),
       task: async (id) => Task._from(await invoke('neo.task', { id })),
-      // A page this run closed is gone, as in Playwright's context.pages().
-      tabs: async () =>
-        (await invoke('neo.tabs', {})).pages.filter((page) => !page.isClosed()),
       // Every CAPTCHA verdict, unsolved included, remains a value to branch on.
       solveCaptcha: (page) => invoke('neo.solveCaptcha', { page }),
     })

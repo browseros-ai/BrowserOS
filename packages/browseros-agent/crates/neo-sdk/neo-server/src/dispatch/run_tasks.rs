@@ -1,17 +1,15 @@
-//! A run's explicit fetches, shared ambient task, and first-touch reply order.
+//! A run's current task and first-touch order for host metadata.
 
 use neo_trace::TaskId;
 use serde::{Deserialize, Serialize};
 
-use super::{ErrorCode, OperationError};
-use crate::browser::{TabRegistry, TaskRecord};
+use crate::browser::TaskRecord;
 
 /// Why the reply names a task. Closing it supersedes its first-touch kind.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) enum TaskKind {
     Created,
-    BuiltinPage,
     Fetched,
     Closed,
 }
@@ -33,25 +31,37 @@ pub(crate) struct TabNote {
     pub(crate) url: String,
 }
 
-/// Protected by the run's task lock. Ambient creation and publication are one critical section.
-#[derive(Default)]
+/// Protected by the run's task lock; the latest explicit pick wins.
 pub(super) struct RunTasks {
-    fetched: Option<TaskId>,
-    auto: Option<TaskId>,
+    current: Option<TaskId>,
     touched: Vec<TaskNote>,
 }
 
 impl RunTasks {
-    pub(super) fn fetched(&self) -> Option<&TaskId> {
-        self.fetched.as_ref()
+    pub(super) fn new(host: Option<TaskId>) -> Self {
+        Self {
+            current: host,
+            touched: Vec::new(),
+        }
     }
 
-    pub(super) fn fetch(&mut self, task: &TaskRecord, kind: TaskKind) {
-        self.fetched = Some(task.id.clone());
+    pub(super) fn current(&self) -> Option<&TaskId> {
+        self.current.as_ref()
+    }
+
+    pub(super) fn pick(&mut self, task: &TaskRecord, kind: TaskKind) {
+        self.current = Some(task.id.clone());
         self.touch(task, kind);
     }
 
-    pub(super) fn touch(&mut self, task: &TaskRecord, kind: TaskKind) {
+    pub(super) fn close(&mut self, task: &TaskRecord, host: Option<&TaskId>) {
+        if self.current.as_ref() == Some(&task.id) {
+            self.current = host.cloned();
+        }
+        self.touch(task, TaskKind::Closed);
+    }
+
+    fn touch(&mut self, task: &TaskRecord, kind: TaskKind) {
         if let Some(note) = self
             .touched
             .iter_mut()
@@ -72,35 +82,5 @@ impl RunTasks {
 
     pub(super) fn notes(&self) -> Vec<TaskNote> {
         self.touched.clone()
-    }
-
-    pub(super) fn ambient(
-        &mut self,
-        tabs: &TabRegistry,
-        host: Option<&TaskId>,
-    ) -> Result<TaskId, OperationError> {
-        if let Some(host) = host {
-            tabs.ensure_task(host)?;
-            return Ok(host.clone());
-        }
-        if let Some(id) = &self.auto {
-            // A closed or evicted auto task is not silently recreated under the same id.
-            tabs.task(id)?;
-            return Ok(id.clone());
-        }
-        let task = tabs.create_task(None)?;
-        self.touch(&task, TaskKind::BuiltinPage);
-        self.auto = Some(task.id.clone());
-        Ok(task.id)
-    }
-
-    pub(super) fn check_new_page(&self) -> Result<(), OperationError> {
-        if let Some(id) = &self.fetched {
-            return Err(OperationError::script(
-                ErrorCode::TASK_PAGE_REQUIRED,
-                format!("this script uses task {id}: open tabs with `await task.newPage()`."),
-            ));
-        }
-        Ok(())
     }
 }

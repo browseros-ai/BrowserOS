@@ -92,6 +92,7 @@ impl TabRegistry {
             return;
         }
         state.entry(page, now).touched = now;
+        state.tasks.touch(page.tab);
         state.remember(page.tab, task, now);
     }
 
@@ -105,6 +106,7 @@ impl TabRegistry {
         let entry = state.entry(page, now);
         entry.origin = TabOrigin::Agent;
         entry.touched = now;
+        state.tasks.touch(page.tab);
         state.remember(page.tab, task, now);
     }
 

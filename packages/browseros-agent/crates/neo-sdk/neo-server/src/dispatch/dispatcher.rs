@@ -66,7 +66,7 @@ const UNKNOWN_METHOD: MethodSpec = MethodSpec::new("unknown", Effect::Write);
 ///
 /// Everything up to the start record is synchronous, so every op id handed out is recorded
 /// and answered even if its task never runs. An op on the run's lazy page records its start
-/// once the door opened the page, before the rules, and its guard records it on any path that
+/// once the door resolved the page, before the rules, and its guard records it on any path that
 /// ends the op sooner.
 pub(crate) struct Dispatcher {
     registry: Registry,
@@ -320,15 +320,20 @@ impl Dispatcher {
         pending.wait().await.outcome
     }
 
-    /// Opens the run's lazy default page through [`DEFAULT_PAGE_OPENER`], as a Neo op with no
-    /// parent. It belongs to the run, not to whichever op first touched `page`, so its send
-    /// never counts toward that op's delivery.
+    /// Resolves the lazy page in the current task, opening one if needed. The opener is a Neo
+    /// op with no parent, so its send never counts toward the op that first touched `page`.
     pub(super) async fn open_default_page(
         self: &Arc<Self>,
         run: &Arc<RunCtx>,
     ) -> Result<PageRef, OperationError> {
-        let task = run.ambient_task(&self.tabs)?;
-        let task = self.tabs.task(&task)?;
+        let task = run.current_task().and_then(|id| self.tabs.task(&id).ok());
+        if let Some(task) = &task {
+            for tab in task.last_used_tab.iter().chain(task.tabs.iter().rev()) {
+                if !run.closed_it(*tab) && self.tabs.is_open(*tab) {
+                    return Ok(PageRef { tab: *tab });
+                }
+            }
+        }
         let opened = self
             .invoke_child(run, None, DEFAULT_PAGE_OPENER, json!({}))
             .await
@@ -338,7 +343,10 @@ impl Dispatcher {
                 page: PageTarget(TargetHandle::Page { tab }),
             }) => {
                 let page = PageRef { tab };
-                self.tabs.own(&page, &task.id)?;
+                if let Some(task) = task {
+                    // A concurrent close wins ownership, but cannot fail an already-open tab.
+                    let _ = self.tabs.own(&page, &task.id);
+                }
                 Ok(page)
             }
             Ok(OpenedPage {
@@ -545,12 +553,7 @@ impl Dispatcher {
         if let Err(refusal) = self.check(&check) {
             return guard.finish(Ending::Refused(refusal), Vec::new(), default_page, None);
         }
-        let ambient = match self.opening_task(&run, &spec, caller) {
-            Ok(task) => task,
-            Err(error) => {
-                return guard.finish(Ending::Refused(error), Vec::new(), default_page, None);
-            }
-        };
+        let opening_task = self.opening_task(&run, &spec, caller);
         let op = OpCore {
             run: Arc::clone(&run),
             dispatcher: Arc::clone(&self),
@@ -601,26 +604,19 @@ impl Dispatcher {
                     ..check
                 },
                 &mut ending,
-                ambient.as_ref().map(|task| &task.id),
+                opening_task.as_ref().map(|task| &task.id),
             )
             .await;
         guard.finish(ending, facts.pages, default_page, facts.observed);
     }
 
-    /// Reserve the ambient task before a script's opener sends, including at the task limit.
-    /// Its record pins an empty task until ownership is assigned after the open.
-    fn opening_task(
-        &self,
-        run: &RunCtx,
-        spec: &MethodSpec,
-        caller: Caller,
-    ) -> Result<Option<TaskRecord>, OperationError> {
+    /// Capture the latest pick before a script's opener sends. Its record pins an empty task
+    /// until ownership is assigned; a missing task simply leaves the tab unowned.
+    fn opening_task(&self, run: &RunCtx, spec: &MethodSpec, caller: Caller) -> Option<TaskRecord> {
         if caller == Caller::Script && spec.name == DEFAULT_PAGE_OPENER {
-            run.check_new_page()?;
-            let id = run.ambient_task(&self.tabs)?;
-            return Ok(Some(self.tabs.task(&id)?));
+            return run.current_task().and_then(|id| self.tabs.task(&id).ok());
         }
-        Ok(None)
+        None
     }
 
     async fn resolve_target(
@@ -708,7 +704,7 @@ impl Dispatcher {
         state: &OpState,
         check: PolicyCheck<'_>,
         ending: &mut Ending,
-        ambient: Option<&TaskId>,
+        opening_task: Option<&TaskId>,
     ) -> PageFacts {
         let reports = state.take_reports();
         let mut pages: Vec<PageRef> = target.into_iter().cloned().collect();
@@ -722,11 +718,9 @@ impl Dispatcher {
                     let seen = self.tabs.seen();
                     if self.browser.page(page.tab).await.is_some() {
                         self.tabs.opened_by_agent(page, seen, run.task_id());
-                        if let Some(task) = ambient
-                            && let Err(error) = self.tabs.own(page, task)
-                        {
-                            *ending =
-                                Ending::Failed(LeafError::definite(OperationError::from(error)));
+                        if let Some(task) = opening_task {
+                            // The selected task can close while the browser opens this tab.
+                            let _ = self.tabs.own(page, task);
                         }
                     }
                 }

@@ -2020,10 +2020,6 @@ struct TaskInput {
     task: String,
 }
 
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct TabsInput {}
-
 async fn task_rig() -> Result<TestRig, TestError> {
     let mut rig = TestRig::new().await?;
     let mut registry = RegistryBuilder::default();
@@ -2050,17 +2046,6 @@ async fn task_rig() -> Result<TestRig, TestError> {
                 json!([{ "$neo": "page", "tab": 102 }, { "$neo": "page", "tab": 101 }])
             };
             Ok(json!({ "id": input.id, "pages": pages }))
-        },
-    })?;
-    registry.define(TaskOp {
-        name: "neo.tabs",
-        effect: Effect::Read,
-        answer: |_input: TabsInput| {
-            Ok(json!({ "pages": [
-                { "$neo": "page", "tab": 201 },
-                { "$neo": "page", "tab": 102 },
-                { "$neo": "page", "tab": 101 }
-            ] }))
         },
     })?;
     registry.define(TaskOp {
@@ -2162,11 +2147,11 @@ fn task_pages_include_new_pages_and_popup_facts_but_not_closed_pages() -> Result
         assert_eq!(
             returned(script(&rig, code).await?)?,
             json!({
-                "first": [102, 101], "added": [102, 101, 103, 104],
-                "refreshed": [102, 101, 103, 104], "afterClose": [102, 103, 104],
+                "first": [102, 101], "added": [102, 101, 104, 103],
+                "refreshed": [102, 101, 104, 103], "afterClose": [102, 104, 103],
                 "newPage": true, "popup": true, "shared": true
             }),
-            "newPage precedes fact-only popups even if the popup was observed first"
+            "already known popups precede later newPage additions"
         );
         Ok(())
     })
@@ -2229,7 +2214,7 @@ fn closing_a_task_empties_its_pages_and_refuses_further_methods() -> Result<(), 
             context._pageFor({ tab: 104, taskId: task.id });
             const errors = [];
             for (const call of [() => task.page(102), () => task.newPage(), () => task.close()]) {
-              try { await call(); } catch (e) { errors.push([e instanceof NeoError, e.code, e.owner]); }
+              try { await call(); } catch (e) { errors.push([e instanceof NeoError, e.code, e.owner, e.message.includes('context.pages()')]); }
             }
             return { id: task.id, pages: task.pages(), void: closed === undefined, errors };
         ";
@@ -2237,8 +2222,8 @@ fn closing_a_task_empties_its_pages_and_refuses_further_methods() -> Result<(), 
             returned(script(&rig, code).await?)?,
             json!({
                 "id": "research", "pages": [], "void": true,
-                "errors": [[true, "task_not_found", "script"], [true, "task_not_found", "script"],
-                    [true, "task_not_found", "script"]]
+                "errors": [[true, "task_not_found", "script", true], [true, "task_not_found", "script", true],
+                    [true, "task_not_found", "script", true]]
             }),
             "closing is final for the cached handle, including late facts"
         );
@@ -2274,23 +2259,41 @@ fn a_refused_close_keeps_the_task_usable_and_unknown_tasks_keep_the_server_error
 }
 
 #[test]
-fn neo_tabs_returns_shared_pages_with_task_ids_from_facts() -> Result<(), TestError> {
+fn context_pages_returns_shared_pages_with_task_ids_from_facts() -> Result<(), TestError> {
     on_neo_runtime(async {
         let rig = task_rig().await?;
         let code = r"
             context._pageFor({ tab: 101, taskId: 'research' });
             context._pageFor({ tab: 102, taskId: 'research' });
             context._pageFor({ tab: 201, taskId: null });
-            const tabs = await neo.tabs();
+            const tabs = context.pages();
             return { ids: tabs.map(p => [p.tabId, p.taskId]),
               shared: tabs.every(p => context.pages().includes(p)) };
         ";
         assert_eq!(
             returned(script(&rig, code).await?)?,
             json!({
-                "ids": [[201, null], [102, "research"], [101, "research"]], "shared": true
+                "ids": [[101, "research"], [102, "research"], [201, null]], "shared": true
             }),
-            "tabs keeps browser listing order and the context's Page objects"
+            "context pages retain their shared identity and ownership"
+        );
+        Ok(())
+    })
+}
+
+#[test]
+fn removed_tab_listing_is_absent_and_its_operation_is_unknown() -> Result<(), TestError> {
+    on_neo_runtime(async {
+        let rig = TestRig::new().await?;
+        let code = r"
+            let error;
+            try { await __neo.invoke(['neo', 'tabs'].join('.'), {}); }
+            catch (caught) { error = { code: caught.code, owner: caught.owner }; }
+            return { type: typeof neo['tabs'], error };
+        ";
+        assert_eq!(
+            returned(script(&rig, code).await?)?,
+            json!({ "type": "undefined", "error": { "code": "method_unavailable", "owner": "script" } })
         );
         Ok(())
     })
