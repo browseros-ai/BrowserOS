@@ -901,8 +901,7 @@ impl FrameKinds {
 
 #[tokio::test]
 #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT (default 9005)"]
-async fn tests_that_with_runtime_off_every_kind_of_frame_takes_its_world_by_number() -> TestResult
-{
+async fn tests_that_with_runtime_off_every_kind_of_frame_takes_its_world_by_number() -> TestResult {
     let live = LiveBrowser::connect().await?;
     let server = fixtures().await?;
     let frames = FrameKinds::open(&live, &server).await?;

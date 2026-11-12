@@ -7,6 +7,7 @@
 //! need `Runtime` enabled on the session, which a site can detect by timing its console calls
 //! (`browseros_core::runtime_lease`). So `worker.evaluate` leaves `Runtime` off.
 
+use browseros_core::ProtocolSession;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use ts_rs::TS;
@@ -95,39 +96,7 @@ pub(crate) async fn evaluate(
     };
     // After the readiness wait: a recovered endpoint may have been rebound meanwhile.
     let session = worker.session();
-    let call = async {
-        // Reading `globalThis` runs no worker code, so it comes before the effect is marked.
-        let global: Global = session
-            .send(
-                "Runtime.evaluate",
-                json!({
-                    "expression": "globalThis",
-                    "objectGroup": scope.object_group(&session),
-                    "silent": true,
-                }),
-            )
-            .await
-            .map_err(|error| scope.core_error(&error))?;
-        let global = global.result.object_id.ok_or_else(|| {
-            scope.fail(ErrorCode::Internal, "the worker returned no handle to its global")
-        })?;
-        let _sent = scope.send_effect()?;
-        session
-            .send_value(
-                "Runtime.callFunctionOn",
-                json!({
-                    "objectId": global,
-                    "functionDeclaration": MAIN_WORLD_JS,
-                    "arguments": [{"value": "evaluate"}, {"value": is_function},
-                        {"value": expression}, {"value": 1}, {"value": arg}],
-                    "returnByValue": true,
-                    "awaitPromise": true,
-                    "userGesture": true,
-                }),
-            )
-            .await
-            .map_err(|error| scope.core_error(&error))
-    };
+    let call = call_in_worker(scope, &session, &expression, is_function, &arg);
     let reply = tokio::select! {
         biased;
         _ = context.wait_for(|state| *state == WorkerContext::Closed) => return Err(closed()),
@@ -148,6 +117,51 @@ pub(crate) async fn evaluate(
     };
     let value = evaluate_guard::evaluation_result(scope, text)?;
     Ok(SerializedValue(value))
+}
+
+/// Upstream's `UtilityScript.evaluate` of the agent's script, through a handle to the worker's
+/// global: `Runtime.callFunctionOn`'s raw reply.
+async fn call_in_worker(
+    scope: &OpScope<'_>,
+    session: &ProtocolSession,
+    expression: &str,
+    is_function: bool,
+    arg: &str,
+) -> Result<Value, PlaywrightError> {
+    // Reading `globalThis` runs no worker code, so it comes before the effect is marked.
+    let global: Global = session
+        .send(
+            "Runtime.evaluate",
+            json!({
+                "expression": "globalThis",
+                "objectGroup": scope.object_group(session),
+                "silent": true,
+            }),
+        )
+        .await
+        .map_err(|error| scope.core_error(&error))?;
+    let global = global.result.object_id.ok_or_else(|| {
+        scope.fail(
+            ErrorCode::Internal,
+            "the worker returned no handle to its global",
+        )
+    })?;
+    let _sent = scope.send_effect()?;
+    session
+        .send_value(
+            "Runtime.callFunctionOn",
+            json!({
+                "objectId": global,
+                "functionDeclaration": MAIN_WORLD_JS,
+                "arguments": [{"value": "evaluate"}, {"value": is_function},
+                    {"value": expression}, {"value": 1}, {"value": arg}],
+                "returnByValue": true,
+                "awaitPromise": true,
+                "userGesture": true,
+            }),
+        )
+        .await
+        .map_err(|error| scope.core_error(&error))
 }
 
 #[derive(Deserialize)]

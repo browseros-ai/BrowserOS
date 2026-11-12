@@ -61,6 +61,26 @@ struct Inner {
     runtime: HashMap<Subscription, Vec<RuntimeLease>>,
 }
 
+/// What one run asks of a tab's dedicated workers: their console messages and uncaught errors,
+/// which a worker reports only while `Runtime` is on in it (`target_watcher.rs`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct WorkerReports {
+    /// The earliest `since` of the run's `page.on('console' | 'pageerror')` listeners on the tab
+    /// that leased its page's `Runtime`. A listener holds no lease where those events never
+    /// come (hosted BrowserOS), and then asks nothing of workers either.
+    pub(crate) listening_since: Option<u64>,
+    /// Whether a `waitForEvent` for one is in flight on the tab (hosted BrowserOS refuses
+    /// those). It keeps no `since` here.
+    pub(crate) waiting: bool,
+}
+
+impl WorkerReports {
+    /// Whether the run asks for anything.
+    pub(crate) fn wanted(self) -> bool {
+        self.listening_since.is_some() || self.waiting
+    }
+}
+
 /// Marks one `events.next` in flight until dropped.
 pub(crate) struct Pumping<'run> {
     events: &'run RunEvents,
@@ -248,6 +268,32 @@ impl RunEvents {
         let wanted =
             |subscription: &Subscription| subscription.page_event() == Some((target, event));
         inner.listening.keys().any(wanted) || inner.waiting.keys().any(wanted)
+    }
+
+    /// What the run asks of the workers of the tab whose target is `target` ([`WorkerReports`]).
+    pub(crate) fn worker_reports(&self, target: &TargetId) -> WorkerReports {
+        let inner = self.lock();
+        let reported = |subscription: &Subscription| {
+            subscription.page_event().is_some_and(|(listened, event)| {
+                listened == target
+                    && matches!(event, PageEventKind::Console | PageEventKind::PageError)
+            })
+        };
+        WorkerReports {
+            listening_since: inner
+                .listening
+                .iter()
+                .filter(|(subscription, _)| {
+                    reported(subscription)
+                        && inner
+                            .runtime
+                            .get(*subscription)
+                            .is_some_and(|leases| !leases.is_empty())
+                })
+                .map(|(_, listening)| listening.since_ms)
+                .min(),
+            waiting: inner.waiting.keys().any(reported),
+        }
     }
 
     /// Context lifecycle interest explicitly asks to observe untouched pages too.

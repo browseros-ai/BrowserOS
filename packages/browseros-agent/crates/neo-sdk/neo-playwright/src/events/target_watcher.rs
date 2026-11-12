@@ -63,13 +63,13 @@ use tokio::time::{self, Instant, MissedTickBehavior};
 use crate::events::dialog_table::{ClosedBy, HeldDialog, Unanswered};
 use crate::events::event_hub::{EventWriter, now_ms};
 use crate::events::frame_lifecycle::FrameLifecycleTracker;
-use crate::events::worker_table::WorkerContext;
 use crate::events::page_event::{
     BindingCalled, ConsoleMessage, ConsoleParams, DialogId, DialogKind, DialogOpened,
     DownloadStarted, ExceptionParams, FileChooserOpened, OpenedPage, PageError, PageEvent,
     WindowKind,
 };
-use crate::events::{PageEventKind, WatcherProgress, navigation_event};
+use crate::events::worker_table::WorkerContext;
+use crate::events::{PageEventKind, WatcherProgress, WorkerReports, navigation_event};
 use crate::world::{BackendNodeId, FrameAttachLog, FrameEvent};
 
 /// upstream's `PageBinding.kBindingName`: the CDP binding every exposed binding's stub calls.
@@ -1080,7 +1080,8 @@ impl Watcher {
                 .await;
             return;
         }
-        self.worker_sessions.insert(session_id.clone(), info.id.clone());
+        self.worker_sessions
+            .insert(session_id.clone(), info.id.clone());
         if announce {
             self.writer.record(PageEvent::Worker {
                 target: tab,
@@ -1123,20 +1124,22 @@ impl Watcher {
         }
     }
 
-    /// Takes a `Runtime` lease on worker session `id` while some run listens on its tab for
-    /// console messages or page errors, and drops it once none does ([`WorkerRuntime`]).
+    /// Takes a `Runtime` lease on worker session `id` while some run asks for console messages
+    /// or page errors on its tab, and drops it once none does ([`WorkerRuntime`]). A run asks
+    /// through a listener only where it leased its page's `Runtime` for them, so in hosted
+    /// BrowserOS, which reports neither, workers stay quiet too.
     ///
     /// The lease's floor is where the browser's replay of the worker's stored history starts to
     /// count (`RuntimeLeases::floor_ms`): the earliest `since` of the tab's listeners, which is
-    /// exact; for a `waitForEvent` alone, whose `since` the run does not keep, the last time the
-    /// watcher saw nobody listening, at most one tick before it began.
+    /// exact; for a `waitForEvent`, whose `since` the run does not keep, the last time the
+    /// watcher saw nobody asking, at most one tick before it began.
     async fn lease_worker(&mut self, id: &SessionId) {
-        let tab = self.sessions.get(id).cloned();
-        let wanted = tab.as_ref().is_some_and(|tab| {
-            let hub = self.writer.hub();
-            hub.wants(tab, PageEventKind::Console) || hub.wants(tab, PageEventKind::PageError)
-        });
-        let checked_ms = match (wanted, self.worker_runtime.get(id)) {
+        let asked = self
+            .sessions
+            .get(id)
+            .map(|tab| self.worker_reports(tab))
+            .unwrap_or_default();
+        let checked_ms = match (asked.wanted(), self.worker_runtime.get(id)) {
             // Not a chosen worker session, or already as it should be.
             (_, None) | (true, Some(WorkerRuntime::On { .. })) => return,
             (true, Some(WorkerRuntime::Off { checked_ms })) => *checked_ms,
@@ -1151,10 +1154,14 @@ impl Watcher {
                 return;
             }
         };
-        let floor_ms = tab
-            .as_ref()
-            .and_then(|tab| self.listening_since(tab))
-            .unwrap_or(checked_ms);
+        let since_ms = asked
+            .listening_since
+            .map(|since| Duration::from_millis(since).as_secs_f64() * 1000.0);
+        let floor_ms = match (since_ms, asked.waiting) {
+            (Some(since), false) => since,
+            (Some(since), true) => since.min(checked_ms),
+            (None, _) => checked_ms,
+        };
         let session = self
             .browser
             .protocol_session(id.clone())
@@ -1172,24 +1179,20 @@ impl Watcher {
         }
     }
 
-    /// The earliest moment a run that listens on `tab` for console messages or page errors
-    /// asked for them (`page.on`), in milliseconds since the epoch.
-    fn listening_since(&self, tab: &TargetId) -> Option<f64> {
-        let hub = self.writer.hub();
-        [PageEventKind::Console, PageEventKind::PageError]
-            .into_iter()
-            .flat_map(|kind| hub.listeners(tab, kind))
-            .filter_map(|run| run.upgrade())
-            .flat_map(|run| run.events.listeners())
-            .filter(|(subscription, _)| {
-                subscription.page_event().is_some_and(|(target, kind)| {
-                    target == tab
-                        && matches!(kind, PageEventKind::Console | PageEventKind::PageError)
-                })
+    /// What the live runs together ask of `tab`'s workers.
+    fn worker_reports(&self, tab: &TargetId) -> WorkerReports {
+        self.writer
+            .hub()
+            .live_runs()
+            .iter()
+            .map(|run| run.events.worker_reports(tab))
+            .fold(WorkerReports::default(), |all, run| WorkerReports {
+                listening_since: match (all.listening_since, run.listening_since) {
+                    (Some(a), Some(b)) => Some(a.min(b)),
+                    (a, b) => a.or(b),
+                },
+                waiting: all.waiting || run.waiting,
             })
-            .map(|(_, listening)| listening.since_ms)
-            .min()
-            .map(|since| Duration::from_millis(since).as_secs_f64() * 1000.0)
     }
 
     async fn attached(&mut self, parent: Option<&SessionId>, attached: Attached) {
@@ -1743,6 +1746,7 @@ mod worker_observation_tests {
         BrowserSession, BrowserSessionHooks, CdpConnection, SessionId, TabId, TargetId,
     };
     use serde_json::json;
+    use tokio::task;
 
     use super::Watcher;
     use crate::events::worker_table::WorkerInfo;
@@ -1816,6 +1820,13 @@ mod worker_observation_tests {
         }
     }
 
+    /// Lets the spawned `Runtime.disable` of a dropped lease reach the connection.
+    async fn settle() {
+        for _ in 0..20 {
+            task::yield_now().await;
+        }
+    }
+
     /// The methods of `calls` that went to `session`, in order.
     fn sent_to(calls: &[TestCall], session: &str) -> Vec<String> {
         calls
@@ -1841,7 +1852,12 @@ mod worker_observation_tests {
             .start_worker(page.clone(), worker("worker"), first.clone(), true)
             .await;
         watcher
-            .start_worker(page.clone(), worker("worker"), SessionId::from("duplicate"), true)
+            .start_worker(
+                page.clone(),
+                worker("worker"),
+                SessionId::from("duplicate"),
+                true,
+            )
             .await;
         let endpoint = hub.workers.get(&page, "worker").ok_or("worker exists")?;
         assert_eq!(endpoint.session().session_id(), Some(&first));
@@ -1861,10 +1877,8 @@ mod worker_observation_tests {
     #[tokio::test]
     async fn a_worker_reports_runtime_only_while_a_run_listens_on_its_tab()
     -> Result<(), Box<dyn Error>> {
-        let connection = TestConnection::new([(
-            "Browser.getVersion",
-            json!({"product":"Chrome/143.0"}),
-        )]);
+        let connection =
+            TestConnection::new([("Browser.getVersion", json!({"product":"Chrome/143.0"}))]);
         for method in [
             "Target.setAutoAttach",
             "Runtime.runIfWaitingForDebugger",
@@ -1882,12 +1896,26 @@ mod worker_observation_tests {
             target: page.clone(),
             event: PageEventKind::Console,
         };
+        let leases = Arc::clone(watcher.browser.page_signals.runtime_leases());
 
-        // A worker that starts while nobody listens, then a listener.
+        // A worker that starts while nobody listens, then a listener, which leases its page
+        // as `event_op::listen` does.
         watcher
-            .start_worker(page.clone(), worker("early"), SessionId::from("early"), true)
+            .start_worker(
+                page.clone(),
+                worker("early"),
+                SessionId::from("early"),
+                true,
+            )
             .await;
         run.events.listen(console.clone(), 1_000, 0);
+        let page_session = watcher
+            .browser
+            .protocol_session(SessionId::from("page-session"));
+        run.events.hold_runtime(
+            &console,
+            vec![leases.acquire(&page_session, 1_000.0).await?],
+        );
         watcher.lease_worker_runtime().await;
         // A worker that starts while the listener is there.
         watcher
@@ -1911,7 +1939,6 @@ mod worker_observation_tests {
             ],
             "on before the start-up pause ends, so the worker's first console call is reported"
         );
-        let leases = Arc::clone(watcher.browser.page_signals.runtime_leases());
         assert_eq!(
             leases.floor_ms(&SessionId::from("early")),
             Some(1_000.0),
@@ -1920,9 +1947,7 @@ mod worker_observation_tests {
 
         run.events.unlisten(&console.key());
         watcher.lease_worker_runtime().await;
-        for _ in 0..20 {
-            tokio::task::yield_now().await;
-        }
+        settle().await;
         let calls = connection.calls()?;
         for session in ["early", "late"] {
             assert_eq!(
@@ -1932,6 +1957,67 @@ mod worker_observation_tests {
             );
             assert!(!leases.is_held(&SessionId::from(session)));
         }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn a_listener_that_leased_no_page_and_a_wait_ask_as_hosted_mode_says()
+    -> Result<(), Box<dyn Error>> {
+        let connection =
+            TestConnection::new([("Browser.getVersion", json!({"product":"Chrome/143.0"}))]);
+        for method in [
+            "Target.setAutoAttach",
+            "Runtime.runIfWaitingForDebugger",
+            "Runtime.enable",
+            "Runtime.disable",
+        ] {
+            connection.always(method, json!({}))?;
+        }
+        let (hub, mut watcher) = scripted(&connection);
+        let page = TargetId("page".to_owned());
+        let run = Arc::new(RunState::default());
+        hub.bind(&run);
+        let errors = Subscription::Page {
+            tab: TabId(1),
+            target: page.clone(),
+            event: PageEventKind::PageError,
+        };
+        watcher
+            .start_worker(page.clone(), worker("w"), SessionId::from("w"), true)
+            .await;
+
+        // Hosted BrowserOS reports no page errors, so the listener leases nothing there.
+        run.events.listen(errors.clone(), 1_000, 0);
+        run.events.hold_runtime(&errors, Vec::new());
+        watcher.lease_worker_runtime().await;
+        let calls = connection.calls()?;
+        assert!(
+            !sent_to(&calls, "w")
+                .iter()
+                .any(|method| method == "Runtime.enable"),
+            "a listener that asked for nothing leaves the worker quiet"
+        );
+
+        // A wait, which hosted BrowserOS refuses before it starts, does ask.
+        let waiting = run.events.waiting(errors.clone());
+        watcher.lease_worker_runtime().await;
+        assert!(
+            watcher
+                .browser
+                .page_signals
+                .runtime_leases()
+                .is_held(&SessionId::from("w"))
+        );
+        drop(waiting);
+        watcher.lease_worker_runtime().await;
+        settle().await;
+        assert!(
+            !watcher
+                .browser
+                .page_signals
+                .runtime_leases()
+                .is_held(&SessionId::from("w"))
+        );
         Ok(())
     }
 }
