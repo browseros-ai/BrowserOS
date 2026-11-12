@@ -488,20 +488,22 @@ pub(crate) const fn needs_runtime(event: PageEventKind) -> bool {
 /// (`PageEventKind::context`), and a context binding is plumbed, and leased, per page as each is
 /// admitted (`page/init_script.rs`).
 ///
-/// **In hosted mode a script receives no console messages, no page errors and no browser log
-/// entries; only bindings work. This is the design, not a gap** (the owner's decision,
-/// 2026-11-12). Hosted BrowserOS suppresses the first two in the browser: its
+/// **In hosted mode a script receives no console messages and no page errors, and no browser log
+/// entries but for one exception below; only bindings work. This is the design, not a gap** (the
+/// owner's decision, 2026-11-12). Hosted BrowserOS suppresses the first two in the browser: its
 /// `hosted-inspector` V8 patch reports no console call and no uncaught exception to any CDP
 /// session, even with `Runtime` on. Formatting one runs the page's getters and
 /// `Error.prepareStackTrace`, which a page can watch to detect an inspector. So in hosted mode a
 /// listener for either is accepted and leases nothing, and [`wait`] refuses at once. The browser
-/// would still send its own log entries (`Log.entryAdded`), but Neo enables `Log` only on a
-/// console lease (`log_lease.rs`), so a script hears none of them. Bindings work: the browser
-/// still sends binding calls, which lease `Runtime` below as anywhere else. Taking the lease for
-/// console messages or page errors here would break something either way. On today's browser it
-/// switches `Runtime` and `Log` on for nothing, and a wait times out silently instead of
-/// refusing. On a browser changed to report them, it opens a window in which the page can detect
-/// Neo.
+/// would still send its own log entries (`Log.entryAdded`), but Neo turns `Log` on only for a
+/// console lease, which hosted mode never takes, and for the length of an `addScriptTag` or
+/// `addStyleTag` insert, for its CSP reports (`page/add_tag.rs`). The watcher passes an entry to
+/// every console listener on the tab, so a hosted one hears only an entry logged during such an
+/// insert. Bindings work: the browser still sends binding calls, which lease `Runtime` below as
+/// anywhere else. Taking the lease for console messages or page errors here would break something
+/// either way. On today's browser it switches `Runtime` and `Log` on for nothing, and a wait times
+/// out silently instead of refusing. On a browser changed to report them, it opens a window in
+/// which the page can detect Neo.
 ///
 /// Outside hosted mode, `Log` rides on a console lease (`log_lease.rs`): upstream emits the
 /// browser's own log entries (a CORS failure, a frame `X-Frame-Options` refused) as console
