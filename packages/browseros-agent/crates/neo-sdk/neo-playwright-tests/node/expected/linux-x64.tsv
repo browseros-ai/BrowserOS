@@ -1,0 +1,177 @@
+# In-scope Playwright spec tests that do not pass on linux-x64: fail, or skip (ran nothing).
+# Written by `bun run test:neo-spec --ci`; do not edit by hand. A pull request whose CI run
+# reports a changed test takes that run's list: `bun run test:neo-spec --expected-from <run URL>`.
+# id	outcome	file	title
+BC-056	fail	tests/library/browsercontext-pages.spec.ts	should click the button with deviceScaleFactor set
+BC-057	fail	tests/library/browsercontext-pages.spec.ts	should click the button with offset with page scale
+BC-054	fail	tests/library/browsercontext-pages.spec.ts	should click with disabled javascript
+BC-055	fail	tests/library/browsercontext-pages.spec.ts	should not hang with touch-enabled viewports
+BC-058	fail	tests/library/browsercontext-pages.spec.ts	should return bounding box with page scale
+HE-012	fail	tests/library/headful.spec.ts	Page.bringToFront should work
+EH-025	fail	tests/page/elementhandle-convenience.spec.ts	should have a nice preview for non-ascii attributes/children
+EH-096	skip	tests/page/elementhandle-scroll-into-view.spec.ts	should scroll display:contents into view
+EX-188	fail	tests/page/expect-misc.spec.ts	toHaveJSProperty › pass
+EX-194	fail	tests/page/expect-misc.spec.ts	toHaveJSProperty › pass boolean
+EX-196	fail	tests/page/expect-misc.spec.ts	toHaveJSProperty › pass boolean 2
+EX-200	fail	tests/page/expect-misc.spec.ts	toHaveJSProperty › pass nested
+EX-199	fail	tests/page/expect-misc.spec.ts	toHaveJSProperty › pass null
+EX-192	fail	tests/page/expect-misc.spec.ts	toHaveJSProperty › pass number
+EX-190	fail	tests/page/expect-misc.spec.ts	toHaveJSProperty › pass string
+EX-198	fail	tests/page/expect-misc.spec.ts	toHaveJSProperty › pass undefined
+EX-216	fail	tests/page/expect-misc.spec.ts	toHaveURL › fail with invalid argument
+EX-222	fail	tests/page/expect-misc.spec.ts	toHaveURL › support URLPattern
+EX-258	fail	tests/page/expect-timeout.spec.ts	should fail the assertion when the signal is already aborted
+FR-007	fail	tests/page/frame-evaluate.spec.ts	should allow cross-frame element handles
+FR-004	skip	tests/page/frame-evaluate.spec.ts	should dispose context on cross-origin navigation
+FR-003	skip	tests/page/frame-evaluate.spec.ts	should dispose context on navigation
+FR-035	fail	tests/page/frame-hierarchy.spec.ts	should refuse to display x-frame-options:deny iframe
+RO-158	skip	tests/page/interception.spec.ts	should intercept worker requests when enabled after worker creation
+LO-114	fail	tests/page/locator-highlight.spec.ts	should highlight locator
+LO-142	fail	tests/page/locator-misc-2.spec.ts	should scroll zero-sized element into view
+LO-182	fail	tests/page/locator-query.spec.ts	count() should not throw during navigation
+LO-167	skip	tests/page/locator-query.spec.ts	should filter by regex with a single quote
+AR-021	skip	tests/page/page-aria-snapshot.spec.ts	check aria-hidden text
+AR-036	skip	tests/page/page-aria-snapshot.spec.ts	match values both against regex and string
+AR-006	skip	tests/page/page-aria-snapshot.spec.ts	should allow text nodes
+AR-026	skip	tests/page/page-aria-snapshot.spec.ts	should be ok with circular ownership
+AR-014	skip	tests/page/page-aria-snapshot.spec.ts	should concatenate div text with spaces
+AR-012	skip	tests/page/page-aria-snapshot.spec.ts	should concatenate span text
+AR-013	skip	tests/page/page-aria-snapshot.spec.ts	should concatenate span text 2
+AR-030	skip	tests/page/page-aria-snapshot.spec.ts	should escape special yaml characters
+AR-031	skip	tests/page/page-aria-snapshot.spec.ts	should escape special yaml values
+AR-027	skip	tests/page/page-aria-snapshot.spec.ts	should escape yaml text in text nodes
+AR-029	skip	tests/page/page-aria-snapshot.spec.ts	should handle long strings
+AR-022	skip	tests/page/page-aria-snapshot.spec.ts	should ignore presentation and none roles
+AR-017	skip	tests/page/page-aria-snapshot.spec.ts	should include new line for block pseudo
+AR-020	skip	tests/page/page-aria-snapshot.spec.ts	should include pseudo codepoints
+AR-015	skip	tests/page/page-aria-snapshot.spec.ts	should include pseudo in text
+AR-028	fail	tests/page/page-aria-snapshot.spec.ts	should normalize whitespace
+AR-016	skip	tests/page/page-aria-snapshot.spec.ts	should not include hidden pseudo in text
+AR-032	skip	tests/page/page-aria-snapshot.spec.ts	should not report textarea textContent
+AR-024	skip	tests/page/page-aria-snapshot.spec.ts	should not use on as checkbox value
+AR-004	skip	tests/page/page-aria-snapshot.spec.ts	should quote names that look like regexes
+AR-025	skip	tests/page/page-aria-snapshot.spec.ts	should respect aria-owns
+AR-001	skip	tests/page/page-aria-snapshot.spec.ts	should snapshot
+AR-041	skip	tests/page/page-aria-snapshot.spec.ts	should snapshot a locator inside a frameset frame
+AR-005	skip	tests/page/page-aria-snapshot.spec.ts	should snapshot complex
+AR-007	skip	tests/page/page-aria-snapshot.spec.ts	should snapshot details visibility
+AR-019	skip	tests/page/page-aria-snapshot.spec.ts	should snapshot inner text
+AR-010	skip	tests/page/page-aria-snapshot.spec.ts	should snapshot integration
+AR-002	skip	tests/page/page-aria-snapshot.spec.ts	should snapshot list
+AR-003	skip	tests/page/page-aria-snapshot.spec.ts	should snapshot list with accessible name
+AR-011	fail	tests/page/page-aria-snapshot.spec.ts	should support multiline text
+AR-023	skip	tests/page/page-aria-snapshot.spec.ts	should treat input value as text in templates, but not for checkbox/radio/file
+AR-018	skip	tests/page/page-aria-snapshot.spec.ts	should work with slots
+CL-106	fail	tests/page/page-click-react.spec.ts	should timeout when click opens alert
+CL-105	fail	tests/page/page-click-scroll.spec.ts	should scroll instantly on retry when scroll-behavior is smooth
+CL-095	skip	tests/page/page-click-scroll.spec.ts	should scroll into view display:contents
+CL-096	skip	tests/page/page-click-scroll.spec.ts	should scroll into view display:contents with a child
+CL-110	fail	tests/page/page-click-timeout-1.spec.ts	should avoid side effects after timeout
+CL-116	fail	tests/page/page-click-timeout-3.spec.ts	should fail when element jumps during hit testing
+CL-121	fail	tests/page/page-click-timeout-4.spec.ts	should click for the second time after first timeout
+CL-068	fail	tests/page/page-click.spec.ts	should retry when navigating during the click
+DE-009	fail	tests/page/page-dispatchevent.spec.ts	should be atomic
+DD-015	skip	tests/page/page-drag.spec.ts	Drag and drop › should allow specifying the position
+DD-011	skip	tests/page/page-drag.spec.ts	Drag and drop › should be able to drag the mouse in a frame
+DD-005	skip	tests/page/page-drag.spec.ts	Drag and drop › should cancel on escape
+DD-014	skip	tests/page/page-drag.spec.ts	Drag and drop › should dragAndDrop with tweened mouse movement
+DD-014	skip	tests/page/page-drag.spec.ts	Drag and drop › should dragTo with tweened mouse movement
+DD-003	skip	tests/page/page-drag.spec.ts	Drag and drop › should not send dragover on the first mousemove
+DD-008	skip	tests/page/page-drag.spec.ts	Drag and drop › should respect the drop effect
+DD-002	skip	tests/page/page-drag.spec.ts	Drag and drop › should send the right events
+DD-001	skip	tests/page/page-drag.spec.ts	Drag and drop › should work @smoke
+DD-012	skip	tests/page/page-drag.spec.ts	Drag and drop › should work if a frame is stalled
+DD-010	skip	tests/page/page-drag.spec.ts	Drag and drop › should work if the drag event is captured but not canceled
+DD-009	skip	tests/page/page-drag.spec.ts	Drag and drop › should work if the drag is canceled
+DD-004	skip	tests/page/page-drag.spec.ts	Drag and drop › should work inside iframe
+DD-016	skip	tests/page/page-drag.spec.ts	Drag and drop › should work with locators
+DD-013	skip	tests/page/page-drag.spec.ts	Drag and drop › should work with the helper method
+DD-019	skip	tests/page/page-drag.spec.ts	should handle custom dataTransfer
+DD-018	skip	tests/page/page-drag.spec.ts	should report event.buttons
+DD-017	skip	tests/page/page-drag.spec.ts	should work if not doing a drag
+DD-020	skip	tests/page/page-drag.spec.ts	what happens when dragging element is destroyed
+EM-011	fail	tests/page/page-emulate-media.spec.ts	should emulate contrast 
+EM-012	fail	tests/page/page-emulate-media.spec.ts	should report hover and fine pointer for desktop
+EV-137	skip	tests/page/page-evaluate-no-stall.spec.ts	should throw when no main execution context
+EV-136	skip	tests/page/page-evaluate-no-stall.spec.ts	should throw while pending navigation
+EV-135	skip	tests/page/page-evaluate-no-stall.spec.ts	should work
+EV-099	skip	tests/page/page-evaluate.spec.ts	should work with a using declaration
+CM-018	fail	tests/page/page-event-console.spec.ts	clearConsoleMessages should work
+CM-017	fail	tests/page/page-event-console.spec.ts	consoleMessages should work
+CM-019	fail	tests/page/page-event-console.spec.ts	consoleMessages since-navigation filter should work
+CM-020	fail	tests/page/page-event-console.spec.ts	pageErrors since-navigation filter should work
+CM-016	fail	tests/page/page-event-console.spec.ts	should have timestamp in consoleMessages
+CM-008	fail	tests/page/page-event-console.spec.ts	should trigger correct Log
+CM-001	fail	tests/page/page-event-console.spec.ts	should work @smoke
+ER-012	fail	tests/page/page-event-pageerror.spec.ts	clearPageErrors should work
+ER-011	fail	tests/page/page-event-pageerror.spec.ts	pageErrors should work
+PO-005	fail	tests/page/page-event-popup.spec.ts	should be able to capture alert
+PO-003	fail	tests/page/page-event-popup.spec.ts	should emit for immediately closed popups
+PO-004	fail	tests/page/page-event-popup.spec.ts	should emit for immediately closed popups 2
+PO-002	fail	tests/page/page-event-popup.spec.ts	should work with window features
+FC-024	skip	tests/page/page-filechooser.spec.ts	should emit event after navigation
+KB-053	fail	tests/page/page-keyboard.spec.ts	should close dialog on Escape key press in contenteditable
+KB-040	skip	tests/page/page-keyboard.spec.ts	should move to the start of the document
+KB-033	skip	tests/page/page-keyboard.spec.ts	should support MacOS shortcuts
+LE-001	skip	tests/page/page-leaks.spec.ts	click should not leak
+LE-003	skip	tests/page/page-leaks.spec.ts	expect should not leak
+LE-002	skip	tests/page/page-leaks.spec.ts	fill should not leak
+LE-004	skip	tests/page/page-leaks.spec.ts	waitFor should not leak
+EE-001	fail	tests/page/page-listeners.spec.ts	should not throw with ignoreErrors
+EE-003	fail	tests/page/page-listeners.spec.ts	wait should throw
+NE-083	fail	tests/page/page-network-idle.spec.ts	should not wait for an open EventSource connection in setContent
+NE-080	fail	tests/page/page-network-idle.spec.ts	should wait for networkidle when iframe attaches and detaches
+NE-020	fail	tests/page/page-network-request.spec.ts	should return multipart/form-data
+NE-050	fail	tests/page/page-network-response.spec.ts	should return body for prefetch script
+NE-055	fail	tests/page/page-network-response.spec.ts	should return http version
+NE-031	fail	tests/page/page-network-response.spec.ts	should return multiple header value
+NE-041	skip	tests/page/page-network-response.spec.ts	should return non-utf8 body even when content-type says utf8
+NE-042	fail	tests/page/page-network-response.spec.ts	should return status text
+NE-035	fail	tests/page/page-network-response.spec.ts	should return text for identity encoding
+NE-033	fail	tests/page/page-network-response.spec.ts	should return uncompressed text
+NE-034	fail	tests/page/page-network-response.spec.ts	should return uncompressed text for brotli encoding
+NE-030	fail	tests/page/page-network-response.spec.ts	should work @smoke
+RO-135	skip	tests/page/page-request-intercept.spec.ts	should fulfill response with empty body
+RO-048	skip	tests/page/page-route.spec.ts	route abort with times: 1 should not affect second sequential fetch
+RO-008	fail	tests/page/page-route.spec.ts	should properly return navigation response when URL has cookies
+SS-024	fail	tests/page/page-screenshot.spec.ts	page screenshot › should capture canvas changes
+SS-027	fail	tests/page/page-screenshot.spec.ts	page screenshot › should work while navigating
+SS-059	fail	tests/page/page-screenshot.spec.ts	page screenshot animations › should capture screenshots after layoutchanges in transitionend event
+SS-054	fail	tests/page/page-screenshot.spec.ts	page screenshot animations › should not capture css animations in shadow DOM
+SS-052	fail	tests/page/page-screenshot.spec.ts	page screenshot animations › should not capture infinite css animation
+SS-057	fail	tests/page/page-screenshot.spec.ts	page screenshot animations › should not capture infinite web animations
+SS-053	fail	tests/page/page-screenshot.spec.ts	page screenshot animations › should not capture pseudo element css animation
+SS-065	fail	tests/page/page-screenshot.spec.ts	should throw if screenshot size is too large
+PA-036	skip	tests/page/page-set-content.spec.ts	should handle timeout properly
+PA-037	skip	tests/page/page-set-content.spec.ts	should handle timeout properly 2
+PA-025	fail	tests/page/page-set-content.spec.ts	should include shadow roots
+IF-002	fail	tests/page/page-set-input-files.spec.ts	should upload a folder
+PA-038	fail	tests/page/page-transition.spec.ts	should not crash when filter transition completes
+WA-124	fail	tests/page/page-wait-for-request.spec.ts	should respect default timeout
+WA-123	fail	tests/page/page-wait-for-request.spec.ts	should respect timeout
+WA-131	fail	tests/page/page-wait-for-response.spec.ts	should respect default timeout
+WA-130	fail	tests/page/page-wait-for-response.spec.ts	should respect timeout
+WA-032	fail	tests/page/page-wait-for-selector-1.spec.ts	elementHandle.waitForSelector should timeout
+WA-027	fail	tests/page/page-wait-for-selector-1.spec.ts	should throw on waitFor
+WA-072	fail	tests/page/page-wait-for-selector-2.spec.ts	should work when navigating before node adoption
+RE-013	fail	tests/page/retarget.spec.ts	direct actions retargeting
+SE-016	skip	tests/page/selectors-css.spec.ts	should work with :nth-child(of) notation with nested functions
+SE-001	fail	tests/page/selectors-css.spec.ts	should work with large DOM @smoke
+SE-090	skip	tests/page/selectors-get-by.spec.ts	getBy escaping
+SE-157	fail	tests/page/selectors-register.spec.ts	getAttribute should be atomic
+SE-156	fail	tests/page/selectors-register.spec.ts	innerHTML should be atomic
+SE-155	fail	tests/page/selectors-register.spec.ts	innerText should be atomic
+SE-158	fail	tests/page/selectors-register.spec.ts	isVisible should be atomic
+SE-159	fail	tests/page/selectors-register.spec.ts	should take java-style string
+SE-154	fail	tests/page/selectors-register.spec.ts	textContent should be atomic
+SE-057	skip	tests/page/selectors-role.spec.ts	should support disabled fieldset
+WO-001	skip	tests/page/workers.spec.ts	Page.workers @smoke
+WO-014	skip	tests/page/workers.spec.ts	should attribute network activity for worker inside iframe to the iframe
+WO-008	skip	tests/page/workers.spec.ts	should evaluate
+WO-007	fail	tests/page/workers.spec.ts	should have JSHandles for console logs
+WO-020	skip	tests/page/workers.spec.ts	should report and intercept network from nested worker
+WO-009	skip	tests/page/workers.spec.ts	should report console event on the worker
+WO-010	skip	tests/page/workers.spec.ts	should report console event on the worker when not listening on page or context
+WO-015	skip	tests/page/workers.spec.ts	should report network activity
+WO-024	skip	tests/page/workers.spec.ts	should resolve worker script allHeaders in iframe
+WO-021	skip	tests/page/workers.spec.ts	should support extra http headers

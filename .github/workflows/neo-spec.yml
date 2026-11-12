@@ -54,9 +54,11 @@ jobs:
       run:
         working-directory: packages/browseros-agent
     env:
-      # Each worker owns one headless browser. 16 on 32 vCPUs leaves headroom for each browser's
-      # renderer and GPU processes, so timing-sensitive tests see no more contention than on a
-      # developer machine running 4.
+      # Each worker owns one headless browser and runs whole spec files. The suite's wall time is
+      # its longest file (page-screenshot.spec.ts: about 6 min on Linux, most of it tests that
+      # time out), and it is dispatched near the end of the corpus, so the worker count decides
+      # how soon it starts: 16 start it within the first minute, 8 would add about 2 min. Tests
+      # that time out only under this load pass when rerun alone and are reported flaky.
       NEO_SPEC_WORKERS: "16"
     steps:
       - uses: actions/checkout@v7
