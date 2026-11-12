@@ -17968,19 +17968,19 @@ ${expected === undefined ? "" : `Expected: ${state.isNot ? "not " : ""}${stringi
       if (actual instanceof Page)
         await send["expect.page"](site, call, {
           page: await actual._brand(api),
+          ...params,
           matcher: name,
           expectation,
           expected,
-          params,
           templateError
         });
       else if (actual instanceof Locator)
         await send["expect.locator"](site, call, {
           target: await actual._frame._locatorBrand(api, actual._selector),
+          ...params,
           matcher: name,
           expectation,
           expected,
-          params,
           templateError
         });
     } catch (error) {

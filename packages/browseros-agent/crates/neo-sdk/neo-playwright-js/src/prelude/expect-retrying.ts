@@ -525,7 +525,9 @@ export async function retry(
   const timeout = matcher.options?.timeout ?? state.config.timeout
   const call = { api, timeoutMs: timeoutMs(api, timeout) }
   // Freeze the payload before resolving a page brand can await: .not and diagnostics belong
-  // to this matcher call even when another script turn changes its configuration.
+  // to this matcher call even when another script turn changes its configuration. `params` are
+  // Frame.expect's own, sent flat as upstream's client sends them; the four fields after them
+  // are what Rust prints the failure from.
   const expectation = matcher.expectation
   const expected = matcher.expected(state.isNot)
   const params = { ...matcher.params, isNot: state.isNot }
@@ -534,19 +536,19 @@ export async function retry(
     if (actual instanceof Page)
       await send['expect.page'](site, call, {
         page: await actual._brand(api),
+        ...params,
         matcher: name,
         expectation,
         expected,
-        params,
         templateError,
       })
     else if (actual instanceof Locator)
       await send['expect.locator'](site, call, {
         target: await actual._frame._locatorBrand(api, actual._selector),
+        ...params,
         matcher: name,
         expectation,
         expected,
-        params,
         templateError,
       })
   } catch (error) {

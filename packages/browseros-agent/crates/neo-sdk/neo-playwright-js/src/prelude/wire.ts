@@ -17,7 +17,7 @@
  */
 
 import type { SerializedValue } from '../../../neo-playwright/third_party/playwright/packages/isomorphic/utilityScriptSerializers'
-import type { Rect, SelectOption } from '../probe/protocol'
+import type { SelectOption } from '../probe/protocol'
 import type { GeneratedInputs, GeneratedOutputs } from './generated'
 import type { OpName } from './generated/ops'
 

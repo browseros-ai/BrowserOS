@@ -7,6 +7,7 @@ import type * as pw from '../../../../neo-playwright/third_party/playwright/pack
 import { invoke } from '../bridge'
 import type { CallSite } from '../call-site'
 import type { SignalLike } from '../signal'
+import type { Assert, UpstreamCheck, VoidIsNull } from '../upstream-check'
 import type { CallHeader } from '../wire'
 import type { LocatorExpectInput } from './types/LocatorExpectInput'
 import type { PageExpectInput } from './types/PageExpectInput'
@@ -54,7 +55,21 @@ export const EXPECT_SEND = {
 
 // Each route row against Playwright's own protocol at the pin (upstream-check.ts): tsc
 // names the op and every key that differs without a reason, or whose reason went stale.
-// expect.locator replaces Frame.expect: probe matcher parameters and preformatted locator diagnostics
-type _expect_locator_replaces = pw.FrameExpectParams
-// expect.page replaces Frame.expect: probe matcher parameters and preformatted page diagnostics
-type _expect_page_replaces = pw.FrameExpectParams
+// expect.locator: Frame.expect
+//   adds matcher: the matcher's name: Rust prints upstream's failure header, `expect(locator).toHaveText(...)`, and refuses a matcher of the wrong receiver by name
+//   adds expectation: the header's parenthesized argument as upstream's client prints it: Rust formats the failure, upstream's client does
+//   adds expected: the printed `Expected:` line: Rust formats the failure, upstream's client does
+//   adds templateError: an aria template that did not parse: the prelude parses templates with the vendored yaml, and Rust raises the error where upstream's server does
+//   retypes expressionArg: upstream's `json` param, which channels.d.ts and the probe type `any` and the check cannot compare: the name toHaveAttribute, toHaveCSS or toHaveJSProperty passes, as JSON
+//   retypes expectedValue: plain JSON, as upstream's server hands it to the injected script after `parseArgument` (Neo has no JS handles); an aria template arrives parsed by the prelude
+type _expect_locator = Assert<UpstreamCheck<'expect.locator', LocatorExpectInput, pw.FrameExpectParams, 'matcher' | 'expectation' | 'expected' | 'templateError', never, 'expressionArg' | 'expectedValue'>>
+type _expect_locator_result = Assert<VoidIsNull<'expect.locator', pw.FrameExpectResult, null>>
+// expect.page: Frame.expect
+//   adds matcher: the matcher's name: Rust prints upstream's failure header, `expect(locator).toHaveText(...)`, and refuses a matcher of the wrong receiver by name
+//   adds expectation: the header's parenthesized argument as upstream's client prints it: Rust formats the failure, upstream's client does
+//   adds expected: the printed `Expected:` line: Rust formats the failure, upstream's client does
+//   adds templateError: an aria template that did not parse: the prelude parses templates with the vendored yaml, and Rust raises the error where upstream's server does
+//   retypes expressionArg: upstream's `json` param, which channels.d.ts and the probe type `any` and the check cannot compare: the name toHaveAttribute, toHaveCSS or toHaveJSProperty passes, as JSON
+//   retypes expectedValue: plain JSON, as upstream's server hands it to the injected script after `parseArgument` (Neo has no JS handles); an aria template arrives parsed by the prelude
+type _expect_page = Assert<UpstreamCheck<'expect.page', PageExpectInput, pw.FrameExpectParams, 'matcher' | 'expectation' | 'expected' | 'templateError', never, 'expressionArg' | 'expectedValue'>>
+type _expect_page_result = Assert<VoidIsNull<'expect.page', pw.FrameExpectResult, null>>

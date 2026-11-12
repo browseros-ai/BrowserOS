@@ -28,11 +28,9 @@ describe('retrying matchers', () => {
         matcher: 'toHaveText',
         expectation: 'expected',
         expected: 'Expected: "Welcome"',
-        params: {
-          expression: 'to.have.text',
-          expectedText: [{ string: 'Welcome', normalizeWhiteSpace: true }],
-          isNot: false,
-        },
+        expression: 'to.have.text',
+        expectedText: [{ string: 'Welcome', normalizeWhiteSpace: true }],
+        isNot: false,
       },
     ])
   })
@@ -56,8 +54,8 @@ describe('retrying matchers', () => {
         op.matcher,
         op.expectation,
         op.expected,
-        (op.params as { expression: string }).expression,
-        (op.params as { isNot: boolean }).isNot,
+        op.expression,
+        op.isNot,
       ]),
     ).toEqual([
       ['toBeVisible', '', 'Expected: not visible', 'to.be.visible', true],
@@ -119,12 +117,12 @@ describe('retrying matchers', () => {
         false,
       ],
     ])
-    expect(sent[2]?.params).toMatchObject({
+    expect(sent[2]).toMatchObject({
       expectedText: [
         { regexSource: 'wel+come', regexFlags: 'i', normalizeWhiteSpace: true },
       ],
     })
-    expect(sent[3]?.params).toMatchObject({
+    expect(sent[3]).toMatchObject({
       expectedText: [
         {
           string: 'come',
@@ -134,10 +132,10 @@ describe('retrying matchers', () => {
         },
       ],
     })
-    expect(sent[4]?.params).toMatchObject({ expectedNumber: 3 })
-    expect(sent[6]?.params).toMatchObject({ expressionArg: 'href' })
-    expect(sent[8]?.params).toMatchObject({ expectedValue: { checked: false } })
-    expect(sent[9]?.params).toMatchObject({
+    expect(sent[4]).toMatchObject({ expectedNumber: 3 })
+    expect(sent[6]).toMatchObject({ expressionArg: 'href' })
+    expect(sent[8]).toMatchObject({ expectedValue: { checked: false } })
+    expect(sent[9]).toMatchObject({
       expressionArg: 'value',
       expectedValue: 12,
     })
@@ -395,37 +393,35 @@ describe('toMatchAriaSnapshot', () => {
         expectation: 'expected',
         expected:
           'Expected: "- list \\"my list\\":\n  - listitem: one\n  - link /Issues \\\\d+/:\n    - /url: /.*example.com/"',
-        params: {
-          expression: 'to.match.aria',
-          expectedValue: {
-            kind: 'role',
-            role: 'list',
-            name: 'my list',
-            children: [
-              {
-                kind: 'role',
-                role: 'listitem',
-                name: '',
-                children: [
-                  { kind: 'text', text: { raw: 'one', normalized: 'one' } },
-                ],
-              },
-              {
-                kind: 'role',
-                role: 'link',
-                name: { pattern: 'Issues \\d+' },
-                children: [],
-                props: {
-                  url: {
-                    raw: '/.*example.com/',
-                    normalized: '/.*example.com/',
-                  },
+        expression: 'to.match.aria',
+        expectedValue: {
+          kind: 'role',
+          role: 'list',
+          name: 'my list',
+          children: [
+            {
+              kind: 'role',
+              role: 'listitem',
+              name: '',
+              children: [
+                { kind: 'text', text: { raw: 'one', normalized: 'one' } },
+              ],
+            },
+            {
+              kind: 'role',
+              role: 'link',
+              name: { pattern: 'Issues \\d+' },
+              children: [],
+              props: {
+                url: {
+                  raw: '/.*example.com/',
+                  normalized: '/.*example.com/',
                 },
               },
-            ],
-          },
-          isNot: false,
+            },
+          ],
         },
+        isNot: false,
       },
       {
         name: 'expect.page',
@@ -435,11 +431,9 @@ describe('toMatchAriaSnapshot', () => {
         matcher: 'toMatchAriaSnapshot',
         expectation: 'expected',
         expected: 'Expected: not "- heading \\"x\\" [level=2]"',
-        params: {
-          expression: 'to.match.aria',
-          expectedValue: { kind: 'role', role: 'heading', name: 'x', level: 2 },
-          isNot: true,
-        },
+        expression: 'to.match.aria',
+        expectedValue: { kind: 'role', role: 'heading', name: 'x', level: 2 },
+        isNot: true,
       },
     ])
   })
@@ -450,21 +444,27 @@ describe('toMatchAriaSnapshot', () => {
       await expect(page.locator('h1')).toMatchAriaSnapshot('heading "title"')
     `)
     expect(
-      sent.map(({ name, params, templateError }) => ({
+      sent.map(({ name, expression, expectedValue, isNot, templateError }) => ({
         name,
-        params,
+        expression,
+        expectedValue,
+        isNot,
         templateError,
       })),
     ).toEqual([
       {
         name: 'expect.page',
-        params: { expression: 'to.match.aria', isNot: false },
+        expression: 'to.match.aria',
+        expectedValue: undefined,
+        isNot: false,
         templateError:
           'Value of "level" attribute must be a number:\n\nheading [level=a]\n               ^\n',
       },
       {
         name: 'expect.locator',
-        params: { expression: 'to.match.aria', isNot: false },
+        expression: 'to.match.aria',
+        expectedValue: undefined,
+        isNot: false,
         templateError:
           'Aria snapshot must be a YAML sequence, elements starting with " -"',
       },

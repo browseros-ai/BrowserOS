@@ -2,10 +2,14 @@
 import type { Target } from "./Target";
 
 /**
- * `expect(locator).<matcher>`, after `call`. No `Debug`: `expected` and `params` may hold a
- * password the script compares.
+ * `expect(locator).<matcher>`, after `call`: `Frame.expect`'s params with the locator brand in
+ * place of `selector`, then the four fields Rust prints the failure from (the row's `adds`).
+ * The optional params stay JSON: Rust hands them to the probe as the prelude sent them and
+ * checks them there (`Expectation::new`), so a decode error never quotes the expected value.
+ * No `Debug`: `expectedText`, `expectedValue` and `expected` may hold a password the script
+ * compares.
  */
-export type LocatorExpectInput = { target: Target, matcher: string, expectation: string, expected: string, params: import('../../../probe/protocol').ExpectParams, 
+export type LocatorExpectInput = { target: Target, expression: string, expressionArg?: import('../../../probe/protocol').ExpectParams['expressionArg'], pseudo?: import('../../../probe/protocol').ExpectParams['pseudo'], expectedText?: import('../../../probe/protocol').ExpectParams['expectedText'], expectedNumber?: import('../../../probe/protocol').ExpectParams['expectedNumber'], expectedValue?: import('../../../probe/protocol').ExpectParams['expectedValue'], useInnerText?: import('../../../probe/protocol').ExpectParams['useInnerText'], isNot: boolean, matcher: string, expectation: string, expected: string, 
 /**
  * Sent only when an aria template did not parse.
  */
