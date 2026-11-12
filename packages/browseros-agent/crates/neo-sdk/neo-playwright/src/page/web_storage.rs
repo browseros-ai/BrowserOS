@@ -42,9 +42,7 @@ struct WebStorageInput {
     page: PageRef,
     kind: StorageKind,
     action: StorageAction,
-    #[serde(default)]
     name: Option<String>,
-    #[serde(default)]
     value: Option<String>,
 }
 
