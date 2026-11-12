@@ -1,6 +1,7 @@
 /** Compiler tests for the guard itself; typecheck must reject drift and obsolete exceptions. */
 import type {
   Assert,
+  ExactUpstreamCheck,
   Flatten,
   KeyList,
   KeysCheck,
@@ -152,6 +153,30 @@ export type GuardChecks = [
     >
   >,
   Assert<Equal<KeyList<{ force?: boolean }>, readonly 'force'[]>>,
+  // An aligned (flat) input passes as it is; the same input still nested in a bag fails.
+  Assert<
+    ExactUpstreamCheck<
+      'flat',
+      { target: object; strict: 'strict'; force?: boolean },
+      { selector: string; strict?: boolean; force?: boolean }
+    >
+  >,
+  Assert<
+    Equal<
+      ExactUpstreamCheck<
+        'still-nested',
+        { target: object; options: { force?: boolean } },
+        { selector: string; force?: boolean }
+      >,
+      { op: 'still-nested'; neoOnly: 'options'; upstreamOnly: 'force' }
+    >
+  >,
+  Assert<
+    Equal<
+      ExactUpstreamCheck<'any-exact', Unresolved, Empty>,
+      { op: 'any-exact'; unresolvedType: 'any' }
+    >
+  >,
   Assert<VoidIsNull<'void', void, null>>,
   Assert<
     Equal<

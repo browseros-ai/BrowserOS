@@ -62,19 +62,20 @@ type Report<
   >
 }
 
-/** A narrower Neo field is compatible; every extra, missing or wider field needs a reason. */
-export type UpstreamCheck<
+/** The report as `true`, or the op with only the kinds of drift that are not empty. */
+type Checked<
   Op extends string,
   Neo,
   Up,
-  Adds extends string = never,
-  Omits extends string = never,
-  Retypes extends string = never,
+  Adds extends string,
+  Omits extends string,
+  Retypes extends string,
 > =
   IsAny<Neo | Up> extends true
     ? { op: Op; unresolvedType: 'any' }
-    : Report<Op, Flatten<Neo>, Up, Adds, Omits, Retypes> extends infer R extends
-          { op: Op }
+    : Report<Op, Neo, Up, Adds, Omits, Retypes> extends infer R extends {
+          op: Op
+        }
       ? R[Exclude<keyof R, 'op'>] extends never
         ? true
         : {
@@ -85,6 +86,33 @@ export type UpstreamCheck<
                 : K]: R[K]
           }
       : never
+
+/** A narrower Neo field is compatible; every extra, missing or wider field needs a reason. */
+export type UpstreamCheck<
+  Op extends string,
+  Neo,
+  Up,
+  Adds extends string = never,
+  Omits extends string = never,
+  Retypes extends string = never,
+> =
+  IsAny<Neo> extends true
+    ? Checked<Op, Neo, Up, Adds, Omits, Retypes>
+    : Checked<Op, Flatten<Neo>, Up, Adds, Omits, Retypes>
+
+/**
+ * The same check for an input that spells upstream's params at its top level, as Playwright's
+ * are (task 006, `options!(Input, flat)` in Rust): nothing is lifted, so an `options` bag left
+ * on an aligned input fails as `neoOnly: 'options'` with its keys as `upstreamOnly`.
+ */
+export type ExactUpstreamCheck<
+  Op extends string,
+  Neo,
+  Up,
+  Adds extends string = never,
+  Omits extends string = never,
+  Retypes extends string = never,
+> = Checked<Op, Neo, Up, Adds, Omits, Retypes>
 
 /** Checks what `pick` sends, independently of a wire type that may declare more fields. */
 export type KeysCheck<

@@ -118,7 +118,11 @@ impl<'a> Route<'a> for Describe {
         F: FnOnce(&'a Playwright, &'a OpScope<'a>, I) -> Fut + Send + 'a,
         Fut: Future<Output = Result<O, PlaywrightError>> + Send + 'a,
     {
-        Some(OpWire::of::<I, O>(I::option_keys(), upstream.into()))
+        Some(OpWire::of::<I, O>(
+            I::NESTING,
+            I::option_keys(),
+            upstream.into(),
+        ))
     }
 
     fn untyped<F, Fut>(self, _handler: F) -> Option<OpWire>

@@ -23,7 +23,9 @@ use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::{fs, io};
 
-use neo_playwright::{Command, Op, OpLifetime, OpTarget, OpWire, Upstream, WireType};
+use neo_playwright::{
+    Command, Op, OpLifetime, OpTarget, OpWire, OptionNesting, Upstream, WireType,
+};
 use neo_trace::Effect;
 
 /// From this crate's manifest directory.
@@ -555,15 +557,22 @@ fn upstream_checks(family: &Family, screaming: &str) -> Checks {
                         let _ = writeln!(out, "//   {list} {key}: {}", reason(why));
                     }
                 }
+                // A flat input (task 006) is compared as it is, nesting included, so an `options`
+                // bag left on an aligned row fails as `neoOnly: 'options'`; a nested one is
+                // compared with its bag lifted, as Neo has always sent it.
+                let check = match wire.option_nesting {
+                    OptionNesting::Flat => "ExactUpstreamCheck",
+                    OptionNesting::Nested | OptionNesting::None => "UpstreamCheck",
+                };
                 let _ = writeln!(
                     out,
-                    "type {alias} = Assert<UpstreamCheck<{name}, {}, pw.{stem}Params, {}, {}, {}>>",
+                    "type {alias} = Assert<{check}<{name}, {}, pw.{stem}Params, {}, {}, {}>>",
                     wire.input,
                     union(adds),
                     union(omits),
                     union(retypes),
                 );
-                checks.helpers.extend(["Assert", "UpstreamCheck"]);
+                checks.helpers.extend(["Assert", check]);
                 if !wire.option_keys.is_empty() {
                     let _ = writeln!(
                         out,
@@ -802,7 +811,7 @@ mod layout {
     use std::fs;
     use std::path::{Path, PathBuf};
 
-    use neo_playwright::{Command, OpWire, Upstream, WireType};
+    use neo_playwright::{Command, OpWire, OptionNesting, Upstream, WireType};
 
     use super::{Family, Files, render, sync};
 
@@ -828,6 +837,7 @@ mod layout {
             output: output.to_owned(),
             references,
             option_keys: Vec::new(),
+            option_nesting: OptionNesting::None,
             upstream,
             types,
         }
@@ -1011,6 +1021,39 @@ mod layout {
         assert!(
             !action.contains("_locator_drop_result"),
             "a result reason waives the void check"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn tests_that_a_flat_row_is_compared_with_its_nesting() -> Result<(), Box<dyn Error>> {
+        let mut click = wire(
+            "ClickInput",
+            "null",
+            vec![named::<HoverInput>("ClickInput")],
+            Upstream::Command(command("ElementHandle.click")),
+        );
+        click.option_keys = vec!["force"];
+        click.option_nesting = OptionNesting::Flat;
+        let families = [Family {
+            name: "action",
+            ops: vec![("locator.click", click)],
+        }];
+        let files = render(&families).map_err(|refusals| refusals.join("\n"))?;
+        let action = file(&files, "action.ts");
+        assert!(
+            action.contains(
+                "type _locator_click = Assert<ExactUpstreamCheck<'locator.click', ClickInput, \
+                 pw.ElementHandleClickParams, never, never, never>>"
+            ),
+            "an aligned row's nesting is compared, not lifted: {action}"
+        );
+        assert!(action.contains(
+            "import type { Assert, ExactUpstreamCheck, KeysCheck, VoidIsNull } from '../upstream-check'"
+        ));
+        assert!(
+            action.contains("  'locator.click': ['force'],"),
+            "a flat row keeps its option keys"
         );
         Ok(())
     }

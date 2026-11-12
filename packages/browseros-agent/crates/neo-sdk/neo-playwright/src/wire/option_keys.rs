@@ -1,27 +1,52 @@
-//! Which of an op's input fields is the script's option bag, and the keys in it.
+//! Which of an op's input fields are the script's options, and how they are nested.
 //!
-//! An op that takes script options carries them in its input's `options` field (today's wire
-//! shape, `{ target, strict, options: { force, .. } }`). Fields the prelude computes itself
-//! (`publication`, `lease`, `noWait`, ...) live on the outer input, so the `options` struct is the
-//! script's option bag by construction and its field names are exactly what the prelude's `pick`
-//! may forward. The generated file holds each list to upstream's `<Command>Options` type.
+//! An op that takes script options carries them either in its input's `options` field (the
+//! shape Neo has always sent, `{ target, strict, options: { force, .. } }`) or, once task 006
+//! aligns it with Playwright, at the input's top level as upstream's params are
+//! (`{ target, strict, force, .. }`). Fields the prelude computes itself (`publication`, `lease`,
+//! `noWait`, ...) are never options: they live outside the bag, and on a flat input they are the
+//! row's `adds`. The keys are what the prelude's `pick` may forward, and the generated file holds
+//! each list to upstream's `<Command>Options` type.
 
 use serde::Deserialize;
 use serde::de::{self, Deserializer, Visitor};
 
+/// Where an op input carries the script's options.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OptionNesting {
+    /// The op takes no script options.
+    None,
+    /// Under the input's `options` field, the shape Neo has always sent.
+    Nested,
+    /// At the input's top level beside Neo's addressing, as upstream's params are (task 006).
+    /// The generated upstream check then compares the nesting too, so a bag left nested fails.
+    Flat,
+}
+
+/// Neo's addressing fields: never a script option. The upstream check sets the same names aside
+/// (`NeoAddressing` in the prelude's `upstream-check.ts`).
+pub(crate) const ADDRESSING: &[&str] = &["target", "strict", "page", "frame"];
+
 /// An op input's option keys. Implemented for every input type by [`options!`], never by hand.
 pub(crate) trait OptionKeys {
-    /// The wire names of the fields of the input's `options` struct, in declaration order; empty
-    /// for an input without one.
+    /// Where the input carries the script's options.
+    const NESTING: OptionNesting;
+
+    /// The wire names of the fields that may hold options, in declaration order: the `options`
+    /// struct's for a nested input, the input's own for a flat one (`Describe` then sets Neo's
+    /// addressing and the row's `adds` aside), none for an input without options.
     fn option_keys() -> Vec<&'static str>;
 }
 
-/// Declares an input's option bag. `options!(ClickInput => ClickOptions)` reads the keys from
+/// Declares an input's options. `options!(ClickInput => ClickOptions)` reads the keys from
 /// `ClickOptions`, and fails to compile unless `ClickInput` has an `options` field of that type;
-/// `options!(TitleInput)` declares an input without one.
+/// `options!(ClickInput, flat)` declares the input's own fields as the options, as upstream's
+/// params are; `options!(TitleInput)` declares an input without options.
 macro_rules! options {
     ($input:ty => $options:ty) => {
         impl $crate::wire::OptionKeys for $input {
+            const NESTING: $crate::wire::OptionNesting = $crate::wire::OptionNesting::Nested;
+
             fn option_keys() -> Vec<&'static str> {
                 // Ties the keys to the input's own `options` field: naming another struct here
                 // does not compile, so the keys cannot drift from what the input decodes.
@@ -30,8 +55,19 @@ macro_rules! options {
             }
         }
     };
+    ($input:ty,flat) => {
+        impl $crate::wire::OptionKeys for $input {
+            const NESTING: $crate::wire::OptionNesting = $crate::wire::OptionNesting::Flat;
+
+            fn option_keys() -> Vec<&'static str> {
+                $crate::wire::serde_fields::<$input>()
+            }
+        }
+    };
     ($input:ty) => {
         impl $crate::wire::OptionKeys for $input {
+            const NESTING: $crate::wire::OptionNesting = $crate::wire::OptionNesting::None;
+
             fn option_keys() -> Vec<&'static str> {
                 Vec::new()
             }
@@ -87,7 +123,7 @@ mod tests {
 
     use serde::Deserialize;
 
-    use super::{OptionKeys, serde_fields};
+    use super::{OptionKeys, OptionNesting, serde_fields};
 
     /// A script option bag in the shape the families use: camelCase on the wire.
     #[derive(Deserialize)]
@@ -119,6 +155,16 @@ mod tests {
     }
     options!(WithoutOptions);
 
+    /// An input aligned with upstream: its options beside its addressing.
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields, rename_all = "camelCase")]
+    #[expect(dead_code, reason = "only the field list is read")]
+    struct FlatInput {
+        target: (),
+        click_count: Option<u32>,
+    }
+    options!(FlatInput, flat);
+
     #[test]
     fn tests_that_option_keys_are_the_options_struct_fields_in_wire_spelling() {
         assert_eq!(
@@ -141,6 +187,18 @@ mod tests {
             WithoutOptions::option_keys().is_empty(),
             "an op that takes no option bag gets no OPTION_KEYS entry"
         );
+        assert_eq!(WithoutOptions::NESTING, OptionNesting::None);
+    }
+
+    #[test]
+    fn tests_that_a_flat_input_offers_its_own_fields() {
+        assert_eq!(FlatInput::NESTING, OptionNesting::Flat);
+        assert_eq!(
+            FlatInput::option_keys(),
+            ["target", "clickCount"],
+            "every wire field, in wire spelling; Describe sets the addressing aside"
+        );
+        assert_eq!(WithOptions::NESTING, OptionNesting::Nested);
     }
 
     #[test]

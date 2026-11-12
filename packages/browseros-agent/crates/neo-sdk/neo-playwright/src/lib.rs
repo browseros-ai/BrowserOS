@@ -83,7 +83,7 @@ pub use playwright::Playwright;
 pub use playwright_error::{Answer, ErrorCode, PlaywrightError, TimedOut};
 pub use prelude_source::PRELUDE_JS;
 pub use run_state::RunState;
-pub use wire::{Command, OpWire, Upstream, WireType};
+pub use wire::{Command, OpWire, OptionNesting, Upstream, WireType};
 
 #[cfg(test)]
 mod tests {
