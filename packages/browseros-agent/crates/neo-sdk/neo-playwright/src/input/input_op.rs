@@ -445,6 +445,9 @@ mod tests {
 
     use super::InputOp;
     use crate::op::Op;
+    use crate::op_output;
+    use crate::op_scope::OpScope;
+    use crate::target::CallHeader;
     use crate::test_env::{self, TestEnv};
     use crate::wire::Nothing;
     use crate::{ErrorCode, Playwright};
@@ -502,20 +505,25 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn tests_that_every_input_answer_keeps_its_null_bytes() -> Result<(), Box<dyn Error>> {
+    #[tokio::test]
+    async fn tests_that_every_input_answer_keeps_its_null_bytes() -> Result<(), Box<dyn Error>> {
         // Input already answered null before route migration. A typed empty object would
         // change those bytes, even though the script's methods discard their answers.
         let answer: Nothing = ();
-        assert_eq!(serde_json::to_string(&answer)?, "null");
+        let env = TestEnv::new();
         for op in InputOp::ALL {
             let wire = op.wire().ok_or("every input op has a typed route")?;
+            let registered = Op::from_name(op.spec().name).ok_or("the input op is registered")?;
+            let scope = OpScope::new(&env, registered, CallHeader::default());
+            let output = op_output::to_output(&scope, &answer)?;
+            assert_eq!(serde_json::to_string(&output)?, "null");
             assert_eq!(
                 wire.output,
                 "null",
                 "{} must still answer null",
                 op.spec().name
             );
+            scope.release_objects().await;
         }
         Ok(())
     }
