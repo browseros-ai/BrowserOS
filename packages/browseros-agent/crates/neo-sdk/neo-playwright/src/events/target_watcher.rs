@@ -160,6 +160,9 @@ struct Watcher {
     closed_early: HashSet<TargetId>,
     /// Which tab each page or OOPIF session belongs to.
     sessions: HashMap<SessionId, TargetId>,
+    /// Core's own page sessions, which it attaches with `Runtime` off: a console report on one
+    /// that no lease holds on is a replay another toggle caused (core's console harvest).
+    page_sessions: HashSet<SessionId>,
     /// Only the chosen auto-attach endpoint publishes a worker's console and close.
     worker_sessions: HashMap<SessionId, String>,
     /// Older Chromium has no workerScriptLoaded event and uses context creation instead.
@@ -400,6 +403,7 @@ impl Watcher {
             pages: HashMap::new(),
             closed_early: HashSet::new(),
             sessions: HashMap::new(),
+            page_sessions: HashSet::new(),
             worker_sessions: HashMap::new(),
             worker_script_events: None,
             root_observers: HashMap::new(),
@@ -517,6 +521,7 @@ impl Watcher {
         }
         self.contexts.retain(|(known, _), _| known != session);
         self.sessions.remove(session);
+        self.page_sessions.remove(session);
     }
 
     /// Handles every broadcast event already queued, without waiting for more.
@@ -1104,7 +1109,7 @@ impl Watcher {
                 let target = TargetId(target_info.target_id);
                 self.lifecycle_sources.attach(&session_id, &target);
                 self.sessions.insert(session_id.clone(), target.clone());
-                self.lease_for_context_listeners(&session_id);
+                self.page_sessions.insert(session_id.clone());
                 if self.lifecycle_sources.accepts(&session_id) {
                     self.seed_lifecycle(&target, &session_id).await;
                 }
@@ -1244,33 +1249,6 @@ impl Watcher {
             .await;
     }
 
-    /// A page attached after a run began listening on the whole context (`context.on('console')`,
-    /// a context binding) gets that run's `Runtime` lease too, as the pages open at the listen
-    /// did (`event_op::lease_runtime`). Spawned, so the watcher never waits on the enable.
-    fn lease_for_context_listeners(&self, session_id: &SessionId) {
-        let leases = Arc::clone(self.browser.page_signals.runtime_leases());
-        for run in self.writer.hub().live_runs() {
-            for (subscription, since_ms) in run.events.context_runtime_listeners() {
-                let session = self
-                    .browser
-                    .protocol_session(session_id.clone())
-                    .at_connection_epoch();
-                let leases = Arc::clone(&leases);
-                let run = Arc::clone(&run);
-                drop(tokio::spawn(async move {
-                    #[expect(
-                        clippy::cast_precision_loss,
-                        reason = "epoch milliseconds stay far below 2^53"
-                    )]
-                    let floor = since_ms as f64;
-                    if let Ok(lease) = leases.acquire(&session, floor).await {
-                        run.events.hold_runtime(&subscription, vec![lease]);
-                    }
-                }));
-            }
-        }
-    }
-
     /// Sessions can attach to a tab whose documents existed before this watcher. Remember
     /// those frames silently so their first removal still carries a real Frame payload.
     async fn seed_lifecycle(&mut self, target: &TargetId, session: &SessionId) {
@@ -1374,7 +1352,8 @@ impl Watcher {
     /// must see only what came after it asked, as it did while `Runtime` stayed on from attach.
     fn replayed(&self, session: &SessionId, params: &Value) -> bool {
         let Some(floor) = self.browser.page_signals.runtime_leases().floor_ms(session) else {
-            return false;
+            // Workers and OOPIFs still keep `Runtime` on without a lease.
+            return self.page_sessions.contains(session);
         };
         params
             .get("timestamp")

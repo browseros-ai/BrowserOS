@@ -54,7 +54,11 @@ struct SessionLeases {
 #[derive(Clone, Copy, Debug, Default)]
 struct Held {
     count: usize,
-    /// Milliseconds since the epoch: the floor the span's first acquirer named.
+    /// Whether the last `Runtime.enable` succeeded with no disable since. Apart from `count`:
+    /// a failed enable leaves a count until its release runs, and the next acquirer must still
+    /// enable rather than trust that count.
+    on: bool,
+    /// Milliseconds since the epoch: the floor the span's opening acquirer named.
     floor_ms: f64,
 }
 
@@ -102,6 +106,7 @@ async fn release(entry: Arc<SessionLeases>, session: ProtocolSession) {
         held.count == 0
     };
     if last {
+        entry.held().on = false;
         // Best effort: a session that is gone has no reporting left to switch off.
         let _ = session.send_value("Runtime.disable", json!({})).await;
     }
@@ -153,17 +158,21 @@ impl RuntimeLeases {
         let opens = {
             let mut held = entry.held();
             held.count += 1;
-            if held.count == 1 {
+            // Before the enable: the browser replays its history ahead of the reply.
+            if !held.on {
                 held.floor_ms = floor_ms;
             }
-            held.count == 1
+            !held.on
         };
+        // The release must reach the session even after the tab left this caller's admission
+        // (moved to another window, say), or reporting would stay on for good.
         let lease = RuntimeLease {
             entry,
-            session: session.clone(),
+            session: session.cancellation_endpoint(),
         };
         if opens {
             session.send_value("Runtime.enable", json!({})).await?;
+            lease.entry.held().on = true;
         }
         drop(turn);
         Ok(lease)
@@ -246,6 +255,32 @@ mod tests {
         );
         assert!(!leases.is_held(&id));
         assert!(leases.unleased_turn(&id).await.is_some());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn an_acquire_after_a_failed_enable_enables_again()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let connection = TestConnection::new([
+            ("Runtime.enable", crate::testing::cdp_error("busy")),
+            ("Runtime.enable", json!({})),
+        ]);
+        connection.always("Runtime.disable", json!({}))?;
+        let session = ProtocolSession::for_session(connection.clone(), SessionId::from("s-2"));
+        let leases = RuntimeLeases::new();
+
+        assert!(leases.acquire(&session, 1.0).await.is_err());
+        // Its release is still queued; this acquire must not count on the failed enable.
+        let lease = leases.acquire(&session, 2.0).await?;
+        for _ in 0..10 {
+            tokio::task::yield_now().await;
+        }
+        assert_eq!(
+            runtime_calls(&connection),
+            vec!["Runtime.enable", "Runtime.enable"]
+        );
+        assert!(leases.is_held(&SessionId::from("s-2")));
+        drop(lease);
         Ok(())
     }
 }

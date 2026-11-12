@@ -482,50 +482,39 @@ pub(crate) const fn needs_runtime(event: PageEventKind) -> bool {
     )
 }
 
-/// `Runtime` leases for what `subscription` listens to, floored at the script's `since_ms`:
-/// its page's session, or every page open now for a context listener. Hosted BrowserOS sends
-/// no console or exception events at all, so there a listener for them leases nothing.
+/// The `Runtime` lease a page listener for console messages or page errors needs, floored at
+/// the script's `since_ms`. Context listeners cover lifecycle events only
+/// (`PageEventKind::context`), and a context binding is plumbed, and leased, per page as each is
+/// admitted (`page/init_script.rs`). Hosted BrowserOS sends no console or exception events, so
+/// there a listener for them leases nothing.
 async fn lease_runtime(
     pw: &Playwright,
     scope: &OpScope<'_>,
     subscription: &Subscription,
     since_ms: u64,
 ) -> Result<Vec<RuntimeLease>, PlaywrightError> {
-    let event = match subscription {
-        Subscription::Page { event, .. } | Subscription::Context(event) => *event,
-        Subscription::ContextPage => return Ok(Vec::new()),
+    let Subscription::Page { tab, event, .. } = subscription else {
+        return Ok(Vec::new());
     };
     let hosted_silent =
         scope.hosted_mode() && matches!(event, PageEventKind::Console | PageEventKind::PageError);
-    if !needs_runtime(event) || hosted_silent {
+    if !needs_runtime(*event) || hosted_silent {
         return Ok(Vec::new());
     }
-    let leases = pw.browser().page_signals.runtime_leases();
     #[expect(
         clippy::cast_precision_loss,
         reason = "epoch milliseconds stay far below 2^53"
     )]
     let floor = since_ms as f64;
-    let core = |error: CoreError| scope.core_error(&error);
-    if let Subscription::Page { tab, .. } = subscription {
-        let admitted = scope.admit(pw.browser(), *tab).await?;
-        let lease = leases
-            .acquire(&admitted.session.session, floor)
-            .await
-            .map_err(core)?;
-        return Ok(vec![lease]);
-    }
-    let listing = scope.view().list_pages().await.map_err(core)?;
-    let mut held = Vec::new();
-    for page in listing.pages {
-        // A tab that closed since the listing has nothing left to report.
-        if let Ok(session) = scope.view().page_session(page.page_id).await
-            && let Ok(lease) = leases.acquire(&session.session, floor).await
-        {
-            held.push(lease);
-        }
-    }
-    Ok(held)
+    let admitted = scope.admit(pw.browser(), *tab).await?;
+    let lease = pw
+        .browser()
+        .page_signals
+        .runtime_leases()
+        .acquire(&admitted.session.session, floor)
+        .await
+        .map_err(|error| scope.core_error(&error))?;
+    Ok(vec![lease])
 }
 
 /// Context listeners observe existing tabs without requiring a prior page action. These are
@@ -711,17 +700,21 @@ async fn wait(
     pw.events().bind(run);
     // While it waits, the watcher records and holds what this wait could receive.
     let _waiting = run.events.waiting(subscription.clone());
-    let _runtime = lease_runtime(pw, scope, &subscription, input.since).await?;
     if matches!(subscription, Subscription::Context(_)) {
         observe_context(scope).await?;
     }
-    let found = first_event(
-        pw,
-        scope,
-        &subscription,
-        input.since,
-        input.after.unwrap_or(0),
-    );
+    let found = async {
+        // Inside the wait's deadline: a slow enable ends at the script's timeout too.
+        let _runtime = lease_runtime(pw, scope, &subscription, input.since).await?;
+        first_event(
+            pw,
+            scope,
+            &subscription,
+            input.since,
+            input.after.unwrap_or(0),
+        )
+        .await
+    };
     match scope.within(found).await {
         Ok(found) => {
             let found = found?;

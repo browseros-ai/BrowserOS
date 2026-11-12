@@ -15,7 +15,6 @@ use tokio::sync::Notify;
 use tokio::time;
 
 use crate::events::event_hub::LOG_CAPACITY;
-use crate::events::event_op::needs_runtime;
 use crate::events::page_event::BindingCalled;
 use crate::events::{ListenerKey, PageEventKind, Subscription};
 
@@ -173,17 +172,20 @@ impl RunEvents {
             .retain(|subscription, _| subscription.key() != *key);
     }
 
-    /// The run's context listeners (`context.on`) whose events only `Runtime` reports, with
-    /// the script's clock when each began: a page that attaches later takes a lease for them.
-    pub(crate) fn context_runtime_listeners(&self) -> Vec<(Subscription, u64)> {
+    /// Whether the run holds a `Runtime` lease for `subscription`.
+    pub(crate) fn holds_runtime(&self, subscription: &Subscription) -> bool {
         self.lock()
-            .listening
-            .iter()
-            .filter(|(subscription, _)| {
-                matches!(subscription, Subscription::Context(event) if needs_runtime(*event))
-            })
-            .map(|(subscription, listening)| (subscription.clone(), listening.since_ms))
-            .collect()
+            .runtime
+            .get(subscription)
+            .is_some_and(|leases| !leases.is_empty())
+    }
+
+    /// Releases the lease the run's bindings on `target` hold, once its last binding there is
+    /// disposed. The binding-call listener stays: a later binding leases again.
+    pub(crate) fn release_binding_runtime(&self, target: &TargetId) {
+        self.lock().runtime.retain(|subscription, _| {
+            subscription.page_event() != Some((target, PageEventKind::Binding))
+        });
     }
 
     /// Keeps `leases` for as long as `subscription` listens. One removed while they were taken
