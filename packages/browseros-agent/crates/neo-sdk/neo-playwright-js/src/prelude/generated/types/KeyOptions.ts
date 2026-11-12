@@ -9,7 +9,6 @@ export type KeyOptions = {
  */
 delay?: number, 
 /**
- * `press` waits for the navigations its keys requested unless this is set; `type` never
- * waits, as upstream.
+ * `press` waits for the navigations its keys requested unless this is set.
  */
 noWaitAfter?: boolean, };
