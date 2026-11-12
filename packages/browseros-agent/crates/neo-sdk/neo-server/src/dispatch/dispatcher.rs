@@ -913,7 +913,8 @@ impl Dispatcher {
     /// script's read of it, after the observation that read them, so a lock the owner took while
     /// the listing waited counts too. A tab held with reads blocked is left out, as a reply leaves
     /// out its fact, and with it everything the owner's session put there: URL, title, task,
-    /// viewport and workers. The run learns of that tab only from a later reply that names it.
+    /// viewport and workers. The run learns of that tab only from a later reply that names it;
+    /// when it is the run's own `page`, the init names its tab id and nothing else.
     pub(crate) fn release_first_facts(
         &self,
         run: &RunCtx,
