@@ -8035,7 +8035,7 @@ ${changes}`;
     return line.textLine && SEPARATORS_ONLY.test(line.body);
   }
   function nameAsContent(node) {
-    if (!node.name || node.text !== undefined)
+    if (!node.name || node.text !== undefined || node.role === "heading")
       return;
     return node.children?.length ? undefined : node.name;
   }
@@ -8055,7 +8055,7 @@ ${changes}`;
         if (typeof child === "string" || child.role === "text")
           stack.push(child);
         else if (!actionable(child))
-          stack.push(child.role === "heading" ? child : nameAsContent(child) ?? child);
+          stack.push(nameAsContent(child) ?? child);
       }
     }
     return pieces.filter((piece) => piece !== "").join(" ");

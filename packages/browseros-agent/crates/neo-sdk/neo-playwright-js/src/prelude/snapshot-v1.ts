@@ -500,18 +500,20 @@ function separatorsOnly(line: Line): boolean {
  * name: `<td>$7.49</td>` is `cell "$7.49"` with no children, so without this the price would
  * print nowhere, even with text on. An image's alt text arrives the same way, and is the only
  * label a link around a badge has. A node with children keeps their own lines instead (a cell
- * holding a link), so its name, derived from them, is never printed twice. In the walk an image
- * prints its own line (rule 6) before this is asked.
+ * holding a link), so its name, derived from them, is never printed twice. A node with a `text`
+ * field has that text as its content instead. A heading's name is never content: the heading
+ * prints its own line (rule 4), just below the control whose own text would repeat it. In the
+ * walk an image prints its own line (rule 6) before this is asked.
  */
 function nameAsContent(node: AriaNodeJSON): string | undefined {
-  if (!node.name || node.text !== undefined) return undefined
+  if (!node.name || node.text !== undefined || node.role === 'heading')
+    return undefined
   return node.children?.length ? undefined : node.name
 }
 
 /**
  * Every text piece under `node` that is not inside a nested actionable node, space-joined. The
- * name of a node that holds nothing else counts as a piece (an image's alt text, a cell's text),
- * except a heading's: the heading prints its own line just below the control.
+ * name of a node that holds nothing else counts as a piece (an image's alt text, a cell's text).
  */
 function ownText(node: AriaNodeJSON): string {
   const pieces: string[] = []
@@ -527,10 +529,7 @@ function ownText(node: AriaNodeJSON): string {
     for (let index = children.length - 1; index >= 0; index--) {
       const child = children[index]
       if (typeof child === 'string' || child.role === 'text') stack.push(child)
-      else if (!actionable(child))
-        stack.push(
-          child.role === 'heading' ? child : (nameAsContent(child) ?? child),
-        )
+      else if (!actionable(child)) stack.push(nameAsContent(child) ?? child)
     }
   }
   return pieces.filter((piece) => piece !== '').join(' ')
