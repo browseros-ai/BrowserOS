@@ -1,5 +1,5 @@
 /**
- * The prelude's half of the wire lever: every op input the prelude sends for one script that
+ * The prelude's half of the wire lever: every op input the prelude sends for scripts that
  * calls every Playwright method Neo routes to Rust, recorded through the built prelude.
  *
  * scripts/build.ts writes the recording to
@@ -12,6 +12,7 @@
 import { Buffer } from 'node:buffer'
 import type { ElementBrand, OpOutputs } from '../src/prelude/wire'
 import { type Call, loadPrelude, SEED } from '../tests/support/prelude-runtime'
+import { type InputExamples, inputExamples } from './input-examples'
 
 /** The clock the recording runs on, so `since` stamps are the same on every build. */
 const RECORDED_AT = 1_700_000_000_000
@@ -96,6 +97,14 @@ function hasAnswer(name: string): name is keyof typeof ANSWERS {
   return Object.hasOwn(ANSWERS, name)
 }
 
+/** Put typed prelude results back into host JSON before the bootstrap revives their brands. */
+function cannedAnswer(name: string): unknown {
+  const answer = hasAnswer(name) ? ANSWERS[name] : null
+  return answer instanceof Uint8Array
+    ? { $neo: 'bytes', base64: Buffer.from(answer).toString('base64') }
+    : answer
+}
+
 /**
  * A plausible result for each op, so the script runs to its end. The pump's first pull answers
  * one binding call, which makes the prelude send `bindingCall.resolve`; the locator-handler
@@ -105,7 +114,10 @@ function hasAnswer(name: string): name is keyof typeof ANSWERS {
 function everyOpAnswer(): (call: Call) => unknown {
   let pulled = false
   let triggered = false
+  // A one-use callback can remove itself before another registration receives its id.
+  let handlerUid = 0
   return (call) => {
+    if (call.name === 'page.addLocatorHandler') return ++handlerUid
     if (call.name === 'events.wait') {
       if (call.input.event === 'worker')
         return {
@@ -127,12 +139,7 @@ function everyOpAnswer(): (call: Call) => unknown {
       triggered = true
       return { uid: 1 }
     }
-    const answer = hasAnswer(call.name) ? ANSWERS[call.name] : null
-    // OpOutputs describes what the prelude sees after the bootstrap revives brands. This
-    // fixture answers at the host's JSON boundary, so put binary answers back in wire form.
-    return answer instanceof Uint8Array
-      ? { $neo: 'bytes', base64: Buffer.from(answer).toString('base64') }
-      : answer
+    return cannedAnswer(call.name)
   }
 }
 
@@ -143,24 +150,58 @@ const EVERY_OP = `
   await page.exposeFunction('add', (a, b) => a + b)
   await page.exposeBinding('source', (source, a) => a); await context.exposeFunction('c', () => 1)
   const l = page.getByRole('button')
-  await l.click(); await l.dblclick(); await l.hover(); await l.check(); await l.uncheck()
-  await l.drop({ data: { 'text/plain': 'external' } });
-  await l.dragTo(page.locator('#b')); await l.fill('x'); await l.press('a'); await l.pressSequentially('ab')
-  await l.selectOption('a'); await l.selectText(); await l.focus(); await l.blur()
+  // Keys and ordinary values come from the input types. These adaptations bridge public
+  // objects/valid value domains to their wire representations; they never enumerate bags.
+  const sample = (op) => {
+    const value = { ...samples[op] }
+    if ('mask' in value) value.mask = [l]
+    if ('maskColor' in value) value.maskColor = '#00ff00'
+    if ('format' in value) value.format = 'A4'
+    if ('pageRanges' in value) value.pageRanges = '1'
+    if ('pollingInterval' in value) value.polling = value.pollingInterval
+    for (const key of ['width', 'height'])
+      if (typeof value[key] === 'string') value[key] = '10px'
+    if ('margin' in value) value.margin = Object.fromEntries(Object.keys(value.margin).map(side => [side, '1px']))
+    if ('path' in value) value.path = 'Cargo.toml'
+    if ('files' in value) value.files = [{ name: 'option.txt', mimeType: 'text/plain', buffer: Buffer.from('a') }]
+    if ('data' in value) value.data = { 'text/plain': 'external' }
+    if ('url' in value) value.url = typeof value.url === 'object' ? '**/pay' : 'https://a.example/script.js'
+    return value
+  }
+  await l.click(sample('locator.click')); await l.dblclick(sample('locator.dblclick'))
+  await l.hover(sample('locator.hover')); await l.check(sample('locator.check')); await l.uncheck(sample('locator.uncheck'))
+  // Drop separates the payload from its position argument.
+  const drop = sample('locator.drop'); await l.drop(drop, { position: drop.position });
+  await l.dragTo(page.locator('#b'), sample('locator.dragTo')); await l.fill('x', sample('locator.fill'))
+  await l.press('a', sample('locator.press')); await l.pressSequentially('ab', sample('locator.pressSequentially'))
+  await l.selectOption('a', sample('locator.selectOption')); await l.selectText(sample('locator.selectText')); await l.focus(); await l.blur()
   // Rust stats paths before any page work, so the offline decode needs one that exists: '.'.
   await l.setInputFiles('.'); await l.setInputFiles({ name: 'a.txt', mimeType: 'text/plain', buffer: Buffer.from('a') })
   await l.dispatchEvent('click'); await l.scrollIntoViewIfNeeded()
   await l.textContent(); await l.innerText(); await l.innerHTML(); await l.getAttribute('id'); await l.inputValue()
   await l.isEnabled(); await l.isDisabled(); await l.isEditable(); await l.isChecked(); await l.isVisible(); await l.isHidden()
-  await l.count(); await l.normalize(); await l.allTextContents(); await l.allInnerTexts(); await l.boundingBox(); await l.waitFor()
+  await l.count(); await l.normalize(); await l.allTextContents(); await l.allInnerTexts(); await l.boundingBox(); await l.waitFor(sample('locator.waitFor'))
   const handle = await l.elementHandle(); await handle.click(); await l.elementHandles()
+  await l.selectOption(['a', handle], sample('locator.selectOption'))
   await handle.$('b'); await handle.$$('b')
-  await page.ariaSnapshot(); await l.ariaSnapshot(); await page.ariaSnapshotJSON({ boxes: true })
+  await page.ariaSnapshot(sample('page.ariaSnapshot')); await l.ariaSnapshot(sample('locator.ariaSnapshot'))
+  await page.ariaSnapshotJSON(sample('page.ariaSnapshot')); await l.ariaSnapshotJSON(sample('locator.ariaSnapshot'))
   await expect(l).toBeVisible(); await expect(page).toHaveTitle('x')
-  await page.keyboard.down('a'); await page.keyboard.up('a'); await page.keyboard.press('a')
-  await page.keyboard.type('ab'); await page.keyboard.insertText('ab')
-  await page.mouse.move(1, 2); await page.mouse.down(); await page.mouse.up(); await page.mouse.click(1, 2); await page.mouse.wheel(0, 9)
-  await page.goto('https://a.example/'); await page.reload(); await page.goBack(); await page.goForward()
+  // A single generic matcher cannot produce Frame.expect's different optional params.
+  const locatorExpect = sample('expect.locator'), pageExpect = sample('expect.page')
+  await expect(l).toHaveCount(locatorExpect.expectedNumber)
+  await expect(l).toHaveAttribute('data-state', 'ready')
+  await expect(l).toHaveCSS('color', 'red', { pseudo: locatorExpect.pseudo })
+  await expect(l).toHaveJSProperty('state', locatorExpect.expectedValue)
+  await expect(l).toHaveText('sample', { useInnerText: locatorExpect.useInnerText })
+  await expect(page).toHaveTitle('sample', { useInnerText: pageExpect.useInnerText })
+  await expect(page).toMatchAriaSnapshot('- button "Go"')
+  await expect(l).toMatchAriaSnapshot('['); await expect(page).toMatchAriaSnapshot('[')
+  await page.keyboard.down('a'); await page.keyboard.up('a'); await page.keyboard.press('a', sample('keyboard.press'))
+  await page.keyboard.type('ab', sample('keyboard.type')); await page.keyboard.insertText('ab')
+  await page.mouse.move(1, 2, sample('mouse.move')); await page.mouse.down(sample('mouse.down'))
+  await page.mouse.up(sample('mouse.up')); await page.mouse.click(1, 2, sample('mouse.click')); await page.mouse.wheel(0, 9)
+  await page.goto('https://a.example/', sample('page.goto')); await page.reload(); await page.goBack(); await page.goForward()
   const pay = page.frame('pay')
   await pay.goto('https://pay.example/'); await pay.waitForLoadState('domcontentloaded'); await pay.locator('#card').count()
   await page.waitForNavigation(); await pay.waitForNavigation({ url: '**/pay' });
@@ -169,45 +210,96 @@ const EVERY_OP = `
   await page.emulateMedia({ media: 'print', colorScheme: 'dark', reducedMotion: 'reduce', forcedColors: 'active', contrast: 'more' });
   await page.localStorage.getItem('token'); await page.sessionStorage.setItem('flag', '1')
   await page.localStorage.items(); await page.localStorage.removeItem('token'); await page.sessionStorage.clear()
-  await page.addScriptTag({ content: 'window.injected = true' }); await pay.addStyleTag({ content: 'body { color: red }' });
+  // content, url and path are alternative sources, so exercise each on a separate call.
+  const scriptTag = sample('page.addScriptTag'), styleTag = sample('page.addStyleTag')
+  await page.addScriptTag({ content: scriptTag.content, type: scriptTag.type })
+  await page.addScriptTag({ url: scriptTag.url, type: scriptTag.type }); await page.addScriptTag({ path: scriptTag.path, type: scriptTag.type })
+  await pay.addStyleTag({ content: styleTag.content }); await page.addStyleTag({ url: styleTag.url }); await page.addStyleTag({ path: styleTag.path })
   await page.setContent('<p>hi</p>'); await page.opener(); await page.evaluate(() => 1)
-  await l.evaluate((e) => e.id); await l.evaluateAll((es) => es.length); await page.waitForFunction(() => true)
+  await l.evaluate((e) => e.id); await l.evaluateAll((es) => es.length); await page.waitForFunction(() => true, undefined, sample('page.waitForFunction'))
   await l.waitForFunction((e) => e.id)
+  // Function normalization refusals are valid inputs too; they travel on the op.
+  const refused = () => {}; refused.toString = () => 'function ('
+  await page.evaluate(refused); await l.evaluate(refused); await l.evaluateAll(refused)
+  await page.waitForFunction(refused); await l.waitForFunction(refused); await page.$eval('b', refused)
   await handle.evaluate((e) => e.id); await handle.$eval('b', (e) => e.id); await handle.$$eval('b', (es) => es.length)
   await page.$eval('b', (e) => e.id); await page.$$eval('b', (es) => es.length); await page.evaluate((e, h) => h.id, handle)
-  await page.screenshot(); await l.screenshot(); await page.pdf()
+  await page.screenshot(sample('page.screenshot')); await l.screenshot(sample('page.screenshot')); await page.pdf(sample('page.pdf'))
   await page.screenshot({ path: '/out/screenshot.png' })
   await page.setViewportSize({ width: 640, height: 480 })
   const script = await page.addInitScript((a) => { window.a = a }, 1)
   // Rust reads a path before any page work, so the offline decode needs a file that exists.
   await page.addInitScript({ path: 'Cargo.toml' }); await context.addInitScript('window.b = 1')
+  await context.addInitScript({ path: 'Cargo.toml' })
   await page.addInitScript(({ cb }) => cb(1), { cb: () => 2 }, { exposeFunctions: true })
+  Math.random = () => 0.5
+  await context.addInitScript(({ cb }) => cb(1), { cb: () => 2 }, { exposeFunctions: true })
   await script.dispose()
-  await page.addLocatorHandler(page.getByText('Accept cookies'), async () => {}, { noWaitAfter: true, times: 2 })
+  let handlerRan
+  const handled = new Promise(resolve => { handlerRan = resolve })
+  await page.addLocatorHandler(page.getByText('Accept cookies'), async () => { handlerRan() }, { noWaitAfter: true, times: 1 })
+  // Let the trigger consume its single use before an explicit removal can delete it.
+  await handled
   await page.removeLocatorHandler(page.getByText('Accept cookies'))
+  await page.addLocatorHandler(page.getByText('Later'), async () => {})
+  await page.removeLocatorHandler(page.getByText('Later'))
   const tab = await context.newPage()
   page.on('console', () => {}); context.on('page', () => {})
   const chooserListener = () => {}
   page.on('filechooser', chooserListener)
   page.off('filechooser', chooserListener)
-  const dialog = await page.waitForEvent('dialog'); await dialog.accept(); await dialog.dismiss()
+  const dialog = await page.waitForEvent('dialog'); await dialog.accept(sample('dialog.accept').promptText); await dialog.dismiss()
   const download = await page.waitForEvent('download'); await download.path(); await download.saveAs('/out/f.csv')
   const worker = await page.waitForEvent('worker'); await worker.evaluate(() => 1)
+  await worker.evaluate(refused)
   await tab.close({ runBeforeUnload: true }); await tab.close()
 `
 
 /** Runs `EVERY_OP` and returns every op the prelude sent, in order. */
 export async function recordEveryOp(prelude?: string): Promise<Call[]> {
+  const { samples }: InputExamples = await inputExamples()
   const runtime = loadPrelude({
     seed: SEED,
     answer: everyOpAnswer(),
     now: RECORDED_AT,
     ...(prelude === undefined ? {} : { prelude }),
   })
-  await runtime.run(EVERY_OP)
+  await runtime.run(`const samples = ${JSON.stringify(samples)};\n${EVERY_OP}`)
   // `page.on` sends its listen op without awaiting it; let those land.
   await new Promise((resolve) => setTimeout(resolve, 0))
-  return runtime.calls
+  // retiredTab is produced only when the run releases internal worker bookkeeping. A fresh
+  // worker-aware page and a real close acknowledgement exercise that lifecycle separately
+  // from the binding/handler pump above, whose first event deliberately carries callbacks.
+  const retired = loadPrelude({
+    seed: {
+      ...SEED,
+      pages: [
+        {
+          tab: 1007,
+          url: 'https://a.example/',
+          title: 'A',
+          closed: false,
+          workers: [],
+        },
+      ],
+    },
+    answer: (call) => {
+      if (call.name === 'events.next') return new Promise(() => {})
+      if (call.name === 'page.close')
+        return {
+          ok: null,
+          pages: [
+            { tab: 1007, url: null, title: null, closed: true, workers: [] },
+          ],
+        }
+      return cannedAnswer(call.name)
+    },
+    now: RECORDED_AT,
+    ...(prelude === undefined ? {} : { prelude }),
+  })
+  await retired.run('await page.close()')
+  await new Promise((resolve) => setTimeout(resolve, 0))
+  return [...runtime.calls, ...retired.calls]
 }
 
 /**
@@ -215,6 +307,7 @@ export async function recordEveryOp(prelude?: string): Promise<Call[]> {
  * header included), ops in name order and inputs in the order the script sent them.
  */
 export async function wireExamplesDocument(prelude?: string): Promise<string> {
+  const { optionalKeys } = await inputExamples()
   const byOp = new Map<string, { seen: Set<string>; inputs: unknown[] }>()
   for (const call of await recordEveryOp(prelude)) {
     const entry = byOp.get(call.name) ?? { seen: new Set(), inputs: [] }
@@ -231,6 +324,7 @@ export async function wireExamplesDocument(prelude?: string): Promise<string> {
     {
       about:
         'Every op input the prelude sends, recorded by crates/neo-sdk/neo-playwright-js/scripts/wire-examples.ts. Do not edit: run bun run build in crates/neo-sdk/neo-playwright-js.',
+      optionalKeys: Object.fromEntries(Object.entries(optionalKeys).sort()),
       ops,
     },
     null,
