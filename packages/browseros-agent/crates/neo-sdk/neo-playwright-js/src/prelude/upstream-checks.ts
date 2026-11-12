@@ -6,11 +6,7 @@
 import type * as pw from '../../../neo-playwright/third_party/playwright/packages/playwright-core/src/client/channels'
 import type { GeneratedInputs } from './generated'
 import type { OpName } from './generated/ops'
-import type {
-  FILL_KEYS,
-  PRESS_KEYS,
-  TYPE_KEYS,
-} from './options'
+import type { FILL_KEYS, PRESS_KEYS, TYPE_KEYS } from './options'
 import type { Assert, KeysCheck, UpstreamCheck } from './upstream-check'
 import type { OpInputs } from './wire'
 

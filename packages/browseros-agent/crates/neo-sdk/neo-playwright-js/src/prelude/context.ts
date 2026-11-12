@@ -1,5 +1,5 @@
-import { send } from './generated'
 import { captureSite } from './call-site'
+import { send } from './generated'
 /**
  * The one browser context a run sees: every tab of the owner's profile, which Neo never closes
  * or recreates. It owns the run's Page objects (one per tab, so identity holds across

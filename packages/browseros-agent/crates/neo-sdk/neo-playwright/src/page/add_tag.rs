@@ -66,6 +66,7 @@ pub(crate) struct Tagged {
     frames: Option<Vec<FrameInfo>>,
 }
 
+/// A returned node is pinned to the admitted page and the document that created it.
 #[derive(Serialize, TS)]
 struct TagElement {
     #[serde(rename = "$neo")]

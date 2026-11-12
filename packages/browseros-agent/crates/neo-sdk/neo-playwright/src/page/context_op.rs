@@ -10,13 +10,12 @@ use serde_json::{Value, json};
 use tokio::sync::broadcast::error::RecvError;
 use ts_rs::TS;
 
-use crate::wire::{self, Describe, OpWire, Route, Run, options};
-
 use crate::listed_enum::listed_enum;
 use crate::op_input::OpArgs;
 use crate::op_scope::OpScope;
 use crate::op_spec::{Capability, OpSpec, OpTarget};
 use crate::page::{PageHandle, init_script};
+use crate::wire::{self, Describe, OpWire, Route, Run, options};
 use crate::{Playwright, PlaywrightError};
 
 listed_enum! {
@@ -33,6 +32,7 @@ listed_enum! {
 }
 
 impl ContextOp {
+    /// Shapes and runtime dispatch come from the same route rows.
     pub(crate) fn wire(self) -> Option<OpWire> {
         route(self, Describe)
     }

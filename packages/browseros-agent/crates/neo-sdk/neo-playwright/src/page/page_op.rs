@@ -668,8 +668,8 @@ mod wire_tests {
         args: String,
     }
 
-    #[test]
-    fn moved_inputs_decode_every_before_recording() -> Result<(), Box<dyn Error>> {
+    #[tokio::test]
+    async fn moved_inputs_decode_every_before_recording() -> Result<(), Box<dyn Error>> {
         let fixture: Fixture =
             serde_json::from_str(include_str!("../../tests/data/page-c-wire.json"))?;
         let env = TestEnv::new();

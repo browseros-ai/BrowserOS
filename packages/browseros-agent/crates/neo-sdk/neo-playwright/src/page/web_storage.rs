@@ -11,8 +11,6 @@
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
-use crate::wire::{Nothing, options};
-
 use crate::op_scope::{OpScope, Sent};
 use crate::op_spec::{OpSpec, PAGE};
 use crate::page::OpPage;
@@ -23,6 +21,7 @@ use crate::probe::{
 };
 use crate::resolve::failed;
 use crate::target::PageRef;
+use crate::wire::{Nothing, options};
 use crate::world::{Endpoint, IsolatedWorld, Place};
 use crate::{ErrorCode, Playwright, PlaywrightError};
 
@@ -38,10 +37,8 @@ pub(crate) const WRITE_SPEC: OpSpec = OpSpec::write(
     "set or remove an item of the main frame's localStorage or sessionStorage, or clear it",
 );
 
-/// `{ page, kind, action, name?, value? }`, as the prelude's `WebStorage` sends it.
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub(crate) struct WebStorageInput {
+/// The shared runner's decoded fields; the read and write routes own their separate inputs.
+struct WebStorageInput {
     page: PageRef,
     kind: StorageKind,
     action: StorageAction,
@@ -66,6 +63,7 @@ pub(crate) struct StorageReadInput {
 }
 options!(StorageReadInput);
 
+/// The write side keeps optional name/value fields for removeItem and clear.
 #[derive(Deserialize, TS)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub(crate) struct StorageWriteInput {
@@ -91,6 +89,7 @@ pub(crate) enum StorageValue {
     Item(Option<String>),
 }
 
+/// One name/value pair in Storage.items(), in the document's existing iteration order.
 #[derive(Deserialize, Serialize, TS)]
 pub(crate) struct StorageItem {
     name: String,
@@ -268,4 +267,18 @@ async fn send(
     _sent: &Sent<'_>,
 ) -> Result<ProbeReply, ProbeFailure> {
     probe::call(world, request).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::StorageValue;
+
+    #[test]
+    fn storage_replies_keep_their_recorded_json_shapes() -> Result<(), serde_json::Error> {
+        for before in [r#"[{"name":"a","value":"b"}]"#, r#""b""#, "null", "[]"] {
+            let typed: StorageValue = serde_json::from_str(before)?;
+            assert_eq!(serde_json::to_string(&typed)?, before);
+        }
+        Ok(())
+    }
 }

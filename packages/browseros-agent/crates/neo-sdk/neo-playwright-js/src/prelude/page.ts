@@ -1,6 +1,4 @@
 import { type CallSite, captureSite, INTERNAL_SITE } from './call-site'
-import type { KeyList } from './upstream-check'
-import type { PickOptions } from './upstream-checks'
 /**
  * Playwright's Page over one tab.
  *
@@ -87,7 +85,6 @@ import type {
   NavigationPublication,
   NavigationResult,
   Observation,
-  OpInputs,
   PageBrand,
   PageFact,
   PageHandle,
@@ -107,7 +104,6 @@ export type MediaOptions = {
 }
 
 export type CloseOptions = { runBeforeUnload?: boolean; reason?: string }
-
 
 export class Page extends EventEmitter {
   /** The browser's tab id, which the page's brand carries; null until a fact or result names it. */
@@ -758,7 +754,10 @@ export class Page extends EventEmitter {
     for (const key of Object.keys(allowed) as (keyof MediaOptions)[]) {
       const value = options[key] === null ? 'no-override' : options[key]
       if (value === undefined) continue
-      if (typeof value !== 'string' || !allowed[key].some((candidate) => candidate === value))
+      if (
+        typeof value !== 'string' ||
+        !allowed[key].some((candidate) => candidate === value)
+      )
         throw clientError(
           api,
           `${key}: expected one of (${allowed[key].join('|')})`,
@@ -768,9 +767,15 @@ export class Page extends EventEmitter {
     await send['page.emulateMedia'](site, this._mainFrame._call(api, 0), {
       page: await this._brand(api),
       media: allowed.media.find((value) => value === input.media),
-      colorScheme: allowed.colorScheme.find((value) => value === input.colorScheme),
-      reducedMotion: allowed.reducedMotion.find((value) => value === input.reducedMotion),
-      forcedColors: allowed.forcedColors.find((value) => value === input.forcedColors),
+      colorScheme: allowed.colorScheme.find(
+        (value) => value === input.colorScheme,
+      ),
+      reducedMotion: allowed.reducedMotion.find(
+        (value) => value === input.reducedMotion,
+      ),
+      forcedColors: allowed.forcedColors.find(
+        (value) => value === input.forcedColors,
+      ),
       contrast: allowed.contrast.find((value) => value === input.contrast),
     })
   }
@@ -978,9 +983,7 @@ export class Page extends EventEmitter {
   }
 
   /** upstream's client turns numeric sizes and margins into CSS pixel strings. */
-  async pdf(
-    options: PdfOptions & { path?: string } = {},
-  ): Promise<unknown> {
+  async pdf(options: PdfOptions & { path?: string } = {}): Promise<unknown> {
     const site = captureSite()
     const api = 'page.pdf'
     if (options.path !== undefined)
@@ -1002,12 +1005,20 @@ export class Page extends EventEmitter {
       { api, timeoutMs: 0 },
       {
         page: await this._brand(api),
-        scale: wire.scale, displayHeaderFooter: wire.displayHeaderFooter,
-        headerTemplate: wire.headerTemplate, footerTemplate: wire.footerTemplate,
-        printBackground: wire.printBackground, landscape: wire.landscape,
-        pageRanges: wire.pageRanges, format: wire.format, width: wire.width,
-        height: wire.height, preferCSSPageSize: wire.preferCSSPageSize,
-        margin: wire.margin, tagged: wire.tagged, outline: wire.outline,
+        scale: wire.scale,
+        displayHeaderFooter: wire.displayHeaderFooter,
+        headerTemplate: wire.headerTemplate,
+        footerTemplate: wire.footerTemplate,
+        printBackground: wire.printBackground,
+        landscape: wire.landscape,
+        pageRanges: wire.pageRanges,
+        format: wire.format,
+        width: wire.width,
+        height: wire.height,
+        preferCSSPageSize: wire.preferCSSPageSize,
+        margin: wire.margin,
+        tagged: wire.tagged,
+        outline: wire.outline,
       },
     )
   }

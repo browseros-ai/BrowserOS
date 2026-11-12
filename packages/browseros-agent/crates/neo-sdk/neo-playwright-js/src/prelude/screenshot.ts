@@ -1,4 +1,3 @@
-import { send } from './generated'
 /**
  * Screenshot client work around capture: infer the format first, then persist the returned
  * bytes. Saving is a separate targetless write so capture remains readable during takeover.
@@ -6,6 +5,7 @@ import { send } from './generated'
 import type { CallSite } from './call-site'
 import { decode } from './encodings'
 import { plainError } from './errors'
+import { send } from './generated'
 import type { SignalLike } from './signal'
 import { getMimeTypeForPath } from './vendored'
 import type { ScreenshotOptions } from './wire'

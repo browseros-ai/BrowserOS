@@ -2,4 +2,7 @@
 import type { FrameSeq } from "./FrameSeq";
 import type { PageBrand } from "./PageBrand";
 
+/**
+ * A returned node is pinned to the admitted page and the document that created it.
+ */
 export type TagElement = { $neo: "element", page: PageBrand, seq: FrameSeq, node: number, display: string, };

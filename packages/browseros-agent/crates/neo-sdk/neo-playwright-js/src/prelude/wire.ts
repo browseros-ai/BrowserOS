@@ -253,7 +253,10 @@ export type PageScript =
   | { refused: string }
 
 /** The screenshot options Neo captures with; the prelude refuses the others before sending. */
-export type ScreenshotOptions = Omit<GeneratedInputs['page.screenshot'], 'page' | 'target' | 'strict'>
+export type ScreenshotOptions = Omit<
+  GeneratedInputs['page.screenshot'],
+  'page' | 'target' | 'strict'
+>
 
 /**
  * PDF fields accepted by pdf.rs. Rust accepts pixels or CSS lengths; the prelude normalizes

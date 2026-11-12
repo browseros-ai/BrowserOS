@@ -4,11 +4,10 @@ use browseros_core::viewport::{Size, ViewportRequest};
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
-use crate::wire::options;
-
 use crate::op_scope::OpScope;
 use crate::op_spec::{OpSpec, PAGE};
 use crate::target::PageRef;
+use crate::wire::options;
 use crate::{ErrorCode, Playwright, PlaywrightError};
 
 /// A tab write, so the dispatcher's takeover lock guards resizing just like navigation.

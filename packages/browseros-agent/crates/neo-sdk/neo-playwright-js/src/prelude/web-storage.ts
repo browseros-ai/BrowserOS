@@ -1,4 +1,3 @@
-import { send } from './generated'
 /**
  * Upstream's WebStorage (client/webStorage.ts at v1.64.1): `page.localStorage` and
  * `page.sessionStorage`. Each method is one op on the page's main frame, without a timeout,
@@ -7,6 +6,7 @@ import { send } from './generated'
  */
 import { captureSite } from './call-site'
 import { clientError } from './errors'
+import { send } from './generated'
 import type { Page } from './page'
 
 type StorageKind = 'local' | 'session'

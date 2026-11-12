@@ -1368,7 +1368,8 @@ export class Frame extends EventEmitter {
       wire.type = screenshotType({ api, path: options.path })
     const { timeout, signal } = this._wait(api, options)
     const page = await this._page._brand(api)
-    const target = selector === null ? undefined : await this._locatorBrand(api, selector)
+    const target =
+      selector === null ? undefined : await this._locatorBrand(api, selector)
     const image = await send['page.screenshot'](
       site,
       this._call(api, timeout),
@@ -1376,10 +1377,17 @@ export class Frame extends EventEmitter {
         page,
         target,
         strict: selector === null ? undefined : 'strict',
-        type: wire.type, quality: wire.quality, omitBackground: wire.omitBackground,
-        fullPage: wire.fullPage, clip: wire.clip, animations: wire.animations,
-        caret: wire.caret, style: wire.style, scale: wire.scale,
-        maskColor: wire.maskColor, mask: wire.mask,
+        type: wire.type,
+        quality: wire.quality,
+        omitBackground: wire.omitBackground,
+        fullPage: wire.fullPage,
+        clip: wire.clip,
+        animations: wire.animations,
+        caret: wire.caret,
+        style: wire.style,
+        scale: wire.scale,
+        maskColor: wire.maskColor,
+        mask: wire.mask,
       },
       signal,
     )
@@ -1497,7 +1505,9 @@ export class Frame extends EventEmitter {
         {
           page,
           frame,
-          url: input.url, path: input.path, content: input.content,
+          url: input.url,
+          path: input.path,
+          content: input.content,
           type: op === 'page.addScriptTag' ? input.type : undefined,
         },
       )
@@ -1634,7 +1644,10 @@ export async function screenshotOptions(
   api: string,
   options: ScreenshotOptionsInput,
 ): Promise<ScreenshotOptions> {
-  const wire: ScreenshotOptions = pick(options, OPTION_KEYS['page.screenshot'].filter((key) => key !== 'mask'))
+  const wire: ScreenshotOptions = pick(
+    options,
+    OPTION_KEYS['page.screenshot'].filter((key) => key !== 'mask'),
+  )
   if (options.mask !== undefined) {
     wire.mask = await Promise.all(
       options.mask.map((locator) => {
