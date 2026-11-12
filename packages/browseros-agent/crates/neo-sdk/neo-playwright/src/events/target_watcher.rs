@@ -771,6 +771,7 @@ impl Watcher {
             }
             "Runtime.consoleAPICalled" => {
                 if let Some(session) = session_id
+                    && !self.replayed(&session, &params)
                     && let Some(target) = self.wanted(&session, PageEventKind::Console).await
                     && let Some(params) = parse::<ConsoleParams>(params)
                 {
@@ -779,6 +780,7 @@ impl Watcher {
             }
             "Runtime.exceptionThrown" => {
                 if let Some(session) = session_id
+                    && !self.replayed(&session, &params)
                     && let Some(target) = self.wanted(&session, PageEventKind::PageError).await
                     && let Some(params) = parse::<ExceptionParams>(params)
                 {
@@ -1353,6 +1355,19 @@ impl Watcher {
     }
 
     /// The tab of `session`, if some run listens for `event` on it.
+    /// Whether a console message or exception is the browser's replay of history: a lease
+    /// that switched `Runtime` on makes the browser send what it stored before, and a listener
+    /// must see only what came after it asked, as it did while `Runtime` stayed on from attach.
+    fn replayed(&self, session: &SessionId, params: &Value) -> bool {
+        let Some(floor) = self.browser.page_signals.runtime_leases().floor_ms(session) else {
+            return false;
+        };
+        params
+            .get("timestamp")
+            .and_then(Value::as_f64)
+            .is_some_and(|stamped| stamped < floor)
+    }
+
     async fn wanted(&mut self, session: &SessionId, event: PageEventKind) -> Option<TargetId> {
         let target = self.target_of(session).await?;
         self.writer.hub().wants(&target, event).then_some(target)

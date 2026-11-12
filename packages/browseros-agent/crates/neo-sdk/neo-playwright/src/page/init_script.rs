@@ -508,15 +508,28 @@ impl InitScripts {
             let run = scope.run_state();
             hub.bind(run);
             let since = now_ms();
-            run.events.listen(
-                Subscription::Page {
-                    tab: admitted.tab,
-                    target: admitted.session.target_id.clone(),
-                    event: PageEventKind::Binding,
-                },
-                since,
-                hub.position_at(since),
-            );
+            let calls = Subscription::Page {
+                tab: admitted.tab,
+                target: admitted.session.target_id.clone(),
+                event: PageEventKind::Binding,
+            };
+            run.events
+                .listen(calls.clone(), since, hub.position_at(since));
+            // Binding calls, and the main-world contexts that name their frame, are Runtime
+            // events; core attaches with Runtime off, so the run holds it on until it ends.
+            #[expect(
+                clippy::cast_precision_loss,
+                reason = "epoch milliseconds stay far below 2^53"
+            )]
+            let floor = since as f64;
+            let lease = scope
+                .view()
+                .signals()
+                .runtime_leases()
+                .acquire(session, floor)
+                .await
+                .map_err(|error| scope.core_error(&error))?;
+            run.events.hold_runtime(&calls, vec![lease]);
             hub.wake();
             let core = |error| scope.core_error(&error);
             session

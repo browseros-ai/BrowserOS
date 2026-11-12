@@ -710,7 +710,14 @@ async fn ordered_rounds(run: &LiveRun, server: &PageServer, page: &TestPage) -> 
         for round in 0..5 {
             let text = format!("ordered {round}");
             let pumped = async {
-                let reply = run.invoke("events.next", json!({})).await;
+                // The pump has no deadline of its own; a message that never comes must fail the
+                // round, not hang the suite.
+                let reply = time::timeout(
+                    Duration::from_secs(10),
+                    run.invoke("events.next", json!({})),
+                )
+                .await
+                .map_err(|_elapsed| format!("round {round}: no console message in 10 s"));
                 (reply, Instant::now())
             };
             let evaluated = async {
@@ -728,7 +735,7 @@ async fn ordered_rounds(run: &LiveRun, server: &PageServer, page: &TestPage) -> 
             };
             let ((pumped, pumped_at), (evaluated, evaluated_at)) = tokio::join!(pumped, evaluated);
             evaluated?;
-            let events = pumped?
+            let events = pumped??
                 .get("events")
                 .and_then(Value::as_array)
                 .cloned()
@@ -746,6 +753,60 @@ async fn ordered_rounds(run: &LiveRun, server: &PageServer, page: &TestPage) -> 
         }
         Ok(())
     }
+}
+
+/// Core attaches pages with `Runtime` off, since a site can time the inspector's console work
+/// to detect DevTools. A run that listens for nothing sends no `Runtime.enable`; a console
+/// listener leases it on (`browseros_core::runtime_lease`), and the run's end switches it off.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_runtime_is_on_only_while_a_run_listens_for_it() -> TestResult {
+    with_page(|mut run, server, page| async move {
+        let result = async {
+            run.record_methods();
+            open(&run, &page, &server.url("/popups.html")).await?;
+            run.click(&page, "#log").await?;
+            let quiet = run.recorded_methods();
+            run.record_methods();
+            assert!(
+                !quiet
+                    .iter()
+                    .any(|method| method.starts_with("Runtime.enable")),
+                "a run that listens for nothing enabled Runtime: {quiet:?}"
+            );
+            run.invoke(
+                "events.listen",
+                json!({ "page": brand(&page), "event": "console", "on": true, "since": now_ms()? }),
+            )
+            .await?;
+            let listening = run.recorded_methods();
+            run.record_methods();
+            assert_eq!(
+                listening
+                    .iter()
+                    .filter(|method| *method == "Runtime.enable")
+                    .count(),
+                1,
+                "the listener takes one lease: {listening:?}"
+            );
+            run.next_run();
+            let deadline = Instant::now() + Duration::from_secs(5);
+            let mut ended = Vec::new();
+            while !ended.iter().any(|method| method == "Runtime.disable") {
+                assert!(
+                    Instant::now() < deadline,
+                    "the ended run left Runtime on: {ended:?}"
+                );
+                time::sleep(Duration::from_millis(50)).await;
+                ended.extend(run.recorded_methods());
+                run.record_methods();
+            }
+            Ok(())
+        }
+        .await;
+        (run, result)
+    })
+    .await
 }
 
 #[tokio::test]
