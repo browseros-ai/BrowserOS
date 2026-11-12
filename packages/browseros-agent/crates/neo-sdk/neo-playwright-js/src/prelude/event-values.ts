@@ -3,9 +3,9 @@
  * playwright-core 1.64.1's client classes. Each is built from one record of Rust's event log
  * (wire.ts `EventRecord`); dialogs and downloads keep the id Rust answers them by.
  */
-import { invoke } from './bridge'
 import { captureSite } from './call-site'
 import type { ElementHandle } from './element-handle'
+import { send } from './generated'
 import { inspectCustom, markHandle } from './options'
 import type { Page } from './page'
 import type {
@@ -81,14 +81,14 @@ export class Dialog {
   async accept(promptText?: string): Promise<void> {
     const site = captureSite()
     const api = 'dialog.accept'
-    await invoke(
-      'dialog.accept',
+    // An undefined `promptText` leaves the input, as the bootstrap drops undefined keys.
+    await send['dialog.accept'](
       site,
       { api, timeoutMs: 0 },
       {
         page: await this.#pageValue._brand(api),
         dialog: this.#info.id,
-        ...(promptText === undefined ? {} : { promptText }),
+        promptText,
       },
     )
   }
@@ -100,8 +100,7 @@ export class Dialog {
     // Outside the try, as page.close's: the catch reads the op's code from the door.
     const page = await this.#pageValue._brand(api)
     try {
-      await invoke(
-        'dialog.dismiss',
+      await send['dialog.dismiss'](
         site,
         { api, timeoutMs: 0 },
         { page, dialog: this.#info.id },
@@ -139,8 +138,7 @@ export class Download {
   async path(): Promise<string> {
     const site = captureSite()
     const api = 'download.path'
-    const done = await invoke(
-      'download.path',
+    const done = await send['download.path'](
       site,
       { api, timeoutMs: 0 },
       { download: this.#info.id },
@@ -154,8 +152,7 @@ export class Download {
   async failure(): Promise<string | null> {
     const site = captureSite()
     const api = 'download.failure'
-    const done = await invoke(
-      'download.path',
+    const done = await send['download.path'](
       site,
       { api, timeoutMs: 0 },
       { download: this.#info.id },
@@ -166,8 +163,7 @@ export class Download {
   async saveAs(path: string): Promise<void> {
     const site = captureSite()
     const api = 'download.saveAs'
-    await invoke(
-      'download.saveAs',
+    await send['download.saveAs'](
       site,
       { api, timeoutMs: 0 },
       { download: this.#info.id, path },

@@ -6,73 +6,16 @@
 import type * as pw from '../../../neo-playwright/third_party/playwright/packages/playwright-core/src/client/channels'
 import type { GeneratedInputs } from './generated'
 import type { OpName } from './generated/ops'
-import type { Assert, UpstreamCheck } from './upstream-check'
-import type { OpInputs } from './wire'
+import type { Assert } from './upstream-check'
 
-export type UpstreamChecks = {
-  // Neo leases file-chooser interception per run; upstream subscribes by event name and enabled flag.
-  'events.interceptFileChooser': Assert<
-    UpstreamCheck<
-      'events.interceptFileChooser',
-      OpInputs['events.interceptFileChooser'],
-      pw.PageUpdateSubscriptionParams,
-      'lease' | 'on',
-      'enabled' | 'event',
-      never
-    >
-  >
-  // dialog identifies the host-owned dialog instead of an upstream channel receiver.
-  'dialog.accept': Assert<
-    UpstreamCheck<
-      'dialog.accept',
-      OpInputs['dialog.accept'],
-      pw.DialogAcceptParams,
-      'dialog',
-      never,
-      never
-    >
-  >
-  // dialog identifies the host-owned dialog instead of an upstream channel receiver.
-  'dialog.dismiss': Assert<
-    UpstreamCheck<
-      'dialog.dismiss',
-      OpInputs['dialog.dismiss'],
-      pw.DialogDismissParams,
-      'dialog',
-      never,
-      never
-    >
-  >
-  // download identifies the host-owned download instead of an upstream Artifact channel.
-  'download.path': Assert<
-    UpstreamCheck<
-      'download.path',
-      OpInputs['download.path'],
-      pw.ArtifactPathAfterFinishedParams,
-      'download',
-      never,
-      never
-    >
-  >
-  // download identifies the host-owned download instead of an upstream Artifact channel.
-  'download.saveAs': Assert<
-    UpstreamCheck<
-      'download.saveAs',
-      OpInputs['download.saveAs'],
-      pw.ArtifactSaveAsParams,
-      'download',
-      never,
-      never
-    >
-  >
-}
+/**
+ * Hand checks against upstream commands: none since the events family moved; every op is
+ * checked by its generated route row. The close-out deletes this file.
+ */
+export type UpstreamChecks = Record<never, never>
 
 /** Ops implemented as client work, an event pump, or several upstream commands together. */
-type NeoOnlyOps = {
-  'events.listen': 'Neo run-scoped listener bookkeeping, including cleanup after a tab closes.'
-  'events.next': 'Neo background event pump, with one cursor per listener.'
-  'events.wait': 'Neo journal wait by event and timestamp instead of upstream channel events.'
-}
+type NeoOnlyOps = Record<never, never>
 
 // Exhaustive in both directions: a new op cannot silently miss this file, and a removed op
 // cannot leave a check or a Neo-only reason behind. A migrated op is checked only by its

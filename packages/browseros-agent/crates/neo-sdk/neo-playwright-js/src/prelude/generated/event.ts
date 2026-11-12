@@ -3,11 +3,72 @@
 // route row in Rust, then run `cargo test -p neo-playwright --test wire_generated`, which
 // rewrites this folder.
 
+import type * as pw from '../../../../neo-playwright/third_party/playwright/packages/playwright-core/src/client/channels'
+import { invoke } from '../bridge'
+import type { CallSite } from '../call-site'
+import type { SignalLike } from '../signal'
+import type { Assert, UpstreamCheck, VoidIsNull } from '../upstream-check'
+import type { CallHeader } from '../wire'
+import type { DialogInput } from './types/DialogInput'
+import type { DownloadFinished } from './types/DownloadFinished'
+import type { DownloadPathInput } from './types/DownloadPathInput'
+import type { DownloadSaveAsInput } from './types/DownloadSaveAsInput'
+import type { EventAcknowledged } from './types/EventAcknowledged'
+import type { EventListenInput } from './types/EventListenInput'
+import type { EventNextInput } from './types/EventNextInput'
+import type { EventRecord } from './types/EventRecord'
+import type { EventWaitInput } from './types/EventWaitInput'
+import type { InterceptFileChooserInput } from './types/InterceptFileChooserInput'
+import type { Pumped } from './types/Pumped'
+
+export type { ConsoleInfo } from './types/ConsoleInfo'
+export type { ConsoleLocation } from './types/ConsoleLocation'
+export type { DialogId } from './types/DialogId'
+export type { DialogInfo } from './types/DialogInfo'
+export type { DialogInput } from './types/DialogInput'
+export type { DialogType } from './types/DialogType'
+export type { DownloadFinished } from './types/DownloadFinished'
+export type { DownloadInfo } from './types/DownloadInfo'
+export type { DownloadPathInput } from './types/DownloadPathInput'
+export type { DownloadSaveAsInput } from './types/DownloadSaveAsInput'
+export type { EventAcknowledged } from './types/EventAcknowledged'
+export type { EventFrame } from './types/EventFrame'
+export type { EventListenInput } from './types/EventListenInput'
+export type { EventListenInterest } from './types/EventListenInterest'
+export type { EventListenRetired } from './types/EventListenRetired'
+export type { EventNextInput } from './types/EventNextInput'
+export type { EventRecord } from './types/EventRecord'
+export type { EventWaitInput } from './types/EventWaitInput'
+export type { FileChooserInfo } from './types/FileChooserInfo'
+export type { InterceptFileChooserInput } from './types/InterceptFileChooserInput'
+export type { PageErrorInfo } from './types/PageErrorInfo'
+export type { PopupTab } from './types/PopupTab'
+export type { Pumped } from './types/Pumped'
+export type { WorkerInfo } from './types/WorkerInfo'
+
 /** Each event op's input, after the `call` header every op shares. */
-export type EventInputs = {}
+export type EventInputs = {
+  'events.listen': EventListenInput
+  'events.next': EventNextInput
+  'events.wait': EventWaitInput
+  'events.interceptFileChooser': InterceptFileChooserInput
+  'dialog.accept': DialogInput
+  'dialog.dismiss': DialogInput
+  'download.path': DownloadPathInput
+  'download.saveAs': DownloadSaveAsInput
+}
 
 /** Each event op's result. */
-export type EventOutputs = {}
+export type EventOutputs = {
+  'events.listen': EventAcknowledged
+  'events.next': Pumped
+  'events.wait': EventRecord
+  'events.interceptFileChooser': EventAcknowledged
+  'dialog.accept': EventAcknowledged
+  'dialog.dismiss': EventAcknowledged
+  'download.path': DownloadFinished
+  'download.saveAs': null
+}
 
 /**
  * The script's option keys of each event op that takes an `options` bag: the fields of its
@@ -20,4 +81,78 @@ export const EVENT_OPTION_KEYS = {} as const
  * One typed sender per event op. A class passes its input as an object literal, so every
  * field is checked against Rust's input type and the result is Rust's result type.
  */
-export const EVENT_SEND = {}
+export const EVENT_SEND = {
+  'events.listen': (
+    site: CallSite,
+    call: CallHeader,
+    input: EventListenInput,
+    signal?: SignalLike,
+  ): Promise<EventAcknowledged> => invoke('events.listen', site, call, input, signal),
+  'events.next': (
+    site: CallSite,
+    call: CallHeader,
+    input: EventNextInput,
+    signal?: SignalLike,
+  ): Promise<Pumped> => invoke('events.next', site, call, input, signal),
+  'events.wait': (
+    site: CallSite,
+    call: CallHeader,
+    input: EventWaitInput,
+    signal?: SignalLike,
+  ): Promise<EventRecord> => invoke('events.wait', site, call, input, signal),
+  'events.interceptFileChooser': (
+    site: CallSite,
+    call: CallHeader,
+    input: InterceptFileChooserInput,
+    signal?: SignalLike,
+  ): Promise<EventAcknowledged> => invoke('events.interceptFileChooser', site, call, input, signal),
+  'dialog.accept': (
+    site: CallSite,
+    call: CallHeader,
+    input: DialogInput,
+    signal?: SignalLike,
+  ): Promise<EventAcknowledged> => invoke('dialog.accept', site, call, input, signal),
+  'dialog.dismiss': (
+    site: CallSite,
+    call: CallHeader,
+    input: DialogInput,
+    signal?: SignalLike,
+  ): Promise<EventAcknowledged> => invoke('dialog.dismiss', site, call, input, signal),
+  'download.path': (
+    site: CallSite,
+    call: CallHeader,
+    input: DownloadPathInput,
+    signal?: SignalLike,
+  ): Promise<DownloadFinished> => invoke('download.path', site, call, input, signal),
+  'download.saveAs': (
+    site: CallSite,
+    call: CallHeader,
+    input: DownloadSaveAsInput,
+    signal?: SignalLike,
+  ): Promise<null> => invoke('download.saveAs', site, call, input, signal),
+}
+
+// Each route row against Playwright's own protocol at the pin (upstream-check.ts): tsc
+// names the op and every key that differs without a reason, or whose reason went stale.
+// events.listen: Neo only: run-scoped listener bookkeeping, including cleanup after a tab closed; upstream subscribes per channel
+// events.next: Neo only: the prelude's background event pump, one cursor per listener
+// events.wait: Neo only: a journal wait by event and time; upstream waits on channel events
+// events.interceptFileChooser replaces Page.updateSubscription: Neo leases chooser interception per run, so the run's end releases it; upstream subscribes by event name and an enabled flag
+type _events_interceptFileChooser_replaces = pw.PageUpdateSubscriptionParams
+// dialog.accept: Dialog.accept
+//   adds dialog: the host-owned dialog's id, instead of an upstream Dialog channel
+type _dialog_accept = Assert<UpstreamCheck<'dialog.accept', DialogInput, pw.DialogAcceptParams, 'dialog', never, never>>
+//   result: a dialog's answer has always been {}; the prelude reads nothing from it (no void check: Neo answers more than null on purpose)
+// dialog.dismiss: Dialog.dismiss
+//   adds dialog: the host-owned dialog's id, instead of an upstream Dialog channel
+//   adds promptText: dialog.accept's input, shared: dismiss accepts it and ignores it
+type _dialog_dismiss = Assert<UpstreamCheck<'dialog.dismiss', DialogInput, pw.DialogDismissParams, 'dialog' | 'promptText', never, never>>
+//   result: a dialog's answer has always been {}; the prelude reads nothing from it (no void check: Neo answers more than null on purpose)
+// download.path: Artifact.pathAfterFinished
+//   adds download: the host-owned download's id, instead of an upstream Artifact channel
+type _download_path = Assert<UpstreamCheck<'download.path', DownloadPathInput, pw.ArtifactPathAfterFinishedParams, 'download', never, never>>
+type _download_path_result = Assert<VoidIsNull<'download.path', pw.ArtifactPathAfterFinishedResult, DownloadFinished>>
+// download.saveAs: Artifact.saveAs
+//   adds download: the host-owned download's id, instead of an upstream Artifact channel
+type _download_saveAs = Assert<UpstreamCheck<'download.saveAs', DownloadSaveAsInput, pw.ArtifactSaveAsParams, 'download', never, never>>
+type _download_saveAs_result = Assert<VoidIsNull<'download.saveAs', pw.ArtifactSaveAsResult, null>>

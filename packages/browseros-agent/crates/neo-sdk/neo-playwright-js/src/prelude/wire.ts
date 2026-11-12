@@ -18,15 +18,17 @@
 
 import type { SerializedValue } from '../../../neo-playwright/third_party/playwright/packages/isomorphic/utilityScriptSerializers'
 import type { GeneratedInputs, GeneratedOutputs } from './generated'
-// The run envelope's types (Observation, PageFact, WorkerInfo) are neo-server's, in bridge.ts.
-// The event records below name the same worker identity.
-import type { WorkerInfo } from './generated/envelope'
 import type { OpName } from './generated/ops'
 
 // Rust owns these shared shapes now. LocatorBrand is a projection of the tagged Target
 // union, so its fields are never repeated in TypeScript.
 export type {
+  ConsoleInfo,
+  DialogInfo,
+  DownloadInfo,
   ElementBrand,
+  EventRecord,
+  FileChooserInfo,
   FilesInput,
   FillOptions,
   FrameInfo,
@@ -38,6 +40,7 @@ export type {
   NavigationPublication,
   NavigationResult,
   PageBrand,
+  PageErrorInfo,
   PageHandle,
   PageScript,
   PartialFrame,
@@ -50,14 +53,7 @@ export type {
 /** Playwright's in-page serialized value (`utilityScriptSerializers.ts`), as JSON. */
 export type { SerializedValue }
 
-import type {
-  ElementBrand,
-  FrameInfo,
-  PageBrand,
-  PageHandle,
-  Strictness,
-  Target,
-} from './generated'
+import type { EventRecord, PageHandle, Strictness, Target } from './generated'
 
 /** Script options are the flat Rust input with its host addressing removed. */
 export type PointerOptions = Omit<
@@ -79,16 +75,17 @@ export type UnopenedPageBrand = PageHandle & { tab: null }
  */
 export type CallHeader = { api: string; timeoutMs: number }
 
-/** One tab, with the URL the prelude caches for its synchronous `url()`. */
-export type PageEntry = { page: PageBrand; url: string }
-
 /**
- * The empty object still returned by host bookkeeping and event acknowledgments. Null results
- * are spelled out per op: changing this alias would misdescribe existing run-record payloads.
+ * The empty object still returned by host bookkeeping. Null results are spelled out per op:
+ * changing this alias would misdescribe existing run-record payloads.
  */
 export type Done = Record<string, never>
 
-/** The Playwright events Neo reports. `page` is the context's; the rest are a page's. */
+/**
+ * The Playwright events Neo reports. `page` is the context's; the rest are a page's. Rust takes
+ * the name as a string and refuses one it does not report; the prelude sends only these
+ * (`isReported`).
+ */
 export type EventName =
   | 'worker'
   | 'workerclosed'
@@ -109,97 +106,11 @@ export type EventName =
   | 'pageload'
   | 'page'
 
-export type DialogInfo = {
-  id: number
-  type: 'alert' | 'beforeunload' | 'confirm' | 'prompt'
-  message: string
-  defaultValue: string
-}
-export type ConsoleInfo = {
-  worker?: WorkerInfo
-  type: string
-  text: string
-  location: { url: string; lineNumber: number; columnNumber: number }
-  timestamp: number
-}
-export type PageErrorInfo = { name: string; message: string; stack: string }
-/** `id` is the browser's download guid, which `download.path` and `download.saveAs` name. */
-export type DownloadInfo = {
-  id: string
-  url: string
-  suggestedFilename: string
-}
-
-/** The exact native input, rather than a selector that could resolve to a replacement. */
-export type FileChooserInfo = { element: ElementBrand; isMultiple: boolean }
-
 /**
- * One event as Rust delivers it to one listener or wait. `event` is Playwright's name and
- * `page` the page it fires on; the context's `page` event names the new tab there. `seq` is the
- * record's place in Rust's log, which a `waitForEvent` whose predicate said no re-waits after.
- * `at` is when Rust recorded it, in ms since the epoch, on the clock that stamps takeover lock
- * times. claw-sdk's door reads it to withhold what a tab did while its owner held it; the prelude
- * ignores it.
- *
- * Rust reads its log once per listener, from that listener's own position, so one opened tab
- * reaches the opener's `popup` listener and the context's `page` listener as two events, and a
- * listener attached late still gets events newer than its own stamp. A `page` may arrive
- * revived as a Page by the bootstrap, or as a raw brand.
+ * A page's call of a binding the run exposed (`bindingCall.resolve` answers it): Rust's
+ * `binding` record, picked out of the generated union.
  */
-export type EventRecord = { seq: number; at: number } & (
-  | { event: 'popup'; page: PageBrand; popup: PageEntry }
-  | { event: 'page'; page: PageBrand; url: string; opener: PageBrand | null }
-  | { event: 'close'; page: PageBrand }
-  | {
-      event: 'load' | 'domcontentloaded' | 'pageload'
-      page: PageBrand
-      frame: FrameInfo
-    }
-  | {
-      event: 'frameattached' | 'framenavigated' | 'framedetached'
-      page: PageBrand
-      frame: FrameInfo
-      context: boolean
-    }
-  | { event: 'dialog'; page: PageBrand; dialog: DialogInfo }
-  | {
-      event: 'dialogclosed'
-      page: PageBrand
-      dialog: DialogInfo
-      context: boolean
-    }
-  | { event: 'worker' | 'workerclosed'; page: PageBrand; worker: WorkerInfo }
-  | {
-      event: 'workerstate'
-      page: PageBrand
-      worker: WorkerInfo
-      closed: boolean
-    }
-  | { event: 'console'; page: PageBrand; message: ConsoleInfo }
-  | { event: 'pageerror'; page: PageBrand; error: PageErrorInfo }
-  | { event: 'download'; page: PageBrand; download: DownloadInfo }
-  | { event: 'filechooser'; page: PageBrand; chooser: FileChooserInfo }
-  | BindingRecord
-)
-
-/**
- * A page's call of a binding the run exposed: the stub's JSON `payload` (`{ name, seq,
- * serializedArgs }`), the `executionContext` to answer in (`bindingCall.resolve`), and that
- * context's frame id, `null` for the main frame.
- */
-export type BindingRecord = {
-  event: 'binding'
-  page: PageBrand
-  frame: string | null
-  executionContext: number
-  payload: string
-}
-
-/**
- * What the pump gets: the events of every listener that had some, in log order, and how many
- * records fell off Rust's ring before this run read them.
- */
-export type Pumped = { events: EventRecord[]; lost: number }
+export type BindingRecord = Extract<EventRecord, { event: 'binding' }>
 
 export type Modifier = 'Alt' | 'Control' | 'ControlOrMeta' | 'Meta' | 'Shift'
 
@@ -229,62 +140,14 @@ export type EveryMatchArgs = { target: Target }
 export type PageArgs = { page: PageHandle }
 /** A page op on one of the page's frames; `frame` is left out for the main frame. */
 export type FrameArgs = PageArgs & { frame?: string }
-/** Each op's input after `call`, for the ops Rust does not describe yet. */
-export type HandInputs = {
-  'events.interceptFileChooser': PageArgs & { lease: number; on: boolean }
+/**
+ * Each op's input after `call`, for the ops Rust does not describe yet: none since the events
+ * family moved. The close-out deletes both hand maps with `_Partition`.
+ */
+export type HandInputs = Record<never, never>
 
-  /**
-   * `since` is the script's `Date.now()` when it attached the listener (or removed it). The
-   * event ops name no target the door resolves, so their page always has its tab: the
-   * prelude opens the run's lazy page first (`Page._openedBrand`).
-   */
-  'events.listen':
-    | { page: PageBrand | null; event: EventName; on: boolean; since: number }
-    /** Cleanup addresses only this run's bookkeeping key; the tab may already be gone. */
-    | {
-        page: null
-        retiredTab: number
-        event: 'workerstate'
-        on: false
-        since: number
-      }
-  /**
-   * The background pump. It names no cursor: Rust keeps one read position per listener in the
-   * run's state, so a listener attached after the pump read past an event still gets it.
-   */
-  'events.next': Record<string, never>
-  /**
-   * The first matching record at or after `since`, the `Date.now()` taken when the script
-   * called `waitForEvent`; with `after`, the first one after that seq (a predicate said no).
-   * Rust counts `call.timeoutMs` from the op's own start, so the prelude sends what is left of
-   * the `waitForEvent`'s one deadline and names the script's timeout in the message (`Timeout
-   * 5000ms exceeded while waiting for event "popup"`). While it waits for `dialog`, the run
-   * counts as listening, so Rust holds the dialog for it.
-   */
-  'events.wait': {
-    page: PageBrand | null
-    event: EventName
-    since: number
-    after: number | null
-  }
-  'dialog.accept': PageArgs & { dialog: number; promptText?: string }
-  'dialog.dismiss': PageArgs & { dialog: number }
-  'download.path': { download: string }
-  'download.saveAs': { download: string; path: string }
-}
-
-/** Each op's result, for the ops Rust does not describe yet. */
-export type HandOutputs = {
-  'events.interceptFileChooser': Done
-
-  'events.listen': Done
-  'events.next': Pumped
-  'events.wait': EventRecord
-  'dialog.accept': Done
-  'dialog.dismiss': Done
-  'download.path': { path: string | null; failure: string | null }
-  'download.saveAs': null
-}
+/** Each op's result, for the ops Rust does not describe yet: none. */
+export type HandOutputs = Record<never, never>
 
 /** Each op's input after `call`: Rust's generated type, or the hand row above. */
 export type OpInputs = GeneratedInputs & HandInputs

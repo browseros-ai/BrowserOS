@@ -17,11 +17,12 @@ pub enum Upstream {
         /// Why the op has no command to compare with.
         reason: &'static str,
     },
-    /// Upstream has a command for the method, but Neo's params share nothing with it. No op
-    /// uses it today. The generated file still names the command, so a command that vanished
-    /// upstream fails to resolve.
+    /// Upstream has a command for the method, but Neo's params share nothing with it
+    /// (`events.interceptFileChooser`'s per-run lease against `Page.updateSubscription`). The
+    /// generated file still names the command, so a command that vanished upstream fails to
+    /// resolve.
     Replaces {
-        /// Upstream's command, `Interface.method` (`Frame.expect`).
+        /// Upstream's command, `Interface.method` (`Page.updateSubscription`).
         command: &'static str,
         /// Why Neo's params are its own.
         reason: &'static str,

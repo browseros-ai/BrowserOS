@@ -102,7 +102,7 @@ impl Op {
             OpKind::Input(op) => op.wire(),
             OpKind::Read(op) => op.wire(),
             OpKind::LocatorHandler(op) => op.wire(),
-            OpKind::Event(_) => None,
+            OpKind::Event(op) => op.wire(),
         }
     }
 
