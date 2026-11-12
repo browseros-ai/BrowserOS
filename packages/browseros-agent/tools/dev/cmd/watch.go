@@ -527,7 +527,6 @@ func clawServerProcConfig(root string, env []string, p proc.Ports, userDataDir s
 				ResourcesDir:  filepath.Join(root, "apps/claw-server/resources"),
 				ExecutionDir:  userDataDir,
 				BrowserBinary: envValue(env, "BROWSEROS_BINARY"),
-				DevMode:       true,
 			}); err != nil {
 				return err
 			}

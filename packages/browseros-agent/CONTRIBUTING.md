@@ -57,6 +57,11 @@ A file watcher also tracks `apps/claw-server/src`, its `Cargo.toml`, and its tes
 
 Stop everything with `bun run dev:stop`.
 
+Claw dev and dogfood modes leave the installed app's agent MCP configurations and shared
+skills alone, including in a release build. Connection settings remain readable, but
+Connect and Disconnect are disabled in dev. Locally authored skills stay in the dev
+instance without being published into agent directories.
+
 ### `:new` versus plain
 
 There are two variants and the difference matters more than the name suggests.
