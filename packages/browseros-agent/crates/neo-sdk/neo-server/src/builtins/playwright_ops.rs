@@ -23,7 +23,8 @@ use std::sync::{Arc, LazyLock};
 use browseros_core::{BrowserView, CoreError, TabId, TargetId};
 use futures_util::future::BoxFuture;
 use neo_playwright::{
-    Answer, ErrorCode as PlaywrightCode, Op, OpEnv, PlaywrightError, Refusal, RunState, TimedOut,
+    Answer, ErrorCode as PlaywrightCode, Op, OpEnv, OpTarget, PlaywrightError, Refusal, RunState,
+    TimedOut,
 };
 use neo_trace::ErrorOwner;
 use serde::{Deserialize, Deserializer};
@@ -34,8 +35,8 @@ use super::event_release::EventRelease;
 use super::op_marks::{self, Hold, OpMarks};
 use crate::browser::PageRef;
 use crate::dispatch::{
-    ErrorCode, LeafError, Lifetime, Method, MethodSpec, OpCtx, OperationError, PageChange,
-    PageTarget, RegistryBuilder, RegistryError, RunCtx,
+    ErrorCode, LeafError, Method, MethodSpec, OpCtx, OperationError, PageChange, PageTarget,
+    RegistryBuilder, RegistryError, RunCtx,
 };
 use crate::host::AgentFront;
 
@@ -226,12 +227,13 @@ impl Method for PlaywrightOp {
             Some(_) => Some(op.page()?),
             None => None,
         };
-        // Two kinds of op skip the page rules: the prelude's event work, which reads the events
-        // a page raised rather than the page, and whose long polls would pay a browser round
-        // trip each; and a close, which reads and opens nothing, so a script can always clean
-        // up a tab.
+        // The page rules cover the ops the crate declares as acting on a page. Two kinds skip
+        // them: the event and locator-handler ops, which name a page the door resolves but read
+        // the events it raised (and must answer once it closed, as `waitForEvent('close')`
+        // racing `page.close()` does); and a close, which reads and opens nothing, so a script
+        // can always clean up a tab.
         let ruled = page.is_some()
-            && self.spec.lifetime == Lifetime::Operation
+            && matches!(self.op.spec().target, OpTarget::Field(_))
             && self.pages != PageEffect::Closes;
         if ruled && let Some(refusal) = refused_page(op, self.spec.name, self.pages).await? {
             return Err(LeafError::definite(refusal));
