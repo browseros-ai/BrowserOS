@@ -27,20 +27,6 @@ use crate::{ErrorCode, PlaywrightError};
 const FRAME_STALL: Duration = Duration::from_secs(1);
 
 const PREPARE: &str = include_str!("../../assets/screenshot-prepare.js");
-/// DIAGNOSTIC only (diag/ss054-fonts).
-const DIAG_FONTS: &str = r#"async function() {
-  const t0 = performance.now();
-  const state = () => ({ status: document.fonts.status, size: document.fonts.size, vis: document.visibilityState, focus: document.hasFocus(), anims: document.getAnimations().map(a => a.playState).join(',') });
-  const ready = document.fonts.ready.then(() => 'ready');
-  const first = await Promise.race([ready, new Promise(r => setTimeout(() => r('pending'), 2000))]);
-  if (first === 'ready') return null;
-  const before = state();
-  const raf = await new Promise(r => { requestAnimationFrame(() => r('raf-fired')); setTimeout(() => r('raf-silent'), 1000); });
-  const mid = state();
-  document.documentElement.getBoundingClientRect();
-  const afterLayout = await Promise.race([ready, new Promise(r => setTimeout(() => r('still-pending'), 1000))]);
-  return { before, raf, mid, afterLayout, after: state(), waitedMs: Math.round(performance.now() - t0) };
-}"#;
 const RESTORE: &str = "function() { window.__pwCleanupScreenshot?.(); }";
 
 /// One screenshot's utility-world mutations and exclusive place in the tab's capture queue.
@@ -133,7 +119,11 @@ impl ScreenshotPreparation {
                         true
                     }
                 }
-                _ => true,
+                Err(_) => {
+                    diag_log(&format!("PREPARE-TIMEOUT {:?}", world.frame()));
+                    true
+                }
+                Ok(Ok(_)) => true,
             }
         }))
         .await;
@@ -169,33 +159,23 @@ impl ScreenshotPreparation {
             scope.log("waiting for fonts to load...".to_owned());
             // A pending promise keeps the original screenshot deadline. A retired world
             // restarts preparation so the replacement's own fonts are awaited as well.
-            // DIAGNOSTIC (throwaway branch diag/ss054-fonts, never to land): when fonts.ready is
-            // still pending after 2 s, record why, and whether rAF fires and a forced layout settles it.
-            let probe = world
-                .call_for_screenshot(DIAG_FONTS, &json!([]))
-                .await;
-            if let Ok(found) = &probe
-                && !found.is_null()
-            {
-                let line = format!("SS054-DIAG {:?} {}\n", world.frame(), found);
-                eprint!("{line}");
-                if let Ok(dir) = std::env::var("NEO_NODE_OUTPUT") {
-                    use std::io::Write as _;
-                    if let Ok(mut file) = std::fs::OpenOptions::new()
-                        .create(true)
-                        .append(true)
-                        .open(std::path::Path::new(&dir).join("ss054-diag.log"))
-                    {
-                        let _written = file.write_all(line.as_bytes());
-                    }
+            // DIAGNOSTIC (throwaway branch diag/ss054-fonts, never to land).
+            diag_log(&format!("entry {:?} iso={} main={}", world.frame(), diag_iso(&world).await, diag_main(page).await));
+            let no_arguments = json!([]);
+            let call = world.call_for_screenshot(
+                "function() { return document.fonts.ready.then(() => {}); }",
+                &no_arguments,
+            );
+            tokio::pin!(call);
+            let fonts = match time::timeout(Duration::from_secs(3), &mut call).await {
+                Ok(result) => result,
+                Err(_) => {
+                    diag_log(&format!("STALL3s {:?} iso={} main={}", world.frame(), diag_iso(&world).await, diag_main(page).await));
+                    time::sleep(Duration::from_secs(1)).await;
+                    diag_log(&format!("STALL4s {:?} iso={} main={}", world.frame(), diag_iso(&world).await, diag_main(page).await));
+                    call.await
                 }
-            }
-            let fonts = world
-                .call_for_screenshot(
-                    "function() { return document.fonts.ready.then(() => {}); }",
-                    &json!([]),
-                )
-                .await;
+            };
             if let Err(error) = fonts
                 && matches!(ProbeFailure::from_core(error), ProbeFailure::Gone(_))
             {
@@ -361,3 +341,51 @@ mod tests {
         Ok(())
     }
 }
+
+// DIAGNOSTIC helpers (diag/ss054-fonts only).
+const DIAG_PROBE: &str = "JSON.stringify({vis: document.visibilityState, focus: document.hasFocus(), fonts: document.fonts.status, beats: window.__ssBeat ?? -1, t: Math.round(performance.now()), anims: document.getAnimations().map(a => a.playState).join(',')})";
+
+fn diag_log(line: &str) {
+    use std::io::Write as _;
+    eprintln!("SS054-DIAG {line}");
+    if let Ok(dir) = std::env::var("NEO_NODE_OUTPUT")
+        && let Ok(mut file) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(std::path::Path::new(&dir).join("ss054-diag.log"))
+    {
+        let _written = writeln!(file, "{} {line}", std::process::id());
+    }
+}
+
+async fn diag_iso(world: &IsolatedWorld) -> String {
+    let reply = time::timeout(
+        Duration::from_secs(2),
+        world.session().send::<_, Value>(
+            "Runtime.callFunctionOn",
+            json!({ "objectId": world.global(), "functionDeclaration": format!("function() {{ return {DIAG_PROBE}; }}"), "returnByValue": true }),
+        ),
+    )
+    .await;
+    match reply {
+        Ok(Ok(value)) => value["result"]["value"].to_string(),
+        Ok(Err(error)) => format!("error:{error}"),
+        Err(_) => "timeout".to_owned(),
+    }
+}
+
+async fn diag_main(page: &OpPage<'_>) -> String {
+    let session = page.root_session();
+    let expression = format!("(() => {{ if (window.__ssBeat === undefined) {{ window.__ssBeat = 0; setInterval(() => {{ window.__ssBeat++; }}, 100); }} return {DIAG_PROBE}; }})()");
+    let reply = time::timeout(
+        Duration::from_secs(2),
+        session.send::<_, Value>("Runtime.evaluate", json!({ "expression": expression, "returnByValue": true })),
+    )
+    .await;
+    match reply {
+        Ok(Ok(value)) => value["result"]["value"].to_string(),
+        Ok(Err(error)) => format!("error:{error}"),
+        Err(_) => "timeout".to_owned(),
+    }
+}
+
