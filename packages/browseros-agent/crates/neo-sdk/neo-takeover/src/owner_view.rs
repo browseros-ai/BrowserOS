@@ -136,7 +136,8 @@ fn script(mode: FitMode) -> String {
 /// `(field, top) => bool`: whether the page draws `field` with its own elements, given `top`,
 /// the element the browser finds on top at the field's place (its middle, or for a field with
 /// no size, its top-left corner) when that is neither the field nor inside it. zuzu's
-/// `neo.DrawnBy` (ZUZU-282), ported unchanged. The page draws the field when all hold:
+/// `neo.DrawnBy` (ZUZU-282), ported, but for its own-label exception (below). The page draws
+/// the field when all hold:
 ///
 /// - the page renders the field: `display:none`, which has no client rects, never counts;
 /// - `top` is inside the field's scope but is not the scope itself, the page's body, or the
@@ -144,7 +145,9 @@ fn script(mode: FitMode) -> String {
 ///   form (else its parent), so a drawing elsewhere on the page never claims a field;
 /// - `top` is not inside a control (a link, button, field, select or label, or a
 ///   `role=button`/`role=link`), which draws itself. Only a field with no size may be drawn by
-///   its own label, as a digit row inside the label that holds the code input;
+///   its own label, as a digit row inside the label that holds the code input. The nearest
+///   control must be that label: a "Resend code" link inside it is the link's, and a tap there
+///   follows the link. zuzu exempted everything inside the label, links and buttons included;
 /// - a `top` that holds the field counts only for a field with no size, and only when it draws
 ///   something else beside the field: a rendered child that does not hold the field, as a digit
 ///   row holding the input and its digits. A wrapper that holds nothing but the field, or the
@@ -158,9 +161,8 @@ const DRAWN_BY: &str = "(field, top) => {
     const scope = empty ? field.form || field.parentElement : field.parentElement;
     if (!scope || scope === field.ownerDocument.body || top === scope || !scope.contains(top) ||
         field.contains(top)) return false;
-    const inOwnLabel = [...(field.labels || [])].some(label => label.contains(top));
-    if (inOwnLabel ? !empty
-        : top.closest('a,button,input,select,textarea,label,[role=button],[role=link]')) return false;
+    const control = top.closest('a,button,input,select,textarea,label,[role=button],[role=link]');
+    if (control && !(empty && [...(field.labels || [])].includes(control))) return false;
     return !top.contains(field) ||
       empty && [...top.children].some(c => !c.contains(field) && c.getClientRects().length > 0);
   }";
@@ -381,7 +383,8 @@ mod live_tests {
 <form><input id="before-button" class="zero"><button type="button">Sign up</button></form>
 <form><input id="alone" class="zero" style="opacity:0"></form>
 <form><input id="by-link" class="zero" style="position:absolute"><a href="#" style="display:block;width:200px;height:30px">Forgot code?</a></form>
-<form><div style="display:flex;gap:4px"><input id="shadowed" class="zero" style="position:absolute"><div class="cell"></div><div class="cell"></div></div><input id="named" name="contains"></form>"##;
+<form><div style="display:flex;gap:4px"><input id="shadowed" class="zero" style="position:absolute"><div class="cell"></div><div class="cell"></div></div><input id="named" name="contains"></form>
+<form><label><input id="under-link" class="zero" style="position:absolute"><a href="#resend" style="display:block;width:200px;height:30px">Resend code</a></label></form>"##;
 
     /// The keyboard boxes the script reports on `html` at a phone's size, and the boxes of the
     /// elements `expected` selects, measured the same way: a phone's page fills the screen from
@@ -487,7 +490,8 @@ mod live_tests {
 
     /// A field with a size under the page's drawing keeps its own box; one under its own label's
     /// text gets none, as zuzu's rule has it. A field with no size inside a label that draws it
-    /// gets the label's box. No honeypot gets a box: off screen, before a button, alone, beside
+    /// gets the label's box, but a link inside that label at the field's place is the link's, not
+    /// a drawing of the field. No honeypot gets a box: off screen, before a button, alone, beside
     /// only a link. A form whose control is named `contains` shadows `form.contains`, so its drawn
     /// field gets none, and every other field keeps its box.
     #[tokio::test]
