@@ -86,7 +86,7 @@ const ANSWERS: Record<string, unknown> = {
   'context.addInitScript': { id: 2 },
   'page.exposeBinding': { id: 3 },
   'context.exposeBinding': { id: 4 },
-  'page.addLocatorHandler': { uid: 1 },
+  'page.addLocatorHandler': 1,
 }
 
 /**

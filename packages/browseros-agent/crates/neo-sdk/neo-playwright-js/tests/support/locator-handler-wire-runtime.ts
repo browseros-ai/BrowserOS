@@ -24,7 +24,7 @@ export async function recordLocatorHandlerWire(
     prelude,
     answer: ({ name, input }) => {
       if (!recording) return null
-      if (name === 'page.addLocatorHandler') return { uid: 1 }
+      if (name === 'page.addLocatorHandler') return 1
       if (name === 'page.locatorHandlerTriggered') {
         if (first) {
           first = false

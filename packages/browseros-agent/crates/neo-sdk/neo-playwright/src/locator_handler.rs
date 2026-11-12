@@ -153,12 +153,6 @@ struct ResolveInput {
 }
 options!(ResolveInput);
 
-/// The registration id retained by the prelude for subsequent pulls and cleanup.
-#[derive(Debug, Serialize, TS)]
-struct LocatorHandlerAdded {
-    uid: u64,
-}
-
 /// A trigger to run, or an explicit null when the run has no handler left.
 #[derive(Debug, Serialize, TS)]
 struct LocatorHandlerTriggered {
@@ -175,11 +169,12 @@ pub(crate) async fn invoke(
     route(op, Run { pw, scope, args }).await
 }
 
+/// The wire unwraps upstream's single uid field; the prelude retains it for run-local cleanup.
 async fn add(
     _pw: &Playwright,
     scope: &OpScope<'_>,
     input: AddInput,
-) -> Result<LocatorHandlerAdded, PlaywrightError> {
+) -> Result<u64, PlaywrightError> {
     let Target::Locator(target) = input.target else {
         return Err(scope.fail(
             ErrorCode::InvalidInput,
@@ -190,7 +185,7 @@ async fn add(
         .run_state()
         .locator_handlers
         .register(target, input.no_wait_after);
-    Ok(LocatorHandlerAdded { uid })
+    Ok(uid)
 }
 
 async fn remove(

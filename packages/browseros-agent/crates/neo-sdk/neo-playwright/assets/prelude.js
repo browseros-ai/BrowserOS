@@ -9477,7 +9477,7 @@ ${value.stack}`;
       if (options.times === 0)
         return;
       const target = await locator._frame._locatorBrand(api, locator._selector);
-      const { uid } = await send["page.addLocatorHandler"](site, { api, timeoutMs: 0 }, { target, noWaitAfter: options.noWaitAfter ? true : undefined });
+      const uid = await send["page.addLocatorHandler"](site, { api, timeoutMs: 0 }, { target, noWaitAfter: options.noWaitAfter ? true : undefined });
       this.#byUid.set(uid, { page, locator, handler, times: options.times });
       if (!this.#pulling) {
         this.#pulling = true;
