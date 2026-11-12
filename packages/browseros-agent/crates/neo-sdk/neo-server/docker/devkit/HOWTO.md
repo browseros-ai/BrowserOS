@@ -1,12 +1,12 @@
 # Try claw-sdk by hand
 
-This kit runs Neo in Docker with this checkout's claw-sdk as its server. You watch Neo's screen in a browser, point an MCP client at it, send scripts, and see for every operation the code that ran, what it was given, what came back, and a screenshot. It is for development only. The image and its entrypoint are the release ones, and only the way `dev.sh` starts the container differs.
+This kit runs this checkout's Neo SDK image (claw-sdk) in Docker. You watch Neo's screen in a browser, point an MCP client at it, send scripts, and see for every operation the code that ran, what it was given, what came back, and a screenshot. It is for development only. The image and its entrypoint are the ones `build.sh` makes, and only the way `dev.sh` starts the container differs.
 
 The same guide with screenshots of the viewer and the trace UI: https://docs.shadowfax92.workers.dev/9Hf3E3tN
 
 ## Quickstart
 
-Run these from `packages/browseros-agent/crates/neo-sdk/neo-server/docker`:
+Run these from `packages/browseros-agent/crates/neo-sdk/neo-server/docker`, after the setup at the end of this section:
 
 ```sh
 ./dev.sh up
@@ -25,21 +25,18 @@ open http://127.0.0.1:16090/trace
 `up` ends with this block:
 
 ```text
-Server:   claw-sdk (read from the container)
 Viewer:   http://127.0.0.1:16090/   (?mode=control to type into it)
 Trace UI: http://127.0.0.1:16090/trace
 MCP:      http://127.0.0.1:19010/mcp
 Host API: http://127.0.0.1:19300/v1   bearer token in /Users/<you>/.local/state/neo-sdk-dev/host-token
 
-MCP client config:
-  {"mcpServers": {"neo-sdk": {"type": "http", "url": "http://127.0.0.1:19010/mcp"}}}
 Claude Code:
   claude mcp add --transport http neo-sdk http://127.0.0.1:19010/mcp
 ```
 
 After you change claw-sdk, run `./dev.sh up` again. It rebuilds only what changed and replaces the container and the gateway. To restart the gateway alone after editing `devkit/`, run `./dev.sh gateway`.
 
-Setup, once: Docker, `brew install jq zig`, `cargo install --locked cargo-zigbuild`, `rustup toolchain install 1.98.0`, `rustup +1.98.0 target add aarch64-unknown-linux-gnu`, and `npx` (the gateway runs on Bun 1.4.2, which `npx` fetches). `dev.sh` builds with Rust 1.98.0, the release job's toolchain. Set `NEO_RUST_TOOLCHAIN=` to use your default instead.
+Setup, once: Docker, `brew install jq openssl`, `npx` (the gateway runs on Bun 1.4.2, which `npx` fetches), and `bun install` in `packages/browseros-agent`: the viewer page loads noVNC from the neo-viewer tool's `@novnc/novnc`, because the SDK image ships none. No Rust toolchain on the Mac: `build.sh` compiles the server inside Docker.
 
 ## Connect an MCP client
 

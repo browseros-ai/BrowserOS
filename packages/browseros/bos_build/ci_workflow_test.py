@@ -4055,6 +4055,10 @@ class NeoSdkImageWorkflowTest(unittest.TestCase):
         self.assertNotEqual(refused.returncode, 0)
         self.assertEqual(refused.stdout.strip(), "")
 
+    def test_nothing_is_pushed_before_every_check_passed(self):
+        self.assertEqual(set(self.jobs["image"]["needs"]), {"preflight", "scripts"})
+        self.assertEqual(set(self.jobs["publish"]["needs"]), {"preflight", "image"})
+
     def test_every_registry_step_waits_for_the_publish_decision(self):
         for name, job in self.jobs.items():
             for step in job.get("steps", []):

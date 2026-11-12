@@ -117,7 +117,8 @@ jobs:
 
   image:
     name: Neo SDK image / ${{ matrix.arch }} build + accept
-    needs: preflight
+    # The scripts' tests too: an image is pushed only when every check of this run passed.
+    needs: [preflight, scripts]
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 75
     permissions:
