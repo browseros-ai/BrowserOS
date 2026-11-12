@@ -872,7 +872,7 @@ export class Frame extends EventEmitter {
     await send['locator.fill'](
       site,
       this._call(api, wait.timeout),
-      { ...addressed, value, options: picked },
+      { ...addressed, value, ...picked },
       wait.signal,
     )
   }
@@ -891,7 +891,7 @@ export class Frame extends EventEmitter {
     await send['locator.press'](
       site,
       this._call(api, wait.timeout),
-      { ...addressed, key, options: picked },
+      { ...addressed, key, ...picked },
       wait.signal,
     )
   }
@@ -911,7 +911,7 @@ export class Frame extends EventEmitter {
     await send['locator.pressSequentially'](
       site,
       this._call(api, wait.timeout),
-      { ...addressed, text, options: picked },
+      { ...addressed, text, ...picked },
       wait.signal,
     )
   }
@@ -969,8 +969,8 @@ export class Frame extends EventEmitter {
       this._call(api, wait.timeout),
       {
         ...addressed,
-        options: converted.options,
-        elements: converted.elements,
+        options: converted.options.length ? converted.options : undefined,
+        elements: converted.elements.length ? converted.elements : undefined,
         ...picked,
       },
       wait.signal,

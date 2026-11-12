@@ -1242,8 +1242,7 @@
           "display": "getByRole('button')"
         },
         "strict": "strict",
-        "value": "x",
-        "options": {}
+        "value": "x"
       }
     ],
     "locator.focus": [
@@ -1651,8 +1650,7 @@
           "display": "getByRole('button')"
         },
         "strict": "strict",
-        "key": "a",
-        "options": {}
+        "key": "a"
       }
     ],
     "locator.pressSequentially": [
@@ -1682,8 +1680,7 @@
           "display": "getByRole('button')"
         },
         "strict": "strict",
-        "text": "ab",
-        "options": {}
+        "text": "ab"
       }
     ],
     "locator.scrollIntoViewIfNeeded": [
@@ -1746,8 +1743,7 @@
           {
             "valueOrLabel": "a"
           }
-        ],
-        "elements": []
+        ]
       }
     ],
     "locator.selectText": [
