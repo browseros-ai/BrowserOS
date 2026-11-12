@@ -57,13 +57,11 @@ const page = (cart = 'Add to cart', extra: string[] = []): string =>
 
 describe('the delta text', () => {
   it('tests the four first lines: no baseline, no change, too much differs, changes', () => {
-    expect(NO_BASELINE).toBe(
-      '# full snapshot: no earlier snapshot of this page',
-    )
+    expect(NO_BASELINE).toBe('# whole page: no earlier snapshot of this page')
     expect(listChanges(page(), page())).toBe(NO_CHANGE)
     expect(NO_CHANGE).toBe('# no change since your last snapshot of this tab')
     expect(TOO_MUCH).toBe(
-      '# full snapshot: too much differs from your last snapshot to list as changes',
+      '# whole page: too much differs from your last snapshot to list as changes',
     )
     const other = lines('- button "Sign in" [ref=e1]', '- link "Help" [ref=e2]')
     // Everything differs: the changes would be longer than the page itself.

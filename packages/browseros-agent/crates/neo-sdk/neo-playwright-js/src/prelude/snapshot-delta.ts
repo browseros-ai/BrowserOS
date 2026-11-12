@@ -34,14 +34,14 @@ import type {
   TextForm,
 } from './wire'
 
-export const NO_BASELINE = '# full snapshot: no earlier snapshot of this page'
+export const NO_BASELINE = '# whole page: no earlier snapshot of this page'
 export const NO_CHANGE = '# no change since your last snapshot of this tab'
 /**
  * Not "the page changed": the same line answers a call whose options disagree with the
  * baseline's form, and it must be true either way.
  */
 export const TOO_MUCH =
-  '# full snapshot: too much differs from your last snapshot to list as changes'
+  '# whole page: too much differs from your last snapshot to list as changes'
 
 /** Unchanged lines printed on each side of a change. */
 const CONTEXT = 3

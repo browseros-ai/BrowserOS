@@ -567,7 +567,7 @@ async fn tests_that_a_delta_snapshot_lists_what_changed_on_a_live_browser() -> T
     let tab = opened["tab"].as_i64().ok_or("the page's tab")?;
     let first = opened["first"].as_str().ok_or("the first snapshot")?;
     assert!(
-        first.starts_with("# full snapshot: no earlier snapshot of this page\n- main [ref="),
+        first.starts_with("# whole page: no earlier snapshot of this page\n- main [ref="),
         "{first}"
     );
     // A second run is a fresh realm on the same tab: the baseline is the host's.
@@ -622,7 +622,7 @@ async fn tests_that_a_delta_snapshot_lists_what_changed_on_a_live_browser() -> T
         "without delta the text is whole"
     );
     assert!(
-        text("otherFirst").starts_with("# full snapshot: no earlier snapshot of this page\n"),
+        text("otherFirst").starts_with("# whole page: no earlier snapshot of this page\n"),
         "another tab has no baseline of its own yet"
     );
     assert_eq!(
@@ -632,7 +632,7 @@ async fn tests_that_a_delta_snapshot_lists_what_changed_on_a_live_browser() -> T
          run's text, and the other tab's snapshot left it alone"
     );
     assert!(
-        text("navigated").starts_with("# full snapshot: no earlier snapshot of this page\n"),
+        text("navigated").starts_with("# whole page: no earlier snapshot of this page\n"),
         "a new document starts over: {}",
         text("navigated")
     );
@@ -662,6 +662,9 @@ const BLIND_PAGE: &str = include_str!("data/snapshot-v1/blind.html");
 const BLIND_DEFAULT: &str = include_str!("data/snapshot-v1/blind.v1-default.txt");
 /// What `ariaSnapshot({ text: false })` prints for it.
 const BLIND_INTERACTIVE: &str = include_str!("data/snapshot-v1/blind.v1-interactive.txt");
+/// What Playwright 1.64.1's own `ariaSnapshot({ mode: 'ai' })` printed for it, and so what
+/// Neo's `mode: 'full'` prints: the page has no element that only clickable marking finds.
+const BLIND_PLAYWRIGHT_AI: &str = include_str!("data/snapshot-v1/blind.playwright-ai.yml");
 /// The snapshot op's `{ json, partial }` for the page, which the prelude's renderer tests read
 /// (neo-playwright-js/tests/snapshot-v1.test.ts). From this crate's manifest directory.
 const BLIND_RESULT: &str = "tests/data/snapshot-v1/blind.json";
@@ -687,7 +690,8 @@ async fn tests_that_the_blind_page_prints_the_v1_text_on_a_live_browser() -> Tes
            const plain = await page.ariaSnapshot()\n\
            const interactive = await page.ariaSnapshot({{ text: false }})\n\
            const json = await page.ariaSnapshotJSON({{ mode: 'ai' }})\n\
-           return {{ plain, interactive, json }}\n\
+           const full = await page.ariaSnapshot({{ mode: 'full' }})\n\
+           return {{ plain, interactive, json, full }}\n\
          }} finally {{\n\
            await page.close()\n\
          }}",
@@ -713,6 +717,185 @@ async fn tests_that_the_blind_page_prints_the_v1_text_on_a_live_browser() -> Tes
         "the default is the text form"
     );
     assert_eq!(result["interactive"], BLIND_INTERACTIVE, "text: false");
+    assert_eq!(
+        result["full"], BLIND_PLAYWRIGHT_AI,
+        "mode 'full' is Playwright's own ai text"
+    );
+    Ok(())
+}
+
+/// `mode: 'full'`'s test page (design section 13): a region holding a plain `div` (no listener,
+/// no pointer cursor, so the v1 text prints it with no ref) and a `div` with only a click
+/// listener (a ref only through clickable marking); 600 orders in `main`, so the whole page is
+/// over the default cap; a footer after it, which the cut line offers; and a dialog at the end of
+/// the document, which a cut must not hide.
+fn full_mode_page() -> String {
+    let orders = (0..600)
+        .map(|n| format!("<li>Order {n} <button>View {n}</button></li>"))
+        .collect::<Vec<_>>()
+        .concat();
+    format!(
+        r##"<!doctype html><html><head><title>Full</title>
+<style>#hover:hover {{ outline: 2px solid red }}</style></head><body>
+<nav aria-label="Top"><a href="#home">Home</a> <a href="#about">About</a></nav>
+<section aria-label="Tools"><div id="hover">Hover me</div><div class="menu">Open menu</div></section>
+<main><h1>Orders</h1><ul>{orders}</ul></main>
+<footer><a href="#contact">Contact</a></footer>
+<div role="dialog" aria-label="Cookies"><p>We use cookies.</p><button>Accept</button></div>
+<script>document.querySelector('.menu').addEventListener('click', () => {{}})</script>
+</body></html>"##
+    )
+}
+
+/// `ariaSnapshot({ mode: 'full' })` on a real engine, page and locator (design section 13): it
+/// prints every ref the v1 text prints in either form (the marked `div` included), the whole page
+/// is cut near 8,000 tokens with the dialog kept, a section named by the v1 text comes back whole,
+/// a ref only the full text prints can be hovered, and the snapshot counts as the run's snapshot
+/// of a tab it opened, so a stale ref after it gets the ordinary message. A second run shows it
+/// is never a delta baseline and never counted for the server's tip.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_mode_full_prints_every_ref_capped_on_a_live_browser() -> TestResult {
+    let page = Page::html(&full_mode_page()).with_header("cache-control", "no-store");
+    let server =
+        FixtureServer::start(HashMap::from([("/prelude/full.html".to_owned(), page)])).await?;
+    let url = json!(server.url("127.0.0.1", "/prelude/full.html"));
+    let run = Arc::new(LiveRun::connect().await?);
+    let host: Arc<dyn OpHost> = Arc::clone(&run) as Arc<dyn OpHost>;
+    let script = format!(
+        "const stale = () => page.getByRef('e9999').textContent({{ timeout: 2000 }}).then(() => null, (error) => error.message)\n\
+         await page.goto({url})\n\
+         const before = await stale()\n\
+         const full = await page.ariaSnapshot({{ mode: 'full' }})\n\
+         const after = await stale()\n\
+         const text = await page.ariaSnapshot({{ text: true, maxTokens: 100000 }})\n\
+         const interactive = await page.ariaSnapshot({{ text: false, maxTokens: 100000 }})\n\
+         const uncut = await page.ariaSnapshot({{ mode: 'full', maxTokens: 100000 }})\n\
+         const plain = await page.ariaSnapshot()\n\
+         const tools = plain.match(/- region \"Tools\" \\[ref=([^\\]]+)\\]/)?.[1]\n\
+         const section = await page.getByRef(tools).ariaSnapshot({{ mode: 'full' }})\n\
+         const hoverRef = section.match(/- generic \\[ref=([^\\]]+)\\]: Hover me/)?.[1] ?? null\n\
+         if (hoverRef) await page.getByRef(hoverRef).hover()\n\
+         const hovered = await page.evaluate(() => document.querySelector('#hover').matches(':hover'))\n\
+         return {{ before, after, full, text, interactive, uncut, plain, section, hoverRef, hovered, tab: page.toJSON().tab }}"
+    );
+    let result = js_runner::run_script(&host, &json!({ "page": null }), &script).await?;
+    run.end_run(Some(&result));
+    let text = |key: &str| result[key].as_str().unwrap_or_default().to_owned();
+
+    assert!(
+        text("before").contains("e9999 is not from this tab, which this run opened"),
+        "no snapshot yet on the tab this run opened: {}",
+        text("before")
+    );
+    assert!(
+        text("after").contains("e9999 is not on the page any more; take a new snapshot"),
+        "a full-mode snapshot is the run's snapshot of the tab: {}",
+        text("after")
+    );
+
+    assert_full_text(&result)?;
+
+    let section = text("section");
+    assert!(
+        section.starts_with("- region \"Tools\" [ref=") && !section.contains("# cut: "),
+        "the section named by the v1 text comes back whole: {section}"
+    );
+    let hover_ref = result["hoverRef"].as_str().ok_or("the plain div's ref")?;
+    assert!(
+        !printed_refs(&text("text")).contains(hover_ref),
+        "the plain div has no ref in the v1 text"
+    );
+    assert_eq!(
+        result["hovered"], true,
+        "the full text's ref hovers the div"
+    );
+
+    let tab = result["tab"].as_i64().ok_or("the page's tab")?;
+    assert_full_mode_leaves_the_baseline(&run, &host, tab).await
+}
+
+/// The first run's full texts: the uncut one prints every ref the v1 forms print (the marked
+/// `div`'s too); the one cut at the default cap keeps the uncut text's top lines, offers the
+/// next section in mode full, and still prints the dialog after the cut line.
+fn assert_full_text(result: &Value) -> TestResult {
+    let text = |key: &str| result[key].as_str().unwrap_or_default().to_owned();
+    let uncut = text("uncut");
+    assert!(!uncut.contains("# cut: "), "{uncut}");
+    assert!(
+        uncut
+            .lines()
+            .any(|line| line.contains("[cursor=pointer]: Open menu") && line.contains("[ref=")),
+        "the listener-only div keeps its ref through clickable marking: {uncut}"
+    );
+    let full_refs = printed_refs(&uncut);
+    for form in ["text", "interactive", "plain"] {
+        let missing: Vec<String> = printed_refs(&text(form))
+            .difference(&full_refs)
+            .cloned()
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "{form} prints refs the full text lacks: {missing:?}"
+        );
+    }
+
+    let full = text("full");
+    let (kept, rest) = full
+        .split_once("\n# cut: ")
+        .ok_or("the whole page is cut")?;
+    assert!(
+        kept.len() <= 32_000 && kept.len() > 31_000,
+        "cut near 8,000 tokens: {} characters",
+        kept.len()
+    );
+    assert!(
+        uncut.starts_with(kept),
+        "the lines above the cut are the uncut text's"
+    );
+    let mut after_cut = rest.lines();
+    let cut_line = after_cut.next().unwrap_or_default();
+    assert!(
+        cut_line.contains(".ariaSnapshot({ mode: 'full' }) shows the contentinfo section"),
+        "the offer keeps the mode: {cut_line}"
+    );
+    assert!(
+        after_cut
+            .next()
+            .is_some_and(|line| line.starts_with("- dialog \"Cookies\" [ref=")),
+        "the dialog past the cut still prints, at the left edge: {rest}"
+    );
+    Ok(())
+}
+
+/// A second run on the tab: a full-mode snapshot between the stored v1 text and a delta changes
+/// nothing, so the delta finds no change, and it is never counted for the server's delta tip.
+async fn assert_full_mode_leaves_the_baseline(
+    run: &LiveRun,
+    host: &Arc<dyn OpHost>,
+    tab: i64,
+) -> TestResult {
+    let second = js_runner::run_script(
+        host,
+        &json!({ "page": { "$neo": "page", "tab": tab } }),
+        "try {\n\
+           const full = await page.ariaSnapshot({ mode: 'full' })\n\
+           return { full, delta: await page.ariaSnapshot({ delta: true }) }\n\
+         } finally {\n\
+           await page.close()\n\
+         }",
+    )
+    .await?;
+    assert_eq!(
+        second.get("delta").and_then(Value::as_str),
+        Some("# no change since your last snapshot of this tab"),
+        "the full text in between changed nothing"
+    );
+    assert_eq!(
+        run.full_snapshot_repeats(),
+        Vec::<TabId>::new(),
+        "a full-mode snapshot is never counted for the delta tip"
+    );
     Ok(())
 }
 
@@ -1047,7 +1230,7 @@ impl OpHost for Unmarked {
     }
 }
 
-/// Every ref a v1 text prints.
+/// Every ref a snapshot text prints, v1 or full.
 fn printed_refs(text: &str) -> HashSet<String> {
     text.split("[ref=")
         .skip(1)

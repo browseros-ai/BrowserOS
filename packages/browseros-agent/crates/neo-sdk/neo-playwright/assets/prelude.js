@@ -7435,49 +7435,12 @@ ${value.stack}`;
     await send["page.saveScreenshot"](site, { api, timeoutMs: 0 }, { path, base64: decode(bytes, "base64") }, signal);
   }
 
-  // crates/neo-sdk/neo-playwright-js/src/prelude/snapshot.ts
-  var upstreamSnapshots = Reflect.get(globalThis, "__neo_upstream_snapshots") === true;
-  function comment(partial) {
-    return `# partial: ${partial.frame} not read (${partial.reason})`;
-  }
-  function iframeLine(lines, lineToNode, ref) {
-    const tag = `[ref=${ref}]`;
-    for (const [index, node] of lineToNode)
-      if (node.ref === ref && lines[index]?.includes(tag))
-        return index;
-    return lines.findIndex((line) => /^\s*- /.test(line) && line.includes(tag));
-  }
-  function renderSnapshot(result) {
-    const json = result.json;
-    const lineToNode = new Map;
-    const yaml = renderAriaSnapshotAsYaml(json, { lineToNode });
-    if (result.partial.length === 0)
-      return yaml;
-    const lines = yaml === "" ? [] : yaml.split(`
-`);
-    const placed = result.partial.map((partial) => ({
-      partial,
-      line: iframeLine(lines, lineToNode, partial.ref)
-    }));
-    const unplaced = [];
-    for (const { partial, line } of placed.sort((a, b) => b.line - a.line)) {
-      if (line === -1) {
-        unplaced.unshift(comment(partial));
-        continue;
-      }
-      const indent = /^\s*/.exec(lines[line] ?? "")?.[0] ?? "";
-      lines.splice(line + 1, 0, `${indent}  ${comment(partial)}`);
-    }
-    return [...lines, ...unplaced].join(`
-`);
-  }
-
   // crates/neo-sdk/neo-playwright-js/src/prelude/snapshot-cap.ts
   var CHARS_PER_TOKEN = 4;
   function aboutTokens(chars) {
     return Math.max(100, Math.round(chars / CHARS_PER_TOKEN / 100) * 100);
   }
-  function cap(notice, lines, limit) {
+  function cap(notice, lines, limit, call = "ariaSnapshot()") {
     const head = notice === null ? [] : [notice];
     const whole = [...head, ...lines.map((line) => line.text)].join(`
 `);
@@ -7524,7 +7487,7 @@ ${value.stack}`;
       return whole;
     const size = `the whole snapshot is about ${aboutTokens(whole.length)} tokens`;
     const open = openSection(lines, cut, limit);
-    const offer = open ? `page.getByRef('${open.ref}').ariaSnapshot() shows all of the ${open.label} section. Or pass a larger maxTokens.` : later ? `page.getByRef('${later.ref}').ariaSnapshot() shows the ${later.label} section, which is not shown above. Or pass a larger maxTokens.` : "Pass a larger maxTokens.";
+    const offer = open ? `page.getByRef('${open.ref}').${call} shows all of the ${open.label} section. Or pass a larger maxTokens.` : later ? `page.getByRef('${later.ref}').${call} shows the ${later.label} section, which is not shown above. Or pass a larger maxTokens.` : "Pass a larger maxTokens.";
     const cutLine = `# cut: ${more} more lines (${withRefs} with refs); ${size}. ${offer}`;
     return [...top, ...linesBefore(lines, cut), cutLine, ...blocks].join(`
 `);
@@ -7577,8 +7540,16 @@ ${value.stack}`;
     "article",
     "iframe"
   ]);
-  var KEPT = new Set(["dialog", "alertdialog", "alert", "status"]);
+  var KEPT = new Set([
+    "dialog",
+    "alertdialog",
+    "alert",
+    "status"
+  ]);
   var KEPT_WITH_REF = new Set(["dialog", "alertdialog"]);
+  function sectionLabel(node) {
+    return node.name ? `${node.role} ${JSON.stringify(node.name)}` : node.role;
+  }
   function keptRef(node) {
     return KEPT_WITH_REF.has(node.role) || actionable(node);
   }
@@ -7757,7 +7728,7 @@ ${value.stack}`;
       if (this.close(header, node.role === "iframe") && this.lines[header].body.endsWith(":") && node.ref !== undefined)
         this.lines[header].section = {
           ref: node.ref,
-          label: node.name ? `${node.role} ${JSON.stringify(node.name)}` : node.role,
+          label: sectionLabel(node),
           end: this.lines.length
         };
     }
@@ -7924,10 +7895,104 @@ ${value.stack}`;
     return lines.reduce((length, line, index) => length + line.text.length + (index > 0 ? 1 : 0), 0);
   }
 
+  // crates/neo-sdk/neo-playwright-js/src/prelude/snapshot.ts
+  var upstreamSnapshots = Reflect.get(globalThis, "__neo_upstream_snapshots") === true;
+  var FULL_CALL = "ariaSnapshot({ mode: 'full' })";
+  function comment(partial) {
+    return `# partial: ${partial.frame} not read (${partial.reason})`;
+  }
+  function treeLines(json) {
+    const lines = [];
+    const steps = [];
+    const later = (children, depth) => {
+      for (let index = children.length - 1;index >= 0; index--)
+        steps.push({ child: children[index], depth });
+    };
+    later(json, 0);
+    for (let step = steps.pop();step; step = steps.pop()) {
+      const indent = "  ".repeat(step.depth);
+      const { child } = step;
+      if (typeof child === "string" || child.role === "text") {
+        const text = typeof child === "string" ? child : child.text || "";
+        const line = renderAriaSnapshotAsYaml([{ role: "text", text }]);
+        if (line !== "")
+          lines.push({ text: indent + line });
+        continue;
+      }
+      const { children, ...own } = child;
+      const [key, ...rest] = renderAriaSnapshotAsYaml([own]).split(`
+`);
+      const block = own.text === undefined && own.url === undefined && own.placeholder === undefined && (children?.length ?? 0) > 0;
+      lines.push({ text: indent + key + (block ? ":" : ""), node: child });
+      for (const line of rest)
+        lines.push({ text: indent + line });
+      if (own.text === undefined && children)
+        later(children, step.depth + 1);
+    }
+    return lines;
+  }
+  function iframeLine(lines, ref) {
+    const placed = lines.findIndex((line) => line.node?.ref === ref);
+    if (placed !== -1)
+      return placed;
+    const tag = `[ref=${ref}]`;
+    return lines.findIndex((line) => /^\s*- /.test(line.text) && line.text.includes(tag));
+  }
+  function yamlLines(result) {
+    const lines = treeLines(result.json);
+    if (result.partial.length === 0)
+      return lines;
+    const placed = result.partial.map((partial) => ({
+      partial,
+      line: iframeLine(lines, partial.ref)
+    }));
+    const unplaced = [];
+    for (const { partial, line } of placed.sort((a, b) => b.line - a.line)) {
+      if (line === -1) {
+        unplaced.unshift({ text: comment(partial) });
+        continue;
+      }
+      const indent = /^\s*/.exec(lines[line]?.text ?? "")?.[0] ?? "";
+      lines.splice(line + 1, 0, { text: `${indent}  ${comment(partial)}` });
+    }
+    return [...lines, ...unplaced];
+  }
+  function renderSnapshot(result) {
+    return yamlLines(result).map((line) => line.text).join(`
+`);
+  }
+  function renderFullSnapshot(result, maxTokens) {
+    return cap(null, printed(yamlLines(result)), maxTokens * CHARS_PER_TOKEN, FULL_CALL);
+  }
+  function printed(lines) {
+    const ends = lines.map(() => lines.length);
+    const open = [];
+    for (let index = 0;index < lines.length; index++) {
+      const text = lines[index].text;
+      const indent = text.length - text.trimStart().length;
+      for (let last = open.at(-1);last !== undefined && last.indent >= indent; last = open.at(-1)) {
+        ends[last.index] = index;
+        open.pop();
+      }
+      open.push({ index, indent });
+    }
+    return lines.map(({ text, node }, index) => {
+      const line = { text, ref: text.includes("[ref=") };
+      const end = ends[index];
+      if (node === undefined)
+        return line;
+      if (KEPT.has(node.role))
+        line.keptEnd = end;
+      else if (SECTION.has(node.role) && node.ref !== undefined && end > index + 1)
+        line.section = { ref: node.ref, label: sectionLabel(node), end };
+      return line;
+    });
+  }
+
   // crates/neo-sdk/neo-playwright-js/src/prelude/snapshot-delta.ts
-  var NO_BASELINE = "# full snapshot: no earlier snapshot of this page";
+  var NO_BASELINE = "# whole page: no earlier snapshot of this page";
   var NO_CHANGE = "# no change since your last snapshot of this tab";
-  var TOO_MUCH = "# full snapshot: too much differs from your last snapshot to list as changes";
+  var TOO_MUCH = "# whole page: too much differs from your last snapshot to list as changes";
   var CONTEXT = 3;
   var MAX_CHANGED_LINES = 1000;
   function renderDelta(stored, result, passed) {
@@ -8215,9 +8280,17 @@ ${changes}`;
     ])
       if (value !== undefined && typeof value !== "boolean")
         throw clientError(api, `${name}: expected boolean, got ${typeof value}`);
+    return {
+      text,
+      urls,
+      maxTokens: maxTokensOption(api, maxTokens),
+      delta: delta ?? false
+    };
+  }
+  function maxTokensOption(api, maxTokens) {
     if (maxTokens !== undefined && !(typeof maxTokens === "number" && Number.isFinite(maxTokens) && maxTokens > 0))
       throw clientError(api, `maxTokens: expected a positive number, got ${String(maxTokens)}`);
-    return { text, urls, maxTokens, delta: delta ?? false };
+    return maxTokens;
   }
 
   class Frame extends EventEmitter {
@@ -8742,8 +8815,16 @@ ${changes}`;
     async _ariaSnapshot(api, selector, options = {}) {
       const site = captureSite();
       const mode = options.mode ?? (upstreamSnapshots ? "default" : "ai");
-      if (mode !== "ai" || upstreamSnapshots)
+      if (upstreamSnapshots)
         return renderSnapshot(await this._snapshot(api, selector, options, mode));
+      if (mode === "default")
+        return renderSnapshot(await this._snapshot(api, selector, options, mode));
+      if (mode === "full") {
+        const maxTokens = maxTokensOption(api, options.maxTokens) ?? DEFAULT_MAX_TOKENS;
+        return renderFullSnapshot(await this._snapshot(api, selector, options, "ai", true), maxTokens);
+      }
+      if (mode !== "ai")
+        throw clientError(api, "mode: expected one of (ai|default|full)");
       const { delta, ...passed } = snapshotV1Options(api, options);
       const wait = this._wait(api, options);
       const deadline = new EventDeadline(api, null, Date.now(), wait.timeout);

@@ -33,14 +33,18 @@ page before repeating it.";
 /// text is the default (`neo-playwright-js/src/prelude/snapshot-v1.ts`): refs only on what can
 /// be acted on and on sections, page text only while it is short. So the hint names the option
 /// that adds the text, and the two ways to reach an element printed without a ref: a locator,
-/// or the JSON tree, which neither the v1 text nor clickable marking changes. Every agent follows
-/// this text literally, so the JSON clause says to search the tree in the script: returned, it
-/// costs what v1 exists to save (8.3k tokens at the median of 31 live pages, 49k on a big one).
+/// or `mode: 'full'`, Playwright's own text with a ref on each visible element
+/// (`neo-playwright-js/src/prelude/snapshot.ts`). Every agent follows this text literally, so it
+/// names one section: a whole page in that mode is 9k tokens at the median of 31 live pages and
+/// 52k on a big one, which the mode's `maxTokens` cap cuts, while one section fits in 196 of 212
+/// cases. It names that mode, not `ariaSnapshotJSON`: the JSON has no cap and no clickable
+/// marks, so it lacks refs the snapshot prints.
 const REF_HINT: &str = "`page.ariaSnapshot()` lists what you can act on, with refs; \
 `page.getByRef('e5')` acts on one; `{ text: true }` adds the page's text. An element without a \
-ref is reached with a locator (`page.getByText('…')`). `page.ariaSnapshotJSON({ mode: 'ai' })` \
-is the whole tree with every ref, several times larger: search it in the script, do not return \
-it.";
+ref is reached with a locator (`page.getByText('…')`). \
+`page.getByRef('e12').ariaSnapshot({ mode: 'full' })` prints all of one section as Playwright \
+does, with its text and a ref on each visible element, up to `maxTokens`; a whole page that way \
+is several times larger.";
 const SNAPSHOT_METHOD: &str = "page.ariaSnapshot";
 
 /// Usage, limits, the error model, then the registry's listed methods: each `Own` line, and
@@ -163,11 +167,16 @@ mod tests {
         assert!(
             description.contains(
                 "An element without a ref is reached with a locator (`page.getByText('…')`). \
-                 `page.ariaSnapshotJSON({ mode: 'ai' })` is the whole tree with every ref, \
-                 several times larger: search it in the script, do not return it."
+                 `page.getByRef('e12').ariaSnapshot({ mode: 'full' })` prints all of one section \
+                 as Playwright does, with its text and a ref on each visible element, up to \
+                 `maxTokens`; a whole page that way is several times larger."
             ),
             "v1 prints refs only on controls and sections, so the model learns how to reach the \
-             rest, and not to return the whole tree: {description}"
+             rest, one section at a time: {description}"
+        );
+        assert!(
+            !description.contains("ariaSnapshotJSON"),
+            "the hint no longer sends the model to the uncapped, unmarked tree: {description}"
         );
         Ok(())
     }

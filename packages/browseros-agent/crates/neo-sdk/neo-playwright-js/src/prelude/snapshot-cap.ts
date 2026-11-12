@@ -1,5 +1,7 @@
 /**
- * The size cap on the v1 snapshot text (snapshot-v1.ts renders the lines, this cuts them).
+ * The size cap on a snapshot's text: the v1 format's (snapshot-v1.ts renders its lines) and
+ * `mode: 'full'`'s, Playwright's own lines (snapshot.ts `renderFullSnapshot`). Each renderer
+ * says which lines are sections and kept blocks; this cuts them the same way for both.
  *
  * Whole lines are kept from the top while they fit the limit, then one `# cut:` line says how
  * much was left out, how big the whole snapshot is, and which section to snapshot instead, then
@@ -43,12 +45,15 @@ export function aboutTokens(chars: number): number {
 
 /**
  * `notice` and `lines` within `limit` characters. The notice counts toward the limit; the cut
- * line and the kept blocks printed after it do not.
+ * line and the kept blocks printed after it do not. `call` is the snapshot call the cut line
+ * offers on a section's ref, in the caller's own mode, so following the offer gives that
+ * section in the same format as the text that was cut.
  */
 export function cap(
   notice: string | null,
   lines: readonly Printed[],
   limit: number,
+  call = 'ariaSnapshot()',
 ): string {
   const head = notice === null ? [] : [notice]
   const whole = [...head, ...lines.map((line) => line.text)].join('\n')
@@ -99,9 +104,9 @@ export function cap(
   const size = `the whole snapshot is about ${aboutTokens(whole.length)} tokens`
   const open = openSection(lines, cut, limit)
   const offer = open
-    ? `page.getByRef('${open.ref}').ariaSnapshot() shows all of the ${open.label} section. Or pass a larger maxTokens.`
+    ? `page.getByRef('${open.ref}').${call} shows all of the ${open.label} section. Or pass a larger maxTokens.`
     : later
-      ? `page.getByRef('${later.ref}').ariaSnapshot() shows the ${later.label} section, which is not shown above. Or pass a larger maxTokens.`
+      ? `page.getByRef('${later.ref}').${call} shows the ${later.label} section, which is not shown above. Or pass a larger maxTokens.`
       : 'Pass a larger maxTokens.'
   const cutLine = `# cut: ${more} more lines (${withRefs} with refs); ${size}. ${offer}`
   return [...top, ...linesBefore(lines, cut), cutLine, ...blocks].join('\n')

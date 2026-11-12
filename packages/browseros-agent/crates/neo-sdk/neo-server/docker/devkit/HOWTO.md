@@ -88,9 +88,11 @@ run 01a1acf4-cf1f-7102-8a53-f7b39569a66e ok effects=done 73ms tabs=[1276814799]
   - button "Frame action" [ref=f1e3]
 ```
 
-On a bigger page its first line says how much text it left out. `{ text: true }` always includes the text and `{ text: false }` never does; `{ urls: true }` prints each link's url; `{ maxTokens: 20000 }` raises the 8,000-token cap. `page.getByRef('e5').ariaSnapshot()` reads one section. `{ mode: 'default' }` is Playwright's full default YAML, unchanged.
+On a bigger page its first line says how much text it left out. `{ text: true }` always includes the text and `{ text: false }` never does; `{ urls: true }` prints each link's url; `{ maxTokens: 20000 }` raises the 8,000-token cap. `page.getByRef('e5').ariaSnapshot()` reads one section. `{ mode: 'default' }` is Playwright's own default YAML, unchanged.
 
-`page.ariaSnapshot({ delta: true })` returns only what changed since the last whole-page snapshot of the tab that a run gave you: one whose run ended ok with the snapshot (or its delta) inside a string it returned or a line it logged. A snapshot your script only inspected, or one from a run that failed, does not count, and neither does one taken earlier in the same run. Its first line says which case it is: `# full snapshot: no earlier snapshot of this page` (then the whole text), `# no change since your last snapshot of this tab`, `# full snapshot: too much differs from your last snapshot to list as changes` (then the whole text), or `# changes since your last snapshot of this tab: 1 added, 1 removed`, then the changes with three lines of context, each block headed by the section it is in:
+`page.getByRef('e12').ariaSnapshot({ mode: 'full' })` prints everything in one section as Playwright prints its `'ai'` snapshot: every element the engine keeps, all the text, each link's `/url`, and a ref on each visible element, including the ones the default list leaves without a ref (a plain `div` you want to hover). It carries Neo's clickable marks, so it prints every ref the default list prints. It obeys `maxTokens` (8,000 by default) with the same cut line, which offers a section in `{ mode: 'full' }`. A whole page that way is several times larger than the default list, and `text`, `urls` and `delta` are ignored.
+
+`page.ariaSnapshot({ delta: true })` returns only what changed since the last whole-page snapshot of the tab that a run gave you: one whose run ended ok with the snapshot (or its delta) inside a string it returned or a line it logged. A snapshot your script only inspected, or one from a run that failed, does not count, and neither does one taken earlier in the same run. Its first line says which case it is: `# whole page: no earlier snapshot of this page` (then the whole text), `# no change since your last snapshot of this tab`, `# whole page: too much differs from your last snapshot to list as changes` (then the whole text), or `# changes since your last snapshot of this tab: 1 added, 1 removed`, then the changes with three lines of context, each block headed by the section it is in:
 
 ```
 @@ main [ref=e2]
@@ -101,7 +103,7 @@ On a bigger page its first line says how much text it left out. `{ text: true }`
    - link "Checkout" [ref=e17]
 ```
 
-A new document in the tab (a navigation, a reload) starts over. A locator's snapshot and `{ mode: 'default' }` ignore `delta`. When a run takes a full snapshot of a page you were already given, its reply ends with a one-line tip saying so, at most three times per task.
+A new document in the tab (a navigation, a reload) starts over. A locator's snapshot, `{ mode: 'default' }` and `{ mode: 'full' }` ignore `delta` and never become the baseline. When a run takes a whole-page snapshot of a page you were already given, its reply ends with a one-line tip saying so, at most three times per task.
 
 ```sh
 ./dev.sh run --task howto-aria -f devkit/examples/aria-ref.js
