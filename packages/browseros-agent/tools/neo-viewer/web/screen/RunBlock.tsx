@@ -193,7 +193,7 @@ function CodeLine({
       <MethodOnLine
         key={operation.id}
         operation={operation}
-        output={outputOf(operation)}
+        outputOf={outputOf}
         number={isFirst ? number : undefined}
         code={isFirst ? line : undefined}
         calls={isFirst ? place?.calls : undefined}
@@ -247,7 +247,7 @@ function rowLabel(
 
 function MethodOnLine({
   operation,
-  output,
+  outputOf,
   number,
   code,
   calls,
@@ -257,7 +257,8 @@ function MethodOnLine({
   onToggle,
 }: {
   operation: NeoOperation
-  output: OperationOutput
+  /** Its output, worked out only while the row is open. */
+  outputOf: (operation: NeoOperation) => OperationOutput
   number?: number
   code?: Line
   calls?: number
@@ -278,7 +279,9 @@ function MethodOnLine({
         open={open}
         onToggle={onToggle}
       />
-      {open && <MethodDetail operation={operation} output={output} />}
+      {open && (
+        <MethodDetail operation={operation} output={outputOf(operation)} />
+      )}
     </>
   )
 }

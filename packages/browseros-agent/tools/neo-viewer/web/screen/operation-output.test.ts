@@ -198,7 +198,7 @@ describe('what a call gave the script', () => {
     ).toBe('The call returned no value.')
   })
 
-  it('prints a shared object as often as the value holds it, a cycle once, and typed arrays as numbers', () => {
+  it("decodes with the run's own decoder: a shared object once, a cycle as such, typed arrays as numbers", () => {
     const shared = { id: 2, o: [{ k: 'n', v: 1 }] }
     const value = {
       id: 1,
@@ -222,9 +222,7 @@ describe('what a call gave the script', () => {
         '  "first": {',
         '    "n": 1',
         '  },',
-        '  "again": {',
-        '    "n": 1',
-        '  },',
+        '  "again": [the same object as above],',
         '  "self": [Circular],',
         '  "bytes": Uint8Array [1, 2, 3],',
         '  "big": BigInt64Array [1n],',
@@ -289,6 +287,70 @@ describe('what a call gave the script', () => {
         }),
       ).formattedText,
     ).toBe(JSON.stringify({ $neo: 'bytes', base64: 'iVBORw0K' }, null, 2))
+  })
+})
+
+describe('a value no reading expected', () => {
+  it('skips a __proto__ entry as the run does, and stays small for a value full of shared objects', () => {
+    const proto = {
+      id: 1,
+      o: [
+        { k: '__proto__', v: { id: 2, o: [{ k: 'x', v: 1 }] } },
+        { k: 'y', v: 2 },
+      ],
+    }
+    expect(
+      shown(operation(1, 'page.evaluate', { result: { value: proto } }))
+        .formattedText,
+    ).toBe('{\n  "y": 2\n}')
+    // x = { a: x, b: x }, fourteen times over: each object once, then by name.
+    let value: unknown = { id: 1, o: [] }
+    for (let id = 2; id <= 15; id++) {
+      value = {
+        id,
+        o: [
+          { k: 'a', v: value },
+          { k: 'b', v: { ref: id - 1 } },
+        ],
+      }
+    }
+    const big = shown(operation(2, 'page.evaluate', { result: { value } }))
+    expect(big.formattedText.length).toBeLessThan(2_000)
+    expect(big.formattedText).toContain('[the same object as above]')
+  })
+
+  it('never decodes a value Neo cut, and says so when the decoder refuses one', () => {
+    const cut = shown(
+      operation(1, 'locator.evaluate', {
+        result: { ta: { k: 'ui8', b: 'AQIDBAUG…[+60 bytes]' } },
+        resultTruncated: true,
+      }),
+    )
+    expect(cut.source).toContain('a cut value cannot be decoded')
+    expect(cut.rawText).toContain('…[+60 bytes]')
+    const refused = shown(
+      operation(2, 'locator.evaluate', {
+        result: { ta: { k: 'ui8', b: '%%%' } },
+      }),
+    )
+    expect(refused.source).toContain(
+      "The run's decoder refuses this recorded value",
+    )
+  })
+
+  it("shows ariaSnapshotJSON's tree as the JSON the script got, not as YAML", () => {
+    const json = [{ role: 'heading', name: 'Hello', level: 1, children: [] }]
+    const out = shown(
+      operation(1, 'page.ariaSnapshot', {
+        args: {
+          mode: 'default',
+          call: { api: 'page.ariaSnapshotJSON', timeoutMs: 5000 },
+        },
+        result: { document: 2, partial: [], json },
+      }),
+    )
+    expect(out.formattedText).toBe(JSON.stringify(json, null, 2))
+    expect(out.source).toContain('ariaSnapshotJSON() returns')
   })
 })
 

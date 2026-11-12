@@ -349,7 +349,7 @@ export function UnplacedGroup({
             spanMs={spanMs}
             open={operation.id === openId}
             onToggle={() => onToggle(operation.id)}
-            output={outputOf(operation)}
+            outputOf={outputOf}
           />
         ))}
     </>
@@ -362,13 +362,14 @@ function MethodGroupRow({
   spanMs,
   open,
   onToggle,
-  output,
+  outputOf,
 }: {
   operation: NeoOperation
   spanMs: number
   open: boolean
   onToggle: () => void
-  output: OperationOutput
+  /** Its output, worked out only while the row is open. */
+  outputOf: (operation: NeoOperation) => OperationOutput
 }) {
   return (
     <>
@@ -383,7 +384,9 @@ function MethodGroupRow({
             : 'Neo internal'
         }
       />
-      {open && <MethodDetail operation={operation} output={output} />}
+      {open && (
+        <MethodDetail operation={operation} output={outputOf(operation)} />
+      )}
     </>
   )
 }

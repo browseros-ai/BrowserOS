@@ -66,14 +66,34 @@ export function operationOutput(
 ): OperationOutput {
   const rawText = recorded(operation)
   return {
-    ...(failed(operation) ??
+    ...shownOrRecord(operation, operations),
+    raw: rawText.split('\n').map(jsonLine),
+    rawText,
+  }
+}
+
+/**
+ * The first reading that applies. One that fails (a value no reading expected) falls back to
+ * Neo's record: a run's block computes this for its open call, and must never break on it.
+ */
+function shownOrRecord(
+  operation: NeoOperation,
+  operations: NeoOperation[],
+): Shown {
+  try {
+    return (
+      failed(operation) ??
       unfinished(operation) ??
       snapshot(operation, operations) ??
       pending(operation) ??
       evaluated(operation) ??
-      recordedValue(operation)),
-    raw: rawText.split('\n').map(jsonLine),
-    rawText,
+      recordedValue(operation)
+    )
+  } catch {
+    return tree(
+      operation,
+      "The viewer could not read this result, so this is Neo's record of it.",
+    )
   }
 }
 
@@ -105,6 +125,16 @@ function snapshot(
   operations: NeoOperation[],
 ): Shown | null {
   if (!operation.name.endsWith('.ariaSnapshot')) return null
+  const result = operation.result
+  // ariaSnapshotJSON() runs the same operation and returns the tree itself.
+  if (apiOf(operation).endsWith('ariaSnapshotJSON')) {
+    return {
+      ...json(isRecord(result) ? result.json : result),
+      source:
+        "The tree the script's await got: ariaSnapshotJSON() returns the page's JSON itself.",
+      cut: operation.resultTruncated,
+    }
+  }
   const text =
     rendered(operation) ??
     (operation.name === 'page.ariaSnapshot'
@@ -190,6 +220,14 @@ function documentOf(operation: NeoOperation): unknown {
   return isRecord(operation.result) ? operation.result.document : undefined
 }
 
+/** The API the script called, which the recorded name can differ from (`call.api`). */
+function apiOf(operation: NeoOperation): string {
+  const call = argsOf(operation).call
+  return isRecord(call) && typeof call.api === 'string'
+    ? call.api
+    : operation.name
+}
+
 function argsOf(operation: NeoOperation): Record<string, unknown> {
   return isRecord(operation.args) ? operation.args : {}
 }
@@ -238,13 +276,8 @@ function pending(operation: NeoOperation): Shown | null {
 
 function evaluated(operation: NeoOperation): Shown | null {
   const result = operation.result
-  const decodedFrom = (value: unknown, source: string): Shown => ({
-    ...(typeof value === 'string'
-      ? lines(value)
-      : toned(pageValueText(value), 'json')),
-    source,
-    cut: operation.resultTruncated,
-  })
+  const decodedFrom = (value: unknown, source: string): Shown =>
+    decoded(operation, value, source)
   const got =
     "The value the script's await got, decoded from the page's serialized form as the run decodes it."
   if (operation.name === 'page.evaluate' && isRecord(result))
@@ -257,6 +290,35 @@ function evaluated(operation: NeoOperation): Shown | null {
     )
   }
   return null
+}
+
+/**
+ * A serialized value decoded by the run's own decoder. A value Neo cut is not decoded: its cut
+ * markers are not the page's forms, so the decoder would build a different value.
+ */
+function decoded(
+  operation: NeoOperation,
+  value: unknown,
+  source: string,
+): Shown {
+  if (operation.resultTruncated) {
+    return tree(
+      operation,
+      "Neo kept only the start of this value, and a cut value cannot be decoded: this is Neo's record of it.",
+    )
+  }
+  const text = pageValueText(value)
+  if (text === null) {
+    return tree(
+      operation,
+      "The run's decoder refuses this recorded value, so this is Neo's record of it.",
+    )
+  }
+  return {
+    ...(typeof value === 'string' ? lines(text) : toned(text, 'json')),
+    source,
+    cut: false,
+  }
 }
 
 function recordedValue(operation: NeoOperation): Shown {
