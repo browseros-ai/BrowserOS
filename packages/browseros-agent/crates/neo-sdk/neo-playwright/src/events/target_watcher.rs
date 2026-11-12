@@ -103,6 +103,13 @@ const TICK: Duration = Duration::from_millis(250);
 /// How long a synchronize waits for the watcher's answer before the asker goes on without it.
 const SYNCHRONIZE_BOUND: Duration = Duration::from_secs(2);
 
+/// How long a new frame session's tree read may take ([`TabLine`]). The tree only seeds the
+/// frame tracker with frames that existed before the session reported events, and a read that
+/// fails or misses this leaves it unseeded, as a failed read always did. It was 1 s while the
+/// whole watcher waited for it; its tab's events wait for it now, and a frame whose renderer
+/// is busy with ad script answers in 100 ms to over a second (measured), so the wait is short.
+const TREE_READ_WAIT: Duration = Duration::from_millis(200);
+
 /// A position in the connection's broadcast event stream: how many events the CDP client had
 /// broadcast when it was taken (`BrowserSession::cdp_events_broadcast`), on the numbering
 /// [`WatcherProgress`] counts the watcher's work in. A synchronize to a fence waits for exactly
@@ -333,8 +340,6 @@ struct Watcher {
     /// Synchronize requests whose fence covers an event a line still holds: answered once the
     /// log has every event before their fence.
     deferred: Vec<WatcherRequest>,
-    /// Set while a line's held events are handled, so they are not held again.
-    replaying: bool,
 }
 
 /// One tab's events while a frame-tree read for one of its new frame sessions is out.
@@ -349,14 +354,22 @@ struct Watcher {
 type TabLine = VecDeque<LineItem>;
 
 enum LineItem {
-    /// A frame session's tree read; `answer` is `None` while it is out, then the tree (or
-    /// `None` when the read failed or ran out of its second).
+    /// A frame session's tree read and how far it got.
     Read {
         session: SessionId,
-        answer: Option<Option<Value>>,
+        answer: TreeAnswer,
     },
     /// An event of the tab read at broadcast `position` and held behind the reads before it.
     Event { position: u64, event: CdpEvent },
+}
+
+/// A tree read's state in its line.
+enum TreeAnswer {
+    /// Still out: the events behind it wait.
+    Out,
+    /// Back: the tree, or `None` when the read failed or missed [`TREE_READ_WAIT`]. Either way
+    /// the events behind it go on; without a tree, as when the read used to fail in place.
+    Back(Option<Value>),
 }
 
 /// A tree read's answer, for the session it was asked on; `None` when it failed or timed out.
@@ -630,7 +643,6 @@ impl Watcher {
             lines: HashMap::new(),
             seeded: None,
             deferred: Vec::new(),
-            replaying: false,
         };
         (watcher, found_rx)
     }
@@ -654,7 +666,9 @@ impl Watcher {
             tokio::select! {
                 received = events.recv() => match received {
                     Ok(event) => {
-                        self.handle(event).await;
+                        if let Some(event) = self.hold(event) {
+                            self.handle(event).await;
+                        }
                         self.progress.handled(1);
                     }
                     Err(RecvError::Lagged(skipped)) => {
@@ -776,7 +790,9 @@ impl Watcher {
             // Counted as the run loop counts, so ops waiting on `progress` see these too.
             match events.try_recv() {
                 Ok(event) => {
-                    self.handle(event).await;
+                    if let Some(event) = self.hold(event) {
+                        self.handle(event).await;
+                    }
                     self.progress.handled(1);
                 }
                 Err(TryRecvError::Lagged(skipped)) => {
@@ -953,14 +969,6 @@ impl Watcher {
     }
 
     async fn handle(&mut self, event: CdpEvent) {
-        if let Some(tab) = self.line_for(&event) {
-            let position = self.progress.events_handled();
-            if let Some(line) = self.lines.get_mut(&tab) {
-                line.push_back(LineItem::Event { position, event });
-            }
-            self.publish_hold();
-            return;
-        }
         let CdpEvent {
             method,
             params,
@@ -975,15 +983,10 @@ impl Watcher {
                     .await;
             }
             "Target.targetCreated" => {
-                if let Some(TargetEvent { target_info }) = parse(params) {
-                    let tab = is_tab(&target_info);
-                    self.created(target_info);
-                    // Only a new tab can need an observer of its own: frames and workers attach
-                    // through their tab's session. A tab listing per frame was most of what a
-                    // page that churns frames cost the watcher (every ad frame lists every tab).
-                    if tab {
-                        self.observe_context().await;
-                    }
+                if let Some(TargetEvent { target_info }) = parse(params)
+                    && self.created(target_info)
+                {
+                    self.observe_context().await;
                 }
             }
             "Target.targetInfoChanged" => {
@@ -1067,10 +1070,13 @@ impl Watcher {
         }
     }
 
-    fn created(&mut self, info: TargetInfo) {
+    /// Records a new tab; whether it was one. Only a new tab can need an observer of its own
+    /// (`observe_context`): frames and workers attach through their tab's session, and a tab
+    /// listing per frame was most of what a page that churns frames cost the watcher.
+    fn created(&mut self, info: TargetInfo) -> bool {
         let target = TargetId(info.target_id.clone());
         if !is_tab(&info) || self.pages.contains_key(&target) {
-            return;
+            return false;
         }
         self.pages.insert(
             target.clone(),
@@ -1086,6 +1092,7 @@ impl Watcher {
         if !info.url.is_empty() {
             self.ready(&target, info.url, info.window_id);
         }
+        true
     }
 
     fn info_changed(&mut self, info: TargetInfo) {
@@ -1704,14 +1711,13 @@ impl Watcher {
             .or_default()
             .push_back(LineItem::Read {
                 session: session.clone(),
-                answer: None,
+                answer: TreeAnswer::Out,
             });
         let protocol = self.browser.protocol_session(session.clone());
         let session = session.clone();
-        // Bounded as the in-place read was, so a line waits at most a second for any read.
         drop(tokio::spawn(async move {
             let tree = time::timeout(
-                Duration::from_secs(1),
+                TREE_READ_WAIT,
                 protocol.send_value("Page.getFrameTree", json!({})),
             )
             .await
@@ -1721,19 +1727,47 @@ impl Watcher {
         }));
     }
 
-    /// The tab whose line `event` must wait in: while a tab has a frame-tree read out, its
-    /// later events go behind it, except a new attachment (which only adds a read of its own)
-    /// and `Runtime`/`Inspector` reports, whose contexts a binding call arriving on its own
-    /// channel needs in arrival order.
+    /// Puts an event just read from the broadcast in its tab's line if that tab has a frame-tree
+    /// read out ([`TabLine`]), or gives it back to be handled now. A line's own events are
+    /// handled straight from it, in order, when the read before them is back.
+    fn hold(&mut self, event: CdpEvent) -> Option<CdpEvent> {
+        let Some(tab) = self.line_for(&event) else {
+            return Some(event);
+        };
+        let position = self.progress.events_handled();
+        if let Some(line) = self.lines.get_mut(&tab) {
+            line.push_back(LineItem::Event { position, event });
+        }
+        self.publish_hold();
+        None
+    }
+
+    /// The tab whose line `event` must wait in: while a tab has a frame-tree read out, every
+    /// later event of that tab goes behind it, so the log and the worker table change in the
+    /// tab's wire order. Two kinds go on at once, as neither publishes anything:
+    /// - a new frame session's attachment, which only adds a read of its own to the line
+    ///   (held, the reads of a page that keeps adding frames would go out one at a time);
+    /// - a session's execution-context bookkeeping, which a binding call, arriving on a
+    ///   channel of its own, needs in arrival order to name its frame.
     fn line_for(&self, event: &CdpEvent) -> Option<TargetId> {
-        if self.replaying || self.lines.is_empty() {
+        if self.lines.is_empty() {
             return None;
         }
         let tab = match event.method.as_str() {
-            "Target.attachedToTarget" => return None,
-            method if method.starts_with("Runtime.") || method.starts_with("Inspector.") => {
+            "Target.attachedToTarget"
+                if event
+                    .params
+                    .get("targetInfo")
+                    .and_then(|info| info.get("type"))
+                    .and_then(Value::as_str)
+                    == Some("iframe") =>
+            {
                 return None;
             }
+            "Runtime.executionContextCreated"
+            | "Runtime.executionContextDestroyed"
+            | "Runtime.executionContextsCleared"
+            | "Inspector.workerScriptLoaded" => return None,
             // A frame or worker session going: named in the params, not by the event's session.
             "Target.detachedFromTarget" => self
                 .sessions
@@ -1757,12 +1791,12 @@ impl Watcher {
             .find_map(|item| match item {
                 LineItem::Read {
                     session: asked,
-                    answer: answer @ None,
+                    answer: answer @ TreeAnswer::Out,
                 } if *asked == session => Some(answer),
                 _ => None,
             });
         if let Some(answer) = read {
-            *answer = Some(tree);
+            *answer = TreeAnswer::Back(tree);
         }
     }
 
@@ -1772,7 +1806,7 @@ impl Watcher {
         loop {
             let next = self.lines.iter_mut().find_map(|(tab, line)| {
                 let ready = match line.front() {
-                    Some(LineItem::Read { answer, .. }) => answer.is_some(),
+                    Some(LineItem::Read { answer, .. }) => matches!(answer, TreeAnswer::Back(_)),
                     Some(LineItem::Event { .. }) => true,
                     None => false,
                 };
@@ -1787,15 +1821,11 @@ impl Watcher {
             };
             match item {
                 LineItem::Read {
-                    answer: Some(Some(tree)),
+                    answer: TreeAnswer::Back(Some(tree)),
                     ..
                 } => self.lifecycle.seed(&tab, tree),
                 LineItem::Read { .. } => {}
-                LineItem::Event { event, .. } => {
-                    self.replaying = true;
-                    self.handle(event).await;
-                    self.replaying = false;
-                }
+                LineItem::Event { event, .. } => self.handle(event).await,
             }
         }
         self.lines.retain(|_, line| !line.is_empty());
@@ -2284,6 +2314,8 @@ mod worker_observation_tests {
     use tokio::sync::{broadcast, mpsc, oneshot};
     use tokio::task;
 
+    use std::collections::VecDeque;
+
     use super::{EventFence, SeededTree, Watcher, WatcherHandle, WatcherRequest};
     use crate::events::worker_table::WorkerInfo;
     use crate::events::{EventHub, PageEvent, PageEventKind, Subscription, WatcherProgress};
@@ -2333,9 +2365,12 @@ mod worker_observation_tests {
         Ok(())
     }
 
-    /// Handles `event` as the run loop does: counted as read once it was handled.
+    /// Handles `event` as the run loop does: held in its tab's line or handled, then counted
+    /// as read.
     async fn read(watcher: &mut Watcher, event: CdpEvent) {
-        watcher.handle(event).await;
+        if let Some(event) = watcher.hold(event) {
+            watcher.handle(event).await;
+        }
         watcher.progress.handled(1);
     }
 
@@ -2433,6 +2468,94 @@ mod worker_observation_tests {
         assert_eq!(progress.applied_through(), 2);
         assert!(answered.try_recv().is_ok(), "answered once the log has it");
         Ok(())
+    }
+
+    /// What waits in a tab's line while its frame-tree read is out: everything of that tab that
+    /// publishes or changes the worker table (a worker's attachment, a console report, a frame
+    /// event, a frame session's detach, the tab's end), but not a new frame session's attachment
+    /// (it only adds a read) nor context bookkeeping; and nothing of another tab.
+    #[tokio::test]
+    async fn a_line_holds_what_publishes_and_lets_bookkeeping_through() {
+        let connection = TestConnection::new([]);
+        let browser = BrowserSession::new(
+            Arc::clone(&connection) as Arc<dyn CdpConnection>,
+            BrowserSessionHooks::default(),
+        );
+        let (_hub, writer) = EventHub::new();
+        let (mut watcher, _found) = Watcher::new(
+            browser,
+            writer,
+            Arc::new(FrameAttachLog::default()),
+            Arc::new(WatcherProgress::default()),
+            Arc::new(SnapshotBaselines::default()),
+        );
+        let (tab, other) = (TargetId("tab".to_owned()), TargetId("other".to_owned()));
+        watcher
+            .sessions
+            .insert(SessionId::from("page"), tab.clone());
+        watcher.sessions.insert(SessionId::from("ad"), tab.clone());
+        watcher.sessions.insert(SessionId::from("elsewhere"), other);
+        watcher.lines.insert(tab.clone(), VecDeque::new());
+        let event = |method: &str, session: &str, params: serde_json::Value| CdpEvent {
+            method: method.to_owned(),
+            params,
+            session_id: Some(SessionId::from(session)),
+        };
+        let held = [
+            event(
+                "Target.attachedToTarget",
+                "page",
+                json!({ "sessionId": "w", "targetInfo": { "targetId": "w", "type": "worker" } }),
+            ),
+            event(
+                "Runtime.consoleAPICalled",
+                "page",
+                json!({ "type": "log", "args": [] }),
+            ),
+            event(
+                "Page.frameNavigated",
+                "page",
+                json!({ "frame": { "id": "tab", "url": "a" } }),
+            ),
+            event(
+                "Target.detachedFromTarget",
+                "page",
+                json!({ "sessionId": "ad" }),
+            ),
+            event(
+                "Target.targetDestroyed",
+                "browser",
+                json!({ "targetId": "tab" }),
+            ),
+        ];
+        for event in &held {
+            assert_eq!(
+                watcher.line_for(event),
+                Some(tab.clone()),
+                "{} waits",
+                event.method
+            );
+        }
+        let through = [
+            event(
+                "Target.attachedToTarget",
+                "page",
+                json!({ "sessionId": "f", "targetInfo": { "targetId": "f", "type": "iframe" } }),
+            ),
+            event(
+                "Runtime.executionContextCreated",
+                "page",
+                json!({ "context": {} }),
+            ),
+            event(
+                "Page.frameNavigated",
+                "elsewhere",
+                json!({ "frame": { "id": "o", "url": "b" } }),
+            ),
+        ];
+        for event in &through {
+            assert_eq!(watcher.line_for(event), None, "{} goes on", event.method);
+        }
     }
 
     /// A tab's snapshot baseline names its main frame's document: a new document or a closed tab

@@ -128,10 +128,11 @@ impl Playwright {
         self.watcher.synchronize(None, fence).await
     }
 
-    /// Whether the watcher has handled every event before `fence`, without waiting.
+    /// Whether every event before `fence` is in the log, without waiting: read by the watcher
+    /// and none of them held back in a tab's line.
     #[must_use]
     pub fn events_handled_through(&self, fence: EventFence) -> bool {
-        self.progress.events_handled() >= fence.0
+        self.progress.applied_through() >= fence.0
     }
 
     /// A handle on the event watcher for what outlives an op (`events::log_lease`).
