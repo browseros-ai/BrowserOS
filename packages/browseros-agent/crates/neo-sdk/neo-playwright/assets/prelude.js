@@ -7460,8 +7460,7 @@ ${value.stack}`;
       index += 1;
     }
     if (more === 0)
-      return [...top, ...linesBefore(lines, cut), ...blocks].join(`
-`);
+      return whole;
     const size = `the whole snapshot is about ${aboutTokens(whole.length)} tokens`;
     const open = openSection(lines, cut, limit);
     const offer = open ? `page.getByRef('${open.ref}').ariaSnapshot() shows all of ${open.label}. Or pass a larger maxTokens.` : later ? `page.getByRef('${later.ref}').ariaSnapshot() shows ${later.label}, which is not shown above. Or pass a larger maxTokens.` : "Pass a larger maxTokens.";

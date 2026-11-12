@@ -89,8 +89,9 @@ export function cap(
     later ??= line.section
     index += 1
   }
-  if (more === 0)
-    return [...top, ...linesBefore(lines, cut), ...blocks].join('\n')
+  // Every line past the limit sits in a kept block, which prints whole anyway: nothing is cut,
+  // so the text stays as it was, each block in its place.
+  if (more === 0) return whole
   const size = `the whole snapshot is about ${aboutTokens(whole.length)} tokens`
   const open = openSection(lines, cut, limit)
   const offer = open

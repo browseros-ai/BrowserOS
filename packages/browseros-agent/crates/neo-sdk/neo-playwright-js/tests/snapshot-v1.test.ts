@@ -398,6 +398,21 @@ it("tests rule 7: list items, a paragraph and a named empty group keep their tex
   ])
 })
 
+it('tests rule 7: a cell gives its name as text, a row with children does not repeat theirs', () => {
+  const json = [
+    {
+      role: 'row',
+      name: 'Toothpaste $7.49',
+      ref: 'e1',
+      children: [
+        { role: 'cell', name: 'Toothpaste', ref: 'e2' },
+        { role: 'cell', name: '$7.49', ref: 'e3' },
+      ],
+    },
+  ] as Node[]
+  expect(both(json)).toEqual(['- text: Toothpaste $7.49', ''])
+})
+
 it('tests rule 6: a named image prints with text on only', () => {
   const json = [
     { role: 'img', name: 'Logo', ref: 'e1' },
@@ -606,6 +621,22 @@ it('tests that a kept block is never split: the cut goes before it and it prints
       '# cut: 1 more lines (1 with refs); the whole snapshot is about 100 tokens. Pass a larger maxTokens.',
       '- alertdialog [ref=e30]:\n  - text: Leave this page?\n  - button "Leave" [ref=e31]',
     ].join('\n'),
+  )
+})
+
+it('tests that when only a kept block passes the limit, nothing is cut and the text stays as it was', () => {
+  const json = [
+    section('main', 'e1', [
+      button('A', 'e2'),
+      button('B', 'e3'),
+      section('dialog', 'e4', [generic(['Sure?']), button('OK', 'e5')]),
+    ]),
+  ]
+  const lines = uncut(json)
+  expect(lines[3]).toBe('  - dialog [ref=e4]:')
+  // The limit falls on the dialog's text; the dialog is the only thing past it.
+  expect(render(json, { text: false, maxTokens: keeping(json, 4) })).toBe(
+    lines.join('\n'),
   )
 })
 
