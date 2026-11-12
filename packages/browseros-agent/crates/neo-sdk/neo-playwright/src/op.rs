@@ -3,9 +3,35 @@
 //! Each family keeps its ops in its own subsystem's file (`action/action_op.rs`, ...), so work
 //! on one family never edits a shared list. [`Op::all`] chains the families; claw-sdk's
 //! registry and the prelude's generated `ops.ts` are both derived from it, and
-//! `tests/wire_generated.rs` fails when the TypeScript copy is stale. Adding an op is one
-//! variant and one spec row in its family file; in a family on route rows (`crate::wire`), also
-//! its route row and handler, whose types [`Op::wire`] describes.
+//! `tests/wire_generated.rs` fails when the TypeScript copy is stale. Shapes belong to the
+//! handlers; policy belongs to [`OpSpec`] and its capability audit below. The generated wire
+//! describes a call but never authorizes it.
+//!
+//! # Adding an op
+//!
+//! 1. Add its variant to the family's `listed_enum!` (for example `ActionOp::Tap`). Both
+//!    `spec()` and `route()` must cover it: a missing arm is a compile error, not a missing
+//!    registry entry at runtime.
+//! 2. Add its `spec()` arm with the effect, target, lifetime and capabilities it actually
+//!    needs, and update `tests_that_every_op_declares_exactly_its_audited_capabilities` below.
+//!    A capability is marked policed only after its gateway has been reviewed.
+//! 3. Give the handler a typed input (`Deserialize`, `TS`, `deny_unknown_fields`) and output
+//!    (`Serialize`, `TS`), then bind it in `route()` with `r.op(...)`. Derive option keys with
+//!    `wire::options!`. Classify the row with `command`, `neo_only` or `replaces`; every
+//!    intentional upstream difference carries its reason on that row.
+//! 4. From `packages/browseros-agent`, run
+//!    `cargo test -p neo-playwright --test wire_generated`. It rewrites stale files in
+//!    `neo-playwright-js/src/prelude/generated/` and fails; review those files and rerun it.
+//!    Never edit the generated TypeScript to repair a handler's contract.
+//! 5. In the prelude, call the generated family sender with an object literal and select
+//!    script options with `OPTION_KEYS[op]`. Remove the method from `UNSUPPORTED` when it is
+//!    implemented. `typecheck` checks the handler's input/result against the vendored
+//!    Playwright protocol, including stale deviation reasons; API coverage catches an
+//!    implemented method still listed as unsupported.
+//! 6. Exercise the op in `scripts/wire-examples.ts` and add behavioral coverage. Run the
+//!    prelude package's tests, `typecheck`, and `build` (the pinned Bun version), then
+//!    `build:check` and the crate tests. Commit the generated files and wire recording with
+//!    the handler. The recording's decode tests check that the prelude and Rust agree.
 
 use crate::action::ActionOp;
 use crate::events::EventOp;

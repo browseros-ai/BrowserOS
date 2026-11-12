@@ -4,7 +4,7 @@ Playwright's page-side selector engine, copied unmodified from
 [microsoft/playwright](https://github.com/microsoft/playwright) under Apache-2.0. `VERSION`
 holds the release tag and its full commit. `LICENSE` and `NOTICE` are upstream's own files.
 
-`neo-playwright` runs this engine in a isolated world so that locators in
+`neo-playwright` runs this engine in an isolated world so that locators in
 Neo's `run` tool resolve exactly as Playwright resolves them: role and accessible names, text
 and label matching, CSS, chaining, strict mode and its error messages.
 
@@ -55,6 +55,23 @@ stand-ins for those four names (`crates/neo-sdk/neo-playwright-js/src/prelude/ve
 so they bind as module-scope names and the agent's realm gains no global. The page's bundles
 load both files plain.
 
+## The wire contract
+
+The protocol declarations are an independent check on Neo's Rust-owned wire, not a second
+implementation of it. Each operation's exhaustive Rust `route()` match binds its upstream
+command to a handler. The handler's serde/ts-rs types supply the input, result, brands and
+option keys; `neo-playwright/tests/wire_generated.rs` renders them into
+`neo-playwright-js/src/prelude/generated/`. The prelude's TypeScript check compares those
+generated rows with this checkout's `channels.d.ts` and its referenced `structs.d.ts`.
+
+An intentional difference is explained on the Rust route row (`adds`, `omits`, `retypes`, or
+a result exception); Neo-only operations and command replacements have reasons there too.
+Changing a field or an upstream declaration therefore reports the affected operation in
+`typecheck`. A deviation that no longer applies also fails. Fix the Rust type or the row's
+reason, regenerate, and review the resulting diff; never patch a generated declaration or
+a vendored file. Policy remains in `OpSpec` and the server's rules, independent of these
+shape checks. See `src/op.rs`'s module docs for the complete adding-an-op workflow.
+
 ## What is deliberately not here
 
 - `highlight.ts`, `highlight.css` and `consoleApi.ts`. They are the inspector overlay and the
@@ -70,7 +87,7 @@ load both files plain.
   protocol's runtime code (apart from the value serializers). Its two generated type files are
   vendored for the wire check and never bundled. The test runner,
   reporters, the trace viewer, codegen and the recorder, Playwright MCP, browser downloads, and
-  every other injected script (`clock.ts`, `bindingsController.ts`, `webSocketMock.ts`,
+  every other injected script (`clock.ts`, `webSocketMock.ts`,
   `storageScript.ts`, `webAuthn.ts`, `webMCP.ts`, `bidiInsertText.ts`, `coverageScript.ts`,
   `webview/`).
 - Any npm package.
@@ -82,16 +99,19 @@ load both files plain.
    `VERSION` and `SHA256SUMS`, and prints what changed.
 3. If upstream added a runtime import, the engine build fails on the unresolved path. Add the
    file to `FILES` in `sync.sh` and to this README, then sync again.
-4. Rebuild the assets with `bun run build` in `crates/neo-sdk/neo-playwright-js` (Bun 1.4.2,
-   the repo's pinned version). If it fails on a wrapped generator function, or the crate's
-   engine guard fails, review every place the new preview and hint code cuts or quotes page
-   text before moving the mask. Its test fails while `crates/neo-sdk/neo-playwright/assets/`
-   or `crates/neo-sdk/neo-playwright/tests/data/probe-protocol.json` is stale. Then run
-   `node scripts/probe-smoke.mjs` there against a throwaway browser.
-5. Port the keyboard tables with `bun scripts/port-keyboard-layout.ts` there, and record new
+4. Run `bun run typecheck` in `crates/neo-sdk/neo-playwright-js`. It names commands whose
+   parameters or results changed, unresolved commands, and stale deviation reasons. Update
+   the Rust handler types or route rows, then run
+   `cargo test -p neo-playwright --test wire_generated` from `packages/browseros-agent` to
+   regenerate (a stale file is rewritten and the test fails; review it and rerun).
+5. Rebuild the assets with `bun run build` in `crates/neo-sdk/neo-playwright-js` (Bun 1.4.2,
+   the repo's pinned version), then run `bun run build:check` and the crate's engine guards.
+   The build also refreshes the probe and wire recordings; review them along with the
+   bundles. Run `node scripts/probe-smoke.mjs` there against a throwaway browser.
+6. Port the keyboard tables with `bun scripts/port-keyboard-layout.ts` there, and record new
    goldens from the same Playwright release with `scripts/capture-goldens.mjs` (its header says
    how). The crate's keyboard and mouse tests replay those goldens.
-6. Update the server's three exact Playwright npm pins to the new release, regenerate its
+7. Update the server's three exact Playwright npm pins to the new release, regenerate its
    conformance inventory, review registration/coverage changes, and run the conformance suite
    on Linux. See `../neo-server/conformance/README.md`.
-7. Review the diff and keep release notes in the commit message.
+8. Review the diff and keep release notes in the commit message.

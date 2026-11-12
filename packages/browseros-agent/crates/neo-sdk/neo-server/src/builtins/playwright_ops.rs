@@ -691,7 +691,7 @@ mod tests {
     use std::error::Error;
 
     use browseros_core::TabId;
-    use neo_playwright::{ErrorCode as PlaywrightCode, Op, PlaywrightError, Refusal};
+    use neo_playwright::{ErrorCode as PlaywrightCode, Op, OpWire, PlaywrightError, Refusal};
     use neo_trace::ErrorOwner;
     use serde_json::{Value, json};
 
@@ -705,6 +705,73 @@ mod tests {
 
     fn brand(input: &Value) -> Result<PageTarget, serde_json::Error> {
         serde_json::from_value(input.clone())
+    }
+
+    /// The door deliberately decodes just the fields it needs for policy and page facts.
+    /// Check those reads against the handler-owned declarations, rather than introducing a
+    /// second host schema. Look in the named declaration, so an unrelated reachable type's
+    /// `page` or `url` cannot accidentally satisfy a root-field assertion.
+    fn assert_wire_fields(
+        wire: &OpWire,
+        name: &str,
+        fields: &[&str],
+    ) -> Result<(), Box<dyn Error>> {
+        let ty = wire
+            .types
+            .iter()
+            .find(|ty| ty.name == name)
+            .ok_or_else(|| format!("the wire has no declaration for {name}"))?;
+        let text = ty.text.as_ref().map_err(|error| error.to_owned())?;
+        let (_, declaration) = text
+            .split_once(&format!("export type {name} = "))
+            .ok_or_else(|| format!("the wire has no type body for {name}"))?;
+        for field in fields {
+            assert!(
+                declaration.contains(field),
+                "the door reads `{field}` in {name}, but the wire declares {declaration}"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn tests_that_door_reads_are_in_the_wire() -> Result<(), Box<dyn Error>> {
+        for (name, input, fields) in [
+            (
+                "page.goto",
+                true,
+                &["page: PageHandle,", "url: string,"][..],
+            ),
+            ("locator.click", true, &["target: Target,"][..]),
+            ("page.close", true, &["page: PageHandle,"][..]),
+            ("page.runBeforeUnload", true, &["page: PageHandle,"][..]),
+            ("context.newPage", false, &["page: PageBrand,"][..]),
+            ("page.opener", false, &["opener: PageBrand | null,"][..]),
+        ] {
+            let op = Op::from_name(name).ok_or_else(|| format!("no op named {name}"))?;
+            let wire = op
+                .wire()
+                .ok_or_else(|| format!("{name} has no typed route"))?;
+            let root = if input { &wire.input } else { &wire.output };
+            assert_wire_fields(&wire, root, fields)?;
+        }
+
+        // page_brand follows both target variants, then PageTarget reads the same brand
+        // discriminant and tab as the result readers OpenedPage and Linked do.
+        let wire = Op::from_name("locator.click")
+            .and_then(Op::wire)
+            .ok_or("locator.click has no wire")?;
+        assert_wire_fields(&wire, "Target", &["LocatorTarget", "ElementTarget"])?;
+        assert_wire_fields(&wire, "LocatorTarget", &["page: PageHandle,"])?;
+        assert_wire_fields(&wire, "ElementTarget", &["page: PageBrand,"])?;
+        assert_wire_fields(
+            &wire,
+            "PageHandle",
+            &["$neo: 'page',", "tab: number | null,"],
+        )?;
+        assert_wire_fields(&wire, "PageBrand", &["$neo: 'page',", "tab: TabId,"])?;
+        assert_wire_fields(&wire, "TabId", &["number"])?;
+        Ok(())
     }
 
     #[test]
