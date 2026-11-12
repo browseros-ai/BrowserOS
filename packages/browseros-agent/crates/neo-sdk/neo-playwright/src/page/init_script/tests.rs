@@ -371,3 +371,66 @@ async fn tests_that_a_context_binding_another_run_holds_reports_no_main_world() 
     );
     Ok(())
 }
+
+/// A binding's dispose runs its cleanup (`removeBinding`) in the main world of the documents
+/// loaded now, so it reports the main world. An init script's dispose only unregisters it and
+/// runs nothing in the page, so it reports nothing.
+#[tokio::test]
+async fn tests_that_disposing_a_binding_reports_the_main_world() -> TestResult {
+    let connection = TestConnection::new([]);
+    let browser = binding_browser(&connection).await?;
+    let playwright = Playwright::new(Arc::clone(&browser));
+    let env = TestEnv::over(BrowserView::unbound(Arc::clone(&browser), None));
+    let script = invoke(
+        &playwright,
+        &env,
+        "page.addInitScript",
+        page_input("window.p = 1"),
+    )
+    .await?;
+    let binding = invoke(
+        &playwright,
+        &env,
+        "page.exposeBinding",
+        json!({ "call": {}, "page": { "$neo": "page", "tab": 7 }, "name": "f" }),
+    )
+    .await?;
+
+    let before = main_world_reports(&env);
+    invoke(
+        &playwright,
+        &env,
+        "disposable.dispose",
+        json!({ "call": {}, "id": script }),
+    )
+    .await?;
+    assert_eq!(
+        main_world_reports(&env),
+        before,
+        "an init script's dispose runs nothing in the page"
+    );
+
+    invoke(
+        &playwright,
+        &env,
+        "disposable.dispose",
+        json!({ "call": {}, "id": binding }),
+    )
+    .await?;
+    let cleanup = sent(&connection, ADD)?
+        .into_iter()
+        .last()
+        .ok_or("the dispose added the cleanup")?;
+    assert_eq!(cleanup["runImmediately"], json!(true));
+    assert!(
+        cleanup["source"]
+            .as_str()
+            .is_some_and(|source| source.contains("removeBinding")),
+        "the cleanup removes the binding from the loaded documents: {cleanup}"
+    );
+    assert!(
+        main_world_reports(&env) > before,
+        "the binding's dispose reports the main world its cleanup ran in"
+    );
+    Ok(())
+}

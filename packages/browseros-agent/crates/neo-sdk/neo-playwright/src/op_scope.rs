@@ -21,9 +21,10 @@
 //!
 //! The scope also tells the host which ops send script into a page's main world, where a site
 //! can notice it ([`OpScope::sending_main_world`]), right before each such send: a `MainWorld`
-//! gateway's `send_effect`, and each of the run's context scripts and bindings a write's
-//! admission adds to its tab. The op's static capabilities would miss the second: a `goto`
-//! declares none, yet it carries `context.exposeBinding`'s stub into a new tab.
+//! gateway's `send_effect`, each of the run's context scripts and bindings a write's admission
+//! adds to its tab, and a binding's cleanup when `disposable.dispose` removes it. The op's
+//! static capabilities would miss the last two: a `goto` declares none, yet it carries
+//! `context.exposeBinding`'s stub into a new tab.
 //!
 //! The scope also owns the op's CDP object group: every remote object the op asks for (an
 //! iframe it hops through) lives in it, and dropping the scope releases it, whether the op

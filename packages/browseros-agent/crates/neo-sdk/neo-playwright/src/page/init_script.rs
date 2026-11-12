@@ -200,6 +200,16 @@ impl Registration {
         }
         self.session = None;
     }
+
+    /// [`Registration::remove`] driven by `scope`'s op, which reports the main world when the
+    /// cleanup runs in the loaded documents. The run's end ([`InitScripts::remove_all`]) and a
+    /// dropped registration remove with no op to report to, so their cleanup goes unflagged.
+    async fn remove_by(self, scope: &OpScope<'_>) {
+        if self.session.is_some() && self.cleanup.is_some() {
+            scope.sending_main_world();
+        }
+        self.remove().await;
+    }
 }
 
 impl Drop for Registration {
@@ -485,7 +495,7 @@ pub(crate) async fn dispose(
         (removed, in_flight)
     };
     for added in removed {
-        added.registration.remove().await;
+        added.registration.remove_by(scope).await;
     }
     for cell in in_flight {
         // Waits out an add in progress; with none, this closure runs and initializes nothing.
@@ -591,6 +601,8 @@ impl InitScripts {
             registry.claims.clear();
             mem::take(&mut registry.added)
         };
+        // No op drives the run's end, so a binding's cleanup here runs in the main world with
+        // no op's record to flag (`Registration::remove_by`).
         future::join_all(added.into_iter().map(|added| added.registration.remove())).await;
     }
 
@@ -678,7 +690,7 @@ impl InitScripts {
                 if let Some(registration) = disposed {
                     // Disposed while it was being added. Removed before the cell settles, which
                     // is what `dispose` waits for, so dispose resolves only once it is gone.
-                    registration.remove().await;
+                    registration.remove_by(scope).await;
                 }
                 Ok::<(), PlaywrightError>(())
             })
