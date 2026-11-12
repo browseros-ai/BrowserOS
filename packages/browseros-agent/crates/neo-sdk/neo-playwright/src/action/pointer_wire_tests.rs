@@ -9,13 +9,8 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use super::{
-    ActionOp, CheckInput, ClickInput, Clicked, DblclickInput, DragInput, DropInput, HoverInput,
-    UncheckInput,
+    ActionOp, CheckInput, ClickInput, DblclickInput, DragInput, DropInput, HoverInput, UncheckInput,
 };
-use crate::action::requested_navigations::NavigationCut;
-use crate::op_scope::OpScope;
-use crate::test_env::TestEnv;
-use crate::{Op, op_output};
 
 #[derive(Deserialize)]
 struct Recording {
@@ -73,7 +68,6 @@ async fn tests_that_pointer_inputs_and_reply_bytes_match_the_aligned_recording()
         serde_json::from_str(include_str!("../../tests/data/pointer-wire.json"))?;
     let mut seen = BTreeSet::new();
     let mut click_replies = BTreeSet::new();
-    let env = TestEnv::new();
     for exchange in recording.scenarios.into_iter().flat_map(|s| s.exchanges) {
         let Some(op) = ActionOp::ALL
             .iter()
@@ -85,16 +79,12 @@ async fn tests_that_pointer_inputs_and_reply_bytes_match_the_aligned_recording()
             continue;
         };
         seen.insert(op.spec().name);
-        let registered = Op::all()
-            .find(|candidate| candidate.spec().name == exchange.op)
-            .ok_or("pointer op is unregistered")?;
         let mut args: Value = serde_json::from_str(&exchange.args)?;
-        let call = args
+        args
             .as_object_mut()
             .ok_or("recorded object args")?
             .remove("call")
             .ok_or("recorded call header")?;
-        let scope = OpScope::new(&env, registered, serde_json::from_value(call)?);
         decode_pointer_input(op, args)?;
         let reply: Value = serde_json::from_str(&exchange.reply)?;
         let body: Value = serde_json::from_str(&exchange.body)?;
@@ -104,32 +94,13 @@ async fn tests_that_pointer_inputs_and_reply_bytes_match_the_aligned_recording()
             "{}: recorded reply body",
             exchange.op
         );
-        let encoded = if op == ActionOp::Click {
+        if op == ActionOp::Click {
             click_replies.insert(body.is_null());
-            let clicked = if body.is_null() {
-                None
-            } else {
-                let navigation = body.get("navigation").ok_or("click cut is missing")?;
-                Some(Clicked {
-                    navigation: NavigationCut {
-                        seq: navigation
-                            .get("seq")
-                            .and_then(Value::as_u64)
-                            .ok_or("cut seq")?,
-                        at: navigation
-                            .get("at")
-                            .and_then(Value::as_u64)
-                            .ok_or("cut time")?,
-                    },
-                })
-            };
-            op_output::to_output(&scope, &clicked)?
         } else {
             assert_eq!(op.wire().ok_or("pointer op is undescribed")?.output, "null");
-            op_output::to_output(&scope, &())?
-        };
-        // Pin the route's output encoder, including its sorted map representation, rather
-        // than serializing a handler's struct directly in declaration order.
+        }
+        let encoded =
+            super::wire_reply::encode(op, serde_json::from_str(&exchange.args)?, body).await?;
         assert_eq!(
             serde_json::to_string(&encoded)?,
             exchange.body,

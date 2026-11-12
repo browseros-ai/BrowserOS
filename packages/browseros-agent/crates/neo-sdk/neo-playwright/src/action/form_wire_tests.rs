@@ -65,9 +65,9 @@ fn input(exchange: &Exchange) -> Result<Value, Box<dyn Error>> {
     Ok(args)
 }
 
-#[test]
-fn tests_that_form_inputs_and_reply_bytes_match_the_before_recording() -> Result<(), Box<dyn Error>>
-{
+#[tokio::test]
+async fn tests_that_form_inputs_and_reply_bytes_match_the_before_recording()
+-> Result<(), Box<dyn Error>> {
     let recording: Recording =
         serde_json::from_str(include_str!("../../tests/data/form-wire.json"))?;
     let mut seen = BTreeSet::new();
@@ -82,19 +82,22 @@ fn tests_that_form_inputs_and_reply_bytes_match_the_before_recording() -> Result
         decode_form(op, input(&exchange)?)?;
         seen.insert(op.spec().name);
         let wire = op.wire().ok_or("form op is not described")?;
-        let encoded = if op == ActionOp::SelectOption {
-            let values: Vec<String> = serde_json::from_str(&exchange.body)?;
-            serde_json::to_string(&values)?
-        } else {
+        if op != ActionOp::SelectOption {
             assert_eq!(
                 wire.output, "null",
                 "{} must keep its null reply",
                 exchange.op
             );
-            serde_json::to_string(&())?
-        };
+        }
+        let encoded = super::wire_reply::encode(
+            op,
+            serde_json::from_str(&exchange.args)?,
+            serde_json::from_str(&exchange.body)?,
+        )
+        .await?;
         assert_eq!(
-            encoded, exchange.body,
+            serde_json::to_string(&encoded)?,
+            exchange.body,
             "{} recorded reply bytes",
             exchange.op
         );

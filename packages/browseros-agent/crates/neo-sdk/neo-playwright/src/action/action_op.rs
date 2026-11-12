@@ -990,3 +990,7 @@ mod tests;
 #[cfg(test)]
 #[path = "form_wire_tests.rs"]
 mod form_tests;
+
+#[cfg(test)]
+#[path = "wire_reply_tests.rs"]
+mod wire_reply;
