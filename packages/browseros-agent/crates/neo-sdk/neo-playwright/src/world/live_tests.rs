@@ -792,7 +792,7 @@ async fn tests_that_set_content_keeps_the_seq_while_an_old_ref_fails() -> TestRe
                     "html": PASSWORD_PAGE }),
         )
         .await?;
-    assert_eq!(set, json!({}));
+    assert_eq!(set, Value::Null, "a void op replies with nothing");
 
     let page = OpPage::admit(&live.playwright, &scope, tab.id).await?;
     assert!(

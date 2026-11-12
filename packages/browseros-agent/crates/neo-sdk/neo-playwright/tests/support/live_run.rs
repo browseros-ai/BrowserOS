@@ -366,7 +366,10 @@ impl LiveRun {
                 .filter(|info| self.playwright.closed_target(&info.target_id).is_none());
             facts.push(match info {
                 Some(info) => {
-                    json!({ "tab": tab.0, "url": info.url, "title": info.title, "closed": false })
+                    // The door lists the tab's live workers too, so `page.workers()` has them.
+                    let workers = self.playwright.workers(&info.target_id);
+                    json!({ "tab": tab.0, "url": info.url, "title": info.title, "closed": false,
+                            "workers": workers })
                 }
                 None => json!({ "tab": tab.0, "url": null, "title": null, "closed": true }),
             });
