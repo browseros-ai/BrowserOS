@@ -519,7 +519,11 @@ describe('the ultrafast page', () => {
     expect(text()).toContain(
       'More from your AI agents, for $20 a month, or less if you pay yearly. Cancel whenever you like.',
     )
-    expect(text()).toContain('Ultrafast mode included')
+    expect(text()).toContain('Fewer steps. Smaller AI bills.')
+    expect(text()).toContain('Skills run in seconds')
+    expect(text()).toContain('Robot checks, solved for you')
+    expect(text()).toContain('Illustration.')
+    expect(text()).not.toContain('Show me')
     expect(text()).toContain('$20a month')
     expect(text()).toContain('Renews by itself each month')
     expect(text()).toContain('2 months free')
@@ -587,6 +591,24 @@ describe('the ultrafast page', () => {
     expect(button('Rename DESKTOP-4FQ7K2L')).toBeTruthy()
     expect(button('Cancel ultrafast')).toBeTruthy()
     expectNoKeyAnywhere()
+  })
+
+  it('tests that Show me opens the pictures at the one chosen, and Skip closes them', async () => {
+    server.plan = async () => PRO
+    await mount()
+    expect(container.querySelector('[role="dialog"]')).toBeNull()
+
+    await click('Show me ultrafast skills')
+    expect(dialog().getAttribute('aria-label')).toBe('ultrafast skills')
+    expect(dialog().textContent).toContain('Skills run in seconds')
+    expect(dialog().textContent).not.toContain('Welcome to ultrafast')
+
+    await click('Skip', dialog())
+    expect(container.querySelector('[role="dialog"]')).toBeNull()
+
+    await click('Show me Robot checks')
+    expect(dialog().textContent).toContain('Robot checks, solved for you')
+    expect(button('Start using ultrafast', dialog())).toBeTruthy()
   })
 
   it('tests that Ending offers Keep ultrafast and keeps it', async () => {
@@ -667,28 +689,36 @@ describe('buying ultrafast', () => {
     expect(events('pro_checkout_abandoned')).toHaveLength(1)
   })
 
-  it('tests that a finished payment shows Welcome with the emailed key line, and ultrafast', async () => {
+  it('tests that a finished payment welcomes the reader with three pictures, then ultrafast', async () => {
     server.checkout = async () => ({ status: 'complete', plan: PRO })
     await mount()
     await click('Get ultrafast')
 
-    const welcome = dialog()
-    expect(welcome.getAttribute('aria-label')).toBe('You’re on ultrafast')
-    expect(welcome.textContent).toContain(
-      'Thank you! We’ve emailed your licence key, and Stripe is emailing your receipt.',
-    )
-    expect(welcome.textContent).toContain(
-      'Use the key in that email to turn on ultrafast on your other computers.',
-    )
-    expect(welcome.textContent).toContain(
-      'Renews on Nov 27, 2026. Billing, receipts and cancelling live on the ultrafast page.',
-    )
+    expect(dialog().getAttribute('aria-label')).toBe('Welcome to ultrafast')
+    expect(dialog().textContent).toContain('Fewer steps. Smaller AI bills.')
+    expect(dialog().textContent).not.toContain('licence key')
     expect(events('pro_checkout_completed')).toHaveLength(1)
     expectNoKeyAnywhere()
 
-    await click('Start using ultrafast')
+    await click('Next', dialog())
+    expect(dialog().textContent).toContain('Skills run in seconds')
+    await click('Next', dialog())
+    expect(dialog().textContent).toContain('Robot checks, solved for you')
+
+    await click('Start using ultrafast', dialog())
     expect(container.querySelector('[role="dialog"]')).toBeNull()
     expect(text()).toContain('You’re on ultrafast')
+  })
+
+  it('tests that Skip on the welcome closes it for good', async () => {
+    server.checkout = async () => ({ status: 'complete', plan: PRO })
+    await mount()
+    await click('Get ultrafast')
+
+    await click('Skip', dialog())
+    expect(container.querySelector('[role="dialog"]')).toBeNull()
+    await settle()
+    expect(container.querySelector('[role="dialog"]')).toBeNull()
   })
 
   it('tests that a payment still being confirmed says so', async () => {
@@ -699,7 +729,7 @@ describe('buying ultrafast', () => {
     expect(text()).toContain('One moment while neo turns on ultrafast.')
   })
 
-  it('tests that paying again on a key whose ultrafast ended keeps the same key', async () => {
+  it('tests that paying again on a key whose ultrafast ended welcomes the reader back', async () => {
     server.plan = async () => planOf({ onKey: true })
     server.checkout = async () => ({ status: 'complete', plan: PRO })
     await mount()
@@ -709,12 +739,11 @@ describe('buying ultrafast', () => {
 
     await click('Get ultrafast')
 
-    const welcome = dialog().textContent ?? ''
-    expect(welcome).toContain('Thank you! Stripe is emailing your receipt.')
-    expect(welcome).toContain(
-      'Your key stays the same. ultrafast is back on every computer that uses it.',
-    )
-    expect(welcome).not.toContain('We’ve emailed your licence key')
+    expect(callsTo('startPlanCheckout')[0]?.body).toEqual({
+      plan: 'ultrafast',
+      interval: 'month',
+    })
+    expect(dialog().getAttribute('aria-label')).toBe('Welcome to ultrafast')
   })
 
   it('tests that an expired checkout says no payment was made', async () => {

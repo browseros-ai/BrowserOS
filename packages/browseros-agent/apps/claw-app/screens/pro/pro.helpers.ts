@@ -12,43 +12,35 @@ import type {
   PlanPricing,
 } from '@browseros/claw-api'
 import { ApiResponseError } from '@browseros/claw-api-client'
-import {
-  CalendarClock,
-  History,
-  LifeBuoy,
-  type LucideIcon,
-  Zap,
-} from 'lucide-react'
+import { Gauge, type LucideIcon, ShieldCheck, Zap } from 'lucide-react'
 
-export interface ProFeature {
+export interface UltrafastStep {
   icon: LucideIcon
+  /** The feature's name, shown above the headline. */
+  name: string
   title: string
-  description: string
+  line: string
 }
 
-/** Placeholders until the real Pro features are decided. */
-export const PRO_FEATURES: readonly ProFeature[] = [
+/** What ultrafast adds, one picture each, in the order the welcome shows them. */
+export const ULTRAFAST_STEPS: readonly UltrafastStep[] = [
+  {
+    icon: Gauge,
+    name: 'ultrafast browsing',
+    title: 'Fewer steps. Smaller AI bills.',
+    line: 'On carts and forms, neo does the clicking.',
+  },
   {
     icon: Zap,
-    title: 'Ultrafast mode included',
-    description: 'Browser tasks finish faster and use far fewer AI tokens.',
+    name: 'ultrafast skills',
+    title: 'Skills run in seconds',
+    line: 'neo writes them from tasks you repeat.',
   },
   {
-    icon: History,
-    title: 'A year of history',
-    description: 'Keep every task’s recording and steps for 12 months.',
-  },
-  {
-    icon: CalendarClock,
-    title: 'Tasks on a schedule',
-    description:
-      'Have your AI agents run a saved task every morning, on their own.',
-  },
-  {
-    icon: LifeBuoy,
-    title: 'Help from the team first',
-    description:
-      'Your questions go to the front of the BrowserOS support queue.',
+    icon: ShieldCheck,
+    name: 'Robot checks',
+    title: 'Robot checks, solved for you',
+    line: 'Sign-ins and codes still come to you.',
   },
 ]
 
