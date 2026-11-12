@@ -40,12 +40,8 @@ const _: fn() = || {
 ///   which has no `TS` impl here, does not compile as a result;
 /// - `'static` on both, because ts-rs walks types by `TypeId`; inputs and results are owned;
 /// - `Fut: Send`, because the door's future is (`neo-server`'s `playwright_ops.rs`).
-///
-/// A family that moves onto rows over several changes routes the ops it has not moved yet
-/// through [`Route::untyped`], which `Run` runs as before and `Describe` leaves undescribed, so
-/// the prelude keeps those ops' hand-written types in `wire.ts` until their change lands.
 pub(crate) trait Route<'a> {
-    /// `Run`'s op future, or `Describe`'s [`OpWire`] (`None` for an untyped row).
+    /// `Run`'s op future, or `Describe`'s wire description.
     type Out;
 
     /// The arm for one op: its place in Playwright's protocol and its handler.
@@ -56,14 +52,6 @@ pub(crate) trait Route<'a> {
         O: Serialize + TS + 'static,
         F: FnOnce(&'a Playwright, &'a OpScope<'a>, I) -> Fut + Send + 'a,
         Fut: Future<Output = Result<O, PlaywrightError>> + Send + 'a;
-
-    /// The transitional arm for an op whose family has not moved it onto a typed handler yet:
-    /// the handler decodes its own arguments and answers JSON, as the family's `run` match did.
-    /// The close-out deletes it, once every family describes every op.
-    fn untyped<F, Fut>(self, handler: F) -> Self::Out
-    where
-        F: FnOnce(&'a Playwright, &'a OpScope<'a>, OpArgs) -> Fut + Send + 'a,
-        Fut: Future<Output = Result<Value, PlaywrightError>> + Send + 'a;
 }
 
 /// Runs the op: decodes `I` from the op's arguments with `OpArgs::decode` (one boundary, the
@@ -93,15 +81,6 @@ impl<'a> Route<'a> for Run<'a> {
             op_output::to_output(scope, &output)
         })
     }
-
-    fn untyped<F, Fut>(self, handler: F) -> Self::Out
-    where
-        F: FnOnce(&'a Playwright, &'a OpScope<'a>, OpArgs) -> Fut + Send + 'a,
-        Fut: Future<Output = Result<Value, PlaywrightError>> + Send + 'a,
-    {
-        let Self { pw, scope, args } = self;
-        Box::pin(handler(pw, scope, args))
-    }
 }
 
 /// Describes the op without running it: never calls the handler and touches no browser or file.
@@ -124,14 +103,6 @@ impl<'a> Route<'a> for Describe {
             upstream.into(),
         ))
     }
-
-    fn untyped<F, Fut>(self, _handler: F) -> Option<OpWire>
-    where
-        F: FnOnce(&'a Playwright, &'a OpScope<'a>, OpArgs) -> Fut + Send + 'a,
-        Fut: Future<Output = Result<Value, PlaywrightError>> + Send + 'a,
-    {
-        None
-    }
 }
 
 #[cfg(test)]
@@ -143,7 +114,7 @@ mod tests {
     use ts_rs::TS;
 
     use crate::op::Op;
-    use crate::op_input::{OpArgs, OpInput};
+    use crate::op_input::OpInput;
     use crate::op_scope::OpScope;
     use crate::test_env::{self, TestEnv};
     use crate::wire::{
@@ -151,15 +122,13 @@ mod tests {
     };
     use crate::{ErrorCode, Playwright, PlaywrightError};
 
-    /// A family of five ops written the way the families write theirs; `Legacy` has not moved
-    /// onto a typed handler yet.
+    /// A family of four ops written the way the families write theirs.
     #[derive(Clone, Copy)]
     enum ProbeOp {
         Echo,
         Quiet,
         Counted,
         Shuffled,
-        Legacy,
     }
 
     #[derive(Debug, Deserialize, TS)]
@@ -219,30 +188,7 @@ mod tests {
             ProbeOp::Quiet => r.op(neo_only("a test op"), quiet),
             ProbeOp::Counted => r.op(replaces("Frame.count", "counts by hand"), counted),
             ProbeOp::Shuffled => r.op(neo_only("a test op"), shuffled),
-            // As a family keeps its old `run` match for the ops it has not moved yet.
-            op @ ProbeOp::Legacy => {
-                r.untyped(move |pw, scope, args| async move { run_by_hand(pw, scope, op, args) })
-            }
         }
-    }
-
-    /// The family's old dispatch: decodes its own input and answers JSON.
-    fn run_by_hand(
-        _pw: &Playwright,
-        scope: &OpScope<'_>,
-        op: ProbeOp,
-        args: OpArgs,
-    ) -> Result<Value, PlaywrightError> {
-        #[derive(Deserialize)]
-        #[serde(deny_unknown_fields)]
-        struct LegacyInput {
-            count: u32,
-        }
-        let ProbeOp::Legacy = op else {
-            return Err(scope.not_built());
-        };
-        let input: LegacyInput = args.decode(scope)?;
-        Ok(json!({ "doubled": input.count * 2 }))
     }
 
     async fn echo(
@@ -310,10 +256,6 @@ mod tests {
             counted.references == ["QuietInput"],
             "a primitive result names no type"
         );
-        assert!(
-            route(ProbeOp::Legacy, Describe).is_none(),
-            "an untyped row describes nothing, so its hand types stay in wire.ts"
-        );
         Ok(())
     }
 
@@ -349,11 +291,6 @@ mod tests {
         let quiet = run(ProbeOp::Quiet, json!({})).await?;
         assert_eq!(quiet, Value::Null, "`Nothing` is JSON null, never {{}}");
         assert_eq!(run(ProbeOp::Counted, json!({})).await?, json!(3));
-        assert_eq!(
-            run(ProbeOp::Legacy, json!({ "count": 2 })).await?,
-            json!({ "doubled": 4 }),
-            "an untyped row runs its handler on the raw arguments"
-        );
         Ok(())
     }
 

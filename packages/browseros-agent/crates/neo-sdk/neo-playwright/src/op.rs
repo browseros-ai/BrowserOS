@@ -115,8 +115,7 @@ impl Op {
 
     /// The op's wire: its input and result as TypeScript, its script option keys and its place
     /// in Playwright's protocol, described from its family's route row and handler types.
-    /// `None` while its family still decodes it by hand (no route rows yet, or the op's
-    /// transitional `untyped` row); the prelude then declares the op's shapes in `wire.ts`.
+    /// `None` until the event family has route rows; its shapes still live in `wire.ts`.
     #[must_use]
     pub fn wire(self) -> Option<OpWire> {
         match self.0 {
