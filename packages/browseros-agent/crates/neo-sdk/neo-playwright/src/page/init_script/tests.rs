@@ -295,3 +295,79 @@ async fn tests_that_a_write_reports_the_main_world_when_it_adds_a_context_script
     );
     Ok(())
 }
+
+/// A browser like [`browser`]'s that also answers what a binding's plumbing and its runtime
+/// lease send, and the write ops these tests admit.
+async fn binding_browser(
+    connection: &Arc<TestConnection>,
+) -> Result<Arc<browseros_core::BrowserSession>, Box<dyn Error>> {
+    let browser = browser(connection).await?;
+    for method in [
+        "Runtime.addBinding",
+        "Runtime.disable",
+        "HeapProfiler.collectGarbage",
+    ] {
+        connection.always(method, json!({}))?;
+    }
+    Ok(browser)
+}
+
+/// A write admitted on a tab where another live run holds a context binding's name adds nothing
+/// there, so it reports no main world, though its recheck passed. A third run's binding of
+/// another name, on the same tab, is added at its write and reported.
+#[tokio::test]
+async fn tests_that_a_context_binding_another_run_holds_reports_no_main_world() -> TestResult {
+    let connection = TestConnection::new([]);
+    let browser = binding_browser(&connection).await?;
+    let playwright = Playwright::new(Arc::clone(&browser));
+    let run = || TestEnv::over(BrowserView::unbound(Arc::clone(&browser), None));
+    let page = json!({ "$neo": "page", "tab": 7 });
+    let write = json!({ "call": {}, "page": page });
+
+    let holder = run();
+    invoke(
+        &playwright,
+        &holder,
+        "page.exposeBinding",
+        json!({ "call": {}, "page": page, "name": "f" }),
+    )
+    .await?;
+
+    let blocked = run();
+    invoke(
+        &playwright,
+        &blocked,
+        "context.exposeBinding",
+        json!({ "call": {}, "name": "f" }),
+    )
+    .await?;
+    let adds = sent(&connection, ADD)?.len();
+    let before = main_world_reports(&blocked);
+    invoke(&playwright, &blocked, "page.requestGC", write.clone()).await?;
+    assert_eq!(
+        sent(&connection, ADD)?.len(),
+        adds,
+        "the holder's binding stays on the tab, and nothing is added"
+    );
+    assert_eq!(
+        main_world_reports(&blocked),
+        before,
+        "a write that added nothing reports no main world"
+    );
+
+    let other = run();
+    invoke(
+        &playwright,
+        &other,
+        "context.exposeBinding",
+        json!({ "call": {}, "name": "g" }),
+    )
+    .await?;
+    let before = main_world_reports(&other);
+    invoke(&playwright, &other, "page.requestGC", write).await?;
+    assert!(
+        main_world_reports(&other) > before,
+        "a write that added its run's binding reports it"
+    );
+    Ok(())
+}

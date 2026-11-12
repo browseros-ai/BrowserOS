@@ -7,7 +7,7 @@
 //!                                            │ sleep, within  Rust's clock against the op's own timeout
 //!                                            │ require(cap)   at a capability's gateway: declared?
 //!                                            └ send_effect()  recheck, then mark_sent ──▶ Sent
-//!                                                             (then main_world, past MainWorld's gateway)
+//!                                                             (then sending_main_world, past MainWorld's gateway)
 //!                                                             └▶ input, navigation, element edits,
 //!                                                                main-world script: each takes &Sent
 //! ```
@@ -20,10 +20,10 @@
 //! can neither mark itself sent nor reach an effect.
 //!
 //! The scope also tells the host which ops send script into a page's main world, where a site
-//! can notice it (`OpEnv::main_world`), from the two places that send it: a `MainWorld`
-//! gateway's `send_effect`, and the run's context scripts and bindings a write's admission adds
-//! to its tab ([`OpScope::recheck`]). The op's static capabilities would miss the second: a
-//! `goto` declares none, yet it carries `context.exposeBinding`'s stub into a new tab.
+//! can notice it ([`OpScope::sending_main_world`]), right before each such send: a `MainWorld`
+//! gateway's `send_effect`, and each of the run's context scripts and bindings a write's
+//! admission adds to its tab. The op's static capabilities would miss the second: a `goto`
+//! declares none, yet it carries `context.exposeBinding`'s stub into a new tab.
 //!
 //! The scope also owns the op's CDP object group: every remote object the op asks for (an
 //! iframe it hops through) lives in it, and dropping the scope releases it, whether the op
@@ -261,14 +261,20 @@ impl<'env> OpScope<'env> {
     /// for a write's preparation that changes no document the page has now, a context init
     /// script added at the op's admission. The op's own effect still goes through
     /// [`OpScope::send_effect`].
-    ///
-    /// Only the run's context registrations call it (`page/init_script.rs`), before they add a
-    /// script or a binding to the tab's main world, so a pass reports the op main-world. That is how a `goto` or a click that carries `context.exposeBinding`'s stub
-    /// into its tab is seen: its spec declares no `MainWorld`, so no gateway reports it.
     pub(crate) fn recheck(&self) -> Result<(), PlaywrightError> {
-        self.env.recheck().map_err(PlaywrightError::from)?;
+        self.env.recheck().map_err(PlaywrightError::from)
+    }
+
+    /// Tells the host this op is about to send script into a page's main world
+    /// (`OpEnv::main_world`). Call it right before the send, once whatever guards the send
+    /// passed (its recheck, a binding name's claim), so a send that never goes out reports
+    /// nothing. A `MainWorld` gateway's [`OpScope::send_effect`] calls it; a send an op makes
+    /// without that gateway's effect calls it itself, as a write's admission does when it adds
+    /// the run's context scripts and bindings to its tab (`page/init_script.rs`): that is how a
+    /// `goto` or a click that carries `context.exposeBinding`'s stub into its tab is seen,
+    /// though its spec declares no `MainWorld`.
+    pub(crate) fn sending_main_world(&self) {
         self.env.main_world();
-        Ok(())
     }
 
     /// Re-runs the host's attempt-stage policies, then marks the op sent, and returns the
@@ -288,7 +294,7 @@ impl<'env> OpScope<'env> {
             Effect::Write => {
                 let sent = Sent::after_recheck(self.env).map_err(PlaywrightError::from)?;
                 if self.main_world.load(Ordering::Relaxed) {
-                    self.env.main_world();
+                    self.sending_main_world();
                 }
                 Ok(sent)
             }

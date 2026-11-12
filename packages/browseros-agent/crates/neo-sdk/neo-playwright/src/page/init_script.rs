@@ -556,6 +556,7 @@ impl InitScripts {
             );
             hub.wake();
             let core = |error| scope.core_error(&error);
+            scope.sending_main_world();
             session
                 .send_value(
                     "Runtime.addBinding",
@@ -564,6 +565,7 @@ impl InitScripts {
                 .await
                 .map_err(core)?;
             scope.recheck()?;
+            scope.sending_main_world();
             let controller = add_script(session, BINDINGS_CONTROLLER_JS, RunNow::Yes, None)
                 .await
                 .map_err(core)?;
@@ -598,8 +600,9 @@ impl InitScripts {
     /// with the refusal it would meet at its own send. The op is not marked sent: the add is
     /// `context.addInitScript`'s effect, which that op marked, and it happens once per tab
     /// session, so the admitting op stays safe to retry when its own effect never went out.
-    /// It is reported main-world, though: the scripts it adds run in the tab's main world, which
-    /// the admitting op's spec does not declare, and each add's recheck says so to the host.
+    /// It is reported main-world, though, at each add that goes out: the scripts and bindings it
+    /// adds run in the tab's main world, which the admitting op's spec does not declare. A
+    /// binding whose name another run holds on the tab adds nothing and reports nothing.
     pub(crate) async fn add_context_scripts(
         &self,
         scope: &OpScope<'_>,
@@ -631,9 +634,12 @@ impl InitScripts {
                 }
                 scope.recheck()?;
                 let registration = match &reach {
-                    Reach::Script(source) => add_script(&session, source, RunNow::No, None)
-                        .await
-                        .map_err(|error| scope.core_error(&error))?,
+                    Reach::Script(source) => {
+                        scope.sending_main_world();
+                        add_script(&session, source, RunNow::No, None)
+                            .await
+                            .map_err(|error| scope.core_error(&error))?
+                    }
                     Reach::Binding(binding) => {
                         let hub = self.lock().hub.clone().ok_or_else(|| {
                             scope.fail(
@@ -825,6 +831,7 @@ async fn add_binding(
     scripts.plumb(scope, hub, admitted, session).await?;
     hold_binding_runtime(scope, admitted, session).await?;
     scope.recheck()?;
+    scope.sending_main_world();
     add_script(
         session,
         &binding.stub(),
