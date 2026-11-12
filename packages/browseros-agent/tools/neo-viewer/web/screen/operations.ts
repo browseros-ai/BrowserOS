@@ -155,10 +155,17 @@ export function callPlaces(placed: PlacedOperations): Map<string, CallPlace> {
   return places
 }
 
-/** The method and the script place that called it (one per loop pass, so it repeats). */
+/**
+ * The script place a call came from, which a loop pass calls again: by its line and column
+ * alone, since one place can call a different method each pass (`locator[method]()`). Neo's
+ * bookkeeping records the site of the call it serves (`page.snapshotPending` that of its
+ * `ariaSnapshot()`), so it is counted on its own; a call with no site, by its name.
+ */
 function callSite(operation: NeoOperation): string {
   const site = operation.site
-  return `${operation.name}@${site ? `${site.line}:${site.column}` : 'none'}`
+  if (!site) return `${operation.name}@none`
+  const place = `${site.line}:${site.column}`
+  return isNeoInternal(operation) ? `${operation.name}@${place}` : place
 }
 
 /** `2nd`, `3rd`, `11th`, `21st`. */

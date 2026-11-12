@@ -33,7 +33,10 @@ const fill = operation(5, 'locator.fill', {
 const loop = [
   operation(6, 'locator.count', { line: 3, startOffsetMs: 40 }),
   ...[7, 8, 9, 10].map((seq) =>
-    operation(seq, 'locator.textContent', { line: 3, startOffsetMs: 40 + seq }),
+    operation(seq, 'locator.textContent', {
+      site: { line: 3, column: 72 },
+      startOffsetMs: 40 + seq,
+    }),
   ),
 ]
 const failedClick = operation(11, 'locator.click', {

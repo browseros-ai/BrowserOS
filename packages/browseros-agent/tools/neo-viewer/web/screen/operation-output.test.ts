@@ -647,6 +647,29 @@ describe('where a call sits', () => {
     expect(places.get('neo-run.2')).toEqual({ line: 1, call: 1, calls: 1 })
   })
 
+  it("counts one place by its calls whatever method each pass called, and Neo's bookkeeping on its own", () => {
+    const at = { line: 2, column: 30 }
+    const passes = [
+      operation(1, 'locator.textContent', { site: at }),
+      operation(2, 'locator.innerText', { site: at }),
+      operation(3, 'locator.textContent', { site: at }),
+    ]
+    const places = callPlaces(placeOperations(record(passes), 3))
+    expect(passes.map((op) => places.get(op.id))).toEqual([
+      { line: 2, call: 1, calls: 3 },
+      { line: 2, call: 2, calls: 3 },
+      { line: 2, call: 3, calls: 3 },
+    ])
+    // One snapshot and the pending record it made share a site: one call each.
+    const snapshot = [
+      operation(4, 'page.ariaSnapshot', { site: at }),
+      operation(5, 'page.snapshotPending', { site: at }),
+    ]
+    const own = callPlaces(placeOperations(record(snapshot), 3))
+    expect(own.get('neo-run.4')).toEqual({ line: 2, call: 1, calls: 1 })
+    expect(own.get('neo-run.5')).toEqual({ line: 2, call: 1, calls: 1 })
+  })
+
   it("shows a long argument's start under the row: the panel has the whole value", () => {
     const lines = argumentLines('page.snapshotPending', {
       text: 'x'.repeat(5_000),
