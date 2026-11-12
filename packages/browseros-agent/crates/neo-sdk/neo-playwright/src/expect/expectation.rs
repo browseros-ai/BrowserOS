@@ -199,9 +199,10 @@ impl Expression {
     }
 }
 
-/// The parameters as Rust reads them; the probe receives the prelude's object unchanged. The
-/// expected strings may be a password the script compares (`toHaveValue`), so they are
-/// skipped, never held: Rust needs only what kind of value each is.
+/// The parameters as Rust reads them; the probe receives every key the prelude sent, rebuilt
+/// into one object from the op's flat fields (`expect_op.rs`). The expected strings may be a
+/// password the script compares (`toHaveValue`), so they are skipped, never held: Rust needs
+/// only what kind of value each is.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct MatcherParams {
@@ -301,7 +302,8 @@ impl Expectation {
     ) -> Result<Self, PlaywrightError> {
         let raw = Value::Object(args.params.0.clone());
         // The decode error is left out: serde quotes the value it could not read, which may
-        // be the expected password.
+        // be the expected password. `params.` names `Frame.expect`'s params, which the op
+        // carries flat beside its receiver.
         let params: MatcherParams = serde_path_to_error::deserialize(raw).map_err(|error| {
             scope.fail(
                 ErrorCode::InvalidInput,

@@ -17,9 +17,9 @@ pub enum Upstream {
         /// Why the op has no command to compare with.
         reason: &'static str,
     },
-    /// Upstream has a command for the method, but Neo's params share nothing with it
-    /// (`expect.*`'s matcher model). The generated file still names the command, so a command
-    /// that vanished upstream fails to resolve.
+    /// Upstream has a command for the method, but Neo's params share nothing with it. No op
+    /// uses it today. The generated file still names the command, so a command that vanished
+    /// upstream fails to resolve.
     Replaces {
         /// Upstream's command, `Interface.method` (`Frame.expect`).
         command: &'static str,

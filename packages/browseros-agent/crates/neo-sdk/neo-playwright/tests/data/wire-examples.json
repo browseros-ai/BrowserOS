@@ -249,13 +249,11 @@
           ],
           "display": "getByRole('button')"
         },
+        "expression": "to.be.visible",
+        "isNot": false,
         "matcher": "toBeVisible",
         "expectation": "",
-        "expected": "Expected: visible",
-        "params": {
-          "expression": "to.be.visible",
-          "isNot": false
-        }
+        "expected": "Expected: visible"
       }
     ],
     "expect.page": [
@@ -268,19 +266,17 @@
           "$neo": "page",
           "tab": 1007
         },
+        "expression": "to.have.title",
+        "expectedText": [
+          {
+            "string": "x",
+            "normalizeWhiteSpace": true
+          }
+        ],
+        "isNot": false,
         "matcher": "toHaveTitle",
         "expectation": "expected",
-        "expected": "Expected: \"x\"",
-        "params": {
-          "expression": "to.have.title",
-          "expectedText": [
-            {
-              "string": "x",
-              "normalizeWhiteSpace": true
-            }
-          ],
-          "isNot": false
-        }
+        "expected": "Expected: \"x\""
       }
     ],
     "keyboard.down": [

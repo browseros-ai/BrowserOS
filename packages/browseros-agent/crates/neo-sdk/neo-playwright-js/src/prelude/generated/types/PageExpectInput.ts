@@ -2,9 +2,10 @@
 import type { PageHandle } from "./PageHandle";
 
 /**
- * `expect(page).toHaveTitle`, `toHaveURL` and `toMatchAriaSnapshot`, after `call`.
+ * `expect(page).toHaveTitle`, `toHaveURL` and `toMatchAriaSnapshot`, after `call`: the
+ * locator op's fields, with the page brand in place of `selector`.
  */
-export type PageExpectInput = { page: PageHandle, matcher: string, expectation: string, expected: string, params: import('../../../probe/protocol').ExpectParams, 
+export type PageExpectInput = { page: PageHandle, expression: string, expressionArg?: import('../../../probe/protocol').ExpectParams['expressionArg'], pseudo?: import('../../../probe/protocol').ExpectParams['pseudo'], expectedText?: import('../../../probe/protocol').ExpectParams['expectedText'], expectedNumber?: import('../../../probe/protocol').ExpectParams['expectedNumber'], expectedValue?: import('../../../probe/protocol').ExpectParams['expectedValue'], useInnerText?: import('../../../probe/protocol').ExpectParams['useInnerText'], isNot: boolean, matcher: string, expectation: string, expected: string, 
 /**
  * Sent only when an aria template did not parse.
  */

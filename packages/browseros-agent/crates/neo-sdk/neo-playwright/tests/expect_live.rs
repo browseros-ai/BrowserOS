@@ -86,7 +86,7 @@ where
 }
 
 /// One `expect.locator` input, shaped as the prelude's `retry` sends it: the matcher, the
-/// header's argument and Playwright's Expected line, then `FrameExpectParams`.
+/// header's argument and Playwright's Expected line, with `FrameExpectParams` flat beside them.
 fn on_locator(
     target: &Value,
     matcher: &str,
@@ -94,14 +94,17 @@ fn on_locator(
     params: &Value,
     timeout_ms: u64,
 ) -> Value {
-    json!({
+    let mut input = json!({
         "call": { "api": format!("expect.{matcher}"), "timeoutMs": timeout_ms },
         "target": target,
         "matcher": matcher,
         "expectation": expectation,
         "expected": expected,
-        "params": params,
-    })
+    });
+    if let (Some(input), Some(params)) = (input.as_object_mut(), params.as_object()) {
+        input.extend(params.clone());
+    }
+    input
 }
 
 /// `page.locator(selector)` on `page`.
@@ -719,11 +722,9 @@ async fn tests_that_a_page_aria_template_matches_an_xhtml_body() -> TestResult {
             "matcher": "toMatchAriaSnapshot",
             "expectation": "expected",
             "expected": "Expected: \"- heading \\\"XHTML heading\\\"\"",
-            "params": {
-                "expression": "to.match.aria",
-                "expectedValue": { "kind": "role", "role": "heading", "name": "XHTML heading" },
-                "isNot": false,
-            },
+            "expression": "to.match.aria",
+            "expectedValue": { "kind": "role", "role": "heading", "name": "XHTML heading" },
+            "isNot": false,
         });
         let result = run.invoke("expect.page", input).await;
         let result = match result {
