@@ -384,6 +384,8 @@ describe('retrying matchers', () => {
         return [
           await rejected(() => expect(page).toHaveURL({})),
           await rejected(() => expect(page.locator('#x'), 'ignored').not.toHaveText(null)),
+          // Printing the value reads its getters; that throw rejects the promise too.
+          await rejected(() => expect(page).toHaveTitle({ get value() { throw new Error('bad getter') } })),
         ]
       `),
     )
@@ -394,6 +396,7 @@ describe('retrying matchers', () => {
     expect(outcome).toEqual([
       ['Error', url],
       ['Error', text],
+      ['Error', 'bad getter'],
     ])
     expect(runtime.calls).toEqual([
       refusalCall('expect.toHaveURL', 'invalid_input', url),

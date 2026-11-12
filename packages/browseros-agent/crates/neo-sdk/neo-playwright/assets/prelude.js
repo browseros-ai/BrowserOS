@@ -18002,8 +18002,7 @@ ${expected === undefined ? "" : `Expected: ${state.isNot ? "not " : ""}${stringi
         value: expected,
         params: { expression, ...extra },
         options,
-        expectedTypeError: `expected value must be a string or regular expression
-${printWithType("Expected", expected)}`
+        invalidExpected: true
       };
     const substring = values[0]?.matchSubstring === true;
     const suffix = typeof expected === "string" ? substring ? " substring" : "" : " pattern";
@@ -18176,8 +18175,9 @@ ${printWithType("Expected", expected)}`
     const accepted = matcher.receiver === "Page" ? isPage : matcher.receiver === "Locator" ? isLocator : isPage || isLocator;
     if (!accepted)
       throw argumentError(name, `${name} can be only used with ${matcher.receiver} object${matcher.receiver.includes(" or ") ? "s" : ""}, was called with ${receiverText(actual)}`);
-    if (matcher.expectedTypeError !== undefined)
-      throw argumentError(name, `${failedHead(name, state, actual, matcher.expectation)}Error: ${matcher.expectedTypeError}
+    if (matcher.invalidExpected)
+      throw argumentError(name, `${failedHead(name, state, actual, matcher.expectation)}Error: expected value must be a string or regular expression
+${printWithType("Expected", matcher.value)}
 `);
     const signal = readSignal(api, matcher.options);
     if (signal?.aborted)

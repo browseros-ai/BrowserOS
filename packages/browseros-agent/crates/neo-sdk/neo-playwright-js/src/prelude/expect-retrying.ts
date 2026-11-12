@@ -38,11 +38,12 @@ export type Retrying = {
    */
   templateError?: string
   /**
-   * An expected value that is neither a string nor a RegExp, refused as upstream's toMatchText
-   * refuses it: inside the async matcher, after the receiver check, so the assertion's promise
-   * rejects rather than the call throwing. Holds the `Error:` text and the value's type.
+   * `value` is neither a string nor a RegExp, refused as upstream's toMatchText refuses it:
+   * inside the async matcher, after the receiver check, so the assertion's promise rejects
+   * rather than the call throwing. The value is printed there too, since printing can throw
+   * (a getter), and that throw must reject the promise as well.
    */
-  expectedTypeError?: string
+  invalidExpected?: true
 }
 
 type ExpectedTextValue = NonNullable<ExpectParams['expectedText']>[number]
@@ -116,7 +117,7 @@ function text(
       value: expected,
       params: { expression, ...extra },
       options,
-      expectedTypeError: `expected value must be a string or regular expression\n${printWithType('Expected', expected)}`,
+      invalidExpected: true,
     }
   const substring = values[0]?.matchSubstring === true
   const suffix =
@@ -506,10 +507,10 @@ export async function retry(
     )
   // Upstream formats this refusal as a failed matcher but throws it, so no `expect(x, message)`
   // prefix and no matcherResult; Neo still records it as an argument refusal.
-  if (matcher.expectedTypeError !== undefined)
+  if (matcher.invalidExpected)
     throw argumentError(
       name,
-      `${failedHead(name, state, actual, matcher.expectation)}Error: ${matcher.expectedTypeError}\n`,
+      `${failedHead(name, state, actual, matcher.expectation)}Error: expected value must be a string or regular expression\n${printWithType('Expected', matcher.value)}\n`,
     )
   // Before the first await, where upstream's client finds the signal aborted and sends nothing.
   const signal = readSignal(api, matcher.options)
