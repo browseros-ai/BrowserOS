@@ -4,15 +4,18 @@
  * per call, with no Playwright timeout.
  */
 
-import { invoke } from './bridge'
 import { captureSite } from './call-site'
+import type {
+  KeyboardDelayOptions,
+  MouseButtonOptions,
+  MouseClickOptions,
+  MouseStepOptions,
+} from './generated'
+import { OPTION_KEYS, send } from './generated'
 import { markHandle, pick } from './options'
 import type { Page } from './page'
-import type { KeyList } from './upstream-check'
-import type { PickOptions } from './upstream-checks'
-import type { MouseButton } from './wire'
 
-export type ButtonOptions = { button?: MouseButton; clickCount?: number }
+export type ButtonOptions = MouseButtonOptions
 
 export class Keyboard {
   readonly #page: Page
@@ -25,8 +28,7 @@ export class Keyboard {
   async down(key: string): Promise<void> {
     const site = captureSite()
     const api = 'keyboard.down'
-    await invoke(
-      'keyboard.down',
+    await send['keyboard.down'](
       site,
       { api, timeoutMs: 0 },
       { page: await this.#page._brand(api), key },
@@ -36,44 +38,37 @@ export class Keyboard {
   async up(key: string): Promise<void> {
     const site = captureSite()
     const api = 'keyboard.up'
-    await invoke(
-      'keyboard.up',
+    await send['keyboard.up'](
       site,
       { api, timeoutMs: 0 },
       { page: await this.#page._brand(api), key },
     )
   }
 
-  async press(key: string, options: { delay?: number } = {}): Promise<void> {
+  async press(key: string, options: KeyboardDelayOptions = {}): Promise<void> {
     const site = captureSite()
     const api = 'keyboard.press'
-    await invoke(
-      'keyboard.press',
+    await send['keyboard.press'](
       site,
       { api, timeoutMs: 0 },
       {
         page: await this.#page._brand(api),
         key,
-        options: pick(options, ['delay'] satisfies KeyList<
-          PickOptions['keyboard.press']
-        >),
+        options: pick(options, OPTION_KEYS['keyboard.press']),
       },
     )
   }
 
-  async type(text: string, options: { delay?: number } = {}): Promise<void> {
+  async type(text: string, options: KeyboardDelayOptions = {}): Promise<void> {
     const site = captureSite()
     const api = 'keyboard.type'
-    await invoke(
-      'keyboard.type',
+    await send['keyboard.type'](
       site,
       { api, timeoutMs: 0 },
       {
         page: await this.#page._brand(api),
         text,
-        options: pick(options, ['delay'] satisfies KeyList<
-          PickOptions['keyboard.type']
-        >),
+        options: pick(options, OPTION_KEYS['keyboard.type']),
       },
     )
   }
@@ -81,8 +76,7 @@ export class Keyboard {
   async insertText(text: string): Promise<void> {
     const site = captureSite()
     const api = 'keyboard.insertText'
-    await invoke(
-      'keyboard.insertText',
+    await send['keyboard.insertText'](
       site,
       { api, timeoutMs: 0 },
       { page: await this.#page._brand(api), text },
@@ -101,21 +95,18 @@ export class Mouse {
   async move(
     x: number,
     y: number,
-    options: { steps?: number } = {},
+    options: MouseStepOptions = {},
   ): Promise<void> {
     const site = captureSite()
     const api = 'mouse.move'
-    await invoke(
-      'mouse.move',
+    await send['mouse.move'](
       site,
       { api, timeoutMs: 0 },
       {
         page: await this.#page._brand(api),
         x,
         y,
-        options: pick(options, ['steps'] satisfies KeyList<
-          PickOptions['mouse.move']
-        >),
+        options: pick(options, OPTION_KEYS['mouse.move']),
       },
     )
   }
@@ -123,15 +114,12 @@ export class Mouse {
   async down(options: ButtonOptions = {}): Promise<void> {
     const site = captureSite()
     const api = 'mouse.down'
-    await invoke(
-      'mouse.down',
+    await send['mouse.down'](
       site,
       { api, timeoutMs: 0 },
       {
         page: await this.#page._brand(api),
-        options: pick(options, ['button', 'clickCount'] satisfies KeyList<
-          PickOptions['mouse.down']
-        >),
+        options: pick(options, OPTION_KEYS['mouse.down']),
       },
     )
   }
@@ -139,24 +127,17 @@ export class Mouse {
   async up(options: ButtonOptions = {}): Promise<void> {
     const site = captureSite()
     const api = 'mouse.up'
-    await invoke(
-      'mouse.up',
+    await send['mouse.up'](
       site,
       { api, timeoutMs: 0 },
       {
         page: await this.#page._brand(api),
-        options: pick(options, ['button', 'clickCount'] satisfies KeyList<
-          PickOptions['mouse.up']
-        >),
+        options: pick(options, OPTION_KEYS['mouse.up']),
       },
     )
   }
 
-  click(
-    x: number,
-    y: number,
-    options: ButtonOptions & { delay?: number } = {},
-  ): Promise<void> {
+  click(x: number, y: number, options: MouseClickOptions = {}): Promise<void> {
     return this.#clickAt('mouse.click', x, y, options)
   }
 
@@ -164,7 +145,7 @@ export class Mouse {
   dblclick(
     x: number,
     y: number,
-    options: Omit<ButtonOptions, 'clickCount'> & { delay?: number } = {},
+    options: Omit<MouseClickOptions, 'clickCount'> = {},
   ): Promise<void> {
     return this.#clickAt('mouse.dblclick', x, y, { ...options, clickCount: 2 })
   }
@@ -172,8 +153,7 @@ export class Mouse {
   async wheel(deltaX: number, deltaY: number): Promise<void> {
     const site = captureSite()
     const api = 'mouse.wheel'
-    await invoke(
-      'mouse.wheel',
+    await send['mouse.wheel'](
       site,
       { api, timeoutMs: 0 },
       { page: await this.#page._brand(api), deltaX, deltaY },
@@ -184,19 +164,17 @@ export class Mouse {
     api: string,
     x: number,
     y: number,
-    options: ButtonOptions & { delay?: number },
+    options: MouseClickOptions,
   ): Promise<void> {
     const site = captureSite()
-    await invoke(
-      'mouse.click',
+    await send['mouse.click'](
       site,
       { api, timeoutMs: 0 },
       {
         page: await this.#page._brand(api),
         x,
         y,
-        // biome-ignore format: Bun preserves literal layout in the byte-checked prelude asset.
-        options: pick(options, ['button', 'clickCount', 'delay'] satisfies KeyList<PickOptions['mouse.click']>),
+        options: pick(options, OPTION_KEYS['mouse.click']),
       },
     )
   }

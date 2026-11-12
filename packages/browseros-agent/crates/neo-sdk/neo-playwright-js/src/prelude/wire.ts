@@ -31,6 +31,7 @@ export type {
   FrameInfo,
   HoverOptions,
   LoadState,
+  MouseButton,
   NavigationCut,
   NavigationPublication,
   NavigationResult,
@@ -213,7 +214,6 @@ export type BindingRecord = {
  */
 export type Pumped = { events: EventRecord[]; lost: number }
 
-export type MouseButton = 'left' | 'right' | 'middle'
 export type Modifier = 'Alt' | 'Control' | 'ControlOrMeta' | 'Meta' | 'Shift'
 
 export type FillOptions = { force?: boolean }
@@ -362,24 +362,6 @@ export type HandInputs = {
   /** `noWait` is `page.$`: the first match now, or null, instead of waiting for one. */
   'locator.elementHandle': TargetArgs & { noWait?: true }
   'locator.elementHandles': EveryMatchArgs
-  'keyboard.down': PageArgs & { key: string }
-  'keyboard.up': PageArgs & { key: string }
-  'keyboard.press': PageArgs & { key: string; options: { delay?: number } }
-  'keyboard.type': PageArgs & { text: string; options: { delay?: number } }
-  'keyboard.insertText': PageArgs & { text: string }
-  'mouse.move': PageArgs & { x: number; y: number; options: { steps?: number } }
-  'mouse.down': PageArgs & {
-    options: { button?: MouseButton; clickCount?: number }
-  }
-  'mouse.up': PageArgs & {
-    options: { button?: MouseButton; clickCount?: number }
-  }
-  'mouse.click': PageArgs & {
-    x: number
-    y: number
-    options: { button?: MouseButton; clickCount?: number; delay?: number }
-  }
-  'mouse.wheel': PageArgs & { deltaX: number; deltaY: number }
   'page.requestGC': PageArgs
   'page.emulateMedia': PageArgs & {
     media?: 'screen' | 'print' | 'no-override'
@@ -528,16 +510,6 @@ export type HandOutputs = {
   'locator.waitFor': ElementBrand | null
   'locator.elementHandle': ElementBrand | null
   'locator.elementHandles': ElementBrand[]
-  'keyboard.down': null
-  'keyboard.up': null
-  'keyboard.press': null
-  'keyboard.type': null
-  'keyboard.insertText': null
-  'mouse.move': null
-  'mouse.down': null
-  'mouse.up': null
-  'mouse.click': null
-  'mouse.wheel': null
   'page.requestGC': null
   'page.emulateMedia': null
   'page.addScriptTag': { element: ElementBrand; frames?: FrameInfo[] }

@@ -307,106 +307,6 @@ export type UpstreamChecks = {
       never
     >
   >
-  'keyboard.down': Assert<
-    UpstreamCheck<
-      'keyboard.down',
-      OpInputs['keyboard.down'],
-      pw.PageKeyboardDownParams,
-      never,
-      never,
-      never
-    >
-  >
-  'keyboard.up': Assert<
-    UpstreamCheck<
-      'keyboard.up',
-      OpInputs['keyboard.up'],
-      pw.PageKeyboardUpParams,
-      never,
-      never,
-      never
-    >
-  >
-  'keyboard.press': Assert<
-    UpstreamCheck<
-      'keyboard.press',
-      OpInputs['keyboard.press'],
-      pw.PageKeyboardPressParams,
-      never,
-      never,
-      never
-    >
-  >
-  'keyboard.type': Assert<
-    UpstreamCheck<
-      'keyboard.type',
-      OpInputs['keyboard.type'],
-      pw.PageKeyboardTypeParams,
-      never,
-      never,
-      never
-    >
-  >
-  'keyboard.insertText': Assert<
-    UpstreamCheck<
-      'keyboard.insertText',
-      OpInputs['keyboard.insertText'],
-      pw.PageKeyboardInsertTextParams,
-      never,
-      never,
-      never
-    >
-  >
-  'mouse.move': Assert<
-    UpstreamCheck<
-      'mouse.move',
-      OpInputs['mouse.move'],
-      pw.PageMouseMoveParams,
-      never,
-      never,
-      never
-    >
-  >
-  'mouse.down': Assert<
-    UpstreamCheck<
-      'mouse.down',
-      OpInputs['mouse.down'],
-      pw.PageMouseDownParams,
-      never,
-      never,
-      never
-    >
-  >
-  'mouse.up': Assert<
-    UpstreamCheck<
-      'mouse.up',
-      OpInputs['mouse.up'],
-      pw.PageMouseUpParams,
-      never,
-      never,
-      never
-    >
-  >
-  'mouse.click': Assert<
-    UpstreamCheck<
-      'mouse.click',
-      OpInputs['mouse.click'],
-      pw.PageMouseClickParams,
-      never,
-      never,
-      never
-    >
-  >
-  'mouse.wheel': Assert<
-    UpstreamCheck<
-      'mouse.wheel',
-      OpInputs['mouse.wheel'],
-      pw.PageMouseWheelParams,
-      never,
-      never,
-      never
-    >
-  >
   'page.requestGC': Assert<
     UpstreamCheck<
       'page.requestGC',
@@ -770,12 +670,6 @@ export type OptionChecks = {
 
 /** Private/inline lists refer to these vendored options only through erased type imports. */
 export type PickOptions = {
-  'keyboard.press': pw.PageKeyboardPressOptions
-  'keyboard.type': pw.PageKeyboardTypeOptions
-  'mouse.move': pw.PageMouseMoveOptions
-  'mouse.down': pw.PageMouseDownOptions
-  'mouse.up': pw.PageMouseUpOptions
-  'mouse.click': pw.PageMouseClickOptions
   'locator.selectOption': pw.ElementHandleSelectOptionOptions
   'locator.selectText': pw.ElementHandleSelectTextOptions
   'page.goto': pw.FrameGotoOptions
