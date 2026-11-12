@@ -264,6 +264,8 @@ fn clip(text: &str, limit: usize) -> (String, bool) {
 
 #[cfg(test)]
 mod tests {
+    use std::error::Error;
+
     use super::{Bounded, RedactionLimits, Redactor, Truncation};
     use serde_json::{Value, json};
 
@@ -345,7 +347,7 @@ mod tests {
 
     #[test]
     fn a_value_setting_keeps_a_snapshot_whole_and_leaves_everything_else_alone()
-    -> Result<(), Box<dyn std::error::Error>> {
+    -> Result<(), Box<dyn Error>> {
         // A whole-page snapshot's text, as `page.snapshotPending` records it: one long string.
         let text = "- link \"Story\" [ref=e1]\n".repeat(1_000);
         let args = json!({ "text": text, "form": "text" });

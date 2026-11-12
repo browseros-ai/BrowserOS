@@ -168,8 +168,10 @@ export function useRunDetail(run: RunSummary, open: boolean): RunDetail | null {
     let current = true
     getJson<RunResponse>(apiRoutes.run(run.id)).then(
       (found) => {
+        // A newer read replaced this one: it must not overwrite the cache or the view.
+        if (!current) return
         remember(run, found.run)
-        if (current) setDetail(found.run)
+        setDetail(found.run)
       },
       // The last detail read stays: a failed read leaves the view as it was.
       () => {},
