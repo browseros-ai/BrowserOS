@@ -118,6 +118,10 @@ pub enum TraceRecordEvent {
         task: Option<TaskId>,
         /// The tab it targets.
         tab: Option<TabId>,
+        /// The tab it makes its run's and its task's (`trace_store::touched_tab`): `tab`, except
+        /// for Neo's own subscriptions (its listeners and event pump), which name every known
+        /// tab without acting on one. What a task's follower follows.
+        touched: Option<TabId>,
         /// Read or write, so a subscriber can follow a tab's in-flight writes.
         effect: Effect,
         /// When.
@@ -669,10 +673,8 @@ impl Writer {
         // The run-end shots go to the run's tabs as its record names them (`link_tab`): Neo's
         // own subscriptions (`trace_store::SUBSCRIPTIONS`, its listeners and event pump) name a
         // tab without acting on it, so they make no tab the run's, nor a tab's last operation.
-        if let Some(tab) = event
-            .tab
-            .filter(|_| !trace_store::is_subscription(&event.name))
-        {
+        let touched = trace_store::touched_tab(&event.name, event.tab);
+        if let Some(tab) = touched {
             run.tabs.admitted(tab, event.id.seq);
         }
         run.operations.insert(
@@ -689,6 +691,7 @@ impl Writer {
             id: event.id,
             task: run.task.clone(),
             tab: event.tab,
+            touched,
             effect: event.effect,
             at: event.at,
         }))

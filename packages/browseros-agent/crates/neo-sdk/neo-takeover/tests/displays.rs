@@ -834,6 +834,48 @@ async fn follow_brings_a_tasks_new_tab_to_the_front_and_pauses_while_it_is_locke
     Ok(())
 }
 
+/// A run of the followed task starts as the prelude starts every run: it listens on every known
+/// page (`events.listen` on the blank tab and on another task's tab, the event pump on one), then
+/// reads its own tab. Neo's listeners name a tab without acting on it, so they never move the
+/// follower; a later operation the task runs on another tab still does.
+#[tokio::test]
+async fn follow_never_moves_for_neos_own_listeners() -> TestResult {
+    let h = harness().await?;
+    h.browser.list_tabs(&[3, 4, 5], 3)?;
+    let task = TaskId::parse("checkout")?;
+    h.operation(&task, 3);
+    h.sink.flush().await?;
+    let _view = h.view(Some(Follow::Task(task.clone()))).await?;
+    eventually(|| h.activated().is_ok_and(|tabs| tabs == [3])).await?;
+
+    let run = RunId::new();
+    let at = EpochMillis::now();
+    h.sink.run_started(run_of(run, &task, at));
+    let steps = [
+        (1, "events.listen", 5),
+        (2, "events.listen", 4),
+        (3, "events.next", 4),
+        (4, "locator.textContent", 3),
+    ];
+    for (seq, name, tab) in steps {
+        h.sink.op_started(OperationStarted {
+            id: OperationId::new(run, seq),
+            ..first_operation(run, name, Effect::Read, Some(TabId(tab)), at)
+        });
+    }
+    h.sink.flush().await?;
+    tokio::time::sleep(QUIET).await;
+    assert_eq!(
+        h.activated()?,
+        [3],
+        "the front never left the task's tab for the blank tab or the other task's"
+    );
+
+    h.operation(&task, 4);
+    eventually(|| h.activated().is_ok_and(|tabs| tabs == [3, 4])).await?;
+    Ok(())
+}
+
 #[tokio::test]
 async fn follow_keeps_a_tab_in_front() -> TestResult {
     let h = harness().await?;

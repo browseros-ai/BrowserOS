@@ -6,7 +6,7 @@
 //!  admission ─ subscribe: T's ops, Neo's moves ─ look up the target ─ bring it forward
 //!  followTab=N ──────────────────────────────────────┐
 //!  followTask=T ─ TraceStore::task_last_act(T), then ├─▶ FollowMemory ─▶ next_activation
-//!                 OperationStarted { task: T, tab }  │     (pure)            (pure)
+//!                 OperationStarted { T, touched }    │     (pure)            (pure)
 //!  Neo's front moves, read before T's ops ───────────┤                         │ due
 //!  1 s tick: the owner holds the screen? the tab     │      the front turn ◀───┘
 //!            locked? ───────────────┘      ─ decide again ─▶ Browser.activateTab
@@ -299,9 +299,12 @@ pub(crate) async fn run(follower: Follower, displays: &Displays) {
                     continue;
                 };
                 match event {
+                    // The tab the operation touched, as the run record counts it: Neo's own
+                    // listeners and event pump name every known tab as a run starts, and
+                    // following them would flash each one in front before the task's own.
                     Ok(TraceRecordEvent::OperationStarted {
                         task: Some(of),
-                        tab: Some(tab),
+                        touched: Some(tab),
                         at,
                         ..
                     }) if &of == task => memory.task_acted(tab, at),
