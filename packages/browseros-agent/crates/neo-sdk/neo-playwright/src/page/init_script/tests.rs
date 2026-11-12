@@ -2,7 +2,7 @@ use std::error::Error;
 use std::sync::Arc;
 use std::time::Duration;
 
-use browseros_core::testing::TestConnection;
+use browseros_core::testing::{TestConnection, cdp_pending};
 use browseros_core::{BrowserView, TabId};
 use neo_trace::ErrorOwner;
 use serde_json::{Value, json};
@@ -450,7 +450,7 @@ async fn tests_that_a_dispose_stalled_before_its_cleanup_reports_nothing() -> Te
         json!({ "call": {}, "page": { "$neo": "page", "tab": 7 }, "name": "f" }),
     )
     .await?;
-    connection.always(REMOVE, browseros_core::testing::cdp_pending())?;
+    connection.always(REMOVE, cdp_pending())?;
     let adds_before = sent(&connection, ADD)?.len();
     let reports_before = main_world_reports(&env);
 
