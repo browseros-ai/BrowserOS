@@ -10,6 +10,7 @@ use tokio::sync::OnceCell;
 
 use crate::browser::BrowserLink;
 use crate::dispatch::{EventLog, WorkerFact};
+use crate::host::AgentFront;
 
 /// neo-playwright's `Playwright` for this process. The crate wants one per browser
 /// connection, and Neo has exactly one: the link's session, which exists from the first
@@ -24,15 +25,18 @@ pub(crate) struct PlaywrightFacade {
     /// Frozen startup mode, passed through each op's environment. Only hosted BrowserOS
     /// suppresses console/page-error events; ordinary desktop connections keep their waits.
     hosted: bool,
+    /// Brings an agent tab forward before its input or capture (`OpEnv::bring_forward`).
+    front: Arc<AgentFront>,
     playwright: OnceCell<Arc<Playwright>>,
 }
 
 impl PlaywrightFacade {
     /// The facade over `link`'s session, built in the background on its first connect.
-    pub(crate) fn start(link: Arc<BrowserLink>, hosted: bool) -> Arc<Self> {
+    pub(crate) fn start(link: Arc<BrowserLink>, hosted: bool, front: Arc<AgentFront>) -> Arc<Self> {
         let facade = Arc::new(Self {
             link,
             hosted,
+            front,
             playwright: OnceCell::new(),
         });
         // Waits for a first connect that may never come; nothing waits on this task.
@@ -46,6 +50,11 @@ impl PlaywrightFacade {
     /// The browser's configured startup mode.
     pub(crate) fn hosted_mode(&self) -> bool {
         self.hosted
+    }
+
+    /// What brings an op's tab forward before its input or capture.
+    pub(crate) fn front(&self) -> &Arc<AgentFront> {
+        &self.front
     }
 
     /// The facade, built here if the background start has not finished. An op runs only

@@ -169,6 +169,9 @@ pub(crate) async fn capture(
             )
             .await?;
             let page = OpPage::admit_handle(pw, scope, &input.page).await?;
+            // A capture waits for a forced frame's presentation; brought forward, the tab has
+            // one at once.
+            scope.bring_forward(page.tab()).await;
             let mut preparation = ScreenshotPreparation::acquire(&page).await;
             // Observe commits before preparation too: a replacement must receive its own
             // styles and font wait, even when the old renderer loses a preparation reply.

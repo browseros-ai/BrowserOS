@@ -22,9 +22,9 @@
 //! The raw `Browser.activateTab` is private to this module, so a part that activated without
 //! the turn would not compile.
 
-use crate::PartError;
 use crate::limits::{ACTIVATE_TIMEOUT, STEP_TIMEOUT, WINDOW_POLL, WINDOW_SETTLE};
 use crate::screen_rule::{ScreenFacts, ScreenHolder};
+use crate::{Follow, PartError};
 use browseros_core::navigation::Navigation;
 use browseros_core::pages::PageInfo;
 use browseros_core::viewport::{ViewportMode, ViewportRequest, Viewports};
@@ -35,6 +35,7 @@ use neo_trace::{EpochMillis, TaskId};
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use tokio::sync::watch;
 use tokio::time::Instant;
@@ -68,6 +69,29 @@ struct FrontState {
     /// even one to the tab already in front. It never holds the owner's or Chromium's own
     /// moves, which Neo does not see.
     last: watch::Sender<Option<FrontMove>>,
+    /// The open view displays, each with what it follows (`None`: the plain screen). The
+    /// agent's implicit move ([`crate::Front::bring_forward`]) reads it, so it never changes
+    /// what a viewer watches. A std mutex, never held across an await.
+    views: Mutex<Vec<(u64, Option<Follow>)>>,
+    next_view: AtomicU64,
+}
+
+/// One open view display in the registry. Dropping it removes the view, so a view that ended
+/// cannot keep the agent's implicit moves off.
+#[must_use = "the view leaves the registry when this is dropped"]
+pub(crate) struct ViewWatchGuard {
+    front: Arc<FrontState>,
+    id: u64,
+}
+
+impl Drop for ViewWatchGuard {
+    fn drop(&mut self) {
+        self.front
+            .views
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .retain(|(id, _)| *id != self.id);
+    }
 }
 
 /// One activation Neo made, as followers read it.
@@ -157,6 +181,8 @@ impl BrowserTabs {
                 turn: tokio::sync::Mutex::default(),
                 holds: Mutex::default(),
                 last: watch::channel(None).0,
+                views: Mutex::default(),
+                next_view: AtomicU64::new(1),
             }),
         }
     }
@@ -182,6 +208,47 @@ impl BrowserTabs {
     /// The owner's holds now, for the screen rule. Sync, one short lock, no I/O.
     pub(crate) fn screen_facts(&self) -> ScreenFacts {
         *self.holds()
+    }
+
+    /// Registers an open view display and what it follows, until the guard drops. Sync: a
+    /// view is in the registry before its admission returns.
+    pub(crate) fn watch_screen(&self, follow: Option<Follow>) -> ViewWatchGuard {
+        let id = self.front.next_view.fetch_add(1, Ordering::Relaxed);
+        self.front
+            .views
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push((id, follow));
+        ViewWatchGuard {
+            front: Arc::clone(&self.front),
+            id,
+        }
+    }
+
+    /// Whether every open view already watches `tab`: it follows that tab, or the task `task`
+    /// (whose acting tab a `followTask` view keeps in front anyway). True with no view open. A
+    /// plain view, or one following anything else, shows a viewer what is in front now.
+    pub(crate) fn views_watch(&self, tab: TabId, task: Option<&TaskId>) -> bool {
+        self.front
+            .views
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .iter()
+            .all(|(_, follow)| match follow {
+                Some(Follow::Tab(followed)) => *followed == tab,
+                Some(Follow::Task(followed)) => Some(followed) == task,
+                None => false,
+            })
+    }
+
+    /// Whether `tab` is its window's active tab now, as Chromium's tab listing says.
+    pub(crate) async fn is_active(&self, tab: TabId) -> Result<bool, PartError> {
+        let reply = self.call("Browser.getTabs", json!({})).await?;
+        Ok(reply["tabs"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .any(|listed| listed["tabId"].as_i64() == Some(tab.0) && listed["isActive"] == true))
     }
 
     /// Neo's front moves from now on, for a follower. Subscribe before reading what the

@@ -18,8 +18,8 @@ use futures_util::FutureExt;
 use futures_util::future::BoxFuture;
 use neo_takeover::testing::FakeXvnc;
 use neo_takeover::{
-    Admitted, BrowserTabs, DisplayBinding, DisplayEnd, DisplayRequest, Displays, Follow, Front,
-    FrontError, LockBinding, LockTtl, Locks, OwnerHasScreen, PartError, Reads, ScreenHolder,
+    Admitted, BrowserTabs, DisplayBinding, DisplayEnd, DisplayRequest, Displays, Follow, Forward,
+    Front, FrontError, LockBinding, LockTtl, Locks, OwnerHasScreen, PartError, Reads, ScreenHolder,
     ScreenSize,
 };
 use neo_trace::{
@@ -1094,6 +1094,64 @@ async fn follow_sees_the_agents_move_and_does_not_undo_it() -> TestResult {
 
 /// The agent's bringToFront(4) for task T: T's follower adopts it, so T's op on 4 brings nothing
 /// forward, and T's op on 3 brings 3 back.
+/// The agent's implicit move before input or a capture (`Front::bring_forward`): it brings a
+/// tab forward when nothing of the owner's shows the screen, and otherwise leaves the front
+/// where it is, sending nothing.
+#[tokio::test]
+async fn bring_forward_activates_only_when_no_owner_hold_or_other_view_shows_the_screen()
+-> TestResult {
+    let h = harness().await?;
+    h.browser.list_tabs(&[3, 4, 5], 3)?;
+    let task = TaskId::parse("checkout")?;
+    let front = h.front();
+    let forward = |tab: i64, task: Option<&TaskId>| front.bring_forward(TabId(tab), task.cloned());
+
+    assert!(
+        matches!(forward(4, None).await?, Forward::Brought),
+        "nothing watches: 4 comes forward"
+    );
+    assert!(
+        matches!(forward(4, None).await?, Forward::AlreadyInFront),
+        "4 is already in front: nothing is sent"
+    );
+    assert_eq!(h.activated()?, [4]);
+
+    let mut control = h.control(None).await?;
+    assert!(
+        matches!(forward(5, None).await?, Forward::OwnerHasScreen(_)),
+        "a control display holds the screen"
+    );
+    control.leave();
+    control.ended().await?;
+
+    let mut plain = h.view(None).await?;
+    assert!(
+        matches!(forward(5, None).await?, Forward::ViewerElsewhere),
+        "a plain view shows whatever is in front"
+    );
+    plain.leave();
+    plain.ended().await?;
+
+    let other_tab = h.view(Some(Follow::Tab(TabId(3)))).await?;
+    eventually(|| h.activated().is_ok_and(|tabs| tabs.last() == Some(&3))).await?;
+    assert!(
+        matches!(forward(5, Some(&task)).await?, Forward::ViewerElsewhere),
+        "a view follows tab 3: the agent's tab 5 stays behind"
+    );
+    let mut other_tab = other_tab;
+    other_tab.leave();
+    other_tab.ended().await?;
+
+    let same_task = h.view(Some(Follow::Task(task.clone()))).await?;
+    assert!(
+        matches!(forward(5, Some(&task)).await?, Forward::Brought),
+        "the view follows this task: it adopts the move"
+    );
+    assert_eq!(h.activated()?.last(), Some(&5));
+    drop(same_task);
+    Ok(())
+}
+
 #[tokio::test]
 async fn a_task_follower_adopts_its_own_tasks_move() -> TestResult {
     let h = harness().await?;

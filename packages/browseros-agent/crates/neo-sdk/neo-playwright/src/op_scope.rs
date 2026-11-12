@@ -303,6 +303,14 @@ impl<'env> OpScope<'env> {
         .await
     }
 
+    /// Asks the host to bring `tab` forward before the op sends it input or captures it
+    /// ([`OpEnv::bring_forward`]), within the op's timeout. Whatever happens, the op goes on: a
+    /// tab left behind is slower, not wrong, and a timeout that passed here is the op's own
+    /// timeout, which its next wait reports.
+    pub(crate) async fn bring_forward(&self, tab: TabId) {
+        let _whatever_happened = self.within(self.env.bring_forward(tab)).await;
+    }
+
     /// Runs `future` until the op's timeout or the script's abort; `Err` if either comes first,
     /// dropping it.
     pub(crate) async fn within<F: Future>(&self, future: F) -> Result<F::Output, Expired> {

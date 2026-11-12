@@ -94,7 +94,12 @@ impl Host {
         let host = HostApi::bind(&config, inputs).await?;
         let takeover = Arc::new(TakeoverLock::default());
         let shutdown = CancellationToken::new();
-        let serving = tokio::spawn(host.serve(link, Arc::clone(&takeover), shutdown.clone()));
+        let serving = tokio::spawn(host.serve(
+            link,
+            Arc::clone(&takeover),
+            Arc::default(),
+            shutdown.clone(),
+        ));
         Ok(Self {
             shutdown,
             serving,
