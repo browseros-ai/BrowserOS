@@ -72,21 +72,22 @@ async fn tests_that_handler_routes_keep_the_recorded_input_and_reply_bytes()
 }
 
 #[test]
-fn tests_that_defaulted_flags_keep_rejecting_explicit_null() {
+fn tests_that_defaulted_flags_keep_rejecting_explicit_null() -> Result<(), Box<dyn Error>> {
     let target = json!({
         "$neo": "locator", "page": { "$neo": "page", "tab": 1 },
         "chunks": [{ "parts": [{ "name": "css", "body": "#overlay", "source": "#overlay" }] }],
         "display": "locator('#overlay')"
     });
-    assert!(serde_json::from_value::<AddInput>(json!({ "target": target })).is_ok());
+    let _: AddInput = serde_json::from_value(json!({ "target": target }))?;
     assert!(
         serde_json::from_value::<AddInput>(json!({
             "target": target, "noWaitAfter": null
         }))
         .is_err()
     );
-    assert!(serde_json::from_value::<ResolveInput>(json!({ "uid": 1 })).is_ok());
+    let _: ResolveInput = serde_json::from_value(json!({ "uid": 1 }))?;
     assert!(serde_json::from_value::<ResolveInput>(json!({ "uid": 1, "remove": null })).is_err());
+    Ok(())
 }
 
 #[tokio::test]
