@@ -220,7 +220,7 @@ export class ElementHandle extends EventEmitter {
     await send['locator.click'](
       site,
       { api, timeoutMs: timeoutMs(api, timeout) },
-      { target: this._brand, strict: 'strict', options: picked },
+      { target: this._brand, strict: 'strict', ...picked },
     )
   }
 
@@ -233,7 +233,7 @@ export class ElementHandle extends EventEmitter {
     await send['locator.dblclick'](
       site,
       { api, timeoutMs: timeoutMs(api, timeout) },
-      { target: this._brand, strict: 'strict', options: picked },
+      { target: this._brand, strict: 'strict', ...picked },
     )
   }
 
@@ -246,7 +246,7 @@ export class ElementHandle extends EventEmitter {
     await send['locator.hover'](
       site,
       { api, timeoutMs: timeoutMs(api, timeout) },
-      { target: this._brand, strict: 'strict', options: picked },
+      { target: this._brand, strict: 'strict', ...picked },
     )
   }
 
@@ -259,7 +259,7 @@ export class ElementHandle extends EventEmitter {
     await send['locator.check'](
       site,
       { api, timeoutMs: timeoutMs(api, timeout) },
-      { target: this._brand, strict: 'strict', options: picked },
+      { target: this._brand, strict: 'strict', ...picked },
     )
   }
 
@@ -272,7 +272,7 @@ export class ElementHandle extends EventEmitter {
     await send['locator.uncheck'](
       site,
       { api, timeoutMs: timeoutMs(api, timeout) },
-      { target: this._brand, strict: 'strict', options: picked },
+      { target: this._brand, strict: 'strict', ...picked },
     )
   }
 
@@ -289,7 +289,7 @@ export class ElementHandle extends EventEmitter {
     await send[op](
       site,
       { api, timeoutMs: timeoutMs(api, timeout) },
-      { target: this._brand, strict: 'strict', options: picked },
+      { target: this._brand, strict: 'strict', ...picked },
     )
   }
 

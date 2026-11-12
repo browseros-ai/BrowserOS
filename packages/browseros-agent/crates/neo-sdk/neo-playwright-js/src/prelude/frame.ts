@@ -756,7 +756,7 @@ export class Frame extends EventEmitter {
     const result = await send['locator.click'](
       site,
       this._call(api, wait.timeout),
-      { ...addressed, options: picked },
+      { ...addressed, ...picked },
       wait.signal,
     )
     if (result?.navigation) {
@@ -798,7 +798,7 @@ export class Frame extends EventEmitter {
     await send['locator.dblclick'](
       site,
       this._call(api, wait.timeout),
-      { ...addressed, options: picked },
+      { ...addressed, ...picked },
       wait.signal,
     )
   }
@@ -816,7 +816,7 @@ export class Frame extends EventEmitter {
     await send['locator.hover'](
       site,
       this._call(api, wait.timeout),
-      { ...addressed, options: picked },
+      { ...addressed, ...picked },
       wait.signal,
     )
   }
@@ -837,7 +837,7 @@ export class Frame extends EventEmitter {
     await send[op](
       site,
       this._call(api, wait.timeout),
-      { ...addressed, options: picked },
+      { ...addressed, ...picked },
       wait.signal,
     )
   }
@@ -858,7 +858,7 @@ export class Frame extends EventEmitter {
     await send['locator.dragTo'](
       site,
       this._call(api, wait.timeout),
-      { ...addressed, to, options: picked },
+      { ...addressed, to, ...picked },
       wait.signal,
     )
   }

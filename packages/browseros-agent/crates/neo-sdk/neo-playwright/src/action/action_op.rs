@@ -165,7 +165,7 @@ fn route<'a, R: Route<'a>>(op: ActionOp, r: R) -> R::Out {
         ActionOp::Uncheck => r.op(wire::command("ElementHandle.uncheck"), uncheck),
         ActionOp::DragTo => r.op(
             wire::command("Frame.dragAndDrop")
-                .adds(&[("to", "Neo addresses the destination with a branded target")])
+                .adds(&[("to", "the destination retains its locator frame; same-page admission covers both endpoints")])
                 .omits(&[
                     (
                         "source",
@@ -206,28 +206,20 @@ fn route<'a, R: Route<'a>>(op: ActionOp, r: R) -> R::Out {
     }
 }
 
-/// These flags were defaulted bools before deriving the contract. Option marks omission for
-/// TypeScript, but a present null must still fail before any action can run. Field defaults
-/// handle omission; only an actual boolean reaches this deserializer.
+/// Optional wire flags distinguish omission from an explicit null, which must fail before an
+/// action runs. Field defaults handle omission; only a boolean reaches this deserializer.
 fn optional_bool<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<bool>, D::Error> {
     bool::deserialize(deserializer).map(Some)
 }
 
-/// Each pointer op owns exactly the script options it forwards; a hover cannot silently
-/// acquire click-only fields through the old shared pointer decoder.
+/// Each pointer input carries only its command's flat fields. The runners own actionability,
+/// focus and navigation; these types own validation before any browser input is sent.
 #[derive(Debug, Deserialize, TS)]
-#[serde(deny_unknown_fields)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+#[ts(optional_fields)]
 struct ClickInput {
     target: Target,
     strict: Strictness,
-    options: ClickOptions,
-}
-options!(ClickInput => ClickOptions);
-
-#[derive(Debug, Deserialize, TS)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-#[ts(rename = "PointerOptions", optional_fields)]
-struct ClickOptions {
     button: Option<WireButton>,
     click_count: Option<u32>,
     /// Milliseconds, after each press and between clicks.
@@ -244,21 +236,15 @@ struct ClickOptions {
     #[serde(default, deserialize_with = "optional_bool")]
     trial: Option<bool>,
 }
+options!(ClickInput, flat);
 
 /// The double-click wire input; upstream fixes the click count at two.
 #[derive(Debug, Deserialize, TS)]
-#[serde(deny_unknown_fields)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+#[ts(optional_fields)]
 struct DblclickInput {
     target: Target,
     strict: Strictness,
-    options: DblclickOptions,
-}
-options!(DblclickInput => DblclickOptions);
-
-#[derive(Debug, Deserialize, TS)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-#[ts(optional_fields)]
-struct DblclickOptions {
     button: Option<WireButton>,
     delay: Option<f64>,
     #[serde(default, deserialize_with = "optional_bool")]
@@ -271,21 +257,15 @@ struct DblclickOptions {
     #[serde(default, deserialize_with = "optional_bool")]
     trial: Option<bool>,
 }
+options!(DblclickInput, flat);
 
 /// A hover carries move options only, while the runner keeps actionability and focus ownership.
 #[derive(Debug, Deserialize, TS)]
-#[serde(deny_unknown_fields)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+#[ts(optional_fields)]
 struct HoverInput {
     target: Target,
     strict: Strictness,
-    options: HoverOptions,
-}
-options!(HoverInput => HoverOptions);
-
-#[derive(Debug, Deserialize, TS)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-#[ts(optional_fields)]
-struct HoverOptions {
     #[serde(default, deserialize_with = "optional_bool")]
     force: Option<bool>,
     modifiers: Option<Vec<WireModifier>>,
@@ -295,21 +275,15 @@ struct HoverOptions {
     #[serde(default, deserialize_with = "optional_bool")]
     trial: Option<bool>,
 }
+options!(HoverInput, flat);
 
 /// A check uses the default physical click, then verifies the element became checked.
 #[derive(Debug, Deserialize, TS)]
-#[serde(deny_unknown_fields)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+#[ts(optional_fields)]
 struct CheckInput {
     target: Target,
     strict: Strictness,
-    options: CheckOptions,
-}
-options!(CheckInput => CheckOptions);
-
-#[derive(Debug, Deserialize, TS)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-#[ts(optional_fields)]
-struct CheckOptions {
     #[serde(default, deserialize_with = "optional_bool")]
     force: Option<bool>,
     #[ts(optional, type = "import('../../../probe/protocol').Point")]
@@ -318,21 +292,15 @@ struct CheckOptions {
     #[serde(default, deserialize_with = "optional_bool")]
     trial: Option<bool>,
 }
+options!(CheckInput, flat);
 
 /// An uncheck has its own contract even though it shares check's pointer runner.
 #[derive(Debug, Deserialize, TS)]
-#[serde(deny_unknown_fields)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+#[ts(optional_fields)]
 struct UncheckInput {
     target: Target,
     strict: Strictness,
-    options: UncheckOptions,
-}
-options!(UncheckInput => UncheckOptions);
-
-#[derive(Debug, Deserialize, TS)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-#[ts(optional_fields)]
-struct UncheckOptions {
     #[serde(default, deserialize_with = "optional_bool")]
     force: Option<bool>,
     #[ts(optional, type = "import('../../../probe/protocol').Point")]
@@ -341,6 +309,7 @@ struct UncheckOptions {
     #[serde(default, deserialize_with = "optional_bool")]
     trial: Option<bool>,
 }
+options!(UncheckInput, flat);
 
 /// The requested-navigation event cut that the prelude publishes before click resolves.
 #[derive(Debug, Serialize, TS)]
@@ -351,19 +320,12 @@ struct Clicked {
 /// `locator.dragTo` and `dragAndDrop`: the second target resolves independently in its
 /// locator's frame, while both endpoints must stay under the same page admission.
 #[derive(Debug, Deserialize, TS)]
-#[serde(deny_unknown_fields)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+#[ts(optional_fields)]
 struct DragInput {
     target: Target,
     strict: Strictness,
     to: Target,
-    options: DragOptions,
-}
-options!(DragInput => DragOptions);
-
-#[derive(Debug, Deserialize, TS)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-#[ts(optional_fields)]
-struct DragOptions {
     #[serde(default, deserialize_with = "optional_bool")]
     force: Option<bool>,
     scroll: Option<ScrollOption>,
@@ -375,6 +337,7 @@ struct DragOptions {
     #[serde(default, deserialize_with = "optional_bool")]
     trial: Option<bool>,
 }
+options!(DragInput, flat);
 
 /// External drops already carry flat fields, not an options bag. Keep their file/MIME
 /// preparation before target admission and preserve the caller's MIME entry order.
@@ -695,7 +658,7 @@ async fn click(
     scope: &OpScope<'_>,
     input: ClickInput,
 ) -> Result<Option<Clicked>, PlaywrightError> {
-    let action = pointer_action(&input.options);
+    let action = pointer_action(&input);
     let navigation = run_pointer(pw, scope, &input.target, input.strict, &action).await?;
     Ok(navigation.map(|navigation| Clicked { navigation }))
 }
@@ -705,24 +668,23 @@ async fn dblclick(
     scope: &OpScope<'_>,
     input: DblclickInput,
 ) -> Result<Nothing, PlaywrightError> {
-    let options = input.options;
     let action = PointerAction {
         kind: PointerKind::Dblclick,
         perform: Perform::Click(MouseClickOptions {
-            button: options.button.map_or(MouseButton::Left, WireButton::button),
+            button: input.button.map_or(MouseButton::Left, WireButton::button),
             click_count: 2,
-            delay: millis(options.delay),
-            steps: options.steps.unwrap_or(1),
+            delay: millis(input.delay),
+            steps: input.steps.unwrap_or(1),
         }),
         wait_after: WaitAfter::Verdict,
-        force: options.force.unwrap_or(false),
-        trial: options.trial.unwrap_or(false),
-        position: options.position,
-        modifiers: options
+        force: input.force.unwrap_or(false),
+        trial: input.trial.unwrap_or(false),
+        position: input.position,
+        modifiers: input
             .modifiers
             .as_ref()
             .map(|names| names.iter().map(|name| name.name()).collect()),
-        scroll: options.scroll != Some(ScrollOption::None),
+        scroll: input.scroll != Some(ScrollOption::None),
     };
     run_pointer(pw, scope, &input.target, input.strict, &action).await?;
     Ok(())
@@ -733,19 +695,18 @@ async fn hover(
     scope: &OpScope<'_>,
     input: HoverInput,
 ) -> Result<Nothing, PlaywrightError> {
-    let options = input.options;
     let action = PointerAction {
         kind: PointerKind::Hover,
         perform: Perform::Move,
         wait_after: WaitAfter::Verdict,
-        force: options.force.unwrap_or(false),
-        trial: options.trial.unwrap_or(false),
-        position: options.position,
-        modifiers: options
+        force: input.force.unwrap_or(false),
+        trial: input.trial.unwrap_or(false),
+        position: input.position,
+        modifiers: input
             .modifiers
             .as_ref()
             .map(|names| names.iter().map(|name| name.name()).collect()),
-        scroll: options.scroll != Some(ScrollOption::None),
+        scroll: input.scroll != Some(ScrollOption::None),
     };
     run_pointer(pw, scope, &input.target, input.strict, &action).await?;
     Ok(())
@@ -756,13 +717,7 @@ async fn check(
     scope: &OpScope<'_>,
     input: CheckInput,
 ) -> Result<Nothing, PlaywrightError> {
-    let options = input.options;
-    let action = checked_action(
-        options.force,
-        options.trial,
-        options.position,
-        options.scroll,
-    );
+    let action = checked_action(input.force, input.trial, input.position, input.scroll);
     set_checked(pw, scope, &input.target, input.strict, true, &action).await
 }
 
@@ -771,13 +726,7 @@ async fn uncheck(
     scope: &OpScope<'_>,
     input: UncheckInput,
 ) -> Result<Nothing, PlaywrightError> {
-    let options = input.options;
-    let action = checked_action(
-        options.force,
-        options.trial,
-        options.position,
-        options.scroll,
-    );
+    let action = checked_action(input.force, input.trial, input.position, input.scroll);
     set_checked(pw, scope, &input.target, input.strict, false, &action).await
 }
 
@@ -828,7 +777,7 @@ async fn drag_to(
     let page = OpPage::admit_handle(pw, scope, input.target.page()).await?;
     let _lease = lease(scope, &page).await?;
     PointerRunner::new(pw, scope, &page, &input.target, input.strict)
-        .drag_to(&input.to, &drag_phases(&input.options))
+        .drag_to(&input.to, &drag_phases(&input))
         .await
 }
 
@@ -856,10 +805,7 @@ async fn drop(
     let _lease = lease(scope, &page).await?;
     let action = PointerAction {
         kind: PointerKind::Drop,
-        perform: Perform::Drop(Arc::new(DropData {
-            payloads,
-            data,
-        })),
+        perform: Perform::Drop(Arc::new(DropData { payloads, data })),
         wait_after: WaitAfter::Verdict,
         force: false,
         trial: false,
@@ -872,30 +818,30 @@ async fn drop(
         .await
 }
 
-/// Only click waits for requested navigations; other pointer handlers have their own option
-/// structs and build their verdict-only actions without admitting click-only fields.
-fn pointer_action(options: &ClickOptions) -> PointerAction {
+/// Only click waits for requested navigations; other pointer inputs build verdict-only
+/// actions without admitting click-only fields.
+fn pointer_action(input: &ClickInput) -> PointerAction {
     PointerAction {
         kind: PointerKind::Click,
         perform: Perform::Click(MouseClickOptions {
-            button: options.button.map_or(MouseButton::Left, WireButton::button),
-            click_count: options.click_count.unwrap_or(1),
-            delay: millis(options.delay),
-            steps: options.steps.unwrap_or(1),
+            button: input.button.map_or(MouseButton::Left, WireButton::button),
+            click_count: input.click_count.unwrap_or(1),
+            delay: millis(input.delay),
+            steps: input.steps.unwrap_or(1),
         }),
-        wait_after: if options.no_wait_after.unwrap_or(false) {
+        wait_after: if input.no_wait_after.unwrap_or(false) {
             WaitAfter::Nothing
         } else {
             WaitAfter::Navigations
         },
-        force: options.force.unwrap_or(false),
-        trial: options.trial.unwrap_or(false),
-        position: options.position,
-        modifiers: options
+        force: input.force.unwrap_or(false),
+        trial: input.trial.unwrap_or(false),
+        position: input.position,
+        modifiers: input
             .modifiers
             .as_ref()
             .map(|names| names.iter().map(|name| name.name()).collect()),
-        scroll: options.scroll != Some(ScrollOption::None),
+        scroll: input.scroll != Some(ScrollOption::None),
     }
 }
 
@@ -919,29 +865,29 @@ fn checked_action(
 }
 
 /// `dragTo`'s two halves: `move and down` on the source, `move and up` on the target.
-fn drag_phases(options: &DragOptions) -> DragPhases {
+fn drag_phases(input: &DragInput) -> DragPhases {
     let half = |kind, perform, position| PointerAction {
         kind,
         perform,
         wait_after: WaitAfter::Verdict,
-        force: options.force.unwrap_or(false),
-        trial: options.trial.unwrap_or(false),
+        force: input.force.unwrap_or(false),
+        trial: input.trial.unwrap_or(false),
         position,
         modifiers: None,
-        scroll: options.scroll != Some(ScrollOption::None),
+        scroll: input.scroll != Some(ScrollOption::None),
     };
     DragPhases {
         down: half(
             PointerKind::DragSource,
             Perform::MoveAndDown,
-            options.source_position,
+            input.source_position,
         ),
         up: half(
             PointerKind::DragTarget,
             Perform::MoveAndUp {
-                steps: options.steps.unwrap_or(1),
+                steps: input.steps.unwrap_or(1),
             },
-            options.target_position,
+            input.target_position,
         ),
     }
 }

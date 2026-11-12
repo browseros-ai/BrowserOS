@@ -63,12 +63,12 @@ fn at(page: &TestPage, selector: &str) -> Value {
     locator(page, &[css(selector)], &format!("locator('{selector}')"))
 }
 
-/// One action op's input: `strict` locator semantics, Playwright's `timeoutMs`, `options`.
+/// One action op's input: `strict` locator semantics, Playwright's `timeoutMs`, flat fields.
 fn action(api: &str, target: &Value, options: Value, timeout_ms: u64) -> Value {
     let mut input = json!({ "call": { "api": api, "timeoutMs": timeout_ms }, "target": target,
                             "strict": "strict" });
-    if let Some(fields) = input.as_object_mut() {
-        fields.insert("options".to_owned(), options);
+    if let (Some(fields), Value::Object(options)) = (input.as_object_mut(), options) {
+        fields.extend(options);
     }
     input
 }
@@ -801,7 +801,7 @@ async fn tests_that_drag_to_drops_one_element_on_another() -> TestResult {
     let page = agent_tab(&run, &server.url("127.0.0.1", "/actions/page.html")).await?;
     let input = json!({ "call": { "api": "locator.dragTo", "timeoutMs": 5000 },
                         "target": at(&page, "#src"), "strict": "strict",
-                        "to": at(&page, "#dst"), "options": { "steps": 5 } });
+                        "to": at(&page, "#dst"), "steps": 5 });
     run.invoke("locator.dragTo", input).await?;
     let log = page_log(&run, &page).await?;
     assert!(
@@ -922,9 +922,16 @@ async fn drag_page(run: &LiveRun, server: &FixtureServer) -> TestResult<TestPage
 
 /// `dragTo` from `#src` onto `#missing`, which never appears.
 fn drag_to_missing(page: &TestPage, options: &Value, timeout_ms: u64) -> Value {
-    json!({ "call": { "api": "locator.dragTo", "timeoutMs": timeout_ms },
-            "target": at(page, "#src"), "strict": "strict",
-            "to": at(page, "#missing"), "options": options })
+    let mut input = action(
+        "locator.dragTo",
+        &at(page, "#src"),
+        options.clone(),
+        timeout_ms,
+    );
+    if let Some(fields) = input.as_object_mut() {
+        fields.insert("to".to_owned(), at(page, "#missing"));
+    }
+    input
 }
 
 /// `mouse.move` onto `#dst`, which takes nothing when pressed.
@@ -940,28 +947,14 @@ async fn move_over_dst(run: &LiveRun, page: &TestPage) -> TestResult {
     Ok(())
 }
 
-/// Runs `op` on `target` with a 5 s timeout. Only the pointer actions carry `options`.
+/// Runs `op` on `target` with a 5 s timeout and its flat pointer fields.
 async fn run_op(
     run: &LiveRun,
     op: &str,
     target: &Value,
     options: Value,
 ) -> Result<Value, PlaywrightError> {
-    let mut input = action(op, target, options, 5000);
-    let pointer = matches!(
-        op,
-        "locator.click"
-            | "locator.dblclick"
-            | "locator.hover"
-            | "locator.check"
-            | "locator.uncheck"
-    );
-    if let Some(input) = input.as_object_mut()
-        && !pointer
-    {
-        input.remove("options");
-    }
-    run.invoke(op, input).await
+    run.invoke(op, action(op, target, options, 5000)).await
 }
 
 #[tokio::test]

@@ -7,4 +7,4 @@ import type { Target } from "./Target";
  * External drops already carry flat fields, not an options bag. Keep their file/MIME
  * preparation before target admission and preserve the caller's MIME entry order.
  */
-export type DropInput = { target: Target, strict: Strictness, files?: DropFiles, data: Extract<import('../../../probe/protocol').Edit, { kind: 'drop' }>['data'], position?: import('../../../probe/protocol').Point, };
+export type DropInput = { target: Target, strict: Strictness, files?: DropFiles, data?: Extract<import('../../../probe/protocol').Edit, { kind: 'drop' }>['data'], position?: import('../../../probe/protocol').Point, };

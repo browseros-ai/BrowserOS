@@ -4,13 +4,13 @@ import fixture from '../../neo-playwright/tests/data/pointer-wire.json'
 import { recordPointerWire } from './support/pointer-wire-runtime'
 
 for (const scenario of fixture.scenarios) {
-  it(`preserves engine op, argument and recorded reply bytes: ${scenario.name}`, async () => {
+  it(`pins aligned engine op, argument and recorded reply bytes: ${scenario.name}`, async () => {
     let next = 0
     const actual = await recordPointerWire(scenario.script, () => {
       const exchange = scenario.exchanges[next++]
       if (!exchange) throw new Error('the prelude sent an extra engine call')
-      // Replay the before-build reply, including its observation envelope. The bootstrap
-      // consumes the same engine bytes; onWire observes the actual request and reply strings.
+      // Alignment changes only the approved request fields. Replaying the original reply,
+      // including its observation envelope, also pins the script's value and navigation cut.
       return JSON.parse(exchange.reply)
     })
     expect(next).toBe(scenario.exchanges.length)

@@ -520,8 +520,7 @@
           ],
           "display": "getByRole('button')"
         },
-        "strict": "strict",
-        "options": {}
+        "strict": "strict"
       }
     ],
     "locator.click": [
@@ -550,8 +549,7 @@
           ],
           "display": "getByRole('button')"
         },
-        "strict": "strict",
-        "options": {}
+        "strict": "strict"
       },
       {
         "call": {
@@ -568,8 +566,7 @@
           "node": 9,
           "display": "<button>Go</button>"
         },
-        "strict": "strict",
-        "options": {}
+        "strict": "strict"
       }
     ],
     "locator.count": [
@@ -664,8 +661,7 @@
           ],
           "display": "getByRole('button')"
         },
-        "strict": "strict",
-        "options": {}
+        "strict": "strict"
       }
     ],
     "locator.dispatchEvent": [
@@ -757,8 +753,7 @@
             }
           ],
           "display": "locator('#b')"
-        },
-        "options": {}
+        }
       }
     ],
     "locator.drop": [
@@ -1368,8 +1363,7 @@
           ],
           "display": "getByRole('button')"
         },
-        "strict": "strict",
-        "options": {}
+        "strict": "strict"
       }
     ],
     "locator.innerHTML": [
@@ -1942,8 +1936,7 @@
           ],
           "display": "getByRole('button')"
         },
-        "strict": "strict",
-        "options": {}
+        "strict": "strict"
       }
     ],
     "locator.waitFor": [
