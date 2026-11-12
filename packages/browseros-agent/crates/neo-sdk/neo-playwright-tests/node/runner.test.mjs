@@ -22,13 +22,16 @@ test('full corpus defaults and all worker spellings keep the browser cap', () =>
     ['-j2'],
   ])
     assert.equal(runnerOptions(args).workers, 2)
+  assert.equal(runnerOptions(['-j16']).workers, 16)
+  assert.equal(runnerOptions(['--workers', '32']).workers, 32)
   for (const args of [
-    ['--workers', '5'],
-    ['-j8'],
+    ['--workers', '33'],
+    ['-j64'],
     ['--workers=50%'],
     ['--workers', '0'],
+    ['--workers', '08x'],
   ])
-    assert.throws(() => runnerOptions(args), /between 1 and 4/)
+    assert.throws(() => runnerOptions(args), /between 1 and 32/)
 })
 
 test('file and grep selection cannot re-enable other headful cases', () => {

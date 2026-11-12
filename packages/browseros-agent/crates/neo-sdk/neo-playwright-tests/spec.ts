@@ -4,6 +4,11 @@
  * find a Node that Playwright Test runs on, find the BrowserOS neo executable, and prepare the
  * pinned Playwright test source once into a cache. Engines, curation, scope and scores stay in
  * run.mjs; this file ends by printing the scores run.mjs recorded.
+ *
+ * `--ci` makes the same run a pass/fail gate (CI's neo-spec.yml calls exactly this): it holds the
+ * run to the platform's committed list of tests that do not pass, reruns what one run cannot
+ * settle, and writes the verdict, a job summary and the list the run supports
+ * (node/expected.mjs). `--expected-from <run>` takes a CI run's list into the checkout.
  */
 import { spawn, spawnSync } from 'node:child_process'
 import fs from 'node:fs'
@@ -372,13 +377,17 @@ async function runRunner(
   node: string,
   env: NodeJS.ProcessEnv,
   args: string[],
+  log?: string,
 ): Promise<{ code: number; output?: string }> {
   const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'neo-spec-'))
   const resultsFile = path.join(scratch, 'results-dir')
+  // Reruns run several at a time, so each writes its own log instead of the terminal.
+  const out = log === undefined ? undefined : fs.openSync(log, 'w')
   const child = spawn(node, [path.join(crate, 'node/run.mjs'), ...args], {
-    stdio: 'inherit',
+    stdio: out === undefined ? 'inherit' : ['ignore', out, out],
     env: { ...env, NEO_NODE_RESULTS_FILE: resultsFile },
   })
+  if (out !== undefined) fs.closeSync(out)
   const wait = () => {}
   const forward = () => child.kill('SIGTERM')
   process.on('SIGINT', wait)
@@ -398,6 +407,18 @@ async function runRunner(
     process.off('SIGTERM', forward)
     fs.rmSync(scratch, { recursive: true, force: true })
   }
+}
+
+const escapeRegex = (text: string) =>
+  text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+
+/**
+ * A `--grep` that selects exactly one test. Playwright greps "<project> <file> <title path>
+ * <tags>"; anchoring both ends keeps a short title from also selecting longer titles that start
+ * with it (curation.mjs does the same).
+ */
+export function exactGrep(suite: string, titles: string[]): string {
+  return `(?:^| )${escapeRegex(suite.replace(/^tests\//, ''))} ${escapeRegex(titles.join(' '))}(?: @\\S+)*$`
 }
 
 /**
@@ -448,13 +469,9 @@ export async function rerunLine(
   if (!row)
     return stopped ? `${stopped} Nothing had failed.` : 'Nothing failed.'
   const outOfScope = excludedBy(scope, row)?.reason
-  const escapeRegex = (text: string) =>
-    text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
   const quote = (text: string) =>
     /^[\w./=:@%+,-]+$/.test(text) ? text : `'${text.replaceAll("'", `'\\''`)}'`
-  // Playwright greps "<project> <file> <title path> <tags>"; anchoring both ends keeps a short
-  // title from also selecting longer titles that start with it (curation.mjs does the same).
-  const grep = `(?:^| )${escapeRegex(row.suite.replace(/^tests\//, ''))} ${escapeRegex(row.titles.join(' '))}(?: @\\S+)*$`
+  const grep = exactGrep(row.suite, row.titles)
   // The shortest name that resolves back to this one spec.
   const folderName = row.suite.replace(/^tests\/|\.spec\.ts$/g, '')
   const fileName = path.basename(folderName)
@@ -526,8 +543,97 @@ export async function finish(
   return code
 }
 
+/** spec.ts's own switches, taken off the command line before the rest goes to run.mjs. */
+export function ciArgs(argv: string[]): {
+  ci: boolean
+  writeExpected: boolean
+  expectedFrom?: string
+  argv: string[]
+} {
+  const rest: string[] = []
+  let ci = false
+  let writeExpected = false
+  let expectedFrom: string | undefined
+  for (let index = 0; index < argv.length; index++) {
+    const arg = argv[index]
+    if (arg === '--') {
+      rest.push(...argv.slice(index))
+      break
+    }
+    if (arg === '--ci') ci = true
+    else if (arg === '--write-expected') writeExpected = true
+    else if (arg === '--expected-from') expectedFrom = argv[++index] ?? ''
+    else if (arg.startsWith('--expected-from='))
+      expectedFrom = arg.slice('--expected-from='.length)
+    else if (VALUE_FLAGS.has(arg) && index + 1 < argv.length)
+      rest.push(arg, argv[++index])
+    else rest.push(arg)
+  }
+  if (expectedFrom === '')
+    throw new Error('--expected-from takes a GitHub Actions run ID or URL')
+  if (expectedFrom !== undefined && (ci || rest.length))
+    throw new Error(
+      '--expected-from takes the list of a finished CI run and runs no tests; give it alone',
+    )
+  if (writeExpected && !ci) throw new Error('--write-expected goes with --ci')
+  return { ci, writeExpected, expectedFrom, argv: rest }
+}
+
+/** Whether a run selected less than the whole corpus, so its verdict covers only its tests. */
+export function isFiltered(names: string[], flags: string[]): boolean {
+  return (
+    names.length > 0 ||
+    parseArgs(flags).flags.some(([flag]) =>
+      SELECTION_FLAGS.has(flag.split('=')[0]),
+    )
+  )
+}
+
+/**
+ * run.mjs's arguments for one test alone: the full run's flags without its selection and worker
+ * count, one worker, and the add-on the full run built.
+ */
+export function ciRerunArgs(
+  flags: string[],
+  test: { file: string; titles: string[] },
+): string[] {
+  const kept = parseArgs(flags).flags.filter(([flag]) => {
+    const name = flag.split('=')[0]
+    return (
+      !SELECTION_FLAGS.has(name) &&
+      name !== '--workers' &&
+      !name.startsWith('-j') &&
+      name !== '--skip-build'
+    )
+  })
+  return [
+    ...kept.flat(),
+    '--skip-build',
+    '--workers',
+    '1',
+    test.file,
+    '--grep',
+    exactGrep(test.file, test.titles),
+  ]
+}
+
 async function main(argv: string[]): Promise<number> {
-  const { names, flags } = splitArgs(argv)
+  const own = ciArgs(argv)
+  if (own.expectedFrom !== undefined)
+    return (await import('./ci')).pullExpected(own.expectedFrom)
+  const { names, flags } = splitArgs(own.argv)
+  const filtered = isFiltered(names, flags)
+  if (own.ci) {
+    const { runnerOptions } = await import('./node/options.mjs')
+    if (flags.includes('--list'))
+      throw new Error('--ci runs tests; --list only lists them')
+    if (runnerOptions(flags).engine !== 'claw')
+      throw new Error("--ci holds Neo's claw engine to its expected list")
+    if (own.writeExpected && filtered)
+      throw new Error(
+        '--write-expected needs the whole corpus: drop the spec names and --grep',
+      )
+  }
   const files = resolveSuites(
     names,
     corpus.suites.filter((suite) => suite.include).map((suite) => suite.file),
@@ -536,7 +642,18 @@ async function main(argv: string[]): Promise<number> {
   const env = runnerEnv({ node, flags })
   env.NEO_TESTS_PLAYWRIGHT_SOURCE = ensureSource(node, env)
   const { code, output } = await runRunner(node, env, [...flags, ...files])
-  return finish(code, output, flags)
+  // The workflow uploads this folder even when the verdict below throws.
+  if (own.ci && output && process.env.GITHUB_OUTPUT)
+    fs.appendFileSync(process.env.GITHUB_OUTPUT, `results=${output}\n`)
+  const finished = await finish(code, output, flags)
+  if (!own.ci || !output || !fs.existsSync(path.join(output, 'scores.json')))
+    return finished
+  return (await import('./ci')).ciVerdict({
+    runner: { node, env, flags, runRunner, rerunArgs: ciRerunArgs },
+    output,
+    complete: !filtered,
+    writeExpected: own.writeExpected,
+  })
 }
 
 if (import.meta.main)
