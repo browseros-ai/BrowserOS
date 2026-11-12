@@ -10,6 +10,8 @@
 # Only Cargo's output at the root: `**/target` would also drop source modules such as
 # browseros-core/src/target/.
 target
+# The CAPTCHA testbed beside neo-captcha's sources is no build input either.
+crates/neo-sdk/neo-captcha/testbed
 # This folder's scripts and docs are not build inputs, so editing them leaves the image cached.
 # The browser pin, the server's build step and the supervisor (supervisor/, its tests aside) are.
 crates/neo-sdk/neo-server/docker

@@ -15,7 +15,7 @@
       "!packages/agent-cursor/src",
       "!packages/agent-cursor/tests/fixtures/golden.json",
       "!contracts/claw-mcp/fixtures/pages",
-      "!tools/captcha-testbed/fixtures/pages",
+      "!crates/neo-sdk/neo-captcha/testbed/fixtures/pages",
       "!crates/browseros-core/tests/data/captured",
       "!crates/browseros-core/src/assets/agent-cursor.js",
       "!crates/neo-sdk/neo-playwright/third_party",

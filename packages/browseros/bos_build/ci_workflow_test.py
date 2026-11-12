@@ -4026,6 +4026,8 @@ class NeoSdkImageWorkflowTest(unittest.TestCase):
             "packages/browseros-agent/Cargo.toml",
             "packages/browseros-agent/Cargo.lock",
             "packages/browseros-agent/crates/**",
+            # The CAPTCHA test bed sits under crates/ but is no build input (Dockerfile.dockerignore).
+            "!packages/browseros-agent/crates/neo-sdk/neo-captcha/testbed/**",
             "packages/browseros-agent/apps/claw-server/**",
             ".github/workflows/neo-sdk-image.yml",
         }

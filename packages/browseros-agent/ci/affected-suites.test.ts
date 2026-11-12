@@ -184,11 +184,14 @@ describe('computeAffectedSuites', () => {
   it('tests that CAPTCHA test bed changes select their unit suite without a browser or Rust', () => {
     const suites = computeAffectedSuites(
       [],
-      ['packages/browseros-agent/tools/captcha-testbed/e2e/runner.ts'],
+      [
+        'packages/browseros-agent/crates/neo-sdk/neo-captcha/testbed/e2e/runner.ts',
+      ],
     )
     expect(suites.map((suite) => suite.suite)).toEqual(['captcha'])
     expect(suites[0]).toMatchObject({
-      command: 'bun run ./scripts/run-bun-test.ts ./tools/captcha-testbed',
+      command:
+        'bun run ./scripts/run-bun-test.ts ./crates/neo-sdk/neo-captcha/testbed',
       junit_path: 'test-results/captcha.xml',
       needs_browser: false,
       needs_rust: false,

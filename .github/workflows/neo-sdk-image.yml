@@ -25,6 +25,8 @@ on:
       - packages/browseros-agent/Cargo.toml
       - packages/browseros-agent/Cargo.lock
       - packages/browseros-agent/crates/**
+      # The CAPTCHA testbed is not in the image's build context (Dockerfile.dockerignore).
+      - "!packages/browseros-agent/crates/neo-sdk/neo-captcha/testbed/**"
       - packages/browseros-agent/apps/claw-server/**
       - .github/workflows/neo-sdk-image.yml
   push:
@@ -33,6 +35,8 @@ on:
       - packages/browseros-agent/Cargo.toml
       - packages/browseros-agent/Cargo.lock
       - packages/browseros-agent/crates/**
+      # The CAPTCHA testbed is not in the image's build context (Dockerfile.dockerignore).
+      - "!packages/browseros-agent/crates/neo-sdk/neo-captcha/testbed/**"
       - packages/browseros-agent/apps/claw-server/**
       - .github/workflows/neo-sdk-image.yml
     # GitHub does not apply path filters to tags: any neo-sdk-v* tag runs, and publishes.

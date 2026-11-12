@@ -19,6 +19,8 @@ on:
       # Everything the claw add-on compiles (crates/neo-sdk and the browseros-cdp and
       # browseros-core crates it links), the prelude, and the spec runner itself.
       - packages/browseros-agent/crates/**
+      # The CAPTCHA test bed under neo-captcha is none of those.
+      - "!packages/browseros-agent/crates/neo-sdk/neo-captcha/testbed/**"
       - packages/browseros-agent/Cargo.toml
       - packages/browseros-agent/Cargo.lock
       # The test:neo-spec script and the pinned Bun.
@@ -28,6 +30,7 @@ on:
     paths:
       - .github/workflows/neo-spec.yml
       - packages/browseros-agent/crates/**
+      - "!packages/browseros-agent/crates/neo-sdk/neo-captcha/testbed/**"
       - packages/browseros-agent/Cargo.toml
       - packages/browseros-agent/Cargo.lock
       - packages/browseros-agent/package.json
