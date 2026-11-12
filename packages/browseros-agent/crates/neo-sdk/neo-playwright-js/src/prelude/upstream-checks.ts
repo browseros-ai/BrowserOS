@@ -6,8 +6,7 @@
 import type * as pw from '../../../neo-playwright/third_party/playwright/packages/playwright-core/src/client/channels'
 import type { GeneratedInputs } from './generated'
 import type { OpName } from './generated/ops'
-import type { FILL_KEYS, PRESS_KEYS, TYPE_KEYS } from './options'
-import type { Assert, KeysCheck, UpstreamCheck } from './upstream-check'
+import type { Assert, UpstreamCheck } from './upstream-check'
 import type { OpInputs } from './wire'
 
 export type UpstreamChecks = {
@@ -19,113 +18,6 @@ export type UpstreamChecks = {
       pw.PageUpdateSubscriptionParams,
       'lease' | 'on',
       'enabled' | 'event',
-      never
-    >
-  >
-  'locator.fill': Assert<
-    UpstreamCheck<
-      'locator.fill',
-      OpInputs['locator.fill'],
-      pw.ElementHandleFillParams,
-      never,
-      never,
-      never
-    >
-  >
-  'locator.press': Assert<
-    UpstreamCheck<
-      'locator.press',
-      OpInputs['locator.press'],
-      pw.ElementHandlePressParams,
-      never,
-      never,
-      never
-    >
-  >
-  'locator.pressSequentially': Assert<
-    UpstreamCheck<
-      'locator.pressSequentially',
-      OpInputs['locator.pressSequentially'],
-      pw.ElementHandleTypeParams,
-      never,
-      never,
-      never
-    >
-  >
-  // The probe receives option records directly and Neo element brands, instead of upstream channel handles.
-  'locator.selectOption': Assert<
-    UpstreamCheck<
-      'locator.selectOption',
-      OpInputs['locator.selectOption'],
-      pw.ElementHandleSelectOptionParams,
-      never,
-      never,
-      'elements'
-    >
-  >
-  'locator.selectText': Assert<
-    UpstreamCheck<
-      'locator.selectText',
-      OpInputs['locator.selectText'],
-      pw.ElementHandleSelectTextParams,
-      never,
-      never,
-      never
-    >
-  >
-  'locator.focus': Assert<
-    UpstreamCheck<
-      'locator.focus',
-      OpInputs['locator.focus'],
-      pw.ElementHandleFocusParams,
-      never,
-      never,
-      never
-    >
-  >
-  'locator.blur': Assert<
-    UpstreamCheck<
-      'locator.blur',
-      OpInputs['locator.blur'],
-      pw.FrameBlurParams,
-      never,
-      never,
-      never
-    >
-  >
-  // Neo resolves paths or in-memory payloads on its host, replacing upstream transport-specific file fields.
-  'locator.setInputFiles': Assert<
-    UpstreamCheck<
-      'locator.setInputFiles',
-      OpInputs['locator.setInputFiles'],
-      pw.ElementHandleSetInputFilesParams,
-      'files',
-      | 'directoryStream'
-      | 'localDirectory'
-      | 'localPaths'
-      | 'payloads'
-      | 'streams',
-      never
-    >
-  >
-  // v1 transports eventInit as JSON rather than upstream SerializedArgument; handles are unsupported here.
-  'locator.dispatchEvent': Assert<
-    UpstreamCheck<
-      'locator.dispatchEvent',
-      OpInputs['locator.dispatchEvent'],
-      pw.ElementHandleDispatchEventParams,
-      never,
-      never,
-      'eventInit'
-    >
-  >
-  'locator.scrollIntoViewIfNeeded': Assert<
-    UpstreamCheck<
-      'locator.scrollIntoViewIfNeeded',
-      OpInputs['locator.scrollIntoViewIfNeeded'],
-      pw.ElementHandleScrollIntoViewIfNeededParams,
-      never,
-      never,
       never
     >
   >
@@ -319,31 +211,9 @@ export type AllOpsChecked = Assert<
     : false
 >
 
-// Shared exported lists are checked by their actual inferred keys. Private and inline lists
-// use KeyList at their declaration/call site so their literal keys cannot drift from a copy.
-export type OptionChecks = {
-  'locator.fill': Assert<
-    KeysCheck<
-      'locator.fill',
-      (typeof FILL_KEYS)[number],
-      pw.ElementHandleFillOptions
-    >
-  >
-  'locator.press': Assert<
-    KeysCheck<
-      'locator.press',
-      (typeof PRESS_KEYS)[number],
-      pw.ElementHandlePressOptions
-    >
-  >
-  'locator.pressSequentially': Assert<
-    KeysCheck<
-      'locator.pressSequentially',
-      (typeof TYPE_KEYS)[number],
-      pw.ElementHandleTypeOptions
-    >
-  >
-}
+// All exported option lists now carry generated checks; retain the empty assertion map
+// while the remaining hand op checks still use this module.
+export type OptionChecks = Record<never, never>
 
 /** Private/inline lists refer to these vendored options only through erased type imports. */
 export type PickOptions = {

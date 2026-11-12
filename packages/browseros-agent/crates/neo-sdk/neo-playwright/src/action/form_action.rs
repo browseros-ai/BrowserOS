@@ -140,7 +140,7 @@ struct Checked {
 
 /// Where ② left the attempt.
 enum Applied {
-    Done(Value),
+    Done(Vec<String>),
     /// Upstream retries this, with its call-log line.
     Retry(&'static str),
     Gone,
@@ -184,8 +184,12 @@ impl<'a> FormRunner<'a> {
     }
 
     /// Runs `edit` to completion, a definite failure, or the op's timeout. `selectOption`
-    /// answers the selected values; the others null.
-    pub(crate) async fn run(&mut self, edit: &FormEdit<'_>) -> Result<Value, PlaywrightError> {
+    /// answers the selected values; other edits return an empty list that their unit handlers
+    /// discard. Wire encoding belongs to the typed handler boundary, not this retry loop.
+    pub(crate) async fn run(
+        &mut self,
+        edit: &FormEdit<'_>,
+    ) -> Result<Vec<String>, PlaywrightError> {
         let row = edit.row();
         self.subject.log_waiting();
         let backoff = Backoff::outer(self.scope.timeout());
@@ -223,7 +227,7 @@ impl<'a> FormRunner<'a> {
         located: &Resolved,
         edit: &FormEdit<'_>,
         row: &Row,
-    ) -> Result<Option<Value>, PlaywrightError> {
+    ) -> Result<Option<Vec<String>>, PlaywrightError> {
         let inner = Backoff::inner();
         let mut pin = None;
         // The attempt's lines wait until the element is seen (`attempt_log.rs`).
@@ -374,7 +378,7 @@ impl<'a> FormRunner<'a> {
                 Ok(match decode(self.scope, selected.into_value())? {
                     Selected::Values(values) => {
                         self.scope.log("  selected specified option(s)".to_owned());
-                        Applied::Done(Value::from(values))
+                        Applied::Done(values)
                     }
                     Selected::Retry(SelectRetry::OptionsNotFound) => {
                         Applied::Retry("  did not find some options")
@@ -389,7 +393,7 @@ impl<'a> FormRunner<'a> {
                 let sent = self.scope.send_effect()?;
                 Ok(
                     match self.edit(&sent, located, pin, Edit::SelectText).await? {
-                        Some(_) => Applied::Done(Value::Null),
+                        Some(_) => Applied::Done(Vec::new()),
                         None => Applied::Gone,
                     },
                 )
@@ -430,7 +434,7 @@ impl<'a> FormRunner<'a> {
                 .await
                 .map_err(|failure| input::burst_failed(self.scope, failure))?;
         }
-        Ok(Applied::Done(Value::Null))
+        Ok(Applied::Done(Vec::new()))
     }
 
     /// Sends `edit` to the pinned element. It changes the page, so it takes the op's [`Sent`].

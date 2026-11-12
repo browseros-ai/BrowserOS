@@ -11,7 +11,10 @@ import type { SelectOption } from '../probe/protocol'
 import { clientError } from './errors'
 import type { ElementBrand } from './wire'
 
-/** The defined values of `keys` in `source`. */
+/**
+ * The defined values of `keys` in `source`. Flat callers spread the result so an omitted
+ * field stays absent even when the script installs a getter on Object.prototype.
+ */
 export function pick<T extends object, K extends keyof T>(
   source: T | undefined,
   keys: readonly K[],
@@ -23,9 +26,6 @@ export function pick<T extends object, K extends keyof T>(
   return picked
 }
 
-export const FILL_KEYS = ['force'] as const
-export const PRESS_KEYS = ['delay', 'noWaitAfter'] as const
-export const TYPE_KEYS = ['delay'] as const
 /** Objects the prelude hands to scripts (pages, frames, locators, handles), by identity. */
 const handles = new WeakSet<object>()
 

@@ -27,7 +27,6 @@ export type { MouseButtonInput } from './types/MouseButtonInput'
 export type { MouseClickInput } from './types/MouseClickInput'
 export type { MouseMoveInput } from './types/MouseMoveInput'
 export type { MouseWheelInput } from './types/MouseWheelInput'
-export type { Typed } from './types/Typed'
 
 /** Each input op's input, after the `call` header every op shares. */
 export type InputInputs = {

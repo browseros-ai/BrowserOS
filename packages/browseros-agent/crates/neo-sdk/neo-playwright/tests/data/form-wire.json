@@ -1,0 +1,380 @@
+{
+  "origin": {
+    "commit": "ab6e90324e9fc31c0e888e0ed37cf4b116b6a068",
+    "bundleSha256": "883c042099ecc3569b4bd8b24a7813bab5408ce83ef5572c1147b1eb87f890c7",
+    "bootstrapSha256": "b6987f2b8f1b952600ef3bdd410457780780c225eb31c944ee603bc182ba4d6b",
+    "boundary": "real bootstrap native JSON boundary over the deterministic test host; typed Rust decoders/reply serialization are checked separately"
+  },
+  "scenarios": [
+    {
+      "name": "flat force omission ignores a polluted prototype",
+      "script": "\n  const l=page.locator('#input')\n  const opts=Object.create(null)\n  opts.force=undefined\n  let reads=0\n  const previous=Object.getOwnPropertyDescriptor(Object.prototype,'force')\n  Object.defineProperty(Object.prototype,'force',{configurable:true,get(){reads++;return true}})\n  try {\n    await l.selectOption('x',opts); await l.selectText(opts)\n    const h=await l.elementHandle()\n    await h.selectOption('x',opts); await h.selectText(opts)\n  } finally {\n    delete Object.prototype.force\n    if(previous)Object.defineProperty(Object.prototype,'force',previous)\n  }\n  return reads\n",
+      "exchanges": [
+        {
+          "op": "locator.selectOption",
+          "args": "{\"call\":{\"api\":\"locator.selectOption\",\"timeoutMs\":5000},\"target\":{\"$neo\":\"locator\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"frame\":null,\"chunks\":[{\"parts\":[{\"name\":\"css\",\"body\":[{\"simples\":[{\"selector\":{\"css\":\"#input\",\"functions\":[]},\"combinator\":\"\"}]}],\"source\":\"#input\"}]}],\"display\":\"locator('#input')\"},\"strict\":\"strict\",\"options\":[{\"valueOrLabel\":\"x\"}],\"elements\":[]}",
+          "reply": "{\"pages\":[],\"ok\":[\"x\"],\"observed\":{\"seq\":2,\"events\":0,\"payloadCurrent\":true}}",
+          "body": "[\"x\"]"
+        },
+        {
+          "op": "locator.selectText",
+          "args": "{\"call\":{\"api\":\"locator.selectText\",\"timeoutMs\":5000},\"target\":{\"$neo\":\"locator\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"frame\":null,\"chunks\":[{\"parts\":[{\"name\":\"css\",\"body\":[{\"simples\":[{\"selector\":{\"css\":\"#input\",\"functions\":[]},\"combinator\":\"\"}]}],\"source\":\"#input\"}]}],\"display\":\"locator('#input')\"},\"strict\":\"strict\"}",
+          "reply": "{\"pages\":[],\"ok\":null,\"observed\":{\"seq\":3,\"events\":0,\"payloadCurrent\":true}}",
+          "body": "null"
+        },
+        {
+          "op": "locator.waitFor",
+          "args": "{\"call\":{\"api\":\"locator.elementHandle\",\"timeoutMs\":5000},\"target\":{\"$neo\":\"locator\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"frame\":null,\"chunks\":[{\"parts\":[{\"name\":\"css\",\"body\":[{\"simples\":[{\"selector\":{\"css\":\"#input\",\"functions\":[]},\"combinator\":\"\"}]}],\"source\":\"#input\"}]}],\"display\":\"locator('#input')\"},\"strict\":\"strict\",\"state\":\"attached\",\"omitReturnValue\":false}",
+          "reply": "{\"pages\":[],\"ok\":{\"$neo\":\"element\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"seq\":2,\"node\":9,\"display\":\"<input>\"},\"observed\":{\"seq\":4,\"events\":0,\"payloadCurrent\":true}}",
+          "body": "{\"$neo\":\"element\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"seq\":2,\"node\":9,\"display\":\"<input>\"}"
+        },
+        {
+          "op": "locator.selectOption",
+          "args": "{\"call\":{\"api\":\"elementHandle.selectOption\",\"timeoutMs\":5000},\"target\":{\"$neo\":\"element\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"seq\":2,\"node\":9,\"display\":\"<input>\"},\"strict\":\"strict\",\"options\":[{\"valueOrLabel\":\"x\"}],\"elements\":[]}",
+          "reply": "{\"pages\":[],\"ok\":[\"x\"],\"observed\":{\"seq\":5,\"events\":0,\"payloadCurrent\":true}}",
+          "body": "[\"x\"]"
+        },
+        {
+          "op": "locator.selectText",
+          "args": "{\"call\":{\"api\":\"elementHandle.selectText\",\"timeoutMs\":5000},\"target\":{\"$neo\":\"element\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"seq\":2,\"node\":9,\"display\":\"<input>\"},\"strict\":\"strict\"}",
+          "reply": "{\"pages\":[],\"ok\":null,\"observed\":{\"seq\":6,\"events\":0,\"payloadCurrent\":true}}",
+          "body": "null"
+        }
+      ],
+      "result": "0"
+    },
+    {
+      "name": "pressSequentially drops noWaitAfter",
+      "script": "\n  await page.locator('#input').pressSequentially('ab', {delay:7,noWaitAfter:true})\n  return null\n",
+      "exchanges": [
+        {
+          "op": "locator.pressSequentially",
+          "args": "{\"call\":{\"api\":\"locator.pressSequentially\",\"timeoutMs\":5000},\"target\":{\"$neo\":\"locator\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"frame\":null,\"chunks\":[{\"parts\":[{\"name\":\"css\",\"body\":[{\"simples\":[{\"selector\":{\"css\":\"#input\",\"functions\":[]},\"combinator\":\"\"}]}],\"source\":\"#input\"}]}],\"display\":\"locator('#input')\"},\"strict\":\"strict\",\"text\":\"ab\",\"options\":{\"delay\":7}}",
+          "reply": "{\"pages\":[],\"ok\":null,\"observed\":{\"seq\":2,\"events\":0,\"payloadCurrent\":true}}",
+          "body": "null"
+        }
+      ],
+      "result": "null"
+    },
+    {
+      "name": "form, key, file and event caller forms",
+      "script": "\n  const l=page.locator('#input')\n  const opts={force:true,delay:7,noWaitAfter:true,strict:true,timeout:1234,ignored:'dropped'}\n  const selected=[]\n  await l.fill('value',opts); await l.clear(opts); await page.fill('#input','value',opts)\n  await page.mainFrame().fill('#input','frame',opts)\n  await l.press('ControlOrMeta+A',opts); await page.press('#input','Enter',opts)\n  await l.pressSequentially('abc',opts); await l.type('abc',opts); await page.type('#input','abc',opts)\n  selected.push(await l.selectOption([{value:'x',label:'X',index:1,valueOrLabel:'x'}],opts))\n  selected.push(await page.selectOption('#input','x',opts)); selected.push(await l.selectOption(null))\n  await l.selectText(opts); await l.focus(opts); await page.focus('#input',opts); await l.blur(opts)\n  await l.setInputFiles('Cargo.toml',opts)\n  await page.setInputFiles('#input',['Cargo.toml'],opts)\n  await l.setInputFiles({name:'a.txt',mimeType:'text/plain',buffer:Buffer.from('a')},opts)\n  await l.setInputFiles([],opts)\n  await l.dispatchEvent('change',{bubbles:true,detail:{value:3}},opts)\n  await page.dispatchEvent('#input','change',null,opts)\n  await l.scrollIntoViewIfNeeded(opts)\n  const h=await l.elementHandle()\n  await h.fill('handle',opts); await h.press('Enter',opts); await h.type('text',opts)\n  selected.push(await h.selectOption('x',opts)); await h.selectText(opts)\n  await h.setInputFiles({name:'b.txt',mimeType:'text/plain',buffer:Buffer.from('b')},opts)\n  await h.focus(); await h.dispatchEvent('change',null); await h.scrollIntoViewIfNeeded(opts)\n  return selected\n",
+      "exchanges": [
+        {
+          "op": "locator.fill",
+          "args": "{\"call\":{\"api\":\"locator.fill\",\"timeoutMs\":1234},\"target\":{\"$neo\":\"locator\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"frame\":null,\"chunks\":[{\"parts\":[{\"name\":\"css\",\"body\":[{\"simples\":[{\"selector\":{\"css\":\"#input\",\"functions\":[]},\"combinator\":\"\"}]}],\"source\":\"#input\"}]}],\"display\":\"locator('#input')\"},\"strict\":\"strict\",\"value\":\"value\",\"options\":{\"force\":true}}",
+          "reply": "{\"pages\":[],\"ok\":null,\"observed\":{\"seq\":2,\"events\":0,\"payloadCurrent\":true}}",
+          "body": "null"
+        },
+        {
+          "op": "locator.fill",
+          "args": "{\"call\":{\"api\":\"locator.clear\",\"timeoutMs\":1234},\"target\":{\"$neo\":\"locator\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"frame\":null,\"chunks\":[{\"parts\":[{\"name\":\"css\",\"body\":[{\"simples\":[{\"selector\":{\"css\":\"#input\",\"functions\":[]},\"combinator\":\"\"}]}],\"source\":\"#input\"}]}],\"display\":\"locator('#input')\"},\"strict\":\"strict\",\"value\":\"\",\"options\":{\"force\":true}}",
+          "reply": "{\"pages\":[],\"ok\":null,\"observed\":{\"seq\":3,\"events\":0,\"payloadCurrent\":true}}",
+          "body": "null"
+        },
+        {
+          "op": "locator.fill",
+          "args": "{\"call\":{\"api\":\"page.fill\",\"timeoutMs\":1234},\"target\":{\"$neo\":\"locator\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"frame\":null,\"chunks\":[{\"parts\":[{\"name\":\"css\",\"body\":[{\"simples\":[{\"selector\":{\"css\":\"#input\",\"functions\":[]},\"combinator\":\"\"}]}],\"source\":\"#input\"}]}],\"display\":\"locator('#input')\"},\"strict\":\"strict\",\"value\":\"value\",\"options\":{\"force\":true}}",
+          "reply": "{\"pages\":[],\"ok\":null,\"observed\":{\"seq\":4,\"events\":0,\"payloadCurrent\":true}}",
+          "body": "null"
+        },
+        {
+          "op": "locator.fill",
+          "args": "{\"call\":{\"api\":\"frame.fill\",\"timeoutMs\":1234},\"target\":{\"$neo\":\"locator\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"frame\":null,\"chunks\":[{\"parts\":[{\"name\":\"css\",\"body\":[{\"simples\":[{\"selector\":{\"css\":\"#input\",\"functions\":[]},\"combinator\":\"\"}]}],\"source\":\"#input\"}]}],\"display\":\"locator('#input')\"},\"strict\":\"strict\",\"value\":\"frame\",\"options\":{\"force\":true}}",
+          "reply": "{\"pages\":[],\"ok\":null,\"observed\":{\"seq\":5,\"events\":0,\"payloadCurrent\":true}}",
+          "body": "null"
+        },
+        {
+          "op": "locator.press",
+          "args": "{\"call\":{\"api\":\"locator.press\",\"timeoutMs\":1234},\"target\":{\"$neo\":\"locator\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"frame\":null,\"chunks\":[{\"parts\":[{\"name\":\"css\",\"body\":[{\"simples\":[{\"selector\":{\"css\":\"#input\",\"functions\":[]},\"combinator\":\"\"}]}],\"source\":\"#input\"}]}],\"display\":\"locator('#input')\"},\"strict\":\"strict\",\"key\":\"ControlOrMeta+A\",\"options\":{\"delay\":7,\"noWaitAfter\":true}}",
+          "reply": "{\"pages\":[],\"ok\":null,\"observed\":{\"seq\":6,\"events\":0,\"payloadCurrent\":true}}",
+          "body": "null"
+        },
+        {
+          "op": "locator.press",
+          "args": "{\"call\":{\"api\":\"page.press\",\"timeoutMs\":1234},\"target\":{\"$neo\":\"locator\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"frame\":null,\"chunks\":[{\"parts\":[{\"name\":\"css\",\"body\":[{\"simples\":[{\"selector\":{\"css\":\"#input\",\"functions\":[]},\"combinator\":\"\"}]}],\"source\":\"#input\"}]}],\"display\":\"locator('#input')\"},\"strict\":\"strict\",\"key\":\"Enter\",\"options\":{\"delay\":7,\"noWaitAfter\":true}}",
+          "reply": "{\"pages\":[],\"ok\":null,\"observed\":{\"seq\":7,\"events\":0,\"payloadCurrent\":true}}",
+          "body": "null"
+        },
+        {
+          "op": "locator.pressSequentially",
+          "args": "{\"call\":{\"api\":\"locator.pressSequentially\",\"timeoutMs\":1234},\"target\":{\"$neo\":\"locator\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"frame\":null,\"chunks\":[{\"parts\":[{\"name\":\"css\",\"body\":[{\"simples\":[{\"selector\":{\"css\":\"#input\",\"functions\":[]},\"combinator\":\"\"}]}],\"source\":\"#input\"}]}],\"display\":\"locator('#input')\"},\"strict\":\"strict\",\"text\":\"abc\",\"options\":{\"delay\":7}}",
+          "reply": "{\"pages\":[],\"ok\":null,\"observed\":{\"seq\":8,\"events\":0,\"payloadCurrent\":true}}",
+          "body": "null"
+        },
+        {
+          "op": "locator.pressSequentially",
+          "args": "{\"call\":{\"api\":\"locator.type\",\"timeoutMs\":1234},\"target\":{\"$neo\":\"locator\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"frame\":null,\"chunks\":[{\"parts\":[{\"name\":\"css\",\"body\":[{\"simples\":[{\"selector\":{\"css\":\"#input\",\"functions\":[]},\"combinator\":\"\"}]}],\"source\":\"#input\"}]}],\"display\":\"locator('#input')\"},\"strict\":\"strict\",\"text\":\"abc\",\"options\":{\"delay\":7}}",
+          "reply": "{\"pages\":[],\"ok\":null,\"observed\":{\"seq\":9,\"events\":0,\"payloadCurrent\":true}}",
+          "body": "null"
+        },
+        {
+          "op": "locator.pressSequentially",
+          "args": "{\"call\":{\"api\":\"page.type\",\"timeoutMs\":1234},\"target\":{\"$neo\":\"locator\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"frame\":null,\"chunks\":[{\"parts\":[{\"name\":\"css\",\"body\":[{\"simples\":[{\"selector\":{\"css\":\"#input\",\"functions\":[]},\"combinator\":\"\"}]}],\"source\":\"#input\"}]}],\"display\":\"locator('#input')\"},\"strict\":\"strict\",\"text\":\"abc\",\"options\":{\"delay\":7}}",
+          "reply": "{\"pages\":[],\"ok\":null,\"observed\":{\"seq\":10,\"events\":0,\"payloadCurrent\":true}}",
+          "body": "null"
+        },
+        {
+          "op": "locator.selectOption",
+          "args": "{\"call\":{\"api\":\"locator.selectOption\",\"timeoutMs\":1234},\"target\":{\"$neo\":\"locator\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"frame\":null,\"chunks\":[{\"parts\":[{\"name\":\"css\",\"body\":[{\"simples\":[{\"selector\":{\"css\":\"#input\",\"functions\":[]},\"combinator\":\"\"}]}],\"source\":\"#input\"}]}],\"display\":\"locator('#input')\"},\"strict\":\"strict\",\"options\":[{\"valueOrLabel\":\"x\",\"value\":\"x\",\"label\":\"X\",\"index\":1}],\"elements\":[],\"force\":true}",
+          "reply": "{\"pages\":[],\"ok\":[\"x\"],\"observed\":{\"seq\":11,\"events\":0,\"payloadCurrent\":true}}",
+          "body": "[\"x\"]"
+        },
+        {
+          "op": "locator.selectOption",
+          "args": "{\"call\":{\"api\":\"page.selectOption\",\"timeoutMs\":1234},\"target\":{\"$neo\":\"locator\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"frame\":null,\"chunks\":[{\"parts\":[{\"name\":\"css\",\"body\":[{\"simples\":[{\"selector\":{\"css\":\"#input\",\"functions\":[]},\"combinator\":\"\"}]}],\"source\":\"#input\"}]}],\"display\":\"locator('#input')\"},\"strict\":\"strict\",\"options\":[{\"valueOrLabel\":\"x\"}],\"elements\":[],\"force\":true}",
+          "reply": "{\"pages\":[],\"ok\":[\"x\"],\"observed\":{\"seq\":12,\"events\":0,\"payloadCurrent\":true}}",
+          "body": "[\"x\"]"
+        },
+        {
+          "op": "locator.selectOption",
+          "args": "{\"call\":{\"api\":\"locator.selectOption\",\"timeoutMs\":5000},\"target\":{\"$neo\":\"locator\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"frame\":null,\"chunks\":[{\"parts\":[{\"name\":\"css\",\"body\":[{\"simples\":[{\"selector\":{\"css\":\"#input\",\"functions\":[]},\"combinator\":\"\"}]}],\"source\":\"#input\"}]}],\"display\":\"locator('#input')\"},\"strict\":\"strict\",\"options\":[],\"elements\":[]}",
+          "reply": "{\"pages\":[],\"ok\":[\"x\"],\"observed\":{\"seq\":13,\"events\":0,\"payloadCurrent\":true}}",
+          "body": "[\"x\"]"
+        },
+        {
+          "op": "locator.selectText",
+          "args": "{\"call\":{\"api\":\"locator.selectText\",\"timeoutMs\":1234},\"target\":{\"$neo\":\"locator\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"frame\":null,\"chunks\":[{\"parts\":[{\"name\":\"css\",\"body\":[{\"simples\":[{\"selector\":{\"css\":\"#input\",\"functions\":[]},\"combinator\":\"\"}]}],\"source\":\"#input\"}]}],\"display\":\"locator('#input')\"},\"strict\":\"strict\",\"force\":true}",
+          "reply": "{\"pages\":[],\"ok\":null,\"observed\":{\"seq\":14,\"events\":0,\"payloadCurrent\":true}}",
+          "body": "null"
+        },
+        {
+          "op": "locator.focus",
+          "args": "{\"call\":{\"api\":\"locator.focus\",\"timeoutMs\":1234},\"target\":{\"$neo\":\"locator\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"frame\":null,\"chunks\":[{\"parts\":[{\"name\":\"css\",\"body\":[{\"simples\":[{\"selector\":{\"css\":\"#input\",\"functions\":[]},\"combinator\":\"\"}]}],\"source\":\"#input\"}]}],\"display\":\"locator('#input')\"},\"strict\":\"strict\"}",
+          "reply": "{\"pages\":[],\"ok\":null,\"observed\":{\"seq\":15,\"events\":0,\"payloadCurrent\":true}}",
+          "body": "null"
+        },
+        {
+          "op": "locator.focus",
+          "args": "{\"call\":{\"api\":\"page.focus\",\"timeoutMs\":1234},\"target\":{\"$neo\":\"locator\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"frame\":null,\"chunks\":[{\"parts\":[{\"name\":\"css\",\"body\":[{\"simples\":[{\"selector\":{\"css\":\"#input\",\"functions\":[]},\"combinator\":\"\"}]}],\"source\":\"#input\"}]}],\"display\":\"locator('#input')\"},\"strict\":\"strict\"}",
+          "reply": "{\"pages\":[],\"ok\":null,\"observed\":{\"seq\":16,\"events\":0,\"payloadCurrent\":true}}",
+          "body": "null"
+        },
+        {
+          "op": "locator.blur",
+          "args": "{\"call\":{\"api\":\"locator.blur\",\"timeoutMs\":1234},\"target\":{\"$neo\":\"locator\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"frame\":null,\"chunks\":[{\"parts\":[{\"name\":\"css\",\"body\":[{\"simples\":[{\"selector\":{\"css\":\"#input\",\"functions\":[]},\"combinator\":\"\"}]}],\"source\":\"#input\"}]}],\"display\":\"locator('#input')\"},\"strict\":\"strict\"}",
+          "reply": "{\"pages\":[],\"ok\":null,\"observed\":{\"seq\":17,\"events\":0,\"payloadCurrent\":true}}",
+          "body": "null"
+        },
+        {
+          "op": "locator.setInputFiles",
+          "args": "{\"call\":{\"api\":\"locator.setInputFiles\",\"timeoutMs\":1234},\"target\":{\"$neo\":\"locator\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"frame\":null,\"chunks\":[{\"parts\":[{\"name\":\"css\",\"body\":[{\"simples\":[{\"selector\":{\"css\":\"#input\",\"functions\":[]},\"combinator\":\"\"}]}],\"source\":\"#input\"}]}],\"display\":\"locator('#input')\"},\"strict\":\"strict\",\"files\":{\"paths\":[\"Cargo.toml\"]}}",
+          "reply": "{\"pages\":[],\"ok\":null,\"observed\":{\"seq\":18,\"events\":0,\"payloadCurrent\":true}}",
+          "body": "null"
+        },
+        {
+          "op": "locator.setInputFiles",
+          "args": "{\"call\":{\"api\":\"page.setInputFiles\",\"timeoutMs\":1234},\"target\":{\"$neo\":\"locator\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"frame\":null,\"chunks\":[{\"parts\":[{\"name\":\"css\",\"body\":[{\"simples\":[{\"selector\":{\"css\":\"#input\",\"functions\":[]},\"combinator\":\"\"}]}],\"source\":\"#input\"}]}],\"display\":\"locator('#input')\"},\"strict\":\"strict\",\"files\":{\"paths\":[\"Cargo.toml\"]}}",
+          "reply": "{\"pages\":[],\"ok\":null,\"observed\":{\"seq\":19,\"events\":0,\"payloadCurrent\":true}}",
+          "body": "null"
+        },
+        {
+          "op": "locator.setInputFiles",
+          "args": "{\"call\":{\"api\":\"locator.setInputFiles\",\"timeoutMs\":1234},\"target\":{\"$neo\":\"locator\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"frame\":null,\"chunks\":[{\"parts\":[{\"name\":\"css\",\"body\":[{\"simples\":[{\"selector\":{\"css\":\"#input\",\"functions\":[]},\"combinator\":\"\"}]}],\"source\":\"#input\"}]}],\"display\":\"locator('#input')\"},\"strict\":\"strict\",\"files\":{\"payloads\":[{\"name\":\"a.txt\",\"mimeType\":\"text/plain\",\"buffer\":\"YQ==\"}]}}",
+          "reply": "{\"pages\":[],\"ok\":null,\"observed\":{\"seq\":20,\"events\":0,\"payloadCurrent\":true}}",
+          "body": "null"
+        },
+        {
+          "op": "locator.setInputFiles",
+          "args": "{\"call\":{\"api\":\"locator.setInputFiles\",\"timeoutMs\":1234},\"target\":{\"$neo\":\"locator\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"frame\":null,\"chunks\":[{\"parts\":[{\"name\":\"css\",\"body\":[{\"simples\":[{\"selector\":{\"css\":\"#input\",\"functions\":[]},\"combinator\":\"\"}]}],\"source\":\"#input\"}]}],\"display\":\"locator('#input')\"},\"strict\":\"strict\",\"files\":{\"payloads\":[]}}",
+          "reply": "{\"pages\":[],\"ok\":null,\"observed\":{\"seq\":21,\"events\":0,\"payloadCurrent\":true}}",
+          "body": "null"
+        },
+        {
+          "op": "locator.dispatchEvent",
+          "args": "{\"call\":{\"api\":\"locator.dispatchEvent\",\"timeoutMs\":1234},\"target\":{\"$neo\":\"locator\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"frame\":null,\"chunks\":[{\"parts\":[{\"name\":\"css\",\"body\":[{\"simples\":[{\"selector\":{\"css\":\"#input\",\"functions\":[]},\"combinator\":\"\"}]}],\"source\":\"#input\"}]}],\"display\":\"locator('#input')\"},\"strict\":\"strict\",\"type\":\"change\",\"eventInit\":{\"bubbles\":true,\"detail\":{\"value\":3}}}",
+          "reply": "{\"pages\":[],\"ok\":null,\"observed\":{\"seq\":22,\"events\":0,\"payloadCurrent\":true}}",
+          "body": "null"
+        },
+        {
+          "op": "locator.dispatchEvent",
+          "args": "{\"call\":{\"api\":\"page.dispatchEvent\",\"timeoutMs\":1234},\"target\":{\"$neo\":\"locator\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"frame\":null,\"chunks\":[{\"parts\":[{\"name\":\"css\",\"body\":[{\"simples\":[{\"selector\":{\"css\":\"#input\",\"functions\":[]},\"combinator\":\"\"}]}],\"source\":\"#input\"}]}],\"display\":\"locator('#input')\"},\"strict\":\"strict\",\"type\":\"change\",\"eventInit\":{}}",
+          "reply": "{\"pages\":[],\"ok\":null,\"observed\":{\"seq\":23,\"events\":0,\"payloadCurrent\":true}}",
+          "body": "null"
+        },
+        {
+          "op": "locator.scrollIntoViewIfNeeded",
+          "args": "{\"call\":{\"api\":\"locator.scrollIntoViewIfNeeded\",\"timeoutMs\":1234},\"target\":{\"$neo\":\"locator\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"frame\":null,\"chunks\":[{\"parts\":[{\"name\":\"css\",\"body\":[{\"simples\":[{\"selector\":{\"css\":\"#input\",\"functions\":[]},\"combinator\":\"\"}]}],\"source\":\"#input\"}]}],\"display\":\"locator('#input')\"},\"strict\":\"strict\"}",
+          "reply": "{\"pages\":[],\"ok\":null,\"observed\":{\"seq\":24,\"events\":0,\"payloadCurrent\":true}}",
+          "body": "null"
+        },
+        {
+          "op": "locator.waitFor",
+          "args": "{\"call\":{\"api\":\"locator.elementHandle\",\"timeoutMs\":5000},\"target\":{\"$neo\":\"locator\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"frame\":null,\"chunks\":[{\"parts\":[{\"name\":\"css\",\"body\":[{\"simples\":[{\"selector\":{\"css\":\"#input\",\"functions\":[]},\"combinator\":\"\"}]}],\"source\":\"#input\"}]}],\"display\":\"locator('#input')\"},\"strict\":\"strict\",\"state\":\"attached\",\"omitReturnValue\":false}",
+          "reply": "{\"pages\":[],\"ok\":{\"$neo\":\"element\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"seq\":2,\"node\":9,\"display\":\"<input>\"},\"observed\":{\"seq\":25,\"events\":0,\"payloadCurrent\":true}}",
+          "body": "{\"$neo\":\"element\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"seq\":2,\"node\":9,\"display\":\"<input>\"}"
+        },
+        {
+          "op": "locator.fill",
+          "args": "{\"call\":{\"api\":\"elementHandle.fill\",\"timeoutMs\":1234},\"target\":{\"$neo\":\"element\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"seq\":2,\"node\":9,\"display\":\"<input>\"},\"strict\":\"strict\",\"value\":\"handle\",\"options\":{\"force\":true}}",
+          "reply": "{\"pages\":[],\"ok\":null,\"observed\":{\"seq\":26,\"events\":0,\"payloadCurrent\":true}}",
+          "body": "null"
+        },
+        {
+          "op": "locator.press",
+          "args": "{\"call\":{\"api\":\"elementHandle.press\",\"timeoutMs\":1234},\"target\":{\"$neo\":\"element\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"seq\":2,\"node\":9,\"display\":\"<input>\"},\"strict\":\"strict\",\"key\":\"Enter\",\"options\":{\"delay\":7,\"noWaitAfter\":true}}",
+          "reply": "{\"pages\":[],\"ok\":null,\"observed\":{\"seq\":27,\"events\":0,\"payloadCurrent\":true}}",
+          "body": "null"
+        },
+        {
+          "op": "locator.pressSequentially",
+          "args": "{\"call\":{\"api\":\"elementHandle.type\",\"timeoutMs\":1234},\"target\":{\"$neo\":\"element\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"seq\":2,\"node\":9,\"display\":\"<input>\"},\"strict\":\"strict\",\"text\":\"text\",\"options\":{\"delay\":7}}",
+          "reply": "{\"pages\":[],\"ok\":null,\"observed\":{\"seq\":28,\"events\":0,\"payloadCurrent\":true}}",
+          "body": "null"
+        },
+        {
+          "op": "locator.selectOption",
+          "args": "{\"call\":{\"api\":\"elementHandle.selectOption\",\"timeoutMs\":1234},\"target\":{\"$neo\":\"element\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"seq\":2,\"node\":9,\"display\":\"<input>\"},\"strict\":\"strict\",\"options\":[{\"valueOrLabel\":\"x\"}],\"elements\":[],\"force\":true}",
+          "reply": "{\"pages\":[],\"ok\":[\"x\"],\"observed\":{\"seq\":29,\"events\":0,\"payloadCurrent\":true}}",
+          "body": "[\"x\"]"
+        },
+        {
+          "op": "locator.selectText",
+          "args": "{\"call\":{\"api\":\"elementHandle.selectText\",\"timeoutMs\":1234},\"target\":{\"$neo\":\"element\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"seq\":2,\"node\":9,\"display\":\"<input>\"},\"strict\":\"strict\",\"force\":true}",
+          "reply": "{\"pages\":[],\"ok\":null,\"observed\":{\"seq\":30,\"events\":0,\"payloadCurrent\":true}}",
+          "body": "null"
+        },
+        {
+          "op": "locator.setInputFiles",
+          "args": "{\"call\":{\"api\":\"elementHandle.setInputFiles\",\"timeoutMs\":1234},\"target\":{\"$neo\":\"element\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"seq\":2,\"node\":9,\"display\":\"<input>\"},\"strict\":\"strict\",\"files\":{\"payloads\":[{\"name\":\"b.txt\",\"mimeType\":\"text/plain\",\"buffer\":\"Yg==\"}]}}",
+          "reply": "{\"pages\":[],\"ok\":null,\"observed\":{\"seq\":31,\"events\":0,\"payloadCurrent\":true}}",
+          "body": "null"
+        },
+        {
+          "op": "locator.focus",
+          "args": "{\"call\":{\"api\":\"elementHandle.focus\",\"timeoutMs\":0},\"target\":{\"$neo\":\"element\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"seq\":2,\"node\":9,\"display\":\"<input>\"},\"strict\":\"strict\"}",
+          "reply": "{\"pages\":[],\"ok\":null,\"observed\":{\"seq\":32,\"events\":0,\"payloadCurrent\":true}}",
+          "body": "null"
+        },
+        {
+          "op": "locator.dispatchEvent",
+          "args": "{\"call\":{\"api\":\"elementHandle.dispatchEvent\",\"timeoutMs\":0},\"target\":{\"$neo\":\"element\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"seq\":2,\"node\":9,\"display\":\"<input>\"},\"strict\":\"strict\",\"type\":\"change\",\"eventInit\":null}",
+          "reply": "{\"pages\":[],\"ok\":null,\"observed\":{\"seq\":33,\"events\":0,\"payloadCurrent\":true}}",
+          "body": "null"
+        },
+        {
+          "op": "locator.scrollIntoViewIfNeeded",
+          "args": "{\"call\":{\"api\":\"elementHandle.scrollIntoViewIfNeeded\",\"timeoutMs\":1234},\"target\":{\"$neo\":\"element\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"seq\":2,\"node\":9,\"display\":\"<input>\"},\"strict\":\"strict\"}",
+          "reply": "{\"pages\":[],\"ok\":null,\"observed\":{\"seq\":34,\"events\":0,\"payloadCurrent\":true}}",
+          "body": "null"
+        }
+      ],
+      "result": "[[\"x\"],[\"x\"],[\"x\"],[\"x\"]]"
+    },
+    {
+      "name": "option getter ordering at async addressing",
+      "script": "\n  const l=page.locator('#input')\n  const reads=[]\n  const opts={get strict(){reads.push('strict');return true},get timeout(){reads.push('timeout');return 222},\n    get force(){reads.push('force');return false},get delay(){reads.push('delay');return 2},\n    get noWaitAfter(){reads.push('noWaitAfter');return false}}\n  await l.fill('x',opts); await l.press('a',opts); await l.pressSequentially('ab',opts)\n  await l.selectOption('x',opts); await l.selectText(opts); await l.focus(opts); await l.blur(opts)\n  await l.setInputFiles([],opts); await l.dispatchEvent('change',{},opts); await l.scrollIntoViewIfNeeded(opts)\n  const h=await l.elementHandle()\n  await h.fill('x',opts); await h.press('a',opts); await h.type('ab',opts)\n  await h.selectOption('x',opts); await h.selectText(opts); await h.setInputFiles([],opts)\n  await h.scrollIntoViewIfNeeded(opts)\n  return reads\n",
+      "exchanges": [
+        {
+          "op": "locator.fill",
+          "args": "{\"call\":{\"api\":\"locator.fill\",\"timeoutMs\":222},\"target\":{\"$neo\":\"locator\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"frame\":null,\"chunks\":[{\"parts\":[{\"name\":\"css\",\"body\":[{\"simples\":[{\"selector\":{\"css\":\"#input\",\"functions\":[]},\"combinator\":\"\"}]}],\"source\":\"#input\"}]}],\"display\":\"locator('#input')\"},\"strict\":\"strict\",\"value\":\"x\",\"options\":{\"force\":false}}",
+          "reply": "{\"pages\":[],\"ok\":null,\"observed\":{\"seq\":2,\"events\":0,\"payloadCurrent\":true}}",
+          "body": "null"
+        },
+        {
+          "op": "locator.press",
+          "args": "{\"call\":{\"api\":\"locator.press\",\"timeoutMs\":222},\"target\":{\"$neo\":\"locator\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"frame\":null,\"chunks\":[{\"parts\":[{\"name\":\"css\",\"body\":[{\"simples\":[{\"selector\":{\"css\":\"#input\",\"functions\":[]},\"combinator\":\"\"}]}],\"source\":\"#input\"}]}],\"display\":\"locator('#input')\"},\"strict\":\"strict\",\"key\":\"a\",\"options\":{\"delay\":2,\"noWaitAfter\":false}}",
+          "reply": "{\"pages\":[],\"ok\":null,\"observed\":{\"seq\":3,\"events\":0,\"payloadCurrent\":true}}",
+          "body": "null"
+        },
+        {
+          "op": "locator.pressSequentially",
+          "args": "{\"call\":{\"api\":\"locator.pressSequentially\",\"timeoutMs\":222},\"target\":{\"$neo\":\"locator\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"frame\":null,\"chunks\":[{\"parts\":[{\"name\":\"css\",\"body\":[{\"simples\":[{\"selector\":{\"css\":\"#input\",\"functions\":[]},\"combinator\":\"\"}]}],\"source\":\"#input\"}]}],\"display\":\"locator('#input')\"},\"strict\":\"strict\",\"text\":\"ab\",\"options\":{\"delay\":2}}",
+          "reply": "{\"pages\":[],\"ok\":null,\"observed\":{\"seq\":4,\"events\":0,\"payloadCurrent\":true}}",
+          "body": "null"
+        },
+        {
+          "op": "locator.selectOption",
+          "args": "{\"call\":{\"api\":\"locator.selectOption\",\"timeoutMs\":222},\"target\":{\"$neo\":\"locator\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"frame\":null,\"chunks\":[{\"parts\":[{\"name\":\"css\",\"body\":[{\"simples\":[{\"selector\":{\"css\":\"#input\",\"functions\":[]},\"combinator\":\"\"}]}],\"source\":\"#input\"}]}],\"display\":\"locator('#input')\"},\"strict\":\"strict\",\"options\":[{\"valueOrLabel\":\"x\"}],\"elements\":[],\"force\":false}",
+          "reply": "{\"pages\":[],\"ok\":[\"x\"],\"observed\":{\"seq\":5,\"events\":0,\"payloadCurrent\":true}}",
+          "body": "[\"x\"]"
+        },
+        {
+          "op": "locator.selectText",
+          "args": "{\"call\":{\"api\":\"locator.selectText\",\"timeoutMs\":222},\"target\":{\"$neo\":\"locator\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"frame\":null,\"chunks\":[{\"parts\":[{\"name\":\"css\",\"body\":[{\"simples\":[{\"selector\":{\"css\":\"#input\",\"functions\":[]},\"combinator\":\"\"}]}],\"source\":\"#input\"}]}],\"display\":\"locator('#input')\"},\"strict\":\"strict\",\"force\":false}",
+          "reply": "{\"pages\":[],\"ok\":null,\"observed\":{\"seq\":6,\"events\":0,\"payloadCurrent\":true}}",
+          "body": "null"
+        },
+        {
+          "op": "locator.focus",
+          "args": "{\"call\":{\"api\":\"locator.focus\",\"timeoutMs\":222},\"target\":{\"$neo\":\"locator\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"frame\":null,\"chunks\":[{\"parts\":[{\"name\":\"css\",\"body\":[{\"simples\":[{\"selector\":{\"css\":\"#input\",\"functions\":[]},\"combinator\":\"\"}]}],\"source\":\"#input\"}]}],\"display\":\"locator('#input')\"},\"strict\":\"strict\"}",
+          "reply": "{\"pages\":[],\"ok\":null,\"observed\":{\"seq\":7,\"events\":0,\"payloadCurrent\":true}}",
+          "body": "null"
+        },
+        {
+          "op": "locator.blur",
+          "args": "{\"call\":{\"api\":\"locator.blur\",\"timeoutMs\":222},\"target\":{\"$neo\":\"locator\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"frame\":null,\"chunks\":[{\"parts\":[{\"name\":\"css\",\"body\":[{\"simples\":[{\"selector\":{\"css\":\"#input\",\"functions\":[]},\"combinator\":\"\"}]}],\"source\":\"#input\"}]}],\"display\":\"locator('#input')\"},\"strict\":\"strict\"}",
+          "reply": "{\"pages\":[],\"ok\":null,\"observed\":{\"seq\":8,\"events\":0,\"payloadCurrent\":true}}",
+          "body": "null"
+        },
+        {
+          "op": "locator.setInputFiles",
+          "args": "{\"call\":{\"api\":\"locator.setInputFiles\",\"timeoutMs\":222},\"target\":{\"$neo\":\"locator\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"frame\":null,\"chunks\":[{\"parts\":[{\"name\":\"css\",\"body\":[{\"simples\":[{\"selector\":{\"css\":\"#input\",\"functions\":[]},\"combinator\":\"\"}]}],\"source\":\"#input\"}]}],\"display\":\"locator('#input')\"},\"strict\":\"strict\",\"files\":{\"payloads\":[]}}",
+          "reply": "{\"pages\":[],\"ok\":null,\"observed\":{\"seq\":9,\"events\":0,\"payloadCurrent\":true}}",
+          "body": "null"
+        },
+        {
+          "op": "locator.dispatchEvent",
+          "args": "{\"call\":{\"api\":\"locator.dispatchEvent\",\"timeoutMs\":222},\"target\":{\"$neo\":\"locator\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"frame\":null,\"chunks\":[{\"parts\":[{\"name\":\"css\",\"body\":[{\"simples\":[{\"selector\":{\"css\":\"#input\",\"functions\":[]},\"combinator\":\"\"}]}],\"source\":\"#input\"}]}],\"display\":\"locator('#input')\"},\"strict\":\"strict\",\"type\":\"change\",\"eventInit\":{}}",
+          "reply": "{\"pages\":[],\"ok\":null,\"observed\":{\"seq\":10,\"events\":0,\"payloadCurrent\":true}}",
+          "body": "null"
+        },
+        {
+          "op": "locator.scrollIntoViewIfNeeded",
+          "args": "{\"call\":{\"api\":\"locator.scrollIntoViewIfNeeded\",\"timeoutMs\":222},\"target\":{\"$neo\":\"locator\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"frame\":null,\"chunks\":[{\"parts\":[{\"name\":\"css\",\"body\":[{\"simples\":[{\"selector\":{\"css\":\"#input\",\"functions\":[]},\"combinator\":\"\"}]}],\"source\":\"#input\"}]}],\"display\":\"locator('#input')\"},\"strict\":\"strict\"}",
+          "reply": "{\"pages\":[],\"ok\":null,\"observed\":{\"seq\":11,\"events\":0,\"payloadCurrent\":true}}",
+          "body": "null"
+        },
+        {
+          "op": "locator.waitFor",
+          "args": "{\"call\":{\"api\":\"locator.elementHandle\",\"timeoutMs\":5000},\"target\":{\"$neo\":\"locator\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"frame\":null,\"chunks\":[{\"parts\":[{\"name\":\"css\",\"body\":[{\"simples\":[{\"selector\":{\"css\":\"#input\",\"functions\":[]},\"combinator\":\"\"}]}],\"source\":\"#input\"}]}],\"display\":\"locator('#input')\"},\"strict\":\"strict\",\"state\":\"attached\",\"omitReturnValue\":false}",
+          "reply": "{\"pages\":[],\"ok\":{\"$neo\":\"element\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"seq\":2,\"node\":9,\"display\":\"<input>\"},\"observed\":{\"seq\":12,\"events\":0,\"payloadCurrent\":true}}",
+          "body": "{\"$neo\":\"element\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"seq\":2,\"node\":9,\"display\":\"<input>\"}"
+        },
+        {
+          "op": "locator.fill",
+          "args": "{\"call\":{\"api\":\"elementHandle.fill\",\"timeoutMs\":222},\"target\":{\"$neo\":\"element\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"seq\":2,\"node\":9,\"display\":\"<input>\"},\"strict\":\"strict\",\"value\":\"x\",\"options\":{\"force\":false}}",
+          "reply": "{\"pages\":[],\"ok\":null,\"observed\":{\"seq\":13,\"events\":0,\"payloadCurrent\":true}}",
+          "body": "null"
+        },
+        {
+          "op": "locator.press",
+          "args": "{\"call\":{\"api\":\"elementHandle.press\",\"timeoutMs\":222},\"target\":{\"$neo\":\"element\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"seq\":2,\"node\":9,\"display\":\"<input>\"},\"strict\":\"strict\",\"key\":\"a\",\"options\":{\"delay\":2,\"noWaitAfter\":false}}",
+          "reply": "{\"pages\":[],\"ok\":null,\"observed\":{\"seq\":14,\"events\":0,\"payloadCurrent\":true}}",
+          "body": "null"
+        },
+        {
+          "op": "locator.pressSequentially",
+          "args": "{\"call\":{\"api\":\"elementHandle.type\",\"timeoutMs\":222},\"target\":{\"$neo\":\"element\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"seq\":2,\"node\":9,\"display\":\"<input>\"},\"strict\":\"strict\",\"text\":\"ab\",\"options\":{\"delay\":2}}",
+          "reply": "{\"pages\":[],\"ok\":null,\"observed\":{\"seq\":15,\"events\":0,\"payloadCurrent\":true}}",
+          "body": "null"
+        },
+        {
+          "op": "locator.selectOption",
+          "args": "{\"call\":{\"api\":\"elementHandle.selectOption\",\"timeoutMs\":222},\"target\":{\"$neo\":\"element\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"seq\":2,\"node\":9,\"display\":\"<input>\"},\"strict\":\"strict\",\"options\":[{\"valueOrLabel\":\"x\"}],\"elements\":[],\"force\":false}",
+          "reply": "{\"pages\":[],\"ok\":[\"x\"],\"observed\":{\"seq\":16,\"events\":0,\"payloadCurrent\":true}}",
+          "body": "[\"x\"]"
+        },
+        {
+          "op": "locator.selectText",
+          "args": "{\"call\":{\"api\":\"elementHandle.selectText\",\"timeoutMs\":222},\"target\":{\"$neo\":\"element\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"seq\":2,\"node\":9,\"display\":\"<input>\"},\"strict\":\"strict\",\"force\":false}",
+          "reply": "{\"pages\":[],\"ok\":null,\"observed\":{\"seq\":17,\"events\":0,\"payloadCurrent\":true}}",
+          "body": "null"
+        },
+        {
+          "op": "locator.setInputFiles",
+          "args": "{\"call\":{\"api\":\"elementHandle.setInputFiles\",\"timeoutMs\":222},\"target\":{\"$neo\":\"element\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"seq\":2,\"node\":9,\"display\":\"<input>\"},\"strict\":\"strict\",\"files\":{\"payloads\":[]}}",
+          "reply": "{\"pages\":[],\"ok\":null,\"observed\":{\"seq\":18,\"events\":0,\"payloadCurrent\":true}}",
+          "body": "null"
+        },
+        {
+          "op": "locator.scrollIntoViewIfNeeded",
+          "args": "{\"call\":{\"api\":\"elementHandle.scrollIntoViewIfNeeded\",\"timeoutMs\":222},\"target\":{\"$neo\":\"element\",\"page\":{\"$neo\":\"page\",\"tab\":1007},\"seq\":2,\"node\":9,\"display\":\"<input>\"},\"strict\":\"strict\"}",
+          "reply": "{\"pages\":[],\"ok\":null,\"observed\":{\"seq\":19,\"events\":0,\"payloadCurrent\":true}}",
+          "body": "null"
+        }
+      ],
+      "result": "[\"strict\",\"timeout\",\"force\",\"delay\",\"noWaitAfter\",\"strict\",\"timeout\",\"force\",\"delay\",\"noWaitAfter\",\"strict\",\"timeout\",\"force\",\"delay\",\"noWaitAfter\",\"strict\",\"timeout\",\"force\",\"delay\",\"noWaitAfter\",\"strict\",\"timeout\",\"force\",\"delay\",\"noWaitAfter\",\"strict\",\"timeout\",\"force\",\"delay\",\"noWaitAfter\",\"strict\",\"timeout\",\"force\",\"delay\",\"noWaitAfter\",\"strict\",\"timeout\",\"force\",\"delay\",\"noWaitAfter\",\"strict\",\"timeout\",\"force\",\"delay\",\"noWaitAfter\",\"strict\",\"timeout\",\"force\",\"delay\",\"noWaitAfter\",\"timeout\",\"timeout\",\"force\",\"force\",\"timeout\",\"timeout\",\"delay\",\"delay\",\"noWaitAfter\",\"noWaitAfter\",\"timeout\",\"timeout\",\"delay\",\"delay\",\"timeout\",\"timeout\",\"force\",\"force\",\"timeout\",\"timeout\",\"force\",\"force\",\"timeout\",\"timeout\",\"timeout\",\"timeout\"]"
+    }
+  ]
+}
