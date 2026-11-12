@@ -168,6 +168,16 @@ impl EventHub {
         })
     }
 
+    /// The earliest moment any live run asked for the console messages and errors of the
+    /// dedicated workers of the tab whose target is `target` (`RunEvents::workers_asked_since`).
+    pub(crate) fn workers_asked_since(&self, target: &TargetId) -> Option<u64> {
+        let runs = self.runs.lock().unwrap_or_else(PoisonError::into_inner);
+        runs.iter()
+            .filter_map(Weak::upgrade)
+            .filter_map(|run| run.events.workers_asked_since(target))
+            .min()
+    }
+
     /// Claims binding `name` on the tab whose target is `target` for `run`: false when another
     /// live run holds it there. A run may claim its own name again; a name stays claimed until
     /// its binding is disposed ([`EventHub::release_binding`]) or the run that holds it ends.
@@ -487,11 +497,14 @@ mod tests {
         hub.bind(&listening);
         hub.bind(&listening);
         hub.bind(&idle);
-        let _waiting = listening.events.waiting(Subscription::Page {
-            tab: TabId(1),
-            target: target.clone(),
-            event: PageEventKind::Dialog,
-        });
+        let _waiting = listening.events.waiting(
+            Subscription::Page {
+                tab: TabId(1),
+                target: target.clone(),
+                event: PageEventKind::Dialog,
+            },
+            0,
+        );
         assert_eq!(hub.listeners(&target, PageEventKind::Dialog).len(), 1);
         assert!(hub.listeners(&target, PageEventKind::Console).is_empty());
     }

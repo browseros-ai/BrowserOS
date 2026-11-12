@@ -4,9 +4,11 @@
 //! `devtools_detection_live` detector: `console.table` timing, getters on logged values, a
 //! `debugger` pause) in three places: the top document, a cross-site iframe (an OOPIF, with its
 //! own CDP session) and a dedicated worker. The test drives the tab through the real prelude and
-//! `Playwright::invoke` in phases (goto, snapshots, reads, a click, a frame read) and prints the
-//! detector counts and the `Runtime.enable` commands Neo sent after each phase, so a detection
-//! can be traced to the phase, and session kind, that caused it.
+//! `Playwright::invoke` in phases (goto, snapshots, reads, a click, a frame read, a
+//! `worker.evaluate`, then a console listener) and prints the detector counts and the
+//! `Runtime.enable` commands Neo sent after each phase, so a detection can be traced to the
+//! phase, and session kind, that caused it. Until the script asks for console events, no session
+//! (page, OOPIF or worker) may get `Runtime.enable`, and no place may detect anything.
 //!
 //! Needs BrowserOS with CDP on `BROWSEROS_CDP_PORT` (default 9005):
 //! `cargo test -p neo-playwright --test devtools_detection_live -- --ignored --nocapture`.
@@ -142,12 +144,43 @@ async fn reports_what_a_neo_driven_tab_detects_per_phase() -> TestResult {
     let top_url = server.url("127.0.0.1", "/top.html");
 
     let run = Arc::new(LiveRun::connect().await?);
+    // The `worker.evaluate` phase finds the detector's worker through `page.workers()`.
+    run.report_workers();
     let page = run.new_page().await?;
     let mut report = Vec::new();
+    let phases = phases(&top_url);
+    let outcome = async {
+        for (name, body) in phases {
+            run.record_methods();
+            let value = script(&run, &page, &body).await;
+            time::sleep(Duration::from_millis(1500)).await;
+            let enables = run
+                .recorded_methods()
+                .iter()
+                .filter(|method| method.as_str() == "Runtime.enable")
+                .count();
+            let seen = detections(&run, &page).await?;
+            let line = json!({ "phase": name, "result": value.map_err(|e| e.to_string()),
+                               "runtimeEnables": enables, "detections": seen });
+            eprintln!("DETECTION {line}");
+            report.push(line);
+        }
+        Ok::<_, Box<dyn Error>>(())
+    }
+    .await;
+    run.close_page(&page).await;
+    drop(server);
+    outcome?;
+    judge(&report)
+}
+
+/// The phases, in order, each a script body run on the fixture's tab.
+fn phases(top_url: &str) -> [(&'static str, String); 8] {
     // Counts are cumulative from the page's load. `idle` is the control: the tab sits with no
     // op running. `console listener` comes last, because asking for console events is what
-    // turns reporting on for the page (a Runtime lease), so its rounds are expected to be slow.
-    let phases: [(&str, String); 7] = [
+    // turns reporting on for the page and its worker (Runtime leases), so its rounds are
+    // expected to be slow.
+    [
         (
             "goto",
             format!("await page.goto({top_url:?}); return page.url();"),
@@ -172,56 +205,104 @@ async fn reports_what_a_neo_driven_tab_detects_per_phase() -> TestResult {
             "return await page.frameLocator('#child').locator('#inner').textContent();".to_owned(),
         ),
         (
+            "worker evaluate",
+            "const [worker] = page.workers(); let sum = 0; \
+             for (let i = 0; i < 5; i++) sum += await worker.evaluate(() => 1); return sum;"
+                .to_owned(),
+        ),
+        (
             "console listener",
             "const seen = []; page.on('console', (message) => seen.push(message.text())); \
              await page.locator('#save').click(); await page.waitForTimeout(2000); \
              return seen.filter((text) => text.startsWith('save failed')).length;"
                 .to_owned(),
         ),
-    ];
-    let outcome = async {
-        for (name, body) in phases {
-            run.record_methods();
-            let value = script(&run, &page, &body).await;
-            time::sleep(Duration::from_millis(1500)).await;
-            let enables = run
-                .recorded_methods()
-                .iter()
-                .filter(|method| method.as_str() == "Runtime.enable")
-                .count();
-            let seen = detections(&run, &page).await?;
-            let line = json!({ "phase": name, "result": value.map_err(|e| e.to_string()),
-                               "runtimeEnables": enables, "detections": seen });
-            eprintln!("DETECTION {line}");
-            report.push(line);
-        }
-        Ok::<_, Box<dyn Error>>(())
-    }
-    .await;
-    run.close_page(&page).await;
-    drop(server);
-    outcome?;
+    ]
+}
+
+/// Fails unless every phase before the console listener left every place quiet; prints what the
+/// listener phase cost.
+#[expect(
+    clippy::print_stderr,
+    reason = "the listener's cost is the measurement"
+)]
+fn judge(report: &[Value]) -> TestResult {
+    // One number of one place in one phase's line, 0 when absent.
+    let count = |line: &Value, place: &str, key: &str| {
+        line.pointer(&format!("/detections/{place}/{key}"))
+            .and_then(Value::as_u64)
+            .unwrap_or(0)
+    };
+    let phase = |line: &Value| line.get("phase").cloned().unwrap_or(Value::Null);
     // The detector's 5 ms threshold also counts a round the shared machine stalled; reporting
-    // makes every round slow and fires the getters. Judge the top document by that signature,
-    // over every phase before the script asked for console events.
-    let quiet = report
+    // makes every round slow and fires the getters. Judge each place by that signature, over
+    // every phase before the script asked for console events.
+    let quiet: Vec<&Value> = report
         .iter()
-        .take_while(|line| line["phase"] != "console listener")
-        .last()
-        .ok_or("no phase ran")?;
-    let main = &quiet["detections"]["main"];
-    for getter in ["errorStackGetter", "elementIdGetter", "debuggerPause"] {
+        .take_while(|line| phase(line) != "console listener")
+        .collect();
+    for line in report {
         assert!(
-            main["hits"].get(getter).is_none(),
-            "the top document fired {getter}: {report:?}"
+            line.pointer("/result/Ok").is_some(),
+            "every phase's script ran: {line}"
         );
     }
-    let rounds = main["rounds"].as_u64().unwrap_or(0);
-    let slow = main["over20"].as_u64().unwrap_or(0);
-    assert!(rounds >= 20, "the detector barely ran: {report:?}");
-    assert!(
-        slow * 10 < rounds,
-        "the top document's console was slow on {slow} of {rounds} rounds: {report:?}"
+    let worker_evaluate = report
+        .iter()
+        .find(|line| phase(line) == "worker evaluate")
+        .and_then(|line| line.pointer("/result/Ok"));
+    assert_eq!(
+        worker_evaluate,
+        Some(&json!(5)),
+        "five worker.evaluate calls answered: {report:?}"
     );
+    for line in &quiet {
+        assert_eq!(
+            line.get("runtimeEnables"),
+            Some(&json!(0)),
+            "no session gets Runtime.enable before a listener asks: {line}"
+        );
+    }
+    let last_quiet = quiet.last().ok_or("no phase ran")?;
+    for place in ["main", "frame", "worker"] {
+        let hits = last_quiet.pointer(&format!("/detections/{place}/hits"));
+        for getter in ["errorStackGetter", "elementIdGetter", "debuggerPause"] {
+            assert!(
+                hits.and_then(|hits| hits.get(getter)).is_none(),
+                "the {place} fired {getter}: {report:?}"
+            );
+        }
+        let rounds = count(last_quiet, place, "rounds");
+        let slow = count(last_quiet, place, "over20");
+        assert!(
+            rounds >= 20,
+            "the {place}'s detector barely ran: {report:?}"
+        );
+        assert!(
+            slow * 10 < rounds,
+            "the {place}'s console was slow on {slow} of {rounds} rounds: {report:?}"
+        );
+    }
+    // What asking for console events costs, per place: the listener phase's own rounds.
+    if let Some(listening) = report
+        .last()
+        .filter(|line| phase(line) == "console listener")
+    {
+        let mut cost = serde_json::Map::new();
+        for place in ["main", "frame", "worker"] {
+            let delta = |key: &str| {
+                count(listening, place, key).saturating_sub(count(last_quiet, place, key))
+            };
+            let hits = listening
+                .pointer(&format!("/detections/{place}/hits"))
+                .cloned()
+                .unwrap_or(Value::Null);
+            cost.insert(
+                place.to_owned(),
+                json!({ "rounds": delta("rounds"), "over20": delta("over20"), "hits": hits }),
+            );
+        }
+        eprintln!("DETECTION listener cost {}", Value::Object(cost));
+    }
     Ok(())
 }

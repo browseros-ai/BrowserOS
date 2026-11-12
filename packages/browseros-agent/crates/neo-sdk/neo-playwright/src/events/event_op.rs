@@ -699,13 +699,16 @@ async fn wait(
     let run = scope.run_state();
     pw.events().bind(run);
     // While it waits, the watcher records and holds what this wait could receive.
-    let _waiting = run.events.waiting(subscription.clone());
+    let _waiting = run.events.waiting(subscription.clone(), input.since);
     if matches!(subscription, Subscription::Context(_)) {
         observe_context(scope).await?;
     }
     let found = async {
         // Inside the wait's deadline: a slow enable ends at the script's timeout too.
         let _runtime = lease_runtime(pw, scope, &subscription, input.since).await?;
+        // The watcher leases the tab's workers when it next reconciles; asking now keeps a short
+        // wait from expiring before its workers report (`target_watcher.rs`, `WorkerRuntime`).
+        pw.synchronize_events().await;
         first_event(
             pw,
             scope,

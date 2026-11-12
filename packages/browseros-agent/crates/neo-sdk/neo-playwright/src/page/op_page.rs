@@ -8,7 +8,7 @@ use crate::op_scope::{AdmittedPage, OpScope};
 use crate::page::PageState;
 use crate::probe::ProbeFailure;
 use crate::target::PageRef;
-use crate::world::{Endpoint, FrameWorlds, Installer, IsolatedWorld, Place, SessionKind};
+use crate::world::{Endpoint, FrameWorlds, Installer, IsolatedWorld, Place};
 use crate::{Playwright, PlaywrightError};
 
 /// The page an op acts on. Admission (the run view's profile and window check) happens once,
@@ -111,23 +111,6 @@ impl<'op> OpPage<'op> {
                 .browser()
                 .protocol_session(self.admitted.session.session_id.clone()),
             frame: FrameId(self.admitted.session.target_id.as_str().to_owned()),
-            kind: SessionKind::Page,
-        }
-    }
-
-    /// A child frame on the session core's frame registry gave it: the page's own for a
-    /// same-process child of the main frame, else an OOPIF's (or the one an OOPIF's
-    /// same-process child shares).
-    pub(crate) fn child_endpoint(&self, session: ProtocolSession, frame: FrameId) -> Endpoint {
-        let kind = if session.session_id() == Some(&self.admitted.session.session_id) {
-            SessionKind::Page
-        } else {
-            SessionKind::Oopif
-        };
-        Endpoint {
-            session,
-            frame,
-            kind,
         }
     }
 
@@ -146,7 +129,7 @@ impl<'op> OpPage<'op> {
             .await
             .map_err(ProbeFailure::from_core)?;
         let installer = Installer {
-            sessions: self.pw.sessions(),
+            browser: self.pw.browser(),
             epoch: self.pw.epoch(),
         };
         self.state.frames().world(installer, endpoint, place).await

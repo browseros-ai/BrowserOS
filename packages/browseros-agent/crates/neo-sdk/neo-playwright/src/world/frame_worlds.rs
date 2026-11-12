@@ -5,26 +5,28 @@ use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
-use browseros_core::{FrameId, ProtocolSession, SessionId, TargetId};
+use browseros_core::{BrowserSession, FrameId, ProtocolSession, SessionId, TargetId};
 use tokio::sync::OnceCell;
 
 use crate::probe::ProbeFailure;
 use crate::world::frame_attach_log::{FrameAttachLog, FrameEvent, Taken};
-use crate::world::{Epoch, FrameSeq, Installed, IsolatedWorld, SessionKind, SessionSetup};
+use crate::world::{ContextWatch, Epoch, FrameSeq, Installed, IsolatedWorld};
 
-/// Where a world is installed: a frame on a raw session, and how that session was set up.
+/// Where a world is installed: a frame on the raw session core's frame registry gave it. That is
+/// the page's own session for the main frame and its same-process children, else an OOPIF's (or
+/// the one an OOPIF's same-process child shares).
 #[derive(Clone, Debug)]
 pub(crate) struct Endpoint {
     pub(crate) session: ProtocolSession,
     pub(crate) frame: FrameId,
-    pub(crate) kind: SessionKind,
 }
 
-/// What every install on one page shares besides its endpoint.
-#[derive(Clone, Copy, Debug)]
+/// What every install on one page shares besides its endpoint. No `Debug`: the browser session
+/// is not worth printing.
+#[derive(Clone, Copy)]
 pub(crate) struct Installer<'a> {
-    /// The process's per-session setup (`Runtime.enable` on OOPIFs).
-    pub(crate) sessions: &'a SessionSetup,
+    /// The connection whose `Runtime` events an install watches (`ContextWatch`).
+    pub(crate) browser: &'a BrowserSession,
     /// The `Playwright` instance's epoch.
     pub(crate) epoch: &'a Epoch,
 }
@@ -213,8 +215,8 @@ impl FrameWorlds {
         self
     }
 
-    /// The world of `endpoint`'s frame, installing it on first use: the session's setup, then
-    /// the engine and boot (`IsolatedWorld::install`). A child's parent link is
+    /// The world of `endpoint`'s frame, installing it on first use: the engine and boot
+    /// (`IsolatedWorld::install`). A child's parent link is
     /// recorded on every call, so a later ref jump into the frame finds its parents.
     pub(crate) async fn world(
         &self,
@@ -232,12 +234,10 @@ impl FrameWorlds {
             frame: endpoint.frame.clone(),
         };
         self.world_with(key, place, |candidate| async move {
-            installer
-                .sessions
-                .ensure(&endpoint.session, endpoint.kind)
-                .await?;
-            // Subscribed here, before the create, so the new world's event cannot be missed.
-            let watch = installer.sessions.watch_contexts();
+            // Subscribed here, before the create, so the new world's event cannot be missed. No
+            // `Runtime.enable` for it: the watch reads only what a `Runtime` lease someone else
+            // holds on the session already reports (`IsolatedWorld::install`).
+            let watch = ContextWatch::new(installer.browser.connection().events());
             IsolatedWorld::install(
                 endpoint.session.clone(),
                 endpoint.frame.clone(),

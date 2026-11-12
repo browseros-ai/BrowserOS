@@ -1,6 +1,11 @@
 //! Dedicated worker endpoints, owned by the target watcher and shared with evaluation ops.
-//! A worker's target identity survives duplicate auto-attaches; its chosen session and
-//! execution context belong to one connection epoch. Closing wakes every in-flight call.
+//! A worker's target identity survives duplicate auto-attaches; its chosen session belongs to
+//! one connection epoch. Closing wakes every in-flight call.
+//!
+//! Readiness comes from `Inspector.workerScriptLoaded`, which Chromium sends without any domain
+//! enabled, never from `Runtime` context events: `Runtime` stays off on a worker session unless a
+//! run listens for its console (`target_watcher.rs`), so scripts run in the worker's only
+//! context, its global scope, as the session's default context.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, PoisonError};
@@ -19,15 +24,26 @@ pub struct WorkerInfo {
     pub url: String,
 }
 
-/// The execution context is unavailable during startup and permanently gone after detach.
+/// Whether a script may run in the worker's global scope: not before its startup script has run
+/// (its globals are not defined yet), and never again after detach.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum WorkerContext {
-    Starting {
-        context: Option<i64>,
-        script_loaded: bool,
-    },
-    Ready(i64),
+    Starting,
+    Ready,
     Closed,
+}
+
+impl WorkerContext {
+    /// A new endpoint's state. Without `Inspector.workerScriptLoaded` (Chromium before 143)
+    /// nothing will report the script, so the worker counts as ready once attached, as
+    /// upstream treats it there.
+    fn attached(wait_for_script: bool) -> Self {
+        if wait_for_script {
+            Self::Starting
+        } else {
+            Self::Ready
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -48,12 +64,12 @@ impl WorkerEndpoint {
             .clone()
     }
 
+    /// Chromium reports `Inspector.workerScriptLoaded` again on the new session at attach when
+    /// the script already ran, so a rebound endpoint starts over.
     pub(crate) fn rebind(&self, session: ProtocolSession, wait_for_script: bool) {
         *self.session.lock().unwrap_or_else(PoisonError::into_inner) = session;
-        self.context.send_replace(WorkerContext::Starting {
-            context: None,
-            script_loaded: !wait_for_script,
-        });
+        self.context
+            .send_replace(WorkerContext::attached(wait_for_script));
     }
 }
 
@@ -76,10 +92,7 @@ impl WorkerTable {
         if workers.contains_key(&info.id) {
             return false;
         }
-        let (context, _) = watch::channel(WorkerContext::Starting {
-            context: None,
-            script_loaded: !wait_for_script,
-        });
+        let (context, _) = watch::channel(WorkerContext::attached(wait_for_script));
         workers.insert(
             info.id.clone(),
             Arc::new(WorkerEndpoint {
@@ -111,37 +124,9 @@ impl WorkerTable {
             .collect()
     }
 
-    pub(crate) fn context(&self, session: &SessionId, context: i64) {
-        for worker in self
-            .workers
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .values()
-        {
-            if worker.session().session_id() == Some(session) {
-                worker.context.send_modify(|state| {
-                    *state = match *state {
-                        WorkerContext::Starting {
-                            script_loaded: false,
-                            ..
-                        } => WorkerContext::Starting {
-                            context: Some(context),
-                            script_loaded: false,
-                        },
-                        WorkerContext::Starting {
-                            script_loaded: true,
-                            ..
-                        }
-                        | WorkerContext::Ready(_) => WorkerContext::Ready(context),
-                        WorkerContext::Closed => WorkerContext::Closed,
-                    };
-                });
-            }
-        }
-    }
-
-    /// Chromium 143+ announces when the worker's startup script has finished. Evaluating
-    /// at executionContextCreated alone can run before the script defines its globals.
+    /// Chromium 143+ announces when the worker's startup script has finished, and again at
+    /// attach to a worker whose script already ran. A script run before it could find the
+    /// worker's globals undefined.
     pub(crate) fn script_loaded(&self, session: &SessionId) {
         for worker in self
             .workers
@@ -150,18 +135,12 @@ impl WorkerTable {
             .values()
         {
             if worker.session().session_id() == Some(session) {
-                worker.context.send_modify(|state| {
-                    *state = match *state {
-                        WorkerContext::Starting {
-                            context: Some(id), ..
-                        }
-                        | WorkerContext::Ready(id) => WorkerContext::Ready(id),
-                        WorkerContext::Starting { context: None, .. } => WorkerContext::Starting {
-                            context: None,
-                            script_loaded: true,
-                        },
-                        WorkerContext::Closed => WorkerContext::Closed,
-                    };
+                worker.context.send_if_modified(|state| {
+                    let starting = *state == WorkerContext::Starting;
+                    if starting {
+                        *state = WorkerContext::Ready;
+                    }
+                    starting
                 });
             }
         }
@@ -212,11 +191,9 @@ mod tests {
             loop {
                 let state = *context.borrow_and_update();
                 match state {
-                    WorkerContext::Ready(id) => {
-                        return Ok((retained.session().session_id().cloned(), id));
-                    }
+                    WorkerContext::Ready => return Ok(retained.session().session_id().cloned()),
                     WorkerContext::Closed => return Err("a live worker was treated as closed"),
-                    WorkerContext::Starting { .. } => {
+                    WorkerContext::Starting => {
                         if context.changed().await.is_err() {
                             return Err("startup channel closed");
                         }
@@ -226,14 +203,18 @@ mod tests {
         });
         let recovered = SessionId::from("recovered-session");
         endpoint.rebind(browser.protocol_session(recovered.clone()), true);
-        table.context(&old, 1);
-        table.context(&recovered, 42);
+        table.script_loaded(&old);
+        assert_eq!(
+            *endpoint.context.borrow(),
+            WorkerContext::Starting,
+            "the replaced session's report is not the recovered endpoint's"
+        );
         table.script_loaded(&recovered);
         let answered = time::timeout(Duration::from_secs(1), waiter).await???;
         assert_eq!(
             answered,
-            (Some(recovered), 42),
-            "the original waiting call uses the recovered session and its context"
+            Some(recovered),
+            "the original waiting call uses the recovered session"
         );
         Ok(())
     }

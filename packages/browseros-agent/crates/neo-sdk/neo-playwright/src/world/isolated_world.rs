@@ -83,7 +83,8 @@ enum Reported {
     Created(String),
     /// Nothing about the id: the world already existed, so the create made no context and the
     /// browser sent no event (measured: a second create on the same session, and the first
-    /// create from a second connection, which is how a restarted claw-sdk meets a world).
+    /// create from a second connection, which is how a restarted claw-sdk meets a world); or
+    /// the session reports no contexts at all, because `Runtime` is off on it.
     Nothing,
     /// The id may name another context by now: the session cleared its contexts, destroyed
     /// the id, or created a context other than this world under it, which is how a renderer
@@ -137,8 +138,9 @@ struct CreatedWorld {
 enum Named {
     /// The world's `uniqueId`, which no other context in the browser ever carries.
     Unique(String),
-    /// The numeric id the create returned, for a world that already existed. Only ever sent
-    /// between two watch reads that saw nothing happen to the id (see `install`).
+    /// The numeric id the create returned, for a world that already existed or one the session
+    /// did not report. Only ever sent between two watch reads that saw nothing happen to the id
+    /// (see `install`).
     Number(ContextId),
 }
 
@@ -160,16 +162,17 @@ impl IsolatedWorld {
     /// Creates (or finds, by name) the frame's `browseros-engine` world and installs the engine
     /// there, or re-keys the probe already there. `candidate` is the seq for a new
     /// document; the reply's seq wins, because a world this `Playwright` already booted keeps
-    /// the one it has, and a re-key reports the seq it replaced. `Runtime` must already be
-    /// enabled on the session (`SessionSetup`) so the watch observes context creation.
+    /// the one it has, and a re-key reports the seq it replaced. The install never enables
+    /// `Runtime` itself: the watch reads only what the session already reports.
     ///
     /// ```text
     ///  watch (subscribed by the caller)                       Runtime events of the session
     ///  Page.createIsolatedWorld { frameId, worldName }        → a numeric id N
     ///  read the watch about N:
-    ///    created  { id N, frameId, isolated, browseros-engine, uniqueId U }   a new world
+    ///    created  { id N, frameId, isolated, browseros-engine, uniqueId U }   a new world,
+    ///                                                      while Runtime reports on the session
     ///      Runtime.evaluate { uniqueContextId: U, "globalThis", group }
-    ///    nothing  (the world already existed: no event)
+    ///    nothing  (the world already existed, or Runtime is off: no event)
     ///      Runtime.evaluate { contextId: N, "globalThis", group }, then read again: nothing
     ///    churned  → Gone
     ///  Runtime.callFunctionOn { handle, install_function,     engine if absent, boot
@@ -189,9 +192,16 @@ impl IsolatedWorld {
     /// evaluate's reply. The context that N names in a new
     /// renderer has to be reported to the session before a command can run in it (measured:
     /// `executionContextsCleared`, then `executionContextCreated` for N, both ahead of the
-    /// evaluate's reply), so a swap in the window reads as churn. That needs `Runtime` enabled
-    /// on the session: core enables it on page sessions, `SessionSetup` on OOPIF sessions.
-    /// Any churn fails `Gone`, and the caller retries the install as for any gone world.
+    /// evaluate's reply), so a swap in the window reads as churn. Any churn fails `Gone`, and
+    /// the caller retries the install as for any gone world.
+    ///
+    /// That guard needs the session to report its contexts, which it does only while `Runtime`
+    /// is enabled there. Neo leaves `Runtime` off on page and OOPIF sessions alike: while it is
+    /// on, every console call serializes its arguments for the inspector, and sites time that
+    /// to detect an open inspector. So by default the session reports nothing, every install takes N,
+    /// and a renderer swap inside the window goes unseen; the guard holds only while some
+    /// `Runtime` lease (`browseros_core::RuntimeLeases`, e.g. a run listening for console
+    /// messages) keeps the session reporting.
     pub(crate) async fn install(
         session: ProtocolSession,
         frame: FrameId,

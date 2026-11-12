@@ -29,6 +29,11 @@
 //!   (`events_targeted`), unbounded, so a call is never lost to the broadcast ring's lag and a
 //!   page never waits forever on an answer nobody heard; the broadcast is drained first, so the
 //!   `Runtime.executionContextCreated` that named the caller's frame is already in hand.
+//! - **Workers.** Each dedicated worker the page sessions auto-attach is armed to auto-attach its
+//!   own nested workers and released from its start-up pause, with `Runtime` left off: while it
+//!   is on, every console call in the worker serializes its arguments for the inspector, which a
+//!   site can time to detect an open inspector. A worker session takes a `Runtime` lease only while some
+//!   run listens for console messages or page errors on its tab ([`WorkerRuntime`]).
 //! - **Console and page errors** are recorded only while some run listens for them on that tab,
 //!   so a chatty page cannot push popups and dialogs out of the ring. BrowserOS in hosted mode
 //!   sends neither (measured: no `Runtime.consoleAPICalled` and no `Runtime.exceptionThrown`
@@ -41,7 +46,8 @@ use std::time::Duration;
 
 use browseros_cdp::CdpEvent;
 use browseros_core::{
-    BrowserSession, BrowserView, CoreError, FrameId, ProtocolSession, SessionId, TargetId,
+    BrowserSession, BrowserView, CoreError, FrameId, ProtocolSession, RuntimeLease, SessionId,
+    TargetId,
 };
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
@@ -62,6 +68,7 @@ use crate::events::page_event::{
     DownloadStarted, ExceptionParams, FileChooserOpened, OpenedPage, PageError, PageEvent,
     WindowKind,
 };
+use crate::events::worker_table::WorkerContext;
 use crate::events::{PageEventKind, WatcherProgress, navigation_event};
 use crate::world::{BackendNodeId, FrameAttachLog, FrameEvent};
 
@@ -165,6 +172,8 @@ struct Watcher {
     page_sessions: HashSet<SessionId>,
     /// Only the chosen auto-attach endpoint publishes a worker's console and close.
     worker_sessions: HashMap<SessionId, String>,
+    /// `Runtime` on each chosen worker session: off unless a run listens on its tab.
+    worker_runtime: HashMap<SessionId, WorkerRuntime>,
     /// Older Chromium has no workerScriptLoaded event and uses context creation instead.
     worker_script_events: Option<bool>,
     /// Watcher-owned root sessions only auto-attach descendants; page Runtime stays off.
@@ -185,6 +194,17 @@ struct Watcher {
     /// Window lookups report their popup back on this channel, so only this task writes the
     /// log. The receiving end is a local of the task's loop.
     found: UnboundedSender<OpenedPage>,
+}
+
+/// A worker session's `Runtime` reporting, which its console messages and uncaught errors need.
+/// While it is on, every console call in the worker serializes its arguments for the inspector,
+/// and a site can time that to detect an open inspector, so it is on only while some run listens for
+/// console messages or page errors on the worker's tab. `worker.evaluate` needs none of it.
+enum WorkerRuntime {
+    /// Off: no run asks.
+    Off,
+    /// On until the lease drops: the session's last lease switches `Runtime` off again.
+    On { _lease: RuntimeLease },
 }
 
 /// The watcher owns only this root attachment, fenced to the socket that created it.
@@ -405,6 +425,7 @@ impl Watcher {
             sessions: HashMap::new(),
             page_sessions: HashSet::new(),
             worker_sessions: HashMap::new(),
+            worker_runtime: HashMap::new(),
             worker_script_events: None,
             root_observers: HashMap::new(),
             lifecycle_sources: LifecycleSources::default(),
@@ -464,6 +485,9 @@ impl Watcher {
                     if let Some(target) = request.closed {
                         for worker in self.writer.hub().workers.list(&target) { self.close_worker(&worker.id); }
                     }
+                    // Every op synchronizes before it replies, so a listener the op added has
+                    // its tab's workers reporting before the script's next call.
+                    self.lease_worker_runtime().await;
                     let _ = request.done.send(());
                 }
                 Some(opened) = found.recv() => self.found(opened),
@@ -484,13 +508,6 @@ impl Watcher {
         match method {
             "Inspector.workerScriptLoaded" => self.writer.hub().workers.script_loaded(&session),
             "Runtime.executionContextCreated" => {
-                if let Some(id) = params
-                    .get("context")
-                    .and_then(|context| context.get("id"))
-                    .and_then(Value::as_i64)
-                {
-                    self.writer.hub().workers.context(&session, id);
-                }
                 if let Some(ContextCreated { context }) = parse(params)
                     && context.aux_data.is_default
                     && let Some(frame) = context.aux_data.frame_id
@@ -516,6 +533,7 @@ impl Watcher {
     /// A session went: its tab and its contexts are forgotten.
     fn session_detached(&mut self, session: &SessionId) {
         self.root_observers.remove(session);
+        self.worker_runtime.remove(session);
         if let Some(id) = self.worker_sessions.remove(session) {
             self.close_worker(&id);
         }
@@ -609,6 +627,8 @@ impl Watcher {
                 self.close_unanswered(dialog);
             }
         }
+        // Catches a `waitForEvent` that started mid-op, and lets go once a run stops listening.
+        self.lease_worker_runtime().await;
     }
 
     /// Learns the tabs that exist and turns discovery on. `changed`: the connection is a new
@@ -670,6 +690,7 @@ impl Watcher {
                 self.close_worker(&id);
             }
             self.worker_sessions.clear();
+            self.worker_runtime.clear();
             self.worker_script_events = None;
             self.root_observers.clear();
             self.sessions.clear();
@@ -913,6 +934,7 @@ impl Watcher {
         if let Some(worker) = self.writer.hub().workers.remove(id) {
             if let Some(session) = worker.session().session_id() {
                 self.worker_sessions.remove(session);
+                self.worker_runtime.remove(session);
                 self.sessions.remove(session);
             }
             self.writer.record(PageEvent::Worker {
@@ -950,8 +972,9 @@ impl Watcher {
         supported
     }
 
-    /// Reattach after event loss with a fresh Runtime agent. This replays both context and
-    /// script-loaded notifications; retaining the old worker ID preserves client identity.
+    /// Reattach a worker still starting after event loss: Chromium reports
+    /// `Inspector.workerScriptLoaded` at attach when the script already ran, so the lost report
+    /// comes again. Retaining the old worker ID preserves client identity.
     async fn recover_workers(&mut self, targets: &[TargetInfo]) {
         #[derive(Deserialize)]
         #[serde(rename_all = "camelCase")]
@@ -963,12 +986,10 @@ impl Watcher {
                 .sessions
                 .values()
                 .find_map(|page| self.writer.hub().workers.get(page, &target.target_id));
-            if known.as_ref().is_some_and(|worker| {
-                matches!(
-                    *worker.context.borrow(),
-                    super::worker_table::WorkerContext::Ready(_)
-                )
-            }) {
+            if known
+                .as_ref()
+                .is_some_and(|worker| *worker.context.borrow() == WorkerContext::Ready)
+            {
                 continue;
             }
             let owner = known
@@ -1006,6 +1027,7 @@ impl Watcher {
             if let Some(worker) = known {
                 if let Some(old_session) = worker.session().session_id() {
                     self.worker_sessions.remove(old_session);
+                    self.worker_runtime.remove(old_session);
                     self.sessions.remove(old_session);
                 }
                 let session = self
@@ -1018,8 +1040,8 @@ impl Watcher {
                 worker.rebind(session.clone(), wait_for_script);
                 self.sessions.insert(attached.session_id.clone(), owner);
                 self.worker_sessions
-                    .insert(attached.session_id, worker.info.id.clone());
-                Self::enable_worker(&session).await;
+                    .insert(attached.session_id.clone(), worker.info.id.clone());
+                self.resume_worker(&session, &attached.session_id).await;
             } else {
                 let info = super::worker_table::WorkerInfo {
                     id: target.target_id.clone(),
@@ -1057,7 +1079,8 @@ impl Watcher {
                 .await;
             return;
         }
-        self.worker_sessions.insert(session_id, info.id.clone());
+        self.worker_sessions
+            .insert(session_id.clone(), info.id.clone());
         if announce {
             self.writer.record(PageEvent::Worker {
                 target: tab,
@@ -1065,22 +1088,82 @@ impl Watcher {
                 closed: false,
             });
         }
-        Self::enable_worker(&session).await;
+        self.resume_worker(&session, &session_id).await;
     }
 
-    async fn enable_worker(session: &ProtocolSession) {
-        // Runtime.enable replays startup contexts and console messages. Arm recursive
-        // attachment as upstream does, so nested workers belong to the same Page.
-        let _ = session.send_value("Runtime.enable", json!({})).await;
+    /// Readies a chosen worker session and releases the worker from its start-up pause, which
+    /// must happen whatever else fails: a worker left paused never runs. Recursive attachment is
+    /// armed as upstream arms it, so nested workers belong to the same page. `Runtime` goes on
+    /// only if a run already listens on the tab, and before the release, so the worker's first
+    /// console call is reported.
+    async fn resume_worker(&mut self, session: &ProtocolSession, id: &SessionId) {
         let _ = session
             .send_value(
                 "Target.setAutoAttach",
                 json!({"autoAttach": true, "waitForDebuggerOnStart": true, "flatten": true}),
             )
             .await;
+        self.worker_runtime.insert(id.clone(), WorkerRuntime::Off);
+        self.lease_worker(id).await;
         let _ = session
             .send_value("Runtime.runIfWaitingForDebugger", json!({}))
             .await;
+    }
+
+    /// Brings every chosen worker session's `Runtime` in line with who listens now.
+    async fn lease_worker_runtime(&mut self) {
+        let sessions: Vec<SessionId> = self.worker_sessions.keys().cloned().collect();
+        for session in sessions {
+            self.lease_worker(&session).await;
+        }
+    }
+
+    /// Takes a `Runtime` lease on worker session `id` while some run asks for console messages
+    /// or page errors on its tab, and drops it once none does ([`WorkerRuntime`]). A run asks
+    /// through a listener only where it leased its page's `Runtime` for them, so a tab's
+    /// workers report exactly when its page does.
+    ///
+    /// The lease's floor is where the browser's replay of the worker's stored history starts to
+    /// count (`RuntimeLeases::floor_ms`): the `since` of the earliest ask, so a listener or a
+    /// wait still sees everything the worker logged after it began, and nothing from before,
+    /// however long the watcher took to get here.
+    async fn lease_worker(&mut self, id: &SessionId) {
+        let since = self
+            .sessions
+            .get(id)
+            .and_then(|tab| self.writer.hub().workers_asked_since(tab));
+        let since = match (since, self.worker_runtime.get(id)) {
+            // Not a chosen worker session, or already as it should be.
+            (_, None)
+            | (Some(_), Some(WorkerRuntime::On { .. }))
+            | (None, Some(WorkerRuntime::Off)) => {
+                return;
+            }
+            (None, Some(WorkerRuntime::On { .. })) => {
+                // Replacing the held lease drops it.
+                self.worker_runtime.insert(id.clone(), WorkerRuntime::Off);
+                return;
+            }
+            (Some(since), Some(WorkerRuntime::Off)) => since,
+        };
+        let session = self
+            .browser
+            .protocol_session(id.clone())
+            .at_connection_epoch();
+        // A failed enable leaves it off; the next pass tries again while the worker lives.
+        if let Ok(lease) = self
+            .browser
+            .page_signals
+            .runtime_leases()
+            .acquire(
+                &session,
+                Duration::from_millis(since).as_secs_f64() * 1000.0,
+            )
+            .await
+        {
+            self.worker_runtime
+                .insert(id.clone(), WorkerRuntime::On { _lease: lease });
+        }
     }
 
     async fn attached(&mut self, parent: Option<&SessionId>, attached: Attached) {
@@ -1352,7 +1435,9 @@ impl Watcher {
     /// must see only what came after it asked, as it did while `Runtime` stayed on from attach.
     fn replayed(&self, session: &SessionId, params: &Value) -> bool {
         let Some(floor) = self.browser.page_signals.runtime_leases().floor_ms(session) else {
-            // Workers and OOPIFs still keep `Runtime` on without a lease.
+            // Unleased, `Runtime` is off on every session Neo drives (a worker reports only
+            // under its `WorkerRuntime` lease, an OOPIF never), so a page session's report is
+            // core's console harvest replaying history.
             return self.page_sessions.contains(session);
         };
         params
@@ -1623,13 +1708,17 @@ mod worker_observation_tests {
     use std::error::Error;
     use std::sync::Arc;
 
-    use browseros_core::testing::TestConnection;
-    use browseros_core::{BrowserSession, BrowserSessionHooks, CdpConnection, SessionId, TargetId};
+    use browseros_core::testing::{TestCall, TestConnection};
+    use browseros_core::{
+        BrowserSession, BrowserSessionHooks, CdpConnection, SessionId, TabId, TargetId,
+    };
     use serde_json::json;
+    use tokio::task;
 
     use super::Watcher;
     use crate::events::worker_table::WorkerInfo;
-    use crate::events::{EventHub, WatcherProgress};
+    use crate::events::{EventHub, PageEventKind, Subscription, WatcherProgress};
+    use crate::run_state::RunState;
     use crate::world::FrameAttachLog;
 
     #[tokio::test]
@@ -1675,54 +1764,228 @@ mod worker_observation_tests {
         Ok(())
     }
 
-    #[tokio::test]
-    async fn a_duplicate_worker_attachment_releases_its_startup_pause() -> Result<(), Box<dyn Error>>
-    {
-        let connection = TestConnection::new([
-            ("Browser.getVersion", json!({"product":"Chrome/143.0"})),
-            ("Runtime.enable", json!({})),
-            ("Target.setAutoAttach", json!({})),
-            ("Runtime.runIfWaitingForDebugger", json!({})),
-        ]);
+    /// A watcher over a scripted browser, with the hub it writes.
+    fn scripted(connection: &Arc<TestConnection>) -> (Arc<EventHub>, Watcher) {
         let browser = BrowserSession::new(
-            Arc::clone(&connection) as Arc<dyn CdpConnection>,
+            Arc::clone(connection) as Arc<dyn CdpConnection>,
             BrowserSessionHooks::default(),
         );
         let (hub, writer) = EventHub::new();
-        let (mut watcher, _found) = Watcher::new(
+        let (watcher, _found) = Watcher::new(
             browser,
             writer,
             Arc::new(FrameAttachLog::default()),
             Arc::new(WatcherProgress::default()),
         );
+        (hub, watcher)
+    }
+
+    fn worker(id: &str) -> WorkerInfo {
+        WorkerInfo {
+            id: id.to_owned(),
+            url: format!("{id}.js"),
+        }
+    }
+
+    /// Lets the spawned `Runtime.disable` of a dropped lease reach the connection.
+    async fn settle() {
+        for _ in 0..20 {
+            task::yield_now().await;
+        }
+    }
+
+    /// The methods of `calls` that went to `session`, in order.
+    fn sent_to(calls: &[TestCall], session: &str) -> Vec<String> {
+        calls
+            .iter()
+            .filter(|call| call.session.as_ref().map(SessionId::as_str) == Some(session))
+            .map(|call| call.method.clone())
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn a_duplicate_worker_attachment_releases_its_startup_pause() -> Result<(), Box<dyn Error>>
+    {
+        let connection = TestConnection::new([
+            ("Browser.getVersion", json!({"product":"Chrome/143.0"})),
+            ("Target.setAutoAttach", json!({})),
+            ("Runtime.runIfWaitingForDebugger", json!({})),
+            ("Runtime.runIfWaitingForDebugger", json!({})),
+        ]);
+        let (hub, mut watcher) = scripted(&connection);
         let page = TargetId("page".to_owned());
-        let info = WorkerInfo {
-            id: "worker".to_owned(),
-            url: "worker.js".to_owned(),
-        };
         let first = SessionId::from("canonical");
         watcher
-            .start_worker(page.clone(), info.clone(), first.clone(), true)
+            .start_worker(page.clone(), worker("worker"), first.clone(), true)
             .await;
         watcher
-            .start_worker(page.clone(), info, SessionId::from("duplicate"), true)
+            .start_worker(
+                page.clone(),
+                worker("worker"),
+                SessionId::from("duplicate"),
+                true,
+            )
             .await;
         let endpoint = hub.workers.get(&page, "worker").ok_or("worker exists")?;
         assert_eq!(endpoint.session().session_id(), Some(&first));
         let calls = connection.calls()?;
         assert_eq!(
-            calls
-                .iter()
-                .filter(|call| call.method == "Runtime.enable")
-                .count(),
-            1
+            sent_to(&calls, "canonical"),
+            ["Target.setAutoAttach", "Runtime.runIfWaitingForDebugger"],
+            "nested workers are armed, and Runtime stays off while nobody listens"
         );
-        let resumes: Vec<_> = calls
-            .iter()
-            .filter(|call| call.method == "Runtime.runIfWaitingForDebugger")
-            .map(|call| call.session.clone())
-            .collect();
-        assert_eq!(resumes, [Some(first), Some(SessionId::from("duplicate"))]);
+        assert_eq!(
+            sent_to(&calls, "duplicate"),
+            ["Runtime.runIfWaitingForDebugger"]
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn a_worker_reports_runtime_only_while_a_run_listens_on_its_tab()
+    -> Result<(), Box<dyn Error>> {
+        let connection =
+            TestConnection::new([("Browser.getVersion", json!({"product":"Chrome/143.0"}))]);
+        for method in [
+            "Target.setAutoAttach",
+            "Runtime.runIfWaitingForDebugger",
+            "Runtime.enable",
+            "Runtime.disable",
+        ] {
+            connection.always(method, json!({}))?;
+        }
+        let (hub, mut watcher) = scripted(&connection);
+        let page = TargetId("page".to_owned());
+        let run = Arc::new(RunState::default());
+        hub.bind(&run);
+        let console = Subscription::Page {
+            tab: TabId(1),
+            target: page.clone(),
+            event: PageEventKind::Console,
+        };
+        let leases = Arc::clone(watcher.browser.page_signals.runtime_leases());
+
+        // A worker that starts while nobody listens, then a listener, which leases its page
+        // as `event_op::listen` does.
+        watcher
+            .start_worker(
+                page.clone(),
+                worker("early"),
+                SessionId::from("early"),
+                true,
+            )
+            .await;
+        run.events.listen(console.clone(), 1_000, 0);
+        let page_session = watcher
+            .browser
+            .protocol_session(SessionId::from("page-session"));
+        run.events.hold_runtime(
+            &console,
+            vec![leases.acquire(&page_session, 1_000.0).await?],
+        );
+        watcher.lease_worker_runtime().await;
+        // A worker that starts while the listener is there.
+        watcher
+            .start_worker(page.clone(), worker("late"), SessionId::from("late"), true)
+            .await;
+        let calls = connection.calls()?;
+        assert_eq!(
+            sent_to(&calls, "early"),
+            [
+                "Target.setAutoAttach",
+                "Runtime.runIfWaitingForDebugger",
+                "Runtime.enable"
+            ]
+        );
+        assert_eq!(
+            sent_to(&calls, "late"),
+            [
+                "Target.setAutoAttach",
+                "Runtime.enable",
+                "Runtime.runIfWaitingForDebugger"
+            ],
+            "on before the start-up pause ends, so the worker's first console call is reported"
+        );
+        assert_eq!(
+            leases.floor_ms(&SessionId::from("early")),
+            Some(1_000.0),
+            "replayed history counts from when the listener asked"
+        );
+
+        run.events.unlisten(&console.key());
+        watcher.lease_worker_runtime().await;
+        settle().await;
+        let calls = connection.calls()?;
+        for session in ["early", "late"] {
+            assert_eq!(
+                sent_to(&calls, session).last().map(String::as_str),
+                Some("Runtime.disable"),
+                "{session}: off again once nobody listens"
+            );
+            assert!(!leases.is_held(&SessionId::from(session)));
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn a_listener_that_leased_no_page_leaves_workers_quiet_and_a_wait_asks()
+    -> Result<(), Box<dyn Error>> {
+        let connection =
+            TestConnection::new([("Browser.getVersion", json!({"product":"Chrome/143.0"}))]);
+        for method in [
+            "Target.setAutoAttach",
+            "Runtime.runIfWaitingForDebugger",
+            "Runtime.enable",
+            "Runtime.disable",
+        ] {
+            connection.always(method, json!({}))?;
+        }
+        let (hub, mut watcher) = scripted(&connection);
+        let page = TargetId("page".to_owned());
+        let run = Arc::new(RunState::default());
+        hub.bind(&run);
+        let errors = Subscription::Page {
+            tab: TabId(1),
+            target: page.clone(),
+            event: PageEventKind::PageError,
+        };
+        watcher
+            .start_worker(page.clone(), worker("w"), SessionId::from("w"), true)
+            .await;
+
+        // A listener whose page took no lease (`event_op::lease_runtime` declined it).
+        run.events.listen(errors.clone(), 1_000, 0);
+        run.events.hold_runtime(&errors, Vec::new());
+        watcher.lease_worker_runtime().await;
+        let calls = connection.calls()?;
+        assert!(
+            !sent_to(&calls, "w")
+                .iter()
+                .any(|method| method == "Runtime.enable"),
+            "a listener that asked for nothing leaves the worker quiet"
+        );
+
+        // A wait asks, from its own start: what the worker logged before it is history.
+        let waiting = run.events.waiting(errors.clone(), 2_000);
+        watcher.lease_worker_runtime().await;
+        assert_eq!(
+            watcher
+                .browser
+                .page_signals
+                .runtime_leases()
+                .floor_ms(&SessionId::from("w")),
+            Some(2_000.0)
+        );
+        drop(waiting);
+        watcher.lease_worker_runtime().await;
+        settle().await;
+        assert!(
+            !watcher
+                .browser
+                .page_signals
+                .runtime_leases()
+                .is_held(&SessionId::from("w"))
+        );
         Ok(())
     }
 }

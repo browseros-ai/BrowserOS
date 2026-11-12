@@ -18,7 +18,7 @@ use crate::op_scope::OpScope;
 use crate::page::{MediaSessions, PageRegistry, context_op, page_op};
 use crate::read::read_op;
 use crate::snapshot::snapshot_op;
-use crate::world::{Epoch, FrameAttachLog, SessionSetup};
+use crate::world::{Epoch, FrameAttachLog};
 use crate::{OpEnv, PlaywrightError, locator_handler};
 
 /// How long an op that ends may wait for its events to reach the run's listeners first
@@ -41,8 +41,6 @@ pub struct Playwright {
     progress: Arc<WatcherProgress>,
     /// This instance's identity to the worlds it boots.
     epoch: Epoch,
-    /// Per-session setup for isolated world installs.
-    sessions: Arc<SessionSetup>,
     /// Every tab the instance acted on.
     pages: Arc<PageRegistry>,
     /// Replays page-owned media into newly attached iframe sessions.
@@ -71,7 +69,6 @@ impl Playwright {
             Arc::clone(&attach_log),
             Arc::clone(&progress),
         );
-        let sessions = Arc::new(SessionSetup::new(browser.connection()));
         let pages = Arc::new(PageRegistry::new(attach_log));
         let (registry, reader) = (Arc::clone(&pages), Arc::clone(&browser));
         drop(tokio::spawn(async move {
@@ -84,7 +81,6 @@ impl Playwright {
             watcher,
             progress,
             epoch: Epoch::random(),
-            sessions,
             pages,
             media,
         })
@@ -145,11 +141,6 @@ impl Playwright {
     /// This instance's epoch.
     pub(crate) fn epoch(&self) -> &Epoch {
         &self.epoch
-    }
-
-    /// Per-session setup for isolated worlds.
-    pub(crate) fn sessions(&self) -> &SessionSetup {
-        &self.sessions
     }
 
     /// Session replay for preferences owned by a tab, independent of any one run.

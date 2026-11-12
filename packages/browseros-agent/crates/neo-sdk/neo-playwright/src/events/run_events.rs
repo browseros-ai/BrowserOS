@@ -42,9 +42,9 @@ struct Inner {
     intercepting: HashMap<u64, Intercepting>,
     /// `page.on` and `context.on` listeners.
     listening: HashMap<Subscription, Listening>,
-    /// `waitForEvent` ops in flight, by what they wait for. Counted, because two may wait for
-    /// the same thing at once.
-    waiting: HashMap<Subscription, usize>,
+    /// `waitForEvent` ops in flight, by what they wait for: each one's `since`, because two may
+    /// wait for the same thing at once.
+    waiting: HashMap<Subscription, Vec<u64>>,
     /// `events.next` calls in flight.
     pumps: usize,
     /// Binding calls the watcher handed this run, oldest first, until its pump takes them. Kept
@@ -119,14 +119,17 @@ pub(crate) struct Listening {
 pub(crate) struct Waiting<'run> {
     events: &'run RunEvents,
     subscription: Subscription,
+    since_ms: u64,
 }
 
 impl Drop for Waiting<'_> {
     fn drop(&mut self) {
         let mut inner = self.events.lock();
-        if let Some(count) = inner.waiting.get_mut(&self.subscription) {
-            *count -= 1;
-            if *count == 0 {
+        if let Some(sinces) = inner.waiting.get_mut(&self.subscription) {
+            if let Some(at) = sinces.iter().position(|since| *since == self.since_ms) {
+                sinces.swap_remove(at);
+            }
+            if sinces.is_empty() {
                 inner.waiting.remove(&self.subscription);
             }
         }
@@ -201,12 +204,18 @@ impl RunEvents {
         }
     }
 
-    /// Counts one `waitForEvent` for `subscription` until the returned guard drops.
-    pub(crate) fn waiting(&self, subscription: Subscription) -> Waiting<'_> {
-        *self.lock().waiting.entry(subscription.clone()).or_default() += 1;
+    /// Counts one `waitForEvent` for `subscription`, which began at the script's `since_ms`,
+    /// until the returned guard drops.
+    pub(crate) fn waiting(&self, subscription: Subscription, since_ms: u64) -> Waiting<'_> {
+        self.lock()
+            .waiting
+            .entry(subscription.clone())
+            .or_default()
+            .push(since_ms);
         Waiting {
             events: self,
             subscription,
+            since_ms,
         }
     }
 
@@ -248,6 +257,39 @@ impl RunEvents {
         let wanted =
             |subscription: &Subscription| subscription.page_event() == Some((target, event));
         inner.listening.keys().any(wanted) || inner.waiting.keys().any(wanted)
+    }
+
+    /// Since when the run wants the dedicated workers of the tab whose target is `target` to
+    /// report console messages and uncaught errors, which a worker does only while `Runtime` is
+    /// on in it (`target_watcher.rs`); `None` if it does not. The script's clock when the earliest
+    /// ask began: its `page.on('console' | 'pageerror')` listeners on the tab that leased the
+    /// page's `Runtime`, and its `waitForEvent`s for them. A listener that took no lease
+    /// (`event_op`'s `lease_runtime` decides) asks nothing of workers either: they follow the page.
+    pub(crate) fn workers_asked_since(&self, target: &TargetId) -> Option<u64> {
+        let inner = self.lock();
+        let reported = |subscription: &Subscription| {
+            subscription.page_event().is_some_and(|(listened, event)| {
+                listened == target
+                    && matches!(event, PageEventKind::Console | PageEventKind::PageError)
+            })
+        };
+        let listening = inner
+            .listening
+            .iter()
+            .filter(|(subscription, _)| {
+                reported(subscription)
+                    && inner
+                        .runtime
+                        .get(*subscription)
+                        .is_some_and(|leases| !leases.is_empty())
+            })
+            .map(|(_, listening)| listening.since_ms);
+        let waiting = inner
+            .waiting
+            .iter()
+            .filter(|(subscription, _)| reported(subscription))
+            .flat_map(|(_, sinces)| sinces.iter().copied());
+        listening.chain(waiting).min()
     }
 
     /// Context lifecycle interest explicitly asks to observe untouched pages too.
@@ -387,8 +429,8 @@ mod tests {
     fn tests_that_a_wait_counts_as_wanting_only_while_it_runs() {
         let events = RunEvents::default();
         let target = TargetId("T".to_owned());
-        let first = events.waiting(dialogs(1, "T"));
-        let second = events.waiting(dialogs(1, "T"));
+        let first = events.waiting(dialogs(1, "T"), 10);
+        let second = events.waiting(dialogs(1, "T"), 10);
         drop(first);
         assert!(
             events.wants(&target, PageEventKind::Dialog),
