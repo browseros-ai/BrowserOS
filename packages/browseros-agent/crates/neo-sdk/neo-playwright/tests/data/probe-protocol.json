@@ -1,5 +1,5 @@
 {
-  "protocol": 28,
+  "protocol": 29,
   "callFunction": "function (request, root, ...nodes) { const probe = globalThis.__neoProbe; return probe ? probe.call(request, root ?? this, nodes) : { kind: \"uninstalled\" }; }",
   "replyKinds": {
     "describe": [
@@ -39,7 +39,8 @@
     ],
     "edit": [
       "value",
-      "detached"
+      "detached",
+      "notFocused"
     ],
     "read": [
       "read",
@@ -383,6 +384,13 @@
       "edit": {
         "kind": "focus",
         "resetSelection": true
+      }
+    },
+    {
+      "op": "edit",
+      "pin": 3,
+      "edit": {
+        "kind": "focusToType"
       }
     },
     {
@@ -1018,19 +1026,19 @@
   "replies": [
     {
       "kind": "described",
-      "protocol": 28,
+      "protocol": 29,
       "seq": 0,
       "url": "https://example.com/"
     },
     {
       "kind": "described",
-      "protocol": 28,
+      "protocol": 29,
       "seq": 347,
       "url": "https://pay.example/frame"
     },
     {
       "kind": "described",
-      "protocol": 28,
+      "protocol": 29,
       "seq": 512340,
       "url": "https://example.com/",
       "retired": 0
@@ -1073,6 +1081,13 @@
     },
     {
       "kind": "detached"
+    },
+    {
+      "kind": "notFocused",
+      "holder": "<input id=\"user\" aria-label=\"Email\"/>"
+    },
+    {
+      "kind": "notFocused"
     },
     {
       "kind": "state",

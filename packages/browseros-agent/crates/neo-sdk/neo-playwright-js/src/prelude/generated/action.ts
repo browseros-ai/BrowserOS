@@ -255,6 +255,7 @@ type _locator_dragTo_result = Assert<VoidIsNull<'locator.dragTo', pw.FrameDragAn
 type _locator_drop = Assert<UpstreamCheck<'locator.drop', DropInput, pw.FrameDropParams, 'files', 'localPaths' | 'payloads' | 'streams', never>>
 type _locator_drop_result = Assert<VoidIsNull<'locator.drop', pw.FrameDropResult, null>>
 // locator.fill: ElementHandle.fill
+//   behaves: a deliberate deviation, by decision (the owner's standing rule that Neo never acts on an element other than the one asked for; lead, 2026-11-12): fill types only into its target. A field the page replaces as it takes the focus is found again, and a focus that ends elsewhere fails not_focused, where upstream types into the box typed into before or the one that took the focus. A failure names the value by its length (call_log::entered_text), where upstream quotes it
 type _locator_fill = Assert<ExactUpstreamCheck<'locator.fill', FillInput, pw.ElementHandleFillParams, never, never, never>>
 type _locator_fill_keys = Assert<KeysCheck<'locator.fill', (typeof ACTION_OPTION_KEYS)['locator.fill'][number], pw.ElementHandleFillOptions>>
 type _locator_fill_result = Assert<VoidIsNull<'locator.fill', pw.ElementHandleFillResult, null>>
@@ -263,6 +264,7 @@ type _locator_press = Assert<ExactUpstreamCheck<'locator.press', PressInput, pw.
 type _locator_press_keys = Assert<KeysCheck<'locator.press', (typeof ACTION_OPTION_KEYS)['locator.press'][number], pw.ElementHandlePressOptions>>
 type _locator_press_result = Assert<VoidIsNull<'locator.press', pw.ElementHandlePressResult, null>>
 // locator.pressSequentially: ElementHandle.type
+//   behaves: a deliberate deviation, by decision (the owner's standing rule that Neo never acts on an element other than the one asked for; lead, 2026-11-12): the keys type only into the target. A box the page replaces as it takes the focus is found again, and a focus that ends elsewhere, or a target that cannot take it, fails not_focused, where upstream types into nothing or into whatever has the focus. The call log names the text by its length (call_log::entered_text)
 type _locator_pressSequentially = Assert<ExactUpstreamCheck<'locator.pressSequentially', TypeInput, pw.ElementHandleTypeParams, never, never, never>>
 type _locator_pressSequentially_keys = Assert<KeysCheck<'locator.pressSequentially', (typeof ACTION_OPTION_KEYS)['locator.pressSequentially'][number], pw.ElementHandleTypeOptions>>
 type _locator_pressSequentially_result = Assert<VoidIsNull<'locator.pressSequentially', pw.ElementHandleTypeResult, null>>

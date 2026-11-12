@@ -15,13 +15,13 @@
 //! Each pass starts with the page's locator-handler checkpoint, as both of upstream's loops do
 //! (`locator_handler.rs`): for a handle, the one pass stands for its first attempt's.
 
-use crate::PlaywrightError;
 use crate::locator_handler::{self, Prechecks};
 use crate::op_scope::OpScope;
 use crate::page::OpPage;
 use crate::probe::{ParsedSelector, ProbeFailure, ProbeReply, ProbeRequest, ProbeTarget};
 use crate::resolve::{self, HandleSite, Resolved, Resolver};
 use crate::target::{ElementTarget, LocatorTarget, Strictness, Target};
+use crate::{ErrorCode, PlaywrightError};
 
 /// One action's target, for one op.
 pub(crate) struct Subject<'a> {
@@ -140,6 +140,19 @@ impl<'a> Subject<'a> {
         request: &ProbeRequest,
     ) -> Result<ProbeReply, ProbeFailure> {
         located.call(request).await
+    }
+
+    /// `website / not_focused`: an edit focused the element to type into it, and the element did
+    /// not keep the focus, so nothing was typed. Neo's own failure, where upstream types into
+    /// whatever has the focus (owner's standing rule: Neo never acts on an element other than the
+    /// one asked for). `holder` is the preview of the element that has the focus now. Never
+    /// retried: the page that moved the focus would move it again.
+    pub(crate) fn not_focused(&self, holder: Option<&str>) -> PlaywrightError {
+        let holder = holder.unwrap_or("no element");
+        self.scope.fail(
+            ErrorCode::NotFocused,
+            &format!("Element did not keep the focus; {holder} has it now, so nothing was typed"),
+        )
     }
 
     /// A reply that ends the action (`resolve::refused`).

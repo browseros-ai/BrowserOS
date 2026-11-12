@@ -669,6 +669,7 @@ fn error_code(code: PlaywrightCode) -> ErrorCode {
         PlaywrightCode::NotActionable => ErrorCode::NOT_ACTIONABLE,
         PlaywrightCode::AssertionFailed => ErrorCode::ASSERTION_FAILED,
         PlaywrightCode::ElementDetached => ErrorCode::ELEMENT_DETACHED,
+        PlaywrightCode::NotFocused => ErrorCode::NOT_FOCUSED,
         PlaywrightCode::PageError => ErrorCode::PAGE_ERROR,
         PlaywrightCode::NavigationFailed => ErrorCode::NAVIGATION_FAILED,
         PlaywrightCode::DownloadFailed => ErrorCode::DOWNLOAD_FAILED,

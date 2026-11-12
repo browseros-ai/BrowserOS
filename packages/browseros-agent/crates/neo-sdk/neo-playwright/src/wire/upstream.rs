@@ -46,6 +46,10 @@ pub struct Command {
     /// Why Neo answers more than `null` where the command returns nothing (`locator.click`'s
     /// navigation cut). Without it, the generated check holds a void command's op to `null`.
     pub result: Option<&'static str>,
+    /// Why the op behaves differently from upstream's implementation of the command on
+    /// purpose, by decision, though its params and result keep upstream's shapes (`fill`
+    /// types only into its target). The shapes are checked; this is a reason to read.
+    pub behaves: Option<&'static str>,
 }
 
 /// The row of an op that carries upstream's `name` command (`"ElementHandle.click"`).
@@ -56,6 +60,7 @@ pub(crate) const fn command(name: &'static str) -> Command {
         omits: &[],
         retypes: &[],
         result: None,
+        behaves: None,
     }
 }
 
@@ -89,6 +94,14 @@ impl Command {
     pub(crate) const fn result(self, reason: &'static str) -> Self {
         Self {
             result: Some(reason),
+            ..self
+        }
+    }
+
+    /// Why Neo's behaviour differs from upstream's on purpose, by decision.
+    pub(crate) const fn behaves(self, reason: &'static str) -> Self {
+        Self {
+            behaves: Some(reason),
             ..self
         }
     }
@@ -137,6 +150,9 @@ impl Upstream {
                 if let Some(why) = row.result {
                     reason(format!("{} result", row.name), why);
                 }
+                if let Some(why) = row.behaves {
+                    reason(format!("{} behaves", row.name), why);
+                }
                 if !is_command_name(row.name) {
                     out.push(format!("command({}) is not `Interface.method`", row.name));
                 }
@@ -178,7 +194,8 @@ mod tests {
             .adds(&[("files", "paths or payloads Rust resolves on Neo's disk")])
             .omits(&[("localPaths", "folded into files")])
             .retypes(&[("position", "Neo's probe point")])
-            .result("answers the drop's navigation");
+            .result("answers the drop's navigation")
+            .behaves("drops only on its target");
         assert_eq!(
             row,
             Command {
@@ -187,6 +204,7 @@ mod tests {
                 omits: &[("localPaths", "folded into files")],
                 retypes: &[("position", "Neo's probe point")],
                 result: Some("answers the drop's navigation"),
+                behaves: Some("drops only on its target"),
             },
             "each builder sets its own list and keeps the others"
         );
@@ -195,7 +213,7 @@ mod tests {
 
     #[test]
     fn tests_that_a_row_without_its_reasons_is_unexplained() {
-        let cases: [(Upstream, &str); 6] = [
+        let cases: [(Upstream, &str); 7] = [
             (neo_only(" "), "neo_only has no reason"),
             (
                 replaces("Frame.expect", ""),
@@ -208,6 +226,10 @@ mod tests {
             (
                 command("ElementHandle.click").result("").into(),
                 "ElementHandle.click result has no reason",
+            ),
+            (
+                command("ElementHandle.fill").behaves(" ").into(),
+                "ElementHandle.fill behaves has no reason",
             ),
             (
                 command("Frame.drop")

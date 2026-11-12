@@ -8523,8 +8523,11 @@ ${value.stack}`;
     const { injected } = world;
     switch (edit.kind) {
       case "fill": {
+        const field = injected.retarget(element, "follow-label") ?? element;
         const filled = injected.fill(element, edit.value);
-        return filled === "error:notconnected" ? filled : valueReply(filled);
+        if (filled === "error:notconnected")
+          return filled;
+        return filled === "needsinput" ? keptFocus(world, [element, field], valueReply(filled)) : valueReply(filled);
       }
       case "selectOptions": {
         const selected = injected.selectOptions(element, edit.options);
@@ -8536,6 +8539,13 @@ ${value.stack}`;
       }
       case "focus":
         return doneOf(injected.focusNode(element, edit.resetSelection));
+      case "focusToType": {
+        const control = injected.retarget(element, "follow-label") ?? element;
+        const focused = injected.focusNode(element, true);
+        if (focused === "error:notconnected")
+          return focused;
+        return keptFocus(world, [element, control], valueReply(null));
+      }
       case "blur":
         return doneOf(injected.blurNode(element));
       case "dispatchEvent":
@@ -8547,18 +8557,53 @@ ${value.stack}`;
         return valueReply(setFiles(world, element, edit.payloads));
     }
   }
+  async function keptFocus(world, targets, kept) {
+    await Promise.resolve();
+    if (targets.some((target) => !target.isConnected))
+      return "error:notconnected";
+    if (targets.some(holdsFocus))
+      return kept;
+    const [first] = targets;
+    return { kind: "notFocused", ...holderOf(world, first?.ownerDocument) };
+  }
+  function holdsFocus(target) {
+    const found = Reflect.get(target.getRootNode(), "activeElement");
+    const active = isElement(found) ? found : null;
+    if (!active)
+      return false;
+    if (target === active || target.contains(active))
+      return true;
+    return isEditable(target) && isEditable(active) && active.contains(target);
+  }
+  function isElement(node) {
+    return typeof node === "object" && node !== null && Reflect.get(node, "nodeType") === Node.ELEMENT_NODE;
+  }
+  function isEditable(element) {
+    return Reflect.get(element, "isContentEditable") === true;
+  }
+  function holderOf(world, document) {
+    let holder = document?.activeElement ?? null;
+    while (holder?.shadowRoot?.activeElement)
+      holder = holder.shadowRoot.activeElement;
+    if (!holder || holder === document?.body || holder === document?.documentElement)
+      return {};
+    return { holder: world.injected.previewNode(holder) };
+  }
   function valueReply(value) {
     return { kind: "value", value };
   }
   function doneOf(result) {
     return result === "done" ? valueReply(null) : result;
   }
+  function replyOf(edited) {
+    return edited === "error:notconnected" ? { kind: "detached" } : edited;
+  }
   function edit(world, request) {
     const element = request.edit.kind === "setFiles" ? world.pins.held(request.pin) : world.pins.live(request.pin);
     if (!element)
       return { kind: "detached" };
     const edited = apply(world, request.edit, element);
-    return edited === "error:notconnected" ? { kind: "detached" } : edited;
+    return edited instanceof Promise ? edited.then(replyOf) : replyOf(edited);
   }
 
   // crates/neo-sdk/neo-playwright-js/src/probe/expect.ts
@@ -8598,7 +8643,7 @@ ${value.stack}`;
   }
 
   // crates/neo-sdk/neo-playwright-js/src/probe/protocol.ts
-  var PROTOCOL = 28;
+  var PROTOCOL = 29;
 
   // crates/neo-sdk/neo-playwright-js/src/probe/read.ts
   var XHTML = "http://www.w3.org/1999/xhtml";

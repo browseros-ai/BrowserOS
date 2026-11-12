@@ -10,6 +10,8 @@
 //!      send_effect()                   ─ Sent, right before the edit
 //!      ② edit { pin, fill | selectOptions | selectText }
 //!         fill → needsinput: Input.insertText(value), or Delete for '' (root session)
+//!              → detached: the page replaced the field as it took the focus; next outer pass
+//!              → notFocused: the focus ended elsewhere; fails, nothing typed
 //!         selectOptions → options not found or not enabled: retry
 //! ```
 //!
@@ -26,6 +28,7 @@ use crate::action::actionability::state_name;
 use crate::action::attempt_log::AttemptLog;
 use crate::action::subject::Subject;
 use crate::backoff::Backoff;
+use crate::call_log::entered_text;
 use crate::input::{self, Keyboard};
 use crate::locator_handler::Prechecks;
 use crate::op_scope::{OpScope, Sent};
@@ -60,10 +63,11 @@ struct Row {
 }
 
 impl FormEdit<'_> {
-    /// Upstream's `fill("x")` line (dom.ts `_fill`), which it logs before the fill's attempts.
+    /// Upstream's `fill("x")` line (dom.ts `_fill`), which it logs before the fill's attempts,
+    /// with the value's length in place of its text (`call_log::entered_text`).
     fn announcement(&self) -> Option<String> {
         match self {
-            Self::Fill(value) => Some(format!("  fill(\"{}\")", value.0)),
+            Self::Fill(value) => Some(format!("  fill({})", entered_text(&value.0))),
             Self::SelectOptions(_) | Self::SelectText => None,
         }
     }
@@ -406,6 +410,13 @@ impl<'a> FormRunner<'a> {
     /// focuses and selects the field, and the value is then typed in one `Input.insertText`
     /// (an empty one presses Delete). The tab's input lock is held from before the edit to
     /// the last key, so no other op's keys reach the field in between.
+    ///
+    /// `Input.insertText` commits to the frame's editing selection, not to an element, so
+    /// before it answers `needsinput` the probe checks that the field kept the focus (edit.ts
+    /// `keptFocus`). A field the page replaced as it took the focus is `detached`: the next
+    /// outer pass finds what the locator matches now. A focus that ended elsewhere fails
+    /// `not_focused`. Upstream checks neither and types into the box typed into before, or
+    /// the one that took the focus: a deliberate deviation (the route row says so).
     async fn fill(
         &self,
         located: &Resolved,
@@ -453,6 +464,9 @@ impl<'a> FormRunner<'a> {
         {
             Called::Reply(ProbeReply::Value { value }) => Ok(Some(value)),
             Called::Reply(ProbeReply::Detached) => self.subject.detached().map(|()| None),
+            Called::Reply(ProbeReply::NotFocused { holder }) => {
+                Err(self.subject.not_focused(holder.as_deref()))
+            }
             // Upstream's own refusals, thrown before the edit changed anything ("Element is
             // not a <select> element").
             Called::Reply(other) => Err(self.subject.refused(other)),

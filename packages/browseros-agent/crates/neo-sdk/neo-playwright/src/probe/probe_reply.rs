@@ -24,7 +24,7 @@ use crate::world::{FrameSeq, Pin};
 /// contract: a world keeps the probe an earlier build installed, and the install replaces that
 /// probe only when its number differs (`engine_source`), so a shape changed under the same
 /// number reaches this build in the old shape. The lock's test catches a change without a bump.
-pub(crate) const PROBE_PROTOCOL: u32 = 28;
+pub(crate) const PROBE_PROTOCOL: u32 = 29;
 
 /// One reply; `kind` is the tag. Any request may also answer `error`, and `uninstalled` when
 /// the world has no booted probe.
@@ -129,6 +129,14 @@ pub(crate) enum ProbeReply {
     /// `selectOptions`.
     Value {
         value: PageText,
+    },
+    /// A `fill` or `focusToType` focused an element that did not keep the focus, and typed
+    /// nothing. `holder` is upstream's preview of the element that has it now, absent when no
+    /// element does (the document's `<body>`).
+    NotFocused {
+        #[serde(default)]
+        #[ts(optional)]
+        holder: Option<String>,
     },
     /// One element's read; a file input's names what its chunk resolved to.
     Read {
@@ -253,6 +261,7 @@ impl ProbeReply {
             Self::Moves { .. } => "moves",
             Self::FrameBox { .. } => "frameBox",
             Self::Value { .. } => "value",
+            Self::NotFocused { .. } => "notFocused",
             Self::Read { .. } => "read",
             Self::Values { .. } => "values",
             Self::Selector { .. } => "selector",

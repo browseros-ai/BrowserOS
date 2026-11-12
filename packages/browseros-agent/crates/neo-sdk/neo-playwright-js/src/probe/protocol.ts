@@ -17,7 +17,7 @@ export type NeoProbe = NonNullable<typeof globalThis.__neoProbe>
  * reports it, and an install whose number differs from Rust's PROBE_PROTOCOL fails as
  * `neo / internal` (the engine asset is stale).
  */
-export const PROTOCOL = 28
+export const PROTOCOL = 29
 
 /**
  * The function declaration Rust sends with every request. Rust calls it on the world's global
@@ -74,6 +74,7 @@ export type Verdict = Extract<ProbeReply, { kind: 'verdict' }>
 export type Moves = Extract<ProbeReply, { kind: 'moves' }>
 export type FrameBox = Extract<ProbeReply, { kind: 'frameBox' }>
 export type Value = Extract<ProbeReply, { kind: 'value' }>
+export type NotFocused = Extract<ProbeReply, { kind: 'notFocused' }>
 export type ReadValue = Extract<ProbeReply, { kind: 'read' }>
 export type Values = Extract<ProbeReply, { kind: 'values' }>
 export type GeneratedSelector = Extract<ProbeReply, { kind: 'selector' }>
@@ -94,7 +95,7 @@ export const REPLY_KINDS = {
   moves: ['moves'],
   disarm: ['verdict'],
   frameBox: ['frameBox', 'detached', 'none', 'strict'],
-  edit: ['value', 'detached'],
+  edit: ['value', 'detached', 'notFocused'],
   read: ['read', 'none', 'strict', 'detached'],
   readAll: ['values'],
   selector: ['selector', 'none', 'detached'],

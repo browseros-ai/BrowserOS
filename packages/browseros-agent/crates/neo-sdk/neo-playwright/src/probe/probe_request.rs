@@ -137,7 +137,8 @@ pub(crate) enum ProbeRequest {
         #[ts(optional)]
         point: Option<Point>,
     },
-    /// `fill`, `selectOptions`, `selectText`, `focus`, `blur` or `dispatchEvent` on a pin.
+    /// `fill`, `selectOptions`, `selectText`, `focus`, `focusToType`, `blur` or
+    /// `dispatchEvent` on a pin.
     Edit { pin: Pin, edit: Edit },
     /// One read of one element, resolved in the same call.
     Read {
@@ -353,7 +354,8 @@ pub(crate) struct SelectOption {
     deny_unknown_fields
 )]
 pub(crate) enum Edit {
-    /// `injected.fill`; `needsinput` means Rust types the value with `Input.insertText`.
+    /// `injected.fill`; `needsinput` means Rust types the value with `Input.insertText`. Before
+    /// it answers `needsinput`, the probe checks that the field kept the focus (`focusToType`).
     Fill {
         value: FillValue,
     },
@@ -364,6 +366,11 @@ pub(crate) enum Edit {
     Focus {
         reset_selection: bool,
     },
+    /// Upstream's `_focus(resetSelectionIfNotFocused: true)` before `pressSequentially`'s keys,
+    /// then Neo's check that the element kept the focus: `detached` when the page replaced it
+    /// as it took the focus, `notFocused` when the focus is elsewhere, so the keys never type
+    /// into another element. `press` keeps upstream's plain `focus`.
+    FocusToType,
     Blur,
     DispatchEvent {
         r#type: String,
