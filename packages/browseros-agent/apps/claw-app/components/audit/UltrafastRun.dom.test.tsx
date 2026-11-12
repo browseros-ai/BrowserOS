@@ -41,9 +41,6 @@ mock.module('@/modules/api/client', () => ({
 
 const { TaskRow } = await import('./TaskRow')
 const { TaskPageHeader } = await import('@/screens/task-detail/TaskPageHeader')
-const { UltrafastRunBanner } = await import(
-  '@/screens/task-detail/UltrafastRunBanner'
-)
 
 /** A finished task where a skill ran without the agent, shaped like a real run. */
 function session(overrides: Partial<SessionSummary> = {}): SessionSummary {
@@ -141,21 +138,20 @@ describe('ultrafast run', () => {
     expect(text()).toContain('ultrafast · 15 sec')
   })
 
-  it('shows pages and tokens saved beside the status on the task page', async () => {
+  it('shows time, pages and tokens saved beside the status on the task page', async () => {
     await render(<TaskPageHeader session={session()} />)
-    expect(text()).toContain('9 pages, 62k tokens saved')
+    expect(text()).toContain('15 sec · 9 pages, 62k tokens saved')
   })
 
-  it('says what neo read and what it saved in the banner', async () => {
+  it('says one page, not one pages', async () => {
     await render(
-      <UltrafastRunBanner
-        run={{ durationMs: 15_354, pagesRead: 9, tokensSaved: 61_942 }}
+      <TaskPageHeader
+        session={session({
+          ultrafast: { durationMs: 8_000, pagesRead: 1, tokensSaved: 4_231 },
+        })}
       />,
     )
-    const banner = body.querySelector('[role="status"]')
-    const said = (banner?.textContent ?? '').replace(/\s+/g, ' ')
-    expect(said).toContain('neo read 9 pages in 15 sec')
-    expect(said).toContain('62,000 tokens saved with ultrafast')
+    expect(text()).toContain('8 sec · 1 page, 4.2k tokens saved')
   })
 
   it('says nothing about ultrafast on a task that ran the normal way', async () => {
@@ -167,15 +163,5 @@ describe('ultrafast run', () => {
     )
     expect(text()).not.toContain('ultrafast')
     expect(text()).not.toContain('tokens saved')
-  })
-
-  it('says one page, not one pages', async () => {
-    await render(
-      <UltrafastRunBanner
-        run={{ durationMs: 8_000, pagesRead: 1, tokensSaved: 4_231 }}
-      />,
-    )
-    expect(text()).toContain('neo read 1 page in 8 sec')
-    expect(text()).toContain('4,200 tokens saved with ultrafast')
   })
 })

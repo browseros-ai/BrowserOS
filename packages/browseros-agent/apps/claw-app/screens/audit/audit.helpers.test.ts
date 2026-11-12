@@ -3,7 +3,6 @@ import type { TaskStatus, TaskSummary } from '@/modules/api/audit.hooks'
 import {
   agentOptionsFor,
   agentsInTasks,
-  bannerTokens,
   chipTokens,
   groupByDay,
   pagesLabel,
@@ -173,12 +172,5 @@ describe('ultrafast run numbers', () => {
     expect(chipTokens(9_990)).toBe('10k')
     expect(chipTokens(61_942)).toBe('62k')
     expect(chipTokens(180_400)).toBe('180k')
-  })
-
-  it('rounds banner tokens to hundreds, then thousands', () => {
-    expect(bannerTokens(42)).toBe('42')
-    expect(bannerTokens(4_231)).toBe('4,200')
-    expect(bannerTokens(61_942)).toBe('62,000')
-    expect(bannerTokens(185_618)).toBe('186,000')
   })
 })

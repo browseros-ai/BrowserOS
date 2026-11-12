@@ -11,6 +11,7 @@ import {
   pagesLabel,
   taskDayAndTime,
   tookLabel,
+  ultrafastTime,
 } from '@/screens/audit/audit.helpers'
 
 interface TaskPageHeaderProps {
@@ -45,6 +46,7 @@ export function TaskPageHeader({ session, lastPageUrl }: TaskPageHeaderProps) {
           />
           {session.ultrafast ? (
             <UltrafastRunBadge size="md">
+              {ultrafastTime(session.ultrafast.durationMs)} ·{' '}
               {pagesLabel(session.ultrafast.pagesRead)},{' '}
               {chipTokens(session.ultrafast.tokensSaved)} tokens saved
             </UltrafastRunBadge>

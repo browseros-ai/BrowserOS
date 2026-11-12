@@ -171,10 +171,3 @@ export function chipTokens(tokens: number): string {
   }
   return `${Math.round(value / 1_000).toLocaleString('en-US')}k`
 }
-
-/** Rounded for a sentence: "4,200" under 10,000, then "62,000". */
-export function bannerTokens(tokens: number): string {
-  const value = Math.max(0, Math.round(tokens))
-  const step = value < 100 ? 1 : value < 10_000 ? 100 : 1_000
-  return (Math.round(value / step) * step).toLocaleString('en-US')
-}
