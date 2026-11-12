@@ -260,7 +260,6 @@ impl AppState {
             .await,
         );
         let decisions = Arc::new(crate::services::decisions::Decisions::for_build(
-            config.dev_mode,
             config.mode.is_hosted(),
         ));
         Ok(Self {

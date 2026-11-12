@@ -195,17 +195,10 @@ async fn without_a_licence_nothing_is_sent() -> anyhow::Result<()> {
 }
 
 #[test]
-fn hosted_servers_have_no_worker_and_dev_servers_use_the_local_one() {
-    assert!(Decisions::for_build(false, true).url().is_none());
-    assert!(Decisions::for_build(true, true).url().is_none());
+fn hosted_servers_have_no_worker_and_release_builds_wait_for_launch() {
+    assert!(Decisions::for_build(true).url().is_none());
     if std::env::var_os("CLAW_DECISIONS_URL").is_none() && !cfg!(feature = "billing-staging") {
-        assert_eq!(
-            Decisions::for_build(true, false)
-                .url()
-                .map(url::Url::as_str),
-            Some("http://localhost:8788/")
-        );
-        assert!(Decisions::for_build(false, false).url().is_none());
+        assert!(Decisions::for_build(false).url().is_none());
     }
 }
 

@@ -17,15 +17,11 @@ use url::Url;
 
 use crate::services::billing::Billing;
 
-/// The worker a local development server uses: `wrangler dev --port 8788`, beside the local
-/// billing gateway on 8787.
-const LOCAL_WORKER: &str = "http://localhost:8788";
-
-/// The staging worker, for builds with the `billing-staging` feature. `None` until it is deployed.
-const STAGING_WORKER: Option<&str> = None;
+/// The staging worker, for builds with the `billing-staging` feature.
+const STAGING_URL: Option<&str> = None;
 
 /// The production worker. `None` until launch, alongside the production billing gateway.
-const RELEASE_WORKER: Option<&str> = None;
+const RELEASE_URL: Option<&str> = None;
 
 /// A debug build may point at another worker, for a stub in tests or a local QA run.
 const URL_OVERRIDE_ENV: &str = "CLAW_DECISIONS_URL";
@@ -52,7 +48,7 @@ impl Decisions {
 
     /// The worker this build uses: none in hosted mode, which has no plan to prove.
     #[must_use]
-    pub fn for_build(dev_mode: bool, hosted: bool) -> Self {
+    pub fn for_build(hosted: bool) -> Self {
         if hosted {
             return Self::new(None);
         }
@@ -63,11 +59,9 @@ impl Decisions {
         let chosen = overridden
             .as_deref()
             .or(if cfg!(feature = "billing-staging") {
-                STAGING_WORKER
-            } else if dev_mode {
-                Some(LOCAL_WORKER)
+                STAGING_URL
             } else {
-                RELEASE_WORKER
+                RELEASE_URL
             });
         Self::new(chosen.and_then(|url| Url::parse(url).ok()))
     }
