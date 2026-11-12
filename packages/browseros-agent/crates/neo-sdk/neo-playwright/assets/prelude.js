@@ -7375,6 +7375,7 @@ ${value.stack}`;
   }
 
   // crates/neo-sdk/neo-playwright-js/src/prelude/snapshot.ts
+  var upstreamSnapshots = Reflect.get(globalThis, "__neo_upstream_snapshots") === true;
   function comment(partial) {
     return `# partial: ${partial.frame} not read (${partial.reason})`;
   }
@@ -7407,6 +7408,320 @@ ${value.stack}`;
       lines.splice(line + 1, 0, `${indent}  ${comment(partial)}`);
     }
     return [...lines, ...unplaced].join(`
+`);
+  }
+
+  // crates/neo-sdk/neo-playwright-js/src/prelude/snapshot-v1.ts
+  var INTERACTIVE = new Set([
+    "button",
+    "link",
+    "textbox",
+    "checkbox",
+    "radio",
+    "combobox",
+    "listbox",
+    "menuitem",
+    "menuitemcheckbox",
+    "menuitemradio",
+    "option",
+    "searchbox",
+    "slider",
+    "spinbutton",
+    "switch",
+    "tab",
+    "treeitem"
+  ]);
+  var SECTION = new Set([
+    "banner",
+    "navigation",
+    "main",
+    "complementary",
+    "contentinfo",
+    "search",
+    "form",
+    "region",
+    "article",
+    "iframe"
+  ]);
+  var KEPT = new Set(["dialog", "alertdialog", "alert", "status"]);
+  var KEPT_WITH_REF = new Set(["dialog", "alertdialog"]);
+  var CHARS_PER_TOKEN = 4;
+  var TEXT_LIMIT_CHARS = 3000 * CHARS_PER_TOKEN;
+  var DEFAULT_MAX_TOKENS = 8000;
+  var OWN_TEXT_CLIP = 80;
+  var LONG_SELECT = 12;
+  function renderSnapshotV1(result, options) {
+    const limit = options.maxTokens * CHARS_PER_TOKEN;
+    if (options.text === false)
+      return cap(null, walk(result, options.urls, false), limit);
+    const textForm = walk(result, options.urls, true);
+    const textLength = joinedLength(textForm);
+    if (options.text === true || textLength <= TEXT_LIMIT_CHARS)
+      return cap(null, textForm, limit);
+    const interactiveForm = walk(result, options.urls, false);
+    const left = (textLength - joinedLength(interactiveForm)) / CHARS_PER_TOKEN;
+    const about = Math.max(100, Math.round(left / 100) * 100);
+    const notice = `# text left out: about ${about} tokens. Pass { text: true } to include it.`;
+    return cap(notice, interactiveForm, limit);
+  }
+  function walk(result, urls, text) {
+    const partials = new Map;
+    for (const partial of result.partial)
+      partials.set(partial.ref, [...partials.get(partial.ref) ?? [], partial]);
+    const printer = new Printer(urls, partials);
+    printer.children(result.json, 0, text);
+    for (const unplaced of partials.values())
+      for (const partial of unplaced)
+        printer.comment(partialComment(partial), 0);
+    return printer.lines.map((line) => ({
+      text: "  ".repeat(line.level) + (line.textLine ? renderAriaSnapshotAsYaml([{ role: "text", text: line.body }]) : line.body),
+      ref: line.ref,
+      section: line.section,
+      keptEnd: line.keptEnd
+    }));
+  }
+
+  class Printer {
+    urls;
+    partials;
+    lines = [];
+    constructor(urls, partials) {
+      this.urls = urls;
+      this.partials = partials;
+    }
+    children(children, level, text) {
+      for (const child of children ?? [])
+        this.node(child, level, text);
+    }
+    node(child, level, text) {
+      if (typeof child === "string")
+        this.piece(child, level, text);
+      else if (child.role === "text")
+        this.piece(child.text ?? "", level, text);
+      else if (KEPT.has(child.role))
+        this.kept(child, level);
+      else if (SECTION.has(child.role))
+        this.section(child, level, text);
+      else if (child.role === "heading")
+        this.heading(child, level);
+      else if (actionable(child))
+        this.actionable(child, level, text);
+      else {
+        if (child.role === "img" && child.name && text)
+          this.element(copy(child, { ref: false, urls: false }), level);
+        this.content(child, level, text);
+      }
+    }
+    comment(body, level) {
+      this.lines.push({ level, body, textLine: false, comment: true, ref: false });
+    }
+    content(node, level, text) {
+      if (node.text !== undefined)
+        this.piece(node.text, level, text);
+      this.children(node.children, level, text);
+    }
+    piece(raw, level, text) {
+      if (!text || raw === "")
+        return;
+      const last = this.lines[this.lines.length - 1];
+      if (last?.textLine && last.level === level)
+        last.body += ` ${raw}`;
+      else
+        this.lines.push({
+          level,
+          body: raw,
+          textLine: true,
+          comment: false,
+          ref: false
+        });
+    }
+    kept(node, level) {
+      const header = this.header(node, level, KEPT_WITH_REF.has(node.role));
+      this.content(node, level + 1, true);
+      const inside = this.lines.slice(header + 1);
+      if (inside.length === 1 && inside[0].textLine) {
+        this.lines.length = header;
+        this.element(copy(node, { ref: false, urls: false, text: inside[0].body }), level);
+      } else if (!this.close(header, Boolean(node.name)))
+        return;
+      this.lines[header].keptEnd = this.lines.length;
+    }
+    section(node, level, text) {
+      const header = this.header(node, level, true);
+      const iframe = node.role === "iframe";
+      if (iframe && node.ref !== undefined) {
+        for (const partial of this.partials.get(node.ref) ?? [])
+          this.comment(partialComment(partial), level + 1);
+        this.partials.delete(node.ref);
+      }
+      this.content(node, level + 1, text);
+      if (this.close(header, iframe) && this.lines[header].body.endsWith(":"))
+        this.lines[header].section = node.ref;
+    }
+    heading(node, level) {
+      const own = node.name ? "" : ownText(node);
+      this.element(copy(node, {
+        ref: actionable(node),
+        urls: false,
+        text: own === "" ? undefined : own
+      }), level);
+      this.children(node.children, level, false);
+    }
+    actionable(node, level, text) {
+      let value;
+      if (node.text !== undefined && node.text !== node.name)
+        value = node.text;
+      else if (!node.name) {
+        const own = ownText(node);
+        if (own !== "")
+          value = text ? own : clip(own, OWN_TEXT_CLIP);
+      }
+      const line = copy(node, { ref: true, urls: this.urls, text: value });
+      const choices = node.role === "combobox" || node.role === "listbox" ? (node.children ?? []).filter((child) => typeof child !== "string" && child.role === "option" && !child.ref) : [];
+      if (choices.length === 0)
+        this.element(line, level);
+      else {
+        this.header(node, level, true, line);
+        this.lines[this.lines.length - 1].body += ":";
+        const shown = text || choices.length <= LONG_SELECT ? choices : choices.filter((option) => option.selected === true);
+        for (const option of shown)
+          this.element(copy(option, { ref: false, urls: false, text: option.text }), level + 1);
+        if (shown.length < choices.length)
+          this.lines.push({
+            level: level + 1,
+            body: `- text: ${choices.length - shown.length} more options`,
+            textLine: false,
+            comment: false,
+            ref: false
+          });
+      }
+      this.children(node.children, level, false);
+    }
+    element(line, level) {
+      const bodies = renderAriaSnapshotAsYaml([line]).split(`
+`);
+      for (const [index, body] of bodies.entries())
+        this.lines.push({
+          level,
+          body,
+          textLine: false,
+          comment: false,
+          ref: index === 0 && line.ref !== undefined
+        });
+    }
+    header(node, level, ref, line = copy(node, { ref, urls: false })) {
+      const { text: _text, url: _url, placeholder: _placeholder, ...key } = line;
+      this.lines.push({
+        level,
+        body: renderAriaSnapshotAsYaml([key]),
+        textLine: false,
+        comment: false,
+        ref: key.ref !== undefined
+      });
+      return this.lines.length - 1;
+    }
+    close(header, keepEmpty) {
+      const inside = this.lines.slice(header + 1);
+      if (inside.some((line) => !line.comment)) {
+        this.lines[header].body += ":";
+        return true;
+      }
+      if (keepEmpty || inside.length > 0)
+        return true;
+      this.lines.pop();
+      return false;
+    }
+  }
+  function actionable(node) {
+    return node.ref !== undefined && (INTERACTIVE.has(node.role) || node.cursor === "pointer");
+  }
+  function copy(node, keep) {
+    const { children: _children, ref, cursor, url, text: _text, ...line } = node;
+    const copied = { ...line };
+    if (keep.ref && ref !== undefined) {
+      copied.ref = ref;
+      if (cursor !== undefined && !INTERACTIVE.has(node.role))
+        copied.cursor = cursor;
+    }
+    if (keep.urls && url !== undefined)
+      copied.url = url;
+    if (keep.text !== undefined)
+      copied.text = keep.text;
+    return copied;
+  }
+  function ownText(node) {
+    const pieces = [];
+    const visit = (parent) => {
+      if (parent.text !== undefined)
+        pieces.push(parent.text);
+      for (const child of parent.children ?? []) {
+        if (typeof child === "string")
+          pieces.push(child);
+        else if (child.role === "text")
+          pieces.push(child.text ?? "");
+        else if (!actionable(child))
+          visit(child);
+      }
+    };
+    visit(node);
+    return pieces.filter((piece) => piece !== "").join(" ");
+  }
+  function clip(text, length) {
+    return text.length <= length ? text : `${text.slice(0, length).trimEnd()}…`;
+  }
+  function partialComment(partial) {
+    return `# partial: ${partial.frame} not read (${partial.reason})`;
+  }
+  function joinedLength(lines) {
+    return lines.reduce((length, line, index) => length + line.text.length + (index > 0 ? 1 : 0), 0);
+  }
+  function cap(notice, lines, limit) {
+    const head = notice === null ? [] : [notice];
+    const sequence = [...head, ...lines.map((line) => line.text)];
+    const whole = sequence.join(`
+`);
+    if (whole.length <= limit)
+      return whole;
+    let used = -1;
+    let taken = 0;
+    while (taken < sequence.length && used + 1 + sequence[taken].length <= limit) {
+      used += 1 + sequence[taken].length;
+      taken += 1;
+    }
+    const top = head.slice(0, taken);
+    let cut = Math.max(0, taken - head.length);
+    for (let index = 0;index < cut; index++) {
+      const end = lines[index].keptEnd;
+      if (end !== undefined && end > cut) {
+        cut = index;
+        break;
+      }
+    }
+    const blocks = [];
+    let more = 0;
+    let withRefs = 0;
+    let section;
+    for (let index = cut;index < lines.length; ) {
+      const line = lines[index];
+      if (line.keptEnd !== undefined) {
+        const indent = line.text.length - line.text.trimStart().length;
+        for (const kept of lines.slice(index, line.keptEnd))
+          blocks.push(kept.text.slice(indent));
+        index = line.keptEnd;
+        continue;
+      }
+      more += 1;
+      if (line.ref)
+        withRefs += 1;
+      section ??= line.section;
+      index += 1;
+    }
+    const shown = [...top, ...lines.slice(0, cut).map((line) => line.text)];
+    if (more > 0) {
+      const next = section === undefined ? "Pass a larger maxTokens." : `Snapshot one section, e.g. page.getByRef('${section}').ariaSnapshot(), or pass a larger maxTokens.`;
+      shown.push(`# cut: ${more} more lines (${withRefs} with refs). ${next}`);
+    }
+    return [...shown, ...blocks].join(`
 `);
   }
 
@@ -7476,6 +7791,22 @@ ${value.stack}`;
     if (known === null)
       throw plainError(api, loadStateError(name));
     return known;
+  }
+  function snapshotV1Options(api, options) {
+    const { text, urls, maxTokens } = options;
+    for (const [name, value] of [
+      ["text", text],
+      ["urls", urls]
+    ])
+      if (value !== undefined && typeof value !== "boolean")
+        throw clientError(api, `${name}: expected boolean, got ${typeof value}`);
+    if (maxTokens !== undefined && !(typeof maxTokens === "number" && Number.isFinite(maxTokens) && maxTokens > 0))
+      throw clientError(api, `maxTokens: expected a positive number, got ${String(maxTokens)}`);
+    return {
+      text,
+      urls: urls ?? false,
+      maxTokens: maxTokens ?? DEFAULT_MAX_TOKENS
+    };
   }
 
   class Frame extends EventEmitter {
@@ -7975,9 +8306,8 @@ ${value.stack}`;
       });
       return fromPageValue(api, value);
     }
-    async _snapshot(api, selector, options = {}) {
+    async _snapshot(api, selector, options, mode) {
       const site = captureSite();
-      const mode = options.mode ?? "default";
       const { depth, boxes } = options;
       const wait = this._wait(api, options);
       if (selector !== null) {
@@ -7993,11 +8323,15 @@ ${value.stack}`;
         boxes
       }, wait.signal);
     }
-    async _ariaSnapshot(api, selector, options) {
-      return renderSnapshot(await this._snapshot(api, selector, options));
+    async _ariaSnapshot(api, selector, options = {}) {
+      const mode = options.mode ?? (upstreamSnapshots ? "default" : "ai");
+      if (mode !== "ai" || upstreamSnapshots)
+        return renderSnapshot(await this._snapshot(api, selector, options, mode));
+      const format = snapshotV1Options(api, options);
+      return renderSnapshotV1(await this._snapshot(api, selector, options, mode), format);
     }
-    async _ariaSnapshotJSON(api, selector, options) {
-      return (await this._snapshot(api, selector, options)).json;
+    async _ariaSnapshotJSON(api, selector, options = {}) {
+      return (await this._snapshot(api, selector, options, options.mode ?? "default")).json;
     }
     async _screenshot(api, selector, options = {}) {
       const site = captureSite();

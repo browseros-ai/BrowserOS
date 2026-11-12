@@ -66,6 +66,10 @@ export async function openClaw(cdpPort, options = {}, { onUncaught } = {}) {
           : native.invoke(name, input, site),
       __neo_log: (level, text) => native.log(level, text),
       __neo_sleep: (ms) => native.sleep(ms),
+      // The prelude's conformance switch (src/prelude/snapshot.ts): Playwright's spec tests pin
+      // its exact snapshot text, so here `ariaSnapshot()` keeps upstream's modes and output
+      // instead of Neo's condensed v1 format. Production hosts never set it.
+      __neo_upstream_snapshots: true,
     }
     const sources = {}
     for (const file of files) {

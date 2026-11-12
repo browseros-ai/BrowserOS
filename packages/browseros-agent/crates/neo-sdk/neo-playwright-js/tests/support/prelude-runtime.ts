@@ -117,6 +117,11 @@ export function loadPrelude(
      * the prelude takes for an older bootstrap.
      */
     withoutRefuse?: boolean
+    /**
+     * Sets the conformance switch the spec harness sets (`__neo_upstream_snapshots`), before
+     * the prelude starts: snapshots keep Playwright's modes and text.
+     */
+    upstreamSnapshots?: boolean
   } = {},
 ): Runtime {
   const calls: Call[] = []
@@ -135,6 +140,7 @@ export function loadPrelude(
   // The vm rig supplies neo-sdk's realm contract. Production installation and semantics are
   // tested through the real QuickJS run_script, rather than proved by these host implementations.
   const realm = createContext({
+    ...(options.upstreamSnapshots ? { __neo_upstream_snapshots: true } : {}),
     URL,
     URLSearchParams,
     atob,

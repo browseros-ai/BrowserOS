@@ -1,0 +1,17 @@
+- main [ref=e2]:
+  - heading "Access restricted" [level=1]
+  - button "Continue" [ref=e5]
+  - heading "Sign in" [level=2]
+  - textbox "Email" [ref=e9]: a@b.c
+  - textbox "Password" [invalid] [ref=e11]
+  - alert: Invalid password. 2 attempts left before lockout.
+  - button "Sign in" [ref=e13]
+  - heading "Cart" [level=2]
+  - button "Add to cart" [ref=e16]
+  - button "Add to cart" [ref=e18]
+  - status: Saved 2 minutes ago
+- dialog [ref=e20]:
+  - heading "Delete project?" [level=2]
+  - text: This permanently deletes "Acme" and its 14 files. This cannot be undone.
+  - button "Cancel" [ref=e23]
+  - button "Delete" [ref=e24]

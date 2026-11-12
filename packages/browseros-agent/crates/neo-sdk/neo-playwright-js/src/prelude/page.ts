@@ -41,6 +41,7 @@ import {
 import { EventDeadline } from './event-deadline'
 import { checkReported, isReported } from './events'
 import {
+  type AriaSnapshotOptions,
   type ClickOptions,
   type ExactOption,
   Frame,
@@ -977,7 +978,7 @@ export class Page extends EventEmitter {
     await this._context._refreshWorkingFrames('page.waitForTimeout')
   }
 
-  ariaSnapshot(options?: SnapshotOptions): Promise<string> {
+  ariaSnapshot(options?: AriaSnapshotOptions): Promise<string> {
     return this._mainFrame._ariaSnapshot('page.ariaSnapshot', null, options)
   }
 

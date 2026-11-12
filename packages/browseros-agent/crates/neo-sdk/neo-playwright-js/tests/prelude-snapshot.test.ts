@@ -1,6 +1,8 @@
-// ariaSnapshot() as scripts see it: Rust returns the stitched JSON, and the prelude
-// renders it with the vendored renderer, adding a `# partial` comment under each iframe line
-// whose frame could not be read.
+// ariaSnapshot() as scripts see it: Rust returns the stitched JSON, and the prelude renders it.
+// With `mode: 'default'` that is the vendored renderer's YAML, with a `# partial` comment under
+// each iframe line whose frame could not be read; with no mode or `mode: 'ai'` it is the v1
+// format (src/prelude/snapshot-v1.ts, rule by rule in snapshot-v1.test.ts), unless the spec
+// harness's conformance switch keeps upstream's text.
 import { expect, it } from 'bun:test'
 import { readFileSync } from 'node:fs'
 import { renderAriaSnapshotAsYaml } from '../../neo-playwright/third_party/playwright/packages/isomorphic/ariaSnapshotRenderer'
@@ -23,11 +25,11 @@ function snapshotting(result: unknown) {
   })
 }
 
-it("tests that a snapshot without partial frames is the vendored renderer's YAML, byte for byte", async () => {
+it("tests that a default-mode snapshot without partial frames is the vendored renderer's YAML, byte for byte", async () => {
   const whole = { json: fixture.result.json, partial: [] }
   const runtime = snapshotting(whole)
   const yaml = await runtime.run(
-    "return await page.ariaSnapshot({ mode: 'ai' })",
+    "return await page.ariaSnapshot({ mode: 'default' })",
   )
   expect(yaml).toBe(renderAriaSnapshotAsYaml(fixture.result.json))
   expect(yaml).toBe(
@@ -40,7 +42,7 @@ it("tests that a snapshot without partial frames is the vendored renderer's YAML
 it('tests that each frame Rust could not read gets its comment under its iframe line', async () => {
   const runtime = snapshotting(fixture.result)
   expect(
-    await runtime.run("return await page.ariaSnapshot({ mode: 'ai' })"),
+    await runtime.run("return await page.ariaSnapshot({ mode: 'default' })"),
   ).toBe(fixture.yaml.join('\n'))
 })
 
@@ -56,7 +58,7 @@ it('tests that a partial frame whose iframe line is missing is still reported, a
   )
 })
 
-it('tests that page and locator snapshots send their mode and depth, and JSON skips the rendering', async () => {
+it('tests that page and locator snapshots send their mode and depth, the text path ai by default, and JSON skips the rendering', async () => {
   const runtime = snapshotting(fixture.result)
   const result = json(
     await runtime.run(`
@@ -79,7 +81,7 @@ it('tests that page and locator snapshots send their mode and depth, and JSON sk
       name: 'page.ariaSnapshot',
       call: { api: 'page.ariaSnapshot', timeoutMs: 5000 },
       page: { $neo: 'page', tab: 1007 },
-      mode: 'default',
+      mode: 'ai',
       target: undefined,
     },
     {

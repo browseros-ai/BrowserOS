@@ -77,8 +77,9 @@ impl SnapshotOp {
 fn route<'a, R: Route<'a>>(op: SnapshotOp, r: R) -> R::Out {
     let command = wire::command("Frame.ariaSnapshot").result(
         "Rust stitches the child frames and answers the JSON tree plus the frames it could \
-         not read; the prelude renders YAML with upstream's own renderer and annotates the \
-         partial frames",
+         not read; the prelude renders the text, upstream's YAML for mode 'default' and \
+         Neo's condensed list of actionable lines for 'ai', each line upstream's own, and \
+         annotates the partial frames",
     );
     match op {
         SnapshotOp::Page => r.op(command, page_snapshot),

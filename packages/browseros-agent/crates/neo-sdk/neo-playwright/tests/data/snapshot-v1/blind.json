@@ -1,0 +1,144 @@
+{
+  "json": [
+    {
+      "active": true,
+      "children": [
+        {
+          "children": [
+            {
+              "level": 1,
+              "name": "Access restricted",
+              "ref": "e3",
+              "role": "heading"
+            },
+            {
+              "ref": "e4",
+              "role": "paragraph",
+              "text": "Continued access by an unauthorized AI agent violates our Conditions of Use. Press Continue only if you are a person."
+            },
+            {
+              "name": "Continue",
+              "ref": "e5",
+              "role": "button"
+            },
+            {
+              "level": 2,
+              "name": "Sign in",
+              "ref": "e6",
+              "role": "heading"
+            },
+            {
+              "children": [
+                {
+                  "children": [
+                    "Email",
+                    {
+                      "name": "Email",
+                      "ref": "e9",
+                      "role": "textbox",
+                      "text": "a@b.c"
+                    }
+                  ],
+                  "ref": "e8",
+                  "role": "generic"
+                },
+                {
+                  "children": [
+                    "Password",
+                    {
+                      "invalid": true,
+                      "name": "Password",
+                      "ref": "e11",
+                      "role": "textbox"
+                    }
+                  ],
+                  "ref": "e10",
+                  "role": "generic"
+                },
+                {
+                  "ref": "e12",
+                  "role": "alert",
+                  "text": "Invalid password. 2 attempts left before lockout."
+                },
+                {
+                  "name": "Sign in",
+                  "ref": "e13",
+                  "role": "button"
+                }
+              ],
+              "ref": "e7",
+              "role": "generic"
+            },
+            {
+              "level": 2,
+              "name": "Cart",
+              "ref": "e14",
+              "role": "heading"
+            },
+            {
+              "children": [
+                "Sensodyne Repair 3.4oz $7.49",
+                {
+                  "name": "Add to cart",
+                  "ref": "e16",
+                  "role": "button"
+                }
+              ],
+              "ref": "e15",
+              "role": "generic"
+            },
+            {
+              "children": [
+                "Sensodyne Repair 6-pack $41.00",
+                {
+                  "name": "Add to cart",
+                  "ref": "e18",
+                  "role": "button"
+                }
+              ],
+              "ref": "e17",
+              "role": "generic"
+            },
+            {
+              "ref": "e19",
+              "role": "status",
+              "text": "Saved 2 minutes ago"
+            }
+          ],
+          "ref": "e2",
+          "role": "main"
+        },
+        {
+          "children": [
+            {
+              "level": 2,
+              "name": "Delete project?",
+              "ref": "e21",
+              "role": "heading"
+            },
+            {
+              "ref": "e22",
+              "role": "paragraph",
+              "text": "This permanently deletes \"Acme\" and its 14 files. This cannot be undone."
+            },
+            {
+              "name": "Cancel",
+              "ref": "e23",
+              "role": "button"
+            },
+            {
+              "name": "Delete",
+              "ref": "e24",
+              "role": "button"
+            }
+          ],
+          "ref": "e20",
+          "role": "dialog"
+        }
+      ],
+      "ref": "e1",
+      "role": "generic"
+    }
+  ],
+  "partial": []
+}
