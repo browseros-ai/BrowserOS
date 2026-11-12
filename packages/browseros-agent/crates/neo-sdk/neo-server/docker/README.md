@@ -3,18 +3,21 @@
 A Linux image of the BrowserOS neo browser and this commit's SDK server, `browseros-claw-sdk`. Agents get
 one MCP tool, `run` (Playwright JavaScript against the browser), and the host gets the `/v1` host API on a
 Unix socket. It is built for hosts that build on it, such as zuzu's cell image (`FROM neo-sdk:<tag>`), and
-it runs on its own too. Nothing here publishes it.
+it runs on its own too. It is not production's image: that is the default Neo image
+(`packages/browseros/docker/neo`, claw-server), which this one shares no file with. CI builds and tests
+it in `.github/workflows/neo-sdk-image.yml`, which publishes it only when asked (Publish below).
 
 ```
 build.sh ──buildx──▶ Dockerfile ─┬─ server   (build machine's arch): this workspace ─▶ browseros-claw-sdk
                                  └─ neo-sdk  (target arch): ubuntu + browser.lock's .deb + the server
-                                              + the supervisor from packages/browseros/docker/neo
+                                              + supervisor/ (this folder)
 accept.sh <image> ──▶ disposable containers ──▶ PASS / FAIL / SKIP per check
 ```
 
-The browser supervisor (`neo-entrypoint`, the healthcheck, `neo-quit`) is the Neo image's own, taken from
-`packages/browseros/docker/neo` at the same commit, not a copy. It picks what the SDK needs from the server
-binary's version marker, so a fix to it lands in both images.
+The browser supervisor (`supervisor/`: `neo-entrypoint`, the healthcheck, `neo-quit`, `neo-server-info`,
+openbox's settings) is this image's own. It started as the default image's and still runs either server,
+choosing from the server binary's version marker; a change to it changes this image only.
+`supervisor/entrypoint_test.py` tests it (`python3 supervisor/entrypoint_test.py`).
 
 ## Build it
 
@@ -24,7 +27,7 @@ crates/neo-sdk/neo-server/docker/build.sh --platform linux/amd64   # zuzu's cell
 ```
 
 The tag is `neo-sdk:<browser>-<commit>-<arch>`, with `-dirty` before the arch when
-`packages/browseros-agent` or `packages/browseros/docker/neo` has uncommitted changes. `build.sh` prints `TAG=`, `IMAGE_ID=` and the
+`packages/browseros-agent` (which holds every input) has uncommitted changes. `build.sh` prints `TAG=`, `IMAGE_ID=` and the
 image's `provenance.json`. The server is cross-compiled with zig, so an amd64 image builds on an Apple
 silicon Mac without emulating rustc. The first build takes about 7 minutes; Cargo's cache is kept per
 architecture after that, shared by every checkout built on the Docker daemon.
@@ -48,13 +51,29 @@ It boots the image in throwaway containers on a private `--internal` network, dr
 `run`, and checks the host contract below, the stop, persistence, a browser restart and a kill of every
 process at once, all under only the capabilities listed below. The header of `accept.sh` lists each check.
 An image for another architecture than the Docker engine's gets the static `identity` check only, because
-booting it would be emulated. To prove amd64 natively, run both scripts on a GitHub-hosted amd64 runner:
+booting it would be emulated. CI runs both scripts natively on amd64 and arm64
+(`.github/workflows/neo-sdk-image.yml`) on every pull request and push that changes the image's inputs,
+with the supervisor's and the scripts' own tests; the accept logs and `provenance.json` are its artifacts.
+
+## Publish
+
+Only `neo-sdk-image.yml` publishes this image, and only to `ghcr.io/browseros-ai/neo-sdk`, never to
+production's `ghcr.io/browseros-ai/neo`. A pull request or a push (to `main` too) builds and tests only.
+It publishes the two images `accept.sh` passed, unchanged, when asked:
 
 ```sh
-gh workflow run neo-sdk-image.yml --ref <branch>   # .github/workflows/neo-sdk-image.yml
+gh workflow run neo-sdk-image.yml --ref <branch> -f publish=true -f confirm=neo-sdk   # :<version>
+git tag neo-sdk-v0.1.0 && git push origin neo-sdk-v0.1.0                              # :<version> and :0.1.0
 ```
 
-It never logs in to a registry or pushes; the accept log and `provenance.json` are its artifacts.
+`<version>` is `build.sh`'s, `<browser>-<9-char commit>`; each architecture is also at `:<version>-amd64`
+and `:<version>-arm64`.
+
+## Develop with it
+
+`dev.sh` runs this checkout's image with the dev kit (`devkit/`, walked through in `devkit/HOWTO.md`): a
+viewer and a trace UI over the host API, and `dev.sh run` to send scripts. `smoke_sdk.py` and
+`check_display.py` check a running container (`dev.sh smoke`).
 
 ## The contract
 

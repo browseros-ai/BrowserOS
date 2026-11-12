@@ -2,24 +2,19 @@
 #
 # The BrowserOS Neo SDK image: the released neo browser plus this commit's SDK server
 # (browseros-claw-sdk, one MCP tool: `run`), for hosts that build on it (zuzu's cell image) or
-# run it alone. README.md beside this file is the host contract. Build it with build.sh, which
-# supplies the two contexts:
+# run it alone. README.md beside this file is the host contract. Build it with build.sh, from one
+# context, packages/browseros-agent, filtered by Dockerfile.dockerignore. The image owns its
+# browser supervisor (supervisor/ beside this file); the default Neo image, packages/browseros/
+# docker/neo with claw-server, is production's and shares nothing with it.
 #
-#   context     packages/browseros-agent    the Rust workspace, filtered by Dockerfile.dockerignore
-#   neo-docker  packages/browseros/docker/neo  the browser supervisor shared with the Neo image
-#
-#   stage server          (build machine's arch)  workspace ─▶ /out/browseros-claw-sdk
+#   stage server          (build machine's arch)  workspace, minus supervisor/ ─▶ /out/browseros-claw-sdk
 #   stage neo-sdk-runtime (target arch)           ubuntu + pinned browser .deb + server
-#                                                 + shared supervisor + provenance
+#                                                 + supervisor/ + provenance
 #   stage neo-sdk-keyed   neo-sdk-runtime + CAPTCHA keys from BuildKit secrets (build.sh --*-key-file)
 #   stage neo-sdk         neo-sdk-runtime as is: keyless, the default target
 
 ARG UBUNTU_IMAGE=ubuntu:24.04@sha256:fe81560990fae86dc4743202b2cb4d3df98d0bcf949173cecef15ce1127ef852
 ARG RUST_IMAGE=rust:1.98.0-bookworm@sha256:82150a52ec202c1b14d7817e14516c392bb7f5cfebd88f1ed531cb37ebd39922
-
-# build.sh replaces this empty stage with packages/browseros/docker/neo. Built without it, the
-# COPY --from=neo-docker lines below fail with "not found" instead of shipping no supervisor.
-FROM scratch AS neo-docker
 
 # The server, cross-compiled on the build machine's own architecture exactly as
 # release-docker.yml's server job does (Rust 1.98.0, ziglang 0.15.2, cargo-zigbuild 0.23.0,
@@ -31,7 +26,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends python3-venv &&
  && ln -s "$(/opt/zig/bin/python -c 'import pathlib, ziglang; print(pathlib.Path(ziglang.__file__).parent)')/zig" /usr/local/bin/zig \
  && cargo install --locked cargo-zigbuild --version 0.23.0
 WORKDIR /src
-COPY . .
+# The supervisor is not a server source: leaving it out keeps a supervisor edit from recompiling
+# the server, and keeps it out of the server's source digest.
+COPY --exclude=crates/neo-sdk/neo-server/docker/supervisor . .
 # The target cache is per architecture and shared by every checkout built on this Docker daemon,
 # so third-party crates compile once; the registry is shared by both architectures.
 # build-server.sh cleans the workspace's own crates from it before each build, because Cargo judges
@@ -82,9 +79,9 @@ RUN set -eu; . /usr/share/neo-sdk/browser.lock; \
     rm -rf /tmp/neo.deb /var/lib/apt/lists/*
 
 # The server goes where the browser launches its bundled one from, and the build fails unless
-# the installed binary's version marker says claw-sdk: the shared entrypoint picks the display,
-# the host socket and the settings call from that marker at every start.
-COPY --from=neo-docker --chmod=0755 neo-server-info.sh /usr/local/bin/neo-server-info
+# the installed binary's version marker says claw-sdk: the entrypoint picks the display, the host
+# socket and the settings call from that marker at every start.
+COPY --chmod=0755 crates/neo-sdk/neo-server/docker/supervisor/neo-server-info.sh /usr/local/bin/neo-server-info
 COPY --from=server /out/browseros-claw-sdk /tmp/browseros-claw-sdk
 COPY --from=server /out/source-digest /usr/share/neo-sdk/source-digest
 RUN set -eu; bundled=$(neo-server-info path); install -m 0755 /tmp/browseros-claw-sdk "$bundled"; rm /tmp/browseros-claw-sdk; \
@@ -92,11 +89,12 @@ RUN set -eu; bundled=$(neo-server-info path); install -m 0755 /tmp/browseros-cla
 
 RUN userdel -r ubuntu && useradd -m -u 1000 -s /bin/bash neo
 
-# One supervisor for both images: a policy, quit or port fix lands in packages/browseros/docker/neo once.
-COPY --from=neo-docker openbox-rc.xml /etc/neo/openbox-rc.xml
-COPY --from=neo-docker --chmod=0755 entrypoint.sh /usr/local/bin/neo-entrypoint
-COPY --from=neo-docker --chmod=0755 healthcheck.sh /usr/local/bin/neo-healthcheck
-COPY --from=neo-docker --chmod=0755 neo-quit.py /usr/local/bin/neo-quit
+# The supervisor, the SDK image's own (supervisor/; it started as a copy of the default image's
+# and is changed here only): the display, the browser, the host socket, the healthcheck, the quit.
+COPY crates/neo-sdk/neo-server/docker/supervisor/openbox-rc.xml /etc/neo/openbox-rc.xml
+COPY --chmod=0755 crates/neo-sdk/neo-server/docker/supervisor/entrypoint.sh /usr/local/bin/neo-entrypoint
+COPY --chmod=0755 crates/neo-sdk/neo-server/docker/supervisor/healthcheck.sh /usr/local/bin/neo-healthcheck
+COPY --chmod=0755 crates/neo-sdk/neo-server/docker/supervisor/neo-quit.py /usr/local/bin/neo-quit
 COPY crates/neo-sdk/neo-playwright/THIRD_PARTY_NOTICES.md crates/neo-sdk/neo-playwright/third_party/playwright/LICENSE crates/neo-sdk/neo-playwright/third_party/playwright/NOTICE /usr/share/doc/neo-sdk/playwright/
 
 # What this image is made of, for hosts and for accept.sh: the source commit, the browser, and

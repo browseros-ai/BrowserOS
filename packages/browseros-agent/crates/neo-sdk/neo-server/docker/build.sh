@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Builds the Neo SDK image from this checkout: the SDK server compiled from this commit and the
-# browser pinned in browser.lock, on top of the supervisor in packages/browseros/docker/neo.
+# browser pinned in browser.lock, with this image's own supervisor (supervisor/ beside this script).
 # It only ever loads the image into the local Docker engine; it never pushes.
 #
 #   build.sh [--platform linux/amd64|linux/arm64] [--tag NAME]
@@ -10,7 +10,7 @@
 #                with zig either way; only the image's apt/dpkg steps run on the target arch.
 #   --tag        default: neo-sdk:<browser version>-<9-char commit>[-dirty]-<arch>. All but the
 #                arch is also the image's org.opencontainers.image.version label. -dirty means
-#                uncommitted changes in packages/browseros-agent or packages/browseros/docker/neo.
+#                uncommitted changes in packages/browseros-agent, which holds every input.
 #                The arch keeps an amd64 build (cells) and an arm64 one (a Mac) apart.
 #   --*-key-file bake a CAPTCHA provider key into the image (the neo-sdk-keyed target). Off by
 #                default: the image is keyless and reads key files a host puts at the paths in
@@ -30,7 +30,6 @@ usage() { sed -n '2,25p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
 here=$(cd -- "$(dirname -- "$0")" && pwd)
 agent=$(cd -- "$here/../../../.." && pwd)
 repo=$(git -C "$agent" rev-parse --show-toplevel)
-neo_docker="$repo/packages/browseros/docker/neo"
 
 platform="" tag="" capsolver="" twocaptcha=""
 while [ $# -gt 0 ]; do
@@ -59,7 +58,7 @@ esac
 . "$here/browser.lock"
 revision=$(git -C "$repo" rev-parse HEAD)
 dirty=false
-if [ -n "$(git -C "$repo" status --porcelain -- "$agent" "$neo_docker")" ]; then dirty=true; fi
+if [ -n "$(git -C "$repo" status --porcelain -- "$agent")" ]; then dirty=true; fi
 version="$NEO_BROWSER_VERSION-${revision:0:9}"
 [ "$dirty" = false ] || version+="-dirty"
 : "${tag:=neo-sdk:$version-${platform#linux/}}"
@@ -85,7 +84,6 @@ trap 'rm -f "$iidfile" "$binary"' EXIT
 docker buildx build \
   --platform "$platform" \
   --file "$here/Dockerfile" \
-  --build-context "neo-docker=$neo_docker" \
   --build-arg "NEO_SDK_REVISION=$revision" \
   --build-arg "NEO_SDK_DIRTY=$dirty" \
   --build-arg "NEO_SDK_VERSION=$version" \

@@ -49,9 +49,7 @@ def docker_command(
     ),
     server_dir: Optional[Path] = typer.Option(
         None, "--server-dir",
-        help="Install <dir>/<arch>/neo-server, a claw-server or claw-sdk build identified by its "
-             "version marker, over the package's server. Required with --push, which refuses "
-             "claw-sdk until it is the default server",
+        help="Override servers from <dir>/<arch>/browseros-claw-server-rs; required with --push",
     ),
     revision: str = typer.Option(
         "", "--revision",

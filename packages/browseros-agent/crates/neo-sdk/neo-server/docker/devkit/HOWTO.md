@@ -6,17 +6,17 @@ The same guide with screenshots of the viewer and the trace UI: https://docs.sha
 
 ## Quickstart
 
-Run these from `packages/browseros/docker/neo`:
+Run these from `packages/browseros-agent/crates/neo-sdk/neo-server/docker`:
 
 ```sh
-./dev.sh up --server claw-sdk
+./dev.sh up
 open http://127.0.0.1:16090/
 open http://127.0.0.1:16090/trace
 ./dev.sh run --task demo -f devkit/examples/goto-title.js
 ./dev.sh down
 ```
 
-1. `up --server claw-sdk` builds claw-sdk for Linux, bakes it into the Neo image, starts the container and the gateway, and prints every address. The first build takes about 2 minutes.
+1. `up` builds this checkout's Neo SDK image with `build.sh`, starts the container and the gateway, and prints every address. The first build takes about 7 minutes; later ones only what changed.
 2. `http://127.0.0.1:16090/` is the viewer: Neo's whole screen, through claw-sdk's own display.
 3. `http://127.0.0.1:16090/trace` is the trace UI. It lists every run and updates as runs happen.
 4. `run` sends a script to claw-sdk's `run` tool, prints what came back, and logs the call.
@@ -29,7 +29,7 @@ Server:   claw-sdk (read from the container)
 Viewer:   http://127.0.0.1:16090/   (?mode=control to type into it)
 Trace UI: http://127.0.0.1:16090/trace
 MCP:      http://127.0.0.1:19010/mcp
-Host API: http://127.0.0.1:19300/v1   bearer token in /Users/<you>/.local/state/neo-dev/host-token
+Host API: http://127.0.0.1:19300/v1   bearer token in /Users/<you>/.local/state/neo-sdk-dev/host-token
 
 MCP client config:
   {"mcpServers": {"neo-sdk": {"type": "http", "url": "http://127.0.0.1:19010/mcp"}}}
@@ -37,7 +37,7 @@ Claude Code:
   claude mcp add --transport http neo-sdk http://127.0.0.1:19010/mcp
 ```
 
-After you change claw-sdk, run `./dev.sh up --server claw-sdk` again. It rebuilds only what changed and replaces the container and the gateway. To restart the gateway alone after editing `devkit/`, run `./dev.sh gateway`.
+After you change claw-sdk, run `./dev.sh up` again. It rebuilds only what changed and replaces the container and the gateway. To restart the gateway alone after editing `devkit/`, run `./dev.sh gateway`.
 
 Setup, once: Docker, `brew install jq zig`, `cargo install --locked cargo-zigbuild`, `rustup toolchain install 1.98.0`, `rustup +1.98.0 target add aarch64-unknown-linux-gnu`, and `npx` (the gateway runs on Bun 1.4.2, which `npx` fetches). `dev.sh` builds with Rust 1.98.0, the release job's toolchain. Set `NEO_RUST_TOOLCHAIN=` to use your default instead.
 
@@ -193,12 +193,12 @@ Release closes that display (`4002 released`) and lifts the lock.
 The trace UI joins two records of each run on its `requestId`:
 
 - Neo's own trace, from the host API: the run's code and result, and every operation with its arguments, result, outcome, delivery (`not_sent`, `done` or `unknown`), error owner, duration and screenshot.
-- The CLI log, `~/.local/state/neo-dev/traces/runs.jsonl`: the code `dev.sh run` sent, the MCP reply as the client saw it (console output included), and the round-trip time.
+- The CLI log, `~/.local/state/neo-sdk-dev/traces/runs.jsonl`: the code `dev.sh run` sent, the MCP reply as the client saw it (console output included), and the round-trip time.
 
 **Follow newest** selects each run as it starts. **Export JSON** downloads the selected run with its screenshots inlined and its CLI record. The list loads the newest 100 runs, and the filter searches only the runs it has loaded, so pick **Load older runs** to reach older ones.
 
 
-To copy everything to disk, run `./dev.sh export`. It writes `~/.local/state/neo-dev/traces/export-<time>/` with `runs.json`, one `runs/<run id>.json` per run, `screenshots/<operation id>.jpg`, `events.json` (the events Neo still holds, up to 1024) and `cli-runs.jsonl`.
+To copy everything to disk, run `./dev.sh export`. It writes `~/.local/state/neo-sdk-dev/traces/export-<time>/` with `runs.json`, one `runs/<run id>.json` per run, `screenshots/<operation id>.jpg`, `events.json` (the events Neo still holds, up to 1024) and `cli-runs.jsonl`.
 
 To call the host API yourself, use `./dev.sh host <METHOD> <path> [json]`, for example `./dev.sh host GET '/v1/runs?taskId=demo'`. It adds the bearer token, which never appears on the command line.
 
@@ -239,17 +239,17 @@ The trace UI needs a few things the host API does not record. Each row says what
 
 ## When something goes wrong
 
-- **claw-sdk restarts in a loop with `setting the mode of <path>/host.sock`.** A folder that Docker Desktop shares from macOS cannot hold a Unix socket. The image's default socket, `/run/neo/host.sock`, is off the data folder, so this happens only when `CLAW_HOST_SOCKET` points into a shared folder. `compose.sdk-dev.yaml` keeps it in the container's `/tmp`.
+- **claw-sdk restarts in a loop with `setting the mode of <path>/host.sock`.** A folder that Docker Desktop shares from macOS cannot hold a Unix socket. The image's default socket, `/run/neo/host.sock`, is off the data folder, so this happens only when `CLAW_HOST_SOCKET` points into a shared folder. `compose.dev.yaml` keeps it in the container's `/tmp`.
 - **A run drives the wrong tab.** It had no `--task`. Pass one.
 - **A port is taken.** Set `NEO_GATEWAY_PORT` (16090), `NEO_HOST_PORT` (19300) or `NEO_MCP_PORT` (19010) before `up`.
-- **The gateway did not come up.** `up` prints the end of `~/.local/state/neo-dev/gateway.log`. The usual cause is that `npx` could not fetch Bun.
+- **The gateway did not come up.** `up` prints the end of `~/.local/state/neo-sdk-dev/gateway.log`. The usual cause is that `npx` could not fetch Bun.
 
 ## Where the kit lives
 
 All of it is dev only and stays out of the image:
 
 - `dev.sh` builds and starts everything. Its header lists every command and setting.
-- `compose.sdk-dev.yaml` adds the host API to the container: the token file, the TCP listener on 127.0.0.1:19300, and the socket moved off the shared folder.
+- `compose.dev.yaml` adds the host API to the container: the token file, the TCP listener on 127.0.0.1:19300, and the socket moved off the shared folder.
 - `devkit/gateway.ts` is the browser's way in. It adds the bearer token, which a browser cannot send on a WebSocket, refuses requests from any other origin, and serves the viewer, the trace UI and the CLI log.
 - `devkit/viewer.html`, `devkit/trace.html` and `devkit/web/` are the two pages. The viewer uses the noVNC 1.3.0 that ships in the image.
 - `dev_mcp.py run` sends scripts and writes the CLI log. `devkit/export.py` is `dev.sh export`.

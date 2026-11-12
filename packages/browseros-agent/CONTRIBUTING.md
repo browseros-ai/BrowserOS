@@ -79,7 +79,7 @@ client to that URL to use the single `run` tool. To check it against the running
 browser, replace `<port>` with the logged server port:
 
 ```bash
-python3 ../browseros/docker/neo/smoke_sdk.py --mcp-port <port>
+python3 crates/neo-sdk/neo-server/docker/smoke_sdk.py --mcp-port <port>
 ```
 
 The Claw UI still launches the browser. Its server-backed screens require

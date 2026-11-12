@@ -67,7 +67,6 @@ NEO_VNC_PORT=7080 NEO_MCP_PORT=7010 NEO_DATA=/mnt/neo docker compose up -d --wai
 | Software graphics (see [Graphics](#graphics)) | `-e NEO_SOFTWARE_GRAPHICS=false` | `NEO_SOFTWARE_GRAPHICS` | `true` |
 | Bundled BrowserOS extensions off (see [Bundled extensions](#bundled-extensions)) | `-e NEO_DISABLE_BROWSEROS_EXTENSIONS=false` | `NEO_DISABLE_BROWSEROS_EXTENSIONS` | `true` |
 | Extra Neo command-line flags (see [Browser frame](#browser-frame)) | `-e NEO_ARGS="--lang=de"` | `NEO_ARGS` | empty |
-| MCP from outside the container (see [Security](#security)) | `-e NEO_MCP_REMOTE=false` | `NEO_MCP_REMOTE` | `true` |
 
 Ports inside the container are always 6080 and 9010; change only the host side.
 
@@ -406,13 +405,6 @@ signed in to your accounts.
 
 - **Port 6080** gives full control of Neo's screen, mouse and keyboard.
 - **Port 9010** exposes Neo's whole local API, not only `/mcp`: sessions, recordings and settings.
-- **Port 9011 serves the same API as 9010 over HTTPS** (a self-signed certificate), and it
-  cannot be turned off. It is not published, but any process that can reach the container can
-  reach it, so a host that firewalls 9010 must firewall 9011 the same way. If another process
-  holds 9011 when Neo starts, the browser takes the next free port instead, so a host that must
-  keep a local user off Neo should allow that user a list of ports rather than block a few.
-- **`NEO_MCP_REMOTE=false`** makes both MCP ports refuse every peer but loopback. Docker's port
-  forwarding arrives from outside the container, so a published 9010 then stops answering.
 - **Keep the `127.0.0.1:` in `-p`.** Without it, Docker publishes the port on every network
   interface, and on Linux that bypasses firewalls such as `ufw`.
 - **To share it,** put your own authenticating reverse proxy in front of both ports.
@@ -467,19 +459,7 @@ docker build --no-cache-filter neo --build-context neo-deb=/path/to/folder -t ne
 
 To run this checkout's claw-server in the image while developing it, use
 [`dev.sh`](dev.sh): `./dev.sh up` builds and starts it with the viewer on 16080 and MCP on
-19010, and its header explains how to test it through Neo's MCP tools. `./dev.sh up --server
-claw-sdk` runs claw-sdk instead, with a dev-only kit to watch the browser, send runs and read
-each run's trace; [`devkit/HOWTO.md`](devkit/HOWTO.md) walks through it.
-
-An image can also run claw-sdk in place of claw-server. Those images are built and
-smoke-tested only for now, and none is published. Hosts that run claw-sdk, such as zuzu, use the
-Neo SDK image instead: [`crates/neo-sdk/neo-server/docker`](../../../browseros-agent/crates/neo-sdk/neo-server/docker/README.md)
-builds it from one commit with a pinned browser and this folder's supervisor. A claw-sdk image serves no noVNC viewer on
-6080, never sends the clipboard to VNC viewers, skips the human-help setting, which
-claw-sdk does not have, and starts the browser with `--disable-back-forward-cache`, as
-Playwright does: a page restored from that cache fires no load event, so a script's `goBack()`
-would wait for one until it timed out. The image knows which server it runs from a version marker compiled
-into the server binary: `docker run --rm --entrypoint neo-server-info <image> kind`.
+19010, and its header explains how to test it through Neo's MCP tools.
 
 Maintainers build and publish the image with `browseros release docker`; see
 [`bos_build/docs/docker-image.md`](../../bos_build/docs/docker-image.md).
@@ -494,11 +474,3 @@ Maintainers build and publish the image with `browseros release docker`; see
 | `permission denied` writing `/data` on Linux | Set `PUID`/`PGID` to the owner of your data folder. |
 | Viewer shows "Failed to connect" | The container stopped or restarted; the page reconnects by itself once it is back. |
 | `No such image` for a version | Images exist for Neo versions released for both amd64 and arm64 Linux. |
-
-## SDK page access
-
-The SDK follows Playwright for main-world evaluation, local-file navigation and file uploads.
-A takeover blocks agent actions on its targeted tab; live views, screenshots and traces keep
-streaming while the owner types. There is no private-tab state or automatic field/secret mask.
-Playwright's explicit screenshot mask option remains available. The host token and CAPTCHA
-key files remain image configuration; filesystem ownership and permissions still apply.
