@@ -1,8 +1,8 @@
 /**
  * Upstream's WebStorage (client/webStorage.ts at v1.64.1): `page.localStorage` and
  * `page.sessionStorage`. Each method is one op on the page's main frame, without a timeout,
- * as upstream's calls are (`kNoTimeout`): `webStorage.read` for `items` and `getItem`,
- * `webStorage.write` for the rest, so the trace says which calls changed the page.
+ * as upstream's calls are (`kNoTimeout`). Each method has its own typed command; the host
+ * marks only setItem, removeItem and clear as writes.
  */
 import { captureSite } from './call-site'
 import { clientError } from './errors'
@@ -23,10 +23,10 @@ export class WebStorage {
   async items(): Promise<{ name: string; value: string }[]> {
     const site = captureSite()
     const api = 'webStorage.items'
-    const items = await send['webStorage.read'](
+    const items = await send['webStorage.items'](
       site,
       { api, timeoutMs: 0 },
-      { page: await this.#page._brand(api), kind: this.#kind, action: 'items' },
+      { page: await this.#page._brand(api), kind: this.#kind },
     )
     return Array.isArray(items) ? items : []
   }
@@ -34,13 +34,12 @@ export class WebStorage {
   async getItem(name: string): Promise<string | null> {
     const site = captureSite()
     const api = 'webStorage.getItem'
-    const value = await send['webStorage.read'](
+    const value = await send['webStorage.getItem'](
       site,
       { api, timeoutMs: 0 },
       {
         page: await this.#page._brand(api),
         kind: this.#kind,
-        action: 'getItem',
         name: text(api, 'name', name),
       },
     )
@@ -50,13 +49,12 @@ export class WebStorage {
   async setItem(name: string, value: string): Promise<void> {
     const site = captureSite()
     const api = 'webStorage.setItem'
-    await send['webStorage.write'](
+    await send['webStorage.setItem'](
       site,
       { api, timeoutMs: 0 },
       {
         page: await this.#page._brand(api),
         kind: this.#kind,
-        action: 'setItem',
         name: text(api, 'name', name),
         value: text(api, 'value', value),
       },
@@ -66,13 +64,12 @@ export class WebStorage {
   async removeItem(name: string): Promise<void> {
     const site = captureSite()
     const api = 'webStorage.removeItem'
-    await send['webStorage.write'](
+    await send['webStorage.removeItem'](
       site,
       { api, timeoutMs: 0 },
       {
         page: await this.#page._brand(api),
         kind: this.#kind,
-        action: 'removeItem',
         name: text(api, 'name', name),
       },
     )
@@ -81,10 +78,10 @@ export class WebStorage {
   async clear(): Promise<void> {
     const site = captureSite()
     const api = 'webStorage.clear'
-    await send['webStorage.write'](
+    await send['webStorage.clear'](
       site,
       { api, timeoutMs: 0 },
-      { page: await this.#page._brand(api), kind: this.#kind, action: 'clear' },
+      { page: await this.#page._brand(api), kind: this.#kind },
     )
   }
 }

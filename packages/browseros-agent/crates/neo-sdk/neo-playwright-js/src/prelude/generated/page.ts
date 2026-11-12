@@ -28,12 +28,12 @@ import type { PdfInput } from './types/PdfInput'
 import type { SaveScreenshotInput } from './types/SaveScreenshotInput'
 import type { ScreenshotInput } from './types/ScreenshotInput'
 import type { SetContentInput } from './types/SetContentInput'
-import type { StorageReadInput } from './types/StorageReadInput'
-import type { StorageValue } from './types/StorageValue'
-import type { StorageWriteInput } from './types/StorageWriteInput'
+import type { StorageInput } from './types/StorageInput'
+import type { StorageItem } from './types/StorageItem'
+import type { StorageKeyInput } from './types/StorageKeyInput'
+import type { StorageSetInput } from './types/StorageSetInput'
 import type { Tagged } from './types/Tagged'
 import type { UrlResult } from './types/UrlResult'
-import type { ViewportChanged } from './types/ViewportChanged'
 import type { ViewportSizeInput } from './types/ViewportSizeInput'
 import type { WaitForNavigationInput } from './types/WaitForNavigationInput'
 import type { WaitForUrlInput } from './types/WaitForUrlInput'
@@ -69,14 +69,13 @@ export type { SaveScreenshotInput } from './types/SaveScreenshotInput'
 export type { Scale } from './types/Scale'
 export type { ScreenshotInput } from './types/ScreenshotInput'
 export type { SetContentInput } from './types/SetContentInput'
+export type { StorageInput } from './types/StorageInput'
 export type { StorageItem } from './types/StorageItem'
-export type { StorageReadInput } from './types/StorageReadInput'
-export type { StorageValue } from './types/StorageValue'
-export type { StorageWriteInput } from './types/StorageWriteInput'
+export type { StorageKeyInput } from './types/StorageKeyInput'
+export type { StorageSetInput } from './types/StorageSetInput'
 export type { TagElement } from './types/TagElement'
 export type { Tagged } from './types/Tagged'
 export type { UrlResult } from './types/UrlResult'
-export type { ViewportChanged } from './types/ViewportChanged'
 export type { ViewportSizeInput } from './types/ViewportSizeInput'
 export type { WaitForNavigationInput } from './types/WaitForNavigationInput'
 export type { WaitForUrlInput } from './types/WaitForUrlInput'
@@ -105,8 +104,11 @@ export type PageInputs = {
   'page.saveScreenshot': SaveScreenshotInput
   'page.pdf': PdfInput
   'page.setViewportSize': ViewportSizeInput
-  'webStorage.read': StorageReadInput
-  'webStorage.write': StorageWriteInput
+  'webStorage.items': StorageInput
+  'webStorage.getItem': StorageKeyInput
+  'webStorage.setItem': StorageSetInput
+  'webStorage.removeItem': StorageKeyInput
+  'webStorage.clear': StorageInput
 }
 
 /** Each page op's result. */
@@ -132,9 +134,12 @@ export type PageOutputs = {
   'page.screenshot': Bytes
   'page.saveScreenshot': null
   'page.pdf': Bytes
-  'page.setViewportSize': ViewportChanged
-  'webStorage.read': StorageValue
-  'webStorage.write': null
+  'page.setViewportSize': null
+  'webStorage.items': Array<StorageItem>
+  'webStorage.getItem': string | null
+  'webStorage.setItem': null
+  'webStorage.removeItem': null
+  'webStorage.clear': null
 }
 
 /**
@@ -283,19 +288,37 @@ export const PAGE_SEND = {
     call: CallHeader,
     input: ViewportSizeInput,
     signal?: SignalLike,
-  ): Promise<ViewportChanged> => invoke('page.setViewportSize', site, call, input, signal),
-  'webStorage.read': (
+  ): Promise<null> => invoke('page.setViewportSize', site, call, input, signal),
+  'webStorage.items': (
     site: CallSite,
     call: CallHeader,
-    input: StorageReadInput,
+    input: StorageInput,
     signal?: SignalLike,
-  ): Promise<StorageValue> => invoke('webStorage.read', site, call, input, signal),
-  'webStorage.write': (
+  ): Promise<Array<StorageItem>> => invoke('webStorage.items', site, call, input, signal),
+  'webStorage.getItem': (
     site: CallSite,
     call: CallHeader,
-    input: StorageWriteInput,
+    input: StorageKeyInput,
     signal?: SignalLike,
-  ): Promise<null> => invoke('webStorage.write', site, call, input, signal),
+  ): Promise<string | null> => invoke('webStorage.getItem', site, call, input, signal),
+  'webStorage.setItem': (
+    site: CallSite,
+    call: CallHeader,
+    input: StorageSetInput,
+    signal?: SignalLike,
+  ): Promise<null> => invoke('webStorage.setItem', site, call, input, signal),
+  'webStorage.removeItem': (
+    site: CallSite,
+    call: CallHeader,
+    input: StorageKeyInput,
+    signal?: SignalLike,
+  ): Promise<null> => invoke('webStorage.removeItem', site, call, input, signal),
+  'webStorage.clear': (
+    site: CallSite,
+    call: CallHeader,
+    input: StorageInput,
+    signal?: SignalLike,
+  ): Promise<null> => invoke('webStorage.clear', site, call, input, signal),
 }
 
 // Each route row against Playwright's own protocol at the pin (upstream-check.ts): tsc
@@ -330,13 +353,13 @@ type _page_content_result = Assert<VoidIsNull<'page.content', pw.FrameContentRes
 type _page_setContent = Assert<UpstreamCheck<'page.setContent', SetContentInput, pw.FrameSetContentParams, never, never, never>>
 type _page_setContent_result = Assert<VoidIsNull<'page.setContent', pw.FrameSetContentResult, null>>
 // page.addScriptTag: Frame.addScriptTag
-//   adds path: the Neo host reads the client's source file before insertion
+//   adds path: the Neo host reads the source file; upstream's client reads it and sends content
 type _page_addScriptTag = Assert<UpstreamCheck<'page.addScriptTag', AddTagInput, pw.FrameAddScriptTagParams, 'path', never, never>>
-type _page_addScriptTag_result = Assert<VoidIsNull<'page.addScriptTag', pw.FrameAddScriptTagResult, Tagged>>
+//   result: the prelude consumes element and frame facts to refresh synchronous frames() after a tag adds frames (no void check: Neo answers more than null on purpose)
 // page.addStyleTag: Frame.addStyleTag
-//   adds path: the Neo host reads the client's stylesheet before insertion
+//   adds path: the Neo host reads the stylesheet; upstream's client reads it and sends content
 type _page_addStyleTag = Assert<UpstreamCheck<'page.addStyleTag', AddStyleTagInput, pw.FrameAddStyleTagParams, 'path', never, never>>
-type _page_addStyleTag_result = Assert<VoidIsNull<'page.addStyleTag', pw.FrameAddStyleTagResult, Tagged>>
+//   result: the prelude consumes element and frame facts to refresh synchronous frames() after insertion (no void check: Neo answers more than null on purpose)
 // page.emulateMedia: Page.emulateMedia
 type _page_emulateMedia = Assert<UpstreamCheck<'page.emulateMedia', MediaInput, pw.PageEmulateMediaParams, never, never, never>>
 type _page_emulateMedia_result = Assert<VoidIsNull<'page.emulateMedia', pw.PageEmulateMediaResult, null>>
@@ -359,23 +382,24 @@ type _page_screenshot_keys = Assert<KeysCheck<'page.screenshot', (typeof PAGE_OP
 type _page_screenshot_result = Assert<VoidIsNull<'page.screenshot', pw.PageScreenshotResult, Bytes>>
 // page.saveScreenshot: Neo only: the screenshot client's path step writes captured bytes on Neo's disk
 // page.pdf: Page.pdf
-//   retypes width: Rust accepts numeric pixels as well as the client's normalized CSS strings
-//   retypes height: Rust accepts numeric pixels as well as the client's normalized CSS strings
-//   retypes margin: Rust accepts numeric pixels on every margin side as well as normalized CSS strings
-type _page_pdf = Assert<ExactUpstreamCheck<'page.pdf', PdfInput, pw.PagePdfParams, never, never, 'width' | 'height' | 'margin'>>
+type _page_pdf = Assert<ExactUpstreamCheck<'page.pdf', PdfInput, pw.PagePdfParams, never, never, never>>
 type _page_pdf_keys = Assert<KeysCheck<'page.pdf', (typeof PAGE_OPTION_KEYS)['page.pdf'][number], pw.PagePdfOptions>>
 type _page_pdf_result = Assert<VoidIsNull<'page.pdf', pw.PagePdfResult, Bytes>>
 // page.setViewportSize: Page.setViewportSize
 type _page_setViewportSize = Assert<UpstreamCheck<'page.setViewportSize', ViewportSizeInput, pw.PageSetViewportSizeParams, never, never, never>>
-//   result: the existing empty object receipt, preserved until the wire alignment (no void check: Neo answers more than null on purpose)
-// webStorage.read: Page.webStorageGetItem
-//   adds action: one Neo op implements getItem and items
-//   retypes name: items reads all names, so only getItem supplies one
-type _webStorage_read = Assert<UpstreamCheck<'webStorage.read', StorageReadInput, pw.PageWebStorageGetItemParams, 'action', never, 'name'>>
-type _webStorage_read_result = Assert<VoidIsNull<'webStorage.read', pw.PageWebStorageGetItemResult, StorageValue>>
-// webStorage.write: Page.webStorageSetItem
-//   adds action: one Neo op implements setItem, removeItem and clear
-//   retypes name: clear needs no item name
-//   retypes value: only setItem supplies a value
-type _webStorage_write = Assert<UpstreamCheck<'webStorage.write', StorageWriteInput, pw.PageWebStorageSetItemParams, 'action', never, 'name' | 'value'>>
-type _webStorage_write_result = Assert<VoidIsNull<'webStorage.write', pw.PageWebStorageSetItemResult, null>>
+type _page_setViewportSize_result = Assert<VoidIsNull<'page.setViewportSize', pw.PageSetViewportSizeResult, null>>
+// webStorage.items: Page.webStorageItems
+type _webStorage_items = Assert<UpstreamCheck<'webStorage.items', StorageInput, pw.PageWebStorageItemsParams, never, never, never>>
+type _webStorage_items_result = Assert<VoidIsNull<'webStorage.items', pw.PageWebStorageItemsResult, Array<StorageItem>>>
+// webStorage.getItem: Page.webStorageGetItem
+type _webStorage_getItem = Assert<UpstreamCheck<'webStorage.getItem', StorageKeyInput, pw.PageWebStorageGetItemParams, never, never, never>>
+type _webStorage_getItem_result = Assert<VoidIsNull<'webStorage.getItem', pw.PageWebStorageGetItemResult, string | null>>
+// webStorage.setItem: Page.webStorageSetItem
+type _webStorage_setItem = Assert<UpstreamCheck<'webStorage.setItem', StorageSetInput, pw.PageWebStorageSetItemParams, never, never, never>>
+type _webStorage_setItem_result = Assert<VoidIsNull<'webStorage.setItem', pw.PageWebStorageSetItemResult, null>>
+// webStorage.removeItem: Page.webStorageRemoveItem
+type _webStorage_removeItem = Assert<UpstreamCheck<'webStorage.removeItem', StorageKeyInput, pw.PageWebStorageRemoveItemParams, never, never, never>>
+type _webStorage_removeItem_result = Assert<VoidIsNull<'webStorage.removeItem', pw.PageWebStorageRemoveItemResult, null>>
+// webStorage.clear: Page.webStorageClear
+type _webStorage_clear = Assert<UpstreamCheck<'webStorage.clear', StorageInput, pw.PageWebStorageClearParams, never, never, never>>
+type _webStorage_clear_result = Assert<VoidIsNull<'webStorage.clear', pw.PageWebStorageClearResult, null>>

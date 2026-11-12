@@ -1,13 +1,13 @@
 //! The page's persistent metrics override, shared with core so a takeover can restore it.
 
 use browseros_core::viewport::{Size, ViewportRequest};
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use ts_rs::TS;
 
 use crate::op_scope::OpScope;
 use crate::op_spec::{OpSpec, PAGE};
 use crate::target::PageRef;
-use crate::wire::options;
+use crate::wire::{Nothing, options};
 use crate::{ErrorCode, Playwright, PlaywrightError};
 
 /// A tab write, so the dispatcher's takeover lock guards resizing just like navigation.
@@ -34,15 +34,11 @@ struct Dimensions {
 
 options!(ViewportSizeInput);
 
-/// The existing viewport write receipt; capture and frame state remain owned by the page.
-#[derive(Debug, Serialize, TS)]
-pub(crate) struct ViewportChanged {}
-
 pub(crate) async fn set(
     pw: &Playwright,
     scope: &OpScope<'_>,
     input: ViewportSizeInput,
-) -> Result<ViewportChanged, PlaywrightError> {
+) -> Result<Nothing, PlaywrightError> {
     let size = Size {
         width: input.viewport_size.width,
         height: input.viewport_size.height,
@@ -62,5 +58,25 @@ pub(crate) async fn set(
         .apply()
         .await
         .map_err(|error| scope.core_error(&error))?;
-    Ok(ViewportChanged {})
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::error::Error;
+
+    use crate::Op;
+    use crate::op_output::to_output;
+    use crate::op_scope::OpScope;
+    use crate::target::CallHeader;
+    use crate::test_env::TestEnv;
+
+    #[tokio::test]
+    async fn viewport_void_receipt_leaves_the_route_as_null() -> Result<(), Box<dyn Error>> {
+        let env = TestEnv::new();
+        let op = Op::from_name("page.setViewportSize").ok_or("viewport op exists")?;
+        let scope = OpScope::new(&env, op, CallHeader::default());
+        assert_eq!(serde_json::to_string(&to_output(&scope, &())?)?, "null");
+        Ok(())
+    }
 }

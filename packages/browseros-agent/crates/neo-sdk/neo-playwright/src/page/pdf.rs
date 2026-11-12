@@ -14,7 +14,7 @@ use crate::target::PageRef;
 use crate::{ErrorCode, Playwright, PlaywrightError};
 use ts_rs::TS;
 
-/// `page.pdf(options)` without `path`, which the prelude writes itself.
+/// `page.pdf(options)` with CSS lengths normalized by the client; Neo returns bytes inline.
 #[derive(Debug, Deserialize, TS)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub(crate) struct PdfInput {
@@ -66,12 +66,12 @@ pub(crate) struct PdfInput {
 
 crate::wire::options!(PdfInput, flat);
 
-/// A length as Playwright takes it: pixels as a number, or text with a `px`, `in`, `cm` or
-/// `mm` unit (text without a known unit is pixels).
+/// The channel accepts only CSS length strings. The prelude converts numeric script
+/// options to `px` before the call, as upstream's client does.
 #[derive(Clone, Debug, Deserialize, TS)]
 #[serde(untagged)]
+// Retain the untagged decoder so invalid non-length script values keep their existing error.
 enum Length {
-    Pixels(f64),
     Text(String),
 }
 
@@ -114,25 +114,21 @@ const UNIT_PIXELS: [(&str, f64); 4] = [("px", 1.0), ("in", 96.0), ("cm", 37.8), 
 impl Length {
     /// Upstream's `convertPrintParameterToInches`.
     fn inches(&self) -> Result<f64, String> {
-        let pixels = match self {
-            Self::Pixels(pixels) => *pixels,
-            Self::Text(text) => {
-                let unit_at = text.len().saturating_sub(2);
-                let unit = text.get(unit_at..).map(str::to_ascii_lowercase);
-                let known = UNIT_PIXELS
-                    .iter()
-                    .find(|(name, _)| unit.as_deref() == Some(*name));
-                let (number, per_unit) = match known {
-                    Some((_, per_unit)) => (text.get(..unit_at).unwrap_or_default(), *per_unit),
-                    None => (text.as_str(), 1.0),
-                };
-                let value: f64 = number
-                    .trim()
-                    .parse()
-                    .map_err(|_error| format!("Failed to parse parameter value: {text}"))?;
-                value * per_unit
-            }
+        let Self::Text(text) = self;
+        let unit_at = text.len().saturating_sub(2);
+        let unit = text.get(unit_at..).map(str::to_ascii_lowercase);
+        let known = UNIT_PIXELS
+            .iter()
+            .find(|(name, _)| unit.as_deref() == Some(*name));
+        let (number, per_unit) = match known {
+            Some((_, per_unit)) => (text.get(..unit_at).unwrap_or_default(), *per_unit),
+            None => (text.as_str(), 1.0),
         };
+        let value: f64 = number
+            .trim()
+            .parse()
+            .map_err(|_error| format!("Failed to parse parameter value: {text}"))?;
+        let pixels = value * per_unit;
         Ok(pixels / 96.0)
     }
 }
@@ -248,11 +244,15 @@ mod tests {
     fn tests_that_units_convert_to_inches_as_upstream_does() -> Result<(), Box<dyn Error>> {
         let sent = params(&json!({
             "width": "960px", "height": "10in",
-            "margin": { "top": "2.54cm", "left": 48, "right": "25.4mm", "bottom": "96" },
+            "margin": { "top": "2.54cm", "left": "48px", "right": "25.4mm", "bottom": "96" },
         }))?;
         assert_eq!(sent["paperWidth"], json!(10.0));
         assert_eq!(sent["paperHeight"], json!(10.0));
-        assert_eq!(sent["marginLeft"], json!(0.5), "a number is pixels");
+        assert_eq!(
+            sent["marginLeft"],
+            json!(0.5),
+            "the client normalizes numeric pixels"
+        );
         assert_eq!(
             sent["marginBottom"],
             json!(1.0),
@@ -264,6 +264,16 @@ mod tests {
             "cm, by upstream's 37.8 px/cm"
         );
         Ok(())
+    }
+
+    #[test]
+    fn tests_that_the_channel_requires_client_normalized_lengths() {
+        for dimension in ["width", "height"] {
+            assert!(params(&json!({ dimension: 96 })).is_err());
+        }
+        for side in ["top", "right", "bottom", "left"] {
+            assert!(params(&json!({ "margin": { side: 96 } })).is_err());
+        }
     }
 
     #[test]

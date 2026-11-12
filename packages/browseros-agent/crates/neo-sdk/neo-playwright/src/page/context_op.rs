@@ -103,7 +103,12 @@ fn route<'a, R: Route<'a>>(op: ContextOp, r: R) -> R::Out {
             wire::neo_only("Neo lists live tabs instead of upstream's client-side page objects"),
             pages,
         ),
-        ContextOp::NewPage => r.op(wire::command("BrowserContext.newPage"), new_page),
+        ContextOp::NewPage => r.op(
+            wire::command("BrowserContext.newPage").result(
+                "the prelude caches url from the new tab so page.url() remains synchronous",
+            ),
+            new_page,
+        ),
         op @ (ContextOp::AddInitScript | ContextOp::ExposeBinding | ContextOp::Dispose) => {
             r.untyped(move |pw, scope, args| run_untyped(pw, scope, op, args))
         }

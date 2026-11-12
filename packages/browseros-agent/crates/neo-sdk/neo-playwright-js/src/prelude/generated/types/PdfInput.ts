@@ -4,7 +4,7 @@ import type { Margin } from "./Margin";
 import type { PageHandle } from "./PageHandle";
 
 /**
- * `page.pdf(options)` without `path`, which the prelude writes itself.
+ * `page.pdf(options)` with CSS lengths normalized by the client; Neo returns bytes inline.
  */
 export type PdfInput = { page: PageHandle, scale?: number, displayHeaderFooter?: boolean, headerTemplate?: string, footerTemplate?: string, printBackground?: boolean, landscape?: boolean, pageRanges?: string, 
 /**

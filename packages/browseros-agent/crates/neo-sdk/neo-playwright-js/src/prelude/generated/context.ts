@@ -7,7 +7,7 @@ import type * as pw from '../../../../neo-playwright/third_party/playwright/pack
 import { invoke } from '../bridge'
 import type { CallSite } from '../call-site'
 import type { SignalLike } from '../signal'
-import type { Assert, UpstreamCheck, VoidIsNull } from '../upstream-check'
+import type { Assert, UpstreamCheck } from '../upstream-check'
 import type { CallHeader } from '../wire'
 import type { ContextNoArgs } from './types/ContextNoArgs'
 import type { ContextPageEntry } from './types/ContextPageEntry'
@@ -60,4 +60,4 @@ export const CONTEXT_SEND = {
 // context.pages: Neo only: Neo lists live tabs instead of upstream's client-side page objects
 // context.newPage: BrowserContext.newPage
 type _context_newPage = Assert<UpstreamCheck<'context.newPage', ContextNoArgs, pw.BrowserContextNewPageParams, never, never, never>>
-type _context_newPage_result = Assert<VoidIsNull<'context.newPage', pw.BrowserContextNewPageResult, ContextPageEntry>>
+//   result: the prelude caches url from the new tab so page.url() remains synchronous (no void check: Neo answers more than null on purpose)

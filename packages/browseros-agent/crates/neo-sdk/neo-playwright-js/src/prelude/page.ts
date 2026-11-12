@@ -61,12 +61,13 @@ import {
   type WaitForSelectorOptions,
   type WaitHandle,
 } from './frame'
-import { OPTION_KEYS, send } from './generated'
+import { send } from './generated'
 import { addInitScript, type Disposable } from './init-script'
 import { Keyboard, Mouse } from './input'
 import type { FrameLocator, Locator } from './locator'
 import type { LocatorHandlerOptions } from './locator-handlers'
-import { markHandle, pick } from './options'
+import { markHandle } from './options'
+import { normalizePdfOptions, type PdfOptionsInput } from './pdf-options'
 import { Publications } from './publication'
 import { Response } from './response'
 import type { LocatorOptions } from './selectors'
@@ -94,7 +95,6 @@ import type {
   PageBrand,
   PageHandle,
   PageScript,
-  PdfOptions,
 } from './wire'
 import { Worker } from './worker'
 
@@ -987,7 +987,9 @@ export class Page extends EventEmitter {
   }
 
   /** upstream's client turns numeric sizes and margins into CSS pixel strings. */
-  async pdf(options: PdfOptions & { path?: string } = {}): Promise<unknown> {
+  async pdf(
+    options: PdfOptionsInput & { path?: string } = {},
+  ): Promise<unknown> {
     const site = captureSite()
     const api = 'page.pdf'
     if (options.path !== undefined)
@@ -995,15 +997,7 @@ export class Page extends EventEmitter {
         api,
         'Neo returns the PDF instead of writing a file; omit path',
       )
-    const wire = pick(options, OPTION_KEYS['page.pdf'])
-    for (const size of ['width', 'height'] as const)
-      if (typeof wire[size] === 'number') wire[size] = `${wire[size]}px`
-    if (typeof wire.margin === 'object' && wire.margin !== null) {
-      const margin = { ...wire.margin }
-      for (const side of ['top', 'right', 'bottom', 'left'] as const)
-        if (typeof margin[side] === 'number') margin[side] = `${margin[side]}px`
-      wire.margin = margin
-    }
+    const wire = normalizePdfOptions(options)
     return await send['page.pdf'](
       site,
       { api, timeoutMs: 0 },

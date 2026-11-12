@@ -156,6 +156,7 @@ const EVERY_OP = `
   await page.requestGC();
   await page.emulateMedia({ media: 'print', colorScheme: 'dark', reducedMotion: 'reduce', forcedColors: 'active', contrast: 'more' });
   await page.localStorage.getItem('token'); await page.sessionStorage.setItem('flag', '1')
+  await page.localStorage.items(); await page.localStorage.removeItem('token'); await page.sessionStorage.clear()
   await page.addScriptTag({ content: 'window.injected = true' }); await pay.addStyleTag({ content: 'body { color: red }' });
   await page.setContent('<p>hi</p>'); await page.opener(); await page.evaluate(() => 1)
   await l.evaluate((e) => e.id); await l.evaluateAll((es) => es.length); await page.waitForFunction(() => true)

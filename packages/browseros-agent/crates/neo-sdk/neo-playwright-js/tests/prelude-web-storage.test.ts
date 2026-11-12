@@ -1,19 +1,17 @@
 // page.localStorage and page.sessionStorage: upstream's WebStorage as one op per call.
 import { describe, expect, it } from 'bun:test'
-import { json, loadPrelude, SEED } from './support/prelude-runtime'
+import { isRefusal, json, loadPrelude, SEED } from './support/prelude-runtime'
 
 describe('WebStorage', () => {
-  it('tests that each method sends its read or write op, without a timeout, and returns upstream values', async () => {
+  it('tests that each method sends its own op, without a timeout, and returns upstream values', async () => {
     const runtime = loadPrelude({
       seed: SEED,
       answer: (call) =>
-        call.name === 'webStorage.read'
-          ? call.input.action === 'items'
-            ? [{ name: 'alpha', value: '1' }]
-            : call.input.name === 'alpha'
-              ? '1'
-              : null
-          : null,
+        call.name === 'webStorage.items'
+          ? [{ name: 'alpha', value: '1' }]
+          : call.name === 'webStorage.getItem' && call.input.name === 'alpha'
+            ? '1'
+            : null,
     })
     const results = json(
       await runtime.run(`
@@ -37,56 +35,49 @@ describe('WebStorage', () => {
         name,
         input.call,
         input.kind,
-        input.action,
         input.name,
         input.value,
       ]),
     ).toEqual([
       [
-        'webStorage.read',
+        'webStorage.items',
         { api: 'webStorage.items', timeoutMs: 0 },
         'local',
-        'items',
         undefined,
         undefined,
       ],
       [
-        'webStorage.read',
+        'webStorage.getItem',
         { api: 'webStorage.getItem', timeoutMs: 0 },
         'local',
-        'getItem',
         'alpha',
         undefined,
       ],
       [
-        'webStorage.read',
+        'webStorage.getItem',
         { api: 'webStorage.getItem', timeoutMs: 0 },
         'session',
-        'getItem',
         'absent',
         undefined,
       ],
       [
-        'webStorage.write',
+        'webStorage.setItem',
         { api: 'webStorage.setItem', timeoutMs: 0 },
         'local',
-        'setItem',
         'k',
         'v',
       ],
       [
-        'webStorage.write',
+        'webStorage.removeItem',
         { api: 'webStorage.removeItem', timeoutMs: 0 },
         'session',
-        'removeItem',
         'k',
         undefined,
       ],
       [
-        'webStorage.write',
+        'webStorage.clear',
         { api: 'webStorage.clear', timeoutMs: 0 },
         'local',
-        'clear',
         undefined,
         undefined,
       ],
@@ -104,8 +95,7 @@ describe('WebStorage', () => {
     // The refusal is a door call of its own; no storage op went out.
     expect(
       runtime.calls.filter(
-        (call) =>
-          call.name === 'webStorage.read' || call.name === 'webStorage.write',
+        (call) => call.name.startsWith('webStorage.') && !isRefusal(call),
       ),
     ).toEqual([])
   })

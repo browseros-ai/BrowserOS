@@ -56,8 +56,11 @@ listed_enum! {
         AddInitScript,
         ExposeBinding,
         ResolveBinding,
-        WebStorageRead,
-        WebStorageWrite,
+        WebStorageItems,
+        WebStorageGetItem,
+        WebStorageSetItem,
+        WebStorageRemoveItem,
+        WebStorageClear,
     }
 }
 
@@ -83,8 +86,11 @@ impl PageOp {
             .using(&[Capability::MainWorld])
             .policed(),
             Self::SaveScreenshot => save_screenshot::SPEC,
-            Self::WebStorageRead => web_storage::READ_SPEC,
-            Self::WebStorageWrite => web_storage::WRITE_SPEC,
+            Self::WebStorageItems => web_storage::ITEMS_SPEC,
+            Self::WebStorageGetItem => web_storage::GET_ITEM_SPEC,
+            Self::WebStorageSetItem => web_storage::SET_ITEM_SPEC,
+            Self::WebStorageRemoveItem => web_storage::REMOVE_ITEM_SPEC,
+            Self::WebStorageClear => web_storage::CLEAR_SPEC,
             Self::SetViewportSize => viewport_size::SPEC,
             Self::Goto => OpSpec::write(
                 "page.goto",
@@ -328,17 +334,19 @@ fn route<'a, R: Route<'a>>(op: PageOp, r: R) -> R::Out {
             frame_tree::frames,
         ),
         PageOp::AddScriptTag => r.op(
-            wire::command("Frame.addScriptTag").adds(&[("path", "the Neo host reads the client's source file before insertion")]),
+            wire::command("Frame.addScriptTag").adds(&[("path", "the Neo host reads the source file; upstream's client reads it and sends content")])
+                .result("the prelude consumes element and frame facts to refresh synchronous frames() after a tag adds frames"),
             add_tag::script,
         ),
         PageOp::AddStyleTag => r.op(
-            wire::command("Frame.addStyleTag").adds(&[("path", "the Neo host reads the client's stylesheet before insertion")]),
+            wire::command("Frame.addStyleTag").adds(&[("path", "the Neo host reads the stylesheet; upstream's client reads it and sends content")])
+                .result("the prelude consumes element and frame facts to refresh synchronous frames() after insertion"),
             add_tag::style,
         ),
         PageOp::EmulateMedia => r.op(wire::command("Page.emulateMedia"), media_emulation::emulate),
         PageOp::RequestGc => r.op(wire::command("Page.requestGC"), request_gc),
         PageOp::SetViewportSize => r.op(
-            wire::command("Page.setViewportSize").result("the existing empty object receipt, preserved until the wire alignment"),
+            wire::command("Page.setViewportSize"),
             viewport_size::set,
         ),
         PageOp::Screenshot => r.op(
@@ -349,22 +357,12 @@ fn route<'a, R: Route<'a>>(op: PageOp, r: R) -> R::Out {
             wire::neo_only("the screenshot client's path step writes captured bytes on Neo's disk"),
             save_screenshot,
         ),
-        PageOp::Pdf => r.op(
-            wire::command("Page.pdf").retypes(&[("width", "Rust accepts numeric pixels as well as the client's normalized CSS strings"),
-                ("height", "Rust accepts numeric pixels as well as the client's normalized CSS strings"),
-                ("margin", "Rust accepts numeric pixels on every margin side as well as normalized CSS strings")]),
-            pdf::print,
-        ),
-        PageOp::WebStorageRead => r.op(
-            wire::command("Page.webStorageGetItem").adds(&[("action", "one Neo op implements getItem and items")])
-                .retypes(&[("name", "items reads all names, so only getItem supplies one")]),
-            web_storage::read,
-        ),
-        PageOp::WebStorageWrite => r.op(
-            wire::command("Page.webStorageSetItem").adds(&[("action", "one Neo op implements setItem, removeItem and clear")])
-                .retypes(&[("name", "clear needs no item name"), ("value", "only setItem supplies a value")]),
-            web_storage::write_value,
-        ),
+        PageOp::Pdf => r.op(wire::command("Page.pdf"), pdf::print),
+        PageOp::WebStorageItems => r.op(wire::command("Page.webStorageItems"), web_storage::items),
+        PageOp::WebStorageGetItem => r.op(wire::command("Page.webStorageGetItem"), web_storage::get_item),
+        PageOp::WebStorageSetItem => r.op(wire::command("Page.webStorageSetItem"), web_storage::set_item),
+        PageOp::WebStorageRemoveItem => r.op(wire::command("Page.webStorageRemoveItem"), web_storage::remove_item),
+        PageOp::WebStorageClear => r.op(wire::command("Page.webStorageClear"), web_storage::clear),
         op @ (PageOp::Evaluate
         | PageOp::WorkerEvaluate
         | PageOp::EvaluateOnElement
@@ -462,8 +460,11 @@ async fn run_untyped(
         | PageOp::Screenshot
         | PageOp::SaveScreenshot
         | PageOp::Pdf
-        | PageOp::WebStorageRead
-        | PageOp::WebStorageWrite => Err(scope.not_built()),
+        | PageOp::WebStorageItems
+        | PageOp::WebStorageGetItem
+        | PageOp::WebStorageSetItem
+        | PageOp::WebStorageRemoveItem
+        | PageOp::WebStorageClear => Err(scope.not_built()),
     }
 }
 
@@ -685,9 +686,9 @@ mod wire_tests {
     }
 
     #[tokio::test]
-    async fn moved_inputs_decode_every_before_recording() -> Result<(), Box<dyn Error>> {
+    async fn aligned_inputs_decode_every_recording() -> Result<(), Box<dyn Error>> {
         let fixture: Fixture =
-            serde_json::from_str(include_str!("../../tests/data/page-c-wire.json"))?;
+            serde_json::from_str(include_str!("../../tests/data/page-c-aligned-wire.json"))?;
         let env = TestEnv::new();
         for exchange in fixture
             .scenarios
@@ -712,8 +713,11 @@ mod wire_tests {
                 "page.screenshot" => decodes!(screenshot::ScreenshotInput),
                 "page.saveScreenshot" => decodes!(save_screenshot::SaveScreenshotInput),
                 "page.pdf" => decodes!(pdf::PdfInput),
-                "webStorage.read" => decodes!(web_storage::StorageReadInput),
-                "webStorage.write" => decodes!(web_storage::StorageWriteInput),
+                "webStorage.items" | "webStorage.clear" => decodes!(web_storage::StorageInput),
+                "webStorage.getItem" | "webStorage.removeItem" => {
+                    decodes!(web_storage::StorageKeyInput);
+                }
+                "webStorage.setItem" => decodes!(web_storage::StorageSetInput),
                 _ => {}
             }
         }

@@ -414,12 +414,27 @@ export const OPS = {
     target: 'page',
     lifetime: 'operation',
   },
-  'webStorage.read': {
+  'webStorage.items': {
     effect: 'read',
     target: 'page',
     lifetime: 'operation',
   },
-  'webStorage.write': {
+  'webStorage.getItem': {
+    effect: 'read',
+    target: 'page',
+    lifetime: 'operation',
+  },
+  'webStorage.setItem': {
+    effect: 'write',
+    target: 'page',
+    lifetime: 'operation',
+  },
+  'webStorage.removeItem': {
+    effect: 'write',
+    target: 'page',
+    lifetime: 'operation',
+  },
+  'webStorage.clear': {
     effect: 'write',
     target: 'page',
     lifetime: 'operation',
