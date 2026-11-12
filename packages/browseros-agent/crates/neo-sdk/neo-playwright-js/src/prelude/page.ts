@@ -1047,12 +1047,10 @@ export class Page extends EventEmitter {
     // error has the door's fields only after the script next yields to Rust.
     const page = await this._brand(api)
     try {
-      // Absent unless set: the codec drops an undefined field, as the door expects.
-      await send['page.close'](
-        site,
-        { api, timeoutMs: 0 },
-        { page, runBeforeUnload: options.runBeforeUnload ? true : undefined },
-      )
+      // Upstream selects a separate command: beforeunload can veto the close, so the door
+      // leaves its closed-page facts to the tab watcher instead of declaring it closed now.
+      const op = options.runBeforeUnload ? 'page.runBeforeUnload' : 'page.close'
+      await send[op](site, { api, timeoutMs: 0 }, { page })
     } catch (error) {
       // As upstream: closing a page that is already gone is not an error.
       if (

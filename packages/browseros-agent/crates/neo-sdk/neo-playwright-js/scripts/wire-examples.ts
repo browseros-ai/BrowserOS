@@ -180,7 +180,7 @@ const EVERY_OP = `
   const dialog = await page.waitForEvent('dialog'); await dialog.accept(); await dialog.dismiss()
   const download = await page.waitForEvent('download'); await download.path(); await download.saveAs('/out/f.csv')
   const worker = await page.waitForEvent('worker'); await worker.evaluate(() => 1)
-  await tab.close()
+  await tab.close({ runBeforeUnload: true }); await tab.close()
 `
 
 /** Runs `EVERY_OP` and returns every op the prelude sent, in order. */

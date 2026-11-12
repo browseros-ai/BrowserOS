@@ -256,10 +256,11 @@ describe('host-observed tab lifecycle', () => {
         ? 'keeps a vetoable close live when its fact is live'
         : 'marks close from its reply fact without another operation',
       async () => {
+        const op = beforeUnload ? 'page.runBeforeUnload' : 'page.close'
         const runtime = loadPrelude({
           seed,
           answer: ({ name }) =>
-            name === 'page.close'
+            name === op
               ? {
                   ok: null,
                   pages: [beforeUnload ? live : closed],
@@ -272,7 +273,7 @@ describe('host-observed tab lifecycle', () => {
             `await page.close({ runBeforeUnload: ${beforeUnload} }); return page.isClosed()`,
           ),
         ).toBe(!beforeUnload)
-        expect(runtime.sent('page.close')).toHaveLength(1)
+        expect(runtime.sent(op)).toHaveLength(1)
       },
     )
   }

@@ -1,13 +1,12 @@
 //! The page ops, their registration metadata, and the small ones' handlers.
 
-use browseros_core::{CoreError, ProtocolSession};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use ts_rs::TS;
 
 use crate::listed_enum::listed_enum;
 use crate::op_input::OpArgs;
-use crate::op_scope::{OpScope, Sent};
+use crate::op_scope::OpScope;
 use crate::op_spec::{Capability, OpSpec, PAGE, TARGET};
 use crate::page::document_op::DocumentInput;
 use crate::page::document_watch::decode;
@@ -41,6 +40,7 @@ listed_enum! {
         EmulateMedia,
         RequestGc,
         Close,
+        RunBeforeUnload,
         Opener,
         Frames,
         Evaluate,
@@ -151,6 +151,11 @@ impl PageOp {
                 "request garbage collection in the page's main renderer",
             ),
             Self::Close => OpSpec::write("page.close", PAGE, "close the tab"),
+            Self::RunBeforeUnload => OpSpec::write(
+                "page.runBeforeUnload",
+                PAGE,
+                "run beforeunload handlers and request a close without waiting for it",
+            ),
             Self::Opener => OpSpec::read("page.opener", PAGE, "the page that opened this one"),
             Self::Frames => OpSpec::read(
                 "page.frames",
@@ -239,6 +244,11 @@ const PUBLICATION: &[(&str, &str)] = &[(
      the call that caused them",
 )];
 
+/// Navigation replies carry the facts behind the prelude's synchronous page methods.
+const NAVIGATION_RESULT: &str = "page.url(), page.frames() and the Response are synchronous or \
+    object-less in Neo, so the navigation answers the url, the frames and the response facts \
+    the prelude caches";
+
 /// One table binds each page op on a typed handler to Playwright 1.64.1's command; `Run` and
 /// `Describe` walk the same rows, and the policy in `spec()` stays independent of the shapes.
 /// The family moves in three changes: the ops not moved yet go through the untyped row to
@@ -249,11 +259,28 @@ const PUBLICATION: &[(&str, &str)] = &[(
 )]
 fn route<'a, R: Route<'a>>(op: PageOp, r: R) -> R::Out {
     match op {
-        PageOp::Goto => r.op(wire::command("Frame.goto").adds(PUBLICATION), goto),
-        PageOp::Reload => r.op(wire::command("Page.reload").adds(PUBLICATION), reload),
-        PageOp::GoBack => r.op(wire::command("Page.goBack").adds(PUBLICATION), go_back),
+        PageOp::Goto => r.op(
+            wire::command("Frame.goto")
+                .adds(PUBLICATION)
+                .result(NAVIGATION_RESULT),
+            goto,
+        ),
+        PageOp::Reload => r.op(
+            wire::command("Page.reload")
+                .adds(PUBLICATION)
+                .result(NAVIGATION_RESULT),
+            reload,
+        ),
+        PageOp::GoBack => r.op(
+            wire::command("Page.goBack")
+                .adds(PUBLICATION)
+                .result(NAVIGATION_RESULT),
+            go_back,
+        ),
         PageOp::GoForward => r.op(
-            wire::command("Page.goForward").adds(PUBLICATION),
+            wire::command("Page.goForward")
+                .adds(PUBLICATION)
+                .result(NAVIGATION_RESULT),
             go_forward,
         ),
         PageOp::WaitForNavigation => r.op(
@@ -276,25 +303,19 @@ fn route<'a, R: Route<'a>>(op: PageOp, r: R) -> R::Out {
         PageOp::Content => r.op(
             wire::command("Frame.content").omits(&[(
                 "includeShadow",
-                "Neo returns the document's HTML; shadow-root serialization is not offered",
+                "shadow-root serialization is not offered (parity gap PA-025)",
             )]),
             content,
         ),
         PageOp::SetContent => r.op(wire::command("Frame.setContent"), document_op::set_content),
         PageOp::Close => r.op(
-            wire::command("Page.close")
-                .adds(&[(
-                    "runBeforeUnload",
-                    "upstream sends Page.runBeforeUnload as a command of its own; Neo folds it \
-                     into close, where the host's policy reads it",
-                )])
-                .omits(&[(
-                    "reason",
-                    "the script's close reason is not sent; a closed page's errors do not \
-                     carry it",
-                )]),
+            wire::command("Page.close").omits(&[(
+                "reason",
+                "Neo reports the browser's own close and attaches no reason text to later errors",
+            )]),
             close,
         ),
+        PageOp::RunBeforeUnload => r.op(wire::command("Page.runBeforeUnload"), run_before_unload),
         PageOp::Opener => r.op(
             wire::neo_only("upstream reads its initializer state; Neo asks its tab bookkeeping"),
             opener,
@@ -430,6 +451,7 @@ async fn run_untyped(
         | PageOp::Content
         | PageOp::SetContent
         | PageOp::Close
+        | PageOp::RunBeforeUnload
         | PageOp::Opener
         | PageOp::Frames
         | PageOp::SetViewportSize
@@ -506,56 +528,46 @@ async fn content(
     document_op::read(pw, scope, input, DocumentPart::Content).await
 }
 
-/// `page.close({ runBeforeUnload })`.
-#[derive(Debug, Deserialize, TS)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-struct CloseInput {
-    page: PageRef,
-    /// Run the page's `beforeunload` handlers first. Their dialog follows the dialog rules
-    /// (a listener's answer, or accepted after the grace), and the close returns at once,
-    /// as upstream does. The prelude sends it only when set, so it prints as optional.
-    #[serde(default)]
-    #[ts(optional, as = "Option<bool>")]
-    run_before_unload: bool,
-}
-options!(CloseInput);
-
 async fn close(
     pw: &Playwright,
     scope: &OpScope<'_>,
-    input: CloseInput,
+    input: PageInput,
 ) -> Result<Nothing, PlaywrightError> {
     let page = input.page.tab();
     let admitted = scope.admit(pw.browser(), page).await?;
     let core = |error| scope.core_error(&error);
-    let sent = scope.send_effect()?;
-    if input.run_before_unload {
-        let session = pw
-            .browser()
-            .protocol_session(admitted.session.session_id.clone());
-        close_with_unload(&session, &sent).await.map_err(core)?;
-    } else {
-        // Through core, so its tab registry forgets the page and the run's view still decides.
-        scope
-            .view()
-            .close_page(admitted.core_page.clone())
-            .await
-            .map_err(core)?;
-    }
-    if !input.run_before_unload {
-        pw.workers_closed(admitted.session.target_id.clone()).await;
-        scope.run_state().frames.forget(page);
-    }
+    let _sent = scope.send_effect()?;
+    // Through core, so its tab registry forgets the page and the run's view still decides.
+    scope
+        .view()
+        .close_page(admitted.core_page.clone())
+        .await
+        .map_err(core)?;
+    pw.workers_closed(admitted.session.target_id.clone()).await;
+    scope.run_state().frames.forget(page);
     Ok(())
 }
 
-/// `Page.close`: the page runs its `beforeunload` handlers and closes unless one cancels.
-async fn close_with_unload(session: &ProtocolSession, _sent: &Sent<'_>) -> Result<(), CoreError> {
-    session.send_value("Page.close", json!({})).await?;
+/// CDP's `Page.close` runs beforeunload and returns before the tab necessarily closes. Leave
+/// workers and frame facts alive: a dialog can veto it, and the tab watcher owns later cleanup.
+async fn run_before_unload(
+    pw: &Playwright,
+    scope: &OpScope<'_>,
+    input: PageInput,
+) -> Result<Nothing, PlaywrightError> {
+    let admitted = scope.admit(pw.browser(), input.page.tab()).await?;
+    let session = pw
+        .browser()
+        .protocol_session(admitted.session.session_id.clone());
+    let _sent = scope.send_effect()?;
+    session
+        .send_value("Page.close", json!({}))
+        .await
+        .map_err(|error| scope.core_error(&error))?;
     Ok(())
 }
 
-/// Page methods without options (`opener`, `requestGC`): `{ page }`.
+/// Page methods without options (`close`, `runBeforeUnload`, `opener`, `requestGC`): `{ page }`.
 #[derive(Debug, Deserialize, TS)]
 #[serde(deny_unknown_fields)]
 #[ts(rename = "PageOnlyInput")]
