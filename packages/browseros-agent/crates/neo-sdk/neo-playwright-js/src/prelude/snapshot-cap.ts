@@ -20,7 +20,11 @@ export type Printed = {
 
 export type Section = {
   ref: string
-  /** Its role and quoted name, `navigation "Footer"`, as the cut line names it. */
+  /**
+   * Its role, and its quoted name when it has one: `navigation "Footer"`. The cut line wraps it
+   * as `the navigation "Footer" section`, since a bare role ("all of region") did not read as a
+   * thing an agent could ask for.
+   */
   label: string
   /** The index after its last line. */
   end: number
@@ -95,9 +99,9 @@ export function cap(
   const size = `the whole snapshot is about ${aboutTokens(whole.length)} tokens`
   const open = openSection(lines, cut, limit)
   const offer = open
-    ? `page.getByRef('${open.ref}').ariaSnapshot() shows all of ${open.label}. Or pass a larger maxTokens.`
+    ? `page.getByRef('${open.ref}').ariaSnapshot() shows all of the ${open.label} section. Or pass a larger maxTokens.`
     : later
-      ? `page.getByRef('${later.ref}').ariaSnapshot() shows ${later.label}, which is not shown above. Or pass a larger maxTokens.`
+      ? `page.getByRef('${later.ref}').ariaSnapshot() shows the ${later.label} section, which is not shown above. Or pass a larger maxTokens.`
       : 'Pass a larger maxTokens.'
   const cutLine = `# cut: ${more} more lines (${withRefs} with refs); ${size}. ${offer}`
   return [...top, ...linesBefore(lines, cut), cutLine, ...blocks].join('\n')

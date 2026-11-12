@@ -13,7 +13,7 @@
  *   section      main, navigation, form, iframe, ...  its line with its ref, content indented
  *   heading                                           its line, no ref
  *   actionable   a ref, and an interactive role or a pointer cursor     one line with its ref
- *   text         `- text:` lines, in the text form only
+ *   text         `- text:` lines, in the text form only; none that holds only separators
  *   other        no line; its content moves up to the level it sits in
  *
  * The text form is returned while it is at most TEXT_LIMIT_CHARS long, otherwise the interactive
@@ -85,10 +85,16 @@ function keptRef(node: AriaNodeJSON): boolean {
 /** 3,000 tokens: the longest text form returned when the script did not choose. */
 const TEXT_LIMIT_CHARS = 3_000 * CHARS_PER_TOKEN
 export const DEFAULT_MAX_TOKENS = 8_000
-/** A nameless control's own text is clipped to this in the interactive form. */
+/** A nameless control's own text, or a link's url label, is clipped to this without text. */
 const OWN_TEXT_CLIP = 80
 /** Past this many options, a native select lists only its selected ones without text. */
 const LONG_SELECT = 12
+/**
+ * A joined text line made only of these says nothing: Hacker News printed `- text: "|"` between
+ * its links, 12% of its front page. Currency signs, `%`, `@`, `#`, `*`, `+`, `=`, `?`, `!` and `&`
+ * are not here: beside a field they mean something.
+ */
+const SEPARATORS_ONLY = /^[\s|·•‧∙/\\\-–—‐›»«‹><:;,.()[\]{}]*$/
 
 export type SnapshotV1Options = {
   /** `true`: the text form; `false`: the interactive form; left out: chosen by length. */
@@ -128,7 +134,7 @@ function walk(result: SnapshotResult, urls: boolean, text: boolean): Printed[] {
   printer.walk(result.json, 0, text)
   for (const unplaced of partials.values())
     for (const partial of unplaced) printer.comment(partialComment(partial), 0)
-  return printer.lines.map((line) => ({
+  return printer.finish().map((line) => ({
     text:
       '  '.repeat(line.level) +
       (line.textLine
@@ -194,6 +200,27 @@ class Printer {
     this.lines.push({ level, body, textLine: false, comment: true, ref: false })
   }
 
+  /**
+   * The lines as printed, once the walk is done. A separator-only text line is judged only now,
+   * on its joined text: a price arrives as `$`, `7`, `.`, `49`, and while its line could still
+   * grow, `$` alone is not a reason to drop it. Block ends are indices into these lines, so each
+   * moves back by the lines dropped before it.
+   */
+  finish(): Line[] {
+    const printed: Line[] = []
+    const moved: number[] = []
+    for (const line of this.lines) {
+      moved.push(printed.length)
+      if (!separatorsOnly(line)) printed.push(line)
+    }
+    moved.push(printed.length)
+    for (const line of printed) {
+      if (line.section) line.section.end = moved[line.section.end]
+      if (line.keptEnd !== undefined) line.keptEnd = moved[line.keptEnd]
+    }
+    return printed
+  }
+
   /** One child of the node being walked, by the first rule that matches it. */
   private node(
     child: AriaNodeJSON | string,
@@ -211,7 +238,7 @@ class Printer {
         if (child.name && text)
           this.element(copy(child, { ref: false, urls: false }), level)
       } else {
-        const named = nameAsText(child)
+        const named = nameAsContent(child)
         if (named !== undefined) this.piece(named, level, text)
       }
       // No line of its own: its text and children belong to the level it sits in.
@@ -263,7 +290,11 @@ class Printer {
   /** After a kept block's content: the leaf form, a colon, or no line at all. */
   private closeKept(node: AriaNodeJSON, header: number, level: number): void {
     const inside = this.lines.slice(header + 1)
-    if (inside.length === 1 && inside[0].textLine) {
+    if (
+      inside.length === 1 &&
+      inside[0].textLine &&
+      !separatorsOnly(inside[0])
+    ) {
       // All of its content is one piece of text: the leaf form, `- alert: Invalid password.`
       this.lines.length = header
       this.element(
@@ -322,8 +353,11 @@ class Printer {
     // A text field that differs from the name: how a textbox shows its value.
     if (node.text !== undefined && node.text !== node.name) value = node.text
     else if (!node.name) {
-      const own = ownText(node)
-      if (own !== '') value = text ? own : clip(own, OWN_TEXT_CLIP)
+      // A link with no words of its own still says where it goes, unless its `/url` line does.
+      const label =
+        ownText(node) ||
+        (node.role === 'link' && !this.urls ? (node.url ?? '') : '')
+      if (label !== '') value = text ? label : clip(label, OWN_TEXT_CLIP)
     }
     const line = copy(node, { ref: true, urls: this.urls, text: value })
     const choices =
@@ -391,16 +425,19 @@ class Printer {
 
   /**
    * Ends the block opened at `header`: a colon when an element or text line printed inside it.
-   * With nothing printed inside, its line stays only when `keepEmpty`. Says whether it stayed.
+   * A text line of separators alone is final here (nothing after the block joins a line inside
+   * it) and does not count. With nothing printed inside, its line stays only when `keepEmpty`
+   * or a comment hangs under it; otherwise it goes with its separator lines, so the text before
+   * and after it can join as if it was never there. Says whether it stayed.
    */
   private close(header: number, keepEmpty: boolean): boolean {
     const inside = this.lines.slice(header + 1)
-    if (inside.some((line) => !line.comment)) {
+    if (inside.some((line) => !line.comment && !separatorsOnly(line))) {
       this.lines[header].body += ':'
       return true
     }
-    if (keepEmpty || inside.length > 0) return true
-    this.lines.pop()
+    if (keepEmpty || inside.some((line) => line.comment)) return true
+    this.lines.length = header
     return false
   }
 }
@@ -452,21 +489,32 @@ function nativeOptions(select: AriaNodeJSON): AriaNodeJSON[] {
   return options
 }
 
+/** A text line whose joined text holds only separators: it is never printed. */
+function separatorsOnly(line: Line): boolean {
+  return line.textLine && SEPARATORS_ONLY.test(line.body)
+}
+
 /**
- * The name of a node that prints no line and holds nothing else, which is then its text. The
- * engine names a table cell, a list item or a group from its text and drops the text child that
- * repeats the name: `<td>$7.49</td>` is `cell "$7.49"` with no children, so without this the price
- * would print nowhere, even with text on. A node with children keeps their own lines instead (a
- * cell holding a link), so its name, derived from them, is never printed twice. An image's name
- * prints as its own line (rule 6).
+ * The name of a node that holds nothing else, which is then its content. The engine names a
+ * table cell, a list item or a group from its text and drops the text child that repeats the
+ * name: `<td>$7.49</td>` is `cell "$7.49"` with no children, so without this the price would
+ * print nowhere, even with text on. An image's alt text arrives the same way, and is the only
+ * label a link around a badge has. A node with children keeps their own lines instead (a cell
+ * holding a link), so its name, derived from them, is never printed twice. A node with a `text`
+ * field has that text as its content instead. A heading's name is never content: the heading
+ * prints its own line (rule 4), just below the control whose own text would repeat it. In the
+ * walk an image prints its own line (rule 6) before this is asked.
  */
-function nameAsText(node: AriaNodeJSON): string | undefined {
-  if (node.role === 'img' || !node.name || node.text !== undefined)
+function nameAsContent(node: AriaNodeJSON): string | undefined {
+  if (!node.name || node.text !== undefined || node.role === 'heading')
     return undefined
   return node.children?.length ? undefined : node.name
 }
 
-/** Every text piece under `node` that is not inside a nested actionable node, space-joined. */
+/**
+ * Every text piece under `node` that is not inside a nested actionable node, space-joined. The
+ * name of a node that holds nothing else counts as a piece (an image's alt text, a cell's text).
+ */
 function ownText(node: AriaNodeJSON): string {
   const pieces: string[] = []
   // Depth first in document order on an explicit stack, as the walk is, for deep trees.
@@ -481,7 +529,7 @@ function ownText(node: AriaNodeJSON): string {
     for (let index = children.length - 1; index >= 0; index--) {
       const child = children[index]
       if (typeof child === 'string' || child.role === 'text') stack.push(child)
-      else if (!actionable(child)) stack.push(nameAsText(child) ?? child)
+      else if (!actionable(child)) stack.push(nameAsContent(child) ?? child)
     }
   }
   return pieces.filter((piece) => piece !== '').join(' ')
