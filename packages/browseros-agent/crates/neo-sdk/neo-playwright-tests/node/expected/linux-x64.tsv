@@ -58,7 +58,6 @@ AR-003	skip	tests/page/page-aria-snapshot.spec.ts	should snapshot list with acce
 AR-023	skip	tests/page/page-aria-snapshot.spec.ts	should treat input value as text in templates, but not for checkbox/radio/file
 AR-018	skip	tests/page/page-aria-snapshot.spec.ts	should work with slots
 CL-106	fail	tests/page/page-click-react.spec.ts	should timeout when click opens alert
-CL-105	fail	tests/page/page-click-scroll.spec.ts	should scroll instantly on retry when scroll-behavior is smooth
 CL-095	skip	tests/page/page-click-scroll.spec.ts	should scroll into view display:contents
 CL-096	skip	tests/page/page-click-scroll.spec.ts	should scroll into view display:contents with a child
 CL-110	fail	tests/page/page-click-timeout-1.spec.ts	should avoid side effects after timeout
