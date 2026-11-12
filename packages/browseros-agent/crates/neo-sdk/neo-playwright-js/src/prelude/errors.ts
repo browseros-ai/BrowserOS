@@ -28,20 +28,12 @@
  * as `expect(locator).toHaveText(expected) failed`, named `Error`, never `TimeoutError`.
  */
 
+import type { ErrBody } from './generated/envelope'
 import type { OpName } from './generated/ops'
 import { localTimeout, type RefusalCode, refuser } from './host'
 import type { SignalLike } from './signal'
 
-/** What claw-sdk's error envelope says (runtime/bridge.rs `ErrBody`), on every error. */
-type ErrorFields = {
-  code?: string
-  owner?: 'neo' | 'script' | 'website' | 'host'
-  delivery?: 'not_sent' | 'done' | 'unknown'
-  retryable?: boolean
-  operationId?: string
-  timeout?: boolean
-}
-
+/** The fields of claw-sdk's error envelope (runtime/bridge.rs `ErrBody`) every error carries. */
 const FIELDS = [
   'code',
   'owner',
@@ -49,7 +41,10 @@ const FIELDS = [
   'retryable',
   'operationId',
   'timeout',
-] as const
+] as const satisfies readonly (keyof ErrBody)[]
+
+/** Those fields as an error has them: each one the envelope or the prelude supplied. */
+type ErrorFields = Partial<Pick<ErrBody, (typeof FIELDS)[number]>>
 
 /** playwright-core's base error. Its `name` stays `Error`, as upstream's does. */
 class PlaywrightError extends Error {}

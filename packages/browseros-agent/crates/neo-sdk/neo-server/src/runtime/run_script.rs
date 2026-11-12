@@ -17,12 +17,12 @@ use rquickjs::{
     AsyncContext, AsyncRuntime, CatchResultExt, CaughtError, Ctx, Function, Object, Promise,
 };
 use serde::Deserialize;
-use serde_json::{Value, json};
+use serde_json::Value;
 use tokio::time;
 
 use super::fit_result::{self, ResultBlob};
 use super::install_web_globals::install_web_globals;
-use super::{Bridge, RunLogs};
+use super::{Bridge, RunInit, RunLogs};
 use crate::browser::PageRef;
 use crate::builtins::PLAYWRIGHT_PRELUDE;
 use crate::config::Defaults;
@@ -214,10 +214,12 @@ async fn evaluate(
         Ok(context) => context,
         Err(error) => return Evaluated::Engine(error.to_string()),
     };
-    // The prelude's `RunInit`: `page` is the run's own tab, `pages` every tab, whose order is
-    // `context.pages()`'s (sdk-playwright's bridge.ts).
-    let init = json!({ "page": script.page, "pages": script.pages, "observed": script.observed })
-        .to_string();
+    let init = RunInit::new(
+        script.page.as_ref(),
+        &script.pages,
+        script.observed.as_ref(),
+    )
+    .to_json();
     let code = script.code;
     let natives = Arc::clone(bridge);
     let evaluation = SliceTimed::new(

@@ -15,7 +15,8 @@
 //! ```
 //!
 //! One file per family, so two family changes in flight never edit the same generated text.
-//! Every file in the folder is the generator's: one the layout no longer writes is removed.
+//! Every file in the folder is the generator's, but those in [`FOREIGN`]: one the layout no
+//! longer writes is removed.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
@@ -33,6 +34,10 @@ const GENERATED: &str = "../neo-playwright-js/src/prelude/generated";
 
 /// Generated files by path, relative to the generated folder.
 type Files = BTreeMap<PathBuf, String>;
+
+/// Files in the folder that another generator owns, which this one neither writes nor removes:
+/// the run envelope's types, from neo-server's `tests/envelope_generated.rs`.
+const FOREIGN: &[&str] = &["envelope.ts"];
 
 /// The header of every file this test writes; ts-rs's own files under `types/` carry its own.
 const HEADER: &str = "\
@@ -686,6 +691,7 @@ fn read_tree(dir: &Path, at: &Path, out: &mut Files) -> io::Result<()> {
 fn sync(dir: &Path, files: &Files) -> io::Result<Vec<String>> {
     let mut committed = Files::new();
     read_tree(dir, dir, &mut committed)?;
+    committed.retain(|path, _| !FOREIGN.iter().any(|foreign| path == Path::new(foreign)));
     let mut changed = Vec::new();
     for (path, text) in files {
         let verb = match committed.get(path) {

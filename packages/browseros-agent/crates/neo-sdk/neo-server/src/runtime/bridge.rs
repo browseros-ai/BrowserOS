@@ -6,10 +6,11 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use futures_util::FutureExt;
 use futures_util::future::{BoxFuture, Shared};
-use neo_trace::OperationId;
+use neo_trace::{Delivery, ErrorOwner, OperationId};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::time::{self, Duration, Instant};
+use ts_rs::TS;
 
 use super::{LogLevel, RunLogs};
 use crate::browser::PageRef;
@@ -96,67 +97,102 @@ impl NavigationReceipt {
 /// The JS wire form of an `OpReply`: `{"ok": value, "pages": […]}` or `{"err": {…}, "pages":
 /// […]}`, plus `defaultPage` once the call opened the run's own page and `pumped` once an op
 /// ordered its answer after event-pump replies. Protocol translation only: the door decided
-/// every value in it.
-#[derive(Serialize)]
+/// every value in it. Every field after `ok`/`err` is the same in both shapes.
+//
+// The bootstrap reads `ok` and `err`; bridge.ts reads the rest (`onReply`). Each optional
+// field's `#[ts(..)]` line mirrors its `skip_serializing_if`, which ts-rs reads as optional only
+// next to `serde(default)`. The variant is chosen by which of `ok` and `err` is present.
+#[derive(Serialize, TS)]
 #[serde(untagged)]
-enum Envelope<'a> {
+pub(crate) enum Envelope<'a> {
+    /// The op answered.
     Ok {
+        /// Its result, typed per op by the prelude's generated `OpOutputs`.
+        #[ts(type = "unknown")]
         ok: &'a Value,
+        /// The pages the op touched, its target first.
         pages: &'a [PageFact],
+        /// The host observation that read `pages`, absent when the op completed none.
         #[serde(skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
         observed: Option<&'a Observation>,
+        /// The run's own page, on the reply of the call that opened it.
         #[serde(rename = "defaultPage", skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
         default_page: Option<DefaultPage>,
         /// `OpReply::pumped`: the prelude dispatches that many event-pump replies before it
-        /// hands the script this one.
+        /// hands the script this one. Absent for none.
         #[serde(skip_serializing_if = "is_zero")]
+        #[ts(optional = nullable)]
         pumped: u64,
+        /// The navigation publications whose producers have answered (`page.goto` and the
+        /// history ops' `publication.id`). Absent for none.
         #[serde(
             rename = "completedNavigations",
             skip_serializing_if = "<[u64]>::is_empty"
         )]
+        #[ts(optional = nullable)]
         completed_navigations: &'a [u64],
     },
+    /// The op failed; the bootstrap rejects with a `NeoError` carrying `err`'s fields.
     Err {
+        /// The failure as the door decided it.
         err: ErrBody<'a>,
+        /// As for `Ok`.
         pages: &'a [PageFact],
+        /// As for `Ok`.
         #[serde(skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
         observed: Option<&'a Observation>,
+        /// As for `Ok`.
         #[serde(rename = "defaultPage", skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
         default_page: Option<DefaultPage>,
+        /// As for `Ok`.
         #[serde(skip_serializing_if = "is_zero")]
+        #[ts(optional = nullable)]
         pumped: u64,
+        /// As for `Ok`.
         #[serde(
             rename = "completedNavigations",
             skip_serializing_if = "<[u64]>::is_empty"
         )]
+        #[ts(optional = nullable)]
         completed_navigations: &'a [u64],
     },
 }
 
-/// The fields of the script's `NeoError`, named as the trace names them.
-#[derive(Serialize)]
+/// The fields of the script's `NeoError`, named as the trace names them. errors.ts copies all
+/// but `message` and `matcher` onto the error the script catches.
+#[derive(Serialize, TS)]
 #[serde(rename_all = "camelCase")]
-struct ErrBody<'a> {
+pub(crate) struct ErrBody<'a> {
+    /// The stable code (`wait_timeout`, `invalid_input`, …).
     code: &'static str,
-    owner: &'static str,
-    delivery: &'static str,
+    /// Who must change to fix it.
+    owner: ErrorOwner,
+    /// Whether the op's side effect happened.
+    delivery: Delivery,
+    /// Whether repeating the op is safe.
     retryable: bool,
+    /// The op that failed.
     operation_id: OperationId,
     /// Makes the bootstrap throw a `TimeoutError`.
     timeout: bool,
+    /// The human message, which already starts with the method the script called.
     message: &'a str,
     /// A failed `expect` matcher's facts, which the bootstrap puts on the error as
     /// `matcherResult` for the expect prelude to complete.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional, type = "unknown")]
     matcher: Option<&'a Value>,
 }
 
 /// The tab of the run's own page, once the call that needed it opened it. Plain ids rather
 /// than the page brand, so the page prelude can give the script's existing `page` its tab
 /// instead of reviving a second object for it.
-#[derive(Serialize)]
-struct DefaultPage {
+#[derive(Serialize, TS)]
+pub(crate) struct DefaultPage {
     tab: i64,
 }
 
@@ -397,8 +433,8 @@ impl<'a> From<&'a OpFailure> for ErrBody<'a> {
     fn from(failure: &'a OpFailure) -> Self {
         Self {
             code: failure.error.code().as_str(),
-            owner: failure.error.owner().as_str(),
-            delivery: failure.delivery.as_str(),
+            owner: failure.error.owner(),
+            delivery: failure.delivery,
             retryable: failure.retryable,
             operation_id: failure.operation,
             timeout: failure.error.is_timeout(),

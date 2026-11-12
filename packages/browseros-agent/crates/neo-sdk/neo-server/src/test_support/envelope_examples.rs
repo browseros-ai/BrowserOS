@@ -15,8 +15,7 @@ use serde_json::{Value, json};
 
 use crate::browser::PageRef;
 use crate::dispatch::{
-    ApprovedClose, ErrorCode, Observation, OpFailure, OpReply, OperationError, PageFact,
-    WorkerFact,
+    ApprovedClose, ErrorCode, Observation, OpFailure, OpReply, OperationError, PageFact, WorkerFact,
 };
 use crate::runtime;
 
@@ -42,7 +41,10 @@ pub fn envelope_examples() -> Result<Vec<EnvelopeExample>, IdError> {
         ),
         example("init.lazy", init(None, &[], None)),
         example("reply.ok", reply_ok()),
-        example("reply.okBare", runtime::envelope(&bare(Ok(Value::Null)), &[])),
+        example(
+            "reply.okBare",
+            runtime::envelope(&bare(Ok(Value::Null)), &[]),
+        ),
         example("reply.err", reply_err(operation)),
         example("reply.errBare", reply_err_bare(operation)),
     ])
@@ -54,7 +56,7 @@ fn example(name: &'static str, text: String) -> EnvelopeExample {
 
 /// The run's init, as `run_script` and the hosted run hand it to the realm.
 fn init(page: Option<&PageRef>, pages: &[PageFact], observed: Option<&Observation>) -> String {
-    json!({ "page": page, "pages": pages, "observed": observed }).to_string()
+    runtime::RunInit::new(page, pages, observed).to_json()
 }
 
 /// A `page.title` answer carrying every optional field the envelope has.

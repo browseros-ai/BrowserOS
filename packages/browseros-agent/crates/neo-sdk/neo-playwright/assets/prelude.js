@@ -902,30 +902,24 @@
       return [];
     const facts = [];
     for (const page of pages) {
-      if (typeof page !== "object" || page === null)
-        continue;
-      const tab = Reflect.get(page, "tab");
+      const tab = field(page, "tab");
       if (typeof tab !== "number")
         continue;
       const fact = { tab };
-      const url = Reflect.get(page, "url");
-      const title = Reflect.get(page, "title");
-      const closed = Reflect.get(page, "closed");
-      const viewport = Reflect.get(page, "viewportSize");
+      const url = field(page, "url");
+      const title = field(page, "title");
+      const closed = field(page, "closed");
+      const viewport = field(page, "viewportSize");
       if (typeof url === "string")
         fact.url = url;
       if (typeof title === "string")
         fact.title = title;
       if (typeof closed === "boolean")
         fact.closed = closed;
-      if (viewport === null)
-        fact.viewportSize = null;
-      else if (typeof viewport === "object" && viewport !== null) {
-        const width = Reflect.get(viewport, "width");
-        const height = Reflect.get(viewport, "height");
-        if (typeof width === "number" && typeof height === "number")
-          fact.viewportSize = { width, height };
-      }
+      const width = field(viewport, "width");
+      const height = field(viewport, "height");
+      if (typeof width === "number" && typeof height === "number")
+        fact.viewportSize = { width, height };
       const workers = readWorkers(field(page, "workers"));
       if (workers)
         fact.workers = workers;

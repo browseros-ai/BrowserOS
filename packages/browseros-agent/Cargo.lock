@@ -1960,6 +1960,7 @@ dependencies = [
  "tracing",
  "tracing-appender",
  "tracing-subscriber",
+ "ts-rs",
  "url",
 ]
 
@@ -2030,6 +2031,7 @@ dependencies = [
  "thiserror",
  "tokio",
  "tracing",
+ "ts-rs",
  "uuid",
 ]
 

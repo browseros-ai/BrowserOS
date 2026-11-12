@@ -19,6 +19,14 @@ thiserror.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 uuid = { workspace = true, features = ["v7"] }
+# Only behind the `ts-rs` feature below.
+ts-rs = { workspace = true, optional = true }
+
+[features]
+# Derives ts-rs's `TS` on the record types that cross the run envelope (`ErrorOwner`, `Delivery`,
+# `OperationId`), which neo-server prints in the prelude's generated TypeScript; the orphan rule
+# keeps the derive here. Only neo-server turns it on.
+ts-rs = ["dep:ts-rs"]
 
 [dev-dependencies]
 tempfile.workspace = true

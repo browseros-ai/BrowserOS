@@ -21,7 +21,12 @@
  * A reply lost when the host cancels the pump at the run's end loses its events with the run.
  */
 import { answerBindingCall } from './bindings'
-import { invoke, invokeObserved, pumpDispatched } from './bridge'
+import {
+  invoke,
+  invokeObserved,
+  type Observation,
+  pumpDispatched,
+} from './bridge'
 import { type CallSite, INTERNAL_SITE } from './call-site'
 import { trackChooserSetup } from './chooser-setup'
 import type { EventEmitter } from './emitter'
@@ -50,7 +55,6 @@ import type {
   EventRecord,
   FileChooserInfo,
   NavigationCut,
-  Observation,
 } from './wire'
 
 /** Events a page reports, from Rust's log. */
