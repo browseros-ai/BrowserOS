@@ -226,7 +226,7 @@ fn route<'a, R: Route<'a>>(op: ActionOp, r: R) -> R::Out {
         ActionOp::DispatchEvent => r.op(
             wire::command("ElementHandle.dispatchEvent").retypes(&[(
                 "eventInit",
-                "Neo transports JSON rather than upstream SerializedArgument",
+                "JSON init keeps dispatch in Neo's isolated world instead of the page's world",
             )]),
             dispatch_event,
         ),
@@ -722,7 +722,7 @@ async fn dispatch_event(
     scope: &OpScope<'_>,
     input: DispatchEventInput,
 ) -> Result<Nothing, PlaywrightError> {
-    // eventInit is deliberately JSON rather than a SerializedArgument. Normalize the old
+    // eventInit stays JSON for the isolated-world probe. Normalize the old
     // null/absent default before admission, and reject primitives before any page effect.
     let init = match input.event_init {
         Value::Object(init) => init,
