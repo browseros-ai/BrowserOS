@@ -10,8 +10,10 @@
 //! never headless. The SDK image hides the input half by accident (its trace camera's per-op
 //! captures count as draws), not the screenshots: measured there at ~1.2 s each from the second
 //! in a row, 33-82 ms once the same tab is made active. macOS draws background tabs and passes.
-//! Evidence: claw-sdk `lead/verify/ss054/NOTES.md`; the browser-side fix it needs:
-//! `lead/verify/ss054/CHROMIUM-PROPOSAL.md`. When this passes on Linux, take the mark off.
+//! Fixing it takes the browser: exempting focus-emulated widgets from that throttle (Blink's
+//! `WebFrameWidgetImpl::SetMayThrottleIfUndrawnFrames`, which document Picture-in-Picture already
+//! uses) fixes input; screenshots need the tab drawn. When this passes on Linux, take the mark
+//! off.
 //!
 //! Needs BrowserOS with CDP on `BROWSEROS_CDP_PORT` (default 9005):
 //! `cargo test -p neo-playwright --test background_tab_live -- --ignored`.
@@ -49,11 +51,14 @@ const PAGE: &str = r"<!DOCTYPE html>
 /// Hover/click rounds: the throttle starts a few frames in (round 3 to 9 on Linux, measured),
 /// so twelve rounds reach it with room to spare.
 const ROUNDS: usize = 12;
+/// The rounds judged: from here on a throttled tab pays ~1 s for every action.
+const SETTLED_FROM: usize = 4;
 /// Screenshots in a row: the first is answered from the frame at hand; the next ones wait for
 /// fresh frames.
 const SHOTS: usize = 3;
-/// Above the slowest fast action or capture measured on any platform (macOS: 157 ms) and well
-/// below the throttled ones (Linux: 990 ms and up).
+/// Well above a fast action or capture (macOS: 2-160 ms) and below the throttled ones (Linux:
+/// 990 ms and up, or no reply). Judged on medians and on every repeat screenshot, so one call a
+/// loaded machine delays does not decide it; a call that fails counts at the time it took.
 const FAST: Duration = Duration::from_millis(500);
 
 #[tokio::test]
@@ -63,20 +68,56 @@ const FAST: Duration = Duration::from_millis(500);
     should_panic(expected = "a background agent tab got slow")
 )]
 async fn a_background_agent_tab_stays_fast_on_linux() {
-    match measure().await {
-        Ok(slow) => assert!(
-            slow.is_empty(),
-            "a background agent tab got slow: {} of {} calls over {FAST:?}: {slow:#?}",
-            slow.len(),
-            ROUNDS * 2 + SHOTS,
-        ),
+    let times = match measure().await {
+        Ok(times) => times,
         Err(error) => panic!("the measurement did not run: {error}"),
+    };
+    let settled: Vec<Duration> = times
+        .iter()
+        .filter(|call| call.round >= SETTLED_FROM && call.round <= ROUNDS)
+        .map(|call| call.took)
+        .collect();
+    let repeat_shots: Vec<Duration> = times
+        .iter()
+        .filter(|call| call.round > ROUNDS + 1)
+        .map(|call| call.took)
+        .collect();
+    let actions_slow = median(&settled) > FAST;
+    let shots_slow = repeat_shots.iter().all(|took| *took > FAST);
+    assert!(
+        !actions_slow && !shots_slow,
+        "a background agent tab got slow (median action from round {SETTLED_FROM}: {:?}, \
+         repeat screenshots: {repeat_shots:?}):\n{}",
+        median(&settled),
+        times.iter().map(Call::line).collect::<Vec<_>>().join("\n"),
+    );
+}
+
+/// One timed call; screenshots are numbered as rounds after the last hover/click round.
+struct Call {
+    round: usize,
+    what: &'static str,
+    took: Duration,
+    failed: Option<String>,
+}
+
+impl Call {
+    fn line(&self) -> String {
+        let Self {
+            round,
+            what,
+            took,
+            failed,
+        } = self;
+        match failed {
+            Some(error) => format!("{round:>2} {what}: failed after {took:?}: {error}"),
+            None => format!("{round:>2} {what}: {took:?}"),
+        }
     }
 }
 
-/// Every hover, click and screenshot on one background agent tab that took longer than
-/// [`FAST`] or failed.
-async fn measure() -> TestResult<Vec<String>> {
+/// Every hover, click and screenshot on one background agent tab, timed.
+async fn measure() -> TestResult<Vec<Call>> {
     let run = LiveRun::connect().await?;
     let pages = HashMap::from([("/page.html".to_owned(), Page::html(PAGE))]);
     let server = FixtureServer::start(pages).await?;
@@ -89,28 +130,23 @@ async fn measure() -> TestResult<Vec<String>> {
                     "url": server.url("127.0.0.1", "/page.html"), "waitUntil": "load" }),
         )
         .await?;
-        let mut slow = Vec::new();
+        let mut times = Vec::new();
         for round in 1..=ROUNDS {
             for (op, selector) in [("locator.hover", "#aside"), ("locator.click", "#target")] {
                 let input = json!({ "call": { "api": op, "timeoutMs": 10_000 },
                                     "target": at(&page, selector), "strict": "strict" });
                 let started = Instant::now();
                 let outcome = run.invoke(op, input).await;
-                note(
-                    &mut slow,
-                    &format!("round {round} {op} {selector}"),
-                    started,
-                    outcome,
-                );
+                times.push(timed(round, op, started, outcome));
             }
         }
         for shot in 1..=SHOTS {
             let input = json!({ "call": { "timeoutMs": 10_000 }, "page": brand(&page) });
             let started = Instant::now();
             let outcome = run.invoke("page.screenshot", input).await;
-            note(&mut slow, &format!("screenshot {shot}"), started, outcome);
+            times.push(timed(ROUNDS + shot, "page.screenshot", started, outcome));
         }
-        Ok(slow)
+        Ok(times)
     }
     .await;
     run.close_page(&page).await;
@@ -121,11 +157,22 @@ fn at(page: &TestPage, selector: &str) -> Value {
     locator(page, &[css(selector)], &format!("locator('{selector}')"))
 }
 
-fn note<E: Debug>(slow: &mut Vec<String>, call: &str, started: Instant, outcome: Result<Value, E>) {
-    let took = started.elapsed();
-    match outcome {
-        Err(error) => slow.push(format!("{call}: failed after {took:?}: {error:?}")),
-        Ok(_) if took > FAST => slow.push(format!("{call}: {took:?}")),
-        Ok(_) => {}
+fn timed<E: Debug>(
+    round: usize,
+    what: &'static str,
+    started: Instant,
+    outcome: Result<Value, E>,
+) -> Call {
+    Call {
+        round,
+        what,
+        took: started.elapsed(),
+        failed: outcome.err().map(|error| format!("{error:?}")),
     }
+}
+
+fn median(times: &[Duration]) -> Duration {
+    let mut sorted = times.to_vec();
+    sorted.sort();
+    sorted.get(sorted.len() / 2).copied().unwrap_or_default()
 }

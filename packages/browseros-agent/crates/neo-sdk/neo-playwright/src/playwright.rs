@@ -35,8 +35,9 @@ pub enum PagePlacement {
     /// A background tab in the browser's existing window: the product's placement, so a new
     /// page never takes the view the owner watches. On Linux such a tab is never drawn, and viz
     /// sends it one `BeginFrame` a second (`ThrottleUndrawnFrames`): each mouse move waits ~1 s
-    /// for its ack and screenshots wait for frames. Production hosts mask part of that with the
-    /// trace camera's captures; see `lead/verify/ss054/NOTES.md`.
+    /// for its ack and screenshots wait for frames (`tests/background_tab_live.rs`). The SDK
+    /// image hides the input half only by accident: its trace camera's per-op captures count as
+    /// draws.
     #[default]
     BackgroundTab,
     /// The only tab of a new, inactive window of its own, where it is drawn: Playwright's own

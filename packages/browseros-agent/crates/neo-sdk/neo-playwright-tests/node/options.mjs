@@ -19,11 +19,12 @@ export const MAX_WORKERS = 32
 /**
  * Where Neo opens each test's page (the add-on's `ownWindowPages`). On Linux a background tab is
  * never drawn, and Chromium's compositor then sends it one frame a second
- * (`ThrottleUndrawnFrames`): every mouse move waits ~1 s and screenshots stall (SS-054, LH-001;
- * claw-sdk `lead/verify/ss054/NOTES.md`). Playwright's own pages are each the active tab of their
- * window, so on Linux the harness opens Neo's pages in a window of their own too, and the corpus
- * measures Neo rather than that throttle. macOS draws background tabs, so it keeps the product's
- * placement. `--background-tabs` and `--own-window-pages` choose either one on any platform.
+ * (`ThrottleUndrawnFrames` in viz's `CompositorFrameSinkSupport::ShouldSendBeginFrame`): every
+ * mouse move waits ~1 s and screenshots stall (SS-054, LH-001). Playwright's own pages are each
+ * the active tab of their window, so on Linux the harness opens Neo's pages in a window of their
+ * own too, and the corpus measures Neo rather than that throttle. macOS draws background tabs, so
+ * it keeps the product's placement. `--background-tabs` and `--own-window-pages` choose either
+ * one on any platform.
  */
 export const defaultOwnWindowPages = (platform = process.platform) =>
   platform === 'linux'
