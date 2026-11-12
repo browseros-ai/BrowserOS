@@ -249,9 +249,17 @@ impl Playwright {
     /// past this op, whatever order the host's promises settle in (the Node add-on settles each
     /// on a threadsafe function of its own, in no fixed order). A run with no listener has
     /// nothing to order and does not wait.
+    ///
+    /// The wait never runs past the op's own timeout: the caller's timeout is how long the call
+    /// takes, so an op that timed out answers at once. Its listeners still run, only maybe after
+    /// the script has its error. A slow watcher held a timed-out 5 s snapshot here for up to 2 s.
     async fn events_before_reply(&self, scope: &OpScope<'_>) {
         let run = scope.run_state();
         if !run.events.has_listeners() {
+            return;
+        }
+        let bound = ordering_bound(scope.deadline(), time::Instant::now());
+        if bound.is_zero() {
             return;
         }
         let fence = Fence {
@@ -262,8 +270,16 @@ impl Playwright {
             self.progress.reached(fence).await;
             run.events.taken_through(self.events.head()).await;
         };
-        let _bounded = time::timeout(EVENTS_BEFORE_REPLY, ordered).await;
+        let _bounded = time::timeout(bound, ordered).await;
     }
+}
+
+/// How long an op that ends at `now` may wait for event ordering: [`EVENTS_BEFORE_REPLY`], and
+/// never past the op's `deadline`, so one that timed out answers at once.
+fn ordering_bound(deadline: Option<time::Instant>, now: time::Instant) -> Duration {
+    deadline.map_or(EVENTS_BEFORE_REPLY, |deadline| {
+        EVENTS_BEFORE_REPLY.min(deadline.saturating_duration_since(now))
+    })
 }
 
 #[cfg(test)]
@@ -346,6 +362,31 @@ mod tests {
     /// crates/neo-sdk/neo-playwright-js/scripts/wire-examples.ts; its build check fails when the
     /// file is stale.
     const WIRE_EXAMPLES: &str = include_str!("../tests/data/wire-examples.json");
+
+    #[test]
+    fn tests_that_the_ordering_wait_never_runs_past_the_op_s_timeout() {
+        let now = time::Instant::now();
+        let ms = Duration::from_millis;
+        assert_eq!(
+            super::ordering_bound(None, now),
+            super::EVENTS_BEFORE_REPLY,
+            "an op with no timeout keeps the whole bound"
+        );
+        assert_eq!(
+            super::ordering_bound(Some(now + Duration::from_secs(30)), now),
+            super::EVENTS_BEFORE_REPLY
+        );
+        assert_eq!(
+            super::ordering_bound(Some(now + ms(300)), now),
+            ms(300),
+            "an op near its timeout waits only for what is left"
+        );
+        assert_eq!(
+            super::ordering_bound(Some(now - ms(1)), now),
+            Duration::ZERO,
+            "an op that timed out answers at once, not up to 2 s later"
+        );
+    }
 
     /// Ops whose recorded input Rust refuses today. Each commit that makes one agree deletes
     /// its line, and the test fails while a fixed op is still listed.

@@ -27,6 +27,7 @@
 //! that when the run ends (`snapshot_baselines.rs`, `pending_baselines.rs`).
 
 use std::fmt;
+use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
 use futures_util::future::{self, BoxFuture};
@@ -293,8 +294,10 @@ async fn page_snapshot(
             mode: input.mode,
             boxes: input.boxes,
             marking: marks(input.mode, input.clickable).then(Marking::new),
+            reading: Mutex::default(),
         };
         let Ok(read) = scope.within(snapshotter.main_frame(&request)).await else {
+            snapshotter.cut_off();
             return Err(scope.timed_out(ErrorCode::WaitTimeout));
         };
         if let Some(root) = read? {
@@ -344,6 +347,7 @@ async fn locator_snapshot(
             mode: input.mode,
             boxes: input.boxes,
             marking: marked.then(Marking::new),
+            reading: Mutex::default(),
         };
         // Marked, the element is pinned first: its frame's targets are read in the world it
         // landed in, then the snapshot is taken there with them. Unmarked, one call does both.
@@ -487,6 +491,9 @@ struct Snapshotter<'op> {
     boxes: bool,
     /// Clickable marking, for `clickable` in mode `ai`, the only mode that mints refs.
     marking: Option<Marking>,
+    /// When the main frame's tree read began, while it runs: what a timeout logs as the phase it
+    /// cut off ([`Snapshotter::cut_off`]).
+    reading: Mutex<Option<Instant>>,
 }
 
 /// One frame's `snapshot` reply, decoded at the boundary.
@@ -540,6 +547,12 @@ impl Snapshotter<'_> {
     /// `request` in `world`, with that frame's clickable targets when the snapshot is marked.
     /// `parent` is the world of the frame that holds its iframe, `None` for the main frame;
     /// `frame_deadline` is when a child frame's [`FRAME_BUDGET`] ends.
+    ///
+    /// A whole page's main frame logs its two phases, the two that grow with the page: Neo's
+    /// clickable marking, then Playwright's walk of the page with the tree's transfer. An op
+    /// that times out shows them in its error: one that ran out during the walk ends with
+    /// `reading the main frame's tree: unfinished after N ms` ([`Snapshotter::cut_off`]), under
+    /// the marking line that says how much of the timeout marking took.
     async fn call(
         &self,
         world: &IsolatedWorld,
@@ -547,15 +560,46 @@ impl Snapshotter<'_> {
         frame_deadline: Option<Instant>,
         request: &ProbeRequest,
     ) -> Result<ProbeReply, ProbeFailure> {
+        let main = parent.is_none()
+            && matches!(
+                request,
+                ProbeRequest::Snapshot {
+                    root: ProbeTarget::Document,
+                    ..
+                }
+            );
         let targets = match &self.marking {
             Some(marking) => {
-                marking
+                let started = Instant::now();
+                let targets = marking
                     .targets(self.scope, world, parent, frame_deadline)
-                    .await
+                    .await;
+                // A frame marking skipped has a line of its own, with its time.
+                if main && let Some(targets) = &targets {
+                    self.scope.log(format!(
+                        "  clickable marking: {} ms, {} elements to mark",
+                        started.elapsed().as_millis(),
+                        targets.len()
+                    ));
+                }
+                targets.unwrap_or_default()
             }
             None => Vec::new(),
         };
+        let started = Instant::now();
+        if main {
+            *self.reading() = Some(started);
+        }
         let reply = probe::call_with_nodes(world, request, &targets).await;
+        if main {
+            *self.reading() = None;
+            if matches!(reply, Ok(ProbeReply::Snapshot { .. })) {
+                self.scope.log(format!(
+                    "  read the main frame's tree in {} ms",
+                    started.elapsed().as_millis()
+                ));
+            }
+        }
         if let Ok(ProbeReply::Snapshot {
             marks_skipped: true,
             ..
@@ -565,6 +609,21 @@ impl Snapshotter<'_> {
                 .log("  clickable marking skipped a frame (page shape)".to_owned());
         }
         reply
+    }
+
+    /// The op's deadline dropped the main frame's read: logs the tree read it cut off, with how
+    /// long it had run, so the timeout's error ends at the phase that ran out.
+    fn cut_off(&self) {
+        if let Some(started) = self.reading().take() {
+            self.scope.log(format!(
+                "  reading the main frame's tree: unfinished after {} ms",
+                started.elapsed().as_millis()
+            ));
+        }
+    }
+
+    fn reading(&self) -> MutexGuard<'_, Option<Instant>> {
+        self.reading.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
     /// A marked locator's snapshot, from the element its resolve pinned in `world`. A world

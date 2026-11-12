@@ -1126,6 +1126,51 @@ fn node_with_text<'a>(node: &'a Value, text: &str) -> Option<&'a Value> {
         .find_map(|child| node_with_text(child, text))
 }
 
+/// A whole page's snapshot that runs out of time says which phase ran out, and answers at its
+/// timeout: its call log gives marking's time, then ends at the tree's read, the walk of the
+/// page that Playwright's engine was still doing. 40,000 rows take far longer than 300 ms.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT (default 9005)"]
+async fn tests_that_a_page_snapshot_that_times_out_names_the_phase_that_ran_out() -> TestResult {
+    let _alone = ALONE.acquire().await?;
+    let live = LiveBrowser::connect().await?;
+    let rows = "<div><a href=\"#row\">row</a> text</div>".repeat(40_000);
+    let pages = HashMap::from([(
+        "/big.html".to_owned(),
+        Page::html(&format!("<main>{rows}</main>")),
+    )]);
+    let server = FixtureServer::start(pages).await?;
+    let page = live.open(&server.url("127.0.0.1", "/big.html")).await?;
+    let mut input = page_snapshot(&page, "ai");
+    input["clickable"] = json!(true);
+    input["call"]["timeoutMs"] = json!(300);
+    let started = Instant::now();
+    let error = live
+        .invoke("page.ariaSnapshot", input)
+        .await?
+        .err()
+        .ok_or("40,000 rows snapshot in under 300 ms")?;
+    let took = started.elapsed();
+    let message = error.message();
+    assert_eq!(
+        error.error_code(),
+        Some(ErrorCode::WaitTimeout),
+        "{message}"
+    );
+    assert!(message.contains("clickable marking"), "{message}");
+    let last = message.trim_end().lines().last().unwrap_or_default();
+    assert!(
+        last.contains("- reading the main frame's tree: unfinished after ")
+            && last.ends_with(" ms"),
+        "the walk is the phase that ran out, with its time: {message}"
+    );
+    assert!(
+        took < Duration::from_millis(1_300),
+        "the call answers at its timeout, not after the walk: {took:?}"
+    );
+    Ok(())
+}
+
 /// Marking never removes a ref or a mark: every ref, and every `cursor: pointer`, of the snapshot
 /// taken without marking is in the one taken with it, page and locator alike. The containers are
 /// left out as targets, so the rows and the empty tile inside them (an owned one included) keep
