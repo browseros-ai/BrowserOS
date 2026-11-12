@@ -51,26 +51,32 @@ Claw builds `node/claw-addon` with `cargo build --release --locked`, then instal
 32-vCPU Linux runner for every pull request and push to `main` that touches `crates/`, the
 workspace manifest or this command, with the browser `neo-server/docker/browser.lock` pins
 (headless, the SDK image's fonts). `--ci` is the same run plus a verdict (`ci.ts`, rules in
-`node/expected.mjs`):
+`node/expected.mjs`). Two lists steer it, and neither changes scope: every test still counts in
+the scores.
 
 - `node/expected/<platform>.tsv` (`linux-x64` in CI) lists the in-scope tests that do not pass
   there, each `fail` or `skip`. The runner writes it; nobody edits it by hand.
-- A test whose full-run result differs from its expectation (pass, or its listed outcome) is
-  rerun alone, up to twice, stopping at the first rerun that matches. Matching once makes it
-  **flaky**: reported, not failing the job, and it keeps its expectation. Never matching settles
-  it at what its reruns agree on: an expected pass that does not pass is a **regression**; a
-  listed test that passed every rerun is **newly passing**, and the job fails until the pull
-  request takes it off the list, so the count only ratchets up; a listed `fail` that now skips
-  (or the reverse) has a **changed outcome**.
-- A skip in the full run is decided by the spec or the harness, not by timing, so it is not
-  rerun: an expected pass that skipped is a regression straight away.
-- A listed test that left the corpus is **stale**, and a rerun that produced no result for its
-  test is **inconclusive**; both fail the job. A run or rerun that reported an error
-  (Playwright's, a stop signal, browsers that survived cleanup, a runner killed before it
-  finished) fails it too, even when another rerun of the same test matched.
-- The job summary has the totals, every regression, newly passing, changed and flaky test by name.
-  The results folder (with `verdict.json`, `summary.md` and failure screenshots) is the
-  `neo-spec-report` artifact; the list this run supports is `neo-spec-expected`.
+- `node/known-flaky.tsv` lists tests that flake, each with why and where its fix is tracked.
+  They are never judged, in either direction: the summary shows each one's outcome on that run,
+  so a test that has stopped flaking is visible. Adding or removing an entry is a deliberate
+  edit to that file in a pull request; no command does it.
+
+The rules for every other in-scope test:
+
+- An expected pass that fails is rerun alone up to twice. Passing once makes it **flaky**
+  (reported, not failing the job); failing both is a **regression**. One that skips is a
+  regression straight away: a skip is decided by the spec or the harness, not by timing.
+- A listed test that passes is rerun alone up to three times. It leaves the list only on proof:
+  it passed the full run **and** three of three reruns alone in the same job. Then it is **newly
+  passing**, and the job fails until the pull request takes it off the list, so the count only
+  ratchets up. A failed rerun makes it flaky; it stays listed.
+- A listed `fail` that now skips (or the reverse) is a **changed outcome**; a listed test that
+  left the corpus is **stale**; a rerun that produced no result is **inconclusive**. Each fails
+  the job, and so does a run or rerun that reported an error (Playwright's, a stop signal,
+  browsers that survived cleanup, a runner killed before it finished).
+- The results folder (`verdict.json`, `summary.md`, failure screenshots) is the `neo-spec-report`
+  artifact. The list the run supports, with the proof for every test it drops, is
+  `neo-spec-expected`.
 
 **Updating the list**, when your pull request fixes or (deliberately) changes a test: take the
 list your pull request's CI run wrote, with the GitHub CLI signed in,
@@ -79,11 +85,13 @@ list your pull request's CI run wrote, with the GitHub CLI signed in,
 bun run test:neo-spec --expected-from <run URL or ID>
 ```
 
-then commit `node/expected/linux-x64.tsv`. It prints what it removed, added and changed; an
-added test accepts a regression, so the pull request says why. A pull request's run tests it
-merged into the current `main`, so a test `main` fixed since the list last changed shows up as
-newly passing too; the same command takes it. Two pull requests that each fix
-a test change different lines and merge cleanly. On a Linux machine,
+then commit `node/expected/linux-x64.tsv`. It prints what it removed, added and changed. It
+refuses, writes nothing and names the test, when the list drops a test without that run's proof:
+a passing full run and three of three passing reruns alone, or the test gone from the corpus, or
+on this checkout's `known-flaky.tsv`. An added test accepts a regression, so the pull request
+says why. A pull request's run tests it merged into the current `main`, so a test `main` fixed
+since the list last changed shows up as newly passing too; the same command takes it. Two pull
+requests that each fix a test change different lines and merge cleanly. On a Linux machine,
 `bun run test:neo-spec --ci --write-expected` writes the list from a local run instead.
 
 ### Reading the check (`Neo spec / linux-x64`)
@@ -96,34 +104,40 @@ Neo spec suite, linux-x64: ❌ 1 regression, 2 newly passing
 ```
 
 Under it are the totals (in scope and all tests, passed of counted, skips beside them), the
-size of the list, the suite's wall time and the reruns. Then one section per kind of finding,
-each test with its ID, file and title. What to do about each:
+size of the list, how many tests were flaky this run, the suite's wall time and the reruns. Then
+one section per kind of finding, each test with its ID, file and title:
 
 | Section | Meaning | What to do |
 |---|---|---|
 | Regressions | Expected to pass; failed in the full run and in both reruns alone (or skipped) | Fix it. Reproduce it with `bun run test:neo-spec <spec> --grep '<title>'`. |
-| Newly passing | Listed; passed in the full run and in both reruns | Run `--expected-from` with the run's URL and commit the list. |
+| Newly passing | Listed; passed in the full run and in three of three reruns | Run `--expected-from` with the run's URL and commit the list. |
 | Changed outcome, Stale entries | The list no longer says what the run did | The same command. |
-| Inconclusive, or "The run reported an error" | The run or a rerun broke: no result, an unreadable report, browsers left behind, a runner killed before it finished. A broken rerun fails the job even when another attempt matched | Read the logs in the report; rerun the job once. If it repeats, it is a harness bug. |
+| Inconclusive, or "The run reported an error" | The run or a rerun broke: no result, an unreadable report, browsers left behind, a runner killed before it finished; a broken rerun fails the job even when another attempt matched | Read the logs in the report; rerun the job once. If it repeats, it is a harness bug. |
 | Flaky | The full run disagreed with the expectation, a rerun alone agreed | Nothing; it does not fail the job. |
+| Known flaky | On `known-flaky.tsv`; this run's outcome for each | Nothing. A test that passes run after run here can come off that file once its fix lands. |
 
-A flaky line reads like this: the test was expected to pass, failed in the full run (here under
-the load of 16 workers) and passed the first time it ran alone, so it counts as a pass:
+**A flake or a regression?** Read the test's rerun results after `alone:`. A flake has at least
+one rerun that agrees with its expectation, and it is under **Flaky**, which never fails the
+job:
 
 ```text
 - EH-085 tests/page/elementhandle-screenshot.spec.ts › element screenshot › should wait for visible:
   expected pass; full run fail, alone: pass — Test timeout of 30000ms exceeded.
 ```
 
-Some tests pass only part of the time on Linux, also alone (SS-054, LH-001). A lucky run can
-take one off the list and an unlucky one then report it as a regression in a pull request that
-cannot reach it. If the regression's test is one your change does not touch and earlier runs
-show it passing and failing, take the run's list with `--expected-from` and say so in the pull
-request; that puts it back as `fail`.
+A regression disagreed every time: the full run and both reruns, under **Regressions**:
 
-`alone: fail, pass` means it needed both reruns. A listed test can be flaky the other way
-(`expected fail; full run pass, alone: fail`); it stays listed. A test that shows up flaky in
-run after run is worth fixing, but does not block a pull request.
+```text
+- EH-104 tests/page/elementhandle-select-text.spec.ts › should select plain div:
+  fail; full run fail, alone: fail, fail — Error: expect(received).toBe(expected)
+```
+
+`alone: fail, pass` means a flake needed both reruns. A listed test can be flaky the other way
+(`expected fail; full run pass, alone: pass, fail`): two passes of three is not proof, so it
+stays listed. A regression on a test your change cannot reach, whose earlier runs show it
+passing and failing, is a flake the reruns did not catch: propose it for `known-flaky.tsv` in a
+pull request, with its reason and where its fix is tracked, instead of taking it onto the
+expected list.
 
 The `neo-spec-report` artifact holds the whole results folder: `summary.md`, `verdict.json`
 (every finding with its reruns), `results.json`, each rerun's log under `reruns/`, and

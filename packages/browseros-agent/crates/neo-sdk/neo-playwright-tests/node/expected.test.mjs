@@ -7,8 +7,11 @@ import {
   formatExpected,
   inScopeTests,
   nextExpected,
+  PROOF_ATTEMPTS,
   parseExpected,
   passed,
+  proofOf,
+  refusals,
   settle,
   summaryMarkdown,
   testKey,
@@ -150,10 +153,12 @@ test('a listed test is newly passing only when it passes every rerun; otherwise 
     calls.push([t.title, attempt])
     return { outcome: t.title === 'lucky' ? 'fail' : 'pass' }
   })
-  // The lucky one stops at its first failed rerun.
+  // Leaving the list takes PROOF_ATTEMPTS passing reruns; the lucky one stops at its first failure.
+  assert.equal(PROOF_ATTEMPTS, 3)
   assert.deepEqual(calls.sort(), [
     ['fixed', 1],
     ['fixed', 2],
+    ['fixed', 3],
     ['lucky', 1],
   ])
   assert.deepEqual(
@@ -246,7 +251,7 @@ test('a rerun that broke proves nothing: the test is inconclusive and the run fa
     ]),
     [
       ['expected pass', ['error', 'error']],
-      ['listed', ['pass', 'not-run']],
+      ['listed', ['pass', 'not-run', 'not-run']],
     ],
   )
   // A broken rerun followed by one that fails as listed still confirms the list.
@@ -296,6 +301,114 @@ test('a full-run failure that skips alone settles as the skip it is', async () =
       ['listed skip', 'skip'],
       ['new skip', 'skip'],
     ],
+  )
+})
+
+test('a listed test that passes twice alone and then fails stays listed: two of three is luck, not proof', async () => {
+  const tests = run([['tests/page/a.spec.ts', 'mostly', 'expected']])
+  const expected = list([['tests/page/a.spec.ts', 'mostly', 'fail']])
+  const verdict = compare(tests, expected, { complete: true })
+  await settle(verdict, async (_t, attempt) => ({
+    outcome: attempt < 3 ? 'pass' : 'fail',
+  }))
+  assert.deepEqual(
+    verdict.flaky.map((i) => i.reruns.map((r) => r.outcome)),
+    [['pass', 'pass', 'fail']],
+  )
+  assert.equal(verdict.newlyPassing.length, 0)
+  assert.equal(
+    nextExpected(tests, expected, verdict, { complete: true }).size,
+    1,
+  )
+})
+
+test('a known flaky test is reported with its outcome and never judged, listed or stale', async () => {
+  const tests = run([
+    ['tests/page/a.spec.ts', 'flaky, failing', 'unexpected'],
+    ['tests/page/a.spec.ts', 'flaky, passing', 'expected'],
+  ])
+  const entry = (title) => ({
+    id: null,
+    file: 'tests/page/a.spec.ts',
+    title,
+    reason: 'flakes',
+    tracked: '#1',
+  })
+  const knownFlaky = new Map(
+    ['flaky, failing', 'flaky, passing', 'flaky, gone'].map((title) => [
+      testKey('tests/page/a.spec.ts', title),
+      entry(title),
+    ]),
+  )
+  // One of them is still on the expected list from before it was known to flake.
+  const expected = list([['tests/page/a.spec.ts', 'flaky, passing', 'fail']])
+  const verdict = compare(tests, expected, { complete: true, knownFlaky })
+  let reruns = 0
+  await settle(verdict, async () => {
+    reruns++
+    return { outcome: 'pass' }
+  })
+  assert.equal(reruns, 0)
+  assert.ok(passed(verdict))
+  assert.equal(verdict.stale.length, 0)
+  assert.deepEqual(
+    verdict.knownFlaky.map((i) => [i.entry.title, i.test?.outcome]),
+    [
+      ['flaky, failing', 'fail'],
+      ['flaky, gone', undefined],
+      ['flaky, passing', 'pass'],
+    ],
+  )
+  const next = nextExpected(tests, expected, verdict, {
+    complete: true,
+    knownFlaky,
+  })
+  assert.equal(next.size, 0)
+  const proof = proofOf(tests, expected, next, verdict, { knownFlaky })
+  assert.deepEqual(
+    proof.removed.map((r) => r.evidence),
+    [{ kind: 'known-flaky' }],
+  )
+  assert.deepEqual(refusals(proof, next, { knownFlaky }), [])
+  // Without the entry in the checkout's known-flaky.tsv, the removal is refused.
+  assert.match(
+    refusals(proof, next)[0],
+    /not on this checkout's known-flaky\.tsv/,
+  )
+})
+
+test('the update proof: three of three alone after a passing full run, or the test is gone', async () => {
+  const tests = run([['tests/page/a.spec.ts', 'fixed', 'expected']])
+  const expected = list([
+    ['tests/page/a.spec.ts', 'fixed', 'fail'],
+    ['tests/page/gone.spec.ts', 'removed upstream', 'fail'],
+  ])
+  const verdict = compare(tests, expected, { complete: true })
+  await settle(verdict, async () => ({ outcome: 'pass' }))
+  const next = nextExpected(tests, expected, verdict, { complete: true })
+  const proof = proofOf(tests, expected, next, verdict)
+  assert.deepEqual(
+    proof.removed.map((r) => [r.title, r.evidence]),
+    [
+      [
+        'fixed',
+        { kind: 'passed', fullRun: 'pass', reruns: ['pass', 'pass', 'pass'] },
+      ],
+      ['removed upstream', { kind: 'absent' }],
+    ],
+  )
+  assert.deepEqual(refusals(proof, next), [])
+  // A list that drops a test the proof does not cover, or with fewer passing reruns, is refused.
+  const short = structuredClone(proof)
+  short.removed[0].evidence.reruns = ['pass', 'pass']
+  assert.match(
+    refusals(short, next)[0],
+    /alone pass, pass; leaving the list needs a passing full run and 3 of 3/,
+  )
+  const unproven = { ...proof, removed: proof.removed.slice(1) }
+  assert.match(
+    refusals(unproven, next)[0],
+    /fixed: the run gives no proof that it passes/,
   )
 })
 

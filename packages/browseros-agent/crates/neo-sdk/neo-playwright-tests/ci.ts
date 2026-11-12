@@ -150,6 +150,7 @@ export async function ciVerdict({
   complete,
   writeExpected,
   listFile: listOverride,
+  knownFlakyFile,
 }: {
   runner: Runner
   output: string
@@ -157,6 +158,8 @@ export async function ciVerdict({
   writeExpected: boolean
   /** The committed list to hold the run to; tests pass their own instead of the platform's. */
   listFile?: string
+  /** known-flaky.tsv to read; tests pass their own. */
+  knownFlakyFile?: string
 }): Promise<number> {
   const expected = await import('./node/expected.mjs')
   const { loadScope } = await import('./node/scope.mjs')
@@ -174,7 +177,9 @@ export async function ciVerdict({
     report,
     loadScope(path.join(output, 'scope.json')),
   )
-  const verdict = expected.compare(tests, listed, { complete })
+  const { readKnownFlaky } = await import('./node/known-flaky.mjs')
+  const knownFlaky = readKnownFlaky(knownFlakyFile)
+  const verdict = expected.compare(tests, listed, { complete, knownFlaky })
   const rerunStarted = Date.now()
   let rerunCount = 0
   const rerunErrors: string[] = []
@@ -209,11 +214,20 @@ export async function ciVerdict({
     )
     return result
   })
-  const next = expected.nextExpected(tests, listed, verdict, { complete })
+  const next = expected.nextExpected(tests, listed, verdict, {
+    complete,
+    knownFlaky,
+  })
+  // The update command lets a test leave the list only with this evidence from the same job.
+  const proof = expected.proofOf(tests, listed, next, verdict, { knownFlaky })
   fs.mkdirSync(path.join(output, 'expected'), { recursive: true })
   fs.writeFileSync(
     path.join(output, 'expected', `${platform}.tsv`),
     expected.formatExpected(next, platform),
+  )
+  fs.writeFileSync(
+    path.join(output, 'expected', `${platform}.proof.json`),
+    JSON.stringify(proof, null, 2),
   )
   const errors = [
     ...runErrors(report, run),
@@ -262,6 +276,13 @@ export async function ciVerdict({
     fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, markdown)
   console.log(`\n${markdown}`)
   if (writeExpected) {
+    const refused = expected.refusals(proof, next, { knownFlaky })
+    if (refused.length) {
+      console.error(
+        `Not writing ${listFile}, a test would leave it without proof:\n${refused.map((reason: string) => `  ${reason}`).join('\n')}`,
+      )
+      return 1
+    }
     fs.mkdirSync(path.dirname(listFile), { recursive: true })
     fs.writeFileSync(listFile, expected.formatExpected(next, platform))
     console.log(`Wrote ${listFile}: ${expected.describeChange(listed, next)}`)
@@ -303,24 +324,67 @@ export async function pullExpected(run: string): Promise<number> {
       throw new Error(
         `Could not download ${expected.ARTIFACTS.expected} from run ${id}${download.error ? ` (${download.error.message})` : ''}. It needs the GitHub CLI, signed in (gh auth login).`,
       )
-    const lists = fs
-      .readdirSync(scratch)
-      .filter((name) => /^[a-z0-9]+-[a-z0-9_]+\.tsv$/.test(name))
-    if (!lists.length)
-      throw new Error(
-        `Run ${id}'s ${expected.ARTIFACTS.expected} holds no list`,
-      )
-    for (const name of lists) {
-      const text = fs.readFileSync(path.join(scratch, name), 'utf8')
-      const after = expected.parseExpected(text)
-      const target = expected.expectedPath(name.slice(0, -'.tsv'.length))
-      const before = expected.readExpected(target) ?? new Map()
-      fs.mkdirSync(path.dirname(target), { recursive: true })
-      fs.writeFileSync(target, text)
-      console.log(`${target}: ${expected.describeChange(before, after)}`)
-    }
-    return 0
+    return adoptLists(scratch)
   } finally {
     fs.rmSync(scratch, { recursive: true, force: true })
   }
+}
+
+/**
+ * Takes the lists a CI run wrote (each `<platform>.tsv` with its `<platform>.proof.json`) into
+ * the checkout, all or none: a list that drops a test without proof from its own job is refused,
+ * and the command says which test and why. Returns the exit code.
+ */
+export async function adoptLists(
+  directory: string,
+  {
+    target,
+    knownFlakyFile,
+  }: { target?: (platform: string) => string; knownFlakyFile?: string } = {},
+): Promise<number> {
+  const expected = await import('./node/expected.mjs')
+  const { readKnownFlaky } = await import('./node/known-flaky.mjs')
+  const knownFlaky = readKnownFlaky(knownFlakyFile)
+  const names = fs
+    .readdirSync(directory)
+    .filter((name) => /^[a-z0-9]+-[a-z0-9_]+\.tsv$/.test(name))
+  if (!names.length) throw new Error(`${directory} holds no list`)
+  const lists = names.map((name) => {
+    const platform = name.slice(0, -'.tsv'.length)
+    const text = fs.readFileSync(path.join(directory, name), 'utf8')
+    const proofFile = path.join(directory, `${platform}.proof.json`)
+    const after = expected.parseExpected(text)
+    const refused = fs.existsSync(proofFile)
+      ? expected.refusals(
+          JSON.parse(fs.readFileSync(proofFile, 'utf8')),
+          after,
+          {
+            knownFlaky,
+          },
+        )
+      : [
+          `the run has no ${platform}.proof.json: it predates proofs, so rerun its job`,
+        ]
+    return { platform, text, after, refused }
+  })
+  const refused = lists.flatMap(({ platform, refused }) =>
+    refused.map((reason: string) => `${platform}: ${reason}`),
+  )
+  if (refused.length) {
+    console.error(
+      [
+        "Not taking this run's lists: a test leaves the expected list only with proof from its own job.",
+        ...refused.map((reason) => `  ${reason}`),
+      ].join('\n'),
+    )
+    return 1
+  }
+  for (const { platform, text, after } of lists) {
+    const file = (target ?? expected.expectedPath)(platform)
+    const before = expected.readExpected(file) ?? new Map()
+    fs.mkdirSync(path.dirname(file), { recursive: true })
+    fs.writeFileSync(file, text)
+    console.log(`${file}: ${expected.describeChange(before, after)}`)
+  }
+  return 0
 }
