@@ -229,6 +229,19 @@ fn log_file(logs: &Path) -> Result<PathBuf, Box<dyn Error>> {
     Err(format!("no claw-sdk.log* in {}", logs.display()).into())
 }
 
+/// The image build reads the source digest back from the binary to prove the server was compiled
+/// from its own checkout (docker/build-server.sh); a build outside the image says it has none.
+#[test]
+fn binary_embeds_a_source_marker() -> TestResult {
+    let binary = fs::read(BIN)?;
+    let marker = b"browseros-claw-sdk-source=none;";
+    assert!(
+        binary.windows(marker.len()).any(|window| window == marker),
+        "{BIN} has no source marker; the image build cannot prove which sources it was compiled from"
+    );
+    Ok(())
+}
+
 #[test]
 fn binary_embeds_the_packaging_version_marker() -> TestResult {
     let marker = format!("browseros-claw-sdk-version={};", env!("CARGO_PKG_VERSION"));

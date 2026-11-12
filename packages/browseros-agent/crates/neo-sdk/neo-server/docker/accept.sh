@@ -16,7 +16,8 @@
 # it would run under emulation, which proves nothing about that architecture.
 #
 #   check            what passes
-#   identity         claw-sdk marker; server sha256 = provenance.json; browser recorded; no noVNC
+#   identity         claw-sdk marker; server sha256 = provenance.json; the server's compiled-in
+#                    source digest = the build's (provenance source_digest); browser recorded; no noVNC
 #                    or websockify; python3 present; CAPTCHA keys present only when baked
 #   boot             healthy within 90 s with a host group and token, under only the capabilities
 #                    README.md documents and no-new-privileges; listeners as README "Ports"
@@ -179,6 +180,8 @@ facts=$(docker run --rm --network none --name "$prefix-identity" --entrypoint sh
   echo "kind=$(neo-server-info kind)"
   echo "sha=$(sha256sum "$(neo-server-info path)" | cut -d" " -f1)"
   echo "provenance_sha=$(jq -r .server.sha256 $p)"
+  echo "built_from=$(LC_ALL=C grep -aoE "browseros-claw-sdk-source=[0-9a-f]{64}" "$(neo-server-info path)" | head -1 | cut -d= -f2)"
+  echo "sources=$(jq -r ".source_digest // empty" $p)"
   echo "marker=$(jq -r .server.version $p)"
   echo "browser=$(jq -r .browser.version $p)/$(dpkg-query -W -f "\${Version}" browserclaw)"
   echo "provenance_deb=$(jq -r .browser.deb $p)"
@@ -193,6 +196,7 @@ fact() { printf '%s\n' "$facts" | sed -n "s/^$1=//p"; }
 problems=()
 [ "$(fact kind)" = claw-sdk ] || problems+=("server kind '$(fact kind)'")
 [ -n "$(fact sha)" ] && [ "$(fact sha)" = "$(fact provenance_sha)" ] || problems+=("server sha256 differs from provenance.json")
+[ -n "$(fact sources)" ] && [ "$(fact built_from)" = "$(fact sources)" ] || problems+=("server compiled from sources '$(fact built_from)', not the build's '$(fact sources)'")
 [ "$(fact browser)" = "$(fact browser | cut -d/ -f1)/$(fact provenance_deb)" ] || problems+=("deb $(fact browser) not in provenance")
 [ "$(fact novnc)/$(fact websockify)" = absent/absent ] || problems+=("viewer installed")
 [ "$(fact python3)" = present ] || problems+=("no python3 for neo-quit")

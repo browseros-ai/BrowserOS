@@ -11,6 +11,7 @@
 # browseros-core/src/target/.
 target
 # This folder's scripts and docs are not build inputs, so editing them leaves the server stage
-# cached. The browser pin is.
+# cached. The browser pin and the server's build step are.
 crates/neo-sdk/neo-server/docker
 !crates/neo-sdk/neo-server/docker/browser.lock
+!crates/neo-sdk/neo-server/docker/build-server.sh

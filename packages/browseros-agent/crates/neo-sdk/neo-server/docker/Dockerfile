@@ -32,9 +32,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends python3-venv &&
  && cargo install --locked cargo-zigbuild --version 0.23.0
 WORKDIR /src
 COPY . .
-# The target cache is per architecture: both builds share the registry, never object files.
+# The target cache is per architecture and shared by every checkout built on this Docker daemon,
+# so third-party crates compile once; the registry is shared by both architectures.
+# build-server.sh cleans the workspace's own crates from it before each build, because Cargo judges
+# freshness by mtime and once shipped another checkout's server, and it fails unless the binary
+# was compiled from these sources. NEO_SDK_CACHE_SCOPE (build.sh: the env var of that name) gives a
+# build a cache of its own, for measurements; NEO_SDK_BUILD_JOBS caps Cargo's parallel jobs.
+ARG NEO_SDK_CACHE_SCOPE=
+ARG NEO_SDK_BUILD_JOBS=
 RUN --mount=type=cache,id=neo-sdk-cargo-registry,target=/usr/local/cargo/registry,sharing=locked \
-    --mount=type=cache,id=neo-sdk-target-${TARGETARCH},target=/src/target,sharing=locked \
+    --mount=type=cache,id=neo-sdk-target-${TARGETARCH}${NEO_SDK_CACHE_SCOPE},target=/src/target,sharing=locked \
     set -eu; \
     case "$TARGETARCH" in \
       amd64) target=x86_64-unknown-linux-gnu ;; \
@@ -42,8 +49,8 @@ RUN --mount=type=cache,id=neo-sdk-cargo-registry,target=/usr/local/cargo/registr
       *) echo "no server build for $TARGETARCH" >&2; exit 1 ;; \
     esac; \
     rustup target add "$target"; \
-    cargo zigbuild --release --locked --target "$target.2.17" -p neo-server --bin browseros-claw-sdk; \
-    install -D -m 0755 "target/$target/release/browseros-claw-sdk" /out/browseros-claw-sdk
+    if [ -n "$NEO_SDK_BUILD_JOBS" ]; then export CARGO_BUILD_JOBS="$NEO_SDK_BUILD_JOBS"; fi; \
+    bash crates/neo-sdk/neo-server/docker/build-server.sh "$target"
 
 FROM ${UBUNTU_IMAGE} AS neo-sdk-runtime
 ARG TARGETARCH
@@ -79,6 +86,7 @@ RUN set -eu; . /usr/share/neo-sdk/browser.lock; \
 # the host socket and the settings call from that marker at every start.
 COPY --from=neo-docker --chmod=0755 neo-server-info.sh /usr/local/bin/neo-server-info
 COPY --from=server /out/browseros-claw-sdk /tmp/browseros-claw-sdk
+COPY --from=server /out/source-digest /usr/share/neo-sdk/source-digest
 RUN set -eu; bundled=$(neo-server-info path); install -m 0755 /tmp/browseros-claw-sdk "$bundled"; rm /tmp/browseros-claw-sdk; \
     [ "$(neo-server-info kind)" = claw-sdk ] || { echo "the installed server is not claw-sdk" >&2; exit 1; }
 
@@ -92,7 +100,9 @@ COPY --from=neo-docker --chmod=0755 neo-quit.py /usr/local/bin/neo-quit
 COPY crates/neo-sdk/neo-playwright/THIRD_PARTY_NOTICES.md crates/neo-sdk/neo-playwright/third_party/playwright/LICENSE crates/neo-sdk/neo-playwright/third_party/playwright/NOTICE /usr/share/doc/neo-sdk/playwright/
 
 # What this image is made of, for hosts and for accept.sh: the source commit, the browser, and
-# the server binary as installed (its sha256 and the version compiled into it). The commit's ARGs
+# the server binary as installed (its sha256, the version compiled into it, and the digest of the
+# sources it was compiled from, which must equal the digest of the sources this build copied;
+# build.sh checks the binary against it before it tags the image). The commit's ARGs
 # are declared here, not at the top: every RUN after an ARG misses the cache when its value
 # changes, which would reinstall the packages and download the browser for every commit.
 ARG NEO_SDK_REVISION=unknown
@@ -103,8 +113,12 @@ RUN set -eu; . /usr/share/neo-sdk/browser.lock; server=$(neo-server-info path); 
       --arg browser "$NEO_BROWSER_VERSION" --arg deb "$(dpkg-query -W -f '${Version}' browserclaw)" \
       --arg server_sha256 "$(sha256sum "$server" | cut -d' ' -f1)" \
       --arg marker "$(LC_ALL=C grep -aoE 'browseros-claw-sdk-version=[^;]*' "$server" | head -1 | cut -d= -f2)" \
-      '{version: $version, revision: $revision, dirty: $dirty, arch: $arch, browser: {version: $browser, deb: $deb}, server: {binary: "browseros-claw-sdk", version: $marker, sha256: $server_sha256, toolchain: "rust 1.98.0, ziglang 0.15.2, cargo-zigbuild 0.23.0, glibc 2.17"}}' \
-      > /usr/share/neo-sdk/provenance.json
+      --arg sources "$(cat /usr/share/neo-sdk/source-digest)" --arg path "$server" \
+      --arg built_from "$(LC_ALL=C grep -aoE 'browseros-claw-sdk-source=[0-9a-f]{64}' "$server" | head -1 | cut -d= -f2)" \
+      '{version: $version, revision: $revision, dirty: $dirty, arch: $arch, source_digest: $sources, browser: {version: $browser, deb: $deb}, server: {binary: "browseros-claw-sdk", path: $path, version: $marker, sha256: $server_sha256, source_digest: $built_from, toolchain: "rust 1.98.0, ziglang 0.15.2, cargo-zigbuild 0.23.0, glibc 2.17"}}' \
+      > /usr/share/neo-sdk/provenance.json; \
+    [ "$(jq -r '.server.source_digest == .source_digest' /usr/share/neo-sdk/provenance.json)" = true ] \
+      || { echo "the installed server was not compiled from this build's sources" >&2; exit 1; }
 
 # The host contract's defaults (README.md). NEO_MCP_REMOTE=false keeps the browser's two
 # unauthenticated MCP proxies, 9010 and 9011, to loopback peers: the host drives Neo from

@@ -33,6 +33,16 @@ const VERSION_MARKER: &str = concat!(
     ";"
 );
 
+/// The digest of the sources this binary was compiled from, as `browseros-claw-sdk-source=<sha256>;`,
+/// set by the image build (`docker/build-server.sh`), which reads it back, as does `build.sh`: the
+/// image's server must have been compiled from the sources the image's provenance names, and the
+/// image build's shared Cargo cache once shipped another checkout's binary under a new revision.
+/// Cargo recompiles when a variable read with `option_env!` changes. Other builds have none.
+const SOURCE_MARKER: &str = match option_env!("NEO_SDK_SOURCE_MARKER") {
+    Some(marker) => marker,
+    None => "browseros-claw-sdk-source=none;",
+};
+
 /// Chromium's arguments. Parsed with `try_parse`, never `parse`, so a bad flag exits 1.
 #[derive(Debug, Parser)]
 #[command(name = "browseros-claw-sdk", disable_version_flag = true)]
@@ -46,8 +56,9 @@ struct Cli {
 }
 
 fn main() -> ExitCode {
-    // Keeps the marker's bytes in the binary through LTO and stripping.
+    // Keeps the markers' bytes in the binary through LTO and stripping.
     hint::black_box(VERSION_MARKER);
+    hint::black_box(SOURCE_MARKER);
     let cli = match Cli::try_parse() {
         Ok(cli) => cli,
         Err(error) => {
