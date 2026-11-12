@@ -72,7 +72,7 @@ function RunRow({ run }: { run: RunSummary }) {
         ) : (
           run.replyPreview !== null && (
             <p className="truncate font-mono text-xs text-zinc-600">
-              {run.replyPreview}
+              {previewText(run.replyPreview)}
             </p>
           )
         )}
@@ -117,6 +117,24 @@ function Reply({ detail }: { detail: RunDetail }) {
 }
 
 /**
+ * A closed row's one-line preview: a returned string decoded (its line breaks then show as spaces
+ * in the one line), even when the preview cut it short; anything else as the model read it.
+ */
+export function previewText(preview: string): string {
+  const first = preview.split('\n', 1)[0] ?? ''
+  if (!first.startsWith('"')) return preview
+  for (const candidate of [first, `${first.replace(/\\$/, '')}"`]) {
+    try {
+      const value: unknown = JSON.parse(candidate)
+      if (typeof value === 'string') return value
+    } catch {
+      // cut inside an escape, or not a string: try the next form
+    }
+  }
+  return preview
+}
+
+/**
  * The reply for a person. A returned string (a snapshot, say) is shown decoded, with a line saying
  * so; "Reply, raw" keeps the exact bytes.
  */
@@ -128,6 +146,9 @@ export function FormattedReply({ detail }: { detail: RunDetail }) {
       {reply.rpcError && <Block text={prettyJson(reply.rpcError)} />}
       {decoded ? (
         <>
+          <p className="font-medium text-xs text-zinc-700">
+            What the model read
+          </p>
           <p className="text-xs text-zinc-500">{decodedNote(decoded.json)}</p>
           <Block text={decoded.value} />
           {decoded.rest && <Block text={decoded.rest} />}

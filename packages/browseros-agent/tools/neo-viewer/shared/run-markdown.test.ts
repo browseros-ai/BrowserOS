@@ -172,6 +172,25 @@ describe('one run as Markdown', () => {
     expect(exported).toContain('```text\n- link "Story 0" [ref=e0]\n')
   })
 
+  test("the text after a decoded string is the model's own, and the export cuts it too", () => {
+    // A console line that looks like one of Neo's notes stays a console line, as the model read it.
+    const text = `${JSON.stringify('ok')}\nconsole:\n[not awaited] this is a console log`
+    const copy = runMarkdown(detailWith(15, { text, neo: null }), FULL)
+    expect(copy).toContain(
+      'Then, as the model read them:\n\n```text\nconsole:\n[not awaited] this is a console log\n```',
+    )
+    // Long console output after a short string: the export keeps to its limit.
+    const long = `${JSON.stringify('ok')}\nconsole:\n${'c'.repeat(50_000)}`
+    const exported = runMarkdown(detailWith(16, { text: long, neo: null }), {
+      ...EXPORT,
+      replyFile: '016.reply.txt',
+    })
+    expect(exported.length).toBeLessThan(8_000)
+    expect(exported).toContain(
+      'Then, as the model read them:\n\nThe first 2,000 characters; the full text is in [016.reply.txt](016.reply.txt):',
+    )
+  })
+
   test('a value that is not a string, or an error, is shown as the model read it', () => {
     const object = runMarkdown(
       detailWith(13, { text: '{"title":"Example","n":2}', neo: null }),

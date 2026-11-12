@@ -81,10 +81,9 @@ export function returnedString(
     return null
   }
   if (typeof value !== 'string') return null
-  const rest = [
-    ...(parts.console.length > 0 ? ['console:', ...parts.console] : []),
-    ...parts.notes,
-  ].join('\n')
+  // The text after the value exactly as the model read it (console lines, notes), not rebuilt
+  // from parsed pieces, which could take a console line for one of Neo's notes.
+  const rest = text.slice(parts.value.length).replace(/^\n/, '')
   return { value, json: parts.value, rest }
 }
 
@@ -351,7 +350,12 @@ function modelRead(detail: RunDetail, options: RunMarkdownOptions): string[] {
     '',
     ...bounded(decoded.value, options, 'decoded'),
     ...(decoded.rest
-      ? ['', 'Then, as the model read them:', '', fenced(decoded.rest, 'text')]
+      ? [
+          '',
+          'Then, as the model read them:',
+          '',
+          ...bounded(decoded.rest, options),
+        ]
       : []),
   ]
 }
