@@ -1169,7 +1169,9 @@ async fn a_control_display_waits_for_a_move_whose_op_gave_up() -> TestResult {
     h.activation_held(4).await?;
     moving.abort();
     assert!(
-        timeout(WITHIN, moving).await?.is_err_and(|gone| gone.is_cancelled()),
+        timeout(WITHIN, moving)
+            .await?
+            .is_err_and(|gone| gone.is_cancelled()),
         "the op is gone"
     );
     let mut control = pin!(h.control(None));
