@@ -28,6 +28,8 @@
 #                    browser's file, `saveAs()` copies it, the run's record lists it, the host
 #                    reads the same bytes at /v1/runs/{id}/downloads/0, and a second run uploads
 #                    that path with `setInputFiles`; after the restart, still served (persist)
+#   pdf-downloads    host's exact PDF attachment, four valid PDF cases (attachment, inline viewer,
+#                    download attribute, typed Blob), and ZIP attachment; disk and host SHA-256
 #   blobs            a 1.5 MB+ full-page PNG and a PDF returned from `run` come back as
 #                    {"$neo":"blob"} markers and read back whole at /v1/runs/{id}/blobs/{id};
 #                    small bytes stay inline; 300 KiB of text is still result_too_large
@@ -114,7 +116,7 @@ data_mount() { if [ -n "$data_dir" ]; then echo "$data_dir:/data"; else echo "$v
 # inputs: the token, the socket group, a persistent /data. Extra docker-run arguments go first.
 start_neo() { # name [docker run args...] [-- command...]
   local name=$1; shift
-  docker run -d --name "$name" --network "$network" --shm-size=1g --stop-timeout 25 \
+  docker run --memory 3g --memory-swap 3g -d --name "$name" --network "$network" --shm-size=1g --stop-timeout 25 \
     --label neo-sdk-accept="$run_id" "${host_caps[@]}" \
     -v "$(data_mount)" -v "$secrets:/run/neo-accept:ro" \
     -e CLAW_HOST_TOKEN_FILE=/run/neo-accept/host-token -e NEO_HOST_GID=$host_gid \
@@ -169,7 +171,7 @@ server_pid() { # name: the claw-sdk server's pid, by its argv[0] (only this chec
     done' | head -1
 }
 probe() { # target-ip port scheme, from a throwaway sibling on the same network
-  docker run --rm -i --name "$prefix-probe" --network "$network" --entrypoint python3 "$image" \
+  docker run --memory 3g --memory-swap 3g --rm -i --name "$prefix-probe" --network "$network" --entrypoint python3 "$image" \
     - probe "$1" "$2" "$3" < "$here/accept_client.py"
 }
 run_ok() { # json from run_call: status ok and the page really filled
@@ -186,7 +188,7 @@ lists_captcha() { # name: whether the run tool offers neo.solveCaptcha
 image_arch=$(docker image inspect -f '{{.Architecture}}' "$image")
 engine_arch=$(docker version -f '{{.Server.Arch}}')
 keys_label=$(docker image inspect -f '{{index .Config.Labels "com.browseros.neo-sdk.captcha-keys"}}' "$image")
-facts=$(docker run --rm --network none --name "$prefix-identity" --entrypoint sh "$image" -c '
+facts=$(docker run --memory 3g --memory-swap 3g --rm --network none --name "$prefix-identity" --entrypoint sh "$image" -c '
   p=/usr/share/neo-sdk/provenance.json
   echo "kind=$(neo-server-info kind)"
   echo "sha=$(sha256sum "$(neo-server-info path)" | cut -d" " -f1)"
@@ -221,7 +223,7 @@ detail="$image_arch, browser $(fact browser), server $(fact marker) $(fact sha |
 if [ ${#problems[@]} -eq 0 ]; then result PASS identity "$detail"; else result FAIL identity "${problems[*]}"; fi
 
 if [ "$image_arch" != "$engine_arch" ]; then
-  for check in boot mcp host-api downloads blobs settings mcp-remote restart-browser stop persist kill-all captcha-keys; do
+  for check in boot mcp host-api downloads pdf-downloads blobs settings mcp-remote restart-browser stop persist kill-all captcha-keys; do
     result SKIP "$check" "$image_arch image on a $engine_arch engine: emulated, not evidence"
   done
   printf '\n'; printf '%s\n' "${results[@]}"
@@ -293,6 +295,19 @@ if [ "$booted" = 1 ]; then
     result PASS downloads "$(jget "$downloaded" 'd["detail"]')"
   else
     result FAIL downloads "$(jget "$downloaded" '"; ".join(d["problems"])' || printf '%s' "${downloaded:0:300}")"
+  fi
+
+  # The collector reads neo's 0700 /data as root. Its socket peer still needs the host gid.
+  pdf_downloaded=$(client "$main" setpriv --regid "$host_gid" --clear-groups python3 accept_client.py pdf-downloads \
+    http://127.0.0.1:9010/mcp /run/neo/host.sock /run/neo-accept/host-token 2>&1)
+  if [ -n "$logs_dir" ]; then
+    mkdir -p "$logs_dir"
+    printf '%s\n' "$pdf_downloaded" > "$logs_dir/pdf-downloads.json"
+  fi
+  if [ "$(jget "$pdf_downloaded" 'd["ok"]')" = True ]; then
+    result PASS pdf-downloads "$(jget "$pdf_downloaded" 'd["detail"]')"
+  else
+    result FAIL pdf-downloads "$(jget "$pdf_downloaded" '"; ".join(d["problems"])' || printf '%s' "${pdf_downloaded:0:300}")"
   fi
 
   # --- blobs ---------------------------------------------------------------------------------
@@ -433,7 +448,7 @@ for pid in pids:
 
   # --- mcp-remote, remote-on half --------------------------------------------------------------
   open="$prefix-remote" open_http='{}' open_tls='{}'
-  docker run -d --name "$open" --network "$network" --shm-size=1g --tmpfs /data:rw,size=1g \
+  docker run --memory 3g --memory-swap 3g -d --name "$open" --network "$network" --shm-size=1g --tmpfs /data:rw,size=1g \
     --label neo-sdk-accept="$run_id" "${host_caps[@]}" -e NEO_MCP_REMOTE=true "$image" >/dev/null
   if wait_healthy "$open" 90 >/dev/null; then
     open_ip=$(docker inspect -f "{{(index .NetworkSettings.Networks \"$network\").IPAddress}}" "$open")
@@ -450,7 +465,7 @@ for pid in pids:
   # --- captcha-keys --------------------------------------------------------------------------
   # Mounted outside /home/neo: the entrypoint re-owns that tree, which a read-only mount refuses.
   keyed="$prefix-keys" keyed_captcha=""
-  docker run -d --name "$keyed" --network "$network" --shm-size=1g --tmpfs /data:rw,size=1g \
+  docker run --memory 3g --memory-swap 3g -d --name "$keyed" --network "$network" --shm-size=1g --tmpfs /data:rw,size=1g \
     --label neo-sdk-accept="$run_id" "${host_caps[@]}" \
     -v "$secrets/capsolver-api-key:/run/neo-keys/capsolver-api-key:ro" \
     -e BROWSEROS_CAPSOLVER_API_KEY_FILE=/run/neo-keys/capsolver-api-key "$image" >/dev/null
@@ -463,7 +478,7 @@ for pid in pids:
     result FAIL captcha-keys "image's own keys listed=$main_captcha (want $want_main); host key file listed=${keyed_captcha:-not booted}"
   fi
 else
-  for check in mcp host-api downloads blobs settings mcp-remote restart-browser stop persist kill-all captcha-keys; do
+  for check in mcp host-api downloads pdf-downloads blobs settings mcp-remote restart-browser stop persist kill-all captcha-keys; do
     result FAIL "$check" "not run: the image did not boot"
   done
 fi
