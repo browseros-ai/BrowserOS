@@ -2325,6 +2325,18 @@ async fn tests_that_sibling_adopted_private_fields_are_masked_across_a_cross_sit
     Ok(())
 }
 
+/// Observe the production document query in the same isolated world without timing it.
+const ADOPTED_QUERY_WITNESS: &str = r"(() => {
+          const state = { original: document.querySelectorAll, queries: [] };
+          globalThis.__adoptedQueryWitness = state;
+          document.querySelectorAll = function(selector) {
+            if (String(selector).replace(/\s/g, '').toLowerCase() === 'input,textarea')
+              state.queries.push(selector);
+            return Reflect.apply(state.original, this, [selector]);
+          };
+          return true;
+        })()";
+
 /// Count the native document-wide field query, independently of its implementation's hint.
 /// A single-frame page skips the scan, while any other frame enables it, including a
 /// cross-site child. CDP targets do not identify all realms a same-origin sibling can move
@@ -2386,21 +2398,7 @@ async fn tests_that_only_single_frame_pages_skip_the_adopted_field_search() -> T
                 .ok_or("the main frame id")?,
         )
         .await?;
-        snapshot_world_eval(
-            &session,
-            world,
-            r"(() => {
-          const state = { original: document.querySelectorAll, queries: [] };
-          globalThis.__adoptedQueryWitness = state;
-          document.querySelectorAll = function(selector) {
-            if (String(selector).replace(/\s/g, '').toLowerCase() === 'input,textarea')
-              state.queries.push(selector);
-            return Reflect.apply(state.original, this, [selector]);
-          };
-          return true;
-        })()",
-        )
-        .await?;
+        snapshot_world_eval(&session, world, ADOPTED_QUERY_WITNESS).await?;
         let init = json!({ "page": prepared["page"] });
         let snapshots = js_runner::run_script(&host, &init,
             "return { whole: await page.ariaSnapshot(), scoped: await page.locator('#snapshot-target').ariaSnapshot() };").await;
