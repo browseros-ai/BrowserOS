@@ -12,6 +12,8 @@ const PRIVATE_AUTOCOMPLETE = new Set([
 
 type Field = HTMLInputElement | HTMLTextAreaElement
 
+const FIELD_TAGS: ReadonlySet<string> = new Set(['input', 'textarea'])
+
 /** One reversible own-property shadow, including an inherited property's original absence. */
 type PropertyOverride = {
   target: object
@@ -140,8 +142,9 @@ function parentTextarea(node: Node): HTMLTextAreaElement | null {
 }
 
 /**
- * Chromium resolves CSS attr(value) without calling getAttribute. Suppress generated content
- * on private controls in this world, while retaining the browser's style for every other read.
+ * Chromium resolves CSS attr(value) without calling getAttribute, including alternative text
+ * on a control's own content. Suppress content on private controls and their pseudo-elements
+ * in this world, while retaining the browser's style for every other read.
  */
 function maskedComputedStyle(
   descriptor: PropertyDescriptor,
@@ -156,10 +159,9 @@ function maskedComputedStyle(
         element,
         pseudo,
       ])
-      // Ordinary style reads are the hot path. They retain the native object after one test.
-      if (!pseudo) return style
-      const tag = element.localName
-      if (tag !== 'input' && tag !== 'textarea') return style
+      // Every element reaches this hot path. Test its tag before reading privacy attributes,
+      // so ordinary elements retain the native object after one set membership check.
+      if (!FIELD_TAGS.has(element.localName)) return style
       if (!isPrivateField(element)) return style
       return new Proxy(style, {
         get(target, key) {

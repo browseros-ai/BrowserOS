@@ -98,7 +98,7 @@ Snapshots mask an `input` or `textarea` value when the page declares `type="pass
 
 Alternate value reads used to name controls follow the same rule: a private input's default value and a private control's `value`, `aria-valuetext` and `aria-valuenow` attributes print bullets of that string's length. A private textarea's stored text is omitted, including when another control uses it as its accessible name or its role has been overridden.
 
-A private control's CSS pseudo-element content is omitted too. Browsers can resolve a value attribute into generated text before the snapshot reads it, so the snapshot cannot distinguish that text from a generated label. Ordinary controls keep their generated text.
+A private control's own CSS content and its pseudo-element content are omitted too. Browsers can resolve a value attribute into generated text before the snapshot reads it, so the snapshot cannot distinguish that text from a generated label. Ordinary controls keep their generated text.
 
 Expiry fields (`cc-exp`, `cc-exp-month`, `cc-exp-year`), holder names (`cc-name`), select options and ordinary page text stay readable. A card box with no private declaration also stays readable; the SDK does not guess from its caption or value. A delta shows a private value growing as a longer bullet line, but replacing it with a value of the same UTF-16 length produces no change. This is snapshot output masking: `locator.inputValue()` and `evaluate` can still read the original value, and explicit reads or fill arguments may contain it in a trace.
 

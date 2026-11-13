@@ -91,7 +91,7 @@ async fn private_field_values_never_reach_stored_snapshot_results() -> TestResul
 }
 
 /// Each source and attribute value is a distinct synthetic secret to scan after persistence.
-const TRACE_FIELDS: [(&str, &str, &str, &str); 10] = [
+const TRACE_FIELDS: [(&str, &str, &str, &str); 11] = [
     (
         "Password",
         "input",
@@ -152,6 +152,12 @@ const TRACE_FIELDS: [(&str, &str, &str, &str); 10] = [
         "class='css-private' autocomplete='current-password'",
         "Trace-CSS-Text-Canary",
     ),
+    (
+        "Styled self",
+        "input",
+        "id='css-self' class='css-private-self' type='checkbox' role='button' aria-labelledby='css-self' autocomplete='one-time-code'",
+        "Trace-CSS-Self-Canary",
+    ),
 ];
 
 fn private_trace_html() -> Result<String, fmt::Error> {
@@ -159,6 +165,7 @@ fn private_trace_html() -> Result<String, fmt::Error> {
         "<title>Snapshot trace</title><style>\
          .css-private{appearance:none;width:40px;height:40px}\
          .css-private::before,.css-private::after{content:attr(value)}\
+         .css-private-self{content:url(data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7) / attr(value)}\
          </style><main><h1>Checkout</h1>",
     );
     for (label, tag, attributes, value) in TRACE_FIELDS {
@@ -295,6 +302,8 @@ async fn snapshot_trace(rig: &mut Rig) -> TestResult {
         .await?;
     assert_eq!(configured.status, 200, "{}", configured.text());
     let client = rig.client().await?;
+    // Commit the final v1 read as the baseline, with focus already stable for the next fill.
+    // A changed output form or focus state could otherwise legitimately return a whole page.
     let first = run(
         &client,
         &format!(
@@ -324,7 +333,7 @@ async fn snapshot_trace(rig: &mut Rig) -> TestResult {
     let changed = run(
         &client,
         "await page.getByLabel('Password', { exact: true }).fill('Trace-Password-Canary!');\n\
-         return await page.ariaSnapshot({ delta: true });",
+         return await page.ariaSnapshot({ delta: true, text: false });",
         &json!({ "requestId": "mask-trace-2", "taskId": "mask-trace" }),
     )
     .await?;

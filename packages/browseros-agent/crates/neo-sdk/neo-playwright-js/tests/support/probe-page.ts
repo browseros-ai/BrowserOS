@@ -91,16 +91,42 @@ export function openProbePage(html: string): ProbePage {
     Object.defineProperty(prototype, 'defaultValue', descriptor)
     suppliedDefaults.push(prototype)
   }
-  // linkedom computes no styles. Keep ordinary reads missing for its no-layout model, but
-  // supply an empty pseudo style object as the native API does: the privacy scope proxies
-  // those objects for private controls, even when no generated content exists.
+  // linkedom computes no styles. The privacy scope now proxies a control's normal style as
+  // well as its pseudos, so those reads need objects as in a browser. Leave unrelated normal
+  // reads absent, preserving the fixture's existing no-layout behavior.
   Reflect.set(
     window,
     'getComputedStyle',
-    (_element: Element, pseudo?: string) =>
-      pseudo ? { content: 'none', getPropertyValue: () => '' } : undefined,
+    (element: Element, pseudo?: string) => {
+      if (
+        !pseudo &&
+        element.localName !== 'input' &&
+        element.localName !== 'textarea'
+      )
+        return undefined
+      return {
+        display: 'block',
+        visibility: 'visible',
+        content: 'none',
+        getPropertyValue: () => '',
+      }
+    },
   )
-  // No layout means no boxes: every element reads as one without a layout box.
+  // computeBox treats a missing style as visible and non-inline. Controls now have styles,
+  // so supply only their visibility and box reads to retain that same synthetic result.
+  for (const prototype of [
+    window.HTMLInputElement.prototype,
+    window.HTMLTextAreaElement.prototype,
+  ]) {
+    Reflect.set(prototype, 'checkVisibility', () => true)
+    Reflect.set(prototype, 'getBoundingClientRect', () => ({
+      x: 0,
+      y: 0,
+      width: 10,
+      height: 10,
+    }))
+  }
+  // There are no real layout fragments; the synthetic control boxes above serve computeBox.
   Reflect.set(window.Element.prototype, 'getClientRects', () => [])
   const saved = new Map<string, unknown>()
   const replace = (name: string, value: unknown) => {

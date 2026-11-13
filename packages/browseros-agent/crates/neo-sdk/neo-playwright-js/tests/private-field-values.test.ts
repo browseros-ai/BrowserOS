@@ -225,11 +225,14 @@ it('suppresses secret textarea text reads without suppressing its masked value o
   ]).toEqual(['A🔒z', 'A🔒z', 'A🔒z', 'A🔒z'])
 })
 
-it('suppresses both CSS content reads only for pseudo-elements of private controls', () => {
+it('suppresses both CSS content reads for private controls and their pseudo-elements', () => {
   const nativeStyle = page.document.createElement('div').style
   nativeStyle.content = '"CSSSecretCanary"'
   nativeStyle.cursor = 'text'
   nativeStyle.display = 'inline-block'
+  const other = page.document.createElement('div')
+  other.setAttribute('autocomplete', 'one-time-code')
+  const attributes = spyOn(other, 'getAttribute')
   const read = spyOn(globalThis, 'getComputedStyle').mockReturnValue(
     nativeStyle,
   )
@@ -238,25 +241,33 @@ it('suppresses both CSS content reads only for pseudo-elements of private contro
       const secret = field(tag, { autocomplete: 'one-time-code' }, 'private')
       const ordinary = field(tag, {}, 'public')
       withMaskedFieldValues(() => {
-        for (const pseudo of [undefined, null, ''])
-          expect(getComputedStyle(secret, pseudo)).toBe(nativeStyle)
-        for (const pseudo of ['::before', '::after', ':before', '::marker']) {
+        for (const pseudo of [
+          undefined,
+          null,
+          '',
+          '::before',
+          '::after',
+          ':before',
+          '::marker',
+        ]) {
           const style = getComputedStyle(secret, pseudo)
           expect(style.content).toBe('none')
           expect(style.getPropertyValue('content')).toBe('none')
           expect(style.cursor).toBe('text')
+          expect(style.display).toBe('inline-block')
           expect(style.getPropertyValue('display')).toBe('inline-block')
           expect(getComputedStyle(ordinary, pseudo)).toBe(nativeStyle)
+          expect(getComputedStyle(other, pseudo)).toBe(nativeStyle)
         }
-        const other = page.document.createElement('div')
-        other.setAttribute('autocomplete', 'one-time-code')
-        expect(getComputedStyle(other, '::before')).toBe(nativeStyle)
+        expect(attributes).not.toHaveBeenCalled()
       })
+      expect(getComputedStyle(secret)).toBe(nativeStyle)
       expect(getComputedStyle(secret, '::before')).toBe(nativeStyle)
       expect(nativeStyle.content).toBe('"CSSSecretCanary"')
     }
   } finally {
     read.mockRestore()
+    attributes.mockRestore()
   }
 })
 
@@ -270,12 +281,11 @@ it('composes with pointer marking in either nesting order and restores each encl
   )
   const marked = <T>(walk: () => T) => asPointerTargets([secret], walk)
   const assertCombinedReads = () => {
-    expect(getComputedStyle(secret).cursor).toBe('pointer')
-    for (const pseudo of ['::before', '::after']) {
+    for (const pseudo of [undefined, null, '', '::before', '::after']) {
       const style = getComputedStyle(secret, pseudo)
       expect(style.content).toBe('none')
       expect(style.getPropertyValue('content')).toBe('none')
-      expect(style.cursor).toBe('text')
+      expect(style.cursor).toBe(pseudo ? 'text' : 'pointer')
     }
   }
   try {

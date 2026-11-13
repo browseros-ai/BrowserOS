@@ -1324,6 +1324,7 @@ fn private_canary_fields(scope: &str) -> String {
 .css-value-before, .css-value-after {{ appearance: none; width: 40px; height: 40px; }}
 .css-value-before::before {{ content: attr(value); }}
 .css-value-after::after {{ content: attr(value); }}
+.css-value-self {{ content: url("data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7") / attr(value); }}
 </style>
 <input type="password" role="combobox" value="SecretCanary{scope}-password-attribute" data-typed="SecretCanary{scope}-password-value">
 <label>{scope} wrapped search<input autocomplete="current-password" role="searchbox" value="SecretCanary{scope}-shown-attribute" data-typed="SecretCanary{scope}-shown-value"></label>
@@ -1345,10 +1346,12 @@ fn private_canary_fields(scope: &str) -> String {
 <input class="css-value-after" type="checkbox" autocomplete="one-time-code" value="SecretCanary{scope}-css-checkbox-after-attribute" data-typed="SecretCanary{scope}-css-checkbox-after-value">
 <input class="css-value-before" role="searchbox" autocomplete="cc-number" value="SecretCanary{scope}-css-text-before-attribute" data-typed="SecretCanary{scope}-css-text-before-value">
 <input class="css-value-after" role="searchbox" autocomplete="cc-number" value="SecretCanary{scope}-css-text-after-attribute" data-typed="SecretCanary{scope}-css-text-after-value">
+<input id="{scope}-css-self" class="css-value-self" type="checkbox" role="button" aria-labelledby="{scope}-css-self" autocomplete="one-time-code" value="SecretCanary{scope}-css-self-attribute" data-typed="SecretCanary{scope}-css-self-value">
 <input class="css-value-before" type="checkbox" value="PublicCanary{scope}-css-checkbox-before">
 <input class="css-value-after" type="checkbox" value="PublicCanary{scope}-css-checkbox-after">
 <input class="css-value-before" role="searchbox" value="PublicCanary{scope}-css-text-before-attribute" data-typed="PublicCanary{scope}-css-text-before-value">
 <input class="css-value-after" role="searchbox" value="PublicCanary{scope}-css-text-after-attribute" data-typed="PublicCanary{scope}-css-text-after-value">
+<input id="{scope}-css-public-self" class="css-value-self" type="checkbox" role="button" aria-labelledby="{scope}-css-public-self" value="PublicCanary{scope}-css-self">
 </section>"##
     )
 }
