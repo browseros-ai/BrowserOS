@@ -23,11 +23,16 @@ The function's parameters are the SDK: Playwright's `page`, `context`, `browser`
 `setTimeout`, `clearTimeout`, `NeoError` and `TimeoutError`. The realm is QuickJS, which has no \
 `Intl`.";
 
-/// The error model, which the agent needs before it retries anything.
+/// The error model, which the agent needs before it retries anything. The model reads
+/// `retryable` inside its script, so the text says it means "safe to repeat", never "will
+/// succeed": a refusal that is permanent (such as `host / private_tab`) still reads `true`
+/// because nothing was sent, and a model that took it as a promise would loop.
 const ERRORS: &str = "An SDK call that fails throws a `NeoError` with `code`, `owner` (who must \
 fix it: neo, script, website or host), `delivery`, `retryable` and `operationId`; a timeout throws its \
 subclass `TimeoutError`. `delivery: \"unknown\"` means a write may have happened: look at the \
-page before repeating it.";
+page before repeating it. `retryable: true` means a repeat is safe (nothing was sent, or the \
+call only read); it is never a promise that a repeat will succeed, so read the `message` before \
+trying again.";
 
 /// sdk-playwright's ref hint, shown once its snapshot method is registered. The prelude's v1
 /// text is the default (`neo-playwright-js/src/prelude/snapshot-v1.ts`): refs only on what can

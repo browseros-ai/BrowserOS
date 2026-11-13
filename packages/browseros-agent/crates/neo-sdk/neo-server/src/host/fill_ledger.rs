@@ -34,6 +34,7 @@ use std::time::Duration;
 
 use neo_sdk_api as api;
 use neo_trace::{EpochMillis, RequestId, RunId, TaskId};
+use serde::de::IgnoredAny;
 use serde::{Deserialize, Serialize};
 use tokio::sync::watch;
 use tokio::{fs as async_fs, task};
@@ -91,6 +92,20 @@ enum State {
     Interrupted,
 }
 
+impl State {
+    /// Which of several fills with one id a repeat follows: the one running, else one that
+    /// answered, else one Neo restarted in the middle of (ruling R36). A start line written
+    /// before its sync failed never typed and freed its id, so a later call with that id may have
+    /// typed and answered: that answer is what happened, and after a restart a repeat gets it.
+    const fn precedence(&self) -> u8 {
+        match self {
+            Self::Running(_) => 0,
+            Self::Answered(_) => 1,
+            Self::Interrupted => 2,
+        }
+    }
+}
+
 /// How the first call ended for those who joined it.
 type Settled = Result<Arc<api::FillResult>, Refused>;
 
@@ -114,9 +129,10 @@ pub(crate) struct FillWaiter {
     first: RunId,
 }
 
-/// One line of the record file.
+/// One line of the record file. Keys it does not know are ignored, so a newer Neo's line that
+/// adds one still reads here.
 #[derive(Serialize, Deserialize)]
-#[serde(tag = "state", rename_all = "snake_case", deny_unknown_fields)]
+#[serde(tag = "state", rename_all = "snake_case")]
 enum Line {
     /// Written and synced before the first key.
     Started {
@@ -139,6 +155,19 @@ enum Line {
         at: i64,
         answer: Box<api::FillResult>,
     },
+}
+
+/// What every line of the record names, read leniently: a newer Neo's line, of a state this one
+/// does not know, still names its request id and its run, so this Neo keeps that id spent.
+#[derive(Deserialize)]
+struct Stamp {
+    #[serde(rename = "requestId")]
+    request: String,
+    #[serde(rename = "taskId", default)]
+    task: Option<String>,
+    #[serde(rename = "runId")]
+    run: String,
+    at: i64,
 }
 
 impl FillLedger {
@@ -197,7 +226,8 @@ impl FillLedger {
         self.prune(&mut entries);
         let found = entries.get(request).and_then(|runs| {
             runs.iter()
-                .find(|entry| task.is_none_or(|task| entry.task.as_ref() == Some(task)))
+                .filter(|entry| task.is_none_or(|task| entry.task.as_ref() == Some(task)))
+                .min_by_key(|entry| entry.state.precedence())
         });
         if let Some(entry) = found {
             return match &entry.state {
@@ -414,46 +444,49 @@ fn oldest(keep: Duration) -> EpochMillis {
     EpochMillis::now().plus_millis(-i64::try_from(keep.as_millis()).unwrap_or(i64::MAX))
 }
 
-/// The record's lines back into memory, and the lines worth keeping. A start with no answer is
-/// interrupted. A line that does not read (a torn line after a crash, or bytes that are not text)
-/// is skipped alone: a torn start line was never synced, so its fill never reached its first key.
-fn replay(bytes: &[u8], oldest: EpochMillis) -> (HashMap<RequestId, Vec<Entry>>, Vec<Line>) {
+/// The record's lines back into memory, and the lines worth keeping, as they are in the file. A
+/// start with no answer is interrupted.
+///
+/// A line that is not whole JSON (a torn line after a crash, or bytes that are not text) is
+/// skipped and dropped alone: a torn start line was never synced, so its fill never reached its
+/// first key. A whole line this Neo cannot read is kept as it is (ruling R36): after a rollback
+/// from a newer Neo, deleting its lines would free ids that Neo spent. If it still names its id
+/// and run, that id stays spent here too, as an interrupted fill, which never types; one that
+/// names neither is kept, past retention too, for the Neo that wrote it.
+fn replay(bytes: &[u8], oldest: EpochMillis) -> (HashMap<RequestId, Vec<Entry>>, Vec<Vec<u8>>) {
     let mut entries: HashMap<RequestId, Vec<Entry>> = HashMap::new();
     let mut kept = Vec::new();
     for raw in bytes
         .split(|byte| *byte == b'\n')
         .filter(|raw| !raw.trim_ascii().is_empty())
     {
-        let Ok(line) = serde_json::from_slice::<Line>(raw) else {
-            tracing::warn!("skipping a line of the fill's request record that does not read");
-            continue;
-        };
-        let (request, task, run, at) = match &line {
-            Line::Started {
-                request,
-                task,
-                run,
-                at,
+        let Ok(stamp) = serde_json::from_slice::<Stamp>(raw) else {
+            if serde_json::from_slice::<IgnoredAny>(raw).is_ok() {
+                tracing::warn!(
+                    "keeping a line of the fill's request record that this Neo cannot read"
+                );
+                kept.push(raw.to_vec());
+            } else {
+                tracing::warn!("skipping a line of the fill's request record that does not read");
             }
-            | Line::Answered {
-                request,
-                task,
-                run,
-                at,
-                ..
-            } => (request, task, run, *at),
-        };
-        let at = EpochMillis::from_millis(at);
-        let (Ok(request), Ok(run)) = (RequestId::parse(request), run.parse::<RunId>()) else {
             continue;
         };
-        let task = task.as_deref().and_then(|task| TaskId::parse(task).ok());
-        if at <= oldest {
+        if EpochMillis::from_millis(stamp.at) <= oldest {
             continue;
         }
-        let state = match &line {
-            Line::Started { .. } => State::Interrupted,
-            Line::Answered { answer, .. } => State::Answered(Arc::new((**answer).clone())),
+        let (Ok(request), Ok(run)) = (RequestId::parse(&stamp.request), stamp.run.parse::<RunId>())
+        else {
+            // An id this Neo would refuse at admission: nothing here can match it.
+            kept.push(raw.to_vec());
+            continue;
+        };
+        let task = stamp
+            .task
+            .as_deref()
+            .and_then(|task| TaskId::parse(task).ok());
+        let state = match serde_json::from_slice::<Line>(raw) {
+            Ok(Line::Answered { answer, .. }) => State::Answered(Arc::new(*answer)),
+            Ok(Line::Started { .. }) | Err(_) => State::Interrupted,
         };
         let runs = entries.entry(request).or_default();
         match runs.iter_mut().find(|entry| entry.run == run) {
@@ -466,27 +499,27 @@ fn replay(bytes: &[u8], oldest: EpochMillis) -> (HashMap<RequestId, Vec<Entry>>,
             None => runs.push(Entry {
                 task,
                 run,
-                at,
+                at: EpochMillis::from_millis(stamp.at),
                 state,
             }),
         }
-        kept.push(line);
+        kept.push(raw.to_vec());
     }
     (entries, kept)
 }
 
-/// Rewrites the record with `lines` only: written to a temporary file, synced, then renamed over
-/// the record, so a crash leaves the old record or the new one, never half of one. Blocking: call
-/// it on a blocking thread.
-fn rewrite(path: &Path, lines: &[Line]) -> io::Result<()> {
-    let mut text = String::new();
+/// Rewrites the record with `lines` only, each as it was read: written to a temporary file,
+/// synced, then renamed over the record, so a crash leaves the old record or the new one, never
+/// half of one. Blocking: call it on a blocking thread.
+fn rewrite(path: &Path, lines: &[Vec<u8>]) -> io::Result<()> {
+    let mut text = Vec::new();
     for line in lines {
-        text.push_str(&serde_json::to_string(line).map_err(io::Error::other)?);
-        text.push('\n');
+        text.extend_from_slice(line);
+        text.push(b'\n');
     }
     let temporary = path.with_extension("jsonl.tmp");
     let mut file = File::create(&temporary)?;
-    file.write_all(text.as_bytes())?;
+    file.write_all(&text)?;
     file.sync_all()?;
     drop(file);
     fs::rename(&temporary, path)?;
@@ -512,7 +545,7 @@ mod tests {
     use std::{fs, mem};
 
     use neo_sdk_api as api;
-    use neo_trace::{RequestId, RunId, TaskId};
+    use neo_trace::{EpochMillis, RequestId, RunId, TaskId};
 
     use super::{Admission, FillLedger, LEDGER_FILE};
     use crate::host::fill_answer::Refused;
@@ -651,6 +684,83 @@ mod tests {
             return Err("the start after a torn line was lost".into());
         };
         assert_eq!(interrupted.run_id, first.to_string());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn an_answer_wins_over_a_start_that_never_typed() -> Result<(), Box<dyn Error>> {
+        // A start line whose sync failed: that call refused and freed the id, and a repeat with
+        // the id typed and answered. After a restart the repeat's answer is what happened.
+        let folder = tempfile::tempdir()?;
+        let request = RequestId::parse("sync-failed-then-typed")?;
+        let (lost, typed) = (RunId::new(), RunId::new());
+        let at = EpochMillis::now().millis();
+        let line = |state: &str, run: RunId, tail: &str| {
+            format!(
+                r#"{{"state":"{state}","requestId":"{}","runId":"{run}","at":{at}{tail}}}"#,
+                request.as_str()
+            )
+        };
+        let answered = serde_json::to_string(&*answer(typed))?;
+        let text = [
+            line("started", lost, ""),
+            line("started", typed, ""),
+            line("answered", typed, &format!(r#","answer":{answered}"#)),
+        ]
+        .join("\n");
+        fs::write(folder.path().join(LEDGER_FILE), text)?;
+        let ledger = FillLedger::open(folder.path(), || KEEP).await;
+        let Admission::Answer(stored) = ledger.admit(&request, None, RunId::new()) else {
+            return Err("the id is spent".into());
+        };
+        assert_eq!(stored.run_id, typed.to_string());
+        assert_eq!(
+            stored.outcome,
+            answer(typed).outcome,
+            "the stored answer, not fill_interrupted"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn a_whole_line_this_neo_cannot_read_is_kept_and_its_id_stays_spent()
+    -> Result<(), Box<dyn Error>> {
+        // A newer Neo's lines, then a rollback: deleting them would free the ids that Neo spent.
+        let folder = tempfile::tempdir()?;
+        let path = folder.path().join(LEDGER_FILE);
+        let newer = RunId::new();
+        let at = EpochMillis::now().millis();
+        let unknown_state = format!(
+            r#"{{"state":"typed_and_checked","requestId":"from-a-newer-neo","runId":"{newer}","at":{at},"more":1}}"#
+        );
+        let unknown_shape = r#"{"version":9,"note":"a line of another shape"}"#;
+        let torn = r#"{"state":"started","requestId":"torn"#;
+        fs::write(&path, format!("{unknown_state}\n{unknown_shape}\n{torn}"))?;
+        let ledger = FillLedger::open(folder.path(), || KEEP).await;
+        let Admission::Answer(spent) =
+            ledger.admit(&RequestId::parse("from-a-newer-neo")?, None, RunId::new())
+        else {
+            return Err("a newer Neo's id types again".into());
+        };
+        assert_eq!(spent.run_id, newer.to_string());
+        assert_eq!(
+            spent.error.as_ref().map(|error| error.code.as_str()),
+            Some("fill_interrupted"),
+            "spent, and never typed"
+        );
+        let after = fs::read_to_string(&path)?;
+        assert!(
+            after.lines().any(|line| line == unknown_state),
+            "kept as it was: {after}"
+        );
+        assert!(
+            after.lines().any(|line| line == unknown_shape),
+            "kept as it was: {after}"
+        );
+        assert!(
+            !after.contains("torn"),
+            "a torn line costs only itself: {after}"
+        );
         Ok(())
     }
 

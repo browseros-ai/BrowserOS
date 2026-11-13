@@ -4,8 +4,15 @@
 //! A refusal never quotes the body. serde's own messages quote a scalar they could not take
 //! ("invalid type: integer `4242…`"), so a value sent in the wrong shape would end up in the
 //! host's error and in its logs. Each refusal is built from the field's path, whose keys are
-//! printed only when they are this body's own, and a fixed sentence.
+//! printed only when they are this body's own, and a fixed sentence. A field's `value` is read by
+//! a visitor of its own that refuses any other JSON type without seeing it as text, and serde's
+//! messages are classified as they format, never copied into a string (ruling R36).
+//!
+//! The limit: a secret the host pastes into another field's string (`"timeoutMs": "<secret>"`)
+//! or as a key is still formatted by serde into its own error. The refusal never quotes it back,
+//! but that copy sits in memory unzeroed until the error is dropped.
 
+use std::fmt;
 use std::time::Duration;
 
 use browseros_core::TabId;
@@ -13,7 +20,7 @@ use neo_playwright::{Expect, PrivateText};
 use neo_takeover::LockId;
 use neo_trace::{RequestId, TaskId};
 use serde::Deserialize;
-use serde::de::DeserializeOwned;
+use serde::de::{self, DeserializeOwned, Deserializer, Visitor};
 use serde_path_to_error::{Error as PathError, Segment};
 
 use crate::builtins::RecordedBox;
@@ -111,6 +118,7 @@ struct WireFill {
 struct WireField {
     #[serde(rename = "ref")]
     box_ref: String,
+    #[serde(deserialize_with = "private_value")]
     value: PrivateText,
     expect: Expect,
     #[serde(default)]
@@ -241,42 +249,123 @@ fn decode<T: DeserializeOwned>(body: &[u8]) -> Result<T, String> {
 /// The 400's message for a body that does not decode: where, and a fixed sentence for why.
 fn refusal(error: &PathError<serde_json::Error>) -> String {
     let inner = error.inner();
-    let text = inner.to_string();
+    let starts = |prefix: &str| message_starts_with(inner, prefix);
     let why = if inner.is_syntax() || inner.is_eof() {
         "the body is not valid JSON"
-    } else if let Some(refused) = private_refusal(&text) {
+    } else if let Some(refused) = PRIVATE_REFUSALS
+        .into_iter()
+        .map(neo_playwright::PrivateTextRefused::message)
+        .find(|message| starts(message))
+    {
         refused
-    } else if text.starts_with("unknown field `requestId`") {
+    } else if starts(NOT_TEXT) {
+        NOT_TEXT
+    } else if starts("unknown field `requestId`") {
         "a check types nothing, so it takes no requestId; send it with the fill"
-    } else if text.starts_with("unknown field `value`") {
+    } else if starts("unknown field `value`") {
         "a check takes no value; send values with the fill alone"
-    } else if text.starts_with("unknown field") {
+    } else if starts("unknown field") {
         "this key is not part of the request"
-    } else if text.starts_with("missing field") {
+    } else if let Some(missing) = KNOWN_KEYS
+        .iter()
+        .find(|key| starts(&format!("missing field `{key}`")))
+    {
         // The key that is missing is one of this body's own.
-        return format!(
-            "{}: {}",
-            path(error),
-            text.split(" at line")
-                .next()
-                .unwrap_or("a required key is missing")
-        );
+        return format!("{}: missing field `{missing}`", path(error));
     } else {
         "this has the wrong type, or is out of range"
     };
     format!("{}: {why}", path(error))
 }
 
-/// `PrivateText`'s own refusal: a fixed sentence it chose, which quotes nothing.
-fn private_refusal(text: &str) -> Option<&'static str> {
-    [
-        neo_playwright::PrivateTextRefused::Empty,
-        neo_playwright::PrivateTextRefused::TooLong,
-        neo_playwright::PrivateTextRefused::ControlCharacter,
-    ]
-    .into_iter()
-    .map(neo_playwright::PrivateTextRefused::message)
-    .find(|message| text.starts_with(message))
+/// `PrivateText`'s own refusals: fixed sentences it chose, which quote nothing.
+const PRIVATE_REFUSALS: [neo_playwright::PrivateTextRefused; 3] = [
+    neo_playwright::PrivateTextRefused::Empty,
+    neo_playwright::PrivateTextRefused::TooLong,
+    neo_playwright::PrivateTextRefused::ControlCharacter,
+];
+
+/// The refusal of a `value` that is not a JSON string.
+const NOT_TEXT: &str = "a value is a JSON string";
+
+/// Reads a field's `value` straight into `PrivateText`. serde's own refusal of a number sent as
+/// `value` formats the number into the error it builds; this visitor takes any JSON type, so it
+/// is handed the number and refuses it with a fixed sentence before anything formats it.
+fn private_value<'de, D: Deserializer<'de>>(deserializer: D) -> Result<PrivateText, D::Error> {
+    struct Value;
+    impl<'de> Visitor<'de> for Value {
+        type Value = PrivateText;
+        fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.write_str(NOT_TEXT)
+        }
+        fn visit_str<E: de::Error>(self, text: &str) -> Result<PrivateText, E> {
+            self.visit_string(text.to_owned())
+        }
+        fn visit_string<E: de::Error>(self, text: String) -> Result<PrivateText, E> {
+            PrivateText::new(text).map_err(|refused| E::custom(refused.message()))
+        }
+        fn visit_bool<E: de::Error>(self, _: bool) -> Result<PrivateText, E> {
+            Err(E::custom(NOT_TEXT))
+        }
+        fn visit_i64<E: de::Error>(self, _: i64) -> Result<PrivateText, E> {
+            Err(E::custom(NOT_TEXT))
+        }
+        fn visit_u64<E: de::Error>(self, _: u64) -> Result<PrivateText, E> {
+            Err(E::custom(NOT_TEXT))
+        }
+        fn visit_i128<E: de::Error>(self, _: i128) -> Result<PrivateText, E> {
+            Err(E::custom(NOT_TEXT))
+        }
+        fn visit_u128<E: de::Error>(self, _: u128) -> Result<PrivateText, E> {
+            Err(E::custom(NOT_TEXT))
+        }
+        fn visit_f64<E: de::Error>(self, _: f64) -> Result<PrivateText, E> {
+            Err(E::custom(NOT_TEXT))
+        }
+        fn visit_unit<E: de::Error>(self) -> Result<PrivateText, E> {
+            Err(E::custom(NOT_TEXT))
+        }
+        fn visit_seq<A: de::SeqAccess<'de>>(self, _: A) -> Result<PrivateText, A::Error> {
+            Err(de::Error::custom(NOT_TEXT))
+        }
+        fn visit_map<A: de::MapAccess<'de>>(self, _: A) -> Result<PrivateText, A::Error> {
+            Err(de::Error::custom(NOT_TEXT))
+        }
+    }
+    deserializer.deserialize_any(Value)
+}
+
+/// Whether `error`'s message starts with `prefix`, compared as it formats and never stored: a
+/// message can quote what the body held (a key that is a pasted value), and a copy of it would
+/// be one that nothing zeroes.
+fn message_starts_with(error: &serde_json::Error, prefix: &str) -> bool {
+    struct Prefix<'a> {
+        rest: &'a [u8],
+        matched: bool,
+    }
+    impl fmt::Write for Prefix<'_> {
+        fn write_str(&mut self, chunk: &str) -> fmt::Result {
+            let take = chunk.len().min(self.rest.len());
+            let head = chunk.as_bytes().get(..take).unwrap_or_default();
+            let Some(rest) = self.rest.strip_prefix(head) else {
+                return Err(fmt::Error);
+            };
+            self.rest = rest;
+            if rest.is_empty() {
+                self.matched = true;
+                // Decided: stop formatting the rest.
+                return Err(fmt::Error);
+            }
+            Ok(())
+        }
+    }
+    let mut probe = Prefix {
+        rest: prefix.as_bytes(),
+        matched: false,
+    };
+    // An `Err` here only says the probe stopped the formatting early.
+    let _stopped = fmt::write(&mut probe, format_args!("{error}"));
+    probe.matched
 }
 
 /// The field's path, with keys that are not this body's own replaced, e.g. `fields[1].value`.
@@ -359,7 +448,7 @@ mod tests {
 
     use browseros_core::TabId;
 
-    use super::{CheckRequest, FillRequest};
+    use super::{CheckRequest, FillRequest, NOT_TEXT, WireField};
 
     const SECRET: &str = "CANARY-parse-4242424242424242";
 
@@ -419,6 +508,31 @@ mod tests {
             assert!(!refused.is_empty(), "refused: {body}");
             assert!(!refused.contains("CANARY"), "{refused}");
             assert!(!refused.contains("4242"), "{refused}");
+        }
+    }
+
+    #[test]
+    fn a_value_that_is_not_text_is_refused_before_serde_formats_it() {
+        // serde's own refusal would format the number into the error it builds, a copy nothing
+        // zeroes even when no one reads it (ruling R36). The field's visitor refuses it first.
+        for value in [
+            "4242424242424242",
+            "-4242424242424242",
+            "4242.4242",
+            "true",
+            "[4242]",
+        ] {
+            let field = format!(r#"{{"ref":"e1","value":{value},"expect":{{"origin":"x"}}}}"#);
+            let inner = serde_json::from_str::<WireField>(&field)
+                .err()
+                .map(|error| error.to_string())
+                .unwrap_or_default();
+            assert!(inner.starts_with(NOT_TEXT), "{inner}");
+            assert!(!inner.contains("4242"), "serde's own message: {inner}");
+            let refused = fill(&format!(r#"{{"fields":[{field}]}}"#))
+                .err()
+                .unwrap_or_default();
+            assert_eq!(refused, format!("body.fields[0].value: {NOT_TEXT}"));
         }
     }
 

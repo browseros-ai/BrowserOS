@@ -43,12 +43,19 @@ host / MCP run
 | `neo-server` | Stateless MCP `run`, JavaScript runtime, dispatch and application wiring. Builds `browseros-claw-sdk`. |
 | `neo-playwright` | Browser operations, locators, snapshots and the isolated-world engine boundary. |
 | `neo-playwright-js` | JavaScript probe and agent prelude; builds the engine's committed assets and fixtures. |
-| `neo-http` | Authenticated host API, traces, live views and takeover routes. |
+| `neo-http` | Authenticated host API, traces, live views, takeover routes and the edge of the host's private typing. |
 | `neo-takeover` | Tab locks, display control, viewport fitting and owner handoff. |
 | `neo-trace` | Run and operation records, storage and bounded trace values. |
 | `neo-sdk-api` | Host API specification, generated Rust models and migration notes. |
 | `neo-captcha` | Shared CAPTCHA solver, also used by desktop. `testbed/` checks it end to end through `run` ([README](neo-captcha/testbed/README.md)). |
 | `neo-screencast` | Shared capture hub, also used by desktop. |
+
+A host types a secret into a page with `POST /v1/tabs/{tabId}/fill`, never in a script: the
+route lives in `neo-http`, and `neo-server` runs it as a run of its own with one `protected`
+operation that records no value, address or picture (`neo-server/src/host/fill_service.rs`;
+[MIGRATION.md](neo-sdk-api/MIGRATION.md) has the host's side). On the defaults, Neo's own
+picture after a script's own fill of a card number shows the number in clear, because masking
+covers text only; `trace.screenshots: off` closes that until Neo withholds such pictures.
 
 `neo-server/docker/` builds the Neo SDK image, the browser plus this server, for hosts such as
 zuzu: see [its README](neo-server/docker/README.md).

@@ -10,10 +10,9 @@ info:
 
     It is served on Neo's host listener, never on the agent's MCP port. That is a Unix socket by
     default (`CLAW_HOST_SOCKET`, or `$BROWSERCLAW_DIR/host.sock` when unset), with a TCP bind
-    only when `CLAW_HOST_TCP` is set. The same listener serves sdk-extensions' host API under
-    `/host/v1`. Every request needs `Authorization: Bearer <token>`, with the token from the file
-    `CLAW_HOST_TOKEN_FILE` names; on the socket the peer's uid is checked too. Tokens are never
-    accepted in query strings.
+    only when `CLAW_HOST_TCP` is set. Every request needs `Authorization: Bearer <token>`, with the
+    token from the file `CLAW_HOST_TOKEN_FILE` names; on the socket the peer's uid is checked too.
+    Tokens are never accepted in query strings.
 
     Locks belong to a browser tab, and a host groups its runs with ids of its own.
     Ids: a run id is a UUIDv7 Neo creates for every run and returns in the result's
@@ -519,6 +518,48 @@ paths:
 
         Every answer about the page is a 200: read `outcome` first; `refused` with `typed` all
         zero is "no character went out", whatever `delivery` says.
+
+        After a fill, its tab is changed for the rest of its life, from before the first key:
+
+        - Neo takes no picture of it. Its operations keep `hasScreenshot: false`, and their
+          screenshot answers `404 not_found` with "this operation's picture was withheld: its
+          tab had taken a private fill".
+        - A script's own `page.screenshot()`, `locator.screenshot()` and `page.pdf()` of it fail
+          `host / private_tab`, with nothing sent. It is permanent for that tab: a repeat fails
+          the same way, though `retryable` reads `true` (nothing was sent). The message the
+          script reads says so: "This tab took a private fill, so Neo takes no picture of it for
+          the rest of the tab's life. Trying again will not succeed. Read the page with
+          page.ariaSnapshot() instead."
+        - A box Neo typed into answers one `•` per character to every read Neo makes: the
+          snapshot, with or without the spec harness's switch, `locator.inputValue()`, and every
+          assertion (the received value and aria tree, the preview and the failure's snapshot),
+          so `toHaveValue` compares against the bullets. A name built from the box reads the
+          same. The preview holds no value only while the page does not write the box's `value`
+          attribute (see below).
+
+        What it does not cover:
+
+        - What the owner types in a takeover or on the display, a script's own fill, and the
+          browser's autofill: none of them marks a box or a tab.
+        - A Neo restart while the browser keeps the tab forgets which tabs took a fill: Neo
+          pictures them again, and a script's screenshot of them is allowed again. The boxes'
+          marks survive a restart of the same Neo; an upgrade that changes the page-side
+          engine's protocol loses them for the documents still open.
+        - Going back in history restores a plain box's value into a new document, and a page that
+          re-creates the box (a re-render, `cloneNode`) makes a new element. Neither carries the
+          mark, so their value prints.
+        - `neo.solveCaptcha` photographs the challenge's own rectangle and sends it to the
+          provider, on such a tab too.
+        - An element preview in a call log or an error (`locator resolved to <input …>`) prints
+          the box's attributes as they are, unmasked. A page that keeps the `value` attribute in
+          step with what is typed, as many frameworks do, shows the typed value there, so a
+          failed assertion or action on that box prints it. A page that does not write the
+          attribute shows none. Later masking work closes this.
+        - The mark is kept in the box's own frame. A box the page moves into another frame of
+          the same origin is not known as marked there: its snapshot line prints no text, while
+          `inputValue()` and assertions on it there read the value. A mark that travels with the
+          box closes this later.
+        - A script's own code in the page (`evaluate`) reads what the page holds.
       parameters:
         - $ref: '#/components/parameters/TabId'
       requestBody:
@@ -1253,6 +1294,9 @@ components:
           type: string
           description: >-
             Stable snake_case, e.g. `owner_has_control`, `strict_mode_violation`, `target_closed`.
+            `host / private_tab` refuses a script's own picture of a tab that took a private
+            fill (`POST /v1/tabs/{tabId}/fill`). It is permanent for that tab: a repeat fails the
+            same way.
         hostCode:
           type: string
           description: The host's own code when `code` is `host_error`, e.g. `needs_owner`.
@@ -1261,7 +1305,11 @@ components:
           description: Free-text error details. Empty with fields=summary; full reads retain the stored message.
         retryable:
           type: boolean
-          description: True only when delivery is `not_sent` or the operation is a read.
+          description: >-
+            True only when delivery is `not_sent` or the operation is a read: a repeat is safe.
+            It is never a promise that a repeat will succeed. A refusal that stands for good,
+            such as `host / private_tab`, reads `true` because nothing was sent; its message says
+            so.
         operationId:
           type: string
           description: On a run's error, the operation it came from.
@@ -1594,13 +1642,18 @@ components:
           description: The operation this one ran inside; absent for the agent's own calls.
         name:
           type: string
-          description: e.g. `page.goto`, `locator.click`, `zuzu.auth.fill`, `host.call`, `host.protectedFill`.
+          description: >-
+            e.g. `page.goto`, `locator.click`, `host.call`, or `host.fill` and `host.fillCheck`
+            for the host's private typing.
         site:
           description: Absent for operations without a script call site and historical records.
           allOf:
             - $ref: '#/components/schemas/OperationSite'
         kind:
           type: string
+          description: >-
+            `protected`: the host's private typing (`host.fill`, `host.fillCheck`), recorded with
+            no value, page address, title, call-log note or screenshot.
           x-extensible-enum: [builtin, defined, next, host_call, protected]
         attempt:
           type: integer
@@ -2319,7 +2372,10 @@ components:
             or the script caused, and of each tab a run touched when it ends. `off`: none, from
             the next operation that ends (a screenshot already ordered is still taken). A
             script's own `page.screenshot()` is its result, whose storage follows trace.values. A name this
-            server does not have is skipped and listed in `unknownValues`.
+            server does not have is skipped and listed in `unknownValues`. Masking covers text
+            only: Neo's own picture after a script's own fill of a card number shows the number in
+            clear. `off` closes that until Neo withholds such pictures; a tab that took the host's
+            private fill (`POST /v1/tabs/{tabId}/fill`) is never pictured either way.
         valueBytes:
           type: integer
           format: int64
