@@ -1,13 +1,23 @@
-//! The installed logging stack keeps `SeaORM`'s bound values out of both real log sinks.
+//! The installed logging stack keeps `SeaORM`'s bound values and MCP payloads out of both
+//! real log sinks, even when the host explicitly requests the library's most verbose level.
 
 use std::error::Error;
 use std::path::Path;
 use std::process::Command;
+use std::time::Duration;
 use std::{env, fs};
 
-use neo_server::{AppConfig, Logging};
+use neo_server::test_support::{self, FakeCdp};
+use neo_server::{App, AppConfig, Logging};
+use rmcp::model::{CallToolRequestParams, ClientInfo, JsonObject};
+use rmcp::transport::StreamableHttpClientTransport;
+use serde_json::json;
+use tokio::net::TcpStream;
+use tokio::time;
 
 const SECRET: &str = "neo-seaorm-bound-value-should-stay-private";
+const SCRIPT_CANARY: &str = "neo-rmcp-script-must-not-reach-logs";
+const REPLY_CANARY: &str = "neo-rmcp-reply-must-not-reach-logs";
 
 /// Each child installs the real global subscriber and panic hook once, without changing the
 /// parent test process's environment. Exiting normally also checks the file worker's flush.
@@ -47,6 +57,8 @@ fn check_logging(filter: &str, present: &[&str], absent: &[&str]) -> Result<(), 
         }
         for forbidden in [
             SECRET,
+            SCRIPT_CANARY,
+            REPLY_CANARY,
             "sea-orm-trace-event",
             "sea-orm-nested-trace-event",
             "stmt=",
@@ -86,6 +98,18 @@ fn logging_caps_sea_orm_even_when_the_host_requests_trace() -> Result<(), Box<dy
                 "driver-warning-inside-sea-orm",
             ],
             &[],
+        )?;
+    }
+    Ok(())
+}
+
+#[test]
+fn logging_caps_rmcp_even_when_the_host_names_it_explicitly() -> Result<(), Box<dyn Error>> {
+    for filter in ["debug", "trace,rmcp=trace,rmcp::service=trace"] {
+        check_logging(
+            filter,
+            &["app-debug", "rmcp-info", "rmcp-warn"],
+            &["rmcp-debug", "rmcp-nested-debug", "rmcp-trace"],
         )?;
     }
     Ok(())
@@ -151,6 +175,9 @@ fn logging_probe() -> Result<(), Box<dyn Error>> {
     tracing::error!(target: "sea_orm", "sea-orm-error");
     tracing::info!(target: "rmcp", "rmcp-info");
     tracing::warn!(target: "rmcp", "rmcp-warn");
+    tracing::debug!(target: "rmcp", "rmcp-debug");
+    tracing::debug!(target: "rmcp::service", "rmcp-nested-debug");
+    tracing::trace!(target: "rmcp::service", "rmcp-trace");
 
     // SeaORM 1.1's SQLite driver instruments `execute` at TRACE with a Debug `stmt` field
     // containing bound values. An allowed driver event inherits those fields in both formatters
@@ -161,6 +188,56 @@ fn logging_probe() -> Result<(), Box<dyn Error>> {
     );
     tracing::trace_span!(target: "sea_orm::driver::sqlx_sqlite", "execute", stmt = ?stmt)
         .in_scope(|| tracing::warn!(target: "sqlx::query", "driver-warning-inside-sea-orm"));
+    mcp_run_probe(Path::new(&state))?;
     drop(logging);
     Ok(())
+}
+
+/// Drive the actual MCP library through the server's router. A comment in the script and a
+/// returned value exercise request and response logging independently of Neo's call notes.
+fn mcp_run_probe(state: &Path) -> Result<(), Box<dyn Error>> {
+    use rmcp::ServiceExt;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    App::runtime()?.block_on(async {
+        let app = App::start_with_fake_browser(test_support::test_config(state), FakeCdp::new()).await?;
+        let address = app.local_addr()?;
+        let server = tokio::spawn(app.serve());
+        let result = time::timeout(Duration::from_secs(20), async {
+            loop {
+                let mut socket = TcpStream::connect(address).await?;
+                socket
+                    .write_all(b"GET /system/ready HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
+                    .await?;
+                let mut response = String::new();
+                socket.read_to_string(&mut response).await?;
+                if response.starts_with("HTTP/1.1 200") {
+                    break;
+                }
+                time::sleep(Duration::from_millis(10)).await;
+            }
+            let transport = StreamableHttpClientTransport::from_uri(format!("http://{address}/mcp"));
+            let client = ClientInfo::default().serve(transport).await?;
+            let arguments: JsonObject = [(
+                "code".to_owned(),
+                json!(format!("/* {SCRIPT_CANARY} */ return '{REPLY_CANARY}';")),
+            )]
+            .into_iter()
+            .collect();
+            let reply = client
+                .call_tool(CallToolRequestParams::new("run").with_arguments(arguments))
+                .await?;
+            assert_eq!(
+                reply.structured_content.as_ref().and_then(|value| value.get("value")),
+                Some(&json!(REPLY_CANARY)),
+                "the canary script must execute and return its value"
+            );
+            client.cancel().await?;
+            Ok::<(), Box<dyn Error>>(())
+        })
+        .await?;
+        server.abort();
+        let _ = server.await;
+        result
+    })
 }

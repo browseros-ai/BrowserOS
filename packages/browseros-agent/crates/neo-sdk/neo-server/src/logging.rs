@@ -16,7 +16,7 @@ use crate::config::{AppConfig, Defaults};
 
 /// The process's logging, installed once by `main` and held until `main` returns: a daily file
 /// under `$BROWSERCLAW_DIR/logs` plus stderr, both filtered by `CLAW_LOG` with `SeaORM` capped at
-/// `DEBUG`, and a panic hook.
+/// `DEBUG` and `rmcp` at `INFO`, and a panic hook.
 ///
 /// The file writer is non-blocking: lines are buffered on a worker thread, and dropping this
 /// value flushes them. That is why `main` returns an exit code instead of calling
@@ -47,13 +47,15 @@ impl Logging {
         };
         tracing_subscriber::registry()
             .with(filter)
-            // SeaORM's TRACE spans record statements with bound values. This global cap is
-            // separate from CLAW_LOG so neither sink can inherit those fields, even when the
-            // host enables trace logging. Filtering only events would still leak span fields.
+            // SeaORM's TRACE spans carry bound values; rmcp's DEBUG events carry entire MCP
+            // requests and replies, including script text. These global caps are separate
+            // from CLAW_LOG, so explicit crate directives cannot expose either payload in
+            // either sink. Filtering only events would still leak SeaORM's span fields.
             .with(
                 Targets::new()
                     .with_default(LevelFilter::TRACE)
-                    .with_target("sea_orm", LevelFilter::DEBUG),
+                    .with_target("sea_orm", LevelFilter::DEBUG)
+                    .with_target("rmcp", LevelFilter::INFO),
             )
             .with(
                 fmt::layer()
