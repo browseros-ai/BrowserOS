@@ -210,7 +210,9 @@ async fn expected_current_columns(path: &Path) -> TestResult {
     sqlx::raw_sql(
         r#"ALTER TABLE "operations" ADD COLUMN "site" text;
         ALTER TABLE "operations" ADD COLUMN "main_world" integer;
-        PRAGMA user_version = 3"#,
+        ALTER TABLE "runs" ADD COLUMN "values" varchar;
+        ALTER TABLE "operations" ADD COLUMN "values" varchar;
+        PRAGMA user_version = 4"#,
     )
     .execute(&mut conn)
     .await?;
@@ -337,8 +339,8 @@ async fn a_fresh_file_has_exactly_the_current_schema() -> TestResult {
     expected_current_columns(&old).await?;
     assert_eq!(shape(&path).await?, shape(&old).await?);
     let dump = logical_dump(&path).await?;
-    assert_eq!(dump.version, 3);
-    assert_eq!(dump.rows.get("seaql_migrations").map(Vec::len), Some(3));
+    assert_eq!(dump.version, 4);
+    assert_eq!(dump.rows.get("seaql_migrations").map(Vec::len), Some(4));
     assert_eq!(
         dump.rows["seaql_migrations"][0][0],
         "'m0001_trace_baseline'"
@@ -559,7 +561,7 @@ async fn a_session_era_file_is_refused_untouched() -> TestResult {
 async fn a_newer_user_version_is_refused_untouched() -> TestResult {
     let (_dir, path) = fixture("s5", true).await?;
     let mut conn = connection(&path).await?;
-    sqlx::raw_sql("PRAGMA user_version = 4")
+    sqlx::raw_sql("PRAGMA user_version = 5")
         .execute(&mut conn)
         .await?;
     conn.close().await?;
@@ -889,7 +891,7 @@ async fn an_already_migrated_file_gains_sites_without_losing_its_operations() ->
 }
 
 /// A file the previous build (fence 2, through `m0002_operation_site`) left runs only the
-/// main-world migration: its rows read no answer, and an operation that ends now stores one,
+/// later additive migrations: its rows read no main-world answer or values marker. An operation that ends now stores an answer,
 /// which a reopen keeps.
 #[tokio::test]
 async fn a_site_era_file_gains_main_world_without_losing_its_operations() -> TestResult {
@@ -903,7 +905,7 @@ async fn a_site_era_file_gains_main_world_without_losing_its_operations() -> Tes
     let (_expected_dir, expected) = fixture("s5", false).await?;
     expected_current_columns(&expected).await?;
     assert_eq!(shape(&path).await?, shape(&expected).await?);
-    assert_eq!(logical_dump(&path).await?.version, 3);
+    assert_eq!(logical_dump(&path).await?.version, 4);
     let old = OperationId::new(A.parse()?, 1);
     assert_eq!(
         store

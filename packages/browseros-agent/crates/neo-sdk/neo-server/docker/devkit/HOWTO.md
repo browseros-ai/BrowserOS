@@ -303,3 +303,17 @@ All of it is dev only and stays out of the image:
 - `devkit/viewer.html`, `devkit/trace.html` and `devkit/web/` are the two pages. The viewer uses the noVNC 1.3.0 that ships in the image.
 - `dev_mcp.py run` sends scripts and writes the CLI log. `devkit/export.py` is `dev.sh export`.
 - `devkit/examples/` holds the example scripts and `check.sh`.
+
+### Omit values from the trace
+
+Use the host API before sending a script:
+
+```sh
+./dev.sh host PATCH /v1/settings '{"trace":{"values":"off","screenshots":"off"}}'
+```
+
+Neo then omits script text, arguments, results, notes, host data, stored replies and error
+messages when records end. The records keep metadata and `values: "off"`. Replies still carry
+the result. Fetch large result blobs within ten minutes; downloads stay until trace retention.
+The viewer explains the omission, while its independent proxy log still keeps what it saw.
+Restore ordinary recording with `{"trace":{"values":"on","screenshots":"perOperation"}}`.

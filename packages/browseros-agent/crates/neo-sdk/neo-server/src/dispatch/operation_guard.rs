@@ -6,7 +6,7 @@ use std::thread;
 use browseros_core::TabId;
 use neo_trace::{
     Delivery, Effect, EpochMillis, OperationEnded, OperationId, OperationKind, OperationSite,
-    OperationStarted, Outcome, PageState, TraceSink,
+    OperationStarted, Outcome, PageState, TraceSink, Values,
 };
 use serde_json::Value;
 use tokio::sync::oneshot;
@@ -305,8 +305,12 @@ fn settle(
     let sent_at = state.sent_at();
     let pumped = state.after_pump();
     let settlement = Settlement::decide(sent_at.is_some(), &spec, ending);
+    // Notes remain debug output, not stored values. The settings watcher flips this live
+    // flag before answering; check each line so a change also reaches operations in flight.
     for note in state.take_notes() {
-        tracing::debug!(operation = %id, method = spec.name, %note, "op note");
+        if trace.values() == Values::On {
+            tracing::debug!(operation = %id, method = spec.name, %note, "op note");
+        }
     }
     let (result, error) = match &settlement.result {
         Settled::Value(value) => (Some(value.clone()), None),

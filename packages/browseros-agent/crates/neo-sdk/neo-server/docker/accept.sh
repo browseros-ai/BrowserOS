@@ -41,6 +41,8 @@
 #   files            downloads-only defaults; all six path reads and file chooser; live PATCH;
 #                    symlinks; Neo's files and directory ancestors protected even with / listed;
 #                    saveAs and all screenshot path forms refuse before send or mkdir
+#   trace-values     on control detects canaries; off omits values from HTTP/events and raw files;
+#                    blob survives a server restart, expires at startup, and its download stays
 #   restart-browser  neo-quit 9110 quits cleanly, the supervisor restarts Neo, a new run passes
 #   stop             docker stop -t 25 takes under 20 s, exits 0, Neo and claw-sdk log the stop
 #   persist          a new container on the same /data reads the run and replays its requestId
@@ -151,7 +153,7 @@ wait_ready() { # name seconds: /system/ready through the browser's proxy, from i
 install_client() { # name: the probes, beside smoke.py whose MCP client they reuse
   docker exec "$1" mkdir -p /opt/neo-accept
   local file
-  for file in "$here/smoke.py" "$here/smoke_sdk.py" "$here/accept_client.py" "$here/accept_files.py"; do
+  for file in "$here/smoke.py" "$here/smoke_sdk.py" "$here/accept_client.py" "$here/accept_files.py" "$here/trace_values.py"; do
     docker cp -q "$file" "$1:/opt/neo-accept/" || return 1
   done
 }
@@ -226,7 +228,7 @@ detail="$image_arch, browser $(fact browser), server $(fact marker) $(fact sha |
 if [ ${#problems[@]} -eq 0 ]; then result PASS identity "$detail"; else result FAIL identity "${problems[*]}"; fi
 
 if [ "$image_arch" != "$engine_arch" ]; then
-  for check in boot mcp host-api downloads pdf-downloads blobs settings files mcp-remote restart-browser stop persist kill-all captcha-keys; do
+  for check in boot mcp host-api downloads pdf-downloads blobs settings files trace-values mcp-remote restart-browser stop persist kill-all captcha-keys; do
     result SKIP "$check" "$image_arch image on a $engine_arch engine: emulated, not evidence"
   done
   printf '\n'; printf '%s\n' "${results[@]}"
@@ -238,7 +240,7 @@ docker network create --internal --label neo-sdk-accept="$run_id" "$network" >/d
 
 # --- boot ------------------------------------------------------------------------------------
 main="$prefix-main"
-start_neo "$main" "$image"
+start_neo "$main" -e CLAW_LOG=neo_server=debug,neo_playwright=debug,neo_trace=debug,neo_service=debug,neo_takeover=debug "$image"
 if seconds=$(wait_healthy "$main" 90) && install_client "$main"; then
   listening=$(jget "$(client "$main" python3 accept_client.py listeners)" '" ".join(a for a in d["listening"] if not a.startswith("127.0.0.11:"))')
   socket=$(docker exec "$main" stat -c '%a %U %g' /run/neo /run/neo/host.sock 2>&1 | tr '\n' ' ')
@@ -365,6 +367,21 @@ if [ "$booted" = 1 ]; then
     result FAIL settings "set=${set_reply:0:200}; refused=${refused:0:160}; pid $old_pid -> $new_pid; read=${read_back:0:200}; file=$file_mode"
   fi
   host_send "$main" PUT /v1/settings '{}' >/dev/null
+
+  # Root reads Neo's private files and rechecks the exact server PID before each restart.
+  # The host primary gid still enforces the socket's peer rule. The probe restores trace
+  # settings so the existing persistence checks retain their normal on-mode artifacts.
+  trace_values=$(client "$main" setpriv --regid "$host_gid" --clear-groups python3 trace_values.py \
+    http://127.0.0.1:9010/mcp /run/neo/host.sock /run/neo-accept/host-token 2>&1)
+  if [ -n "$logs_dir" ]; then
+    mkdir -p "$logs_dir"
+    printf '%s\n' "$trace_values" > "$logs_dir/trace-values.json"
+  fi
+  if [ "$(jget "$trace_values" 'd["ok"]')" = True ]; then
+    result PASS trace-values "$(jget "$trace_values" 'd["detail"]')"
+  else
+    result FAIL trace-values "$(jget "$trace_values" '"; ".join(d["problems"])' || printf '%s' "${trace_values:0:300}")"
+  fi
 
   # --- restart-browser -----------------------------------------------------------------------
   docker exec "$main" neo-quit 9110; quit_status=$?
@@ -500,7 +517,7 @@ for pid in pids:
     result FAIL captcha-keys "image's own keys listed=$main_captcha (want $want_main); host key file listed=${keyed_captcha:-not booted}"
   fi
 else
-  for check in mcp host-api downloads pdf-downloads blobs settings files mcp-remote restart-browser stop persist kill-all captcha-keys; do
+  for check in mcp host-api downloads pdf-downloads blobs settings files trace-values mcp-remote restart-browser stop persist kill-all captcha-keys; do
     result FAIL "$check" "not run: the image did not boot"
   done
 fi

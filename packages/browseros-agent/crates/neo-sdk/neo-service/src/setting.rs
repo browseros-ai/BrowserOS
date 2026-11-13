@@ -116,6 +116,15 @@ pub(crate) const TRACE_VALUE_BYTES: Setting = Setting {
 pub(crate) const SCREENSHOTS_PER_OPERATION: &str = "perOperation";
 pub(crate) const SCREENSHOTS_OFF: &str = "off";
 
+/// Whether the trace keeps script and host values.
+pub(crate) const TRACE_VALUES: Setting = Setting {
+    name: "trace.values",
+    rule: Rule::Choice {
+        default: "on",
+        values: &["on", "off"],
+    },
+};
+
 /// The live folders scripts may read by path, with the application-supplied downloads default.
 pub(crate) const FILE_READ_DIRS: Setting = Setting {
     name: "files.readDirs",
@@ -128,6 +137,7 @@ pub(crate) const SETTINGS: &[Setting] = &[
     TRACE_RETENTION,
     TRACE_SCREENSHOTS,
     TRACE_VALUE_BYTES,
+    TRACE_VALUES,
     FILE_READ_DIRS,
 ];
 

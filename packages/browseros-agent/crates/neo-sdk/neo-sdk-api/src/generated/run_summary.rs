@@ -13,6 +13,9 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Default, Debug, PartialEq, Serialize, Deserialize)]
 pub struct RunSummary {
+    /// `off` means trace.values omitted script and host values when this record ended. Error messages are empty; metadata, downloads and the separate screenshot policy stay. Absent when values were recorded.
+    #[serde(rename = "values", skip_serializing_if = "Option::is_none")]
+    pub values: Option<String>,
     #[serde(rename = "id")]
     pub id: String,
     /// The host's task it sent with the run (`_meta[\"com.browseros.neo/run\"].taskId`), if any.
@@ -59,6 +62,7 @@ impl RunSummary {
         complete: bool,
     ) -> RunSummary {
         RunSummary {
+            values: None,
             id,
             task_id: None,
             tabs,

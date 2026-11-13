@@ -96,7 +96,8 @@ impl HostedStack {
             dispatcher: Arc::clone(&dispatcher),
             browser: Arc::clone(&browser),
             tabs: Arc::clone(&tabs),
-            store,
+            store: store.clone(),
+            settings: settings.clone(),
             trace: trace.clone(),
             shutdown: shutdown.clone(),
             orphan_grace: Defaults::ORPHAN_GRACE,
@@ -110,6 +111,7 @@ impl HostedStack {
                 settings.clone(),
             ),
             trace.clone(),
+            store.outputs().clone(),
             settings,
             shutdown.clone(),
         ));

@@ -263,3 +263,22 @@ code that was never stored, for example after a restart.
 
 Existing trace rows remain readable: `[redacted]` arguments stay as recorded, and an older
 run whose code was withheld still has no code. No storage migration or reconstruction is done.
+
+## Values omitted by the host
+
+`trace.values` defaults to `on`. With `off`, each operation and run that ends omits script
+text, arguments, results, notes, host data and stored replies. Errors retain their owner, code,
+host code, retryability and operation id, with an empty message. `Run`, `RunSummary` and
+`Operation` add the optional open-list marker `values: "off"`; absent means normal recording.
+A run can contain operations recorded under different settings. HTTP reads and events expose
+the stored record. Values already stored are unchanged.
+
+The live reply and the ten-minute in-memory request replay are unchanged. After a restart,
+a repeat of an off run gets `duplicate_request` even inside that window. It never executes
+twice while its request history is retained.
+
+Result blobs written with values off expire ten minutes after their write. Neo writes the
+absolute expiry in a sidecar before the first blob, restores it at startup, and deletes due
+blobs on minute upkeep. This also covers a crash before the trace end commits. Downloads,
+page metadata and Neo's separately configured screenshots retain their existing rules.
+The store adds one migration; an older build refuses the newer schema and starts fresh.

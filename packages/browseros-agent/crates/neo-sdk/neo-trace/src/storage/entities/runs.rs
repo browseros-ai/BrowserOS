@@ -7,6 +7,7 @@ use sea_orm::entity::prelude::*;
 #[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel)]
 #[sea_orm(table_name = "runs")]
 pub struct Model {
+    pub values: Option<String>,
     #[sea_orm(primary_key, auto_increment = false)]
     pub id: String,
     pub task_id: Option<String>,

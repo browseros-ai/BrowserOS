@@ -6,11 +6,12 @@ use std::sync::Arc;
 #[cfg(test)]
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
-use std::{future, mem};
+use std::{future, io, mem};
 
 use neo_playwright::RunState;
+use neo_service::Settings;
 use neo_trace::{
-    EpochMillis, RunEnded, RunId, RunOutputs, RunStarted, TaskId, TraceSink, TraceStore,
+    EpochMillis, RunEnded, RunId, RunOutputs, RunStarted, TaskId, TraceSink, TraceStore, Values,
 };
 use tokio::task::JoinSet;
 use tokio::time::{self, Instant};
@@ -36,6 +37,7 @@ pub(crate) struct RunService {
     tabs: Arc<TabRegistry>,
     store: TraceStore,
     trace: TraceSink,
+    settings: Settings,
     ledger: Arc<RequestLedger>,
     /// Cancelled on SIGTERM: every run stops as `neo / shutting_down` and records its end.
     shutdown: CancellationToken,
@@ -61,6 +63,8 @@ pub(crate) struct RunServiceParts {
     pub(crate) store: TraceStore,
     /// The trace writer.
     pub(crate) trace: TraceSink,
+    /// The live policy, read once when the run writes its result blobs.
+    pub(crate) settings: Settings,
     /// Fires on SIGTERM.
     pub(crate) shutdown: CancellationToken,
     /// `Defaults::ORPHAN_GRACE` in the app.
@@ -84,6 +88,7 @@ impl RunService {
             tabs,
             store,
             trace,
+            settings,
             shutdown,
             orphan_grace,
         } = parts;
@@ -94,6 +99,7 @@ impl RunService {
             tabs,
             store,
             trace,
+            settings,
             shutdown,
             orphan_grace,
             snapshot_tips: SnapshotTips::default(),
@@ -263,7 +269,8 @@ impl RunService {
         // Before the reply, so a host that reads a download or a blob right after it finds the
         // file; and before the end record, which drops the run state that lists the downloads.
         builtins::keep_downloads(&run, self.store.outputs()).await;
-        let end = keep_blobs(run.id(), end, self.store.outputs()).await;
+        let values = self.settings.trace_policy().values;
+        let end = keep_blobs(run.id(), end, self.store.outputs(), values).await;
         // A run's init scripts end with it: removed before the reply, so the next run's first
         // navigation, or the owner's, loads without them. A renderer that does not answer within
         // the grace leaves the rest to the run state's drop, which removes them in the background.
@@ -407,19 +414,36 @@ impl RunService {
 /// host reads them once it has the reply. One that cannot be written fails the run as Neo's, and
 /// the blobs already written go with it: a reply must never name bytes the host cannot read, and
 /// a failed one names none.
-async fn keep_blobs(run: RunId, mut end: ScriptEnd, outputs: &RunOutputs) -> ScriptEnd {
+async fn keep_blobs(
+    run: RunId,
+    mut end: ScriptEnd,
+    outputs: &RunOutputs,
+    values: Values,
+) -> ScriptEnd {
     let blobs = mem::take(&mut end.blobs);
-    for blob in &blobs {
-        if let Err(error) = outputs.keep_blob(run, blob.id, &blob.bytes).await {
-            tracing::warn!(%error, %run, blob = %blob.id, "could not keep a result blob");
-            end.outcome = ScriptOutcome::Failed(OperationError::neo(
-                ErrorCode::INTERNAL_ERROR,
-                format_args!("Neo could not keep the result's bytes for the host: {error}"),
-            ));
-            if let Err(error) = outputs.forget_blobs(run).await {
-                tracing::warn!(%error, %run, "the failed reply's blobs stay on disk until the sweep");
-            }
-            break;
+    let kept = async {
+        // Read once by the caller: a concurrent settings change cannot give one reply's
+        // blobs different lifetimes. Write expiry first, before any bytes can outlive a crash.
+        if !blobs.is_empty() && values == Values::Off {
+            let window = i64::try_from(Defaults::REPLAY_WINDOW.as_millis()).unwrap_or(i64::MAX);
+            outputs
+                .keep_blobs_until(run, EpochMillis::now().plus_millis(window))
+                .await?;
+        }
+        for blob in &blobs {
+            outputs.keep_blob(run, blob.id, &blob.bytes).await?;
+        }
+        Ok::<(), io::Error>(())
+    }
+    .await;
+    if let Err(error) = kept {
+        tracing::warn!(%error, %run, "could not keep result blobs");
+        end.outcome = ScriptOutcome::Failed(OperationError::neo(
+            ErrorCode::INTERNAL_ERROR,
+            format_args!("Neo could not keep the result's bytes for the host: {error}"),
+        ));
+        if let Err(error) = outputs.forget_blobs(run).await {
+            tracing::warn!(%error, %run, "the failed reply's blobs remain for a later cleanup");
         }
     }
     end

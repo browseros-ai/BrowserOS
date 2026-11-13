@@ -367,4 +367,65 @@ describe("an open run's methods", () => {
       'Methods appear when the run ends',
     )
   })
+
+  it('explains why a run has no recorded values while keeping its methods and proxy code visible', async () => {
+    const run = runSummary(3, { code })
+    const step = operation(5, 'locator.fill', {
+      line: 1,
+      values: 'off',
+      args: null,
+      result: null,
+    })
+    await show(run, detailWith(run, { ...record([step]), values: 'off' }))
+    expect(dom.container.textContent).toContain(
+      'Neo did not record values for this run (trace.values is off)',
+    )
+    expect(methods()).toEqual(['locator.fill on line 1'])
+    expect(dom.container.textContent).toContain("await page.getByRef('e5')")
+    expect(dom.container.textContent).not.toContain('No record from Neo')
+  })
+
+  it('marks one operation without hiding an earlier recorded operation in a mixed run', async () => {
+    const run = runSummary(3, { code })
+    const omitted = operation(12, 'locator.click', {
+      line: 2,
+      values: 'off',
+      args: null,
+      result: null,
+      outcome: 'error',
+      delivery: 'not_sent',
+      error: {
+        owner: 'script',
+        code: 'no_match',
+        message: '',
+        retryable: true,
+      },
+    })
+    await show(run, detailWith(run, record([fill, omitted])))
+    expect(dom.container.textContent).not.toContain(
+      'Neo did not record values for this run',
+    )
+    const row = dom.container.querySelector('[data-operation="12"]')
+    if (!row) throw new Error('the omitted operation still has a row')
+    await dom.interact(() => fire(row, 'click'))
+    expect(dom.container.textContent).toContain(
+      'Neo did not record values for this operation (trace.values is off)',
+    )
+    expect(dom.container.textContent).toContain('script / no_match')
+    expect(dom.container.textContent).toContain('error, delivery not_sent')
+    expect(dom.container.textContent).not.toContain('No call log recorded.')
+    expect(dom.container.textContent).not.toContain('Arguments')
+
+    const earlier = dom.container.querySelector('[data-operation="5"]')
+    if (!earlier)
+      throw new Error('the earlier recorded operation still has a row')
+    await dom.interact(() => fire(earlier, 'click'))
+    expect(dom.container.textContent).toContain('value   "Grace Hopper"')
+    expect(dom.container.textContent).toContain(
+      '10 chars, ≈2 tok, shown on the right',
+    )
+    expect(dom.container.textContent).not.toContain(
+      'Neo did not record values for this operation',
+    )
+  })
 })

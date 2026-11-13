@@ -57,6 +57,34 @@ describe('one run as Markdown', () => {
     expect(markdown).toContain('## Console\n\n```text\nhi\n[warn] careful\n```')
   })
 
+  test('Copy and export explain Neo omitted values while retaining the independently captured code and reply', () => {
+    const record = twoLineRecord()
+    record.values = 'off'
+    record.operations = record.operations.map((operation) => ({
+      ...operation,
+      values: operation.name === 'locator.click' ? 'off' : undefined,
+    }))
+    const run = detailWith(1, { text: '"proxy reply"', neo: record })
+    for (const options of [FULL, EXPORT]) {
+      const markdown = runMarkdown(run, options)
+      expect(markdown).toContain(
+        'Neo did not record values for this run (trace.values is off)',
+      )
+      expect(markdown).toContain(
+        'Operations with values omitted (trace.values is off): `01a1.4`',
+      )
+      expect(markdown).toContain('- L2 locator.click: +425 ms, 80 ms, ok')
+      expect(markdown).toContain(TWO_LINES)
+      expect(markdown).toContain('proxy reply')
+    }
+    delete record.values
+    const mixed = runMarkdown(run, FULL)
+    expect(mixed).not.toContain('Neo did not record values for this run')
+    expect(mixed).toContain(
+      'Operations with values omitted (trace.values is off): `01a1.4`',
+    )
+  })
+
   test('a failed run says why, in Neo’s words, and marks the operation that failed', () => {
     const text =
       'script / strict_mode_violation: locator.click: strict mode violation: 2 elements'

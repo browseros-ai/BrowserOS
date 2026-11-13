@@ -181,6 +181,8 @@ export interface NeoRunRecord {
    * be paired with what is there, so the viewer does not guess across a gap.
    */
   traceGaps: number
+  /** `off` when Neo omitted values at the run's end. Each operation follows its own end's policy. */
+  values?: string
 }
 
 /** One SDK call the script made (or one made inside it), as Neo recorded it (openapi.yaml `Operation`). */
@@ -216,6 +218,8 @@ export interface NeoOperation {
   /** Its call-log lines, oldest first. */
   notes: string[]
   hasScreenshot: boolean
+  /** `off` when Neo omitted this operation's values; absent when it recorded them. */
+  values?: string
 }
 
 /** openapi.yaml `OperationError`. */

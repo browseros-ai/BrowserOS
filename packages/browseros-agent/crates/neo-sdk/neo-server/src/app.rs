@@ -12,8 +12,8 @@ use neo_captcha::CaptchaSolver;
 use neo_captcha::config::{CAPSOLVER_KEY_FILE_ENV, TWOCAPTCHA_KEY_FILE_ENV};
 use neo_service::Settings;
 use neo_trace::{
-    EpochMillis, RedactionLimits, Redactor, RetentionPolicy, TraceError, TraceSink, TraceStore,
-    WriterConfig,
+    EpochMillis, RedactionLimits, Redactor, RetentionPolicy, RunOutputs, TraceError, TraceSink,
+    TraceStore, WriterConfig,
 };
 use tokio::net::TcpListener;
 use tokio::runtime::{Builder, Runtime};
@@ -97,10 +97,11 @@ impl App {
     pub(crate) async fn hosted_housekeeping(
         janitor: TabJanitor,
         trace: TraceSink,
+        outputs: RunOutputs,
         settings: Settings,
         shutdown: CancellationToken,
     ) {
-        housekeeping(janitor, trace, settings, shutdown).await;
+        housekeeping(janitor, trace, outputs, settings, shutdown).await;
     }
 
     /// The tokio runtime Neo runs on: multi-thread, with `Defaults::WORKER_STACK_BYTES` worker
@@ -200,21 +201,19 @@ impl App {
             config.file_access(settings.clone()),
         );
 
-        // One solver for the process: its paid-task budget and page reservations are its own.
-        let solver = CaptchaSolver::new(config.captcha.clone()).map(Arc::new);
         let claims = Arc::new(CaptchaClaims::default());
         let mut methods = RegistryBuilder::default();
+        // One solver for the process: its paid-task budget and page reservations are its own.
         let deps = BuiltinDeps {
-            solver,
+            solver: CaptchaSolver::new(config.captcha.clone()).map(Arc::new),
             claims: Arc::clone(&claims),
             playwright: Arc::clone(&playwright),
         };
         builtins::builtin_set(&mut methods, deps)
             .map_err(|error| StartError::Methods(error.to_string()))?;
-        let methods = methods.build();
         let takeover = Arc::new(TakeoverLock::default());
         let dispatcher = Arc::new(Dispatcher::new(
-            methods,
+            methods.build(),
             builtins::door_rules(&takeover, &claims),
             trace.clone(),
             Arc::clone(&browser),
@@ -228,6 +227,7 @@ impl App {
             tabs: Arc::clone(&tabs),
             store: store.clone(),
             trace: trace.clone(),
+            settings: settings.clone(),
             shutdown: shutdown.clone(),
             orphan_grace: Defaults::ORPHAN_GRACE,
         });
@@ -250,6 +250,7 @@ impl App {
                 settings.clone(),
             ),
             trace.clone(),
+            store.outputs().clone(),
             settings,
             shutdown.clone(),
         ));
@@ -313,7 +314,7 @@ impl fmt::Debug for App {
     }
 }
 
-/// Tells the trace writer what to record (`trace.screenshots`, `trace.valueBytes`) now and after
+/// Tells the trace writer what to record (`trace.screenshots`, `trace.valueBytes`, `trace.values`) now and after
 /// every change of the host's settings, before the change answers. The policy travels in the
 /// writer's own queue, so a change applies from the next operation that ends.
 fn follow_trace_policy(settings: &Settings, trace: TraceSink) {
@@ -333,6 +334,7 @@ fn follow_trace_policy(settings: &Settings, trace: TraceSink) {
 async fn housekeeping(
     janitor: TabJanitor,
     trace: TraceSink,
+    outputs: RunOutputs,
     settings: Settings,
     shutdown: CancellationToken,
 ) {
@@ -345,6 +347,9 @@ async fn housekeeping(
         tokio::select! {
             () = shutdown.cancelled() => return,
             _ = upkeep.tick() => {
+                if let Err(error) = outputs.expire_blobs(EpochMillis::now()).await {
+                    warn!(%error, "expired result blobs could not be removed; retrying next minute");
+                }
                 let now = time::Instant::now();
                 if let Some(run) = janitor.sweep(now).await {
                     debug!(%run, "idle-tab sweep recorded");
@@ -372,8 +377,8 @@ async fn housekeeping(
 /// replacement runs it again. Log that boundary for the operator before moving the old store.
 async fn open_trace(trace_dir: &Path) -> Result<TraceStore, StartError> {
     let path = trace_dir.join("trace.db");
-    match TraceStore::open(&path).await {
-        Ok(store) => Ok(store),
+    let store = match TraceStore::open(&path).await {
+        Ok(store) => store,
         Err(error) => {
             let aside = PathBuf::from(format!(
                 "{}.broken-{}",
@@ -387,9 +392,16 @@ async fn open_trace(trace_dir: &Path) -> Result<TraceStore, StartError> {
                 // Absent when SQLite never wrote one.
                 let _ = fs::remove_file(sidecar).await;
             }
-            Ok(TraceStore::open(&path).await?)
+            TraceStore::open(&path).await?
         }
-    }
+    };
+    // Output recovery must not pass through the database replacement path: a failed file
+    // cleanup is not a corrupt trace and must never discard request history.
+    store
+        .outputs()
+        .restore_blob_expiries(EpochMillis::now())
+        .await?;
+    Ok(store)
 }
 
 /// Why the agent port did not bind. Only a taken port is `PortInUse`, which `main` exits 2 on.
@@ -458,6 +470,99 @@ fn log_startup(config: &AppConfig, address: SocketAddr) {
         warn!(
             "neo.solveCaptcha is off: no readable CAPTCHA provider key ({CAPSOLVER_KEY_FILE_ENV}, {TWOCAPTCHA_KEY_FILE_ENV}); a call fails host / captcha_unavailable"
         );
+    }
+}
+
+#[cfg(test)]
+mod housekeeping_tests {
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    use futures_util::poll;
+    use neo_trace::{BlobId, EpochMillis, RunId};
+    use tokio::{task, time};
+
+    use super::housekeeping;
+    use crate::builtins::TabJanitor;
+    use crate::config::Defaults;
+    use crate::host::HostHolds;
+    use crate::test_rig::{TestError, TestRig, within};
+
+    #[tokio::test]
+    async fn minute_housekeeping_expires_blobs_after_its_startup_pass() -> Result<(), TestError> {
+        let rig = TestRig::new().await?;
+        let outputs = rig.store.outputs().clone();
+        let janitor = TabJanitor::new(
+            Arc::clone(&rig.dispatcher),
+            Arc::clone(&rig.link),
+            Arc::clone(&rig.tabs),
+            Arc::new(HostHolds::default()),
+            rig.settings.clone(),
+        );
+        let mut upkeep = Box::pin(housekeeping(
+            janitor,
+            rig.sink.clone(),
+            outputs.clone(),
+            rig.settings.clone(),
+            rig.shutdown.clone(),
+        ));
+
+        // Consume both immediate startup ticks while there are no tabs or outputs. The
+        // retention request is their only pending step; flush settles it before the second
+        // poll finishes that branch and waits for the next interval.
+        task::yield_now().await;
+        let starting = time::Instant::now();
+        assert!(poll!(upkeep.as_mut()).is_pending());
+        let started_by = time::Instant::now();
+        rig.sink.flush().await?;
+        assert!(poll!(upkeep.as_mut()).is_pending());
+
+        let expiring = RunId::new();
+        let ordinary = RunId::new();
+        let blob = BlobId::new(0);
+        // Blob expiry uses wall time, independently of the paused interval clock below.
+        outputs
+            .keep_blobs_until(expiring, EpochMillis::now().plus_millis(-1))
+            .await?;
+        outputs.keep_blob(expiring, blob, b"expires").await?;
+        outputs
+            .keep_blob(ordinary, blob, b"ordinary retention")
+            .await?;
+        // No SQLite row exists for retention to select and remove with its outputs.
+        assert!(rig.store.run_summary(expiring).await?.is_none());
+        let blob_path = rig
+            .dir
+            .path()
+            .join("outputs")
+            .join(expiring.to_string())
+            .join("blobs")
+            .join(blob.to_string());
+
+        time::pause();
+        let worker = tokio::spawn(upkeep);
+        let before_tick = starting + Defaults::HOUSEKEEPING_EVERY - Duration::from_secs(1);
+        time::advance(before_tick.saturating_duration_since(time::Instant::now())).await;
+        // A synchronous read prevents filesystem awaits from auto-advancing paused time.
+        assert!(
+            blob_path.try_exists()?,
+            "startup must not remove the new blob"
+        );
+        let next_tick = started_by + Defaults::HOUSEKEEPING_EVERY;
+        time::advance(next_tick.saturating_duration_since(time::Instant::now())).await;
+        time::resume();
+
+        let expired = within(Duration::from_secs(5), async {
+            while outputs.open_blob(expiring, blob).await?.is_some() {
+                time::sleep(Duration::from_millis(5)).await;
+            }
+            Ok::<(), TestError>(())
+        })
+        .await;
+        rig.shutdown.cancel();
+        within(Duration::from_secs(5), worker).await??;
+        expired??;
+        assert!(outputs.open_blob(ordinary, blob).await?.is_some());
+        Ok(())
     }
 }
 

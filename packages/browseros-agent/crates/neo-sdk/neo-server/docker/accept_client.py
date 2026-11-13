@@ -67,7 +67,7 @@ def describe(url: str) -> dict:
     return {"description": next(t.get("description", "") for t in tools if t["name"] == "run")}
 
 
-def call_run(client, code: str, meta: dict) -> dict:
+def call_run(client, code: str, meta: dict, *, text_limit: int | None = 400) -> dict:
     result = client.call(
         "tools/call",
         {
@@ -81,7 +81,7 @@ def call_run(client, code: str, meta: dict) -> dict:
         "isError": bool(result.get("isError")),
         "meta": result.get("_meta", {}).get(RUN_META, {}),
         "value": result.get("structuredContent"),
-        "text": text[:400],
+        "text": text[:text_limit],
     }
 
 

@@ -27,6 +27,7 @@
 
 import type { AriaSnapshotJSON } from '../../../../crates/neo-sdk/neo-playwright/third_party/playwright/packages/isomorphic/ariaSnapshot'
 import type { NeoOperation, NeoOperationError } from '../../shared/api'
+import { OPERATION_VALUES_OFF_NOTICE } from '../../shared/trace-values'
 import { handleText } from './operation-values'
 import { isNeoInternal } from './operations'
 import { pageValueText } from './page-value'
@@ -79,7 +80,10 @@ export function operationOutput(
     ...shownOrRecord(operation, traceGaps > 0 ? null : operations),
     raw: rawText.split('\n').map(jsonLine),
     rawText,
-    rawCut: operation.error ? false : operation.resultTruncated,
+    rawCut:
+      operation.error || operation.values === 'off'
+        ? false
+        : operation.resultTruncated,
   }
 }
 
@@ -91,6 +95,17 @@ function shownOrRecord(
   operation: NeoOperation,
   operations: NeoOperation[] | null,
 ): Shown {
+  // The wire reader maps an absent result to null. The marker distinguishes omitted values
+  // from a recorded null and prevents decoding or pairing a value the trace did not retain.
+  if (operation.values === 'off') {
+    return operation.error
+      ? thrown(operation.error, OPERATION_VALUES_OFF_NOTICE)
+      : {
+          ...toned('(values not recorded)', 'muted'),
+          source: OPERATION_VALUES_OFF_NOTICE,
+          cut: false,
+        }
+  }
   try {
     return (
       failed(operation) ??
@@ -111,6 +126,7 @@ function shownOrRecord(
 
 function recorded(operation: NeoOperation): string {
   if (operation.error) return JSON.stringify(operation.error, null, 2)
+  if (operation.values === 'off') return ''
   if (operation.result === undefined) return ''
   return JSON.stringify(operation.result, null, 2) ?? 'undefined'
 }
@@ -241,6 +257,12 @@ function pendingOf(
   for (const operation of call) {
     if (recordsText(operation)) open.push(operation)
     if (!closesSnapshot(operation)) continue
+    // Omitted bookkeeping has no document id. It cannot identify which open call ended, so
+    // abandon those pairings before later recorded text can be assigned to an earlier call.
+    if (operation.values === 'off') {
+      open = []
+      continue
+    }
     const owners = open.filter(
       (candidate) => documentOf(candidate) === argsOf(operation).document,
     )

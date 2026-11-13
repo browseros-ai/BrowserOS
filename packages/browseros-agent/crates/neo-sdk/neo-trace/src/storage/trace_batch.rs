@@ -37,10 +37,13 @@ pub(crate) enum RunCode<'a> {
     Stored { text: &'a str, truncated: bool },
     /// The writer never received the run's code.
     Unavailable,
+    /// Intentionally omitted by the host's trace.values policy.
+    NotRecorded,
 }
 
 /// A run's end row, as the writer stores it.
 pub(crate) struct RunEndRow<'a> {
+    pub(crate) values: Option<&'a str>,
     pub(crate) id: RunId,
     pub(crate) at: EpochMillis,
     pub(crate) status: RunStatus,
@@ -74,6 +77,7 @@ pub(crate) struct OperationStartRow<'a> {
 
 /// An operation's end row, as the writer stores it (payloads already bounded).
 pub(crate) struct OperationEndRow<'a> {
+    pub(crate) values: Option<&'a str>,
     pub(crate) id: OperationId,
     pub(crate) at: EpochMillis,
     pub(crate) outcome: Outcome,
@@ -173,6 +177,7 @@ impl TraceBatch {
             .col_expr(operations::Column::Outcome, Expr::value("cancelled"))
             .col_expr(operations::Column::EndedAt, Expr::value(run.at.millis()))
             .col_expr(operations::Column::Delivery, cancelled_delivery())
+            .col_expr(operations::Column::Values, Expr::value(run.values))
             .filter(operations::Column::RunId.eq(&id))
             .filter(operations::Column::Outcome.is_null())
             .exec(&self.txn)
@@ -218,8 +223,10 @@ impl TraceBatch {
         let (code, code_truncated, code_withheld) = match run.code {
             RunCode::Stored { text, truncated } => (Some(text.to_owned()), truncated, None),
             RunCode::Unavailable => (None, false, Some("unavailable".to_owned())),
+            RunCode::NotRecorded => (None, false, None),
         };
         let mut model = runs::ActiveModel {
+            values: Set(run.values.map(str::to_owned)),
             ended_at: Set(Some(run.at.millis())),
             status: Set(run.status.as_str().to_owned()),
             effects: Set(Some(effects.as_str().to_owned())),
@@ -318,6 +325,7 @@ impl TraceBatch {
         // The legacy page_id column stays untouched for old files. New records leave it NULL;
         // only the native tab ID crosses the trace boundary.
         let mut model = operations::ActiveModel {
+            values: Set(op.values.map(str::to_owned)),
             ended_at: Set(Some(op.at.millis())),
             outcome: Set(Some(op.outcome.as_str().to_owned())),
             delivery: Set(Some(op.delivery.as_str().to_owned())),

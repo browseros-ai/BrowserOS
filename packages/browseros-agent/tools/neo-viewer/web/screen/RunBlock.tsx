@@ -16,6 +16,7 @@
 import { useState } from 'react'
 import type { NeoOperation, RunDetail, RunSummary } from '../../shared/api'
 import type { FormattedCode } from '../../shared/code-format'
+import { RUN_VALUES_OFF_NOTICE } from '../../shared/trace-values'
 import {
   MethodDetail,
   MethodHeader,
@@ -92,6 +93,9 @@ export function RunBlock({
     <div
       className={`flex flex-col border-neo-edge border-b pt-1 pb-1.5 text-xs leading-4 ${selected ? 'bg-neo-tint-2' : 'bg-neo-tint-3'}`}
     >
+      {record?.values === 'off' && (
+        <p className="px-4 py-1 text-ink-3">{RUN_VALUES_OFF_NOTICE}</p>
+      )}
       {placed && <MethodHeader />}
       {lines.map((line, index) => (
         <CodeLine

@@ -12,6 +12,37 @@ const shown = (op: NeoOperation, all: NeoOperation[] = [op]) => {
 }
 
 describe('what a call gave the script', () => {
+  it('explains omitted values without treating the missing result as null', () => {
+    const omitted = operation(1, 'page.evaluate', {
+      values: 'off',
+      args: null,
+      result: null,
+    })
+    const output = shown(omitted)
+    expect(output.formattedText).toBe('(values not recorded)')
+    expect(output.source).toBe(
+      'Neo did not record values for this operation (trace.values is off)',
+    )
+    expect(output.rawText).toBe('')
+    expect(output.cut).toBe(false)
+    const failed = shown({
+      ...omitted,
+      outcome: 'error',
+      error: {
+        owner: 'script',
+        code: 'no_match',
+        message: '',
+        retryable: true,
+      },
+    })
+    expect(failed.formattedText).toContain('script / no_match')
+    expect(JSON.parse(failed.rawText)).toMatchObject({
+      owner: 'script',
+      code: 'no_match',
+      message: '',
+    })
+  })
+
   it("shows a whole-page snapshot's text from the page.snapshotPending that follows it, each loop pass its own", () => {
     const tree = { document: 4, partial: false, json: [{ role: 'heading' }] }
     const all = [
@@ -48,6 +79,46 @@ describe('what a call gave the script', () => {
       '@@',
       '+- button "Go" [ref=e2]',
     ])
+  })
+
+  it('pairs recorded snapshot text again after omitted snapshot bookkeeping', () => {
+    const tree = { document: 4, json: [] }
+    const first = operation(1, 'page.ariaSnapshot', {
+      line: 1,
+      result: tree,
+    })
+    const second = operation(3, 'page.ariaSnapshot', {
+      line: 1,
+      result: tree,
+    })
+    const pending = operation(4, 'page.snapshotPending', {
+      line: 1,
+      args: { document: 4, text: 'second snapshot text', form: 'text' },
+    })
+    // Either bookkeeping operation can finish the snapshot after its values were omitted.
+    for (const omitted of [
+      operation(2, 'page.snapshotPending', {
+        line: 1,
+        values: 'off',
+        args: null,
+        result: null,
+      }),
+      operation(2, 'page.snapshotBaseline', {
+        line: 1,
+        values: 'off',
+        args: null,
+        result: null,
+        outcome: 'error',
+      }),
+    ]) {
+      const all = [first, omitted, second, pending]
+      expect(shown(second, all).lines).toEqual(['second snapshot text'])
+      expect(shown(first, all).formattedText).toBe(
+        JSON.stringify(tree, null, 2),
+      )
+      expect(shown(first, all).source).not.toContain('overlapped')
+      expect(shown(omitted, all).formattedText).toBe('(values not recorded)')
+    }
   })
 
   it("renders mode 'default' with the run's own renderer, and shows a locator's v1 snapshot as the tree", () => {
