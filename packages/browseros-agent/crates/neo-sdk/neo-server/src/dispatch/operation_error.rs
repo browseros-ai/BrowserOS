@@ -194,6 +194,9 @@ error_codes! {
     BROWSER_DISCONNECTED = "browser_disconnected";
     /// The target tab is gone.
     PAGE_CLOSED = "page_closed";
+    /// Task scope: the tab is not one of the run's task's tabs (another task's, no task's, or
+    /// none at all, answered alike). Nothing was sent.
+    PAGE_NOT_IN_TASK = "page_not_in_task";
     /// A bug in Neo.
     INTERNAL_ERROR = "internal_error";
     /// A CDP call got no answer in time.

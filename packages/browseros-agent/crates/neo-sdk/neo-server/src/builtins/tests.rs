@@ -34,7 +34,7 @@ use super::event_release::EventRelease;
 use super::op_marks::{Hold, OpMarks};
 use super::playwright_ops::{self, FILE_PAGES, OpCtxEnv, leaf_error};
 use super::{BuiltinDeps, CaptchaClaims, PlaywrightFacade, TabJanitor};
-use crate::browser::{Adopt, BrowserLink, NeoTab, PageRef, TabRegistry};
+use crate::browser::{Adopt, BrowserLink, NeoTab, PageRef, TabRegistry, TabsScope};
 use crate::config::Defaults;
 use crate::dispatch::{
     Call, CallSite, Dispatcher, ErrorCode, EventLog, FrameVersion, LeafError, Lifetime, Listing,
@@ -207,6 +207,7 @@ impl Harness {
             view,
             deadline: Instant::now() + Defaults::RUN_TIMEOUT,
             default_page: None,
+            tabs_scope: TabsScope::Browser,
         };
         Ok(RunCtx::start(&self.dispatcher, start))
     }
@@ -5629,6 +5630,28 @@ fn run_for(harness: &Harness, task: &TaskId) -> Result<(Arc<RunCtx>, RunGuard), 
         view,
         deadline: Instant::now() + Defaults::RUN_TIMEOUT,
         default_page: None,
+        tabs_scope: TabsScope::Browser,
+    };
+    Ok(RunCtx::start(&harness.dispatcher, start))
+}
+
+/// A recorded script run that read `scope` at its start, for host task `task`.
+fn run_scoped(
+    harness: &Harness,
+    scope: TabsScope,
+    task: Option<&TaskId>,
+) -> Result<(Arc<RunCtx>, RunGuard), Box<dyn Error>> {
+    let view = harness.link.view().ok_or("the link is up")?;
+    let start = RunStart {
+        id: RunId::new(),
+        code: String::new(),
+        request_id: None,
+        task_id: task.cloned(),
+        host_data: None,
+        view,
+        deadline: Instant::now() + Defaults::RUN_TIMEOUT,
+        default_page: None,
+        tabs_scope: scope,
     };
     Ok(RunCtx::start(&harness.dispatcher, start))
 }
@@ -5688,5 +5711,80 @@ async fn a_created_task_joins_the_family_of_its_runs_host_task() -> Result<(), B
         root,
         "a run with no host task makes a family root, though it picked another task first"
     );
+    Ok(())
+}
+
+/// Under task scope a run picks, opens in and closes only the tasks its scope allows. One it may
+/// not use answers exactly as a missing task, so the refusal reveals nothing about it.
+#[tokio::test]
+async fn a_task_a_run_may_not_use_answers_as_a_missing_one() -> Result<(), Box<dyn Error>> {
+    let harness = Harness::new().await?;
+    let host = TaskId::parse("host-s")?;
+    let other = TaskId::parse("host-r")?;
+    let (bound, _bound_guard) = run_scoped(&harness, TabsScope::Task, Some(&host))?;
+    let (theirs_run, _theirs_guard) = run_scoped(&harness, TabsScope::Task, Some(&other))?;
+    let mine = created_in(&harness, &bound).await?;
+    let theirs = created_in(&harness, &theirs_run).await?;
+    let answer = |reply: OpReply, id: &TaskId| -> Result<_, Box<dyn Error>> {
+        let refused = failure(reply)?;
+        Ok((
+            refused.error.owner(),
+            refused.error.code(),
+            refused.error.message().replace(id.as_str(), "<id>"),
+        ))
+    };
+    let missing = TaskId::parse("never-made")?;
+    let expected = answer(
+        harness
+            .submit(&bound, "neo.task", json!({ "id": missing.as_str() }))
+            .await,
+        &missing,
+    )?;
+    assert_eq!(
+        (expected.0, expected.1),
+        (ErrorOwner::Script, ErrorCode::TASK_NOT_FOUND)
+    );
+    let uses = |id: &TaskId| {
+        [
+            ("neo.task", json!({ "id": id.as_str() })),
+            ("task.newPage", json!({ "task": id.as_str() })),
+            ("task.close", json!({ "task": id.as_str() })),
+        ]
+    };
+    for id in [&other, &theirs] {
+        for (method, input) in uses(id) {
+            assert_eq!(
+                answer(harness.submit(&bound, method, input).await, id)?,
+                expected,
+                "{method} on another family's task answers as a missing one"
+            );
+        }
+    }
+    value(
+        harness
+            .submit(&bound, "neo.task", json!({ "id": mine.as_str() }))
+            .await,
+    )?;
+
+    let (taskless, _taskless_guard) = run_scoped(&harness, TabsScope::Task, None)?;
+    for (method, input) in uses(&host) {
+        assert_eq!(
+            answer(harness.submit(&taskless, method, input).await, &host)?,
+            expected,
+            "{method}: a run with no task never takes over a host's task"
+        );
+    }
+    value(
+        harness
+            .submit(&taskless, "neo.task", json!({ "id": theirs.as_str() }))
+            .await,
+    )?;
+
+    let (unbound, _unbound_guard) = run_scoped(&harness, TabsScope::Browser, None)?;
+    value(
+        harness
+            .submit(&unbound, "neo.task", json!({ "id": host.as_str() }))
+            .await,
+    )?;
     Ok(())
 }

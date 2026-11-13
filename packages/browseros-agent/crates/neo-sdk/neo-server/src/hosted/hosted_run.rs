@@ -11,7 +11,7 @@ use tokio::time::{self, Instant};
 use tokio_util::sync::CancellationToken;
 
 use super::HostedError;
-use crate::browser::BrowserLink;
+use crate::browser::{BrowserLink, TabsScope};
 use crate::config::Defaults;
 use crate::dispatch::{Dispatcher, RunCtx, RunGuard, RunStart, StopReason};
 use crate::run::{RunReply, RunService};
@@ -74,6 +74,7 @@ impl HostedRun {
                 view,
                 deadline,
                 default_page: None,
+                tabs_scope: TabsScope::Browser,
             },
         );
         let bridge = Arc::new(Bridge::new(Arc::clone(&context), Arc::clone(dispatcher)));

@@ -12,7 +12,7 @@ use neo_trace::{RunId, RunStatus};
 use serde_json::json;
 use tokio::time::{self, Instant};
 
-use crate::browser::{BrowserLink, PageRef, TabRegistry};
+use crate::browser::{BrowserLink, PageRef, TabRegistry, TabsScope};
 use crate::dispatch::{Call, Caller, Dispatcher, OpReply, RunCtx, RunEnd, RunStart, StopReason};
 use crate::host::HostHolds;
 
@@ -140,6 +140,7 @@ impl TabJanitor {
                 view,
                 deadline,
                 default_page: None,
+                tabs_scope: TabsScope::Browser,
             },
         );
         let Swept { closed, kept } = self.close_each(&run, &idle, idle_time, now, deadline).await;

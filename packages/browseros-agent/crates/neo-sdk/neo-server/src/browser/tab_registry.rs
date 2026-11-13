@@ -378,13 +378,6 @@ impl TabRegistry {
     /// anything else is [`Sight::Foreign`]. The run's own opens in flight are the run's to
     /// admit: the registry learns of a tab only once core names it.
     #[must_use]
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "the door's sight check reads it, and no run asks it until runs carry a scope"
-        )
-    )]
     pub(crate) fn sight(&self, scope: &RunScope, tab: TabId) -> Sight {
         let state = self.lock();
         if state

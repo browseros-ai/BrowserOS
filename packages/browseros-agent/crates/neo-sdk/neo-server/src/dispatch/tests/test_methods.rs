@@ -70,6 +70,7 @@ pub(super) fn test_methods(
     registry.define(Budget)?;
     registry.define(Echo)?;
     registry.define(AnyInput)?;
+    registry.define(NamesTab)?;
     registry.define(MainWorldScript)?;
     registry.define(Pump)
 }
@@ -758,6 +759,39 @@ impl Method for AnyInput {
         input: Value,
     ) -> impl Future<Output = Result<Value, LeafError>> + Send {
         future::ready(Ok(input))
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TabNumber {
+    tab: i64,
+}
+
+/// Answers a page brand for the tab number it is given: a result that names a tab its input
+/// never branded, as a method that lists or finds tabs does.
+struct NamesTab;
+
+impl Method for NamesTab {
+    type Input = TabNumber;
+    type Output = Value;
+
+    fn spec(&self) -> MethodSpec {
+        MethodSpec::new("test.names_tab", Effect::Read)
+    }
+
+    fn target(_input: &TabNumber) -> Option<&PageTarget> {
+        None
+    }
+
+    fn call(
+        &self,
+        _op: &OpCtx<Self>,
+        input: TabNumber,
+    ) -> impl Future<Output = Result<Value, LeafError>> + Send {
+        future::ready(Ok(
+            json!({ "found": { "$neo": "page", "id": null, "tab": input.tab } }),
+        ))
     }
 }
 

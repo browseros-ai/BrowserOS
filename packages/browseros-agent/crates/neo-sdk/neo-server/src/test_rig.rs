@@ -26,7 +26,7 @@ use tokio::time::{self, Instant};
 use tokio_util::sync::CancellationToken;
 
 use crate::app::App;
-use crate::browser::{BrowserLink, PageRef, TabRegistry};
+use crate::browser::{BrowserLink, PageRef, TabRegistry, TabsScope};
 use crate::builtins;
 use crate::dispatch::{
     Dispatcher, ErrorCode, LeafError, Lifetime, Method, MethodSpec, Observer, OpCtx,
@@ -198,6 +198,16 @@ impl TestRig {
         budget: Duration,
         task_id: Option<TaskId>,
     ) -> Result<(Arc<RunCtx>, RunGuard), TestError> {
+        self.run_in(budget, TabsScope::Browser, task_id)
+    }
+
+    /// As [`TestRig::run`], for a run that read `scope` at its start.
+    pub(crate) fn run_in(
+        &self,
+        budget: Duration,
+        scope: TabsScope,
+        task_id: Option<TaskId>,
+    ) -> Result<(Arc<RunCtx>, RunGuard), TestError> {
         let view = self.link.view().ok_or("the link is up")?;
         let start = RunStart {
             id: RunId::new(),
@@ -208,6 +218,7 @@ impl TestRig {
             view,
             deadline: Instant::now() + budget,
             default_page: None,
+            tabs_scope: scope,
         };
         Ok(RunCtx::start(&self.dispatcher, start))
     }

@@ -207,7 +207,7 @@ impl<M> OpCtx<M> {
             tab: Some(tab),
             ..self.core.policy_check()
         };
-        self.core.dispatcher.check(&check)
+        self.core.dispatcher.check(&self.core.run, &check)
     }
 
     /// The side effect may happen from now on. Write-once, and it marks every ancestor too:

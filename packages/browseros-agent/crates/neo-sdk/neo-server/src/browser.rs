@@ -54,15 +54,7 @@ pub(crate) use browser_link::{BrowserLink, LinkStatus, RunView};
 pub(crate) use neo_tab::Adopt;
 pub(crate) use neo_tab::NeoTab;
 pub(crate) use page_ref::PageRef;
-pub(crate) use run_scope::{RunScope, Sight};
+pub(crate) use run_scope::{RunScope, Sight, TabsScope};
 pub(crate) use tab_registry::{Seen, TabRegistry, TaskPage};
 pub(crate) use tab_watch::{TabEvent, TabListing, Watched};
-#[cfg_attr(
-    not(test),
-    expect(
-        unused_imports,
-        reason = "the saved-holders record names the origin; until it is wired nothing does"
-    )
-)]
-pub(crate) use task_book::TaskOrigin;
-pub(crate) use task_book::{Holder, TaskError, TaskRecord};
+pub(crate) use task_book::{Holder, TaskError, TaskOrigin, TaskRecord};

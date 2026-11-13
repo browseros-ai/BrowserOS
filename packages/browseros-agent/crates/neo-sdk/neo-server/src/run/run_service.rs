@@ -21,7 +21,9 @@ use tokio_util::sync::CancellationToken;
 use super::request_ledger::{Admission, LedgerLimits, RunTicket};
 use super::snapshot_tips::SnapshotTips;
 use super::{HostData, RequestLedger, RunHandle, RunMeta, RunReply, RunRequest};
-use crate::browser::{BrowserLink, NeoTab, PageRef, RunView, TabRegistry, TaskPage};
+use crate::browser::{
+    BrowserLink, NeoTab, PageRef, RunView, Sight, TabRegistry, TabsScope, TaskPage,
+};
 use crate::builtins;
 use crate::config::Defaults;
 #[cfg(feature = "hosted-run")]
@@ -249,6 +251,7 @@ impl RunService {
                 view,
                 deadline: Instant::now() + timeout.get(),
                 default_page: page.clone(),
+                tabs_scope: TabsScope::Browser,
             },
         );
         #[cfg(test)]
@@ -332,9 +335,10 @@ impl RunService {
         };
         match listing {
             Ok(listing) => {
-                // Not Neo's blank tab: the prelude listens on every page it names, and no script
-                // sees that tab (`NeoTab`). One the owner browsed in is handed back first, so the
-                // run starts with their page.
+                // Only the tabs the run may reach: never Neo's blank tab, since the prelude listens
+                // on every page it names and no script sees that tab (`NeoTab`), and for a run
+                // bound to its task, only its family's tabs. One the owner browsed in is handed
+                // back first, so the run starts with their page.
                 if let Some(blank_tab) = &self.blank_tab {
                     let listed: Vec<(TabId, &str)> = listing
                         .pages
@@ -347,7 +351,7 @@ impl RunService {
                     .pages
                     .iter()
                     .map(PageRef::from)
-                    .filter(|page| !self.tabs.is_neo(page.tab))
+                    .filter(|page| run.sight(page.tab) == Sight::Shown)
                     .collect();
                 if pages.is_empty() {
                     return PageFacts {
@@ -530,7 +534,9 @@ async fn drain(ops: &mut JoinSet<()>) {
 
 #[cfg(test)]
 mod observation_tests {
+    use crate::browser::TabsScope;
     use crate::test_rig::{TestError, TestRig, on_neo_runtime, within};
+    use neo_trace::TaskId;
     use serde_json::Value;
     use std::sync::Arc;
     use std::time::Duration;
@@ -634,6 +640,50 @@ mod observation_tests {
                 Some(&Value::Null),
                 "null must be serialized, not omitted"
             );
+            Ok(())
+        })
+    }
+
+    #[test]
+    fn a_bound_runs_init_lists_only_its_familys_tabs() -> Result<(), TestError> {
+        on_neo_runtime(async {
+            let rig = TestRig::new().await?;
+            let mine = rig.owner_tab("https://mine.example/").await?;
+            let theirs = rig.owner_tab("https://theirs.example/").await?;
+            let free = rig.owner_tab("https://free.example/").await?;
+            let host = TaskId::parse("host-s")?;
+            let other = TaskId::parse("host-r")?;
+            for (page, task) in [(&mine, &host), (&theirs, &other)] {
+                rig.tabs.ensure_task(task)?;
+                rig.tabs.touched(page, rig.tabs.seen());
+                rig.tabs.own(page, task)?;
+            }
+            let service = rig.run_service(Duration::ZERO);
+            let (bound, _bound_guard) =
+                rig.run_in(Duration::from_secs(30), TabsScope::Task, Some(host))?;
+            let listed: Vec<_> = service
+                .open_pages(&bound)
+                .await
+                .pages
+                .iter()
+                .map(|fact| fact.tab)
+                .collect();
+            assert_eq!(listed, vec![mine.tab], "only its family's tab");
+            let (taskless, _taskless_guard) =
+                rig.run_in(Duration::from_secs(30), TabsScope::Task, None)?;
+            let listed: Vec<_> = service
+                .open_pages(&taskless)
+                .await
+                .pages
+                .iter()
+                .map(|fact| fact.tab)
+                .collect();
+            for page in [&mine, &theirs, &free] {
+                assert!(
+                    listed.contains(&page.tab),
+                    "a run with no task lists every tab, as before task scope"
+                );
+            }
             Ok(())
         })
     }
