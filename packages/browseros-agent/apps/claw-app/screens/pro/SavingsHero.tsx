@@ -20,12 +20,14 @@ import { cn } from '@/lib/utils'
 import {
   chipTokens,
   pagesLabel,
+  pursuePill,
   taskWhen,
   ultrafastTime,
 } from '@/screens/audit/audit.helpers'
 import { savingsTime, savingsTokens } from './pro.helpers'
 
-const TOKEN_GLOSS = 'Tokens are what your AI agent’s plan charges for.'
+const TOKEN_GLOSS =
+  'Page text neo read itself that never went to your AI agent, in tokens, which is what your agent’s plan charges for. Browsing tasks from before neo counted pages add their time only.'
 
 /** What ultrafast has done on this computer, from the task history. */
 export function SavingsHero({
@@ -187,6 +189,20 @@ function Total({ value, label }: { value: string; label: string }) {
 function LatestRun({ task }: { task: SessionSummary }) {
   const location = useLocation()
   const run = task.ultrafast
+  const pursue = task.pursue
+  const pill = pursue
+    ? pursuePill(pursue)
+    : run
+      ? `ultrafast · ${ultrafastTime(run.durationMs)}`
+      : null
+  // What neo measured, or for a pursue run from before pages were counted, the steps it took.
+  const recorded = run
+    ? `${pagesLabel(run.pagesRead)}, ${chipTokens(run.tokensSaved)} tokens saved`
+    : pursue && pursue.steps.length > 0
+      ? pursue.steps.length === 1
+        ? '1 step'
+        : `${pursue.steps.length} steps`
+      : null
   return (
     <li className="border-border-2 border-b">
       <Link
@@ -202,16 +218,15 @@ function LatestRun({ task }: { task: SessionSummary }) {
             {taskWhen(task.startedAt, Date.now())}
           </span>
         </span>
-        {run ? (
-          <>
-            <UltrafastRunBadge className="justify-self-start">
-              ultrafast · {ultrafastTime(run.durationMs)}
-            </UltrafastRunBadge>
-            <span className="whitespace-nowrap text-[13.5px] text-ink-2">
-              {pagesLabel(run.pagesRead)}, {chipTokens(run.tokensSaved)} tokens
-              saved
-            </span>
-          </>
+        {pill ? (
+          <UltrafastRunBadge className="justify-self-start">
+            {pill}
+          </UltrafastRunBadge>
+        ) : null}
+        {recorded ? (
+          <span className="whitespace-nowrap text-[13.5px] text-ink-2">
+            {recorded}
+          </span>
         ) : null}
       </Link>
     </li>

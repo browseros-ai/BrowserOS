@@ -41,6 +41,7 @@ mock.module('@/modules/api/client', () => ({
 
 const { TaskRow } = await import('./TaskRow')
 const { TaskPageHeader } = await import('@/screens/task-detail/TaskPageHeader')
+const { NeoSteps } = await import('@/screens/task-detail/NeoSteps')
 
 /** A finished task where a skill ran without the agent, shaped like a real run. */
 function session(overrides: Partial<SessionSummary> = {}): SessionSummary {
@@ -178,5 +179,85 @@ describe('ultrafast run', () => {
     )
     expect(text()).not.toContain('ultrafast')
     expect(text()).not.toContain('tokens saved')
+  })
+})
+
+/** The recorded Google Flights task: pursue handed back after two clicks and typing. */
+const flights = {
+  outcome: 'handed_back',
+  durationMs: 5_662,
+  steps: [
+    { action: 'click' },
+    { action: 'click' },
+    { action: 'type', text: 'Singapore' },
+  ],
+} as const satisfies NonNullable<SessionSummary['pursue']>
+
+/** The recorded amazon.in task: pursue finished after typing and pressing Enter. */
+const colgate = {
+  outcome: 'completed',
+  durationMs: 7_317,
+  steps: [
+    { action: 'type', text: 'colgate toothpaste' },
+    { action: 'press', text: 'Enter' },
+  ],
+} as const satisfies NonNullable<SessionSummary['pursue']>
+
+describe('a task neo drove with pursue', () => {
+  it('says how many steps neo did when it handed back', async () => {
+    const task = session({ ultrafast: undefined, pursue: flights })
+    await render(
+      <>
+        <TaskRow task={task} now={Date.now()} />
+        <TaskPageHeader session={task} />
+      </>,
+    )
+    expect(text()).toContain('ultrafast · neo did 3 steps')
+    expect(text()).toContain('ultrafast · neo did 3 steps in 6 sec')
+    expect(text()).not.toContain('tokens saved')
+  })
+
+  it('says how long neo took when it finished', async () => {
+    const task = session({ ultrafast: undefined, pursue: colgate })
+    await render(
+      <>
+        <TaskRow task={task} now={Date.now()} />
+        <TaskPageHeader session={task} />
+      </>,
+    )
+    expect(text()).toContain('ultrafast · neo did it in 7 sec')
+    expect(text()).not.toContain('steps')
+  })
+
+  it('adds pages and tokens on the task page once neo counted them', async () => {
+    const task = session({
+      pursue: flights,
+      ultrafast: { durationMs: 5_662, pagesRead: 4, tokensSaved: 12_310 },
+    })
+    await render(<TaskPageHeader session={task} />)
+    expect(text()).toContain(
+      'ultrafast · neo did 3 steps in 6 sec · 4 pages, 12k tokens saved',
+    )
+  })
+
+  it('lists the steps neo took and where it handed back', async () => {
+    await render(<NeoSteps pursue={flights} />)
+    const heading = body.querySelector('h2')
+    expect(heading?.textContent).toBe('What neo did for your agent')
+    const steps = [...body.querySelectorAll('li')].map((item) =>
+      (item.textContent ?? '').replace(/^\d+/, ''),
+    )
+    expect(steps).toEqual(['Clicked', 'Clicked', 'Typed "Singapore"'])
+    expect(text()).toContain('Then neo handed the page back to your agent.')
+  })
+
+  it('lists the steps of a finished run without a hand-back line', async () => {
+    await render(<NeoSteps pursue={colgate} />)
+    const steps = [...body.querySelectorAll('li')].map((item) =>
+      (item.textContent ?? '').replace(/^\d+/, ''),
+    )
+    expect(steps).toEqual(['Typed "colgate toothpaste"', 'Pressed Enter'])
+    expect(text()).toContain('neo reached the goal on its own.')
+    expect(text()).not.toContain('handed')
   })
 })

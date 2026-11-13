@@ -9,6 +9,7 @@ import { ButtonLink } from '@/components/motion/button/base'
 import {
   chipTokens,
   pagesLabel,
+  pursueHeader,
   taskDayAndTime,
   tookLabel,
   ultrafastTime,
@@ -44,7 +45,11 @@ export function TaskPageHeader({ session, lastPageUrl }: TaskPageHeaderProps) {
             sessionId={session.sessionId}
             size="md"
           />
-          {session.ultrafast ? (
+          {session.pursue ? (
+            <UltrafastRunBadge size="md">
+              {pursueHeader(session.pursue, session.ultrafast)}
+            </UltrafastRunBadge>
+          ) : session.ultrafast ? (
             <UltrafastRunBadge size="md">
               {ultrafastTime(session.ultrafast.durationMs)} ·{' '}
               {pagesLabel(session.ultrafast.pagesRead)},{' '}

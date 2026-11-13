@@ -120,6 +120,7 @@ const ranOn = (
   sessionId: string,
   name: string,
   ultrafast: SessionSummary['ultrafast'],
+  pursue?: SessionSummary['pursue'],
 ): SessionSummary =>
   ({
     sessionId,
@@ -132,17 +133,28 @@ const ranOn = (
     dispatchCount: 6,
     errorCount: 0,
     ultrafast,
+    pursue,
   }) as SessionSummary
 
 const SAVINGS: PlanSavings = {
   totals: { durationMs: 468_000, pagesRead: 141, tokensSaved: 972_900 },
   tasks: 23,
   latest: [
-    ranOn('pursue-1', 'Search flights to Singapore', {
-      durationMs: 7_317,
-      pagesRead: 5,
-      tokensSaved: 18_204,
+    ranOn('pursue-1', 'Search flights to Singapore', undefined, {
+      outcome: 'handed_back',
+      durationMs: 5_662,
+      steps: [
+        { action: 'click' },
+        { action: 'click' },
+        { action: 'type', text: 'Singapore' },
+      ],
     }),
+    ranOn(
+      'pursue-2',
+      'Search amazon.in for Colgate',
+      { durationMs: 7_317, pagesRead: 5, tokensSaved: 18_204 },
+      { outcome: 'completed', durationMs: 7_317, steps: [] },
+    ),
     ranOn('skill-1', 'Today’s phone deals on Flipkart', {
       durationMs: 15_354,
       pagesRead: 9,
@@ -727,15 +739,20 @@ describe('what ultrafast has saved', () => {
 
     expect(text()).toContain('973ktokens saved')
     expect(
-      button('Tokens are what your AI agent’s plan charges for.'),
+      button(
+        'Page text neo read itself that never went to your AI agent, in tokens, which is what your agent’s plan charges for. Browsing tasks from before neo counted pages add their time only.',
+      ),
     ).toBeTruthy()
     expect(text()).toContain('pages read141')
     expect(text()).toContain('tasks23')
     expect(text()).toContain('neo working8 min')
     expect(text()).toContain('Latest')
     expect(text()).toContain('Search flights to Singapore')
-    expect(text()).toContain('ultrafast · 7 sec')
-    expect(text()).toContain('5 pages, 18k tokens saved')
+    expect(text()).toContain('ultrafast · neo did 3 steps3 steps')
+    expect(text()).toContain('Search amazon.in for Colgate')
+    expect(text()).toContain(
+      'ultrafast · neo did it in 7 sec5 pages, 18k tokens saved',
+    )
     expect(text()).toContain('ultrafast · 15 sec')
     expect(text()).toContain('9 pages, 62k tokens saved')
     const links = [...container.querySelectorAll('a')].map((link) => [
