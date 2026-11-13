@@ -4,10 +4,9 @@ use std::fmt;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::str::FromStr;
 
-/// A screen or viewer size. Neo's screen runs at a device pixel ratio of 1, so these are both
-/// Xvnc's pixels and the page's CSS pixels. Any size Xvnc can report is representable: the fit
-/// rule decides what a size gets, and the service holds a host's viewer to the contract's 100
-/// to 4096 a side.
+/// Dimensions of Neo's physical framebuffer, or the logical size carried by a [`crate::Viewer`].
+/// The real screen has DPR 1; mobile preview scaling can draw one logical pixel across two
+/// framebuffer pixels. Any size Xvnc can report is representable; host requests are bounded.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct ScreenSize {
     /// Width.

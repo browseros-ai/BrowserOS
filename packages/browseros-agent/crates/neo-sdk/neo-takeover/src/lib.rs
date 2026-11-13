@@ -78,6 +78,7 @@ mod tab_hold;
 mod takeovers;
 #[doc(hidden)]
 pub mod testing;
+mod viewer;
 
 pub use browser_tabs::BrowserTabs;
 pub use displays::{Admitted, DisplayBinding, DisplayEnd, DisplayRequest, Displays, Follow};
@@ -96,3 +97,4 @@ pub use tab_hold::TabHold;
 pub use takeovers::{
     ReleaseReason, Takeover, TakeoverRequest, TakeoverState, TakeoverTtl, Takeovers,
 };
+pub use viewer::{Viewer, ViewerGeometry, ViewerScale};

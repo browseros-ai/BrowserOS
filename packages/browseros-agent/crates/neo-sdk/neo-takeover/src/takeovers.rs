@@ -49,7 +49,7 @@ use crate::browser_tabs::ScreenHoldGuard;
 use crate::limits::{GIVE_BACK, KEEP_RELEASED_TAKEOVER, MIN_TAKEOVER_TTL, TAKEOVER_CHANGES};
 use crate::{
     BrowserTabs, DisplayBinding, FitId, Fits, LockBinding, LockId, LockTtl, Locks, PartError,
-    Reads, ScreenHolder, ScreenSize, TakeoverId,
+    Reads, ScreenHolder, TakeoverId, Viewer,
 };
 use browseros_core::TabId;
 use futures_util::future::{self, BoxFuture, FutureExt};
@@ -95,8 +95,8 @@ impl TakeoverTtl {
 pub struct TakeoverRequest {
     /// The tab the owner takes.
     pub tab: TabId,
-    /// The owner's screen. Without it the tab is not fitted.
-    pub viewer: Option<ScreenSize>,
+    /// The owner's logical viewer and optional preview scale. Without it the tab is not fitted.
+    pub viewer: Option<Viewer>,
     /// Whether the lock refuses the agent's reads of the tab too.
     pub reads: Reads,
     /// How long the takeover may last.

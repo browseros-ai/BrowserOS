@@ -590,7 +590,25 @@ impl FakeBrowser {
         if hung {
             std::future::pending::<()>().await;
         }
-        self.reply(method, params, session)
+        // Hold an owner view after it sampled geometry. A refit can then complete while its
+        // old reply is in flight, without also holding core's viewport readback expressions.
+        let owner_view = method == "Runtime.evaluate"
+            && params["expression"]
+                .as_str()
+                .is_some_and(|expression| expression.contains("visualViewport"));
+        let owner_held = if owner_view {
+            self.holds()
+                .get("owner-view-reply")
+                .filter(|gate| !*gate.borrow())
+                .map(watch::Sender::subscribe)
+        } else {
+            None
+        };
+        let reply = self.reply(method, params, session);
+        if let Some(mut held) = owner_held {
+            let _ = held.wait_for(|open| *open).await;
+        }
+        reply
     }
 
     async fn answer_raw(

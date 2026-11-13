@@ -84,5 +84,7 @@ pub mod trace_tail;
 pub use self::trace_tail::TraceTail;
 pub mod unknown_operation;
 pub use self::unknown_operation::UnknownOperation;
+pub mod viewer_request;
+pub use self::viewer_request::ViewerRequest;
 pub mod viewer_size;
 pub use self::viewer_size::ViewerSize;

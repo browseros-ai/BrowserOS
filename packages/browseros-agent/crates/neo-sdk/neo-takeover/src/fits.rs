@@ -14,8 +14,8 @@
 //!   them the other way round;
 //! - the screen's size as the watcher last saw it, on a `watch` channel;
 //! - each fit's hold on the screen for its owner (decision 44), a guard in the front's registry
-//!   (`browser_tabs`): taken before its claim awaits anything, kept in its table entry while it
-//!   is active, and let go once its restore's plan ran. The agent cannot move the front and
+//!   (`browser_tabs`): taken after Surface resolves the request and before browser work, kept
+//!   in its table entry while active, and let go once its restore's plan ran. The agent cannot move the front and
 //!   followers pause while any fit holds it, so neither strands the owner's phone fit.
 //!
 //! ```text
@@ -32,7 +32,7 @@
 //! viewer and returns the same fit. Restoring is idempotent per fit.
 
 use crate::browser_tabs::{ScreenHoldGuard, WindowState};
-use crate::fit_rule::{FitMode, Layout, layout_for};
+use crate::fit_rule::{FitMode, Layout};
 use crate::limits::{
     KEEP_RESTORED_FIT, NAVIGATE_TIMEOUT, OWNER_VIEW_BUDGET, OWNER_VIEW_TICK, STEP_TIMEOUT,
     WATCH_CATCH_UP,
@@ -42,7 +42,9 @@ use crate::owner_view::{self, OwnerView};
 use crate::screen::Screen;
 use crate::surface::{Seen, Surface};
 use crate::surface_steps::{self, PlanFor};
-use crate::{BrowserTabs, FitId, PartError, ScreenHolder, ScreenSize, TabHold, Xvnc};
+use crate::{
+    BrowserTabs, FitId, PartError, ScreenHolder, ScreenSize, TabHold, Viewer, ViewerGeometry, Xvnc,
+};
 use browseros_core::{TabId, TargetId};
 use neo_trace::EpochMillis;
 use std::collections::HashMap;
@@ -58,10 +60,11 @@ pub struct Fit {
     pub id: FitId,
     /// The fitted tab.
     pub tab: TabId,
-    /// The screen size the tab is fitted to: the viewer's, then each size the owner's viewer
-    /// resizes the screen to.
+    /// The physical screen the tab is fitted to, including external viewer resizes.
     pub screen: ScreenSize,
-    /// Mobile or desktop, from the screen's size.
+    /// The logical device and preview scale currently shared by every active fit.
+    pub viewer: ViewerGeometry,
+    /// Mobile or desktop, from the logical viewer width.
     pub mode: FitMode,
     /// How its last application landed.
     pub fitted: Fitted,
@@ -219,30 +222,35 @@ impl Fits {
     }
 
     /// Fits `tab` to `viewer`: brings the tab to the front, resizes Neo's screen, then resets
-    /// zoom and sets the window and the viewport for the screen's size. Returns once that ran,
+    /// zoom and sets the window and the viewport for the logical viewer. Returns once that ran,
     /// with `fitted` saying whether all of it landed. The first fit starts the fits loop and
     /// the screen watcher. From the start of its claim to the end of its restore, the fit holds
     /// the screen for its owner.
     ///
     /// # Errors
-    /// `UnusableViewer` under 100 px a side; `TabNotFound`; `Browser` when the tab's window
-    /// cannot be read; `Screen` when Xvnc cannot be resized, which leaves the fits and the
-    /// surface as they were; `TimedOut` when an in-flight viewport change does not finish
-    /// within the browser-step budget, before any fit is claimed.
-    pub async fn fit(self: &Arc<Self>, tab: TabId, viewer: ScreenSize) -> Result<Fit, PartError> {
-        let layout = layout_for(viewer).ok_or(PartError::UnusableViewer(viewer))?;
-        // Before anything awaits. The claim's activation waits for the front turn, and without
-        // the hold an agent move could pass the screen rule meanwhile and land on top of it. A
-        // failed claim drops it; a refit of an active fit keeps its entry's own.
-        let held = self.browser.hold_screen(ScreenHolder::Fit);
-        let page = self.browser.page(tab).await?;
+    /// `InvalidViewer` when a refit's inherited scale requires a phone or its resolved physical
+    /// sides exceed 4096; `UnusableViewer` under 100 px a side; `TabNotFound`; `Browser` when
+    /// the tab's window cannot be read; `Screen` when Xvnc cannot be resized, which leaves the
+    /// fits and the surface as they were; `TimedOut` when the tab lookup or an in-flight viewport
+    /// change does not finish within the browser-step budget, before any fit is claimed.
+    pub async fn fit(self: &Arc<Self>, tab: TabId, viewer: Viewer) -> Result<Fit, PartError> {
         let mut surface = self.surface.lock().await;
+        // Scale inheritance and its bounds are resolved by the surface before browser work.
+        // Its lock also prevents another fit or watcher from changing that choice mid-plan.
+        let id = self.active_fit(tab).unwrap_or_default();
+        let layout = surface.resolve_request(id, viewer)?;
+        // Before browser work. Without the hold an agent move could pass the front rule
+        // while this claim is reading the window, then land on top of its activation.
+        let held = self.browser.hold_screen(ScreenHolder::Fit);
+        // The lookup shares Surface with every restore. Bound it like a plan step so a stalled
+        // browser cannot keep another takeover fitted past its give-back budget.
+        let page = tokio::time::timeout(STEP_TIMEOUT, self.browser.page(tab))
+            .await
+            .map_err(|_| PartError::TimedOut("looking up the tab to fit"))??;
         let seen = Seen {
             window: self.browser.window(&page).await?,
             viewport: self.browser.viewport(&page).await?,
         };
-        // The tab's active fit, or a new id (a `FitId` defaults to a fresh one).
-        let id = self.active_fit(tab).unwrap_or_default();
         let before = surface.clone();
         let plan = surface.claim(id, tab, layout, seen);
         let refitted = plan.refitted();
@@ -261,6 +269,7 @@ impl Fits {
                     id,
                     tab,
                     screen: layout.screen,
+                    viewer: layout.viewer,
                     mode: layout.shape.mode(),
                     fitted,
                     state: FitState::Active,
@@ -280,16 +289,16 @@ impl Fits {
             // this one, the fits loop could take the older report for the owner's resize and
             // refit to it. The loop reads the latest size under the surface lock held here.
             let mut sizes = self.watched.subscribe();
-            let caught_up = sizes.wait_for(|size| *size == Some(viewer));
+            let caught_up = sizes.wait_for(|size| *size == Some(layout.screen));
             if tokio::time::timeout(WATCH_CATCH_UP, caught_up)
                 .await
                 .is_err()
             {
-                tracing::debug!(%viewer, "the screen watcher did not report the new size in time");
+                tracing::debug!(screen = %layout.screen, "the screen watcher did not report the new size in time");
             }
         }
         drop(surface);
-        tracing::info!(fit = %id, tab = tab.0, screen = %viewer, mode = ?layout.shape.mode(), ?fitted, "fitted");
+        tracing::info!(fit = %id, tab = tab.0, screen = %layout.screen, mode = ?layout.shape.mode(), ?fitted, "fitted");
         fit.ok_or(PartError::NotFound)
     }
 
@@ -557,8 +566,9 @@ impl Fits {
         let Some(size) = watched else {
             return;
         };
-        // Too small to fit anything: everything stays as it is until the next size.
-        let Some(layout) = layout_for(size) else {
+        // Unusable logical dimensions, below the minimum or above the scaled mobile limit,
+        // leave the last usable layout in place until the next observation.
+        let Some(layout) = surface.observed_layout(size) else {
             return;
         };
         let Some(plan) = surface.follow_screen(layout) else {
@@ -586,15 +596,16 @@ impl Fits {
                     entry.fit.id,
                     entry.fit.tab,
                     entry.fit.screen,
+                    entry.fit.viewer,
                     entry.fit.mode,
                     entry.known_popups.clone(),
                 )
             })
             .collect::<Vec<_>>();
-        for (id, tab, screen, mode, known) in active {
-            let read = owner_view::read(&self.browser, tab, mode, screen, known.as_deref());
+        for (id, tab, screen, viewer, mode, known) in active {
+            let read = owner_view::read(&self.browser, tab, mode, screen, viewer, known.as_deref());
             match tokio::time::timeout(OWNER_VIEW_BUDGET, read).await {
-                Ok(Ok(view)) => self.store(id, screen, mode, view),
+                Ok(Ok(view)) => self.store(id, screen, viewer, mode, view),
                 Ok(Err(error)) => tracing::debug!(%error, fit = %id, "an owner view read failed"),
                 Err(_) => tracing::debug!(fit = %id, "an owner view read ran out of time"),
             }
@@ -603,12 +614,25 @@ impl Fits {
 
     /// Keeps a reading, unless the fit was restored or refitted while it was read: then it
     /// describes a tab that is no longer fitted that way.
-    fn store(&self, id: FitId, screen: ScreenSize, mode: FitMode, view: OwnerView) {
+    fn store(
+        &self,
+        id: FitId,
+        screen: ScreenSize,
+        viewer: ViewerGeometry,
+        mode: FitMode,
+        view: OwnerView,
+    ) {
         let mut table = self.table();
         let Some(entry) = table.get_mut(&id) else {
             return;
         };
-        if entry.restored().is_some() || entry.fit.screen != screen || entry.fit.mode != mode {
+        // Equal physical screens can show different logical devices, such as 600x1000 at
+        // 1x and 300x500 at 2x. Every geometry component belongs to the read's identity.
+        if entry.restored().is_some()
+            || entry.fit.screen != screen
+            || entry.fit.viewer != viewer
+            || entry.fit.mode != mode
+        {
             return;
         }
         entry.fit.keyboard = view.keyboard;
@@ -631,17 +655,22 @@ impl Fits {
 }
 
 /// Records a plan that showed `layout` on every active fit: each follows the screen's size and
-/// mode, the tabs the plan refitted take its outcome, and keyboard boxes measured at an older
-/// size are dropped, since they would open the keyboard in the wrong place.
+/// mode, and the tabs the plan refitted take its outcome. Keyboard boxes measured at another
+/// logical geometry or scale are dropped even when physical dimensions match, since they
+/// would open the keyboard in the wrong place.
 fn apply(table: &mut HashMap<FitId, Entry>, layout: Layout, refitted: &[TabId], fitted: Fitted) {
     for entry in table.values_mut() {
         if entry.restored().is_some() {
             continue;
         }
-        if entry.fit.screen != layout.screen {
+        if entry.fit.screen != layout.screen
+            || entry.fit.viewer != layout.viewer
+            || entry.fit.mode != layout.shape.mode()
+        {
             entry.fit.keyboard = None;
         }
         entry.fit.screen = layout.screen;
+        entry.fit.viewer = layout.viewer;
         entry.fit.mode = layout.shape.mode();
         if refitted.contains(&entry.fit.tab) {
             entry.fit.fitted = fitted;

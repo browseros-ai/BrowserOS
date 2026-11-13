@@ -788,8 +788,14 @@ paths:
       summary: Fit a tab to a viewer's screen. A takeover part.
       description: |
         Brings the tab to the front, sizes Neo's screen to the viewer, resets the tab's zoom,
-        and sets it to mobile (a screen 600 px wide or less: mobile emulation at the screen's
-        size with touch, in a fullscreen window) or desktop (a maximized window, no emulation).
+        and sets it to mobile (a logical viewer 600 px wide or less, with touch in a fullscreen
+        window) or desktop (a maximized window, no emulation). Optional `scale: 2` draws a phone
+        preview at 200 percent on a framebuffer twice its logical width and height. Its logical
+        device size and existing DPR 2 stay the same. New fits default to scale 1; an omitted
+        scale on a refit inherits the current shared scale. Explicit 1 returns to 1x. Scale 2 on
+        a desktop, including an inherited 2, is 400 `invalid_request`. Logical sides and scaled
+        physical sides must each be at most 4096. The owner viewer should fit locally or send
+        physical scaled dimensions when requesting a remote framebuffer resize.
         Neo has one screen and one window, so the window's state is recorded once, by the first
         fit while no other is active, and put back at the last restore. Each tab's viewport mode
         is recorded by its own first fit. The first fit of a tab returns a new fit; while that
@@ -798,7 +804,11 @@ paths:
         refits the takeover's fit and returns it (the takeover's `fitId`), and the takeover's
         release restores it. A takeover started without a viewer has no fit, so a fit of its tab
         is a fit of its own, which that release does not restore. While a mobile fit is active,
-        pages the tab opens are pulled into it.
+        pages the tab opens are pulled into it. All active fits follow the latest shared layout.
+        External framebuffer resizes at scale 2 floor odd sides to logical pixels and leave at
+        most one unused edge pixel. Crossing logical width 600 switches to ordinary desktop at
+        scale 1; returning to a phone then requires explicit 2 to restore 2x. Unusable external
+        sizes leave the last usable layout in place.
       parameters:
         - $ref: '#/components/parameters/TabId'
       requestBody:
@@ -806,7 +816,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/ViewerSize'
+              $ref: '#/components/schemas/ViewerRequest'
       responses:
         '200':
           description: The fit.
@@ -900,7 +910,9 @@ paths:
         tab to `viewer` when given. A fit that fails gives back the lock. The answer names
         the parts it holds and `display`, the control display to open for the owner. A tab that already
         has an active takeover gets that takeover back as it is. A host may compose its own flow
-        from the parts instead.
+        from the parts instead. `viewer` uses the same logical size and optional scale as the
+        standalone fit request. Repeating a start returns the existing takeover unchanged;
+        resize or change scale through its fit.
       requestBody:
         required: true
         content:
@@ -1828,6 +1840,12 @@ components:
           format: int64
         screen:
           $ref: '#/components/schemas/ViewerSize'
+        viewer:
+          description: >-
+            Effective logical dimensions and scale, present only at scale 2. `screen` remains
+            the physical framebuffer size. Every active fit reflects the latest shared layout.
+          allOf:
+            - $ref: '#/components/schemas/ViewerRequest'
         mode:
           type: string
           x-extensible-enum: [mobile, desktop]
@@ -1857,7 +1875,8 @@ components:
         Boxes of the fields a phone keyboard opens for, in screen px, `[x, y, width, height]`: a
         field's own box, or for a field with no size that the page draws with its own elements
         (digit squares over a hidden code input) the drawing's box, where the owner taps. Present
-        only while they were measured at `width`×`height`.
+        only while they were measured at `width`×`height`. Dimensions and boxes are physical
+        framebuffer pixels, including the phone preview scale.
       required: [width, height, boxes, at]
       properties:
         width:
@@ -1897,7 +1916,7 @@ components:
           type: integer
           format: int64
         viewer:
-          $ref: '#/components/schemas/ViewerSize'
+          $ref: '#/components/schemas/ViewerRequest'
         reads:
           type: string
           description: The lock's `reads`, as on `LockRequest`.
@@ -1960,6 +1979,7 @@ components:
           description: When the takeover's lock ends. Neo releases the takeover 10 s before.
     ViewerSize:
       type: object
+      description: Physical framebuffer dimensions in pixels.
       required: [width, height]
       properties:
         width:
@@ -1972,6 +1992,32 @@ components:
           format: int32
           minimum: 100
           maximum: 4096
+    ViewerRequest:
+      type: object
+      description: >-
+        Logical viewer dimensions. `scale` accepts only integer 1 or 2; null, other numbers,
+        strings and booleans are 400 `invalid_request`. New fits default to 1, and refits with
+        omitted scale inherit the current shared scale. Scale 2 requires logical width at most
+        600 and both scaled physical sides at most 4096. It uses the existing mobile preview
+        zoom at 200 percent and keeps the logical device size and mobile DPR 2 unchanged.
+      required: [width, height]
+      properties:
+        width:
+          type: integer
+          format: int32
+          minimum: 100
+          maximum: 4096
+        height:
+          type: integer
+          format: int32
+          minimum: 100
+          maximum: 4096
+        scale:
+          type: integer
+          format: int32
+          minimum: 1
+          maximum: 2
+          description: Physical framebuffer pixels per logical viewer pixel, either 1 or 2.
     NavigateRequest:
       type: object
       required: [action]

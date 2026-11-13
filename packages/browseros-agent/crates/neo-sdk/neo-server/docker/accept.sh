@@ -2,12 +2,15 @@
 # Acceptance checks for a built Neo SDK image: it boots, drives a real page through `run`, keeps
 # its host contract (README.md), and survives the stops and kills a host puts it through.
 #
-#   accept.sh <image> [--data DIR] [--logs DIR] [--prefix NAME]
+#   accept.sh <image> [--data DIR] [--logs DIR] [--prefix NAME] [--case CHECK] [--scale 1|2]
 #
 #   --data    bind-mount DIR as /data and leave it there afterwards. Default: a named volume that
 #             is removed with everything else.
 #   --logs    save each container's log there, for CI artifacts.
 #   --prefix  name what it creates NAME-<run>-*. Default: neo-sdk-accept.
+#   --case    run only identity, boot and one takeover-scale, takeover-restart, takeover-expiry
+#             or takeover-refusal check in a fresh container. Default: the full acceptance suite.
+#   --scale   lifecycle check scale, 1 or 2. Default: 2. takeover-scale measures both scales.
 #
 # Prints one `PASS|FAIL|SKIP <check> <detail>` line per check and exits 1 if any check failed.
 # Everything it creates is named <prefix>-<run>-* and removed on exit: the containers, an
@@ -46,6 +49,13 @@
 #                    added mid-run shows after the script's next wait (accept_frames.py)
 #   tab-keep         host keeps survive idle sweeps; DELETE and TTL restart the idle clock;
 #                    agents can fill, read, and close kept tabs, including task.close()
+#   takeover-scale   366x700 phone metrics at 1x/2x, actual RFB 366x700/732x1400; PNG/JPEG
+#                    capture density and fixture pixels; owner input, physical keyboard boxes,
+#                    refits and restoration of display/window and a different agent viewport
+#   takeover-restart opt-in server-only SIGKILL while fitted; same browser PID/start, CDP link
+#                    and target; display/window recovery and original viewport outcome recorded
+#   takeover-expiry  opt-in 60 s TTL expires itself; original display/window/viewport and input
+#   takeover-refusal opt-in Xvnc resize rejection; 503, unchanged original state, input unlocked
 #   mcp-remote       9011 is the same MCP over TLS; with NEO_MCP_REMOTE=false (the default) a
 #                    sibling container is cut off on 9010 and 9011; with true it is answered
 #   settings         PATCH /v1/settings applies and lists an unknown name, a bad value is 400 and
@@ -72,18 +82,22 @@ usage() { sed -n '2,10p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
 
 here=$(cd -- "$(dirname -- "$0")" && pwd)
 
-image="" data_dir="" logs_dir="" name_prefix=neo-sdk-accept
+image="" data_dir="" logs_dir="" name_prefix=neo-sdk-accept selected_case="" selected_scale=2
 while [ $# -gt 0 ]; do
   case "$1" in
     --data) data_dir=${2:?--data needs a directory}; shift 2 ;;
     --logs) logs_dir=${2:?--logs needs a directory}; shift 2 ;;
     --prefix) name_prefix=${2:?--prefix needs a name}; shift 2 ;;
+    --case) selected_case=${2:?--case needs a check}; shift 2 ;;
+    --scale) selected_scale=${2:?--scale needs a value}; shift 2 ;;
     -h | --help) usage ;;
     -*) echo "accept.sh: unknown option '$1'" >&2; usage ;;
     *) [ -z "$image" ] || usage; image=$1; shift ;;
   esac
 done
 [ -n "$image" ] || usage
+case "$selected_case" in ""|takeover-scale|takeover-restart|takeover-expiry|takeover-refusal) ;; *) usage ;; esac
+case "$selected_scale" in 1|2) ;; *) usage ;; esac
 docker image inspect "$image" >/dev/null 2>&1 || { echo "accept.sh: no image '$image'" >&2; exit 2; }
 
 run_id="$(date +%s)-$$"
@@ -171,7 +185,7 @@ install_client() { # name: the probes, beside smoke.py whose MCP client they reu
   local file
   for file in "$here/smoke.py" "$here/smoke_sdk.py" "$here/accept_client.py" "$here/accept_files.py" \
     "$here/trace_values.py" "$here/accept_task_page.py" "$here/accept_tab_keep.py" \
-    "$here/accept_frames.py"; do
+    "$here/accept_frames.py" "$here/accept_takeover_scale.py" "$here/accept_takeover_lifecycle.py"; do
     docker cp -q "$file" "$1:/opt/neo-accept/" || return 1
   done
 }
@@ -205,6 +219,38 @@ runs_for() { jget "$(host_get "$1" "/v1/runs?requestId=$2")" 'len(d["body"]["ite
 lists_captcha() { # name: whether the run tool offers neo.solveCaptcha
   jget "$(client "$1" python3 accept_client.py describe http://127.0.0.1:9010/mcp)" \
     '"neo.solveCaptcha(page)" in d["description"]'
+}
+
+takeover_probe() { # container check scale: run only the probe's owned tab and save its evidence
+  local name=$1 check=$2 scale=$3 output status artifact_path lifecycle_case
+  artifact_path="/tmp/neo-accept-$check"
+  if [ "$check" = takeover-scale ]; then
+    output=$(client "$name" "${as_host[@]}" python3 accept_takeover_scale.py \
+      http://127.0.0.1:9010/mcp /run/neo/host.sock /run/neo-accept/host-token "$artifact_path" 2>&1)
+    status=$?
+  else
+    case "$check" in
+      takeover-restart) lifecycle_case=restart ;;
+      takeover-expiry) lifecycle_case=ttl ;;
+      takeover-refusal) lifecycle_case=refusal ;;
+    esac
+    # The collector revalidates the exact recorded server PID before signaling it. Root stays
+    # inside this acceptance container; the host group is still needed for the Unix socket.
+    output=$(client "$name" setpriv --regid "$host_gid" --clear-groups python3 accept_takeover_lifecycle.py \
+      --case "$lifecycle_case" --scale "$scale" http://127.0.0.1:9010/mcp \
+      /run/neo/host.sock /run/neo-accept/host-token "$artifact_path" 2>&1)
+    status=$?
+  fi
+  if [ -n "$logs_dir" ]; then
+    mkdir -p "$logs_dir/$check"
+    printf '%s\n' "$output" > "$logs_dir/$check.json"
+    docker cp -q "$name:$artifact_path/." "$logs_dir/$check/" >/dev/null 2>&1 || true
+  fi
+  if [ "$status" = 0 ] && [ "$(jget "$output" 'd["ok"]')" = True ]; then
+    result PASS "$check" "$(jget "$output" 'd["detail"]')"
+  else
+    result FAIL "$check" "$(jget "$output" '"; ".join(d["problems"])' || printf '%s' "${output:0:500}")"
+  fi
 }
 
 # --- identity --------------------------------------------------------------------------------
@@ -246,15 +292,43 @@ detail="$image_arch, browser $(fact browser), server $(fact marker) $(fact sha |
 if [ ${#problems[@]} -eq 0 ]; then result PASS identity "$detail"; else result FAIL identity "${problems[*]}"; fi
 
 if [ "$image_arch" != "$engine_arch" ]; then
-  for check in boot mcp host-api downloads pdf-downloads blobs frames tab-keep settings files trace-values mcp-remote restart-browser stop persist kill-all captcha-keys; do
-    result SKIP "$check" "$image_arch image on a $engine_arch engine: emulated, not evidence"
-  done
+  if [ -n "$selected_case" ]; then
+    result SKIP "$selected_case" "$image_arch image on a $engine_arch engine: emulated, not evidence"
+  else
+    for check in boot mcp host-api downloads pdf-downloads blobs frames tab-keep takeover-scale settings files trace-values mcp-remote restart-browser stop persist kill-all captcha-keys; do
+      result SKIP "$check" "$image_arch image on a $engine_arch engine: emulated, not evidence"
+    done
+  fi
   printf '\n'; printf '%s\n' "${results[@]}"
   exit "$failed"
 fi
 
 docker network create --internal --label neo-sdk-accept="$run_id" "$network" >/dev/null || { echo "accept.sh: no network" >&2; exit 1; }
 [ -n "$data_dir" ] || docker volume create --label neo-sdk-accept="$run_id" "$volume" >/dev/null
+
+if [ -n "$selected_case" ]; then
+  selected="$prefix-$selected_case"
+  if [ "$selected_case" = takeover-refusal ]; then
+    # This Xvnc parameter is startup-only. A launcher mounted only in this disposable
+    # container makes the real display refuse resizes without changing the built image.
+    cat > "$secrets/Xvnc" <<'XVNC'
+#!/bin/sh
+exec /usr/bin/Xtigervnc "$@" -AcceptSetDesktopSize=0
+XVNC
+    chmod 0755 "$secrets/Xvnc"
+    start_neo "$selected" -v "$secrets/Xvnc:/usr/local/bin/Xvnc:ro" -e CLAW_LOG=trace "$image"
+  else
+    start_neo "$selected" -e CLAW_LOG=trace "$image"
+  fi
+  if seconds=$(wait_healthy "$selected" 90) && install_client "$selected"; then
+    result PASS boot "fresh container healthy after ${seconds}s"
+    takeover_probe "$selected" "$selected_case" "$selected_scale"
+  else
+    result FAIL "$selected_case" "fresh container not healthy within 90 seconds or probe installation failed"
+  fi
+  printf '\n'; printf '%s\n' "${results[@]}"
+  exit "$failed"
+fi
 
 # --- boot ------------------------------------------------------------------------------------
 main="$prefix-main"
@@ -310,6 +384,10 @@ if [ "$booted" = 1 ]; then
   else
     result FAIL host-api "good=${good:0:200}; wrong=${wrong:0:120}; no_group=$no_group; agent=$agent"
   fi
+
+  # The probe's tab owns the fit and its original viewport. Release and close it before any
+  # later acceptance case uses the shared display; preserve the actual encoded images in logs.
+  takeover_probe "$main" takeover-scale 2
 
   # --- downloads -----------------------------------------------------------------------------
   # Download, upload and import, as the host uid with the socket's group.
@@ -600,7 +678,7 @@ for pid in pids:
     result FAIL captcha-keys "image's own keys listed=$main_captcha (want $want_main); host key file listed=${keyed_captcha:-not booted}"
   fi
 else
-  for check in mcp host-api downloads pdf-downloads blobs frames tab-keep settings files trace-values mcp-remote restart-browser stop persist kill-all captcha-keys; do
+  for check in mcp host-api downloads pdf-downloads blobs frames tab-keep takeover-scale settings files trace-values mcp-remote restart-browser stop persist kill-all captcha-keys; do
     result FAIL "$check" "not run: the image did not boot"
   done
 fi

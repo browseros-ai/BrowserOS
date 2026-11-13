@@ -33,6 +33,10 @@ async fn a_fit_answers_with_the_contracts_fit_and_restores_once() -> TestResult 
     );
     assert_eq!(fitted.body["mode"], "mobile");
     assert!(
+        fitted.body.get("viewer").is_none(),
+        "legacy fits keep their wire shape"
+    );
+    assert!(
         matches!(fitted.body["fit"].as_str(), Some("fitted" | "partial")),
         "{}",
         fitted.body
@@ -132,6 +136,90 @@ async fn fit_requests_that_name_nothing_or_do_not_parse_are_refused() -> TestRes
         1,
         "only the screen put home at start"
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn scale_is_optional_for_refits_and_only_two_x_adds_viewer_metadata() -> TestResult {
+    let h = harness().await?;
+    h.browser.open_tab(12);
+    let fit = h
+        .post("/v1/tabs/12/fit", r#"{"width":366,"height":700,"scale":2}"#)
+        .await?;
+    assert_eq!(fit.status, StatusCode::OK, "{}", fit.body);
+    assert_eq!(fit.body["screen"], json!({"width":732,"height":1400}));
+    assert_eq!(
+        fit.body["viewer"],
+        json!({"width":366,"height":700,"scale":2})
+    );
+    assert_eq!(fit.body["mode"], "mobile");
+    let refit = h
+        .post("/v1/tabs/12/fit", r#"{"width":366,"height":500}"#)
+        .await?;
+    assert_eq!(refit.status, StatusCode::OK, "{}", refit.body);
+    assert_eq!(refit.body["id"], fit.body["id"]);
+    assert_eq!(refit.body["screen"], json!({"width":732,"height":1000}));
+    assert_eq!(
+        refit.body["viewer"],
+        json!({"width":366,"height":500,"scale":2})
+    );
+    h.post("/v1/tabs/12/fit", r#"{"width":700,"height":366}"#)
+        .await?
+        .assert_error(StatusCode::BAD_REQUEST, "invalid_request");
+    let reset = h
+        .post("/v1/tabs/12/fit", r#"{"width":700,"height":366,"scale":1}"#)
+        .await?;
+    assert_eq!(reset.status, StatusCode::OK, "{}", reset.body);
+    assert_eq!(reset.body["screen"], json!({"width":700,"height":366}));
+    assert!(
+        reset.body.get("viewer").is_none(),
+        "effective 1x emits the legacy fields"
+    );
+    let id = fit.body["id"].as_str().ok_or("a fit id")?;
+    h.post(&format!("/v1/fits/{id}/restore"), "").await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn invalid_scale_and_scaled_bounds_are_rejected_before_control_effects() -> TestResult {
+    let h = harness().await?;
+    h.browser.open_tab(12);
+    h.browser.become_unreachable();
+    let mut viewers = vec![
+        json!({"width":601,"height":700,"scale":2}),
+        json!({"width":366,"height":2049,"scale":2}),
+        json!({"width":366,"height":65535,"scale":2}),
+    ];
+    for scale in [
+        json!(0),
+        json!(-1),
+        json!(3),
+        json!(2147483648_i64),
+        json!(1.5),
+        json!(null),
+        json!("2"),
+        json!(true),
+    ] {
+        viewers.push(json!({"width":366,"height":700,"scale":scale}));
+    }
+    for viewer in viewers {
+        h.post("/v1/tabs/12/fit", &viewer.to_string())
+            .await?
+            .assert_error(StatusCode::BAD_REQUEST, "invalid_request");
+        h.post(
+            "/v1/takeovers",
+            &json!({"tabId":12,"viewer":viewer}).to_string(),
+        )
+        .await?
+        .assert_error(StatusCode::BAD_REQUEST, "invalid_request");
+    }
+    assert_eq!(
+        h.xvnc.resizes().len(),
+        1,
+        "only service startup resized the display"
+    );
+    assert_eq!(h.service.front().check(), Ok(()));
+    assert!(!h.service.locks().is_locked(TabId(12)));
     Ok(())
 }
 
