@@ -8,7 +8,7 @@
  * its target, exactly as it does for an element the page styles with a pointer cursor.
  *
  * The vendored engine reads every computed style through the frame window's `getComputedStyle`
- * (domUtils `getElementComputedStyle`, reached from `computeBox`). Like hideBrowserOSUi, this
+ * (domUtils `getElementComputedStyle`, reached from `computeBox`). Like shadow-roots.ts, this
  * overrides what the engine reads, never the page: the override is this isolated world's own
  * property on its own window, so the page's world, its scripts and its styles never see it. It
  * is installed only around the one snapshot call that has targets and removed in `finally`, so

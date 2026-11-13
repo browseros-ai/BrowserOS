@@ -1766,3 +1766,415 @@ async fn tests_that_a_control_the_engine_does_not_draw_does_not_make_a_container
     }
     Ok(())
 }
+
+/// Closed shadow roots (design.md section 18): a button, a text box, a frame and a line of text
+/// in a closed root; a closed root holding a section that holds a second closed root; and a
+/// closed root that shows its host's own button through a slot. The page's own script keeps
+/// every root, so only the page can reach inside one; the button counts its clicks. Thirty
+/// ordinary links follow, so that one changed line is a delta and not most of the page.
+const CLOSED_PAGE: &str = r##"<!doctype html><html><head><title>Closed</title></head><body>
+<main>
+<h1>Closed roots</h1>
+<div id="host"></div>
+<div id="outer"></div>
+<div id="slotted"><button>Slotted button</button></div>
+</main>
+<script>
+const host = document.getElementById('host').attachShadow({ mode: 'closed' })
+host.innerHTML = '<button>Closed button</button><input aria-label="Closed box"><iframe title="Inner frame" src="/closed/frame.html"></iframe><p>Clicked 0</p>'
+let clicks = 0
+host.querySelector('button').addEventListener('click', () => { host.querySelector('p').textContent = `Clicked ${++clicks}` })
+const outer = document.getElementById('outer').attachShadow({ mode: 'closed' })
+outer.innerHTML = '<section aria-label="Outer"><p>Outer text</p><div></div></section>'
+outer.querySelector('div').attachShadow({ mode: 'closed' }).innerHTML = '<button>Nested button</button>'
+document.getElementById('slotted').attachShadow({ mode: 'closed' }).innerHTML = '<p>Slot text</p><slot></slot>'
+document.querySelector('main').insertAdjacentHTML('beforeend', Array.from({ length: 30 }, (_, i) => `<p><a href="#s${i}">Story ${i}</a></p>`).join(''))
+</script>
+</body></html>"##;
+
+/// The frame inside the first closed root. Two elements, since the engine inlines a frame
+/// body's only child into the frame's line.
+const CLOSED_FRAME: &str =
+    "<!doctype html><html><body><button>Frame button</button><p>Frame text</p></body></html>";
+
+/// The ref the first line of `text` holding `line` prints.
+fn ref_on(text: &str, line: &str) -> TestResult<String> {
+    let found = text
+        .lines()
+        .find(|printed| printed.contains(line))
+        .ok_or_else(|| format!("no line with {line}:\n{text}"))?;
+    let r#ref = found
+        .split("[ref=")
+        .nth(1)
+        .and_then(|rest| rest.split(']').next())
+        .ok_or_else(|| format!("no ref on {found}"))?;
+    Ok(r#ref.to_owned())
+}
+
+/// What is inside a closed root prints, and is acted on, as inside an open one: the default
+/// format, `{ text: true }`, `{ text: false }` and `mode: 'full'` all print the button, the
+/// text box, the frame with its content, and the button inside the nested closed root, with
+/// refs; the slotted button prints once beside the closed root's own text. A click and a fill
+/// through the printed refs reach the page's own elements, a role locator finds the nested
+/// button once a snapshot has read the page, and the page's own script still reads `null` from
+/// every closed host. A delta after a change inside the root lists it. Under the spec harness's
+/// conformance switch, on the same page, nothing inside a closed root prints and no DOM capture
+/// is made.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_closed_shadow_root_reads_and_acts_as_an_open_one() -> TestResult {
+    let _alone = ALONE.acquire().await?;
+    let page = |html: &str| Page::html(html).with_header("cache-control", "no-store");
+    let server = FixtureServer::start(HashMap::from([
+        ("/closed/page.html".to_owned(), page(CLOSED_PAGE)),
+        ("/closed/frame.html".to_owned(), page(CLOSED_FRAME)),
+    ]))
+    .await?;
+    let url = json!(server.url("127.0.0.1", "/closed/page.html"));
+    let run = Arc::new(LiveRun::connect().await?);
+    let host: Arc<dyn OpHost> = Arc::clone(&run) as Arc<dyn OpHost>;
+    let read = js_runner::run_script(
+        &host,
+        &json!({ "page": null }),
+        &format!(
+            "await page.goto({url})\n\
+             const plain = await page.ariaSnapshot()\n\
+             const text = await page.ariaSnapshot({{ text: true }})\n\
+             const interactive = await page.ariaSnapshot({{ text: false }})\n\
+             const full = await page.ariaSnapshot({{ mode: 'full' }})\n\
+             const refOn = (line) => interactive.split('\\n').find((l) => l.includes(line)).match(/\\[ref=([^\\]]+)\\]/)[1]\n\
+             await page.getByRef(refOn('button \"Closed button\"')).click()\n\
+             const box = page.getByRef(refOn('textbox \"Closed box\"'))\n\
+             await box.fill('typed')\n\
+             const nested = await page.getByRole('button', {{ name: 'Nested button' }}).count()\n\
+             const clicked = await page.getByText('Clicked 1').count()\n\
+             const value = await box.inputValue()\n\
+             const pageReads = await page.evaluate(() => ['host', 'outer', 'slotted'].map((id) => document.getElementById(id).shadowRoot))\n\
+             return {{ plain, text, interactive, full, nested, clicked, value, pageReads, tab: page.toJSON().tab }}"
+        ),
+    )
+    .await?;
+    assert_closed_content_reads(&read);
+    // The reading run is dropped; the delta's own runs make and read the baseline.
+    run.end_run(None);
+    let tab = read["tab"].as_i64().ok_or("the page's tab")?;
+    let init = json!({ "page": { "$neo": "page", "tab": tab } });
+    assert_closed_change_is_listed(&run, &host, &init).await?;
+    js_runner::run_script(&host, &init, "await page.close()").await?;
+    assert_the_switch_keeps_roots_closed(&run, &url).await
+}
+
+/// Every form prints what is inside the closed roots, and the actions through its refs land.
+fn assert_closed_content_reads(read: &Value) {
+    let field = |key: &str| read.get(key).cloned().unwrap_or_default();
+    let form = |key: &str| field(key).as_str().unwrap_or_default().to_owned();
+    for key in ["plain", "text", "interactive", "full"] {
+        let printed = form(key);
+        for line in [
+            "- button \"Closed button\" [ref=",
+            "- textbox \"Closed box\" [ref=",
+            "- iframe [ref=",
+            "- button \"Frame button\" [ref=f",
+            "- button \"Nested button\" [ref=",
+            "- button \"Slotted button\" [ref=",
+        ] {
+            assert!(printed.contains(line), "{key}: {line}\n{printed}");
+        }
+        assert_eq!(
+            printed.matches("Slotted button").count(),
+            1,
+            "{key}: the slotted button prints once, where the slot shows it\n{printed}"
+        );
+        // The interactive form leaves text out; every other form has it, and shows the slotted
+        // button where the slot is, after the root's own text.
+        if key != "interactive" {
+            for words in ["Clicked 0", "Outer text", "Slot text", "Frame text"] {
+                assert!(printed.contains(words), "{key}: {words}\n{printed}");
+            }
+            assert!(
+                printed.find("Slot text") < printed.find("Slotted button"),
+                "{key}: the slot shows the button after the root's text\n{printed}"
+            );
+        }
+    }
+    assert_eq!(
+        field("nested"),
+        1,
+        "a role locator reaches the nested closed root"
+    );
+    assert_eq!(field("clicked"),
+        1, "the click through the ref reached the page");
+    assert_eq!(field("value"),
+        "typed", "the fill through the ref reached the page");
+    assert_eq!(
+        field("pageReads"),
+        json!([null, null, null]),
+        "the page's own world still reads null from every closed host"
+    );
+}
+
+/// One run returns the page whole, which makes the tab's baseline; the next clicks inside the
+/// closed root, and its delta lists the change.
+async fn assert_closed_change_is_listed(
+    run: &LiveRun,
+    host: &Arc<dyn OpHost>,
+    init: &Value,
+) -> TestResult {
+    let base =
+        js_runner::run_script(host, init, "return { base: await page.ariaSnapshot() }").await?;
+    run.end_run(Some(&base));
+    let button = ref_on(
+        base.get("base").and_then(Value::as_str).ok_or("the baseline")?,
+        "- button \"Closed button\"",
+    )?;
+    let changed = js_runner::run_script(
+        host,
+        init,
+        &format!(
+            "await page.getByRef({button}).click()\n\
+             return {{ delta: await page.ariaSnapshot({{ delta: true }}) }}",
+            button = json!(button)
+        ),
+    )
+    .await?;
+    let delta = changed
+        .get("delta")
+        .and_then(Value::as_str)
+        .ok_or("the delta")?;
+    let listed = |mark: char, words: &str| {
+        delta
+            .lines()
+            .any(|line| line.starts_with(mark) && line.ends_with(&format!("- text: {words}")))
+    };
+    assert!(
+        delta.starts_with("# changes since your last snapshot of this tab:")
+            && listed('-', "Clicked 1")
+            && listed('+', "Clicked 2"),
+        "the change inside the closed root is listed: {delta}"
+    );
+    Ok(())
+}
+
+/// Under the switch: Playwright's own text, without what the closed roots hold, and no capture.
+async fn assert_the_switch_keeps_roots_closed(run: &Arc<LiveRun>, url: &Value) -> TestResult {
+    let upstream: Arc<dyn OpHost> = Arc::new(Upstream(Arc::clone(run)));
+    run.record_methods();
+    let ai = js_runner::run_script(
+        &upstream,
+        &json!({ "page": null }),
+        &format!(
+            "try {{\n\
+               await page.goto({url})\n\
+               return {{ ai: await page.ariaSnapshot({{ mode: 'ai' }}) }}\n\
+             }} finally {{\n\
+               await page.close()\n\
+             }}"
+        ),
+    )
+    .await?;
+    let methods = run.recorded_methods();
+    let ai = ai
+        .get("ai")
+        .and_then(Value::as_str)
+        .ok_or("Playwright's ai text")?;
+    for inside in ["Closed button", "Closed box", "Nested button", "Outer text", "Slot text"] {
+        assert!(!ai.contains(inside), "under the switch {inside} stays closed: {ai}");
+    }
+    assert!(
+        ai.contains("Slotted button"),
+        "the host's own button is light content, which upstream reads: {ai}"
+    );
+    assert!(
+        !methods.iter().any(|method| method == "DOMSnapshot.captureSnapshot"),
+        "under the switch no capture is made: {methods:?}"
+    );
+    Ok(())
+}
+
+/// The call-log lines a run's ops noted so far.
+fn notes(run: &LiveRun) -> Vec<String> {
+    run.calls()
+        .into_iter()
+        .filter_map(|call| match call {
+            live_run::EnvCall::Note(line) => Some(line),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The text of the page at `url` snapshotted with `options`, by a run that opens and closes its tab.
+async fn snapshot_of(host: &Arc<dyn OpHost>, url: &str, options: &str) -> TestResult<String> {
+    let result = js_runner::run_script(
+        host,
+        &json!({ "page": null }),
+        &format!(
+            "try {{\n\
+               await page.goto({url})\n\
+               return await page.ariaSnapshot({options})\n\
+             }} finally {{\n\
+               await page.close()\n\
+             }}",
+            url = json!(url)
+        ),
+    )
+    .await?;
+    Ok(result.as_str().ok_or("the snapshot")?.to_owned())
+}
+
+/// A closed root that holds a list of 150 items, each a button in an `li`: one root, so one
+/// seed, since a list, an item and a button cannot host a root of their own. Every item prints.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_large_closed_root_takes_one_seed_and_prints_whole() -> TestResult {
+    let _alone = ALONE.acquire().await?;
+    let html = "<!doctype html><html><body><main><div id=\"host\"></div></main><script>\n\
+                const items = Array.from({ length: 150 }, (_, i) => `<li><button>Item ${i}</button></li>`).join('')\n\
+                document.getElementById('host').attachShadow({ mode: 'closed' }).innerHTML = `<ul>${items}</ul>`\n\
+                </script></body></html>";
+    let server = FixtureServer::start(HashMap::from([(
+        "/closed/list.html".to_owned(),
+        Page::html(html).with_header("cache-control", "no-store"),
+    )]))
+    .await?;
+    let run = Arc::new(LiveRun::connect().await?);
+    let host: Arc<dyn OpHost> = Arc::clone(&run) as Arc<dyn OpHost>;
+    let url = server.url("127.0.0.1", "/closed/list.html");
+    let text = snapshot_of(&host, &url, "{ maxTokens: 100000 }").await?;
+    for item in [0, 1, 75, 149] {
+        let line = format!("- button \"Item {item}\" [ref=");
+        assert!(text.contains(&line), "{line}\n{text}");
+    }
+    assert!(!text.contains("# partial"), "{text}");
+    let notes = notes(&run);
+    assert!(
+        notes
+            .iter()
+            .any(|line| line.ends_with(", closed shadow root seeds: 1")),
+        "one seed went: {notes:#?}"
+    );
+    Ok(())
+}
+
+/// `count` hosts, each with a closed root holding one button: a page built from many small
+/// closed components needs one seed per component.
+fn closed_cards(count: usize) -> String {
+    format!(
+        "<!doctype html><html><body><main></main><script>\n\
+         const main = document.querySelector('main')\n\
+         for (let i = 0; i < {count}; i++) {{\n\
+           const card = main.appendChild(document.createElement('div'))\n\
+           card.attachShadow({{ mode: 'closed' }}).innerHTML = `<button>Card ${{i}}</button>`\n\
+         }}\n\
+         </script></body></html>"
+    )
+}
+
+/// More closed roots than a frame sends seeds for: the text says so on its first line, in the
+/// default format and in `mode: 'full'`, and the op's call log names the cut; the roots that
+/// were sent print. With fewer roots than the cap, no such line and every card prints.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_more_closed_roots_than_the_cap_say_so_in_the_text() -> TestResult {
+    let _alone = ALONE.acquire().await?;
+    let page = |html: String| Page::html(&html).with_header("cache-control", "no-store");
+    let server = FixtureServer::start(HashMap::from([
+        ("/closed/many.html".to_owned(), page(closed_cards(1_001))),
+        ("/closed/few.html".to_owned(), page(closed_cards(40))),
+    ]))
+    .await?;
+    let run = Arc::new(LiveRun::connect().await?);
+    let host: Arc<dyn OpHost> = Arc::clone(&run) as Arc<dyn OpHost>;
+    let many = server.url("127.0.0.1", "/closed/many.html");
+    let line = "# partial: closed shadow roots not all read (1000 of 1001)";
+    for options in ["{ text: false }", "{ mode: 'full' }"] {
+        let text = snapshot_of(&host, &many, options).await?;
+        assert_eq!(text.lines().next(), Some(line), "{options}: {text}");
+        assert!(text.contains("- button \"Card 0\" [ref="), "{options}: {text}");
+    }
+    let notes = notes(&run);
+    assert!(
+        notes
+            .iter()
+            .any(|line| line == "  closed shadow roots: a frame has 1001 seeds, the first 1000 sent"),
+        "the cut is on the call log: {notes:#?}"
+    );
+    let few = server.url("127.0.0.1", "/closed/few.html");
+    for options in ["{}", "{ mode: 'full' }"] {
+        let text = snapshot_of(&host, &few, options).await?;
+        assert!(!text.contains("# partial"), "{options}: {text}");
+        for card in [0, 39] {
+            let line = format!("- button \"Card {card}\" [ref=");
+            assert!(text.contains(&line), "{options}: {line}\n{text}");
+        }
+    }
+    Ok(())
+}
+
+/// Slots in closed roots, each shape in a host of its own: named slots that show the host's
+/// children out of their order, a host child no slot takes, a root that assigns its slot by hand
+/// (`slot.assign()`) and leaves a child out, and a slot inside a slot (a root that shows its host's
+/// child through a slot placed in a nested root's host). `?mode=open` builds the same page with
+/// open roots.
+const SLOTS_PAGE: &str = r#"<!doctype html><html><head><title>Slots</title></head><body>
+<main>
+<div id="named"><button slot="b">Bee</button><button slot="a">Ay</button><button>Unslotted</button></div>
+<div id="manual"><button id="one">One</button><button id="two">Two</button></div>
+<div id="nested"><button>Deep</button></div>
+</main>
+<script>
+const mode = new URLSearchParams(location.search).get('mode') ?? 'closed'
+const root = (id, init) => document.getElementById(id).attachShadow({ mode, ...init })
+root('named').innerHTML = '<p>Named</p><slot name="a"></slot><slot name="b"></slot>'
+const manual = root('manual', { slotAssignment: 'manual' })
+manual.innerHTML = '<p>Manual</p><slot></slot>'
+manual.querySelector('slot').assign(document.getElementById('two'))
+const outer = root('nested')
+outer.innerHTML = '<p>Outer</p><div class="inner"><slot></slot></div>'
+outer.querySelector('.inner').attachShadow({ mode }).innerHTML = '<p>Inner</p><slot></slot>'
+</script>
+</body></html>"#;
+
+/// A closed root's slots show what an open root's would: on the same page, the default format and
+/// `mode: 'full'` print the same text with closed roots as with open ones, refs aside, so the
+/// host children no slot takes stay hidden and every slotted one prints once, where its slot is.
+/// Under the conformance switch the closed page reads as upstream reads it, its roots closed:
+/// none of their own text, and the hosts' drawn children in document order.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_closed_roots_slot_their_hosts_children_as_open_ones_do() -> TestResult {
+    let _alone = ALONE.acquire().await?;
+    let server = FixtureServer::start(HashMap::from([(
+        "/closed/slots.html".to_owned(),
+        Page::html(SLOTS_PAGE).with_header("cache-control", "no-store"),
+    )]))
+    .await?;
+    let run = Arc::new(LiveRun::connect().await?);
+    let host: Arc<dyn OpHost> = Arc::clone(&run) as Arc<dyn OpHost>;
+    let closed = server.url("127.0.0.1", "/closed/slots.html");
+    let open = format!("{closed}?mode=open");
+    for options in ["{ text: true }", "{ mode: 'full' }"] {
+        let closed_text = without_refs(&snapshot_of(&host, &closed, options).await?);
+        let open_text = without_refs(&snapshot_of(&host, &open, options).await?);
+        assert_eq!(closed_text, open_text, "{options}");
+        for shown in ["Named", "Ay", "Bee", "Manual", "Two", "Outer", "Inner", "Deep"] {
+            assert_eq!(closed_text.matches(shown).count(), 1, "{options}: {shown}\n{closed_text}");
+        }
+        for hidden in ["Unslotted", "One"] {
+            assert!(!closed_text.contains(hidden), "{options}: {hidden}\n{closed_text}");
+        }
+        assert!(
+            closed_text.find("\"Ay\"") < closed_text.find("\"Bee\""),
+            "{options}: named slots show in their own order\n{closed_text}"
+        );
+    }
+    let upstream: Arc<dyn OpHost> = Arc::new(Upstream(Arc::clone(&run)));
+    let ai = snapshot_of(&upstream, &closed, "{ mode: 'ai' }").await?;
+    for inside in ["Named", "Manual", "Outer", "Inner"] {
+        assert!(!ai.contains(inside), "under the switch {inside} stays closed: {ai}");
+    }
+    assert!(
+        ai.find("\"Bee\"") < ai.find("\"Ay\""),
+        "upstream reads a closed host's own drawn children in their own order, not the slots': {ai}"
+    );
+    Ok(())
+}

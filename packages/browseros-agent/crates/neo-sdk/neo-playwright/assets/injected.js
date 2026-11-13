@@ -8399,43 +8399,6 @@ ${value.stack}`;
     }
   }
 
-  // crates/neo-sdk/neo-playwright-js/src/probe/browseros-ui.ts
-  var BROWSEROS_UI_HOSTS = new Set([
-    "browseros-neo-takeover"
-  ]);
-  function isBrowserOSUi(element) {
-    return BROWSEROS_UI_HOSTS.has(element.localName);
-  }
-  var installed = false;
-  function shadowRootReader() {
-    let owner = Element.prototype;
-    while (owner) {
-      const descriptor = Object.getOwnPropertyDescriptor(owner, "shadowRoot");
-      if (descriptor) {
-        if (typeof descriptor.get !== "function")
-          throw new ProbeError("internal", "this world's Element.prototype.shadowRoot is not an accessor");
-        return descriptor.get;
-      }
-      owner = Object.getPrototypeOf(owner);
-    }
-    return;
-  }
-  function hideBrowserOSUi() {
-    if (installed)
-      return;
-    installed = true;
-    const read = shadowRootReader();
-    if (!read)
-      return;
-    Object.defineProperty(Element.prototype, "shadowRoot", {
-      configurable: true,
-      enumerable: true,
-      get() {
-        return isBrowserOSUi(this) ? null : Reflect.apply(read, this, []);
-      }
-    });
-  }
-
   // crates/neo-sdk/neo-playwright-js/src/probe/document.ts
   function documentText(world, request) {
     const { injected } = world;
@@ -8668,7 +8631,7 @@ ${value.stack}`;
   }
 
   // crates/neo-sdk/neo-playwright-js/src/probe/protocol.ts
-  var PROTOCOL = 30;
+  var PROTOCOL = 31;
 
   // crates/neo-sdk/neo-playwright-js/src/probe/read.ts
   var XHTML = "http://www.w3.org/1999/xhtml";
@@ -8861,6 +8824,103 @@ ${value.stack}`;
     return { kind: "value", value: null };
   }
 
+  // crates/neo-sdk/neo-playwright-js/src/probe/browseros-ui.ts
+  var BROWSEROS_UI_HOSTS = new Set([
+    "browseros-neo-takeover"
+  ]);
+  function isBrowserOSUi(element) {
+    return BROWSEROS_UI_HOSTS.has(element.localName);
+  }
+
+  // crates/neo-sdk/neo-playwright-js/src/probe/shadow-roots.ts
+  var closedRoots = new WeakMap;
+  var realShadowRoot;
+  var installed = false;
+  function getterOf(prototype, name) {
+    let owner = prototype;
+    while (owner) {
+      const descriptor = Object.getOwnPropertyDescriptor(owner, name);
+      if (descriptor) {
+        if (typeof descriptor.get !== "function")
+          throw new ProbeError("internal", `this world's ${name} is not an accessor`);
+        return descriptor.get;
+      }
+      owner = Object.getPrototypeOf(owner);
+    }
+    return;
+  }
+  function override(prototype, name, get) {
+    Object.defineProperty(prototype, name, {
+      configurable: true,
+      enumerable: true,
+      get
+    });
+  }
+  function installShadowRoots() {
+    if (installed)
+      return;
+    installed = true;
+    const read = getterOf(Element.prototype, "shadowRoot");
+    if (!read)
+      return;
+    realShadowRoot = read;
+    override(Element.prototype, "shadowRoot", function() {
+      if (isBrowserOSUi(this))
+        return null;
+      return Reflect.apply(read, this, []) ?? closedRoots.get(this) ?? null;
+    });
+    for (const prototype of [Element.prototype, Text.prototype]) {
+      const slot = getterOf(prototype, "assignedSlot");
+      if (!slot)
+        continue;
+      override(prototype, "assignedSlot", function() {
+        return Reflect.apply(slot, this, []) ?? closedSlotOf(this);
+      });
+    }
+  }
+  var slotMaps = new Map;
+  var dropScheduled = false;
+  function closedSlotOf(node) {
+    const host = node.parentElement;
+    const root = host ? closedRoots.get(host) : undefined;
+    if (!root)
+      return null;
+    let slots = slotMaps.get(root);
+    if (!slots) {
+      slots = new Map;
+      for (const slot of root.querySelectorAll("slot"))
+        for (const assigned of slot.assignedNodes())
+          if (!slots.has(assigned))
+            slots.set(assigned, slot);
+      slotMaps.set(root, slots);
+      if (!dropScheduled) {
+        dropScheduled = true;
+        queueMicrotask(() => {
+          dropScheduled = false;
+          slotMaps.clear();
+        });
+      }
+    }
+    return slots.get(node) ?? null;
+  }
+  function openClosedRoots(seeds) {
+    const read = realShadowRoot;
+    if (!read)
+      return;
+    for (const seed of seeds) {
+      if (!(seed instanceof Node))
+        continue;
+      const root = seed.getRootNode();
+      if (!(root instanceof ShadowRoot))
+        continue;
+      const host = root.host;
+      if (isBrowserOSUi(host))
+        continue;
+      if (Reflect.apply(read, host, []) !== root)
+        closedRoots.set(host, root);
+    }
+  }
+
   // crates/neo-sdk/neo-playwright-js/src/probe/pointer-targets.ts
   var INTERACTIVE_TAGS = new Set([
     "a",
@@ -9043,6 +9103,9 @@ ${value.stack}`;
     return element ? { kind: "one", element } : { kind: "none" };
   }
   function snapshot(world, request, root, nodes) {
+    const seeds = request.closedRoots ?? 0;
+    openClosedRoots(nodes.slice(0, seeds));
+    const targets = nodes.slice(seeds);
     const found = request.root === "document" ? frameRoot(world) : resolveTarget(world, request.root, "strict", root);
     if (found.kind !== "one")
       return found;
@@ -9057,7 +9120,7 @@ ${value.stack}`;
       roleOf: (of) => injected.utils.getAriaRole(of),
       isVisible: (of) => injected.utils.isElementVisible(of)
     };
-    const { result, skipped } = marked(nodes, engine, plain);
+    const { result, skipped } = marked(targets, engine, plain);
     const { json, iframeRefs, iframeDepths } = result;
     const iframes = [];
     if (request.mode === "ai") {
@@ -9078,8 +9141,8 @@ ${value.stack}`;
       ...skipped ? { marksSkipped: true } : {}
     };
   }
-  function marked(nodes, engine, snapshot) {
-    const elements = nodes.filter((node) => node instanceof Element);
+  function marked(targets, engine, snapshot) {
+    const elements = targets.filter((node) => node instanceof Element);
     if (elements.length === 0)
       return { result: snapshot(), skipped: false };
     try {
@@ -9358,7 +9421,7 @@ ${value.stack}`;
         pins.clear();
         refs.forget();
         listenForMoves();
-        hideBrowserOSUi();
+        installShadowRoots();
         const injected = createEngine(frameSeq);
         injected.onGlobalListenersRemoved.add(listenForMoves);
         refs.install(engineTable(injected), injected.utils);

@@ -9,6 +9,8 @@
  * end of the document, and a cut must never hide one.
  */
 
+import type { SnapshotResult } from './wire'
+
 /** One rendered line of a form, indented, with what the cap needs to know about it. */
 export type Printed = {
   text: string
@@ -44,18 +46,31 @@ export function aboutTokens(chars: number): number {
 }
 
 /**
- * `notice` and `lines` within `limit` characters. The notice counts toward the limit; the cut
- * line and the kept blocks printed after it do not. `call` is the snapshot call the cut line
- * offers on a section's ref, in the caller's own mode, so following the offer gives that
- * section in the same format as the text that was cut.
+ * The comment lines a v1 or full-mode text opens with, before the tree, for what the tree may
+ * lack: some closed shadow roots, when clickable marking found more of their seeds than it
+ * could hand a probe (Rust's `closedRoots`). At the top, so a cut never hides them.
+ */
+export function partialHead(result: SnapshotResult): string[] {
+  const roots = result.closedRoots
+  return roots
+    ? [
+        `# partial: closed shadow roots not all read (${roots.sent} of ${roots.found})`,
+      ]
+    : []
+}
+
+/**
+ * `head` and `lines` within `limit` characters. The head lines (the notice, the partial lines)
+ * count toward the limit; the cut line and the kept blocks printed after it do not. `call` is
+ * the snapshot call the cut line offers on a section's ref, in the caller's own mode, so
+ * following the offer gives that section in the same format as the text that was cut.
  */
 export function cap(
-  notice: string | null,
+  head: readonly string[],
   lines: readonly Printed[],
   limit: number,
   call = 'ariaSnapshot()',
 ): string {
-  const head = notice === null ? [] : [notice]
   const whole = [...head, ...lines.map((line) => line.text)].join('\n')
   if (whole.length <= limit) return whole
   // Whole lines from the top while they fit; `used` counts the newline before each but the first.

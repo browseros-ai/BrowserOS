@@ -158,8 +158,10 @@ pub(crate) enum ProbeRequest {
     Selector { target: ProbeTarget },
     /// `ariaSnapshotJSON` of `root` and this frame's rendered iframe refs. `root: document` is
     /// upstream's frame root, `body,frameset`. Any nodes the call carries after its root
-    /// ([`super::call_with_nodes`]) are clickable marking's targets: for this call the engine
-    /// reads them as `cursor: pointer` (probe/pointer-targets.ts).
+    /// ([`super::call_with_nodes`]) come from clickable marking's read of the frame: the first
+    /// `closed_roots` sit inside closed shadow roots, which the world opens to its engine from
+    /// then on (probe/shadow-roots.ts), and the rest are marking's targets, which for this call
+    /// the engine reads as `cursor: pointer` (probe/pointer-targets.ts).
     Snapshot {
         root: ProbeTarget,
         mode: SnapshotMode,
@@ -172,6 +174,11 @@ pub(crate) enum ProbeRequest {
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         #[ts(optional, as = "Option<bool>")]
         boxes: bool,
+        /// How many of the call's nodes, first, are seeds of closed shadow roots; none outside
+        /// clickable marking.
+        #[serde(default, skip_serializing_if = "is_zero")]
+        #[ts(optional, as = "Option<u32>")]
+        closed_roots: u32,
     },
     /// One poll of one retrying matcher; Rust's loop owns the timing, `.not` and the failure.
     Expect {
@@ -538,6 +545,15 @@ pub(crate) enum UrlPattern {
         regex_source: String,
         regex_flags: String,
     },
+}
+
+/// Serde's skip test for a count that is absent from the wire when zero.
+#[expect(
+    clippy::trivially_copy_pass_by_ref,
+    reason = "serde's skip_serializing_if passes the field by reference"
+)]
+fn is_zero(count: &u32) -> bool {
+    *count == 0
 }
 
 #[cfg(test)]

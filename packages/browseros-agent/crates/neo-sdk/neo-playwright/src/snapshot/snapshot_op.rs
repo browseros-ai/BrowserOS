@@ -14,8 +14,9 @@
 //! ```
 //!
 //! With `clickable` in mode `ai` (the prelude's v1 text asks for it), each frame's snapshot call
-//! also carries that frame's clickable targets (`clickable_targets`), read before it; a locator's
-//! own frame resolves its element first, so the targets come from the world it landed in.
+//! also carries that frame's clickable targets and the seeds of its closed shadow roots
+//! (`clickable_targets`), read before it; a locator's own frame resolves its element first, so
+//! they come from the world it landed in.
 //!
 //! A snapshot only reads, so it never calls `send_effect`. Default mode mints no refs and so
 //! prints no iframes to follow: it reads one frame, as upstream's does.
@@ -26,6 +27,7 @@
 //! text, and the string it returned, as pending on the run's state; the host commits or drops
 //! that when the run ends (`snapshot_baselines.rs`, `pending_baselines.rs`).
 
+use std::borrow::Cow;
 use std::fmt;
 use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
@@ -36,8 +38,8 @@ use serde_json::Value;
 use tokio::time::{self, Instant};
 use ts_rs::TS;
 
-use super::aria_snapshot::{self, AriaNode, ChildFrame, FrameSnapshot, PartialFrame};
-use super::clickable_targets::Marking;
+use super::aria_snapshot::{self, AriaNode, ChildFrame, ClosedRoots, FrameSnapshot, PartialFrame};
+use super::clickable_targets::{Feed, Marking};
 use super::{Baseline, SnapshotForm};
 use crate::backoff::Backoff;
 use crate::listed_enum::listed_enum;
@@ -276,12 +278,7 @@ async fn page_snapshot(
     // Before the tree: a document that commits after this makes the text stale for the
     // baseline, so a run that ends later cannot hand the new document the old one's text.
     let document = pw.snapshot_baselines().generation(page.target_id());
-    let request = ProbeRequest::Snapshot {
-        root: ProbeTarget::Document,
-        mode: input.mode,
-        depth: input.depth,
-        boxes: input.boxes,
-    };
+    let request = snapshot_request(ProbeTarget::Document, input.mode, input.depth, input.boxes);
     let backoff = Backoff::outer(scope.timeout());
     for attempt in 0.. {
         if scope.sleep(backoff.wait(attempt)).await.is_err() {
@@ -405,7 +402,20 @@ fn snapshot_request(
         mode,
         depth,
         boxes,
+        closed_roots: 0,
     }
+}
+
+/// `request` as it goes with `seeds` closed-root seeds first among its nodes; borrowed when it
+/// carries none, which is every request but a marked snapshot's on a page with a closed root.
+fn with_closed_roots(request: &ProbeRequest, seeds: usize) -> Cow<'_, ProbeRequest> {
+    let mut request = Cow::Borrowed(request);
+    if seeds > 0
+        && let ProbeRequest::Snapshot { closed_roots, .. } = request.to_mut()
+    {
+        *closed_roots = u32::try_from(seeds).unwrap_or(u32::MAX);
+    }
+    request
 }
 
 /// The tab's stored baseline for the snapshot's document, or `null`: none yet, its main frame
@@ -544,7 +554,8 @@ fn marks(mode: SnapshotMode, clickable: bool) -> bool {
 }
 
 impl Snapshotter<'_> {
-    /// `request` in `world`, with that frame's clickable targets when the snapshot is marked.
+    /// `request` in `world`, with that frame's clickable targets and closed-root seeds when the
+    /// snapshot is marked.
     /// `parent` is the world of the frame that holds its iframe, `None` for the main frame;
     /// `frame_deadline` is when a child frame's [`FRAME_BUDGET`] ends.
     ///
@@ -568,29 +579,35 @@ impl Snapshotter<'_> {
                     ..
                 }
             );
-        let targets = match &self.marking {
+        let feed = match &self.marking {
             Some(marking) => {
                 let started = Instant::now();
-                let targets = marking
-                    .targets(self.scope, world, parent, frame_deadline)
+                let feed = marking
+                    .feed(self.scope, world, parent, frame_deadline)
                     .await;
                 // A frame marking skipped has a line of its own, with its time.
-                if main && let Some(targets) = &targets {
+                if main && let Some(feed) = &feed {
+                    let seeds = match feed.seeds.len() {
+                        0 => String::new(),
+                        seeds => format!(", closed shadow root seeds: {seeds}"),
+                    };
                     self.scope.log(format!(
-                        "  clickable marking: {} ms, {} elements to mark",
+                        "  clickable marking: {} ms, {} elements to mark{seeds}",
                         started.elapsed().as_millis(),
-                        targets.len()
+                        feed.targets.len()
                     ));
                 }
-                targets.unwrap_or_default()
+                feed.unwrap_or_default()
             }
-            None => Vec::new(),
+            None => Feed::default(),
         };
+        let request = with_closed_roots(request, feed.seeds.len());
+        let nodes = [feed.seeds, feed.targets].concat();
         let started = Instant::now();
         if main {
             *self.reading() = Some(started);
         }
-        let reply = probe::call_with_nodes(world, request, &targets).await;
+        let reply = probe::call_with_nodes(world, &request, &nodes).await;
         if main {
             *self.reading() = None;
             if matches!(reply, Ok(ProbeReply::Snapshot { .. })) {
@@ -675,13 +692,24 @@ impl Snapshotter<'_> {
         }
     }
 
-    /// `root` with every frame below it read and stitched.
+    /// `root` with every frame below it read and stitched, and, once every frame is read, the
+    /// closed-root seeds marking found but could not send.
     async fn stitched(
         &self,
         root: FrameReply,
         depth: Option<i64>,
     ) -> Result<aria_snapshot::SnapshotResult, PlaywrightError> {
-        Ok(aria_snapshot::stitch(self.below(root, depth).await?))
+        let mut result = aria_snapshot::stitch(self.below(root, depth).await?);
+        let count = |seeds: usize| u32::try_from(seeds).unwrap_or(u32::MAX);
+        result.closed_roots = self
+            .marking
+            .as_ref()
+            .and_then(Marking::unsent_seeds)
+            .map(|seeds| ClosedRoots {
+                sent: count(seeds.sent),
+                found: count(seeds.found),
+            });
+        Ok(result)
     }
 
     /// `frame`'s tree: every iframe it rendered, read at once (upstream's `Promise.all`). The

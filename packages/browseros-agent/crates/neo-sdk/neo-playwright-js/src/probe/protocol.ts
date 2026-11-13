@@ -17,12 +17,12 @@ export type NeoProbe = NonNullable<typeof globalThis.__neoProbe>
  * reports it, and an install whose number differs from Rust's PROBE_PROTOCOL fails as
  * `neo / internal` (the engine asset is stale).
  */
-export const PROTOCOL = 30
+export const PROTOCOL = 31
 
 /**
  * The function declaration Rust sends with every request. Rust calls it on the world's global
  * object, with the request, an element handle's node as the call's root (or null), and any
- * further nodes a request reads (`snapshot`'s clickable targets), so the probe treats a root that is not a Node as
+ * further nodes a request reads (`snapshot`'s closed-root seeds and clickable targets), so the probe treats a root that is not a Node as
  * "no root". A world whose probe is gone (or never booted) answers `uninstalled`, which Rust
  * treats like a stale context: install again, once.
  */

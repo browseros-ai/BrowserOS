@@ -17,6 +17,7 @@ import {
 } from './pointer-targets'
 import type { ReplyTo, SnapshotIframe, SnapshotRequest } from './protocol'
 import { type Found, resolveTarget } from './resolve'
+import { openClosedRoots } from './shadow-roots'
 import { frameSource, lastSnapshotRefs, type World } from './world'
 
 /**
@@ -33,9 +34,12 @@ function frameRoot(world: World): Found {
 }
 
 /**
- * `nodes`, the call's nodes after its root, are the elements Rust found clickable without a
- * pointer cursor (clickable marking, pointer-targets.ts); Rust sends them only in ai mode, and
- * never under the spec harness's conformance switch, so without them this is upstream's call.
+ * `nodes`, the call's nodes after its root, come from clickable marking's read of the frame, which
+ * Rust makes only in ai mode and never under the spec harness's conformance switch, so without
+ * them this is upstream's call. The first `closedRoots` of them sit inside closed shadow roots:
+ * their roots are opened to this world's engine (shadow-roots.ts) before anything else runs, so
+ * marking's guard and the engine both read inside them, now and in every later call. The rest
+ * are the elements Chromium reports clickable without a pointer cursor (pointer-targets.ts).
  */
 export function snapshot(
   world: World,
@@ -43,6 +47,9 @@ export function snapshot(
   root: Node | undefined,
   nodes: readonly unknown[],
 ): ReplyTo<'snapshot'> {
+  const seeds = request.closedRoots ?? 0
+  openClosedRoots(nodes.slice(0, seeds))
+  const targets = nodes.slice(seeds)
   // A locator's element is strict in both modes, as upstream's locator.ariaSnapshot is.
   const found =
     request.root === 'document'
@@ -61,7 +68,7 @@ export function snapshot(
     roleOf: (of) => injected.utils.getAriaRole(of),
     isVisible: (of) => injected.utils.isElementVisible(of),
   }
-  const { result, skipped } = marked(nodes, engine, plain)
+  const { result, skipped } = marked(targets, engine, plain)
   const { json, iframeRefs, iframeDepths } = result
   const iframes: SnapshotIframe[] = []
   if (request.mode === 'ai') {
@@ -90,11 +97,11 @@ export function snapshot(
  * which notes it on the op's call log.
  */
 function marked<T>(
-  nodes: readonly unknown[],
+  targets: readonly unknown[],
   engine: EngineReads,
   snapshot: () => T,
 ): { result: T; skipped: boolean } {
-  const elements = nodes.filter((node) => node instanceof Element)
+  const elements = targets.filter((node) => node instanceof Element)
   if (elements.length === 0) return { result: snapshot(), skipped: false }
   try {
     return {
