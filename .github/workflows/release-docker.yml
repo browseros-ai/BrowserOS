@@ -130,7 +130,7 @@ jobs:
       - name: Set up Rust
         # Pinned like test.yml, so the compiler and the cache key below stay
         # stable across runs.
-        uses: dtolnay/rust-toolchain@1.98.0
+        uses: dtolnay/rust-toolchain@1.120.0
         with:
           targets: ${{ matrix.rust_target }}
       - name: Cache Rust build
