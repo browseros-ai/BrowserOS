@@ -139,7 +139,22 @@ impl PlaywrightFacade {
     pub(crate) fn set_fill_pictures_never(&self, never: bool) {
         self.pictures_never.store(never, Ordering::Release);
         if let Some(playwright) = self.playwright.get() {
+            self.sync_pictures(playwright);
+        }
+    }
+
+    /// Applies the stored `fill.pictures` to the entry until what it applied is what is stored.
+    /// The settings watcher and every [`Self::get`] call this, from any thread: a change stored
+    /// while an older value is being applied is seen by the check that follows and applied again,
+    /// so an older read never overwrites a newer change. Every store is followed by a call, so
+    /// the entry ends at the last value stored.
+    fn sync_pictures(&self, playwright: &Playwright) {
+        loop {
+            let never = self.pictures_never.load(Ordering::Acquire);
             playwright.set_fill_pictures_never(never);
+            if self.pictures_never.load(Ordering::Acquire) == never {
+                return;
+            }
         }
     }
 
@@ -172,7 +187,7 @@ impl PlaywrightFacade {
             .await;
         // A change of `fill.pictures` that came while the entry was being built reached only
         // this facade: every op gets the setting as it stands.
-        playwright.set_fill_pictures_never(self.pictures_never.load(Ordering::Acquire));
+        self.sync_pictures(playwright);
         playwright
     }
 }
