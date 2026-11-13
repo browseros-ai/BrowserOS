@@ -415,6 +415,91 @@ async fn a_scaled_takeover_ttl_restores_its_preview_before_unlocking() -> TestRe
     Ok(())
 }
 
+/// A stalled new fit cannot hold the shared surface past another takeover's give-back budget.
+#[tokio::test]
+async fn a_stalled_tab_lookup_leaves_time_to_restore_a_scaled_takeover() -> TestResult {
+    let h = harness(&[3, 4]).await?;
+    let original_metrics = h.browser.metrics(TAB.0);
+    let takeover = h
+        .takeovers
+        .start(TakeoverRequest {
+            viewer: Some(FitViewer::new(PHONE, Some(ViewerScale::Two))?),
+            ..request(None)?
+        })
+        .await?;
+    let fit_id = takeover.fit.ok_or("a scaled fit")?;
+    assert_eq!(
+        h.xvnc.size(),
+        ScreenSize {
+            width: 780,
+            height: 1688
+        }
+    );
+    h.probe_writes();
+    let before = h.browser.calls().len();
+    h.browser.hold("Browser.getTabs");
+    let viewer = FitViewer::new(PHONE, None)?;
+    let fitting = tokio::spawn({
+        let fits = Arc::clone(&h.fits);
+        async move { fits.fit(TabId(4), viewer).await }
+    });
+    eventually(|| h.browser.held("Browser.getTabs") > 0).await?;
+    let release_started = Instant::now();
+    let releasing = tokio::spawn({
+        let takeovers = Arc::clone(&h.takeovers);
+        async move { takeovers.release(takeover.id, ReleaseReason::Done).await }
+    });
+    eventually(|| {
+        matches!(
+            h.takeovers.binding(takeover.id),
+            Err(PartError::TakeoverReleased)
+        )
+    })
+    .await?;
+    assert!(
+        h.locks.is_locked(TAB),
+        "restore still holds the agent's lock"
+    );
+
+    tokio::time::pause();
+    let failed = timeout(WITHIN, fitting).await;
+    // The same fake gate would also stall restore's own tab lookup. Let only the failed fit
+    // wait out its deadline; restore's Xvnc calls need the real clock and an answering browser.
+    tokio::time::resume();
+    h.browser.let_go("Browser.getTabs");
+    let failed = failed??;
+    assert!(matches!(failed, Err(PartError::TimedOut(_))), "{failed:?}");
+    let released = timeout(WITHIN, releasing).await???;
+
+    assert_eq!(released_for(&released), Some(ReleaseReason::Done));
+    assert!(
+        release_started.elapsed() < Duration::from_secs(10),
+        "the lookup must leave time to restore within the give-back budget"
+    );
+    assert!(matches!(
+        h.fits.view(fit_id).ok_or("the fit")?.state,
+        FitState::Restored(_)
+    ));
+    assert_eq!(h.xvnc.size(), HOME);
+    assert_eq!(h.browser.window(), "maximized");
+    assert_eq!(h.browser.metrics(TAB.0), original_metrics);
+    let restored = h.calls_since(before, "Emulation.clearDeviceMetricsOverride");
+    assert!(
+        !restored.is_empty() && restored.iter().all(|call| call.probed == Some(true)),
+        "the scaled preview must be cleared while the agent is still locked out"
+    );
+    assert!(
+        !h.locks.is_locked(TAB),
+        "restore then lifts the agent's lock"
+    );
+    assert_eq!(
+        h.front().check(),
+        Ok(()),
+        "the failed claim and restored takeover both release their screen holds"
+    );
+    Ok(())
+}
+
 /// Release stops display input before restoring the fit, while the agent stays locked.
 #[tokio::test]
 async fn release_gives_back_in_order_and_lifts_the_lock_last() -> TestResult {

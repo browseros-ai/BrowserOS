@@ -231,8 +231,8 @@ impl Fits {
     /// `InvalidViewer` when a refit's inherited scale requires a phone or its resolved physical
     /// sides exceed 4096; `UnusableViewer` under 100 px a side; `TabNotFound`; `Browser` when
     /// the tab's window cannot be read; `Screen` when Xvnc cannot be resized, which leaves the
-    /// fits and the surface as they were; `TimedOut` when an in-flight viewport change does not finish
-    /// within the browser-step budget, before any fit is claimed.
+    /// fits and the surface as they were; `TimedOut` when the tab lookup or an in-flight viewport
+    /// change does not finish within the browser-step budget, before any fit is claimed.
     pub async fn fit(self: &Arc<Self>, tab: TabId, viewer: Viewer) -> Result<Fit, PartError> {
         let mut surface = self.surface.lock().await;
         // Scale inheritance and its bounds are resolved by the surface before browser work.
@@ -242,7 +242,11 @@ impl Fits {
         // Before browser work. Without the hold an agent move could pass the front rule
         // while this claim is reading the window, then land on top of its activation.
         let held = self.browser.hold_screen(ScreenHolder::Fit);
-        let page = self.browser.page(tab).await?;
+        // The lookup shares Surface with every restore. Bound it like a plan step so a stalled
+        // browser cannot keep another takeover fitted past its give-back budget.
+        let page = tokio::time::timeout(STEP_TIMEOUT, self.browser.page(tab))
+            .await
+            .map_err(|_| PartError::TimedOut("looking up the tab to fit"))??;
         let seen = Seen {
             window: self.browser.window(&page).await?,
             viewport: self.browser.viewport(&page).await?,
