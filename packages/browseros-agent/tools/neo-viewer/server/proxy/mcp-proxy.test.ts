@@ -398,12 +398,12 @@ describe('one log', () => {
       chunks: [sseEvent(runResult(1, '1', { value: 1 }))],
     }))
     const body = runCall(1, 'return 1', {
-      'com.browseros.neo/run': { taskId: 'zuzu-42', requestId: 'rq-1' },
+      'com.browseros.neo/run': { taskId: 'host-42', requestId: 'rq-1' },
     })
     await post(viewer.mcpUrl, body)
     expect(neo.requests.at(-1)?.body).toBe(body)
     expect(await onlyRun(viewer)).toMatchObject({
-      agentTaskId: 'zuzu-42',
+      agentTaskId: 'host-42',
       client: { name: 'claude-code', version: '2.1.322' },
     })
   })
@@ -419,7 +419,7 @@ describe('one log', () => {
         jsonrpc: '2.0',
         id: 0,
         method: 'initialize',
-        params: { clientInfo: { name: 'zuzu-recipes', version: '1' } },
+        params: { clientInfo: { name: 'host-recipes', version: '1' } },
       }),
       legacy,
     )
@@ -447,7 +447,7 @@ describe('one log', () => {
       viewer.store.list().length === 2 ? viewer.store.list() : null,
     )
     expect(runs.map((run) => run.client?.name)).toEqual([
-      'zuzu-recipes',
+      'host-recipes',
       'node-fetch',
     ])
   })

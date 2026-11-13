@@ -1,7 +1,7 @@
 //! The v1 takeover flow's routes: `POST /v1/takeovers`, `GET /v1/takeovers/{takeoverId}` and
 //! `POST /v1/takeovers/{takeoverId}/release`, over `neo_takeover::Takeovers`.
 //!
-//! zuzu starts a takeover when its own poll sees the owner open the link, and opens the answer's
+//! A host starts a takeover when the owner opens its link, and opens the answer's
 //! `display` (`/v1/display?mode=control&release=<id>`) for the owner through its relay. It then
 //! long-polls `GET ...?wait=60&state=active` until the takeover reads `released`: by its own
 //! `POST .../release` when the owner is done, by the TTL 10 s before `expiresAt`, or by the tab

@@ -1,5 +1,5 @@
 <!doctype html><meta charset=utf-8><title>Rewrite</title>
 <!-- A box that keeps less than what is typed, with no maxlength: the page cuts it to four
-     characters on every input, as some masked boxes do (finding I2's own case). The read-back
+     characters on every input, as some masked boxes do. The read-back
      finds something other than the value. -->
 <input id=code aria-label="Short code" oninput="this.value = this.value.slice(0, 4)">

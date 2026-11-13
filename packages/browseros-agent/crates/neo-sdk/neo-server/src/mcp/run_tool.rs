@@ -47,7 +47,7 @@ impl RunTool {
     ///   write that was never confirmed or op the script left running, then the reply's tips;
     /// - `structuredContent`: `{ "value": … }`, or `{ "error": … }`;
     /// - `_meta["com.browseros.neo/run"]`: `{ id, status, effects, error?, unknown, tasks }`, the
-    ///   committed contract's names (MIGRATION.md: the run id is `.id`);
+    ///   committed host API contract's names (`neo-sdk-api/openapi.yaml`: the run id is `.id`);
     /// - `isError` unless the status is `ok`. A failed run is a tool result, never a JSON-RPC
     ///   error, so the model reads why.
     #[must_use]
@@ -187,7 +187,7 @@ mod tests {
                 "[unknown outcome] locator.click at run:3:7 (op 7) was sent but not confirmed. \
                  Take a snapshot before repeating it."
             ),
-            "sdk-traces' wording, which zuzu's own warning used"
+            "the warning describes where values remain visible"
         );
         Ok(())
     }

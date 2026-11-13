@@ -1,4 +1,4 @@
-//! `GET /v1/display` as zuzu reaches it: parameter errors before anything opens, and whole
+//! `GET /v1/display` as the host reaches it: parameter errors before anything opens, and whole
 //! WebSocket sessions through `host_service` on a real Unix socket with the token, carrying RFB
 //! between a test viewer and the fake Xvnc.
 

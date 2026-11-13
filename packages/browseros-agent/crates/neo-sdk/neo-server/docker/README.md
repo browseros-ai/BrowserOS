@@ -2,8 +2,8 @@
 
 A Linux image of the BrowserOS neo browser and this commit's SDK server, `browseros-claw-sdk`. Agents get
 one MCP tool, `run` (Playwright JavaScript against the browser), and the host gets the `/v1` host API on a
-Unix socket. It is built for hosts that build on it, such as zuzu's cell image (`FROM neo-sdk:<tag>`), and
-it runs on its own too. It is not production's image: that is the default Neo image
+Unix socket. A host can build on it with `FROM neo-sdk:<tag>` or run it on its own.
+Production uses the default Neo image
 (`packages/browseros/docker/neo`, claw-server), which this one shares no file with. CI builds and tests
 it in `.github/workflows/neo-sdk-image.yml`, which publishes it only when asked (Publish below).
 
@@ -23,7 +23,7 @@ choosing from the server binary's version marker; a change to it changes this im
 
 ```sh
 crates/neo-sdk/neo-server/docker/build.sh --platform linux/arm64   # a dev Mac
-crates/neo-sdk/neo-server/docker/build.sh --platform linux/amd64   # zuzu's cells
+crates/neo-sdk/neo-server/docker/build.sh --platform linux/amd64   # host containers
 ```
 
 The tag is `neo-sdk:<browser>-<commit>-<arch>`, with `-dirty` before the arch when
@@ -152,8 +152,9 @@ Nothing listens on 6080: this image serves no noVNC viewer.
 
 - The agent ports 9010 and 9011 have no authentication. Whoever reaches them can run arbitrary Playwright
   JavaScript in the owner's logged-in browser.
-- Every process in the container's network namespace reaches both. In zuzu's cell that includes mirrord,
-  the harness and the agent, so only the host's uid filter keeps them apart.
+- Every process in the container's network namespace reaches both, including the host's supervisor
+  and any agent process. If untrusted processes share it, restrict their access, for example
+  with uid firewall rules.
 - With `NEO_MCP_REMOTE=true`, every peer that can route to the container reaches them too: other containers
   on the same Docker network, or hosts in a VPC.
 - Publishing a port on `127.0.0.1` only hides it from other machines. It does not isolate peers inside the
@@ -259,29 +260,126 @@ They become 0400 files owned by neo in the `neo-sdk-keyed` target, and the image
 public registry. That stage is rebuilt without its cache every time, so a rotated key never survives in a
 cached layer, and a keyless build never mounts a key at all.
 
-## Use it from zuzu
+## Use it from a host
 
 ```sh
 # in a BrowserOS checkout, packages/browseros-agent
 crates/neo-sdk/neo-server/docker/build.sh --platform linux/amd64
-# in zuzu's cell/Dockerfile
+# in the host's Dockerfile
 FROM neo-sdk:0.52.1.2-<commit>-amd64
 ```
 
-zuzu keeps calling `/usr/local/bin/neo-entrypoint` from its own supervisor, as root, with the same `/data`
-layout and the neo user. It passes `NEO_HOST_GID` and `CLAW_HOST_TOKEN_FILE` (its `env -i` filter must let
-`CLAW_*` through), adds the socket's group to mirrord, and adds 9011 to its firewall's Neo ports.
+Call `/usr/local/bin/neo-entrypoint` from the host's supervisor as root, with the `/data`
+layout and neo user described above. Pass `NEO_HOST_GID` and `CLAW_HOST_TOKEN_FILE`, allow
+`CLAW_*` through any `env -i` filter, add the socket's group to the host's supervisor,
+and include 9011 in the firewall rules for Neo's ports.
 
-How Neo behaves is set on the host API, not in a file or the environment: once Neo answers, and before
-its first run, mirrord sends `PUT /v1/settings` with everything it wants, such as
-`{"tabs":{"idleCloseSeconds":300}}`. Neo saves it under `/data` and loads it again at every start: when
-the browser restarts the server, and in a new container on the same `/data`. mirrord still sends its `PUT`
-at every start of its own, so the saved set is what it wants now, not what an older mirrord or a hand
-`PATCH` left there. The settings and their ranges are in [the server's README](../README.md#settings).
+Set Neo's behavior through the host API before the first run. Send `PUT /v1/settings`
+with the host's full settings, such as `{"tabs":{"idleCloseSeconds":300}}`. Neo saves them
+under `/data` and loads them when the server or container restarts. Send the full settings
+at each host startup to replace older settings and manual patches. The settings and their
+ranges are in [the server's README](../README.md#settings).
 
 Neo keeps one blank tab of its own open at all times (`owner: "neo"` in `GET /v1/tabs`), so closing
-every other tab never ends the browser: mirrord's tab reset no longer needs a keeper tab of its own.
+every other tab never ends the browser. A host does not need a keeper tab of its own.
 Once the owner browses in that tab it is theirs again, and Neo opens a new blank one.
+
+## Host API integration
+
+The SDK host API describes runs, operations, and browser tabs. It does not serve claw-server's hosted session routes or a recording endpoint. Host requests use the authenticated host listener, separate from the agent's MCP port. The [host API contract](../../neo-sdk-api/openapi.yaml) defines each route and response.
+
+A Go host can dial the Unix socket through `http.Transport.DialContext`. The URL host is ignored on that connection, so a URL such as `http://neo/v1/runs` works.
+
+Send optional `requestId`, `taskId`, and `hostData` in `_meta["com.browseros.neo/run"]`. Neo returns its own run id in that key's `.id`. A request id scopes replay to its task when a task id is present, or across Neo otherwise. The guarantee lasts while Neo retains the request history. Retention removes that history and permits the id to run again.
+
+For MCP runs with ordinary value recording, a repeated request gets the exact reply for ten minutes after the run ends, including across a server restart. Later repeats receive `duplicate_request` while the history remains. With `trace.values: "off"`, the exact reply survives in memory for ten minutes, but a repeat after a server restart receives `duplicate_request`. The [server's run contract](../README.md#the-run-contract) describes joins, client disconnects, and task selection.
+
+Tasks group a piece of work across runs. They do not create Chromium tab groups or restrict which tabs a script may use. A run without a host or script task opens a new tab when its built-in `page` is first used. Give agents [agent.d.ts](../../agent.d.ts) for task selection and the walkthrough across runs.
+
+Choose the host read for the question you need to answer.
+
+| Question | Host request |
+|---|---|
+| Which runs belong to this task? | `GET /v1/runs?taskId={taskId}` |
+| Did a request start after its reply was lost? | `GET /v1/runs?requestId={requestId}&taskId={taskId}` |
+| What happened most recently? | `GET /v1/trace?taskId={taskId}&tail=20` |
+| Has one run finished its operation and screenshot work? | `GET /v1/runs/{runId}?wait=60`, then inspect `complete` |
+| Which runs acted on a tab? | `GET /v1/runs?tab={tabId}` |
+| Which tabs are open now? | `GET /v1/tabs` |
+| What does a tab show now? | `GET /v1/tabs/{tabId}/screencast` or `/video` |
+| Did a tab close? | `GET /v1/events?tab={tabId}`, with `Last-Event-ID` for resumption |
+
+Use `since` and `until` to filter the run list, and `cursor` and `limit` to page through it. There is no session-wide live or ended status, or SDK equivalent of the old session `client` and `q` filters. Each run has its own status and completeness. The newest operation with a `tabId` shows the last tab that operation targeted. Use `/v1/tabs` for a fresh inventory. A `stream.reset` event requires reading state again.
+
+Current package names and responsibilities are in the [SDK package map](../../README.md). Custom `CLAW_LOG` directives for the host API use the `neo_http` tracing target.
+
+## Keep a tab while a task waits
+
+When an approval wait starts, send `PUT /v1/tabs/{tabId}/keep` with `{}`. Release it with `DELETE /v1/tabs/{tabId}/keep` when the wait ends. This replaces periodic reads that exist only to prevent idle cleanup. Add `ttlSeconds` when the keep needs a time limit.
+
+A keep affects only idle cleanup. It is independent of settings, locks, fits, and takeovers, and agent operations remain available. Use a lock or takeover to pause agent actions. Successful keep and release requests each write an info log line. They create no run, operation, or event. The [keep contract](../../neo-sdk-api/openapi.yaml) defines replacement, expiry, restart, and missing-tab behavior.
+
+## Read an audit timeline
+
+One request returns a page of runs with their operations.
+
+```http
+GET /v1/runs?taskId=checkout&limit=20&fields=summary&internal=false
+```
+
+Runs appear newest first, and each run's operations appear in start order. Follow `nextCursor` for older runs. `fields=summary` also works on run detail and trace reads. `internal=false` omits Neo's own subscription operations while retaining explicit script listeners that have a recorded call site. Defaults are `fields=full&internal=true`.
+
+A summary omits stored argument and result values, code, host data, downloads, error text, and inline screenshots. It keeps page URLs, titles, and tab identity. URLs and titles can contain values, so the host applies its own redaction before presenting an audit view. A summary changes only the read response. Full reads, stored downloads, blobs, and screenshot endpoints retain their access. Use `hasScreenshot` to find images for separate reads.
+
+## Import downloads and large results
+
+Wait for the download event and file completion before returning a file for the host to import.
+
+```js
+const [download] = await Promise.all([
+	page.waitForEvent('download'),
+	page.getByRole('button', { name: 'Download', exact: true }).click(),
+]);
+return { path: await download.path(), filename: download.suggestedFilename() };
+```
+
+The returned path names the file on Neo's disk, under `/data/downloads` in this image. The browser chooses its actual filename, including a suffix such as ` (1)` on a collision. Read the returned path instead of reconstructing it from the suggested filename. A later run can upload that path with `locator.setInputFiles(path)`. `download.saveAs(path)` copies the file. `download.failure()` returns `null` or a failure reason such as `canceled`.
+
+`GET /v1/runs/{runId}` lists the downloads handed to the script. `GET /v1/runs/{runId}/downloads/{index}` serves Neo's completed copy with the host token. A file still being written when the run ends has no stored bytes. The host copy follows trace retention, while the browser's original file remains in the downloads folder.
+
+A result larger than the 256 KiB inline limit can replace byte values with `{"$neo":"blob","id":"b0","size":N}`. Read their bytes through `GET /v1/runs/{runId}/blobs/{id}`. Text does not spill to a blob. Return large text as `Buffer.from(text)` so it can use that path. A result that still exceeds the limit fails `script / result_too_large`.
+
+Blob lifetime follows the recording policy. Ordinary blobs follow run retention. Blobs written under `trace.values: "off"` remain fetchable for ten minutes after their write, including across a restart, and the next minute upkeep removes them.
+
+## Type a host's secret
+
+Use `POST /v1/tabs/{tabId}/fill/check` to inspect inputs without a value. The host decides which secret each input may receive, then sends the approved facts as `expect` with `POST /v1/tabs/{tabId}/fill`. Name each input by a snapshot ref or a ref from `locator.ref()`. `expect.origin` names the input's own frame origin. The [fill contract](../../neo-sdk-api/openapi.yaml) defines outcomes, request replay, locks, and privacy limits. Read `outcome` before deciding whether another attempt is safe.
+
+The host typing route keeps values out of its own records and applies its tab screenshot policy. The page still holds the typed value. Page-world evaluation and page-controlled content can disclose it, so the host retains its own disclosure policy.
+
+This route types into text inputs. Dropdown selection and navigation to a URL containing a token stay in the host's explicit flow. Browser saved form state is separate from typing and can restore a value later. See [Saved sessions](#saved-sessions) for this image's cleanup option.
+
+## Older SDK clients
+
+Clients of older SDK images must stop using the removed privacy calls and fields.
+
+| Old call or field | Current contract |
+|---|---|
+| `POST /v1/tabs/{tabId}/private`, `POST /v1/tabs/{tabId}/sweep`, `POST /v1/secrets` | These routes are absent. Use locks or takeovers to block agent actions, and the host fill route to type a secret. |
+| `tab.private`, `Event.privacy`, `TraceTail.visuals` | These are absent. Read each operation's `hasScreenshot` for a stored image. |
+| Host API response codes `page_private`, `withheld`, `privacy_unavailable` | These are no longer produced. A missing or legacy withheld screenshot returns `404 not_found`. An image removed by retention returns `410 expired`. |
+
+Clients accept response fields and extensible enum values they do not know, as defined by the [API compatibility rules](../../neo-sdk-api/openapi.yaml).
+
+With value recording on, ordinary script arguments remain their original values, subject to storage limits. Password, card, and code targets do not cause argument redaction or withhold the new run's script text. The host fill route has its own protected record. Current `codeWithheld: "unavailable"` marks code that was never stored, such as a run interrupted by a restart.
+
+Older trace rows remain as recorded. An argument recorded as `[redacted]` stays that way. An older run with `codeWithheld: "sensitive_input"` can still have no code. Neo does not reconstruct missing values.
+
+### Trace recording policies
+
+`trace.values` applies when each operation or run ends. A run can contain operations recorded under different settings. Inspect the per-record `values: "off"` marker. An absent marker means ordinary recording, and changing the setting leaves existing records unchanged.
+
+For blobs written with values off, the ten-minute expiry survives a crash before the run's trace end commits. Startup restores the expiry, and minute upkeep removes due blobs. Downloads, page metadata, and Neo's separately configured screenshots keep their existing rules. See [Keep values out of Neo's trace](#keep-values-out-of-neos-trace) to set both value and screenshot policies.
 
 ## Run it alone, for a quick look
 

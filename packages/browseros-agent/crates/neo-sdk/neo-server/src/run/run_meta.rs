@@ -10,7 +10,7 @@ use crate::config::Defaults;
 use crate::dispatch::{ErrorCode, OperationError};
 
 /// The `_meta` key a host sends its ids under, and Neo answers the run's id, status and effects
-/// under (MIGRATION.md).
+/// under (`neo-sdk-api/openapi.yaml`).
 pub(crate) const RUN_META_KEY: &str = "com.browseros.neo/run";
 
 /// `_meta["com.browseros.neo/run"]`, every field optional. Parsed once, at the MCP boundary; a

@@ -6,8 +6,8 @@
 //! The entry itself (protected-fill pull request 2) is a stand-in here, [`ScriptedEntry`],
 //! behind the same seam production calls (`builtins::PrivateEntry`): it answers what each test
 //! scripts, asks the door's rules and marks the op sent as the real entry promises to, and sees
-//! only each value's length. The real entry is tested on real pages in its own pull request and
-//! end to end by zuzu's acceptance (`claw-sdk/zuzu/night/sdk-acceptance.md`).
+//! only each value's length. The real browser entry is covered by neo-playwright's
+//! `private_entry_live` suite.
 
 use std::cmp::Ordering as CmpOrdering;
 use std::error::Error;

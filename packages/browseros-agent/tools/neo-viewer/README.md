@@ -180,7 +180,7 @@ Nothing, in either direction. Every method, path, header and body reaches Neo as
 and every reply reaches the agent as Neo sent it, byte for byte, chunk by chunk as it streams; so
 Neo behaves exactly as it does without the viewer: a run that names no task gets a new tab of its
 own (plain Playwright), a script picks a task with `neo.createTask`/`neo.task(id)`, and a request's
-`_meta["com.browseros.neo/run"].taskId` (a host's task; zuzu sends one) keeps that task's tab (#3452).
+`_meta["com.browseros.neo/run"].taskId` (a host's task) keeps that task's tab (#3452).
 That `_meta` taskId passes through untouched and the run shows it beside the client
 (`RunSummary.agentTaskId`). The tasks a run touched come back in the reply's
 `_meta["com.browseros.neo/run"].tasks`; the viewer reads them into `RunSummary.tasks`. Headers that belong to one HTTP hop (`connection`,

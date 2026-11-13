@@ -486,7 +486,7 @@ async fn tab_hold_reports_a_lock_and_a_fit_now_and_until_they_let_go() -> TestRe
     assert_eq!(
         harness.service.tab_hold(fitted),
         Some(TabHold::Now),
-        "a fit with no lock still holds the tab: zuzu's handoff"
+        "a fit with no lock still holds the tab: the host's handoff"
     );
     let id = fit.body["id"].as_str().ok_or("a fit id")?;
     let before = Instant::now();

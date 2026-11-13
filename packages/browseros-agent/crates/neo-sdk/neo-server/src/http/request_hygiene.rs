@@ -5,8 +5,8 @@ use axum::http::{Method, StatusCode, header};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 
-/// claw-server's `mcp_request_hygiene`, copied. The agent port has no auth (in the cell only
-/// mirrord reaches it), so this is what stops a page open in the browser Neo drives from
+/// claw-server's `mcp_request_hygiene`, copied. The agent port has no auth, so these request
+/// checks stop a page open in the browser Neo drives from
 /// calling `run`:
 /// - `OPTIONS` answers 204, as a preflight would, and goes no further;
 /// - a request carrying `Origin` or `Sec-Fetch-Site` is 403: browser fetches carry one, native

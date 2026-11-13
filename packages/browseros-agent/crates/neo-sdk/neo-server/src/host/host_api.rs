@@ -18,7 +18,7 @@ use crate::browser::{BrowserLink, NeoTab};
 use crate::config::HostApiConfig;
 use crate::http::{BindError, HostListener};
 
-/// Neo's host API (neo-http) from startup until it serves zuzu over the host socket.
+/// Neo's host API (neo-http) from startup until it serves the host over the host socket.
 ///
 /// ```text
 ///  start ─ bind: token file ─ unset or unusable: no socket (run still works), default settings

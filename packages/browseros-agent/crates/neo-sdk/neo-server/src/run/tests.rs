@@ -816,7 +816,7 @@ fn a_refused_call_is_recorded_without_its_request_id() -> Result<(), TestError> 
     })
 }
 
-/// zuzu gap G3: a reply too large to carry its bytes names them, and they are on disk beside
+/// A reply too large to carry its bytes names them, and they are on disk beside
 /// the trace by the time the caller has the reply.
 #[test]
 fn a_reply_over_the_limit_names_blobs_already_kept_with_the_run() -> Result<(), TestError> {

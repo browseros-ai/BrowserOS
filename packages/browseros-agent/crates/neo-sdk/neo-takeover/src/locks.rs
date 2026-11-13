@@ -51,7 +51,7 @@ pub enum Reads {
     /// `inputValue()` on the field the owner is typing a password into.
     #[default]
     Block,
-    /// Only writes are refused (zuzu's old behavior).
+    /// Only writes are refused; reads remain available while the owner has control.
     Allow,
 }
 

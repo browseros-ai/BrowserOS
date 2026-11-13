@@ -502,7 +502,7 @@ impl TraceStore {
     }
 
     /// The latest operations that match `query`, oldest first, with the summaries of their
-    /// runs. zuzu's audit reads this.
+    /// runs, for a host's audit timeline.
     ///
     /// # Errors
     /// When the file cannot be read or a row is corrupt.

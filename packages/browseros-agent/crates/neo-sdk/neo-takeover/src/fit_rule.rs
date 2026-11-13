@@ -1,5 +1,4 @@
-//! What a screen of a given size gets (decision 20): zuzu's `viewportFor`, with its desktop
-//! changed to no emulation at all. Pure, and a function of the screen's size alone, so every
+//! Chooses mobile emulation or a desktop window from the screen's size alone, so every
 //! active fit agrees on the mode and the window.
 //!
 //! | Screen | Window | Viewport |

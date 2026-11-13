@@ -1,8 +1,7 @@
 //! The private entry's look (protected-fill design section 5.3) through
 //! `Playwright::look_boxes`, against a real browser:
 //!
-//! - zuzu's 32 covered-rule cases (`claw-sdk/zuzu/pin-move/covered-own-label.md`), on zuzu's own
-//!   fixture pages, each answering as main's rule answers;
+//! - covered-rule cases on local fixture pages, each answering as the core rule answers;
 //! - main's rule itself, `browseros-core`'s own point and hit test (`get_element_center`,
 //!   `click_blocker_at_point`, its `HIT_TEST_BLOCKER_JS`) run on every box of those pages beside
 //!   the port, so the two cannot drift apart;
@@ -169,7 +168,7 @@ async fn main_rule_blocks(
         .is_some())
 }
 
-/// One of zuzu's pages and what main's rule says about its boxes: (role, name, covered).
+/// A fixture page and the core rule's answer for each box: (role, name, covered).
 struct CoveredPage {
     cases: &'static str,
     path: &'static str,
@@ -195,11 +194,11 @@ const fn boxed(
     (named.0, named.1, covered)
 }
 
-/// zuzu's 32 cases by page. A `B` case is zuzu's fill on the page, a `C05k` case its field
-/// read's `covered` fact: both answer main's covered rule, which the look is.
+/// Fixture cases grouped by page. Fill eligibility and the look's `covered` fact must agree
+/// with the core's hit-test rule.
 const COVERED: &[CoveredPage] = &[
     CoveredPage {
-        cases: "B11c B05c C05kc: a cookie banner over the password box",
+        cases: "a cookie banner over the password box",
         path: "/private/covered-login.html?mode=banner",
         frame_site: Site::Page,
         boxes: &[boxed(EMAIL, false), boxed(PASSWORD, true)],
@@ -211,79 +210,79 @@ const COVERED: &[CoveredPage] = &[
         boxes: &[boxed(EMAIL, false), boxed(PASSWORD, true)],
     },
     CoveredPage {
-        cases: "B11l C05kl: the box's own <label for> drawn over it",
+        cases: "the box's own <label for> drawn over it",
         path: "/private/covered-login.html?mode=label",
         frame_site: Site::Page,
         boxes: &[boxed(EMAIL, false), boxed(PASSWORD, false)],
     },
     CoveredPage {
-        cases: "B11w C05kw: a wrapping label whose text floats over the box",
+        cases: "a wrapping label whose text floats over the box",
         path: "/private/covered-login.html?mode=wrap",
         frame_site: Site::Page,
         boxes: &[boxed(EMAIL, false), boxed(PASSWORD, false)],
     },
     CoveredPage {
-        cases: "B11i C05ki: an icon inside the box's own label",
+        cases: "an icon inside the box's own label",
         path: "/private/covered-login.html?mode=icon",
         frame_site: Site::Page,
         boxes: &[boxed(EMAIL, false), boxed(PASSWORD, false)],
     },
     CoveredPage {
-        cases: "B11p C05kp: the box drawn under its own wrapper, an ancestor (kept as main)",
+        cases: "the box drawn under its own wrapper, an ancestor (kept as main)",
         path: "/private/covered-login.html?mode=under",
         frame_site: Site::Page,
         boxes: &[boxed(EMAIL, false), boxed(PASSWORD, false)],
     },
     CoveredPage {
-        cases: "B11h C05kh: a cover inside the box's own shadow root (kept as main)",
+        cases: "a cover inside the box's own shadow root (kept as main)",
         path: "/private/covered-login.html?mode=shadow",
         frame_site: Site::Page,
         boxes: &[boxed(EMAIL, false), boxed(PASSWORD, false)],
     },
     CoveredPage {
-        cases: "B11a C05ka: an overlay that is a sibling of the box's ancestor",
+        cases: "an overlay that is a sibling of the box's ancestor",
         path: "/private/covered-login.html?mode=ancsib",
         frame_site: Site::Page,
         boxes: &[boxed(EMAIL, false), boxed(PASSWORD, true)],
     },
     CoveredPage {
-        cases: "B11x C05kx: another field's label drawn over the box",
+        cases: "another field's label drawn over the box",
         path: "/private/covered-login.html?mode=otherlabel",
         frame_site: Site::Page,
         boxes: &[boxed(EMAIL, false), boxed(PASSWORD, true)],
     },
     CoveredPage {
-        cases: "B11y C05ky: a decoration that is a child of the label's parent",
+        cases: "a decoration that is a child of the label's parent",
         path: "/private/covered-login.html?mode=sibling",
         frame_site: Site::Page,
         boxes: &[boxed(EMAIL, false), boxed(PASSWORD, true)],
     },
     CoveredPage {
-        cases: "B05n C05kn: nothing over the box",
+        cases: "nothing over the box",
         path: "/private/covered-login.html?mode=none",
         frame_site: Site::Page,
         boxes: &[boxed(EMAIL, false), boxed(PASSWORD, false)],
     },
     CoveredPage {
-        cases: "B05k C05kf: the card box covered inside its cross-site frame",
+        cases: "the card box covered inside its cross-site frame",
         path: "/private/covered-cardframe.html?inner=cover",
         frame_site: Site::Other,
         boxes: &[boxed(NUMBER, true)],
     },
     CoveredPage {
-        cases: "B05o C05ko: the page's overlay over a cross-site frame is not seen (kept as main)",
+        cases: "the page's overlay over a cross-site frame is not seen (kept as main)",
         path: "/private/covered-cardframe.html?inner=none&outer=1",
         frame_site: Site::Other,
         boxes: &[boxed(NUMBER, false)],
     },
     CoveredPage {
-        cases: "B05s C05ks: the page's overlay over a same-origin frame is seen",
+        cases: "the page's overlay over a same-origin frame is seen",
         path: "/private/covered-cardframe.html?inner=none&outer=1&same=1",
         frame_site: Site::Page,
         boxes: &[boxed(NUMBER, true)],
     },
     CoveredPage {
-        cases: "B05q: a card box in a cross-site frame, nothing over it",
+        cases: "a card box in a cross-site frame, nothing over it",
         path: "/private/covered-cardframe.html?inner=none",
         frame_site: Site::Other,
         boxes: &[boxed(NUMBER, false)],
@@ -301,7 +300,7 @@ const COVERED: &[CoveredPage] = &[
         boxes: &[boxed(NUMBER, true)],
     },
     CoveredPage {
-        cases: "B05r: a card box in a same-origin frame, nothing over it",
+        cases: "a card box in a same-origin frame, nothing over it",
         path: "/private/covered-cardframe.html?inner=none&same=1",
         frame_site: Site::Page,
         boxes: &[boxed(NUMBER, false)],
@@ -310,7 +309,7 @@ const COVERED: &[CoveredPage] = &[
 
 #[tokio::test]
 #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
-async fn tests_that_the_look_answers_zuzus_covered_cases_as_mains_rule() -> TestResult {
+async fn tests_that_the_look_answers_covered_cases_as_the_core_rule() -> TestResult {
     let server = FixtureServer::start(private_host::pages()).await?;
     let live = LiveBrowser::connect().await?;
     let (page_origin, other_origin) = private_host::origins(&server);
@@ -356,12 +355,12 @@ async fn tests_that_the_look_answers_zuzus_covered_cases_as_mains_rule() -> Test
     Ok(())
 }
 
-/// B11q: an input with `pointer-events: none` in a clickable wrapper gets no ref in the snapshot,
-/// so no host can name it by a snapshot's ref (a fact, not a call). C18c: a dropdown is not a
-/// text box: the look refuses it as `not_an_input`, where zuzu's script chooses it.
+/// An input with `pointer-events: none` in a clickable wrapper gets no ref in the snapshot,
+/// so no host can name it by a snapshot's ref (a fact, not a call). A dropdown is not a
+/// text box: the look refuses it as `not_an_input`.
 #[tokio::test]
 #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
-async fn tests_that_a_box_without_a_ref_and_a_dropdown_answer_as_zuzu_expects() -> TestResult {
+async fn tests_that_a_box_without_a_ref_and_a_dropdown_answer_as_the_host_expects() -> TestResult {
     let server = FixtureServer::start(private_host::pages()).await?;
     let live = LiveBrowser::connect().await?;
     let (page_origin, _) = private_host::origins(&server);
@@ -375,7 +374,7 @@ async fn tests_that_a_box_without_a_ref_and_a_dropdown_answer_as_zuzu_expects() 
         !printed
             .iter()
             .any(|node| node.role == "textbox" && node.name == "Password"),
-        "B11q: a box with pointer-events: none gets no ref: {printed:?}"
+        "noninteractive box: a box with pointer-events: none gets no ref: {printed:?}"
     );
     // Ruling R17, design decision 2: the host mints a ref for such a box with locator.ref()
     // and names it by that ref. Its wrapper takes the hit at its centre: an ancestor, so it is
@@ -390,7 +389,11 @@ async fn tests_that_a_box_without_a_ref_and_a_dropdown_answer_as_zuzu_expects() 
         field(&minted, Some(expecting(&page_origin))),
     )
     .await?;
-    assert_eq!(code(&answer), None, "B11q by a minted ref: {answer:?}");
+    assert_eq!(
+        code(&answer),
+        None,
+        "noninteractive box by a minted ref: {answer:?}"
+    );
     let kind = answer.facts.map(|facts| facts.kind);
     assert_eq!(kind.as_deref(), Some("password"));
     live.close(&page).await?;
@@ -407,13 +410,13 @@ async fn tests_that_a_box_without_a_ref_and_a_dropdown_answer_as_zuzu_expects() 
         field(&month, Some(expecting(&page_origin))),
     )
     .await?;
-    assert_eq!(code(&answer), Some("not_an_input"), "C18c: {answer:?}");
+    assert_eq!(code(&answer), Some("not_an_input"), "dropdown: {answer:?}");
     assert_eq!(answer.facts, None, "a dropdown has no box facts");
     live.close(&page).await?;
     Ok(())
 }
 
-/// B11m: covered when the look runs, free 1.5 s later. The look does not wait for the page: it
+/// Covered when the look runs, free 1.5 s later. The look does not wait for the page: it
 /// refuses now, and a later look passes.
 #[tokio::test]
 #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
@@ -438,7 +441,7 @@ async fn tests_that_the_look_answers_the_page_as_it_is_now() -> TestResult {
     assert_eq!(
         code(&now),
         Some("box_covered"),
-        "B11m: covered when the look ran"
+        "temporary cover: covered when the look ran"
     );
     assert!(
         started.elapsed() < Duration::from_millis(1000),
@@ -455,7 +458,7 @@ async fn tests_that_the_look_answers_the_page_as_it_is_now() -> TestResult {
             break;
         }
     }
-    let later = later.ok_or("B11m: the box was never free again")?;
+    let later = later.ok_or("temporary cover: the box was never free again")?;
     assert!(
         later >= Duration::from_millis(1400),
         "free only once the page freed it: {later:?}"

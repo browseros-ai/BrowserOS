@@ -1,7 +1,7 @@
 //! The host API of hosted BrowserOS Neo (claw-sdk): the `/v1` routes of the `neo-sdk-api`
 //! contract, the host auth in front of them, and the event stream behind `GET /v1/events`.
 //!
-//! zuzu (mirrord) is the only client. It reaches Neo over a Unix socket that the app binds;
+//! A host reaches Neo over a Unix socket that the app binds;
 //! the app builds one [`Service`] from values it already holds (the trace store and sink, the
 //! host's [`Settings`],
 //! the agent's browser session and viewports, the writer's screenshot jobs, Xvnc's

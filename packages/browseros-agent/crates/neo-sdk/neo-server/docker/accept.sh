@@ -62,7 +62,7 @@
 #   restart-browser  neo-quit 9110 quits cleanly, the supervisor restarts Neo, a new run passes
 #   stop             docker stop -t 25 takes under 20 s, exits 0, Neo and claw-sdk log the stop
 #   persist          a new container on the same /data reads the run and replays its requestId
-#   kill-all         SIGKILL of the whole Neo tree (zuzu's OOM cgroup.kill) and a restart loop:
+#   kill-all         SIGKILL of the whole Neo tree (the host's OOM cgroup.kill) and a restart loop:
 #                    healthy again, socket recreated, the run readable and replayed
 #   captcha-keys     neo.solveCaptcha is listed only with a key: none in a keyless image, and
 #                    listed once the host mounts a key file read-only and points the variable at it
@@ -97,8 +97,8 @@ chmod 0755 "$secrets"
 od -An -tx1 -N24 /dev/urandom | tr -d ' \n' > "$secrets/host-token"
 printf 'accept-dummy-capsolver-key' > "$secrets/capsolver-api-key"
 chmod 0644 "$secrets/host-token" "$secrets/capsolver-api-key"
-# The capabilities README.md says the entrypoint needs, and no more: zuzu's cells grant a set
-# this small (no CAP_FSETID among them), so Docker's wider default would hide a missing one.
+# Grant only the capabilities README.md says the entrypoint needs. Docker's wider default
+# includes CAP_FSETID and would hide a missing capability in a host container.
 host_caps=(--cap-drop ALL --cap-add SETUID --cap-add SETGID --cap-add CHOWN --cap-add FOWNER
   --cap-add DAC_OVERRIDE --cap-add KILL --security-opt no-new-privileges)
 
@@ -176,7 +176,7 @@ install_client() { # name: the probes, beside smoke.py whose MCP client they reu
   done
 }
 
-# The host as zuzu runs it: uid 2001 in the socket's group. The agent stand-in is uid 2002.
+# A host process is uid 2001 in the socket's group. The agent stand-in is uid 2002.
 as_host=(setpriv --reuid 2001 --regid 2001 --groups "$host_gid")
 as_host_no_group=(setpriv --reuid 2001 --regid 2001 --clear-groups)
 as_agent=(setpriv --reuid 2002 --regid 2002 --clear-groups)
@@ -198,7 +198,7 @@ probe() { # target-ip port scheme, from a throwaway sibling on the same network
     - probe "$1" "$2" "$3" < "$here/accept_client.py"
 }
 run_ok() { # json from run_call: status ok and the page really filled
-  [ "$(jget "$1" 'd["meta"]["status"]')" = ok ] && [ "$(jget "$1" 'd["value"]["value"]["value"]')" = zuzu ] \
+  [ "$(jget "$1" 'd["meta"]["status"]')" = ok ] && [ "$(jget "$1" 'd["value"]["value"]["value"]')" = host ] \
     && [ "$(jget "$1" 'd["value"]["value"]["title"]')" = neo-sdk-accept ]
 }
 runs_for() { jget "$(host_get "$1" "/v1/runs?requestId=$2")" 'len(d["body"]["items"])'; }
@@ -312,7 +312,7 @@ if [ "$booted" = 1 ]; then
   fi
 
   # --- downloads -----------------------------------------------------------------------------
-  # zuzu's neo_download -> neo_upload and `import`, as the host uid with the socket's group.
+  # Download, upload and import, as the host uid with the socket's group.
   downloaded=$(client "$main" "${as_host[@]}" python3 accept_client.py downloads \
     http://127.0.0.1:9010/mcp /run/neo/host.sock /run/neo-accept/host-token 2>&1)
   if [ -n "$logs_dir" ]; then mkdir -p "$logs_dir"; printf '%s\n' "$downloaded" > "$logs_dir/downloads.json"; fi
@@ -337,7 +337,7 @@ if [ "$booted" = 1 ]; then
   fi
 
   # --- blobs ---------------------------------------------------------------------------------
-  # zuzu's full-page screenshot and PDF, too large for a reply, read back on the host socket.
+  # Full-page screenshot and PDF, too large for a reply, read back on the host socket.
   blobbed=$(client "$main" "${as_host[@]}" python3 accept_client.py blobs \
     http://127.0.0.1:9010/mcp /run/neo/host.sock /run/neo-accept/host-token 2>&1)
   blob_run=$(jget "$blobbed" 'd["run"]') blob_id=$(jget "$blobbed" 'd["blob"]')
@@ -511,8 +511,8 @@ if [ "$booted" = 1 ]; then
   remove "$second"
 
   # --- kill-all ------------------------------------------------------------------------------
-  # zuzu restarts the entrypoint itself and its OOM path kills the whole cgroup at once
-  # (cell/bin/entrypoint.sh). PID 1 here is tini running that restart loop.
+  # Model a host that kills the whole cgroup on OOM and restarts the entrypoint itself.
+  # PID 1 here is tini running that restart loop.
   looped="$prefix-kill-all"
   start_neo "$looped" --entrypoint /usr/bin/tini "$image" -- bash -c \
     'while :; do /usr/local/bin/neo-entrypoint; echo "[accept] entrypoint exited $?"; sleep 1; done'

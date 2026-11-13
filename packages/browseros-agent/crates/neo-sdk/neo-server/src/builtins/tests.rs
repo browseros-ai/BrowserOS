@@ -1330,7 +1330,7 @@ async fn the_janitor_closes_idle_agent_tabs_through_the_door() -> Result<(), Box
     Ok(())
 }
 
-/// The owner's 5 minutes for zuzu (the settings design, section 2): the idle time a host sets
+/// A host's five-minute idle setting
 /// applies at the next pass, and a tab in use stays open however long the use lasts. A tab is
 /// in use while a run that used it is in flight, a lock holds it, or a fit is on it, and its
 /// clock restarts when the last of them ends. A popup an agent's tab opened is the agent's.
@@ -1428,7 +1428,7 @@ async fn the_janitor_follows_the_idle_time_and_leaves_tabs_in_use() -> Result<()
 }
 
 /// Closing the browser's last tab ends the browser, and Neo's server with it; both come back a
-/// few seconds later with a new browser id (zuzu's last-tab probe, 2026-11-12). A host that keeps
+/// few seconds later with a new browser id. A host that keeps
 /// one tab of its own would see that every idle time. "Last" counts every tab the browser
 /// lists, the owner's included.
 #[tokio::test]

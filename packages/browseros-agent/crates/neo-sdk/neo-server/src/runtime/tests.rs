@@ -705,7 +705,7 @@ fn a_result_far_deeper_than_the_js_stack_revives_whole() -> Result<(), TestError
     })
 }
 
-/// S3b. An op's input is made plain JSON on the run's 512 KiB stack, where recursion overflowed
+/// An op's input is made plain JSON on the run's 512 KiB stack, where recursion overflowed
 /// past 17 nested arrays or 51 nested objects in a debug build (measured here), and a
 /// Playwright locator's parsed selector with `:scope` inside `:has()` is 28 levels deep. These go
 /// 120 levels deep, of each kind, through a real op and back. The door's JSON parse takes 127
@@ -742,7 +742,7 @@ fn an_input_far_deeper_than_the_js_stack_reaches_its_op_whole() -> Result<(), Te
     })
 }
 
-/// S3b's review. A Proxy around an array answers whatever `length` its trap chooses, and the
+/// A Proxy around an array answers whatever `length` its trap chooses, and the
 /// input codec counts its items as `Array.prototype.map` did, by that length as a whole number of
 /// at least 0: a length in text counts, a fraction is cut and a negative is none. Each item it
 /// lacks is a hole, sent as null.
