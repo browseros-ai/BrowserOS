@@ -72,8 +72,7 @@ pub(super) fn pursue_tool() -> Tool {
                     "type": "object",
                     "properties": {
                         "label": { "type": "string" },
-                        "url": { "type": "string" },
-                        "newTab": { "type": "boolean" }
+                        "url": { "type": "string" }
                     },
                     "required": ["label", "url"]
                 }
@@ -464,10 +463,9 @@ fn destinations_from(raw_args: &Value) -> Vec<Destination> {
                     Some(Destination {
                         label: entry.get("label")?.as_str()?.to_string(),
                         url: entry.get("url")?.as_str()?.to_string(),
-                        new_tab: entry
-                            .get("newTab")
-                            .and_then(Value::as_bool)
-                            .unwrap_or(false),
+                        // Destinations always load in the page pursue works on; an old
+                        // caller's `newTab` is ignored.
+                        new_tab: false,
                     })
                 })
                 .collect()
@@ -588,13 +586,16 @@ mod tests {
     fn values_and_destinations_come_from_the_arguments() {
         let args = json!({
             "values": { "pincode": "600042", "bad": 4 },
-            "destinations": [{ "label": "Cart", "url": "https://shop.test/cart" }, { "label": "no url" }],
+            "destinations": [{ "label": "Cart", "url": "https://shop.test/cart", "newTab": true }, { "label": "no url" }],
         });
         let values = values_from(&args);
         assert_eq!(values.len(), 1);
         assert_eq!(values[0].text, "600042");
         let destinations = destinations_from(&args);
         assert_eq!(destinations.len(), 1);
-        assert!(!destinations[0].new_tab);
+        assert!(
+            !destinations[0].new_tab,
+            "newTab is ignored: destinations load in the working page"
+        );
     }
 }

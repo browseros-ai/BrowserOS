@@ -350,51 +350,33 @@ impl PageDriver {
     }
 
     async fn travel(&self, journey: &Journey) -> Result<(), ActError> {
-        match journey {
-            Journey::To(destination) if destination.new_tab => {
-                self.run(
-                    self.reach.tabs,
-                    Operation::Tabs,
-                    json!({ "action": "new", "url": destination.url }),
-                )
-                .await?;
-            }
-            Journey::To(destination) => {
-                self.run(
-                    self.reach.navigate,
-                    Operation::Navigate,
-                    json!({ "page": self.page, "url": destination.url }),
-                )
-                .await?;
-            }
-            Journey::Back => {
-                self.run(
-                    self.reach.navigate,
-                    Operation::Back,
-                    json!({ "page": self.page, "action": "back" }),
-                )
-                .await?;
-            }
-            Journey::Again => {
-                self.run(
-                    self.reach.navigate,
-                    Operation::Reload,
-                    json!({ "page": self.page, "action": "reload" }),
-                )
-                .await?;
-            }
-            Journey::Tab(page) => {
-                self.run(
-                    self.reach.tabs,
-                    Operation::Tabs,
-                    json!({ "action": "select", "page": page }),
-                )
-                .await?;
-            }
-        }
+        let (operation, args) = journey_call(self.page, journey);
+        let tool = match operation {
+            Operation::Tabs => self.reach.tabs,
+            _ => self.reach.navigate,
+        };
+        self.run(tool, operation, args).await?;
         // As in `act`: the observe that follows settles, so there is nothing
         // for a sleep to add.
         Ok(())
+    }
+}
+
+/// The browser call a move between pages makes. A destination always loads in the working page,
+/// since every later look and step reads that page; opening it in another tab would leave the run
+/// behind on the old one.
+fn journey_call(page: u32, journey: &Journey) -> (Operation, Value) {
+    match journey {
+        Journey::To(destination) => (
+            Operation::Navigate,
+            json!({ "page": page, "url": destination.url }),
+        ),
+        Journey::Back => (Operation::Back, json!({ "page": page, "action": "back" })),
+        Journey::Again => (
+            Operation::Reload,
+            json!({ "page": page, "action": "reload" }),
+        ),
+        Journey::Tab(tab) => (Operation::Tabs, json!({ "action": "select", "page": tab })),
     }
 }
 
@@ -525,6 +507,21 @@ mod tests {
             "what it does have is still offered"
         );
         assert!(!missing.contains(&Operation::Act));
+    }
+
+    /// A destination marked for a new tab used to open one while the run kept reading the old
+    /// page. Every destination now loads in the page pursue is working on.
+    #[test]
+    fn a_destination_always_loads_in_the_working_page() {
+        let destination = browseros_decide::offer::Destination {
+            label: "Cart".to_string(),
+            url: "https://shop.test/cart".to_string(),
+            new_tab: true,
+        };
+        let (operation, args) = journey_call(7, &Journey::To(destination));
+        assert_eq!(operation, Operation::Navigate);
+        assert_eq!(args, json!({ "page": 7, "url": "https://shop.test/cart" }));
+        assert_eq!(journey_call(7, &Journey::Tab(3)).0, Operation::Tabs);
     }
 
     /// A peer that ships everything withholds nothing.
