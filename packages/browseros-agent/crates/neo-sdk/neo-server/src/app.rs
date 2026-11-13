@@ -201,21 +201,19 @@ impl App {
             config.file_access(settings.clone()),
         );
 
-        // One solver for the process: its paid-task budget and page reservations are its own.
-        let solver = CaptchaSolver::new(config.captcha.clone()).map(Arc::new);
         let claims = Arc::new(CaptchaClaims::default());
         let mut methods = RegistryBuilder::default();
+        // One solver for the process: its paid-task budget and page reservations are its own.
         let deps = BuiltinDeps {
-            solver,
+            solver: CaptchaSolver::new(config.captcha.clone()).map(Arc::new),
             claims: Arc::clone(&claims),
             playwright: Arc::clone(&playwright),
         };
         builtins::builtin_set(&mut methods, deps)
             .map_err(|error| StartError::Methods(error.to_string()))?;
-        let methods = methods.build();
         let takeover = Arc::new(TakeoverLock::default());
         let dispatcher = Arc::new(Dispatcher::new(
-            methods,
+            methods.build(),
             builtins::door_rules(&takeover, &claims),
             trace.clone(),
             Arc::clone(&browser),
