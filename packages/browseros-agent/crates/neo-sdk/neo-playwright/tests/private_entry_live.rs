@@ -2764,6 +2764,86 @@ async fn tests_that_a_box_marked_in_a_removed_frame_stays_masked() -> TestResult
     bench.close(opened).await
 }
 
+/// Ruling R53, step two: an assertion on a marked box the page moved into another same-origin
+/// frame compares against the bullets there, as `inputValue()` reads them (ruling R47), whether
+/// the locator finds the box itself or the label that leads to it. That frame's copy of the
+/// probe never marked a box, so only the mark on the box tells it to guard the comparison. Both
+/// ways: a box marked in the page and moved into the frame, and one marked in the frame and
+/// moved out into the page. A failed check prints the box's value as `<N characters>` and holds
+/// it nowhere (this input sends no Expected line, which is the script's own argument).
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_check_on_a_moved_marked_box_compares_against_bullets() -> TestResult {
+    let bench = Bench::start().await?;
+    let bullets = "•".repeat(MARKED.chars().count());
+    let marker = format!("<{} characters>", MARKED.chars().count());
+    // The fixture's query, the page's move, then the box and its label where the move put them.
+    let moves: [(&str, &str, &[&str], &[&str]); 2] = [
+        ("", "moveIn()", &["#inner", "#code"], &["#inner", "label"]),
+        ("?inside=1", "moveOut()", &["#code"], &["label"]),
+    ];
+    for (query, step, the_box, its_label) in moves {
+        let opened = bench
+            .open(&format!("/private/moved-box.html{query}"), Place::Front)
+            .await?;
+        let code = bench.r#ref(&opened, "textbox", "Code").await?;
+        let env = bench.host(&opened);
+        let entry = bench
+            .enter(
+                &env,
+                &opened,
+                vec![Field::new(&code, &bench.page_origin).with(MARKED)?],
+            )
+            .await;
+        assert_eq!(entry.outcome, EntryOutcome::Entered, "{step}: {entry:?}");
+        page_does(&bench, &opened, step).await?;
+        let page = opened.page.brand();
+        for (on, path) in [("box", the_box), ("label", its_label)] {
+            let has_value = |expected: &str| {
+                expectation(
+                    ("target", css_target(&page, path)),
+                    "toHaveValue",
+                    &json!({
+                        "expression": "to.have.value", "isNot": false,
+                        "expectedText": [{ "string": expected }],
+                    }),
+                )
+            };
+            let as_read = bench
+                .live
+                .invoke("expect.locator", has_value(&bullets))
+                .await?;
+            assert_eq!(
+                as_read.ok(),
+                Some(Value::Null),
+                "{step}, on the {on}: toHaveValue compares against the bullets"
+            );
+            for expected in [MARKED, "something else"] {
+                let failed = match bench
+                    .live
+                    .invoke("expect.locator", has_value(expected))
+                    .await?
+                {
+                    Ok(passed) => {
+                        return Err(format!(
+                            "{step}, on the {on}: toHaveValue({expected}) passed: {passed}"
+                        )
+                        .into());
+                    }
+                    Err(error) => error.message().to_owned(),
+                };
+                assert!(
+                    failed.contains(&marker) && !failed.contains(MARKED),
+                    "{step}, on the {on}: a failed toHaveValue({expected}) prints {marker}, \
+                     never the value: {failed}"
+                );
+            }
+        }
+        bench.close(opened).await?;
+    }
+    Ok(())
+}
+
 /// Ruling R53's mark lives on the box's wrapper in Neo's isolated world, so it lives as long as
 /// that wrapper does. A Chromium that ever dropped such a wrapper in a garbage collection while
 /// the box lives would take every mark with it, and nothing else would notice; this row does.
