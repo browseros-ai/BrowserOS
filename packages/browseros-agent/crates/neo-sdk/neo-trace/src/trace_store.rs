@@ -47,8 +47,8 @@ use crate::storage::record_rows::{self, RunDetailRow, RunSummaryRow};
 use crate::storage::{TraceBatch, trace_migrator};
 use crate::{
     EpochMillis, OperationFilter, OperationId, OperationRow, Page, RequestId, RunDetail, RunId,
-    RunQuery, RunSummary, ShotRead, ShotState, TailQuery, TaskAct, TaskId, TraceError, TraceTail,
-    salvage,
+    RunQuery, RunSummary, ShotRead, ShotState, TailQuery, TaskAct, TaskId, TaskTabs, TraceError,
+    TraceTail, salvage,
 };
 
 /// Operations that only subscribe to or deliver a page's events: the prelude's `page.on` and
@@ -66,6 +66,10 @@ pub(crate) const SUBSCRIPTIONS: [&str; 3] = [
 /// Operations that open a tab, which arrives on their end (`page_after`) rather than as their
 /// target: the run opened it, so it is the run's even before the script acts on it.
 pub(crate) const OPENERS: [&str; 1] = ["context.newPage"];
+
+/// Operations that make another task the run's current one: after one, an open may be that
+/// task's, so the run no longer proves which task its opens belong to.
+pub(crate) const TASK_PICKS: [&str; 2] = ["neo.createTask", "neo.task"];
 
 /// Whether the operation `name` only subscribes (see [`SUBSCRIPTIONS`]), so it makes no tab its
 /// run's or its task's. The door asks too, for the task's default page it keeps in memory.
@@ -563,51 +567,91 @@ impl TraceStore {
         .transpose()
     }
 
-    /// The task's built-in `page` as the trace can still tell it, for claw-sdk after a restart
-    /// (its memory of tasks and tab owners is gone): among the tabs the task's runs opened
-    /// ([`OPENERS`]), the one its own script last acted on, else the one it opened last. Only the
-    /// script's calls count, the operations stored with a call site: Neo's own reads (the
-    /// prelude's frame refresh after `waitForTimeout` on every tab the run knows, its listeners)
-    /// have none, and a tab the script reached through `context.pages()` without opening it,
-    /// another task's or the browser's New Tab, is never the answer. A popup is not among the
-    /// opened tabs, so a task left only with one starts on a new tab. Unlike
+    /// The task's own tabs as the trace can still tell them, for claw-sdk after a restart (its
+    /// memory of tasks and tab owners is gone), and among them its built-in `page`.
+    ///
+    /// The trace keeps no owners, so a tab counts as the task's only where its owner is certain:
+    /// it was opened ([`OPENERS`]) in one of the task's runs that picked no task
+    /// ([`TASK_PICKS`]). There every open goes to the run's own task; after a pick an open may be
+    /// the picked task's, so those runs are left out. A popup is not an opener, so a task left
+    /// only with one starts on a new tab.
+    ///
+    /// The page is the tab among those its own script last acted on: an operation stored with a
+    /// call site. Neo's own reads (the prelude's frame refresh after `waitForTimeout` on every
+    /// tab the run knows, its listeners) have none, and a tab the script reached through
+    /// `context.pages()` without opening it, another task's or the browser's New Tab, is never
+    /// one. When it opened a tab after its last act, that tab. Unlike
     /// [`task_last_act`](Self::task_last_act), which a follow view reads to show where the task
     /// is working, this names where its next run starts.
     ///
     /// # Errors
     /// When the file cannot be read.
-    pub async fn task_page_tab(&self, task: &TaskId) -> Result<Option<TabId>, TraceError> {
-        // An opener's tab arrives on its end, as the page it ended on (`tab_id`).
-        let opened = Query::select()
-            .column(operations::Column::TabId)
+    pub async fn task_tabs(&self, task: &TaskId) -> Result<TaskTabs, TraceError> {
+        let picking = Query::select()
+            .column(operations::Column::RunId)
             .from(operations::Entity)
-            .and_where(Expr::col(operations::Column::RunId).in_subquery(task_runs(task)))
-            .and_where(Expr::col(operations::Column::Name).is_in(OPENERS))
-            .and_where(Expr::col(operations::Column::TabId).is_not_null())
+            .and_where(Expr::col(operations::Column::Name).is_in(TASK_PICKS))
             .to_owned();
-        let scripted_act = Condition::all()
-            .add(operations::Column::Site.is_not_null())
-            .add(operations::Column::Name.is_not_in(SUBSCRIPTIONS))
-            .add(operations::Column::TargetTabId.in_subquery(opened));
-        let open = Condition::all()
-            .add(operations::Column::Name.is_in(OPENERS))
-            .add(operations::Column::TabId.is_not_null());
-        let row = operations::Entity::find()
+        let unpicked_runs = task_runs(task)
+            .and_where(Expr::col(runs::Column::Id).not_in_subquery(picking))
+            .to_owned();
+        // An opener's tab arrives on its end, as the page it ended on (`tab_id`).
+        let opens: Vec<(i64, i64, String, i64)> = operations::Entity::find()
             .select_only()
-            .columns([operations::Column::TargetTabId, operations::Column::TabId])
+            .columns([
+                operations::Column::TabId,
+                operations::Column::StartedAt,
+                operations::Column::RunId,
+                operations::Column::Seq,
+            ])
+            .filter(operations::Column::RunId.in_subquery(unpicked_runs))
+            .filter(operations::Column::Name.is_in(OPENERS))
+            .filter(operations::Column::TabId.is_not_null())
+            .order_by_asc(operations::Column::StartedAt)
+            .order_by_asc(operations::Column::RunId)
+            .order_by_asc(operations::Column::Seq)
+            .into_tuple()
+            .all(&self.db)
+            .await?;
+        let mut opened: Vec<TabId> = Vec::new();
+        for (tab, ..) in &opens {
+            if !opened.contains(&TabId(*tab)) {
+                opened.push(TabId(*tab));
+            }
+        }
+        let last_act: Option<(i64, i64, String, i64)> = operations::Entity::find()
+            .select_only()
+            .columns([
+                operations::Column::TargetTabId,
+                operations::Column::StartedAt,
+                operations::Column::RunId,
+                operations::Column::Seq,
+            ])
             .filter(operations::Column::RunId.in_subquery(task_runs(task)))
-            .filter(Condition::any().add(scripted_act).add(open))
+            .filter(operations::Column::Site.is_not_null())
+            .filter(operations::Column::Name.is_not_in(SUBSCRIPTIONS))
+            .filter(operations::Column::TargetTabId.is_in(opened.iter().map(|tab| tab.0)))
             .order_by_desc(operations::Column::StartedAt)
             .order_by_desc(operations::Column::RunId)
             .order_by_desc(operations::Column::Seq)
             .limit(1)
-            .into_tuple::<(Option<i64>, Option<i64>)>()
+            .into_tuple()
             .one(&self.db)
             .await?;
-        // A scripted act counts with its target; an opener has none and counts with its tab.
-        Ok(row
-            .and_then(|(target, opened)| target.or(opened))
-            .map(TabId))
+        // The later of the last act and the last open, in the order the trace keeps operations.
+        let order = |row: &(i64, i64, String, i64)| (row.1, row.2.clone(), row.3);
+        let latest = match (last_act, opens.last().cloned()) {
+            (Some(act), Some(open)) => Some(if order(&act) >= order(&open) {
+                act
+            } else {
+                open
+            }),
+            (act, open) => act.or(open),
+        };
+        Ok(TaskTabs {
+            opened,
+            page: latest.map(|(tab, ..)| TabId(tab)),
+        })
     }
 
     /// The distinct tasks whose retained, committed runs touched each requested tab, sorted

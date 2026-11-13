@@ -333,6 +333,29 @@ impl TabRegistry {
         Ok(())
     }
 
+    /// After a restart, the task's own tabs as the trace proves them join it again, those still
+    /// open, registered and owned by no task here; `page`, when one of them, is its page again,
+    /// and otherwise its newest. A tab that has an owner keeps it.
+    pub(crate) fn restore(
+        &self,
+        task: &TaskId,
+        tabs: &[TabId],
+        page: Option<TabId>,
+    ) -> Result<(), TaskError> {
+        let mut state = self.lock();
+        state.tasks.ensure(task)?;
+        for tab in tabs {
+            if state.open.contains_key(tab) {
+                state.tasks.join(*tab, task)?;
+            }
+        }
+        if let Some(page) = page {
+            state.tasks.acted(page, task);
+        }
+        state.inherit_popups();
+        Ok(())
+    }
+
     /// A popup inherits its opener, even if its event preceded the opener's task assignment.
     pub(crate) fn popup(&self, page: &PageRef, opener: TabId, seen: Seen) {
         let mut state = self.lock();
@@ -437,8 +460,9 @@ impl TabState {
                 return;
             }
             for (tab, id) in inherited {
-                // The owner was read under this lock, so its task still exists.
-                let _ = self.tasks.attach(tab, &id);
+                // The owner was read under this lock, so its task still exists. A popup is the
+                // task's tab, but not its page until the task's own script acts on it.
+                let _ = self.tasks.join(tab, &id);
             }
         }
     }
@@ -669,6 +693,41 @@ mod tests {
             "and the other task keeps its own"
         );
         assert_eq!(tabs.owner(new_tab.tab), None, "an act never takes a tab");
+        Ok(())
+    }
+
+    #[test]
+    fn a_popup_joins_its_openers_task_without_becoming_its_page() -> Result<(), Box<dyn Error>> {
+        let tabs = TabRegistry::new();
+        let task = TaskId::parse("task-1")?;
+        tabs.ensure_task(&task)?;
+        let (opener, popup) = (page(1, 101), page(2, 102));
+        tabs.touched(&opener, tabs.seen());
+        tabs.own(&opener, &task)?;
+        // Discovered by the tab watcher, with no script op on it.
+        tabs.popup(&popup, opener.tab, tabs.seen());
+        assert_eq!(
+            tabs.owner(popup.tab),
+            Some(task.clone()),
+            "the opener's task's tab"
+        );
+        assert_eq!(
+            tabs.task_page(&task),
+            TaskPage::Tab(opener.clone()),
+            "not its page: the task's script last acted on the opener"
+        );
+        tabs.acted_on(&popup, tabs.seen(), &[&task]);
+        assert_eq!(
+            tabs.task_page(&task),
+            TaskPage::Tab(popup.clone()),
+            "until its script acts on it"
+        );
+        tabs.removing(popup.tab)();
+        assert_eq!(
+            tabs.task_page(&task),
+            TaskPage::Tab(opener),
+            "then the opener again"
+        );
         Ok(())
     }
 

@@ -7,7 +7,7 @@ use neo_trace::{
     Delivery, Effect, EpochMillis, ErrorOwner, ErrorRecord, OperationEnded, OperationId,
     OperationKind, OperationSite, OperationStarted, Outcome, PageState, RedactionLimits, Redactor,
     RequestId, RetentionPolicy, RunEffects, RunEnded, RunId, RunQuery, RunStarted, RunStatus,
-    TailQuery, TaskAct, TaskId, TraceRecordEvent, TraceSink, TraceStore, WriterConfig,
+    TailQuery, TaskAct, TaskId, TaskTabs, TraceRecordEvent, TraceSink, TraceStore, WriterConfig,
     spawn_writer,
 };
 use serde_json::{Value, json};
@@ -1174,12 +1174,13 @@ async fn a_tasks_last_tab_falls_back_to_the_tab_an_operation_ended_on() {
     assert_eq!(last_tab().await, Some(TabId(3)));
 }
 
-/// Where a task's next run starts after a restart: among the tabs its runs opened, the one its
-/// own script last acted on, else the one it opened last. Neo's own reads (stored with no call
-/// site, as the prelude's frame refresh after `waitForTimeout` is), another task's tab and a tab
-/// the script reached without opening it never are.
+/// What survives a restart of a task's tabs: the tabs its runs opened, and its page among them,
+/// the one its own script last acted on, else one it opened since. Neo's own reads (stored with
+/// no call site, as the prelude's frame refresh after `waitForTimeout` is), another task's tab and
+/// a tab the script reached without opening it never count. A run that picked another task
+/// proves no owner for its opens, so its tabs are left out.
 #[tokio::test]
-async fn a_tasks_page_after_a_restart_is_its_own_tab_its_script_last_acted_on() {
+async fn a_tasks_tabs_after_a_restart_are_the_ones_it_surely_opened() {
     let h = harness(WriterConfig::default()).await;
     let theirs = start_in(&h.sink, Some("search"), 0);
     new_page(&h.sink, OperationId::new(theirs, 1), TabId(4), 1);
@@ -1190,35 +1191,54 @@ async fn a_tasks_page_after_a_restart_is_its_own_tab_its_script_last_acted_on() 
     read_on(&h.sink, OperationId::new(run, 4), Some(TabId(6)), 40);
     scripted_read(&h.sink, OperationId::new(run, 5), TabId(4), 50);
     scripted_read(&h.sink, OperationId::new(run, 6), TabId(9), 60);
+    // A later run of the same host task picks another task and opens a tab, which is that
+    // task's, then acts on it.
+    let picking = start_in(&h.sink, Some("checkout"), 70);
+    op_started(
+        &h.sink,
+        simple(OperationId::new(picking, 1), "neo.createTask", Effect::Read),
+    );
+    new_page(&h.sink, OperationId::new(picking, 2), TabId(8), 80);
+    scripted_read(&h.sink, OperationId::new(picking, 3), TabId(8), 90);
     flushed(&h).await;
-    let page_tab = |name: &'static str| {
+    let tabs = |name: &'static str| {
         let store = h.store.clone();
         async move {
             store
-                .task_page_tab(&task(name))
+                .task_tabs(&task(name))
                 .await
-                .unwrap_or_else(|error| panic!("task_page_tab: {error}"))
+                .unwrap_or_else(|error| panic!("task_tabs: {error}"))
         }
     };
     assert_eq!(
-        page_tab("checkout").await,
-        Some(TabId(5)),
-        "its script's last act on a tab it opened; not Neo's read of 6, another task's 4 or 9"
+        tabs("checkout").await,
+        TaskTabs {
+            opened: vec![TabId(5), TabId(6)],
+            page: Some(TabId(5)),
+        },
+        "its script's last act on a tab it opened: not Neo's read of 6, another task's 4, the \
+         New Tab 9, or 8, opened after a pick"
     );
     assert_eq!(
-        page_tab("search").await,
-        Some(TabId(4)),
+        tabs("search").await,
+        TaskTabs {
+            opened: vec![TabId(4)],
+            page: Some(TabId(4)),
+        },
         "the tab it opened"
     );
-    assert_eq!(page_tab("unknown").await, None);
+    assert_eq!(tabs("unknown").await, TaskTabs::default());
 
-    let later = start_in(&h.sink, Some("checkout"), 70);
-    new_page(&h.sink, OperationId::new(later, 1), TabId(7), 70);
+    let later = start_in(&h.sink, Some("checkout"), 100);
+    new_page(&h.sink, OperationId::new(later, 1), TabId(7), 100);
     flushed(&h).await;
     assert_eq!(
-        page_tab("checkout").await,
-        Some(TabId(7)),
-        "a tab it opened since, before its script acted anywhere"
+        tabs("checkout").await,
+        TaskTabs {
+            opened: vec![TabId(5), TabId(6), TabId(7)],
+            page: Some(TabId(7)),
+        },
+        "a tab it opened since its script last acted"
     );
 }
 

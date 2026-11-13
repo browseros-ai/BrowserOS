@@ -552,25 +552,7 @@ impl Dispatcher {
         };
         let page = target.as_ref().map(|target| &target.page);
         guard.started_on(page.map(|page| page.tab));
-        // Any op from the script's realm keeps its tab in use (the idle clock, the janitor), but
-        // only the script's own call acts on it, and only an act moves a task's built-in `page`,
-        // among that task's own tabs ([`TabRegistry::acted_on`]). A subscription (`page.on` on
-        // every tab the run knows) names a tab without acting on it. The prelude's own reads are
-        // not acts either: `waitForTimeout` refreshes the frames of every tab the run lists, and
-        // counting those moved the task's next `page` to whichever tab answered last.
-        if let (Caller::Script, Some(target)) = (caller, &target)
-            && !neo_trace::is_subscription(spec.name)
-        {
-            if scripted {
-                let host = run.task_id();
-                let picked = run.current_task();
-                let tasks: Vec<&TaskId> = host.into_iter().chain(picked.as_ref()).collect();
-                self.tabs.acted_on(&target.page, target.seen, &tasks);
-            } else {
-                self.tabs.touched(&target.page, target.seen);
-            }
-            self.tabs.used_in_run(target.page.tab, run.id());
-        }
+        self.note_use(&run, caller, scripted, &spec, target.as_ref());
         // The rules see the checked tab: the handle's, once verified, or the default page's,
         // once open.
         let check = PolicyCheck {
@@ -648,6 +630,38 @@ impl Dispatcher {
             "operation timing"
         );
         guard.finish(ending, facts.pages, default_page, facts.observed);
+    }
+
+    /// An op from the script's realm keeps its tab in use (the idle clock, the janitor), but
+    /// only the script's own call acts on it, and only an act moves a task's built-in `page`,
+    /// among that task's own tabs ([`TabRegistry::acted_on`]). A subscription (`page.on` on
+    /// every tab the run knows) names a tab without acting on it. The prelude's own reads are not
+    /// acts either: `waitForTimeout` refreshes the frames of every tab the run lists, and counting
+    /// those moved the task's next `page` to whichever tab answered last. Neo's own ops (`caller`
+    /// Neo) touch nothing here.
+    fn note_use(
+        &self,
+        run: &RunCtx,
+        caller: Caller,
+        scripted: bool,
+        spec: &MethodSpec,
+        target: Option<&ResolvedPage>,
+    ) {
+        let (Caller::Script, Some(target)) = (caller, target) else {
+            return;
+        };
+        if neo_trace::is_subscription(spec.name) {
+            return;
+        }
+        if scripted {
+            let host = run.task_id();
+            let picked = run.current_task();
+            let tasks: Vec<&TaskId> = host.into_iter().chain(picked.as_ref()).collect();
+            self.tabs.acted_on(&target.page, target.seen, &tasks);
+        } else {
+            self.tabs.touched(&target.page, target.seen);
+        }
+        self.tabs.used_in_run(target.page.tab, run.id());
     }
 
     /// Capture the latest pick before a script's opener sends. Its record pins an empty task

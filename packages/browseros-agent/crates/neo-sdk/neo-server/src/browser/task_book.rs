@@ -106,20 +106,31 @@ impl TaskBook {
         self.owners.get(&tab)
     }
 
+    /// The task opened `tab` (the lazy page, `context.newPage`, `task.newPage`): it joins the
+    /// task and becomes its page, as the script that opened it is working in it.
     pub(super) fn attach(&mut self, tab: TabId, id: &TaskId) -> Result<(), TaskError> {
+        if self.join(tab, id)? {
+            self.acted(tab, id);
+        }
+        Ok(())
+    }
+
+    /// `tab` joins the task without becoming its page: a popup one of its tabs opened, which the
+    /// task's page moves to only once its own script acts on it ([`TaskBook::acted`]). True when
+    /// it joined now; a tab that has an owner keeps it, since a touch or a repeated popup notice
+    /// must never move a tab between tasks.
+    pub(super) fn join(&mut self, tab: TabId, id: &TaskId) -> Result<bool, TaskError> {
         let task = self
             .tasks
             .iter_mut()
             .find(|task| task.id == *id)
             .ok_or_else(|| TaskError::NotFound(id.clone()))?;
-        // A touch or a repeated popup notice must never move a tab between tasks.
         if self.owners.contains_key(&tab) {
-            return Ok(());
+            return Ok(false);
         }
         task.tabs.push(tab);
-        task.last_used_tab = Some(tab);
         self.owners.insert(tab, id.clone());
-        Ok(())
+        Ok(true)
     }
 
     /// `task`'s own script acted on `tab`. Only the owner's act counts: a script that reaches

@@ -80,6 +80,15 @@ def task(shape: str, i: int) -> str:
     return f"accept-tp-{shape}-{i}-{uuid.uuid4().hex[:6]}"
 
 
+def waited(runs: Runs, name: str, problems: list, label: str) -> bool:
+    """Runs the wait in `name`'s task; a wait that failed proves nothing about the next page."""
+    value, error = runs.run(name, WAIT)
+    if value == 1:
+        return True
+    problems.append(f"{label}: the wait failed: {error}")
+    return False
+
+
 def own_page(runs: Runs, name: str, opened, problems: list, label: str) -> bool:
     """Whether `name`'s next run starts on `opened`, its own tab."""
     got = runs.page(name)
@@ -92,7 +101,8 @@ def own_page(runs: Runs, name: str, opened, problems: list, label: str) -> bool:
 def wait_middle(runs: Runs, i: int, problems: list) -> bool:
     name = task("wait-middle", i)
     opened = runs.goto(name)
-    runs.run(name, WAIT)
+    if not waited(runs, name, problems, f"wait-middle {i}"):
+        return False
     ok = own_page(runs, name, opened, problems, f"wait-middle {i}")
     runs.close(name)
     return ok
@@ -116,8 +126,8 @@ def wait_loop(runs: Runs, i: int, problems: list) -> bool:
     _, error = runs.run(
         name, "await page.click('h1'); for (;;) await page.waitForTimeout(200);", timeout=1500
     )
-    if not error:
-        problems.append(f"wait-loop {i}: the loop was not ended by its deadline")
+    if "timeout" not in json.dumps(error).lower():
+        problems.append(f"wait-loop {i}: not ended by its deadline: {error}")
         return False
     ok = own_page(runs, name, opened, problems, f"wait-loop {i}")
     runs.close(name)
@@ -127,7 +137,14 @@ def wait_loop(runs: Runs, i: int, problems: list) -> bool:
 def other_tab(runs: Runs, i: int, problems: list) -> bool:
     name = task("other-tab", i)
     opened = runs.goto(name)
-    runs.run(name, "for (const q of context.pages()) if (q !== page) await q.title(); return 1;")
+    acted, error = runs.run(
+        name,
+        "let n = 0; for (const q of context.pages()) if (q !== page) { await q.title(); n++; } "
+        "return n;",
+    )
+    if not isinstance(acted, int) or acted < 1:
+        problems.append(f"other-tab {i}: acted on no other tab: {acted} {error}")
+        return False
     ok = own_page(runs, name, opened, problems, f"other-tab {i}")
     runs.close(name)
     return ok
@@ -136,8 +153,8 @@ def other_tab(runs: Runs, i: int, problems: list) -> bool:
 def interleaved(runs: Runs, i: int, problems: list) -> bool:
     first, second = task("interleaved-a", i), task("interleaved-b", i)
     opened = {first: runs.goto(first), second: runs.goto(second)}
-    runs.run(first, WAIT)
-    runs.run(second, WAIT)
+    if not all([waited(runs, name, problems, f"interleaved {i}") for name in opened]):
+        return False
     ok = all([own_page(runs, name, opened[name], problems, f"interleaved {i}") for name in opened])
     runs.close(first)
     runs.close(second)
@@ -147,13 +164,17 @@ def interleaved(runs: Runs, i: int, problems: list) -> bool:
 def closed(runs: Runs, i: int, problems: list, closer: str) -> bool:
     name = task("closed", i)
     opened = runs.goto(name)
-    runs.run(name, WAIT)
+    if not waited(runs, name, problems, f"closed {i}"):
+        return False
     # Closed from outside the task (here the neighbour's script), as the owner closes a tab.
-    runs.run(
+    shut, error = runs.run(
         closer,
         f"const q = context.pages().find((p) => p.tabId === {json.dumps(opened)}); "
-        "if (q) await q.close(); return 1;",
+        "if (!q) return 0; await q.close(); return 1;",
     )
+    if shut != 1:
+        problems.append(f"closed {i}: the task's tab {opened} was not closed: {shut} {error}")
+        return False
     value, error = runs.run(
         name,
         "const before = page.tabId; const existing = context.pages().map((q) => q.tabId); "

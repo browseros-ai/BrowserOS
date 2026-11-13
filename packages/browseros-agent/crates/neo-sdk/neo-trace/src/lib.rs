@@ -65,7 +65,7 @@ pub use operation_record::{
 };
 pub use read_model::{
     OperationFilter, OperationRow, Page, RunDetail, RunQuery, RunSummary, ShotRead, ShotState,
-    TailQuery, TaskAct, TraceTail,
+    TailQuery, TaskAct, TaskTabs, TraceTail,
 };
 pub use record_policy::{RecordPolicy, Screenshots, Values};
 pub use redactor::{Bounded, RedactionLimits, Redactor, Truncation};

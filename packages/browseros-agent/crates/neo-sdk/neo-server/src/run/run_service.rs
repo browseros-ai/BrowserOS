@@ -222,12 +222,6 @@ impl RunService {
             let seen = self.tabs.seen();
             if self.browser.page(page.tab).await.is_some() {
                 self.tabs.touched(page, seen);
-                if let Some(task) = &meta.task_id {
-                    // A tab the trace gave back after a restart joins its task again, so the
-                    // rule below holds from this run on. A tab with an owner keeps it.
-                    let _ = self.tabs.ensure_task(task);
-                    let _ = self.tabs.own(page, task);
-                }
             }
         }
         let RunMeta {
@@ -407,11 +401,11 @@ impl RunService {
     /// Neo's own operations ([`TabRegistry::acted_on`]). A task with no open tab gets `None`, and
     /// the run opens a new tab for it on first use, so parallel tasks never share one.
     ///
-    /// Memory decides for every task it knows. Only a task it does not know (Neo restarted) asks
-    /// the trace, which keeps the same rule as far as it can see it
-    /// ([`TraceStore::task_page_tab`]): the tab of the task's own script's last act among the
-    /// tabs its runs opened, if that tab is still open and no task here owns it. Without a
-    /// `taskId`, a fresh tab opens on first use.
+    /// Memory decides for every task it knows. A task it does not know (Neo restarted) gets its
+    /// tabs back from the trace first ([`TraceStore::task_tabs`]): the ones it surely opened that
+    /// are still open and that no task here owns rejoin it, so its script's acts on any of them
+    /// count again, and the trace's page among them is its page. Without a `taskId`, a fresh tab
+    /// opens on first use.
     async fn default_page(&self, task: Option<&TaskId>, view: &RunView) -> Option<PageRef> {
         let task = task?;
         match self.tabs.task_page(task) {
@@ -419,23 +413,43 @@ impl RunService {
             TaskPage::NoTab => return None,
             TaskPage::Unknown => {}
         }
-        let tab = match self.store.task_page_tab(task).await {
-            Ok(tab) => tab?,
+        let tabs = match self.store.task_tabs(task).await {
+            Ok(tabs) => tabs,
             Err(error) => {
-                tracing::warn!(%error, %task, "cannot read the task's last tab; the run opens a fresh one");
+                tracing::warn!(%error, %task, "cannot read the task's tabs; the run opens a fresh one");
                 return None;
             }
         };
-        if self.tabs.owner(tab).is_some() {
-            // A tab number may be reused after a browser restart; a task here already owns it.
+        if tabs.opened.is_empty() {
             return None;
         }
-        match view.view.resolve_tab_ids(&[tab]).await {
-            Ok(pages) => pages.get(&tab).map(|_| PageRef { tab }),
+        let live = match view.view.resolve_tab_ids(&tabs.opened).await {
+            Ok(live) => live,
             Err(error) => {
-                tracing::debug!(%error, %task, "the task's last tab is gone; the run opens a fresh one");
-                None
+                tracing::debug!(%error, %task, "the task's tabs are gone; the run opens a fresh one");
+                return None;
             }
+        };
+        let mut mine = Vec::new();
+        for tab in tabs.opened {
+            // A tab number may be reused after a browser restart; a task here may already own it.
+            if !live.contains_key(&tab) || self.tabs.owner(tab).is_some() {
+                continue;
+            }
+            // Registered first: only a tab with an entry can have an owner.
+            let seen = self.tabs.seen();
+            if self.browser.page(tab).await.is_some() {
+                self.tabs.touched(&PageRef { tab }, seen);
+                mine.push(tab);
+            }
+        }
+        if let Err(error) = self.tabs.restore(task, &mine, tabs.page) {
+            tracing::warn!(%error, %task, "cannot restore the task's tabs; the run opens a fresh one");
+            return None;
+        }
+        match self.tabs.task_page(task) {
+            TaskPage::Tab(page) => Some(page),
+            TaskPage::NoTab | TaskPage::Unknown => None,
         }
     }
 

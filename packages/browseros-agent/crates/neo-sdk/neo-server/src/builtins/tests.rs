@@ -37,10 +37,10 @@ use super::{BuiltinDeps, CaptchaClaims, PlaywrightFacade, TabJanitor};
 use crate::browser::{Adopt, BrowserLink, NeoTab, PageRef, TabRegistry};
 use crate::config::Defaults;
 use crate::dispatch::{
-    Call, Dispatcher, ErrorCode, EventLog, LeafError, Lifetime, Listing, Method, MethodSpec,
-    Observer, OpCtx, OpFailure, OpReply, OperationError, PageChange, PageScript, PageTarget,
-    PendingReply, Policy, PolicyCheck, RegistryBuilder, RegistryError, RunCtx, RunEnd, RunGuard,
-    RunStart, StopReason, Visibility,
+    Call, CallSite, Dispatcher, ErrorCode, EventLog, LeafError, Lifetime, Listing, Method,
+    MethodSpec, Observer, OpCtx, OpFailure, OpReply, OperationError, PageChange, PageScript,
+    PageTarget, PendingReply, Policy, PolicyCheck, RegistryBuilder, RegistryError, RunCtx, RunEnd,
+    RunGuard, RunStart, StopReason, Visibility,
 };
 use crate::host::{HostHolds, TakeoverLock};
 use crate::runtime::{Script, ScriptOutcome, run_script};
@@ -214,6 +214,17 @@ impl Harness {
     /// One script call, answered.
     async fn submit(&self, run: &Arc<RunCtx>, name: &str, input: Value) -> OpReply {
         self.submit_op(run, name, input).await.1
+    }
+
+    /// One call the script itself made, from a line of its code, answered: the kind that acts
+    /// on a tab for the run's task. [`Harness::submit`]'s calls carry no site, as the prelude's
+    /// own do.
+    async fn submit_scripted(&self, run: &Arc<RunCtx>, name: &str, input: Value) -> OpReply {
+        let pending = self.dispatcher.submit(
+            run,
+            Call::script(name.to_owned(), input, CallSite::parse("run:1:1")),
+        );
+        pending.wait().await
     }
 
     /// One script call, answered, with the op it became.
@@ -4160,10 +4171,43 @@ async fn a_picked_task_reuses_its_last_used_tab_then_newest_then_opens_one()
             harness.submit(&creator, "context.newPage", json!({})).await,
         )?)?);
     }
+    // A read from a run that acts for no task, and one without a script call site (the
+    // prelude's own) in a run that picked the task, leave the task on the tab it opened last.
     let (other, _other_guard) = harness.run()?;
     value(
         harness
-            .submit(&other, "page.opener", json!({ "page": pages[0] }))
+            .submit_scripted(&other, "page.opener", json!({ "page": pages[0] }))
+            .await,
+    )?;
+    let (unsited, _unsited_guard) = harness.run()?;
+    let picked = harness
+        .submit(&unsited, "neo.task", json!({ "id": task["id"] }))
+        .await;
+    assert_eq!(
+        picked.picked_page.as_ref(),
+        Some(&pages[2]),
+        "a task-less run moves nothing"
+    );
+    value(picked)?;
+    value(
+        harness
+            .submit(&unsited, "page.opener", json!({ "page": pages[0] }))
+            .await,
+    )?;
+    // The task's own script acting on a tab, in a run that picked it, makes that tab its page.
+    let (acting, _acting_guard) = harness.run()?;
+    let picked = harness
+        .submit(&acting, "neo.task", json!({ "id": task["id"] }))
+        .await;
+    assert_eq!(
+        picked.picked_page.as_ref(),
+        Some(&pages[2]),
+        "nor an unsited read"
+    );
+    value(picked)?;
+    value(
+        harness
+            .submit_scripted(&acting, "page.opener", json!({ "page": pages[0] }))
             .await,
     )?;
     let lazy = json!({ "page": { "$neo": "page", "tab": null } });
