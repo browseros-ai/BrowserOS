@@ -4,7 +4,16 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { fileURLToPath } from 'node:url'
+import {
+  browserFlags,
+  cleanupBrowser,
+  isAlive,
+  startOwnedBrowser as startBrowser,
+  stopBrowser,
+} from '../../../../tools/browser-process.mjs'
 import { verifyViewport } from './browser-defaults.mjs'
+
+export { isAlive, stopBrowser }
 
 export function browserVersion(executable) {
   if (!executable || process.platform !== 'darwin') return undefined
@@ -24,12 +33,7 @@ export function browserLaunch(
   return {
     executable,
     flags: [
-      '--headless=new',
-      '--disable-browseros-server',
-      '--disable-browseros-extensions',
-      '--remote-debugging-port=0',
-      `--user-data-dir=${profile}`,
-      '--no-first-run',
+      ...browserFlags(profile),
       '--lang=en-US',
       hostedMode ? '--window-size=1280,841' : '--window-size=1520,801',
       '--force-device-scale-factor=1',
@@ -41,174 +45,12 @@ export function browserLaunch(
   }
 }
 
-export function isAlive(pid) {
-  try {
-    process.kill(pid, 0)
-    return true
-  } catch (error) {
-    if (error.code === 'ESRCH') return false
-    // macOS can return EPERM while the last sandboxed helper is being reaped.
-    // Check existence without treating that transient denial as an ownership failure.
-    if (error.code === 'EPERM') {
-      if (pid > 0) return true
-      return execFileSync('ps', ['-axo', 'pgid='], { encoding: 'utf8' })
-        .split('\n')
-        .some((group) => Number(group.trim()) === -pid)
-    }
-    throw error
-  }
-}
-
-function groupOwned(pid, profile) {
-  // Host command lines can exceed execFileSync's output buffer and strand a cleanup slot.
-  // Enumerate compact numeric ids first, then read commands only in the owned group.
-  const members = execFileSync('ps', ['-axo', 'pid=,pgid='], {
-    encoding: 'utf8',
-    // Concurrent agents can have very large command lines. Ownership must still be checked
-    // before cleanup; Node's 1 MiB default can otherwise strand the private browser group.
-    maxBuffer: 16 * 1024 * 1024,
+/** Corpus-specific viewport calibration wraps the shared process lifecycle. */
+export function startOwnedBrowser(executable, outputDir, signal) {
+  return startBrowser(executable, outputDir, signal, {
+    launch: browserLaunch,
+    prepare: async (port) => ({ viewport: await verifyViewport(port) }),
   })
-    .split('\n')
-    .flatMap((line) => {
-      const [member, group] = line.trim().split(/\s+/).map(Number)
-      return group === pid && Number.isInteger(member) && member > 0
-        ? [member]
-        : []
-    })
-  if (!members.length) return false
-  let processes
-  try {
-    processes = execFileSync(
-      'ps',
-      ['-p', members.join(','), '-o', 'pgid=,command='],
-      {
-        encoding: 'utf8',
-      },
-    )
-  } catch (error) {
-    // Every listed member can exit between the two reads. Ownership then fails closed.
-    if (error.status === 1) return false
-    throw error
-  }
-  // Recheck the group as well as the profile: a pid can be reused between the reads.
-  return processes.split('\n').some((line) => {
-    const match = line.trim().match(/^(\d+)\s+(.*)$/)
-    return (
-      Number(match?.[1]) === pid &&
-      match[2].includes(`--user-data-dir=${profile}`)
-    )
-  })
-}
-
-/** Revalidate immediately before each signal: recorded process IDs alone prove no ownership. */
-export async function stopBrowser(owner) {
-  if (!owner.pid || !isAlive(-owner.pid)) return
-  for (const [signal, attempts] of [
-    ['SIGTERM', 40],
-    ['SIGKILL', 60],
-  ]) {
-    if (!isAlive(-owner.pid)) return
-    if (!groupOwned(owner.pid, owner.profile)) {
-      // The group can finish exiting between the liveness probe and the ps listing; a group
-      // that is gone needs no signal. One that is alive but unproven is never signalled.
-      if (!isAlive(-owner.pid)) return
-      throw new Error(`Cannot revalidate browser group ${owner.pid}`)
-    }
-    try {
-      process.kill(-owner.pid, signal)
-    } catch (error) {
-      if (error.code !== 'ESRCH') throw error
-    }
-    for (let attempt = 0; attempt < attempts; attempt++) {
-      if (!isAlive(-owner.pid)) return
-      await sleep(50)
-    }
-  }
-  throw new Error(`Owned browser process group ${owner.pid} survived cleanup`)
-}
-
-/** Used only inside the guardian, which installs cancellation before acquiring resources. */
-export async function startOwnedBrowser(executable, outputDir, signal) {
-  const profile = fs.mkdtempSync(path.join(outputDir, 'profile-'))
-  const owner = { profile }
-  let stdout
-  let stderr
-  let child
-  let exit
-  let exited
-  let closing
-  const close = () =>
-    (closing ??= (async () => {
-      await stopBrowser(owner)
-      if (exited) await exited
-      fs.rmSync(profile, { recursive: true, force: true })
-      fs.writeFileSync(
-        path.join(outputDir, 'cleanup.json'),
-        JSON.stringify({ ...owner, exit }),
-      )
-    })())
-  try {
-    signal.throwIfAborted()
-    stdout = fs.openSync(path.join(outputDir, 'browser.stdout.log'), 'wx')
-    stderr = fs.openSync(path.join(outputDir, 'browser.stderr.log'), 'wx')
-    const launch = browserLaunch(executable, profile)
-    fs.writeFileSync(
-      path.join(outputDir, 'launch.json'),
-      JSON.stringify(launch, null, 2),
-    )
-    child = spawn(executable, launch.flags, {
-      detached: true,
-      stdio: ['ignore', stdout, stderr],
-      env: Object.fromEntries(
-        Object.entries({ ...process.env, ...launch.env }).filter(
-          ([, value]) => value !== null,
-        ),
-      ),
-    })
-    exited = new Promise((resolve) => {
-      child.once('exit', (code, signal) => {
-        exit = { code, signal }
-        resolve(exit)
-      })
-      child.once('error', (error) => {
-        exit = { error: error.message }
-        resolve(exit)
-      })
-    })
-    owner.pid = child.pid
-    // No await between spawn and durable ownership: an IPC disconnect cannot strand a browser.
-    fs.writeFileSync(path.join(outputDir, 'owner.json'), JSON.stringify(owner))
-    if (!child.pid) throw new Error('Browser did not start')
-    const deadline = Date.now() + 30_000
-    while (Date.now() < deadline) {
-      signal.throwIfAborted()
-      if (exit)
-        throw new Error(`Browser exited at startup: ${JSON.stringify(exit)}`)
-      try {
-        const [port] = fs
-          .readFileSync(path.join(profile, 'DevToolsActivePort'), 'utf8')
-          .split('\n')
-        if (/^\d+$/.test(port) && Number(port) > 0 && Number(port) !== 9200) {
-          launch.viewport = await verifyViewport(Number(port))
-          fs.writeFileSync(
-            path.join(outputDir, 'launch.json'),
-            JSON.stringify(launch, null, 2),
-          )
-          return { ...owner, port: Number(port), exited, close }
-        }
-      } catch (error) {
-        if (error.code !== 'ENOENT') throw error
-      }
-      await sleep(50, undefined, { signal })
-    }
-    throw new Error('Browser did not publish its CDP port')
-  } catch (error) {
-    await close()
-    throw error
-  } finally {
-    if (stdout !== undefined) fs.closeSync(stdout)
-    if (stderr !== undefined) fs.closeSync(stderr)
-  }
 }
 
 export async function launchBrowser(
@@ -291,14 +133,7 @@ export async function cleanupWorker(dir) {
   const record = path.join(dir, 'owner.json')
   if (!fs.existsSync(record)) return
   const owner = JSON.parse(fs.readFileSync(record))
-  if (
-    path.dirname(owner.profile) !== dir ||
-    !path.basename(owner.profile).startsWith('profile-')
-  )
-    throw new Error('Invalid owned profile path')
-  await stopBrowser(owner)
-  fs.rmSync(owner.profile, { recursive: true, force: true })
-  fs.writeFileSync(cleaned, JSON.stringify({ ...owner, parentFallback: true }))
+  await cleanupBrowser({ ...owner, parentFallback: true }, dir)
 }
 
 export async function cleanupWorkers(outputDir) {

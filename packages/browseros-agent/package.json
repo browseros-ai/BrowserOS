@@ -29,6 +29,7 @@
     "dev:reset:prod": "./tools/dev/run.sh reset --target prod",
     "install:browseros-dogfood": "make -C tools/dogfood install",
     "test:env": "./tools/dev/run.sh test",
+    "test:browser": "node tools/test-browser.mjs",
     "test:cleanup": "./tools/dev/run.sh cleanup --quick --yes",
     "start:server": "cd apps/server && bun --watch --env-file=../../.env.development src/index.ts --config ../../config.dev.json",
     "start:agent": "bun run --filter @browseros/app dev",

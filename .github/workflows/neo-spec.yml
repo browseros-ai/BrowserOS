@@ -25,6 +25,8 @@ on:
       - packages/browseros-agent/Cargo.lock
       # The test:neo-spec script and the pinned Bun.
       - packages/browseros-agent/package.json
+      - packages/browseros-agent/tools/browser-process.mjs
+      - packages/browseros-agent/tools/test-browser.mjs
   push:
     branches: [main]
     paths:
@@ -34,6 +36,8 @@ on:
       - packages/browseros-agent/Cargo.toml
       - packages/browseros-agent/Cargo.lock
       - packages/browseros-agent/package.json
+      - packages/browseros-agent/tools/browser-process.mjs
+      - packages/browseros-agent/tools/test-browser.mjs
   workflow_dispatch:
 
 permissions:
@@ -114,6 +118,11 @@ jobs:
             "$RUNNER_TEMP/neo.deb" \
             fonts-liberation fonts-noto-core fonts-noto-color-emoji fonts-wqy-zenhei fonts-ipafont-gothic
           echo "NEO_SPEC_BROWSER_LABEL=BrowserOS neo $NEO_BROWSER_VERSION (browser.lock amd64 .deb, $(/usr/bin/browserclaw --version | tr -s ' '))" >> "$GITHUB_ENV"
+
+      # Fail before the corpus if a lifecycle change prevents Linux browser startup. Otherwise
+      # every spec fails identically and the expected-failure reruns can consume the whole job.
+      - name: Smoke private browser startup
+        run: bun run test:browser -- node -e 'if (!process.env.BROWSEROS_CDP_PORT) process.exit(1)'
 
       - name: Prepare the Playwright source
         if: steps.playwright.outputs.cache-hit != 'true'

@@ -10,8 +10,7 @@
 //! (Runner N). Ported from r10c (`68440df5d`, `b45f541b0`) onto the main-world gateway.
 //!
 //! Needs a throwaway BrowserOS with CDP on `BROWSEROS_CDP_PORT` (default 9005), for example
-//! `PORT_BASE=9601 spikes/eval/browser.sh <profile> &`, then
-//! `BROWSEROS_CDP_PORT=9601 cargo test -p neo-playwright --test element_eval_live -- --ignored`.
+//! `bun run test:browser -- cargo test -p neo-playwright --test element_eval_live -- --ignored`.
 //! Every test opens its own tab and closes it.
 
 #[path = "support/fixture_server.rs"]

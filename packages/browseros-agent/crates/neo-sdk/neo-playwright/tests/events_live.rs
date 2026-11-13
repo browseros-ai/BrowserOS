@@ -5,9 +5,9 @@
 //! which BrowserOS sends only outside hosted mode.
 //!
 //! Needs a throwaway BrowserOS with CDP on `BROWSEROS_CDP_PORT` (default 9005). Set
-//! `BROWSERCLAW_HOSTED_MODE=1` when that browser runs in hosted mode, as `spikes/eval/browser.sh`
-//! starts it: then the console test checks that nothing arrives. Every test opens its own tabs
-//! and closes them.
+//! `BROWSERCLAW_HOSTED_MODE=1` when testing hosted mode; then the console test checks that
+//! nothing arrives. Run with `bun run test:browser -- cargo test -p neo-playwright --test
+//! events_live -- --ignored`. Every test opens and closes its own tabs.
 
 #[path = "support/js_runner.rs"]
 #[expect(

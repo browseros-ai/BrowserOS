@@ -5,7 +5,7 @@
 //! input against the vendored parser's output.
 //!
 //! The live tests need BrowserOS with CDP on `BROWSEROS_CDP_PORT` (default 9005):
-//! `cargo test -p neo-playwright --test frames_live -- --ignored`. They serve the
+//! `bun run test:browser -- cargo test -p neo-playwright --test frames_live -- --ignored`. They serve the
 //! fixtures on `127.0.0.1`, `localhost` and `[::1]`, and open and close their own tabs.
 
 #[path = "support/fixture_server.rs"]

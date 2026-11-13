@@ -6,8 +6,7 @@
 //! and snapshots.
 //!
 //! Needs a throwaway BrowserOS with CDP on `BROWSEROS_CDP_PORT` (default 9005), for example
-//! `PORT_BASE=9511 spikes/eval/browser.sh <profile> &`, then
-//! `BROWSEROS_CDP_PORT=9511 cargo test -p neo-playwright --test expect_live -- --ignored`.
+//! `bun run test:browser -- cargo test -p neo-playwright --test expect_live -- --ignored`.
 //! Every test opens its own tab and closes it.
 
 #[path = "support/fixture_server.rs"]
