@@ -5616,3 +5616,57 @@ async fn a_start_that_cannot_list_the_tabs_treats_every_tab_as_filled() -> Resul
     }
     Ok(())
 }
+
+/// A task counts as its creating run's own: it joins the family of the run's host task, whose
+/// root a run naming a created task keeps. A run with no host task makes a family root, even
+/// after it picked another task.
+#[tokio::test]
+async fn a_created_task_joins_the_family_of_its_runs_host_task() -> Result<(), Box<dyn Error>> {
+    let harness = Harness::new().await?;
+    let created_by = async |task: Option<&TaskId>| -> Result<TaskId, Box<dyn Error>> {
+        let view = harness.link.view().ok_or("the link is up")?;
+        let (run, _guard) = RunCtx::start(
+            &harness.dispatcher,
+            RunStart {
+                id: RunId::new(),
+                code: String::new(),
+                request_id: None,
+                task_id: task.cloned(),
+                host_data: None,
+                view,
+                deadline: Instant::now() + Defaults::RUN_TIMEOUT,
+                default_page: None,
+            },
+        );
+        let created = value(harness.submit(&run, "neo.createTask", json!({})).await)?;
+        Ok(TaskId::parse(created["id"].as_str().ok_or("task id")?)?)
+    };
+    let host = TaskId::parse("host-s")?;
+    let child = created_by(Some(&host)).await?;
+    assert_eq!(
+        harness.tabs.task(&child)?.family,
+        host,
+        "created in the host task's run"
+    );
+    let grandchild = created_by(Some(&child)).await?;
+    assert_eq!(
+        harness.tabs.task(&grandchild)?.family,
+        host,
+        "created in a run that names the created task: still the host task's family"
+    );
+
+    let (free, _free_guard) = harness.run()?;
+    value(
+        harness
+            .submit(&free, "neo.task", json!({ "id": child.as_str() }))
+            .await,
+    )?;
+    let created = value(harness.submit(&free, "neo.createTask", json!({})).await)?;
+    let root = TaskId::parse(created["id"].as_str().ok_or("task id")?)?;
+    assert_eq!(
+        harness.tabs.task(&root)?.family,
+        root,
+        "a run with no host task makes a family root, though it picked another task first"
+    );
+    Ok(())
+}

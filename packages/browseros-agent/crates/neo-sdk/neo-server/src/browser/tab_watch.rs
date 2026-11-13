@@ -90,6 +90,11 @@ pub(crate) struct TabListing {
 /// Each listing also fires core's detach hook for the tabs it lacks, which drops them from
 /// `TabRegistry`: core notices a closed tab only on its own close or its next listing.
 ///
+/// A popup's opener goes to the registry twice: at its announcement, for sight only
+/// (`TabRegistry::note_opener`), so a task's popup is the task's before any listing; and at the
+/// next listing, which registers the popup and lets it join its opener's task
+/// (`TabRegistry::popup`).
+///
 /// Runs for the process's life: the session's event channel outlives every reconnect.
 pub(crate) async fn tab_watch(
     session: Arc<BrowserSession>,
@@ -258,6 +263,7 @@ impl Watch {
         self.targets.clear();
         self.openers.clear();
         self.closing.clear();
+        self.tabs.forget_openers();
         self.begin(epoch);
     }
 
@@ -293,6 +299,14 @@ impl Watch {
                 };
                 if target_info.kind != "page" {
                     return false;
+                }
+                if let Some(tab) = target_info.tab_id
+                    && let Some(opener) = target_info
+                        .opener_id
+                        .as_ref()
+                        .and_then(|opener| self.targets.get(opener))
+                {
+                    self.tabs.note_opener(TabId(tab), *opener);
                 }
                 if let Some(opener) = target_info.opener_id {
                     self.openers.insert(target_info.target_id.clone(), opener);
