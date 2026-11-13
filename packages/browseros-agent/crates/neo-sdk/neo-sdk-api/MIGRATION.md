@@ -94,6 +94,20 @@ default. `fields=summary` keeps the field. Operations recorded before it, and th
 never recorded, have none. The server also logs each such read at warn, `a tab's frame tree is
 not whole`, with the tab and the frame's error.
 
+**Rolling back to an image without this field.** The field comes with trace schema 5. An older
+image (schema 4 or below, every image before this field) cannot read that `trace.db`, but it
+still starts. It renames the file `trace.db.broken-<ms>` beside it, starts an empty store, and
+logs an error, `the trace store does not open; starting a fresh one`. So after a rollback:
+
+- the older image lists none of the runs recorded before it;
+- a `requestId` sent before the rollback runs again instead of returning its stored reply.
+
+Only `trace.db` moves (its `-wal` and `-shm` files are removed, so writes not yet copied into the
+file are lost with them); `settings.json` beside it stays. Moving forward again, the newer image
+upgrades the older image's store. The runs from before the rollback then stay only in the
+`.broken` file, which Neo never reads or deletes. Proven on a schema-4 image: it started healthy
+on a schema-5 store, moved it aside and answered `GET /v1/runs` with no runs.
+
 ## Source layout and package names
 
 The SDK's source packages now live together under `crates/neo-sdk/`, relative to
