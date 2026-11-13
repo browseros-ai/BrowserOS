@@ -927,7 +927,9 @@ async fn assert_adopted_stored_snapshots(
                 continue;
             }
             if phase == 0 && (2..50).contains(&snapshot_count) {
-                let scope = SCOPES[(snapshot_count - 2) / 8];
+                let scope = SCOPES
+                    .get((snapshot_count - 2) / 8)
+                    .ok_or("the snapshot scope index")?;
                 let format = (snapshot_count - 2) % 8;
                 // Default mode stays in one frame. AI and full page reads stitch the child.
                 if !(scope == "page" && destination == "child" && matches!(format, 5 | 7)) {
