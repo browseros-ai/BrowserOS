@@ -18,6 +18,7 @@ use serde_json::Value;
 use ts_rs::TS;
 
 use crate::op_scope::OpScope;
+use crate::page::OpPage;
 use crate::probe::{self, Point, ProbeFailure, ProbeReply, ProbeRequest, Read, Rect};
 use crate::read::element_read;
 use crate::resolve::{self, FramePath, Hop};
@@ -29,20 +30,22 @@ use crate::{ErrorCode, PlaywrightError};
 /// longer there, as upstream returns null when it cannot place the frame.
 pub(crate) async fn in_main_viewport(
     scope: &OpScope<'_>,
+    page: &OpPage<'_>,
     path: &FramePath,
     local: Value,
 ) -> Result<Option<Rect>, PlaywrightError> {
-    project(scope, path, local, Projection::BoundingBox).await
+    project(scope, page, path, local, Projection::BoundingBox).await
 }
 
 /// Screenshot projection keeps a vanished ancestor distinct from a hidden layout box, so
 /// capture can retry its preparation while an existing hidden frame remains uncapturable.
 pub(crate) async fn for_screenshot(
     scope: &OpScope<'_>,
+    page: &OpPage<'_>,
     path: &FramePath,
     local: Value,
 ) -> Result<Option<Rect>, PlaywrightError> {
-    project(scope, path, local, Projection::Screenshot).await
+    project(scope, page, path, local, Projection::Screenshot).await
 }
 
 #[derive(Clone, Copy)]
@@ -59,6 +62,7 @@ enum OriginState {
 
 async fn project(
     scope: &OpScope<'_>,
+    page: &OpPage<'_>,
     path: &FramePath,
     local: Value,
     projection: Projection,
@@ -72,7 +76,7 @@ async fn project(
     // In order, top down. The hops are independent, but a path is a handful of frames and each
     // call is one local round trip, which upstream's own recursion also pays.
     for hop in path.hops() {
-        match frame_origin(scope, hop).await? {
+        match frame_origin(scope, page, hop).await? {
             OriginState::Present(FrameOrigin::Placed {
                 x,
                 y,
@@ -132,7 +136,11 @@ pub(crate) enum Rotated {
 }
 
 /// Keep a missing node distinct from an existing iframe without a layout box.
-async fn frame_origin(scope: &OpScope<'_>, hop: &Hop) -> Result<OriginState, PlaywrightError> {
+async fn frame_origin(
+    scope: &OpScope<'_>,
+    page: &OpPage<'_>,
+    hop: &Hop,
+) -> Result<OriginState, PlaywrightError> {
     let iframe = hop
         .iframe
         .target()
@@ -143,7 +151,7 @@ async fn frame_origin(scope: &OpScope<'_>, hop: &Hop) -> Result<OriginState, Pla
         frame_visible: true,
         read: Read::FrameOrigin,
     };
-    match probe::call(&hop.parent, &request).await {
+    match probe::call(scope, page, &hop.parent, &request).await {
         Ok(ProbeReply::Read { value, .. }) => {
             let origin: Option<FrameOrigin> = element_read::read_value(scope, value.into_value())?;
             Ok(origin.map_or(OriginState::Hidden, OriginState::Present))
@@ -170,23 +178,34 @@ mod tests {
 
     use browseros_core::testing::TestConnection;
     use browseros_core::{CdpConnection, ProtocolSession, SessionId};
-    use serde_json::json;
+    use serde_json::{Value, json};
 
     use super::{for_screenshot, in_main_viewport};
     use crate::op_scope::OpScope;
+    use crate::page::OpPage;
     use crate::resolve::{FramePath, Hop, HopIframe};
     use crate::target::CallHeader;
-    use crate::test_env::TestEnv;
+    use crate::test_support::{ProbeAnswer, ScriptedRun, ScriptedTab, TabScript};
     use crate::world::IsolatedWorld;
     use crate::{ErrorCode, Op};
+
+    struct ProjectionPage;
+
+    impl TabScript for ProjectionPage {
+        fn probe(&self, _frame: &str, _request: &Value) -> ProbeAnswer {
+            ProbeAnswer::unexpected()
+        }
+    }
 
     /// A vanished ancestor is retryable only for screenshots. boundingBox keeps its public
     /// null contract, and an existing hidden iframe remains null for both callers.
     #[tokio::test]
     async fn ancestor_detachment_is_distinct_from_hidden_layout() -> Result<(), Box<dyn Error>> {
-        let env = TestEnv::new();
+        let tab = ScriptedTab::new(ProjectionPage);
+        let run = ScriptedRun::over(&tab).await?;
         let op = Op::from_name("page.screenshot").ok_or("screenshot op missing")?;
-        let scope = OpScope::new(&env, op, CallHeader::default());
+        let scope = OpScope::new(&run.env, op, CallHeader::default());
+        let page = OpPage::admit_handle(&run.playwright, &scope, &run.page).await?;
         for detached in [false, true] {
             let connection = TestConnection::new([]);
             let reply = if detached {
@@ -213,8 +232,11 @@ mod tests {
                 iframe: HopIframe::Key("#iframe".to_owned()),
             });
             let local = json!({ "x": 1, "y": 2, "width": 3, "height": 4 });
-            assert_eq!(in_main_viewport(&scope, &path, local.clone()).await?, None);
-            let screenshot = for_screenshot(&scope, &path, local).await;
+            assert_eq!(
+                in_main_viewport(&scope, &page, &path, local.clone()).await?,
+                None
+            );
+            let screenshot = for_screenshot(&scope, &page, &path, local).await;
             if detached {
                 assert_eq!(
                     screenshot

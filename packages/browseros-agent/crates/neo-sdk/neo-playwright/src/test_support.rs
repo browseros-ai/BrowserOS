@@ -540,13 +540,13 @@ impl<S: TabScript> ScriptedTab<S> {
     /// answers `described`, and any other call answers an object the tab holds.
     async fn call(&self, params: &Value) -> Result<Value, CdpError> {
         let first = &params["arguments"][0]["value"];
-        if first.get("op").is_some() {
+        if let Some(request) = first.get("request") {
             let frame = match params["objectId"].as_str() {
                 Some("g-child") => SCRIPTED_CHILD,
                 Some("g-oopif") => SCRIPTED_OOPIF,
                 _ => SCRIPTED_MAIN,
             };
-            let ProbeAnswer { after, reply } = self.script.probe(frame, first);
+            let ProbeAnswer { after, reply } = self.script.probe(frame, request);
             time::sleep(after).await;
             return reply
                 .map(|reply| json!({ "result": { "type": "object", "value": reply } }))

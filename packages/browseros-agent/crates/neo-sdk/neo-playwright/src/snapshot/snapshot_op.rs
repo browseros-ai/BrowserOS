@@ -115,12 +115,6 @@ fn route<'a, R: Route<'a>>(op: SnapshotOp, r: R) -> R::Out {
                 "Neo also marks elements Chromium reports clickable without a pointer cursor, so \
                  the condensed snapshot keeps their refs; read over CDP, never a script in the page",
             ),
-            (
-                "conformance",
-                "the prelude's captured spec-harness switch bypasses the masking of page-declared \
-                 private fields in every frame, never of a box Neo typed a host's secret into; no \
-                 public snapshot option can set it",
-            ),
         ])
         .result(
             "Each frame masks page-declared private field values outside conformance; Rust \
@@ -184,10 +178,6 @@ struct PageInput {
     #[serde(default)]
     #[ts(optional, as = "Option<bool>")]
     clickable: bool,
-    // Spec-harness bypass. Omission keeps normal snapshot value masking enabled.
-    #[serde(default)]
-    #[ts(optional, as = "Option<bool>")]
-    conformance: bool,
 }
 // Snapshots have always sent flat fields, not a nested `options` bag. Keep that wire shape;
 // there is no options bag for the generator's option-key probe to describe.
@@ -212,10 +202,6 @@ struct LocatorInput {
     #[serde(default)]
     #[ts(optional, as = "Option<bool>")]
     clickable: bool,
-    // Spec-harness bypass, carried unchanged into every frame's isolated-world walk.
-    #[serde(default)]
-    #[ts(optional, as = "Option<bool>")]
-    conformance: bool,
 }
 options!(LocatorInput);
 
@@ -301,8 +287,6 @@ async fn page_snapshot(
         depth: input.depth,
         boxes: input.boxes,
         closed_roots: 0,
-        conformance: input.conformance,
-        may_have_other_frame: true,
     };
     let backoff = Backoff::outer(scope.timeout());
     for attempt in 0.. {
@@ -315,7 +299,6 @@ async fn page_snapshot(
             page: &page,
             mode: input.mode,
             boxes: input.boxes,
-            conformance: input.conformance,
             marking: marks(input.mode, input.clickable).then(Marking::new),
             reading: Mutex::default(),
         };
@@ -369,13 +352,12 @@ async fn locator_snapshot(
             page: &page,
             mode: input.mode,
             boxes: input.boxes,
-            conformance: input.conformance,
             marking: marked.then(Marking::new),
             reading: Mutex::default(),
         };
         // Marked, the element is pinned first: its frame's targets are read in the world it
         // landed in, then the snapshot is taken there with them. Unmarked, one call does both.
-        let request = |last, _frame_visible, world: &IsolatedWorld| {
+        let request = |last, _frame_visible| {
             let root = ProbeTarget::Chunk(last);
             if marked {
                 ProbeRequest::Resolve {
@@ -384,13 +366,10 @@ async fn locator_snapshot(
                     want: Want::Element,
                 }
             } else {
-                with_frame_context(Cow::Owned(snapshotter.request(root, input.depth)), || {
-                    page.may_have_other_frame(scope, world)
-                })
-                .into_owned()
+                snapshotter.request(root, input.depth)
             }
         };
-        let Ok(attempt) = scope.within(resolver.attempt_at_world(request)).await else {
+        let Ok(attempt) = scope.within(resolver.attempt_at(request)).await else {
             return Err(scope.timed_out(ErrorCode::NoMatch));
         };
         let Some(Landed { reply, world, path }) = attempt? else {
@@ -428,31 +407,6 @@ fn with_closed_roots(request: &ProbeRequest, seeds: usize) -> Cow<'_, ProbeReque
         && let ProbeRequest::Snapshot { closed_roots, .. } = request.to_mut()
     {
         *closed_roots = u32::try_from(seeds).unwrap_or(u32::MAX);
-    }
-    request
-}
-
-/// Bind the hint lazily to the world about to be read, after marking or a resolver retry.
-/// Keeping the read inside this closure makes conformance perform no topology work at all.
-fn with_frame_context(
-    mut request: Cow<'_, ProbeRequest>,
-    hint: impl FnOnce() -> bool,
-) -> Cow<'_, ProbeRequest> {
-    if let ProbeRequest::Snapshot {
-        conformance: false,
-        may_have_other_frame,
-        ..
-    } = request.as_ref()
-    {
-        let hint = hint();
-        if hint != *may_have_other_frame
-            && let ProbeRequest::Snapshot {
-                may_have_other_frame,
-                ..
-            } = request.to_mut()
-        {
-            *may_have_other_frame = hint;
-        }
     }
     request
 }
@@ -538,9 +492,6 @@ struct Snapshotter<'op> {
     mode: SnapshotMode,
     /// Asked of every frame, as upstream passes its options down to each child frame.
     boxes: bool,
-    /// The prelude's captured spec switch. Every descendant uses the same value so a hop or
-    /// retry cannot change whether field values are masked before crossing the protocol.
-    conformance: bool,
     /// Clickable marking, for `clickable` in mode `ai`, the only mode that mints refs.
     marking: Option<Marking>,
     /// When the main frame's tree read began, while it runs: what a timeout logs as the phase it
@@ -596,7 +547,8 @@ fn marks(mode: SnapshotMode, clickable: bool) -> bool {
 }
 
 impl Snapshotter<'_> {
-    /// Each locator, pin and child frame inherits this op's rendering and conformance policy.
+    /// Each locator, pin and child frame inherits this snapshot's rendering options. The
+    /// common probe sender carries the scope's output policy independently of these options.
     fn request(&self, root: ProbeTarget, depth: Option<i64>) -> ProbeRequest {
         ProbeRequest::Snapshot {
             root,
@@ -604,8 +556,6 @@ impl Snapshotter<'_> {
             depth,
             boxes: self.boxes,
             closed_roots: 0,
-            conformance: self.conformance,
-            may_have_other_frame: true,
         }
     }
 
@@ -657,15 +607,12 @@ impl Snapshotter<'_> {
             None => Feed::default(),
         };
         let request = with_closed_roots(request, feed.seeds.len());
-        let request = with_frame_context(request, || {
-            self.page.may_have_other_frame(self.scope, world)
-        });
         let nodes = [feed.seeds, feed.targets].concat();
         let started = Instant::now();
         if main {
             *self.reading() = Some(started);
         }
-        let reply = probe::call_with_nodes(world, &request, &nodes).await;
+        let reply = probe::call_with_nodes(self.scope, self.page, world, &request, &nodes).await;
         if main {
             *self.reading() = None;
             if matches!(reply, Ok(ProbeReply::Snapshot { .. })) {
@@ -905,46 +852,13 @@ fn child_depth(depth: Option<i64>, iframe_depth: u32) -> Option<i64> {
 
 #[cfg(test)]
 mod tests {
-    use std::borrow::Cow;
-    use std::cell::Cell;
     use std::error::Error;
 
     use serde_json::json;
 
-    use super::{LocatorInput, PageInput, Unread, child_depth, with_frame_context};
+    use super::{LocatorInput, PageInput, Unread, child_depth};
     use crate::ErrorCode;
-    use crate::probe::{ProbeRequest, SnapshotMode};
-
-    #[test]
-    fn conformance_skips_even_the_lazy_frame_metadata_read() -> Result<(), Box<dyn Error>> {
-        let mut request: ProbeRequest = serde_json::from_value(json!({
-            "op": "snapshot", "root": "document", "mode": "ai", "conformance": true,
-        }))?;
-        let read = Cell::new(false);
-        let contextual = with_frame_context(Cow::Borrowed(&request), || {
-            read.set(true);
-            false
-        });
-        assert!(!read.get());
-        assert!(matches!(contextual, Cow::Borrowed(_)));
-        let ProbeRequest::Snapshot { conformance, .. } = &mut request else {
-            return Err("expected snapshot".into());
-        };
-        *conformance = false;
-        let contextual = with_frame_context(Cow::Borrowed(&request), || {
-            read.set(true);
-            false
-        });
-        assert!(read.get());
-        assert!(matches!(
-            contextual.as_ref(),
-            ProbeRequest::Snapshot {
-                may_have_other_frame: false,
-                ..
-            }
-        ));
-        Ok(())
-    }
+    use crate::probe::SnapshotMode;
 
     #[test]
     fn tests_that_a_child_frame_s_depth_follows_upstream_s_arithmetic() {
@@ -976,7 +890,6 @@ mod tests {
             "page": { "$neo": "page", "tab": 1007 }, "mode": "ai", "depth": 3,
         }))?;
         assert_eq!((page.mode, page.depth), (SnapshotMode::Ai, Some(3)));
-        assert!(!page.conformance, "normal page inputs mask by default");
         let locator: LocatorInput = serde_json::from_value(json!({
             "target": { "$neo": "locator", "page": { "$neo": "page", "tab": 1007 }, "chunks": [
                 { "parts": [{ "name": "aria-ref", "body": "f2e5", "source": "f2e5" }] },
@@ -985,10 +898,6 @@ mod tests {
             "mode": "default",
         }))?;
         assert_eq!((locator.mode, locator.depth), (SnapshotMode::Default, None));
-        assert!(
-            !locator.conformance,
-            "normal locator inputs mask by default"
-        );
         let boxed: PageInput = serde_json::from_value(
             json!({ "page": { "$neo": "page", "tab": 1007 }, "mode": "default", "boxes": true }),
         )?;
@@ -996,20 +905,17 @@ mod tests {
             boxed.boxes,
             "upstream's boxes option reaches every frame's probe"
         );
-        let upstream_page: PageInput = serde_json::from_value(json!({
-            "page": { "$neo": "page", "tab": 1007 }, "mode": "ai", "conformance": true,
-        }))?;
-        assert!(upstream_page.conformance);
-        let upstream_locator: LocatorInput = serde_json::from_value(json!({
+        let obsolete_locator = json!({
             "target": { "$neo": "locator", "page": { "$neo": "page", "tab": 1007 }, "chunks": [
                 { "parts": [{ "name": "css", "body": "body", "source": "body" }] },
             ], "display": "locator('body')" },
             "strict": "strict", "mode": "default", "conformance": true,
-        }))?;
-        assert!(upstream_locator.conformance);
+        });
+        assert!(serde_json::from_value::<LocatorInput>(obsolete_locator).is_err());
         for bad in [
             json!({ "page": { "$neo": "page", "tab": 1007 }, "mode": "codegen" }),
             json!({ "page": { "$neo": "page", "tab": 1007 }, "mode": "ai", "depth": 1.5 }),
+            json!({ "page": { "$neo": "page", "tab": 1007 }, "mode": "ai", "conformance": true }),
             json!({ "page": { "$neo": "page", "tab": 1007 }, "mode": "ai", "mayHaveOtherFrame": false }),
         ] {
             assert!(

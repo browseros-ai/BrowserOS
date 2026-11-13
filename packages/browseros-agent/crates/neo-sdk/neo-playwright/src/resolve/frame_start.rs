@@ -186,7 +186,7 @@ async fn enter_child(
         strictness: Strictness::Strict,
         want: Want::Frame,
     };
-    match probe::call_on(parent, &request, &object).await {
+    match probe::call_on(scope, page, parent, &request, &object).await {
         Ok(ProbeReply::Frame {
             pin, key, visible, ..
         }) => {

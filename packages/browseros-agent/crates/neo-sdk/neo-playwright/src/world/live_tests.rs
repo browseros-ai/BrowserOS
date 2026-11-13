@@ -64,7 +64,7 @@ async fn resolve_element(
     world: &IsolatedWorld,
     target: ParsedSelector,
 ) -> TestResult<Result<ProbeReply, ProbeFailure>> {
-    Ok(probe::call(world, &resolve(target, Want::Element)).await)
+    Ok(probe::call_for_tests(world, &resolve(target, Want::Element)).await)
 }
 
 async fn fixtures() -> TestResult<FixtureServer> {
@@ -268,10 +268,11 @@ async fn world_url(world: &IsolatedWorld) -> TestResult<Value> {
 /// The frame of the same-process `<iframe>` the probe pinned in `world`.
 async fn same_process_frame(
     scope: &OpScope<'_>,
+    page: &OpPage<'_>,
     world: &IsolatedWorld,
     pin: Pin,
 ) -> TestResult<FrameId> {
-    let iframe = probe::pinned_object(scope, world, pin)
+    let iframe = probe::pinned_object(scope, page, world, pin)
         .await?
         .ok_or("the pinned iframe comes back by handle")?;
     let described: Value = world
@@ -364,7 +365,7 @@ async fn tests_that_a_new_page_starts_at_seq_0_and_concurrent_first_uses_share_o
         first.same_install(&second),
         "both first uses got the one install's handle"
     );
-    let described = probe::call(&first, &ProbeRequest::Describe).await;
+    let described = probe::call_for_tests(&first, &ProbeRequest::Describe).await;
     assert!(
         matches!(
             described,
@@ -394,7 +395,7 @@ async fn tests_that_a_navigation_retires_the_seq_even_across_processes() -> Test
     // Another site: the document moves to another renderer, where context ids start over.
     tab.navigate(&server.url("localhost", "/password.html"))
         .await?;
-    let stale = probe::call(&first, &ProbeRequest::Describe).await;
+    let stale = probe::call_for_tests(&first, &ProbeRequest::Describe).await;
     assert!(
         matches!(stale, Err(ProbeFailure::Gone(_))),
         "the old handle must fail, never answer from another context: {stale:?}"
@@ -430,7 +431,7 @@ async fn tests_that_a_navigation_retires_the_seq_even_across_processes() -> Test
     // The same site again: the context is destroyed in the same renderer.
     tab.navigate(&server.url("localhost", "/password.html?again"))
         .await?;
-    let stale = probe::call(&second, &ProbeRequest::Describe).await;
+    let stale = probe::call_for_tests(&second, &ProbeRequest::Describe).await;
     assert!(matches!(stale, Err(ProbeFailure::Gone(_))), "{stale:?}");
     live.close(&tab).await;
     Ok(())
@@ -508,7 +509,7 @@ async fn tests_that_a_second_playwright_rekeys_the_world_so_old_refs_fail() -> T
     let scope = OpScope::new(&env, count_op()?, CallHeader::default());
     let world = main_world(&first, &scope, &tab).await?;
     // A frame hop's key stands in for a snapshot ref: the probe forgets both on a re-key.
-    let frame = probe::call(&world, &resolve(css("#frame")?, Want::Frame)).await;
+    let frame = probe::call_for_tests(&world, &resolve(css("#frame")?, Want::Frame)).await;
     let Ok(ProbeReply::Frame { key, pin, .. }) = frame else {
         return Err(format!("the iframe did not resolve: {frame:?}").into());
     };
@@ -517,8 +518,8 @@ async fn tests_that_a_second_playwright_rekeys_the_world_so_old_refs_fail() -> T
         matches!(by_key, Ok(ProbeReply::Element { .. })),
         "{by_key:?}"
     );
-    let child_frame = same_process_frame(&scope, &world, pin).await?;
     let first_page = OpPage::admit(&first.playwright, &scope, tab.id).await?;
+    let child_frame = same_process_frame(&scope, &first_page, &world, pin).await?;
     let child = first_page
         .world(
             &Endpoint {
@@ -570,7 +571,7 @@ async fn tests_that_a_second_playwright_rekeys_the_world_so_old_refs_fail() -> T
         SeqLookup::Retired
     ));
     navigate_frame(&tab, "?next").await?;
-    let stale = probe::call(&other_child, &ProbeRequest::Describe).await;
+    let stale = probe::call_for_tests(&other_child, &ProbeRequest::Describe).await;
     assert!(matches!(stale, Err(ProbeFailure::Gone(_))), "{stale:?}");
     other_page.frames().invalidate(&other_child);
     let next = other_page.world(&child_endpoint, child_place).await?;
@@ -579,7 +580,7 @@ async fn tests_that_a_second_playwright_rekeys_the_world_so_old_refs_fail() -> T
         overlapping.0 + 1,
         "the child's next document skips the seq the older instance gave its first"
     );
-    let old_ref = probe::call(
+    let old_ref = probe::call_for_tests(
         &world,
         &resolve(ParsedSelector::frame_key(&key)?, Want::Element),
     )
@@ -589,7 +590,7 @@ async fn tests_that_a_second_playwright_rekeys_the_world_so_old_refs_fail() -> T
         "the first instance's ref is stale at once, which the resolver reports as \
          element_detached: {old_ref:?}"
     );
-    let described = probe::call(&world, &ProbeRequest::Describe).await;
+    let described = probe::call_for_tests(&world, &ProbeRequest::Describe).await;
     assert!(
         matches!(described, Ok(ProbeReply::Described { seq, .. }) if seq == rekeyed.seq()),
         "the world answers with the new instance's numbering"
@@ -637,7 +638,7 @@ async fn tests_that_a_legacy_sdk_world_is_never_reused_by_the_engine() -> TestRe
         frame_visible: true,
         read: Read::InputValue,
     };
-    let Ok(ProbeReply::Read { value, .. }) = probe::call(&world, &read).await else {
+    let Ok(ProbeReply::Read { value, .. }) = probe::call_for_tests(&world, &read).await else {
         return Err("the password field did not read".into());
     };
     assert_eq!(
@@ -684,7 +685,7 @@ async fn tests_that_an_older_protocols_probe_is_rekeyed_then_replaced() -> TestR
         FrameSeq(0),
         "the new probe takes this instance's seq"
     );
-    let described = probe::call(&world, &ProbeRequest::Describe).await?;
+    let described = probe::call_for_tests(&world, &ProbeRequest::Describe).await?;
     assert!(
         matches!(
             described,
@@ -723,11 +724,12 @@ async fn tests_that_an_ops_objects_are_released_when_its_scope_drops() -> TestRe
     let env = live.env();
     let scope = OpScope::new(&env, count_op()?, CallHeader::default());
     let world = main_world(&live, &scope, &tab).await?;
-    let frame = probe::call(&world, &resolve(css("#frame")?, Want::Frame)).await;
+    let frame = probe::call_for_tests(&world, &resolve(css("#frame")?, Want::Frame)).await;
     let Ok(ProbeReply::Frame { pin, .. }) = frame else {
         return Err(format!("the iframe did not resolve: {frame:?}").into());
     };
-    let iframe = probe::pinned_object(&scope, &world, pin)
+    let page = OpPage::admit(&live.playwright, &scope, tab.id).await?;
+    let iframe = probe::pinned_object(&scope, &page, &world, pin)
         .await?
         .ok_or("the pinned iframe comes back by handle")?;
     let describe = json!({ "objectId": iframe, "depth": 0 });
@@ -735,6 +737,7 @@ async fn tests_that_an_ops_objects_are_released_when_its_scope_drops() -> TestRe
         .session()
         .send::<_, Value>("DOM.describeNode", describe.clone())
         .await?;
+    drop(page);
     drop(scope);
     let mut released = false;
     for _ in 0..40 {
@@ -750,7 +753,7 @@ async fn tests_that_an_ops_objects_are_released_when_its_scope_drops() -> TestRe
         time::sleep(Duration::from_millis(25)).await;
     }
     assert!(released, "the op's object group went with its scope");
-    let alive = probe::call(&world, &ProbeRequest::Describe).await;
+    let alive = probe::call_for_tests(&world, &ProbeRequest::Describe).await;
     assert!(
         matches!(alive, Ok(ProbeReply::Described { .. })),
         "the world's own handle is in another group and stays: {alive:?}"
@@ -771,7 +774,7 @@ async fn tests_that_set_content_keeps_the_seq_while_an_old_ref_fails() -> TestRe
     let scope = OpScope::new(&env, count_op()?, CallHeader::default());
     let before = main_world(&live, &scope, &tab).await?;
     // A frame hop's key stands in for a snapshot ref: both live in Neo's aria-ref map.
-    let frame = probe::call(&before, &resolve(css("#frame")?, Want::Frame)).await;
+    let frame = probe::call_for_tests(&before, &resolve(css("#frame")?, Want::Frame)).await;
     let Ok(ProbeReply::Frame { key, .. }) = frame else {
         return Err(format!("the iframe did not resolve: {frame:?}").into());
     };
@@ -805,7 +808,7 @@ async fn tests_that_set_content_keeps_the_seq_while_an_old_ref_fails() -> TestRe
         before.seq(),
         "the written content keeps the frame's seq and its refs' prefix"
     );
-    let old_ref = probe::call(
+    let old_ref = probe::call_for_tests(
         &after,
         &resolve(ParsedSelector::frame_key(&key)?, Want::Element),
     )
@@ -919,7 +922,7 @@ async fn tests_that_with_runtime_off_every_kind_of_frame_takes_its_world_by_numb
             "{label}: the install never switches Runtime on"
         );
         assert_eq!(world_url(&world).await?, json!([url, false]), "{label}");
-        let described = probe::call(&world, &ProbeRequest::Describe).await;
+        let described = probe::call_for_tests(&world, &ProbeRequest::Describe).await;
         assert!(
             matches!(described, Ok(ProbeReply::Described { .. })),
             "{label}: {described:?}"
@@ -953,7 +956,7 @@ async fn tests_that_under_a_runtime_lease_every_kind_of_frame_takes_a_new_world_
              {evaluated:?}"
         );
         assert_eq!(world_url(&world).await?, json!([url, false]), "{label}");
-        let described = probe::call(&world, &ProbeRequest::Describe).await;
+        let described = probe::call_for_tests(&world, &ProbeRequest::Describe).await;
         assert!(
             matches!(described, Ok(ProbeReply::Described { .. })),
             "{label}: {described:?}"

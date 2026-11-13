@@ -6,7 +6,7 @@
  * type error, so a new kind cannot ship undocumented on either side.
  */
 import { parseSelector } from '../../../neo-playwright/third_party/playwright/packages/isomorphic/selectorParser'
-import type { ProbeReply, ProbeTarget } from './generated'
+import type { ProbeCall, ProbeReply, ProbeTarget } from './generated'
 import {
   CALL_FUNCTION,
   type Op,
@@ -325,17 +325,15 @@ export const REQUEST_EXAMPLES: { [O in Op]: AtLeastOne<RequestOf<O>> } = {
       op: 'snapshot',
       root: 'document',
       mode: 'ai',
-      mayHaveOtherFrame: false,
     },
     { op: 'snapshot', root: chunk('main'), mode: 'default', depth: 3 },
     { op: 'snapshot', root: 'document', mode: 'default', boxes: true },
     { op: 'snapshot', root: 'document', mode: 'ai', closedRoots: 2 },
-    { op: 'snapshot', root: 'document', mode: 'ai', conformance: true },
+    { op: 'snapshot', root: 'document', mode: 'ai' },
     {
       op: 'snapshot',
       root: chunk('main'),
       mode: 'default',
-      conformance: true,
     },
   ],
   expect: [
@@ -715,6 +713,18 @@ const REPLY_EXAMPLES: {
   uninstalled: [{ kind: 'uninstalled' }],
 }
 
+/** Both policies belong to the fingerprinted ABI, alongside the request variants. */
+const CALL_EXAMPLES: AtLeastOne<ProbeCall> = [
+  {
+    request: REQUEST_EXAMPLES.snapshot[0],
+    policy: { conformance: false, mayHaveOtherFrame: true },
+  },
+  {
+    request: REQUEST_EXAMPLES.expect[0],
+    policy: { conformance: true, mayHaveOtherFrame: false },
+  },
+]
+
 /** The document scripts/build.ts writes to probe-protocol.json. */
 export function protocolDocument() {
   return {
@@ -723,6 +733,7 @@ export function protocolDocument() {
     replyKinds: REPLY_KINDS,
     byHandle: ['pinned'],
     anyRequest: ['error', 'uninstalled'],
+    calls: CALL_EXAMPLES,
     requests: Object.values(REQUEST_EXAMPLES).flat(),
     replies: Object.values(REPLY_EXAMPLES).flat(),
   }

@@ -4,7 +4,8 @@
  *
  * This is also the one file that reaches into InjectedScript's private fields. Each access
  * checks the shape it expects and fails as `internal` otherwise, so an upgrade that renames
- * a field breaks loudly at the first request instead of resolving refs wrongly.
+ * a field breaks loudly at the first request instead of resolving refs or emitting diagnostics
+ * wrongly. Request-owned formatting scopes and arm-owned receivers retain the same engine.
  */
 import {
   type FrameExpectParams,
@@ -186,6 +187,9 @@ export type ExpectChecks = {
  * `expectSingleElement` and `expectArray`, the checks behind the engine's public `expect`.
  * The public one also renders an aria snapshot on every failing poll, for the test runner's
  * error context, which Neo has no place for; these two are what it calls to match.
+ * In the pinned vendor, aria/name/description/text branches finish their reads synchronously
+ * before the Promise returns; only viewport awaits. FailureOutput relies on that split to
+ * restore tree guards before awaiting. Recheck those branches at each vendor upgrade.
  */
 export function expectChecks(injected: InjectedScript): ExpectChecks {
   const single: unknown = Reflect.get(injected, 'expectSingleElement')
@@ -201,6 +205,185 @@ export function expectChecks(injected: InjectedScript): ExpectChecks {
     every: (elements, params) =>
       Reflect.apply(every, injected, [elements, params]),
   }
+}
+
+/** The two vendor diagnostic seams; neither changes normal selector execution. */
+type DiagnosticHooks = {
+  previewNode: InjectedScript['previewNode']
+  generateSelectors(elements: Element[], generate: () => string[]): string[]
+}
+
+/**
+ * A checked view of the pinned vendor's diagnostic methods. It captures native formatting
+ * once, scopes synchronous hooks, and gives delayed hit tests a receiver owned by their arm.
+ */
+export type DiagnosticEngine = {
+  previewNode: InjectedScript['previewNode']
+  run<T>(hooks: DiagnosticHooks, invoke: () => T): T
+  arm(
+    previewNode: InjectedScript['previewNode'],
+    ...args: Parameters<InjectedScript['setupHitTargetInterceptor']>
+  ): ReturnType<InjectedScript['setupHitTargetInterceptor']>
+}
+
+type DiagnosticOverride = {
+  property: string
+  original: PropertyDescriptor | undefined
+  replacement: PropertyDescriptor
+}
+
+const diagnosticEngines = new WeakMap<InjectedScript, DiagnosticEngine>()
+
+function diagnosticOverride(
+  injected: InjectedScript,
+  property: string,
+  value: DiagnosticHooks['previewNode'] | ((elements: Element[]) => string[]),
+): DiagnosticOverride {
+  const original = Object.getOwnPropertyDescriptor(injected, property)
+  if (
+    original?.configurable === false ||
+    (!original && !Object.isExtensible(injected))
+  )
+    throw new ProbeError(
+      'internal',
+      'vendor diagnostic hooks cannot be installed',
+    )
+  return {
+    property,
+    original,
+    replacement: {
+      configurable: true,
+      enumerable: original?.enumerable ?? false,
+      writable: true,
+      value,
+    },
+  }
+}
+
+/** Restoration attempts both seams even after one fails, and refuses any incomplete cleanup. */
+function restoreDiagnostics(
+  injected: InjectedScript,
+  installed: DiagnosticOverride[],
+): void {
+  let failed = false
+  for (const override of installed.reverse()) {
+    try {
+      if (override.original)
+        Object.defineProperty(injected, override.property, override.original)
+      else if (!Reflect.deleteProperty(injected, override.property))
+        failed = true
+    } catch {
+      failed = true
+    }
+  }
+  if (failed)
+    throw new ProbeError(
+      'internal',
+      'vendor diagnostic hooks could not be restored',
+    )
+}
+
+export function diagnosticEngine(injected: InjectedScript): DiagnosticEngine {
+  const captured = diagnosticEngines.get(injected)
+  if (captured) return captured
+  const previewNode = injected.previewNode
+  const setup = injected.setupHitTargetInterceptor
+  const selectors: unknown = Reflect.get(injected, '_generateSelectors')
+  const interceptor: unknown = Reflect.get(injected, '_hitTargetInterceptor')
+  const interceptorDescriptor = Object.getOwnPropertyDescriptor(
+    injected,
+    '_hitTargetInterceptor',
+  )
+  if (
+    typeof previewNode !== 'function' ||
+    typeof setup !== 'function' ||
+    typeof selectors !== 'function' ||
+    !interceptorDescriptor ||
+    !('value' in interceptorDescriptor) ||
+    !interceptorDescriptor.writable ||
+    (interceptor !== undefined && typeof interceptor !== 'function')
+  )
+    throw new ProbeError(
+      'internal',
+      'the vendored diagnostic engine contract changed',
+    )
+
+  const generateSelectors = (elements: Element[]): string[] => {
+    const lines: unknown = Reflect.apply(selectors, injected, [elements])
+    if (
+      !Array.isArray(lines) ||
+      !lines.every((line: unknown) => typeof line === 'string')
+    )
+      throw new ProbeError(
+        'internal',
+        'vendor diagnostic selectors did not return text',
+      )
+    return lines
+  }
+  const adapter: DiagnosticEngine = {
+    previewNode: (node) => Reflect.apply(previewNode, injected, [node]),
+    run(hooks, invoke) {
+      const overrides = [
+        diagnosticOverride(injected, 'previewNode', hooks.previewNode),
+        diagnosticOverride(
+          injected,
+          '_generateSelectors',
+          (elements: Element[]) =>
+            hooks.generateSelectors(elements, () =>
+              generateSelectors(elements),
+            ),
+        ),
+      ]
+      const installed: DiagnosticOverride[] = []
+      try {
+        for (const override of overrides) {
+          try {
+            Object.defineProperty(
+              injected,
+              override.property,
+              override.replacement,
+            )
+          } catch {
+            throw new ProbeError(
+              'internal',
+              'vendor diagnostic hooks cannot be installed',
+            )
+          }
+          installed.push(override)
+        }
+        // Returning a Promise restores now. A producer after an await must enter its own
+        // request's scope; leaving hooks installed would change a concurrent call's policy.
+        return invoke()
+      } finally {
+        restoreDiagnostics(injected, installed)
+      }
+    },
+    arm(preview, ...args) {
+      // The vendor's setup, listener and stop arrows capture this receiver. Its sole state
+      // write must reach the real engine: the constructor's global listener reads that slot,
+      // and stop compares its listener identity before clearing it. No shared method lease
+      // survives a request, and an intervening opposite-policy call cannot change this arm.
+      const receiver: InjectedScript = Object.create(injected, {
+        previewNode: { value: preview },
+        _hitTargetInterceptor: {
+          get: () => Reflect.get(injected, '_hitTargetInterceptor'),
+          set(value: unknown) {
+            if (
+              (value !== undefined && typeof value !== 'function') ||
+              !Reflect.set(injected, '_hitTargetInterceptor', value, injected)
+            )
+              throw new ProbeError(
+                'internal',
+                'vendor hit-target state could not be forwarded',
+              )
+          },
+        },
+      })
+      return Reflect.apply(setup, receiver, args)
+    },
+  }
+  diagnosticEngines.set(injected, adapter)
+  return adapter
 }
 
 /**

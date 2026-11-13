@@ -16,6 +16,7 @@
 use futures_util::future;
 
 use crate::op_scope::OpScope;
+use crate::page::OpPage;
 use crate::probe::{
     Hit, PageText, ParsedSelector, Point, ProbeFailure, ProbeReply, ProbeRequest, ProbeTarget,
 };
@@ -41,13 +42,14 @@ pub(crate) enum Projection {
 /// upstream does. A parent world, or its iframe, that went away is [`Projection::Gone`].
 pub(crate) async fn project(
     scope: &OpScope<'_>,
+    page: &OpPage<'_>,
     path: &FramePath,
     point: Point,
     hit_test: bool,
 ) -> Result<Projection, PlaywrightError> {
     let broken = |why: &str| scope.fail(ErrorCode::Internal, why);
     let hops = path.hops();
-    let boxes = future::join_all(hops.iter().map(|hop| frame_box(scope, hop, None))).await;
+    let boxes = future::join_all(hops.iter().map(|hop| frame_box(scope, page, hop, None))).await;
     let mut origins = Vec::with_capacity(hops.len());
     for placed in boxes {
         match placed? {
@@ -76,7 +78,7 @@ pub(crate) async fn project(
     let hits = future::join_all(
         hops.iter()
             .zip(&at_level)
-            .map(|(hop, at)| frame_box(scope, hop, Some(*at))),
+            .map(|(hop, at)| frame_box(scope, page, hop, Some(*at))),
     )
     .await;
     for hit in hits {
@@ -102,6 +104,7 @@ enum Placed {
 
 async fn frame_box(
     scope: &OpScope<'_>,
+    page: &OpPage<'_>,
     hop: &Hop,
     point: Option<Point>,
 ) -> Result<Placed, PlaywrightError> {
@@ -114,23 +117,25 @@ async fn frame_box(
         }
     };
     let request = ProbeRequest::FrameBox { iframe, point };
-    Ok(match resolve::ask(&hop.parent, &request, None).await {
-        Ok(ProbeReply::FrameBox { hit: Some(hit), .. }) if point.is_some() => Placed::Hit(hit),
-        Ok(ProbeReply::FrameBox {
-            origin: Some(origin),
-            ..
-        }) => Placed::Origin(origin),
-        Ok(ProbeReply::FrameBox { origin: None, .. }) => Placed::NoOrigin,
-        Ok(ProbeReply::None { .. } | ProbeReply::Detached | ProbeReply::Strict { .. })
-        | Err(ProbeFailure::Gone(_)) => Placed::Gone,
-        Ok(other) => {
-            return Err(scope.fail(
-                ErrorCode::Internal,
-                &format!("frameBox answered `{}`", other.kind()),
-            ));
-        }
-        Err(failure) => return Err(resolve::failed(scope, failure)),
-    })
+    Ok(
+        match resolve::ask(scope, page, &hop.parent, &request, None).await {
+            Ok(ProbeReply::FrameBox { hit: Some(hit), .. }) if point.is_some() => Placed::Hit(hit),
+            Ok(ProbeReply::FrameBox {
+                origin: Some(origin),
+                ..
+            }) => Placed::Origin(origin),
+            Ok(ProbeReply::FrameBox { origin: None, .. }) => Placed::NoOrigin,
+            Ok(ProbeReply::None { .. } | ProbeReply::Detached | ProbeReply::Strict { .. })
+            | Err(ProbeFailure::Gone(_)) => Placed::Gone,
+            Ok(other) => {
+                return Err(scope.fail(
+                    ErrorCode::Internal,
+                    &format!("frameBox answered `{}`", other.kind()),
+                ));
+            }
+            Err(failure) => return Err(resolve::failed(scope, failure)),
+        },
+    )
 }
 
 /// Upstream's `roundPoint`: two decimals, toward zero, as the page point is sent.

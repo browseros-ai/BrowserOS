@@ -33,6 +33,7 @@ async fn tests_that_a_burst_stopped_part_way_releases_what_it_pressed_before_the
     let header = CallHeader {
         api: None,
         timeout_ms: Some(100),
+        conformance: false,
     };
     let scope = OpScope::new(&env, op, header);
     let sent = scope.send_effect()?;

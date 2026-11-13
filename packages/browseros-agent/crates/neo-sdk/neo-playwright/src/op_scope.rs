@@ -68,6 +68,8 @@ pub(crate) struct OpScope<'env> {
     spec: OpSpec,
     /// The method the script called (`page.click`); every message starts with it.
     api: String,
+    /// Captured once from the trusted call header, never from a request or world cache.
+    conformance: bool,
     started: Instant,
     /// Playwright's timeout for this op. `None` is `timeout: 0`: the op waits until the host
     /// drops it at the run's deadline.
@@ -112,6 +114,7 @@ impl<'env> OpScope<'env> {
             env,
             spec,
             api: call.api.unwrap_or_else(|| spec.name.to_owned()),
+            conformance: call.conformance,
             started: Instant::now(),
             timeout: call
                 .timeout_ms
@@ -139,6 +142,11 @@ impl<'env> OpScope<'env> {
     /// The op's Playwright timeout; `None` waits until the host drops the op.
     pub(crate) fn timeout(&self) -> Option<Duration> {
         self.timeout
+    }
+
+    /// Whether every probe diagnostic in this operation must preserve upstream bytes.
+    pub(crate) fn conformance(&self) -> bool {
+        self.conformance
     }
 
     /// The tab this op admitted, once it has.
@@ -624,7 +632,24 @@ mod tests {
         CallHeader {
             api: api.map(str::to_owned),
             timeout_ms,
+            conformance: false,
         }
+    }
+
+    #[tokio::test]
+    async fn output_policy_is_captured_from_the_common_header() -> Result<(), Box<dyn Error>> {
+        let env = TestEnv::new();
+        let mut call = CallHeader::default();
+        let private = OpScope::new(&env, op("locator.count")?, call.clone());
+        call.conformance = true;
+        let upstream = OpScope::new(&env, op("locator.count")?, call);
+        assert!(!private.conformance());
+        assert!(upstream.conformance());
+        assert!(
+            !private.conformance(),
+            "another operation cannot change this scope's policy"
+        );
+        Ok(())
     }
 
     #[tokio::test]

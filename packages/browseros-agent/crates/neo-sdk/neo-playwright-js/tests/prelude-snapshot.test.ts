@@ -159,9 +159,11 @@ it('tests that only the v1 text asks for clickable marking: never mode default, 
       call.name.endsWith('.ariaSnapshot') ? fixture.result : null,
   })
   await upstream.run(script)
-  expect(upstream.calls.every((call) => call.input.conformance === true)).toBe(
-    true,
-  )
+  expect(
+    upstream.calls.every(
+      (call) => Reflect.get(Object(call.input.call), 'conformance') === true,
+    ),
+  ).toBe(true)
   expect(asked(upstream)).toEqual([
     { name: 'page.ariaSnapshot', mode: 'default', clickable: 'absent' },
     { name: 'page.ariaSnapshot', mode: 'ai', clickable: 'absent' },

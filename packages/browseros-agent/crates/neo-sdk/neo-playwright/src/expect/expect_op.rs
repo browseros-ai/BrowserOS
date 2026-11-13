@@ -456,7 +456,7 @@ async fn main_frame(
         Err(ProbeFailure::Gone(_)) => return Ok(Poll::Missing),
         Err(failure) => return Err(resolve::failed(scope, failure)),
     };
-    match resolve::ask(&world, request, None).await {
+    match resolve::ask(scope, page, &world, request, None).await {
         Ok(reply) => expect.poll_of(scope, reply),
         Err(ProbeFailure::Gone(_)) => {
             page.frames().invalidate(&world);

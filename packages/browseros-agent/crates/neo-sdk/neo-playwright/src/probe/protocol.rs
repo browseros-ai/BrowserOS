@@ -15,7 +15,7 @@ use crate::private_entry::{Looked, PrivateAnswer};
 use crate::read::{FrameOrigin, Located, PinnedMatch};
 
 use super::probe_reply::ProbeReply;
-use super::probe_request::{BootOptions, ProbeRequest};
+use super::probe_request::{BootOptions, ProbeCall};
 
 const HEADER: &str = "\
 // Generated from Rust's probe request/reply types and family-decoded value payloads by ts-rs.
@@ -27,7 +27,7 @@ const HEADER: &str = "\
 /// command and the compare-only test use exactly the same rendering path.
 pub fn render() -> Result<String, Box<dyn Error>> {
     let mut declarations = Declarations::new();
-    declarations.visit::<ProbeRequest>();
+    declarations.visit::<ProbeCall<'static>>();
     declarations.visit::<ProbeReply>();
     declarations.visit::<BootOptions<'static>>();
     // `value` replies carry JSON that the owning runner decodes after the envelope. Those

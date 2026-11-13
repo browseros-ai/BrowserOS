@@ -4,8 +4,7 @@
  * utility world. A failed `expect` that found nothing reads the body's aria snapshot here, as
  * upstream reads it from its utility world.
  */
-
-import { withMarkedFieldsMasked } from './private-field-values'
+import type { FailureOutput } from './failure-output'
 import type {
   DocumentRequest,
   DocumentText,
@@ -17,18 +16,21 @@ import type { World } from './world'
 export function documentText(
   world: World,
   request: DocumentRequest,
+  _root: Node | undefined,
+  _nodes: readonly unknown[],
+  output: FailureOutput,
 ): DocumentText {
   const { injected } = world
   const { document } = injected
-  const { body } = document
   const text =
     request.part === 'title'
       ? document.title
       : request.part === 'expectSnapshot'
-        ? body
-          ? // A box Neo typed a host's secret into prints bullets here too (ruling R44).
-            withMarkedFieldsMasked(() =>
-              injected.ariaSnapshotForExpectFailure(body, { mode: 'default' }),
+        ? document.body
+          ? output.tree(document.body, () =>
+              injected.ariaSnapshotForExpectFailure(document.body, {
+                mode: 'default',
+              }),
             )
           : ''
         : request.includeShadow

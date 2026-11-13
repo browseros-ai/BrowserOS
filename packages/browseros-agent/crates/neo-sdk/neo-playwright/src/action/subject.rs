@@ -139,7 +139,7 @@ impl<'a> Subject<'a> {
         located: &Resolved,
         request: &ProbeRequest,
     ) -> Result<ProbeReply, ProbeFailure> {
-        located.call(request).await
+        located.call(self.scope, self.page, request).await
     }
 
     /// `website / not_focused`: an edit focused the element to type into it, and the element did

@@ -37,23 +37,23 @@ impl Visibility {
     }
 }
 
-/// What a read got: the value, and the parent frames of the element it was read from, which a
-/// box needs to reach the main viewport.
-#[derive(Debug)]
-pub(crate) struct Reading {
+/// What a read got, with its existing admission retained for follow-up frame projection.
+/// Keeping the page here avoids admitting it again or looking up topology without the op.
+pub(crate) struct Reading<'op> {
     pub(crate) value: Value,
     pub(crate) path: FramePath,
+    pub(crate) page: OpPage<'op>,
 }
 
 /// Reads `target`'s element with `read`, once it is there. A handle whose node is gone fails
 /// `element_detached`.
-pub(crate) async fn read_attached(
-    pw: &Playwright,
-    scope: &OpScope<'_>,
+pub(crate) async fn read_attached<'op>(
+    pw: &'op Playwright,
+    scope: &'op OpScope<'_>,
     target: &Target,
     strict: Strictness,
     read: &Read,
-) -> Result<Reading, PlaywrightError> {
+) -> Result<Reading<'op>, PlaywrightError> {
     match target {
         Target::Locator(target) => read_locator(pw, scope, target, strict, read).await,
         Target::Element(target) => read_handle(pw, scope, target, read)
@@ -68,13 +68,13 @@ pub(crate) async fn read_attached(
 ///
 /// The timeout covers every await of the op, admission and each attempt's CDP calls included:
 /// a busy renderer can hold one call for over a second, and the op still ends at its deadline.
-async fn read_locator(
-    pw: &Playwright,
-    scope: &OpScope<'_>,
+async fn read_locator<'op>(
+    pw: &'op Playwright,
+    scope: &'op OpScope<'_>,
     target: &LocatorTarget,
     strict: Strictness,
     read: &Read,
-) -> Result<Reading, PlaywrightError> {
+) -> Result<Reading<'op>, PlaywrightError> {
     // Boxed: every op's future is one variant of `Playwright::invoke`'s, which a host awaits.
     let attempts = Box::pin(poll_locator(pw, scope, target, strict, read));
     match scope.within(attempts).await {
@@ -84,13 +84,13 @@ async fn read_locator(
 }
 
 /// [`read_locator`]'s attempts, which its deadline drops wherever they are.
-async fn poll_locator(
-    pw: &Playwright,
-    scope: &OpScope<'_>,
+async fn poll_locator<'op>(
+    pw: &'op Playwright,
+    scope: &'op OpScope<'_>,
     target: &LocatorTarget,
     strict: Strictness,
     read: &Read,
-) -> Result<Reading, PlaywrightError> {
+) -> Result<Reading<'op>, PlaywrightError> {
     let page = OpPage::admit_handle(pw, scope, &target.page).await?;
     let resolver = Resolver::new(&page, scope, target, strict);
     scope.log(format!("waiting for {}", target.display));
@@ -113,6 +113,7 @@ async fn poll_locator(
                 return Ok(Reading {
                     value: value.into_value(),
                     path,
+                    page,
                 });
             }
             ProbeReply::None { stale_ref: None } | ProbeReply::Detached => {}
@@ -125,12 +126,12 @@ async fn poll_locator(
 /// One read of an element handle's node; `None` when the node is gone for good. Its frames'
 /// visibility is not the handle's to know, so it counts as visible, as upstream's handle
 /// queries start from `frameVisible: true`.
-async fn read_handle(
-    pw: &Playwright,
-    scope: &OpScope<'_>,
+async fn read_handle<'op>(
+    pw: &'op Playwright,
+    scope: &'op OpScope<'_>,
     target: &ElementTarget,
     read: &Read,
-) -> Result<Option<Reading>, PlaywrightError> {
+) -> Result<Option<Reading<'op>>, PlaywrightError> {
     let page = OpPage::admit_handle(pw, scope, &target.page).await?;
     let Some(site) = HandleSite::find(&page, scope, target).await? else {
         return Ok(None);
@@ -145,6 +146,7 @@ async fn read_handle(
         ProbeReply::Read { value, .. } => Ok(Some(Reading {
             value: value.into_value(),
             path: site.path().clone(),
+            page,
         })),
         ProbeReply::Detached => Ok(None),
         // A read of the handle's own node finds one element, so no strict violation.

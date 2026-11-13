@@ -10,15 +10,12 @@
  * element; iframe refs are in it too, which is how Rust's hop finds each iframe again.
  */
 import { parseSelector } from '../../../neo-playwright/third_party/playwright/packages/isomorphic/selectorParser'
+import type { FailureOutput } from './failure-output'
 import {
   asPointerTargets,
   type EngineReads,
   leafTargets,
 } from './pointer-targets'
-import {
-  withMarkedFieldsMasked,
-  withMaskedFieldValues,
-} from './private-field-values'
 import type { ReplyTo, SnapshotIframe, SnapshotRequest } from './protocol'
 import { type Found, resolveTarget } from './resolve'
 import { openClosedRoots } from './shadow-roots'
@@ -51,6 +48,7 @@ export function snapshot(
   request: SnapshotRequest,
   root: Node | undefined,
   nodes: readonly unknown[],
+  output: FailureOutput,
 ): ReplyTo<'snapshot'> {
   const seeds = request.closedRoots ?? 0
   openClosedRoots(nodes.slice(0, seeds))
@@ -74,20 +72,7 @@ export function snapshot(
     isVisible: (of) => injected.utils.isElementVisible(of),
   }
   const take = () => marked(targets, engine, plain)
-  // Under the spec harness's conformance switch the page's own private fields print as upstream
-  // prints them, but a box Neo typed a host's secret into stays masked: the mark has no bypass
-  // (ruling R44). Until this world marks a box, that snapshot installs nothing.
-  const { result, skipped } = request.conformance
-    ? withMarkedFieldsMasked(take)
-    : withMaskedFieldValues(
-        {
-          root: element,
-          // Rust's topology includes frames hidden from window.frames by shadow roots.
-          // Unknown hints still discover foreign prototypes; false only skips that search.
-          mayHaveOtherFrame: request.mayHaveOtherFrame !== false,
-        },
-        take,
-      )
+  const { result, skipped } = output.tree(element, take)
   const { json, iframeRefs, iframeDepths } = result
   const iframes: SnapshotIframe[] = []
   if (request.mode === 'ai') {

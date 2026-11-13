@@ -21,6 +21,7 @@ use browseros_core::CoreError;
 use serde_json::{Value, json};
 
 use crate::op_scope::OpScope;
+use crate::page::OpPage;
 use crate::probe::{self, ProbeFailure};
 use crate::world::{IsolatedWorld, Pin};
 
@@ -29,10 +30,11 @@ use crate::world::{IsolatedWorld, Pin};
 /// follows reports the detach or the missing box, as it would without the scroll.
 pub(super) async fn scroll_if_needed(
     scope: &OpScope<'_>,
+    page: &OpPage<'_>,
     world: &IsolatedWorld,
     pin: Pin,
 ) -> Result<(), ProbeFailure> {
-    let Some(object) = probe::pinned_object(scope, world, pin).await? else {
+    let Some(object) = probe::pinned_object(scope, page, world, pin).await? else {
         return Ok(());
     };
     match world

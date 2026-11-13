@@ -108,7 +108,9 @@ it('tests that a snapshot whose clickable marking throws is still taken, as upst
 })
 
 it('never installs any field or text override under conformance', () => {
-  const probe = booted()
+  page = openProbePage(PAGE, { conformance: true, mayHaveOtherFrame: true })
+  page.boot({ frameSeq: 3, epoch: 'a' })
+  const probe = page
   showFixture(probe)
   const replacements: unknown[] = []
   const define = Object.defineProperty
@@ -128,7 +130,6 @@ it('never installs any field or text override under conformance', () => {
       op: 'snapshot',
       root: 'document',
       mode: 'ai',
-      conformance: true,
     })
     expect(result).toMatchObject({ kind: 'snapshot' })
     expect(JSON.stringify(result)).toContain('"text":"hunter2"')

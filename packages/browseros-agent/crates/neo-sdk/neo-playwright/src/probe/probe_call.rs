@@ -21,16 +21,72 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::op_scope::OpScope;
+use crate::page::OpPage;
+use crate::private_entry::PrivateStep;
 use crate::probe::probe_reply::ProbeReply;
-use crate::probe::probe_request::ProbeRequest;
+use crate::probe::probe_request::{ProbeCall, ProbePolicy, ProbeRequest};
 use crate::world::{BackendNodeId, IsolatedWorld, Pin};
 
 /// The function declaration every request is sent with. It must equal `CALL_FUNCTION` in
 /// protocol.ts (a test checks it against probe-protocol.json). It runs on the world's global,
-/// with the request, an element handle's node or null as the call's root, and any further
+/// with the call envelope, an element handle's node or null as the call's root, and any further
 /// nodes the request reads ([`call_with_nodes`]); a world without a booted probe answers
 /// `uninstalled`, which Rust treats like a stale context.
-pub(crate) const CALL_FUNCTION: &str = "function (request, root, ...nodes) { const probe = globalThis.__neoProbe; return probe ? probe.call(request, root ?? this, nodes) : { kind: \"uninstalled\" }; }";
+pub(crate) const CALL_FUNCTION: &str = "function (call, root, ...nodes) { const probe = globalThis.__neoProbe; return probe ? probe.call(call, root ?? this, nodes) : { kind: \"uninstalled\" }; }";
+
+impl ProbePolicy {
+    /// Drop cannot borrow an ended operation or inspect its admitted page. Cleanup retains
+    /// the captured authority and conservatively permits adopted-field discovery instead.
+    pub(crate) fn for_cleanup(scope: &OpScope<'_>) -> Self {
+        Self {
+            conformance: scope.conformance(),
+            may_have_other_frame: true,
+        }
+    }
+}
+
+/// Compute topology at the send seam for the exact world, after any retry or frame hop.
+/// Conformance must not even inspect the frame metadata used only for private output.
+fn policy(scope: &OpScope<'_>, page: &OpPage<'_>, world: &IsolatedWorld) -> ProbePolicy {
+    with_frame_context(scope.conformance(), || {
+        page.may_have_other_frame(scope, world)
+    })
+}
+
+fn with_frame_context(conformance: bool, hint: impl FnOnce() -> bool) -> ProbePolicy {
+    ProbePolicy {
+        conformance,
+        may_have_other_frame: conformance || hint(),
+    }
+}
+
+/// The only requests allowed after an operation's scope has ended. A token-specific verdict
+/// stops its own interceptor during navigation; it cannot stop a later operation's arm.
+pub(crate) enum Control {
+    Disarm,
+    Verdict { token: u32 },
+    Forget { pin: Pin },
+    ScreenshotMaskCleanup,
+}
+
+/// Best-effort detached cleanup has no general request overload. Its captured policy cannot
+/// authorize a fresh read or action once the operation's admission and deadline are gone.
+pub(crate) async fn cleanup(
+    policy: ProbePolicy,
+    world: &IsolatedWorld,
+    control: Control,
+) -> Result<ProbeReply, ProbeFailure> {
+    let request = match control {
+        Control::Disarm => ProbeRequest::Disarm,
+        Control::Verdict { token } => ProbeRequest::Verdict { token },
+        Control::Forget { pin } => ProbeRequest::Private {
+            pin,
+            step: PrivateStep::Forget,
+        },
+        Control::ScreenshotMaskCleanup => ProbeRequest::ScreenshotMaskCleanup,
+    };
+    send(world, &request, policy, Handed::NONE, Gesture::None).await
+}
 
 /// Why a probe call or an install produced no reply.
 #[derive(Debug)]
@@ -195,20 +251,52 @@ impl ExceptionDetails {
 
 /// One request, answered by value.
 pub(crate) async fn call(
+    scope: &OpScope<'_>,
+    page: &OpPage<'_>,
     world: &IsolatedWorld,
     request: &ProbeRequest,
 ) -> Result<ProbeReply, ProbeFailure> {
-    send(world, request, Handed::NONE, Gesture::None).await
+    send(
+        world,
+        request,
+        policy(scope, page, world),
+        Handed::NONE,
+        Gesture::None,
+    )
+    .await
+}
+
+/// Raw installation tests intentionally own worlds without admitting a page or keeping an
+/// operation alive. Their sender still speaks the production envelope with normal policy.
+#[cfg(test)]
+pub(crate) async fn call_for_tests(
+    world: &IsolatedWorld,
+    request: &ProbeRequest,
+) -> Result<ProbeReply, ProbeFailure> {
+    let policy = ProbePolicy {
+        conformance: false,
+        may_have_other_frame: true,
+    };
+    send(world, request, policy, Handed::NONE, Gesture::None).await
 }
 
 /// [`call`] with a user gesture, as upstream sends its own utility-world calls
 /// (`evaluateWithArguments`, `userGesture: true`): `setContent`'s write, whose HTML's scripts
 /// run inside the call and so with the frame's transient activation, as they do upstream.
 pub(crate) async fn call_with_gesture(
+    scope: &OpScope<'_>,
+    page: &OpPage<'_>,
     world: &IsolatedWorld,
     request: &ProbeRequest,
 ) -> Result<ProbeReply, ProbeFailure> {
-    send(world, request, Handed::NONE, Gesture::User).await
+    send(
+        world,
+        request,
+        policy(scope, page, world),
+        Handed::NONE,
+        Gesture::User,
+    )
+    .await
 }
 
 /// One request about an element handle's node (`root`, a remote object in this world), which
@@ -221,6 +309,8 @@ pub(crate) async fn call_with_gesture(
 /// and that refusal is `Gone`. So a stale id can fail the call, but can never hand a request
 /// to a page's own world, as calling on the node's object would.
 pub(crate) async fn call_on(
+    scope: &OpScope<'_>,
+    page: &OpPage<'_>,
     world: &IsolatedWorld,
     request: &ProbeRequest,
     root: &str,
@@ -229,7 +319,14 @@ pub(crate) async fn call_on(
         root: Some(root),
         nodes: &[],
     };
-    send(world, request, handed, Gesture::None).await
+    send(
+        world,
+        request,
+        policy(scope, page, world),
+        handed,
+        Gesture::None,
+    )
+    .await
 }
 
 /// One request with several nodes (remote objects in this world, from `DOM.resolveNode` with
@@ -237,12 +334,21 @@ pub(crate) async fn call_on(
 /// clickable targets. With no nodes it is [`call`]. As with [`call_on`], an id a later document
 /// took over fails the call as `Gone`, and never reaches a page's own world.
 pub(crate) async fn call_with_nodes(
+    scope: &OpScope<'_>,
+    page: &OpPage<'_>,
     world: &IsolatedWorld,
     request: &ProbeRequest,
     nodes: &[String],
 ) -> Result<ProbeReply, ProbeFailure> {
     let handed = Handed { root: None, nodes };
-    send(world, request, handed, Gesture::None).await
+    send(
+        world,
+        request,
+        policy(scope, page, world),
+        handed,
+        Gesture::None,
+    )
+    .await
 }
 
 /// The remote objects a call hands the probe after its request.
@@ -279,13 +385,14 @@ enum Gesture {
 async fn send(
     world: &IsolatedWorld,
     request: &ProbeRequest,
+    policy: ProbePolicy,
     handed: Handed<'_>,
     gesture: Gesture,
 ) -> Result<ProbeReply, ProbeFailure> {
     let mut params = json!({
         "objectId": world.global(),
         "functionDeclaration": CALL_FUNCTION,
-        "arguments": call_arguments(request, handed)?,
+        "arguments": call_arguments(request, policy, handed)?,
         "returnByValue": true,
         "awaitPromise": true,
     });
@@ -309,13 +416,17 @@ async fn send(
     reply_of(called)
 }
 
-/// [`CALL_FUNCTION`]'s `arguments` for one call: the request, then the root when there is one
+/// [`CALL_FUNCTION`]'s `arguments` for one call: the envelope, then the root when there is one
 /// (`null` when only nodes follow), then the nodes.
-fn call_arguments(request: &ProbeRequest, handed: Handed<'_>) -> Result<Vec<Value>, ProbeFailure> {
-    let request = serde_json::to_value(request).map_err(|error| {
+fn call_arguments(
+    request: &ProbeRequest,
+    policy: ProbePolicy,
+    handed: Handed<'_>,
+) -> Result<Vec<Value>, ProbeFailure> {
+    let call = serde_json::to_value(ProbeCall { request, policy }).map_err(|error| {
         ProbeFailure::Broken(format!("a probe request did not encode: {error}"))
     })?;
-    let mut arguments = vec![json!({ "value": request })];
+    let mut arguments = vec![json!({ "value": call })];
     if handed.any() {
         arguments.push(match handed.root {
             Some(root) => json!({ "objectId": root }),
@@ -351,16 +462,15 @@ pub(crate) fn reply_of(called: Value) -> Result<ProbeReply, ProbeFailure> {
 /// op ends), for `DOM.describeNode` and other by-node CDP calls. `None` once the pin is gone.
 pub(crate) async fn pinned_object(
     scope: &OpScope<'_>,
+    page: &OpPage<'_>,
     world: &IsolatedWorld,
     pin: Pin,
 ) -> Result<Option<String>, ProbeFailure> {
-    let request = serde_json::to_value(ProbeRequest::Pinned { pin }).map_err(|error| {
-        ProbeFailure::Broken(format!("a probe request did not encode: {error}"))
-    })?;
+    let request = ProbeRequest::Pinned { pin };
     let params = json!({
         "objectId": world.global(),
         "functionDeclaration": CALL_FUNCTION,
-        "arguments": [{ "value": request }],
+        "arguments": call_arguments(&request, policy(scope, page, world), Handed::NONE)?,
         "returnByValue": false,
         // Chromium truncates property previews by UTF-16 code unit and can emit lone
         // surrogates for emoji attributes, which Rust's JSON decoder cannot read. The node
@@ -400,6 +510,7 @@ pub(crate) async fn pinned_object(
 /// the main-world gateway has adopted it; no selector or Neo callback runs in the page world.
 pub(crate) async fn pinned_nodes(
     scope: &OpScope<'_>,
+    page: &OpPage<'_>,
     world: &IsolatedWorld,
     pins: Vec<Pin>,
 ) -> Result<Option<Vec<BackendNodeId>>, ProbeFailure> {
@@ -411,11 +522,16 @@ pub(crate) async fn pinned_nodes(
     // Use the same request gateway as single pins, including its uninstalled marker. A
     // batch runs synchronously so a re-key cannot mix pins from two probe lifetimes.
     let function = format!(
-        "function (requests) {{ const call = ({CALL_FUNCTION}); \
-         const nodes = requests.map(request => call.call(this, request)); \
+        "function (calls) {{ const call = ({CALL_FUNCTION}); \
+         const nodes = calls.map(envelope => call.call(this, envelope)); \
          return nodes.some(node => node && !(node instanceof Node) && \
                            node.kind === 'uninstalled') ? null : nodes; }}"
     );
+    let policy = policy(scope, page, world);
+    let calls: Vec<ProbeCall<'_>> = requests
+        .iter()
+        .map(|request| ProbeCall { request, policy })
+        .collect();
     let called: Called = world
         .session()
         .send(
@@ -423,7 +539,7 @@ pub(crate) async fn pinned_nodes(
             json!({
                 "objectId": world.global(),
                 "functionDeclaration": function,
-                "arguments": [{ "value": requests }],
+                "arguments": [{ "value": calls }],
                 "objectGroup": scope.object_group(world.session()),
                 "serializationOptions": {
                     "serialization": "deep",
@@ -478,15 +594,18 @@ async fn is_uninstalled(world: &IsolatedWorld, object: Option<&str>) -> Result<b
 
 #[cfg(test)]
 mod tests {
+    use std::cell::Cell;
     use std::error::Error;
 
     use browseros_cdp::CdpError;
     use browseros_core::CoreError;
     use serde_json::{Value, json};
 
-    use super::{CALL_FUNCTION, Handed, ProbeFailure, Ran, call_arguments, reply_of};
+    use super::{
+        CALL_FUNCTION, Handed, ProbeFailure, Ran, call_arguments, reply_of, with_frame_context,
+    };
     use crate::probe::probe_reply::ProbeReply;
-    use crate::probe::probe_request::ProbeRequest;
+    use crate::probe::probe_request::{ProbePolicy, ProbeRequest};
 
     const PROTOCOL: &str = include_str!("../../tests/data/probe-protocol.json");
 
@@ -502,34 +621,40 @@ mod tests {
     }
 
     #[test]
-    fn tests_that_a_call_sends_the_request_then_its_root() -> Result<(), Box<dyn Error>> {
+    fn tests_that_a_call_sends_its_policy_envelope_then_its_root() -> Result<(), Box<dyn Error>> {
         let request = ProbeRequest::Describe;
+        let policy = ProbePolicy {
+            conformance: false,
+            may_have_other_frame: true,
+        };
+        let envelope = json!({ "value": {
+            "request": { "op": "describe" },
+            "policy": { "conformance": false, "mayHaveOtherFrame": true },
+        } });
         assert_eq!(
             call_arguments(
                 &request,
+                policy,
                 Handed {
                     root: None,
                     nodes: &[]
                 }
             )?,
-            call_arguments(&request, Handed::NONE)?,
+            call_arguments(&request, policy, Handed::NONE)?,
             "a call with no nodes is the plain call"
         );
         assert_eq!(
-            call_arguments(&request, Handed::NONE)?,
-            [json!({ "value": { "op": "describe" } })],
-            "a call on the world's global sends the request alone"
+            call_arguments(&request, policy, Handed::NONE)?.as_slice(),
+            std::slice::from_ref(&envelope),
+            "a call on the world's global sends the envelope alone"
         );
         let rooted = Handed {
             root: Some("node-1"),
             nodes: &[],
         };
         assert_eq!(
-            call_arguments(&request, rooted)?,
-            [
-                json!({ "value": { "op": "describe" } }),
-                json!({ "objectId": "node-1" }),
-            ],
+            call_arguments(&request, policy, rooted)?,
+            [envelope.clone(), json!({ "objectId": "node-1" }),],
             "an element handle's node follows as the call's root"
         );
         let nodes = ["node-2".to_owned(), "node-3".to_owned()];
@@ -538,9 +663,9 @@ mod tests {
             nodes: &nodes,
         };
         assert_eq!(
-            call_arguments(&ProbeRequest::Disarm, several)?,
+            call_arguments(&request, policy, several)?,
             [
-                json!({ "value": { "op": "disarm" } }),
+                envelope,
                 json!({ "value": null }),
                 json!({ "objectId": "node-2" }),
                 json!({ "objectId": "node-3" }),
@@ -548,6 +673,27 @@ mod tests {
             "nodes follow an empty root, in order, so the probe reads them positionally"
         );
         Ok(())
+    }
+
+    #[test]
+    fn conformance_skips_even_the_lazy_frame_metadata_read() {
+        let read = Cell::new(false);
+        let policy = with_frame_context(true, || {
+            read.set(true);
+            false
+        });
+        assert!(policy.conformance);
+        assert!(
+            !read.get(),
+            "upstream diagnostics do not inspect private topology"
+        );
+        let policy = with_frame_context(false, || {
+            read.set(true);
+            false
+        });
+        assert!(read.get());
+        assert!(!policy.conformance);
+        assert!(!policy.may_have_other_frame);
     }
 
     fn protocol_error(message: &str) -> CoreError {

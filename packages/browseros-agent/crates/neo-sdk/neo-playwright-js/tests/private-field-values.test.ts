@@ -350,6 +350,8 @@ it('suppresses both CSS content reads for private controls and their pseudo-elem
           const style = getComputedStyle(secret, pseudo)
           expect(style.content).toBe('none')
           expect(style.getPropertyValue('content')).toBe('none')
+          expect(style.getPropertyValue('CONTENT')).toBe('none')
+          expect(style.getPropertyValue('CoNtEnT')).toBe('none')
           expect(style.cursor).toBe('text')
           expect(style.display).toBe('inline-block')
           expect(style.getPropertyValue('display')).toBe('inline-block')

@@ -226,6 +226,7 @@ impl Polls {
             // Upstream polls again when the element went before its handle was made.
             if let Some(brand) = element_handle::element_brand(
                 scope,
+                page,
                 &target.page,
                 &world,
                 located.pin,

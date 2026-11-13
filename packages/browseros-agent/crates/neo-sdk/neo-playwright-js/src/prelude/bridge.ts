@@ -37,6 +37,7 @@ import { shapeBridgeError, unsupportedError, withAbortCause } from './errors'
 import type * as Wire from './generated/envelope'
 import type { OpName } from './generated/ops'
 import { host, refuser } from './host'
+import { upstreamSnapshots } from './output-policy'
 import { completedPublications } from './publication'
 import type { SignalLike } from './signal'
 import type { CallHeader, OpInputs, OpOutputs } from './wire'
@@ -83,6 +84,12 @@ export type Reply = {
   pickedPage: Wire.DefaultPage | null
 }
 
+/** Keep the header's recorded byte position while stamping policy after all arguments. */
+function requestInput<Op extends OpName>(call: CallHeader, args: OpInputs[Op]) {
+  const header = upstreamSnapshots ? { ...call, conformance: true } : call
+  return Object.assign({ call: header, ...args }, { call: header })
+}
+
 /**
  * Runs one op using the site captured before the public method's first await. The site is
  * transport metadata, never part of the probe's wire input. Inputs are plain JSON built by
@@ -102,11 +109,10 @@ export async function invoke<Op extends OpName>(
     const ready = readyChoosers(op)
     if (ready) await ready
     countPumps()
-    const value = (await host().invoke(
-      op,
-      { call, ...args },
-      { signal, site: site.value },
-    )) as OpOutputs[Op]
+    const value = (await host().invoke(op, requestInput(call, args), {
+      signal,
+      site: site.value,
+    })) as OpOutputs[Op]
     const held = pumpsCaughtUp(op)
     if (held) await held
     return value
@@ -133,19 +139,15 @@ export async function invokeObserved<Op extends OpName>(
     const ready = readyChoosers(op)
     if (ready) await ready
     countPumps()
-    const reply = await host().invoke(
-      op,
-      { call, ...args },
-      {
-        site: site.value,
-        observed: true,
-        signal,
-        onResult:
-          onResult &&
-          ((value, observed) =>
-            onResult(value as OpOutputs[Op], readObservation(observed))),
-      },
-    )
+    const reply = await host().invoke(op, requestInput(call, args), {
+      site: site.value,
+      observed: true,
+      signal,
+      onResult:
+        onResult &&
+        ((value, observed) =>
+          onResult(value as OpOutputs[Op], readObservation(observed))),
+    })
     const held = pumpsCaughtUp(op)
     if (held) await held
     return {

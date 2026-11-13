@@ -8011,6 +8011,93 @@ ${value.stack}`;
       every: (elements, params) => Reflect.apply(every, injected, [elements, params])
     };
   }
+  var diagnosticEngines = new WeakMap;
+  function diagnosticOverride(injected, property, value) {
+    const original = Object.getOwnPropertyDescriptor(injected, property);
+    if (original?.configurable === false || !original && !Object.isExtensible(injected))
+      throw new ProbeError("internal", "vendor diagnostic hooks cannot be installed");
+    return {
+      property,
+      original,
+      replacement: {
+        configurable: true,
+        enumerable: original?.enumerable ?? false,
+        writable: true,
+        value
+      }
+    };
+  }
+  function restoreDiagnostics(injected, installed) {
+    let failed = false;
+    for (const override of installed.reverse()) {
+      try {
+        if (override.original)
+          Object.defineProperty(injected, override.property, override.original);
+        else if (!Reflect.deleteProperty(injected, override.property))
+          failed = true;
+      } catch {
+        failed = true;
+      }
+    }
+    if (failed)
+      throw new ProbeError("internal", "vendor diagnostic hooks could not be restored");
+  }
+  function diagnosticEngine(injected) {
+    const captured = diagnosticEngines.get(injected);
+    if (captured)
+      return captured;
+    const previewNode = injected.previewNode;
+    const setup = injected.setupHitTargetInterceptor;
+    const selectors = Reflect.get(injected, "_generateSelectors");
+    const interceptor = Reflect.get(injected, "_hitTargetInterceptor");
+    const interceptorDescriptor = Object.getOwnPropertyDescriptor(injected, "_hitTargetInterceptor");
+    if (typeof previewNode !== "function" || typeof setup !== "function" || typeof selectors !== "function" || !interceptorDescriptor || !("value" in interceptorDescriptor) || !interceptorDescriptor.writable || interceptor !== undefined && typeof interceptor !== "function")
+      throw new ProbeError("internal", "the vendored diagnostic engine contract changed");
+    const generateSelectors = (elements) => {
+      const lines = Reflect.apply(selectors, injected, [elements]);
+      if (!Array.isArray(lines) || !lines.every((line) => typeof line === "string"))
+        throw new ProbeError("internal", "vendor diagnostic selectors did not return text");
+      return lines;
+    };
+    const adapter = {
+      previewNode: (node) => Reflect.apply(previewNode, injected, [node]),
+      run(hooks, invoke) {
+        const overrides = [
+          diagnosticOverride(injected, "previewNode", hooks.previewNode),
+          diagnosticOverride(injected, "_generateSelectors", (elements) => hooks.generateSelectors(elements, () => generateSelectors(elements)))
+        ];
+        const installed = [];
+        try {
+          for (const override of overrides) {
+            try {
+              Object.defineProperty(injected, override.property, override.replacement);
+            } catch {
+              throw new ProbeError("internal", "vendor diagnostic hooks cannot be installed");
+            }
+            installed.push(override);
+          }
+          return invoke();
+        } finally {
+          restoreDiagnostics(injected, installed);
+        }
+      },
+      arm(preview, ...args) {
+        const receiver = Object.create(injected, {
+          previewNode: { value: preview },
+          _hitTargetInterceptor: {
+            get: () => Reflect.get(injected, "_hitTargetInterceptor"),
+            set(value) {
+              if (value !== undefined && typeof value !== "function" || !Reflect.set(injected, "_hitTargetInterceptor", value, injected))
+                throw new ProbeError("internal", "vendor hit-target state could not be forwarded");
+            }
+          }
+        });
+        return Reflect.apply(setup, receiver, args);
+      }
+    };
+    diagnosticEngines.set(injected, adapter);
+    return adapter;
+  }
   function expectFailureSnapshot(injected, element, params, frameVisible) {
     const snapshot = Reflect.get(injected, "_ariaSnapshotForExpect");
     if (typeof snapshot !== "function")
@@ -8165,7 +8252,7 @@ ${value.stack}`;
       expired: false
     };
   }
-  function act(world, request, root) {
+  function act(world, request, root, _nodes, output) {
     const found = resolveTarget(world, request.target, request.strictness, root);
     if (found.kind !== "one")
       return found;
@@ -8213,7 +8300,7 @@ ${value.stack}`;
       return measured;
     if (arm.expectRect && !sameRect(box, arm.expectRect))
       return measured;
-    const interception = injected.setupHitTargetInterceptor(element, arm.action, arm.browserMapped ? undefined : place.point, arm.blockAll);
+    const interception = output.arm(element, arm.action, arm.browserMapped ? undefined : place.point, arm.blockAll);
     if (interception === "error:notconnected")
       return { kind: "detached" };
     if (typeof interception === "string")
@@ -8399,401 +8486,13 @@ ${value.stack}`;
     }
   }
 
-  // crates/neo-sdk/neo-playwright-js/src/probe/private-entry.ts
-  var marked = new WeakSet;
-  var anyMarked = false;
-  var LEAVES = ["beforeunload", "pagehide"];
-  var watched = new WeakMap;
-  var active = new Map;
-  function privatelyTyped(element) {
-    return marked.has(element);
-  }
-  function anyPrivatelyTyped() {
-    return anyMarked;
-  }
-  function mark(element) {
-    marked.add(element);
-    anyMarked = true;
-  }
-  function privateStep(world, request) {
-    const { step, pin } = request;
-    const box = active.get(pin) ?? (step.kind === "focus" ? world.pins.live(pin) : undefined);
-    if (!box)
-      return { kind: "detached" };
-    const answered = answer(world, pin, box, step);
-    return answered instanceof Promise ? answered.then(reply) : reply(answered);
-  }
-  function reply(value) {
-    return { kind: "value", value };
-  }
-  function answer(world, pin, box, step) {
-    switch (step.kind) {
-      case "focus":
-        return focus(world, pin, box, step.text, step.spaced);
-      case "focused":
-        return { kind: "focus", focus: focusState(box) };
-      case "holds":
-        return {
-          kind: "holds",
-          holds: same(heldText(box), step.text, step.spaced)
-        };
-      case "readBack":
-        return readBack(pin, box);
-      case "forget":
-        forget(pin, box);
-        return { kind: "forgot" };
-      case "markFocused":
-        return { kind: "markedFocused", marked: markFocused(box) };
-    }
-  }
-  function markFocused(box) {
-    let holder = box.ownerDocument.activeElement;
-    while (holder?.shadowRoot?.activeElement)
-      holder = holder.shadowRoot.activeElement;
-    if (!holder || holder === box)
-      return false;
-    const name = holder.localName;
-    if (name !== "input" && name !== "textarea")
-      return false;
-    mark(holder);
-    return true;
-  }
-  async function focus(world, pin, box, text, spaced) {
-    mark(box);
-    listen(pin, box, text, spaced);
-    if (world.injected.selectText(box) === "error:notconnected")
-      return { kind: "focus", focus: "gone" };
-    await Promise.resolve();
-    return { kind: "focus", focus: focusState(box) };
-  }
-  function focusState(box) {
-    if (!box.isConnected)
-      return "gone";
-    if (moving(watched.get(box)))
-      return "moving";
-    if (!holdsFocus(box))
-      return "elsewhere";
-    return box.ownerDocument.hasFocus() ? "held" : "noDocumentFocus";
-  }
-  function holdsFocus(box) {
-    const root = box.getRootNode();
-    const active = Reflect.get(root, "activeElement");
-    return active === box;
-  }
-  function moving(entry) {
-    if (!entry)
-      return false;
-    return entry.leaving || entry.submits.some((event) => !event.defaultPrevented && Reflect.get(event.target ?? {}, "target") !== "_blank");
-  }
-  function listen(pin, box, text, spaced) {
-    forget(pin, box);
-    const entry = {
-      text,
-      spaced,
-      heldAtLastInput: false,
-      submits: [],
-      leaving: false,
-      listener: () => {
-        entry.heldAtLastInput = same(heldText(box), text, spaced);
-      },
-      onSubmit: (event) => {
-        entry.submits.push(event);
-      },
-      onLeave: () => {
-        entry.leaving = true;
-      }
-    };
-    watched.set(box, entry);
-    active.set(pin, box);
-    box.addEventListener("input", entry.listener, { capture: true });
-    const view = box.ownerDocument.defaultView;
-    view?.addEventListener("submit", entry.onSubmit, { capture: true });
-    for (const type of LEAVES)
-      view?.addEventListener(type, entry.onLeave, { capture: true });
-  }
-  function forget(pin, box) {
-    active.delete(pin);
-    const entry = watched.get(box);
-    if (!entry)
-      return;
-    box.removeEventListener("input", entry.listener, { capture: true });
-    const view = box.ownerDocument.defaultView;
-    view?.removeEventListener("submit", entry.onSubmit, { capture: true });
-    for (const type of LEAVES)
-      view?.removeEventListener(type, entry.onLeave, { capture: true });
-    watched.delete(box);
-  }
-  function readBack(pin, box) {
-    const entry = watched.get(box);
-    const heldAtLastInput = entry?.heldAtLastInput ?? false;
-    let state;
-    if (!box.isConnected)
-      state = "left";
-    else if (entry && same(heldText(box), entry.text, entry.spaced))
-      state = "holds";
-    else
-      state = "other";
-    if (state === "other")
-      markFocused(box);
-    const leaving = moving(entry);
-    forget(pin, box);
-    return { kind: "readBack", state, heldAtLastInput, moving: leaving };
-  }
-  function heldText(box) {
-    const value = Reflect.get(box, "value");
-    return typeof value === "string" ? value : "";
-  }
-  function same(held, text, spaced) {
-    if (held === text)
-      return true;
-    if (!spaced)
-      return false;
-    const bare = (value) => value.replace(/[\s\-/]/g, "");
-    return bare(held) === bare(text);
-  }
-
-  // crates/neo-sdk/neo-playwright-js/src/probe/private-field-values.ts
-  var PRIVATE_AUTOCOMPLETE = new Set([
-    "current-password",
-    "new-password",
-    "one-time-code",
-    "cc-number",
-    "cc-csc"
-  ]);
-  var HTML_NAMESPACE = "http://www.w3.org/1999/xhtml";
-  var FIELD_TAGS = new Set(["input", "textarea"]);
-  var PRIVATE_VALUE_ATTRIBUTES = new Set([
-    "value",
-    "aria-valuetext",
-    "aria-valuenow"
-  ]);
-  var declaredMasked = true;
-  function isHtmlField(element) {
-    return FIELD_TAGS.has(element.localName) && element.namespaceURI === HTML_NAMESPACE;
-  }
-  function isHtmlTextarea(node) {
-    return node?.nodeType === 1 && "localName" in node && node.localName === "textarea" && "namespaceURI" in node && node.namespaceURI === HTML_NAMESPACE;
-  }
-  function hasReadableOpener(document2) {
-    try {
-      const view = document2.defaultView;
-      if (!view)
-        return true;
-      const opener = view.opener;
-      if (opener === null || opener === undefined)
-        return false;
-      if (typeof opener !== "object" && typeof opener !== "function")
-        return true;
-      const _openerDocument = Reflect.get(opener, "document");
-      return true;
-    } catch (error) {
-      return !(typeof error === "object" && error !== null && ("name" in error) && error.name === "SecurityError");
-    }
-  }
-  function collectFieldPrototypes({
-    root,
-    mayHaveOtherFrame
-  }) {
-    const prototypes = {
-      inputs: new Set([HTMLInputElement.prototype]),
-      textareas: new Set([HTMLTextAreaElement.prototype]),
-      texts: new Set([Text.prototype])
-    };
-    const collect = (element) => {
-      if (!isHtmlField(element))
-        return;
-      const prototype = Object.getPrototypeOf(element);
-      if (!prototype)
-        throw new TypeError("snapshot field prototype is unavailable");
-      if (element.localName === "input") {
-        prototypes.inputs.add(prototype);
-        return;
-      }
-      prototypes.textareas.add(prototype);
-      for (const child of element.childNodes) {
-        if (child.nodeType !== 3)
-          continue;
-        const textPrototype = Object.getPrototypeOf(child);
-        if (!textPrototype)
-          throw new TypeError("snapshot textarea Text prototype is unavailable");
-        prototypes.texts.add(textPrototype);
-      }
-    };
-    const ownerDocument = root?.ownerDocument ?? document;
-    if (root)
-      collect(root);
-    if (!mayHaveOtherFrame && !hasReadableOpener(ownerDocument))
-      return prototypes;
-    const roots = [ownerDocument];
-    for (const tree of roots) {
-      for (const element of tree.querySelectorAll("input,textarea"))
-        collect(element);
-      for (const host of tree.querySelectorAll("*")) {
-        const shadow = host.shadowRoot;
-        if (shadow)
-          roots.push(shadow);
-      }
-    }
-    return prototypes;
-  }
-  function isPrivateField(field) {
-    return privatelyTyped(field) || declaredMasked && (field.getAttribute("type")?.toLowerCase() === "password" || (field.getAttribute("autocomplete") ?? "").toLowerCase().split(/\s+/).some((token) => PRIVATE_AUTOCOMPLETE.has(token)));
-  }
-  function maskedValue(descriptor, valueReads) {
-    if (typeof descriptor.get !== "function")
-      throw new TypeError("snapshot field value accessor is unavailable");
-    const get = descriptor.get;
-    return {
-      ...descriptor,
-      get() {
-        const alreadyReading = valueReads.has(this);
-        valueReads.add(this);
-        let value;
-        try {
-          value = get.call(this);
-        } finally {
-          if (!alreadyReading)
-            valueReads.delete(this);
-        }
-        if (typeof value !== "string")
-          throw new TypeError("snapshot field value accessor did not return text");
-        return isPrivateField(this) ? "•".repeat(value.length) : value;
-      }
-    };
-  }
-  function propertyOverride(target, property, mask) {
-    const original = Object.getOwnPropertyDescriptor(target, property);
-    if (original?.configurable === false || !original && !Object.isExtensible(target))
-      throw new TypeError(`snapshot field ${property} cannot be overridden`);
-    let owner = target;
-    while (owner) {
-      const descriptor = Object.getOwnPropertyDescriptor(owner, property);
-      if (descriptor) {
-        return {
-          target,
-          property,
-          original,
-          masked: { ...mask(descriptor), configurable: true }
-        };
-      }
-      owner = Object.getPrototypeOf(owner);
-    }
-    throw new TypeError(`snapshot field ${property} is unavailable`);
-  }
-  function maskedAttributes(descriptor) {
-    if (typeof descriptor.value !== "function")
-      throw new TypeError("snapshot field getAttribute method is unavailable");
-    const getAttribute = descriptor.value;
-    return {
-      ...descriptor,
-      value(name) {
-        const value = getAttribute.call(this, name);
-        return typeof value === "string" && typeof name === "string" && PRIVATE_VALUE_ATTRIBUTES.has(name.toLowerCase()) && isPrivateField(this) ? "•".repeat(value.length) : value;
-      }
-    };
-  }
-  function emptyTextareaText(descriptor, textareaOf, valueReads) {
-    if (typeof descriptor.get !== "function")
-      throw new TypeError("snapshot textarea text accessor is unavailable");
-    const get = descriptor.get;
-    return {
-      ...descriptor,
-      get() {
-        const textarea = textareaOf(this);
-        return textarea && !valueReads.has(textarea) && isPrivateField(textarea) ? "" : get.call(this);
-      }
-    };
-  }
-  function parentTextarea(node) {
-    const parent = node.parentElement;
-    return isHtmlTextarea(parent) ? parent : null;
-  }
-  function maskedComputedStyle(descriptor) {
-    if (typeof descriptor.value !== "function")
-      throw new TypeError("snapshot getComputedStyle method is unavailable");
-    const read = descriptor.value;
-    return {
-      ...descriptor,
-      value(element, pseudo) {
-        const style = Reflect.apply(read, this, [
-          element,
-          pseudo
-        ]);
-        if (!isHtmlField(element))
-          return style;
-        if (!isPrivateField(element))
-          return style;
-        return new Proxy(style, {
-          get(target, key) {
-            if (key === "content")
-              return "none";
-            if (key === "getPropertyValue")
-              return (property) => property === "content" ? "none" : target.getPropertyValue(property);
-            const value = Reflect.get(target, key);
-            return typeof value === "function" ? value.bind(target) : value;
-          }
-        });
-      }
-    };
-  }
-  function restoreOverrides(installed) {
-    const failures = [];
-    for (const override of installed.reverse()) {
-      try {
-        if (override.original) {
-          Object.defineProperty(override.target, override.property, override.original);
-        } else if (!Reflect.deleteProperty(override.target, override.property)) {
-          throw new TypeError(`snapshot field ${override.property} could not be removed`);
-        }
-      } catch (error) {
-        failures.push(error);
-      }
-    }
-    if (failures.length)
-      throw new TypeError("snapshot field overrides could not be restored", {
-        cause: new AggregateError(failures)
-      });
-  }
-  function withMarkedFieldsMasked(walk) {
-    return anyPrivatelyTyped() ? withMaskedFieldValues({ root: document.documentElement, mayHaveOtherFrame: true }, walk, { declared: false }) : walk();
-  }
-  function withMaskedFieldValues(discovery, walk, { declared = true } = {}) {
-    const prototypes = collectFieldPrototypes(discovery);
-    const inputs = Array.from(prototypes.inputs);
-    const textareas = Array.from(prototypes.textareas);
-    const texts = Array.from(prototypes.texts);
-    const valueReads = new Set;
-    const overrides = [
-      ...inputs.map((input) => propertyOverride(input, "value", (descriptor) => maskedValue(descriptor, valueReads))),
-      ...textareas.map((textarea) => propertyOverride(textarea, "value", (descriptor) => maskedValue(descriptor, valueReads))),
-      ...inputs.map((input) => propertyOverride(input, "defaultValue", (descriptor) => maskedValue(descriptor, valueReads))),
-      ...inputs.map((input) => propertyOverride(input, "getAttribute", maskedAttributes)),
-      ...textareas.map((textarea) => propertyOverride(textarea, "getAttribute", maskedAttributes)),
-      ...texts.flatMap((text) => ["nodeValue", "textContent", "data", "wholeText"].map((property) => propertyOverride(text, property, (descriptor) => emptyTextareaText(descriptor, parentTextarea, valueReads)))),
-      ...textareas.flatMap((textarea) => ["textContent", "innerText", "innerHTML", "defaultValue"].map((property) => propertyOverride(textarea, property, (descriptor) => emptyTextareaText(descriptor, (node) => isHtmlTextarea(node) ? node : null, valueReads)))),
-      propertyOverride(globalThis, "getComputedStyle", maskedComputedStyle)
-    ];
-    const installed = [];
-    const outer = declaredMasked;
-    try {
-      for (const override of overrides) {
-        Object.defineProperty(override.target, override.property, override.masked);
-        installed.push(override);
-      }
-      declaredMasked = declared;
-      return walk();
-    } finally {
-      declaredMasked = outer;
-      restoreOverrides(installed);
-    }
-  }
-
   // crates/neo-sdk/neo-playwright-js/src/probe/document.ts
-  function documentText(world, request) {
+  function documentText(world, request, _root, _nodes, output) {
     const { injected } = world;
     const { document: document2 } = injected;
-    const { body } = document2;
-    const text = request.part === "title" ? document2.title : request.part === "expectSnapshot" ? body ? withMarkedFieldsMasked(() => injected.ariaSnapshotForExpectFailure(body, { mode: "default" })) : "" : request.includeShadow ? injected.documentContent(true) : content(document2);
+    const text = request.part === "title" ? document2.title : request.part === "expectSnapshot" ? document2.body ? output.tree(document2.body, () => injected.ariaSnapshotForExpectFailure(document2.body, {
+      mode: "default"
+    })) : "" : request.includeShadow ? injected.documentContent(true) : content(document2);
     return { kind: "documentText", text };
   }
   function content(document2) {
@@ -8932,7 +8631,7 @@ ${value.stack}`;
     await Promise.resolve();
     if (connected.some((element) => !element.isConnected))
       return "error:notconnected";
-    if (!typed || holdsFocus2(typed))
+    if (!typed || holdsFocus(typed))
       return kept;
     return { kind: "notFocused", ...holderOf(world, typed.ownerDocument) };
   }
@@ -8942,7 +8641,7 @@ ${value.stack}`;
     const control = Reflect.get(element, "control");
     return isElement(control) ? control : null;
   }
-  function holdsFocus2(target) {
+  function holdsFocus(target) {
     const found = Reflect.get(target.getRootNode(), "activeElement");
     const active = isElement(found) ? found : null;
     if (!active)
@@ -8987,23 +8686,22 @@ ${value.stack}`;
     const body = world.injected.document.body;
     return body?.localName === "body" ? { kind: "one", element: body } : { kind: "none" };
   }
-  async function expect(world, request, root) {
+  async function expect(world, request, root, _nodes, output) {
     const params = request.params;
-    const checks = expectChecks(world.injected);
     if (params.expression === "to.have.count" || params.expression.endsWith(".array")) {
       const elements = queryAll(world, request.target, root);
       const count = `${elements.length} element${elements.length === 1 ? "" : "s"}`;
-      return poll(withMarkedFieldsMasked(() => checks.every(elements, params)), count);
+      return poll(output.checkMany(elements, params), count);
     }
     const found = params.expression === "to.match.aria" && request.target === "document" ? pageAriaRoot(world) : resolveTarget(world, request.target, request.strictness, root);
     if (found.kind !== "one")
       return found;
     const { element } = found;
-    const resolved = withMarkedFieldsMasked(() => world.injected.previewNode(element));
-    const check = await withMarkedFieldsMasked(() => checks.single(element, params, request.frameVisible));
+    const resolved = world.injected.previewNode(element);
+    const check = await output.check(element, params, request.frameVisible);
     const reply = poll(check, resolved);
     if (check.matches === params.isNot) {
-      const ariaSnapshot = withMarkedFieldsMasked(() => expectFailureSnapshot(world.injected, element, params, request.frameVisible));
+      const ariaSnapshot = output.tree(element, () => expectFailureSnapshot(world.injected, element, params, request.frameVisible));
       if (ariaSnapshot !== undefined)
         reply.ariaSnapshot = ariaSnapshot;
     }
@@ -9015,6 +8713,489 @@ ${value.stack}`;
       matches: check.matches,
       resolved,
       received: check.received
+    };
+  }
+
+  // crates/neo-sdk/neo-playwright-js/src/probe/private-entry.ts
+  var marked = new WeakSet;
+  var anyMarked = false;
+  var LEAVES = ["beforeunload", "pagehide"];
+  var watched = new WeakMap;
+  var active = new Map;
+  function privatelyTyped(element) {
+    return marked.has(element);
+  }
+  function anyPrivatelyTyped() {
+    return anyMarked;
+  }
+  function mark(element) {
+    marked.add(element);
+    anyMarked = true;
+  }
+  function privateStep(world, request) {
+    const { step, pin } = request;
+    const box = active.get(pin) ?? (step.kind === "focus" ? world.pins.live(pin) : undefined);
+    if (!box)
+      return { kind: "detached" };
+    const answered = answer(world, pin, box, step);
+    return answered instanceof Promise ? answered.then(reply) : reply(answered);
+  }
+  function reply(value) {
+    return { kind: "value", value };
+  }
+  function answer(world, pin, box, step) {
+    switch (step.kind) {
+      case "focus":
+        return focus(world, pin, box, step.text, step.spaced);
+      case "focused":
+        return { kind: "focus", focus: focusState(box) };
+      case "holds":
+        return {
+          kind: "holds",
+          holds: same(heldText(box), step.text, step.spaced)
+        };
+      case "readBack":
+        return readBack(pin, box);
+      case "forget":
+        forget(pin, box);
+        return { kind: "forgot" };
+      case "markFocused":
+        return { kind: "markedFocused", marked: markFocused(box) };
+    }
+  }
+  function markFocused(box) {
+    let holder = box.ownerDocument.activeElement;
+    while (holder?.shadowRoot?.activeElement)
+      holder = holder.shadowRoot.activeElement;
+    if (!holder || holder === box)
+      return false;
+    const name = holder.localName;
+    if (name !== "input" && name !== "textarea")
+      return false;
+    mark(holder);
+    return true;
+  }
+  async function focus(world, pin, box, text, spaced) {
+    mark(box);
+    listen(pin, box, text, spaced);
+    if (world.injected.selectText(box) === "error:notconnected")
+      return { kind: "focus", focus: "gone" };
+    await Promise.resolve();
+    return { kind: "focus", focus: focusState(box) };
+  }
+  function focusState(box) {
+    if (!box.isConnected)
+      return "gone";
+    if (moving(watched.get(box)))
+      return "moving";
+    if (!holdsFocus2(box))
+      return "elsewhere";
+    return box.ownerDocument.hasFocus() ? "held" : "noDocumentFocus";
+  }
+  function holdsFocus2(box) {
+    const root = box.getRootNode();
+    const active = Reflect.get(root, "activeElement");
+    return active === box;
+  }
+  function moving(entry) {
+    if (!entry)
+      return false;
+    return entry.leaving || entry.submits.some((event) => !event.defaultPrevented && Reflect.get(event.target ?? {}, "target") !== "_blank");
+  }
+  function listen(pin, box, text, spaced) {
+    forget(pin, box);
+    const entry = {
+      text,
+      spaced,
+      heldAtLastInput: false,
+      submits: [],
+      leaving: false,
+      listener: () => {
+        entry.heldAtLastInput = same(heldText(box), text, spaced);
+      },
+      onSubmit: (event) => {
+        entry.submits.push(event);
+      },
+      onLeave: () => {
+        entry.leaving = true;
+      }
+    };
+    watched.set(box, entry);
+    active.set(pin, box);
+    box.addEventListener("input", entry.listener, { capture: true });
+    const view = box.ownerDocument.defaultView;
+    view?.addEventListener("submit", entry.onSubmit, { capture: true });
+    for (const type of LEAVES)
+      view?.addEventListener(type, entry.onLeave, { capture: true });
+  }
+  function forget(pin, box) {
+    active.delete(pin);
+    const entry = watched.get(box);
+    if (!entry)
+      return;
+    box.removeEventListener("input", entry.listener, { capture: true });
+    const view = box.ownerDocument.defaultView;
+    view?.removeEventListener("submit", entry.onSubmit, { capture: true });
+    for (const type of LEAVES)
+      view?.removeEventListener(type, entry.onLeave, { capture: true });
+    watched.delete(box);
+  }
+  function readBack(pin, box) {
+    const entry = watched.get(box);
+    const heldAtLastInput = entry?.heldAtLastInput ?? false;
+    let state;
+    if (!box.isConnected)
+      state = "left";
+    else if (entry && same(heldText(box), entry.text, entry.spaced))
+      state = "holds";
+    else
+      state = "other";
+    if (state === "other")
+      markFocused(box);
+    const leaving = moving(entry);
+    forget(pin, box);
+    return { kind: "readBack", state, heldAtLastInput, moving: leaving };
+  }
+  function heldText(box) {
+    const value = Reflect.get(box, "value");
+    return typeof value === "string" ? value : "";
+  }
+  function same(held, text, spaced) {
+    if (held === text)
+      return true;
+    if (!spaced)
+      return false;
+    const bare = (value) => value.replace(/[\s\-/]/g, "");
+    return bare(held) === bare(text);
+  }
+
+  // crates/neo-sdk/neo-playwright-js/src/probe/private-field-values.ts
+  var PRIVATE_AUTOCOMPLETE = new Set([
+    "current-password",
+    "new-password",
+    "one-time-code",
+    "cc-number",
+    "cc-csc"
+  ]);
+  var HTML_NAMESPACE = "http://www.w3.org/1999/xhtml";
+  var FIELD_TAGS = new Set(["input", "textarea"]);
+  var PRIVATE_VALUE_ATTRIBUTES = new Set([
+    "value",
+    "aria-valuetext",
+    "aria-valuenow"
+  ]);
+  function isHtmlField(element) {
+    return element.nodeType === 1 && "localName" in element && typeof element.localName === "string" && FIELD_TAGS.has(element.localName) && "namespaceURI" in element && element.namespaceURI === HTML_NAMESPACE;
+  }
+  var declaredMasked;
+  function isHtmlTextarea(node) {
+    return node?.nodeType === 1 && "localName" in node && node.localName === "textarea" && "namespaceURI" in node && node.namespaceURI === HTML_NAMESPACE;
+  }
+  function hasReadableOpener(document2) {
+    try {
+      const view = document2.defaultView;
+      if (!view)
+        return true;
+      const opener = view.opener;
+      if (opener === null || opener === undefined)
+        return false;
+      if (typeof opener !== "object" && typeof opener !== "function")
+        return true;
+      const _openerDocument = Reflect.get(opener, "document");
+      return true;
+    } catch (error) {
+      return !(typeof error === "object" && error !== null && ("name" in error) && error.name === "SecurityError");
+    }
+  }
+  function collectFieldPrototypes({
+    root,
+    mayHaveOtherFrame
+  }) {
+    const prototypes = {
+      inputs: new Set([HTMLInputElement.prototype]),
+      textareas: new Set([HTMLTextAreaElement.prototype]),
+      texts: new Set([Text.prototype])
+    };
+    const collect = (element) => {
+      if (!isHtmlField(element))
+        return;
+      const prototype = Object.getPrototypeOf(element);
+      if (!prototype)
+        throw new TypeError("snapshot field prototype is unavailable");
+      if (element.localName === "input") {
+        prototypes.inputs.add(prototype);
+        return;
+      }
+      prototypes.textareas.add(prototype);
+      for (const child of element.childNodes) {
+        if (child.nodeType !== 3)
+          continue;
+        const textPrototype = Object.getPrototypeOf(child);
+        if (!textPrototype)
+          throw new TypeError("snapshot textarea Text prototype is unavailable");
+        prototypes.texts.add(textPrototype);
+      }
+    };
+    const ownerDocument = root?.ownerDocument ?? document;
+    if (root)
+      collect(root);
+    if (!mayHaveOtherFrame && !hasReadableOpener(ownerDocument))
+      return prototypes;
+    const roots = [ownerDocument];
+    for (const tree of roots) {
+      for (const element of tree.querySelectorAll("input,textarea"))
+        collect(element);
+      for (const host of tree.querySelectorAll("*")) {
+        const shadow = host.shadowRoot;
+        if (shadow)
+          roots.push(shadow);
+      }
+    }
+    return prototypes;
+  }
+  function isPrivateField(field, { declared = declaredMasked ?? true } = {}) {
+    return isHtmlField(field) && (privatelyTyped(field) || (declaredMasked === true || declared) && (field.getAttribute("type")?.toLowerCase() === "password" || (field.getAttribute("autocomplete") ?? "").toLowerCase().split(/\s+/).some((token) => PRIVATE_AUTOCOMPLETE.has(token))));
+  }
+  function maskedValue(descriptor, valueReads) {
+    if (typeof descriptor.get !== "function")
+      throw new TypeError("snapshot field value accessor is unavailable");
+    const get = descriptor.get;
+    return {
+      ...descriptor,
+      get() {
+        const alreadyReading = valueReads.has(this);
+        valueReads.add(this);
+        let value;
+        try {
+          value = get.call(this);
+        } finally {
+          if (!alreadyReading)
+            valueReads.delete(this);
+        }
+        if (typeof value !== "string")
+          throw new TypeError("snapshot field value accessor did not return text");
+        return isPrivateField(this) ? "•".repeat(value.length) : value;
+      }
+    };
+  }
+  function propertyOverride(target, property, mask) {
+    const original = Object.getOwnPropertyDescriptor(target, property);
+    if (original?.configurable === false || !original && !Object.isExtensible(target))
+      throw new TypeError(`snapshot field ${property} cannot be overridden`);
+    let owner = target;
+    while (owner) {
+      const descriptor = Object.getOwnPropertyDescriptor(owner, property);
+      if (descriptor) {
+        return {
+          target,
+          property,
+          original,
+          masked: { ...mask(descriptor), configurable: true }
+        };
+      }
+      owner = Object.getPrototypeOf(owner);
+    }
+    throw new TypeError(`snapshot field ${property} is unavailable`);
+  }
+  function maskedAttributes(descriptor) {
+    if (typeof descriptor.value !== "function")
+      throw new TypeError("snapshot field getAttribute method is unavailable");
+    const getAttribute = descriptor.value;
+    return {
+      ...descriptor,
+      value(name) {
+        const value = getAttribute.call(this, name);
+        return typeof value === "string" && typeof name === "string" && PRIVATE_VALUE_ATTRIBUTES.has(name.toLowerCase()) && isPrivateField(this) ? "•".repeat(value.length) : value;
+      }
+    };
+  }
+  function emptyTextareaText(descriptor, textareaOf, valueReads) {
+    if (typeof descriptor.get !== "function")
+      throw new TypeError("snapshot textarea text accessor is unavailable");
+    const get = descriptor.get;
+    return {
+      ...descriptor,
+      get() {
+        const textarea = textareaOf(this);
+        return textarea && !valueReads.has(textarea) && isPrivateField(textarea) ? "" : get.call(this);
+      }
+    };
+  }
+  function parentTextarea(node) {
+    const parent = node.parentElement;
+    return isHtmlTextarea(parent) ? parent : null;
+  }
+  function maskedComputedStyle(descriptor) {
+    if (typeof descriptor.value !== "function")
+      throw new TypeError("snapshot getComputedStyle method is unavailable");
+    const read = descriptor.value;
+    return {
+      ...descriptor,
+      value(element, pseudo) {
+        const style = Reflect.apply(read, this, [
+          element,
+          pseudo
+        ]);
+        if (!isHtmlField(element))
+          return style;
+        if (!isPrivateField(element))
+          return style;
+        return new Proxy(style, {
+          get(target, key) {
+            if (key === "content")
+              return "none";
+            if (key === "getPropertyValue")
+              return (property) => property.toLowerCase() === "content" ? "none" : target.getPropertyValue(property);
+            const value = Reflect.get(target, key);
+            return typeof value === "function" ? value.bind(target) : value;
+          }
+        });
+      }
+    };
+  }
+  function restoreOverrides(installed) {
+    const failures = [];
+    for (const override of installed.reverse()) {
+      try {
+        if (override.original) {
+          Object.defineProperty(override.target, override.property, override.original);
+        } else if (!Reflect.deleteProperty(override.target, override.property)) {
+          throw new TypeError(`snapshot field ${override.property} could not be removed`);
+        }
+      } catch (error) {
+        failures.push(error);
+      }
+    }
+    if (failures.length)
+      throw new TypeError("snapshot field overrides could not be restored", {
+        cause: new AggregateError(failures)
+      });
+  }
+  function withMarkedFieldsMasked(walk, root = document.documentElement) {
+    return anyPrivatelyTyped() ? withMaskedFieldValues({ root, mayHaveOtherFrame: true }, walk, {
+      declared: false
+    }) : walk();
+  }
+  function withMaskedFieldValues(discovery, walk, { declared = true } = {}) {
+    const prototypes = collectFieldPrototypes(discovery);
+    const inputs = Array.from(prototypes.inputs);
+    const textareas = Array.from(prototypes.textareas);
+    const texts = Array.from(prototypes.texts);
+    const valueReads = new Set;
+    const overrides = [
+      ...inputs.map((input) => propertyOverride(input, "value", (descriptor) => maskedValue(descriptor, valueReads))),
+      ...textareas.map((textarea) => propertyOverride(textarea, "value", (descriptor) => maskedValue(descriptor, valueReads))),
+      ...inputs.map((input) => propertyOverride(input, "defaultValue", (descriptor) => maskedValue(descriptor, valueReads))),
+      ...inputs.map((input) => propertyOverride(input, "getAttribute", maskedAttributes)),
+      ...textareas.map((textarea) => propertyOverride(textarea, "getAttribute", maskedAttributes)),
+      ...texts.flatMap((text) => ["nodeValue", "textContent", "data", "wholeText"].map((property) => propertyOverride(text, property, (descriptor) => emptyTextareaText(descriptor, parentTextarea, valueReads)))),
+      ...textareas.flatMap((textarea) => ["textContent", "innerText", "innerHTML", "defaultValue"].map((property) => propertyOverride(textarea, property, (descriptor) => emptyTextareaText(descriptor, (node) => isHtmlTextarea(node) ? node : null, valueReads)))),
+      propertyOverride(globalThis, "getComputedStyle", maskedComputedStyle)
+    ];
+    const installed = [];
+    const outer = declaredMasked;
+    try {
+      for (const override of overrides) {
+        Object.defineProperty(override.target, override.property, override.masked);
+        installed.push(override);
+      }
+      declaredMasked = declared || outer === true;
+      return walk();
+    } finally {
+      declaredMasked = outer;
+      restoreOverrides(installed);
+    }
+  }
+
+  // crates/neo-sdk/neo-playwright-js/src/probe/failure-output.ts
+  function characterMarker(value) {
+    const length = Array.from(value).length;
+    return `<${length} character${length === 1 ? "" : "s"}>`;
+  }
+  function guardedComparison(params) {
+    switch (params.expression) {
+      case "to.match.aria":
+      case "to.have.accessible.name":
+      case "to.have.accessible.description":
+        return true;
+      case "to.have.text":
+      case "to.have.text.array":
+      case "to.contain.text.array":
+        return params.useInnerText !== true;
+      default:
+        return false;
+    }
+  }
+
+  class FailureOutput {
+    world;
+    engine;
+    checks;
+    policy;
+    constructor(world, policy) {
+      this.world = world;
+      this.policy = Object.freeze({
+        conformance: policy.conformance,
+        mayHaveOtherFrame: policy.mayHaveOtherFrame
+      });
+      this.engine = diagnosticEngine(world.injected);
+      this.checks = expectChecks(world.injected);
+    }
+    run(invoke) {
+      if (this.policy.conformance && !anyPrivatelyTyped())
+        return invoke();
+      return this.engine.run({
+        previewNode: this.previewNode,
+        generateSelectors: (elements, generate) => this.tree(elements[0] ?? this.world.injected.document.documentElement, generate)
+      }, invoke);
+    }
+    tree(root, read) {
+      if (this.policy.conformance && !anyPrivatelyTyped())
+        return read();
+      return this.run(() => withMaskedFieldValues({ root, mayHaveOtherFrame: this.policy.mayHaveOtherFrame }, read, { declared: !this.policy.conformance }));
+    }
+    async check(element, params, frameVisible) {
+      const mode = this.checkMode(element, params);
+      const compare = () => this.checks.single(element, params, frameVisible);
+      const check = await (mode.kind === "guardedTree" ? this.tree(element, compare) : this.run(() => withMarkedFieldsMasked(compare, element)));
+      return mode.kind === "realValue" && typeof check.received === "string" ? { ...check, received: characterMarker(check.received) } : check;
+    }
+    checkMany(elements, params) {
+      const compare = () => this.checks.every(elements, params);
+      return !this.policy.conformance && guardedComparison(params) ? this.tree(elements[0] ?? this.world.injected.document.documentElement, compare) : this.run(() => withMarkedFieldsMasked(compare, elements[0] ?? null));
+    }
+    arm(...args) {
+      return this.engine.arm(this.previewNode, ...args);
+    }
+    checkMode(element, params) {
+      if (this.policy.conformance)
+        return { kind: "native" };
+      if (guardedComparison(params))
+        return { kind: "guardedTree" };
+      if (params.expression === "to.have.value") {
+        const effective = this.world.injected.retarget(element, "follow-label");
+        return effective && isPrivateField(effective) ? { kind: "realValue" } : { kind: "native" };
+      }
+      if (!isPrivateField(element))
+        return { kind: "native" };
+      const property = params.expressionArg;
+      const sensitive = typeof property === "string" && (params.expression === "to.have.attribute.value" && PRIVATE_VALUE_ATTRIBUTES.has(property.toLowerCase()) || params.expression === "to.have.css" && property.toLowerCase() === "content" || params.expression === "to.have.property" && (property === "value" || property === "defaultValue"));
+      return { kind: sensitive ? "realValue" : "native" };
+    }
+    previewNode = (node) => {
+      const parent = node.parentElement;
+      if (node.nodeType === 3 && parent?.localName === "textarea" && isPrivateField(parent, { declared: !this.policy.conformance }))
+        return this.engine.previewNode(parent.ownerDocument.createTextNode(""));
+      if (!isPrivateField(node, { declared: !this.policy.conformance }))
+        return this.engine.previewNode(node);
+      const clone = node.cloneNode(false);
+      if (!isHtmlField(clone))
+        throw new ProbeError("internal", "private-field preview could not be projected");
+      for (const attribute of clone.attributes) {
+        if (PRIVATE_VALUE_ATTRIBUTES.has(attribute.name.toLowerCase()))
+          attribute.value = characterMarker(attribute.value);
+      }
+      return this.engine.previewNode(clone);
     };
   }
 
@@ -9176,7 +9357,7 @@ ${value.stack}`;
   }
 
   // crates/neo-sdk/neo-playwright-js/src/probe/protocol.ts
-  var PROTOCOL = 36;
+  var PROTOCOL = 37;
 
   // crates/neo-sdk/neo-playwright-js/src/probe/read.ts
   var XHTML = "http://www.w3.org/1999/xhtml";
@@ -9648,7 +9829,7 @@ ${value.stack}`;
     const element = injected.querySelector(FRAME_ROOT, injected.document, false);
     return element ? { kind: "one", element } : { kind: "none" };
   }
-  function snapshot(world, request, root, nodes) {
+  function snapshot(world, request, root, nodes, output) {
     const seeds = request.closedRoots ?? 0;
     openClosedRoots(nodes.slice(0, seeds));
     const targets = nodes.slice(seeds);
@@ -9667,10 +9848,7 @@ ${value.stack}`;
       isVisible: (of) => injected.utils.isElementVisible(of)
     };
     const take = () => marked2(targets, engine, plain);
-    const { result, skipped } = request.conformance ? withMarkedFieldsMasked(take) : withMaskedFieldValues({
-      root: element,
-      mayHaveOtherFrame: request.mayHaveOtherFrame !== false
-    }, take);
+    const { result, skipped } = output.tree(element, take);
     const { json, iframeRefs, iframeDepths } = result;
     const iframes = [];
     if (request.mode === "ai") {
@@ -9955,11 +10133,13 @@ ${value.stack}`;
     const pins = new Pins;
     const refs = new RefMap;
     let world;
-    function answer(booted, request, scope, nodes) {
+    function answer(booted, call, scope, nodes) {
       try {
+        const { request, policy } = call;
         if (request.op === "pinned")
           return pinned(booted, request);
-        const reply = dispatch(booted, request.op, request, scope, nodes);
+        const output = new FailureOutput(booted, policy);
+        const reply = output.run(() => dispatch(booted, request.op, request, scope, nodes, output));
         return reply instanceof Promise ? reply.catch(thrownReply) : reply;
       } catch (error) {
         return thrownReply(error);
@@ -9981,21 +10161,28 @@ ${value.stack}`;
         world = { epoch, seq: frameSeq, injected, pins, refs };
         return retired === undefined ? described2(world) : { ...described2(world), retired };
       },
-      call(request, root, nodes) {
+      call(call, root, nodes) {
         const booted = world;
         if (!booted)
           return UNINSTALLED;
-        if (!hasKnownOp(request))
-          return errorReply("internal", "not a probe request");
+        if (!isProbeCall(call))
+          return errorReply("internal", "not a probe call");
         const scope = root instanceof Node ? root : undefined;
         const handed = Array.isArray(nodes) ? nodes : [];
-        return answer(booted, request, scope, handed);
+        return answer(booted, call, scope, handed);
       }
     };
   }
-  function dispatch(world, op, request, root, nodes) {
+  function dispatch(world, op, request, root, nodes, output) {
     const handler = HANDLERS[op];
-    return handler(world, request, root, nodes);
+    return handler(world, request, root, nodes, output);
+  }
+  function isProbeCall(value) {
+    if (typeof value !== "object" || value === null)
+      return false;
+    const request = Reflect.get(value, "request");
+    const policy = Reflect.get(value, "policy");
+    return hasKnownOp(request) && typeof policy === "object" && policy !== null && typeof Reflect.get(policy, "conformance") === "boolean" && typeof Reflect.get(policy, "mayHaveOtherFrame") === "boolean";
   }
   function hasKnownOp(request) {
     if (typeof request !== "object" || request === null)

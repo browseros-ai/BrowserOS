@@ -285,7 +285,7 @@ impl Chunk {
     }
 }
 
-/// Opens every op input: Playwright's name for the call and its timeout.
+/// Opens every op input: Playwright's name, timeout, and the prelude's captured output policy.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub(crate) struct CallHeader {
@@ -296,6 +296,10 @@ pub(crate) struct CallHeader {
     /// `setDefaultTimeout` and Playwright's defaults (Rust holds no defaults). `0` or absent
     /// means none: the op waits until the host's run deadline drops it.
     pub(crate) timeout_ms: Option<u64>,
+    /// Private transport stamped by the common prelude bridge after public arguments. The
+    /// operation retains this decision across frame hops; no method option can override it.
+    #[serde(default)]
+    pub(crate) conformance: bool,
 }
 
 /// Whether a resolution that matches several elements fails. The probe protocol carries it

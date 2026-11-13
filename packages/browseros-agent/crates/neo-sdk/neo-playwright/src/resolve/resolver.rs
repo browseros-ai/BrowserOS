@@ -92,8 +92,13 @@ impl Resolved {
     /// Sends `request` in [`Resolved::world`], with the root node the target is queried from
     /// when there is one (an element handle's node, or the root of a locator rooted at a
     /// handle). A pinned target ignores the root.
-    pub(crate) async fn call(&self, request: &ProbeRequest) -> Result<ProbeReply, ProbeFailure> {
-        ask(&self.world, request, self.root.as_deref()).await
+    pub(crate) async fn call(
+        &self,
+        scope: &OpScope<'_>,
+        page: &OpPage<'_>,
+        request: &ProbeRequest,
+    ) -> Result<ProbeReply, ProbeFailure> {
+        ask(scope, page, &self.world, request, self.root.as_deref()).await
     }
 
     /// The world the last chunk runs in.
@@ -200,17 +205,6 @@ impl<'a> Resolver<'a> {
         &self,
         request: impl Fn(ParsedSelector, bool) -> ProbeRequest,
     ) -> Result<Option<Landed>, PlaywrightError> {
-        self.attempt_at_world(move |last, visible, _world| request(last, visible))
-            .await
-    }
-
-    /// The same retry path with the actual read world available while building the request.
-    /// Snapshot metadata belongs to the final frame after hops/ref jumps, and is recomputed
-    /// after re-resolution rather than inherited from the locator's starting frame.
-    pub(crate) async fn attempt_at_world(
-        &self,
-        request: impl Fn(ParsedSelector, bool, &IsolatedWorld) -> ProbeRequest,
-    ) -> Result<Option<Landed>, PlaywrightError> {
         for _ in 0..2 {
             let resolved = match self.resolve().await? {
                 Step::Ready(resolved) => resolved,
@@ -223,8 +217,8 @@ impl<'a> Resolver<'a> {
                 }
             };
             let last = ParsedSelector::of(self.target.chunks.last());
-            let request = request(last, resolved.frame_visible, &resolved.world);
-            match ask(&resolved.world, &request, resolved.root.as_deref()).await {
+            let request = request(last, resolved.frame_visible);
+            match resolved.call(self.scope, self.page, &request).await {
                 Ok(reply) => {
                     return Ok(Some(Landed {
                         reply,
@@ -358,7 +352,7 @@ impl<'a> Resolver<'a> {
                 SeqLookup::Live { world, parents } => {
                     let path = FramePath::from_parents(parents);
                     *way = Way {
-                        frame_visible: iframes_visible(self.scope, &path).await?,
+                        frame_visible: iframes_visible(self.scope, self.page, &path).await?,
                         path,
                         root: None,
                     };
@@ -474,7 +468,7 @@ async fn hop_from(
         strictness,
         want: Want::Frame,
     };
-    let (pin, key, visible) = match ask(parent, &request, root).await {
+    let (pin, key, visible) = match ask(scope, page, parent, &request, root).await {
         Ok(ProbeReply::Frame {
             pin, key, visible, ..
         }) => (pin, key, visible),
@@ -508,7 +502,7 @@ async fn enter_pinned(
     key: String,
     visible: bool,
 ) -> Result<Hopped, PlaywrightError> {
-    let object = match probe::pinned_object(scope, parent, pin).await {
+    let object = match probe::pinned_object(scope, page, parent, pin).await {
         Ok(Some(object)) => object,
         Ok(None) => return Ok(Hopped::Missing),
         Err(ProbeFailure::Gone(_)) => return Ok(Hopped::ParentGone),
@@ -605,13 +599,15 @@ pub(super) async fn enter_iframe(
 /// `request` in `world`: from the document, or from `root` (an element handle's node there),
 /// which the probe reads as the call's root element.
 pub(crate) async fn ask(
+    scope: &OpScope<'_>,
+    page: &OpPage<'_>,
     world: &IsolatedWorld,
     request: &ProbeRequest,
     root: Option<&str>,
 ) -> Result<ProbeReply, ProbeFailure> {
     match root {
-        Some(root) => probe::call_on(world, request, root).await,
-        None => probe::call(world, request).await,
+        Some(root) => probe::call_on(scope, page, world, request, root).await,
+        None => probe::call(scope, page, world, request).await,
     }
 }
 
@@ -621,7 +617,11 @@ pub(crate) async fn ask(
 /// whole path wherever the frame was reached from; upstream starts a jump at `true`. An iframe
 /// that is gone, or a parent world that is, is not visible: the request in the jumped world
 /// decides whether the ref's document still lives.
-async fn iframes_visible(scope: &OpScope<'_>, path: &FramePath) -> Result<bool, PlaywrightError> {
+async fn iframes_visible(
+    scope: &OpScope<'_>,
+    page: &OpPage<'_>,
+    path: &FramePath,
+) -> Result<bool, PlaywrightError> {
     for hop in path.hops() {
         let iframe = hop
             .iframe
@@ -635,7 +635,7 @@ async fn iframes_visible(scope: &OpScope<'_>, path: &FramePath) -> Result<bool, 
                 state: QueryState::Visible,
             },
         };
-        let visible = match probe::call(&hop.parent, &request).await {
+        let visible = match probe::call(scope, page, &hop.parent, &request).await {
             Ok(ProbeReply::Read { value, .. }) => value.into_value() == Value::Bool(true),
             Ok(ProbeReply::None { .. } | ProbeReply::Detached) | Err(ProbeFailure::Gone(_)) => {
                 false

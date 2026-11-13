@@ -339,6 +339,22 @@ export type PrivateAnswer = { "kind": "focus", focus: FocusState, } | { "kind": 
 export type PrivateStep = { "kind": "focus", text: PageSecret, spaced: boolean, } | { "kind": "focused" } | { "kind": "holds", text: PageSecret, spaced: boolean, } | { "kind": "readBack" } | { "kind": "forget" } | { "kind": "markFocused" };
 
 /**
+ * The common private call envelope. Keeping the policy outside request variants prevents a
+ * snapshot, frame hop, or pinned-node route from choosing a different diagnostic authority.
+ */
+export type ProbeCall = { request: ProbeRequest, policy: ProbePolicy, };
+
+/**
+ * One invocation's output policy. Worlds retain document state, while this value belongs to
+ * the operation that may create diagnostics, including an interceptor's delayed callbacks.
+ */
+export type ProbePolicy = { conformance: boolean, 
+/**
+ * Only a current, complete observation can prove the frame has no adoption sources.
+ */
+mayHaveOtherFrame: boolean, };
+
+/**
  * One reply; `kind` is the tag. Any request may also answer `error`, and `uninstalled` when
  * the world has no booted probe.
  */
@@ -383,12 +399,7 @@ boxes?: boolean,
  * How many of the call's nodes, first, are seeds of closed shadow roots; none outside
  * clickable marking.
  */
-closedRoots?: number, conformance?: boolean, 
-/**
- * This tab has another frame, or Rust cannot prove it has none. Different sessions
- * can host frames that exchange nodes; only explicit false skips the adopted-field scan.
- */
-mayHaveOtherFrame?: boolean, } | { "op": "expect", target: ProbeTarget, strictness: Strictness, frameVisible: boolean, params: ExpectParams, } | { "op": "matchUrl", pattern: UrlPattern, url: string, } | { "op": "pinned", pin: Pin, } | { "op": "document", part: DocumentPart, includeShadow?: boolean, } | { "op": "setContent", html: string, } | { "op": "armInput", pin: Pin, } | { "op": "inputArrived", pin: Pin, } | { "op": "webStorage", kind: StorageKind, action: StorageAction, name?: string, value?: string, };
+closedRoots?: number, } | { "op": "expect", target: ProbeTarget, strictness: Strictness, frameVisible: boolean, params: ExpectParams, } | { "op": "matchUrl", pattern: UrlPattern, url: string, } | { "op": "pinned", pin: Pin, } | { "op": "document", part: DocumentPart, includeShadow?: boolean, } | { "op": "setContent", html: string, } | { "op": "armInput", pin: Pin, } | { "op": "inputArrived", pin: Pin, } | { "op": "webStorage", kind: StorageKind, action: StorageAction, name?: string, value?: string, };
 
 /**
  * What a request runs on inside the world.

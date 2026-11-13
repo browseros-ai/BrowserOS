@@ -1,7 +1,7 @@
 /**
  * Renders the snapshot ops' result as Playwright's YAML: the text `ariaSnapshot()` returns with
  * `mode: 'default'`, with `mode: 'full'` (the engine's `'ai'` tree, capped), and with
- * `mode: 'ai'` under the conformance switch below. The default text format is snapshot-v1.ts,
+ * `mode: 'ai'` under the captured conformance switch. The default text format is snapshot-v1.ts,
  * made from the same result.
  *
  * Rust stitches every frame's JSON and applies Neo's naming rule; the text is made here, in the agent runtime, as upstream makes it in its server and
@@ -15,6 +15,7 @@
  * `mode: 'full'` differs from Playwright's text in one thing: an iframe's fallback markup does
  * not print, so its frame's content does (snapshot-v1.ts `shownText`).
  */
+
 import { CHARS_PER_TOKEN, cap, type Printed, partialHead } from './snapshot-cap'
 import { KEPT, SECTION, sectionLabel, shownText } from './snapshot-v1'
 import {
@@ -24,16 +25,7 @@ import {
 } from './vendored'
 import type { PartialFrame, SnapshotResult } from './wire'
 
-/**
- * The conformance switch. Playwright's own spec tests pin its exact snapshot text, so the spec
- * harness (neo-playwright-tests/node/claw-loader.mjs) sets `__neo_upstream_snapshots` on the
- * prelude's globalThis: then `ariaSnapshot()` with no mode means `'default'` and `mode: 'ai'`
- * prints Playwright's text, both as they did before the v1 format. Production hosts never set
- * it. Read once, as the prelude starts and before the agent's function exists, so a script that
- * sets the global changes nothing.
- */
-export const upstreamSnapshots: boolean =
-  Reflect.get(globalThis, '__neo_upstream_snapshots') === true
+export { upstreamSnapshots } from './output-policy'
 
 /** The offer a cut full-mode text makes: a section in the same mode, not the v1 list. */
 const FULL_CALL = "ariaSnapshot({ mode: 'full' })"

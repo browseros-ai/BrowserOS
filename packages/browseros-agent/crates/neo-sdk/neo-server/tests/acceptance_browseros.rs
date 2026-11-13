@@ -24,7 +24,7 @@ pub mod browseros_rig;
 )]
 pub mod fixture_server;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::fmt::{self, Write as _};
 use std::path::Path;
@@ -34,7 +34,7 @@ use browseros_rig::{
     CaptchaKey, Client, HOST_TOKEN, Rig, TestResult, browser_or_skip, get, outcome, run,
 };
 use fixture_server::{FixtureServer, Page};
-use neo_trace::{RunId, RunStatus, TraceStore};
+use neo_trace::{RedactionLimits, Redactor, RunDetail, RunId, RunStatus, TraceStore};
 use rmcp::model::CallToolResult;
 use serde_json::{Value, json};
 use tokio::time;
@@ -96,6 +96,243 @@ async fn private_field_values_never_reach_stored_snapshot_results() -> TestResul
         Ok(Err(error)) => Err(format!("{error}\n{}", rig.logs()).into()),
         Err(_elapsed) => Err(format!("snapshot trace timed out\n{}", rig.logs()).into()),
     }
+}
+
+/// The same SDK case matrix as private_failures_live, now through MCP and a real trace writer.
+/// A deliberate read and caller-supplied Expected may contain a canary; page-derived error
+/// messages, matcher facts and operation notes must already be safe before persistence.
+#[tokio::test(flavor = "multi_thread")]
+async fn private_field_values_never_reach_stored_failure_diagnostics() -> TestResult {
+    let Some(browser) = browser_or_skip() else {
+        return Ok(());
+    };
+    let mut rig = Rig::start(&browser, CaptchaKey::Absent)?;
+    match time::timeout(TEST_BUDGET, private_failure_trace(&mut rig)).await {
+        Ok(Ok(())) => Ok(()),
+        Ok(Err(error)) => Err(format!("{error}\n{}", rig.logs()).into()),
+        Err(_elapsed) => Err(format!("private failure trace timed out\n{}", rig.logs()).into()),
+    }
+}
+
+const FAILURE_CANARIES: [&str; 3] = ["AttrCanary-1", "TypedCanary-2", "TextCanary-3"];
+const PRIVATE_FAILURE_HTML: &str =
+    include_str!("../../neo-playwright/tests/data/private-failure-fields/page.html");
+const PRIVATE_FAILURE_CASES: &str =
+    include_str!("../../neo-playwright/tests/data/private-failure-fields/cases.js");
+
+fn assert_failure_canaries_absent(text: &str) {
+    for canary in FAILURE_CANARIES {
+        assert!(!text.contains(canary), "failure exposes {canary}: {text}");
+    }
+}
+
+async fn private_failure_trace(rig: &mut Rig) -> TestResult {
+    let server = FixtureServer::start(HashMap::from([(
+        "/private-failures.html".to_owned(),
+        Page::html(PRIVATE_FAILURE_HTML),
+    )]))
+    .await?;
+    rig.until_ready().await?;
+    let configured = rig
+        .host(
+            "PATCH",
+            "/v1/settings",
+            Some(HOST_TOKEN),
+            Some(&json!({ "trace": { "values": "on", "valueBytes": 262_144 } })),
+        )
+        .await?;
+    assert_eq!(configured.status, 200, "{}", configured.text());
+    let client = rig.client().await?;
+    let script = PRIVATE_FAILURE_CASES.replace(
+        "__FIXTURE_URL__",
+        &json!(server.url("127.0.0.1", "/private-failures.html")).to_string(),
+    );
+    let result = run(
+        &client,
+        &script,
+        &json!({ "requestId": "private-failure-trace", "taskId": "private-failure-trace" }),
+    )
+    .await?;
+    let (id, status, _) = run_meta(&result)?;
+    assert_eq!(
+        status, "ok",
+        "every deliberate failure was caught: {result:?}"
+    );
+    let returned = value(&result)?;
+    let failures = returned
+        .get("failures")
+        .and_then(Value::as_object)
+        .ok_or("the run returned its named failure matrix")?;
+    let clear_templates = returned
+        .get("clearTemplates")
+        .and_then(Value::as_array)
+        .ok_or("the two caller-supplied clear templates were rejected")?;
+    assert!(
+        failures.len() >= 40,
+        "the complete live matrix ran through MCP"
+    );
+    assert_eq!(clear_templates.len(), 2);
+    for field in ["failures", "clearTemplates", "snapshots"] {
+        assert_failure_canaries_absent(
+            &returned
+                .get(field)
+                .ok_or("the diagnostic field")?
+                .to_string(),
+        );
+    }
+    assert_eq!(
+        returned
+            .get("reads")
+            .and_then(|reads| reads.get("inputValue")),
+        Some(&json!("TypedCanary-2")),
+        "explicit reads remain clear in the same run"
+    );
+    let expected_failures = failures.len() + clear_templates.len();
+    // Wait for operation records and screenshots before stopping the writer. Reading the
+    // database only after a clean stop proves storage, rather than the service's live cache.
+    read_run(rig, &id).await?;
+    client.cancel().await?;
+    assert_eq!(rig.stop_neo().await?, Some(0));
+    assert_stored_failure_diagnostics(&rig.trace_path(), id.parse()?, expected_failures).await
+}
+
+/// Trace messages have a fixed text budget independent of valueBytes. Preserve and scan the
+/// complete captured failures in the run result, then require each stored message to equal
+/// their bounded projection so truncation cannot turn an unsafe diagnostic into a passing test.
+fn complete_stored_failure_messages(
+    detail: &RunDetail,
+    expected_failures: usize,
+) -> Result<HashSet<String>, Box<dyn Error>> {
+    assert!(
+        !detail.result_truncated,
+        "the full diagnostic matrix was stored"
+    );
+    let result = detail.result.as_ref().ok_or("the stored run result")?;
+    for field in ["failures", "clearTemplates", "snapshots"] {
+        assert_failure_canaries_absent(
+            &result
+                .get(field)
+                .ok_or("the complete diagnostic field")?
+                .to_string(),
+        );
+    }
+    let failures = result
+        .get("failures")
+        .and_then(Value::as_object)
+        .ok_or("the complete failure map")?;
+    let templates = result
+        .get("clearTemplates")
+        .and_then(Value::as_array)
+        .ok_or("the caller templates")?;
+    assert_eq!(failures.len() + templates.len(), expected_failures);
+    let redactor = Redactor::new(RedactionLimits::default());
+    let mut messages = HashSet::new();
+    for failure in failures.values() {
+        let message = failure
+            .get("message")
+            .and_then(Value::as_str)
+            .ok_or("the complete failure message")?;
+        assert!(
+            !message.contains("…[+"),
+            "the source failure was retained whole"
+        );
+        messages.insert(redactor.text(message));
+    }
+    Ok(messages)
+}
+
+async fn assert_stored_failure_diagnostics(
+    path: &Path,
+    id: RunId,
+    expected_failures: usize,
+) -> TestResult {
+    let store = TraceStore::open(path).await?;
+    let detail = store
+        .run(id)
+        .await?
+        .ok_or("the failure run was persisted")?;
+    assert_eq!(detail.summary.status, RunStatus::Ok);
+    let safe_messages = complete_stored_failure_messages(&detail, expected_failures)?;
+    let (mut failed, mut caller_templates, mut markers, mut public, mut notes) = (0, 0, 0, 0, 0);
+    for operation in detail.operations {
+        for note in &operation.notes {
+            assert_failure_canaries_absent(note);
+            assert!(
+                !note.contains("…[+"),
+                "the diagnostic note was stored whole"
+            );
+            notes += 1;
+        }
+        let Some(error) = operation.error else {
+            continue;
+        };
+        failed += 1;
+        assert!(
+            !operation.args_truncated,
+            "the matcher inputs were stored whole"
+        );
+        assert!(
+            !operation.result_truncated,
+            "the matcher result was stored whole"
+        );
+        let args = operation
+            .args
+            .as_ref()
+            .ok_or("the failed operation kept its inputs")?;
+        let caller_expected =
+            args.get("expected")
+                .and_then(Value::as_str)
+                .is_some_and(|expected| {
+                    FAILURE_CANARIES
+                        .iter()
+                        .any(|canary| expected.contains(canary))
+                });
+        if caller_expected {
+            // These two templates contain a canary supplied by the script. The shared
+            // script separately scans their actual/log/ariaSnapshot facts; stored notes
+            // above remain covered without erasing the caller's Expected line.
+            caller_templates += 1;
+        } else {
+            assert_failure_canaries_absent(&error.message);
+            assert!(
+                safe_messages.contains(&error.message),
+                "{} kept the bounded form of its complete safe failure: {}",
+                operation.name,
+                error.message,
+            );
+        }
+        if let Some(result) = operation.result {
+            assert_failure_canaries_absent(&result.to_string());
+        }
+        markers += usize::from(
+            error
+                .message
+                .lines()
+                .any(|line| line.starts_with("Received") && line.contains(" characters>\"")),
+        );
+        public += usize::from(error.message.contains("Received: \"Public"));
+    }
+    assert_eq!(
+        failed, expected_failures,
+        "every caught failure reached the trace"
+    );
+    assert_eq!(
+        caller_templates, 2,
+        "only caller-supplied Expected text is exempt"
+    );
+    assert!(
+        markers >= 10,
+        "real value comparisons stored received-length markers"
+    );
+    assert!(
+        public >= 4,
+        "public twins retain their real received values"
+    );
+    assert!(
+        notes > failed,
+        "the trace retained the original operation notes"
+    );
+    Ok(())
 }
 
 /// Each source and attribute value is a distinct synthetic secret to scan after persistence.
