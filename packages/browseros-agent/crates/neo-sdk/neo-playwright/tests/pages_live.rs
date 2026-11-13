@@ -661,6 +661,34 @@ async fn tests_that_close_runs_no_beforeunload() -> TestResult {
     .await
 }
 
+/// A host whose view is bound to a profile closes through core's own close, the one close its
+/// root gate allows, and the browser's tab list still confirms it.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_view_bound_to_a_profile_closes_its_tab() -> TestResult {
+    let run = LiveRun::connect_bound().await?;
+    assert!(
+        run.is_bound(),
+        "BrowserOS binds the view to its Default profile"
+    );
+    let page = run.new_page().await?;
+    let closed = time::timeout(
+        BROWSER_ONLY,
+        run.invoke("page.close", json!({ "page": brand(&page) })),
+    )
+    .await;
+    let listed = listed_pages(&run).await?;
+    if listed.iter().any(|(id, _)| *id == page) {
+        run.close_page(&page).await;
+    }
+    closed.map_err(|_elapsed| "page.close waited")??;
+    assert!(
+        !listed.iter().any(|(id, _)| *id == page),
+        "the tab is gone: {listed:?}"
+    );
+    Ok(())
+}
+
 /// Waits until the browser reports `page` loading, then checks that it answers no page command
 /// for a second: the state a tab is in while its navigation waits on a server that never answers.
 async fn stuck(run: &LiveRun, page: &TestPage) -> TestResult {

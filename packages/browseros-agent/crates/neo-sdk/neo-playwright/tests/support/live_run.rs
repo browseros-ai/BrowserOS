@@ -280,6 +280,20 @@ impl LiveRun {
         Self::connect_through(|client| Arc::new(client) as Arc<dyn CdpConnection>).await
     }
 
+    /// As [`LiveRun::connect`], with the run's view bound to the browser's Default profile, as a
+    /// host that admits each call to one profile builds it (`BrowserView::capture`).
+    pub(crate) async fn connect_bound() -> TestResult<Self> {
+        let mut run = Self::connect().await?;
+        run.env.view = BrowserView::capture(Arc::clone(&run.browser), None, None).await;
+        Ok(run)
+    }
+
+    /// Whether the run's view is bound to a profile, which a browser without profile targeting
+    /// never does.
+    pub(crate) fn is_bound(&self) -> bool {
+        self.env.view.scope().is_ok_and(|scope| scope.is_some())
+    }
+
     /// As [`LiveRun::connect`], with every CDP call going through the connection `wrap` builds
     /// over the client, so a test can stand between the crate and the browser.
     pub(crate) async fn connect_through(

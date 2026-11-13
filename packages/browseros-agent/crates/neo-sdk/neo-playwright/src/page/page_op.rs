@@ -594,7 +594,7 @@ async fn close(
     // never waits on the browser past it, and never answers closed without the listing.
     let limit = scope.timeout().unwrap_or(CLOSE_CONFIRMATION);
     let work = async {
-        let closed = close_target(scope, page, admitted).await?;
+        let closed = close_target(pw, scope, page, admitted).await?;
         gone(scope, page).await?;
         Ok::<TargetId, PlaywrightError>(closed)
     };
@@ -625,11 +625,34 @@ async fn close(
 /// the listing decides ([`gone`]). Each retry is a new attempt at the page, so the host's
 /// policies are asked again first (the owner may have taken the tab meanwhile). Returns the
 /// target closed last.
+///
+/// A view bound to a profile or window allows no `Target.closeTarget` at its root (core's
+/// `cdp_policy` admits `Browser.closeTab` there), so a bound host closes through core's own
+/// close, as before: BrowserOS's `Browser.closeTab`, which runs beforeunload. A page that then
+/// asks to stay fails the listing wait instead of answering closed. Every Neo run's view is
+/// unbound.
 async fn close_target(
+    pw: &Playwright,
     scope: &OpScope<'_>,
     tab: TabId,
     admitted: TargetId,
 ) -> Result<TargetId, PlaywrightError> {
+    let core = |error| scope.core_error(&error);
+    if scope
+        .view()
+        .scope()
+        .map_err(|error| core(error.into()))?
+        .is_some()
+    {
+        let page = pw
+            .browser()
+            .pages
+            .get_info_by_tab(tab)
+            .await
+            .ok_or_else(|| scope.fail(ErrorCode::TargetClosed, "the tab was closed"))?;
+        scope.view().close_page(page.page_id).await.map_err(core)?;
+        return Ok(admitted);
+    }
     let mut target = admitted;
     loop {
         match scope
