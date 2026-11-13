@@ -122,6 +122,12 @@ async fn default_listener_response_changes_only_internal_and_explicit_listener_s
             .ok_or("baseline operation")?;
         assert!(!op.contains_key("internal"));
         op.insert("internal".into(), json!(internal));
+        // A later additive field: every ended operation says whether its frame-tree read was
+        // whole, and none of these listeners read one.
+        assert!(!op.contains_key("framesIncomplete"));
+        if op.contains_key("endedAt") {
+            op.insert("framesIncomplete".into(), json!(false));
+        }
         if index == 1 || index == 2 {
             assert!(
                 !op.contains_key("site"),
