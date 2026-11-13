@@ -74,8 +74,13 @@ A script's `page.frames()` lists a tab's whole frame tree, cross-site frames inc
 own `page.frames` reads: before the script's first statement, and before each operation settles
 for a tab whose frames changed. A read that could not get the whole tree ends with
 `framesIncomplete: true`: an out-of-process frame's subtree would not read, or no tree came back
-at all. A whole read ends with `false`. After a short read the script's `frames()` lists the
-frames that were read, and the tab is read again before the script's next operation settles.
+at all. A read that answered the whole tree ends with `false`. After a short read the script's
+`frames()` lists the frames that were read, and the tab is read again before the script's next
+operation settles.
+
+Read the mark per operation. `true` says that one read was short; a later `page.frames` operation
+of the same tab may have read it whole. `false` on a `page.frames` operation that failed (refused,
+timed out) says nothing about the tree: it answered none, and the script kept the frames it had.
 
 To find a run whose script was handed a short tree, read it and look for a `page.frames`
 operation with `framesIncomplete: true`:

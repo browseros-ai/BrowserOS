@@ -1738,9 +1738,10 @@ components:
             all. Neo's own `page.frames` reads carry it. The script's `page.frames()` then lists
             the frames that were read, and the tree is read again before the script's next
             operation settles, so a later `page.frames` operation of the same tab shows whether
-            that read was whole. Present once the operation has ended, so an operation still
-            running, one whose end Neo never recorded, or one recorded before this field has
-            none.
+            that read was whole. It describes this one read: `false` on an operation that failed
+            (refused, timed out) says nothing about the tree, which it did not answer. Present
+            once the operation has ended, so an operation still running, one whose end Neo never
+            recorded, or one recorded before this field has none.
         internal:
           type: boolean
           description: >-

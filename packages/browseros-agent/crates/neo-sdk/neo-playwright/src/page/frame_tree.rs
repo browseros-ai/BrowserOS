@@ -537,6 +537,8 @@ pub(crate) fn sample_tree() -> Result<FrameTree, serde_json::Error> {
 
 #[cfg(test)]
 mod tests {
+    use std::error::Error;
+
     use browseros_core::FrameId;
     use serde::Serialize;
     use serde_json::json;
@@ -553,8 +555,8 @@ mod tests {
     /// host finds the run whose script was handed a short tree.
     #[tokio::test]
     async fn tests_that_only_a_short_or_missing_tree_marks_the_operation()
-    -> Result<(), Box<dyn std::error::Error>> {
-        let marked = |frames: Option<FrameTree>| -> Result<bool, Box<dyn std::error::Error>> {
+    -> Result<(), Box<dyn Error>> {
+        let marked = |frames: Option<FrameTree>| -> Result<bool, Box<dyn Error>> {
             let env = TestEnv::new();
             let op = Op::from_name("page.frames").ok_or("page.frames is an op")?;
             let scope = OpScope::new(&env, op, CallHeader::default());
