@@ -6,7 +6,7 @@
 //! of its host around each send.
 //!
 //! Needs a throwaway BrowserOS with CDP on `BROWSEROS_CDP_PORT` (default 9005):
-//! `cargo test -p neo-playwright --test evaluate_values_live -- --ignored`.
+//! `bun run test:browser -- cargo test -p neo-playwright --test evaluate_values_live -- --ignored`.
 //! Every test opens its own tab and closes it.
 
 #[path = "support/fixture_server.rs"]

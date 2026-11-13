@@ -3,8 +3,7 @@
 //! captures without consulting the host, the context's tabs, `opener` and `close`.
 //!
 //! Needs a throwaway BrowserOS with CDP on `BROWSEROS_CDP_PORT` (default 9005), for example
-//! `PORT_BASE=9371 spikes/eval/browser.sh <profile> &`, then
-//! `BROWSEROS_CDP_PORT=9371 cargo test -p neo-playwright --test pages_live -- --ignored`.
+//! `bun run test:browser -- cargo test -p neo-playwright --test pages_live -- --ignored`.
 //! Every test opens its own tabs and closes them.
 
 #[path = "support/live_run.rs"]

@@ -4,8 +4,7 @@
 //! retires the document's seq is checked in `src/world/live_tests.rs`, where seqs are visible.
 //!
 //! Needs a throwaway BrowserOS with CDP on `BROWSEROS_CDP_PORT` (default 9005), for example
-//! `PORT_BASE=9461 spikes/eval/browser.sh <profile> &`, then
-//! `BROWSEROS_CDP_PORT=9461 cargo test -p neo-playwright --test page_world_live -- --ignored`.
+//! `bun run test:browser -- cargo test -p neo-playwright --test page_world_live -- --ignored`.
 //! Every test opens its own tab and closes it.
 
 #[path = "support/fixture_server.rs"]

@@ -25,6 +25,7 @@ on:
       - packages/browseros-agent/Cargo.lock
       # The test:neo-spec script and the pinned Bun.
       - packages/browseros-agent/package.json
+      - packages/browseros-agent/tools/browser-process.mjs
   push:
     branches: [main]
     paths:
@@ -34,6 +35,7 @@ on:
       - packages/browseros-agent/Cargo.toml
       - packages/browseros-agent/Cargo.lock
       - packages/browseros-agent/package.json
+      - packages/browseros-agent/tools/browser-process.mjs
   workflow_dispatch:
 
 permissions:

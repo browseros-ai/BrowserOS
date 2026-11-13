@@ -4,7 +4,7 @@
 //! partial results for children that answer too late, on either the same or another site.
 //!
 //! The live tests need BrowserOS with CDP on `BROWSEROS_CDP_PORT` (default 9005):
-//! `cargo test -p neo-playwright --test snapshot_live -- --ignored`. They serve the
+//! `bun run test:browser -- cargo test -p neo-playwright --test snapshot_live -- --ignored`. They serve the
 //! fixtures on `127.0.0.1`, `localhost` and `[::1]`; F6 serves its unresponsive frame on
 //! `hang.localtest.me`, a public name for 127.0.0.1, so that name must resolve. The cross-site
 //! late child is on `late.localhost`, which Chromium resolves to loopback itself.

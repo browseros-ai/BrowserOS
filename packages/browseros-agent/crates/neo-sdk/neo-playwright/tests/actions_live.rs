@@ -10,7 +10,7 @@
 //! the test's own), never through the crate.
 //!
 //! Needs BrowserOS with CDP on `BROWSEROS_CDP_PORT` (default 9005):
-//! `cargo test -p neo-playwright --test actions_live -- --ignored`. The fixtures are
+//! `bun run test:browser -- cargo test -p neo-playwright --test actions_live -- --ignored`. The fixtures are
 //! served on `127.0.0.1`, `localhost` and `[::1]`, three sites; every test opens and closes
 //! its own tabs.
 

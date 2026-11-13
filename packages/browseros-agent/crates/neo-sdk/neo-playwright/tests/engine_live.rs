@@ -5,7 +5,7 @@
 //! tests in `src/world/live_tests.rs`.
 //!
 //! Needs a BrowserOS (or Chromium) instance with CDP on `BROWSEROS_CDP_PORT` (default 9005):
-//! `cargo test -p neo-playwright --test engine_live -- --ignored`. The test opens and
+//! `bun run test:browser -- cargo test -p neo-playwright --test engine_live -- --ignored`. The test opens and
 //! closes its own tab.
 
 use browseros_cdp::{CdpClient, ConnectOptions, SessionId};

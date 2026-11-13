@@ -1,0 +1,63 @@
+name: Browser test launcher
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/test-browser.yml
+      - packages/browseros-agent/tools/browser-process.mjs
+      - packages/browseros-agent/tools/test-browser*.mjs
+      - packages/browseros-agent/tools/fixtures/test-browser.mjs
+      - packages/browseros-agent/crates/neo-sdk/neo-playwright-tests/node/browser*.mjs
+      - packages/browseros-agent/crates/neo-sdk/neo-playwright-tests/node/lifecycle.test.mjs
+      - packages/browseros-agent/crates/neo-sdk/neo-playwright-tests/node/process-ownership.test.mjs
+      - packages/browseros-agent/package.json
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/test-browser.yml
+      - packages/browseros-agent/tools/browser-process.mjs
+      - packages/browseros-agent/tools/test-browser*.mjs
+      - packages/browseros-agent/tools/fixtures/test-browser.mjs
+      - packages/browseros-agent/crates/neo-sdk/neo-playwright-tests/node/browser*.mjs
+      - packages/browseros-agent/crates/neo-sdk/neo-playwright-tests/node/lifecycle.test.mjs
+      - packages/browseros-agent/crates/neo-sdk/neo-playwright-tests/node/process-ownership.test.mjs
+      - packages/browseros-agent/package.json
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: test-browser-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  launcher:
+    name: Browser launcher / ${{ matrix.os }} / Node ${{ matrix.node }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            node: 22
+          - os: macos-latest
+            node: 26
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 5
+    defaults:
+      run:
+        working-directory: packages/browseros-agent
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
+        with:
+          node-version: ${{ matrix.node }}
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: packages/browseros-agent/package.json
+      # Process fixtures use the public CLI; no browser install, Rust build, or Docker daemon.
+      - name: Verify lifecycle and ownership
+        run: >-
+          node --test tools/test-browser.test.mjs
+          crates/neo-sdk/neo-playwright-tests/node/process-ownership.test.mjs
+          crates/neo-sdk/neo-playwright-tests/node/lifecycle.test.mjs

@@ -6,7 +6,7 @@
 //! through the event pump, and page handles that keep their identity.
 //!
 //! The offline test needs no browser. The live test needs a throwaway BrowserOS with CDP on
-//! `BROWSEROS_CDP_PORT` (default 9005): `cargo test -p neo-playwright --test prelude_live
+//! `BROWSEROS_CDP_PORT` (default 9005): `bun run test:browser -- cargo test -p neo-playwright --test prelude_live
 //! -- --ignored`. It serves its fixtures from `tests/data/prelude/` and closes the tabs it opens.
 
 #[path = "support/fixture_server.rs"]
