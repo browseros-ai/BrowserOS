@@ -102,10 +102,11 @@ const expired = !!anchor && anchor.classList.contains('recaptcha-checkbox-expire
 "#;
 
 /// The page's own CAPTCHA settings, read in its main world as JSON. No DOM call: elements a
-/// grecaptcha client holds are counted, never touched.
+/// grecaptcha client holds are counted, never touched. A setting is passed on whole: a shortened
+/// one would reach a provider as if it were the page's.
 const VENDOR_SCAN: &str = r#"(() => { /* captcha:vendor */
 let complete = true;
-const cut = v => typeof v === 'string' ? v.slice(0, 512) : null;
+const text = v => typeof v === 'string' ? v : null;
 const raw = window.___grecaptcha_cfg?.clients || {};
 const keys = Object.keys(raw);
 if (keys.length > 64) complete = false;
@@ -124,7 +125,7 @@ for (const key of keys.slice(0, 64)) {
             const v = descriptor.value;
             if (['sitekey', 'action', 's', 'size', 'callback', 'promise-callback'].includes(k)) {
                 const dest = k === 's' ? 'recaptchaS' : k === 'promise-callback' ? 'callback' : k;
-                if (typeof v === 'string') meta[dest] = cut(v);
+                if (typeof v === 'string') meta[dest] = v;
                 if (dest === 'callback' && typeof v === 'function') meta.callback = '<inline>';
             }
             if (v && typeof v === 'object') queue.push([v, depth + 1]);
@@ -136,13 +137,13 @@ for (const key of keys.slice(0, 64)) {
 return {complete, enterprise: !!window.grecaptcha?.enterprise, clients,
     turnstile: typeof window.turnstile !== 'undefined', geetest: typeof window.initGeetest === 'function',
     awsWaf: typeof window.AwsWafCaptcha !== 'undefined', arkose: typeof window.ArkoseEnforcement !== 'undefined',
-    goku: typeof window.gokuProps !== 'undefined', awsKey: cut(window.gokuProps?.key) || cut(window.apiKey),
+    goku: typeof window.gokuProps !== 'undefined', awsKey: text(window.gokuProps?.key) || text(window.apiKey),
     cfChlOpt: !!window._cf_chl_opt};
 })()"#;
 
 /// One child document's AWS settings, read in its main world when its DOM scan found a
 /// `#captcha-container` that only `gokuProps` makes an AWS widget.
-const VENDOR_GATE: &str = "(() => { /* captcha:gate */ const cut = v => typeof v === 'string' ? v.slice(0, 512) : null; return {goku: typeof window.gokuProps !== 'undefined', awsKey: cut(window.gokuProps?.key) || cut(window.apiKey)}; })()";
+const VENDOR_GATE: &str = "(() => { /* captcha:gate */ const text = v => typeof v === 'string' ? v : null; return {goku: typeof window.gokuProps !== 'undefined', awsKey: text(window.gokuProps?.key) || text(window.apiKey)}; })()";
 
 /// The top document's join of the vendor settings with its DOM, after `DOM_SCAN`.
 const JOIN_SCAN: &str = r#"
@@ -2678,6 +2679,49 @@ window.onTs = function() {{
         browser.close_page(id).await?;
         connection.disconnect().await;
         Ok(result?)
+    }
+
+    #[tokio::test]
+    #[ignore = "requires an owned dev browser at CAPTCHA_LIVE_CDP_PORT"]
+    async fn tests_that_live_page_settings_arrive_whole() -> anyhow::Result<()> {
+        let long = "k".repeat(3000);
+        let recaptcha = live_dom_detection(
+            "<div style=\"width:304px;height:78px\"><textarea id=\"g-recaptcha-response\" name=\"g-recaptcha-response\" style=\"display:none\"></textarea></div>",
+            &format!("window.___grecaptcha_cfg = {{clients: {{0: {{a: {{sitekey: 'key', s: '{long}'}}}}}}}}"),
+        )
+        .await?;
+        assert!(recaptcha.complete);
+        assert_eq!(recaptcha.challenges.len(), 1, "{:?}", recaptcha.challenges);
+        assert_eq!(recaptcha.challenges[0].kind, CaptchaKind::RecaptchaV2);
+        assert_eq!(recaptcha.challenges[0].sitekey.as_deref(), Some("key"));
+        assert_eq!(
+            recaptcha.challenges[0].recaptcha_s.as_deref(),
+            Some(long.as_str())
+        );
+
+        // The top document's key comes through the vendor read, a child's through its gate.
+        let aws = "<div id=\"captcha-container\" style=\"width:300px;height:100px\">AWS WAF</div>";
+        let settings = format!("gokuProps = {{key: '{long}'}}");
+        for (html, setup, in_child) in [
+            (aws.to_owned(), format!("window.{settings}"), false),
+            (
+                "<iframe style=\"width:360px;height:180px\"></iframe>".to_owned(),
+                format!(
+                    "const f = document.querySelector('iframe'); f.contentDocument.body.innerHTML = {}; f.contentWindow.{settings}",
+                    serde_json::to_string(aws)?
+                ),
+                true,
+            ),
+        ] {
+            let result = live_dom_detection(&html, &setup).await?;
+            assert!(result.complete, "in child: {in_child}");
+            assert_eq!(result.challenges.len(), 1, "{:?}", result.challenges);
+            let challenge = &result.challenges[0];
+            assert_eq!(challenge.kind, CaptchaKind::AwsWaf);
+            assert_eq!(challenge.host_frame.is_some(), in_child);
+            assert_eq!(challenge.sitekey.as_deref(), Some(long.as_str()));
+        }
+        Ok(())
     }
 
     #[tokio::test]
