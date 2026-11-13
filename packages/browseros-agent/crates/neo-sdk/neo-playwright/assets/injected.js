@@ -9073,7 +9073,7 @@ ${value.stack}`;
       });
   }
   function withMarkedFieldsMasked(walk, root = document.documentElement) {
-    return anyPrivatelyTyped() ? withMaskedFieldValues({ root, mayHaveOtherFrame: true }, walk, {
+    return anyPrivatelyTyped() || root !== null && privatelyTyped(root) ? withMaskedFieldValues({ root, mayHaveOtherFrame: true }, walk, {
       declared: false
     }) : walk();
   }
@@ -9157,9 +9157,10 @@ ${value.stack}`;
       return this.run(() => withMaskedFieldValues({ root, mayHaveOtherFrame: this.policy.mayHaveOtherFrame }, read, { declared: !this.policy.conformance }));
     }
     async check(element, params, frameVisible) {
-      const mode = this.checkMode(element, params);
+      const field = this.world.injected.retarget(element, "follow-label") ?? element;
+      const mode = this.checkMode(element, field, params);
       const compare = () => this.checks.single(element, params, frameVisible);
-      const check = await (mode.kind === "guardedTree" ? this.tree(element, compare) : this.run(() => withMarkedFieldsMasked(compare, element)));
+      const check = await (mode.kind === "guardedTree" ? this.tree(element, compare) : this.run(() => withMarkedFieldsMasked(compare, field)));
       return mode.kind === "realValue" && typeof check.received === "string" ? { ...check, received: characterMarker(check.received) } : check;
     }
     checkMany(elements, params) {
@@ -9169,15 +9170,13 @@ ${value.stack}`;
     arm(...args) {
       return this.engine.arm(this.previewNode, ...args);
     }
-    checkMode(element, params) {
+    checkMode(element, field, params) {
       if (this.policy.conformance)
         return { kind: "native" };
       if (guardedComparison(params))
         return { kind: "guardedTree" };
-      if (params.expression === "to.have.value") {
-        const effective = this.world.injected.retarget(element, "follow-label");
-        return effective && isPrivateField(effective) ? { kind: "realValue" } : { kind: "native" };
-      }
+      if (params.expression === "to.have.value")
+        return isPrivateField(field) ? { kind: "realValue" } : { kind: "native" };
       if (!isPrivateField(element))
         return { kind: "native" };
       const property = params.expressionArg;
