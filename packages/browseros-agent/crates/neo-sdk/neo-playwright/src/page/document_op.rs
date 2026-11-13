@@ -104,8 +104,9 @@ pub(crate) async fn read(
         part,
         include_shadow,
     };
-    with_world(&page, &endpoint, &place, |world| async move {
-        match probe::call(&world, request).await? {
+    let page = &page;
+    with_world(page, &endpoint, &place, |world| async move {
+        match probe::call(scope, page, &world, request).await? {
             ProbeReply::DocumentText { text } => Ok(text),
             other => Err(unexpected("document", other)),
         }
@@ -131,7 +132,7 @@ pub(crate) async fn expect_snapshot(
         include_shadow: false,
     };
     let text = with_world(page, &endpoint, &place, |world| async move {
-        match probe::call(&world, request).await? {
+        match probe::call(scope, page, &world, request).await? {
             ProbeReply::DocumentText { text } => Ok(text),
             other => Err(unexpected("document", other)),
         }

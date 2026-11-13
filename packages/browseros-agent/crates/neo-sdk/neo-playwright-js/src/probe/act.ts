@@ -20,6 +20,7 @@
  * expiry past the last event its op can still send, so an expiry never lets an event of the
  * action through.
  */
+import type { FailureOutput } from './failure-output'
 import type {
   ActRequest,
   DisarmRequest,
@@ -111,6 +112,8 @@ export function act(
   world: World,
   request: ActRequest,
   root: Node | undefined,
+  _nodes: readonly unknown[],
+  output: FailureOutput,
 ): ReplyTo<'act'> {
   const found = resolveTarget(world, request.target, request.strictness, root)
   if (found.kind !== 'one') return found
@@ -164,7 +167,7 @@ export function act(
   if (arm.expectRect && !sameRect(box, arm.expectRect)) return measured
   // A transformed frame can map a different clipped centroid, or scale a subpixel
   // local target into view. Rust checked that geometry; events establish its hit.
-  const interception = injected.setupHitTargetInterceptor(
+  const interception = output.arm(
     element,
     arm.action,
     arm.browserMapped ? undefined : place.point,

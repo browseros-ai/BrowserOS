@@ -88,6 +88,25 @@ pub(crate) struct BootOptions<'a> {
     pub(crate) epoch: &'a str,
 }
 
+/// One invocation's output policy. Worlds retain document state, while this value belongs to
+/// the operation that may create diagnostics, including an interceptor's delayed callbacks.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub(crate) struct ProbePolicy {
+    pub(crate) conformance: bool,
+    /// Only a current, complete observation can prove the frame has no adoption sources.
+    pub(crate) may_have_other_frame: bool,
+}
+
+/// The common private call envelope. Keeping the policy outside request variants prevents a
+/// snapshot, frame hop, or pinned-node route from choosing a different diagnostic authority.
+#[derive(Debug, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ProbeCall<'request> {
+    pub(crate) request: &'request ProbeRequest,
+    pub(crate) policy: ProbePolicy,
+}
+
 /// One request; `op` is the tag.
 #[derive(Clone, Debug, Serialize, Deserialize, TS)]
 #[serde(
@@ -186,15 +205,6 @@ pub(crate) enum ProbeRequest {
         #[serde(default, skip_serializing_if = "is_zero")]
         #[ts(optional, as = "Option<u32>")]
         closed_roots: u32,
-        // Spec-harness bypass. Omission keeps normal snapshot value masking enabled.
-        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-        #[ts(optional, as = "Option<bool>")]
-        conformance: bool,
-        /// This tab has another frame, or Rust cannot prove it has none. Different sessions
-        /// can host frames that exchange nodes; only explicit false skips the adopted-field scan.
-        #[serde(default = "default_true", skip_serializing_if = "is_true")]
-        #[ts(optional, as = "Option<bool>")]
-        may_have_other_frame: bool,
     },
     /// One poll of one retrying matcher; Rust's loop owns the timing, `.not` and the failure.
     Expect {
@@ -572,59 +582,44 @@ fn is_zero(count: &u32) -> bool {
     *count == 0
 }
 
-fn default_true() -> bool {
-    true
-}
-
-/// Omission is conservative; false must remain explicit on the wire.
-#[expect(
-    clippy::trivially_copy_pass_by_ref,
-    reason = "serde's skip_serializing_if passes the field by reference"
-)]
-fn is_true(value: &bool) -> bool {
-    *value
-}
-
 #[cfg(test)]
 mod tests {
     use std::error::Error;
 
     use serde_json::{Number, Value, json};
 
-    use super::{Edit, FillValue, ParsedSelector, ProbeRequest, SelectOption};
+    use super::{
+        Edit, FillValue, ParsedSelector, ProbeCall, ProbePolicy, ProbeRequest, SelectOption,
+    };
 
     const PROTOCOL: &str = include_str!("../../tests/data/probe-protocol.json");
 
     #[test]
-    fn snapshot_other_frame_hint_defaults_true_and_false_stays_explicit()
+    fn output_policy_belongs_to_the_common_call_instead_of_snapshot_options()
     -> Result<(), Box<dyn Error>> {
-        let omitted = json!({"op": "snapshot", "root": "document", "mode": "ai"});
-        let mut request: ProbeRequest = serde_json::from_value(omitted.clone())?;
-        assert!(matches!(
-            &request,
-            ProbeRequest::Snapshot {
-                may_have_other_frame: true,
-                ..
-            }
-        ));
-        assert_eq!(serde_json::to_value(&request)?, omitted);
-        let ProbeRequest::Snapshot {
-            may_have_other_frame,
-            ..
-        } = &mut request
-        else {
-            return Err("expected snapshot".into());
+        let snapshot = json!({"op": "snapshot", "root": "document", "mode": "ai"});
+        let request: ProbeRequest = serde_json::from_value(snapshot.clone())?;
+        let policy = ProbePolicy {
+            conformance: false,
+            may_have_other_frame: false,
         };
-        *may_have_other_frame = false;
-        let written = serde_json::to_value(&request)?;
-        assert_eq!(written["mayHaveOtherFrame"], false);
-        assert!(matches!(
-            serde_json::from_value::<ProbeRequest>(written)?,
-            ProbeRequest::Snapshot {
-                may_have_other_frame: false,
-                ..
-            }
-        ));
+        assert_eq!(
+            serde_json::to_value(ProbeCall {
+                request: &request,
+                policy
+            })?,
+            json!({
+                "request": snapshot,
+                "policy": { "conformance": false, "mayHaveOtherFrame": false },
+            }),
+            "false remains explicit in the common envelope"
+        );
+        for obsolete in [
+            json!({"op": "snapshot", "root": "document", "mode": "ai", "conformance": true}),
+            json!({"op": "snapshot", "root": "document", "mode": "ai", "mayHaveOtherFrame": false}),
+        ] {
+            assert!(serde_json::from_value::<ProbeRequest>(obsolete).is_err());
+        }
         Ok(())
     }
 
@@ -666,6 +661,28 @@ mod tests {
             ),
             other => other,
         }
+    }
+
+    #[test]
+    fn common_call_examples_round_trip_with_their_policy() -> Result<(), Box<dyn Error>> {
+        let protocol: Value = serde_json::from_str(PROTOCOL)?;
+        let examples = protocol["calls"]
+            .as_array()
+            .ok_or("the common call examples")?;
+        assert_eq!(examples.len(), 2);
+        for example in examples {
+            let request: ProbeRequest = serde_json::from_value(example["request"].clone())?;
+            let policy: ProbePolicy = serde_json::from_value(example["policy"].clone())?;
+            assert_eq!(
+                as_javascript(serde_json::to_value(ProbeCall {
+                    request: &request,
+                    policy
+                })?),
+                as_javascript(example.clone()),
+                "the versioned ABI includes both policy spellings and the request"
+            );
+        }
+        Ok(())
     }
 
     #[test]

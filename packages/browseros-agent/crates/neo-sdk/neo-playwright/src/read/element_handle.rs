@@ -74,16 +74,17 @@ struct DescribedNode {
 /// it. `None` when the element went first.
 pub(crate) async fn element_brand(
     scope: &OpScope<'_>,
-    page: &PageRef,
+    page: &OpPage<'_>,
+    brand: &PageRef,
     world: &IsolatedWorld,
     pin: Pin,
     preview: &str,
 ) -> Result<Option<RootHandle>, PlaywrightError> {
-    let Some(node) = backend_node(scope, world, pin).await? else {
+    let Some(node) = backend_node(scope, page, world, pin).await? else {
         return Ok(None);
     };
     Ok(Some(RootHandle::Element(ElementTarget {
-        page: page.clone(),
+        page: brand.clone(),
         seq: world.seq(),
         node,
         display: preview.to_owned(),
@@ -94,10 +95,11 @@ pub(crate) async fn element_brand(
 /// that world's session for good; `None` when the element or the world went first.
 pub(crate) async fn backend_node(
     scope: &OpScope<'_>,
+    page: &OpPage<'_>,
     world: &IsolatedWorld,
     pin: Pin,
 ) -> Result<Option<BackendNodeId>, PlaywrightError> {
-    let isolated = match probe::pinned_object(scope, world, pin).await {
+    let isolated = match probe::pinned_object(scope, page, world, pin).await {
         Ok(Some(object)) => object,
         Ok(None) | Err(ProbeFailure::Gone(_)) => return Ok(None),
         Err(failure) => return Err(resolve::failed(scope, failure)),
@@ -148,7 +150,7 @@ pub(crate) async fn every_match(
         })?;
         pins.push(pin);
     }
-    let nodes = match probe::pinned_nodes(scope, &world, pins).await {
+    let nodes = match probe::pinned_nodes(scope, page, &world, pins).await {
         Ok(Some(nodes)) => nodes,
         Ok(None) | Err(ProbeFailure::Gone(_)) => {
             return Err(scope.fail(
@@ -184,8 +186,15 @@ pub(crate) async fn find_one(
     match reply {
         ProbeReply::Read { value, .. } => {
             let located: Located = element_read::read_value(scope, value.into_value())?;
-            let brand =
-                element_brand(scope, &target.page, &world, located.pin, &located.preview).await?;
+            let brand = element_brand(
+                scope,
+                &page,
+                &target.page,
+                &world,
+                located.pin,
+                &located.preview,
+            )
+            .await?;
             Ok(brand)
         }
         ProbeReply::None { stale_ref: None } | ProbeReply::Detached => Ok(None),
@@ -222,7 +231,8 @@ pub(crate) async fn query_all(
     let mut handles = Vec::with_capacity(values.len());
     for value in values {
         let PinnedMatch { pin, preview } = element_read::read_value(scope, value.into_value())?;
-        let Some(brand) = element_brand(scope, &target.page, &world, pin, &preview).await? else {
+        let Some(brand) = element_brand(scope, &page, &target.page, &world, pin, &preview).await?
+        else {
             return Err(scope.fail(
                 ErrorCode::TargetClosed,
                 &format!(

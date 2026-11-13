@@ -165,7 +165,9 @@ async fn complete_navigation(
     let mut followed = wait_for_url::follow(pw, page, scope, input.frame.as_ref()).await?;
     if let Some(pattern) = &input.url {
         loop {
-            match wait_for_url::matches(page, &followed.frame, pattern, event.url.clone()).await {
+            match wait_for_url::matches(scope, page, &followed.frame, pattern, event.url.clone())
+                .await
+            {
                 Ok(true) => break,
                 Ok(false) => return Ok(None),
                 // Concurrent waits can each install a world while successive navigations

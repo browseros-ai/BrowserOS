@@ -1,9 +1,8 @@
 /**
- * Masks page-declared private values, and the values Neo typed privately for a host, during one
- * synchronous snapshot walk in this frame's isolated world. The DOM's stored values and the page
- * world's native getters stay untouched.
+ * Projects page-declared private fields during a synchronous tree read in this frame's
+ * isolated world. Snapshots and text/name comparisons share this scope; native stored values,
+ * field-value comparisons and deliberate reads remain clear outside it.
  */
-
 import { anyPrivatelyTyped, privatelyTyped } from './private-entry'
 
 const PRIVATE_AUTOCOMPLETE = new Set([
@@ -40,23 +39,25 @@ type PropertyOverride = {
   masked: PropertyDescriptor
 }
 
-const PRIVATE_VALUE_ATTRIBUTES = new Set([
+export const PRIVATE_VALUE_ATTRIBUTES: ReadonlySet<string> = new Set([
   'value',
   'aria-valuetext',
   'aria-valuenow',
 ])
 
-/**
- * Whether the scope in force masks what the page declares private. Under the spec harness's
- * conformance switch it does not, so declared fields print as upstream prints them.
- */
-let declaredMasked = true
-
-function isHtmlField(element: Element): element is Field {
+export function isHtmlField(element: Node): element is Field {
   return (
-    FIELD_TAGS.has(element.localName) && element.namespaceURI === HTML_NAMESPACE
+    element.nodeType === 1 &&
+    'localName' in element &&
+    typeof element.localName === 'string' &&
+    FIELD_TAGS.has(element.localName) &&
+    'namespaceURI' in element &&
+    element.namespaceURI === HTML_NAMESPACE
   )
 }
+
+/** Declaration masking is a synchronous scope; a host-typing mark has no bypass. */
+let declaredMasked: boolean | undefined
 
 function isHtmlTextarea(node: Node | null): node is HTMLTextAreaElement {
   return (
@@ -141,18 +142,20 @@ function collectFieldPrototypes({
   return prototypes
 }
 
-function isPrivateField(field: Element): boolean {
+/** One privacy decision for tree reads and diagnostics, including fields adopted from another realm. */
+export function isPrivateField(
+  field: Node,
+  { declared = declaredMasked ?? true }: { declared?: boolean } = {},
+): field is Field {
   return (
-    // A box Neo typed a host's secret into is private whatever the page declares, in every
-    // scope: the host's private typing marks it before its first character (protected-fill
-    // rulings R14 and R44).
-    privatelyTyped(field) ||
-    (declaredMasked &&
-      (field.getAttribute('type')?.toLowerCase() === 'password' ||
-        (field.getAttribute('autocomplete') ?? '')
-          .toLowerCase()
-          .split(/\s+/)
-          .some((token) => PRIVATE_AUTOCOMPLETE.has(token))))
+    isHtmlField(field) &&
+    (privatelyTyped(field) ||
+      ((declaredMasked === true || declared) &&
+        (field.getAttribute('type')?.toLowerCase() === 'password' ||
+          (field.getAttribute('autocomplete') ?? '')
+            .toLowerCase()
+            .split(/\s+/)
+            .some((token) => PRIVATE_AUTOCOMPLETE.has(token)))))
   )
 }
 
@@ -285,7 +288,7 @@ function maskedComputedStyle(
           if (key === 'content') return 'none'
           if (key === 'getPropertyValue')
             return (property: string) =>
-              property === 'content'
+              property.toLowerCase() === 'content'
                 ? 'none'
                 : target.getPropertyValue(property)
           const value: unknown = Reflect.get(target, key)
@@ -322,20 +325,15 @@ function restoreOverrides(installed: PropertyOverride[]): void {
     })
 }
 
-/**
- * `walk` with only the boxes Neo typed into masked: for the engine's reads that print a page
- * outside main's masking (a failed `expect`'s aria snapshot) and under the spec harness's
- * conformance switch, which no mark bypasses (ruling R44). Until this world marks a box it
- * installs nothing, so those reads stay exactly upstream's.
- */
-export function withMarkedFieldsMasked<T>(walk: () => T): T {
+/** Mark-only reads install no guards until this world has privately typed a box (R44/R47). */
+export function withMarkedFieldsMasked<T>(
+  walk: () => T,
+  root: Element | null = document.documentElement,
+): T {
   return anyPrivatelyTyped()
-    ? withMaskedFieldValues(
-        // These mark-only callers have no frame hint yet, so discovery stays conservative.
-        { root: document.documentElement, mayHaveOtherFrame: true },
-        walk,
-        { declared: false },
-      )
+    ? withMaskedFieldValues({ root, mayHaveOtherFrame: true }, walk, {
+        declared: false,
+      })
     : walk()
 }
 
@@ -344,8 +342,7 @@ export function withMarkedFieldsMasked<T>(walk: () => T): T {
  * retry stays inside this scope, so its fallback cannot create a clear-value tree. Validate
  * every patch before installing any; cleanup attempts all installed patches in reverse order.
  * The style guard shares this registry so it restores the function it found, including a
- * pointer-target wrapper when the two scopes are nested in either order. With `declared: false`
- * (the spec harness's conformance switch) it masks only the boxes Neo typed into.
+ * pointer-target wrapper when the two scopes are nested in either order.
  */
 export function withMaskedFieldValues<T>(
   discovery: FieldDiscovery,
@@ -408,7 +405,9 @@ export function withMaskedFieldValues<T>(
       Object.defineProperty(override.target, override.property, override.masked)
       installed.push(override)
     }
-    declaredMasked = declared
+    // Nested scopes may strengthen privacy, never weaken a full outer walk into mark-only.
+    // Undefined means no active scope, so a standalone conformance scope can remain mark-only.
+    declaredMasked = declared || outer === true
     return walk()
   } finally {
     declaredMasked = outer

@@ -79,7 +79,12 @@ impl TabAddress {
             Err(ProbeFailure::Gone(_)) => return Ok(Self::Changed),
             Err(failure) => return Err(failure_code(failure)),
         };
-        match within(scope, resolve::ask(&world, &ProbeRequest::Describe, None)).await? {
+        match within(
+            scope,
+            resolve::ask(scope, page, &world, &ProbeRequest::Describe, None),
+        )
+        .await?
+        {
             Ok(ProbeReply::Described { url, .. }) if url == wanted => Ok(Self::Same),
             Ok(ProbeReply::Described { .. }) | Err(ProbeFailure::Gone(_)) => Ok(Self::Changed),
             Ok(_) => Err(EntryCode::Internal),
@@ -146,7 +151,7 @@ pub(crate) async fn look_at(
             strictness: Strictness::Strict,
             want: Want::Element,
         };
-        let pin = match within(scope, site.call(&resolve)).await? {
+        let pin = match within(scope, site.call(scope, page, &resolve)).await? {
             Ok(ProbeReply::Element { pin, .. }) => pin,
             Ok(ProbeReply::None { .. } | ProbeReply::Detached) => {
                 return Ok(Look::Unfound(EntryCode::ElementDetached));
@@ -167,7 +172,12 @@ pub(crate) async fn look_at(
             keys: field.keys,
             frame_visible: site.frame_visible(),
         };
-        let looked = match within(scope, site.call(&ProbeRequest::Look { pin, look: ask })).await? {
+        let looked = match within(
+            scope,
+            site.call(scope, page, &ProbeRequest::Look { pin, look: ask }),
+        )
+        .await?
+        {
             Ok(ProbeReply::Value { value }) => decode_looked(value.into_value())?,
             // The pin's element left its document, or the document went, since the resolve.
             Ok(ProbeReply::Detached) | Err(ProbeFailure::Gone(_)) => {

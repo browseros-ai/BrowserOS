@@ -6,7 +6,7 @@
  */
 import { readFileSync } from 'node:fs'
 import { parseHTML } from 'linkedom'
-import { CALL_FUNCTION } from '../../src/probe/protocol'
+import { CALL_FUNCTION, type ProbePolicy } from '../../src/probe/protocol'
 
 const ASSET = readFileSync(
   new URL('../../../neo-playwright/assets/injected.js', import.meta.url),
@@ -52,7 +52,10 @@ export type ProbePage = {
  * Installs `html` as the global DOM and evaluates the asset once. `close` restores every
  * global it replaced.
  */
-export function openProbePage(html: string): ProbePage {
+export function openProbePage(
+  html: string,
+  policy: ProbePolicy = { conformance: false, mayHaveOtherFrame: true },
+): ProbePage {
   const { window, document } = parseHTML(html)
   // linkedom omits the native defaultValue accessors. Supply their markup reads only in this
   // harness so the production guard can require every native API instead of silently skipping
@@ -143,7 +146,7 @@ export function openProbePage(html: string): ProbePage {
   return {
     document,
     call: (request, root, ...nodes) =>
-      callFunction.call(globalThis, request, root, ...nodes),
+      callFunction.call(globalThis, { request, policy }, root, ...nodes),
     // Through Reflect.apply, so tests can hand boot options Rust never would.
     boot: (options) => Reflect.apply(probe.boot, probe, [options]),
     close() {

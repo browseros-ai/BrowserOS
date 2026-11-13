@@ -518,8 +518,8 @@ fn envelope(
 ) -> String {
     let mut envelope = match outcome {
         Ok(ok) => json!({ "ok": ok, "pages": facts }),
-        Err(error) => json!({
-            "err": {
+        Err(error) => {
+            let mut failure = json!({
                 "code": error.code(),
                 "owner": error.owner().as_str(),
                 "delivery": "unknown",
@@ -527,9 +527,17 @@ fn envelope(
                 "operationId": operation,
                 "timeout": error.timed_out() == TimedOut::Yes,
                 "message": error.message(),
-            },
-            "pages": facts,
-        }),
+            });
+            // Production's ErrBody forwards these facts for the bootstrap to install as
+            // matcherResult. The adapter must preserve that boundary too: dropping actual,
+            // log or ariaSnapshot would make a privacy canary pass without observing them.
+            if let Some(matcher) = error.matcher_details()
+                && let Some(fields) = failure.as_object_mut()
+            {
+                fields.insert("matcher".to_owned(), matcher.clone());
+            }
+            json!({ "err": failure, "pages": facts })
+        }
     };
     if let (Some(page), Some(fields)) = (default_page, envelope.as_object_mut()) {
         fields.insert("defaultPage".to_owned(), page);

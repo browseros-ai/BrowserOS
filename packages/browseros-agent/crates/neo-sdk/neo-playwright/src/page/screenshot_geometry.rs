@@ -164,7 +164,7 @@ impl ScreenshotGeometry {
         let element = if let Some(target) = target {
             let reading =
                 read::read_attached(pw, scope, target, strict, &Read::BoundingBox).await?;
-            Some(element_box(scope, &reading.path, reading.value).await?)
+            Some(element_box(scope, &reading.page, &reading.path, reading.value).await?)
         } else {
             None
         };
@@ -241,10 +241,11 @@ impl ScreenshotGeometry {
 /// distinguishes a missing ancestor (retryable detachment) from a hidden frame (no box).
 async fn element_box(
     scope: &OpScope<'_>,
+    page: &OpPage<'_>,
     path: &FramePath,
     local: Value,
 ) -> Result<Rect, PlaywrightError> {
-    let rect = read::for_screenshot(scope, path, local)
+    let rect = read::for_screenshot(scope, page, path, local)
         .await?
         .ok_or_else(|| {
             scope.fail(
@@ -497,7 +498,7 @@ mod tests {
         }
 
         fn cdp_reply(&self, method: &str, params: &Value) -> Option<Value> {
-            (method == "Runtime.callFunctionOn" && params["arguments"][0]["value"]["op"] == "pinned")
+            (method == "Runtime.callFunctionOn" && params["arguments"][0]["value"]["request"]["op"] == "pinned")
                 .then(|| json!({ "result": { "type": "object", "subtype": "node", "objectId": "pinned-node" } }))
         }
     }
@@ -528,6 +529,7 @@ mod tests {
                 CallHeader {
                     api: Some("locator.screenshot".to_owned()),
                     timeout_ms: Some(if found { 2_000 } else { 50 }),
+                    conformance: false,
                 },
             );
             let bound = ScreenshotGeometry::bind(
@@ -568,20 +570,20 @@ mod tests {
     -> Result<(), Box<dyn Error>> {
         use crate::op_output;
         use crate::resolve::FramePath;
-        use crate::test_env::TestEnv;
-
-        let env = TestEnv::new();
+        let tab = ScriptedTab::new(ScreenshotElement { found: true });
+        let run = ScriptedRun::over(&tab).await?;
         let op = Op::from_name("page.screenshot").ok_or("screenshot op missing")?;
-        let scope = OpScope::new(&env, op, CallHeader::default());
+        let scope = OpScope::new(&run.env, op, CallHeader::default());
+        let page = OpPage::admit_handle(&run.playwright, &scope, &run.page).await?;
         let old = json!({ "x": 1.25, "y": 2.5, "width": 3.0, "height": 4.0 });
-        let typed = super::element_box(&scope, &FramePath::default(), old.clone()).await?;
+        let typed = super::element_box(&scope, &page, &FramePath::default(), old.clone()).await?;
         let encoded = op_output::to_output(&scope, &typed)?;
         assert_eq!(encoded.to_string(), old.to_string());
         assert_eq!(
             encoded.to_string(),
             r#"{"height":4.0,"width":3.0,"x":1.25,"y":2.5}"#
         );
-        let error = super::element_box(&scope, &FramePath::default(), Value::Null)
+        let error = super::element_box(&scope, &page, &FramePath::default(), Value::Null)
             .await
             .err()
             .ok_or("null layout must fail capture")?;
@@ -598,16 +600,17 @@ mod tests {
     -> Result<(), Box<dyn Error>> {
         use crate::probe::Rect;
         use crate::resolve::{FramePath, Hop, HopIframe};
-        use crate::test_env::TestEnv;
         use crate::world::IsolatedWorld;
         use crate::{op_output, read};
         use browseros_core::testing::TestConnection;
         use browseros_core::{CdpConnection, ProtocolSession, SessionId};
         use std::sync::Arc;
 
-        let env = TestEnv::new();
+        let tab = ScriptedTab::new(ScreenshotElement { found: true });
+        let run = ScriptedRun::over(&tab).await?;
         let op = Op::from_name("page.screenshot").ok_or("screenshot op missing")?;
-        let scope = OpScope::new(&env, op, CallHeader::default());
+        let scope = OpScope::new(&run.env, op, CallHeader::default());
+        let page = OpPage::admit_handle(&run.playwright, &scope, &run.page).await?;
         let connection = TestConnection::new([]);
         connection.always(
             "Runtime.callFunctionOn",
@@ -630,12 +633,12 @@ mod tests {
             iframe: HopIframe::Key("#frame".to_owned()),
         });
         let local = json!({"x":1,"y":2,"width":1e308,"height":4});
-        let projection = read::for_screenshot(&scope, &path, local.clone()).await?;
+        let projection = read::for_screenshot(&scope, &page, &path, local.clone()).await?;
         let old_error =
             serde_json::from_value::<Option<Rect>>(op_output::to_output(&scope, &projection)?)
                 .err()
                 .ok_or("old JSON handoff must reject overflow")?;
-        let error = super::element_box(&scope, &path, local)
+        let error = super::element_box(&scope, &page, &path, local)
             .await
             .err()
             .ok_or("typed handoff must retain overflow failure")?;

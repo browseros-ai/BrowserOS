@@ -253,7 +253,7 @@ pub(crate) async fn set_input_files(
             continue;
         };
         matched = true;
-        let ready = files.ready(scope, &subject, &located, &input);
+        let ready = files.ready(scope, &page, &subject, &located, &input);
         let Ok(ready) = scope.within(ready).await else {
             break;
         };
@@ -366,6 +366,7 @@ impl InputFiles {
     async fn ready(
         &self,
         scope: &OpScope<'_>,
+        page: &OpPage<'_>,
         subject: &Subject<'_>,
         located: &Resolved,
         input: &FileInput,
@@ -384,7 +385,7 @@ impl InputFiles {
             subject.retry_unless_handle(|| scope.fail(ErrorCode::InvalidInput, NOT_FILE_INPUT))?;
             return Ok(None);
         }
-        let object = match probe::pinned_object(scope, located.world(), input.pin).await {
+        let object = match probe::pinned_object(scope, page, located.world(), input.pin).await {
             Ok(Some(object)) => object,
             Ok(None) => return subject.detached().map(|()| None),
             Err(ProbeFailure::Gone(_)) => return subject.lost(located).map(|()| None),

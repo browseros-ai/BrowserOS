@@ -109,7 +109,7 @@ pub(crate) async fn wait_for_url(
         let probed = |failure| failed(scope, failure);
         let watched = |error| navigation::watch_error(scope, &error);
         if !followed
-            .matches_current(&page, &pattern)
+            .matches_current(scope, &page, &pattern)
             .await
             .map_err(probed)?
         {
@@ -120,7 +120,7 @@ pub(crate) async fn wait_for_url(
                     Err(WatchError::Left) => {
                         followed = follow(pw, &page, scope, frame_id.as_ref()).await?;
                         if followed
-                            .matches_current(&page, &pattern)
+                            .matches_current(scope, &page, &pattern)
                             .await
                             .map_err(probed)?
                         {
@@ -135,7 +135,7 @@ pub(crate) async fn wait_for_url(
                     return Err(scope.fail(ErrorCode::NavigationFailed, &message));
                 }
                 scope.log(format!("  navigated to \"{}\"", navigated.url));
-                if matches(&page, &followed.frame, &pattern, navigated.url)
+                if matches(scope, &page, &followed.frame, &pattern, navigated.url)
                     .await
                     .map_err(probed)?
                 {
@@ -264,17 +264,19 @@ impl Watching {
     /// Whether the document the frame shows now matches `pattern`.
     async fn matches_current(
         &self,
+        scope: &OpScope<'_>,
         page: &OpPage<'_>,
         pattern: &UrlPattern,
     ) -> Result<bool, ProbeFailure> {
         let current = self.watch.url().unwrap_or_default().to_owned();
-        matches(page, &self.frame, pattern, current).await
+        matches(scope, page, &self.frame, pattern, current).await
     }
 }
 
 /// Whether `url` matches `pattern`, as the page's JavaScript decides. A document that went away
 /// under the frame's world is matched in the new document's world.
 pub(crate) async fn matches(
+    scope: &OpScope<'_>,
     page: &OpPage<'_>,
     frame: &TreeFrame,
     pattern: &UrlPattern,
@@ -285,7 +287,7 @@ pub(crate) async fn matches(
         url,
     };
     with_world(page, &frame.endpoint, &frame.place, |world| async move {
-        match probe::call(&world, request).await? {
+        match probe::call(scope, page, &world, request).await? {
             ProbeReply::UrlMatch { matches, .. } => Ok(matches),
             other => Err(unexpected("matchUrl", other)),
         }

@@ -513,7 +513,7 @@ async fn bounding_box(
     let ElementInput { target, strict } = input;
     let reading =
         element_read::read_attached(pw, scope, &target, strict, &Read::BoundingBox).await?;
-    viewport_box::in_main_viewport(scope, &reading.path, reading.value).await
+    viewport_box::in_main_viewport(scope, &reading.page, &reading.path, reading.value).await
 }
 
 async fn count(

@@ -21,7 +21,9 @@ pub(super) enum MaskLocator {
 }
 use crate::op_scope::OpScope;
 use crate::page::OpPage;
-use crate::probe::{self, ParsedSelector, ProbeFailure, ProbeReply, ProbeRequest, ProbeTarget};
+use crate::probe::{
+    self, Control, ParsedSelector, ProbeFailure, ProbePolicy, ProbeReply, ProbeRequest, ProbeTarget,
+};
 use crate::resolve::Resolver;
 use crate::target::{LocatorTarget, Strictness};
 use crate::world::IsolatedWorld;
@@ -29,7 +31,15 @@ use crate::world::IsolatedWorld;
 /// Worlds remembered before applying any overlay, so a lost reply cannot lose its cleanup.
 #[derive(Default)]
 pub(super) struct ScreenshotMasks {
-    worlds: Vec<IsolatedWorld>,
+    /// Retain the operation policy alongside each world: restoration may run after the
+    /// screenshot's scope was dropped, so it uses the restricted cleanup sender.
+    worlds: Vec<MaskedWorld>,
+}
+
+/// One overlay's cleanup authority survives the operation that installed it.
+struct MaskedWorld {
+    world: IsolatedWorld,
+    policy: ProbePolicy,
 }
 
 impl ScreenshotMasks {
@@ -53,12 +63,15 @@ impl ScreenshotMasks {
             let Some(resolved) = resolver.locate().await? else {
                 continue;
             };
-            self.worlds.push(resolved.world().clone());
+            self.worlds.push(MaskedWorld {
+                world: resolved.world().clone(),
+                policy: ProbePolicy::for_cleanup(scope),
+            });
             let request = ProbeRequest::ScreenshotMask {
                 target: ProbeTarget::Chunk(ParsedSelector::of(locator.chunks.last())),
                 color: color.to_owned(),
             };
-            match resolved.call(&request).await {
+            match resolved.call(scope, page, &request).await {
                 Ok(ProbeReply::Value { .. }) | Err(ProbeFailure::Gone(_)) => {}
                 Ok(reply) => return Err(resolver.refused(reply)),
                 Err(failure) => return Err(resolver.failed(failure)),
@@ -68,10 +81,10 @@ impl ScreenshotMasks {
     }
 
     pub(super) async fn restore(&mut self) {
-        future::join_all(self.worlds.iter().map(|world| async {
+        future::join_all(self.worlds.iter().map(|masked| async {
             let _restored = time::timeout(
                 Duration::from_secs(5),
-                probe::call(world, &ProbeRequest::ScreenshotMaskCleanup),
+                probe::cleanup(masked.policy, &masked.world, Control::ScreenshotMaskCleanup),
             )
             .await;
         }))

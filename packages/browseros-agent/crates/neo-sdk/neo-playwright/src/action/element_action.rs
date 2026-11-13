@@ -318,7 +318,8 @@ impl<'a> ElementRunner<'a> {
         };
         let mut reply = self.call(located, &act(target, ScrollPlan::None)).await?;
         if scroll && let Some(ProbeReply::Measured { pin, .. }) = reply {
-            let scrolled = protocol_scroll::scroll_if_needed(self.scope, located.world(), pin);
+            let scrolled =
+                protocol_scroll::scroll_if_needed(self.scope, self.page, located.world(), pin);
             let Ok(scrolled) = self.scope.within(scrolled).await else {
                 return Err(self.scope.timed_out(ErrorCode::NoMatch));
             };

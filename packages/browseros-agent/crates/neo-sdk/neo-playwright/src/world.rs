@@ -10,7 +10,7 @@
 //!          │                                 contexts (watched from before the create)
 //!          └─ install_function(engine, boot { frameSeq, epoch })
 //!               → described { seq, retired? }   a re-key's old seq is never handed out again
-//!  every later call ── probe::call(world)    Runtime.callFunctionOn on that handle
+//!  every later call ── probe::call(scope, page, world)    Runtime.callFunctionOn on that handle
 //!  a call fails Gone ── FrameWorlds::invalidate: the cell goes and the seq retires
 //! ```
 //!

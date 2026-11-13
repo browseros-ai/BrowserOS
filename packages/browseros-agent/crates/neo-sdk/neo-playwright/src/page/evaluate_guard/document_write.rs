@@ -115,7 +115,7 @@ impl<'op> DocumentWrite<'op> {
         let mut retried = false;
         loop {
             let sent = scope.send_effect()?;
-            match write_document(&world, html, &sent).await {
+            match write_document(scope, &self.page, &world, html, &sent).await {
                 Ok(ProbeReply::Replaced) => return Ok(()),
                 Ok(other) => {
                     return Err(resolve::failed(
@@ -151,6 +151,8 @@ async fn bounded<T>(
 /// The probe's `setContent`, which replaces the frame's document, sent with the user gesture
 /// upstream's utility-world write carries.
 async fn write_document(
+    scope: &OpScope<'_>,
+    page: &OpPage<'_>,
     world: &IsolatedWorld,
     html: &str,
     _sent: &Sent<'_>,
@@ -158,7 +160,7 @@ async fn write_document(
     let request = ProbeRequest::SetContent {
         html: html.to_owned(),
     };
-    probe::call_with_gesture(world, &request).await
+    probe::call_with_gesture(scope, page, world, &request).await
 }
 
 #[cfg(test)]

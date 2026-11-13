@@ -125,7 +125,7 @@ it('tests that resolve pins one element, or reports none, strict or not-a-frame'
   probe.boot({ frameSeq: 0, epoch: 'a' })
   expect(probe.call(resolveRequest('#pw'))).toMatchObject({
     kind: 'element',
-    preview: '<input id="pw" type="password" value="hunter2"/>',
+    preview: '<input id="pw" type="password" value="<7 characters>"/>',
   })
   expect(
     probe.call(resolveRequest('button', { strictness: 'firstMatch' })),
@@ -257,12 +257,41 @@ it('tests that an unknown request is internal', () => {
   expect(probe.call({ op: 'teleport' })).toEqual({
     kind: 'error',
     class: 'internal',
-    message: 'not a probe request',
+    message: 'not a probe call',
   })
   expect(probe.call('describe')).toMatchObject({
     kind: 'error',
     class: 'internal',
   })
+})
+
+it('rejects missing or malformed common policy before reading a private snapshot', () => {
+  const page = open()
+  page.boot({ frameSeq: 0, epoch: 'a' })
+  const request = {
+    op: 'snapshot',
+    root: 'document',
+    mode: 'ai',
+    conformance: true,
+  }
+  for (const call of [
+    request,
+    { request },
+    { request, policy: { conformance: 'true', mayHaveOtherFrame: false } },
+  ]) {
+    expect(globalThis.__neoProbe?.call(call)).toMatchObject({
+      kind: 'error',
+      class: 'internal',
+    })
+  }
+  expect(
+    globalThis.__neoProbe?.call({
+      request,
+      policy: { conformance: false, mayHaveOtherFrame: false },
+    }),
+  ).not.toEqual(
+    expect.objectContaining({ class: 'internal', message: 'not a probe call' }),
+  )
 })
 
 it("tests that read resolves and reads one element's textContent, strictly or first", () => {

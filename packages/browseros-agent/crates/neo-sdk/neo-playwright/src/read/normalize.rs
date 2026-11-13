@@ -84,7 +84,7 @@ pub(crate) async fn normalize(
         ProbeReply::None { .. } | ProbeReply::Detached => return Err(no_element()),
         other => return Err(resolver.refused(other)),
     };
-    let mut parts = frame_selectors(scope, &path, &input.selector).await?;
+    let mut parts = frame_selectors(scope, &page, &path, &input.selector).await?;
     parts.push(element);
     Ok(Normalized {
         // Translate only the op reply; the probe's `selector` protocol stays unchanged.
@@ -97,6 +97,7 @@ pub(crate) async fn normalize(
 /// element cannot be found again.
 async fn frame_selectors(
     scope: &OpScope<'_>,
+    page: &OpPage<'_>,
     path: &FramePath,
     selector: &str,
 ) -> Result<Vec<String>, PlaywrightError> {
@@ -112,7 +113,7 @@ async fn frame_selectors(
             .iframe
             .target()
             .map_err(|error| scope.fail(ErrorCode::Internal, &error.to_string()))?;
-        match probe::call(&hop.parent, &ProbeRequest::Selector { target }).await {
+        match probe::call(scope, page, &hop.parent, &ProbeRequest::Selector { target }).await {
             Ok(ProbeReply::Selector { selector }) => parts.push(selector),
             Ok(ProbeReply::None { .. } | ProbeReply::Detached) | Err(ProbeFailure::Gone(_)) => {
                 return Err(unable());

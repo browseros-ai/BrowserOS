@@ -88,7 +88,8 @@ mod tests {
             input.call,
             CallHeader {
                 api: Some("page.click".to_owned()),
-                timeout_ms: Some(250)
+                timeout_ms: Some(250),
+                conformance: false,
             }
         );
         assert_eq!(input.args.0.get("strict"), Some(&json!("firstMatch")));
@@ -96,6 +97,21 @@ mod tests {
             !input.args.0.contains_key("call"),
             "the family never sees the header"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn output_policy_is_private_by_default_and_decodes_only_a_boolean() -> Result<(), Box<dyn Error>>
+    {
+        let normal = OpInput::decode(click()?, json!({}))?;
+        assert!(!normal.call.conformance);
+        let upstream = OpInput::decode(click()?, json!({ "call": { "conformance": true } }))?;
+        assert!(upstream.call.conformance);
+        for invalid in [json!("true"), json!(1), json!(null)] {
+            assert!(
+                OpInput::decode(click()?, json!({ "call": { "conformance": invalid } })).is_err()
+            );
+        }
         Ok(())
     }
 

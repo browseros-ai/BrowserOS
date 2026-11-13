@@ -1,6 +1,6 @@
 {
-  "protocol": 36,
-  "callFunction": "function (request, root, ...nodes) { const probe = globalThis.__neoProbe; return probe ? probe.call(request, root ?? this, nodes) : { kind: \"uninstalled\" }; }",
+  "protocol": 37,
+  "callFunction": "function (call, root, ...nodes) { const probe = globalThis.__neoProbe; return probe ? probe.call(call, root ?? this, nodes) : { kind: \"uninstalled\" }; }",
   "replyKinds": {
     "describe": [
       "described"
@@ -109,6 +109,65 @@
   "anyRequest": [
     "error",
     "uninstalled"
+  ],
+  "calls": [
+    {
+      "request": {
+        "op": "snapshot",
+        "root": "document",
+        "mode": "ai"
+      },
+      "policy": {
+        "conformance": false,
+        "mayHaveOtherFrame": true
+      }
+    },
+    {
+      "request": {
+        "op": "expect",
+        "target": {
+          "chunk": {
+            "parts": [
+              {
+                "name": "css",
+                "body": [
+                  {
+                    "simples": [
+                      {
+                        "selector": {
+                          "css": "#greeting",
+                          "functions": []
+                        },
+                        "combinator": ""
+                      }
+                    ]
+                  }
+                ],
+                "source": "#greeting"
+              }
+            ]
+          }
+        },
+        "strictness": "strict",
+        "frameVisible": true,
+        "params": {
+          "expression": "to.have.text",
+          "expectedText": [
+            {
+              "string": "Welcome",
+              "matchSubstring": false,
+              "normalizeWhiteSpace": true
+            }
+          ],
+          "isNot": false,
+          "useInnerText": false
+        }
+      },
+      "policy": {
+        "conformance": true,
+        "mayHaveOtherFrame": false
+      }
+    }
   ],
   "requests": [
     {
@@ -978,8 +1037,7 @@
     {
       "op": "snapshot",
       "root": "document",
-      "mode": "ai",
-      "mayHaveOtherFrame": false
+      "mode": "ai"
     },
     {
       "op": "snapshot",
@@ -1024,8 +1082,7 @@
     {
       "op": "snapshot",
       "root": "document",
-      "mode": "ai",
-      "conformance": true
+      "mode": "ai"
     },
     {
       "op": "snapshot",
@@ -1052,8 +1109,7 @@
           ]
         }
       },
-      "mode": "default",
-      "conformance": true
+      "mode": "default"
     },
     {
       "op": "expect",
@@ -1185,19 +1241,19 @@
   "replies": [
     {
       "kind": "described",
-      "protocol": 36,
+      "protocol": 37,
       "seq": 0,
       "url": "https://example.com/"
     },
     {
       "kind": "described",
-      "protocol": 36,
+      "protocol": 37,
       "seq": 347,
       "url": "https://pay.example/frame"
     },
     {
       "kind": "described",
-      "protocol": 36,
+      "protocol": 37,
       "seq": 512340,
       "url": "https://example.com/",
       "retired": 0

@@ -59,7 +59,6 @@
     "locator.ariaSnapshot": [
       "boxes",
       "clickable",
-      "conformance",
       "depth"
     ],
     "locator.blur": [],
@@ -213,7 +212,6 @@
     "page.ariaSnapshot": [
       "boxes",
       "clickable",
-      "conformance",
       "depth"
     ],
     "page.close": [],
@@ -1095,7 +1093,8 @@
       {
         "call": {
           "api": "locator.ariaSnapshotJSON",
-          "timeoutMs": 30000
+          "timeoutMs": 30000,
+          "conformance": true
         },
         "target": {
           "$neo": "locator",
@@ -1130,8 +1129,7 @@
           "display": "locator('body')"
         },
         "strict": "strict",
-        "mode": "ai",
-        "conformance": true
+        "mode": "ai"
       }
     ],
     "locator.blur": [
@@ -3116,14 +3114,14 @@
       {
         "call": {
           "api": "page.ariaSnapshot",
-          "timeoutMs": 30000
+          "timeoutMs": 30000,
+          "conformance": true
         },
         "page": {
           "$neo": "page",
           "tab": 1007
         },
-        "mode": "default",
-        "conformance": true
+        "mode": "default"
       }
     ],
     "page.close": [

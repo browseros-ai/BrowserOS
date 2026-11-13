@@ -66,7 +66,7 @@ pub(crate) async fn point(
     pin: Pin,
     offset: Option<Point>,
 ) -> Result<Placement, ProbeFailure> {
-    let Some(object) = probe::pinned_object(scope, located.world(), pin).await? else {
+    let Some(object) = probe::pinned_object(scope, page, located.world(), pin).await? else {
         return Ok(Placement::Detached);
     };
     let Some(origin) = target_origin(located).await? else {

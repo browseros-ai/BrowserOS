@@ -350,6 +350,8 @@ it('suppresses both CSS content reads for private controls and their pseudo-elem
           const style = getComputedStyle(secret, pseudo)
           expect(style.content).toBe('none')
           expect(style.getPropertyValue('content')).toBe('none')
+          expect(style.getPropertyValue('CONTENT')).toBe('none')
+          expect(style.getPropertyValue('CoNtEnT')).toBe('none')
           expect(style.cursor).toBe('text')
           expect(style.display).toBe('inline-block')
           expect(style.getPropertyValue('display')).toBe('inline-block')
@@ -1173,4 +1175,52 @@ it('keeps mark-only reads masked after the page removes its document element', a
   expect(withMarkedFieldsMasked(() => 'walked')).toBe('walked')
   expect(withMarkedFieldsMasked(() => typed.value)).toBe('••••••••••••••')
   expect(typed.value).toBe('RootlessCanary')
+})
+
+it('never lowers a full walk to mark-only when diagnostic scopes nest', async () => {
+  const typed = field('input', { type: 'text' }, 'MarkedCanary')
+  const declared = field('input', { type: 'password' }, 'DeclaredCanary')
+  page.document.body.append(typed, declared)
+  const world = {
+    pins: { live: (pin: number) => (pin === 92 ? typed : undefined) },
+    injected: { selectText: () => 'selected' },
+  } as unknown as World
+  await privateStep(world, {
+    op: 'private',
+    pin: 92,
+    step: { kind: 'focus', text: 'MarkedCanary', spaced: false },
+  })
+  privateStep(world, { op: 'private', pin: 92, step: { kind: 'forget' } })
+  expect(withMarkedFieldsMasked(() => declared.value)).toBe('DeclaredCanary')
+  expect(
+    masked(() => withMarkedFieldsMasked(() => [typed.value, declared.value])),
+  ).toEqual(['••••••••••••', '••••••••••••••'])
+  expect(withMarkedFieldsMasked(() => declared.value)).toBe('DeclaredCanary')
+  expect(declared.value).toBe('DeclaredCanary')
+})
+
+it("collects a detached marked field's own foreign prototype for a mark-only read", async () => {
+  const { element, prototype } = retainedField(
+    'input',
+    { type: 'text' },
+    'MarkedCanary',
+  )
+  page.document.body.append(element)
+  const world = {
+    pins: { live: (pin: number) => (pin === 93 ? element : undefined) },
+    injected: { selectText: () => 'selected' },
+  } as unknown as World
+  await privateStep(world, {
+    op: 'private',
+    pin: 93,
+    step: { kind: 'focus', text: 'MarkedCanary', spaced: false },
+  })
+  privateStep(world, { op: 'private', pin: 93, step: { kind: 'forget' } })
+  element.remove()
+  const before = Object.getOwnPropertyDescriptors(prototype)
+  expect(withMarkedFieldsMasked(() => element.value, element)).toBe(
+    '••••••••••••',
+  )
+  expect(element.value).toBe('MarkedCanary')
+  expect(Object.getOwnPropertyDescriptors(prototype)).toEqual(before)
 })

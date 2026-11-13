@@ -108,7 +108,9 @@ it('tests that a snapshot whose clickable marking throws is still taken, as upst
 })
 
 it('never installs any field or text override under conformance', () => {
-  const probe = booted()
+  page = openProbePage(PAGE, { conformance: true, mayHaveOtherFrame: true })
+  page.boot({ frameSeq: 3, epoch: 'a' })
+  const probe = page
   showFixture(probe)
   const replacements: unknown[] = []
   const define = Object.defineProperty
@@ -128,7 +130,6 @@ it('never installs any field or text override under conformance', () => {
       op: 'snapshot',
       root: 'document',
       mode: 'ai',
-      conformance: true,
     })
     expect(result).toMatchObject({ kind: 'snapshot' })
     expect(JSON.stringify(result)).toContain('"text":"hunter2"')
@@ -223,25 +224,28 @@ function pinOf(probe: ProbePage, selector: string): number {
 }
 
 it("tests that a box the entry typed into prints bullets in the page's snapshot, with and without the conformance switch (rulings R14 and R44)", async () => {
-  page = openProbePage(MARKED_PAGE)
-  page.boot({ frameSeq: 3, epoch: 'a' })
-  showFixture(page)
-  const probe = page
-  const box = pinOf(probe, '#code')
-  // The entry's focus step marks the box before its first character (private-entry.ts).
-  await probe.call({
-    op: 'private',
-    pin: box,
-    step: { kind: 'focus', text: 'CANARY-1', spaced: false },
-  })
-  probe.call({ op: 'private', pin: box, step: { kind: 'forget' } })
   for (const conformance of [false, true]) {
+    page?.close()
+    page = openProbePage(MARKED_PAGE, {
+      conformance,
+      mayHaveOtherFrame: true,
+    })
+    page.boot({ frameSeq: 3, epoch: 'a' })
+    showFixture(page)
+    const probe = page
+    const box = pinOf(probe, '#code')
+    // The entry marks the box before typing. Policy belongs to the common captured envelope.
+    await probe.call({
+      op: 'private',
+      pin: box,
+      step: { kind: 'focus', text: 'CANARY-1', spaced: false },
+    })
+    probe.call({ op: 'private', pin: box, step: { kind: 'forget' } })
     const printed = JSON.stringify(
       probe.call({
         op: 'snapshot',
         root: 'document',
         mode: 'ai',
-        ...(conformance ? { conformance } : {}),
       }),
     )
     expect(printed).not.toContain('CANARY-1')

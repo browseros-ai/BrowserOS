@@ -6,7 +6,9 @@ use tokio::runtime::Handle;
 use tokio::sync::Mutex;
 
 use crate::input::TabInput;
-use crate::probe::{self, ProbeFailure, ProbeReply, ProbeRequest};
+use crate::op_scope::OpScope;
+use crate::page::OpPage;
+use crate::probe::{self, Control, ProbeFailure, ProbePolicy, ProbeReply, ProbeRequest};
 use crate::resolve;
 use crate::world::IsolatedWorld;
 
@@ -35,11 +37,14 @@ pub(crate) struct ArmGuard {
     input: Arc<Mutex<TabInput>>,
     /// The tab's pointer scale, for the owed releases (each carries its own session).
     pointer_scale: f64,
+    /// A spawned cleanup cannot retain the operation's borrowed scope or admitted page.
+    policy: ProbePolicy,
 }
 
 impl ArmGuard {
     /// The interceptor `act { arm }` armed with `token` in `world`.
     pub(crate) fn new(
+        scope: &OpScope<'_>,
         world: IsolatedWorld,
         token: u32,
         input: Arc<Mutex<TabInput>>,
@@ -50,6 +55,7 @@ impl ArmGuard {
             token,
             input,
             pointer_scale,
+            policy: ProbePolicy::for_cleanup(scope),
         }
     }
 
@@ -57,14 +63,18 @@ impl ArmGuard {
     /// was in the way, from the trusted event. Once the probe answered (with a verdict or an
     /// error), or the world is gone, there is nothing left to disarm; any other failure leaves
     /// it to `Drop`.
-    pub(crate) async fn verdict(&mut self) -> Result<ProbeReply, ProbeFailure> {
+    pub(crate) async fn verdict(
+        &mut self,
+        scope: &OpScope<'_>,
+        page: &OpPage<'_>,
+    ) -> Result<ProbeReply, ProbeFailure> {
         let Some(world) = self.world.clone() else {
             return Err(ProbeFailure::Broken(
                 "the interceptor's verdict was already read".to_owned(),
             ));
         };
         let request = ProbeRequest::Verdict { token: self.token };
-        let reply = resolve::ask(&world, &request, None).await;
+        let reply = resolve::ask(scope, page, &world, &request, None).await;
         if matches!(reply, Ok(_) | Err(ProbeFailure::Gone(_))) {
             self.world = None;
         }
@@ -86,13 +96,14 @@ impl ArmGuard {
         let Ok(runtime) = Handle::try_current() else {
             return;
         };
-        let request = ProbeRequest::Verdict { token: self.token };
+        let control = Control::Verdict { token: self.token };
+        let policy = self.policy;
         let input = Arc::clone(&self.input);
         let pointer_scale = self.pointer_scale;
         drop(runtime.spawn(async move {
             flush_when_idle(&input, pointer_scale).await;
             // Best effort: a world that is gone took its interceptor with it.
-            let _stopped = probe::call(&world, &request).await;
+            let _stopped = probe::cleanup(policy, &world, control).await;
         }));
     }
 }
@@ -109,6 +120,7 @@ impl Drop for ArmGuard {
             world,
             Arc::clone(&self.input),
             self.pointer_scale,
+            self.policy,
         )));
     }
 }
@@ -126,9 +138,14 @@ async fn flush_when_idle(input: &Mutex<TabInput>, pointer_scale: f64) {
     clippy::await_holding_invalid_type,
     reason = "the releases and the disarm run while no op holds the tab's input; see ArmGuard"
 )]
-async fn disarm_when_idle(world: IsolatedWorld, input: Arc<Mutex<TabInput>>, pointer_scale: f64) {
+async fn disarm_when_idle(
+    world: IsolatedWorld,
+    input: Arc<Mutex<TabInput>>,
+    pointer_scale: f64,
+    policy: ProbePolicy,
+) {
     let mut tab = input.lock().await;
     tab.flush_owed(pointer_scale).await;
     // Best effort: a world that is gone took its interceptor with it.
-    let _disarmed = probe::call(&world, &ProbeRequest::Disarm).await;
+    let _disarmed = probe::cleanup(policy, &world, Control::Disarm).await;
 }

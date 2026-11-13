@@ -679,6 +679,7 @@ mod tests {
             CallHeader {
                 api: Some("expect.toHaveValue".to_owned()),
                 timeout_ms: Some(5000),
+                conformance: false,
             },
         ))
     }
@@ -916,6 +917,7 @@ mod tests {
             CallHeader {
                 api: Some("expect.toBeVisible".to_owned()),
                 timeout_ms: Some(timeout_ms),
+                conformance: false,
             },
         ))
     }

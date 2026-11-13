@@ -646,6 +646,7 @@ impl<'a> PointerRunner<'a> {
                 match self.call(located, &arm).await? {
                     Called::Reply(ProbeReply::Armed { .. }) => {
                         guard = Some(ArmGuard::new(
+                            self.scope,
                             located.world().clone(),
                             token,
                             Arc::clone(self.page.state().input()),
@@ -791,7 +792,7 @@ impl<'a> PointerRunner<'a> {
                     // a navigation for a landed input: the frame would not answer until it ends,
                     // which may be never. The guard is then abandoned, not awaited.
                     let frame = located.world().frame().clone();
-                    let read = self.scope.within(guard.verdict());
+                    let read = self.scope.within(guard.verdict(self.scope, self.page));
                     let navigating = async {
                         match navigations.as_mut() {
                             Some(watch) => watch.pending_in(&frame).await,
@@ -978,7 +979,8 @@ impl<'a> PointerRunner<'a> {
         req: &Requirements,
         pin: Pin,
     ) -> Result<Called, PlaywrightError> {
-        let scrolled = protocol_scroll::scroll_if_needed(self.scope, located.world(), pin);
+        let scrolled =
+            protocol_scroll::scroll_if_needed(self.scope, self.page, located.world(), pin);
         let Ok(scrolled) = self.scope.within(scrolled).await else {
             return Ok(Called::Expired);
         };
@@ -1009,6 +1011,7 @@ impl<'a> PointerRunner<'a> {
     ) -> Result<Placed, PlaywrightError> {
         let projected = frame_projection::project(
             self.scope,
+            self.page,
             located.path(),
             measured.point,
             !action.force && measured.in_view,

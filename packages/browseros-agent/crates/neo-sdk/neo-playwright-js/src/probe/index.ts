@@ -18,6 +18,7 @@ import { RefMap } from './aria-ref'
 import { documentText, replaceDocument } from './document'
 import { edit } from './edit'
 import { expect } from './expect'
+import { FailureOutput } from './failure-output'
 import { armInput, inputArrived } from './files'
 import { privateStep } from './private-entry'
 import { look } from './private-look'
@@ -27,6 +28,7 @@ import {
   type ErrorClass,
   type ErrorReply,
   PROTOCOL,
+  type ProbeCall,
   type ProbeRequest,
   type ReplyTo,
   type RequestOf,
@@ -59,6 +61,7 @@ type Handler<O extends Routed> = (
   request: RequestOf<O>,
   root: Node | undefined,
   nodes: readonly unknown[],
+  output: FailureOutput,
 ) => ReplyTo<O> | Promise<ReplyTo<O>>
 type Handlers = { [O in Routed]: Handler<O> }
 
@@ -110,13 +113,19 @@ function createProbe() {
   /** One request's reply in `booted`, the error replies included. */
   function answer(
     booted: World,
-    request: ProbeRequest,
+    call: ProbeCall,
     scope: Node | undefined,
     nodes: readonly unknown[],
   ): unknown {
     try {
+      const { request, policy } = call
       if (request.op === 'pinned') return pinned(booted, request)
-      const reply = dispatch(booted, request.op, request, scope, nodes)
+      const output = new FailureOutput(booted, policy)
+      // Only synchronous engine work owns these hooks. Async handlers retain output for
+      // later diagnostics, through its formatter or tree scope; no mutable mode survives here.
+      const reply = output.run(() =>
+        dispatch(booted, request.op, request, scope, nodes, output),
+      )
       // CDP's `awaitPromise` settles a promise for Rust, so a handler that throws after
       // its first await is classified here, as a synchronous one is below.
       return reply instanceof Promise ? reply.catch(thrownReply) : reply
@@ -146,16 +155,15 @@ function createProbe() {
         : { ...described(world), retired }
     },
 
-    call(request: unknown, root?: unknown, nodes?: unknown) {
+    call(call: unknown, root?: unknown, nodes?: unknown) {
       const booted = world
       if (!booted) return UNINSTALLED
-      if (!hasKnownOp(request))
-        return errorReply('internal', 'not a probe request')
+      if (!isProbeCall(call)) return errorReply('internal', 'not a probe call')
       // On a context call CALL_FUNCTION passes the world's global as `root`.
       const scope = root instanceof Node ? root : undefined
       // The nodes after the root, in Rust's order; each handler checks what it reads.
       const handed: readonly unknown[] = Array.isArray(nodes) ? nodes : []
-      return answer(booted, request, scope, handed)
+      return answer(booted, call, scope, handed)
     },
   }
 }
@@ -167,9 +175,24 @@ function dispatch<O extends Routed>(
   request: RequestOf<O>,
   root: Node | undefined,
   nodes: readonly unknown[],
+  output: FailureOutput,
 ): ReplyTo<O> | Promise<ReplyTo<O>> {
   const handler: Handler<O> = HANDLERS[op]
-  return handler(world, request, root, nodes)
+  return handler(world, request, root, nodes, output)
+}
+
+/** The Rust-owned call envelope is the only policy entry; malformed input cannot bypass it. */
+function isProbeCall(value: unknown): value is ProbeCall {
+  if (typeof value !== 'object' || value === null) return false
+  const request: unknown = Reflect.get(value, 'request')
+  const policy: unknown = Reflect.get(value, 'policy')
+  return (
+    hasKnownOp(request) &&
+    typeof policy === 'object' &&
+    policy !== null &&
+    typeof Reflect.get(policy, 'conformance') === 'boolean' &&
+    typeof Reflect.get(policy, 'mayHaveOtherFrame') === 'boolean'
+  )
 }
 
 /**

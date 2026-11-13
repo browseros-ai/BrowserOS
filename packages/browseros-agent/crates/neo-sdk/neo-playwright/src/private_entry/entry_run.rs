@@ -36,7 +36,7 @@ use crate::private_entry::{
     BoxState, Entry, EntryCode, EntryError, EntryOutcome, FocusState, LookField, PageSecret,
     PrivateAnswer, PrivateField, PrivateStep, Sending, entry,
 };
-use crate::probe::{self, ProbeFailure, ProbeReply, ProbeRequest};
+use crate::probe::{self, Control, ProbeFailure, ProbePolicy, ProbeReply, ProbeRequest};
 use crate::world::{IsolatedWorld, Pin};
 use crate::{ErrorCode, Playwright, PlaywrightError, Refusal};
 
@@ -274,7 +274,7 @@ impl<'a> EntryRun<'a> {
             .and_then(|max| usize::try_from(max).ok());
         let text = PageSecret::fitting(&field.value, fits);
         let spaced = field.spec.spaced;
-        let guard = ForgetGuard::new(&world, pin);
+        let guard = ForgetGuard::new(self.scope, &world, pin);
 
         let box_at = BoxAt {
             world: &world,
@@ -282,7 +282,8 @@ impl<'a> EntryRun<'a> {
             session: &session,
             own_frame,
         };
-        self.focus_step(sent, input, &box_at, &text, spaced).await?;
+        self.focus_step(page, sent, input, &box_at, &text, spaced)
+            .await?;
         // A box with no size that already holds text is emptied by a key before the first
         // character (ruling R51): the browser does not count a selection in such a box against
         // its maxlength, so with a full box the first key empties it and its own character is
@@ -290,18 +291,19 @@ impl<'a> EntryRun<'a> {
         // focus step's selection is replaced by the first character, and a page that submits on
         // its first input event must never see an empty box (B11v).
         if !looked.facts.sized && !looked.facts.empty {
-            self.empty_box(sent, input, &box_at, &text, spaced).await?;
+            self.empty_box(page, sent, input, &box_at, &text, spaced)
+                .await?;
         }
 
         let seen = if field.spec.keys {
-            self.keys(sent, input, &session, &world, pin, at, &text, spaced)
+            self.keys(page, sent, input, &session, &world, pin, at, &text, spaced)
                 .await?
         } else {
             self.insert(sent, input, &session, at, &text).await?;
             // The box held the focus in the check right before the one insertion.
             true
         };
-        self.read_back(&world, pin, seen, guard).await
+        self.read_back(page, &world, pin, seen, guard).await
     }
 
     /// The focus step (design section 5.4): marks the box, arms its listener, focuses it and
@@ -314,6 +316,7 @@ impl<'a> EntryRun<'a> {
     /// typed with the press, 9 of 10 sent without it).
     async fn focus_step(
         &self,
+        page: &OpPage<'_>,
         sent: &Sent<'_>,
         input: &mut PageInput,
         box_at: &BoxAt<'_>,
@@ -324,7 +327,7 @@ impl<'a> EntryRun<'a> {
             text: text.clone(),
             spaced,
         };
-        match self.step(box_at.world, box_at.pin, focus).await? {
+        match self.step(page, box_at.world, box_at.pin, focus).await? {
             Some(PrivateAnswer::Focus {
                 focus: FocusState::Held,
             }) if !box_at.own_frame => Ok(()),
@@ -332,7 +335,7 @@ impl<'a> EntryRun<'a> {
                 focus: FocusState::Held | FocusState::NoDocumentFocus,
             }) => {
                 self.press(sent, input, box_at.session, "Shift").await?;
-                if self.focused(box_at.world, box_at.pin).await? == FocusState::Held {
+                if self.focused(page, box_at.world, box_at.pin).await? == FocusState::Held {
                     Ok(())
                 } else {
                     Err(self.stop(EntryCode::NotFocused))
@@ -350,6 +353,7 @@ impl<'a> EntryRun<'a> {
     /// with `box_not_cleared`; one whose focus cannot be held, `not_focused`.
     async fn empty_box(
         &self,
+        page: &OpPage<'_>,
         sent: &Sent<'_>,
         input: &mut PageInput,
         box_at: &BoxAt<'_>,
@@ -358,19 +362,21 @@ impl<'a> EntryRun<'a> {
     ) -> Result<(), Stop> {
         for key in ["Delete", "Backspace"] {
             if key == "Backspace" {
-                self.focus_step(sent, input, box_at, text, spaced).await?;
+                self.focus_step(page, sent, input, box_at, text, spaced)
+                    .await?;
             }
             self.scope.recheck().map_err(|error| self.refused(&error))?;
             self.press(sent, input, box_at.session, key).await?;
-            let mut emptied = self.emptied(box_at).await?;
+            let mut emptied = self.emptied(page, box_at).await?;
             // Only a focus that went elsewhere is taken back: a fresh focus step re-arms the
             // box's listener, which would forget a submit or an unload the key set off.
             if matches!(
                 emptied.focus,
                 FocusState::Elsewhere | FocusState::NoDocumentFocus
             ) {
-                self.focus_step(sent, input, box_at, text, spaced).await?;
-                emptied = self.emptied(box_at).await?;
+                self.focus_step(page, sent, input, box_at, text, spaced)
+                    .await?;
+                emptied = self.emptied(page, box_at).await?;
             }
             match emptied.focus {
                 FocusState::Held if emptied.empty => return Ok(()),
@@ -384,14 +390,14 @@ impl<'a> EntryRun<'a> {
     }
 
     /// What the box holds and where the focus is, after a key meant to empty it.
-    async fn emptied(&self, box_at: &BoxAt<'_>) -> Result<Emptied, Stop> {
-        let focus = self.focused(box_at.world, box_at.pin).await?;
+    async fn emptied(&self, page: &OpPage<'_>, box_at: &BoxAt<'_>) -> Result<Emptied, Stop> {
+        let focus = self.focused(page, box_at.world, box_at.pin).await?;
         let none = PrivateStep::Holds {
             text: PageSecret::empty(),
             spaced: false,
         };
         let empty = matches!(
-            self.step(box_at.world, box_at.pin, none).await?,
+            self.step(page, box_at.world, box_at.pin, none).await?,
             Some(PrivateAnswer::Holds { holds: true })
         );
         Ok(Emptied { empty, focus })
@@ -424,6 +430,7 @@ impl<'a> EntryRun<'a> {
     )]
     async fn keys(
         &mut self,
+        page: &OpPage<'_>,
         sent: &Sent<'_>,
         input: &mut PageInput,
         session: &ProtocolSession,
@@ -445,17 +452,17 @@ impl<'a> EntryRun<'a> {
                     spaced,
                 };
                 seen = matches!(
-                    self.step(world, pin, holds).await?,
+                    self.step(page, world, pin, holds).await?,
                     Some(PrivateAnswer::Holds { holds: true })
                 );
             }
-            match self.focused(world, pin).await? {
+            match self.focused(page, world, pin).await? {
                 FocusState::Held => {}
                 _ if index == 0 => return Err(self.stop(EntryCode::NotFocused)),
                 // The form left with part of the value.
                 FocusState::Moving => return Err(self.stop(EntryCode::PageMoved)),
                 FocusState::NoDocumentFocus | FocusState::Elsewhere | FocusState::Gone => {
-                    self.mark_focused(world, pin).await;
+                    self.mark_focused(page, world, pin).await;
                     return Err(self.stop(EntryCode::FocusLost));
                 }
             }
@@ -475,13 +482,14 @@ impl<'a> EntryRun<'a> {
     /// forgotten the value, and the guard stands down.
     async fn read_back(
         &mut self,
+        page: &OpPage<'_>,
         world: &IsolatedWorld,
         pin: Pin,
         seen: bool,
         guard: ForgetGuard,
     ) -> Result<BoxEnd, Stop> {
         let request = private(pin, PrivateStep::ReadBack);
-        let reading = look_op::within(self.scope, probe::call(world, &request));
+        let reading = look_op::within(self.scope, probe::call(self.scope, page, world, &request));
         let read = match self.navigation.as_mut() {
             Some(navigation) => navigation.race(reading).await,
             None => Some(reading.await),
@@ -544,26 +552,34 @@ impl<'a> EntryRun<'a> {
     /// Marks the text control holding the focus in the box's document, when it is not the
     /// box, so a snapshot masks it as well (ruling R26). Best effort: the entry is stopping
     /// either way, and its answer does not wait on this.
-    async fn mark_focused(&self, world: &IsolatedWorld, pin: Pin) {
-        let _marked = self.step(world, pin, PrivateStep::MarkFocused).await;
+    async fn mark_focused(&self, page: &OpPage<'_>, world: &IsolatedWorld, pin: Pin) {
+        let _marked = self.step(page, world, pin, PrivateStep::MarkFocused).await;
     }
 
-    async fn focused(&self, world: &IsolatedWorld, pin: Pin) -> Result<FocusState, Stop> {
-        Ok(match self.step(world, pin, PrivateStep::Focused).await? {
-            Some(PrivateAnswer::Focus { focus }) => focus,
-            _ => FocusState::Gone,
-        })
+    async fn focused(
+        &self,
+        page: &OpPage<'_>,
+        world: &IsolatedWorld,
+        pin: Pin,
+    ) -> Result<FocusState, Stop> {
+        Ok(
+            match self.step(page, world, pin, PrivateStep::Focused).await? {
+                Some(PrivateAnswer::Focus { focus }) => focus,
+                _ => FocusState::Gone,
+            },
+        )
     }
 
     /// One step on the box; `None` when the box or its document is gone.
     async fn step(
         &self,
+        page: &OpPage<'_>,
         world: &IsolatedWorld,
         pin: Pin,
         step: PrivateStep,
     ) -> Result<Option<PrivateAnswer>, Stop> {
         let request = private(pin, step);
-        let called = look_op::within(self.scope, probe::call(world, &request))
+        let called = look_op::within(self.scope, probe::call(self.scope, page, world, &request))
             .await
             .map_err(|code| self.stop(code))?;
         match called {
@@ -684,12 +700,15 @@ fn burst_code(failure: &input::BurstFailure) -> EntryCode {
 /// future) sends `forget` from a spawned task, since `Drop` cannot await.
 struct ForgetGuard {
     armed: Option<(IsolatedWorld, Pin)>,
+    /// Cleanup outlives the entry's scope, retaining only its immutable output authority.
+    policy: ProbePolicy,
 }
 
 impl ForgetGuard {
-    fn new(world: &IsolatedWorld, pin: Pin) -> Self {
+    fn new(scope: &OpScope<'_>, world: &IsolatedWorld, pin: Pin) -> Self {
         Self {
             armed: Some((world.clone(), pin)),
+            policy: ProbePolicy::for_cleanup(scope),
         }
     }
 
@@ -707,8 +726,9 @@ impl Drop for ForgetGuard {
         let Ok(runtime) = Handle::try_current() else {
             return;
         };
+        let policy = self.policy;
         drop(runtime.spawn(async move {
-            let _forgot = probe::call(&world, &private(pin, PrivateStep::Forget)).await;
+            let _forgot = probe::cleanup(policy, &world, Control::Forget { pin }).await;
         }));
     }
 }

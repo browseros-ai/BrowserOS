@@ -246,8 +246,9 @@ async fn call(
         write(&page, scope, &endpoint, &place, request).await?
     } else {
         // A read changes nothing, so with_world may send it again in a replaced document.
-        with_world(&page, &endpoint, &place, |world| async move {
-            probe::call(&world, request).await
+        let page = &page;
+        with_world(page, &endpoint, &place, |world| async move {
+            probe::call(scope, page, &world, request).await
         })
         .await
         .map_err(|failure| failed(scope, failure))?
@@ -293,7 +294,7 @@ async fn write(
     let mut retried = false;
     loop {
         let sent = scope.send_effect()?;
-        match send(&world, request, &sent).await {
+        match send(scope, page, &world, request, &sent).await {
             Ok(reply) => return Ok(reply),
             Err(ProbeFailure::Gone(Ran::Maybe)) => {
                 return Err(scope
@@ -316,11 +317,13 @@ async fn write(
 
 /// The probe's `webStorage` write, which only an op that marked itself sent may make.
 async fn send(
+    scope: &OpScope<'_>,
+    page: &OpPage<'_>,
     world: &IsolatedWorld,
     request: &ProbeRequest,
     _sent: &Sent<'_>,
 ) -> Result<ProbeReply, ProbeFailure> {
-    probe::call(world, request).await
+    probe::call(scope, page, world, request).await
 }
 
 #[cfg(test)]

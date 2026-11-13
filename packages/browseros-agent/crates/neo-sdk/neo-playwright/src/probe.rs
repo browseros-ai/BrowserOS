@@ -5,8 +5,8 @@
 //!  Runtime.callFunctionOn {
 //!    objectId: <the world's global, held since install>,   // never executionContextId: see probe_call
 //!    functionDeclaration: CALL_FUNCTION,
-//!    arguments: [{ value: <ProbeRequest> }, root?, ...nodes?], returnByValue: true }
-//!        └─▶ globalThis.__neoProbe.call(request, root, nodes) ─▶ <ProbeReply>,
+//!    arguments: [{ value: <ProbeCall> }, root?, ...nodes?], returnByValue: true }
+//!        └─▶ globalThis.__neoProbe.call(call, root, nodes) ─▶ <ProbeReply>,
 //!            or { kind: "uninstalled" }
 //! ```
 //!
@@ -20,15 +20,19 @@ mod probe_reply;
 mod probe_request;
 pub(crate) mod protocol;
 
+#[cfg(test)]
+pub(crate) use probe_call::call_for_tests;
+
 pub(crate) use probe_call::{
-    NAVIGATED_OR_CLOSED, ProbeFailure, Ran, call, call_on, call_with_gesture, call_with_nodes,
-    pinned_nodes, pinned_object, reply_of,
+    Control, NAVIGATED_OR_CLOSED, ProbeFailure, Ran, call, call_on, call_with_gesture,
+    call_with_nodes, cleanup, pinned_nodes, pinned_object, reply_of,
 };
 pub(crate) use probe_reply::{
     ErrorClass, Hit, PROBE_PROTOCOL, PageText, Point, ProbeReply, Rect, Resolution, SnapshotIframe,
 };
 pub(crate) use probe_request::{
     ArmPlan, BootOptions, DocumentPart, DropEntry, Edit, ElementState, ExpectParams, FilePayload,
-    FillValue, HitAction, ParsedSelector, ProbeRequest, ProbeTarget, QueryState, Read, ReadAll,
-    Retarget, ScrollPlan, SelectOption, SnapshotMode, StorageAction, StorageKind, UrlPattern, Want,
+    FillValue, HitAction, ParsedSelector, ProbePolicy, ProbeRequest, ProbeTarget, QueryState, Read,
+    ReadAll, Retarget, ScrollPlan, SelectOption, SnapshotMode, StorageAction, StorageKind,
+    UrlPattern, Want,
 };

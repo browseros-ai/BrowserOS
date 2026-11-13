@@ -27,7 +27,8 @@ impl TabScript for ReadPage {
     }
 
     fn cdp_reply(&self, method: &str, params: &Value) -> Option<Value> {
-        (method == "Runtime.callFunctionOn" && params["arguments"][0]["value"]["op"] == "pinned")
+        (method == "Runtime.callFunctionOn"
+            && params["arguments"][0]["value"]["request"]["op"] == "pinned")
             .then(|| {
                 json!({ "result": {
                 "type": "object", "subtype": "node", "objectId": "pinned-node"

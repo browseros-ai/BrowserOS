@@ -146,11 +146,23 @@ fn vendored_as_synced(dir: &str) -> TestResult {
 }
 
 /// Neo files outside the probe that may name an engine internal, and why.
-const INTERNALS_ALLOWED: &[(&str, &str, &str)] = &[(
-    "crates/neo-sdk/neo-playwright-js/tests/aria-ref.test.ts",
-    "_ariaRef",
-    "plays the engine: it sets the expando an ai snapshot leaves, to see the probe's re-key delete it",
-)];
+const INTERNALS_ALLOWED: &[(&str, &str, &str)] = &[
+    (
+        "crates/neo-sdk/neo-playwright-js/tests/aria-ref.test.ts",
+        "_ariaRef",
+        "plays the engine: it sets the expando an ai snapshot leaves, to see the probe's re-key delete it",
+    ),
+    (
+        "crates/neo-sdk/neo-playwright-js/tests/failure-output.test.ts",
+        "_ariaSnapshotForExpect",
+        "reads the native failure-tree baseline to verify conformance byte equality; production still reaches it only through the probe",
+    ),
+    (
+        "crates/neo-sdk/neo-playwright-js/tests/failure-output.test.ts",
+        "_generateSelectors",
+        "observes the exact native diagnostic descriptor before and after scoped hooks; the exception is this test file and member only",
+    ),
+];
 
 /// The `_name` tokens in `text` read as properties or string keys (`injected._engines`,
 /// `'_ariaRef'`), which is how code reaches an engine internal; comment lines are skipped.

@@ -93,7 +93,7 @@ impl<'a> HandleSite<'a> {
     /// Sends `request`, whose target is `ProbeTarget::Root`, with the node as the call's root.
     /// A world that went away under the call answers `detached`, like a node that left.
     pub(crate) async fn call(&self, request: &ProbeRequest) -> Result<ProbeReply, PlaywrightError> {
-        match probe::call_on(&self.world, request, &self.node).await {
+        match probe::call_on(self.scope, self.page, &self.world, request, &self.node).await {
             Ok(reply) => Ok(reply),
             Err(ProbeFailure::Gone(_)) => {
                 self.page.frames().invalidate(&self.world);
