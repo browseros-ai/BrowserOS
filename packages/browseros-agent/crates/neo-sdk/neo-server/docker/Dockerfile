@@ -65,7 +65,9 @@ RUN apt-get update \
  && rm -rf /var/lib/apt/lists/*
 
 # The browser is pinned by version and per-architecture sha256 in browser.lock, so a bump is a
-# reviewed one-file diff and a changed download fails the build.
+# reviewed one-file diff and a changed download fails the build. The download retries every
+# failure (a CDN reset or a stream cut off mid-file failed image jobs before), each try from the
+# start into the same file; the checksum after it still fails a short or wrong file, retried or not.
 COPY crates/neo-sdk/neo-server/docker/browser.lock /usr/share/neo-sdk/browser.lock
 RUN set -eu; . /usr/share/neo-sdk/browser.lock; \
     case "$TARGETARCH" in \
@@ -73,7 +75,7 @@ RUN set -eu; . /usr/share/neo-sdk/browser.lock; \
       arm64) url=$NEO_BROWSER_URL_ARM64 sha=$NEO_BROWSER_SHA256_ARM64 ;; \
       *) echo "no browser for $TARGETARCH" >&2; exit 1 ;; \
     esac; \
-    curl -fsSL -o /tmp/neo.deb "$url"; \
+    curl -fsSL --connect-timeout 30 --retry 5 --retry-delay 5 --retry-all-errors -o /tmp/neo.deb "$url"; \
     echo "$sha  /tmp/neo.deb" | sha256sum -c -; \
     apt-get update; apt-get install -y --no-install-recommends /tmp/neo.deb; \
     rm -rf /tmp/neo.deb /var/lib/apt/lists/*
