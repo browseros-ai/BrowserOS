@@ -79,6 +79,19 @@ describe('toChatError', () => {
     expect(error.statusCode).toBe(400)
   })
 
+  it('keeps Retry-After when a 4xx classifies by message text', () => {
+    const error = toChatError(
+      apiCallError({
+        message: 'upstream gateway failed to fetch the model',
+        statusCode: 400,
+        responseHeaders: { 'retry-after': '9' },
+      }),
+    )
+
+    expect(error.code).toBe('connection_failed')
+    expect(error.retryAfterSeconds).toBe(9)
+  })
+
   it('keeps a non-overflow 400 as unknown', () => {
     const error = toChatError(
       apiCallError({ message: 'bad request', statusCode: 400 }),

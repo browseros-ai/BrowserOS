@@ -208,6 +208,9 @@ function fromApiCallError(
       ...matched,
       statusCode: base.statusCode,
       details: base.details ?? matched.details,
+      retryAfterSeconds: matched.retryable
+        ? retryAfterSeconds(error)
+        : undefined,
     }
   }
 
