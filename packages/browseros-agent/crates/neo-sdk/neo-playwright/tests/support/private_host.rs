@@ -157,6 +157,7 @@ pub(crate) fn pages() -> HashMap<String, Page> {
         ("rewrite", include_str!("../data/private/rewrite.html")),
         ("swap", include_str!("../data/private/swap.html")),
         ("labelled", include_str!("../data/private/labelled.html")),
+        ("stale", include_str!("../data/private/stale.html")),
     ]
     .into_iter()
     .map(|(name, body)| {

@@ -294,6 +294,9 @@ error_codes! {
     FOCUS_LOST = "focus_lost";
     /// The box holds something other than the value at the read-back.
     VALUE_NOT_TAKEN = "value_not_taken";
+    /// A box with no size still held text after Neo tried to empty it before the first
+    /// character; nothing of the value was typed.
+    BOX_NOT_CLEARED = "box_not_cleared";
     /// The page moved before Neo saw all but the last character in the box.
     PAGE_MOVED = "page_moved";
     /// A repeat of a fill's `requestId` whose first call Neo started and never finished: Neo

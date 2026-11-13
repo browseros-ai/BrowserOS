@@ -1,0 +1,57 @@
+<!doctype html><meta charset=utf-8><title>Stale</title>
+<!-- Code boxes that already hold a value (ruling R51), as the first host's pages build them.
+     window.seen records the box's value at every input event, so a test can show the page never
+     saw the box empty in between.
+     ?mode=host     one box, maxlength 6, holding 111111, with no size and opacity 0
+     ?mode=sized    the same full box with a size
+     ?mode=digits1  six one-digit boxes (maxlength 1, no size), the third holding an old digit;
+                    Backspace empties a box and focuses the one before, as the first host's do
+     ?mode=digits6  the same, every box holding an old digit
+     ?mode=restore  a box with no size whose page puts its text back on every input
+     ?mode=number   a number box with no size holding 111, no maxlength -->
+<form id=f onsubmit="return false"></form>
+<script>
+const mode = new URLSearchParams(location.search).get('mode') || 'host';
+const f = document.getElementById('f');
+window.seen = [];
+const hidden = 'width:0;height:0;padding:0;border:0;opacity:0';
+const box = (attrs) => {
+  const b = document.createElement('input');
+  Object.assign(b, attrs);
+  b.addEventListener('input', () => window.seen.push(b.value));
+  f.appendChild(b);
+  return b;
+};
+if (mode === 'host' || mode === 'sized') {
+  const b = box({ id: 'code', maxLength: 6, value: '111111', inputMode: 'numeric', autocomplete: 'one-time-code' });
+  b.setAttribute('aria-label', 'Verification code');
+  if (mode === 'host') b.style.cssText = hidden;
+}
+if (mode === 'digits1' || mode === 'digits6') {
+  const digits = [];
+  for (let i = 1; i <= 6; i++) {
+    const old = mode === 'digits6' || i === 3 ? '9' : '';
+    const b = box({ id: 'd' + i, maxLength: 1, value: old, inputMode: 'numeric' });
+    b.setAttribute('aria-label', 'Digit ' + i);
+    b.style.cssText = hidden;
+    b.addEventListener('keydown', (event) => {
+      if (event.key !== 'Backspace') return;
+      event.preventDefault();
+      b.value = '';
+      if (i > 1) digits[i - 2].focus();
+    });
+    digits.push(b);
+  }
+}
+if (mode === 'restore') {
+  const b = box({ id: 'code', value: 'old' });
+  b.setAttribute('aria-label', 'Verification code');
+  b.style.cssText = hidden;
+  b.addEventListener('input', () => { b.value = 'old'; });
+}
+if (mode === 'number') {
+  const b = box({ id: 'code', type: 'number', value: '111' });
+  b.setAttribute('aria-label', 'Verification code');
+  b.style.cssText = hidden;
+}
+</script>
