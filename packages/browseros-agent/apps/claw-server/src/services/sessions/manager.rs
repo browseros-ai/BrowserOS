@@ -345,6 +345,35 @@ impl Sessions {
         entry.replacement.get_or_insert(candidate).clone()
     }
 
+    /// Rebinds a retired handle's recorded successor when the recorded one is dead.
+    ///
+    /// `adopt_replacement` binds once and never updates, which is the convergence the
+    /// mechanism exists for — until the bound successor itself dies, at which point the
+    /// first bind becomes a dead end every later resend walks into. This moves the bind
+    /// only off `expected` under the same write lock, so a racer that already rebound to
+    /// a live session wins and its id comes back for the caller to adopt instead.
+    pub async fn rebind_replacement(
+        &self,
+        retired: &SessionId,
+        expected: &SessionId,
+        candidate: SessionId,
+    ) -> SessionId {
+        let mut entries = self.retired.write().await;
+        let entry = entries.entry(retired.clone()).or_insert_with(|| Retired {
+            at: Instant::now(),
+            cause: RetirementCause::Closed,
+            replacement: None,
+        });
+        if entry
+            .replacement
+            .as_ref()
+            .is_none_or(|current| current == expected)
+        {
+            entry.replacement = Some(candidate.clone());
+        }
+        entry.replacement.clone().unwrap_or(candidate)
+    }
+
     async fn retire(&self, id: &SessionId, cause: RetirementCause) {
         self.retired.write().await.insert(
             id.clone(),

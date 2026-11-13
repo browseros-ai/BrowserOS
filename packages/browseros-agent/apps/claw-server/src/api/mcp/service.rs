@@ -896,39 +896,46 @@ impl ClawMcpService {
             ));
         }
         let (mine, mine_handle) = self.mint_session(client).await?;
-        let winner = self
+        let mut winner = self
             .state
             .sessions
             .adopt_replacement(retired, mine_handle.clone())
             .await;
-        if winner == mine_handle {
-            self.inherit_target(retired, &mine_handle).await?;
-            return Ok((mine, mine_handle));
+        loop {
+            if winner == mine_handle {
+                self.inherit_target(retired, &mine_handle).await?;
+                return Ok((mine, mine_handle));
+            }
+            // The winner inserted its session before it adopted, and adoption is serialized, so
+            // a winner that is still live is visible here. One that is not was torn down in the
+            // gap; rebind the tombstone to this resend's session so every later resend converges
+            // on a live successor instead of minting and keeping a session of its own.
+            let Some(session) = self.state.sessions.lookup(&winner).await else {
+                winner = self
+                    .state
+                    .sessions
+                    .rebind_replacement(retired, &winner, mine_handle.clone())
+                    .await;
+                continue;
+            };
+            if let Err(error) = self
+                .state
+                .sessions
+                .remove(&mine_handle, "closed", Some("superseded"))
+                .await
+            {
+                warn!(error = %error, "discarding a superseded replacement session failed");
+            }
+            let agent_label = session.agent().label().to_string();
+            self.inherit_target(retired, &winner).await?;
+            return Ok((
+                StartedSession {
+                    session,
+                    agent_label,
+                },
+                winner,
+            ));
         }
-        // The winner inserted its session before it adopted, and adoption is serialized, so
-        // a winner that is still live is visible here. One that is not was torn down in the
-        // gap; keep mine rather than chase a chain of tombstones.
-        let Some(session) = self.state.sessions.lookup(&winner).await else {
-            self.inherit_target(retired, &mine_handle).await?;
-            return Ok((mine, mine_handle));
-        };
-        if let Err(error) = self
-            .state
-            .sessions
-            .remove(&mine_handle, "closed", Some("superseded"))
-            .await
-        {
-            warn!(error = %error, "discarding a superseded replacement session failed");
-        }
-        let agent_label = session.agent().label().to_string();
-        self.inherit_target(retired, &winner).await?;
-        Ok((
-            StartedSession {
-                session,
-                agent_label,
-            },
-            winner,
-        ))
     }
 
     async fn inherit_target(&self, from: &SessionId, to: &SessionId) -> Result<(), McpError> {
@@ -4148,6 +4155,112 @@ mod tests {
         assert_eq!(
             rename_session(None, &json!({ "name": "invoice processing" })).await,
             Err("unable to resolve this session")
+        );
+        Ok(())
+    }
+
+    /// When the recorded successor has itself died, the settle must rebind the
+    /// tombstone to the session it keeps. Without the rebind every resend mints and
+    /// keeps a session of its own, and resends never converge.
+    #[tokio::test]
+    async fn a_dead_recorded_successor_rebinds_to_the_kept_session() -> anyhow::Result<()> {
+        let call = crate::api::mcp::test_support::tool_call("tabs", json!({})).await?;
+        let service = ClawMcpService::new(call.state.clone());
+
+        let (_, handle) = service
+            .resolve_modern_session(None, None, None)
+            .await
+            .map_err(|error| anyhow::anyhow!("{error:?}"))?;
+        call.state
+            .sessions
+            .remove(&handle, "closed", Some("idle timeout"))
+            .await?;
+        let (_, first_successor) = service
+            .resolve_modern_session(Some(handle.clone()), None, None)
+            .await
+            .map_err(|error| anyhow::anyhow!("{error:?}"))?;
+        call.state
+            .sessions
+            .remove(&first_successor, "closed", Some("idle timeout"))
+            .await?;
+
+        let (_, second) = service
+            .succeed_retired_session(&handle, SessionClient::resolve(None, None))
+            .await
+            .map_err(|error| anyhow::anyhow!("{error:?}"))?;
+        let (_, third) = service
+            .succeed_retired_session(&handle, SessionClient::resolve(None, None))
+            .await
+            .map_err(|error| anyhow::anyhow!("{error:?}"))?;
+
+        assert_eq!(
+            second, third,
+            "two settles on one dead handle must land in the same session"
+        );
+        assert_eq!(
+            call.state.sessions.replacement_of(&handle).await,
+            Some(second.clone()),
+            "the tombstone must name the live successor"
+        );
+        Ok(())
+    }
+
+    /// The race the single-lock adoption exists for, one generation later: resends
+    /// arriving together after the recorded successor died must still settle on one
+    /// session and one conversation.
+    #[tokio::test]
+    async fn concurrent_resends_converge_after_the_recorded_successor_dies()
+    -> anyhow::Result<()> {
+        let call = crate::api::mcp::test_support::tool_call("tabs", json!({})).await?;
+        let service = std::sync::Arc::new(ClawMcpService::new(call.state.clone()));
+
+        let (_, handle) = service
+            .resolve_modern_session(None, None, None)
+            .await
+            .map_err(|error| anyhow::anyhow!("{error:?}"))?;
+        call.state
+            .sessions
+            .remove(&handle, "closed", Some("idle timeout"))
+            .await?;
+        let (_, first_successor) = service
+            .resolve_modern_session(Some(handle.clone()), None, None)
+            .await
+            .map_err(|error| anyhow::anyhow!("{error:?}"))?;
+        call.state
+            .sessions
+            .remove(&first_successor, "closed", Some("idle timeout"))
+            .await?;
+        let before = call.state.sessions.count().await;
+
+        let racers = (0..4).map(|_| {
+            let service = service.clone();
+            let handle = handle.clone();
+            tokio::spawn(async move {
+                service
+                    .resolve_modern_session(Some(handle), None, None)
+                    .await
+                    .map(|(started, resolved)| {
+                        (
+                            resolved.to_string(),
+                            started.session.convo_id().as_str().to_string(),
+                        )
+                    })
+                    .map_err(|error| anyhow::anyhow!("{error:?}"))
+            })
+        });
+        let mut resolved = std::collections::BTreeSet::new();
+        for racer in racers.collect::<Vec<_>>() {
+            resolved.insert(racer.await??);
+        }
+        assert_eq!(
+            resolved.len(),
+            1,
+            "concurrent resends of one dead handle must settle on one session, got {resolved:?}"
+        );
+        assert_eq!(
+            call.state.sessions.count().await,
+            before + 1,
+            "every resend must land in one session"
         );
         Ok(())
     }
