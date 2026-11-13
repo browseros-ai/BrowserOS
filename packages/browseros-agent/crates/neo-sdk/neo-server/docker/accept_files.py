@@ -416,6 +416,49 @@ def policy(proof, places):
                 with path.open('xb') as fixture:
                     created_profile_files.append(path)
                     fixture.write(('Harmless synthetic acceptance marker: ' + name + '\n').encode())
+
+            ordinary_folder = inside / 'ordinary-folder'
+            (ordinary_folder / 'nested').mkdir(parents=True)
+            (ordinary_folder / 'first.txt').write_text('first')
+            (ordinary_folder / 'nested' / 'second.txt').write_text('second')
+            directory_facts = """async input => await Promise.all([...input.files].map(async file =>
+              ({name:file.name,text:await file.text()})))"""
+            proof.patch([str(downloads)])
+            proof.allowed('allowed folder uploads ordinary descendants', PREPARE +
+                          upload(ordinary_folder, '#directory') + ';\n' +
+                          f"const files=await page.locator('#directory').evaluate({directory_facts});\n" +
+                          "files.sort((a,b)=>a.name.localeCompare(b.name)); "
+                          "return JSON.stringify(files)===JSON.stringify([{name:'first.txt',text:'first'},"
+                          "{name:'second.txt',text:'second'}]);")
+
+            outside_target = outside / 'symlink-target'
+            outside_target.mkdir()
+            (outside_target / 'outside.txt').write_text('outside')
+            # Chromium enumerates descendants after CDP. A safe selected root must not let
+            # nested links expose an outside or protected target during that later enumeration.
+            links = [
+                ('outside file', outside_target / 'outside.txt', False),
+                ('outside directory', outside_target, False),
+                ('protected file', profile_fixtures[0][1], True),
+                ('protected directory', profile_fixtures[2][1].parent, True),
+            ]
+            for index, (name, target, own) in enumerate(links):
+                folder = inside / f'nested-link-{index}'
+                folder.mkdir()
+                (folder / 'ordinary.txt').write_text('ordinary')
+                (folder / 'link').symlink_to(target, target_is_directory=target.is_dir())
+                got = proof.run(PREPARE + upload(folder, '#directory') + ';\n' +
+                                f"return await page.locator('#directory').evaluate({directory_facts});")
+                if got['meta'].get('status') == 'error':
+                    proof.refused('folder with nested ' + name + ' is refused', got, target, own=own)
+                else:
+                    files = proof.value(got)
+                    proof.check('folder upload omits nested ' + name,
+                                files == [{'name': 'ordinary.txt', 'text': 'ordinary'}],
+                                run=got['meta'].get('id'),
+                                uploadedNames=[file.get('name') for file in files]
+                                if isinstance(files, list) else None)
+            proof.patch(['/'])
             protected = [('trace', places['state'] / 'trace.db'),
                          ('settings', places['state'] / 'settings.json'),
                          ('profile', places['profile'] / 'Local State'),
