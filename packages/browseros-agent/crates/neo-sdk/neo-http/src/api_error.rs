@@ -7,7 +7,7 @@
 
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use neo_capture::CaptureError;
+use neo_screencast::CaptureError;
 use neo_takeover::PartError;
 use neo_trace::TraceError;
 use std::borrow::Cow;

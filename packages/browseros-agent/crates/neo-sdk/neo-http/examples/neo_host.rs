@@ -4,7 +4,7 @@
 //! surface for checking the routes and the camera by hand, or from the Neo container harness:
 //!
 //! ```text
-//! cargo run -p neo-service --example neo_host -- --cdp-port 9110 \
+//! cargo run -p neo-http --example neo_host -- --cdp-port 9110 \
 //!     --open https://example.com --fake-writes
 //! curl --unix-socket <socket> -H "Authorization: Bearer $(cat <token file>)" http://neo/v1/runs
 //! ```
@@ -61,7 +61,7 @@ use axum::{Json, Router};
 use browseros_cdp::{CdpClient, ConnectOptions, ReconnectPolicy};
 use browseros_core::viewport::{ViewportMode, ViewportRequest, Viewports};
 use browseros_core::{BrowserSession, BrowserSessionHooks, BrowserView, PageJs, TabId};
-use neo_service::{HostAuth, HostToken, PeerRule, Service, ServiceInputs, Settings, host_service};
+use neo_http::{HostAuth, HostToken, PeerRule, Service, ServiceInputs, Settings, host_service};
 use neo_takeover::{Front, FrontError, LockTarget, Locks, ScreenSize, Xvnc};
 use neo_trace::{
     Delivery, Effect, EpochMillis, OperationEnded, OperationId, OperationKind, OperationStarted,

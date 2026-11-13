@@ -243,7 +243,7 @@ docker network create --internal --label neo-sdk-accept="$run_id" "$network" >/d
 
 # --- boot ------------------------------------------------------------------------------------
 main="$prefix-main"
-start_neo "$main" -e CLAW_LOG=neo_server=debug,neo_playwright=debug,neo_trace=debug,neo_service=debug,neo_takeover=debug "$image"
+start_neo "$main" -e CLAW_LOG=neo_server=debug,neo_playwright=debug,neo_trace=debug,neo_http=debug,neo_takeover=debug "$image"
 if seconds=$(wait_healthy "$main" 90) && install_client "$main"; then
   listening=$(jget "$(client "$main" python3 accept_client.py listeners)" '" ".join(a for a in d["listening"] if not a.startswith("127.0.0.11:"))')
   socket=$(docker exec "$main" stat -c '%a %U %g' /run/neo /run/neo/host.sock 2>&1 | tr '\n' ' ')

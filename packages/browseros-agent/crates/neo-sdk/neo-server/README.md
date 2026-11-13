@@ -97,7 +97,7 @@ From the launch JSON it reads `ports.server` (default 9200), `ports.cdp` (defaul
 Neo binds two listeners:
 
 - The agent listener is `127.0.0.1:<ports.server>`, with no auth. Chromium's proxy forwards to it. It serves `/mcp`, plus `GET /system/health` and `GET /system/ready` for Chromium's supervisor. `/mcp` refuses any request that carries `Origin` or `Sec-Fetch-Site`, so a web page in the driven browser cannot call `run`.
-- The host listener is a Unix socket with mode 0660, plus TCP when `CLAW_HOST_TCP` is set. It serves neo-service's `/v1` routes (runs, operations, screenshots, events, locks, tabs, fits, and settings) behind the service's bearer and peer-uid checks. The service starts when the browser link first connects.
+- The host listener is a Unix socket with mode 0660, plus TCP when `CLAW_HOST_TCP` is set. It serves neo-http's `/v1` routes (runs, operations, screenshots, events, locks, tabs, fits, and settings) behind the service's bearer and peer-uid checks. The service starts when the browser link first connects.
 
 State lives under `$BROWSERCLAW_DIR`:
 
@@ -132,7 +132,7 @@ Every setting is optional. Trace and tab defaults preserve the existing behavior
 
 Neo saves what the host set in `claw-sdk/settings.json` before it switches a change on, and loads that file at every start, before the first run, so a setting survives the restarts the browser gives the server on its own. At start, a setting the file names that this build does not know, or a value it cannot use, falls back to its default with a warning; Neo never fails to start over the file. Without a host API (no usable `CLAW_HOST_TOKEN_FILE`) nothing could change or read the settings, so every setting is at its default and the file is left alone.
 
-Adding a setting is one row in `neo-service/src/setting.rs`, its key in the `Settings` schema of `openapi.yaml`, a row in the table above, and a reader where Neo uses it. A test in `setting.rs` keeps the three lists equal.
+Adding a setting is one row in `neo-http/src/setting.rs`, its key in the `Settings` schema of `openapi.yaml`, a row in the table above, and a reader where Neo uses it. A test in `setting.rs` keeps the three lists equal.
 
 Path reads in `setInputFiles`, `fileChooser.setFiles`, `drop`, script/style tags and page/context init scripts follow `files.readDirs`. The default allows uploading a file returned by `download.path()` and a copy saved inside the downloads folder. Owner files can arrive as `{ name, mimeType, buffer }` payloads without a host staging folder. A host that stages elsewhere adds that absolute folder with `PATCH /v1/settings`, for example `{"files":{"readDirs":["/data/downloads","/run/uploads"]}}`.
 

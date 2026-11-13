@@ -1,9 +1,0 @@
-{
-  "name": "@browseros/neo-service-rust",
-  "version": "0.0.0",
-  "private": true,
-  "scripts": {
-    "lint:rust": "cargo fmt --package neo-service -- --check && cargo clippy --package neo-service --all-targets --locked -- -D warnings",
-    "test:rust": "cargo test --package neo-service --locked"
-  }
-}

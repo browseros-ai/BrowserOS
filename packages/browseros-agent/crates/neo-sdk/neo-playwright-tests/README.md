@@ -259,7 +259,7 @@ opens popups as tabs, but suppresses CDP console events that vanilla Playwright'
   `neoExpect` annotations record this path; these passes count as product passes.
   The test runner owns three things on a Neo receiver, each with its own annotation
   description:
-  - `toHaveScreenshot` (`playwright-visual/neo-capture`): Playwright Test owns baseline
+  - `toHaveScreenshot` (`playwright-visual/neo-screenshot`): Playwright Test owns baseline
     paths, tolerances, attachments and the pinned stability/comparison loop. A visual
     receiver supplies only real Neo `screenshot` and `evaluate` calls, including for
     locators and explicit masks.

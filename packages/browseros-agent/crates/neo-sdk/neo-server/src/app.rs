@@ -10,7 +10,7 @@ use axum::Router;
 use browseros_core::NativeCapabilities;
 use neo_captcha::CaptchaSolver;
 use neo_captcha::config::{CAPSOLVER_KEY_FILE_ENV, TWOCAPTCHA_KEY_FILE_ENV};
-use neo_service::Settings;
+use neo_http::Settings;
 use neo_trace::{
     EpochMillis, RedactionLimits, Redactor, RetentionPolicy, RunOutputs, ShotJobs, TraceError,
     TraceSink, TraceStore, WriterConfig,
@@ -45,7 +45,7 @@ use crate::test_support::FakeCdp;
 ///          the link's first connect) ─ CaptchaSolver (with a provider key) ─ Registry
 ///          (built-ins, neo-playwright's ops)
 ///        ─ Dispatcher (rules: builtins::door_rules) ─ RunService ─ McpServer
-///        ─ host API task (starts neo-service once the link connects, then serves the
+///        ─ host API task (starts neo-http once the link connects, then serves the
 ///          socket) ─ housekeeping task (reads the host's settings each pass) ─ agent router
 ///  serve ─ until SIGTERM ─ runs stop (shutting_down) ─ connections drain ─ trace flushed
 /// ```
@@ -310,7 +310,7 @@ impl fmt::Debug for App {
 /// The trace writer over `store`, and the camera's end of its screenshot queue. The writer
 /// starts at the default limits until the host's `trace.valueBytes` reaches it, which `start_on`
 /// does as soon as the settings are loaded and before any run. It decides which ops get a
-/// screenshot; neo-service's camera takes them once the browser links.
+/// screenshot; neo-http's camera takes them once the browser links.
 fn start_trace(store: &TraceStore) -> (TraceSink, ShotJobs) {
     let redactor = Redactor::new(RedactionLimits::default());
     let writer = WriterConfig {

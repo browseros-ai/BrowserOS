@@ -49,18 +49,19 @@ or browser behavior change:
 - `neo-server`: renamed from the inner `neo-sdk` crate (previously `claw-sdk` at `apps/claw-sdk`); the binary stays `browseros-claw-sdk`.
 - `neo-playwright`: renamed from `browseros-playwright` at `crates/browseros-playwright`.
 - `neo-playwright-js`: renamed from `@browseros/browseros-playwright-js` at `packages/browseros-playwright-js`.
-- `neo-service`: renamed from `browseros-service` at `crates/browseros-service`.
+- `neo-http`: renamed from `browseros-service` at `crates/browseros-service`, then from `neo-service`.
 - `neo-takeover`: renamed from `browseros-takeover` at `crates/browseros-takeover`.
 - `neo-trace`: renamed from `browseros-trace` at `crates/browseros-trace`.
 - `neo-sdk-api`: renamed from `claw-sdk-api`; `contracts/claw-sdk-api` and `crates/claw-sdk-api` are colocated here.
 - `neo-captcha`: renamed from `browseros-captcha` at `crates/browseros-captcha`; desktop uses the same solver.
-- `neo-capture`: renamed from `browseros-capture` at `crates/browseros-capture`; desktop uses the same capture hub.
+- `neo-screencast`: renamed from `browseros-capture` at `crates/browseros-capture`, then from `neo-capture`; desktop uses the same capture hub.
 
 Build the server with Cargo package `neo-server`. Release server kind `claw-sdk`, binary and
 version marker `browseros-claw-sdk`, MCP server name and `CLAW_*` variables are unchanged.
 Desktop's behavior and dependency graph are unchanged apart from the two shared crate names.
-Tracing targets use `neo_captcha::…` and `neo_capture::…`; update custom `CLAW_LOG` directives
-that name those crates. The default desktop log filter is unchanged.
+Tracing targets use `neo_captcha::…` and `neo_screencast::…` (`neo_capture::…` before the second
+rename), and the host API's are `neo_http::…` (formerly `neo_service::…`); update custom `CLAW_LOG`
+directives that name those crates. The default desktop log filter is unchanged.
 
 ## Host file paths
 

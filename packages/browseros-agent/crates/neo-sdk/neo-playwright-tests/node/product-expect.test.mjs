@@ -140,7 +140,7 @@ test('visual assertions keep runner options and chains while web assertions stay
     options,
   )
   assert.deepEqual(calls, [['expected.png', options]])
-  assert.equal(annotations[0].description, 'playwright-visual/neo-capture')
+  assert.equal(annotations[0].description, 'playwright-visual/neo-screenshot')
   assert.equal(wrapped(subject).toBeVisible(), 'product')
   assert.equal(annotations[1].description, 'product')
 })

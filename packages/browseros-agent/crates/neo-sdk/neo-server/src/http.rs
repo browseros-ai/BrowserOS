@@ -6,7 +6,7 @@
 //!                  which keeps web pages out) and /system/* for Chromium's supervisor.
 //!  host listener   a Unix socket ($BROWSERCLAW_DIR/host.sock), TCP only by CLAW_HOST_TCP, none
 //!                  without a usable CLAW_HOST_TOKEN_FILE (host::HostApi decides). Serves
-//!                  neo-service's host_service(routes, auth), which owns the routes, the
+//!                  neo-http's host_service(routes, auth), which owns the routes, the
 //!                  auth and the connect info; Neo only binds the sockets.
 //! ```
 //!

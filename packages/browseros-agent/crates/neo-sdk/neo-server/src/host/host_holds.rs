@@ -15,7 +15,7 @@ type HoldSource = Arc<dyn Fn(TabId) -> Option<TabHold> + Send + Sync>;
 /// using, and a fit is how a host shows the tab to the owner, without a lock in zuzu's
 /// handoff.
 ///
-/// The locks and fits belong to neo-service, which starts only once the browser link's first
+/// The locks and fits belong to neo-http, which starts only once the browser link's first
 /// connect lands. Until the host API arms this, the host holds nothing, which is exact: a lock or
 /// a fit is taken only through the host API's routes, served only after arming. `default()` is
 /// unarmed, as it stays in the Node-hosted embedding, which has no host API.

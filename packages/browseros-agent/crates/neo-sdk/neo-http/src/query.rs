@@ -11,7 +11,7 @@ use crate::limits::{
     DEFAULT_LIMIT, DEFAULT_TAIL, MAX_INLINE_SCREENSHOTS, MAX_LIMIT, MAX_TAIL, MAX_WAIT_SECONDS,
 };
 use browseros_core::TabId;
-use neo_capture::Quality;
+use neo_screencast::Quality;
 use neo_takeover::{FitId, Follow, LockId, TakeoverId};
 use neo_trace::{
     EpochMillis, OperationFilter, OperationId, RequestId, RunId, RunQuery, RunStatus, TailQuery,
@@ -397,7 +397,7 @@ mod tests {
     use crate::limits::{DEFAULT_LIMIT, DEFAULT_TAIL};
     use axum::http::StatusCode;
     use browseros_core::TabId;
-    use neo_capture::Quality;
+    use neo_screencast::Quality;
     use neo_takeover::{Follow, TakeoverId};
     use neo_trace::{EpochMillis, RunId, RunStatus, TaskId};
     use std::time::Duration;

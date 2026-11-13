@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use neo_service::Service;
+use neo_http::Service;
 use tokio::sync::broadcast;
 use tokio::sync::broadcast::error::RecvError;
 

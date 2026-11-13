@@ -2,8 +2,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::{env, io};
 
+use neo_http::{Settings, SettingsDefaults};
 use neo_playwright::{FileAccess, ProtectedPath};
-use neo_service::{Settings, SettingsDefaults};
 
 use neo_captcha::config::CaptchaConfig;
 
@@ -187,8 +187,8 @@ mod tests {
     #[tokio::test]
     async fn file_policy_uses_the_launch_profile_and_retains_missing_protected_files()
     -> Result<(), Box<dyn Error>> {
+        use neo_http::{Settings, SettingsDefaults};
         use neo_playwright::FileAccessError;
-        use neo_service::{Settings, SettingsDefaults};
 
         let dir = tempfile::tempdir()?;
         let mut config = config(None, None);

@@ -13,9 +13,9 @@ use axum::response::Response;
 use browseros_core::TabId;
 use browseros_core::viewport::Viewports;
 use futures_util::StreamExt;
-use neo_capture::CaptureTransport;
-use neo_capture::testing::{ScriptedCdp, ScriptedTransport};
-use neo_service::{HostAuth, HostToken, PeerInfo, Service, ServiceInputs, Settings, host_router};
+use neo_http::{HostAuth, HostToken, PeerInfo, Service, ServiceInputs, Settings, host_router};
+use neo_screencast::CaptureTransport;
+use neo_screencast::testing::{ScriptedCdp, ScriptedTransport};
 use neo_takeover::ScreenSize;
 use neo_takeover::testing::FakeXvnc;
 use neo_trace::{

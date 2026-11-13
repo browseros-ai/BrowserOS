@@ -1,5 +1,5 @@
 [package]
-name = "neo-service"
+name = "neo-http"
 version = "0.1.0"
 edition.workspace = true
 rust-version.workspace = true
@@ -11,7 +11,7 @@ description = "The host API of hosted BrowserOS Neo (claw-sdk): the /v1 router, 
 axum = { workspace = true, features = ["ws"] }
 base64.workspace = true
 browseros-cdp.workspace = true
-neo-capture.workspace = true
+neo-screencast.workspace = true
 browseros-core.workspace = true
 neo-takeover.workspace = true
 neo-trace.workspace = true

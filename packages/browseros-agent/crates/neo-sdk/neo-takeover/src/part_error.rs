@@ -1,5 +1,5 @@
 //! The crate's one error. Every part returns it, so the service turns the parts' failures into
-//! the contract's status codes in one place (`neo-service`'s `api_error`).
+//! the contract's status codes in one place (`neo-http`'s `api_error`).
 
 use crate::ScreenSize;
 use browseros_core::{CoreError, TabId};

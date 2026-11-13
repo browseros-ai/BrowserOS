@@ -390,7 +390,7 @@ async fn solve_on_captcha_pages(rig: &Rig, pages: &CaptchaPages) -> TestResult {
 
 /// A host locks a tab the agent opened with `context.newPage()` and loaded, the owner closes it from
 /// outside Neo (Chromium's own `/json/close`), and the lock ends with the tab: the close reached
-/// neo-service from BrowserOS's target events. Returns the run that opened the tab and
+/// neo-http from BrowserOS's target events. Returns the run that opened the tab and
 /// the tab, for the trace check after the stop.
 async fn a_hosts_lock_ends_when_its_tab_closes(
     rig: &Rig,
@@ -479,7 +479,7 @@ async fn read_back_over_the_host_socket(rig: &Rig, id: RunId) -> TestResult {
         "the host socket wants the bearer token: {refused}"
     );
     // `wait` holds the answer until the run ended and every screenshot job it made was
-    // answered, so `complete` says neo-service's camera took the writer's jobs here.
+    // answered, so `complete` says neo-http's camera took the writer's jobs here.
     let recorded = rig
         .host_get(&format!("/v1/runs/{id}?wait=30"), Some(HOST_TOKEN))
         .await?;

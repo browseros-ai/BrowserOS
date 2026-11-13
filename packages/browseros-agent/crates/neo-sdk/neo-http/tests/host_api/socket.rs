@@ -2,7 +2,7 @@
 //! token only from the `Authorization` header.
 
 use crate::support::{BoxError, TestResult, harness};
-use neo_service::{HostAuth, HostToken, PeerRule, host_service};
+use neo_http::{HostAuth, HostToken, PeerRule, host_service};
 use std::future::IntoFuture;
 use std::path::Path;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};

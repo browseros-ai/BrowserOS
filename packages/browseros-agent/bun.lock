@@ -315,8 +315,8 @@
       "name": "@browseros/hosted-api-rust",
       "version": "0.0.0",
     },
-    "crates/neo-sdk/neo-capture": {
-      "name": "@browseros/neo-capture-rust",
+    "crates/neo-sdk/neo-http": {
+      "name": "@browseros/neo-http-rust",
       "version": "0.0.0",
     },
     "crates/neo-sdk/neo-playwright": {
@@ -331,6 +331,10 @@
         "linkedom": "^0.18.13",
         "yaml": "2.9.1",
       },
+    },
+    "crates/neo-sdk/neo-screencast": {
+      "name": "@browseros/neo-screencast-rust",
+      "version": "0.0.0",
     },
     "crates/neo-sdk/neo-sdk-api": {
       "name": "@browseros/neo-sdk-api-rust",
@@ -349,10 +353,6 @@
         "pngjs": "7.0.0",
         "yaml": "2.9.1",
       },
-    },
-    "crates/neo-sdk/neo-service": {
-      "name": "@browseros/neo-service-rust",
-      "version": "0.0.0",
     },
     "crates/neo-sdk/neo-takeover": {
       "name": "@browseros/neo-takeover-rust",
@@ -731,17 +731,17 @@
 
     "@browseros/hosted-api-rust": ["@browseros/hosted-api-rust@workspace:crates/hosted-api"],
 
-    "@browseros/neo-capture-rust": ["@browseros/neo-capture-rust@workspace:crates/neo-sdk/neo-capture"],
+    "@browseros/neo-http-rust": ["@browseros/neo-http-rust@workspace:crates/neo-sdk/neo-http"],
 
     "@browseros/neo-playwright-js": ["@browseros/neo-playwright-js@workspace:crates/neo-sdk/neo-playwright-js"],
 
     "@browseros/neo-playwright-rust": ["@browseros/neo-playwright-rust@workspace:crates/neo-sdk/neo-playwright"],
 
+    "@browseros/neo-screencast-rust": ["@browseros/neo-screencast-rust@workspace:crates/neo-sdk/neo-screencast"],
+
     "@browseros/neo-sdk-api-rust": ["@browseros/neo-sdk-api-rust@workspace:crates/neo-sdk/neo-sdk-api"],
 
     "@browseros/neo-server": ["@browseros/neo-server@workspace:crates/neo-sdk/neo-server"],
-
-    "@browseros/neo-service-rust": ["@browseros/neo-service-rust@workspace:crates/neo-sdk/neo-service"],
 
     "@browseros/neo-takeover-rust": ["@browseros/neo-takeover-rust@workspace:crates/neo-sdk/neo-takeover"],
 

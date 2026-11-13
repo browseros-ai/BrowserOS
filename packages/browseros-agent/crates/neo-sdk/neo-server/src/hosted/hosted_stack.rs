@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use browseros_core::NativeCapabilities;
 use neo_captcha::CaptchaSolver;
-use neo_service::{Settings, SettingsDefaults};
+use neo_http::{Settings, SettingsDefaults};
 use neo_trace::{RedactionLimits, Redactor, TraceSink, WriterConfig};
 use tokio::time;
 use tokio_util::sync::CancellationToken;

@@ -5,7 +5,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use neo_service::{
+use neo_http::{
     HostAuth, HostToken, PeerRule, Service, ServiceInputs, Settings, SettingsDefaults, TokenError,
 };
 use neo_takeover::Xvnc;
@@ -18,7 +18,7 @@ use crate::browser::{BrowserLink, NeoTab};
 use crate::config::HostApiConfig;
 use crate::http::{BindError, HostListener};
 
-/// Neo's host API (neo-service) from startup until it serves zuzu over the host socket.
+/// Neo's host API (neo-http) from startup until it serves zuzu over the host socket.
 ///
 /// ```text
 ///  start ─ bind: token file ─ unset or unusable: no socket (run still works), default settings
@@ -78,7 +78,7 @@ enum UnusableToken {
 
 impl HostApi {
     /// Binds the host socket when `CLAW_HOST_TOKEN_FILE` holds a usable token. Without one there
-    /// is no socket, as neo-service asks: never a host API behind a weak or unusable
+    /// is no socket, as neo-http asks: never a host API behind a weak or unusable
     /// token. A socket that cannot be bound fails the start, because a host that configured a
     /// token expects the API to be there.
     ///
@@ -202,7 +202,7 @@ impl HostApi {
         };
         tracing::info!("host API serving");
         if let Err(error) = listener
-            .serve(neo_service::host_service(service.router(), auth), shutdown)
+            .serve(neo_http::host_service(service.router(), auth), shutdown)
             .await
         {
             tracing::error!(%error, "the host listener stopped; the host API is down until Neo restarts");

@@ -1,5 +1,5 @@
 //! The acceptance smoke for hosted Neo: one task, driven by an agent over MCP and watched and
-//! steered by a host over the host socket, on a real BrowserOS with the real neo-service,
+//! steered by a host over the host socket, on a real BrowserOS with the real neo-http,
 //! -takeover and -trace behind claw-sdk. Nothing is faked.
 //!
 //! ```text
