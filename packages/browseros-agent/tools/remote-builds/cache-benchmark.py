@@ -143,7 +143,7 @@ def run() -> int:
                      "inputSha256": fingerprint, "stats": stats(),
                      "passedTestBinaries": len(re.findall(r"^test result: ok\.", output, re.M)),
                      "workspaceDirect": all("direct " + str(tree / "packages/browseros-agent/crates/neo-sdk" / package)
-                                             in trace.read_text() for package in ("neo-sdk-api", "neo-service", "neo-server", "neo-playwright"))}
+                                             in trace.read_text() for package in ("neo-sdk-api", "neo-http", "neo-server", "neo-playwright"))}
             results["phases"].append(phase)
             (artifacts / "cache-benchmark.json").write_text(json.dumps(results, indent=2))
             print(f"CACHE_BENCH_PHASE={label} END seconds={seconds:.3f} exit={code}", flush=True)
