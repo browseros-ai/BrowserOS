@@ -386,3 +386,38 @@ async fn tab_hold_reports_a_lock_and_a_fit_now_and_until_they_let_go() -> TestRe
     );
     Ok(())
 }
+
+/// On the development TCP listener the token is the only check, so a script that got it could
+/// call the host API from a page of the browser Neo drives. Every page request carries `Origin`
+/// or `Sec-Fetch-Site`, a same-origin one too; the host's own clients send neither.
+#[tokio::test]
+async fn a_request_from_a_web_page_is_refused_whatever_its_token() -> TestResult {
+    let harness = harness().await?;
+    for (name, value) in [
+        ("origin", "http://127.0.0.1:9300"),
+        ("sec-fetch-site", "same-origin"),
+    ] {
+        for method in [Method::GET, Method::PUT, Method::PATCH] {
+            let request = axum::http::Request::builder()
+                .method(method.clone())
+                .uri("/v1/settings")
+                .header(axum::http::header::CONTENT_TYPE, "application/json")
+                .header(name, value)
+                .body(Body::from(r#"{"tabs":{"idleCloseSeconds":300}}"#))?;
+            let reply =
+                Reply::read(tower::ServiceExt::oneshot(harness.router.clone(), request).await?)
+                    .await?;
+            reply.assert_error(StatusCode::FORBIDDEN, "forbidden");
+            assert!(
+                !harness.settings_file().exists(),
+                "{method} with {name}: nothing saved"
+            );
+        }
+    }
+    assert_eq!(
+        harness.get("/v1/settings").await?.body["settings"],
+        defaults(),
+        "nothing applied"
+    );
+    Ok(())
+}

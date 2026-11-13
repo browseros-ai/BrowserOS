@@ -753,7 +753,9 @@ paths:
       description: |
         `settings` holds every setting this server knows, each at its value: what the host set,
         or the default. Its shape is a body for `PUT`, so a host can read it, change it and send
-        it back. A server older than the settings answers 404.
+        it back. A server older than the settings answers 404. Only the host may call these
+        routes: a request a web page sends is refused with 403, so a script in the browser Neo
+        drives cannot reach them even on the development TCP listener.
       responses:
         '200':
           description: The settings.
@@ -763,6 +765,8 @@ paths:
                 $ref: '#/components/schemas/SettingsState'
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
     put:
       operationId: putSettings
       summary: Set every setting. A setting left out goes back to its default.
@@ -795,6 +799,8 @@ paths:
           $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
         '500':
           description: Neo could not save the settings (`internal_error`). Nothing changed.
           content:
@@ -825,6 +831,8 @@ paths:
           $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
         '500':
           description: Neo could not save the settings (`internal_error`). Nothing changed.
           content:
@@ -922,6 +930,14 @@ components:
   responses:
     BadRequest:
       description: A parameter or body is invalid (`invalid_request`).
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Forbidden:
+      description: >-
+        A request a web page sent (it carries `Origin` or `Sec-Fetch-Site`), which this route
+        never serves, whatever its token (`forbidden`).
       content:
         application/json:
           schema:
@@ -1662,6 +1678,7 @@ components:
             [
               invalid_request,
               unauthorized,
+              forbidden,
               not_found,
               expired,
               tab_not_found,

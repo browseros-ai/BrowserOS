@@ -516,18 +516,18 @@ pub(crate) struct SettingsBody {
     pub(crate) faults: Vec<String>,
 }
 
-/// `PUT` and `PATCH /v1/settings`: the values to apply, and the names skipped. The body is
-/// decoded here rather than into the generated `Settings` type, which would drop an unknown
-/// name without a word; the host is told what was skipped instead. A refusal names every
-/// setting at fault, and then nothing is applied.
-pub(crate) fn settings_request(body: &[u8]) -> Result<(SetValues, Vec<String>), ApiError> {
+/// `PUT` and `PATCH /v1/settings`: the values to apply, and the names skipped; `faults` is empty.
+/// The body is decoded here rather than into the generated `Settings` type, which would drop an
+/// unknown name without a word; the host is told what was skipped instead. A refusal names
+/// every setting at fault, and then nothing is applied.
+pub(crate) fn settings_request(body: &[u8]) -> Result<SettingsBody, ApiError> {
     let shape = r#"{"tabs"?: {"idleCloseSeconds"?: integer}, …}"#;
     let json: serde_json::Value = serde_json::from_slice(body).map_err(|_| not_the_body(shape))?;
     let checked = settings_body(&json).ok_or_else(|| not_the_body(shape))?;
     if !checked.faults.is_empty() {
         return Err(ApiError::invalid(checked.faults.join("; ")));
     }
-    Ok((checked.values, checked.unknown))
+    Ok(checked)
 }
 
 /// `json` checked against the table, at any depth; `None` when it is not an object. A group a

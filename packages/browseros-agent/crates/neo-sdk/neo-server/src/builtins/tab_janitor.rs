@@ -96,9 +96,8 @@ impl TabJanitor {
             .into_iter()
             .filter_map(|tab| self.holds.hold(tab).map(|hold| (tab, hold)))
             .collect();
-        let idle: Vec<PageRef> =
-            self.tabs
-                .idle_agent_tabs(self.settings.tab_idle_close(), now, &holds);
+        let idle_time = self.settings.tab_idle_close();
+        let idle: Vec<PageRef> = self.tabs.idle_agent_tabs(idle_time, now, &holds);
         if idle.is_empty() {
             return None;
         }
@@ -140,7 +139,7 @@ impl TabJanitor {
                 default_page: None,
             },
         );
-        let Swept { closed, kept } = self.close_each(&run, &idle, deadline).await;
+        let Swept { closed, kept } = self.close_each(&run, &idle, idle_time, now, deadline).await;
         // The ops' tasks end right after answering; drained so their records precede the run's.
         let mut ops = run.close_ops();
         while ops.join_next().await.is_some() {}
@@ -161,12 +160,26 @@ impl TabJanitor {
     /// Closes `idle`, the longest idle first, in `run`. One close at a time, each decided on a
     /// listing taken after the previous close was answered: the sweep's own closes can never
     /// take the last two tabs together, and the tab it keeps last is the one used most recently.
-    async fn close_each(&self, run: &Arc<RunCtx>, idle: &[PageRef], deadline: Instant) -> Swept {
+    /// Each tab is checked again right before its close, since a run may have used it, or a host
+    /// fitted it, while earlier closes ran: such a tab is no longer idle and is left alone.
+    async fn close_each(
+        &self,
+        run: &Arc<RunCtx>,
+        idle: &[PageRef],
+        idle_time: Duration,
+        now: Instant,
+        deadline: Instant,
+    ) -> Swept {
         let mut closed: Vec<TabId> = Vec::new();
         let mut kept = Vec::new();
         for page in idle {
             if run.stop_reason().is_some() {
                 kept.push(page.tab.0);
+                continue;
+            }
+            let hold = self.holds.hold(page.tab);
+            if !self.tabs.still_idle(page.tab, idle_time, now, hold) {
+                tracing::debug!(run = %run.id(), tab = page.tab.0, "an idle agent tab was used again before its close; left open");
                 continue;
             }
             let Ok(Some(open)) = time::timeout_at(deadline, self.browser_tabs()).await else {

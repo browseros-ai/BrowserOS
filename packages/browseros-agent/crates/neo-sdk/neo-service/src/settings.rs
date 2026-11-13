@@ -149,12 +149,12 @@ impl Settings {
     /// The route's 400 message, or the save's failure.
     #[doc(hidden)]
     pub async fn patch(&self, body: &[u8]) -> Result<Vec<String>, String> {
-        let (values, unknown) =
+        let request =
             wire::settings_request(body).map_err(|refused| refused.message.into_owned())?;
-        self.change(values, ChangeMode::Merge)
+        self.change(request.values, ChangeMode::Merge)
             .await
             .map_err(|error| error.to_string())?;
-        Ok(unknown)
+        Ok(request.unknown)
     }
 
     fn whole(&self, setting: &Setting) -> u64 {

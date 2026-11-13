@@ -326,23 +326,32 @@ impl TabRegistry {
         let in_runs: HashSet<TabId> = state.runs.values().flatten().copied().collect();
         let mut idle_tabs: Vec<(Instant, PageRef)> = Vec::new();
         for (tab, entry) in &mut state.open {
-            if entry.origin != TabOrigin::Agent || in_runs.contains(tab) {
-                continue;
-            }
-            match holds.get(tab) {
-                Some(TabHold::Now) => {
-                    entry.touched = entry.touched.max(now);
-                    continue;
-                }
-                Some(TabHold::Until(ended)) => entry.touched = entry.touched.max(*ended),
-                None => {}
-            }
-            if now.saturating_duration_since(entry.touched) >= idle {
+            let busy = in_runs.contains(tab);
+            if entry.is_idle(busy, holds.get(tab).copied(), idle, now) {
                 idle_tabs.push((entry.touched, PageRef { tab: *tab }));
             }
         }
         idle_tabs.sort_by_key(|(touched, page)| (*touched, page.tab.0));
         idle_tabs.into_iter().map(|(_, page)| page).collect()
+    }
+
+    /// Whether `tab` is still one of the agent's idle tabs, by the rule of
+    /// [`TabRegistry::idle_agent_tabs`], with `hold` asked just now. The janitor asks it right
+    /// before each close: a sweep closes one tab at a time, and a run may use a tab, or a host fit
+    /// it, after the sweep chose it.
+    pub(crate) fn still_idle(
+        &self,
+        tab: TabId,
+        idle: Duration,
+        now: Instant,
+        hold: Option<TabHold>,
+    ) -> bool {
+        let mut state = self.lock();
+        let busy = state.runs.values().any(|used| used.contains(&tab));
+        state
+            .open
+            .get_mut(&tab)
+            .is_some_and(|entry| entry.is_idle(busy, hold, idle, now))
     }
 
     /// Whether Neo saw `tab` close, within the close history it keeps. A browser's own listing
@@ -446,6 +455,26 @@ impl TabState {
     }
 }
 
+impl TabEntry {
+    /// The janitor's rule for one entry: an agent's tab, used by no run in flight (`busy`), not
+    /// held by the host now, and whose clock is `idle` old. A hold seen now, or the instant one
+    /// ended, is kept in the clock, so a claim the host forgets an hour later still counts.
+    fn is_idle(&mut self, busy: bool, hold: Option<TabHold>, idle: Duration, now: Instant) -> bool {
+        if self.origin != TabOrigin::Agent || busy {
+            return false;
+        }
+        match hold {
+            Some(TabHold::Now) => {
+                self.touched = self.touched.max(now);
+                return false;
+            }
+            Some(TabHold::Until(ended)) => self.touched = self.touched.max(ended),
+            None => {}
+        }
+        now.saturating_duration_since(self.touched) >= idle
+    }
+}
+
 /// A point in the registry's close history, valid only for a read started after it was taken.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Seen(u64);
@@ -454,7 +483,7 @@ mod tests {
     use std::error::Error;
     use std::sync::Arc;
 
-    use std::collections::HashMap;
+    use std::collections::{HashMap, HashSet};
 
     use browseros_core::{TabId, TargetId};
     use neo_takeover::TabHold;
@@ -647,9 +676,8 @@ mod tests {
         let later = RunId::new();
         tabs.run_started(later, Some(closed.tab));
         tabs.used_in_run(closed.tab, later);
-        assert_eq!(
-            tabs.lock().runs.get(&later).map(|used| used.len()),
-            Some(0),
+        assert!(
+            tabs.lock().runs.get(&later).is_some_and(HashSet::is_empty),
             "a tab with no entry is not in use"
         );
     }
@@ -687,6 +715,40 @@ mod tests {
             tabs.idle_agent_tabs(idle, released + idle, &ended),
             vec![tab],
             "a full idle time after the let-go"
+        );
+    }
+
+    #[test]
+    fn a_tab_used_after_the_sweep_chose_it_is_no_longer_idle() {
+        let tabs = TabRegistry::new();
+        let idle = Duration::from_mins(5);
+        let tab = page(1, 101);
+        tabs.opened_by_agent(&tab, tabs.seen(), None);
+        let later = Instant::now() + idle;
+        assert_eq!(
+            tabs.idle_agent_tabs(idle, later, &HashMap::new()),
+            vec![tab.clone()]
+        );
+        assert!(tabs.still_idle(tab.tab, idle, later, None));
+        assert!(
+            !tabs.still_idle(tab.tab, idle, later, Some(TabHold::Now)),
+            "a host fitted or locked it since"
+        );
+        let run = RunId::new();
+        tabs.run_started(run, None);
+        tabs.used_in_run(tab.tab, run);
+        assert!(
+            !tabs.still_idle(tab.tab, idle, later + idle, None),
+            "a run in flight uses it now"
+        );
+        tabs.run_ended(run);
+        assert!(
+            !tabs.still_idle(tab.tab, idle, Instant::now() + Duration::from_secs(1), None),
+            "and its clock restarted when the run ended"
+        );
+        assert!(
+            !tabs.still_idle(TabId(999), idle, later, None),
+            "a tab Neo does not know is never the janitor's"
         );
     }
 
