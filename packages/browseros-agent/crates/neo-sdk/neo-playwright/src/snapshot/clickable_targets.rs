@@ -30,7 +30,9 @@
 
 use std::collections::HashSet;
 use std::sync::{Mutex, PoisonError};
+use std::task::Poll;
 use std::time::Duration;
+use std::{future, pin};
 
 use browseros_cdp::CdpError;
 use browseros_core::CoreError;
@@ -126,41 +128,44 @@ impl Marking {
     /// The elements of `world`'s frame to pass to its snapshot call, as remote objects of that
     /// world in the op's object group. `parent` is the world of the frame that holds its iframe,
     /// `None` for the main frame; `frame_deadline` is when a child frame's own budget ends.
-    /// Empty when the frame has none or could not be read; the latter is noted on the op's call
-    /// log.
+    /// Empty when the frame has none; `None` when it could not be read, which is noted, with
+    /// the time it took, on the op's call log.
     pub(super) async fn targets(
         &self,
         scope: &OpScope<'_>,
         world: &IsolatedWorld,
         parent: Option<&IsolatedWorld>,
         frame_deadline: Option<Instant>,
-    ) -> Vec<String> {
+    ) -> Option<Vec<String>> {
         let session = world.session_id().map(|id| id.0.clone());
         let timed_out = || {
             self.timed_out
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner)
         };
+        let started = Instant::now();
         let read = if timed_out().contains(&session) {
             Err(Skipped::Timeout)
         } else {
-            let budget = frame_budget(scope, frame_deadline);
-            let read = time::timeout(budget, self.read(scope, world, parent))
-                .await
-                .unwrap_or(Err(Skipped::Timeout));
+            let read = within(
+                started + frame_budget(scope, frame_deadline),
+                self.read(scope, world, parent),
+            )
+            .await;
             if matches!(read, Err(Skipped::Timeout)) {
                 timed_out().insert(session);
             }
             read
         };
         match read {
-            Ok(targets) => targets,
+            Ok(targets) => Some(targets),
             Err(skipped) => {
                 scope.log(format!(
-                    "  clickable marking skipped a frame ({})",
-                    skipped.words()
+                    "  clickable marking skipped a frame ({}) after {} ms",
+                    skipped.words(),
+                    started.elapsed().as_millis()
                 ));
-                Vec::new()
+                None
             }
         }
     }
@@ -188,6 +193,33 @@ impl Marking {
         // A node that left its document since the capture resolved to nothing and is skipped.
         Ok(resolved.into_iter().flatten().collect())
     }
+}
+
+/// `read`'s answer, unless `deadline` passes first; then `Skipped::Timeout`, and `read` is
+/// dropped where it stands. The deadline is asked before `read` on every poll, so a read whose
+/// budget is already spent sends no capture at all, and a capture that comes back after its
+/// budget is dropped as it arrives. `time::timeout` asks its future first: a late capture was
+/// still decoded and run through core's rules (about 0.1 s for the 12.8 MB capture of a
+/// 75,000-element page) and its first resolves sent before the timer was asked. A capture
+/// already sent cannot be called back: Chromium finishes it, and the frame's tree walk queues
+/// behind it in the page, so dropping what comes back is all a deadline can still save.
+///
+/// The clock is read on every poll, not only the timer: tokio reports a timer as expired only
+/// once its driver has turned, so a read polled in between would still run. The timer stays
+/// for the wake-up at the deadline.
+async fn within<T>(
+    deadline: Instant,
+    read: impl Future<Output = Result<T, Skipped>>,
+) -> Result<T, Skipped> {
+    let mut timer = pin::pin!(time::sleep_until(deadline));
+    let mut read = pin::pin!(read);
+    future::poll_fn(|cx| {
+        if Instant::now() >= deadline || timer.as_mut().poll(cx).is_ready() {
+            return Poll::Ready(Err(Skipped::Timeout));
+        }
+        read.as_mut().poll(cx)
+    })
+    .await
 }
 
 /// One frame's read budget: [`MARK_BUDGET`], or half of what is left of the op's timeout, or of
@@ -282,9 +314,41 @@ async fn resolve(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::{AtomicBool, Ordering};
     use std::time::Duration;
 
-    use super::{MARK_BUDGET, budget_within};
+    use tokio::time::{self, Instant};
+
+    use super::{MARK_BUDGET, Skipped, budget_within, within};
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_a_spent_budget_drops_the_read_before_it_runs_and_a_late_one_as_it_lands() {
+        let polled = AtomicBool::new(false);
+        let read = async {
+            polled.store(true, Ordering::SeqCst);
+            Ok::<_, Skipped>(())
+        };
+        let spent = within(Instant::now() - Duration::from_millis(1), read).await;
+        assert!(matches!(spent, Err(Skipped::Timeout)));
+        assert!(
+            !polled.load(Ordering::SeqCst),
+            "no budget left: the read never starts, so no capture is sent"
+        );
+        let deadline = Instant::now() + Duration::from_millis(100);
+        let late = within(deadline, async {
+            time::sleep_until(deadline + Duration::from_millis(1)).await;
+            Ok::<_, Skipped>(())
+        });
+        assert!(matches!(late.await, Err(Skipped::Timeout)));
+        let ready = within(Instant::now() + Duration::from_millis(100), async {
+            time::sleep(Duration::from_millis(10)).await;
+            Ok::<_, Skipped>(7)
+        });
+        assert!(
+            matches!(ready.await, Ok(7)),
+            "a read inside its budget answers"
+        );
+    }
 
     #[test]
     fn tests_that_a_frame_read_never_takes_more_than_half_of_what_is_left() {
