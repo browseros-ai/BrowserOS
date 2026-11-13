@@ -3118,12 +3118,12 @@
   }
   var kTextNodeRange = Symbol("playwrightTextNodeRange");
   function isVisibleTextNode(node) {
-    const document = node.ownerDocument;
-    const range = document[kTextNodeRange] ??= document.createRange();
+    const document2 = node.ownerDocument;
+    const range = document2[kTextNodeRange] ??= document2.createRange();
     range.selectNode(node);
     const rect = range.getBoundingClientRect();
     const result = rect.width > 0 && rect.height > 0;
-    range.setStart(document, 0);
+    range.setStart(document2, 0);
     range.collapse(true);
     return result;
   }
@@ -4785,8 +4785,8 @@
     return false;
   }
   function shouldSkipForTextMatching(element) {
-    const document = element.ownerDocument;
-    return element.nodeName === "SCRIPT" || element.nodeName === "NOSCRIPT" || element.nodeName === "STYLE" || document.head && document.head.contains(element);
+    const document2 = element.ownerDocument;
+    return element.nodeName === "SCRIPT" || element.nodeName === "NOSCRIPT" || element.nodeName === "STYLE" || document2.head && document2.head.contains(element);
   }
   function elementText(cache, root) {
     let value = cache.get(root);
@@ -5966,10 +5966,10 @@
       if (selector.startsWith("/") && root.nodeType !== Node.DOCUMENT_NODE)
         selector = "." + selector;
       const result = [];
-      const document = root.ownerDocument || root;
-      if (!document)
+      const document2 = root.ownerDocument || root;
+      if (!document2)
         return result;
-      const it = document.evaluate(selector, root, null, XPathResult.ORDERED_NODE_ITERATOR_TYPE);
+      const it = document2.evaluate(selector, root, null, XPathResult.ORDERED_NODE_ITERATOR_TYPE);
       for (let node = it.iterateNext();node; node = it.iterateNext()) {
         if (node.nodeType === Node.ELEMENT_NODE)
           result.push(node);
@@ -6593,8 +6593,8 @@ ${value.stack}`;
       const endTagIndex = emptyRoot.lastIndexOf("</");
       return content + emptyRoot.slice(0, endTagIndex) + root.getHTML({ shadowRoots }) + emptyRoot.slice(endTagIndex);
     }
-    getAllElementsMatchingExpectAriaTemplate(document, template) {
-      return getAllElementsMatchingExpectAriaTemplate(document.documentElement, template);
+    getAllElementsMatchingExpectAriaTemplate(document2, template) {
+      return getAllElementsMatchingExpectAriaTemplate(document2.documentElement, template);
     }
     querySelectorAll(selector, root) {
       if (selector.capture !== undefined) {
@@ -8560,6 +8560,7 @@ ${value.stack}`;
     "cc-number",
     "cc-csc"
   ]);
+  var HTML_NAMESPACE = "http://www.w3.org/1999/xhtml";
   var FIELD_TAGS = new Set(["input", "textarea"]);
   var PRIVATE_VALUE_ATTRIBUTES = new Set([
     "value",
@@ -8567,6 +8568,74 @@ ${value.stack}`;
     "aria-valuenow"
   ]);
   var declaredMasked = true;
+  function isHtmlField(element) {
+    return FIELD_TAGS.has(element.localName) && element.namespaceURI === HTML_NAMESPACE;
+  }
+  function isHtmlTextarea(node) {
+    return node?.nodeType === 1 && "localName" in node && node.localName === "textarea" && "namespaceURI" in node && node.namespaceURI === HTML_NAMESPACE;
+  }
+  function hasReadableOpener(document2) {
+    try {
+      const view = document2.defaultView;
+      if (!view)
+        return true;
+      const opener = view.opener;
+      if (opener === null || opener === undefined)
+        return false;
+      if (typeof opener !== "object" && typeof opener !== "function")
+        return true;
+      const _openerDocument = Reflect.get(opener, "document");
+      return true;
+    } catch (error) {
+      return !(typeof error === "object" && error !== null && ("name" in error) && error.name === "SecurityError");
+    }
+  }
+  function collectFieldPrototypes({
+    root,
+    mayHaveOtherFrame
+  }) {
+    const prototypes = {
+      inputs: new Set([HTMLInputElement.prototype]),
+      textareas: new Set([HTMLTextAreaElement.prototype]),
+      texts: new Set([Text.prototype])
+    };
+    const collect = (element) => {
+      if (!isHtmlField(element))
+        return;
+      const prototype = Object.getPrototypeOf(element);
+      if (!prototype)
+        throw new TypeError("snapshot field prototype is unavailable");
+      if (element.localName === "input") {
+        prototypes.inputs.add(prototype);
+        return;
+      }
+      prototypes.textareas.add(prototype);
+      for (const child of element.childNodes) {
+        if (child.nodeType !== 3)
+          continue;
+        const textPrototype = Object.getPrototypeOf(child);
+        if (!textPrototype)
+          throw new TypeError("snapshot textarea Text prototype is unavailable");
+        prototypes.texts.add(textPrototype);
+      }
+    };
+    const ownerDocument = root?.ownerDocument ?? document;
+    if (root)
+      collect(root);
+    if (!mayHaveOtherFrame && !hasReadableOpener(ownerDocument))
+      return prototypes;
+    const roots = [ownerDocument];
+    for (const tree of roots) {
+      for (const element of tree.querySelectorAll("input,textarea"))
+        collect(element);
+      for (const host of tree.querySelectorAll("*")) {
+        const shadow = host.shadowRoot;
+        if (shadow)
+          roots.push(shadow);
+      }
+    }
+    return prototypes;
+  }
   function isPrivateField(field) {
     return privatelyTyped(field) || declaredMasked && (field.getAttribute("type")?.toLowerCase() === "password" || (field.getAttribute("autocomplete") ?? "").toLowerCase().split(/\s+/).some((token) => PRIVATE_AUTOCOMPLETE.has(token)));
   }
@@ -8636,7 +8705,8 @@ ${value.stack}`;
     };
   }
   function parentTextarea(node) {
-    return node.parentElement instanceof HTMLTextAreaElement ? node.parentElement : null;
+    const parent = node.parentElement;
+    return isHtmlTextarea(parent) ? parent : null;
   }
   function maskedComputedStyle(descriptor) {
     if (typeof descriptor.value !== "function")
@@ -8649,7 +8719,7 @@ ${value.stack}`;
           element,
           pseudo
         ]);
-        if (!FIELD_TAGS.has(element.localName))
+        if (!isHtmlField(element))
           return style;
         if (!isPrivateField(element))
           return style;
@@ -8685,20 +8755,22 @@ ${value.stack}`;
       });
   }
   function withMarkedFieldsMasked(walk) {
-    return anyPrivatelyTyped() ? withMaskedFieldValues(walk, { declared: false }) : walk();
+    return anyPrivatelyTyped() ? withMaskedFieldValues({ root: document.documentElement, mayHaveOtherFrame: true }, walk, { declared: false }) : walk();
   }
-  function withMaskedFieldValues(walk, { declared = true } = {}) {
-    const input = HTMLInputElement.prototype;
-    const textarea = HTMLTextAreaElement.prototype;
+  function withMaskedFieldValues(discovery, walk, { declared = true } = {}) {
+    const prototypes = collectFieldPrototypes(discovery);
+    const inputs = Array.from(prototypes.inputs);
+    const textareas = Array.from(prototypes.textareas);
+    const texts = Array.from(prototypes.texts);
     const valueReads = new Set;
     const overrides = [
-      propertyOverride(input, "value", (descriptor) => maskedValue(descriptor, valueReads)),
-      propertyOverride(textarea, "value", (descriptor) => maskedValue(descriptor, valueReads)),
-      propertyOverride(input, "defaultValue", (descriptor) => maskedValue(descriptor, valueReads)),
-      propertyOverride(input, "getAttribute", maskedAttributes),
-      propertyOverride(textarea, "getAttribute", maskedAttributes),
-      ...["nodeValue", "textContent", "data", "wholeText"].map((property) => propertyOverride(Text.prototype, property, (descriptor) => emptyTextareaText(descriptor, parentTextarea, valueReads))),
-      ...["textContent", "innerText", "innerHTML", "defaultValue"].map((property) => propertyOverride(textarea, property, (descriptor) => emptyTextareaText(descriptor, (node) => node instanceof HTMLTextAreaElement ? node : null, valueReads))),
+      ...inputs.map((input) => propertyOverride(input, "value", (descriptor) => maskedValue(descriptor, valueReads))),
+      ...textareas.map((textarea) => propertyOverride(textarea, "value", (descriptor) => maskedValue(descriptor, valueReads))),
+      ...inputs.map((input) => propertyOverride(input, "defaultValue", (descriptor) => maskedValue(descriptor, valueReads))),
+      ...inputs.map((input) => propertyOverride(input, "getAttribute", maskedAttributes)),
+      ...textareas.map((textarea) => propertyOverride(textarea, "getAttribute", maskedAttributes)),
+      ...texts.flatMap((text) => ["nodeValue", "textContent", "data", "wholeText"].map((property) => propertyOverride(text, property, (descriptor) => emptyTextareaText(descriptor, parentTextarea, valueReads)))),
+      ...textareas.flatMap((textarea) => ["textContent", "innerText", "innerHTML", "defaultValue"].map((property) => propertyOverride(textarea, property, (descriptor) => emptyTextareaText(descriptor, (node) => isHtmlTextarea(node) ? node : null, valueReads)))),
       propertyOverride(globalThis, "getComputedStyle", maskedComputedStyle)
     ];
     const installed = [];
@@ -8719,14 +8791,14 @@ ${value.stack}`;
   // crates/neo-sdk/neo-playwright-js/src/probe/document.ts
   function documentText(world, request) {
     const { injected } = world;
-    const { document } = injected;
-    const { body } = document;
-    const text = request.part === "title" ? document.title : request.part === "expectSnapshot" ? body ? withMarkedFieldsMasked(() => injected.ariaSnapshotForExpectFailure(body, { mode: "default" })) : "" : request.includeShadow ? injected.documentContent(true) : content(document);
+    const { document: document2 } = injected;
+    const { body } = document2;
+    const text = request.part === "title" ? document2.title : request.part === "expectSnapshot" ? body ? withMarkedFieldsMasked(() => injected.ariaSnapshotForExpectFailure(body, { mode: "default" })) : "" : request.includeShadow ? injected.documentContent(true) : content(document2);
     return { kind: "documentText", text };
   }
-  function content(document) {
-    const doctype = document.doctype ? doctypeMarkup(document.doctype) : "";
-    return doctype + (document.documentElement?.outerHTML ?? "");
+  function content(document2) {
+    const doctype = document2.doctype ? doctypeMarkup(document2.doctype) : "";
+    return doctype + (document2.documentElement?.outerHTML ?? "");
   }
   function doctypeMarkup(doctype) {
     let markup = `<!DOCTYPE ${doctype.name}`;
@@ -8739,12 +8811,12 @@ ${value.stack}`;
     return `${markup}>`;
   }
   function replaceDocument(world, request) {
-    const { document } = world.injected;
-    document.open();
+    const { document: document2 } = world.injected;
+    document2.open();
     try {
-      document.write(request.html);
+      document2.write(request.html);
     } finally {
-      document.close();
+      document2.close();
     }
     return { kind: "replaced" };
   }
@@ -8885,11 +8957,11 @@ ${value.stack}`;
   function isEditable(element) {
     return Reflect.get(element, "isContentEditable") === true;
   }
-  function holderOf(world, document) {
-    let holder = document?.activeElement ?? null;
+  function holderOf(world, document2) {
+    let holder = document2?.activeElement ?? null;
     while (holder?.shadowRoot?.activeElement)
       holder = holder.shadowRoot.activeElement;
-    if (!holder || holder === document?.body || holder === document?.documentElement)
+    if (!holder || holder === document2?.body || holder === document2?.documentElement)
       return {};
     return { holder: world.injected.previewNode(holder) };
   }
@@ -9013,9 +9085,9 @@ ${value.stack}`;
       empty: input.value === ""
     };
   }
-  function originOf(document) {
-    const origin = document.defaultView ? Reflect.get(document.defaultView, "origin") : undefined;
-    return typeof origin === "string" ? origin : document.location.origin;
+  function originOf(document2) {
+    const origin = document2.defaultView ? Reflect.get(document2.defaultView, "origin") : undefined;
+    return typeof origin === "string" ? origin : document2.location.origin;
   }
   function changedFact(facts, expect) {
     if (expect.autocomplete !== undefined && expect.autocomplete !== facts.autocomplete)
@@ -9037,16 +9109,16 @@ ${value.stack}`;
     try {
       scrollIntoViewIfNeeded(box);
       const rect = box.getBoundingClientRect();
-      let document = box.ownerDocument;
+      let document2 = box.ownerDocument;
       let x = rect.left + rect.width / 2;
       let y = rect.top + rect.height / 2;
-      for (let frame = document.defaultView?.frameElement;frame; frame = document.defaultView?.frameElement) {
+      for (let frame = document2.defaultView?.frameElement;frame; frame = document2.defaultView?.frameElement) {
         const frameRect = frame.getBoundingClientRect();
         x += frameRect.x + frame.clientLeft;
         y += frameRect.y + frame.clientTop;
-        document = frame.ownerDocument;
+        document2 = frame.ownerDocument;
       }
-      return blockerAt(document, box, x, y);
+      return blockerAt(document2, box, x, y);
     } catch {
       return true;
     }
@@ -9058,8 +9130,8 @@ ${value.stack}`;
     else
       box.scrollIntoView({ block: "center", inline: "center" });
   }
-  function blockerAt(document, box, pointX, pointY) {
-    let currentDocument = document;
+  function blockerAt(document2, box, pointX, pointY) {
+    let currentDocument = document2;
     let x = pointX;
     let y = pointY;
     let hit = currentDocument.elementFromPoint(x, y);
@@ -9104,7 +9176,7 @@ ${value.stack}`;
   }
 
   // crates/neo-sdk/neo-playwright-js/src/probe/protocol.ts
-  var PROTOCOL = 35;
+  var PROTOCOL = 36;
 
   // crates/neo-sdk/neo-playwright-js/src/probe/read.ts
   var XHTML = "http://www.w3.org/1999/xhtml";
@@ -9595,7 +9667,10 @@ ${value.stack}`;
       isVisible: (of) => injected.utils.isElementVisible(of)
     };
     const take = () => marked2(targets, engine, plain);
-    const { result, skipped } = request.conformance ? withMarkedFieldsMasked(take) : withMaskedFieldValues(take);
+    const { result, skipped } = request.conformance ? withMarkedFieldsMasked(take) : withMaskedFieldValues({
+      root: element,
+      mayHaveOtherFrame: request.mayHaveOtherFrame !== false
+    }, take);
     const { json, iframeRefs, iframeDepths } = result;
     const iframes = [];
     if (request.mode === "ai") {

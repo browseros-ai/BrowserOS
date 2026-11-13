@@ -1,0 +1,26 @@
+[
+  [
+    "document",
+    "child"
+  ],
+  [
+    "document",
+    "parent"
+  ],
+  [
+    "open",
+    "child"
+  ],
+  [
+    "open",
+    "parent"
+  ],
+  [
+    "closed",
+    "child"
+  ],
+  [
+    "closed",
+    "parent"
+  ]
+]

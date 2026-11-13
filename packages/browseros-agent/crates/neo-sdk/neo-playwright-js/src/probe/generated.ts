@@ -383,7 +383,12 @@ boxes?: boolean,
  * How many of the call's nodes, first, are seeds of closed shadow roots; none outside
  * clickable marking.
  */
-closedRoots?: number, conformance?: boolean, } | { "op": "expect", target: ProbeTarget, strictness: Strictness, frameVisible: boolean, params: ExpectParams, } | { "op": "matchUrl", pattern: UrlPattern, url: string, } | { "op": "pinned", pin: Pin, } | { "op": "document", part: DocumentPart, includeShadow?: boolean, } | { "op": "setContent", html: string, } | { "op": "armInput", pin: Pin, } | { "op": "inputArrived", pin: Pin, } | { "op": "webStorage", kind: StorageKind, action: StorageAction, name?: string, value?: string, };
+closedRoots?: number, conformance?: boolean, 
+/**
+ * This tab has another frame, or Rust cannot prove it has none. Different sessions
+ * can host frames that exchange nodes; only explicit false skips the adopted-field scan.
+ */
+mayHaveOtherFrame?: boolean, } | { "op": "expect", target: ProbeTarget, strictness: Strictness, frameVisible: boolean, params: ExpectParams, } | { "op": "matchUrl", pattern: UrlPattern, url: string, } | { "op": "pinned", pin: Pin, } | { "op": "document", part: DocumentPart, includeShadow?: boolean, } | { "op": "setContent", html: string, } | { "op": "armInput", pin: Pin, } | { "op": "inputArrived", pin: Pin, } | { "op": "webStorage", kind: StorageKind, action: StorageAction, name?: string, value?: string, };
 
 /**
  * What a request runs on inside the world.

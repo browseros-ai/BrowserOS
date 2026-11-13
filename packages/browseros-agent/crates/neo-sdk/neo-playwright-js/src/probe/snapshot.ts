@@ -79,7 +79,15 @@ export function snapshot(
   // (ruling R44). Until this world marks a box, that snapshot installs nothing.
   const { result, skipped } = request.conformance
     ? withMarkedFieldsMasked(take)
-    : withMaskedFieldValues(take)
+    : withMaskedFieldValues(
+        {
+          root: element,
+          // Rust's topology includes frames hidden from window.frames by shadow roots.
+          // Unknown hints still discover foreign prototypes; false only skips that search.
+          mayHaveOtherFrame: request.mayHaveOtherFrame !== false,
+        },
+        take,
+      )
   const { json, iframeRefs, iframeDepths } = result
   const iframes: SnapshotIframe[] = []
   if (request.mode === 'ai') {

@@ -200,6 +200,17 @@ impl<'a> Resolver<'a> {
         &self,
         request: impl Fn(ParsedSelector, bool) -> ProbeRequest,
     ) -> Result<Option<Landed>, PlaywrightError> {
+        self.attempt_at_world(move |last, visible, _world| request(last, visible))
+            .await
+    }
+
+    /// The same retry path with the actual read world available while building the request.
+    /// Snapshot metadata belongs to the final frame after hops/ref jumps, and is recomputed
+    /// after re-resolution rather than inherited from the locator's starting frame.
+    pub(crate) async fn attempt_at_world(
+        &self,
+        request: impl Fn(ParsedSelector, bool, &IsolatedWorld) -> ProbeRequest,
+    ) -> Result<Option<Landed>, PlaywrightError> {
         for _ in 0..2 {
             let resolved = match self.resolve().await? {
                 Step::Ready(resolved) => resolved,
@@ -212,7 +223,7 @@ impl<'a> Resolver<'a> {
                 }
             };
             let last = ParsedSelector::of(self.target.chunks.last());
-            let request = request(last, resolved.frame_visible);
+            let request = request(last, resolved.frame_visible, &resolved.world);
             match ask(&resolved.world, &request, resolved.root.as_deref()).await {
                 Ok(reply) => {
                     return Ok(Some(Landed {

@@ -190,6 +190,11 @@ pub(crate) enum ProbeRequest {
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         #[ts(optional, as = "Option<bool>")]
         conformance: bool,
+        /// This tab has another frame, or Rust cannot prove it has none. Different sessions
+        /// can host frames that exchange nodes; only explicit false skips the adopted-field scan.
+        #[serde(default = "default_true", skip_serializing_if = "is_true")]
+        #[ts(optional, as = "Option<bool>")]
+        may_have_other_frame: bool,
     },
     /// One poll of one retrying matcher; Rust's loop owns the timing, `.not` and the failure.
     Expect {
@@ -567,6 +572,19 @@ fn is_zero(count: &u32) -> bool {
     *count == 0
 }
 
+fn default_true() -> bool {
+    true
+}
+
+/// Omission is conservative; false must remain explicit on the wire.
+#[expect(
+    clippy::trivially_copy_pass_by_ref,
+    reason = "serde's skip_serializing_if passes the field by reference"
+)]
+fn is_true(value: &bool) -> bool {
+    *value
+}
+
 #[cfg(test)]
 mod tests {
     use std::error::Error;
@@ -576,6 +594,39 @@ mod tests {
     use super::{Edit, FillValue, ParsedSelector, ProbeRequest, SelectOption};
 
     const PROTOCOL: &str = include_str!("../../tests/data/probe-protocol.json");
+
+    #[test]
+    fn snapshot_other_frame_hint_defaults_true_and_false_stays_explicit()
+    -> Result<(), Box<dyn Error>> {
+        let omitted = json!({"op": "snapshot", "root": "document", "mode": "ai"});
+        let mut request: ProbeRequest = serde_json::from_value(omitted.clone())?;
+        assert!(matches!(
+            &request,
+            ProbeRequest::Snapshot {
+                may_have_other_frame: true,
+                ..
+            }
+        ));
+        assert_eq!(serde_json::to_value(&request)?, omitted);
+        let ProbeRequest::Snapshot {
+            may_have_other_frame,
+            ..
+        } = &mut request
+        else {
+            return Err("expected snapshot".into());
+        };
+        *may_have_other_frame = false;
+        let written = serde_json::to_value(&request)?;
+        assert_eq!(written["mayHaveOtherFrame"], false);
+        assert!(matches!(
+            serde_json::from_value::<ProbeRequest>(written)?,
+            ProbeRequest::Snapshot {
+                may_have_other_frame: false,
+                ..
+            }
+        ));
+        Ok(())
+    }
 
     /// An option names any of its attributes, all of which must match (SO-008), and one the
     /// probe does not know is refused.

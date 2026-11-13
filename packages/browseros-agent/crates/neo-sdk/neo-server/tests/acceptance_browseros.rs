@@ -516,6 +516,443 @@ async fn snapshot_trace(rig: &mut Rig) -> TestResult {
     assert_stored_snapshot_values(&rig.trace_path(), [first_id, second_id]).await
 }
 
+/// Each page has one same-origin child. Keeping shadow children separate from light-DOM
+/// children makes their zero `window.length` a real discovery case rather than a spare route.
+const ADOPTED_FIELD_CASES: &str =
+    include_str!("../../neo-playwright/tests/data/adopted-private-fields/cases.json");
+
+/// The page retains its source frame and closed-root reference, as an application that moves
+/// controls would. `srcdoc` inherits the parent's origin even though its URL says about:srcdoc.
+/// References live outside the moved controls, so a button-scoped walk must guard the document.
+const ADOPTED_FIELD_PAGE: &str =
+    include_str!("../../neo-playwright/tests/data/adopted-private-fields/page.html");
+
+/// Warm both native worlds before adoption. Otherwise Chromium may first wrap a field in its
+/// destination world and accidentally turn this into an ordinary same-realm masking test.
+/// Explicit reads are kept apart from snapshots because those APIs intentionally return clear values.
+const ADOPTED_FIELD_SNAPSHOT_SCRIPT: &str =
+    include_str!("../../neo-playwright/tests/data/adopted-private-fields/snapshots.js");
+
+/// The next run reads the committed page baseline before changing only a private value's
+/// length. The source child remains connected until both delta rendering and clear reads finish.
+const ADOPTED_FIELD_DELTA_SCRIPT: &str =
+    include_str!("../../neo-playwright/tests/data/adopted-private-fields/delta.js");
+
+fn adopted_field_values(name: &str) -> [String; 4] {
+    [
+        format!("AdoptedPrivate-{name}-password-value🔒"),
+        format!("AdoptedPrivate-{name}-textarea-value🔒"),
+        format!("AdoptedPublic-{name}-input-value"),
+        format!("AdoptedPublic-{name}-textarea-value"),
+    ]
+}
+
+fn assert_adopted_canaries_absent(snapshot: &Value) -> TestResult {
+    let encoded = serde_json::to_string(snapshot)?;
+    assert!(
+        !encoded.contains("AdoptedPrivate-"),
+        "snapshot exposes an adopted secret: {encoded}"
+    );
+    Ok(())
+}
+
+/// Mixed owner content stays in JSON children. Find the owner by its own static text and
+/// the control it owns, so another button or an unrelated visible field cannot satisfy it.
+fn adopted_owner_node<'tree>(tree: &'tree Value, label: &str, field: &str) -> Option<&'tree Value> {
+    match tree {
+        Value::Array(nodes) => nodes
+            .iter()
+            .find_map(|node| adopted_owner_node(node, label, field)),
+        Value::Object(node) => {
+            let own_label = node.get("name").and_then(Value::as_str) == Some(label)
+                || node.get("text").and_then(Value::as_str) == Some(label)
+                || node
+                    .get("children")
+                    .and_then(Value::as_array)
+                    .is_some_and(|children| {
+                        children.iter().any(|child| {
+                            child.as_str() == Some(label)
+                                || (child.get("role").and_then(Value::as_str) == Some("text")
+                                    && child.get("text").and_then(Value::as_str) == Some(label))
+                        })
+                    });
+            if node.get("role").and_then(Value::as_str) == Some("button")
+                && own_label
+                && trace_field_node(tree, field).is_some()
+            {
+                Some(tree)
+            } else {
+                node.values()
+                    .find_map(|value| adopted_owner_node(value, label, field))
+            }
+        }
+        _ => None,
+    }
+}
+
+/// External labels read masked values. Ownership instead keeps the owner's static content
+/// and the moved field's bare native line. Public twins preserve values in labels and keep
+/// the public textarea's default content when its own adopted line is walked.
+fn assert_adopted_snapshot(snapshot: &Value, name: &str, scope: &str) -> TestResult {
+    assert_adopted_canaries_absent(snapshot)?;
+    let values = adopted_field_values(name);
+    let password = "•".repeat(values[0].encode_utf16().count());
+    let textarea = "•".repeat(values[1].encode_utf16().count());
+    for (group, prefix, value) in [
+        ("passwordLabel", "Password label", password.as_str()),
+        ("textareaLabel", "Textarea label", textarea.as_str()),
+        ("public", "Public input label", values[2].as_str()),
+        ("public", "Public textarea label", values[3].as_str()),
+    ] {
+        if scope != "page" && scope != "destination" && scope != group {
+            continue;
+        }
+        let label = format!("{prefix} {value}");
+        if let Some(text) = snapshot
+            .as_str()
+            .or_else(|| trace_field_text(snapshot, &format!("button \"{label}\"")))
+        {
+            assert!(text.contains(&format!("button \"{label}\"")), "{text}");
+        } else {
+            let node = trace_field_node(snapshot, &label)
+                .ok_or_else(|| format!("missing button {label} in {snapshot}"))?;
+            assert_eq!(node["role"], "button", "{node}");
+        }
+    }
+    for (group, owner, field) in [
+        ("passwordOwner", "Owned password", "Moved password"),
+        ("textareaOwner", "Owned textarea", "Moved textarea"),
+        ("public", "Owned public input", "Public moved input"),
+        ("public", "Owned public textarea", "Public moved textarea"),
+    ] {
+        if scope != "page" && scope != "destination" && scope != group {
+            continue;
+        }
+        let public_content = (field == "Public moved textarea")
+            .then(|| format!("AdoptedPublic-{name}-textarea-content"));
+        if let Some(text) = snapshot
+            .as_str()
+            .or_else(|| trace_field_text(snapshot, &format!("\"{field}\"")))
+        {
+            assert!(
+                text.contains(owner),
+                "missing owner content {owner} in {text}"
+            );
+            let text = adopted_without_refs(text);
+            let line = text
+                .lines()
+                .find(|line| line.contains(&format!("\"{field}\"")))
+                .ok_or_else(|| format!("missing owned field {field} in {text}"))?;
+            if let Some(content) = public_content {
+                assert!(
+                    line.ends_with(&format!(": {content}"))
+                        || line.ends_with(&format!(": \"{content}\"")),
+                    "{line}"
+                );
+            } else {
+                assert!(
+                    line.ends_with(&format!("\"{field}\"")),
+                    "moved field is bare: {line}"
+                );
+            }
+        } else {
+            let owner_node = adopted_owner_node(snapshot, owner, field)
+                .ok_or_else(|| format!("missing owner {owner} with field {field} in {snapshot}"))?;
+            let node = trace_field_node(owner_node, field).ok_or("the owner includes its field")?;
+            assert_eq!(
+                node["role"],
+                if field.ends_with("textarea") {
+                    "searchbox"
+                } else {
+                    "textbox"
+                }
+            );
+            if let Some(content) = public_content {
+                assert_eq!(node["text"], content, "{node}");
+            } else {
+                assert!(node.get("text").is_none(), "moved field is bare: {node}");
+            }
+        }
+    }
+    Ok(())
+}
+
+fn assert_adopted_reads(reads: &Value, name: &str, grown: bool) -> TestResult {
+    let mut values = adopted_field_values(name);
+    if grown {
+        values[0].push('!');
+    }
+    for read in reads.as_array().ok_or("the reads after the walks")? {
+        let main = read.get("main").ok_or("the main-world clear reads")?;
+        assert_eq!(read["direct"], json!(&values[..2]));
+        assert_eq!(main["values"], json!(values));
+        assert_eq!(
+            main["defaults"],
+            json!([
+                format!("AdoptedPrivate-{name}-password-attribute"),
+                format!("AdoptedPrivate-{name}-textarea-content"),
+            ])
+        );
+        assert_eq!(
+            main["attributes"],
+            json!([
+                format!("AdoptedPrivate-{name}-password-attribute"),
+                format!("AdoptedPrivate-{name}-textarea-attribute"),
+            ])
+        );
+        assert_eq!(
+            main["content"],
+            format!("AdoptedPrivate-{name}-textarea-content")
+        );
+        assert_eq!(main["childPresent"], true);
+        if name.starts_with("closed-") {
+            assert_eq!(main["closedOpaque"], true);
+        }
+    }
+    Ok(())
+}
+
+fn assert_adopted_delta(changed: &Value, name: &str) -> TestResult {
+    assert_adopted_canaries_absent(&changed["delta"])?;
+    let delta = changed["delta"]
+        .as_str()
+        .ok_or("the changed value's delta")?;
+    assert!(delta.starts_with("# changes since"), "{name}: {delta}");
+    let old = "•".repeat(adopted_field_values(name)[0].encode_utf16().count());
+    for mask in [&old, &format!("{old}•")] {
+        assert!(
+            delta.contains(&format!("Password label {mask}\"")),
+            "{name}: {delta}"
+        );
+    }
+    assert_eq!(changed["reads"].as_array().map(Vec::len), Some(1));
+    assert_adopted_reads(&changed["reads"], name, true)
+}
+
+/// Returned formats prove the document guard reaches external references, while the raw
+/// instance facts keep this a moved-wrapper case and preserve closed-root page semantics.
+fn assert_adopted_returned_snapshots(
+    opened: &Value,
+    root: &str,
+    destination: &str,
+    name: &str,
+) -> TestResult {
+    assert_eq!(opened["initial"].as_array().map(Vec::len), Some(2));
+    assert_adopted_canaries_absent(&opened["initial"])?;
+    assert_adopted_snapshot(&opened["baseline"], name, "page")?;
+    assert_eq!(
+        opened["snapshots"].as_object().map(serde_json::Map::len),
+        Some(6)
+    );
+    assert_eq!(opened["reads"].as_array().map(Vec::len), Some(6));
+    let facts = opened.get("facts").ok_or("the native adoption facts")?;
+    assert_eq!(facts["childPresent"], true, "{name}");
+    assert_eq!(facts["childURL"], "about:srcdoc", "{name}");
+    assert_eq!(facts["frameCount"], i32::from(root == "document"), "{name}");
+    assert_eq!(facts["sourcePrototypes"], json!([true, true]), "{name}");
+    assert_eq!(
+        facts["destinationInstances"],
+        json!([false, false]),
+        "{name}"
+    );
+    for (scope, group) in opened["snapshots"]
+        .as_object()
+        .ok_or("the snapshot scopes")?
+    {
+        for format in ["texts", "trees"] {
+            assert_eq!(
+                group[format].as_object().map(serde_json::Map::len),
+                Some(if format == "texts" { 6 } else { 2 })
+            );
+            for (mode, snapshot) in group[format].as_object().ok_or("the snapshot formats")? {
+                assert_adopted_canaries_absent(snapshot)?;
+                if scope == "page" && destination == "child" && mode == "default" {
+                    continue;
+                }
+                assert_adopted_snapshot(snapshot, name, scope)?;
+            }
+        }
+    }
+    assert_adopted_reads(&opened["reads"], name, false)?;
+    Ok(())
+}
+
+/// Strip only unstable refs before comparing a moved control's bare line. The label and
+/// any printed value remain intact, so the assertion still catches accidental value output.
+fn adopted_without_refs(text: &str) -> String {
+    text.split(" [ref=")
+        .enumerate()
+        .map(|(index, part)| match (index, part.split_once(']')) {
+            (0, _) | (_, None) => part.to_owned(),
+            (_, Some((_, rest))) => rest.to_owned(),
+        })
+        .collect()
+}
+
+/// The public run returns rendered forms; the trace holds the same operations' raw trees.
+/// Fill arguments and deliberate clear reads may retain canaries, so only snapshot results
+/// and their persisted baseline are scanned after the server stops.
+#[tokio::test(flavor = "multi_thread")]
+async fn adopted_private_fields_never_reach_stored_snapshot_results() -> TestResult {
+    let Some(browser) = browser_or_skip() else {
+        return Ok(());
+    };
+    let mut rig = Rig::start(&browser, CaptchaKey::Absent)?;
+    match time::timeout(TEST_BUDGET, adopted_snapshot_trace(&mut rig)).await {
+        Ok(Ok(())) => Ok(()),
+        Ok(Err(error)) => Err(format!("{error}\n{}", rig.logs()).into()),
+        Err(_elapsed) => Err(format!("adopted snapshot trace timed out\n{}", rig.logs()).into()),
+    }
+}
+
+async fn adopted_snapshot_trace(rig: &mut Rig) -> TestResult {
+    let server = FixtureServer::start(HashMap::from([(
+        "/adopted.html".to_owned(),
+        Page::html(ADOPTED_FIELD_PAGE),
+    )]))
+    .await?;
+    rig.until_ready().await?;
+    let configured = rig
+        .host(
+            "PATCH",
+            "/v1/settings",
+            Some(HOST_TOKEN),
+            Some(&json!({ "trace": { "values": "on", "valueBytes": 262_144 } })),
+        )
+        .await?;
+    assert_eq!(configured.status, 200, "{}", configured.text());
+    let client = rig.client().await?;
+    let mut runs = Vec::new();
+    for (root, destination) in serde_json::from_str::<Vec<(&str, &str)>>(ADOPTED_FIELD_CASES)? {
+        let name = format!("{root}-{destination}");
+        let task = format!("adopted-{name}");
+        let url = server.url(
+            "127.0.0.1",
+            &format!("/adopted.html?root={root}&destination={destination}"),
+        );
+        let script = format!("const p = await context.newPage();\n{ADOPTED_FIELD_SNAPSHOT_SCRIPT}")
+            .replace("__FIXTURE_URL__", &json!(url).to_string())
+            .replace("__DESTINATION__", &json!(destination).to_string())
+            .replace("__CASE_NAME__", &json!(name).to_string());
+        let first = run(
+            &client,
+            &script,
+            &json!({ "requestId": format!("{task}-1"), "taskId": task }),
+        )
+        .await?;
+        let first_id: RunId = outcome(&first)?["id"]
+            .as_str()
+            .ok_or("the first run id")?
+            .parse()?;
+        let returned = first
+            .structured_content
+            .as_ref()
+            .and_then(|value| value.get("value"))
+            .ok_or_else(|| format!("the run returns its snapshots: {first:?}"))?;
+        assert_adopted_returned_snapshots(returned, root, destination, &name)?;
+        let changed = run(
+            &client,
+            &ADOPTED_FIELD_DELTA_SCRIPT.replace("__DESTINATION__", &json!(destination).to_string()),
+            &json!({ "requestId": format!("{task}-2"), "taskId": task }),
+        )
+        .await?;
+        let second_id: RunId = outcome(&changed)?["id"]
+            .as_str()
+            .ok_or("the second run id")?
+            .parse()?;
+        let returned = changed
+            .structured_content
+            .as_ref()
+            .and_then(|value| value.get("value"))
+            .ok_or_else(|| format!("the run returns its delta: {changed:?}"))?;
+        assert_adopted_delta(returned, &name)?;
+        runs.push((root, destination, name, first_id, second_id));
+    }
+    client.cancel().await?;
+    assert_eq!(rig.stop_neo().await?, Some(0));
+    let store = TraceStore::open(&rig.trace_path()).await?;
+    for (root, destination, name, first, second) in runs {
+        assert_adopted_stored_snapshots(&store, [first, second], root, destination, &name).await?;
+    }
+    Ok(())
+}
+
+/// Snapshot requests run sequentially in the script. Their known scope order pairs each raw
+/// stored result with the public request that produced it, including source-world warmups.
+/// This keeps pre-adoption fields' valid masked values distinct from post-adoption bare lines.
+async fn assert_adopted_stored_snapshots(
+    store: &TraceStore,
+    ids: [RunId; 2],
+    root: &str,
+    destination: &str,
+    name: &str,
+) -> TestResult {
+    const SCOPES: [&str; 6] = [
+        "page",
+        "destination",
+        "passwordLabel",
+        "textareaLabel",
+        "passwordOwner",
+        "textareaOwner",
+    ];
+    let mut snapshot_count = 0;
+    let mut baseline_count = 0;
+    for (phase, id) in ids.into_iter().enumerate() {
+        let detail = store
+            .run(id)
+            .await?
+            .ok_or("the adopted run was persisted")?;
+        assert_eq!(detail.summary.status, RunStatus::Ok, "{name}");
+        for operation in detail.operations {
+            if !matches!(
+                operation.name.as_str(),
+                "page.ariaSnapshot"
+                    | "locator.ariaSnapshot"
+                    | "page.snapshotBaseline"
+                    | "page.snapshotPending"
+            ) {
+                continue;
+            }
+            assert!(
+                !operation.result_truncated,
+                "{name}: stored snapshot results are whole"
+            );
+            let result = operation.result.ok_or("the snapshot has a stored result")?;
+            assert_adopted_canaries_absent(&result)?;
+            if operation.name == "page.snapshotBaseline" {
+                baseline_count += 1;
+                assert_adopted_snapshot(&result, name, "page")?;
+            }
+            if !operation.name.ends_with(".ariaSnapshot") {
+                continue;
+            }
+            if phase == 0 && (2..50).contains(&snapshot_count) {
+                let scope = SCOPES
+                    .get((snapshot_count - 2) / 8)
+                    .copied()
+                    .ok_or("the snapshot scope index")?;
+                let format = (snapshot_count - 2) % 8;
+                // Default mode stays in one frame. AI and full page reads stitch the child.
+                if !(scope == "page" && destination == "child" && matches!(format, 5 | 7)) {
+                    assert_adopted_snapshot(&result, name, scope)?;
+                }
+            } else if phase == 0 && snapshot_count == 50 {
+                assert_adopted_snapshot(&result, name, "page")?;
+            }
+            snapshot_count += 1;
+        }
+    }
+    assert_eq!(
+        snapshot_count, 52,
+        "{root}-{destination}: every requested snapshot was stored"
+    );
+    assert_eq!(
+        baseline_count, 1,
+        "{name}: the later run read its persisted baseline"
+    );
+    Ok(())
+}
+
 /// Run 1: a new tab, a navigation and a read, ending with the tab open and its handle returned.
 /// Returns the run id and the tab.
 async fn the_agent_opens_a_tab(client: &Client) -> Result<(String, i64), Box<dyn Error>> {

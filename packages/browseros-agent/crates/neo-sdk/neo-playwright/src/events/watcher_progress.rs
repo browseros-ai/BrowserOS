@@ -68,6 +68,13 @@ impl WatcherProgress {
         }
     }
 
+    /// A cache may trust absence only while observation is live and caught up. Stopped uses
+    /// `u64::MAX` to release waiters, but that sentinel cannot prove that no frame attached.
+    pub(crate) fn live_through(&self, events: u64) -> bool {
+        let applied = self.applied_through();
+        self.events_handled() != u64::MAX && applied >= events
+    }
+
     /// The watcher now holds back events from `position` on (the oldest it holds), or none.
     pub(crate) fn hold_from(&self, position: Option<u64>) {
         self.held.store(
@@ -121,6 +128,31 @@ mod tests {
     use tokio::time;
 
     use super::{Fence, WatcherProgress};
+
+    #[test]
+    fn a_negative_topology_hint_requires_a_live_watcher_with_no_backlog_or_held_events() {
+        let progress = WatcherProgress::default();
+        progress.start(10, 0);
+        assert!(progress.live_through(10));
+        assert!(
+            !progress.live_through(11),
+            "unread broadcast events are uncertain"
+        );
+        progress.handled(1);
+        assert!(progress.live_through(11));
+        progress.hold_from(Some(10));
+        assert!(
+            !progress.live_through(11),
+            "a tab's queued events are not applied"
+        );
+        progress.hold_from(None);
+        assert!(progress.live_through(11));
+        progress.stopped();
+        assert!(
+            !progress.live_through(0),
+            "stopped releases waiters but proves no absence"
+        );
+    }
 
     #[tokio::test(start_paused = true)]
     async fn tests_that_a_wait_ends_when_the_watcher_counts_past_the_fence() {
