@@ -15,10 +15,14 @@ import {
 import type { AcpAgentDefinition } from '../../../src/lib/agents/agent-types'
 
 const AGENT_ID = '4a815af8-7555-4d65-b789-3be98f567a2d'
+const OTHER_AGENT_ID = '9c2f1d44-3a17-4e88-9d0b-6f5a1c7e2b30'
 
-function acpAgent(type: AcpAgentDefinition['type'] = 'claude') {
+function acpAgent(
+  type: AcpAgentDefinition['type'] = 'claude',
+  id: string = AGENT_ID,
+) {
   return {
-    id: AGENT_ID,
+    id,
     name: type === 'claude' ? 'Claude Code' : 'Codex',
     type,
     workingDirectory: '/agent/default',
@@ -30,6 +34,7 @@ function acpAgent(type: AcpAgentDefinition['type'] = 'claude') {
 function deps(
   options: {
     agent?: AcpAgentDefinition | null
+    agents?: AcpAgentDefinition[]
     streamError?: Error
     firstStreamError?: Error
   } = {},
@@ -115,9 +120,12 @@ function deps(
     } as never,
     serverPort: 9100,
     acpAgentStore: {
-      get: mock(async () =>
-        options.agent === undefined ? acpAgent() : options.agent,
-      ),
+      get: mock(async (id: string) => {
+        if (options.agents) {
+          return options.agents.find((agent) => agent.id === id) ?? null
+        }
+        return options.agent === undefined ? acpAgent() : options.agent
+      }),
     },
     acpRuntime: acpRuntime as never,
     conversationStore: conversationStore as never,
@@ -412,6 +420,44 @@ describe('ChatService ACP dispatch', () => {
     expect(fixture.leases[0]?.revoked).toBe(true)
     expect(fixture.leases[1]?.readOnly).toBe(true)
     expect(fixture.calls[1]?.readOnly).toBe(true)
+  })
+
+  it('re-mints the browser tool lease when the conversation switches agents', async () => {
+    const fixture = deps({
+      agents: [acpAgent('claude'), acpAgent('codex', OTHER_AGENT_ID)],
+    })
+    const conversationId = crypto.randomUUID()
+    const request = {
+      conversationId,
+      isScheduledTask: false,
+      mode: 'agent' as const,
+      origin: 'sidepanel' as const,
+    }
+
+    const claude = { type: 'claude' as const, agentId: AGENT_ID }
+    const codex = { type: 'codex' as const, agentId: OTHER_AGENT_ID }
+    for (const [index, target] of [claude, codex, claude].entries()) {
+      const response = await fixture.service.processMessage(
+        { ...request, target, message: `turn ${index}` },
+        new AbortController().signal,
+      )
+      expect(await response.text()).toContain('"delta":"done"')
+    }
+
+    // Switching away revokes the lease that the returning agent's cached ACP
+    // session still holds, so the runtime must observe a different token to
+    // replace that session instead of reusing a revoked capability.
+    expect(fixture.leases).toHaveLength(3)
+    expect(fixture.leases[0]?.revoked).toBe(true)
+    expect(fixture.leases[1]?.revoked).toBe(true)
+    expect(fixture.leases[2]?.revoked).toBe(false)
+    expect(fixture.calls).toHaveLength(3)
+    expect(fixture.calls[0]?.browserToolLeaseToken).not.toBe(
+      fixture.calls[2]?.browserToolLeaseToken,
+    )
+    expect(fixture.calls[2]?.browserToolLeaseToken).toBe(
+      fixture.leases[2]?.token,
+    )
   })
 })
 
