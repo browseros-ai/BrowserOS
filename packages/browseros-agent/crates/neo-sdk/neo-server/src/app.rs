@@ -18,18 +18,19 @@ use neo_trace::{
 use tokio::net::TcpListener;
 use tokio::runtime::{Builder, Runtime};
 use tokio::signal::unix::SignalKind;
+use tokio::sync::broadcast;
 use tokio::time::MissedTickBehavior;
 use tokio::{fs, signal, time};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 
-use crate::browser::{BrowserLink, NeoTab, TabRegistry};
+use crate::browser::{BrowserLink, NeoTab, TabEvent, TabRegistry};
 use crate::builtins::{self, BuiltinDeps, CaptchaClaims, PlaywrightFacade, TabJanitor};
 use crate::config::{AppConfig, Defaults, HostedMode};
 use crate::dispatch::{Dispatcher, Observer, RegistryBuilder};
 use crate::host::{
-    AgentFront, FillLedger, FillService, FillServiceParts, HostApi, HostHolds, HostInputs,
-    TakeoverLock,
+    AgentFront, FillLedger, FillService, FillServiceParts, FilledTabs, HostApi, HostHolds,
+    HostInputs, TakeoverLock,
 };
 use crate::http::agent_router;
 use crate::mcp::McpServer;
@@ -40,25 +41,60 @@ use crate::test_support::FakeCdp;
 /// The host's private typing (`POST /v1/tabs/{tabId}/fill`), over the app's one door. Its record
 /// of request ids lives beside the trace and keeps what the trace keeps: the host's
 /// `trace.retentionSeconds`, read at every prune, as the retention sweep reads it.
+/// The parts the host's private typing shares with the rest of the app. A plain data bag.
+struct PrivateTypingParts<'a> {
+    dispatcher: &'a Arc<Dispatcher>,
+    browser: &'a Arc<BrowserLink>,
+    takeover: &'a Arc<TakeoverLock>,
+    playwright: &'a Arc<PlaywrightFacade>,
+    filled: Arc<FilledTabs>,
+}
+
 async fn private_typing(
     trace_dir: &Path,
     settings: &Settings,
-    dispatcher: &Arc<Dispatcher>,
-    browser: &Arc<BrowserLink>,
-    takeover: &Arc<TakeoverLock>,
-    playwright: &Arc<PlaywrightFacade>,
+    parts: PrivateTypingParts<'_>,
     shutdown: &CancellationToken,
 ) -> Arc<FillService> {
+    let PrivateTypingParts {
+        dispatcher,
+        browser,
+        takeover,
+        playwright,
+        filled,
+    } = parts;
     let retention = settings.clone();
     let entry = Arc::clone(playwright);
+    let reader = Arc::clone(playwright);
     FillService::new(FillServiceParts {
         dispatcher: Arc::clone(dispatcher),
         browser: Arc::clone(browser),
         takeover: Arc::clone(takeover),
         ledger: FillLedger::open(trace_dir, move || retention.trace_retention()).await,
+        filled,
         shutdown: shutdown.clone(),
         took: Arc::new(move |tab| entry.took_private_text(tab)),
+        checks: Arc::new(move |tab| {
+            let reader = Arc::clone(&reader);
+            Box::pin(async move { reader.picture_verdict(tab).await })
+        }),
     })
+}
+
+/// Drops a closed tab's target from the record of tabs that took a fill, in the order the
+/// link's tab watch saw it. A close seen on a socket since replaced is skipped: after a browser
+/// restart its tab id may name another tab, and the next start's listing prunes the record.
+async fn forget_closed_filled_tabs(browser: Arc<BrowserLink>, filled: Arc<FilledTabs>) {
+    let mut events = browser.tab_events();
+    loop {
+        match events.recv().await {
+            Ok(TabEvent::Closed { epoch, tab }) if browser.epoch() == Some(epoch) => {
+                filled.closed(tab).await;
+            }
+            Ok(_) | Err(broadcast::error::RecvError::Lagged(_)) => {}
+            Err(broadcast::error::RecvError::Closed) => return,
+        }
+    }
 }
 
 /// Neo's sidecar, started: the agent listener bound, the browser link connecting, and every
@@ -216,11 +252,18 @@ impl App {
         let browser = link(native, Arc::clone(&tabs));
         // Armed by the host API with the owner's screen and views, beside the takeover lock.
         let front = Arc::new(AgentFront::default());
+        // Read back before the facade starts, which marks its tabs before any op runs.
+        let filled = FilledTabs::open(&config.env.trace_dir()).await;
+        tokio::spawn(forget_closed_filled_tabs(
+            Arc::clone(&browser),
+            Arc::clone(&filled),
+        ));
         let playwright = PlaywrightFacade::start(
             Arc::clone(&browser),
             matches!(&config.env.hosted_mode, HostedMode::On),
             Arc::clone(&front),
             config.file_access(settings.clone()),
+            Some(Arc::clone(&filled)),
         );
 
         let claims = Arc::new(CaptchaClaims::default());
@@ -261,10 +304,13 @@ impl App {
         let fill = private_typing(
             &config.env.trace_dir(),
             &settings,
-            &dispatcher,
-            &browser,
-            &takeover,
-            &playwright,
+            PrivateTypingParts {
+                dispatcher: &dispatcher,
+                browser: &browser,
+                takeover: &takeover,
+                playwright: &playwright,
+                filled,
+            },
             &shutdown,
         )
         .await;

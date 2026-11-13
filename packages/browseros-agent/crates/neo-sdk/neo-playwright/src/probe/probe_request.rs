@@ -166,6 +166,11 @@ pub(crate) enum ProbeRequest {
     /// One step of the private entry on a pinned box (design sections 5.4 to 5.6): `value`
     /// with its answer (`PrivateAnswer`), or `detached` for a pin that is gone.
     Private { pin: Pin, step: PrivateStep },
+    /// Whether this frame's document holds a box the mask treats as private, that is not
+    /// empty, and that the browser paints in clear (protected-fill ruling R45): `value` with a
+    /// boolean. Neo's camera asks it in every frame before and after a picture. Reads no value
+    /// out of the page.
+    PrivateShown,
     /// One read of one element, resolved in the same call.
     Read {
         target: ProbeTarget,

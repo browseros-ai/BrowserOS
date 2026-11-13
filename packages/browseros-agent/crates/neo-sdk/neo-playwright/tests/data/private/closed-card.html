@@ -1,0 +1,10 @@
+<!doctype html><meta charset=utf-8><title>Closed card</title>
+<!-- A card box the page declares (cc-number), inside a CLOSED shadow root, with a button beside
+     it so a marked snapshot's clickable read finds the root. The page's own script keeps the root
+     and fills the box, as the keyboard could: no snapshot or locator reaches it first. -->
+<div id=host></div>
+<script>
+const root = document.getElementById('host').attachShadow({ mode: 'closed' });
+root.innerHTML = '<label>Card number <input id=card autocomplete=cc-number style="width:280px;height:30px"></label><div onclick="1" style="width:80px;height:24px;border:1px solid #888">Pay</div>';
+window.fillCard = (value) => { root.getElementById('card').value = value; return root.getElementById('card').value.length; };
+</script>

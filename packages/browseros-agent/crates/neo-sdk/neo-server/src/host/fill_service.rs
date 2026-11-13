@@ -23,7 +23,9 @@
 
 use std::sync::Arc;
 
-use neo_http::{FillAsk, FillDoor, FillRefusal, FillReply, FillVerb, TookPrivateText};
+use neo_http::{
+    ChecksPicture, FillAsk, FillDoor, FillRefusal, FillReply, FillVerb, TookPrivateText,
+};
 use neo_sdk_api as api;
 use neo_takeover::NamedLock;
 use neo_trace::{ErrorOwner, RunId, RunStatus};
@@ -32,10 +34,10 @@ use serde_json::Value;
 use tokio::time::{self, Instant};
 use tokio_util::sync::CancellationToken;
 
-use super::TakeoverLock;
 use super::fill_answer::{self, Refused, owner_name};
 use super::fill_ledger::{Admission, FillLedger, FillTicket};
 use super::fill_request::{CheckRequest, FillRequest};
+use super::{FilledTabs, TakeoverLock};
 use crate::browser::{BrowserLink, PageRef};
 use crate::builtins::{
     ENTRY_BACKSTOP, FillProgress, FillValues, HOST_FILL, HOST_FILL_CHECK, HOST_FILL_CHECK_CODE,
@@ -52,10 +54,14 @@ pub(crate) struct FillService {
     browser: Arc<BrowserLink>,
     takeover: Arc<TakeoverLock>,
     ledger: Arc<FillLedger>,
+    /// The tabs that took a fill, on disk for a restart (ruling R45).
+    filled: Arc<FilledTabs>,
     /// Cancelled on SIGTERM: a fill stops as `neo / shutting_down` and records its end.
     shutdown: CancellationToken,
     /// Which tabs the entry typed into, for the host API's camera.
     took: TookPrivateText,
+    /// The app's reading of what a tab shows, for the host API's camera (ruling R45).
+    checks: ChecksPicture,
 }
 
 /// What the fill service is built from. A plain data bag.
@@ -68,11 +74,15 @@ pub(crate) struct FillServiceParts {
     pub(crate) takeover: Arc<TakeoverLock>,
     /// The fill's own record of request ids.
     pub(crate) ledger: Arc<FillLedger>,
+    /// The tabs that took a fill, kept on disk so a Neo restart still takes no picture of them.
+    pub(crate) filled: Arc<FilledTabs>,
     /// Fires on SIGTERM.
     pub(crate) shutdown: CancellationToken,
     /// Whether a tab took a private entry: the entry's own answer
     /// (`Playwright::took_private_text`), true for the tab's life once its first character went.
     pub(crate) took: TookPrivateText,
+    /// What a tab shows now, read in every frame (`Playwright::picture_check`, ruling R45).
+    pub(crate) checks: ChecksPicture,
 }
 
 /// The check method's value, as the service reads it back.
@@ -90,17 +100,27 @@ impl FillService {
             browser,
             takeover,
             ledger,
+            filled,
             shutdown,
             took,
+            checks,
         } = parts;
         Arc::new(Self {
             dispatcher,
             browser,
             takeover,
             ledger,
+            filled,
             shutdown,
             took,
+            checks,
         })
+    }
+
+    /// What the host API arms its camera's reading of a tab with (ruling R45).
+    #[must_use]
+    pub(crate) fn checks_picture(&self) -> ChecksPicture {
+        Arc::clone(&self.checks)
     }
 
     /// What the host API arms its camera with, so a tab this service typed into is never
@@ -160,6 +180,7 @@ impl FillService {
             dispatcher: Arc::clone(&self.dispatcher),
             browser: Arc::clone(&self.browser),
             takeover: Arc::clone(&self.takeover),
+            filled: Arc::clone(&self.filled),
             shutdown: self.shutdown.clone(),
         };
         match tokio::spawn(work.run(run, request, ticket)).await {
@@ -180,6 +201,7 @@ impl FillService {
             dispatcher: Arc::clone(&self.dispatcher),
             browser: Arc::clone(&self.browser),
             takeover: Arc::clone(&self.takeover),
+            filled: Arc::clone(&self.filled),
             shutdown: self.shutdown.clone(),
         };
         tokio::spawn(work.check(request))
@@ -193,6 +215,7 @@ struct Fill {
     dispatcher: Arc<Dispatcher>,
     browser: Arc<BrowserLink>,
     takeover: Arc<TakeoverLock>,
+    filled: Arc<FilledTabs>,
     shutdown: CancellationToken,
 }
 
@@ -222,9 +245,9 @@ impl Fill {
         let Some(view) = self.browser.view() else {
             return refuse(ticket, Refused::BrowserUnavailable);
         };
-        if self.browser.page(tab).await.is_none() {
+        let Some(page) = self.browser.page(tab).await else {
             return refuse(ticket, Refused::TabNotFound);
-        }
+        };
         // A named lock that holds nothing here means the host believes the agent is locked out
         // and it is not: a request error, the id unused. A takeover's lock named is the door's
         // to refuse (`owner_has_control`, nothing typed), as any lock the host did not take.
@@ -232,6 +255,13 @@ impl Fill {
             && self.takeover.named(lock, tab) == NamedLock::NotHeld
         {
             return refuse(ticket, Refused::LockReleased);
+        }
+        // The tab's target is on disk before the first character, so a Neo restart while the
+        // browser keeps the tab still takes no picture of it (ruling R45). A write that fails
+        // refuses the fill before it starts: nothing typed, the id unused.
+        if let Err(error) = self.filled.remember(tab, page.target_id).await {
+            tracing::error!(%error, run = %id, "cannot record the tab that takes the fill; it types nothing");
+            return refuse(ticket, Refused::RecordUnavailable);
         }
         let recorded = match ticket.as_mut() {
             Some(ticket) => ticket.started().await,

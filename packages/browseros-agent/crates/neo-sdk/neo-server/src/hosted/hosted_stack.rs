@@ -68,6 +68,7 @@ impl HostedStack {
             matches!(&config.env.hosted_mode, HostedMode::On),
             Arc::new(AgentFront::without_host()),
             file_access,
+            None,
         );
         let solver = CaptchaSolver::new(config.captcha).map(Arc::new);
         let claims = Arc::new(CaptchaClaims::default());

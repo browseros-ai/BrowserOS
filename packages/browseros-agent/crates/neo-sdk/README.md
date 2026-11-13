@@ -53,9 +53,9 @@ host / MCP run
 A host types a secret into a page with `POST /v1/tabs/{tabId}/fill`, never in a script: the
 route lives in `neo-http`, and `neo-server` runs it as a run of its own with one `protected`
 operation that records no value, address or picture (`neo-server/src/host/fill_service.rs`;
-[MIGRATION.md](neo-sdk-api/MIGRATION.md) has the host's side). On the defaults, Neo's own
-picture after a script's own fill of a card number shows the number in clear, because masking
-covers text only; `trace.screenshots: off` closes that until Neo withholds such pictures.
+[MIGRATION.md](neo-sdk-api/MIGRATION.md) has the host's side). Neo also stores no picture of a
+tab while any frame of it shows a box masking treats as private, not empty and painted in clear,
+such as a card number a script typed; a password box paints bullets, so sign-in pages keep theirs.
 
 `neo-server/docker/` builds the Neo SDK image, the browser plus this server, for hosts such as
 zuzu: see [its README](neo-server/docker/README.md).

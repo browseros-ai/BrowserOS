@@ -12,7 +12,7 @@
 use crate::event_log::{EventKind, EventLog, LogEvent};
 use crate::fill_route::{FillDoor, FillGate};
 use crate::live_tabs::LiveTabs;
-use crate::private_tabs::{PrivateTabs, TookPrivateText};
+use crate::private_tabs::{ChecksPicture, PrivateTabs, TookPrivateText};
 use crate::screenshot_taker::Camera;
 use crate::settings::Settings;
 use crate::tab_keeps::TabKeeps;
@@ -213,6 +213,14 @@ impl Service {
     /// records `withheld` in the picture's place. Arm it with the fill routes.
     pub fn arm_private_tabs(&self, took: TookPrivateText) {
         self.state.private.arm(took);
+    }
+
+    /// Arms the camera with the app's reading of what a tab shows (ruling R45): every frame is
+    /// asked whether a box masking treats as private holds a value painted in clear, before and
+    /// after each capture. Arm it before the socket serves; unarmed, the camera reads nothing.
+    /// The first arm stays.
+    pub fn arm_picture_check(&self, check: ChecksPicture) {
+        self.state.private.arm_check(check);
     }
 
     /// Arms `POST /v1/tabs/{tabId}/fill` and `/fill/check` with what a fill does, which lives in

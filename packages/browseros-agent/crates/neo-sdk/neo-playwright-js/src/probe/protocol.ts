@@ -17,7 +17,7 @@ export type NeoProbe = NonNullable<typeof globalThis.__neoProbe>
  * reports it, and an install whose number differs from Rust's PROBE_PROTOCOL fails as
  * `neo / internal` (the engine asset is stale).
  */
-export const PROTOCOL = 37
+export const PROTOCOL = 38
 
 /**
  * The function declaration Rust sends with every request. Rust calls it on the world's global
@@ -60,6 +60,7 @@ export type InputArrivedRequest = RequestOf<'inputArrived'>
 export type ScreenshotMaskRequest = RequestOf<'screenshotMask'>
 export type ScreenshotMaskCleanupRequest = RequestOf<'screenshotMaskCleanup'>
 export type WebStorageRequest = RequestOf<'webStorage'>
+export type PrivateShownRequest = RequestOf<'privateShown'>
 
 export type Described = Extract<ProbeReply, { kind: 'described' }>
 export type NoMatch = Extract<ProbeReply, { kind: 'none' }>
@@ -100,6 +101,7 @@ export const REPLY_KINDS = {
   edit: ['value', 'detached', 'notFocused'],
   look: ['value', 'detached'],
   private: ['value', 'detached'],
+  privateShown: ['value'],
   read: ['read', 'none', 'strict', 'detached'],
   readAll: ['values'],
   selector: ['selector', 'none', 'detached'],

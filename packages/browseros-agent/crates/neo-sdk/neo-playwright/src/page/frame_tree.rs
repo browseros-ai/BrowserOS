@@ -306,6 +306,36 @@ pub(crate) async fn read(
     page: &PageId,
     root: &ProtocolSession,
 ) -> Result<FrameTree, CoreError> {
+    read_frames(browser, page, root, Subtrees::Skip).await
+}
+
+/// [`read`], failing where it skips: a cross-site frame that exists and whose own tree cannot be
+/// read fails the whole read. Neo's camera reads every frame before it may store a picture
+/// (protected-fill ruling R45), and a frame left out there could be the one showing a card
+/// number.
+pub(crate) async fn read_every(
+    browser: &BrowserSession,
+    page: &PageId,
+    root: &ProtocolSession,
+) -> Result<FrameTree, CoreError> {
+    read_frames(browser, page, root, Subtrees::Require).await
+}
+
+/// What a read does with a cross-site frame whose own tree cannot be read.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Subtrees {
+    /// Leave it out: the frame may have gone away between the two reads.
+    Skip,
+    /// Fail the read.
+    Require,
+}
+
+async fn read_frames(
+    browser: &BrowserSession,
+    page: &PageId,
+    root: &ProtocolSession,
+    subtrees: Subtrees,
+) -> Result<FrameTree, CoreError> {
     let mut tree = FrameTree::default();
     tree.add_hosted(frame_tree(root).await?.frame_tree, None, root);
     let iframes: Targets = browser
@@ -342,12 +372,14 @@ pub(crate) async fn read(
             else {
                 continue;
             };
-            if let Ok(subtree) = oopif_tree(browser, page, &oopif.target_id, parent).await {
-                tree.add_hosted(
+            match oopif_tree(browser, page, &oopif.target_id, parent).await {
+                Ok(subtree) => tree.add_hosted(
                     subtree.tree.frame_tree,
                     oopif.parent_frame_id.as_deref(),
                     &subtree.session,
-                );
+                ),
+                Err(error) if subtrees == Subtrees::Require => return Err(error),
+                Err(_skipped) => {}
             }
         }
     }

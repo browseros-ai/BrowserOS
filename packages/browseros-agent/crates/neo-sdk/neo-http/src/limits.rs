@@ -28,6 +28,10 @@ pub(crate) const CAPTURE_BACKOFF: Duration = Duration::from_millis(500);
 /// The longest one job holds the camera, its attempts and pauses together; past it the job
 /// answers `Dropped`. Three attempts and two pauses take 7 s, so it binds only if those grow.
 pub(crate) const CAPTURE_BUDGET: Duration = Duration::from_secs(8);
+/// How long the camera waits for the app's reading of what a tab shows (ruling R45), once before
+/// and once after a capture. It reads every frame, cross-site ones included; a reading that does
+/// not come in time withholds the picture.
+pub(crate) const VERDICT_BUDGET: Duration = Duration::from_secs(5);
 
 /// The screenshot jobs that may wait for the camera on one tab (decision 37). A newer job drops
 /// the tab's oldest waiting one, which answers `Dropped`: a capture that far behind its

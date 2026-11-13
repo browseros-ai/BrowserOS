@@ -346,14 +346,15 @@ POST /v1/tabs/{tabId}/fill
   the mark stays in the box's frame: a box the page moves into another same-origin frame reads
   its value there from `inputValue()` and assertions.
 - **Not covered**: what the owner types in a takeover or on the display, a script's own fill
-  and the browser's autofill; a Neo restart forgets which tabs took a fill, so Neo pictures them
-  again; a box the page re-creates, or a value Back restores, has no mark. `neo.solveCaptcha`
+  and the browser's autofill; a box the page re-creates, or a value Back restores, has no mark.
+  A Neo restart keeps which tabs took a fill (a synced record beside the trace). `neo.solveCaptcha`
   still photographs its challenge. A dropdown (`expiry_select.js` stays), a link with a token in
   its address (`open_link.js` stays), and the browser's saved form state, which can bring a
   value back after a restore (the host clears it). The contract's fill route lists each limit.
-- **A script's own fill of a card number** is not this route: Neo's own picture after it shows
-  the number in clear, because masking covers text only. Set `trace.screenshots` to `off` to
-  close that until Neo withholds such pictures.
+- **A script's own fill of a card number** is not this route, and its pictures are withheld
+  anyway: Neo stores no picture of a tab while any frame of it shows a box masking treats as
+  private, not empty and painted in clear. A password box paints bullets, so a sign-in page keeps
+  its pictures.
 
 ## Error bodies
 

@@ -9,8 +9,9 @@ use browseros_core::pages::{PageInfo, PageManagerHooks};
 use browseros_core::viewport::Viewports;
 use browseros_core::{
     BrowserSession, BrowserSessionHooks, BrowserView, CdpConnection, NativeCapabilities, TabId,
-    page_js,
+    TargetId, page_js,
 };
+use serde_json::json;
 use tokio::sync::{SetOnce, broadcast, watch};
 use tokio::time;
 
@@ -174,6 +175,24 @@ impl BrowserLink {
     /// until something refreshes the page; `None` once core saw the tab close.
     pub(crate) async fn page(&self, tab: TabId) -> Option<PageInfo> {
         self.session.get()?.pages.get_info_by_tab(tab).await
+    }
+
+    /// Every tab the browser has, each with its target, from the browser's own list: unlike
+    /// core's page listing, which leaves out extension and devtools pages, nothing is filtered.
+    pub(crate) async fn every_tab(&self) -> Option<Vec<(TargetId, TabId)>> {
+        let session = self.session.get()?;
+        let listed = session.cdp("Browser.getTabs", json!({}), None).await.ok()?;
+        listed
+            .get("tabs")?
+            .as_array()?
+            .iter()
+            .map(|tab| {
+                Some((
+                    TargetId::from(tab.get("targetId")?.as_str()?.to_owned()),
+                    TabId(tab.get("tabId")?.as_i64()?),
+                ))
+            })
+            .collect()
     }
 
     /// The one session, once the first connect landed; until then this waits. The host API

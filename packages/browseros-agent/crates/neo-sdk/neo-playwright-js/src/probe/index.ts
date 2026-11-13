@@ -22,6 +22,7 @@ import { FailureOutput } from './failure-output'
 import { armInput, inputArrived } from './files'
 import { privateStep } from './private-entry'
 import { look } from './private-look'
+import { privateShown } from './private-shown'
 import {
   type BootOptions,
   type Described,
@@ -79,6 +80,7 @@ const HANDLERS: Handlers = {
   edit,
   look,
   private: privateStep,
+  privateShown,
   read,
   readAll,
   selector: generatedSelector,

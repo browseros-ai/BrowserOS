@@ -131,7 +131,8 @@ impl ShotState {
 pub enum ShotRead {
     /// The JPEG.
     Jpeg(Vec<u8>),
-    /// Withheld: the tab had taken a host's private typing, or an older writer withheld it.
+    /// Withheld: the tab had taken a host's private typing, or a frame showed a private box's
+    /// value (protected-fill ruling R45), or an older writer withheld it.
     Withheld,
     /// Deleted by the disk cap, or missing from the disk.
     Expired,

@@ -8,7 +8,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use browseros_core::{NativeCapabilities, TabId};
-use neo_http::{Settings, SettingsDefaults};
+use neo_http::{ChecksPicture, Settings, SettingsDefaults, TookPrivateText};
 use neo_trace::{Effect, OperationId, RedactionLimits, Redactor, RunId, TraceStore, WriterConfig};
 use serde_json::{Value, json};
 use tempfile::TempDir;
@@ -18,7 +18,9 @@ use tokio::task::JoinHandle;
 use tokio::{fs, time};
 use tokio_util::sync::CancellationToken;
 
-use super::{FillLedger, FillService, FillServiceParts, HostApi, HostInputs, TakeoverLock};
+use super::{
+    FillLedger, FillService, FillServiceParts, FilledTabs, HostApi, HostInputs, TakeoverLock,
+};
 use crate::browser::{Adopt, BrowserLink, NeoTab, TabRegistry};
 use crate::builtins::{self, EntryParts, PrivateEntry};
 use crate::config::HostApiConfig;
@@ -68,6 +70,21 @@ struct Host {
     /// The stand-in for the entry (protected-fill pull request 2), which the tests script.
     entry: Arc<ScriptedEntry>,
     dir: TempDir,
+}
+
+/// The scripted entry's answer to which tabs took a fill, as the app wires the real entry's.
+fn entry_took(entry: &Arc<ScriptedEntry>) -> TookPrivateText {
+    let entry = Arc::clone(entry);
+    Arc::new(move |tab| entry.took(tab))
+}
+
+/// The scripted entry's reading of what a tab shows, as the app wires `picture_check`.
+fn entry_checks(entry: &Arc<ScriptedEntry>) -> ChecksPicture {
+    let entry = Arc::clone(entry);
+    Arc::new(move |tab| {
+        let verdict = entry.verdict(tab);
+        Box::pin(async move { verdict })
+    })
 }
 
 impl Host {
@@ -152,11 +169,10 @@ impl Host {
             browser: Arc::clone(&link),
             takeover: Arc::clone(&takeover),
             ledger: FillLedger::open(dir.path(), || Duration::from_hours(7 * 24)).await,
+            filled: FilledTabs::open(dir.path()).await,
             shutdown: shutdown.clone(),
-            took: {
-                let entry = Arc::clone(&entry);
-                Arc::new(move |tab| entry.took(tab))
-            },
+            took: entry_took(&entry),
+            checks: entry_checks(&entry),
         });
         let serving = tokio::spawn(host.with_fill(fill).serve(
             Arc::clone(&link),

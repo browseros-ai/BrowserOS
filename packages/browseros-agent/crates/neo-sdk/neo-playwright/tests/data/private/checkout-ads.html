@@ -1,0 +1,23 @@
+<!doctype html><meta charset=utf-8><title>Checkout with ads</title>
+<h1>Checkout</h1>
+<iframe id=x style="width:420px;height:120px;border:1px solid #888"></iframe>
+<iframe id=ad1 style="width:300px;height:80px"></iframe>
+<iframe id=ad2 style="width:300px;height:80px"></iframe>
+<button id=pay>Pay</button>
+<script>
+// A card box in a cross-site payment frame, beside two ad frames that never rest (one
+// cross-site, one same-site), each moved to a new document every 120 ms (ruling R54's checkout,
+// from the design's author). ?still=1 leaves the ads alone.
+const other = location.protocol + '//' + (location.hostname === 'localhost' ? '127.0.0.1' : 'localhost') + ':' + location.port;
+document.getElementById('x').src = other + '/private/card-field.html?field=number';
+let n = 0;
+const turn = () => {
+  n += 1;
+  document.getElementById('ad1').src = other + '/private/ad.html?ad=' + n;
+  document.getElementById('ad2').src = '/private/ad.html?ad=' + n;
+};
+turn();
+if (!new URLSearchParams(location.search).get('still')) setInterval(turn, 120);
+// The checkout moves on: the payment frame is removed.
+window.leave = () => { document.getElementById('x').remove(); return 1; };
+</script>

@@ -1,0 +1,23 @@
+<!doctype html><meta charset=utf-8><title>Ten frames</title>
+<!-- Ten card frames, every other one cross-site (the fixture server's other name), for the time
+     one reading of every frame takes. ?nodes=N adds N ordinary elements to the page. -->
+<div id=frames></div>
+<script>
+const q = new URLSearchParams(location.search);
+const other = location.protocol + '//' + (location.hostname === 'localhost' ? '127.0.0.1' : 'localhost') + ':' + location.port;
+for (let i = 0; i < 10; i++) {
+  const frame = document.createElement('iframe');
+  frame.style.cssText = 'width:300px;height:60px;border:1px solid #888';
+  frame.onload = () => { frame.dataset.loaded = '1'; };
+  frame.src = (i % 2 ? other : '') + '/private/card-field.html?field=number';
+  document.getElementById('frames').appendChild(frame);
+}
+const filler = document.createElement('div');
+for (let i = 0; i < Number(q.get('nodes') || 0); i++) {
+  const item = document.createElement(i % 3 ? 'p' : 'a');
+  item.textContent = 'item ' + i;
+  if (i % 3 === 0) item.href = '#' + i;
+  filler.appendChild(item);
+}
+document.body.appendChild(filler);
+</script>

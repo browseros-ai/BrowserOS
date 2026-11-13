@@ -17,6 +17,10 @@
 //!    write the JPEG at the job's path ────────────────────────────────────▶ Taken
 //!  a tab that took a host's private typing, asked before the capture and again before the
 //!    write, so a capture the fill's start straddles is thrown away ───────────▶ Withheld
+//!  a frame showing a private box's value, read before and after the capture
+//!    (ruling R45), or no reading within VERDICT_BUDGET ─────────────────────────▶ Withheld
+//!  the two readings differ: a frame holding a private box came, went or moved to another
+//!    document, or a private box took input ─────────────────────────────────────▶ Dropped
 //! ```
 //!
 //! **In order, bounded per tab.** Jobs are taken in the order the writer made them, so each
@@ -42,9 +46,9 @@
 
 use crate::limits::{
     CAPTURE_ATTEMPTS, CAPTURE_BACKOFF, CAPTURE_BUDGET, CAPTURE_TIMEOUT, MAX_WAITING_PER_TAB,
-    SCREENSHOT_QUALITY,
+    SCREENSHOT_QUALITY, VERDICT_BUDGET,
 };
-use crate::private_tabs::PrivateTabs;
+use crate::private_tabs::{PictureVerdict, PrivateTabs};
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use browseros_core::screenshot::{ScreenshotCaptureOptions, ScreenshotFormat};
@@ -102,6 +106,12 @@ impl Camera {
             answer.send(Shot::Withheld);
             return;
         }
+        let before = self.verdict(tab).await;
+        if before == Some(PictureVerdict::Private) {
+            tracing::debug!(%op, tab = tab.0, "screenshot withheld: a private box shows its value");
+            answer.send(Shot::Withheld);
+            return;
+        }
         let shot = match self.capture(op, tab).await {
             Err(missed) => missed.answer(op, tab),
             // Asked again: a fill that started while the capture ran has its value in these
@@ -110,17 +120,46 @@ impl Camera {
                 tracing::debug!(%op, tab = tab.0, "screenshot withheld: a private fill began during the capture");
                 Shot::Withheld
             }
-            Ok(jpeg) => match write_jpeg(&path, &jpeg).await {
-                Ok(()) => Shot::Taken {
-                    bytes_len: u64::try_from(jpeg.len()).unwrap_or(u64::MAX),
-                },
-                Err(error) => {
-                    tracing::warn!(%op, %error, "screenshot could not be written; dropped");
+            // And the page read again (ruling R45): a value typed into a private box while the
+            // capture ran is in these pixels, even if it is gone again, and a capture that spans
+            // two documents of any frame was checked against neither.
+            Ok(jpeg) => match (before, self.verdict(tab).await) {
+                (_, Some(PictureVerdict::Private)) => {
+                    tracing::debug!(%op, tab = tab.0, "screenshot withheld: a private box showed its value during the capture");
+                    Shot::Withheld
+                }
+                (
+                    Some(PictureVerdict::Clear { reading: first }),
+                    Some(PictureVerdict::Clear { reading: then }),
+                ) if first != then => {
+                    tracing::debug!(%op, tab = tab.0, "screenshot dropped: a frame holding a private box changed, or a private box took input, during the capture");
                     Shot::Dropped
                 }
+                _ => Self::write(op, &path, &jpeg).await,
             },
         };
         answer.send(shot);
+    }
+
+    /// What `tab` shows now, bounded: a reading that does not come within `VERDICT_BUDGET` is
+    /// private, so a picture is never stored on a guess.
+    async fn verdict(&self, tab: TabId) -> Option<PictureVerdict> {
+        tokio::time::timeout(VERDICT_BUDGET, self.private.verdict(tab))
+            .await
+            .unwrap_or(Some(PictureVerdict::Private))
+    }
+
+    /// Writes the picture: taken, or dropped when the disk refuses it.
+    async fn write(op: OperationId, path: &Path, jpeg: &[u8]) -> Shot {
+        match write_jpeg(path, jpeg).await {
+            Ok(()) => Shot::Taken {
+                bytes_len: u64::try_from(jpeg.len()).unwrap_or(u64::MAX),
+            },
+            Err(error) => {
+                tracing::warn!(%op, %error, "screenshot could not be written; dropped");
+                Shot::Dropped
+            }
+        }
     }
 
     /// Captures `tab`, retrying an attempt that runs past `CAPTURE_TIMEOUT`. Each attempt runs

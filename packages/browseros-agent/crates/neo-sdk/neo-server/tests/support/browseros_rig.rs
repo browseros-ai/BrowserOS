@@ -166,6 +166,9 @@ pub struct Rig {
     _browser: Child,
     server_port: u16,
     cdp_port: u16,
+    /// How Neo was started, so [`Rig::restart_neo`] starts it again the same way.
+    captcha: CaptchaKey,
+    env: Vec<(String, String)>,
     dir: TempDir,
 }
 
@@ -217,41 +220,68 @@ impl Rig {
         fs::write(&launch, launch_json.to_string())?;
         let token_file = dir.path().join(TOKEN_FILE);
         fs::write(&token_file, format!("{HOST_TOKEN}\n"))?;
-        let mut neo = Command::new(BIN);
-        neo.arg("--config")
-            .arg(&launch)
-            .env_clear()
-            .env("HOME", dir.path().join("home"))
-            .env("BROWSERCLAW_DIR", dir.path().join("state"))
-            .env("CLAW_PROFILE_DIR", &profile)
-            .env("CLAW_DOWNLOADS_DIR", dir.path().join("downloads"))
-            .env("BROWSERCLAW_HOSTED_MODE", "1")
-            .env("CLAW_HOST_TOKEN_FILE", &token_file)
-            .env("CLAW_HOST_SOCKET", dir.path().join("host.sock"))
-            // The headless browser has no Xvnc, and 5900 may be a developer's Screen Sharing.
-            .env("CLAW_XVNC_ADDR", CLOSED_XVNC.addr.to_string());
-        if let CaptchaKey::Placeholder = captcha {
-            let key_file = dir.path().join(CAPTCHA_KEY_FILE);
-            fs::write(&key_file, "placeholder")?;
-            neo.env("BROWSEROS_CAPSOLVER_API_KEY_FILE", &key_file)
-                .env("BROWSEROS_CAPSOLVER_API_URL", "http://127.0.0.1:9");
-        }
-        neo.envs(env.iter().copied());
-        let neo = fork_lock::spawn(
-            neo.stdin(Stdio::null())
-                .stdout(Stdio::null())
-                .stderr(log_sink(&dir.path().join("neo.log"))?)
-                .kill_on_drop(true),
-        )?;
+        let env: Vec<(String, String)> = env
+            .iter()
+            .map(|(name, value)| ((*name).to_owned(), (*value).to_owned()))
+            .collect();
+        let neo = spawn_neo(dir.path(), captcha, &env)?;
         Ok(Self {
             neo,
             _browser: browser,
             server_port,
             cdp_port,
+            captcha,
+            env,
             dir,
         })
     }
 
+    /// Starts Neo again as it was started, on the same browser, state folder and ports, after
+    /// [`Rig::stop_neo`]: a restart of the server alone, the browser and its tabs kept.
+    pub fn restart_neo(&mut self) -> TestResult {
+        self.neo = spawn_neo(self.dir.path(), self.captcha, &self.env)?;
+        Ok(())
+    }
+}
+
+/// Neo as the rig runs it, over the launch file, token and profile `start_with` wrote into `dir`.
+fn spawn_neo(
+    dir: &Path,
+    captcha: CaptchaKey,
+    env: &[(String, String)],
+) -> Result<Child, Box<dyn Error>> {
+    let launch = dir.join("server_config.json");
+    let token_file = dir.join(TOKEN_FILE);
+    let profile = dir.join(PROFILE_DIR);
+    let mut neo = Command::new(BIN);
+    neo.arg("--config")
+        .arg(&launch)
+        .env_clear()
+        .env("HOME", dir.join("home"))
+        .env("BROWSERCLAW_DIR", dir.join("state"))
+        .env("CLAW_PROFILE_DIR", &profile)
+        .env("CLAW_DOWNLOADS_DIR", dir.join("downloads"))
+        .env("BROWSERCLAW_HOSTED_MODE", "1")
+        .env("CLAW_HOST_TOKEN_FILE", &token_file)
+        .env("CLAW_HOST_SOCKET", dir.join("host.sock"))
+        // The headless browser has no Xvnc, and 5900 may be a developer's Screen Sharing.
+        .env("CLAW_XVNC_ADDR", CLOSED_XVNC.addr.to_string());
+    if let CaptchaKey::Placeholder = captcha {
+        let key_file = dir.join(CAPTCHA_KEY_FILE);
+        fs::write(&key_file, "placeholder")?;
+        neo.env("BROWSEROS_CAPSOLVER_API_KEY_FILE", &key_file)
+            .env("BROWSEROS_CAPSOLVER_API_URL", "http://127.0.0.1:9");
+    }
+    neo.envs(env.iter().map(|(name, value)| (name, value)));
+    Ok(fork_lock::spawn(
+        neo.stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(log_sink(&dir.join("neo.log"))?)
+            .kill_on_drop(true),
+    )?)
+}
+
+impl Rig {
     /// The browser's remote-debugging port, for `/json/list` and `/json/close`.
     #[must_use]
     pub fn cdp_port(&self) -> u16 {

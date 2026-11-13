@@ -125,6 +125,22 @@ impl Playwright {
     pub fn took_private_text(&self, tab: TabId) -> bool {
         self.private_tabs().took(tab)
     }
+
+    /// Marks `tab` as having taken a private entry, as if this process had typed into it: for
+    /// a host that kept the fact across a Neo restart while the browser kept the tab (ruling
+    /// R45). From then on Neo's camera and a script's own pictures refuse the tab, as
+    /// [`Playwright::took_private_text`] says. Nothing unmarks a tab.
+    pub fn keep_private_tab(&self, tab: TabId) {
+        self.private_tabs().mark(tab);
+    }
+
+    /// Treats every tab as having taken a private entry, for this instance's life: for a host
+    /// that cannot tell which tabs its record names (it could not list the browser's tabs at
+    /// start). Neo's camera and a script's own pictures then refuse every tab: the record fails
+    /// closed.
+    pub fn keep_every_tab(&self) {
+        self.private_tabs().mark_every();
+    }
 }
 
 /// A scope for one of the host's calls, timed to end at `deadline`.
