@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use browseros_core::NativeCapabilities;
 use browseros_core::pages::NewPageOptions;
-use neo_service::Settings;
+use neo_service::{Settings, SettingsDefaults};
 use neo_trace::{
     Effect, RedactionLimits, Redactor, RunId, TaskId, TraceSink, TraceStore, WriterConfig,
     spawn_writer,
@@ -110,7 +110,7 @@ impl TestRig {
         let store = open_store(dir.path().join("trace.db")).await?;
         let redactor = Redactor::new(RedactionLimits::default());
         let sink = spawn_writer(&store, redactor, writer, None);
-        let settings = Settings::defaults(Default::default());
+        let settings = Settings::defaults(SettingsDefaults::default());
         settings.watch({
             let sink = sink.clone();
             move |settings| sink.record_policy(settings.trace_policy())
