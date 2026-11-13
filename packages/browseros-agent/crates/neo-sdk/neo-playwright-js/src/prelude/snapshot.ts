@@ -11,9 +11,12 @@
  *
  *   - iframe [ref=e7]
  *     # partial: https://pay.example/form not read (timeout after 2000 ms)
+ *
+ * `mode: 'full'` differs from Playwright's text in one thing: an iframe's fallback markup does
+ * not print, so its frame's content does (snapshot-v1.ts `shownText`).
  */
 import { CHARS_PER_TOKEN, cap, type Printed } from './snapshot-cap'
-import { KEPT, SECTION, sectionLabel } from './snapshot-v1'
+import { KEPT, SECTION, sectionLabel, shownText } from './snapshot-v1'
 import {
   type AriaNodeJSON,
   type AriaSnapshotJSON,
@@ -52,8 +55,12 @@ function comment(partial: PartialFrame): string {
  * children, so keys, quoting and escaping stay Playwright's byte for byte. Alone, only a node
  * with children and neither text nor props renders differently: as a leaf, so its line gains the
  * colon that opens its block. Like the renderer, a node with text prints no children.
+ *
+ * `keepFallback` false is `mode: 'full'`: an iframe's own text, fallback markup no browser
+ * shows, is dropped (`shownText`), so the iframe opens a block of its frame's content as an
+ * iframe without fallback does. True is Playwright's text, the fallback line and no frame.
  */
-function treeLines(json: AriaSnapshotJSON): YamlLine[] {
+function treeLines(json: AriaSnapshotJSON, keepFallback: boolean): YamlLine[] {
   const lines: YamlLine[] = []
   const steps: { child: AriaNodeJSON | string; depth: number }[] = []
   const later = (
@@ -73,16 +80,18 @@ function treeLines(json: AriaSnapshotJSON): YamlLine[] {
       if (line !== '') lines.push({ text: indent + line })
       continue
     }
-    const { children, ...own } = child
-    const [key, ...rest] = renderAriaSnapshotAsYaml([own]).split('\n')
+    const { children, text: _text, ...own } = child
+    const text = keepFallback ? child.text : shownText(child)
+    const alone: AriaNodeJSON = text === undefined ? own : { ...own, text }
+    const [key, ...rest] = renderAriaSnapshotAsYaml([alone]).split('\n')
     const block =
-      own.text === undefined &&
+      text === undefined &&
       own.url === undefined &&
       own.placeholder === undefined &&
       (children?.length ?? 0) > 0
     lines.push({ text: indent + key + (block ? ':' : ''), node: child })
     for (const line of rest) lines.push({ text: indent + line })
-    if (own.text === undefined && children) later(children, step.depth + 1)
+    if (text === undefined && children) later(children, step.depth + 1)
   }
   return lines
 }
@@ -97,9 +106,12 @@ function iframeLine(lines: readonly YamlLine[], ref: string): number {
   )
 }
 
-/** The YAML's lines for one snapshot op's `{ json, partial }`, each element's with its node. */
-function yamlLines(result: SnapshotResult): YamlLine[] {
-  const lines = treeLines(result.json)
+/**
+ * The YAML's lines for one snapshot op's `{ json, partial }`, each element's with its node;
+ * `keepFallback` as `treeLines` takes it.
+ */
+function yamlLines(result: SnapshotResult, keepFallback: boolean): YamlLine[] {
+  const lines = treeLines(result.json, keepFallback)
   if (result.partial.length === 0) return lines
   const placed = result.partial.map((partial) => ({
     partial,
@@ -118,9 +130,12 @@ function yamlLines(result: SnapshotResult): YamlLine[] {
   return [...lines, ...unplaced]
 }
 
-/** The YAML for one snapshot op's `{ json, partial }`. */
+/**
+ * Playwright's YAML for one snapshot op's `{ json, partial }`: `mode: 'default'`, and every mode
+ * under the conformance switch.
+ */
 export function renderSnapshot(result: SnapshotResult): string {
-  return yamlLines(result)
+  return yamlLines(result, true)
     .map((line) => line.text)
     .join('\n')
 }
@@ -130,7 +145,9 @@ export function renderSnapshot(result: SnapshotResult): string {
  * `maxTokens` by the v1 format's cap (snapshot-cap.ts). It fits on most single sections and on
  * few whole pages (9k tokens at the median of 31 live pages, 52k at most), so the cap is what
  * keeps one careless call from costing what the v1 format saves. When it fits, the text is
- * `renderSnapshot`'s byte for byte.
+ * `renderSnapshot`'s byte for byte, except under an iframe with fallback markup between its
+ * tags: there it prints the frame's content where Playwright prints only that markup, so it
+ * never lacks a ref the v1 text prints.
  */
 export function renderFullSnapshot(
   result: SnapshotResult,
@@ -138,7 +155,7 @@ export function renderFullSnapshot(
 ): string {
   return cap(
     null,
-    printed(yamlLines(result)),
+    printed(yamlLines(result, false)),
     maxTokens * CHARS_PER_TOKEN,
     FULL_CALL,
   )

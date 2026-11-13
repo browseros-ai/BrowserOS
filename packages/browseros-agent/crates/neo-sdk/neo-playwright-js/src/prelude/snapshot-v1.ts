@@ -87,6 +87,20 @@ export const KEPT = new Set<string>([
 ])
 const KEPT_WITH_REF = new Set<string>(['dialog', 'alertdialog'])
 
+/**
+ * A node's own `text` as Neo's formats print it: the v1 text, and `mode: 'full'` (snapshot.ts).
+ * An iframe's text is the fallback markup written between its tags (`<iframe …><p>Your browser
+ * does not support iframes.</p></iframe>`), which the HTML parser keeps as raw text and no
+ * browser shows. The engine reads it as the iframe node's text and Rust stitches the frame's
+ * content under the same node, as children. Playwright's renderer prints a node that has text
+ * as one line and never visits its children, so printing that text would lose the frame (a
+ * payment page's card fields). Playwright's own YAML (`mode: 'default'` and the conformance
+ * switch) keeps it, as upstream prints it.
+ */
+export function shownText(node: AriaNodeJSON): string | undefined {
+  return node.role === 'iframe' ? undefined : node.text
+}
+
 /** How the cut line names a section: its role, and its quoted name when it has one. */
 export function sectionLabel(node: AriaNodeJSON): string {
   return node.name ? `${node.role} ${JSON.stringify(node.name)}` : node.role
@@ -317,8 +331,9 @@ class Printer {
   }
 
   /**
-   * Schedules a node's own `text` field, then its children, as the next steps. Children go on
-   * in reverse so they come off in document order, ahead of the siblings already waiting.
+   * Schedules a node's own `text` field (none for an iframe: `shownText`), then its children,
+   * as the next steps. Children go on in reverse so they come off in document order, ahead of
+   * the siblings already waiting.
    */
   private content(
     node: AriaNodeJSON | { children: (AriaNodeJSON | string)[] },
@@ -328,8 +343,9 @@ class Printer {
     const children = node.children ?? []
     for (let index = children.length - 1; index >= 0; index--)
       this.steps.push({ kind: 'node', child: children[index], level, text })
-    if ('text' in node && node.text !== undefined)
-      this.steps.push({ kind: 'piece', raw: node.text, level, text })
+    const own = 'role' in node ? shownText(node) : undefined
+    if (own !== undefined)
+      this.steps.push({ kind: 'piece', raw: own, level, text })
   }
 
   /**
@@ -583,9 +599,10 @@ function nameAsContent(node: AriaNodeJSON): string | undefined {
 }
 
 /**
- * Whether nothing under `children` prints text: no string, and no node with a `text` field or a
- * name, at any depth (an empty one prints nothing, as in the walk). Stops at the first one, and
- * walks an explicit stack, as the walk does, for trees deeper than the call stack.
+ * Whether nothing under `children` prints text: no string, and no node with a printed `text`
+ * field (`shownText`) or a name, at any depth (an empty one prints nothing, as in the walk).
+ * Stops at the first one, and walks an explicit stack, as the walk does, for trees deeper than
+ * the call stack.
  */
 function saysNothing(children: AriaNodeJSON['children']): boolean {
   const pending: (AriaNodeJSON | string)[] = []
@@ -596,7 +613,7 @@ function saysNothing(children: AriaNodeJSON['children']): boolean {
   for (let item = pending.pop(); item !== undefined; item = pending.pop()) {
     if (typeof item === 'string') {
       if (item !== '') return false
-    } else if (item.text || item.name) return false
+    } else if (shownText(item) || item.name) return false
     else add(item.children)
   }
   return true
@@ -605,7 +622,7 @@ function saysNothing(children: AriaNodeJSON['children']): boolean {
 /**
  * Every text piece under `node` that is not inside a nested actionable node, space-joined. The
  * name of a node under which nothing prints text counts as a piece (an image's alt text, a
- * cell's text).
+ * cell's text). An iframe's fallback markup is no piece (`shownText`); its frame's text is.
  */
 function ownText(node: AriaNodeJSON): string {
   const pieces: string[] = []
@@ -616,7 +633,8 @@ function ownText(node: AriaNodeJSON): string {
       pieces.push(item)
       continue
     }
-    if (item.text !== undefined) pieces.push(item.text)
+    const shown = shownText(item)
+    if (shown !== undefined) pieces.push(shown)
     const children = item.children ?? []
     for (let index = children.length - 1; index >= 0; index--) {
       const child = children[index]
