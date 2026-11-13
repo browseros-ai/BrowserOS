@@ -214,12 +214,11 @@ fn unpaid_and_none_unlock_nothing() -> anyhow::Result<()> {
     Ok(())
 }
 
+// A staging build's dev mode uses the staging gateway, whose key the billing config tests check.
+#[cfg(not(feature = "billing-staging"))]
 #[test]
 fn the_local_gateways_dev_key_is_the_one_compiled_in() -> anyhow::Result<()> {
     let Some(config) = BillingConfig::for_build(true) else {
-        if cfg!(feature = "billing-staging") {
-            return Ok(());
-        }
         anyhow::bail!("dev mode has billing");
     };
     let Some(key) = config.trusted_key("dev-1") else {

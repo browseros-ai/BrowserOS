@@ -16,6 +16,7 @@ use claw_server::{
     db::audit_log::{RecordToolDispatchInput, TaskStatus, bounded_args_json, result_meta},
     identity::{ClientIdentity, ClientInfo, ConversationIdentity},
     ids::{DispatchId, ProfileId, SessionId},
+    services::billing::Billing,
     services::cockpit::RecordToolInput,
     services::sessions::Session,
 };
@@ -291,7 +292,16 @@ async fn test_app() -> anyhow::Result<TestApp> {
         behavior: Default::default(),
         behavior_ignored: Vec::new(),
     });
-    let state = AppState::new_with_home(config, dir.path().join("home")).await?;
+    let mut state = AppState::new_with_home(config, dir.path().join("home")).await?;
+    // No billing gateway, whatever this build compiles in, so no test reaches a real one.
+    state.billing = Arc::new(
+        Billing::open(
+            None,
+            dir.path().join("browserclaw"),
+            tokio_util::sync::CancellationToken::new(),
+        )
+        .await,
+    );
     let connection = FixtureConnection::new();
     let browser = BrowserSession::new(connection.clone(), BrowserSessionHooks::default());
     assert_eq!(browser.pages.list().await?.len(), 8);

@@ -109,16 +109,15 @@ async fn computer(gateway: Option<&FakeGateway>) -> anyhow::Result<Computer> {
     let dir = tempfile::tempdir()?;
     let mut state =
         AppState::new_with_home(config_for(dir.path()), dir.path().join("home")).await?;
-    if let Some(gateway) = gateway {
-        state.billing = Arc::new(
-            Billing::open(
-                Some(gateway.config()?),
-                dir.path().join("browserclaw"),
-                CancellationToken::new(),
-            )
-            .await,
-        );
-    }
+    let config = gateway.map(FakeGateway::config).transpose()?;
+    state.billing = Arc::new(
+        Billing::open(
+            config,
+            dir.path().join("browserclaw"),
+            CancellationToken::new(),
+        )
+        .await,
+    );
     Ok(Computer {
         router: build_router(state.clone()),
         state,
