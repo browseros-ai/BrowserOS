@@ -22,8 +22,9 @@ const PAY_TITLE: &str = "Neo checkout";
 /// What the next run opens, in another task.
 const NEXT: &str = "data:text/html,<title>Neo next</title><p>next</p>";
 const NEXT_TITLE: &str = "Neo next";
-/// Far under the 60 s the first host's next run hung for.
-const NO_STALL: Duration = Duration::from_secs(20);
+/// After the old close the next run took 60 s on the published image and 12 s on a headless
+/// BrowserOS here; after this one, well under a second.
+const NO_STALL: Duration = Duration::from_secs(5);
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_page_that_prevents_leaving_closes_and_the_next_run_does_not_stall() -> TestResult {
