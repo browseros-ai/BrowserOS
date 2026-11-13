@@ -393,6 +393,17 @@ impl Keyboard {
         steps
     }
 
+    /// Lets go of every key held now, modifiers included, the last pressed first: what a
+    /// script left held on the tab before a private entry types its first character (a held
+    /// Shift would type other characters, a held letter would make the next press a repeat).
+    pub(crate) fn release_all(&mut self) -> Vec<InputStep> {
+        let held: Vec<&'static str> = self.pressed.iter().rev().copied().collect();
+        held.into_iter()
+            .filter_map(|code| KEYS.get(code).copied())
+            .map(|key| self.key_up(key))
+            .collect()
+    }
+
     /// `keyboard.insertText(text)`: one `Input.insertText`, no key events, no state.
     pub(crate) fn insert_text(text: &str) -> Vec<InputStep> {
         vec![InputStep::Dispatch(InputEvent::InsertText(text.to_owned()))]

@@ -143,6 +143,11 @@ sized: boolean,
 empty: boolean, };
 
 /**
+ * What the read-back found in the box.
+ */
+export type BoxState = "holds" | "other" | "left";
+
+/**
  * A `checkable` read's value (the generated probe `Checkable`): upstream's `elementState(el,
  * 'checked')`, which follows a label to its control.
  */
@@ -225,6 +230,11 @@ export type FillValue = string;
 export type Filled = "done" | "needsinput";
 
 /**
+ * Where the focus is, as Playwright's focused rule reads it.
+ */
+export type FocusState = "held" | "noDocumentFocus" | "elsewhere" | "moving" | "gone";
+
+/**
  * A `frameOrigin` read's value, also used to generate the page-side probe declaration.
  */
 export type FrameOrigin = { x: number, y: number, scaleX: number, scaleY: number, } | Rotated;
@@ -278,6 +288,14 @@ export type LookRefused = { code: LookRefusal, fact?: BoxFact, };
 export type Looked = { facts?: BoxFacts, refusal?: LookRefused, };
 
 /**
+ * A private value on its way to Neo's isolated world, where the box's listener and the
+ * read-back compare with it: the whole value, or the part a `maxlength` lets in. It prints
+ * as `[private]` and is zeroed when dropped, as [`PrivateText`] is. Only the entry builds one,
+ * from a [`PrivateText`]; probe calls never log their requests (`probe/probe_call.rs`).
+ */
+export type PageSecret = string;
+
+/**
  * A value as the probe sent it: the page's own text. It prints as `[page text]`, so no log line carries a value the page
  * shows (STYLE P4); [`PageText::into_value`] hands it to the op's output, and [`PageText::pin`]
  * takes only the probe's pin and drops the text unread.
@@ -311,6 +329,16 @@ export type PinnedMatch = { pin: Pin, preview: string, };
 export type Point = { x: number, y: number, };
 
 /**
+ * The answer to one step (`value` payload of the `private` request).
+ */
+export type PrivateAnswer = { "kind": "focus", focus: FocusState, } | { "kind": "holds", holds: boolean, } | { "kind": "readBack", state: BoxState, heldAtLastInput: boolean, moving: boolean, } | { "kind": "forgot" } | { "kind": "markedFocused", marked: boolean, };
+
+/**
+ * One step of the entry on a pinned box.
+ */
+export type PrivateStep = { "kind": "focus", text: PageSecret, spaced: boolean, } | { "kind": "focused" } | { "kind": "holds", text: PageSecret, spaced: boolean, } | { "kind": "readBack" } | { "kind": "forget" } | { "kind": "markFocused" };
+
+/**
  * One reply; `kind` is the tag. Any request may also answer `error`, and `uninstalled` when
  * the world has no booted probe.
  */
@@ -341,7 +369,7 @@ export type ProbeRequest = { "op": "describe" } | { "op": "resolve", target: Pro
 /**
  * Every `<iframe>` on the way down is visible (the resolver's hops).
  */
-frameVisible: boolean, scroll: ScrollPlan, position?: Point, arm?: ArmPlan, } | { "op": "verdict", token: number, } | { "op": "moves" } | { "op": "disarm" } | { "op": "frameBox", iframe: ProbeTarget, point?: Point, } | { "op": "edit", pin: Pin, edit: Edit, } | { "op": "look", pin: Pin, look: BoxAsk, } | { "op": "read", target: ProbeTarget, strictness: Strictness, frameVisible: boolean, read: Read, } | { "op": "readAll", target: ProbeTarget, read: ReadAll, } | { "op": "screenshotMask", target: ProbeTarget, color: string, } | { "op": "screenshotMaskCleanup" } | { "op": "selector", target: ProbeTarget, } | { "op": "snapshot", root: ProbeTarget, mode: SnapshotMode, 
+frameVisible: boolean, scroll: ScrollPlan, position?: Point, arm?: ArmPlan, } | { "op": "verdict", token: number, } | { "op": "moves" } | { "op": "disarm" } | { "op": "frameBox", iframe: ProbeTarget, point?: Point, } | { "op": "edit", pin: Pin, edit: Edit, } | { "op": "look", pin: Pin, look: BoxAsk, } | { "op": "private", pin: Pin, step: PrivateStep, } | { "op": "read", target: ProbeTarget, strictness: Strictness, frameVisible: boolean, read: Read, } | { "op": "readAll", target: ProbeTarget, read: ReadAll, } | { "op": "screenshotMask", target: ProbeTarget, color: string, } | { "op": "screenshotMaskCleanup" } | { "op": "selector", target: ProbeTarget, } | { "op": "snapshot", root: ProbeTarget, mode: SnapshotMode, 
 /**
  * Any integer, as upstream passes it: a child frame's depth can come out zero or
  * negative, and the engine reads those differently from no depth.

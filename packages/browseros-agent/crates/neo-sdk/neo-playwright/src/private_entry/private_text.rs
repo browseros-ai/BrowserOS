@@ -96,29 +96,11 @@ impl PrivateText {
         self.text.chars().count()
     }
 
-    /// The value's characters, in order, for the keyboard. Crate-private: only the entry reads
-    /// the value, and only to type it or to hand it to its own isolated world's comparison.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "the entry (pull request 2 of protected-fill) types these"
-        )
-    )]
+    /// The value's characters, in order. Crate-private: only the entry reads the value, and
+    /// only character by character (ruling R12: a string slice at a bad byte index panics
+    /// with the text in its message, and Neo writes panics to a file).
     pub(crate) fn chars(&self) -> impl Iterator<Item = char> + '_ {
         self.text.chars()
-    }
-
-    /// The value as one string, for the read-back's comparison in Neo's isolated world.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "the entry (pull request 2 of protected-fill) compares with it"
-        )
-    )]
-    pub(crate) fn expose(&self) -> &str {
-        &self.text
     }
 }
 
@@ -198,7 +180,6 @@ mod tests {
         let value: PrivateText = serde_json::from_str(r#""246813""#)?;
         assert_eq!(value.char_count(), 6);
         assert_eq!(value.chars().collect::<String>(), "246813");
-        assert_eq!(value.expose(), "246813");
         Ok(())
     }
 }

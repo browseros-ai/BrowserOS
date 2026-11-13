@@ -2,7 +2,6 @@
 
 use std::sync::Arc;
 
-use browseros_core::ProtocolSession;
 use tokio::runtime::Handle;
 use tokio::sync::Mutex;
 
@@ -34,8 +33,7 @@ pub(crate) struct ArmGuard {
     world: Option<IsolatedWorld>,
     token: u32,
     input: Arc<Mutex<TabInput>>,
-    /// The tab's root session and pointer scale, for the owed releases.
-    session: ProtocolSession,
+    /// The tab's pointer scale, for the owed releases (each carries its own session).
     pointer_scale: f64,
 }
 
@@ -45,14 +43,12 @@ impl ArmGuard {
         world: IsolatedWorld,
         token: u32,
         input: Arc<Mutex<TabInput>>,
-        session: ProtocolSession,
         pointer_scale: f64,
     ) -> Self {
         Self {
             world: Some(world),
             token,
             input,
-            session,
             pointer_scale,
         }
     }
@@ -92,10 +88,9 @@ impl ArmGuard {
         };
         let request = ProbeRequest::Verdict { token: self.token };
         let input = Arc::clone(&self.input);
-        let session = self.session.clone();
         let pointer_scale = self.pointer_scale;
         drop(runtime.spawn(async move {
-            flush_when_idle(&input, &session, pointer_scale).await;
+            flush_when_idle(&input, pointer_scale).await;
             // Best effort: a world that is gone took its interceptor with it.
             let _stopped = probe::call(&world, &request).await;
         }));
@@ -113,7 +108,6 @@ impl Drop for ArmGuard {
         drop(runtime.spawn(disarm_when_idle(
             world,
             Arc::clone(&self.input),
-            self.session.clone(),
             self.pointer_scale,
         )));
     }
@@ -124,22 +118,17 @@ impl Drop for ArmGuard {
     clippy::await_holding_invalid_type,
     reason = "the releases run while no op holds the tab's input; see ArmGuard"
 )]
-async fn flush_when_idle(input: &Mutex<TabInput>, session: &ProtocolSession, pointer_scale: f64) {
-    input.lock().await.flush_owed(session, pointer_scale).await;
+async fn flush_when_idle(input: &Mutex<TabInput>, pointer_scale: f64) {
+    input.lock().await.flush_owed(pointer_scale).await;
 }
 
 #[expect(
     clippy::await_holding_invalid_type,
     reason = "the releases and the disarm run while no op holds the tab's input; see ArmGuard"
 )]
-async fn disarm_when_idle(
-    world: IsolatedWorld,
-    input: Arc<Mutex<TabInput>>,
-    session: ProtocolSession,
-    pointer_scale: f64,
-) {
+async fn disarm_when_idle(world: IsolatedWorld, input: Arc<Mutex<TabInput>>, pointer_scale: f64) {
     let mut tab = input.lock().await;
-    tab.flush_owed(&session, pointer_scale).await;
+    tab.flush_owed(pointer_scale).await;
     // Best effort: a world that is gone took its interceptor with it.
     let _disarmed = probe::call(&world, &ProbeRequest::Disarm).await;
 }

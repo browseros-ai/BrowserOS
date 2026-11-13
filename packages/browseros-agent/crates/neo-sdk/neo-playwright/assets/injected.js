@@ -8630,6 +8630,148 @@ ${value.stack}`;
     };
   }
 
+  // crates/neo-sdk/neo-playwright-js/src/probe/private-entry.ts
+  var marked = new WeakSet;
+  var LEAVES = ["beforeunload", "pagehide"];
+  var watched = new WeakMap;
+  var active = new Map;
+  function privateStep(world, request) {
+    const { step, pin } = request;
+    const box = active.get(pin) ?? (step.kind === "focus" ? world.pins.live(pin) : undefined);
+    if (!box)
+      return { kind: "detached" };
+    const answered = answer(world, pin, box, step);
+    return answered instanceof Promise ? answered.then(reply) : reply(answered);
+  }
+  function reply(value) {
+    return { kind: "value", value };
+  }
+  function answer(world, pin, box, step) {
+    switch (step.kind) {
+      case "focus":
+        return focus(world, pin, box, step.text, step.spaced);
+      case "focused":
+        return { kind: "focus", focus: focusState(box) };
+      case "holds":
+        return {
+          kind: "holds",
+          holds: same(heldText(box), step.text, step.spaced)
+        };
+      case "readBack":
+        return readBack(pin, box);
+      case "forget":
+        forget(pin, box);
+        return { kind: "forgot" };
+      case "markFocused":
+        return { kind: "markedFocused", marked: markFocused(box) };
+    }
+  }
+  function markFocused(box) {
+    let holder = box.ownerDocument.activeElement;
+    while (holder?.shadowRoot?.activeElement)
+      holder = holder.shadowRoot.activeElement;
+    if (!holder || holder === box)
+      return false;
+    const name = holder.localName;
+    if (name !== "input" && name !== "textarea")
+      return false;
+    marked.add(holder);
+    return true;
+  }
+  async function focus(world, pin, box, text, spaced) {
+    marked.add(box);
+    listen(pin, box, text, spaced);
+    if (world.injected.selectText(box) === "error:notconnected")
+      return { kind: "focus", focus: "gone" };
+    await Promise.resolve();
+    return { kind: "focus", focus: focusState(box) };
+  }
+  function focusState(box) {
+    if (!box.isConnected)
+      return "gone";
+    if (moving(watched.get(box)))
+      return "moving";
+    if (!holdsFocus2(box))
+      return "elsewhere";
+    return box.ownerDocument.hasFocus() ? "held" : "noDocumentFocus";
+  }
+  function holdsFocus2(box) {
+    const root = box.getRootNode();
+    const active = Reflect.get(root, "activeElement");
+    return active === box;
+  }
+  function moving(entry) {
+    if (!entry)
+      return false;
+    return entry.leaving || entry.submits.some((event) => !event.defaultPrevented && Reflect.get(event.target ?? {}, "target") !== "_blank");
+  }
+  function listen(pin, box, text, spaced) {
+    forget(pin, box);
+    const entry = {
+      text,
+      spaced,
+      heldAtLastInput: false,
+      submits: [],
+      leaving: false,
+      listener: () => {
+        entry.heldAtLastInput = same(heldText(box), text, spaced);
+      },
+      onSubmit: (event) => {
+        entry.submits.push(event);
+      },
+      onLeave: () => {
+        entry.leaving = true;
+      }
+    };
+    watched.set(box, entry);
+    active.set(pin, box);
+    box.addEventListener("input", entry.listener, { capture: true });
+    const view = box.ownerDocument.defaultView;
+    view?.addEventListener("submit", entry.onSubmit, { capture: true });
+    for (const type of LEAVES)
+      view?.addEventListener(type, entry.onLeave, { capture: true });
+  }
+  function forget(pin, box) {
+    active.delete(pin);
+    const entry = watched.get(box);
+    if (!entry)
+      return;
+    box.removeEventListener("input", entry.listener, { capture: true });
+    const view = box.ownerDocument.defaultView;
+    view?.removeEventListener("submit", entry.onSubmit, { capture: true });
+    for (const type of LEAVES)
+      view?.removeEventListener(type, entry.onLeave, { capture: true });
+    watched.delete(box);
+  }
+  function readBack(pin, box) {
+    const entry = watched.get(box);
+    const heldAtLastInput = entry?.heldAtLastInput ?? false;
+    let state;
+    if (!box.isConnected)
+      state = "left";
+    else if (entry && same(heldText(box), entry.text, entry.spaced))
+      state = "holds";
+    else
+      state = "other";
+    if (state === "other")
+      markFocused(box);
+    const leaving = moving(entry);
+    forget(pin, box);
+    return { kind: "readBack", state, heldAtLastInput, moving: leaving };
+  }
+  function heldText(box) {
+    const value = Reflect.get(box, "value");
+    return typeof value === "string" ? value : "";
+  }
+  function same(held, text, spaced) {
+    if (held === text)
+      return true;
+    if (!spaced)
+      return false;
+    const bare = (value) => value.replace(/[\s\-/]/g, "");
+    return bare(held) === bare(text);
+  }
+
   // crates/neo-sdk/neo-playwright-js/src/probe/private-look.ts
   var TEXT_TYPES = new Set([
     "text",
@@ -8788,7 +8930,7 @@ ${value.stack}`;
   }
 
   // crates/neo-sdk/neo-playwright-js/src/probe/protocol.ts
-  var PROTOCOL = 33;
+  var PROTOCOL = 34;
 
   // crates/neo-sdk/neo-playwright-js/src/probe/read.ts
   var XHTML = "http://www.w3.org/1999/xhtml";
@@ -9434,7 +9576,7 @@ ${value.stack}`;
       roleOf: (of) => injected.utils.getAriaRole(of),
       isVisible: (of) => injected.utils.isElementVisible(of)
     };
-    const take = () => marked(targets, engine, plain);
+    const take = () => marked2(targets, engine, plain);
     const { result, skipped } = request.conformance ? take() : withMaskedFieldValues(take);
     const { json, iframeRefs, iframeDepths } = result;
     const iframes = [];
@@ -9456,7 +9598,7 @@ ${value.stack}`;
       ...skipped ? { marksSkipped: true } : {}
     };
   }
-  function marked(targets, engine, snapshot) {
+  function marked2(targets, engine, snapshot) {
     const elements = targets.filter((node) => node instanceof Element);
     if (elements.length === 0)
       return { result: snapshot(), skipped: false };
@@ -9694,6 +9836,7 @@ ${value.stack}`;
     frameBox,
     edit,
     look,
+    private: privateStep,
     read,
     readAll,
     selector: generatedSelector,

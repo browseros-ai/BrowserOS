@@ -1,0 +1,16 @@
+<!doctype html><meta charset=utf-8><title>Card field</title>
+<style>body { margin: 0; } input { width: 280px; height: 30px; font: 16px monospace; }</style>
+<input id=f>
+<script>
+// One card field in its own frame, as a payment provider draws each: ?field=number|expiry|cvc.
+// ?swap=1: the box hands the focus to a second box in this frame as it takes it (a box swapped on focus).
+const q = new URLSearchParams(location.search), f = document.getElementById('f');
+const kinds = { number: ['cc-number', 'Card number'], expiry: ['cc-exp', 'Expiration date'], cvc: ['cc-csc', 'Security code'] };
+const [ac, label] = kinds[q.get('field') || 'number'];
+f.name = q.get('field') || 'number'; f.autocomplete = ac; f.inputMode = 'numeric'; f.setAttribute('aria-label', label);
+if (q.get('swap')) { const g = document.createElement('input'); g.id = 'g'; g.setAttribute('aria-label', 'Other'); document.body.appendChild(g); f.onfocus = () => g.focus(); }
+// ?tell=N (Neo's addition): after the box holds N characters, the frame tells its page, which
+// takes the focus back into its own box (xframe.html ?stealafter=1): a focus stolen mid-entry.
+const tell = Number(q.get('tell') || 0);
+if (tell) f.addEventListener('input', () => { if (f.value.length === tell) parent.postMessage('typed', '*'); });
+</script>

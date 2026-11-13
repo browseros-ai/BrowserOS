@@ -1,0 +1,10 @@
+<!doctype html><meta charset=utf-8><title>Swap</title>
+<!-- A sign-in whose password box is swapped out for a copy as it takes the focus, as a framework
+     re-rendering it does (zuzu's B11f, design case 5a): the entry types the username, then finds
+     the password box gone at its focus step and types nothing more. -->
+<input id=user type=email autocomplete=username aria-label="Email">
+<input id=pw type=password autocomplete=current-password aria-label="Password">
+<script>
+const pw = document.getElementById('pw');
+pw.addEventListener('focus', () => { const copy = pw.cloneNode(); copy.id = 'pw2'; pw.replaceWith(copy); }, { once: true });
+</script>

@@ -11,7 +11,7 @@ use ts_rs::{Config, TS, TypeVisitor};
 
 use crate::action::{Checkable, FileInput, FilesSet, Filled, Selected};
 use crate::page::StorageValue;
-use crate::private_entry::Looked;
+use crate::private_entry::{Looked, PrivateAnswer};
 use crate::read::{FrameOrigin, Located, PinnedMatch};
 
 use super::probe_reply::ProbeReply;
@@ -42,6 +42,7 @@ pub fn render() -> Result<String, Box<dyn Error>> {
     declarations.visit::<Selected>();
     declarations.visit::<StorageValue>();
     declarations.visit::<Looked>();
+    declarations.visit::<PrivateAnswer>();
     declarations.finish()
 }
 

@@ -24,8 +24,10 @@ mod box_ask;
 mod box_look;
 mod box_spec;
 mod entry;
+mod entry_ask;
 mod entry_op;
 mod entry_request;
+mod entry_run;
 mod look_op;
 mod private_text;
 
@@ -33,5 +35,7 @@ pub(crate) use box_ask::{BoxAsk, LookRefusal, LookRefused, Looked};
 pub use box_look::{BoxFacts, BoxLook};
 pub use box_spec::{BoxSpec, Expect};
 pub use entry::{BoxFact, Entry, EntryCode, EntryError, EntryOutcome, Sending, delivery_of};
+pub(crate) use entry_ask::{BoxState, FocusState, PageSecret, PrivateAnswer, PrivateStep};
 pub use entry_request::{EntryRequest, LookField, LookRequest, PrivateField};
+pub(crate) use entry_run::PrivateTabs;
 pub use private_text::{MAX_PRIVATE_CHARS, PrivateText, PrivateTextRefused};
