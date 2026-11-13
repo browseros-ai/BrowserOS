@@ -110,6 +110,7 @@ async function stopFixture(running) {
     })
     fs.rmSync(browser.profile, { recursive: true, force: true })
     fs.rmSync(browser.home, { recursive: true, force: true })
+    fs.rmSync(browser.temp, { recursive: true, force: true })
   }
 }
 
@@ -135,6 +136,7 @@ test('returns the command failure unchanged and removes its private browser', {
   assert.ok(browser.args.includes('--disable-browseros-server'))
   assert.equal(fs.existsSync(browser.profile), false)
   assert.equal(fs.existsSync(browser.home), false)
+  assert.equal(fs.existsSync(browser.temp), false)
   assert.throws(() => process.kill(browser.pid, 0), { code: 'ESRCH' })
 })
 
@@ -148,6 +150,19 @@ test('a failed browser never starts the command', {
   assert.equal(result.code, 125, result.stderr)
   assert.equal(result.stdout, '')
   assert.equal(fs.existsSync(running.record), false)
+})
+
+test('the browser can bind a Unix socket beneath its private temporary directory', {
+  timeout: 20_000,
+}, async (t) => {
+  const running = run(t, [process.execPath, fixture, 'command'], {
+    FIXTURE_BROWSER_SOCKET: '1',
+  })
+  const result = await running.exited
+  assert.equal(result.code, 0, result.stderr)
+  const browser = JSON.parse(fs.readFileSync(running.record, 'utf8'))
+  assert.equal(fs.existsSync(browser.temp), false)
+  assert.equal(receipt(running).cleaned, true)
 })
 
 test('the command waits for its own browser to become ready', {
@@ -214,6 +229,7 @@ for (const [signal, code] of [
     assert.equal(completed.cleaned, true, JSON.stringify(completed))
     assert.equal(fs.existsSync(browser.profile), false)
     assert.equal(fs.existsSync(browser.home), false)
+    assert.equal(fs.existsSync(browser.temp), false)
     assert.throws(() => process.kill(browser.pid, 0), { code: 'ESRCH' })
     assert.throws(() => process.kill(completed.command.pid, 0), {
       code: 'ESRCH',
@@ -291,6 +307,7 @@ test('a hard-killed CLI during startup still cleans its browser', {
   assert.equal(running.stdout(), '')
   assert.equal(fs.existsSync(browser.profile), false)
   assert.equal(fs.existsSync(browser.home), false)
+  assert.equal(fs.existsSync(browser.temp), false)
   assert.throws(() => process.kill(browser.pid, 0), { code: 'ESRCH' })
 })
 
@@ -307,6 +324,7 @@ test('unproven cleanup returns failure and retains the live browser state', {
     const browser = JSON.parse(fs.readFileSync(running.record, 'utf8'))
     assert.equal(fs.existsSync(browser.profile), true)
     assert.equal(fs.existsSync(browser.home), true)
+    assert.equal(fs.existsSync(browser.temp), true)
   } finally {
     await stopFixture(running)
   }
@@ -347,6 +365,7 @@ test('an unexpected owner death still drains its recorded groups and temporary s
   assert.equal(result.code, 125, result.stderr)
   assert.equal(fs.existsSync(browser.profile), false)
   assert.equal(fs.existsSync(browser.home), false)
+  assert.equal(fs.existsSync(browser.temp), false)
   assert.equal(receipt(running).cleaned, true)
 })
 
@@ -366,6 +385,7 @@ test('a browser that never publishes readiness fails at the startup deadline', {
   const browser = JSON.parse(fs.readFileSync(running.record, 'utf8'))
   assert.equal(fs.existsSync(browser.profile), false)
   assert.equal(fs.existsSync(browser.home), false)
+  assert.equal(fs.existsSync(browser.temp), false)
   assert.equal(receipt(running).cleaned, true)
 })
 
@@ -388,6 +408,7 @@ test('failed command-group ownership stops the browser but preserves its state',
     assert.throws(() => process.kill(browser.pid, 0), { code: 'ESRCH' })
     assert.equal(fs.existsSync(browser.profile), true)
     assert.equal(fs.existsSync(browser.home), true)
+    assert.equal(fs.existsSync(browser.temp), true)
   } finally {
     await stopFixture(running)
   }

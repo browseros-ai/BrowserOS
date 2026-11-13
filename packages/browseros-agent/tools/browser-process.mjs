@@ -113,6 +113,12 @@ export async function cleanupBrowser(
     )
       throw new Error(`Invalid owned ${key} path`)
   }
+  if (
+    owner.temp &&
+    (path.dirname(owner.temp) !== '/tmp' ||
+      !path.basename(owner.temp).startsWith('browseros-test-'))
+  )
+    throw new Error('Invalid owned temporary path')
   await stopBrowser(owner)
   const exit = await exited
   // A different owned group may still be unproven; stopping this browser must not erase evidence.
@@ -120,6 +126,7 @@ export async function cleanupBrowser(
     if (owner.profile)
       fs.rmSync(owner.profile, { recursive: true, force: true })
     if (owner.home) fs.rmSync(owner.home, { recursive: true, force: true })
+    if (owner.temp) fs.rmSync(owner.temp, { recursive: true, force: true })
   }
   writeReceipt(path.join(outputDir, 'cleanup.json'), {
     ...owner,
@@ -142,7 +149,7 @@ export function browserFlags(profile) {
   ]
 }
 
-function browserEnvironment(home, overrides) {
+function browserEnvironment(home, temp, overrides) {
   // A Chromium profile does not isolate Rust server state or coding harness homes.
   // These overrides belong only to the browser; the supplied command keeps the caller's env.
   const roots = {
@@ -158,7 +165,7 @@ function browserEnvironment(home, overrides) {
     CODEX_HOME: path.join(home, '.codex'),
     COPILOT_HOME: path.join(home, '.copilot'),
     BROWSERCLAW_DIR: path.join(home, '.browserclaw'),
-    TMPDIR: path.join(home, 'tmp'),
+    TMPDIR: temp,
   }
   for (const dir of Object.values(roots))
     fs.mkdirSync(dir, { recursive: true, mode: 0o700 })
@@ -231,7 +238,10 @@ export async function startOwnedBrowser(
     signal.throwIfAborted()
     owner.profile = fs.mkdtempSync(path.join(outputDir, 'profile-'))
     owner.home = fs.mkdtempSync(path.join(outputDir, 'home-'))
-    const { profile, home } = owner
+    // Chromium's Linux singleton socket must fit in 108 bytes. Artifact roots can be much longer;
+    // keep TMPDIR short and private, and record it for the same proven cleanup as home/profile.
+    owner.temp = fs.mkdtempSync('/tmp/browseros-test-')
+    const { profile, home, temp } = owner
     const launch = options.launch?.(executable, profile) || {
       executable,
       flags: [...browserFlags(profile), 'about:blank'],
@@ -256,7 +266,7 @@ export async function startOwnedBrowser(
       child = spawn(executable, launch.flags, {
         detached: true,
         stdio: ['ignore', stdout, stderr],
-        env: browserEnvironment(home, launch.env),
+        env: browserEnvironment(home, temp, launch.env),
       })
     } finally {
       if (stdout !== undefined) fs.closeSync(stdout)

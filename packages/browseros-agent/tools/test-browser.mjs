@@ -145,6 +145,7 @@ async function owner(runDir) {
       pid: browser.pid,
       profile: browser.profile,
       home: browser.home,
+      temp: browser.temp,
       port: browser.port,
     }
     signal.throwIfAborted()

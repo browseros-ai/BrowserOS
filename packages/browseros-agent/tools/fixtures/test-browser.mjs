@@ -4,6 +4,7 @@
 import { spawn } from 'node:child_process'
 import fs from 'node:fs'
 import http from 'node:http'
+import net from 'node:net'
 import path from 'node:path'
 
 const args = process.argv.slice(2)
@@ -38,6 +39,21 @@ if (args[0] === 'command') {
   if (process.env.FIXTURE_BROWSER_MODE === 'exit') process.exit(7)
   if (process.env.FIXTURE_BROWSER_MODE === 'unowned')
     process.title = 'test-browser-fixture-unowned'
+  if (process.env.FIXTURE_BROWSER_SOCKET === '1') {
+    // Chromium binds its singleton socket beneath TMPDIR; long artifact paths cannot host it.
+    const directory = path.join(
+      process.env.TMPDIR,
+      'org.chromium.Chromium.fixture',
+    )
+    fs.mkdirSync(directory)
+    const socket = net.createServer()
+    await new Promise((resolve, reject) => {
+      socket.once('error', reject)
+      socket.listen(path.join(directory, 'SingletonSocket'), resolve)
+    })
+    if (!fs.existsSync(path.join(directory, 'SingletonSocket')))
+      throw new Error('Singleton socket path was truncated')
+  }
   const server = http.createServer((_request, response) => {
     response.setHeader('content-type', 'application/json')
     response.end(
@@ -55,6 +71,7 @@ if (args[0] === 'command') {
         pid: process.pid,
         profile,
         home: process.env.HOME,
+        temp: process.env.TMPDIR,
         args,
         port,
       }),
