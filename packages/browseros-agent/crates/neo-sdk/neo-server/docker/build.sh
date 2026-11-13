@@ -101,6 +101,9 @@ binary=$(mktemp)
 trap 'rm -f "$iidfile" "$binary"' EXIT
 # Older frozen worktrees use a named context for five shared supervisor files.
 # The remote manifest includes those exact inputs; current images own supervisor/.
+# Retain for pre-split sources such as a22477b21e. Delete this block together with
+# remote.py:LEGACY_SUPERVISOR once every supported image-source worktree owns
+# supervisor/ and support for pre-split snapshots is retired (remote-builds README).
 context_args=()
 if [ -f "$here/Dockerfile" ] && grep -q -- '--from=neo-docker' "$here/Dockerfile"; then
   neo_docker="$repo/packages/browseros/docker/neo"

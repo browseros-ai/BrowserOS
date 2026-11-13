@@ -170,12 +170,13 @@ class PoolTests(unittest.TestCase):
         self.assertTrue(self.request("release", job)["released"])
         self.assertEqual(first["name"], self.request("acquire", "c" * 32)["host"]["name"])
 
-    def test_old_reservations_never_expire_on_wall_clock(self):
+    def test_elapsed_time_alone_never_releases_a_reservation(self):
         for index in range(4):
             self.request("acquire", f"{index:032x}")
         state = json.loads(self.state.read_text())
         for host in state["hosts"]:
             host["job"]["started"] = 0
+            host["job"]["wallUntil"] = 0
         self.state.write_text(json.dumps(state))
         self.assertIsNone(self.request("acquire", "f" * 32)["host"])
 
@@ -337,6 +338,96 @@ class LeaseTests(unittest.TestCase):
             self.assertEqual(self.job, self.call("status")["hosts"][0]["job"]["id"])
         with patch.object(reaper.subprocess, "run", return_value=SimpleNamespace(stdout=safe)):
             reaper.sweep(self.state, self.profile)
+        self.assertIsNone(self.call("status")["hosts"][0]["job"])
+
+    def set_wall_policy(self, kind="gate", seconds=5):
+        state = json.loads(self.state.read_text())
+        state["policy"] = {"wallSeconds": {kind: seconds}}
+        self.state.write_text(json.dumps(state))
+
+    def test_live_heartbeats_and_retry_cannot_extend_frozen_wall_deadline(self):
+        self.set_wall_policy()
+        self.expire()  # Original reservation at 100, wall limit at 105.
+        for now in (101, 102, 104):
+            with patch.object(pool.time, "time", return_value=now):
+                self.assertTrue(self.call("heartbeat")["renewed"])
+        # Even an operator policy change affects only later reservations.
+        self.set_wall_policy(seconds=50)
+        with patch.object(pool.time, "time", return_value=104):
+            retry = pool.request(self.state, {"operation": "acquire", "job": self.job,
+                                             "submission": submission_for()})
+        self.assertEqual(105, retry["host"]["job"]["wallUntil"])
+        with patch.object(pool.time, "time", return_value=105):
+            with self.assertRaisesRegex(ValueError, "hard wall limit"):
+                self.call("heartbeat")
+            self.assertEqual("reaping", self.call("status")["hosts"][0]["job"]["state"])
+            with self.assertRaisesRegex(ValueError, "hard wall limit"):
+                pool.request(self.state, {"operation": "acquire", "job": self.job,
+                                          "submission": submission_for()})
+
+    def test_class_limits_apply_without_a_client_lease_and_legacy_start_is_preserved(self):
+        for kind in ("gate", "image", "viewer-image", "spec", "detector", "run"):
+            with self.subTest(kind=kind):
+                self.set_wall_policy(kind, 5)
+                with patch.object(pool.time, "time", return_value=100):
+                    pool.request(self.state, {"operation": "acquire", "job": self.job,
+                                              "submission": submission_for(kind=kind)})
+                state = json.loads(self.state.read_text())
+                # Upgrade a reservation made by the previous coordinator version.
+                del state["hosts"][0]["job"]["wallUntil"]
+                self.state.write_text(json.dumps(state))
+                with patch.object(pool.time, "time", return_value=105):
+                    expired = self.call("expired")["hosts"]
+                self.assertEqual(105, expired[0]["job"]["wallUntil"])
+                self.assertEqual("hard wall limit", expired[0]["job"]["expiryReason"])
+                self.call("release")
+
+    def test_nonfinite_or_invalid_operator_wall_limits_refuse_admission(self):
+        for value in (0, -1, True, 1.5, "unlimited", 86401):
+            with self.subTest(value=value):
+                self.set_wall_policy(seconds=value)
+                with self.assertRaisesRegex(ValueError, "wallSeconds"):
+                    self.expire()
+                self.assertIsNone(json.loads(self.state.read_text())["hosts"][0]["job"])
+
+    def test_hung_live_workload_is_cancelled_at_wall_limit_and_not_freed_on_uncertain_cleanup(self):
+        # A real owned process stays alive while its client renews successfully.
+        # The fake SSH boundary performs only this fixture's cancellation: no
+        # systemd, Docker, network or production pool is touched by this test.
+        process = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+
+        def cleanup():
+            if process.poll() is None:
+                process.kill()
+            process.wait(timeout=5)
+
+        self.addCleanup(cleanup)
+        self.set_wall_policy()
+        self.expire()
+        for now in (101, 102, 104):
+            with patch.object(pool.time, "time", return_value=now):
+                self.call("heartbeat")
+        self.assertIsNone(process.poll())
+        # Failed/incorrect cleanup cannot free the expired reservation.
+        for receipt in ({"job": self.job, "safeToRelease": False},
+                        {"job": "b" * 32, "safeToRelease": True}):
+            with patch.object(pool.time, "time", return_value=105), \
+                    patch.object(reaper.subprocess, "run", return_value=SimpleNamespace(stdout=json.dumps(receipt))):
+                reaper.sweep(self.state, self.profile)
+            self.assertEqual(self.job, self.call("status")["hosts"][0]["job"]["id"])
+            self.assertIsNone(process.poll())
+
+        def cancel_owned(arguments, **options):
+            self.assertEqual("lease-cancel", arguments[-1])
+            self.assertEqual({"job": self.job}, json.loads(options["input"]))
+            process.terminate()
+            process.wait(timeout=5)
+            return SimpleNamespace(stdout=json.dumps({"job": self.job, "safeToRelease": True}))
+
+        with patch.object(pool.time, "time", return_value=106), \
+                patch.object(reaper.subprocess, "run", side_effect=cancel_owned):
+            reaper.sweep(self.state, self.profile)
+        self.assertIsNotNone(process.poll())
         self.assertIsNone(self.call("status")["hosts"][0]["job"])
 
 

@@ -2,7 +2,8 @@
 """Prioritized first-free VM slots over SSH, without a daemon or cloud credentials.
 
 The sidecar flock protects a small JSON file on the coordinator VM. New clients renew
-a short lease; expiry fences admission until the independent reaper proves job cleanup.
+a short lease; a separate frozen wall deadline also bounds live hung clients. Either
+expiry fences admission until the independent reaper proves job and Docker cleanup.
 """
 from __future__ import annotations
 
@@ -22,6 +23,36 @@ JOB_ID = re.compile(r"[a-f0-9]{32}\Z")
 WORKER_LIMIT = 2
 KINDS = {"gate", "image", "viewer-image", "spec", "detector", "run"}
 PRIORITY = {"gate": 0, "image": 1, "viewer-image": 1, "spec": 2, "detector": 2, "run": 2}
+# Measured gates took about 5 minutes, amd64 images 8, viewer images 16,
+# and a full spec job 13. These generous budgets include sync, exclude queue
+# wait, and cannot be renewed by a healthy but hung client.
+WALL_SECONDS = {"gate": 20 * 60, "image": 45 * 60, "viewer-image": 45 * 60,
+                "spec": 45 * 60, "detector": 15 * 60, "run": 30 * 60}
+
+
+def wall_seconds(state: dict, kind: str) -> int:
+    """Only the coordinator's operator-controlled policy can change finite limits."""
+    seconds = state.get("policy", {}).get("wallSeconds", {}).get(kind, WALL_SECONDS[kind])
+    if type(seconds) is not int or not 1 <= seconds <= 24 * 60 * 60:
+        raise ValueError("wallSeconds must be an integer from 1 through 86400")
+    return seconds
+
+
+def wall_deadline(state: dict, reservation: dict) -> float:
+    # Older durable reservations have a start time but no frozen wall field.
+    # Derive it from that original start, never from a renewal or upgrade time.
+    # Administrators must drain before upgrading: an old over-budget job can
+    # immediately become eligible for fenced cancellation under the new policy.
+    if "wallUntil" not in reservation:
+        reservation["wallUntil"] = reservation["started"] + wall_seconds(state, reservation.get("kind", "run"))
+    return reservation["wallUntil"]
+
+
+def fence_wall(state: dict, reservation: dict, now: float) -> None:
+    """Fence a late heartbeat/acquire even before the next independent timer tick."""
+    if wall_deadline(state, reservation) <= now:
+        reservation.update(state="reaping", expiryReason="hard wall limit")
+        raise ValueError("job reached its hard wall limit; cleanup required")
 
 
 def queue_order(row: dict) -> tuple:
@@ -133,21 +164,31 @@ def request(path: Path, message: dict) -> dict:
             expired = []
             for host in hosts:
                 reservation = host.get("job") or {}
+                if not reservation:
+                    continue
                 deadline = reservation.get("clientUntil")
-                if deadline is not None and deadline <= time.time():
+                reason = ("hard wall limit" if wall_deadline(state, reservation) <= now else
+                          "client lease" if deadline is not None and deadline <= now else None)
+                if reason:
                     # Claim expiry under the same lock as heartbeat. A delayed
                     # client cannot renew after cancellation has been authorized.
                     reservation["state"] = "reaping"
+                    reservation["expiryReason"] = reason
                     expired.append(host)
-            if expired:
-                write_state(path, state)
+            write_state(path, state)  # Persist derived legacy wall deadlines too.
             return {"hosts": expired}
         if operation == "acquire":
             metadata = submission(message)
             # Retrying after a lost SSH reply must not consume another slot.
             if assigned is not None:
+                try:
+                    fence_wall(state, assigned["job"], now)
+                except ValueError:
+                    write_state(path, state)
+                    raise
                 if assigned["job"]["state"] != "reserved":
                     raise ValueError("job outcome is unknown; recover it before reuse")
+                write_state(path, state)
                 return {"host": assigned}
             if job in state["rejected"]:
                 write_state(path, state)
@@ -185,20 +226,26 @@ def request(path: Path, message: dict) -> dict:
                     write_state(path, state)
                     return {"host": None}
             state["waiting"] = [row for row in waiting if row["id"] != job]
-            free["job"] = {"id": job, "started": now, "state": "reserved", **(metadata or {})}
+            free["job"] = {"id": job, "started": now, "state": "reserved", **(metadata or {}),
+                           "wallUntil": now + wall_seconds(state, metadata["kind"])}
             if message.get("lease"):
-                free["job"]["clientUntil"] = time.time() + 120
+                free["job"]["clientUntil"] = min(now + 120, free["job"]["wallUntil"])
             write_state(path, state)
             return {"host": free}
         if assigned is None:
             return {"released": False}
         if operation == "heartbeat":
             reservation = assigned["job"]
+            try:
+                fence_wall(state, reservation, now)
+            except ValueError:
+                write_state(path, state)
+                raise
             if reservation["state"] != "reserved":
                 raise ValueError("job lease no longer renewable; cleanup required")
             if "clientUntil" not in reservation:
                 raise ValueError("legacy reservation has no renewable lease")
-            reservation["clientUntil"] = time.time() + 120
+            reservation["clientUntil"] = min(now + 120, reservation["wallUntil"])
             write_state(path, state)
             return {"renewed": True}
         if operation == "unavailable":

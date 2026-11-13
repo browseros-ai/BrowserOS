@@ -4,6 +4,11 @@
 The shared SSH coordinator owns VM slots. This client freezes approved working
 files locally, never uploads Git metadata or ambient credentials, and releases
 its slot only after the guest supervisor confirms completion or cancellation.
+
+WARNING: selected file contents are uploaded verbatim. An inline token in a tracked
+file is sent to the worker even if its filename looks like ordinary source. Path
+exclusions and the limited private-key header check are not a general secret scanner;
+remove secrets from selected files before invoking this client. Never redact build inputs.
 """
 from __future__ import annotations
 
