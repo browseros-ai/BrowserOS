@@ -154,6 +154,21 @@ describe('ultrafast run', () => {
     expect(text()).toContain('8 sec · 1 page, 4.2k tokens saved')
   })
 
+  it('marks a task neo browsed with pursue the same way, card and page', async () => {
+    const browsed = session({
+      name: 'Search flights to Singapore',
+      ultrafast: { durationMs: 72_400, pagesRead: 5, tokensSaved: 18_204 },
+    })
+    await render(
+      <>
+        <TaskRow task={browsed} now={Date.now()} />
+        <TaskPageHeader session={browsed} />
+      </>,
+    )
+    expect(text()).toContain('ultrafast · 1 min')
+    expect(text()).toContain('1 min · 5 pages, 18k tokens saved')
+  })
+
   it('says nothing about ultrafast on a task that ran the normal way', async () => {
     await render(
       <>

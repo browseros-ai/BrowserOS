@@ -22,6 +22,8 @@ import {
   monthsFreeLabel,
   pickPeriod,
   proPrices,
+  savingsTime,
+  savingsTokens,
 } from './pro.helpers'
 
 const spaces = (text: string) => text.replace(/\s/g, ' ')
@@ -245,5 +247,25 @@ describe('computers', () => {
     expect(computerName(computer)).toBe('Linux')
     expect(computerName({ ...computer, label: '  ' })).toBe('Linux')
     expect(computerName({ ...computer, label: 'Studio' })).toBe('Studio')
+  })
+})
+
+describe('savings numbers', () => {
+  it('tests that tokens read as people say them', () => {
+    expect(savingsTokens(0)).toBe('0')
+    expect(savingsTokens(640)).toBe('640')
+    expect(savingsTokens(4_180)).toBe('4.2k')
+    expect(savingsTokens(61_942)).toBe('62k')
+    expect(savingsTokens(972_900)).toBe('973k')
+    expect(savingsTokens(999_600)).toBe('1.0M')
+    expect(savingsTokens(1_240_000)).toBe('1.2M')
+  })
+
+  it('tests that time reads in seconds, minutes, then hours', () => {
+    expect(savingsTime(0)).toBe('0 sec')
+    expect(savingsTime(40_200)).toBe('40 sec')
+    expect(savingsTime(468_000)).toBe('8 min')
+    expect(savingsTime(3_600_000)).toBe('1 hr')
+    expect(savingsTime(4_320_000)).toBe('1 hr 12 min')
   })
 })

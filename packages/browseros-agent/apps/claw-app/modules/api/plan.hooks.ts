@@ -4,7 +4,8 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  *
  * ultrafast: this computer's plan, the prices on sale, a checkout's progress,
- * the licence key this computer is on, and the actions on them. Mutations
+ * the licence key this computer is on, what ultrafast has done here, and the
+ * actions on them. Mutations
  * write their reply into the cache at the call site via `Hook.getKey()`.
  */
 
@@ -19,6 +20,7 @@ import type {
   PlanPortal,
   PlanPortalRequest,
   PlanPricing,
+  PlanSavings,
   StartPlanCheckoutRequest,
 } from '@browseros/claw-api'
 import type {
@@ -37,6 +39,12 @@ export const usePlan = createQuery<Plan>({
 export const usePlanPricing = createQuery<PlanPricing>({
   queryKey: ['api', 'plan-pricing'],
   fetcher: async () => (await apiClient()).getPlanPricing(),
+})
+
+/** Pass `skipToken` as the variables unless ultrafast is on. */
+export const usePlanSavings = createQuery<PlanSavings, void>({
+  queryKey: ['api', 'plan-savings'],
+  fetcher: async () => (await apiClient()).getPlanSavings(),
 })
 
 /** Pass `skipToken` as the variables unless the plan says `onKey`. */
