@@ -92,7 +92,8 @@ export function closeDanglingToolCalls(messages: UIMessage[]): UIMessage[] {
         part.state !== 'input-available' &&
         part.state !== 'approval-requested' &&
         !(
-          part.state === 'approval-responded' && part.approval.approved === true
+          part.state === 'approval-responded' &&
+          part.approval?.approved !== false
         )
       ) {
         return part
@@ -104,7 +105,8 @@ export function closeDanglingToolCalls(messages: UIMessage[]): UIMessage[] {
         input: part.input,
         errorText: 'Tool call interrupted before it could complete.',
         approval:
-          part.state === 'approval-responded' && part.approval.approved === true
+          part.state === 'approval-responded' &&
+          part.approval?.approved === true
             ? { ...part.approval, approved: true as const }
             : undefined,
       }

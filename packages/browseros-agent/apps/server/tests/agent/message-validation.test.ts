@@ -333,6 +333,21 @@ describe('closeDanglingToolCalls', () => {
     expect(message.parts[0]).toBe(denied)
   })
 
+  // Persisted history is trusted, not schema-checked: an `approval-responded`
+  // part missing its `approval` object cannot produce a result either, and it
+  // must close instead of crashing the prompt path.
+  it('closes an approval-responded part with no approval object', () => {
+    const malformed = danglingToolPart('approval-responded')
+
+    const [message] = closeDanglingToolCalls([
+      makeAssistantMessage([malformed]),
+    ])
+
+    const part = message.parts[0] as { state: string; approval?: unknown }
+    expect(part.state).toBe('output-error')
+    expect(part.approval).toBeUndefined()
+  })
+
   it('returns the same message references when nothing is dangling', () => {
     const messages: UIMessage[] = [
       makeUserMessage('hi'),
