@@ -12,7 +12,8 @@ use neo_captcha::CaptchaSolver;
 use neo_captcha::config::{CAPSOLVER_KEY_FILE_ENV, TWOCAPTCHA_KEY_FILE_ENV};
 use neo_service::Settings;
 use neo_trace::{
-    EpochMillis, RedactionLimits, Redactor, RetentionPolicy, RunOutputs, TraceError, TraceSink,
+    EpochMillis, RedactionLimits, Redactor, RetentionPolicy, RunOutputs, ShotJobs, TraceError,
+    TraceSink,
     TraceStore, WriterConfig,
 };
 use tokio::net::TcpListener;
@@ -160,17 +161,7 @@ impl App {
         log_startup(&config, address);
 
         let store = open_trace(&config.env.trace_dir()).await?;
-        // The default limits until the host's `trace.valueBytes` reaches the writer, which
-        // happens below, as soon as the settings are loaded and before any run.
-        let redactor = Redactor::new(RedactionLimits::default());
-        let writer = WriterConfig {
-            replay_window: Defaults::REPLAY_WINDOW,
-            ..WriterConfig::default()
-        };
-        // The writer decides which ops get a screenshot; neo-service's camera takes them
-        // once the browser links.
-        let (shots, screenshots) = neo_trace::screenshot_queue();
-        let trace = neo_trace::spawn_writer(&store, redactor, writer, Some(shots));
+        let (trace, screenshots) = start_trace(&store);
         let host = HostApi::bind(
             &config.env.host_api,
             HostInputs {
@@ -315,6 +306,21 @@ impl fmt::Debug for App {
             .field("agent", &self.agent)
             .finish_non_exhaustive()
     }
+}
+
+/// The trace writer over `store`, and the camera's end of its screenshot queue. The writer
+/// starts at the default limits until the host's `trace.valueBytes` reaches it, which `start_on`
+/// does as soon as the settings are loaded and before any run. It decides which ops get a
+/// screenshot; neo-service's camera takes them once the browser links.
+fn start_trace(store: &TraceStore) -> (TraceSink, ShotJobs) {
+    let redactor = Redactor::new(RedactionLimits::default());
+    let writer = WriterConfig {
+        replay_window: Defaults::REPLAY_WINDOW,
+        ..WriterConfig::default()
+    };
+    let (shots, screenshots) = neo_trace::screenshot_queue();
+    let trace = neo_trace::spawn_writer(store, redactor, writer, Some(shots));
+    (trace, screenshots)
 }
 
 /// Neo's blank tab (`NeoTab`), kept open for the process's life: every close first makes sure of
