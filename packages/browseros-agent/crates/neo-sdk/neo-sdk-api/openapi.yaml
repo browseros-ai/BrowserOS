@@ -488,10 +488,33 @@ paths:
         reads each box back. It does not wait: a box in another state now is refused now;
         `timeoutMs` only bounds a browser that stops answering.
 
+        A box under its field's own drawing is typed by default. A site often draws over a box
+        an element that is no `<label>`: a floating label, or a code field's digit cells. Such a
+        drawing does not cover its box when it is in the box's own document, inside the box's
+        parent or that parent's parent, holds no control and is none, and lies within the box's
+        rectangle grown by half on each side. A drawing that shows the box's own accessible name
+        lets it be typed either way; a drawing that shows nothing only key by key (`keys`), as a
+        code is typed, and in one insertion it answers `box_covered`. Still refused either way,
+        `box_covered`: a cover that sticks out beyond the field (a banner, a dialog, a sheet),
+        one that holds a control or is one, one outside the box's parent and grandparent or in
+        another document, and one that shows other words than the box's name. Neo never clicks
+        the drawing. After the typing Neo reads the text the drawing's wrapper shows outside the
+        box, whatever the box then holds. A value of at most ten characters it newly shows stays,
+        a code's digits, and the record notes it. A longer one, a password or a card number, Neo
+        empties from the box and reads the wrapper once more: `value_drawn` when the page no
+        longer shows it, `value_still_drawn` when it does, for Neo cannot take text off a page.
+        What this gives up: Neo types where a person's click would land on the field's drawing,
+        not on the box; a layer over one field that repeats its name, or a blank one when typing
+        key by key, passes; and the check after the typing reads text only, so a value a site
+        paints as an image is not seen (no snapshot prints such an image, and a tab that took a
+        fill is not pictured).
+
         The value is in no record. Neo starts a run of its own with one operation, `host.fill`
         (kind `protected`), whose `args` name the boxes, the expected origins and the number of
         characters, never the value; the run's `code` is one fixed line and its `result` is this
-        answer. The operation records no screenshot and no page address or title (a form that
+        answer. On an entered fill the operation's own `result` also notes, in `drawings`, each
+        box entered under its field's own drawing (`field`, its index) and whether the site drew
+        the value there (`drawn`). The operation records no screenshot and no page address or title (a form that
         submits by GET would put the value there), nor does its tab get a run-end picture. The
         answer, events, logs and the fill's request record hold no value either.
 
@@ -2196,7 +2219,12 @@ components:
             `element_detached`, `not_an_input`, `wrong_origin`, `wrong_type`, `box_changed`,
             `page_changed`, `box_not_editable`, `box_hidden`, `box_covered`, `value_too_long`,
             `not_focused`, `focus_lost`, `value_not_taken`, `box_not_cleared` (a box with no
-            size still held text after Neo tried to empty it; nothing was typed), `page_moved`,
+            size still held text after Neo tried to empty it; nothing was typed), `value_drawn`
+            (a value of more than ten characters that the box's field drawing showed outside the
+            box: Neo emptied the box and the page no longer shows the value, but the site saw what
+            was typed, so look at the page before trying again), `value_still_drawn` (as
+            `value_drawn`, but the page still shows the value after the emptying: reload or close
+            the page before anything reads it, a snapshot included), `page_moved`,
             `run_timeout`,
             `target_closed`, `browser_disconnected`, `shutting_down`, `internal_error` (a
             failure inside Neo, the fill's own task included: look at the page before trying

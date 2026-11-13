@@ -263,6 +263,103 @@ async fn no_picture_after_the_fill(rig: &Rig, client: &Client) -> TestResult {
     Ok(())
 }
 
+/// A sign-in whose boxes each sit under a sibling div that draws the field's name and takes the
+/// pointer, which is no `<label>` (ruling R55). Built in the script; its title is a hash of what
+/// both boxes hold after each input.
+const DRAWN_FORM: &str = r#"
+const field = (id, name, type) => '<div style="position:relative;width:260px;height:40px;margin:0 0 16px">'
+  + '<input id="' + id + '" type="' + type + '" aria-label="' + name + '" style="width:100%;height:100%;box-sizing:border-box">'
+  + '<div style="position:absolute;inset:0;display:flex;align-items:center;padding:0 8px">' + name + '</div></div>';
+const html = '<title>sign in</title><form>' + field('user', 'User', 'text') + field('pw', 'Password', 'password') + '</form>'
+  + '<script>'
+  + 'const hash = (text) => { let x = 5381; for (const c of text) { x = ((x * 33) ^ c.codePointAt(0)) >>> 0; } return x; };'
+  + 'const show = () => { document.title = "h:" + hash(user.value + "|" + pw.value); };'
+  + 'user.addEventListener("input", show); pw.addEventListener("input", show);'
+  + '</script>';
+await page.goto('data:text/html,' + encodeURIComponent(html));
+const snapshot = await page.ariaSnapshot();
+const user = /textbox "User" \[ref=(e\d+)\]/.exec(snapshot)?.[1];
+const pw = /textbox "Password" \[ref=(e\d+)\]/.exec(snapshot)?.[1];
+return { page, user, pw, snapshot };
+"#;
+
+/// Rulings R55 and R56 through the route on a real BrowserOS, with nothing set by the host: the
+/// check call passes both boxes under their fields' drawn names, the fill enters both, the page
+/// holds exactly the values, and the record notes both fields as entered under their drawing,
+/// with no value drawn. Fails with the drawing's branch left out of the look (`box_covered`).
+#[tokio::test(flavor = "multi_thread")]
+async fn a_host_types_into_boxes_under_drawn_labels() -> TestResult {
+    let Some(browser) = browser_or_skip() else {
+        return Ok(());
+    };
+    let mut rig = Rig::start_with(&browser, CaptchaKey::Absent, &[])?;
+    let failure = match time::timeout(TEST_BUDGET, drive_drawn(&mut rig)).await {
+        Ok(Ok(())) => return Ok(()),
+        Ok(Err(error)) => error.to_string(),
+        Err(_elapsed) => format!("the drive did not finish within {TEST_BUDGET:?}"),
+    };
+    Err(format!("{failure}\n{}", rig.logs()).into())
+}
+
+async fn drive_drawn(rig: &mut Rig) -> TestResult {
+    rig.until_ready().await?;
+    let client = rig.client().await?;
+    let form = run(&client, DRAWN_FORM, &json!({ "taskId": TASK })).await?;
+    let form = value(&form)?;
+    let tab = form
+        .pointer("/page/tab")
+        .and_then(Value::as_i64)
+        .ok_or_else(|| format!("the form's tab: {form}"))?;
+    let (Some(user), Some(pw)) = (at(form, "/user").as_str(), at(form, "/pw").as_str()) else {
+        return Err(format!("the snapshot names both boxes: {form}").into());
+    };
+    let check = json!({ "taskId": TASK, "fields": [{ "ref": user }, { "ref": pw }] });
+    let checked = host(rig, &format!("/v1/tabs/{tab}/fill/check"), &check).await?;
+    for at_box in ["/fields/0/refusal", "/fields/1/refusal"] {
+        assert!(at(&checked, at_box).is_null(), "{checked}");
+    }
+    let origin = at(&checked, "/fields/0/facts/origin")
+        .as_str()
+        .ok_or_else(|| format!("the check reads the box's origin: {checked}"))?
+        .to_owned();
+    let body = json!({
+        "taskId": TASK,
+        "fields": [
+            { "ref": user, "value": USER, "expect": { "origin": origin } },
+            { "ref": pw, "value": PASSWORD, "expect": { "origin": origin, "type": "password" } }
+        ]
+    });
+    let answer = host(rig, &format!("/v1/tabs/{tab}/fill"), &body).await?;
+    assert_eq!(at(&answer, "/outcome"), "entered", "{answer}");
+    let read = run(
+        &client,
+        "return await page.title();",
+        &json!({ "taskId": TASK }),
+    )
+    .await?;
+    assert_eq!(
+        value(&read)?,
+        &json!(format!("h:{}", page_hash(&format!("{USER}|{PASSWORD}")))),
+        "the boxes hold the host's values"
+    );
+    let run_id = at(&answer, "/runId").as_str().ok_or("a runId")?;
+    let record = rig
+        .host(
+            "GET",
+            &format!("/v1/runs/{run_id}?wait=10"),
+            Some(HOST_TOKEN),
+            None,
+        )
+        .await?
+        .json()?;
+    assert_eq!(
+        at(&record, "/operations/0/result/drawings"),
+        &json!([{ "field": 0, "drawn": false }, { "field": 1, "drawn": false }]),
+        "{record}"
+    );
+    client.cancel().await?;
+    Ok(())
+}
 /// The value at `pointer`, or null.
 fn at<'a>(value: &'a Value, pointer: &str) -> &'a Value {
     value.pointer(pointer).unwrap_or(&Value::Null)

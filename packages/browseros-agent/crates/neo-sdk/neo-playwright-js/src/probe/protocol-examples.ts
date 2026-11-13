@@ -209,6 +209,11 @@ export const REQUEST_EXAMPLES: { [O in Op]: AtLeastOne<RequestOf<O>> } = {
     { op: 'private', pin: 3, step: { kind: 'readBack' } },
     { op: 'private', pin: 3, step: { kind: 'forget' } },
     { op: 'private', pin: 3, step: { kind: 'markFocused' } },
+    {
+      op: 'private',
+      pin: 6,
+      step: { kind: 'drawn', text: 'CANARY-example' },
+    },
   ],
   read: [
     {
@@ -574,10 +579,22 @@ const REPLY_EXAMPLES: {
         state: 'left',
         heldAtLastInput: true,
         moving: false,
+        drawing: 'none',
+      },
+    },
+    {
+      kind: 'value',
+      value: {
+        kind: 'readBack',
+        state: 'holds',
+        heldAtLastInput: true,
+        moving: false,
+        drawing: 'drawn',
       },
     },
     { kind: 'value', value: { kind: 'forgot' } },
     { kind: 'value', value: { kind: 'markedFocused', marked: true } },
+    { kind: 'value', value: { kind: 'drawn', drawn: false } },
   ],
   read: [
     { kind: 'read', value: 'Welcome' },

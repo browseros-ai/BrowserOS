@@ -11,7 +11,9 @@
  *   5 enabled and not read-only              boxNotEditable
  *   6 the box shows, and nothing else takes  boxHidden, boxCovered
  *     the pointer at its centre              (main's covered rule, below); a box with no
- *                                            size is hidden unless typed key by key
+ *                                            size is hidden unless typed key by key; the
+ *                                            field's own drawing over its box does not
+ *                                            cover it (rulings R55, R56, below)
  *   7 the value fits its maxlength, or the   valueTooLong
  *     host allowed a cut
  *
@@ -66,6 +68,9 @@ export function look(world: World, request: LookRequest): ReplyTo<'look'> {
  * check call before the host approved anything) no origin and no fact is checked.
  */
 export function lookAt(world: World, element: Element, ask: BoxAsk): Looked {
+  // Every look starts without the wrapper an earlier one kept: a box with no size is reached by
+  // focus and never hit-tested, so a wrapper from a look when it had a size must not carry over.
+  coverWrappers.delete(element)
   if (!isTextInput(element)) return { refusal: { code: 'notAnInput' } }
   const facts = factsOf(element)
   const refusal = firstRefusal(world, element, facts, ask)
@@ -95,7 +100,7 @@ function firstRefusal(
     !world.injected.elementState(element, 'visible', ask.frameVisible).matches
   )
     return { code: 'boxHidden' }
-  else if (covered(element)) return { code: 'boxCovered' }
+  else if (blocked(world, element, ask.keys)) return { code: 'boxCovered' }
   if (
     ask.length !== undefined &&
     !ask.cut &&
@@ -185,7 +190,7 @@ function isTextInput(element: Element): element is HTMLInputElement {
  *   where `frameElement` stops the climb. Here the point stays in the frame's own coordinates
  *   for that document, so the hit lands on the box's centre.
  */
-function covered(box: Element): boolean {
+function blockerOf(box: Element): Element | null | 'unread' {
   try {
     scrollIntoViewIfNeeded(box)
     const rect = box.getBoundingClientRect()
@@ -207,8 +212,152 @@ function covered(box: Element): boolean {
     }
     return blockerAt(document, box, x, y)
   } catch {
-    return true
+    return 'unread'
   }
+}
+
+/**
+ * The box's wrapper, by box, when its last look let it through under its field's own drawing
+ * (rulings R55, R56): the private entry reads the wrapper's text before the first character and
+ * at the read-back, to see whether the site draws the typed value outside the box
+ * (private-entry.ts). Each look sets or clears it, so a later look with no drawing left forgets
+ * it.
+ */
+const coverWrappers = new WeakMap<Element, Element>()
+
+/** The wrapper of the drawing the box's last look let it through under, if it did. */
+export function coverWrapper(box: Element): Element | undefined {
+  return coverWrappers.get(box)
+}
+
+/**
+ * Whether the box is covered: main's rule, except that the field's own drawing over its box does
+ * not cover it ([`drawingOf`], rulings R55 and R56). tests/private_look_live.rs holds the look
+ * against main's own script on every page, and lists the pages where the two differ.
+ */
+function blocked(world: World, box: Element, keys: boolean): boolean {
+  const blocker = blockerOf(box)
+  if (blocker === null) return false
+  if (blocker === 'unread') return true
+  const wrapper = drawingOf(world, box, blocker, keys)
+  if (!wrapper) return true
+  coverWrappers.set(box, wrapper)
+  return false
+}
+
+/** An element that can take input or the focus, in a cover or as the cover itself. */
+const CONTROLS =
+  'input, textarea, select, button, a[href], iframe, frame, [contenteditable], [tabindex]'
+
+/**
+ * Rulings R55 and R56: the field's own drawing over its box, which is no `<label>`, such as a
+ * floating label or a code field's drawn digits, so main's rule calls it a cover. It does not
+ * cover when every point holds, and then the answer is its wrapper; otherwise `null`.
+ *
+ * 1. The blocker is in the box's own document.
+ * 2. It is inside the box's parent, or that parent's parent: the wrapper.
+ * 3. The cover, the largest element under the wrapper that holds the blocker and not the box,
+ *    holds no control and is none; a `<label>` for another control counts as one (`labelsAnother`).
+ * 4. The cover lies within the box's rectangle grown by half its width on each side and half its
+ *    height above and below.
+ * 5. The cover draws the box's own name: its rendered text and the box's accessible name, as the
+ *    snapshot engine computes it, are the same once folded (`sameName`); the box is typed either
+ *    way. Or it draws nothing (its rendered text is empty once folded), as a code field's drawn
+ *    digits do before any is typed; then only key by key (`keys`), as a host types a code.
+ *    Other words cover the box.
+ */
+function drawingOf(
+  world: World,
+  box: Element,
+  blocker: Element,
+  keys: boolean,
+): Element | null {
+  if (blocker.ownerDocument !== box.ownerDocument) return null
+  const parent = box.parentElement
+  const grand = parent?.parentElement
+  const wrapper = parent?.contains(blocker)
+    ? parent
+    : grand?.contains(blocker)
+      ? grand
+      : null
+  if (!wrapper) return null
+  let cover = blocker
+  while (
+    cover.parentElement &&
+    cover.parentElement !== wrapper &&
+    !cover.parentElement.contains(box)
+  )
+    cover = cover.parentElement
+  if (
+    cover.contains(box) ||
+    cover.matches(CONTROLS) ||
+    cover.querySelector(CONTROLS) ||
+    labelsAnother(cover, box)
+  )
+    return null
+  const own = box.getBoundingClientRect()
+  const drawn = cover.getBoundingClientRect()
+  const dx = own.width / 2
+  const dy = own.height / 2
+  if (
+    drawn.left < own.left - dx ||
+    drawn.right > own.right + dx ||
+    drawn.top < own.top - dy ||
+    drawn.bottom > own.bottom + dy
+  )
+    return null
+  const text = renderedText(cover)
+  if (fold(text) === '') return keys ? wrapper : null
+  const name = world.injected.utils.getElementAccessibleNameText(box, false)
+  return sameName(text, name) ? wrapper : null
+}
+
+/**
+ * Whether the cover is, or holds, a `<label>` for another control than the box: the page itself
+ * says whose it is, and a person's click there goes to that field. A label that labels nothing
+ * (no `for`, no control inside it) stays a drawing: floating-label kits draw with one.
+ */
+function labelsAnother(cover: Element, box: Element): boolean {
+  const labels = [cover, ...cover.querySelectorAll('label')]
+  return labels.some((label) => {
+    if (label.localName !== 'label') return false
+    const control: unknown = Reflect.get(label, 'control')
+    return isNode(control) && control !== box
+  })
+}
+
+/**
+ * What an element draws as text: `innerText`, which leaves out what does not render, so an
+ * overlay that hides the name and shows nothing draws nothing. An element with no `innerText`
+ * (an SVG or MathML one) draws nothing the look can read: its `textContent` would count a
+ * `<title>` that never shows.
+ */
+export function renderedText(element: Element): string {
+  const text: unknown = Reflect.get(element, 'innerText')
+  return typeof text === 'string' ? text : ''
+}
+
+/**
+ * Two names are the same once folded (whitespace collapsed, lower case, a trailing `*` or `:`
+ * dropped), both non-empty, and equal, or the longer holds the shorter and the shorter has at
+ * least three characters (`Email address` drawn over a box named `Email`).
+ */
+function sameName(drawn: string, name: string): boolean {
+  const a = fold(drawn)
+  const b = fold(name)
+  if (!a || !b) return false
+  if (a === b) return true
+  const [shorter, longer] = a.length < b.length ? [a, b] : [b, a]
+  return shorter.length >= 3 && longer.includes(shorter)
+}
+
+/** Whitespace collapsed, lower case, a trailing `*` or `:` dropped. */
+function fold(text: string): string {
+  return text
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase()
+    .replace(/[\s*:]+$/, '')
 }
 
 /** Main's `DOM.scrollIntoViewIfNeeded` before its hit test: a no-op for a box in view. */
@@ -218,13 +367,13 @@ function scrollIntoViewIfNeeded(box: Element): void {
   else box.scrollIntoView({ block: 'center', inline: 'center' })
 }
 
-/** Main's `blockerAt`, line for line, answering whether there is a blocker. */
+/** Main's `blockerAt`, line for line, answering with the blocker, or `null` when there is none. */
 function blockerAt(
   document: Document,
   box: Element,
   pointX: number,
   pointY: number,
-): boolean {
+): Element | null {
   let currentDocument = document
   let x = pointX
   let y = pointY
@@ -249,13 +398,12 @@ function blockerAt(
     currentDocument = child
     hit = currentDocument.elementFromPoint(x, y)
   }
-  if (!hit || hit === box || reaches(hit, box) || reaches(box, hit))
-    return false
+  if (!hit || hit === box || reaches(hit, box) || reaches(box, hit)) return null
   const hitLabel = hit.closest('label')
   if (hitLabel && (hitLabel.control === box || hitLabel.contains(box)))
-    return false
+    return null
   const boxLabel = box.closest('label')
-  return !(boxLabel?.contains(hit) ?? false)
+  return (boxLabel?.contains(hit) ?? false) ? null : hit
 }
 
 /**

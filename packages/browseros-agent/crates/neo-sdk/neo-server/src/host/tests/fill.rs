@@ -23,8 +23,8 @@ use browseros_core::TabId;
 use futures_util::future::BoxFuture;
 use neo_http::PictureVerdict;
 use neo_playwright::{
-    BoxFacts, BoxLook, Entry, EntryCode, EntryError, EntryOutcome, EntryRequest, LookRequest,
-    OpEnv, Sending,
+    BoxFacts, BoxLook, Drawing, Entry, EntryCode, EntryError, EntryOutcome, EntryRequest,
+    LookRequest, OpEnv, Sending,
 };
 use neo_trace::{Delivery, Effect, RunId};
 use serde::Deserialize;
@@ -62,6 +62,9 @@ pub(super) enum Script {
     Enter,
     /// Every character went in and the page moved after the last one.
     EnterPageMoved,
+    /// Every box takes its value; the first under its field's own drawing, which drew the value
+    /// (a code), the second under one that did not (rulings R55, R56).
+    EnterUnderDrawings,
     /// The look refuses box `at` with `code` before any key.
     Refuse { at: usize, code: EntryCode },
     /// Box `at` got some of its characters, then `code` stopped the entry.
@@ -71,6 +74,18 @@ pub(super) enum Script {
     Hold,
     /// Never answers: only the deadline or a shutdown ends it.
     Hang,
+}
+
+/// How each box's field drawing figured in an entry `script` answers: the first two under their
+/// fields' drawings for [`Script::EnterUnderDrawings`], the first of which drew its value; none
+/// otherwise.
+fn drawings_of(script: Script, fields: usize) -> Vec<Drawing> {
+    let mut drawings = vec![Drawing::None; fields];
+    if matches!(script, Script::EnterUnderDrawings) {
+        drawings[0] = Drawing::Drawn;
+        drawings[1] = Drawing::Under;
+    }
+    drawings
 }
 
 /// The stand-in for the entry behind `builtins::PrivateEntry`.
@@ -192,22 +207,23 @@ impl PrivateEntry for ScriptedEntry {
                     Entry::refused_before_sending(fields, at, EntryError::of(code, Sending::NotYet))
                 }
                 Script::Hang => future::pending().await,
-                Script::Enter | Script::EnterPageMoved => {
+                Script::Enter | Script::EnterPageMoved | Script::EnterUnderDrawings => {
                     if let Some(refused) = before_keys(0) {
                         return refused;
                     }
                     self.sent(env, request.tab);
                     self.typed(&lengths);
                     Entry {
-                        outcome: if matches!(script, Script::Enter) {
-                            EntryOutcome::Entered
-                        } else {
+                        outcome: if matches!(script, Script::EnterPageMoved) {
                             EntryOutcome::EnteredPageMoved
+                        } else {
+                            EntryOutcome::Entered
                         },
                         delivery: Delivery::Done,
                         at: None,
                         typed: lengths,
                         error: None,
+                        drawings: drawings_of(script, fields),
                     }
                 }
                 Script::Uncertain { at, code } => {
@@ -232,6 +248,7 @@ impl PrivateEntry for ScriptedEntry {
                         at: Some(at),
                         typed,
                         error: Some(error),
+                        drawings: vec![Drawing::None; fields],
                     }
                 }
                 Script::Hold => {
@@ -250,6 +267,7 @@ impl PrivateEntry for ScriptedEntry {
                             at: Some(0),
                             typed: vec![0; fields],
                             error: Some(error),
+                            drawings: vec![Drawing::None; fields],
                         };
                     }
                     self.typed(&lengths);
@@ -259,6 +277,7 @@ impl PrivateEntry for ScriptedEntry {
                         at: None,
                         typed: lengths,
                         error: None,
+                        drawings: vec![Drawing::None; fields],
                     }
                 }
             }
@@ -1222,6 +1241,63 @@ async fn request_errors_type_nothing_and_quote_nothing() -> TestResult {
     // The 404 left the id unused.
     let typed = fill(&host, tab, &canary_body(&json!({ "requestId": "gone" }))).await?;
     assert_eq!(typed.body["outcome"], "entered", "{typed:?}");
+    Ok(())
+}
+
+/// Rulings R55 and R56 on the record: an entry whose boxes went under their fields' own drawings
+/// notes each such field on its operation's result, with whether the site drew the value there;
+/// a field with no drawing has no note. Fails with the notes left out of the result.
+#[tokio::test]
+async fn the_record_notes_fields_entered_under_their_drawing() -> TestResult {
+    let (host, tab) = ready().await?;
+    host.entry.script(Script::EnterUnderDrawings);
+    let answer = fill(&host, tab, &canary_body(&json!({}))).await?;
+    assert_eq!(answer.status, 200, "{answer:?}");
+    assert_eq!(answer.body["outcome"], "entered");
+    assert!(
+        answer.body.get("drawings").is_none(),
+        "the host's answer is unchanged: {answer:?}"
+    );
+    let run = answer.body["runId"].as_str().ok_or("a runId")?;
+    let record = get(&host, &format!("/v1/runs/{run}?wait=10")).await?;
+    assert_eq!(
+        record.body["operations"][0]["result"]["drawings"],
+        json!([{ "field": 0, "drawn": true }, { "field": 1, "drawn": false }]),
+        "{record:?}"
+    );
+    Ok(())
+}
+
+/// Ruling R55 after the typing: an entry the site drew the value of answers `value_drawn`, or
+/// `value_still_drawn` when the page still shows it, the website's, each with its fixed sentence,
+/// and quotes no value. Fails without the route's codes (the answer reads `internal_error`).
+#[tokio::test]
+async fn a_drawn_value_answers_its_code() -> TestResult {
+    let cases = [
+        (
+            EntryCode::ValueDrawn,
+            "value_drawn",
+            "The site drew the typed value outside the box. Neo emptied the box, and the page no \
+             longer shows the value.",
+        ),
+        (
+            EntryCode::ValueStillDrawn,
+            "value_still_drawn",
+            "The site drew the typed value outside the box, and the page still shows it. Reload \
+             or close the page before anything reads it.",
+        ),
+    ];
+    for (code, name, sentence) in cases {
+        let (host, tab) = ready().await?;
+        host.entry.script(Script::Uncertain { at: 0, code });
+        let answer = fill(&host, tab, &canary_body(&json!({}))).await?;
+        assert_eq!(answer.status, 200, "{answer:?}");
+        assert_eq!(answer.body["outcome"], "uncertain", "{answer:?}");
+        assert_eq!(answer.body["error"]["code"], name, "{answer:?}");
+        assert_eq!(answer.body["error"]["owner"], "website");
+        assert_eq!(answer.body["error"]["message"], sentence);
+        assert!(!holds_any(answer.body.to_string().as_bytes(), PASSWORD));
+    }
     Ok(())
 }
 
