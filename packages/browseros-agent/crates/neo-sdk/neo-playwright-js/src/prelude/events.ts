@@ -579,9 +579,9 @@ export class EventHub {
     const site = INTERNAL_SITE
     const id = ++this.nextChooserLease
     const api = 'page.filechooser'
-    // Upkeep for the script's file chooser listener or wait, whose own op (`sendListen` with
-    // the script's site, or `events.wait`) is what makes the page working.
-    const target = page._openedBrand(api, { working: false })
+    // Set up only for the script's own file chooser listener or wait on this page, so it makes
+    // the page working, at once: the listener's `events.listen` goes out once this is ready.
+    const target = page._openedBrand(api)
     const ready = target.then(async (page) => {
       await send['events.interceptFileChooser'](
         site,

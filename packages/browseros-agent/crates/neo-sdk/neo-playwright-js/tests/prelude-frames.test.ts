@@ -263,15 +263,45 @@ it("tests that Neo's own listener on every listed tab leaves a wait reading only
   ])
 })
 
+/** The door's answer to an interception it could not set up. */
+const REFUSED = {
+  err: {
+    code: 'owner_has_control',
+    owner: 'host',
+    delivery: 'not_sent',
+    retryable: true,
+    operationId: 'run.1',
+    timeout: false,
+    message: 'page.filechooser: the owner has control of this tab',
+  },
+}
+
+// A file chooser listener's interception is set up before its `events.listen` goes out, so the
+// page is working from the script's call on, whether that setup is answered, still pending as
+// the wait ends, or refused.
 it("tests that the script's own listener on another listed tab makes that tab working", async () => {
-  for (const event of ['framenavigated', 'filechooser']) {
-    const runtime = loadPrelude({ seed: LISTED, answer: listedAnswer })
+  const cases: [string, unknown][] = [
+    ['framenavigated', null],
+    ['filechooser', null],
+    ['filechooser', new Promise(() => {})],
+    ['filechooser', REFUSED],
+  ]
+  for (const [event, interception] of cases) {
+    const runtime = loadPrelude({
+      seed: LISTED,
+      answer: (call) =>
+        call.name === 'events.interceptFileChooser'
+          ? interception
+          : listedAnswer(call),
+    })
     await runtime.run(`
       context.pages().find((other) => other.url().includes('1009')).on('${event}', () => {})
       await page.waitForTimeout(1)
+      await page.waitForTimeout(1)
     `)
-    expect(listens(runtime)).toContainEqual([1009, event])
     expect(reads(runtime.calls)).toEqual([
+      [1007, 'page.waitForTimeout'],
+      [1009, 'page.waitForTimeout'],
       [1007, 'page.waitForTimeout'],
       [1009, 'page.waitForTimeout'],
     ])

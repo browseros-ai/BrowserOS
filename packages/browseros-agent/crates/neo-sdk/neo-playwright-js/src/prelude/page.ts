@@ -143,8 +143,8 @@ export class Page extends EventEmitter {
    * Whether `waitForTimeout` reads this page's frame tree again (FR-1): the run's page, a page
    * the run opened or learned of after it started, and a tab the run's init listed once the
    * script ran an op on it. A listed tab the script never touched keeps the tree it had: Neo's
-   * own subscriptions on every listed tab (worker state, the file chooser's interception) brand
-   * it with `working: false` (`_brand`). Each refresh is an op on its tab, and a view that
+   * own worker-state subscription on every listed tab brands it with `working: false`
+   * (`_brand`, `EventHub.sendListen`). Each refresh is an op on its tab, and a view that
    * follows the run's task goes to the tab of the task's latest op, so marking every listed tab
    * would send that view across all of them after each wait.
    */

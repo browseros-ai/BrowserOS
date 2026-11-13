@@ -10299,7 +10299,7 @@ ${changes}`;
       const site = INTERNAL_SITE;
       const id = ++this.nextChooserLease;
       const api = "page.filechooser";
-      const target = page._openedBrand(api, { working: false });
+      const target = page._openedBrand(api);
       const ready = target.then(async (page) => {
         await send["events.interceptFileChooser"](site, { api, timeoutMs: 0 }, { page, event: "fileChooser", enabled: true, lease: id });
       });
