@@ -152,6 +152,12 @@ export async function invoke<Op extends OpName>(
 /**
  * A page-state result and its ordering evidence. An optional consumer reserves delivery
  * synchronously, before any caller awaiting this reply can run. `signal` as for [`invoke`].
+ *
+ * `apply` takes the reply's page facts (a supplemental frame tree, a navigation's URL) after the
+ * events before the reply were dispatched and before the settle step. The settle step may read
+ * the same tab again, a newer observation of it that makes this reply's facts stale; one that
+ * got no tree would then leave the script the tree from before this operation. Applied first,
+ * the reply's tree stays as the last good one and the failed read only marks it to be read again.
  */
 export async function invokeObserved<Op extends OpName>(
   op: Op,
@@ -160,6 +166,7 @@ export async function invokeObserved<Op extends OpName>(
   args: OpInputs[Op],
   onResult?: (value: OpOutputs[Op], observed: Observation | null) => void,
   signal?: SignalLike,
+  apply?: (value: OpOutputs[Op], observed: Observation | null) => void,
 ): Promise<{ value: OpOutputs[Op]; observed: Observation | null }> {
   try {
     const ready = readyChoosers(op)
@@ -176,11 +183,11 @@ export async function invokeObserved<Op extends OpName>(
     })
     const held = pumpsCaughtUp(op)
     if (held) await held
+    const value = field(reply, 'value') as OpOutputs[Op]
+    const observed = readObservation(field(reply, 'observed'))
+    apply?.(value, observed)
     await settled(site)
-    return {
-      value: field(reply, 'value') as OpOutputs[Op],
-      observed: readObservation(field(reply, 'observed')),
-    }
+    return { value, observed }
   } catch (thrown) {
     const held = pumpsCaughtUp(op)
     if (held) await held

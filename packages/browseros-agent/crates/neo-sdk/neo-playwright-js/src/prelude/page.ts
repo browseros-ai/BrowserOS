@@ -106,6 +106,9 @@ import { Worker } from './worker'
  */
 const FRAMES_RETRY_MS = 100
 
+/** The read a navigation's reply still owes once its facts are applied (`Page._navigationReplied`). */
+export type NavigationRead = 'none' | 'read' | 'reread'
+
 /** Page-scoped preferences; omitted values are retained and null clears just that override. */
 export type MediaOptions = {
   media?: 'screen' | 'print' | null
@@ -1231,27 +1234,13 @@ export class Page extends EventEmitter {
     result: Partial<NavigationResult> | null,
     at: Observation | null,
     ready?: () => void,
+    replied: NavigationRead = this._navigationReplied(frame, result, at),
   ): Promise<Response | null> {
-    if (this.#payloadCurrent(at)) {
-      if (typeof result?.url === 'string') {
-        if (frame === this._mainFrame) {
-          this._url = result.url
-          this.#urlKnown = true
-        } else frame._url = result.url
-      }
-      // A supplemental tree is whole (the native side sends no partial one), but it does not
-      // count as a read at the reply's version: that version was taken after the tree was, so
-      // a frame that changed in between would be lost. A moved version is read once more.
-      if (Array.isArray(result?.frames)) this._applyFrames(result.frames, at)
-      else if (!result?.frameSnapshotAttempted) await this._refreshFrames(api)
-      // A bounded snapshot that got no tree (it ran out of time, or a navigation started):
-      // the tree is read once the navigation ended (`_navigating`).
-      else this._framesUnknown()
-    } else if (!this._closed && !result?.frameSnapshotAttempted) {
+    if (replied === 'read') await this._refreshFrames(api)
+    else if (replied === 'reread')
       // Keep the original operation's return value even if a fresh read of the replacement
       // binding fails. The stale payload never becomes the replacement's cached state.
       await this._refreshFrames(api).catch(() => undefined)
-    }
     // A modern native reply already attempted its bounded snapshot. If superseded, discard
     // those facts instead of reading a replacement renderer on an older op's completion.
     // After this mark a later evaluate may publish this navigation's public promise before
@@ -1265,6 +1254,39 @@ export class Page extends EventEmitter {
     // navigation is no longer in flight and its publication finished.
     if (!ready) await this._context._settleFrames().catch(() => {})
     return navigationResponse(frame, result)
+  }
+
+  /**
+   * The facts a navigation's reply carries, applied to the cache: its URL, and its tree when its
+   * bounded snapshot got one. A wait outside a tracked navigation applies them through
+   * `invokeObserved`'s `apply`, before its settle step can read this tab again (bridge.ts); a
+   * tracked one's tab is in flight, which the settle step leaves alone, so `_navigated` applies
+   * them itself. Says which read is still owed: `read` when the reply attempted no snapshot,
+   * `reread` when a newer fact replaced this reply's binding and it attempted none, else `none`.
+   */
+  _navigationReplied(
+    frame: Frame,
+    result: Partial<NavigationResult> | null,
+    at: Observation | null,
+  ): NavigationRead {
+    if (this.#payloadCurrent(at)) {
+      if (typeof result?.url === 'string') {
+        if (frame === this._mainFrame) {
+          this._url = result.url
+          this.#urlKnown = true
+        } else frame._url = result.url
+      }
+      // A supplemental tree is whole (the native side sends no partial one), but it does not
+      // count as a read at the reply's version: that version was taken after the tree was, so
+      // a frame that changed in between would be lost. A moved version is read once more.
+      if (Array.isArray(result?.frames)) this._applyFrames(result.frames, at)
+      else if (!result?.frameSnapshotAttempted) return 'read'
+      // A bounded snapshot that got no tree (it ran out of time, or a navigation started):
+      // the tree is read once the navigation ended (`_navigating`), or at the settle step.
+      else this._framesUnknown()
+      return 'none'
+    }
+    return !this._closed && !result?.frameSnapshotAttempted ? 'reread' : 'none'
   }
 
   /** Both the payload's admitted binding and this Page's newest fact must agree. */
@@ -1708,17 +1730,23 @@ export class Page extends EventEmitter {
         throw error
       }
     }
+    // Each wait's reply facts are applied before its settle step (`_navigationReplied`).
     const wait = (pattern: UrlPattern, until: LoadState, budget: number) =>
-      nativeWait(() =>
-        invokeObserved(
+      nativeWait(async () => {
+        let replied: NavigationRead | undefined
+        const reply = await invokeObserved(
           'page.waitForURL',
           site,
           frame._call(api, budget),
           { ...args, url: pattern, waitUntil: until },
           undefined,
           signal,
-        ),
-      )
+          (value, at) => {
+            replied = this._navigationReplied(frame, value, at)
+          },
+        )
+        return { ...reply, replied }
+      })
 
     if (typeof url !== 'function') {
       const pattern =
@@ -1729,12 +1757,12 @@ export class Page extends EventEmitter {
             : undefined
       if (!pattern)
         throw clientError(api, 'url: expected a string, a RegExp or a function')
-      const { value: result, observed } = await wait(
-        pattern,
-        waitUntil,
-        timeout,
-      )
-      await this._navigated(api, frame, result, observed)
+      const {
+        value: result,
+        observed,
+        replied,
+      } = await wait(pattern, waitUntil, timeout)
+      await this._navigated(api, frame, result, observed, undefined, replied)
       return
     }
     const started = Date.now()
@@ -1757,12 +1785,16 @@ export class Page extends EventEmitter {
         )
         return
       }
-      const { value: result, observed } = await wait(
+      const {
+        value: result,
+        observed,
+        replied,
+      } = await wait(
         { regexSource: `^(?!${escapeRegExp(current)}$)`, regexFlags: '' },
         'commit',
         remaining,
       )
-      await this._navigated(api, frame, result, observed)
+      await this._navigated(api, frame, result, observed, undefined, replied)
     }
   }
 
@@ -1816,6 +1848,7 @@ export class Page extends EventEmitter {
     // deadline check follows it (event-deadline.ts): the frame-cache refresh after a navigation
     // or a load-state wait is bounded by the deadline but never fails the call.
     for (;;) {
+      let replied: NavigationRead | undefined
       const { value: result, observed } = await deadline
         .race(
           invokeObserved(
@@ -1831,10 +1864,20 @@ export class Page extends EventEmitter {
             },
             undefined,
             signal,
+            (value, at) => {
+              replied = this._navigationReplied(frame, value, at)
+            },
           ),
         )
         .catch(rethrow)
-      const navigated = this._navigated(api, frame, result, observed)
+      const navigated = this._navigated(
+        api,
+        frame,
+        result,
+        observed,
+        undefined,
+        replied,
+      )
       const settled = await deadline.within(navigated)
       const response = settled
         ? settled.value

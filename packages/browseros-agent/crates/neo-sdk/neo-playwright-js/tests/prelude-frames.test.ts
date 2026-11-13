@@ -535,6 +535,63 @@ it('tests that a tab the script never used shows a frame added mid-run at its fi
   expect(count).toEqual(4)
 })
 
+// An evaluate's reply holds the page's whole tree as the script left it. The settle read that
+// follows (its reply carries the moved version) is a newer observation of the page: one that gets
+// no tree must not leave the script the tree from before the evaluate.
+it("tests that an evaluate's whole tree stays applied when the settle read after it gets no tree", async () => {
+  let reads = 0
+  const runtime = loadPrelude({
+    seed: SEED,
+    answer: (call) => {
+      if (call.name === 'page.frames') return reads++ === 0 ? TREE : {}
+      if (call.name === 'page.evaluate')
+        return {
+          ok: { value: { n: 1 }, frames: ADDED.frames },
+          pages: [{ tab: 1007 }],
+          frames: [{ tab: 1007, version: 2 }],
+        }
+      return null
+    },
+  })
+  const count = json(
+    await runtime.run(
+      'await page.evaluate(() => 1); return page.frames().length',
+    ),
+  )
+  expect(reads).toEqual(2)
+  expect(count).toEqual(4)
+})
+
+// The same for a wait outside a tracked navigation: its reply's tree is the last good one.
+it("tests that a load-state wait's whole tree stays applied when the settle read after it gets no tree", async () => {
+  let reads = 0
+  const runtime = loadPrelude({
+    seed: SEED,
+    answer: (call) => {
+      if (call.name === 'page.frames') return reads++ === 0 ? TREE : {}
+      if (call.name === 'page.waitForLoadState')
+        return {
+          ok: {
+            response: null,
+            url: 'https://a.example/',
+            frames: ADDED.frames,
+            frameSnapshotAttempted: true,
+          },
+          frames: [{ tab: 1007, version: 2 }],
+        }
+      return null
+    },
+  })
+  const count = json(
+    await runtime.run(
+      'await page.waitForLoadState(); return page.frames().length',
+    ),
+  )
+  // The settle step's read, and the one `_navigated` settles with, both got no tree.
+  expect(reads).toEqual(3)
+  expect(count).toEqual(4)
+})
+
 it('tests that a rejected operation also leaves every changed tree read before the script catches it', async () => {
   let reads = 0
   const runtime = loadPrelude({

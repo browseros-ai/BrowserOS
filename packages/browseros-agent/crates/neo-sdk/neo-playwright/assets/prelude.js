@@ -828,7 +828,7 @@
       throw withAbortCause(shapeBridgeError(op, call.api, thrown), signal);
     }
   }
-  async function invokeObserved(op, site, call, args, onResult, signal) {
+  async function invokeObserved(op, site, call, args, onResult, signal, apply) {
     try {
       const ready = readyChoosers(op);
       if (ready)
@@ -843,11 +843,11 @@
       const held = pumpsCaughtUp(op);
       if (held)
         await held;
+      const value = field(reply, "value");
+      const observed = readObservation(field(reply, "observed"));
+      apply?.(value, observed);
       await settled(site);
-      return {
-        value: field(reply, "value"),
-        observed: readObservation(field(reply, "observed"))
-      };
+      return { value, observed };
     } catch (thrown) {
       const held = pumpsCaughtUp(op);
       if (held)
@@ -9033,9 +9033,12 @@ ${changes}`;
       const verified = loadState(api, "state", state ?? "load");
       const signal = signalOf(api, options);
       await untilAborted(signal, () => abortedError(api, signal), async () => {
-        const wait = invokeObserved("page.waitForLoadState", site, this._call(api, this._navigationTimeout(options)), { ...await this._frameArgs(api), state: verified }, undefined, signal);
+        let replied;
+        const wait = invokeObserved("page.waitForLoadState", site, this._call(api, this._navigationTimeout(options)), { ...await this._frameArgs(api), state: verified }, undefined, signal, (value, at) => {
+          replied = this._page._navigationReplied(this, value, at);
+        });
         const { value: result, observed } = await (deadline ? deadline.race(wait) : wait);
-        const navigated = this._page._navigated(api, this, result, observed);
+        const navigated = this._page._navigated(api, this, result, observed, undefined, replied);
         await (deadline ? deadline.within(navigated) : navigated);
       });
     }
@@ -9060,15 +9063,14 @@ ${changes}`;
       let handle;
       try {
         const { page, frame } = await this._frameArgs(api);
-        const { value: result, observed } = await invokeObserved(op, site, this._call(api, 0), {
+        const { value: result } = await invokeObserved(op, site, this._call(api, 0), {
           page,
           frame,
           url: input.url,
           path: input.path,
           content: input.content,
           type: op === "page.addScriptTag" ? input.type : undefined
-        });
-        this._page._evaluated(result.frames, observed);
+        }, undefined, undefined, (value, at) => this._page._evaluated(value.frames, at));
         handle = this._page._handle(result.element);
       } catch (error) {
         if (error instanceof Error && error.message.startsWith(`${api}: `) && /^(?:E[A-Z0-9]+|UNKNOWN): .*?, (?:open|read) '/.test(error.message.slice(api.length + 2)))
@@ -9083,15 +9085,17 @@ ${changes}`;
       const site = captureSite();
       const waitUntil = loadState(api, "waitUntil", options.waitUntil ?? "load");
       const signal = signalOf(api, options);
-      const { value: result, observed } = await invokeObserved("page.setContent", site, this._call(api, this._navigationTimeout(options)), { ...await this._frameArgs(api), html, waitUntil }, undefined, signal);
-      await this._page._navigated(api, this, result, observed);
+      let replied;
+      const { value: result, observed } = await invokeObserved("page.setContent", site, this._call(api, this._navigationTimeout(options)), { ...await this._frameArgs(api), html, waitUntil }, undefined, signal, (value, at) => {
+        replied = this._page._navigationReplied(this, value, at);
+      });
+      await this._page._navigated(api, this, result, observed, undefined, replied);
     }
     async _evaluate(api, pageFunction, arg, options) {
       const site = captureSite();
       const script = await this._page._evaluationScript(api, site, "frame", pageFunction, arg, options);
       const { page, frame } = await this._frameArgs(api);
-      const { value: result, observed } = await invokeObserved("page.evaluate", site, this._call(api, 0), { page, frame, ...script });
-      this._page._evaluated(result.frames, observed);
+      const { value: result } = await invokeObserved("page.evaluate", site, this._call(api, 0), { page, frame, ...script }, undefined, undefined, (value, at) => this._page._evaluated(value.frames, at));
       await this._page._publishCompleted();
       return fromPageValue(api, result.value);
     }
@@ -11529,7 +11533,19 @@ ${changes}`;
       if (this.#payloadCurrent(at) && Array.isArray(frames))
         this._applyFrames(frames, at);
     }
-    async _navigated(api, frame, result, at, ready) {
+    async _navigated(api, frame, result, at, ready, replied = this._navigationReplied(frame, result, at)) {
+      if (replied === "read")
+        await this._refreshFrames(api);
+      else if (replied === "reread")
+        await this._refreshFrames(api).catch(() => {
+          return;
+        });
+      ready?.();
+      if (!ready)
+        await this._context._settleFrames().catch(() => {});
+      return navigationResponse(frame, result);
+    }
+    _navigationReplied(frame, result, at) {
       if (this.#payloadCurrent(at)) {
         if (typeof result?.url === "string") {
           if (frame === this._mainFrame) {
@@ -11541,18 +11557,12 @@ ${changes}`;
         if (Array.isArray(result?.frames))
           this._applyFrames(result.frames, at);
         else if (!result?.frameSnapshotAttempted)
-          await this._refreshFrames(api);
+          return "read";
         else
           this._framesUnknown();
-      } else if (!this._closed && !result?.frameSnapshotAttempted) {
-        await this._refreshFrames(api).catch(() => {
-          return;
-        });
+        return "none";
       }
-      ready?.();
-      if (!ready)
-        await this._context._settleFrames().catch(() => {});
-      return navigationResponse(frame, result);
+      return !this._closed && !result?.frameSnapshotAttempted ? "reread" : "none";
     }
     #payloadCurrent(at) {
       return !this._closed && at !== null && at.payloadCurrent === true && at.seq === this.#observedSeq;
@@ -11855,13 +11865,23 @@ ${changes}`;
           throw error;
         }
       };
-      const wait = (pattern, until, budget) => nativeWait(() => invokeObserved("page.waitForURL", site, frame._call(api, budget), { ...args, url: pattern, waitUntil: until }, undefined, signal));
+      const wait = (pattern, until, budget) => nativeWait(async () => {
+        let replied;
+        const reply = await invokeObserved("page.waitForURL", site, frame._call(api, budget), { ...args, url: pattern, waitUntil: until }, undefined, signal, (value, at) => {
+          replied = this._navigationReplied(frame, value, at);
+        });
+        return { ...reply, replied };
+      });
       if (typeof url !== "function") {
         const pattern = typeof url === "string" ? { glob: url } : url instanceof RegExp ? { regexSource: url.source, regexFlags: url.flags } : undefined;
         if (!pattern)
           throw clientError(api, "url: expected a string, a RegExp or a function");
-        const { value: result, observed } = await wait(pattern, waitUntil, timeout);
-        await this._navigated(api, frame, result, observed);
+        const {
+          value: result,
+          observed,
+          replied
+        } = await wait(pattern, waitUntil, timeout);
+        await this._navigated(api, frame, result, observed, undefined, replied);
         return;
       }
       const started = Date.now();
@@ -11882,8 +11902,12 @@ ${changes}`;
           }));
           return;
         }
-        const { value: result, observed } = await wait({ regexSource: `^(?!${escapeRegExp(current)}$)`, regexFlags: "" }, "commit", remaining);
-        await this._navigated(api, frame, result, observed);
+        const {
+          value: result,
+          observed,
+          replied
+        } = await wait({ regexSource: `^(?!${escapeRegExp(current)}$)`, regexFlags: "" }, "commit", remaining);
+        await this._navigated(api, frame, result, observed, undefined, replied);
       }
     }
     async _waitForNavigation(api, frame, options = {}) {
@@ -11907,14 +11931,17 @@ ${changes}`;
         throw deadline.named(error);
       };
       for (;; ) {
+        let replied;
         const { value: result, observed } = await deadline.race(invokeObserved("page.waitForNavigation", site, frame._call(api, deadline.left()), {
           ...args,
           since,
           after,
           ...url ? { url } : {},
           waitUntil: predicate ? "commit" : waitUntil
-        }, undefined, signal)).catch(rethrow);
-        const navigated = this._navigated(api, frame, result, observed);
+        }, undefined, signal, (value, at) => {
+          replied = this._navigationReplied(frame, value, at);
+        })).catch(rethrow);
+        const navigated = this._navigated(api, frame, result, observed, undefined, replied);
         const settled = await deadline.within(navigated);
         const response = settled ? settled.value : navigationResponse(frame, result);
         if (!predicate)
