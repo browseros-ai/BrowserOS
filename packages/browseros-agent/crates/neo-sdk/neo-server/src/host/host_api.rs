@@ -5,7 +5,9 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use neo_service::{HostAuth, HostToken, PeerRule, Service, ServiceInputs, Settings, TokenError};
+use neo_service::{
+    HostAuth, HostToken, PeerRule, Service, ServiceInputs, Settings, SettingsDefaults, TokenError,
+};
 use neo_takeover::Xvnc;
 use neo_trace::{ShotJobs, TraceSink, TraceStore};
 use tokio::fs;
@@ -55,6 +57,8 @@ pub(crate) struct HostInputs {
     pub(crate) cdp_port: u16,
     /// Where `/v1/settings` saves what the host set: `settings.json` beside `trace.db`.
     pub(crate) settings_file: PathBuf,
+    /// The downloads default discovered by the app, also used when there is no host listener.
+    pub(crate) settings_defaults: SettingsDefaults,
 }
 
 /// The bound host listener and the auth in front of every request on it.
@@ -99,10 +103,14 @@ impl HostApi {
             },
         };
         let settings = if socket.is_some() {
-            Settings::load(inputs.settings_file.clone()).await
+            Settings::load(
+                inputs.settings_file.clone(),
+                inputs.settings_defaults.clone(),
+            )
+            .await
         } else {
             tracing::info!(file = %inputs.settings_file.display(), "no host API, so every setting is at its default; a saved settings file is ignored");
-            Settings::defaults()
+            Settings::defaults(inputs.settings_defaults.clone())
         };
         Ok(Self {
             inputs,
@@ -147,6 +155,7 @@ impl HostApi {
             xvnc,
             cdp_port,
             settings_file: _,
+            settings_defaults: _,
         } = inputs;
         let service = Service::start(ServiceInputs {
             store,

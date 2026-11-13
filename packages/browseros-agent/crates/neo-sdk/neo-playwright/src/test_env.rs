@@ -13,7 +13,7 @@ use futures_util::future::BoxFuture;
 use serde_json::{Map, Value};
 use tokio::sync::{broadcast, mpsc};
 
-use crate::{OpEnv, Refusal, RunState};
+use crate::{FileAccess, OpEnv, Refusal, RunState};
 
 /// One request the crate made of its host, in order.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -33,6 +33,7 @@ pub(crate) struct TestEnv {
     view: BrowserView,
     run_state: Arc<RunState>,
     refusal: Option<Refusal>,
+    file_access: Option<FileAccess>,
     /// How many `recheck`s pass before `refusal` applies; 0 refuses from the first.
     passing_rechecks: usize,
     calls: Mutex<Vec<EnvCall>>,
@@ -53,6 +54,7 @@ impl TestEnv {
             view,
             run_state: Arc::default(),
             refusal: None,
+            file_access: None,
             passing_rechecks: 0,
             calls: Mutex::default(),
             forwarded: Mutex::default(),
@@ -61,6 +63,13 @@ impl TestEnv {
 
     pub(crate) fn refusing(refusal: Refusal) -> Self {
         Self::new().with_refusal(refusal)
+    }
+
+    pub(crate) fn with_file_access(self, file_access: FileAccess) -> Self {
+        Self {
+            file_access: Some(file_access),
+            ..self
+        }
     }
 
     /// The same env, refusing every `recheck` with `refusal`.
@@ -106,6 +115,10 @@ impl TestEnv {
 }
 
 impl OpEnv for TestEnv {
+    fn file_access(&self) -> Option<&FileAccess> {
+        self.file_access.as_ref()
+    }
+
     fn view(&self) -> &BrowserView {
         &self.view
     }

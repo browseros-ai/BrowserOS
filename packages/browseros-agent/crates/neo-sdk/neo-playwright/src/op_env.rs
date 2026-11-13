@@ -23,7 +23,7 @@ use futures_util::future::BoxFuture;
 use neo_trace::ErrorOwner;
 use serde_json::Value;
 
-use crate::RunState;
+use crate::{FileAccess, RunState};
 
 /// What one operation needs from the host that runs it.
 pub trait OpEnv: Send + Sync {
@@ -41,6 +41,12 @@ pub trait OpEnv: Send + Sync {
     /// library never reads process environment. Existing hosts default to non-hosted.
     fn hosted_mode(&self) -> bool {
         false
+    }
+
+    /// Host filesystem policy, consulted at the actual IO gateways. SDK hosts always supply
+    /// one. The default preserves standalone engine consumers that own their own IO policy.
+    fn file_access(&self) -> Option<&FileAccess> {
+        None
     }
 
     /// Re-runs the host's attempt-stage policies (the owner's takeover lock on the op's tab),

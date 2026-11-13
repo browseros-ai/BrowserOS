@@ -866,8 +866,13 @@ async fn save_as(
             &format!("cannot save the download to \"{}\": {error}", input.path),
         )
     })?;
+    // The source is a registered browser download, not a script-selected read path. Only the
+    // destination is supplied by the script and must pass the own-files guard before any copy
+    // or parent creation. Marking sent still precedes Tokio's cancellable filesystem work.
+    let checked = scope.write_path(&target).await?;
+    let target = checked.original();
     let sent = scope.send_effect()?;
-    copy_to(&sent, &source, &target).await.map_err(|error| {
+    copy_to(&sent, &source, target).await.map_err(|error| {
         scope.fail(
             file_save::error_code(error.kind()),
             &format!(

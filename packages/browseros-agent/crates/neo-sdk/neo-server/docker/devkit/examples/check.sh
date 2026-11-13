@@ -18,8 +18,27 @@ DEV=$HERE/../../dev.sh
 GATEWAY=http://127.0.0.1:${NEO_GATEWAY_PORT:-16090}
 STAMP=$(date +%Y%m%d-%H%M%S)
 failed=0
+upload_dirs_before=""
 
 command -v jq >/dev/null || { echo "check.sh: needs jq" >&2; exit 1; }
+
+# A developer may have settings of their own. Keep the wider fixture allowance temporary,
+# including when a run fails or the check is interrupted.
+restore_upload_dirs() {
+  [ -n "$upload_dirs_before" ] || return 0
+  local body
+  body=$(jq -cn --argjson dirs "$upload_dirs_before" '{files:{readDirs:$dirs}}')
+  if "$DEV" host PATCH /v1/settings "$body" >/dev/null; then
+    upload_dirs_before=""
+  else
+    echo "FAIL restore files.readDirs after upload example" >&2
+    failed=$((failed + 1))
+    return 1
+  fi
+}
+trap restore_upload_dirs EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 # Read from the CLI record `dev.sh run --json` prints (design shape: requestId,
 # taskId, code, timeoutMs, timing, response, transportError).
@@ -165,6 +184,16 @@ actions() {
   expect "(g) keyboard.type then Enter, expect toHaveText" "$rec" \
     'meta.status == "ok" and value.shown == "Results for claw sdk"' 'outcome + " shown=\(value.shown)"'
 
+  rec=$("$DEV" host GET /v1/settings)
+  upload_dirs_before=$(jq -c '.settings.files.readDirs // empty' <<<"$rec")
+  expect "(g) read current path allowance for upload example" "$rec" \
+    '.settings.files.readDirs | type == "array"' '.settings.files.readDirs | tostring'
+  [ -n "$upload_dirs_before" ] || return
+  local upload_settings
+  upload_settings=$(jq -cn --argjson dirs "$upload_dirs_before" '{files:{readDirs:($dirs + ["/etc"] | unique)}}')
+  rec=$("$DEV" host PATCH /v1/settings "$upload_settings")
+  expect "(g) allow /etc for the ordinary fixture" "$rec" \
+    '(.settings.files.readDirs | index("/etc")) != null' '.settings.files.readDirs | tostring'
   rec=$(run upload-file.js --task check-actions)
   expect "(g) setInputFiles uploads a local path and an in-memory payload" "$rec" \
     'meta.status == "ok" and (value.uploaded | startswith("os-release: "))
@@ -173,6 +202,7 @@ actions() {
   expect "(g) Neo's trace records both uploads as done" "$(trace_of "$rec")" \
     '[.operations[] | select(.name == "locator.setInputFiles") | .delivery] == ["done", "done"]' \
     '[.operations[] | select(.name == "locator.setInputFiles") | .delivery] | join(", ")'
+  restore_upload_dirs
 
 }
 
@@ -183,8 +213,9 @@ probes() {
     'meta.status == "ok" and value == "Evaluate"' 'outcome'
 
   rec=$(run probe-file-url.js --task check-probes)
-  expect "(f) goto file:///etc/os-release loads the local file" "$rec" \
-    'meta.status == "ok" and (value.content | contains("PRETTY_NAME="))' 'outcome'
+  expect "(f) file navigation is refused before sending" "$rec" \
+    'meta.status == "error" and meta.error.owner == "script" and meta.error.code == "invalid_input"
+      and meta.error.delivery == "not_sent"' 'outcome'
 
   local script
   # The SDK refuses these itself, before any operation, so the error carries no delivery and

@@ -157,13 +157,27 @@ run 01a1ad11-0d93-7030-96ae-f432286a6a94 ok effects=done 130ms tabs=[1276815223]
 
 ### Upload a file or a payload
 
-`upload-file.js` uploads `/etc/os-release` from the container, then an in-memory text file. The page shows each file's name and first line.
+`upload-file.js` uploads `/etc/os-release` from the container, then an in-memory text file. The page shows each file's name and first line. Allow the ordinary fixture before running it, then restore your prior folder list:
 
 ```sh
-./dev.sh run --task howto-upload -f devkit/examples/upload-file.js
+(
+  prior=$(./dev.sh host GET /v1/settings | jq -c '.settings.files.readDirs')
+  restore() {
+    body=$(jq -cn --argjson dirs "$prior" '{files:{readDirs:$dirs}}')
+    ./dev.sh host PATCH /v1/settings "$body" >/dev/null
+  }
+  trap restore EXIT
+  body=$(jq -cn --argjson dirs "$prior" '{files:{readDirs:($dirs + ["/etc"] | unique)}}')
+  ./dev.sh host PATCH /v1/settings "$body"
+  ./dev.sh run --task howto-upload -f devkit/examples/upload-file.js
+)
 ```
 
-The result contains `uploaded` (starting with `os-release: `) and `payload: "note.txt: hello from Neo"`. Both `locator.setInputFiles` operations are delivered `done` in the trace. Paths use the files Neo's process can read; there is no SDK path deny list.
+The result contains `uploaded` (starting with `os-release: `) and `payload: "note.txt: hello from Neo"`. Both `locator.setInputFiles` operations are delivered `done` in the trace. `devkit/examples/check.sh` makes the same temporary allowance and restores the host's prior list even after a failed example.
+
+`files.readDirs` defaults to `["/data/downloads"]` in this image. A task can give its own `download.path()` straight to `setInputFiles`, or save a copy inside that folder and upload the copy. Owner files can arrive as `{ name, mimeType, buffer }` payloads, with no host staging folder. Payloads and clearing an input with `[]` need no path allowance.
+
+Every path read resolves symlinks and must stay inside a listed folder. The list covers uploads, drops and script/style/init-script file paths. Neo always protects its state folder, browser profile, host token and CAPTCHA key files, even with `["/"]` listed. Directory uploads also refuse ancestors of those places. Download saves and screenshot paths cannot write to those protected places; `/tmp` remains writable. A refused path reports `script / invalid_input`, delivery `not_sent`, without repeating the denied path. Host settings changes apply to the next file operation, including inside a running script.
 
 ### See a host lock refuse a write
 
@@ -233,7 +247,7 @@ To call the host API yourself, use `./dev.sh host <METHOD> <path> [json]`, for e
 
 The settings are on the same API. `./dev.sh host GET /v1/settings` shows each one and its default, and `./dev.sh host PATCH /v1/settings '{"tabs":{"idleCloseSeconds":300}}'` changes one at once. The container keeps what you set across its restarts, under `NEO_DATA`; `./dev.sh host PUT /v1/settings '{}'` puts every setting back to its default.
 
-Main-world evaluation (`page.evaluate` and element forms), `page.waitForFunction`, `page.setContent` and `file:`/`javascript:` navigation are supported. The evaluate and file URL probes check successful results.
+Main-world evaluation (`page.evaluate` and element forms), `page.waitForFunction` and `page.setContent` are supported. The evaluate probe checks a successful result. `file:` navigation is refused before sending; it cannot bypass the file policy.
 
 ## What does not work yet
 

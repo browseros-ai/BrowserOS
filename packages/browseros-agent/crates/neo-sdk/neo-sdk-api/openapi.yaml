@@ -1652,6 +1652,26 @@ components:
           $ref: '#/components/schemas/TabSettings'
         trace:
           $ref: '#/components/schemas/TraceSettings'
+        files:
+          $ref: '#/components/schemas/FilesSettings'
+    FilesSettings:
+      type: object
+      properties:
+        readDirs:
+          type: array
+          maxItems: 16
+          x-neo-default: downloads folder
+          description: >-
+            Absolute folders scripts may read files from by path. Defaults to the browser's
+            downloads folder. Empty denies path reads; missing roots match nothing. Real
+            paths are compared by component at each use, so symlinks cannot escape a root.
+            Neo's state, profile, host token and CAPTCHA key files can never be read or written,
+            even with / allowed. Directory uploads cannot contain those protected locations.
+            Byte payload uploads do not need a listed folder. Changes apply at the next file
+            operation, including inside a running script.
+          items:
+            type: string
+            pattern: '^/'
     TabSettings:
       type: object
       properties:

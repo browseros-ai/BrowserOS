@@ -161,7 +161,7 @@ async fn start(
         WriterConfig::default(),
         camera.then_some(queue),
     );
-    let settings = Settings::load(dir.path().join("settings.json")).await;
+    let settings = Settings::load(dir.path().join("settings.json"), Default::default()).await;
     let browser = ScriptedBrowser::new();
     browser.set_window(window);
     let xvnc = FakeXvnc::start(screen).await?;

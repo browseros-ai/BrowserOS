@@ -25,9 +25,9 @@
 #   host-api         group + token: 200; wrong token: 401; no group, with or without the
 #                    token: EACCES at connect
 #   downloads        a click that downloads from a page on 127.0.0.1: `download.path()` is the
-#                    browser's file, `saveAs()` copies it, the run's record lists it, the host
-#                    reads the same bytes at /v1/runs/{id}/downloads/0, and a second run uploads
-#                    that path with `setInputFiles`; after the restart, still served (persist)
+#                    browser's file; the same run uploads it and a saveAs copy inside the default
+#                    downloads folder; hashes agree with bytes served on the host socket;
+#                    /tmp remains writable and a second run uploads the original again
 #   pdf-downloads    host's exact PDF attachment, four valid PDF cases (attachment, inline viewer,
 #                    download attribute, typed Blob), and ZIP attachment; disk and host SHA-256
 #   blobs            a 1.5 MB+ full-page PNG and a PDF returned from `run` come back as
@@ -38,6 +38,9 @@
 #   settings         PATCH /v1/settings applies and lists an unknown name, a bad value is 400 and
 #                    changes nothing; after SIGKILL of the server alone (the browser relaunches it)
 #                    GET answers what the host set; settings.json is 0600 neo under /data
+#   files            downloads-only defaults; all six path reads and file chooser; live PATCH;
+#                    symlinks; Neo's files and directory ancestors protected even with / listed;
+#                    saveAs and all screenshot path forms refuse before send or mkdir
 #   restart-browser  neo-quit 9110 quits cleanly, the supervisor restarts Neo, a new run passes
 #   stop             docker stop -t 25 takes under 20 s, exits 0, Neo and claw-sdk log the stop
 #   persist          a new container on the same /data reads the run and replays its requestId
@@ -148,7 +151,7 @@ wait_ready() { # name seconds: /system/ready through the browser's proxy, from i
 install_client() { # name: the probes, beside smoke.py whose MCP client they reuse
   docker exec "$1" mkdir -p /opt/neo-accept
   local file
-  for file in "$here/smoke.py" "$here/smoke_sdk.py" "$here/accept_client.py"; do
+  for file in "$here/smoke.py" "$here/smoke_sdk.py" "$here/accept_client.py" "$here/accept_files.py"; do
     docker cp -q "$file" "$1:/opt/neo-accept/" || return 1
   done
 }
@@ -223,7 +226,7 @@ detail="$image_arch, browser $(fact browser), server $(fact marker) $(fact sha |
 if [ ${#problems[@]} -eq 0 ]; then result PASS identity "$detail"; else result FAIL identity "${problems[*]}"; fi
 
 if [ "$image_arch" != "$engine_arch" ]; then
-  for check in boot mcp host-api downloads pdf-downloads blobs settings mcp-remote restart-browser stop persist kill-all captcha-keys; do
+  for check in boot mcp host-api downloads pdf-downloads blobs settings files mcp-remote restart-browser stop persist kill-all captcha-keys; do
     result SKIP "$check" "$image_arch image on a $engine_arch engine: emulated, not evidence"
   done
   printf '\n'; printf '%s\n' "${results[@]}"
@@ -290,6 +293,7 @@ if [ "$booted" = 1 ]; then
   # zuzu's neo_download -> neo_upload and `import`, as the host uid with the socket's group.
   downloaded=$(client "$main" "${as_host[@]}" python3 accept_client.py downloads \
     http://127.0.0.1:9010/mcp /run/neo/host.sock /run/neo-accept/host-token 2>&1)
+  if [ -n "$logs_dir" ]; then mkdir -p "$logs_dir"; printf '%s\n' "$downloaded" > "$logs_dir/downloads.json"; fi
   download_run=$(jget "$downloaded" 'd["run"]')
   if [ "$(jget "$downloaded" 'd["ok"]')" = True ]; then
     result PASS downloads "$(jget "$downloaded" 'd["detail"]')"
@@ -334,7 +338,7 @@ if [ "$booted" = 1 ]; then
   # The browser relaunches a killed server by itself and no host notices, so what the host set
   # must come back from /data before the server's first run. Only the server is killed.
   set_reply=$(host_send "$main" PATCH /v1/settings \
-    '{"tabs":{"idleCloseSeconds":300},"trace":{"retentionSeconds":86400},"files":{"readDirs":["/data"]}}')
+    '{"tabs":{"idleCloseSeconds":300},"trace":{"retentionSeconds":86400},"files":{"readDirs":["/etc","/data/downloads"]},"futureUnknown":true}')
   refused=$(host_send "$main" PATCH /v1/settings '{"tabs":{"idleCloseSeconds":5}}')
   old_pid=$(server_pid "$main") new_pid="" read_back='{}'
   [ -n "$old_pid" ] && docker exec "$main" kill -KILL "$old_pid"
@@ -349,13 +353,14 @@ if [ "$booted" = 1 ]; then
     sleep 1
   done
   file_mode=$(docker exec "$main" stat -c '%a %U' /data/browserclaw/claw-sdk/settings.json 2>&1)
-  # Only the two it set: settings a later image adds come back at their defaults.
-  wanted='300 86400'
-  if [ "$(jget "$set_reply" 'd["status"]')" = 200 ] && [ "$(jget "$set_reply" 'd["body"]["unknown"]')" = "['files']" ] \
+  # Compare only the keys this check set; added settings keep their defaults.
+  if [ "$(jget "$set_reply" 'd["status"]')" = 200 ] && [ "$(jget "$set_reply" 'd["body"]["unknown"]')" = "['futureUnknown']" ] \
       && [ "$(jget "$refused" 'd["status"]')" = 400 ] && [ -n "$old_pid" ] && [ -n "$new_pid" ] && [ "$new_pid" != "$old_pid" ] \
-      && [ "$(jget "$read_back" '"%s %s" % (d["body"]["settings"]["tabs"]["idleCloseSeconds"], d["body"]["settings"]["trace"]["retentionSeconds"])')" = "$wanted" ] \
+      && [ "$(jget "$read_back" 'd["body"]["settings"]["tabs"]["idleCloseSeconds"]')" = 300 ] \
+      && [ "$(jget "$read_back" 'd["body"]["settings"]["trace"]["retentionSeconds"]')" = 86400 ] \
+      && [ "$(jget "$read_back" 'd["body"]["settings"]["files"]["readDirs"]')" = "['/etc', '/data/downloads']" ] \
       && [ "$file_mode" = "600 neo" ]; then
-    result PASS settings "set 300 s / 1 day with files.* listed unknown, 5 s refused; server $old_pid killed, $new_pid relaunched, GET answers what the host set; settings.json $file_mode"
+    result PASS settings "set 300 s / 1 day / files.readDirs=[/etc,/data/downloads], futureUnknown listed unknown, 5 s refused; server $old_pid killed, $new_pid relaunched, GET answers what the host set; settings.json $file_mode"
   else
     result FAIL settings "set=${set_reply:0:200}; refused=${refused:0:160}; pid $old_pid -> $new_pid; read=${read_back:0:200}; file=$file_mode"
   fi
@@ -467,9 +472,26 @@ for pid in pids:
   keyed="$prefix-keys" keyed_captcha=""
   docker run --memory 3g --memory-swap 3g -d --name "$keyed" --network "$network" --shm-size=1g --tmpfs /data:rw,size=1g \
     --label neo-sdk-accept="$run_id" "${host_caps[@]}" \
+    -v "$secrets:/run/neo-accept:ro" \
+    -e CLAW_HOST_TOKEN_FILE=/run/neo-accept/host-token -e NEO_HOST_GID=$host_gid \
     -v "$secrets/capsolver-api-key:/run/neo-keys/capsolver-api-key:ro" \
-    -e BROWSEROS_CAPSOLVER_API_KEY_FILE=/run/neo-keys/capsolver-api-key "$image" >/dev/null
-  if wait_healthy "$keyed" 90 >/dev/null && install_client "$keyed"; then keyed_captcha=$(lists_captcha "$keyed"); fi
+    -e BROWSEROS_CAPSOLVER_API_KEY_FILE=/run/neo-keys/capsolver-api-key \
+    -e BROWSEROS_2CAPTCHA_API_KEY_FILE=/tmp/neo-accept-missing-key "$image" >/dev/null
+  if wait_healthy "$keyed" 90 >/dev/null && install_client "$keyed"; then
+    docker exec "$keyed" ln -s /tmp/neo-accept-future-key /tmp/neo-accept-missing-key
+    keyed_captcha=$(lists_captcha "$keyed")
+    # Root owns fixtures and compares saved bytes; the socket still requires its host group.
+    filed=$(docker exec --user "0:$host_gid" -w /opt/neo-accept "$keyed" python3 accept_files.py \
+      http://127.0.0.1:9010/mcp /run/neo/host.sock /run/neo-accept/host-token 2>&1)
+    if [ "$(jget "$filed" 'd["ok"]')" = True ]; then
+      result PASS files "$(jget "$filed" 'd["detail"]')"
+    else
+      result FAIL files "$(jget "$filed" '"; ".join(d["problems"])' || printf '%s' "${filed:0:300}")"
+    fi
+    if [ -n "$logs_dir" ]; then mkdir -p "$logs_dir"; printf '%s\n' "$filed" > "$logs_dir/files.json"; fi
+  else
+    result FAIL files "keyed container not healthy or client install failed"
+  fi
   want_main=False
   [ "$keys_label" != baked ] || want_main=True
   if [ "$main_captcha" = "$want_main" ] && [ "$keyed_captcha" = True ]; then
@@ -478,7 +500,7 @@ for pid in pids:
     result FAIL captcha-keys "image's own keys listed=$main_captcha (want $want_main); host key file listed=${keyed_captcha:-not booted}"
   fi
 else
-  for check in mcp host-api downloads pdf-downloads blobs settings mcp-remote restart-browser stop persist kill-all captcha-keys; do
+  for check in mcp host-api downloads pdf-downloads blobs settings files mcp-remote restart-browser stop persist kill-all captcha-keys; do
     result FAIL "$check" "not run: the image did not boot"
   done
 fi

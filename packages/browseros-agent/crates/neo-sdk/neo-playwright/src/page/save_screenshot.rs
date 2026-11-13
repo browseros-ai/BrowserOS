@@ -50,11 +50,13 @@ pub(crate) async fn save(
             &format!("cannot save screenshot to \"{}\": {error}", input.path),
         )
     })?;
+    let checked = scope.write_path(&target).await?;
+    let target = checked.original();
     let sent = scope.send_effect()?;
     // Tokio's filesystem work can finish after its future is cancelled. Mark the effect
     // before mkdir/write so a deadline reports unknown delivery rather than claiming no write.
     scope
-        .within(write_to(&sent, &target, &bytes))
+        .within(write_to(&sent, target, &bytes))
         .await
         .map_err(|_expired| scope.timed_out(ErrorCode::WaitTimeout))?
         .map_err(|error| {
@@ -198,6 +200,53 @@ mod tests {
         assert_eq!(error.error_code(), Some(ErrorCode::InvalidInput));
         assert_eq!(error.owner(), ErrorOwner::Script);
         assert!(error.message().contains("cannot save screenshot"));
+        Ok(())
+    }
+    #[tokio::test]
+    async fn protected_screenshot_saves_leave_no_directories_and_never_mark_sent()
+    -> Result<(), Box<dyn Error>> {
+        use crate::{FileAccess, ProtectedPath};
+        use std::os::unix::fs::symlink;
+
+        let dir = tempfile::tempdir()?;
+        let state = dir.path().join("state");
+        fs::create_dir(&state).await?;
+        fs::write(state.join("settings.json"), b"unchanged").await?;
+        symlink(&state, dir.path().join("into-state"))?;
+        let env = TestEnv::new().with_file_access(FileAccess::new(
+            || vec!["/".into()],
+            vec![ProtectedPath::Directory(state.clone())],
+        ));
+        let op = Op::from_name("page.saveScreenshot").ok_or("save op")?;
+        for target in [
+            state.join("settings.json"),
+            state.join("new/nested/image.png"),
+            state.join("settings.json.tmp/../../outside.png"),
+            dir.path().join("missing/../into-state/new/image.png"),
+        ] {
+            let scope = OpScope::new(&env, op, CallHeader::default());
+            let error = save(&scope, input(&target))
+                .await
+                .err()
+                .ok_or("protected save must fail")?;
+            assert_eq!(error.error_code(), Some(ErrorCode::InvalidInput));
+            assert_eq!(error.owner(), ErrorOwner::Script);
+            assert!(error.message().contains("Neo's own files"));
+            assert!(
+                !error
+                    .message()
+                    .contains(&target.to_string_lossy().into_owned())
+            );
+        }
+        assert!(
+            env.calls().is_empty(),
+            "refusal precedes the effect boundary"
+        );
+        assert_eq!(fs::read(state.join("settings.json")).await?, b"unchanged");
+        assert!(!state.join("new").exists());
+        assert!(!state.join("settings.json.tmp").exists());
+        assert!(!dir.path().join("outside.png").exists());
+        assert!(!dir.path().join("missing").exists());
         Ok(())
     }
 }

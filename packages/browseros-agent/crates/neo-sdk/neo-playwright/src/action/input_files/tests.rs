@@ -13,7 +13,7 @@ use super::{
 use crate::op_scope::OpScope;
 use crate::target::CallHeader;
 use crate::test_env::{TestEnv, offline_session};
-use crate::{ErrorCode, Op, Playwright, PlaywrightError};
+use crate::{ErrorCode, FileAccess, Op, Playwright, PlaywrightError, ProtectedPath};
 
 type TestResult = Result<(), Box<dyn Error>>;
 
@@ -66,7 +66,15 @@ impl Drop for Scratch {
 /// Classifies paths as the upload action does before admitting a page.
 async fn classified(paths: &[&str]) -> Result<InputFiles, PlaywrightError> {
     let paths = paths.iter().map(|path| (*path).to_owned()).collect();
-    InputFiles::classify(FilesInput::Paths(paths)).await
+    classified_input(FilesInput::Paths(paths)).await
+}
+
+async fn classified_input(files: FilesInput) -> Result<InputFiles, PlaywrightError> {
+    let env = TestEnv::new();
+    let op = Op::from_name("locator.setInputFiles")
+        .ok_or_else(|| PlaywrightError::new(ErrorCode::Internal, "missing upload op".to_owned()))?;
+    let scope = OpScope::new(&env, op, CallHeader::default());
+    InputFiles::classify(&scope, files).await
 }
 
 /// The client's error a classification fails with, as the script sees it.
@@ -266,7 +274,7 @@ async fn tests_that_the_clients_refusals_are_unprefixed_and_in_its_order() -> Te
         client("Multiple directories are not supported"),
         "a second directory fails at once, before the paths after it"
     );
-    let payloads = InputFiles::classify(FilesInput::Payloads(serde_json::from_value(json!([
+    let payloads = classified_input(FilesInput::Payloads(serde_json::from_value(json!([
         { "name": "a.txt", "mimeType": "text/plain", "buffer": "YQ==" }
     ]))?))
     .await?;
@@ -374,6 +382,88 @@ async fn tests_that_the_recheck_reads_a_path_gone_by_now_as_upstreams_access_err
         Some(format!(
             "ENOENT: no such file or directory, access '{missing}'"
         ))
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn native_upload_checks_both_os_and_node_spellings_and_rechecks_live_roots() -> TestResult {
+    use std::os::unix::fs::symlink;
+    use std::sync::{Arc, PoisonError, RwLock};
+
+    let dir = tempfile::tempdir()?;
+    let allowed = dir.path().join("allowed");
+    let own = dir.path().join("own");
+    fs::create_dir_all(allowed.join("sub"))?;
+    fs::create_dir_all(own.join("sub"))?;
+    fs::write(allowed.join("item.txt"), "allowed")?;
+    fs::write(own.join("item.txt"), "private")?;
+    symlink(own.join("sub"), allowed.join("hop"))?;
+    symlink(allowed.join("sub"), own.join("hop"))?;
+    symlink(allowed.join("item.txt"), allowed.join("alias.txt"))?;
+    let roots = Arc::new(RwLock::new(vec![PathBuf::from("/")]));
+    let live = Arc::clone(&roots);
+    let env = TestEnv::new().with_file_access(FileAccess::new(
+        move || live.read().unwrap_or_else(PoisonError::into_inner).clone(),
+        vec![ProtectedPath::Directory(own.clone())],
+    ));
+    let op = Op::from_name("locator.setInputFiles").ok_or("upload op")?;
+    let scope = OpScope::new(&env, op, CallHeader::default());
+    for path in [allowed.join("hop/../item.txt"), own.join("hop/../item.txt")] {
+        let error = InputFiles::classify(
+            &scope,
+            FilesInput::Paths(vec![path.to_string_lossy().into_owned()]),
+        )
+        .await
+        .err()
+        .ok_or("both spellings must pass")?;
+        assert_eq!(error.owner(), ErrorOwner::Script);
+        assert_eq!(error.error_code(), Some(ErrorCode::InvalidInput));
+        assert!(error.message().contains("Neo's own files"));
+        assert!(
+            !error
+                .message()
+                .contains(&path.to_string_lossy().into_owned())
+        );
+    }
+    let alias = allowed.join("alias.txt");
+    let files = InputFiles::classify(
+        &scope,
+        FilesInput::Paths(vec![alias.to_string_lossy().into_owned()]),
+    )
+    .await?;
+    assert!(
+        matches!(&files, InputFiles::Paths(paths) if paths.first().is_some_and(|HostPath(path)| path.ends_with("/alias.txt")))
+    );
+    roots
+        .write()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clear();
+    assert!(
+        files.authorize(&scope).await.is_err(),
+        "a host revocation after classification applies before delivery"
+    );
+    assert!(
+        env.calls().is_empty(),
+        "a refused file never marks delivery"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn allowed_missing_files_keep_upstreams_client_error() -> TestResult {
+    let env = TestEnv::new().with_file_access(FileAccess::new(|| vec!["/".into()], Vec::new()));
+    let op = Op::from_name("locator.setInputFiles").ok_or("upload op")?;
+    let scope = OpScope::new(&env, op, CallHeader::default());
+    let missing = tempfile::tempdir()?.path().join("does-not-exist.txt");
+    let path = missing.to_string_lossy().into_owned();
+    let error = InputFiles::classify(&scope, FilesInput::Paths(vec![path.clone()]))
+        .await
+        .err()
+        .ok_or("missing file must fail")?;
+    assert_eq!(
+        error.message(),
+        format!("ENOENT: no such file or directory, stat '{path}'")
     );
     Ok(())
 }

@@ -582,7 +582,7 @@ mod tests {
         BrowserosCase {
             op: "locator.setInputFiles",
             file: "uploads_browseros.rs",
-            test: "host_owned_paths_and_payloads_upload_and_an_empty_list_clears_the_input",
+            test: "own_files_are_refused_while_allowed_paths_payloads_and_clearing_work",
             proves: Proves::Served,
         },
     ];

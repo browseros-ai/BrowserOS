@@ -40,6 +40,7 @@ mod download_facts;
 mod events;
 pub use events::worker_table::WorkerInfo;
 mod expect;
+mod file_access;
 mod file_save;
 mod input;
 mod listed_enum;
@@ -70,6 +71,7 @@ mod world;
 
 pub use download_facts::{DownloadFacts, DownloadState};
 pub use events::EventFence;
+pub use file_access::{FileAccess, FileAccessError, ProtectedPath, ReadPath, WritePath};
 pub use op::Op;
 pub use op_env::{OpEnv, Refusal};
 pub use op_spec::{Capability, OpLifetime, OpSpec, OpTarget};

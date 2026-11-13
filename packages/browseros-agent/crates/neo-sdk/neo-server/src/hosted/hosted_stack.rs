@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use browseros_core::NativeCapabilities;
 use neo_captcha::CaptchaSolver;
-use neo_service::Settings;
+use neo_service::{Settings, SettingsDefaults};
 use neo_trace::{RedactionLimits, Redactor, TraceSink, WriterConfig};
 use tokio::time;
 use tokio_util::sync::CancellationToken;
@@ -33,7 +33,16 @@ impl HostedStack {
         options: HostedOptions,
         link: impl FnOnce(NativeCapabilities, Arc<TabRegistry>) -> Arc<BrowserLink>,
     ) -> Result<Arc<Self>, HostedError> {
+        let read_dirs = options.read_dirs.clone();
         let config = options.config()?;
+        // No host API in the embedding. Its explicit roots replace the application default,
+        // and the same setting rule validates them before a facade can start.
+        let defaults = match read_dirs {
+            Some(dirs) => SettingsDefaults::new(dirs).map_err(HostedError)?,
+            None => config.settings_defaults(),
+        };
+        let settings = Settings::defaults(defaults);
+        let file_access = config.file_access(settings.clone());
         let store = App::hosted_trace(&config.env.trace_dir())
             .await
             .map_err(HostedError::from_error)?;
@@ -58,6 +67,7 @@ impl HostedStack {
             Arc::clone(&browser),
             matches!(&config.env.hosted_mode, HostedMode::On),
             Arc::new(AgentFront::without_host()),
+            file_access,
         );
         let solver = CaptchaSolver::new(config.captcha).map(Arc::new);
         let claims = Arc::new(CaptchaClaims::default());
@@ -72,8 +82,7 @@ impl HostedStack {
         )
         .map_err(HostedError::from_error)?;
         let takeover = Arc::new(TakeoverLock::default());
-        // No host API here, so nothing sets anything: the defaults, and no locks or fits.
-        let settings = Settings::defaults();
+        // No host API here, so no locks or fits.
         let dispatcher = Arc::new(Dispatcher::new(
             methods.build(),
             builtins::door_rules(&takeover, &claims),

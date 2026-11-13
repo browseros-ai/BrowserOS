@@ -2,6 +2,8 @@ pub mod error;
 pub use self::error::Error;
 pub mod event;
 pub use self::event::Event;
+pub mod files_settings;
+pub use self::files_settings::FilesSettings;
 pub mod fit;
 pub use self::fit::Fit;
 pub mod fit_browser_bar;

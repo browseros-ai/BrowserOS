@@ -102,10 +102,13 @@ readonly MCP_REMOTE
 # the program's own pid (setpriv, env and Neo's launcher all exec in turn) and
 # signals reach it directly; a plain backgrounded function would leave $! on
 # a wrapper shell that dies on SIGTERM while the program keeps running.
+# Pass the browser's actual directories through its inherited environment so the SDK's read
+# default and profile protection follow image overrides rather than guessing from HOME.
 spawn_as_neo() {
   (exec setpriv --reuid=neo --regid=neo --init-groups \
     env HOME="$NEO_HOME" USER=neo DISPLAY=:1 XDG_RUNTIME_DIR="$XDG_DIR" LANG=C.UTF-8 \
       BROWSERCLAW_DIR="$CLAW_DATA" BROWSERCLAW_HOSTED_MODE="$BROWSERCLAW_HOSTED_MODE" \
+      CLAW_PROFILE_DIR="$PROFILE" CLAW_DOWNLOADS_DIR="$DOWNLOADS" \
       BROWSEROS_OUTPUT_DIR="$OUTPUTS" "$@") &
 }
 

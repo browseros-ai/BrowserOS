@@ -34,6 +34,7 @@
 //! returned or the host dropped its future.
 
 use std::future::Future;
+use std::path::Path;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
@@ -53,7 +54,7 @@ use crate::object_group::ObjectGroup;
 use crate::op::Op;
 use crate::op_spec::Capability;
 use crate::target::CallHeader;
-use crate::{ErrorCode, OpEnv, PlaywrightError, RunState};
+use crate::{ErrorCode, OpEnv, PlaywrightError, ReadPath, RunState, WritePath};
 
 pub(crate) use sent::Sent;
 
@@ -161,6 +162,29 @@ impl<'env> OpScope<'env> {
     /// The browser's startup mode, supplied by the host for this operation.
     pub(crate) fn hosted_mode(&self) -> bool {
         self.env.hosted_mode()
+    }
+
+    /// Checks the live read policy before a gateway stats or reads a script-supplied path.
+    /// Only legacy standalone hosts may omit the policy; SDK constructors require one.
+    pub(crate) async fn read_path(&self, path: &Path) -> Result<ReadPath, PlaywrightError> {
+        match self.env.file_access() {
+            Some(access) => access
+                .read(path)
+                .await
+                .map_err(|error| self.fail(ErrorCode::InvalidInput, &error.to_string())),
+            None => Ok(ReadPath::unchecked(path).await),
+        }
+    }
+
+    /// Checks protected destinations before delivery is marked or parent folders are made.
+    pub(crate) async fn write_path(&self, path: &Path) -> Result<WritePath, PlaywrightError> {
+        match self.env.file_access() {
+            Some(access) => access
+                .write(path)
+                .await
+                .map_err(|error| self.fail(ErrorCode::InvalidInput, &error.to_string())),
+            None => Ok(WritePath::unchecked(path)),
+        }
     }
 
     /// Carries delivered-close evidence to the host before the operation returns its value.

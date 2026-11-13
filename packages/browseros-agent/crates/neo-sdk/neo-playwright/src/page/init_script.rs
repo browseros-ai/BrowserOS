@@ -764,7 +764,7 @@ async fn gate(scope: &OpScope<'_>, script: InitSource) -> Result<String, Playwri
     scope.require(Capability::HostFiles)?;
     match script {
         InitSource::Source(source) => Ok(source),
-        InitSource::Path(path) => input_files::read_script_file(&path).await,
+        InitSource::Path(path) => input_files::read_script_file(scope, &path).await,
     }
 }
 

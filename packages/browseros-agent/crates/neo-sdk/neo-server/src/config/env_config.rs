@@ -1,6 +1,6 @@
 use std::fmt::Display;
 use std::net::SocketAddr;
-use std::path::PathBuf;
+use std::path::{self, PathBuf};
 use std::str::FromStr;
 
 use neo_takeover::Xvnc;
@@ -14,6 +14,13 @@ pub(crate) struct EnvConfig {
     /// `BROWSERCLAW_DIR` (trimmed, non-empty), else `.browserclaw` under `home`. Logs, the trace
     /// store and the default host socket live under it.
     pub(crate) state_dir: PathBuf,
+    /// `CLAW_DOWNLOADS_DIR`, else the browser's `$HOME/Downloads`. The sole default read root; absent only if no home can be discovered.
+    pub(crate) downloads_dir: Option<PathBuf>,
+    /// `CLAW_PROFILE_DIR`, with launch-file fallback owned by `AppConfig`.
+    pub(crate) profile_dir: Option<PathBuf>,
+    /// Both configured CAPTCHA key files, including missing files, protected independently
+    /// of whether a solver could read and enable them at startup.
+    pub(crate) captcha_key_files: Vec<PathBuf>,
     /// `CLAW_LOG`, else `Defaults::LOG_FILTER`.
     pub(crate) log_filter: String,
     /// `BROWSERCLAW_HOSTED_MODE`.
@@ -91,6 +98,16 @@ impl EnvConfig {
                 });
             }
         };
+        let downloads_dir = read("CLAW_DOWNLOADS_DIR")
+            .map(PathBuf::from)
+            .or_else(|| home.as_ref().map(|home| home.join("Downloads")))
+            .map(|downloads| {
+                path::absolute(downloads).map_err(|error| ConfigError::Env {
+                    name: "CLAW_DOWNLOADS_DIR",
+                    why: error.to_string(),
+                })
+            })
+            .transpose()?;
         let hosted_mode = match lookup("BROWSERCLAW_HOSTED_MODE") {
             Some(value) if value == "1" => HostedMode::On,
             value => HostedMode::Off { value },
@@ -116,6 +133,15 @@ impl EnvConfig {
             host_api,
             xvnc,
             state_dir,
+            downloads_dir,
+            profile_dir: read("CLAW_PROFILE_DIR").map(PathBuf::from),
+            captcha_key_files: [
+                "BROWSEROS_CAPSOLVER_API_KEY_FILE",
+                "BROWSEROS_2CAPTCHA_API_KEY_FILE",
+            ]
+            .into_iter()
+            .filter_map(|name| read(name).map(PathBuf::from))
+            .collect(),
         })
     }
 
@@ -186,6 +212,9 @@ mod tests {
             config,
             EnvConfig {
                 state_dir: PathBuf::from("/home/neo/.browserclaw"),
+                downloads_dir: Some(PathBuf::from("/home/neo/Downloads")),
+                profile_dir: None,
+                captcha_key_files: Vec::new(),
                 log_filter: Defaults::LOG_FILTER.to_owned(),
                 hosted_mode: HostedMode::Off { value: None },
                 native_version: None,
@@ -382,5 +411,28 @@ mod tests {
                  given: {error:?}"
             );
         }
+    }
+    #[test]
+    fn filesystem_layout_keeps_configured_missing_paths_and_no_home_startup()
+    -> Result<(), Box<dyn Error>> {
+        let config = env(&[
+            ("BROWSERCLAW_DIR", "/state"),
+            ("CLAW_DOWNLOADS_DIR", "/downloads"),
+            ("CLAW_PROFILE_DIR", "/profile"),
+            ("BROWSEROS_CAPSOLVER_API_KEY_FILE", "/keys/one"),
+            ("BROWSEROS_2CAPTCHA_API_KEY_FILE", "/keys/two"),
+        ])?;
+        assert_eq!(config.downloads_dir, Some(PathBuf::from("/downloads")));
+        assert_eq!(config.profile_dir, Some(PathBuf::from("/profile")));
+        assert_eq!(
+            config.captcha_key_files,
+            vec![PathBuf::from("/keys/one"), PathBuf::from("/keys/two")]
+        );
+        let config = env(&[("BROWSERCLAW_DIR", "/state")])?;
+        assert_eq!(
+            config.downloads_dir, None,
+            "no home must not invent a browser downloads directory"
+        );
+        Ok(())
     }
 }

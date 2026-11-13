@@ -18,6 +18,8 @@ pub struct Settings {
     pub tabs: Option<Box<models::TabSettings>>,
     #[serde(rename = "trace", skip_serializing_if = "Option::is_none")]
     pub trace: Option<Box<models::TraceSettings>>,
+    #[serde(rename = "files", skip_serializing_if = "Option::is_none")]
+    pub files: Option<Box<models::FilesSettings>>,
 }
 
 impl Settings {
@@ -26,6 +28,7 @@ impl Settings {
         Settings {
             tabs: None,
             trace: None,
+            files: None,
         }
     }
 }

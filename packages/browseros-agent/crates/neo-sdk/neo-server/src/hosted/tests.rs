@@ -1,10 +1,10 @@
 //! Hosted lifecycle through the production stack and the existing fake CDP seam.
 
 use std::error::Error;
-use std::future;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
+use std::{fs, future};
 
 use neo_trace::{RunId, RunStatus, TraceStore};
 use serde_json::{Value, json};
@@ -20,6 +20,7 @@ async fn connect(dir: &TempDir, fake: Arc<FakeCdp>) -> Result<HostedRuntime, Box
     Ok(HostedRuntime::start(
         HostedOptions {
             state_dir: dir.path().join("state"),
+            read_dirs: None,
             execution_dir: Some(dir.path().join("profile/.browseros")),
             browseros_version: Some("0.52.1.1".to_owned()),
             hosted_mode: false,
@@ -227,5 +228,79 @@ async fn hosted_runs_start_unowned_and_attach_tabs_only_after_picking_a_task()
         owned["ok"]["page"]["tab"]
     );
     runtime.close().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn hosted_file_reads_use_default_explicit_and_empty_lists_and_protect_state()
+-> Result<(), Box<dyn Error>> {
+    let dir = tempfile::tempdir()?;
+    let fixture = dir.path().join("fixture.js");
+    fs::write(&fixture, "globalThis.fixture = 1;")?;
+    for (name, read_dirs, allowed) in [
+        ("default", None, false),
+        ("explicit", Some(vec![dir.path().to_owned()]), true),
+        ("empty", Some(Vec::new()), false),
+    ] {
+        let fake = FakeCdp::new();
+        let state = dir.path().join(name);
+        let runtime = HostedRuntime::start(
+            HostedOptions {
+                state_dir: state.clone(),
+                read_dirs,
+                ..HostedOptions::default()
+            },
+            move |native, tabs| {
+                BrowserLink::start_with(native, tabs, move || future::ready(fake.connect()))
+            },
+        )
+        .await?;
+        let run = runtime.open_run(Duration::from_secs(10)).await?;
+        let answer: Value = serde_json::from_str(
+            &run.invoke(
+                "context.addInitScript".to_owned(),
+                &json!({"path": fixture}).to_string(),
+                "",
+            )
+            .await,
+        )?;
+        if allowed {
+            assert!(answer.get("ok").is_some(), "{name}: {answer}");
+        } else {
+            assert_eq!(answer["err"]["code"], "invalid_input", "{name}: {answer}");
+            assert_eq!(answer["err"]["delivery"], "not_sent");
+            assert_eq!(answer["err"]["owner"], "script");
+        }
+        let protected = state.join("nested/new.png");
+        let answer: Value = serde_json::from_str(
+            &run.invoke(
+                "page.saveScreenshot".to_owned(),
+                &json!({"path": protected, "base64": "cGljdHVyZQ=="}).to_string(),
+                "",
+            )
+            .await,
+        )?;
+        assert_eq!(answer["err"]["code"], "invalid_input", "{answer}");
+        assert_eq!(answer["err"]["delivery"], "not_sent");
+        assert!(!protected.exists());
+        run.finish().await?;
+        runtime.close().await?;
+    }
+    let fake = FakeCdp::new();
+    let invalid = HostedRuntime::start(
+        HostedOptions {
+            state_dir: dir.path().join("invalid"),
+            read_dirs: Some(vec!["relative".into()]),
+            ..HostedOptions::default()
+        },
+        move |native, tabs| {
+            BrowserLink::start_with(native, tabs, move || future::ready(fake.connect()))
+        },
+    )
+    .await;
+    assert!(
+        invalid.is_err(),
+        "hosted options use the host settings validation"
+    );
     Ok(())
 }

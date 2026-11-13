@@ -12,6 +12,9 @@
 use crate::limits::{IDLE_CLOSE_SECONDS, RETENTION_SECONDS, VALUE_BYTES};
 use serde_json::Value;
 use std::ops::RangeInclusive;
+use std::path::PathBuf;
+
+use crate::settings::SettingsDefaults;
 
 /// One row of the table: a setting's dotted name, which is its path in the JSON, and its rule.
 #[derive(Debug)]
@@ -41,15 +44,23 @@ pub(crate) enum Rule {
         /// The names this server knows.
         values: &'static [&'static str],
     },
+    /// Absolute read roots. The application supplies the downloads default, since the library
+    /// does not know the browser's filesystem layout.
+    AbsoluteDirs {
+        /// The largest accepted list.
+        max: usize,
+    },
 }
 
 /// One setting's value, as checked against its rule.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum SettingValue {
     /// A [`Rule::Whole`] value.
     Whole(u64),
     /// A [`Rule::Choice`] value, one of its `values`.
     Choice(&'static str),
+    /// A [`Rule::AbsoluteDirs`] value.
+    Dirs(Vec<PathBuf>),
 }
 
 /// What a value sent for a known setting is, against its rule.
@@ -105,12 +116,19 @@ pub(crate) const TRACE_VALUE_BYTES: Setting = Setting {
 pub(crate) const SCREENSHOTS_PER_OPERATION: &str = "perOperation";
 pub(crate) const SCREENSHOTS_OFF: &str = "off";
 
+/// The live folders scripts may read by path, with the application-supplied downloads default.
+pub(crate) const FILE_READ_DIRS: Setting = Setting {
+    name: "files.readDirs",
+    rule: Rule::AbsoluteDirs { max: 16 },
+};
+
 /// Every setting this server knows, in the order the README lists them.
 pub(crate) const SETTINGS: &[Setting] = &[
     TAB_IDLE_CLOSE,
     TRACE_RETENTION,
     TRACE_SCREENSHOTS,
     TRACE_VALUE_BYTES,
+    FILE_READ_DIRS,
 ];
 
 impl Setting {
@@ -131,10 +149,11 @@ impl Setting {
     }
 
     /// The value used when the host set nothing.
-    pub(crate) const fn default_value(&self) -> SettingValue {
+    pub(crate) fn default_value(&self, defaults: &SettingsDefaults) -> SettingValue {
         match self.rule {
             Rule::Whole { default, .. } => SettingValue::Whole(default),
             Rule::Choice { default, .. } => SettingValue::Choice(default),
+            Rule::AbsoluteDirs { .. } => SettingValue::Dirs(defaults.read_dirs.clone()),
         }
     }
 
@@ -165,6 +184,27 @@ impl Setting {
                     }),
                 None => Checked::Refused(format!("must be one of {}", self.values_text())),
             },
+            Rule::AbsoluteDirs { max } => {
+                let dirs = value
+                    .as_array()
+                    .filter(|dirs| dirs.len() <= *max)
+                    .and_then(|dirs| {
+                        dirs.iter()
+                            .map(|dir| {
+                                let path = PathBuf::from(dir.as_str()?);
+                                path.is_absolute().then_some(path)
+                            })
+                            .collect::<Option<Vec<_>>>()
+                    });
+                dirs.map_or_else(
+                    || {
+                        Checked::Refused(format!(
+                            "must be a list of at most {max} absolute folders"
+                        ))
+                    },
+                    |dirs| Checked::Value(SettingValue::Dirs(dirs)),
+                )
+            }
         }
     }
 
@@ -173,15 +213,20 @@ impl Setting {
     pub(crate) fn values_text(&self) -> String {
         match &self.rule {
             Rule::Choice { values, .. } => values.join(", "),
-            Rule::Whole { .. } => String::new(),
+            Rule::Whole { .. } | Rule::AbsoluteDirs { .. } => String::new(),
         }
     }
 
     /// `value` as JSON, for an answer and the saved file.
-    pub(crate) fn json(value: SettingValue) -> Value {
+    pub(crate) fn json(value: &SettingValue) -> Value {
         match value {
-            SettingValue::Whole(whole) => Value::from(whole),
-            SettingValue::Choice(name) => Value::from(name),
+            SettingValue::Whole(whole) => Value::from(*whole),
+            SettingValue::Choice(name) => Value::from(*name),
+            SettingValue::Dirs(dirs) => Value::Array(
+                dirs.iter()
+                    .map(|dir| Value::from(dir.to_string_lossy().into_owned()))
+                    .collect(),
+            ),
         }
     }
 }
@@ -215,6 +260,10 @@ mod tests {
                 Rule::Choice { default, values } => (
                     setting.name.to_owned(),
                     ((*default).to_owned(), values.join(", ")),
+                ),
+                Rule::AbsoluteDirs { max } => (
+                    setting.name.to_owned(),
+                    ("downloads folder".to_owned(), format!("0 to {max} folders")),
                 ),
             })
             .collect()
@@ -272,13 +321,21 @@ mod tests {
                         .unwrap_or_default()
                 };
                 // An open list states its names as `x-extensible-enum: [a, b]`; a number, its
-                // bounds.
+                // bounds. A folder list has an application-owned default and a size bound.
                 let names = field("x-extensible-enum: [");
-                let range = match names.strip_suffix(']') {
-                    Some(names) => names.to_owned(),
-                    None => format!("{} to {}", field("minimum: "), field("maximum: ")),
+                let (default, range) = if field("type: ") == "array" {
+                    (
+                        field("x-neo-default: "),
+                        format!("0 to {} folders", field("maxItems: ")),
+                    )
+                } else {
+                    let range = match names.strip_suffix(']') {
+                        Some(names) => names.to_owned(),
+                        None => format!("{} to {}", field("minimum: "), field("maximum: ")),
+                    };
+                    (field("default: "), range)
                 };
-                listed.insert(format!("{group}.{key}"), (field("default: "), range));
+                listed.insert(format!("{group}.{key}"), (default, range));
             }
         }
         Ok(listed)

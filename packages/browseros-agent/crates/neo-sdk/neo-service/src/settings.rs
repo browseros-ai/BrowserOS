@@ -19,8 +19,8 @@
 //! aside, and the settings must not vanish with it.
 
 use crate::setting::{
-    SCREENSHOTS_OFF, SETTINGS, Setting, SettingValue, TAB_IDLE_CLOSE, TRACE_RETENTION,
-    TRACE_SCREENSHOTS, TRACE_VALUE_BYTES,
+    Checked, FILE_READ_DIRS, SCREENSHOTS_OFF, SETTINGS, Setting, SettingValue, TAB_IDLE_CLOSE,
+    TRACE_RETENTION, TRACE_SCREENSHOTS, TRACE_VALUE_BYTES,
 };
 use crate::wire;
 use neo_trace::{RecordPolicy, Screenshots};
@@ -44,7 +44,30 @@ pub struct Settings {
     inner: Arc<Inner>,
 }
 
+/// Defaults whose values belong to the application's filesystem layout, rather than a
+/// constant in the settings table. One instance drives GET, reset, load fallback and logs.
+#[derive(Clone, Debug, Default)]
+pub struct SettingsDefaults {
+    /// The browser's downloads folder by default; the Node embedding may supply a list.
+    pub read_dirs: Vec<PathBuf>,
+}
+
+impl SettingsDefaults {
+    /// Checks an embedding's roots with the same rule as `/v1/settings`. Server defaults
+    /// already come from the validated launch environment.
+    pub fn new(read_dirs: Vec<PathBuf>) -> Result<Self, String> {
+        match FILE_READ_DIRS.check(&Setting::json(&SettingValue::Dirs(read_dirs.clone()))) {
+            Checked::Value(_) => Ok(Self { read_dirs }),
+            Checked::Refused(rule) => Err(format!("`files.readDirs` {rule}")),
+            Checked::UnknownValue => {
+                Err("`files.readDirs` does not accept unknown values".to_owned())
+            }
+        }
+    }
+}
+
 struct Inner {
+    defaults: SettingsDefaults,
     /// Where a change is saved; `None` keeps changes in memory (no host API, the Node-hosted
     /// embedding, tests).
     file: Option<PathBuf>,
@@ -73,8 +96,8 @@ impl Settings {
     /// Every setting at its default, kept in memory only. For a Neo with no host API: nothing
     /// could change them, and a file saved by an earlier run with a host API is ignored.
     #[must_use]
-    pub fn defaults() -> Self {
-        Self::new(None, SetValues::new())
+    pub fn defaults(defaults: SettingsDefaults) -> Self {
+        Self::new(None, SetValues::new(), defaults)
     }
 
     /// The settings saved in `file`, which later changes are saved to. A missing file means
@@ -82,14 +105,15 @@ impl Settings {
     /// an error in the log. A name this build does not know, or a value it cannot use, falls
     /// back to its default with a warning, and the other settings still apply: the server never
     /// fails to start over this file.
-    pub async fn load(file: PathBuf) -> Self {
+    pub async fn load(file: PathBuf, defaults: SettingsDefaults) -> Self {
         let set = read_saved(&file).await;
-        Self::new(Some(file), set)
+        Self::new(Some(file), set, defaults)
     }
 
-    fn new(file: Option<PathBuf>, set: SetValues) -> Self {
+    fn new(file: Option<PathBuf>, set: SetValues, defaults: SettingsDefaults) -> Self {
         Self {
             inner: Arc::new(Inner {
+                defaults,
                 file,
                 set: RwLock::new(set),
                 changing: tokio::sync::Mutex::new(()),
@@ -116,9 +140,11 @@ impl Settings {
     /// in a message (`TraceSink::record_policy`), sent by a [`Settings::watch`] the app sets up.
     #[must_use]
     pub fn trace_policy(&self) -> RecordPolicy {
-        let screenshots = match value_of(&self.set(), &TRACE_SCREENSHOTS) {
+        let screenshots = match self.value(&TRACE_SCREENSHOTS) {
             SettingValue::Choice(SCREENSHOTS_OFF) => Screenshots::Off,
-            SettingValue::Choice(_) | SettingValue::Whole(_) => Screenshots::PerOperation,
+            SettingValue::Choice(_) | SettingValue::Whole(_) | SettingValue::Dirs(_) => {
+                Screenshots::PerOperation
+            }
         };
         RecordPolicy {
             screenshots,
@@ -142,12 +168,32 @@ impl Settings {
         watchers.push(Box::new(apply));
     }
 
+    /// `files.readDirs`, read at every filesystem gateway so a change also applies to a run
+    /// already in flight. The lock protects only this clone, never filesystem work.
+    #[must_use]
+    pub fn read_dirs(&self) -> Vec<PathBuf> {
+        match self.value(&FILE_READ_DIRS) {
+            SettingValue::Dirs(dirs) => dirs,
+            SettingValue::Whole(_) | SettingValue::Choice(_) => {
+                self.inner.defaults.read_dirs.clone()
+            }
+        }
+    }
+
+    pub(crate) fn default_value(&self, setting: &Setting) -> SettingValue {
+        setting.default_value(&self.inner.defaults)
+    }
+
     /// Every setting at its current value: what the host set, or the default.
     pub(crate) fn current(&self) -> Vec<(&'static Setting, SettingValue)> {
-        let set = self.set();
+        let set = self
+            .inner
+            .set
+            .read()
+            .unwrap_or_else(PoisonError::into_inner);
         SETTINGS
             .iter()
-            .map(|setting| (setting, value_of(&set, setting)))
+            .map(|setting| (setting, value_of(&set, setting, &self.inner.defaults)))
             .collect()
     }
 
@@ -188,7 +234,7 @@ impl Settings {
         {
             apply(self);
         }
-        log_change(&before, &after);
+        log_change(&before, &after, &self.inner.defaults);
         Ok(())
     }
 
@@ -209,10 +255,20 @@ impl Settings {
     }
 
     fn whole(&self, setting: &Setting) -> u64 {
-        match (value_of(&self.set(), setting), setting.default_value()) {
+        match (self.value(setting), self.default_value(setting)) {
             (SettingValue::Whole(whole), _) | (_, SettingValue::Whole(whole)) => whole,
-            (SettingValue::Choice(_), SettingValue::Choice(_)) => 0,
+            // Only Whole rows call this getter. Other kinds have typed getters.
+            _ => 0,
         }
+    }
+
+    fn value(&self, setting: &Setting) -> SettingValue {
+        let set = self
+            .inner
+            .set
+            .read()
+            .unwrap_or_else(PoisonError::into_inner);
+        value_of(&set, setting, &self.inner.defaults)
     }
 
     fn set(&self) -> SetValues {
@@ -224,10 +280,10 @@ impl Settings {
     }
 }
 
-fn value_of(set: &SetValues, setting: &Setting) -> SettingValue {
+fn value_of(set: &SetValues, setting: &Setting, defaults: &SettingsDefaults) -> SettingValue {
     set.get(setting.name)
-        .copied()
-        .unwrap_or_else(|| setting.default_value())
+        .cloned()
+        .unwrap_or_else(|| setting.default_value(defaults))
 }
 
 /// What the last run saved, key by key (`Settings::load`).
@@ -266,7 +322,7 @@ async fn read_saved(file: &Path) -> SetValues {
     let applied: Vec<String> = saved
         .values
         .iter()
-        .map(|(name, value)| format!("{name}={}", Setting::json(*value)))
+        .map(|(name, value)| format!("{name}={}", Setting::json(value)))
         .collect();
     tracing::info!(file = %file.display(), applied = %applied.join(" "), "saved settings loaded");
     saved.values
@@ -276,7 +332,7 @@ async fn read_saved(file: &Path) -> SetValues {
 /// written: a crash leaves the old one or the new one. Mode 0600: it is the host's.
 async fn save(file: &Path, set: &SetValues) -> io::Result<()> {
     let mut bytes = serde_json::to_vec(&wire::settings_object(
-        set.iter().map(|(name, value)| (*name, *value)),
+        set.iter().map(|(name, value)| (*name, value.clone())),
     ))?;
     bytes.push(b'\n');
     let mut temp = file.as_os_str().to_owned();
@@ -305,18 +361,18 @@ async fn save(file: &Path, set: &SetValues) -> io::Result<()> {
 
 /// One line per change, with every setting whose value changed, from and to. No setting is a
 /// secret (the settings design, section 2), so values are logged.
-fn log_change(before: &SetValues, after: &SetValues) {
+fn log_change(before: &SetValues, after: &SetValues, defaults: &SettingsDefaults) {
     let changed: Vec<String> = SETTINGS
         .iter()
         .filter_map(|setting| {
-            let from = value_of(before, setting);
-            let to = value_of(after, setting);
+            let from = value_of(before, setting, defaults);
+            let to = value_of(after, setting, defaults);
             (from != to).then(|| {
                 format!(
                     "{}: {} -> {}",
                     setting.name,
-                    Setting::json(from),
-                    Setting::json(to)
+                    Setting::json(&from),
+                    Setting::json(&to)
                 )
             })
         })
@@ -333,7 +389,7 @@ mod tests {
 
     #[test]
     fn every_default_is_todays_behaviour() {
-        let settings = Settings::defaults();
+        let settings = Settings::defaults(Default::default());
         assert_eq!(
             settings.trace_retention(),
             RetentionPolicy::default().max_age,
@@ -349,5 +405,45 @@ mod tests {
             RecordPolicy::default(),
             "Neo's own screenshots on, and the trace's default value limits"
         );
+    }
+    #[tokio::test]
+    async fn application_defaults_drive_answers_reset_and_saved_fallback()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use super::{ChangeMode, SetValues, SettingsDefaults};
+        use crate::wire;
+        use serde_json::{Value, json};
+
+        let dir = tempfile::tempdir()?;
+        let file = dir.path().join("settings.json");
+        let downloads = dir.path().join("downloads");
+        let defaults = SettingsDefaults::new(vec![downloads.clone()])?;
+        let settings = Settings::load(file.clone(), defaults.clone()).await;
+        let answer: Value = serde_json::to_value(
+            wire::settings_state(&settings, None).map_err(|error| error.message.into_owned())?,
+        )?;
+        assert_eq!(answer["settings"]["files"]["readDirs"], json!([downloads]));
+        assert_eq!(answer["defaults"]["files"]["readDirs"], json!([downloads]));
+        settings.patch(br#"{"files":{"readDirs":["/"]}}"#).await?;
+        let restored = Settings::load(file.clone(), defaults.clone()).await;
+        assert_eq!(restored.read_dirs(), vec![std::path::PathBuf::from("/")]);
+        settings
+            .change(SetValues::new(), ChangeMode::Replace)
+            .await?;
+        assert_eq!(settings.read_dirs(), vec![downloads.clone()]);
+        assert_eq!(
+            Settings::load(file.clone(), defaults.clone())
+                .await
+                .read_dirs(),
+            vec![downloads.clone()]
+        );
+        tokio::fs::write(
+            &file,
+            br#"{"files":{"readDirs":["relative"]},"trace":{"retentionSeconds":7200}}"#,
+        )
+        .await?;
+        let fallback = Settings::load(file, defaults).await;
+        assert_eq!(fallback.read_dirs(), vec![downloads]);
+        assert_eq!(fallback.trace_retention(), Duration::from_secs(7200));
+        Ok(())
     }
 }

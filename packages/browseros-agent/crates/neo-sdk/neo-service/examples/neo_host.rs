@@ -212,7 +212,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         },
         cdp_port: args.cdp_port,
         // Beside trace.db, where the app keeps them.
-        settings: Settings::load(dir.join("settings.json")).await,
+        settings: Settings::load(dir.join("settings.json"), Default::default()).await,
     });
     let surface = SurfaceCalls {
         sink: sink.clone(),

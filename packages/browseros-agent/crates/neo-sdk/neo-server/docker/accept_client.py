@@ -170,8 +170,21 @@ DOWNLOAD_CODE = """\
 await page.goto('ORIGIN/');
 const [download] = await Promise.all([page.waitForEvent('download'), page.locator('#get').click()]);
 const path = await download.path();
+const copy = '/data/downloads/neo-accept-saved.csv';
+const facts = async () => await page.locator('#f').evaluate(async input => {
+  const file = input.files[0];
+  const digest = await crypto.subtle.digest('SHA-256', await file.arrayBuffer());
+  return { name: file.name, size: file.size,
+           sha256: [...new Uint8Array(digest)].map(b => b.toString(16).padStart(2, '0')).join('') };
+});
+await page.locator('#f').setInputFiles(path);
+const originalUpload = await facts();
+await download.saveAs(copy);
+await page.locator('#f').setInputFiles(copy);
+const copyUpload = await facts();
 await download.saveAs('/tmp/neo-accept-saved.csv');
-return { path, name: download.suggestedFilename(), failure: await download.failure() };
+return { path, copy, originalUpload, copyUpload,
+         name: download.suggestedFilename(), failure: await download.failure() };
 """
 
 UPLOAD_CODE = """\
@@ -187,13 +200,18 @@ return await page.locator('#f').evaluate(async (input) => {
 
 
 def downloads(url: str, socket_path: str, token_file: str) -> dict:
-    """zuzu's neo_download then neo_upload, and `import` reading the bytes on the host socket."""
+    """Reuse the task's original and saved download paths under untouched image defaults."""
     server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), FilesPage)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     origin = f"http://127.0.0.1:{server.server_address[1]}"
     want = hashlib.sha256(STATEMENT).hexdigest()
     client = connect(url)
     problems = []
+    settings = host(socket_path, token_file, '/v1/settings')
+    defaults = settings.get('body', {}).get('defaults', {}).get('files', {}).get('readDirs')
+    current = settings.get('body', {}).get('settings', {}).get('files', {}).get('readDirs')
+    if defaults != ['/data/downloads'] or current != defaults:
+        problems.append('files.readDirs is not the untouched downloads-folder-only default')
     got = call_run(client, DOWNLOAD_CODE.replace("ORIGIN", origin), {"taskId": "accept-downloads"})
     value = (got["value"] or {}).get("value") or {}
     run_id = got["meta"].get("id", "")
@@ -202,6 +220,17 @@ def downloads(url: str, socket_path: str, token_file: str) -> dict:
         problems.append(f"download run: {got['meta'].get('status')} {got['text'][:200]}")
     if value.get("name") != STATEMENT_NAME or value.get("failure") is not None:
         problems.append(f"download facts: {value}")
+    membership = {}
+    for label, upload_key in (('path', 'originalUpload'), ('copy', 'copyUpload')):
+        file_path = value.get(label) or ''
+        real_path = os.path.realpath(file_path) if file_path else ''
+        membership[label] = bool(real_path and any(os.path.commonpath([real_path, os.path.realpath(root)]) ==
+                                                   os.path.realpath(root) for root in defaults or []))
+        sent = value.get(upload_key) or {}
+        if (sent.get('name'), sent.get('size'), sent.get('sha256')) != (os.path.basename(file_path), len(STATEMENT), want):
+            problems.append(f'{label} upload from the downloading run did not preserve name, bytes and hash')
+        if not membership[label]:
+            problems.append(f'{label} real path is outside default files.readDirs')
     record = host(socket_path, token_file, f"/v1/runs/{run_id}?wait=10")
     listed = ((record.get("body") or {}).get("downloads") or [{}])[0]
     if (listed.get("state"), listed.get("size"), listed.get("path")) != ("completed", len(STATEMENT), path):
@@ -213,10 +242,12 @@ def downloads(url: str, socket_path: str, token_file: str) -> dict:
     if STATEMENT_NAME not in headers.get("content-disposition", ""):
         problems.append(f"content-disposition: {headers.get('content-disposition')}")
     try:
-        saved = os.stat("/tmp/neo-accept-saved.csv").st_size
+        with open('/tmp/neo-accept-saved.csv', 'rb') as saved_file:
+            saved_bytes = saved_file.read()
+        saved = len(saved_bytes)
     except OSError as error:
         saved = str(error)
-    if saved != len(STATEMENT):
+    if saved != len(STATEMENT) or hashlib.sha256(saved_bytes).hexdigest() != want:
         problems.append(f"saveAs copy: {saved}")
     upload_code = f"const args = {json.dumps({'path': path})};\n" + UPLOAD_CODE.replace("ORIGIN", origin)
     uploaded = call_run(client, upload_code, {"taskId": "accept-downloads"})
@@ -227,8 +258,16 @@ def downloads(url: str, socket_path: str, token_file: str) -> dict:
     return {
         "ok": not problems,
         "run": run_id,
+        "path": path,
+        "copy": value.get('copy'),
+        "defaultReadDirs": defaults,
+        "realPathInDefault": membership,
+        "sha256": want,
+        "uploads": {key: value.get(key) for key in ('originalUpload', 'copyUpload')},
         "problems": problems,
-        "detail": f"run {run_id}: {path}, {len(STATEMENT)} bytes read back over the socket and uploaded again",
+        "detail": f"run {run_id}: download.path()={path}; copy={value.get('copy')}; "
+        f"defaults={defaults}; real-path membership={membership}; {len(STATEMENT)} bytes, sha256={want}; "
+        "both paths uploaded in the downloading run, original uploaded again, /tmp save preserved",
     }
 
 

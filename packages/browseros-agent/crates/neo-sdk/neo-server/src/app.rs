@@ -179,6 +179,7 @@ impl App {
                 xvnc: config.env.xvnc,
                 cdp_port: config.launch.cdp_port,
                 settings_file: config.env.settings_file(),
+                settings_defaults: config.settings_defaults(),
             },
         )
         .await
@@ -196,6 +197,7 @@ impl App {
             Arc::clone(&browser),
             matches!(&config.env.hosted_mode, HostedMode::On),
             Arc::clone(&front),
+            config.file_access(settings.clone()),
         );
 
         // One solver for the process: its paid-task budget and page reservations are its own.

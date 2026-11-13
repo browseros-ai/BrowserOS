@@ -8,7 +8,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use browseros_core::{NativeCapabilities, TabId};
-use neo_service::Settings;
+use neo_service::{Settings, SettingsDefaults};
 use neo_trace::{Effect, OperationId, RedactionLimits, Redactor, RunId, TraceStore, WriterConfig};
 use serde_json::{Value, json};
 use tempfile::TempDir;
@@ -94,6 +94,7 @@ impl Host {
             // The fake browser has no CDP port, and no test here opens a live view to dial it.
             cdp_port: 0,
             settings_file: dir.path().join("settings.json"),
+            settings_defaults: SettingsDefaults::default(),
         };
         let host = HostApi::bind(&config, inputs).await?;
         let settings = host.settings().clone();

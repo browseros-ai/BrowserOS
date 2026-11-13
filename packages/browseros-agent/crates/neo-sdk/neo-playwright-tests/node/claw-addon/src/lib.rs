@@ -46,6 +46,9 @@ pub fn connect(env: Env, cdp_port: u16, options: ConnectOptions) -> Result<JsObj
             cdp_port,
             HostedOptions {
                 state_dir: PathBuf::from(options.state_dir),
+                // Upstream specs read fixtures and outputs across several directories.
+                // The embedding's own-files protection still applies with `/` allowed.
+                read_dirs: Some(vec![PathBuf::from("/")]),
                 execution_dir: options.execution_dir.map(PathBuf::from),
                 browseros_version: options.browseros_version,
                 hosted_mode: options.hosted_mode.unwrap_or(false),

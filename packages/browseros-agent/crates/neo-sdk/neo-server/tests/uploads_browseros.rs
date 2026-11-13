@@ -1,9 +1,9 @@
 //! Uploads end to end on a real BrowserOS: `setInputFiles` over MCP `run` hands the page
-//! host-owned paths, an ordinary file, a payload, and `[]`.
+//! protected paths, a host-allowed file, a payload, and `[]`.
 //!
 //! ```text
 //!  MCP run ─▶ browseros-claw-sdk ─ setInputFiles ─▶ the door ─▶ neo-playwright's upload
-//!    ─ host-owned files and a symlink: the page reports the uploaded file's name and size
+//!    ─ host-owned files and a symlink: refused even after the host allows /
 //!    ─ an ordinary file and payload: the page reports their bytes; [] clears the input
 //! ```
 //!
@@ -18,9 +18,11 @@ use std::os::unix::fs::symlink;
 use std::path::Path;
 use std::time::Duration;
 
-use browseros_rig::{CaptchaKey, PATIENCE, Rig, TestResult, browser_or_skip, outcome, run};
+use browseros_rig::{
+    CaptchaKey, HOST_TOKEN, PATIENCE, Rig, TestResult, browser_or_skip, outcome, run,
+};
 use neo_trace::RunId;
-use serde_json::{Value, json};
+use serde_json::json;
 use tokio::time;
 
 /// The whole drive; see `e2e_browseros.rs` for why the budget sits inside the test.
@@ -53,13 +55,14 @@ const html = '<title>Uploads</title>'
   + '</script>';
 await page.goto('data:text/html,' + encodeURIComponent(html));
 const hostInput = page.locator('#host-files');
-const hostSeen = page.locator('#host-seen li');
 const hostUploads = {};
-let hostCount = 0;
 for (const [name, path] of Object.entries(HOST_FILES)) {
-  await hostInput.setInputFiles(path);
-  await expect(hostSeen).toHaveCount(++hostCount);
-  hostUploads[name] = JSON.parse(await hostSeen.nth(hostCount - 1).textContent());
+  try {
+    await hostInput.setInputFiles(path);
+    hostUploads[name] = { unexpectedUpload: true };
+  } catch (error) {
+    hostUploads[name] = { owner: error.owner, code: error.code, delivery: error.delivery, message: error.message };
+  }
 }
 const input = page.locator('#files');
 const seen = page.locator('#seen li');
@@ -74,7 +77,7 @@ return { hostUploads, uploads };
 "#;
 
 #[tokio::test(flavor = "multi_thread")]
-async fn host_owned_paths_and_payloads_upload_and_an_empty_list_clears_the_input() -> TestResult {
+async fn own_files_are_refused_while_allowed_paths_payloads_and_clearing_work() -> TestResult {
     let Some(browser) = browser_or_skip() else {
         return Ok(());
     };
@@ -111,6 +114,34 @@ async fn uploads(rig: &Rig) -> TestResult {
         json!(PAYLOAD_TEXT),
     );
     let client = rig.client().await?;
+    let default_probe = format!(
+        "await page.setContent('<input type=file>'); try {{ await page.locator('input').setInputFiles({}); return {{ unexpectedUpload: true }}; }} catch (error) {{ return {{ code: error.code, owner: error.owner, delivery: error.delivery }}; }}",
+        json!(ordinary)
+    );
+    let denied = run(
+        &client,
+        &default_probe,
+        &json!({ "taskId": "uploads-default" }),
+    )
+    .await?;
+    let denied = denied
+        .structured_content
+        .as_ref()
+        .and_then(|content| content.get("value"))
+        .ok_or("default upload result")?;
+    assert_eq!(
+        denied,
+        &json!({"code": "invalid_input", "owner": "script", "delivery": "not_sent"})
+    );
+    let changed = rig
+        .host(
+            "PATCH",
+            "/v1/settings",
+            Some(HOST_TOKEN),
+            Some(&json!({"files": {"readDirs": ["/"]}})),
+        )
+        .await?;
+    assert_eq!(changed.status, 200);
     let result = run(&client, &code, &json!({ "taskId": "uploads" })).await?;
     client.cancel().await?;
     assert_eq!(
@@ -126,30 +157,15 @@ async fn uploads(rig: &Rig) -> TestResult {
 
     let named = host_files.as_object().ok_or("the host files are named")?;
     for (name, path) in named {
-        let uploaded = value
+        let refused = value
             .pointer(&format!("/hostUploads/{name}"))
-            .and_then(Value::as_array)
-            .ok_or_else(|| format!("the script uploaded {name}: {value}"))?;
-        assert_eq!(uploaded.len(), 1, "{name} uploads one file: {value}");
-        let uploaded = uploaded.first().ok_or("the input holds its file")?;
-        let path = path.as_str().ok_or("a path is text")?;
-        let file = Path::new(path)
-            .file_name()
-            .and_then(|file| file.to_str())
-            .ok_or("a path names a file")?;
-        assert_eq!(
-            uploaded.get("name"),
-            Some(&json!(file)),
-            "{name} reaches the page under its supplied name: {value}"
-        );
-        let size = uploaded
-            .get("size")
-            .and_then(Value::as_u64)
-            .ok_or("the uploaded file has a size")?;
-        assert!(
-            size > 0,
-            "{name} reaches the page with its contents: {value}"
-        );
+            .ok_or("protected result")?;
+        assert_eq!(refused["code"], "invalid_input", "{name}: {value}");
+        assert_eq!(refused["owner"], "script", "{name}: {value}");
+        assert_eq!(refused["delivery"], "not_sent", "{name}: {value}");
+        let message = refused["message"].as_str().ok_or("refusal message")?;
+        assert!(message.contains("Neo's own files"));
+        assert!(!message.contains(path.as_str().ok_or("path text")?));
     }
     assert_eq!(
         value.get("uploads"),
