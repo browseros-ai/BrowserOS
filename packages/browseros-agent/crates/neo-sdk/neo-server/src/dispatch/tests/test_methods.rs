@@ -7,6 +7,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 
+use browseros_core::TabId;
 use browseros_core::pages::NewPageOptions;
 use browseros_core::viewport::{ViewportMode, ViewportRequest};
 use neo_trace::Effect;
@@ -71,6 +72,7 @@ pub(super) fn test_methods(
     registry.define(Echo)?;
     registry.define(AnyInput)?;
     registry.define(NamesTab)?;
+    registry.define(ChecksTab)?;
     registry.define(MainWorldScript)?;
     registry.define(Pump)
 }
@@ -792,6 +794,35 @@ impl Method for NamesTab {
         future::ready(Ok(
             json!({ "found": { "$neo": "page", "id": null, "tab": input.tab } }),
         ))
+    }
+}
+
+/// Asks the door's rules about the tab number it is given, as an event pull does for every tab an
+/// event names (`OpCtx::check_tab`), and answers the refusal's code, or null.
+struct ChecksTab;
+
+impl Method for ChecksTab {
+    type Input = TabNumber;
+    type Output = Value;
+
+    fn spec(&self) -> MethodSpec {
+        MethodSpec::new("test.checks_tab", Effect::Read)
+    }
+
+    fn target(_input: &TabNumber) -> Option<&PageTarget> {
+        None
+    }
+
+    fn call(
+        &self,
+        op: &OpCtx<Self>,
+        input: TabNumber,
+    ) -> impl Future<Output = Result<Value, LeafError>> + Send {
+        let refused = op
+            .check_tab(TabId(input.tab))
+            .err()
+            .map(|refusal| refusal.code().as_str().to_owned());
+        future::ready(Ok(json!({ "refused": refused })))
     }
 }
 

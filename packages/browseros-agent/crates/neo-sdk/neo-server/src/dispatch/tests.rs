@@ -4,6 +4,7 @@
 mod harness;
 mod test_methods;
 
+use std::collections::HashMap;
 use std::error::Error;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
@@ -13,6 +14,7 @@ use browseros_core::TabId;
 use futures_util::future;
 use neo_trace::{
     Delivery, Effect, ErrorOwner, OperationId, Outcome, RunEffects, RunStatus, TaskId,
+    TraceRecordEvent,
 };
 use serde_json::{Value, json};
 use tokio::time;
@@ -20,8 +22,8 @@ use tokio::time;
 use self::harness::{GATE_PARTIES, Harness, SeenCheck, within};
 use crate::browser::{PageRef, TabsScope};
 use crate::dispatch::{
-    Call, Caller, ErrorCode, OpFailure, OpReply, OpsReport, PendingReply, RunEnd, StopReason,
-    TEXT_CHARS,
+    Call, Caller, ErrorCode, OpFailure, OpReply, OpsReport, PendingReply, RunCtx, RunEnd,
+    StopReason, TEXT_CHARS,
 };
 
 /// The page brand a script sends for `page`.
@@ -1095,10 +1097,13 @@ async fn a_bound_run_is_refused_a_tab_outside_its_family_before_the_record_names
     let (run, _guard) = harness.run_in(TabsScope::Task, Some(&tabs.host))?;
     let never = PageRef { tab: TabId(99_999) };
     let mut messages = Vec::new();
+    let mut events = harness.sink.subscribe();
+    let mut refused_ops = Vec::new();
     for page in [&tabs.theirs, &tabs.free, &never] {
         let (operation, reply) = harness
             .submit(&run, "test.read", json!({ "page": handle(page) }))
             .await;
+        refused_ops.push(operation);
         let refused = failure(reply)?;
         assert_eq!(
             owner_and_code(&refused),
@@ -1126,6 +1131,32 @@ async fn a_bound_run_is_refused_a_tab_outside_its_family_before_the_record_names
         .await;
     assert_eq!(returned(reply)?, json!({ "tab": tabs.mine.tab.0 }));
     assert_eq!(harness.row(operation).await?.tab, Some(tabs.mine.tab));
+    let mut started = HashMap::new();
+    while let Ok(event) = events.try_recv() {
+        if let TraceRecordEvent::OperationStarted {
+            id, tab, touched, ..
+        } = event
+        {
+            started.insert(id, (tab, touched));
+        }
+    }
+    for operation in refused_ops {
+        assert_eq!(
+            started.get(&operation),
+            Some(&(None, None)),
+            "a follower and the run-end pictures are told of no tab"
+        );
+    }
+    let summary = harness
+        .store
+        .run_summary(run.id())
+        .await?
+        .ok_or("the run is recorded")?;
+    assert_eq!(
+        summary.tabs,
+        vec![tabs.mine.tab],
+        "the run links only the tab it was allowed"
+    );
 
     for scope in [TabsScope::Browser, TabsScope::Task] {
         let task = match scope {
@@ -1239,6 +1270,33 @@ async fn a_bound_runs_family_tab_that_closed_answers_page_closed() -> Result<(),
         .code(),
         ErrorCode::PAGE_NOT_IN_TASK,
         "another family never learns the tab closed"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn every_rule_seam_keeps_a_bound_run_to_its_family() -> Result<(), Box<dyn Error>> {
+    let harness = Harness::new().await?;
+    let tabs = families(&harness).await?;
+    let checked = async |run: &Arc<RunCtx>, page: &PageRef| -> Result<Value, Box<dyn Error>> {
+        let reply = harness
+            .submit(run, "test.checks_tab", json!({ "tab": page.tab.0 }))
+            .await
+            .1;
+        Ok(returned(reply)?["refused"].clone())
+    };
+    let (run, _guard) = harness.run_in(TabsScope::Task, Some(&tabs.host))?;
+    assert_eq!(
+        checked(&run, &tabs.theirs).await?,
+        json!("page_not_in_task"),
+        "an event naming another task's tab is withheld from a bound run"
+    );
+    assert_eq!(checked(&run, &tabs.mine).await?, Value::Null);
+    let (unbound, _unbound_guard) = harness.run_in(TabsScope::Browser, Some(&tabs.host))?;
+    assert_eq!(
+        checked(&unbound, &tabs.theirs).await?,
+        Value::Null,
+        "as before task scope"
     );
     Ok(())
 }

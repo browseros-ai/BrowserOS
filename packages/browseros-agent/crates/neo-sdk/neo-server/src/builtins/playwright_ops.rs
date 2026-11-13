@@ -33,7 +33,7 @@ use serde_json::{Map, Value, json};
 use super::PlaywrightFacade;
 use super::event_release::EventRelease;
 use super::op_marks::{self, Hold, OpMarks};
-use crate::browser::{NeoTab, PageRef};
+use crate::browser::{NeoTab, PageRef, Sight};
 use crate::dispatch::{
     ErrorCode, LeafError, Method, MethodSpec, OpCtx, OperationError, PageChange, PageTarget,
     RegistryBuilder, RegistryError, RunCtx,
@@ -733,8 +733,12 @@ impl<M> OpEnv for OpCtxEnv<'_, M> {
         Some(&self.file_access)
     }
 
+    /// What the engine leaves out of listings, `opener()` and events: Neo's blank tab for every
+    /// run, and for a run bound to its task, any tab outside its family. A family tab that closed
+    /// stays visible, so the run learns it closed. For a run that is not bound this is Neo's
+    /// blank tab alone, as before task scope.
     fn is_reserved_tab(&self, tab: TabId) -> bool {
-        self.op.tabs().is_neo(tab)
+        matches!(self.op.run().sight(tab), Sight::Reserved | Sight::Foreign)
     }
 
     fn reserved_tabs_settled<'b>(&'b self, listed: &'b [(TabId, &'b str)]) -> BoxFuture<'b, ()> {

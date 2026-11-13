@@ -270,8 +270,13 @@ impl<M> OpCtx<M> {
         }
     }
 
-    /// Reports a page this op opened, navigated or closed.
+    /// Reports a page this op opened, navigated or closed. An open is the run's own from here
+    /// on ([`RunCtx::opened`]): its task takes the tab only in the op's page facts, after the
+    /// result's backstop and the release of its facts have asked whether the run sees it.
     pub(crate) fn report_page(&self, page: &PageRef, change: PageChange) {
+        if matches!(change, PageChange::Opened) {
+            self.core.run.opened(page.tab);
+        }
         lock(&self.core.state.reports).push(PageReport {
             page: page.clone(),
             change,

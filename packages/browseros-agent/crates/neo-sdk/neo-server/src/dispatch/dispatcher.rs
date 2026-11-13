@@ -390,7 +390,6 @@ impl Dispatcher {
                 page: PageTarget(TargetHandle::Page { tab }),
             }) => {
                 let page = PageRef { tab };
-                run.opened(tab);
                 if let Some(task) = task {
                     // A concurrent close wins ownership, but cannot fail an already-open tab.
                     let _ = self.tabs.own(&page, &task.id);
@@ -947,8 +946,6 @@ impl Dispatcher {
         for PageReport { page, change } in &reports {
             match change {
                 PageChange::Opened => {
-                    // The run's own open, seen by it before its task holds the tab.
-                    run.opened(page.tab);
                     let seen = self.tabs.seen();
                     if self.browser.page(page.tab).await.is_some() {
                         self.tabs.opened_by_agent(page, seen);
