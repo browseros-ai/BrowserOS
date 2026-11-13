@@ -330,7 +330,7 @@ fn a_script_drives_a_page_through_the_playwright_api() -> TestResult {
             neo.fake
                 .calls()
                 .iter()
-                .any(|call| call.method == "Browser.closeTab"),
+                .any(|call| call.method == "Target.closeTarget"),
             "the browser closed the tab"
         );
 
