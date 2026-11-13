@@ -91,8 +91,9 @@ pub fn commit_label(doc: &FlowDoc, labels: &[String]) -> Option<String> {
     labels.get(index).cloned()
 }
 
-/// Identifies the click an answer covers: the commit step's number, code and label. A patch that
-/// changes that click changes it; a patch to an earlier read-only step does not.
+/// Identifies the click an answer covers: the commit step's number, code and label, and the sites
+/// the steps up to it open. A patch that changes that click, or sends an earlier step to another
+/// site, changes it; a patch to an earlier read-only step on the same sites does not.
 #[must_use]
 pub fn commit_fingerprint(doc: &FlowDoc, labels: &[String]) -> Option<String> {
     use sha2::{Digest, Sha256};
@@ -103,11 +104,43 @@ pub fn commit_fingerprint(doc: &FlowDoc, labels: &[String]) -> Option<String> {
     let src = doc.step(commit).map(|step| step.src.as_str()).unwrap_or("");
     let code: String = src.split_whitespace().collect::<Vec<_>>().join(" ");
     let label = commit_label(doc, labels).unwrap_or_default();
+    let sites = sites_opened_through(doc, commit).join(",");
     let digest = format!(
         "{:x}",
-        Sha256::digest(format!("{commit}\n{code}\n{label}").as_bytes())
+        Sha256::digest(format!("{commit}\n{code}\n{label}\n{sites}").as_bytes())
     );
     Some(digest[..16].to_string())
+}
+
+/// The hosts named by URLs in the quoted strings of steps up to `commit`, without a leading
+/// `www.`, sorted and deduplicated.
+fn sites_opened_through(doc: &FlowDoc, commit: u32) -> Vec<String> {
+    let mut hosts: Vec<String> = doc
+        .steps
+        .iter()
+        .filter(|step| step.n <= commit)
+        .flat_map(|step| {
+            step.src
+                .split(['\'', '"', '`'])
+                .skip(1)
+                .step_by(2)
+                .filter_map(url_host)
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    hosts.sort();
+    hosts.dedup();
+    hosts
+}
+
+fn url_host(text: &str) -> Option<String> {
+    let start = text.find("https://").or_else(|| text.find("http://"))?;
+    let candidate = text[start..].split_whitespace().next()?;
+    let host = url::Url::parse(candidate)
+        .ok()?
+        .host_str()?
+        .to_ascii_lowercase();
+    Some(host.strip_prefix("www.").unwrap_or(&host).to_string())
 }
 
 /// Whether the commit step pays, orders, sends or deletes, judged from its label and the text
@@ -410,6 +443,52 @@ mod tests {
             decision(Some(&with), &basket, &cart_labels),
             Decision::Undecided
         );
+        Ok(())
+    }
+
+    #[test]
+    fn moving_an_earlier_step_to_another_site_needs_a_new_answer() -> anyhow::Result<()> {
+        let click = "async (s) => { await s.page.click({ name: 'Add to cart' }) }";
+        let cart = doc(click);
+        let cart_labels = labels("Add it to the cart.");
+        let fingerprint =
+            commit_fingerprint(&cart, &cart_labels).ok_or_else(|| anyhow::anyhow!("write flow"))?;
+        let mut row = new_row("neo-shop-add", FlowStatus::Verified);
+        row.write_approved = true;
+        row.approved_commit = Some(fingerprint.clone());
+
+        let mut same_site = cart.clone();
+        same_site.patch_step(
+            1,
+            "async (s) => { await s.page.goto('https://www.amazon.in/gp/cart'); await s.wait(500) }",
+        )
+        .map_err(anyhow::Error::msg)?;
+        assert_eq!(
+            commit_fingerprint(&same_site, &cart_labels).as_deref(),
+            Some(fingerprint.as_str()),
+            "a read-only patch on the same site keeps the answer"
+        );
+        assert_eq!(
+            decision(Some(&row), &same_site, &cart_labels),
+            Decision::WithoutAgent
+        );
+
+        let mut elsewhere = cart.clone();
+        elsewhere
+            .patch_step(
+                1,
+                "async (s) => { await s.page.goto('https://shop.example.com') }",
+            )
+            .map_err(anyhow::Error::msg)?;
+        assert_ne!(
+            commit_fingerprint(&elsewhere, &cart_labels).as_deref(),
+            Some(fingerprint.as_str())
+        );
+        assert_eq!(
+            decision(Some(&row), &elsewhere, &cart_labels),
+            Decision::Undecided
+        );
+        assert!(is_reask(Some(&row), &elsewhere, &cart_labels));
         Ok(())
     }
 

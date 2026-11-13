@@ -228,6 +228,24 @@ async fn a_write_skill_runs_with_the_agent_until_the_user_chooses_for_its_click(
     assert_eq!(runs["mode"], "with_agent", "{runs}");
     assert_eq!(runs["chosen"], false);
     assert_eq!(runs["reask"], true);
+
+    // Say "without" for the new click, then an earlier step moves to another site: asked again.
+    app.call(
+        "POST",
+        &format!("/api/v1/skills/{SKILL}/ultrafast/approve-write"),
+        None,
+    )
+    .await?;
+    let basket = "async (s) => { await s.page.click({ name: 'Add to basket' }) }";
+    assert_eq!(app.runs().await?["runs"]["mode"], "without_agent");
+    let mut moved = write_flow(basket);
+    moved.steps[0].src =
+        "async (s) => { await s.page.goto('https://shop.example.com') }".to_string();
+    flow::store::write(&app.state.skills.skill_dir(SKILL), &moved)?;
+    let runs = app.runs().await?["runs"].clone();
+    assert_eq!(runs["mode"], "with_agent", "{runs}");
+    assert_eq!(runs["chosen"], false);
+    assert_eq!(runs["reask"], true);
     Ok(())
 }
 
