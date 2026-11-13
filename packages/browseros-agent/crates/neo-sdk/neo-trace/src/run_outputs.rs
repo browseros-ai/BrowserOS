@@ -19,10 +19,12 @@
 use std::collections::HashMap;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::str;
 use std::sync::Arc;
 
 use tokio::io::AsyncWriteExt;
 use tokio::sync::Mutex;
+use tracing::warn;
 
 use crate::{BlobId, EpochMillis, RunDownload, RunId, TraceError};
 
@@ -94,6 +96,8 @@ impl RunOutputs {
     /// Restores the expiry list once at startup, including outputs whose run end never
     /// committed. Names are parsed as typed run ids; unrelated files cannot become delete paths.
     /// Expired blobs are removed before listeners serve, and future ones enter the upkeep list.
+    /// An unreadable deadline would otherwise retain values indefinitely or prevent startup,
+    /// so malformed contents count as already due; filesystem read and cleanup errors still fail.
     ///
     /// # Errors
     /// When output directories or an expiry sidecar cannot be read, or cleanup fails.
@@ -108,16 +112,22 @@ impl RunOutputs {
             let Ok(run) = dir.file_name().to_string_lossy().parse::<RunId>() else {
                 continue;
             };
-            let bytes = match tokio::fs::read_to_string(self.blob_expiry(run)).await {
+            let bytes = match tokio::fs::read(self.blob_expiry(run)).await {
                 Ok(bytes) => bytes,
                 Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
                 Err(error) => return Err(error),
             };
-            let millis = bytes
-                .trim()
-                .parse::<i64>()
-                .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "invalid blob expiry"))?;
-            expiring.insert(run, EpochMillis::from_millis(millis));
+            let until = match str::from_utf8(&bytes)
+                .ok()
+                .and_then(|text| text.trim().parse::<i64>().ok())
+            {
+                Some(millis) => EpochMillis::from_millis(millis),
+                None => {
+                    warn!(%run, "invalid blob expiry; removing the run's blobs before startup");
+                    now
+                }
+            };
+            expiring.insert(run, until);
         }
         drop(expiring);
         self.expire_blobs(now).await

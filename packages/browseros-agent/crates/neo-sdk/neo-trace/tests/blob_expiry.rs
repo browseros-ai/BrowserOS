@@ -134,6 +134,44 @@ async fn startup_tracks_future_expiry_without_resetting_the_deadline() -> TestRe
 }
 
 #[tokio::test]
+async fn startup_removes_malformed_expiries_and_keeps_downloads() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let run = RunId::new();
+    let sidecar = dir
+        .path()
+        .join("outputs")
+        .join(run.to_string())
+        .join("blob-expiry");
+    for invalid in [
+        b"".as_slice(),
+        b"not a timestamp".as_slice(),
+        b"9223372036854775808",
+        b"\xff",
+    ] {
+        {
+            let store = open(&dir).await?;
+            let outputs = store.outputs();
+            outputs.keep_blobs_until(run, at(10)).await?;
+            outputs.keep_blob(run, BLOB, BLOB_BYTES).await?;
+            let source = dir.path().join("statement.txt");
+            tokio::fs::write(&source, b"downloaded statement").await?;
+            outputs.keep_download(run, 0, &source).await?;
+            outputs.record_downloads(run, &[]).await?;
+            tokio::fs::write(&sidecar, invalid).await?;
+        }
+
+        // A fresh process must serve even if a sidecar was truncated, overflowed or not UTF-8.
+        let restarted = open(&dir).await?;
+        restarted.outputs().restore_blob_expiries(at(1)).await?;
+        assert!(restarted.outputs().open_blob(run, BLOB).await?.is_none());
+        assert!(!tokio::fs::try_exists(&sidecar).await?);
+        assert!(restarted.outputs().open_download(run, 0).await?.is_some());
+        assert!(tokio::fs::try_exists(sidecar.with_file_name("downloads.json")).await?);
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn on_mode_blobs_survive_upkeep_and_startup() -> TestResult {
     let dir = tempfile::tempdir()?;
     let run = RunId::new();

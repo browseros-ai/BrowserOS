@@ -305,7 +305,9 @@ stops passing its environment on to the server.
 ### Keep values out of Neo's trace
 
 Before the first run, set `{"trace":{"values":"off","screenshots":"off"}}` through
-`PUT /v1/settings`. Run and operation records keep metadata and say `values: "off"`; the
+`PATCH /v1/settings`. Run and operation records keep metadata and say `values: "off"`; the
 host's live reply remains complete. Neo retains download copies until trace retention.
 Result blobs written under off remain fetchable for ten minutes, including across a server
 restart, and the next minute upkeep removes them. Existing trace records are unchanged.
+`trace.values` governs Neo's own records and log lines; other libraries can print values when
+the host raises `CLAW_LOG`, so a host that needs off keeps its default `info,rmcp=warn` filter.

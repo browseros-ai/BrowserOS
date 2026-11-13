@@ -476,6 +476,99 @@ fn log_startup(config: &AppConfig, address: SocketAddr) {
 }
 
 #[cfg(test)]
+mod housekeeping_tests {
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    use futures_util::poll;
+    use neo_trace::{BlobId, EpochMillis, RunId};
+    use tokio::{task, time};
+
+    use super::housekeeping;
+    use crate::builtins::TabJanitor;
+    use crate::config::Defaults;
+    use crate::host::HostHolds;
+    use crate::test_rig::{TestError, TestRig, within};
+
+    #[tokio::test]
+    async fn minute_housekeeping_expires_blobs_after_its_startup_pass() -> Result<(), TestError> {
+        let rig = TestRig::new().await?;
+        let outputs = rig.store.outputs().clone();
+        let janitor = TabJanitor::new(
+            Arc::clone(&rig.dispatcher),
+            Arc::clone(&rig.link),
+            Arc::clone(&rig.tabs),
+            Arc::new(HostHolds::default()),
+            rig.settings.clone(),
+        );
+        let mut upkeep = Box::pin(housekeeping(
+            janitor,
+            rig.sink.clone(),
+            outputs.clone(),
+            rig.settings.clone(),
+            rig.shutdown.clone(),
+        ));
+
+        // Consume both immediate startup ticks while there are no tabs or outputs. The
+        // retention request is their only pending step; flush settles it before the second
+        // poll finishes that branch and waits for the next interval.
+        task::yield_now().await;
+        let starting = time::Instant::now();
+        assert!(poll!(upkeep.as_mut()).is_pending());
+        let started_by = time::Instant::now();
+        rig.sink.flush().await?;
+        assert!(poll!(upkeep.as_mut()).is_pending());
+
+        let expiring = RunId::new();
+        let ordinary = RunId::new();
+        let blob = BlobId::new(0);
+        // Blob expiry uses wall time, independently of the paused interval clock below.
+        outputs
+            .keep_blobs_until(expiring, EpochMillis::now().plus_millis(-1))
+            .await?;
+        outputs.keep_blob(expiring, blob, b"expires").await?;
+        outputs
+            .keep_blob(ordinary, blob, b"ordinary retention")
+            .await?;
+        // No SQLite row exists for retention to select and remove with its outputs.
+        assert!(rig.store.run_summary(expiring).await?.is_none());
+        let blob_path = rig
+            .dir
+            .path()
+            .join("outputs")
+            .join(expiring.to_string())
+            .join("blobs")
+            .join(blob.to_string());
+
+        time::pause();
+        let worker = tokio::spawn(upkeep);
+        let before_tick = starting + Defaults::HOUSEKEEPING_EVERY - Duration::from_secs(1);
+        time::advance(before_tick.saturating_duration_since(time::Instant::now())).await;
+        // A synchronous read prevents filesystem awaits from auto-advancing paused time.
+        assert!(
+            blob_path.try_exists()?,
+            "startup must not remove the new blob"
+        );
+        let next_tick = started_by + Defaults::HOUSEKEEPING_EVERY;
+        time::advance(next_tick.saturating_duration_since(time::Instant::now())).await;
+        time::resume();
+
+        let expired = within(Duration::from_secs(5), async {
+            while outputs.open_blob(expiring, blob).await?.is_some() {
+                time::sleep(Duration::from_millis(5)).await;
+            }
+            Ok::<(), TestError>(())
+        })
+        .await;
+        rig.shutdown.cancel();
+        within(Duration::from_secs(5), worker).await??;
+        expired??;
+        assert!(outputs.open_blob(ordinary, blob).await?.is_some());
+        Ok(())
+    }
+}
+
+#[cfg(test)]
 mod storage_tests {
     use std::error::Error;
     use std::fs;

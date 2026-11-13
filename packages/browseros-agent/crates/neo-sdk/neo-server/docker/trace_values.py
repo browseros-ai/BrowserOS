@@ -231,10 +231,14 @@ def check_stripped(record, label, marker=True):
 
 def check_reads(socket_path, token_file, case, events):
     records = [case["record"], case["failed_record"]]
+    details = []
     for record in records:
         check_stripped(record, "run detail")
         for op in record.get("operations", []):
             check_stripped(op, "run operation")
+            detail = api(socket_path, token_file, "/v1/operations/" + op["id"])
+            check_stripped(detail, "operation detail")
+            details.append(detail)
     query = urllib.parse.urlencode({"taskId": case["task"], "limit": 100})
     listed = api(socket_path, token_file, "/v1/runs?" + query)
     require({row["id"] for row in listed["items"]} == {case["run"], case["failed_run"]}, "off listing lost or duplicated a run")
@@ -252,7 +256,7 @@ def check_reads(socket_path, token_file, case, events):
     for event in events:
         if event.get("type") == "run.ended":
             check_stripped(event["run"], "run.ended event")
-    encoded = json.dumps([records, listed, tail, events]).encode()
+    encoded = json.dumps([records, details, listed, tail, events]).encode()
     for kind, canary in case["markers"].items():
         require(canary.encode() not in encoded, f"off HTTP or events exposed the {kind} canary")
 
@@ -286,8 +290,11 @@ def check_control(case):
     require(all(not op.get("notes") for op in operations), "on must not begin storing call-log notes")
     logs = TRACE_DIR.parent / "logs"
     logged = b"".join(path.read_bytes() for path in logs.rglob("*") if path.is_file())
-    for kind in ("note", "argument"):
-        require(markers[kind].encode() in logged, f"on control has no debug call-log {kind} canary")
+    require(markers["note"].encode() in logged, "on control has no debug call-log selector canary")
+    # Entered text already prints as a character count in the default call log. Preserve
+    # that contract while proving the fill announcement reached the real debug sink.
+    require(f"fill(<{len(markers['argument'])} characters>)".encode() in logged, "on control has no debug fill announcement")
+    require(markers["argument"].encode() not in logged, "on call log exposed entered text instead of its length")
     require(any(markers["error"] in (op.get("error") or {}).get("message", "") for op in operations), "on control has no stored operation error canary")
     require(markers["run-error"] in (case["failed_record"].get("error") or {}).get("message", ""), "on control has no stored run error canary")
     database = sqlite3.connect(f"file:{TRACE_DIR / 'trace.db'}?mode=ro", uri=True)

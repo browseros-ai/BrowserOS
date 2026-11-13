@@ -125,6 +125,9 @@ reply from memory for ten minutes; after a server restart it gets `duplicate_req
 run's id. Neo still lists downloads and serves their copies until retention. A host that also
 wants no automatic pictures sets `trace.screenshots: "off"`.
 
+`trace.values` governs Neo's own records and log lines; other libraries can print values when a
+host raises `CLAW_LOG`, so a host that needs off keeps the default `info,rmcp=warn` filter.
+
 Every setting is optional. Trace and tab defaults preserve the existing behavior; `files.readDirs` defaults to the browser downloads folder. `PUT` sets every setting, and one left out goes back to its default; `PATCH` changes only the settings it names. A name Neo does not know is skipped, never refused, and the answer lists it in `unknown`, so a host and a server of different versions still work together. A name of an open list Neo does not have yet, such as a later `trace.screenshots` mode, is skipped the same way, and the answer names its setting in `unknownValues`, never the value. A known setting with a value outside its rule refuses the whole call with 400 `invalid_request`, which names every setting at fault and its rule; nothing is applied. A change takes effect at once, with no restart: each part reads its setting when it acts.
 
 Neo saves what the host set in `claw-sdk/settings.json` before it switches a change on, and loads that file at every start, before the first run, so a setting survives the restarts the browser gives the server on its own. At start, a setting the file names that this build does not know, or a value it cannot use, falls back to its default with a warning; Neo never fails to start over the file. Without a host API (no usable `CLAW_HOST_TOKEN_FILE`) nothing could change or read the settings, so every setting is at its default and the file is left alone.
