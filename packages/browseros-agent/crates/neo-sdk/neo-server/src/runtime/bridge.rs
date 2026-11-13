@@ -183,6 +183,16 @@ pub(crate) enum Envelope<'a> {
     },
 }
 
+/// Every tab's frame-tree version the dispatcher's observer knows, as replies carry them.
+pub(crate) fn frame_versions(dispatcher: &Dispatcher) -> Vec<FrameVersion> {
+    dispatcher
+        .observer()
+        .frame_versions()
+        .into_iter()
+        .map(|(tab, version)| FrameVersion { tab, version })
+        .collect()
+}
+
 /// One tab's frame-tree version on a reply (`Envelope::Ok` `frames`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, TS)]
 pub(crate) struct FrameVersion {
@@ -313,14 +323,12 @@ impl Bridge {
         completed.extend(reply.completed_publications.iter().copied());
         completed.sort_unstable();
         completed.dedup();
-        let frames: Vec<FrameVersion> = self
-            .dispatcher
-            .observer()
-            .frame_versions()
-            .into_iter()
-            .map(|(tab, version)| FrameVersion { tab, version })
-            .collect();
-        envelope(&reply, &completed, &frames)
+        envelope(&reply, &completed, &self.frame_versions())
+    }
+
+    /// Every tab's frame-tree version now, for a reply or the run's init.
+    pub(crate) fn frame_versions(&self) -> Vec<FrameVersion> {
+        frame_versions(&self.dispatcher)
     }
 
     /// The bootstrap's abort of the op it keyed `key`: `{"key", "reason"}`. An op that already

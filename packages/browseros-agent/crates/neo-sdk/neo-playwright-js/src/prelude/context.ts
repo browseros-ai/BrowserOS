@@ -255,6 +255,10 @@ export class BrowserContext extends EventEmitter {
    */
   _runPage(init: RunInit): Page {
     for (const fact of init.pages) this._pageFor(fact, init.observed)
+    // The versions the start's reads are read at, so the first reply does not take them for
+    // changes and read every tab again.
+    for (const { tab, version } of init.frames ?? [])
+      this.#byTab.get(tab)?._frameVersion(version)
     const page = init.page
       ? this._pageFor(init.page, init.observed)
       : new Page(this, null)
@@ -340,7 +344,7 @@ export class BrowserContext extends EventEmitter {
     observed,
     frames,
   }: Reply): void {
-    for (const { tab, version } of frames)
+    for (const { tab, version } of frames ?? [])
       this.#byTab.get(tab)?._frameVersion(version)
     const page = this.#unopened
     const held = pickedPage ? this.#byTab.get(pickedPage.tab) : undefined

@@ -80,6 +80,11 @@ impl RunService {
     /// The other JS host uses precisely the product's initial tab listing, with the host
     /// observation that orders it against later replies.
     #[cfg(feature = "hosted-run")]
+    /// Every tab's frame-tree version now, for a hosted run's init (`RunInit` `frames`).
+    pub(crate) fn frame_versions(&self) -> Vec<crate::runtime::FrameVersion> {
+        crate::runtime::frame_versions(&self.dispatcher)
+    }
+
     pub(crate) async fn hosted_open_pages(&self, run: &RunCtx) -> PageFacts {
         self.open_pages(run).await
     }

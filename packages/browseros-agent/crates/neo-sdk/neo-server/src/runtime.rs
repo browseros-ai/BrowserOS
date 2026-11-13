@@ -41,7 +41,7 @@ use bridge::Bridge;
 #[cfg(feature = "hosted-run")]
 pub(crate) use bridge::Bridge;
 #[cfg(feature = "test-support")]
-pub(crate) use bridge::{Envelope, envelope};
+pub(crate) use bridge::{Envelope, FrameVersion, envelope, frame_versions};
 pub(crate) use run_init::RunInit;
 pub(crate) use run_logs::{LogLevel, LogLine, RunLogs};
 pub(crate) use run_script::{Script, ScriptEnd, ScriptOutcome, run_script};

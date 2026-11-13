@@ -237,7 +237,13 @@ pages: Array<PageFact>,
 /**
  * The host observation that read `pages`, which later replies' observations follow.
  */
-observed: Observation | null, };
+observed: Observation | null, 
+/**
+ * Every tab's frame-tree version when the run started, as every reply carries them
+ * (`Envelope::Ok` `frames`): the trees the prelude reads at the start are read at these, so
+ * the run's first reply does not take them for changes. Absent before any change.
+ */
+frames?: Array<FrameVersion>, };
 
 /**
  * A width and height, as a page's viewport size is reported. neo-server's run envelope carries

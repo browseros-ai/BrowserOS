@@ -623,6 +623,18 @@ it('tests that a page first seen mid-run has its whole tree when the operation t
   expect(names).toEqual(['', 'same', 'cross'])
 })
 
+it("tests that the run's init versions keep its first reply from reading unchanged tabs again", async () => {
+  const runtime = loadPrelude({
+    seed: { ...OBSERVER, frames: [{ tab: 1009, version: 4 }] },
+    answer: (call) =>
+      call.name === 'page.frames'
+        ? TREE
+        : { ok: 'Agent', frames: [{ tab: 1009, version: 4 }] },
+  })
+  await runtime.run('await page.title()')
+  expect(reads(runtime.calls).filter(([tab]) => tab === 1009)).toEqual([])
+})
+
 it('tests that a frame missing from the tree a wait reads is detached', async () => {
   const removed = { frames: TREE.frames.filter((frame) => frame.id !== 'same') }
   let read = 0

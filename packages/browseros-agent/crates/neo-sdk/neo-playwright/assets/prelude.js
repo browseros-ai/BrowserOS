@@ -921,7 +921,8 @@
       return build({
         page: page ? { $neo: "page", ...page } : null,
         pages: readPageFacts(field(init, "pages")),
-        observed: readObservation(field(init, "observed"))
+        observed: readObservation(field(init, "observed")),
+        frames: readFrameVersions(field(init, "frames"))
       });
     });
   }
@@ -12044,6 +12045,8 @@ ${changes}`;
     _runPage(init) {
       for (const fact of init.pages)
         this._pageFor(fact, init.observed);
+      for (const { tab, version } of init.frames ?? [])
+        this.#byTab.get(tab)?._frameVersion(version);
       const page = init.page ? this._pageFor(init.page, init.observed) : new Page(this, null);
       if (!init.page)
         this.#unopened = page;
@@ -12078,7 +12081,7 @@ ${changes}`;
       observed,
       frames
     }) {
-      for (const { tab, version } of frames)
+      for (const { tab, version } of frames ?? [])
         this.#byTab.get(tab)?._frameVersion(version);
       const page = this.#unopened;
       const held = pickedPage ? this.#byTab.get(pickedPage.tab) : undefined;

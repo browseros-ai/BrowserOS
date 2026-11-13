@@ -54,7 +54,7 @@ fn example(name: &'static str, text: String) -> EnvelopeExample {
 
 /// The run's init, as `run_script` and the hosted run hand it to the realm.
 fn init(page: Option<&PageRef>, pages: &[PageFact], observed: Option<&Observation>) -> String {
-    RunInit::new(page, pages, observed).to_json()
+    RunInit::new(page, pages, observed, &[]).to_json()
 }
 
 /// A `page.title` answer carrying every optional field the envelope has.

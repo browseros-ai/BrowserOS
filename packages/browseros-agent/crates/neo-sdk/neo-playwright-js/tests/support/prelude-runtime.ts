@@ -109,6 +109,8 @@ export function loadPrelude(
       page: unknown
       pages?: unknown[]
       observed?: Observation | null
+      /** Every tab's frame-tree version when the run started (`RunInit.frames`). */
+      frames?: { tab: number; version: number }[]
     }
     /** The prelude's source; the committed asset when absent (build.ts passes a fresh build). */
     prelude?: string

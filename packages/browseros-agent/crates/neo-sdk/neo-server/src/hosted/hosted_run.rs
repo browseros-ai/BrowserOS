@@ -100,7 +100,8 @@ impl HostedRun {
     /// Initializes the product's page facts; a hosted run always opens its default on first use.
     pub(super) async fn initialize(&mut self, service: &RunService) {
         let facts = service.hosted_open_pages(&self.context).await;
-        self.init = RunInit::new(None, &facts.pages, facts.observed.as_ref()).to_json();
+        let frames = service.frame_versions();
+        self.init = RunInit::new(None, &facts.pages, facts.observed.as_ref(), &frames).to_json();
     }
 
     /// The run's trace identity.

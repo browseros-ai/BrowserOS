@@ -71,9 +71,11 @@ export type PageFact = Pick<Wire.PageFact, 'tab'> & {
 }
 
 /** What a run starts with: Rust's `RunInit`, its facts as the readers keep them. */
-export type RunInit = Omit<Wire.RunInit, 'pages' | 'observed'> & {
+export type RunInit = Omit<Wire.RunInit, 'pages' | 'observed' | 'frames'> & {
   pages: PageFact[]
   observed: Observation | null
+  /** Every tab's frame-tree version when the run started (`RunInit.frames`). */
+  frames: Wire.FrameVersion[]
 }
 
 /** What one reply envelope says about pages, as `onReply` reads it: an absent field is none. */
@@ -83,7 +85,7 @@ export type Reply = {
   defaultPage: Wire.DefaultPage | null
   pickedPage: Wire.DefaultPage | null
   /** Every tab's frame-tree version (`Envelope.frames`); empty when absent. */
-  frames: Wire.FrameVersion[]
+  frames?: Wire.FrameVersion[]
 }
 
 /** Keep the header's recorded byte position while stamping policy after all arguments. */
@@ -297,6 +299,7 @@ export function provide(name: string, build: (init: RunInit) => unknown): void {
       page: page ? { $neo: 'page', ...page } : null,
       pages: readPageFacts(field<Wire.RunInit>(init, 'pages')),
       observed: readObservation(field<Wire.RunInit>(init, 'observed')),
+      frames: readFrameVersions(field<Wire.RunInit>(init, 'frames')),
     })
   })
 }
