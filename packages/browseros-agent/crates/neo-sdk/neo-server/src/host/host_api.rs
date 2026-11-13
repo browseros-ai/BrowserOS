@@ -21,9 +21,9 @@ use crate::http::{BindError, HostListener};
 /// Neo's host API (neo-http) from startup until it serves the host over the host socket.
 ///
 /// ```text
-///  start ─ bind: token file ─ unset or unusable: no socket (run still works), default settings
-///                           └ usable: HostListener::bind (failure fails the start) + peer rule,
-///                                     then the settings the host saved (settings.json)
+///  start ─ bind: token file ─ unset or unusable: no socket (run still works)
+///                           └ usable: HostListener::bind (failure fails the start) + peer rule
+///        └▶ load settings.json in either case, before the first run
 ///  serve ─ the link's first connect ─▶ Service::start ─▶ TakeoverLock, HostHolds, the fill routes armed
 ///        ─▶ tab events subscribed ─▶ tab state reconciled with a watched listing ─▶ tab_feed
 ///        └▶ host_service(service.router(), auth) on the socket, until SIGTERM
@@ -84,9 +84,8 @@ impl HostApi {
     /// token. A socket that cannot be bound fails the start, because a host that configured a
     /// token expects the API to be there.
     ///
-    /// With a socket, the settings are what the host saved, loaded before anything reads them,
-    /// so the first run already follows them. Without one they are the defaults, and a saved
-    /// file is left alone: no host could see or change what it would apply.
+    /// Settings are loaded regardless of the token. A host's startup file must apply before
+    /// the first run even when its API token is missing or unusable.
     pub(crate) async fn bind(
         config: &HostApiConfig,
         inputs: HostInputs,
@@ -104,16 +103,11 @@ impl HostApi {
                 }
             },
         };
-        let settings = if socket.is_some() {
-            Settings::load(
-                inputs.settings_file.clone(),
-                inputs.settings_defaults.clone(),
-            )
-            .await
-        } else {
-            tracing::info!(file = %inputs.settings_file.display(), "no host API, so every setting is at its default; a saved settings file is ignored");
-            Settings::defaults(inputs.settings_defaults.clone())
-        };
+        let settings = Settings::load(
+            inputs.settings_file.clone(),
+            inputs.settings_defaults.clone(),
+        )
+        .await;
         Ok(Self {
             inputs,
             socket,

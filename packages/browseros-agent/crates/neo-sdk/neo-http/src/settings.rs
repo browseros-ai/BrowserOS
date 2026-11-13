@@ -2,8 +2,8 @@
 //! file that keeps them across restarts of the server.
 //!
 //! ```text
-//!  start ─▶ Settings::load(settings.json) ─ key by key: an unknown name or a bad value
-//!             │                               falls back to its default, with a warning
+//!  start ─▶ Settings::load(settings.json) ─ unknown names skipped; bad values use defaults,
+//!             │                               except recording switches, which use off
 //!             ▼
 //!  PUT / PATCH ─▶ settings_routes ─▶ Settings::change ─ save (temp file, rename) ─▶ switch ─▶ 200
 //!                                                        └ fails: 500, nothing switched
@@ -68,8 +68,8 @@ impl SettingsDefaults {
 
 struct Inner {
     defaults: SettingsDefaults,
-    /// Where a change is saved; `None` keeps changes in memory (no host API, the Node-hosted
-    /// embedding, tests).
+    /// Where a change is saved; `None` keeps changes in memory (the Node-hosted embedding,
+    /// tests).
     file: Option<PathBuf>,
     /// What the host set. Read on every pass of every reader, written only by `change`.
     set: RwLock<SetValues>,
@@ -93,18 +93,17 @@ pub(crate) enum ChangeMode {
 }
 
 impl Settings {
-    /// Every setting at its default, kept in memory only. For a Neo with no host API: nothing
-    /// could change them, and a file saved by an earlier run with a host API is ignored.
+    /// Every setting at its default, kept in memory only for embeddings that supply settings
+    /// in code rather than reading a server state folder.
     #[must_use]
     pub fn defaults(defaults: SettingsDefaults) -> Self {
         Self::new(None, SetValues::new(), defaults)
     }
 
     /// The settings saved in `file`, which later changes are saved to. A missing file means
-    /// the defaults. A file that cannot be read or is not a JSON object means the defaults and
-    /// an error in the log. A name this build does not know, or a value it cannot use, falls
-    /// back to its default with a warning, and the other settings still apply: the server never
-    /// fails to start over this file.
+    /// the defaults. Unreadable or malformed input uses defaults with recording switches off.
+    /// Unknown names are skipped; invalid known values use their saved-input fallback or normal
+    /// default, with a warning. Good siblings still apply, and this file never prevents startup.
     pub async fn load(file: PathBuf, defaults: SettingsDefaults) -> Self {
         let set = read_saved(&file).await;
         Self::new(Some(file), set, defaults)
@@ -293,6 +292,7 @@ fn value_of(set: &SetValues, setting: &Setting, defaults: &SettingsDefaults) -> 
 
 /// What the last run saved, key by key (`Settings::load`).
 async fn read_saved(file: &Path) -> SetValues {
+    let mut fallback = SetValues::new();
     let bytes = match fs::read(file).await {
         Ok(bytes) => bytes,
         Err(error) if error.kind() == io::ErrorKind::NotFound => {
@@ -300,29 +300,41 @@ async fn read_saved(file: &Path) -> SetValues {
             return SetValues::new();
         }
         Err(error) => {
-            tracing::error!(%error, file = %file.display(), "the saved settings cannot be read; every setting is at its default");
-            return SetValues::new();
+            tracing::error!(%error, file = %file.display(), "the saved settings cannot be read; recording switches are off, other settings use defaults");
+            saved_fallbacks("", &mut fallback);
+            return fallback;
         }
     };
     let saved = match serde_json::from_slice(&bytes) {
         Ok(json) => wire::settings_body(&json),
         Err(_) => None,
     };
-    let Some(saved) = saved else {
-        tracing::error!(file = %file.display(), "the saved settings are not a JSON object; every setting is at its default");
-        return SetValues::new();
+    let Some(mut saved) = saved else {
+        tracing::error!(file = %file.display(), "the saved settings are not a JSON object; recording switches are off, other settings use defaults");
+        saved_fallbacks("", &mut fallback);
+        return fallback;
     };
     for name in &saved.unknown {
         tracing::warn!(file = %file.display(), name, "a saved setting this build does not know is skipped");
     }
     for fault in &saved.faults {
-        tracing::warn!(file = %file.display(), fault, "a saved setting falls back to its default");
+        let fallback = if saved_fallbacks(&fault.name, &mut saved.values) {
+            "off"
+        } else {
+            "default"
+        };
+        tracing::warn!(file = %file.display(), %fault, fallback, "a saved setting cannot be used");
     }
     for name in &saved.unknown_values {
         let known = Setting::find(name)
             .map(Setting::values_text)
             .unwrap_or_default();
-        tracing::warn!(file = %file.display(), name, known, "a saved setting has a value this build does not have; it falls back to its default");
+        let fallback = if saved_fallbacks(name, &mut saved.values) {
+            "off"
+        } else {
+            "default"
+        };
+        tracing::warn!(file = %file.display(), name, known, fallback, "a saved setting has a value this build does not have");
     }
     let applied: Vec<String> = saved
         .values
@@ -333,8 +345,28 @@ async fn read_saved(file: &Path) -> SetValues {
     saved.values
 }
 
+/// A fault belongs to a setting or a dotted ancestor group; an empty name covers the whole
+/// file. Insert fallbacks into the explicit set so GET and the next API save preserve them.
+fn saved_fallbacks(name: &str, set: &mut SetValues) -> bool {
+    let mut applied = false;
+    for setting in SETTINGS {
+        if (name.is_empty()
+            || setting.name == name
+            || setting
+                .name
+                .strip_prefix(name)
+                .is_some_and(|rest| rest.starts_with('.')))
+            && let Some(value) = &setting.invalid_saved
+        {
+            set.insert(setting.name, value.clone());
+            applied = true;
+        }
+    }
+    applied
+}
+
 /// Writes `set` to a temporary file and renames it over `file`, so the file is never half
-/// written: a crash leaves the old one or the new one. Mode 0600: it is the host's.
+/// written: a crash leaves the old one or the new one. Mode 0600 keeps it private to Neo.
 async fn save(file: &Path, set: &SetValues) -> io::Result<()> {
     let mut bytes = serde_json::to_vec(&wire::settings_object(
         set.iter().map(|(name, value)| (*name, value.clone())),

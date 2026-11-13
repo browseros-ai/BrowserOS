@@ -1074,8 +1074,26 @@ paths:
         (out of its range, the wrong type, or `null`) refuses the whole call with 400
         `invalid_request`, which names every setting at fault and its rule; nothing is applied.
 
-        Neo saves what the host set beside its trace and loads it at every start, so a setting
-        survives a restart of the server. A change takes effect at once, with no restart: each
+        Neo saves what the host set in `$BROWSERCLAW_DIR/claw-sdk/settings.json` beside its trace,
+        and loads it before the first run at every server start, with or without a host token.
+        A host may write that file before startup as one PUT body with no envelope. It writes
+        under another name in the same folder and renames, or writes while Neo is stopped.
+        After startup Neo owns the file; running changes use this API.
+
+        A missing file means normal defaults. Unreadable or malformed input uses defaults with
+        `trace.values` and `trace.screenshots` off. An invalid known value for either switch
+        uses off; an invalid `trace` group turns both off. Other invalid values keep their
+        defaults, including retention. Unknown names are skipped with a warning. Neo always
+        starts; recording-off fallbacks appear in GET and persist in the next API save.
+
+        In the SDK image the saved path is `/data/browserclaw/claw-sdk/settings.json`.
+        At every entrypoint start, a regular `/etc/neo/settings.json` atomically replaces it,
+        owned by Neo with mode 0600. A derived image can COPY that fixed file; a host can mount
+        it read-only. Failed copies are logged and startup continues with saved settings.
+        API changes survive a server or browser restart, until the next entrypoint start
+        replaces them from the fixed file. Without a fixed file, saved changes persist.
+
+        A change takes effect at once, with no restart: each
         part reads the value when it acts. A run in flight follows the new values from its next
         operation.
       requestBody:
@@ -1109,8 +1127,11 @@ paths:
       description: |
         `PUT`'s rules for each setting sent: an unknown name is skipped and listed in `unknown`,
         an unknown name of an open list in `unknownValues` (the setting keeps its value), a wrong
-        value refuses the whole call. A setting changed this way stays changed across
-        restarts, until another call changes it.
+        value refuses the whole call. A setting changed this way stays changed across server
+        restarts. A host may replace the saved PUT-shaped settings file before startup. In the
+        SDK image a regular `/etc/neo/settings.json` replaces saved settings at each entrypoint
+        start, so API changes last until that start when a fixed file is present. See PUT for
+        the saved path, ownership handoff, atomic writes and tolerant startup rules.
       requestBody:
         required: true
         content:

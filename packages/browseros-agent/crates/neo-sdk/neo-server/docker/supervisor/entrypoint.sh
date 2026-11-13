@@ -187,6 +187,44 @@ prepare_data() {
     "$PROFILE/.browseros/BrowserClawServer/current_version"
 }
 
+# A host hands this state to Neo before the browser opens its trace database. The fixed
+# image file replaces saved settings once per entrypoint start; browser/server restarts
+# must leave later API changes intact. This step only copies bytes, never parses JSON.
+prepare_settings() {
+  [ "$HOST_SOCKET" = 1 ] || return 0
+  local state="$CLAW_DATA/claw-sdk" fixed=/etc/neo/settings.json saved tmp
+  saved="$state/settings.json"
+  # The host may link the state root, but root must never change a link target inside it.
+  [ ! -L "$state" ] \
+    || { log "Settings directory $state is a symlink; keeping saved settings"; return 0; }
+  if ! mkdir -p "$state" || ! chown neo:neo "$state"; then
+    log "Could not prepare settings directory $state; keeping saved settings"
+    return 0
+  fi
+  if [ -f "$saved" ] && [ ! -L "$saved" ]; then
+    if ! chown neo:neo "$saved" || ! chmod 600 "$saved"; then
+      log "Could not prepare saved settings $saved; keeping saved settings"
+      return 0
+    fi
+  fi
+  [ -e "$fixed" ] || [ -L "$fixed" ] || return 0
+  [ -f "$fixed" ] \
+    || { log "Settings input $fixed is not a regular file; keeping saved settings"; return 0; }
+  tmp=$(mktemp "$state/.settings.json.XXXXXX") \
+    || { log "Could not create settings copy in $state; keeping saved settings"; return 0; }
+  # A failed copy or permission change never truncates the previous file. Every command
+  # checks its status explicitly, including when a caller disables Bash's errexit.
+  # os.replace replaces a symlink itself, including one pointing at a directory. Plain mv
+  # would follow a directory link and write inside its target instead of replacing it.
+  if cp "$fixed" "$tmp" && chown neo:neo "$tmp" && chmod 600 "$tmp" \
+      && python3 -c 'import os, sys; os.replace(sys.argv[1], sys.argv[2])' "$tmp" "$saved"; then
+    return 0
+  fi
+  log "Could not install settings from $fixed; keeping saved settings"
+  rm -f "$tmp" || log "Could not remove settings copy $tmp"
+  return 0
+}
+
 # Viewers can't zoom Neo (see start_neo), but the menu's zoom buttons still
 # work, so pages zoomed before, per site or through a changed default, go back
 # to 100%. start_neo runs it before every launch, while Neo is stopped, so a
@@ -268,8 +306,9 @@ clear_sessions() {
 #                         route. claw-server's call stays strict, which also stops a
 #                         claw-sdk built without its marker. Read as claw-server, it
 #                         gets a 404 for the PUT and the container exits unhealthy.
-#   HOST_SOCKET           claw-sdk's host API socket directory (prepare_host_socket).
-#                         claw-server serves its /v1 on 9010 and has no socket.
+#   HOST_SOCKET           claw-sdk's state input (prepare_settings) and host API socket
+#                         directory (prepare_host_socket). claw-server has neither and
+#                         serves its /v1 on 9010.
 #   BACK_FORWARD_CACHE    Chromium's back-forward cache (start_neo). claw-sdk serves
 #                         Playwright's API, and Playwright launches every Chromium
 #                         with the cache off: a page restored from it fires no load
@@ -603,6 +642,7 @@ rm -f "$CONFIGURED" "$VIEWER_MARK"
 server_policy
 apply_ids
 prepare_data
+prepare_settings
 prepare_host_socket
 apply_policies
 apply_minimal_ui

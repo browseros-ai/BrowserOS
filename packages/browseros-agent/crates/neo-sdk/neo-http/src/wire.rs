@@ -22,6 +22,7 @@ use neo_trace::{
     RunDetail, RunDownload, RunSummary, ShotState, TaskId, TraceTail,
 };
 use std::collections::HashMap;
+use std::fmt;
 use std::time::Duration;
 
 /// The screenshots a read inlines, base64 JPEGs by operation. Empty unless the request asked
@@ -650,7 +651,21 @@ pub(crate) struct SettingsBody {
     /// is named, never the value.
     pub(crate) unknown_values: Vec<&'static str>,
     /// One per setting at fault: its name and the rule it broke, never the value.
-    pub(crate) faults: Vec<String>,
+    pub(crate) faults: Vec<SettingFault>,
+}
+
+/// Keeps validation identity separate from its wording. Saved-file loading also handles a
+/// fault on an ancestor group, while HTTP renders the same setting-and-rule refusal.
+#[derive(Debug)]
+pub(crate) struct SettingFault {
+    pub(crate) name: String,
+    pub(crate) rule: String,
+}
+
+impl fmt::Display for SettingFault {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "`{}` {}", self.name, self.rule)
+    }
 }
 
 /// `PUT` and `PATCH /v1/settings`: the values to apply, and what was skipped; `faults` is empty.
@@ -662,7 +677,8 @@ pub(crate) fn settings_request(body: &[u8]) -> Result<SettingsBody, ApiError> {
     let json: serde_json::Value = serde_json::from_slice(body).map_err(|_| not_the_body(shape))?;
     let checked = settings_body(&json).ok_or_else(|| not_the_body(shape))?;
     if !checked.faults.is_empty() {
-        return Err(ApiError::invalid(checked.faults.join("; ")));
+        let faults: Vec<String> = checked.faults.iter().map(ToString::to_string).collect();
+        return Err(ApiError::invalid(faults.join("; ")));
     }
     Ok(checked)
 }
@@ -695,14 +711,18 @@ fn check_settings(
                     checked.values.insert(setting.name, value);
                 }
                 Checked::UnknownValue => checked.unknown_values.push(setting.name),
-                Checked::Refused(rule) => checked.faults.push(format!("`{}` {rule}", setting.name)),
+                Checked::Refused(rule) => checked.faults.push(SettingFault {
+                    name: setting.name.to_owned(),
+                    rule,
+                }),
             }
         } else if Setting::is_group(&name) {
             match value.as_object() {
                 Some(inner) => check_settings(&name, inner, checked),
-                None => checked
-                    .faults
-                    .push(format!("`{name}` must be an object of settings")),
+                None => checked.faults.push(SettingFault {
+                    name,
+                    rule: "must be an object of settings".to_owned(),
+                }),
             }
         } else {
             checked.unknown.push(name);

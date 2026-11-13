@@ -24,6 +24,9 @@ pub(crate) struct Setting {
     pub(crate) name: &'static str,
     /// What the value may be, and its default.
     pub(crate) rule: Rule,
+    /// A saved value that cannot be used takes this value instead of the normal default.
+    /// Only recording switches opt in, so malformed input cannot start recording or shorten retention.
+    pub(crate) invalid_saved: Option<SettingValue>,
 }
 
 /// What one setting's value may be.
@@ -78,6 +81,7 @@ pub(crate) enum Checked {
 /// Neo closes an agent's tab once nothing used it for this long (the idle-tab janitor).
 pub(crate) const TAB_IDLE_CLOSE: Setting = Setting {
     name: "tabs.idleCloseSeconds",
+    invalid_saved: None,
     rule: Rule::Whole {
         default: 30 * 60,
         range: IDLE_CLOSE_SECONDS,
@@ -88,6 +92,7 @@ pub(crate) const TAB_IDLE_CLOSE: Setting = Setting {
 /// `neo_trace::RetentionPolicy`'s own `max_age`, which a test keeps equal.
 pub(crate) const TRACE_RETENTION: Setting = Setting {
     name: "trace.retentionSeconds",
+    invalid_saved: None,
     rule: Rule::Whole {
         default: 7 * 24 * 60 * 60,
         range: RETENTION_SECONDS,
@@ -97,6 +102,7 @@ pub(crate) const TRACE_RETENTION: Setting = Setting {
 /// Neo's own screenshots: `perOperation`, or `off` (the trace writer's `RecordPolicy`).
 pub(crate) const TRACE_SCREENSHOTS: Setting = Setting {
     name: "trace.screenshots",
+    invalid_saved: Some(SettingValue::Choice(SCREENSHOTS_OFF)),
     rule: Rule::Choice {
         default: SCREENSHOTS_PER_OPERATION,
         values: &[SCREENSHOTS_PER_OPERATION, SCREENSHOTS_OFF],
@@ -106,6 +112,7 @@ pub(crate) const TRACE_SCREENSHOTS: Setting = Setting {
 /// The size up to which the trace keeps values whole; `0` keeps the trace writer's defaults.
 pub(crate) const TRACE_VALUE_BYTES: Setting = Setting {
     name: "trace.valueBytes",
+    invalid_saved: None,
     rule: Rule::Whole {
         default: 0,
         range: VALUE_BYTES,
@@ -119,6 +126,7 @@ pub(crate) const SCREENSHOTS_OFF: &str = "off";
 /// Whether the trace keeps script and host values.
 pub(crate) const TRACE_VALUES: Setting = Setting {
     name: "trace.values",
+    invalid_saved: Some(SettingValue::Choice("off")),
     rule: Rule::Choice {
         default: "on",
         values: &["on", "off"],
@@ -128,6 +136,7 @@ pub(crate) const TRACE_VALUES: Setting = Setting {
 /// The live folders scripts may read by path, with the application-supplied downloads default.
 pub(crate) const FILE_READ_DIRS: Setting = Setting {
     name: "files.readDirs",
+    invalid_saved: None,
     rule: Rule::AbsoluteDirs { max: 16 },
 };
 

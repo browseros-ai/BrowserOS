@@ -63,6 +63,10 @@
 #   settings         PATCH /v1/settings applies and lists an unknown name, a bad value is 400 and
 #                    changes nothing; after SIGKILL of the server alone (the browser relaunches it)
 #                    GET answers what the host set; settings.json is 0600 neo under /data
+#   settings-file    fresh root-written state; recording off before any API write, malformed
+#                    files and no token; fixed file replaces saved state on each container start
+#   settings-file-ids     a host that runs Neo under another PUID and PGID owns and loads its settings
+#   settings-file-link    a state folder that is a symlink keeps its link and loads the fixed file
 #   files            downloads-only defaults; all six path reads and file chooser; live PATCH;
 #                    symlinks; Neo's files and directory ancestors protected even with / listed;
 #                    saveAs and all screenshot path forms refuse before send or mkdir; Neo's home
@@ -110,6 +114,7 @@ run_id="$(date +%s)-$$"
 prefix="$name_prefix-$run_id"
 network="$prefix-net"
 volume="$prefix-data"
+settings_volumes=""
 host_gid=2005
 secrets=$(mktemp -d)
 # The token is mounted read-only for neo (uid PUID) and the test uids, so the folder is 0755.
@@ -144,6 +149,7 @@ cleanup() {
   for name in $(docker ps -aq --filter "name=^$prefix-"); do remove "$name"; done
   docker network rm "$network" >/dev/null 2>&1
   [ -n "$data_dir" ] || docker volume rm "$volume" >/dev/null 2>&1
+  for name in $settings_volumes; do docker volume rm "$name" >/dev/null 2>&1; done
   rm -rf "$secrets"
 }
 trap cleanup EXIT
@@ -191,7 +197,7 @@ install_client() { # name: the probes, beside smoke.py whose MCP client they reu
   local file
   for file in "$here/smoke.py" "$here/smoke_sdk.py" "$here/accept_client.py" "$here/accept_files.py" \
     "$here/trace_values.py" "$here/accept_task_page.py" "$here/accept_tab_keep.py" \
-    "$here/accept_frames.py" "$here/accept_takeover_scale.py" "$here/accept_takeover_lifecycle.py"; do
+    "$here/accept_frames.py" "$here/accept_settings_file.py" "$here/accept_takeover_scale.py" "$here/accept_takeover_lifecycle.py"; do
     docker cp -q "$file" "$1:/opt/neo-accept/" || return 1
   done
 }
@@ -259,6 +265,107 @@ takeover_probe() { # container check scale: run only the probe's owned tab and s
   fi
 }
 
+# Each startup case owns fresh persistent data. Root installs fixtures before Neo's real
+# entrypoint; the fixed input is a read-only mount, and no settings call repairs a start.
+settings_file_case() { # result-label probe-mode [uid]
+  local mode=$2 uid=${3:-1000} name="$prefix-$1" own_volume="$prefix-$1-data"
+  local first='{}' second='{}' ready=0 volumes_ready=1 target_volume="$prefix-$1-state"
+  local -a input_flags state_flags
+  input_flags=(-e SETTINGS_FILE_CASE="$mode")
+  state_flags=(-v "$own_volume:/data")
+  if [ "$mode" = fixed ] || [ "$mode" = linked-ids ]; then
+    input_flags+=(-v "$secrets/start-settings.json:/etc/neo/settings.json:ro")
+  fi
+  settings_volumes="$settings_volumes $own_volume"
+  docker volume create "$own_volume" >/dev/null || volumes_ready=0
+  if [ "$mode" = linked-ids ]; then
+    settings_volumes="$settings_volumes $target_volume"
+    docker volume create "$target_volume" >/dev/null || volumes_ready=0
+    state_flags+=(-v "$target_volume:/state-volume")
+  fi
+  if [ "$volumes_ready" = 1 ] \
+      && docker run --memory 3g --memory-swap 3g -d --name "$name" --network "$network" --shm-size=1g \
+      --stop-timeout 25 --label neo-sdk-accept="$run_id" "${host_caps[@]}" \
+      "${state_flags[@]}" -v "$secrets:/run/neo-accept:ro" "${input_flags[@]}" \
+      -e PUID="$uid" -e PGID="$uid" -e NEO_HOST_GID="$host_gid" \
+      -e CLAW_HOST_TOKEN_FILE=/tmp/settings-host-token --entrypoint bash "$image" -c '
+        set -e
+        cp /run/neo-accept/host-token /tmp/settings-host-token
+        if [ "$SETTINGS_FILE_CASE" = linked-ids ] && [ ! -L /data/browserclaw ]; then
+          mkdir -p /state-volume/private-state
+          chown "$PUID:$PGID" /state-volume/private-state
+          chmod 700 /state-volume/private-state
+          ln -s /state-volume/private-state /data/browserclaw
+        elif [ ! -e /data/browserclaw/claw-sdk/settings.json ]; then
+          mkdir -p /data/browserclaw/claw-sdk
+          if [ "$SETTINGS_FILE_CASE" = fixed ]; then
+            printf %s '\''{"tabs":{"idleCloseSeconds":900},"trace":{"values":"on"}}'\'' > /data/browserclaw/claw-sdk/settings.json
+          else
+            cp /run/neo-accept/start-settings.json /data/browserclaw/claw-sdk/settings.json
+          fi
+        fi
+        if [ "$SETTINGS_FILE_CASE" = linked-ids ]; then
+          # Keep failed startup volumes inspectable for a bounded time. The two checks
+          # report their own filesystem facts even when the host API never becomes ready.
+          /usr/local/bin/neo-entrypoint || true
+          exec sleep 240
+        fi
+        exec /usr/local/bin/neo-entrypoint' >/dev/null; then
+    wait_healthy "$name" 90 >/dev/null && ready=1
+    if [ "$mode" = linked-ids ] && install_client "$name"; then
+      first=$(client "$name" setpriv --regid "$host_gid" --clear-groups python3 accept_settings_file.py linked-ids "$ready" 2>&1)
+    elif [ "$ready" = 1 ] && install_client "$name"; then
+      first=$(client "$name" setpriv --regid "$host_gid" --clear-groups python3 accept_settings_file.py "$mode" 2>&1)
+    else
+      first='{"ok":false,"checks":[{"name":"fresh container started healthy","ok":false}]}'
+    fi
+    if [ "$mode" = fixed ] && [ "$ready" = 1 ]; then
+      if docker restart "$name" >/dev/null && wait_healthy "$name" 90 >/dev/null; then
+        second=$(client "$name" setpriv --regid "$host_gid" --clear-groups python3 accept_settings_file.py fixed-restarted 2>&1)
+      else
+        second='{"ok":false,"checks":[{"name":"container restarted healthy","ok":false}]}'
+      fi
+    fi
+  else
+    first='{"ok":false,"checks":[{"name":"fresh container started healthy","ok":false}]}'
+  fi
+  if [ "$mode" = linked-ids ]; then
+    settings_file_report=$first
+  else
+    settings_file_report=$(merge_settings_file_reports "$first" "$second")
+  fi
+  remove "$name"
+}
+
+# Even a failed docker exec yields a valid JSON artifact with the preceding observations.
+merge_settings_file_reports() {
+  python3 - "$@" <<'PY'
+import json, sys
+checks = []
+for raw in sys.argv[1:]:
+    try:
+        result = json.loads(raw)
+        checks.extend(result.get('checks', []))
+        if result and not result.get('checks'):
+            checks.append({'name': 'probe supplied observations', 'ok': False})
+    except (ValueError, AttributeError) as error:
+        checks.append({'name': 'probe emitted JSON', 'ok': False, 'error': str(error)})
+problems = [row['name'] for row in checks if not row['ok']]
+print(json.dumps({'ok': bool(checks) and not problems, 'checks': checks, 'problems': problems,
+                  'detail': f'{len(checks)} startup settings assertions; {len(problems)} failed'}))
+PY
+}
+
+report_settings_file() { # label JSON
+  local label=$1 report=$2
+  if [ -n "$logs_dir" ]; then mkdir -p "$logs_dir"; printf '%s\n' "$report" > "$logs_dir/$label.json"; fi
+  if [ "$(jget "$report" 'd["ok"]')" = True ]; then
+    result PASS "$label" "$(jget "$report" 'd["detail"]')"
+  else
+    result FAIL "$label" "$(jget "$report" 'd["detail"] + "; " + "; ".join(d["problems"])')"
+  fi
+}
+
 # --- identity --------------------------------------------------------------------------------
 image_arch=$(docker image inspect -f '{{.Architecture}}' "$image")
 engine_arch=$(docker version -f '{{.Server.Arch}}')
@@ -321,7 +428,7 @@ if [ "$image_arch" != "$engine_arch" ]; then
   if [ -n "$selected_case" ]; then
     result SKIP "$selected_case" "$image_arch image on a $engine_arch engine: emulated, not evidence"
   else
-    for check in boot mcp host-api downloads pdf-downloads blobs frames tab-keep takeover-scale settings files trace-values mcp-remote restart-browser stop persist kill-all captcha-keys; do
+    for check in boot mcp host-api downloads pdf-downloads blobs frames tab-keep takeover-scale settings settings-file settings-file-ids settings-file-link files trace-values mcp-remote restart-browser stop persist kill-all captcha-keys; do
       result SKIP "$check" "$image_arch image on a $engine_arch engine: emulated, not evidence"
     done
   fi
@@ -356,6 +463,9 @@ XVNC
   exit "$failed"
 fi
 
+printf %s '{"tabs":{"idleCloseSeconds":300},"trace":{"values":"off","screenshots":"off","retentionSeconds":3600},"futureGroup":true}' > "$secrets/start-settings.json"
+chmod 0644 "$secrets/start-settings.json"
+
 # --- boot ------------------------------------------------------------------------------------
 main="$prefix-main"
 # Exercise the host's most verbose filter so the canary catches dependency payload logs
@@ -382,6 +492,26 @@ fi
 
 if [ "$booted" = 1 ]; then
   main_captcha=$(lists_captcha "$main")
+
+  settings_file_case settings-file-saved saved
+  saved_settings=$settings_file_report
+  settings_file_case settings-file-fixed fixed
+  report_settings_file settings-file "$(merge_settings_file_reports "$saved_settings" "$settings_file_report")"
+  settings_file_case settings-file-linked-ids linked-ids 2307
+  for check in ids link; do
+    check_report=$(python3 - "$settings_file_report" "$check" <<'PY'
+import json, sys
+try:
+    report = json.loads(sys.argv[1])[sys.argv[2]]
+except (ValueError, KeyError, TypeError):
+    report = {'ok': False, 'checks': [{'name': 'startup facts available', 'ok': False}],
+              'problems': ['startup facts unavailable'], 'detail': 'not ready; before and after-PATCH facts unavailable',
+              'before': None, 'afterPatch': None}
+print(json.dumps(report))
+PY
+    )
+    report_settings_file "settings-file-$check" "$check_report"
+  done
 
   # --- mcp -----------------------------------------------------------------------------------
   task="accept-$run_id" request="req-$run_id"
@@ -763,7 +893,7 @@ for pid in pids:
     result FAIL captcha-keys "${captcha_problems[*]}"
   fi
 else
-  for check in mcp host-api downloads pdf-downloads blobs frames tab-keep takeover-scale settings files trace-values mcp-remote restart-browser stop persist kill-all captcha-keys; do
+  for check in mcp host-api downloads pdf-downloads blobs frames tab-keep takeover-scale settings settings-file settings-file-ids settings-file-link files trace-values mcp-remote restart-browser stop persist kill-all captcha-keys; do
     result FAIL "$check" "not run: the image did not boot"
   done
 fi

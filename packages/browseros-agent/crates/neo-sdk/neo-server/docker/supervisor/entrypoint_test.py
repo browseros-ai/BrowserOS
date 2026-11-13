@@ -833,6 +833,145 @@ class ServerPolicyTest(unittest.TestCase):
                 self.assertNotIn("started", result.stdout)
 
 
+class PrepareSettingsTest(unittest.TestCase):
+    """Startup takes the host's saved file and copies the fixed image input atomically."""
+
+    def prepare(self, kind="claw-sdk", fixed=None, failure=None, root_link=False, saved_link=None,
+                puid="1000", pgid="1000"):
+        directory = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        root = directory / "root"
+        if root_link:
+            target = directory / "volume" / "private-state"
+            target.mkdir(parents=True, mode=0o700)
+            root.symlink_to(target, target_is_directory=True)
+        else:
+            root.mkdir()
+        state = root / "claw-sdk"
+        state.mkdir()
+        saved = state / "settings.json"
+        if saved_link:
+            target = directory / "untouched"
+            if saved_link == "directory":
+                target.mkdir(mode=0o700)
+                (target / "original").write_text("unchanged")
+            else:
+                target.write_text("unchanged")
+                target.chmod(0o640)
+            saved.symlink_to(target, target_is_directory=saved_link == "directory")
+        else:
+            saved.write_text('{"trace":{"values":"on"}}')
+            saved.chmod(0o644)
+        source = directory / "fixed.json"
+        if fixed == "directory":
+            source.mkdir()
+        elif fixed is not None:
+            source.write_text(fixed)
+        calls, templates = directory / "owners", directory / "templates"
+        # The host machine has no neo user. Record its requested ownership and use real
+        # filesystem operations for the copy, rename, permissions and saved bytes.
+        stub = f'chown() {{ printf "%s\\n" "$*" >> {shlex.quote(str(calls))}; }}\n'
+        stub += f'mktemp() {{ printf "%s\\n" "$*" >> {shlex.quote(str(templates))}; command mktemp "$@"; }}\n'
+        if failure:
+            stub += f'{failure}() {{ return 1; }}\n'
+        prepare = shell_function("prepare_settings").replace("/etc/neo/settings.json", str(source))
+        result = run_bash(
+            server_is(kind) + stub + f'CLAW_DATA={shlex.quote(str(root))} PUID={puid} PGID={pgid}\n'
+            + prepare
+            + 'prepare_settings\necho startup-continued\n', check=False,
+        )
+        owners = calls.read_text().splitlines() if calls.exists() else []
+        return result, state, saved, source, owners
+
+    def test_a_host_written_folder_and_file_are_taken_for_neo(self):
+        result, state, saved, _, owners = self.prepare()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(f"neo:neo {state}", owners)
+        self.assertIn(f"neo:neo {saved}", owners)
+        self.assertEqual(saved.stat().st_mode & 0o777, 0o600)
+
+    def test_the_fixed_file_replaces_the_saved_set_without_parsing_it(self):
+        for body in ['{"trace":{"values":"off"}}', '{"trace":']:
+            with self.subTest(body=body):
+                result, state, saved, _, owners = self.prepare(fixed=body)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(saved.read_text(), body)
+                self.assertEqual(saved.stat().st_mode & 0o777, 0o600)
+                self.assertTrue(any("neo:neo " in owner for owner in owners))
+                self.assertEqual(list(state.iterdir()), [saved], "no temporary copy remains")
+
+    def test_preparation_failures_keep_saved_bytes_and_continue_startup(self):
+        for command in ["mkdir", "chown", "chmod", "mktemp", "cp", "python3"]:
+            with self.subTest(command=command):
+                result, state, saved, _, _ = self.prepare(fixed="replacement", failure=command)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn("startup-continued", result.stdout)
+                self.assertIn("settings", result.stdout.lower())
+                self.assertEqual(saved.read_text(), '{"trace":{"values":"on"}}')
+                self.assertEqual(list(state.iterdir()), [saved], "a failed copy leaves no temp file")
+
+    def test_a_directory_at_the_fixed_path_is_logged_and_skipped(self):
+        result, _, saved, source, _ = self.prepare(fixed="directory")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(str(source), result.stdout)
+        self.assertEqual(saved.read_text(), '{"trace":{"values":"on"}}')
+
+    def test_claw_server_does_not_take_or_replace_settings(self):
+        result, _, saved, _, owners = self.prepare(kind="claw-server", fixed="replacement")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(owners, [])
+        self.assertEqual(saved.stat().st_mode & 0o777, 0o644)
+        self.assertEqual(saved.read_text(), '{"trace":{"values":"on"}}')
+
+    def test_ownership_names_neo_after_the_configured_ids_have_been_applied(self):
+        result, _, _, _, owners = self.prepare(fixed="replacement", puid="2307", pgid="2308")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(owners)
+        self.assertTrue(all(owner.startswith("neo:neo ") for owner in owners), owners)
+
+    def test_a_state_root_symlink_and_its_target_mode_survive_the_atomic_copy(self):
+        result, state, saved, source, _ = self.prepare(fixed="replacement", root_link=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        target = source.parent / "volume" / "private-state"
+        self.assertTrue(state.parent.is_symlink())
+        self.assertEqual(state.parent.readlink(), target)
+        self.assertEqual((target / "claw-sdk" / "settings.json").read_text(), "replacement")
+        self.assertEqual(target.stat().st_mode & 0o777, 0o700)
+        templates = (source.parent / "templates").read_text().splitlines()
+        self.assertEqual(templates, [str(state / ".settings.json.XXXXXX")])
+        self.assertEqual(list(state.iterdir()), [saved])
+
+    def test_a_saved_symlink_is_replaced_without_changing_its_target(self):
+        for kind in ["file", "directory"]:
+            with self.subTest(kind=kind):
+                result, state, saved, source, owners = self.prepare(fixed="replacement", saved_link=kind)
+                target = source.parent / "untouched"
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertFalse(saved.is_symlink())
+                self.assertEqual(saved.read_text(), "replacement")
+                self.assertNotIn(f"neo:neo {saved}", owners)
+                self.assertEqual((target.stat().st_uid, target.stat().st_gid), (os.getuid(), os.getgid()))
+                self.assertEqual(target.stat().st_mode & 0o777, 0o700 if kind == "directory" else 0o640)
+                if kind == "directory":
+                    self.assertEqual([item.name for item in target.iterdir()], ["original"])
+                    self.assertEqual((target / "original").read_text(), "unchanged")
+                else:
+                    self.assertEqual(target.read_text(), "unchanged")
+                self.assertEqual(list(state.iterdir()), [saved])
+
+    def test_a_link_inside_the_state_root_is_skipped_without_writes(self):
+        directory = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        root, target = directory / "root", directory / "target"
+        root.mkdir()
+        target.mkdir(mode=0o700)
+        (root / "claw-sdk").symlink_to(target, target_is_directory=True)
+        result = run_bash(server_is("claw-sdk") + f'CLAW_DATA={shlex.quote(str(root))}\n'
+                          + shell_function("prepare_settings") + 'prepare_settings\necho startup-continued\n')
+        self.assertIn("symlink", result.stdout)
+        self.assertIn("startup-continued", result.stdout)
+        self.assertEqual(list(target.iterdir()), [])
+        self.assertEqual(target.stat().st_mode & 0o777, 0o700)
+
+
 class HostSocketTest(unittest.TestCase):
     def prepare(
         self, kind: str, host_gid: str = "", caller_socket: str | None = None
