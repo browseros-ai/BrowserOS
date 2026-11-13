@@ -46,14 +46,14 @@ host / MCP run
 | `neo-http` | Authenticated host API, traces, live views, takeover routes and the edge of the host's private typing. |
 | `neo-takeover` | Tab locks, display control, viewport fitting and owner handoff. |
 | `neo-trace` | Run and operation records, storage and bounded trace values. |
-| `neo-sdk-api` | Host API specification, generated Rust models and migration notes. |
+| `neo-sdk-api` | Host API specification, generated Rust models and compatibility rules. |
 | `neo-captcha` | Shared CAPTCHA solver, also used by desktop. `testbed/` checks it end to end through `run` ([README](neo-captcha/testbed/README.md)). |
 | `neo-screencast` | Shared capture hub, also used by desktop. |
 
 A host types a secret into a page with `POST /v1/tabs/{tabId}/fill`, never in a script: the
 route lives in `neo-http`, and `neo-server` runs it as a run of its own with one `protected`
 operation that records no value, address or picture (`neo-server/src/host/fill_service.rs`;
-[MIGRATION.md](neo-sdk-api/MIGRATION.md) has the host's side). Neo also stores no picture of a
+[the image's host typing guide](neo-server/docker/README.md#type-a-hosts-secret) describes its use). Neo also stores no picture of a
 tab while any frame of it shows a box masking treats as private, not empty and painted in clear,
 such as a card number a script typed; a password box paints bullets, so sign-in pages keep theirs.
 
