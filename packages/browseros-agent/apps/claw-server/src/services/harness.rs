@@ -19,7 +19,10 @@ use std::{
     path::{Path, PathBuf},
     process,
     str::FromStr,
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
     time::{SystemTime, UNIX_EPOCH},
 };
 use tokio::sync::Mutex;
@@ -180,7 +183,20 @@ pub struct HarnessService {
 struct ManagedSkill {
     reconciler: SkillReconciler,
     spec: SkillSpec,
+    /// The guide installed while ultrafast is on, when the server has one.
+    ultrafast_spec: Option<SkillSpec>,
+    ultrafast: Arc<AtomicBool>,
     environment: SkillEnvironment,
+}
+
+impl ManagedSkill {
+    /// The guide agents should have now.
+    fn current_spec(&self) -> &SkillSpec {
+        match &self.ultrafast_spec {
+            Some(spec) if self.ultrafast.load(Ordering::Acquire) => spec,
+            _ => &self.spec,
+        }
+    }
 }
 
 impl HarnessService {
@@ -219,6 +235,8 @@ impl HarnessService {
                 .with_provisioned_roots(environment.common_skill_roots())
                 .with_owned_name(super::harness_skills::MANAGED_SKILL_DIRECTORY),
             spec,
+            ultrafast_spec: None,
+            ultrafast: Arc::default(),
             environment,
         };
         Self::build(
@@ -246,6 +264,28 @@ impl HarnessService {
             mutex: Arc::new(Mutex::new(())),
             analytics,
         }
+    }
+
+    /// Gives the managed guide its ultrafast variant, installed while `set_ultrafast_skill` is on.
+    #[must_use]
+    pub fn with_ultrafast_skill(mut self, spec: SkillSpec) -> Self {
+        if let Some(managed) = &mut self.managed_skill {
+            managed.ultrafast_spec = Some(spec);
+        }
+        self
+    }
+
+    /// Switches every connected agent's guide to the ultrafast variant or back, re-installing it
+    /// only when that changes. Returns whether it changed.
+    pub async fn set_ultrafast_skill(&self, on: bool) -> AppResult<bool> {
+        let Some(managed) = &self.managed_skill else {
+            return Ok(false);
+        };
+        if managed.ultrafast_spec.is_none() || managed.ultrafast.swap(on, Ordering::AcqRel) == on {
+            return Ok(false);
+        }
+        self.run_skill_reconciliation().await?;
+        Ok(true)
     }
 
     /// Reconcile a user-authored skill into every connected agent, returning
@@ -682,8 +722,8 @@ fn reconcile_managed_skill(
         Err(error) => {
             // A damaged MCP manifest must not block baseline instructions. Defer
             // native/legacy cleanup because their consumers are currently unknown.
-            let mut outcome =
-                reconciler.repair_provisioned(&managed_skill.spec, &managed_skill.environment)?;
+            let mut outcome = reconciler
+                .repair_provisioned(managed_skill.current_spec(), &managed_skill.environment)?;
             outcome.warnings.push(SkillWarning {
                 target: workspace_dir.to_path_buf(),
                 message: format!(
@@ -706,7 +746,11 @@ fn reconcile_managed_skill(
             "migrated legacy BrowserOS neo skill directories to the current name"
         );
     }
-    reconciler.reconcile(&managed_skill.spec, &consumers, &managed_skill.environment)
+    reconciler.reconcile(
+        managed_skill.current_spec(),
+        &consumers,
+        &managed_skill.environment,
+    )
 }
 
 fn reconcile_skill_warning(

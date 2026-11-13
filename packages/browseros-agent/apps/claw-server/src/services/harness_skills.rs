@@ -33,6 +33,23 @@ const SKILL_GROUP_PROMISES: [(&str, &str); 2] = [
     ),
 ];
 
+/// The guide's run-first line, and what it says while ultrafast lists pursue.
+const SKILL_RUN_FIRST: (&str, &str) = (
+    "Reach for `run` first; the granular tools are the fallback.",
+    "Start with `pursue` for tasks that act on a page; reach for `run` for everything else and for what pursue hands back. The granular tools are the fallback.",
+);
+/// Where the pursue section goes in the guide while ultrafast is on.
+const SKILL_PURSUE_ANCHOR: &str = "## Writing a `run` script";
+const SKILL_PURSUE_SECTION: &str = "## Start with pursue
+
+This browser has ultrafast, so start each task that does something on a site with `pursue`. Open or find the page, then give pursue that page and the whole outcome you want, with any text you already know in `values`. neo decides each step and does it.
+
+If pursue says `completed`, read the page to confirm. If it says `handed_back`, carry on with one `run` script from the page and url it names. Skip the steps it lists as done, and do not call pursue again for that task.
+
+Go straight to `run` for reading or collecting data and for work across many pages at once.
+
+";
+
 #[derive(Deserialize)]
 struct SkillFrontmatter {
     name: String,
@@ -79,6 +96,26 @@ fn with_tab_grouping(content: String, tab_grouping: TabGrouping) -> String {
         })
 }
 
+/// The guide installed while ultrafast is on: pursue comes first and run picks up what it
+/// hands back. Built from the guide the server already loaded, so it keeps every adaptation.
+pub fn with_ultrafast(spec: &SkillSpec) -> AppResult<SkillSpec> {
+    let (run_first, pursue_first) = SKILL_RUN_FIRST;
+    let mut content = spec.content().replacen(run_first, pursue_first, 1);
+    content = match content.find(SKILL_PURSUE_ANCHOR) {
+        Some(at) => format!("{}{SKILL_PURSUE_SECTION}{}", &content[..at], &content[at..]),
+        None => format!(
+            "{}\n\n{}",
+            content.trim_end(),
+            SKILL_PURSUE_SECTION.trim_end()
+        ),
+    };
+    parse_browserclaw_skill(content).map_err(|error| {
+        AppError::Internal(format!(
+            "ultrafast BrowserClaw skill failed validation: {error}"
+        ))
+    })
+}
+
 fn parse_browserclaw_skill(content: String) -> Result<SkillSpec, String> {
     let normalized = content.replace("\r\n", "\n");
     let mut lines = normalized.lines();
@@ -122,7 +159,8 @@ mod tests {
     use tempfile::tempdir;
 
     use super::{
-        SKILL_GROUP_PROMISES, TabGrouping, embedded_browserclaw_skill, load_browserclaw_skill,
+        SKILL_GROUP_PROMISES, SKILL_PURSUE_ANCHOR, SKILL_RUN_FIRST, TabGrouping,
+        embedded_browserclaw_skill, load_browserclaw_skill, with_ultrafast,
     };
 
     /// Each promise is removed by an exact string replace, so a reword of the shipped guide
@@ -149,6 +187,34 @@ mod tests {
         assert!(content.contains("Preserve useful pages when the task ends."));
         let automatic = load_browserclaw_skill(root.path(), TabGrouping::Automatic)?;
         assert_eq!(automatic.content(), embedded_browserclaw_skill());
+        Ok(())
+    }
+
+    /// Both edits match the shipped guide exactly, so a reword would silently drop pursue.
+    #[test]
+    fn the_guide_still_holds_what_ultrafast_rewrites() {
+        let content = embedded_browserclaw_skill();
+        assert_eq!(content.matches(SKILL_RUN_FIRST.0).count(), 1);
+        assert_eq!(content.matches(SKILL_PURSUE_ANCHOR).count(), 1);
+    }
+
+    #[test]
+    fn with_ultrafast_the_guide_starts_tasks_with_pursue() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let root = tempdir()?;
+        let plain = load_browserclaw_skill(root.path(), TabGrouping::Automatic)?;
+        assert!(!plain.content().contains("pursue"));
+        let ultrafast = with_ultrafast(&plain)?;
+        let content = ultrafast.content();
+        assert!(content.contains("Start with `pursue` for tasks that act on a page"));
+        assert!(!content.contains(SKILL_RUN_FIRST.0));
+        let section = content
+            .find("## Start with pursue")
+            .ok_or("no pursue section")?;
+        let anchor = content.find(SKILL_PURSUE_ANCHOR).ok_or("no run section")?;
+        assert!(section < anchor, "pursue comes before writing a run script");
+        assert!(content.contains("do not call pursue again for that task"));
+        assert_eq!(ultrafast.name(), plain.name());
         Ok(())
     }
 

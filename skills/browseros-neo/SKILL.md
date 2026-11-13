@@ -46,6 +46,14 @@ Reach for `run` first; the granular tools are the fallback. One `run` script com
 
 Derive the page you work on inside the same script that uses it. When you do carry something between calls, carry the URL rather than the page id: an id is only good while that tab is open and still yours.
 
+## With ultrafast: start with pursue
+
+If your BrowserOS neo lists a tool named `pursue` (it comes with ultrafast), start each task that does something on a site with it. Open or find the page, then give pursue that page and the whole outcome you want, with any text you already know in `values`. neo decides each step and does it.
+
+If pursue says `completed`, read the page to confirm. If it says `handed_back`, carry on with one `run` script from the page and url it names. Skip the steps it lists as done, and do not call pursue again for that task.
+
+Go straight to `run` for reading or collecting data and for work across many pages at once. Without `pursue` in your tool list, skip this section.
+
 ## Writing a `run` script
 
 - **The sandbox is neither Node nor the page.** No `fetch`, `require` or `document` in scope; read the page through `page.snapshot`, `page.read` and `page.grep`, which run no script in it. `page.evaluateInPage` runs your own script inside the page, where page scripts can watch it; use it only when the user explicitly asks to run code in the page or those cannot answer.
