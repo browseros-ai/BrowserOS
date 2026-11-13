@@ -674,6 +674,7 @@ fn summary_select() -> Select<runs::Entity> {
             runs::Column::OperationCount,
             runs::Column::TraceGaps,
             runs::Column::Complete,
+            runs::Column::Values,
         ])
         .column_as(SimpleExpr::SubQuery(None, Box::new(tabs)), "tabs")
 }

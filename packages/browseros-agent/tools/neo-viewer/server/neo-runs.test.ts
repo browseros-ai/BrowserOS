@@ -129,6 +129,51 @@ test("Neo's run record keeps each operation's name, site, timing, args, result, 
   })
 })
 
+test('values markers distinguish omitted values and preserve future recording policies', () => {
+  const record = toNeoRunRecord({
+    ...RUN,
+    values: 'off',
+    operations: [
+      {
+        id: '01a1.1',
+        name: 'locator.fill',
+        values: 'off',
+        kind: 'builtin',
+        effect: 'write',
+        tabId: 7,
+        startedAt: 1_010,
+        durationMs: 290,
+        outcome: 'error',
+        delivery: 'not_sent',
+        error: { ...RUN.error, message: '', operationId: '01a1.1' },
+      },
+    ],
+  })
+  expect(record.values).toBe('off')
+  expect(record.operations[0]).toMatchObject({
+    values: 'off',
+    name: 'locator.fill',
+    tabId: 7,
+    startOffsetMs: 10,
+    durationMs: 290,
+    outcome: 'error',
+    delivery: 'not_sent',
+    args: null,
+    result: null,
+    notes: [],
+    error: { owner: 'script', code: 'no_match', message: '', retryable: true },
+  })
+  const future = toNeoRunRecord({
+    ...RUN,
+    values: 'future-policy',
+    operations: [{ ...RUN.operations[0], values: 'future-policy' }],
+  })
+  expect(future.values).toBe('future-policy')
+  expect(future.operations[0]?.values).toBe('future-policy')
+  expect(toNeoRunRecord(RUN)).not.toHaveProperty('values')
+  expect(toNeoRunRecord(RUN).operations[0]).not.toHaveProperty('values')
+})
+
 function fakeStore() {
   const attached: Array<[string, NeoRunRecord]> = []
   let listener: ((event: { type: string; run?: RunSummary }) => void) | null =
@@ -203,7 +248,20 @@ test('a joined record is in the run detail and the list, and survives a restart'
     proxyMs: 0,
     request: { raw: '{}', jsonRpcId: 1 },
   })
-  store.attachNeoRun(runId, toNeoRunRecord(RUN))
+  store.attachNeoRun(
+    runId,
+    toNeoRunRecord({
+      ...RUN,
+      values: 'off',
+      operations: RUN.operations.map((operation) => ({
+        ...operation,
+        values: 'off',
+        args: undefined,
+        result: undefined,
+        notes: undefined,
+      })),
+    }),
+  )
   await store.flush()
   const reopened = await RunStore.open(dataDir)
   expect(reopened.list()[0]).toMatchObject({
@@ -215,6 +273,10 @@ test('a joined record is in the run detail and the list, and survives a restart'
     'frame.waitForLoadState',
     'locator.click',
   ])
+  expect(reopened.run(runId)?.neo?.values).toBe('off')
+  expect(
+    reopened.run(runId)?.neo?.operations.map((operation) => operation.values),
+  ).toEqual(['off', 'off', 'off'])
 })
 
 test('stopping waits for a read in flight, so its record is attached before the final flush', async () => {

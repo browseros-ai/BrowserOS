@@ -14,6 +14,8 @@ use serde_json::Value;
 /// One stored operation.
 #[derive(Clone, Debug, PartialEq)]
 pub struct OperationRow {
+    /// `off` when trace.values omitted values at this operation's end; absent otherwise.
+    pub values: Option<String>,
     /// The script call site; absent for old rows and work without a script frame.
     pub site: Option<OperationSite>,
     /// Its id.
@@ -139,6 +141,8 @@ pub enum ShotRead {
 /// A run without its operations.
 #[derive(Clone, Debug, PartialEq)]
 pub struct RunSummary {
+    /// `off` when trace.values omitted values at this run's end; absent otherwise.
+    pub values: Option<String>,
     /// Its id.
     pub id: RunId,
     /// The host's task it belongs to.

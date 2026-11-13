@@ -19,7 +19,7 @@ use tokio::time::Instant;
 fn defaults() -> Value {
     json!({
         "tabs": { "idleCloseSeconds": 1800 },
-        "trace": { "retentionSeconds": 604_800, "screenshots": "perOperation", "valueBytes": 0 },
+        "trace": { "retentionSeconds": 604_800, "screenshots": "perOperation", "valueBytes": 0, "values": "on" },
         "files": { "readDirs": [] },
     })
 }
@@ -74,7 +74,7 @@ async fn put_replaces_everything_and_patch_changes_only_what_it_names() -> TestR
         .await?;
     let set = json!({
         "tabs": { "idleCloseSeconds": 300 },
-        "trace": { "retentionSeconds": 86_400, "screenshots": "perOperation", "valueBytes": 0 },
+        "trace": { "retentionSeconds": 86_400, "screenshots": "perOperation", "valueBytes": 0, "values": "on" },
         "files": { "readDirs": [] },
     });
     assert_eq!(put.status, StatusCode::OK, "{}", put.body);
@@ -96,7 +96,7 @@ async fn put_replaces_everything_and_patch_changes_only_what_it_names() -> TestR
         patched.body["settings"],
         json!({
             "tabs": { "idleCloseSeconds": 600 },
-            "trace": { "retentionSeconds": 86_400, "screenshots": "perOperation", "valueBytes": 0 },
+            "trace": { "retentionSeconds": 86_400, "screenshots": "perOperation", "valueBytes": 0, "values": "on" },
             "files": { "readDirs": [] },
         }),
         "PATCH keeps what it does not name"
@@ -138,7 +138,7 @@ async fn an_unknown_name_is_skipped_listed_and_never_stops_the_known_ones() -> T
         reply.body["settings"],
         json!({
             "tabs": { "idleCloseSeconds": 300 },
-            "trace": { "retentionSeconds": 7200, "screenshots": "perOperation", "valueBytes": 0 },
+            "trace": { "retentionSeconds": 7200, "screenshots": "perOperation", "valueBytes": 0, "values": "on" },
             "files": { "readDirs": [] },
         }),
         "the known settings in the same call still apply"
@@ -447,6 +447,7 @@ async fn a_watcher_hears_the_trace_policy_before_the_change_answers() -> TestRes
             RecordPolicy {
                 screenshots: Screenshots::Off,
                 value_bytes: 262_144,
+                ..RecordPolicy::default()
             },
         ],
         "once when watched, once for the change, before its answer"
@@ -572,5 +573,152 @@ async fn read_dirs_round_trip_reset_and_refuse_invalid_lists_atomically() -> Tes
     }
     let reset = harness.put("{}").await?;
     assert_eq!(reset.body["settings"], defaults());
+    Ok(())
+}
+
+/// The open values choice uses the same persisted, atomic settings contract as screenshots.
+#[tokio::test]
+async fn values_accepts_known_names_skips_future_names_and_survives_restart() -> TestResult {
+    let h = harness().await?;
+    let off = h.patch(r#"{"trace":{"values":"off"}}"#).await?;
+    assert_eq!(off.status, StatusCode::OK, "{}", off.body);
+    assert_eq!(off.body["settings"]["trace"]["values"], "off");
+    let reloaded = Settings::load(h.settings_file(), Default::default()).await;
+    assert_eq!(reloaded.trace_policy().values, neo_trace::Values::Off);
+    let future = h.patch(r#"{"trace":{"values":"future"}}"#).await?;
+    assert_eq!(future.status, StatusCode::OK);
+    assert_eq!(future.body["unknownValues"], json!(["trace.values"]));
+    assert_eq!(future.body["settings"]["trace"]["values"], "off");
+    let before = std::fs::read(h.settings_file())?;
+    for value in [json!(12), Value::Null, json!({})] {
+        let refused = h
+            .patch(&json!({"trace":{"values":value}}).to_string())
+            .await?;
+        assert_eq!(refused.status, StatusCode::BAD_REQUEST);
+        assert!(
+            refused.body["message"]
+                .as_str()
+                .is_some_and(|text| text.contains("trace.values"))
+        );
+        assert_eq!(
+            std::fs::read(h.settings_file())?,
+            before,
+            "a refusal changes no saved value"
+        );
+    }
+    let reset = h.put(r#"{"trace":{"values":"future"}}"#).await?;
+    assert_eq!(
+        reset.body["settings"]["trace"]["values"], "on",
+        "PUT treats an unknown name as absent"
+    );
+    let on = h.patch(r#"{"trace":{"values":"on"}}"#).await?;
+    assert_eq!(on.status, StatusCode::OK);
+    Ok(())
+}
+
+/// HTTP records and SSE hydrate the same stored omission, including runs admitted before PATCH.
+#[tokio::test]
+async fn values_off_reaches_records_and_events_without_payloads() -> TestResult {
+    use crate::support::{EventStream, at};
+    use neo_trace::{
+        Delivery, Effect, ErrorOwner, ErrorRecord, OperationEnded, OperationId, OperationKind,
+        OperationStarted, Outcome, PageState, RunEnded, RunId, RunStarted, RunStatus,
+    };
+
+    let h = harness().await?;
+    h.settings.watch({
+        let sink = h.sink.clone();
+        move |settings| sink.record_policy(settings.trace_policy())
+    });
+    let mut stream = EventStream::open(&h, "/v1/events", None).await?;
+    let run = RunId::new();
+    let op = OperationId::new(run, 1);
+    h.sink.run_started(RunStarted {
+        id: run,
+        code: "code-canary-host-api".into(),
+        request_id: None,
+        task_id: None,
+        host_data: Some(json!({"data":"host-canary-host-api"})),
+        at: at(0),
+    });
+    h.sink.op_started(OperationStarted {
+        site: None,
+        id: op,
+        parent: None,
+        name: "locator.fill".into(),
+        kind: OperationKind::Builtin,
+        effect: Effect::Write,
+        tab: Some(TabId(7)),
+        args: json!({"value":"argument-canary-host-api"}),
+        at: at(1),
+    });
+    let patched = h.patch(r#"{"trace":{"values":"off"}}"#).await?;
+    assert_eq!(patched.status, StatusCode::OK);
+    h.sink.op_notes(op, vec!["note-canary-host-api".into()]);
+    let error = ErrorRecord {
+        owner: ErrorOwner::Website,
+        code: "timeout".into(),
+        message: "error-canary-host-api".into(),
+        host_code: None,
+        retryable: false,
+        operation_id: Some(op),
+    };
+    h.sink.op_ended(OperationEnded {
+        id: op,
+        outcome: Outcome::Error,
+        delivery: Delivery::Done,
+        sent_at: Some(at(2)),
+        result: Some(json!("result-canary-host-api")),
+        error: Some(error.clone()),
+        page_after: Some(PageState {
+            tab_id: Some(TabId(7)),
+            url: Some("https://example.test/form".into()),
+            title: Some("Form".into()),
+        }),
+        main_world: false,
+        at: at(3),
+    });
+    h.sink.run_ended(RunEnded {
+        id: run,
+        status: RunStatus::Error,
+        error: Some(error),
+        result: Some(json!("return-canary-host-api")),
+        replay: Some(json!("reply-canary-host-api")),
+        at: at(4),
+    });
+    h.sink.flush().await?;
+    let events = stream.take(4).await?;
+    assert_eq!(events[2].data["operation"]["values"], "off");
+    assert_eq!(events[3].data["run"]["values"], "off");
+    let record = h.get(&format!("/v1/runs/{run}")).await?;
+    assert_eq!(record.body["values"], "off");
+    assert_eq!(record.body["error"]["message"], "");
+    assert_eq!(record.body["error"]["owner"], "website");
+    assert_eq!(
+        record.body["operations"][0]["page"]["url"],
+        "https://example.test/form"
+    );
+    for key in ["code", "result", "hostData", "codeWithheld"] {
+        assert!(
+            record.body.get(key).is_none(),
+            "{key} must be absent: {}",
+            record.body
+        );
+    }
+    let list = h.get("/v1/runs").await?;
+    assert_eq!(list.body["items"][0]["values"], "off");
+    let tail = h.get("/v1/trace").await?;
+    assert_eq!(tail.body["operations"][0]["values"], "off");
+    let all = json!([
+        record.body,
+        list.body,
+        tail.body,
+        events.iter().map(|event| &event.data).collect::<Vec<_>>()
+    ])
+    .to_string();
+    assert!(
+        !all.contains("canary-host-api"),
+        "no trace read or event carries a canary"
+    );
     Ok(())
 }

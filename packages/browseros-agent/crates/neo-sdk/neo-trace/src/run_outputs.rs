@@ -10,21 +10,28 @@
 //!
 //! claw-sdk writes them when a run ends, before it answers the run, so a host that reads them
 //! right after the reply finds them; nothing here goes through the writer task. The age sweep
-//! deletes `outputs/<run>` with the run's rows, so the files live exactly as long as the run's
-//! record. The screenshot cap never touches them: it frees screenshot bytes only. Every path is
+//! deletes `outputs/<run>` with the run's rows. Blobs made under trace.values off instead
+//! carry a durable absolute expiry and leave after ten minutes; downloads keep their retention.
+//! The screenshot cap never touches them: it frees screenshot bytes only. Every path is
 //! built from a typed id and an index, never from text read back, so no stored value can point
 //! a read or a delete outside the directory.
 
+use std::collections::HashMap;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use crate::{BlobId, RunDownload, RunId, TraceError};
+use tokio::io::AsyncWriteExt;
+use tokio::sync::Mutex;
+
+use crate::{BlobId, EpochMillis, RunDownload, RunId, TraceError};
 
 /// The outputs directory of one trace file. Cheap to clone.
 #[derive(Clone, Debug)]
 pub struct RunOutputs {
     root: Arc<Path>,
+    /// Only runs with a durable expiry sidecar. Upkeep reads this list, never scans the disk.
+    expiring: Arc<Mutex<HashMap<RunId, EpochMillis>>>,
 }
 
 impl RunOutputs {
@@ -33,6 +40,7 @@ impl RunOutputs {
         let dir = db.parent().unwrap_or_else(|| Path::new("."));
         Self {
             root: Arc::from(dir.join("outputs")),
+            expiring: Arc::default(),
         }
     }
 
@@ -51,6 +59,102 @@ impl RunOutputs {
 
     fn blob_path(&self, run: RunId, id: BlobId) -> PathBuf {
         self.run_dir(run).join("blobs").join(id.to_string())
+    }
+
+    fn blob_expiry(&self, run: RunId) -> PathBuf {
+        self.run_dir(run).join("blob-expiry")
+    }
+
+    /// Records an absolute expiry before the first blob of a run recorded without values.
+    /// The sidecar is independent of SQLite: a crash after output delivery but before the
+    /// trace end commits must still preserve the caller's ten-minute fetch window.
+    ///
+    /// # Errors
+    /// When the sidecar cannot be written. The caller must then write no blobs.
+    pub async fn keep_blobs_until(&self, run: RunId, until: EpochMillis) -> io::Result<()> {
+        let mut expiring = self.expiring.lock().await;
+        tokio::fs::create_dir_all(self.run_dir(run)).await?;
+        let path = self.blob_expiry(run);
+        let partial = path.with_extension("partial");
+        let mut file = tokio::fs::File::create(&partial).await?;
+        file.write_all(until.millis().to_string().as_bytes())
+            .await?;
+        file.sync_all().await?;
+        drop(file);
+        tokio::fs::rename(partial, path).await?;
+        // Publish the deadline durably before a blob can reach disk. Sync the new run entry
+        // as well as its sidecar, so filesystem recovery cannot keep bytes without their lease.
+        for directory in [self.run_dir(run), self.root.to_path_buf()] {
+            tokio::fs::File::open(directory).await?.sync_all().await?;
+        }
+        expiring.insert(run, until);
+        Ok(())
+    }
+
+    /// Restores the expiry list once at startup, including outputs whose run end never
+    /// committed. Names are parsed as typed run ids; unrelated files cannot become delete paths.
+    /// Expired blobs are removed before listeners serve, and future ones enter the upkeep list.
+    ///
+    /// # Errors
+    /// When output directories or an expiry sidecar cannot be read, or cleanup fails.
+    pub async fn restore_blob_expiries(&self, now: EpochMillis) -> io::Result<()> {
+        let mut dirs = match tokio::fs::read_dir(&self.root).await {
+            Ok(dirs) => dirs,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+            Err(error) => return Err(error),
+        };
+        let mut expiring = self.expiring.lock().await;
+        while let Some(dir) = dirs.next_entry().await? {
+            let Ok(run) = dir.file_name().to_string_lossy().parse::<RunId>() else {
+                continue;
+            };
+            let bytes = match tokio::fs::read_to_string(self.blob_expiry(run)).await {
+                Ok(bytes) => bytes,
+                Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+                Err(error) => return Err(error),
+            };
+            let millis = bytes
+                .trim()
+                .parse::<i64>()
+                .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "invalid blob expiry"))?;
+            expiring.insert(run, EpochMillis::from_millis(millis));
+        }
+        drop(expiring);
+        self.expire_blobs(now).await
+    }
+
+    /// Removes due blobs and their sidecars, leaving downloads and every on-mode output alone.
+    /// The in-memory list bounds each minute pass to runs this process wrote or restored;
+    /// failed deletes stay listed for the next pass. Retention may already have removed a run.
+    ///
+    /// # Errors
+    /// When an expired blob folder or its sidecar cannot be removed.
+    pub async fn expire_blobs(&self, now: EpochMillis) -> io::Result<()> {
+        let mut expiring = self.expiring.lock().await;
+        let due: Vec<RunId> = expiring
+            .iter()
+            .filter_map(|(&run, &until)| (until <= now).then_some(run))
+            .collect();
+        let mut failure = None;
+        for run in due {
+            let removed = async {
+                self.forget_blobs(run).await?;
+                match tokio::fs::remove_file(self.blob_expiry(run)).await {
+                    Err(error) if error.kind() != io::ErrorKind::NotFound => Err(error),
+                    _ => Ok(()),
+                }
+            }
+            .await;
+            match removed {
+                Ok(()) => {
+                    expiring.remove(&run);
+                }
+                Err(error) => {
+                    failure = Some(error);
+                }
+            }
+        }
+        failure.map_or(Ok(()), Err)
     }
 
     /// Writes blob `id` of `run`: bytes its reply names instead of carrying them.

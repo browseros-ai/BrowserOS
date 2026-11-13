@@ -14,7 +14,7 @@ use neo_trace::{
 use serde_json::{Value, json};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePool};
 use tokio::runtime::Handle;
-use tokio::{task, time};
+use tokio::{fs, task, time};
 
 use super::request_ledger::{Admission, LedgerLimits};
 use super::run_reply::{ReplyDelivery, ReplyEffects, ReplyStatus};
@@ -1137,4 +1137,213 @@ fn task_pages_keep_opening_order_across_context_and_task_openers() -> Result<(),
         assert_eq!(reply.value["owners"], json!(vec![&reply.value["id"]; 4]));
         Ok(())
     })
+}
+
+/// Value omission changes persistence only: a caller still receives and can fetch its result.
+#[test]
+fn values_off_preserves_the_reply_blobs_and_memory_replay_but_not_restart_replay()
+-> Result<(), TestError> {
+    on_neo_runtime(async {
+        let rig = TestRig::new().await?;
+        rig.settings.patch(br#"{"trace":{"values":"off"}}"#).await?;
+        let service = rig.run_service(GRACE);
+        let code = "return { shot: new Uint8Array(300 * 1024).fill(9) };";
+        let first = service
+            .run(request(code, meta(Some("off-reply"), None)?)?)
+            .await;
+        assert_eq!(first.status, ReplyStatus::Ok);
+        let blob = rig
+            .store
+            .outputs()
+            .open_blob(first.id, BlobId::new(0))
+            .await?
+            .ok_or("reply blob")?;
+        assert_eq!(blob.size, 300 * 1024);
+        let sidecar = rig
+            .dir
+            .path()
+            .join(format!("outputs/{}/blob-expiry", first.id));
+        let until: i64 = fs::read_to_string(&sidecar).await?.parse()?;
+        let now = EpochMillis::now().millis();
+        assert!(
+            until > now && until <= now + 600_000,
+            "expiry is the absolute ten-minute reply window"
+        );
+        rig.sink.flush().await?;
+        let row = rig.store.run(first.id).await?.ok_or("run")?;
+        assert_eq!(row.summary.values.as_deref(), Some("off"));
+        assert!(row.code.is_none() && row.result.is_none());
+        assert!(
+            rig.store
+                .replay(first.id, EpochMillis::now())
+                .await?
+                .is_none()
+        );
+        let repeat = service
+            .run(request(
+                "throw new Error('ran twice')",
+                meta(Some("off-reply"), None)?,
+            )?)
+            .await;
+        assert_eq!(
+            *repeat, *first,
+            "same-process memory replays the complete reply"
+        );
+        let after_restart = rig
+            .restarted_service(GRACE)?
+            .run(request(code, meta(Some("off-reply"), None)?)?)
+            .await;
+        assert_eq!(error_of(&after_restart)?.code, "duplicate_request");
+        assert_eq!(
+            runs_of(&rig, "off-reply")
+                .await?
+                .iter()
+                .filter(|run| run.status == RunStatus::Ok)
+                .count(),
+            1
+        );
+        assert!(
+            rig.store
+                .outputs()
+                .open_blob(first.id, BlobId::new(0))
+                .await?
+                .is_some()
+        );
+        Ok(())
+    })
+}
+
+/// An off record remains the request-id authority after its in-memory reply expires.
+#[test]
+fn values_off_does_not_execute_a_request_again_after_the_memory_window() -> Result<(), TestError> {
+    on_neo_runtime(async {
+        let rig = TestRig::new().await?;
+        rig.settings.patch(br#"{"trace":{"values":"off"}}"#).await?;
+        let ledger = RequestLedger::new(
+            rig.store.clone(),
+            rig.sink.clone(),
+            LedgerLimits {
+                replay_window: SHORT_WINDOW,
+                ..LedgerLimits::default()
+            },
+        );
+        let first = run_once(&rig, &ledger, "off-expired").await?;
+        rig.sink.flush().await?;
+        assert!(
+            rig.store
+                .replay(first.id, EpochMillis::now())
+                .await?
+                .is_none()
+        );
+        time::sleep(SHORT_WINDOW + Duration::from_millis(20)).await;
+        assert!(
+            matches!(admit(&ledger, "off-expired").await?, Admission::Duplicate(run) if run == first.id)
+        );
+        assert_eq!(runs_of(&rig, "off-expired").await?.len(), 1);
+        Ok(())
+    })
+}
+
+/// The default debug-note path must not grow a stored payload in either recording mode.
+#[test]
+fn operation_notes_remain_unstored_through_the_real_dispatcher() -> Result<(), TestError> {
+    on_neo_runtime(async {
+        let rig = TestRig::new().await?;
+        let service = rig.run_service(GRACE);
+        for mode in ["on", "off"] {
+            rig.settings
+                .patch(json!({"trace":{"values":mode}}).to_string().as_bytes())
+                .await?;
+            let reply = service
+                .run(request(
+                    "return await __neo.invoke('test.echo', { note: 'dispatch-note-canary' });",
+                    RunMeta::default(),
+                )?)
+                .await;
+            assert_eq!(reply.status, ReplyStatus::Ok);
+            rig.sink.flush().await?;
+            let op = rig
+                .store
+                .operation(OperationId::new(reply.id, 1))
+                .await?
+                .ok_or("echo operation")?;
+            assert!(
+                op.notes.is_empty(),
+                "call-log lines stay on the debug channel in both modes"
+            );
+        }
+        Ok(())
+    })
+}
+
+/// A separate process installs the real subscriber once; both its stderr and daily file must
+/// suppress off-mode selectors and typed values while keeping the on-mode control visible.
+#[test]
+fn values_off_suppresses_real_call_log_values_at_debug() -> Result<(), TestError> {
+    use std::process::Command;
+    use std::{env, fs};
+
+    let state = tempfile::tempdir()?;
+    fs::write(state.path().join("launch.json"), "{}")?;
+    let output = Command::new(env::current_exe()?)
+        .args(["--ignored", "--exact", "run::tests::trace_values_log_probe", "--nocapture"])
+        .env_clear().env("BROWSERCLAW_DIR", state.path()).env("HOME", state.path())
+        .env("CLAW_LOG", "neo_server=debug,neo_playwright=debug,neo_trace=debug,neo_service=debug,neo_takeover=debug")
+        .output()?;
+    assert!(
+        output.status.success(),
+        "logging child failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8(output.stderr)?;
+    let mut logged = String::new();
+    for entry in fs::read_dir(state.path().join("logs"))? {
+        let path = entry?.path();
+        if path
+            .file_name()
+            .is_some_and(|name| name.to_string_lossy().starts_with("claw-sdk.log"))
+        {
+            logged.push_str(&fs::read_to_string(path)?);
+        }
+    }
+    for text in [stderr, logged] {
+        assert!(
+            text.contains("selector-on-canary") && text.contains("filled-on-canary"),
+            "on must keep its existing debug notes: {text}"
+        );
+        assert!(
+            !text.contains("selector-off-canary") && !text.contains("filled-off-canary"),
+            "off must suppress call-log values at the source: {text}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+#[ignore = "installs process-global logging in the subprocess above"]
+fn trace_values_log_probe() -> Result<(), TestError> {
+    use crate::{AppConfig, Logging};
+    use std::env;
+    use std::path::Path;
+
+    let state = env::var_os("BROWSERCLAW_DIR").ok_or("child state")?;
+    let logging = Logging::install(&AppConfig::load(&Path::new(&state).join("launch.json"))?)?;
+    on_neo_runtime(async {
+        let rig = TestRig::new().await?;
+        let service = rig.run_service(GRACE);
+        for mode in ["on", "off"] {
+            rig.settings
+                .patch(json!({"trace":{"values":mode}}).to_string().as_bytes())
+                .await?;
+            let code = format!(
+                "return await __neo.invoke('test.echo', {{note: \"selector-{mode}-canary filled-{mode}-canary\"}});"
+            );
+            let reply = service.run(request(&code, RunMeta::default())?).await;
+            assert_eq!(reply.status, ReplyStatus::Ok);
+        }
+        rig.sink.flush().await?;
+        Ok(())
+    })?;
+    drop(logging);
+    Ok(())
 }

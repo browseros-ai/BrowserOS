@@ -12,6 +12,37 @@ const shown = (op: NeoOperation, all: NeoOperation[] = [op]) => {
 }
 
 describe('what a call gave the script', () => {
+  it('explains omitted values without treating the missing result as null', () => {
+    const omitted = operation(1, 'page.evaluate', {
+      values: 'off',
+      args: null,
+      result: null,
+    })
+    const output = shown(omitted)
+    expect(output.formattedText).toBe('(values not recorded)')
+    expect(output.source).toBe(
+      'Neo did not record values for this operation (trace.values is off)',
+    )
+    expect(output.rawText).toBe('')
+    expect(output.cut).toBe(false)
+    const failed = shown({
+      ...omitted,
+      outcome: 'error',
+      error: {
+        owner: 'script',
+        code: 'no_match',
+        message: '',
+        retryable: true,
+      },
+    })
+    expect(failed.formattedText).toContain('script / no_match')
+    expect(JSON.parse(failed.rawText)).toMatchObject({
+      owner: 'script',
+      code: 'no_match',
+      message: '',
+    })
+  })
+
   it("shows a whole-page snapshot's text from the page.snapshotPending that follows it, each loop pass its own", () => {
     const tree = { document: 4, partial: false, json: [{ role: 'heading' }] }
     const all = [

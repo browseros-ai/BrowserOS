@@ -50,12 +50,13 @@ use crate::{
     Delivery, Effect, EpochMillis, OperationEnded, OperationId, OperationReached, OperationStarted,
     Outcome, RecordPolicy, Redactor, RunEffects, RunEnded, RunId, RunStarted, RunStatus,
     Screenshots, Shot, ShotAnswer, ShotJob, ShotQueue, TaskId, TraceError, TraceStore, Truncation,
+    Values,
 };
 use browseros_core::TabId;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::mem;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 use tokio::sync::{broadcast, mpsc, oneshot};
@@ -228,6 +229,9 @@ struct SinkInner {
     tx: mpsc::UnboundedSender<Command>,
     backlog: AtomicUsize,
     max_backlog: usize,
+    /// Source-side debug notes cannot wait for the writer queue. Updated before the host
+    /// settings call answers, while stored records still follow the ordered policy command.
+    record_values: AtomicBool,
     dropped: Arc<DroppedEvents>,
     events: broadcast::Sender<TraceRecordEvent>,
 }
@@ -333,8 +337,22 @@ impl TraceSink {
     /// size of the values it keeps whole (the host's `trace.*` settings). In the queue, so every
     /// record sent before this call follows the old policy and every one after it the new.
     pub fn record_policy(&self, policy: RecordPolicy) {
+        self.inner
+            .record_values
+            .store(policy.values == Values::On, Ordering::Release);
         if self.command(Command::Policy(policy)).is_err() {
             tracing::warn!("trace writer stopped; record policy not applied");
+        }
+    }
+
+    /// The live value choice for source-side logging. Unlike stored records, call-log lines
+    /// are printed by the dispatcher, so it must observe a switch before the settings reply.
+    #[must_use]
+    pub fn values(&self) -> Values {
+        if self.inner.record_values.load(Ordering::Acquire) {
+            Values::On
+        } else {
+            Values::Off
         }
     }
 
@@ -388,6 +406,7 @@ pub fn spawn_writer(
             tx,
             backlog: AtomicUsize::new(0),
             max_backlog: config.max_backlog,
+            record_values: AtomicBool::new(true),
             dropped: Arc::clone(&dropped),
             events: broadcast::channel(1024).0,
         }),
@@ -739,14 +758,27 @@ impl Writer {
             .get_mut(&event.id.run)
             .and_then(|run| run.operations.remove(&event.id.seq));
         let redactor = self.redactor.clone();
-        let precise = open.as_ref().map(|open| redactor.args(&open.args));
+        let keep = self.policy.values == Values::On;
+        let precise = open
+            .as_ref()
+            .filter(|_| keep)
+            .map(|open| redactor.args(&open.args));
         let notes = open
             .as_mut()
+            .filter(|_| keep)
             .map(|open| redactor.notes(mem::take(&mut open.notes)))
             .unwrap_or_default();
-        let result = event.result.as_ref().map(|result| redactor.result(result));
+        let result = event
+            .result
+            .as_ref()
+            .filter(|_| keep)
+            .map(|result| redactor.result(result));
         let error = event.error.map(|mut error| {
-            error.message = redactor.text(&error.message);
+            error.message = if keep {
+                redactor.text(&error.message)
+            } else {
+                String::new()
+            };
             error
         });
         let page = event.page_after.map(|mut page| {
@@ -756,6 +788,7 @@ impl Writer {
         });
         let matched = tx
             .end_operation(OperationEndRow {
+                values: self.policy.values.marker(),
                 id: event.id,
                 at: event.at,
                 outcome: event.outcome,
@@ -840,16 +873,27 @@ impl Writer {
         // count only when the batch commits.
         let complete = pending <= self.answering.get(&event.id).copied().unwrap_or(0);
         let redactor = self.redactor.clone();
-        let result = event.result.as_ref().map(|result| redactor.result(result));
+        // The end command decides persistence. Raw input stayed in memory until this point,
+        // so a policy changed during a run also covers its code, host data and stored reply.
+        let keep = self.policy.values == Values::On;
+        let result = event
+            .result
+            .as_ref()
+            .filter(|_| keep)
+            .map(|result| redactor.result(result));
         let error = event.error.map(|mut error| {
-            error.message = redactor.text(&error.message);
+            error.message = if keep {
+                redactor.text(&error.message)
+            } else {
+                String::new()
+            };
             error
         });
-        let bounded = match open.as_ref() {
+        let bounded = match open.as_ref().filter(|_| keep) {
             Some(run) => run.code.as_deref().map(|code| redactor.code(code)),
             _ => None,
         };
-        let host_data = open.as_ref().and_then(|run| {
+        let host_data = open.as_ref().filter(|_| keep).and_then(|run| {
             let data = run.host_data.as_ref()?;
             Some(redactor.host_data(data).value)
         });
@@ -858,12 +902,14 @@ impl Writer {
                 text: &code.value,
                 truncated: code.truncation == Truncation::Cut,
             },
+            _ if !keep => RunCode::NotRecorded,
             _ => RunCode::Unavailable,
         };
         let replay_window =
             i64::try_from(self.config.replay_window.as_millis()).unwrap_or(i64::MAX);
         let effects = tx
             .end_run(RunEndRow {
+                values: self.policy.values.marker(),
                 id: event.id,
                 at: event.at,
                 status: event.status,
@@ -874,10 +920,11 @@ impl Writer {
                     .is_some_and(|result| result.truncation == Truncation::Cut),
                 code,
                 host_data: host_data.as_ref(),
-                replay: event.replay.as_ref(),
+                replay: event.replay.as_ref().filter(|_| keep),
                 replay_until: event
                     .replay
                     .as_ref()
+                    .filter(|_| keep)
                     .map(|_| event.at.plus_millis(replay_window)),
                 gaps,
                 complete,

@@ -12,8 +12,8 @@ use neo_captcha::CaptchaSolver;
 use neo_captcha::config::{CAPSOLVER_KEY_FILE_ENV, TWOCAPTCHA_KEY_FILE_ENV};
 use neo_service::Settings;
 use neo_trace::{
-    EpochMillis, RedactionLimits, Redactor, RetentionPolicy, TraceError, TraceSink, TraceStore,
-    WriterConfig,
+    EpochMillis, RedactionLimits, Redactor, RetentionPolicy, RunOutputs, TraceError, TraceSink,
+    TraceStore, WriterConfig,
 };
 use tokio::net::TcpListener;
 use tokio::runtime::{Builder, Runtime};
@@ -97,10 +97,11 @@ impl App {
     pub(crate) async fn hosted_housekeeping(
         janitor: TabJanitor,
         trace: TraceSink,
+        outputs: RunOutputs,
         settings: Settings,
         shutdown: CancellationToken,
     ) {
-        housekeeping(janitor, trace, settings, shutdown).await;
+        housekeeping(janitor, trace, outputs, settings, shutdown).await;
     }
 
     /// The tokio runtime Neo runs on: multi-thread, with `Defaults::WORKER_STACK_BYTES` worker
@@ -228,6 +229,7 @@ impl App {
             tabs: Arc::clone(&tabs),
             store: store.clone(),
             trace: trace.clone(),
+            settings: settings.clone(),
             shutdown: shutdown.clone(),
             orphan_grace: Defaults::ORPHAN_GRACE,
         });
@@ -250,6 +252,7 @@ impl App {
                 settings.clone(),
             ),
             trace.clone(),
+            store.outputs().clone(),
             settings,
             shutdown.clone(),
         ));
@@ -313,7 +316,7 @@ impl fmt::Debug for App {
     }
 }
 
-/// Tells the trace writer what to record (`trace.screenshots`, `trace.valueBytes`) now and after
+/// Tells the trace writer what to record (`trace.screenshots`, `trace.valueBytes`, `trace.values`) now and after
 /// every change of the host's settings, before the change answers. The policy travels in the
 /// writer's own queue, so a change applies from the next operation that ends.
 fn follow_trace_policy(settings: &Settings, trace: TraceSink) {
@@ -333,6 +336,7 @@ fn follow_trace_policy(settings: &Settings, trace: TraceSink) {
 async fn housekeeping(
     janitor: TabJanitor,
     trace: TraceSink,
+    outputs: RunOutputs,
     settings: Settings,
     shutdown: CancellationToken,
 ) {
@@ -345,6 +349,9 @@ async fn housekeeping(
         tokio::select! {
             () = shutdown.cancelled() => return,
             _ = upkeep.tick() => {
+                if let Err(error) = outputs.expire_blobs(EpochMillis::now()).await {
+                    warn!(%error, "expired result blobs could not be removed; retrying next minute");
+                }
                 let now = time::Instant::now();
                 if let Some(run) = janitor.sweep(now).await {
                     debug!(%run, "idle-tab sweep recorded");
@@ -372,8 +379,8 @@ async fn housekeeping(
 /// replacement runs it again. Log that boundary for the operator before moving the old store.
 async fn open_trace(trace_dir: &Path) -> Result<TraceStore, StartError> {
     let path = trace_dir.join("trace.db");
-    match TraceStore::open(&path).await {
-        Ok(store) => Ok(store),
+    let store = match TraceStore::open(&path).await {
+        Ok(store) => store,
         Err(error) => {
             let aside = PathBuf::from(format!(
                 "{}.broken-{}",
@@ -387,9 +394,16 @@ async fn open_trace(trace_dir: &Path) -> Result<TraceStore, StartError> {
                 // Absent when SQLite never wrote one.
                 let _ = fs::remove_file(sidecar).await;
             }
-            Ok(TraceStore::open(&path).await?)
+            TraceStore::open(&path).await?
         }
-    }
+    };
+    // Output recovery must not pass through the database replacement path: a failed file
+    // cleanup is not a corrupt trace and must never discard request history.
+    store
+        .outputs()
+        .restore_blob_expiries(EpochMillis::now())
+        .await?;
+    Ok(store)
 }
 
 /// Why the agent port did not bind. Only a taken port is `PortInUse`, which `main` exits 2 on.

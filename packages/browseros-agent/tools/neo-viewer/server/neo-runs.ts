@@ -47,6 +47,7 @@ export function toNeoRunRecord(raw: Raw): NeoRunRecord {
       toOperation(operation, startedAt),
     ),
     traceGaps: numberOr(raw.traceGaps, 0) ?? 0,
+    ...(typeof raw.values === 'string' ? { values: raw.values } : {}),
   }
 }
 
@@ -78,6 +79,7 @@ function toOperation(raw: Raw, runStartedAt: number): NeoOperation {
       ? raw.notes.filter((note): note is string => typeof note === 'string')
       : [],
     hasScreenshot: raw.hasScreenshot === true,
+    ...(typeof raw.values === 'string' ? { values: raw.values } : {}),
   }
 }
 

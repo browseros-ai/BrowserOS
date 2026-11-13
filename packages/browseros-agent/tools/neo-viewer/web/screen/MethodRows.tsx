@@ -13,6 +13,7 @@
 
 import type { ReactNode } from 'react'
 import { type NeoOperation, textSize } from '../../shared/api'
+import { OPERATION_VALUES_OFF_NOTICE } from '../../shared/trace-values'
 import type { OperationOutput } from './operation-output'
 import { argumentLines } from './operation-values'
 import { namesWithCounts, waterfallBar } from './operations'
@@ -230,29 +231,43 @@ export function MethodDetail({
   output: OperationOutput
 }) {
   const args = argumentLines(operation.name, operation.args)
+  // An operation can omit values even when the run ends after recording was turned back on.
+  const valuesOff = operation.values === 'off'
   return (
     <div className="flex shrink-0 bg-white px-4">
       <Rail />
       <div className="flex min-w-0 flex-1 gap-6 border-neo-edge border-b pt-2 pb-2.5 pl-[84px] text-[11px] leading-4">
-        <section className="flex w-[250px] shrink-0 flex-col gap-1">
-          <h4 className="font-semibold text-ink leading-[14px]">Arguments</h4>
-          <Lines lines={args} empty="none" />
-          {operation.argsTruncated && (
-            <Truncated>
-              Neo kept only the start of this operation's arguments.
-            </Truncated>
-          )}
-        </section>
-        <section className="flex min-w-0 flex-1 flex-col gap-1">
-          <h4 className="font-semibold text-ink leading-[14px]">Call log</h4>
-          {operation.notes.length === 0 ? (
-            <p className="text-ink-3">No call log recorded.</p>
-          ) : (
-            <pre className="max-h-60 overflow-auto font-code text-ink-2">
-              {operation.notes.join('\n')}
-            </pre>
-          )}
-        </section>
+        {valuesOff ? (
+          <p className="min-w-0 flex-1 text-ink-3">
+            {OPERATION_VALUES_OFF_NOTICE}
+          </p>
+        ) : (
+          <>
+            <section className="flex w-[250px] shrink-0 flex-col gap-1">
+              <h4 className="font-semibold text-ink leading-[14px]">
+                Arguments
+              </h4>
+              <Lines lines={args} empty="none" />
+              {operation.argsTruncated && (
+                <Truncated>
+                  Neo kept only the start of this operation's arguments.
+                </Truncated>
+              )}
+            </section>
+            <section className="flex min-w-0 flex-1 flex-col gap-1">
+              <h4 className="font-semibold text-ink leading-[14px]">
+                Call log
+              </h4>
+              {operation.notes.length === 0 ? (
+                <p className="text-ink-3">No call log recorded.</p>
+              ) : (
+                <pre className="max-h-60 overflow-auto font-code text-ink-2">
+                  {operation.notes.join('\n')}
+                </pre>
+              )}
+            </section>
+          </>
+        )}
         <section className="flex w-[260px] shrink-0 flex-col gap-1">
           <h4 className="font-semibold text-ink leading-[14px]">Result</h4>
           {operation.error ? (
@@ -265,13 +280,15 @@ export function MethodDetail({
               </pre>
             </div>
           ) : (
-            <p className="text-ink-2">
-              {count(textSize(output.formattedText).chars)} chars, ≈
-              {count(textSize(output.formattedText).tokens)} tok, shown on the
-              right
-            </p>
+            !valuesOff && (
+              <p className="text-ink-2">
+                {count(textSize(output.formattedText).chars)} chars, ≈
+                {count(textSize(output.formattedText).tokens)} tok, shown on the
+                right
+              </p>
+            )
           )}
-          {output.cut && (
+          {!valuesOff && output.cut && (
             <Truncated>Neo kept only the start of this result.</Truncated>
           )}
           <p className="text-ink-2">

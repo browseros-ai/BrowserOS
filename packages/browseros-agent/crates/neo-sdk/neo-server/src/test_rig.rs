@@ -11,6 +11,7 @@ use std::time::Duration;
 
 use browseros_core::NativeCapabilities;
 use browseros_core::pages::NewPageOptions;
+use neo_service::Settings;
 use neo_trace::{
     Effect, RedactionLimits, Redactor, RunId, TaskId, TraceSink, TraceStore, WriterConfig,
     spawn_writer,
@@ -45,6 +46,7 @@ pub(crate) struct TestRig {
     pub(crate) tabs: Arc<TabRegistry>,
     pub(crate) store: TraceStore,
     pub(crate) sink: TraceSink,
+    pub(crate) settings: Settings,
     /// Where `test.gate` waits for the test, so the test acts between two of a script's ops.
     pub(crate) gate: Arc<Barrier>,
     pub(crate) dispatcher: Arc<Dispatcher>,
@@ -108,6 +110,11 @@ impl TestRig {
         let store = open_store(dir.path().join("trace.db")).await?;
         let redactor = Redactor::new(RedactionLimits::default());
         let sink = spawn_writer(&store, redactor, writer, None);
+        let settings = Settings::defaults(Default::default());
+        settings.watch({
+            let sink = sink.clone();
+            move |settings| sink.record_policy(settings.trace_policy())
+        });
         let gate = Arc::new(Barrier::new(2));
         let dispatcher = dispatcher(&link, &tabs, &sink, &gate)?;
         Ok(Self {
@@ -116,6 +123,7 @@ impl TestRig {
             tabs,
             store,
             sink,
+            settings,
             gate,
             dispatcher,
             shutdown: CancellationToken::new(),
@@ -150,6 +158,7 @@ impl TestRig {
         orphan_grace: Duration,
     ) -> Arc<RunService> {
         RunService::new(RunServiceParts {
+            settings: self.settings.clone(),
             dispatcher,
             browser: Arc::clone(&self.link),
             tabs,
@@ -276,6 +285,9 @@ impl Method for Echo {
         op: &OpCtx<Self>,
         input: Value,
     ) -> impl Future<Output = Result<Value, LeafError>> + Send {
+        if let Some(note) = input.get("note").and_then(Value::as_str) {
+            op.note(note.to_owned());
+        }
         if let Some(pumped) = input.get("pumped").and_then(Value::as_u64) {
             op.answer_after_pump(pumped);
         }

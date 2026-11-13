@@ -8,6 +8,7 @@ use sea_orm::sea_query::{Alias, Func, SimpleExpr};
 #[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel)]
 #[sea_orm(table_name = "operations")]
 pub struct Model {
+    pub values: Option<String>,
     #[sea_orm(primary_key, auto_increment = false)]
     pub run_id: String,
     #[sea_orm(primary_key, auto_increment = false)]

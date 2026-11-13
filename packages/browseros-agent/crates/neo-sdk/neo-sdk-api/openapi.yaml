@@ -1122,6 +1122,13 @@ components:
       type: object
       required: [id, status, startedAt, operationCount, complete, tabs]
       properties:
+        values:
+          type: string
+          x-extensible-enum: [off]
+          description: >-
+            `off` means trace.values omitted script and host values when this record ended.
+            Error messages are empty; metadata, downloads and the separate screenshot policy stay.
+            Absent when values were recorded.
         id:
           type: string
         taskId:
@@ -1178,6 +1185,13 @@ components:
       type: object
       required: [id, status, startedAt, operationCount, complete, tabs, operations]
       properties:
+        values:
+          type: string
+          x-extensible-enum: [off]
+          description: >-
+            `off` means trace.values omitted script and host values when this record ended.
+            Error messages are empty; metadata, downloads and the separate screenshot policy stay.
+            Absent when values were recorded.
         id:
           type: string
         taskId:
@@ -1311,6 +1325,13 @@ components:
       type: object
       required: [id, runId, name, kind, effect, startedAt, hasScreenshot, internal]
       properties:
+        values:
+          type: string
+          x-extensible-enum: [off]
+          description: >-
+            `off` means trace.values omitted script and host values when this record ended.
+            Error messages are empty; metadata, downloads and the separate screenshot policy stay.
+            Absent when values were recorded.
         id:
           type: string
         runId:
@@ -1789,7 +1810,7 @@ components:
             Neo's own screenshots. `perOperation`: after each write, after a failure the website
             or the script caused, and of each tab a run touched when it ends. `off`: none, from
             the next operation that ends (a screenshot already ordered is still taken). A
-            script's own `page.screenshot()` is its result and is kept either way. A name this
+            script's own `page.screenshot()` is its result, whose storage follows trace.values. A name this
             server does not have is skipped and listed in `unknownValues`.
         valueBytes:
           type: integer
@@ -1802,6 +1823,16 @@ components:
             them whole up to this many bytes, from the next operation that ends. `0` keeps the
             trace's own limits: 4 KiB arguments, 2 KiB results, 1 KiB strings. A higher value
             stores more of what a script typed and got.
+        values:
+          type: string
+          x-extensible-enum: [on, off]
+          default: on
+          description: >-
+            `off` omits script text, arguments, results, notes, host data, stored replies and
+            error messages from records, from the next operation or run that ends. Metadata
+            and downloads stay; screenshots follow trace.screenshots. Result blobs stay
+            fetchable for ten minutes after their write, then the next minute upkeep removes them. Existing
+            records are unchanged. Unknown names are skipped and listed in unknownValues.
     Error:
       type: object
       required: [code, message]

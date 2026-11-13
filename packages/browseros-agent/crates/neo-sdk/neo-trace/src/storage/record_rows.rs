@@ -17,6 +17,7 @@ use crate::{
 /// A list projection: deliberately excludes code, host data, results and replay bodies.
 #[derive(FromQueryResult)]
 pub(crate) struct RunSummaryRow {
+    pub(crate) values: Option<String>,
     pub(crate) id: String,
     pub(crate) task_id: Option<String>,
     pub(crate) status: String,
@@ -46,6 +47,7 @@ pub(crate) struct RunDetailRow {
 
 pub(crate) fn run_summary(row: RunSummaryRow) -> Result<RunSummary, TraceError> {
     Ok(RunSummary {
+        values: row.values,
         id: parse_id(&row.id)?,
         task_id: host_id(row.task_id.as_deref(), "task_id", TaskId::parse)?,
         tabs: tabs(row.tabs.as_deref())?,
@@ -87,6 +89,7 @@ pub(crate) fn operation_row(row: operations::Model) -> Result<OperationRow, Trac
     let seq = u32::try_from(row.seq).map_err(|_| TraceError::Corrupt("operation seq".into()))?;
     let attempt = row.attempt.and_then(|value| u32::try_from(value).ok());
     Ok(OperationRow {
+        values: row.values,
         site: json_column(row.site.as_deref())?,
         id: OperationId::new(run, seq),
         parent: row.parent_id.as_deref().map(parse_id).transpose()?,

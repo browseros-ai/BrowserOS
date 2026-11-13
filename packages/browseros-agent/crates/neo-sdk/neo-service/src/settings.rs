@@ -20,10 +20,10 @@
 
 use crate::setting::{
     Checked, FILE_READ_DIRS, SCREENSHOTS_OFF, SETTINGS, Setting, SettingValue, TAB_IDLE_CLOSE,
-    TRACE_RETENTION, TRACE_SCREENSHOTS, TRACE_VALUE_BYTES,
+    TRACE_RETENTION, TRACE_SCREENSHOTS, TRACE_VALUE_BYTES, TRACE_VALUES,
 };
 use crate::wire;
-use neo_trace::{RecordPolicy, Screenshots};
+use neo_trace::{RecordPolicy, Screenshots, Values};
 use std::collections::BTreeMap;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -136,7 +136,7 @@ impl Settings {
         Duration::from_secs(self.whole(&TRACE_RETENTION))
     }
 
-    /// `trace.screenshots` and `trace.valueBytes`: what the trace writer records. It gets them
+    /// `trace.screenshots`, `trace.valueBytes` and `trace.values`: what the trace writer records. It gets them
     /// in a message (`TraceSink::record_policy`), sent by a [`Settings::watch`] the app sets up.
     #[must_use]
     pub fn trace_policy(&self) -> RecordPolicy {
@@ -146,8 +146,13 @@ impl Settings {
                 Screenshots::PerOperation
             }
         };
+        let values = match self.value(&TRACE_VALUES) {
+            SettingValue::Choice("off") => Values::Off,
+            SettingValue::Choice(_) | SettingValue::Whole(_) | SettingValue::Dirs(_) => Values::On,
+        };
         RecordPolicy {
             screenshots,
+            values,
             value_bytes: usize::try_from(self.whole(&TRACE_VALUE_BYTES)).unwrap_or(usize::MAX),
         }
     }

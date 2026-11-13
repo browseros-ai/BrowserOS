@@ -22,6 +22,7 @@ import { clock, count, plural, seconds } from '../web/screen/units'
 import type { NeoOperation, RunDetail, RunSummary } from './api'
 import { textSize } from './api'
 import { firstStatement, formatCode } from './code-format'
+import { RUN_VALUES_OFF_NOTICE } from './trace-values'
 
 export interface RunMarkdownOptions {
   /** Characters of the reply (and of a failed run's error) shown inline; null shows all of it. */
@@ -219,6 +220,14 @@ function facts(detail: RunDetail): string[] {
   }
   if (detail.neo && !detail.neo.complete)
     lines.push("- Neo's record was read before every operation had ended")
+  if (detail.neo?.values === 'off') lines.push(`- ${RUN_VALUES_OFF_NOTICE}`)
+  const withoutValues = detail.neo?.operations.filter(
+    (operation) => operation.values === 'off',
+  )
+  if (withoutValues?.length)
+    lines.push(
+      `- Operations with values omitted (trace.values is off): ${withoutValues.map((operation) => `\`${operation.id}\``).join(', ')}`,
+    )
   return lines
 }
 

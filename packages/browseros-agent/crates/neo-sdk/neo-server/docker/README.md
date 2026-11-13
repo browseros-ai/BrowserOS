@@ -169,7 +169,7 @@ them, as the Neo image's README describes.
 |---|---|---|---|
 | `/data` | neo, 0700 | the folders below | yes |
 | `/data/profile` | neo | the browser profile: cookies and logins (`--password-store=basic`) | yes |
-| `/data/browserclaw` | neo | claw-sdk's `claw-sdk/trace.db` (runs, operations, screenshots, request-id history), `claw-sdk/outputs/` (the copy of each run's downloads and its reply's blobs, which the host reads; removed with the run after `trace.retentionSeconds`, 7 days by default), `claw-sdk/settings.json` (what the host set through `/v1/settings`, loaded at every start) and `logs/`. An image with an older store schema moves a newer store aside (`trace.db.broken-<ms>`) and starts empty | yes |
+| `/data/browserclaw` | neo | claw-sdk's `claw-sdk/trace.db` (runs, operations, screenshots, request-id history), `claw-sdk/outputs/` (the copy of each run's downloads and its reply's blobs, which the host reads; downloads removed with the run after `trace.retentionSeconds`, 7 days by default; blobs written under `trace.values: "off"` removed after ten minutes), `claw-sdk/settings.json` (what the host set through `/v1/settings`, loaded at every start) and `logs/`. An image with an older store schema moves a newer store aside (`trace.db.broken-<ms>`) and starts empty | yes |
 | `/data/downloads` | neo | downloads, where the browser saves them and `download.path()` points; Neo never deletes them | yes |
 | `/run/neo` | neo, group `NEO_HOST_GID`, 2750 | `host.sock` | no; set up at every start |
 
@@ -301,3 +301,11 @@ curl -fsSL "https://cdn.browseros.com/releases/browserclaw/$v/linux/release.json
 
 Then build and run `accept.sh` on both architectures. `accept.sh`'s `host-api` check fails if a browser
 stops passing its environment on to the server.
+
+### Keep values out of Neo's trace
+
+Before the first run, set `{"trace":{"values":"off","screenshots":"off"}}` through
+`PUT /v1/settings`. Run and operation records keep metadata and say `values: "off"`; the
+host's live reply remains complete. Neo retains download copies until trace retention.
+Result blobs written under off remain fetchable for ten minutes, including across a server
+restart, and the next minute upkeep removes them. Existing trace records are unchanged.

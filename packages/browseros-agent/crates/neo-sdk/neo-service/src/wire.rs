@@ -56,6 +56,7 @@ pub(crate) fn run_summary(run: &RunSummary) -> api::RunSummary {
 
 fn run_summary_fields(run: &RunSummary, fields: Fields) -> api::RunSummary {
     api::RunSummary {
+        values: run.values.clone(),
         id: run.id.to_string(),
         task_id: run.task_id.as_ref().map(ToString::to_string),
         tabs: run.tabs.iter().map(|tab| tab.0).collect(),
@@ -98,6 +99,7 @@ pub(crate) fn audit_run(summary: &RunSummary, operations: &[OperationRow]) -> ap
 /// screenshots `include=screenshots` asked for.
 pub(crate) fn run(run: &RunDetail, inlined: &Inlined, fields: Fields) -> api::Run {
     let api::RunSummary {
+        values,
         id,
         task_id,
         tabs,
@@ -122,6 +124,7 @@ pub(crate) fn run(run: &RunDetail, inlined: &Inlined, fields: Fields) -> api::Ru
         })
         .collect::<Vec<_>>();
     api::Run {
+        values,
         id,
         task_id,
         tabs,
@@ -184,6 +187,7 @@ pub(crate) fn operation(op: &OperationRow, inlined: &Inlined) -> api::Operation 
 /// Arguments, results and call logs are omitted. URL and title remain for the host's audit timeline.
 fn operation_fields(op: &OperationRow, inlined: &Inlined, fields: Fields) -> api::Operation {
     api::Operation {
+        values: op.values.clone(),
         id: op.id.to_string(),
         run_id: op.id.run.to_string(),
         parent_id: op.parent.map(|parent| parent.to_string()),
