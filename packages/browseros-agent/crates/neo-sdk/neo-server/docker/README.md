@@ -264,6 +264,10 @@ the browser restarts the server, and in a new container on the same `/data`. mir
 at every start of its own, so the saved set is what it wants now, not what an older mirrord or a hand
 `PATCH` left there. The settings and their ranges are in [the server's README](../README.md#settings).
 
+Neo keeps one blank tab of its own open at all times (`owner: "neo"` in `GET /v1/tabs`), so closing
+every other tab never ends the browser: mirrord's tab reset no longer needs a keeper tab of its own.
+Once the owner browses in that tab it is theirs again, and Neo opens a new blank one.
+
 ## Run it alone, for a quick look
 
 ```sh

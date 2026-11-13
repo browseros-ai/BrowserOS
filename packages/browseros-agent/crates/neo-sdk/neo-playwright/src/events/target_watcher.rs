@@ -143,6 +143,9 @@ impl Drop for TargetWatcher {
 #[derive(Debug)]
 struct WatcherRequest {
     closed: Option<TargetId>,
+    /// A tab the host stopped keeping for itself, and its address now: recorded as opened once
+    /// the events before `fence` are, as a tab the owner opens is (`Playwright::hand_back`).
+    handed_back: Option<(TargetId, String)>,
     /// The events this request needs handled: those broadcast before it was asked.
     fence: EventFence,
     done: oneshot::Sender<()>,
@@ -177,12 +180,18 @@ impl Requests {
     /// Asks the watcher to handle the events before `fence`, retire `closed`'s workers and
     /// bring the leases in line, and waits at most [`SYNCHRONIZE_BOUND`]. Whether it answered:
     /// a watcher that is gone answers at once, as there is nothing left to wait for.
-    async fn ask(&self, closed: Option<TargetId>, fence: EventFence) -> bool {
+    async fn ask(
+        &self,
+        closed: Option<TargetId>,
+        handed_back: Option<(TargetId, String)>,
+        fence: EventFence,
+    ) -> bool {
         let (done, wait) = oneshot::channel();
         if self
             .sender
             .send(WatcherRequest {
                 closed,
+                handed_back,
                 fence,
                 done,
             })
@@ -207,7 +216,7 @@ impl WatcherHandle {
     /// is gone answers at once.
     pub(crate) async fn synchronize(&self) {
         let fence = self.requests.fence();
-        self.requests.ask(None, fence).await;
+        self.requests.ask(None, None, fence).await;
     }
 
     /// A handle no watcher answers, for tests.
@@ -243,7 +252,15 @@ impl TargetWatcher {
     /// A confirmed explicit close also retires workers before Chromium finishes tearing
     /// down a renderer with unresolved promises (Playwright issue 43204).
     pub(crate) async fn synchronize(&self, closed: Option<TargetId>, fence: EventFence) -> bool {
-        self.requests.ask(closed, fence).await
+        self.requests.ask(closed, None, fence).await
+    }
+
+    /// Records `target`'s tab as opened at `url`, after every event received until now: the
+    /// host stopped keeping it for itself (`Playwright::hand_back`). Whether the watcher
+    /// answered in time.
+    pub(crate) async fn hand_back(&self, target: TargetId, url: String) -> bool {
+        let fence = self.requests.fence();
+        self.requests.ask(None, Some((target, url)), fence).await
     }
 
     /// Starts watching `browser`, recording page events through `writer` and frame lifecycles
@@ -705,9 +722,12 @@ impl Watcher {
                     if self.epoch.is_none() { self.tick().await; }
                     let fence = batch.iter().map(|request| request.fence).max().unwrap_or_default();
                     self.drain_through(&mut events, fence).await;
-                    for request in &batch {
+                    for request in &mut batch {
                         if let Some(target) = &request.closed {
                             for worker in self.writer.hub().workers.list(target) { self.close_worker(&worker.id); }
+                        }
+                        if let Some((target, url)) = request.handed_back.take() {
+                            self.handed_back(target, url);
                         }
                     }
                     // Every op synchronizes before it replies, so a listener the op added has
@@ -1144,6 +1164,26 @@ impl Watcher {
                 tab,
             });
         });
+    }
+
+    /// The host stopped keeping `target`'s tab for itself (the owner browsed in its blank tab):
+    /// scripts hear of it as of a tab the owner just opened. A tab not reported yet is recorded
+    /// when its URL comes, as any; one already closed is not news.
+    fn handed_back(&mut self, target: TargetId, url: String) {
+        let Some(page) = self.pages.get(&target) else {
+            return;
+        };
+        if !matches!(page.state, PageState::Reported) {
+            return;
+        }
+        let tab = page.tab;
+        self.writer.record(PageEvent::Opened(OpenedPage {
+            target,
+            opener: None,
+            url,
+            window: WindowKind::Tab,
+            tab,
+        }));
     }
 
     /// A popup's window lookup came back.
@@ -2462,6 +2502,7 @@ mod worker_observation_tests {
         let (done, mut answered) = oneshot::channel();
         watcher.deferred.push(WatcherRequest {
             closed: None,
+            handed_back: None,
             fence: EventFence(2),
             done,
         });

@@ -166,6 +166,7 @@ impl TestRig {
             trace: self.sink.clone(),
             shutdown: self.shutdown.clone(),
             orphan_grace,
+            blank_tab: None,
         })
     }
 

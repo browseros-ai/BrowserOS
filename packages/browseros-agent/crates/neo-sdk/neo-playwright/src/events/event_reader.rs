@@ -259,6 +259,9 @@ pub(crate) enum WindowPopup {
 #[derive(Debug, Default)]
 pub(crate) struct Tabs {
     listed: Option<Vec<(TargetId, PageHandle)>>,
+    /// The host's own tabs that listing named (`OpEnv::is_reserved_tab`): never handed out, and
+    /// never waited for as a tab not listed yet.
+    reserved: Vec<TargetId>,
 }
 
 impl Tabs {
@@ -287,6 +290,9 @@ impl Tabs {
             if let Some(page) = self.known(scope, target).await? {
                 return Ok(Some(page));
             }
+            if self.reserved.contains(target) {
+                return Ok(None);
+            }
             if let Some(tab) = closed() {
                 scope.run_state().events.remember_page(target, tab);
                 return Ok(Some(PageHandle::new(tab)));
@@ -311,9 +317,16 @@ impl Tabs {
                 .list_pages()
                 .await
                 .map_err(|error| scope.core_error(&error))?;
+            // Never the host's own tab: no event is delivered for it, at the page or the
+            // context, and none names it as an opener.
+            scope.reserved_tabs_settled(&listing.pages).await;
+            let (reserved, pages): (Vec<_>, Vec<_>) = listing
+                .pages
+                .into_iter()
+                .partition(|page| scope.is_reserved_tab(page.tab_id));
+            self.reserved = reserved.into_iter().map(|page| page.target_id).collect();
             self.listed = Some(
-                listing
-                    .pages
+                pages
                     .into_iter()
                     .map(|page| (page.target_id, PageHandle::new(page.tab_id)))
                     .collect(),
@@ -499,6 +512,10 @@ async fn ordinary_payload(
             let Some(popup) = popup_tab(pw, scope, opened, tabs, windows).await? else {
                 return Ok(None);
             };
+            scope.reserved_tabs_settled(&[]).await;
+            if scope.is_reserved_tab(popup.tab()) {
+                return Ok(None);
+            }
             let popup = NewTab {
                 page: popup,
                 url: opened.url.clone(),
@@ -524,6 +541,12 @@ async fn ordinary_payload(
             else {
                 return Ok(None);
             };
+            // The host's own tab (its blank tab) is no page of the script's. The browser
+            // announces it a moment before the host marks it, so the check waits for the mark.
+            scope.reserved_tabs_settled(&[]).await;
+            if scope.is_reserved_tab(page.tab()) {
+                return Ok(None);
+            }
             Payload::Page {
                 page,
                 url: opened.url.clone(),

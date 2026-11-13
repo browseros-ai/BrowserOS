@@ -33,7 +33,7 @@ use serde_json::{Map, Value, json};
 use super::PlaywrightFacade;
 use super::event_release::EventRelease;
 use super::op_marks::{self, Hold, OpMarks};
-use crate::browser::PageRef;
+use crate::browser::{NeoTab, PageRef};
 use crate::dispatch::{
     ErrorCode, LeafError, Method, MethodSpec, OpCtx, OperationError, PageChange, PageTarget,
     RegistryBuilder, RegistryError, RunCtx,
@@ -239,6 +239,11 @@ impl Method for PlaywrightOp {
         if ruled && let Some(refusal) = refused_page(op, self.spec.name, self.pages).await? {
             return Err(LeafError::definite(refusal));
         }
+        // Neo's blank tab first, then the close: a script's last tab, a task's tabs or the
+        // janitor's idle tab never take the browser's last tab with them (`NeoTab`).
+        if self.pages == PageEffect::Closes {
+            self.facade.keep_blank_tab().await;
+        }
         let input = input.resolved(page);
         let playwright = self.facade.get().await;
         let env = OpCtxEnv::new(
@@ -246,7 +251,8 @@ impl Method for PlaywrightOp {
             self.facade.hosted_mode(),
             Arc::clone(self.facade.front()),
             Arc::clone(self.facade.file_access()),
-        );
+        )
+        .keeping(self.facade.blank_tab().cloned());
         let result = op
             .race_classified(playwright.invoke(&env, self.op, input))
             .await;
@@ -674,6 +680,8 @@ pub(super) struct OpCtxEnv<'a, M> {
     file_access: Arc<FileAccess>,
     /// The run's one `RunState`, shared by all of its ops and dropped when the run ends.
     run_state: Arc<RunState>,
+    /// Neo's blank tab, which the engine keeps out of the op's listings and events.
+    blank_tab: Option<Arc<NeoTab>>,
 }
 
 impl<'a, M> OpCtxEnv<'a, M> {
@@ -690,7 +698,14 @@ impl<'a, M> OpCtxEnv<'a, M> {
             front,
             file_access,
             run_state: op.run().slot::<RunState>(),
+            blank_tab: None,
         }
+    }
+
+    /// The env, with the blank tab the sidecar keeps (`PlaywrightFacade::blank_tab`).
+    pub(super) fn keeping(mut self, blank_tab: Option<Arc<NeoTab>>) -> Self {
+        self.blank_tab = blank_tab;
+        self
     }
 }
 
@@ -701,6 +716,18 @@ impl<M> OpEnv for OpCtxEnv<'_, M> {
 
     fn file_access(&self) -> Option<&FileAccess> {
         Some(&self.file_access)
+    }
+
+    fn is_reserved_tab(&self, tab: TabId) -> bool {
+        self.op.tabs().is_neo(tab)
+    }
+
+    fn reserved_tabs_settled<'b>(&'b self, listed: &'b [(TabId, &'b str)]) -> BoxFuture<'b, ()> {
+        Box::pin(async move {
+            if let Some(blank_tab) = &self.blank_tab {
+                blank_tab.settle(listed).await;
+            }
+        })
     }
 
     fn view(&self) -> &BrowserView {

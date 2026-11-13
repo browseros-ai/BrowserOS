@@ -14,7 +14,7 @@ use tokio::fs;
 use tokio_util::sync::CancellationToken;
 
 use super::{AgentFront, HostHolds, TakeoverLock, tab_feed};
-use crate::browser::BrowserLink;
+use crate::browser::{BrowserLink, NeoTab};
 use crate::config::HostApiConfig;
 use crate::http::{BindError, HostListener};
 
@@ -137,6 +137,7 @@ impl HostApi {
         takeover: Arc<TakeoverLock>,
         front: Arc<AgentFront>,
         holds: Arc<HostHolds>,
+        blank_tab: Option<Arc<NeoTab>>,
         shutdown: CancellationToken,
     ) {
         let Self {
@@ -166,6 +167,11 @@ impl HostApi {
             xvnc,
             cdp_port,
             settings,
+            // `GET /v1/tabs` marks Neo's blank tab, which no script sees, as Neo's.
+            tab_owner: Arc::new(move |tab| {
+                let held = blank_tab.as_ref().and_then(|blank_tab| blank_tab.current());
+                (held == Some(tab)).then_some("neo")
+            }),
         });
         takeover.arm(Arc::clone(service.locks()));
         holds.arm({

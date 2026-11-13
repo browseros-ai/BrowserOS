@@ -23,7 +23,7 @@ use tokio::{fs, signal, time};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 
-use crate::browser::{BrowserLink, TabRegistry};
+use crate::browser::{BrowserLink, NeoTab, TabRegistry};
 use crate::builtins::{self, BuiltinDeps, CaptchaClaims, PlaywrightFacade, TabJanitor};
 use crate::config::{AppConfig, Defaults, HostedMode};
 use crate::dispatch::{Dispatcher, Observer, RegistryBuilder};
@@ -218,9 +218,10 @@ impl App {
             trace.clone(),
             Arc::clone(&browser),
             Arc::clone(&tabs),
-            Observer::new(playwright),
+            Observer::new(Arc::clone(&playwright) as _),
         ));
         let shutdown = CancellationToken::new();
+        let blank_tab = keep_blank_tab(&browser, &tabs, &store, &playwright, &shutdown);
         let runs = RunService::new(RunServiceParts {
             dispatcher: Arc::clone(&dispatcher),
             browser: Arc::clone(&browser),
@@ -230,6 +231,7 @@ impl App {
             settings: settings.clone(),
             shutdown: shutdown.clone(),
             orphan_grace: Defaults::ORPHAN_GRACE,
+            blank_tab: Some(Arc::clone(&blank_tab)),
         });
         let mcp = McpServer::new(runs, dispatcher.registry());
         // Armed by the host API with its locks and fits, for the janitor.
@@ -239,6 +241,7 @@ impl App {
             takeover,
             front,
             Arc::clone(&holds),
+            Some(blank_tab),
             shutdown.clone(),
         ));
         tokio::spawn(housekeeping(
@@ -312,6 +315,22 @@ impl fmt::Debug for App {
             .field("agent", &self.agent)
             .finish_non_exhaustive()
     }
+}
+
+/// Neo's blank tab (`NeoTab`), kept open for the process's life: every close first makes sure of
+/// it (`PlaywrightFacade::keep`), and a task follows the link's watch starts and its closes. The
+/// sidecar's alone: the Node-hosted embedding's host launched its own browser.
+fn keep_blank_tab(
+    browser: &Arc<BrowserLink>,
+    tabs: &Arc<TabRegistry>,
+    store: &TraceStore,
+    playwright: &Arc<PlaywrightFacade>,
+    shutdown: &CancellationToken,
+) -> Arc<NeoTab> {
+    let blank_tab = NeoTab::new(Arc::clone(browser), Arc::clone(tabs), store.clone());
+    playwright.keep(Arc::clone(&blank_tab));
+    tokio::spawn(Arc::clone(&blank_tab).follow(shutdown.clone()));
+    blank_tab
 }
 
 /// Tells the trace writer what to record (`trace.screenshots`, `trace.valueBytes`, `trace.values`) now and after

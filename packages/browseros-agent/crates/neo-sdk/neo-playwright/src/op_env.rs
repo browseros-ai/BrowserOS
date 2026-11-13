@@ -35,6 +35,26 @@ pub trait OpEnv: Send + Sync {
     /// `RunCtx::slot::<RunState>()`) and drops it with the run.
     fn run_state(&self) -> &Arc<RunState>;
 
+    /// Whether `tab` is one the host keeps for itself, which scripts never see or reach: neo-server's
+    /// blank tab, which keeps the browser alive when every other tab closes. The crate leaves it
+    /// out of `context.pages()`, out of page and popup events, and out of the tabs a context
+    /// listener attaches to; the host's own door refuses any op that names it. The default keeps
+    /// no tab.
+    fn is_reserved_tab(&self, _tab: TabId) -> bool {
+        false
+    }
+
+    /// Resolves once the host is not in the middle of opening, adopting or handing back a
+    /// reserved tab. The browser lists a tab, and announces it, a moment before the host can
+    /// mark it, so a listing or a page event is checked against [`OpEnv::is_reserved_tab`]
+    /// only after this: a reserved tab in it is then always marked. `listed` is the fresh
+    /// listing a script is about to be shown, each tab with its address (empty for an event):
+    /// a host that keeps a tab only while it is blank hands back one that now shows a page
+    /// first, so the script sees it. The default waits for nothing.
+    fn reserved_tabs_settled<'a>(&'a self, _listed: &'a [(TabId, &'a str)]) -> BoxFuture<'a, ()> {
+        Box::pin(future::ready(()))
+    }
+
     /// Whether this browser runs in hosted mode. Hosted BrowserOS suppresses console and
     /// page-error events by design (`events/event_op.rs`, `lease_runtime`), so listeners for
     /// them stay silent and a one-shot wait is refused. Hosts supply their startup mode; the

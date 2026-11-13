@@ -46,10 +46,13 @@ const SWEEP_BUDGET: Duration = Duration::from_secs(30);
 /// host's to keep alive with a read. Only `TabOrigin::Agent` tabs are candidates (the agent's own
 /// and their popups), so the owner's own tabs are never closed.
 ///
-/// It never closes the browser's last tab: closing it ends the browser and Neo's server
-/// (`TabJanitor::leaves_another`). "Last" counts every tab the browser lists, the owner's and
-/// the one it opened at launch included. When the idle tabs are all that is left, the one used
-/// most recently stays.
+/// Neo's blank tab (`NeoTab`) keeps the browser open, so every idle agent tab may close; each
+/// close first makes sure of that tab (`PlaywrightFacade::keep_blank_tab`). The janitor still
+/// never closes the browser's last tab (`TabJanitor::leaves_another`), as a fallback for a
+/// browser that would not open Neo's tab and for the Node-hosted embedding, which keeps none:
+/// closing it ends the browser and Neo's server. "Last" counts every tab the browser lists, the
+/// owner's and the one it opened at launch included. When the idle tabs are all that is left,
+/// the one used most recently stays.
 ///
 /// Each close is a `page.close` op that Neo submits through the dispatcher, in a run of its own
 /// with no `requestId` and no `taskId` (synthesis graft 8), so the trace records what Neo closed.

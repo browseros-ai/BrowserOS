@@ -8,6 +8,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use std::{future, io, mem};
 
+use browseros_core::TabId;
 use neo_playwright::RunState;
 use neo_service::Settings;
 use neo_trace::{
@@ -20,7 +21,7 @@ use tokio_util::sync::CancellationToken;
 use super::request_ledger::{Admission, LedgerLimits, RunTicket};
 use super::snapshot_tips::SnapshotTips;
 use super::{HostData, RequestLedger, RunHandle, RunMeta, RunReply, RunRequest};
-use crate::browser::{BrowserLink, PageRef, RunView, TabRegistry};
+use crate::browser::{BrowserLink, NeoTab, PageRef, RunView, TabRegistry};
 use crate::builtins;
 use crate::config::Defaults;
 use crate::dispatch::{
@@ -45,6 +46,8 @@ pub(crate) struct RunService {
     orphan_grace: Duration,
     /// How many delta tips each task was given (`snapshot_tips.rs`).
     snapshot_tips: SnapshotTips,
+    /// Neo's blank tab, left out of a run's initial pages; `None` in the hosted embedding.
+    blank_tab: Option<Arc<NeoTab>>,
     /// Makes the next run's task panic right after its start record, so tests can watch the
     /// panic boundary hold.
     #[cfg(test)]
@@ -69,6 +72,8 @@ pub(crate) struct RunServiceParts {
     pub(crate) shutdown: CancellationToken,
     /// `Defaults::ORPHAN_GRACE` in the app.
     pub(crate) orphan_grace: Duration,
+    /// Neo's blank tab (`NeoTab`), which the sidecar keeps; `None` in the hosted embedding.
+    pub(crate) blank_tab: Option<Arc<NeoTab>>,
 }
 
 impl RunService {
@@ -91,6 +96,7 @@ impl RunService {
             settings,
             shutdown,
             orphan_grace,
+            blank_tab,
         } = parts;
         Arc::new(Self {
             ledger: RequestLedger::new(store.clone(), trace.clone(), LedgerLimits::default()),
@@ -103,6 +109,7 @@ impl RunService {
             shutdown,
             orphan_grace,
             snapshot_tips: SnapshotTips::default(),
+            blank_tab,
             #[cfg(test)]
             crash_next_run: AtomicBool::new(false),
         })
@@ -315,7 +322,23 @@ impl RunService {
         };
         match listing {
             Ok(listing) => {
-                let pages: Vec<PageRef> = listing.pages.iter().map(PageRef::from).collect();
+                // Not Neo's blank tab: the prelude listens on every page it names, and no script
+                // sees that tab (`NeoTab`). One the owner browsed in is handed back first, so the
+                // run starts with their page.
+                if let Some(blank_tab) = &self.blank_tab {
+                    let listed: Vec<(TabId, &str)> = listing
+                        .pages
+                        .iter()
+                        .map(|page| (page.tab_id, page.url.as_str()))
+                        .collect();
+                    blank_tab.settle(&listed).await;
+                }
+                let pages: Vec<PageRef> = listing
+                    .pages
+                    .iter()
+                    .map(PageRef::from)
+                    .filter(|page| !self.tabs.is_neo(page.tab))
+                    .collect();
                 if pages.is_empty() {
                     return PageFacts {
                         pages: Vec::new(),

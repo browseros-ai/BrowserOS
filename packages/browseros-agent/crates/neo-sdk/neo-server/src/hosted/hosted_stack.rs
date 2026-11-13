@@ -101,6 +101,8 @@ impl HostedStack {
             trace: trace.clone(),
             shutdown: shutdown.clone(),
             orphan_grace: Defaults::ORPHAN_GRACE,
+            // The host launched its own browser and keeps its own tabs.
+            blank_tab: None,
         });
         tokio::spawn(App::hosted_housekeeping(
             TabJanitor::new(

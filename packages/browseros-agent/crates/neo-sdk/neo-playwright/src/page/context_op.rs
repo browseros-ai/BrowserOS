@@ -80,7 +80,8 @@ struct NoArgs {}
 options!(NoArgs);
 
 /// `context.pages()`: every tab the run's view admits, the owner's and other sessions' tabs
-/// included (D8, the owner's decision: no ownership filter).
+/// included (D8, the owner's decision: no ownership filter), except a tab the host keeps for
+/// itself (`OpEnv::is_reserved_tab`).
 #[derive(Debug, Serialize, TS)]
 #[ts(rename = "ContextPages")]
 struct Pages {
@@ -155,9 +156,13 @@ async fn pages(
         .list_pages()
         .await
         .map_err(|error| scope.core_error(&error))?;
+    // The host's own tab (its blank tab) is no page of the script's; one the owner browsed in
+    // is handed back first, and listed.
+    scope.reserved_tabs_settled(&listing.pages).await;
     let pages = listing
         .pages
         .into_iter()
+        .filter(|page| !scope.is_reserved_tab(page.tab_id))
         .map(|page| PageEntry {
             page: PageHandle::new(page.tab_id),
             url: page.url,

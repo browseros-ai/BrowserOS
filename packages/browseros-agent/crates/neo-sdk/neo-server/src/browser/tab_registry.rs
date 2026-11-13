@@ -41,6 +41,9 @@ pub(crate) enum TabOrigin {
     Agent,
     /// Anything else: the owner's tabs and their popups, tabs from before a Neo restart.
     Found,
+    /// Neo's own blank tab (`NeoTab`), which keeps the browser open when every other tab closes.
+    /// No script sees or reaches it, no task takes it, and the janitor never closes it.
+    Neo,
 }
 
 #[derive(Default)]
@@ -218,6 +221,47 @@ impl TabRegistry {
     /// Core now shows a replacement target for this tab.
     pub(crate) fn forget_gone(&self, tab: TabId) {
         self.lock().gone.remove(&tab);
+    }
+
+    /// `tab` is Neo's blank tab from now on (`NeoTab`), and stops being any task's. Neo just
+    /// listed or opened it, so it is open.
+    pub(crate) fn make_neo(&self, tab: TabId) {
+        let mut state = self.lock();
+        let entry = state.entry(&PageRef { tab }, Instant::now());
+        entry.origin = TabOrigin::Neo;
+        state.tasks.detach(tab);
+    }
+
+    /// `tab` is no longer Neo's: the owner browsed in it, so it is theirs, as a tab they
+    /// opened is (`Found`): scripts see it, and the janitor never closes it.
+    pub(crate) fn release_neo(&self, tab: TabId) {
+        if let Some(entry) = self.lock().open.get_mut(&tab)
+            && entry.origin == TabOrigin::Neo
+        {
+            entry.origin = TabOrigin::Found;
+        }
+    }
+
+    /// Whether `tab` is Neo's blank tab, which scripts never see and the door refuses.
+    #[must_use]
+    pub(crate) fn is_neo(&self, tab: TabId) -> bool {
+        self.lock()
+            .open
+            .get(&tab)
+            .is_some_and(|entry| entry.origin == TabOrigin::Neo)
+    }
+
+    /// Whether `tab` may become Neo's blank tab by adoption: it is not the agent's and no task
+    /// Neo remembers owns it. The trace's own task links are the caller's to check, since the
+    /// registry starts empty after a server restart.
+    #[must_use]
+    pub(crate) fn adoptable(&self, tab: TabId) -> bool {
+        let state = self.lock();
+        state
+            .open
+            .get(&tab)
+            .is_none_or(|entry| entry.origin != TabOrigin::Agent)
+            && state.tasks.owner(tab).is_none()
     }
 
     /// Whether an admitted operation has registered this tab and it has not since closed.

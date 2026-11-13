@@ -79,6 +79,6 @@ mod wire;
 
 pub use host_auth::{HostAuth, HostToken, PeerRule, TokenError};
 pub use host_service::{PeerInfo, host_router, host_service};
-pub use service::{Service, ServiceInputs};
+pub use service::{Service, ServiceInputs, TabOwner};
 pub use settings::{Settings, SettingsDefaults};
 pub use tab_stamps::TabFence;

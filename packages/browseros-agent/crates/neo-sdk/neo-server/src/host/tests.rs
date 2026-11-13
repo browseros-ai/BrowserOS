@@ -19,7 +19,7 @@ use tokio::{fs, time};
 use tokio_util::sync::CancellationToken;
 
 use super::{HostApi, HostInputs, TakeoverLock};
-use crate::browser::{BrowserLink, TabRegistry};
+use crate::browser::{Adopt, BrowserLink, NeoTab, TabRegistry};
 use crate::config::HostApiConfig;
 use crate::dispatch::{Caller, ErrorCode, MethodSpec, OperationError, Policy, PolicyCheck};
 use crate::test_support::{CLOSED_XVNC, FakeCdp};
@@ -45,6 +45,8 @@ struct Host {
     /// The settings the bind decided on, as the app hands them to the janitor.
     settings: Settings,
     fake: Arc<FakeCdp>,
+    /// Neo's blank tab, as `GET /v1/tabs` marks it. Nothing opens one until a test asks.
+    blank_tab: Arc<NeoTab>,
     socket: PathBuf,
     dir: TempDir,
 }
@@ -64,12 +66,14 @@ impl Host {
         token: Option<&str>,
     ) -> Result<Self, Box<dyn Error>> {
         let connect = Arc::clone(&fake);
+        let tabs = Arc::new(TabRegistry::new());
         let link = BrowserLink::start_with(
             NativeCapabilities::default(),
-            Arc::new(TabRegistry::new()),
+            Arc::clone(&tabs),
             move || future::ready(connect.connect()),
         );
         let store = TraceStore::open(&dir.path().join("trace.db")).await?;
+        let blank_tab = NeoTab::new(Arc::clone(&link), tabs, store.clone());
         let redactor = Redactor::new(RedactionLimits::default());
         let (shots, screenshots) = neo_trace::screenshot_queue();
         let sink = neo_trace::spawn_writer(&store, redactor, WriterConfig::default(), Some(shots));
@@ -105,6 +109,7 @@ impl Host {
             Arc::clone(&takeover),
             Arc::default(),
             Arc::default(),
+            Some(Arc::clone(&blank_tab)),
             shutdown.clone(),
         ));
         Ok(Self {
@@ -113,6 +118,7 @@ impl Host {
             takeover,
             settings,
             fake,
+            blank_tab,
             socket: config.socket,
             dir,
         })
@@ -472,5 +478,48 @@ async fn a_lock_on_a_tab_no_listing_had_ends_when_the_tab_closes() -> TestResult
     );
     host.shutdown.cancel();
     within(host.serving).await??;
+    Ok(())
+}
+
+/// `GET /v1/tabs` marks Neo's blank tab `owner: "neo"`. Once the owner browses in it, it is
+/// theirs and unmarked, and the one new blank tab Neo keeps instead carries the mark.
+#[tokio::test]
+async fn tabs_mark_neos_blank_tab_and_follow_its_hand_back() -> Result<(), Box<dyn Error>> {
+    let fake = FakeCdp::new();
+    let launch = fake.open_tab("about:blank", "");
+    let host = Host::start_on(fake, tempfile::tempdir()?, Some(TOKEN)).await?;
+    let owners = |reply: &Reply| -> Vec<(i64, Option<Value>)> {
+        let mut owners: Vec<_> = reply.body["items"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|item| Some((item["tabId"].as_i64()?, item.get("owner").cloned())))
+            .collect();
+        owners.sort_by_key(|(tab, _)| *tab);
+        owners
+    };
+
+    assert_eq!(
+        within(host.blank_tab.ensure(Adopt::Allowed)).await?,
+        Some(launch),
+        "the launch tab serves"
+    );
+    let listed = request(&host.socket, "GET", "/v1/tabs", Some(TOKEN), None).await?;
+    assert_eq!(listed.status, 200, "{}", listed.body);
+    assert_eq!(owners(&listed), vec![(launch.0, Some(json!("neo")))]);
+
+    assert!(
+        host.fake
+            .navigate_tab(launch, "https://example.com/", "Example")
+    );
+    let fresh = within(host.blank_tab.ensure(Adopt::Never))
+        .await?
+        .ok_or("Neo's new blank tab")?;
+    let listed = request(&host.socket, "GET", "/v1/tabs", Some(TOKEN), None).await?;
+    assert_eq!(
+        owners(&listed),
+        vec![(launch.0, None), (fresh.0, Some(json!("neo")))],
+        "one blank tab of Neo's; the owner's tab has no owner field"
+    );
     Ok(())
 }

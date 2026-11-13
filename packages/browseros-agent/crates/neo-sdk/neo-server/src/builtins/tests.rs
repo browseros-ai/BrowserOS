@@ -18,8 +18,9 @@ use neo_playwright::{
 use neo_service::{Settings, SettingsDefaults};
 use neo_takeover::{Lock, LockBinding, LockTtl, Locks, Reads, TabHold};
 use neo_trace::{
-    Delivery, Effect, ErrorOwner, OperationId, OperationRow, Outcome, RedactionLimits, Redactor,
-    RunId, RunStatus, TraceSink, TraceStore, WriterConfig, spawn_writer,
+    Delivery, Effect, EpochMillis, ErrorOwner, OperationId, OperationKind, OperationRow,
+    OperationStarted, Outcome, RedactionLimits, Redactor, RunEnded, RunId, RunStarted, RunStatus,
+    TaskId, TraceSink, TraceStore, WriterConfig, spawn_writer,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -27,12 +28,13 @@ use tempfile::TempDir;
 use tokio::sync::Notify;
 use tokio::task;
 use tokio::time::{self, Instant};
+use tokio_util::sync::CancellationToken;
 
 use super::event_release::EventRelease;
 use super::op_marks::{Hold, OpMarks};
 use super::playwright_ops::{self, FILE_PAGES, OpCtxEnv, leaf_error};
 use super::{BuiltinDeps, CaptchaClaims, PlaywrightFacade, TabJanitor};
-use crate::browser::{BrowserLink, PageRef, TabRegistry};
+use crate::browser::{Adopt, BrowserLink, NeoTab, PageRef, TabRegistry};
 use crate::config::Defaults;
 use crate::dispatch::{
     Call, Dispatcher, ErrorCode, EventLog, LeafError, Lifetime, Listing, Method, MethodSpec,
@@ -4898,5 +4900,372 @@ async fn tests_that_a_takeover_while_dollar_eval_runs_decides_as_for_locator_eva
     )
     .await?;
     assert_eq!(value(reply)?, json!({ "read": OWNERS_TEXT }));
+    Ok(())
+}
+
+/// Neo's blank tab, armed on this harness's facade as the sidecar arms it.
+fn blank_tab(harness: &Harness) -> Arc<NeoTab> {
+    let blank = NeoTab::new(
+        Arc::clone(&harness.link),
+        Arc::clone(&harness.tabs),
+        harness.store.clone(),
+    );
+    harness.playwright.keep(Arc::clone(&blank));
+    blank
+}
+
+/// The tabs `context.pages()` lists, by id.
+fn listed_tabs(pages: &Value) -> Vec<i64> {
+    pages["pages"]
+        .as_array()
+        .map(|pages| {
+            pages
+                .iter()
+                .filter_map(|entry| entry["page"]["tab"].as_i64())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// The owner, 2026-11-12: "keep a blank tab open always". Neo opens one tab of its own, keeps the
+/// same one, and no script sees or reaches it: `context.pages()` leaves it out, a handle built for
+/// it is refused before anything is sent, and the janitor never counts it as the agent's.
+#[tokio::test]
+async fn neo_keeps_one_blank_tab_that_no_script_sees_or_reaches() -> Result<(), Box<dyn Error>> {
+    let harness = Harness::new().await?;
+    let blank = blank_tab(&harness);
+    let tab = within(blank.ensure(Adopt::Allowed))
+        .await?
+        .ok_or("Neo's tab opened")?;
+    assert_eq!(
+        harness.fake.count("Browser.createTab"),
+        1,
+        "nothing to adopt: opened"
+    );
+    assert_eq!(
+        within(blank.ensure(Adopt::Allowed)).await?,
+        Some(tab),
+        "the same tab again: never two"
+    );
+    assert_eq!(harness.fake.count("Browser.createTab"), 1);
+    assert!(harness.tabs.is_neo(tab));
+    assert!(
+        !harness.tabs.agent_tabs().contains(&tab),
+        "not the agent's: the janitor never closes it"
+    );
+
+    let (run, guard) = harness.run()?;
+    let script = page_of(&value(
+        harness.submit(&run, "context.newPage", json!({})).await,
+    )?)?;
+    let pages = value(harness.submit(&run, "context.pages", json!({})).await)?;
+    assert_eq!(
+        listed_tabs(&pages),
+        vec![script.tab.0],
+        "context.pages() lists the script's tab, not Neo's"
+    );
+    let refused = failure(
+        harness
+            .submit(
+                &run,
+                "page.opener",
+                json!({ "page": { "$neo": "page", "tab": tab.0 } }),
+            )
+            .await,
+    )?;
+    assert_eq!(
+        (
+            refused.error.owner(),
+            refused.error.code(),
+            refused.delivery
+        ),
+        (
+            ErrorOwner::Script,
+            ErrorCode::INVALID_INPUT,
+            Delivery::NotSent
+        ),
+        "a handle a script built for Neo's tab is refused: {}",
+        refused.error
+    );
+    Harness::finish(guard);
+    Ok(())
+}
+
+/// At a watch start Neo adopts a blank tab no one owns (the launch tab, or its own tab restored
+/// by the browser) rather than open another: not a task's, as the trace remembers it after a
+/// server restart, and never while the server runs.
+#[tokio::test]
+async fn neo_adopts_a_free_blank_tab_only_at_a_watch_start() -> Result<(), Box<dyn Error>> {
+    let harness = Harness::new().await?;
+    let tasked = harness.fake.open_tab("about:blank", "");
+    let free = harness.fake.open_tab("chrome://newtab/", "New Tab");
+    // A run of task `mail` touched the first blank tab before this server started.
+    let run = RunId::new();
+    harness.sink.run_started(RunStarted {
+        id: run,
+        code: String::new(),
+        request_id: None,
+        task_id: Some(TaskId::parse("mail")?),
+        host_data: None,
+        at: EpochMillis::now(),
+    });
+    harness.sink.op_started(OperationStarted {
+        site: None,
+        id: OperationId::new(run, 1),
+        parent: None,
+        name: "page.title".into(),
+        kind: OperationKind::Builtin,
+        effect: Effect::Read,
+        tab: Some(tasked),
+        args: Value::Null,
+        at: EpochMillis::now(),
+    });
+    harness.sink.run_ended(RunEnded {
+        id: run,
+        status: RunStatus::Ok,
+        error: None,
+        result: None,
+        replay: None,
+        at: EpochMillis::now(),
+    });
+    harness.sink.flush().await?;
+
+    let blank = blank_tab(&harness);
+    let opened = within(blank.ensure(Adopt::Never))
+        .await?
+        .ok_or("Neo's tab")?;
+    assert!(
+        opened != free && opened != tasked && harness.fake.count("Browser.createTab") == 1,
+        "while the server runs it never adopts: a script may be about to use that tab"
+    );
+    // The browser restarts without it, say: the next watch start may adopt.
+    assert!(harness.fake.close_tab(opened), "Neo's tab goes");
+    assert_eq!(
+        within(blank.ensure(Adopt::Allowed)).await?,
+        Some(free),
+        "at a watch start the free blank tab is adopted, not the task's"
+    );
+    assert_eq!(
+        harness.fake.count("Browser.createTab"),
+        1,
+        "adopted, not opened"
+    );
+    assert!(!harness.tabs.is_neo(tasked), "a task's tab is never Neo's");
+    Ok(())
+}
+
+/// When Neo's tab closes while the server runs, it opens another at once.
+#[tokio::test]
+async fn neo_opens_another_blank_tab_when_its_own_closes() -> Result<(), Box<dyn Error>> {
+    let harness = Harness::new().await?;
+    let blank = blank_tab(&harness);
+    let shutdown = CancellationToken::new();
+    let following = tokio::spawn(Arc::clone(&blank).follow(shutdown.clone()));
+    let first = within(async {
+        loop {
+            if let Some(tab) = blank.current() {
+                return tab;
+            }
+            time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await?;
+    assert!(harness.fake.close_tab(first), "the owner closes Neo's tab");
+    let second = within(async {
+        loop {
+            if let Some(tab) = blank.current().filter(|tab| *tab != first) {
+                return tab;
+            }
+            time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await?;
+    assert!(harness.tabs.is_neo(second) && !harness.tabs.is_neo(first));
+    assert_eq!(
+        harness.fake.count("Browser.createTab"),
+        2,
+        "one at a time, never two"
+    );
+    shutdown.cancel();
+    within(following).await??;
+    Ok(())
+}
+
+/// "Open it first, then close": a script closing its last tab leaves the browser Neo's blank
+/// tab, and the janitor may close an idle agent tab that is the only other tab.
+#[tokio::test]
+async fn a_close_makes_sure_of_neos_tab_first() -> Result<(), Box<dyn Error>> {
+    let harness = Harness::new().await?;
+    let blank = blank_tab(&harness);
+    let (run, guard) = harness.run()?;
+    let only = page_of(&value(
+        harness.submit(&run, "context.newPage", json!({})).await,
+    )?)?;
+    value(
+        harness
+            .submit(&run, "page.close", json!({ "page": handle(&only) }))
+            .await,
+    )?;
+    let calls: Vec<String> = harness
+        .fake
+        .calls()
+        .into_iter()
+        .map(|call| call.method)
+        .filter(|method| method == "Browser.createTab" || method == "Browser.closeTab")
+        .collect();
+    assert_eq!(
+        calls,
+        vec!["Browser.createTab", "Browser.createTab", "Browser.closeTab"],
+        "the script's tab, then Neo's tab, then the close"
+    );
+    let neo = blank.current().ok_or("Neo's tab")?;
+    assert!(harness.is_open(neo).await?, "the browser keeps Neo's tab");
+    Harness::finish(guard);
+
+    // The janitor closes an idle agent tab even when it is the only other tab.
+    let (run, guard) = harness.run()?;
+    let idle = page_of(&value(
+        harness.submit(&run, "context.newPage", json!({})).await,
+    )?)?;
+    Harness::finish(guard);
+    let later = Instant::now() + harness.settings.tab_idle_close();
+    within(harness.janitor().sweep(later))
+        .await?
+        .ok_or("the sweep ran")?;
+    assert!(
+        !harness.is_open(idle.tab).await?,
+        "closed after the idle time"
+    );
+    assert!(harness.is_open(neo).await?, "Neo's tab stays");
+    Ok(())
+}
+
+/// A script waiting for a new page never gets Neo's blank tab: Neo opens it while the wait
+/// watches, so its open is among the events the wait reads, and the reader leaves it out. The
+/// wait returns the next tab instead.
+#[tokio::test]
+async fn a_script_waiting_for_a_page_never_gets_neos_tab() -> Result<(), Box<dyn Error>> {
+    let harness = Harness::new().await?;
+    let blank = blank_tab(&harness);
+    let (run, guard) = harness.run()?;
+    let wait = json!({
+        "call": { "api": "browserContext.waitForEvent", "timeoutMs": 10000 },
+        "page": null,
+        "event": "page",
+        "since": 0,
+    });
+    let pending = harness
+        .dispatcher
+        .submit(&run, Call::script("events.wait".to_owned(), wait, None));
+    within(async {
+        while harness.fake.count("Target.getTargets") == 0 {
+            time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await?;
+    // The owner closed Neo's tab, say: Neo opens another while the script waits.
+    let neo = within(blank.ensure(Adopt::Never))
+        .await?
+        .ok_or("Neo's tab")?;
+    let owners = harness.fake.open_tab("https://example.com/", "Example");
+    let reply = value(within(pending.wait()).await?)?;
+    let text = reply.to_string();
+    assert!(
+        text.contains(&format!("\"tab\":{}", owners.0))
+            && !text.contains(&format!("\"tab\":{}", neo.0)),
+        "the wait got the owner's new tab, never Neo's: {text}"
+    );
+    Harness::finish(guard);
+    Ok(())
+}
+
+/// In a fresh browser Neo's tab is often the one the owner sees. Once they browse in it, it is
+/// theirs: a new run lists their page at once, Neo keeps one new blank tab instead (never two),
+/// and the janitor never closes the owner's tab.
+#[tokio::test]
+async fn neo_hands_its_tab_back_once_the_owner_browses_in_it() -> Result<(), Box<dyn Error>> {
+    let harness = Harness::new().await?;
+    let launch = harness.fake.open_tab("about:blank", "");
+    let blank = blank_tab(&harness);
+    assert_eq!(
+        within(blank.ensure(Adopt::Allowed)).await?,
+        Some(launch),
+        "the launch tab serves"
+    );
+    assert!(
+        harness
+            .fake
+            .navigate_tab(launch, "https://example.com/", "Example")
+    );
+
+    let (run, guard) = harness.run()?;
+    let pages = value(harness.submit(&run, "context.pages", json!({})).await)?;
+    assert_eq!(
+        listed_tabs(&pages),
+        vec![launch.0],
+        "the run lists the owner's page at once, and not Neo's new tab"
+    );
+    Harness::finish(guard);
+    let fresh = blank.current().ok_or("Neo's new tab")?;
+    assert!(
+        fresh != launch && harness.tabs.is_neo(fresh) && !harness.tabs.is_neo(launch),
+        "the new blank tab is Neo's, the owner's tab is not"
+    );
+    assert_eq!(
+        harness.fake.count("Browser.createTab"),
+        1,
+        "one new tab: the browser has the owner's and Neo's, never two of Neo's"
+    );
+
+    let later = Instant::now() + harness.settings.tab_idle_close();
+    let _swept = within(harness.janitor().sweep(later)).await?;
+    assert!(
+        harness.is_open(launch).await? && harness.is_open(fresh).await?,
+        "the janitor closes neither the owner's tab nor Neo's"
+    );
+    Ok(())
+}
+
+/// A script waiting for the owner's next page hears of a tab Neo hands back, as it hears of a
+/// tab the owner opens.
+#[tokio::test]
+async fn a_handed_back_tab_reaches_a_waiting_script_as_a_new_page() -> Result<(), Box<dyn Error>> {
+    let harness = Harness::new().await?;
+    let launch = harness.fake.open_tab("about:blank", "");
+    let blank = blank_tab(&harness);
+    assert_eq!(within(blank.ensure(Adopt::Allowed)).await?, Some(launch));
+    let (run, guard) = harness.run()?;
+    let wait = json!({
+        "call": { "api": "browserContext.waitForEvent", "timeoutMs": 10000 },
+        "page": null,
+        "event": "page",
+        "since": 0,
+    });
+    let pending = harness
+        .dispatcher
+        .submit(&run, Call::script("events.wait".to_owned(), wait, None));
+    within(async {
+        while harness.fake.count("Target.getTargets") == 0 {
+            time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await?;
+    assert!(
+        harness
+            .fake
+            .navigate_tab(launch, "https://example.com/", "Example")
+    );
+    // Neo's 30-second check, run now.
+    let fresh = within(blank.ensure(Adopt::Never))
+        .await?
+        .ok_or("Neo's new tab")?;
+    let reply = value(within(pending.wait()).await?)?;
+    let text = reply.to_string();
+    assert!(
+        text.contains(&format!("\"tab\":{}", launch.0))
+            && !text.contains(&format!("\"tab\":{}", fresh.0)),
+        "the wait got the owner's page, never Neo's new tab: {text}"
+    );
+    Harness::finish(guard);
     Ok(())
 }

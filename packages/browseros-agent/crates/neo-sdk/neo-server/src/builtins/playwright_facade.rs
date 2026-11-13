@@ -1,14 +1,14 @@
 //! The process's one neo-playwright facade.
 
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 
 use browseros_core::TargetId;
 
 use futures_util::future::BoxFuture;
 use neo_playwright::{EventFence, FileAccess, Playwright};
-use tokio::sync::OnceCell;
+use tokio::sync::{OnceCell, SetOnce};
 
-use crate::browser::BrowserLink;
+use crate::browser::{Adopt, BrowserLink, NeoTab};
 use crate::dispatch::{EventLog, WorkerFact};
 use crate::host::AgentFront;
 
@@ -30,6 +30,9 @@ pub(crate) struct PlaywrightFacade {
     /// Required by the SDK constructor so neither startup mode can omit filesystem policy.
     file_access: Arc<FileAccess>,
     playwright: OnceCell<Arc<Playwright>>,
+    /// Neo's blank tab, made sure of before every close; unset in the Node-hosted embedding,
+    /// whose host launched the browser itself.
+    blank_tab: SetOnce<Arc<NeoTab>>,
 }
 
 impl PlaywrightFacade {
@@ -46,6 +49,7 @@ impl PlaywrightFacade {
             front,
             file_access,
             playwright: OnceCell::new(),
+            blank_tab: SetOnce::new(),
         });
         // Waits for a first connect that may never come; nothing waits on this task.
         let early = Arc::clone(&facade);
@@ -56,6 +60,40 @@ impl PlaywrightFacade {
     }
 
     /// The browser's configured startup mode.
+    /// From now on every close first makes sure of Neo's blank tab, every op's listings and
+    /// page events skip it (`OpCtxEnv`), and a tab Neo hands back reaches running scripts as a
+    /// new page. Called once by the sidecar; a second call changes nothing.
+    pub(crate) fn keep(self: &Arc<Self>, blank_tab: Arc<NeoTab>) {
+        // Weak: the facade holds the blank tab, which must not keep the facade alive.
+        let facade = Arc::downgrade(self);
+        blank_tab.on_hand_back(Box::new(move |target, url| {
+            let facade = Weak::clone(&facade);
+            Box::pin(async move {
+                // A Playwright not started yet has no run to tell.
+                let playwright = facade
+                    .upgrade()
+                    .and_then(|facade| facade.playwright.get().cloned());
+                if let Some(playwright) = playwright {
+                    playwright.hand_back(target, url).await;
+                }
+            })
+        }));
+        let _ = self.blank_tab.set(blank_tab);
+    }
+
+    /// Neo's blank tab, when the sidecar keeps one.
+    pub(crate) fn blank_tab(&self) -> Option<&Arc<NeoTab>> {
+        self.blank_tab.get()
+    }
+
+    /// Makes sure Neo's blank tab is open before a close, without adopting another tab (a script
+    /// may be about to use it). Nothing when the sidecar keeps none.
+    pub(crate) async fn keep_blank_tab(&self) {
+        if let Some(blank_tab) = self.blank_tab.get() {
+            blank_tab.ensure(Adopt::Never).await;
+        }
+    }
+
     pub(crate) fn hosted_mode(&self) -> bool {
         self.hosted
     }

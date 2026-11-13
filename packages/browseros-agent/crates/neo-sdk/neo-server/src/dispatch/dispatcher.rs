@@ -683,6 +683,14 @@ impl Dispatcher {
     /// Checks a handle against core's cache, with no CDP call, and names the owner of a dead
     /// one: this script if it closed the page itself, Neo otherwise.
     async fn resolve(&self, run: &RunCtx, tab: TabId) -> Result<ResolvedPage, OperationError> {
+        // Neo's blank tab keeps the browser open (`NeoTab`): no listing gives it to a script, and
+        // a handle a script built for it itself is refused here, before anything reaches it.
+        if self.tabs.is_neo(tab) {
+            return Err(OperationError::script(
+                ErrorCode::INVALID_INPUT,
+                "this tab is Neo's own blank tab, which keeps the browser open; a script cannot use it",
+            ));
+        }
         // Sample immediately before the cache read. A detach after this read invalidates the
         // registry write even if its close record was evicted before the write resumes.
         let seen = self.tabs.seen();

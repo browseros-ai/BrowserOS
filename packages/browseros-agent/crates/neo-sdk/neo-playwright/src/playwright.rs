@@ -128,6 +128,14 @@ impl Playwright {
         self.watcher.synchronize(None, fence).await
     }
 
+    /// The host stopped keeping `target`'s tab for itself (`OpEnv::is_reserved_tab` reads false
+    /// for it from now on): the owner browsed in it, at `url`. Scripts hear of it as of a tab
+    /// the owner just opened, a context's `page` event, after every event received until now.
+    /// Whether the watcher answered within 2 s.
+    pub async fn hand_back(&self, target: TargetId, url: String) -> bool {
+        self.watcher.hand_back(target, url).await
+    }
+
     /// Whether every event before `fence` is in the log, without waiting: read by the watcher
     /// and none of them held back in a tab's line.
     #[must_use]
