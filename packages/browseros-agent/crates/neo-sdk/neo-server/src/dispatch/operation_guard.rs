@@ -13,8 +13,8 @@ use tokio::sync::oneshot;
 
 use super::op_ctx::OpState;
 use super::{
-    Answer, CallSite, ErrorCode, LeafError, Lifetime, MethodSpec, Observation, OpFailure, OpLine,
-    OpReply, OperationError, PageFact, RunCtx, StopReason,
+    Answer, CallSite, ErrorCode, FrameVersion, LeafError, Lifetime, MethodSpec, Observation,
+    OpFailure, OpLine, OpReply, OperationError, PageFact, RunCtx, StopReason,
 };
 use crate::browser::PageRef;
 
@@ -261,10 +261,22 @@ impl OperationGuard {
         pages: Vec<PageFact>,
         default_page: Option<PageRef>,
         observed: Option<Observation>,
+        frames: Vec<FrameVersion>,
     ) {
         if let Some(open) = self.open.take() {
-            settle(open, ending, pages, default_page, observed);
+            settle(open, ending, pages, default_page, observed, frames);
         }
+    }
+
+    /// [`finish`](Self::finish) for an op the door ended before it ran: no page facts and no
+    /// observation of its own.
+    pub(super) fn end_early(
+        self,
+        ending: Ending,
+        default_page: Option<PageRef>,
+        frames: Vec<FrameVersion>,
+    ) {
+        self.finish(ending, Vec::new(), default_page, None, frames);
     }
 }
 
@@ -276,7 +288,7 @@ impl Drop for OperationGuard {
             } else {
                 open.run.stop_reason().map_or(Ending::Lost, Ending::Stopped)
             };
-            settle(open, ending, Vec::new(), None, None);
+            settle(open, ending, Vec::new(), None, None, Vec::new());
         }
     }
 }
@@ -288,6 +300,7 @@ fn settle(
     pages: Vec<PageFact>,
     default_page: Option<PageRef>,
     observed: Option<Observation>,
+    frames: Vec<FrameVersion>,
 ) {
     let Open {
         state,
@@ -397,6 +410,7 @@ fn settle(
         picked_page: state.bound_page(),
         pumped,
         completed_publications: state.take_publications(),
+        frames,
     });
 }
 

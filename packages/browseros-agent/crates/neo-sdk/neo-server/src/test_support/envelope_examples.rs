@@ -132,6 +132,7 @@ fn bare(outcome: Result<Value, OpFailure>) -> OpReply {
         picked_page: None,
         pumped: 0,
         completed_publications: Vec::new(),
+        frames: Vec::new(),
     }
 }
 

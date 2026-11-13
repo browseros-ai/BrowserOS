@@ -63,6 +63,8 @@ export class BrowserContext extends EventEmitter {
   readonly #handed = new WeakSet<Page>()
   /** Set once the run's page exists: a page first seen after it is working (`Page._working`). */
   #started = false
+  /** The frame versions of the reply `_applyReply` is applying, for the pages it makes. */
+  #replyVersions: Map<number, number> | null = null
 
   constructor() {
     super()
@@ -218,6 +220,10 @@ export class BrowserContext extends EventEmitter {
       page = new Page(this, fact.tab, fact.url)
       page._working = this.#started
       this.#byTab.set(fact.tab, page)
+      // The version the reply that names it gave, taken before its first read, so that read
+      // counts as current and the next reply does not read it again.
+      const version = this.#replyVersions?.get(fact.tab)
+      if (version !== undefined) page._frameVersion(version)
     }
     page._applyFact(fact, at, approved)
     // A page first seen once the run started (a popup, a new page, an op's result, a tab
@@ -301,7 +307,7 @@ export class BrowserContext extends EventEmitter {
     const stale = this._knownPages().filter((page) => page._framesStale())
     if (stale.length === 0) return
     await Promise.all(
-      stale.map((page) => page._readFrames(LISTED_FRAMES_TIMEOUT_MS)),
+      stale.map((page) => page._settle(LISTED_FRAMES_TIMEOUT_MS)),
     )
   }
 
@@ -344,22 +350,39 @@ export class BrowserContext extends EventEmitter {
     observed,
     frames,
   }: Reply): void {
-    for (const { tab, version } of frames ?? [])
+    const versions = new Map<number, number>()
+    for (const { tab, version } of frames ?? []) versions.set(tab, version)
+    for (const [tab, version] of versions)
       this.#byTab.get(tab)?._frameVersion(version)
     const page = this.#unopened
     const held = pickedPage ? this.#byTab.get(pickedPage.tab) : undefined
     const bind =
       defaultPage ?? (held && this.#handed.has(held) ? null : pickedPage)
     if (bind && page) {
+      const known = this.#byTab.get(bind.tab)
       this.#unopened = null
       page._tab = bind.tab
       this.#byTab.set(bind.tab, page)
+      const version = versions.get(bind.tab)
+      if (version !== undefined) page._frameVersion(version)
+      // The built-in `page` takes over a tab that already has a document: one the context
+      // knew (its object's tree stays with that object) or a task's tab it was picked for. It
+      // has read no tree of it, so it reads it now, and the operation that bound it settles
+      // after that read (the settle steps join a first read). A tab the door opened for it
+      // is new: its reply's version says when its tree is worth reading.
+      if (known || bind === pickedPage)
+        void page._readInitialFrames(LISTED_FRAMES_TIMEOUT_MS)
     }
     const approved = new Map<number, number>()
     for (const close of observed?.closes ?? [])
       approved.set(close.tab, Math.max(approved.get(close.tab) ?? 0, close.seq))
-    for (const fact of pages)
-      this._pageFor(fact, observed, approved.get(fact.tab) ?? null)
+    this.#replyVersions = versions
+    try {
+      for (const fact of pages)
+        this._pageFor(fact, observed, approved.get(fact.tab) ?? null)
+    } finally {
+      this.#replyVersions = null
+    }
   }
 
   async #openPage(api: string): Promise<Page> {

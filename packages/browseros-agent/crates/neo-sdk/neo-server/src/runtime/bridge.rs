@@ -305,12 +305,13 @@ impl Bridge {
         completed.extend(reply.completed_publications.iter().copied());
         completed.sort_unstable();
         completed.dedup();
-        envelope(&reply, &completed, &self.frame_versions())
+        envelope(&reply, &completed, &reply.frames)
     }
 
-    /// Every tab's frame-tree version now, for a reply or the run's init.
-    pub(crate) fn frame_versions(&self) -> Vec<FrameVersion> {
-        self.dispatcher.observer().frame_versions()
+    /// The frame-tree versions a run's init carries, of the tabs it lists (`pages`), past the
+    /// read rules ([`Dispatcher::listed_frame_versions`]).
+    pub(crate) fn frame_versions_of(&self, pages: &[PageFact]) -> Vec<FrameVersion> {
+        self.dispatcher.listed_frame_versions(&self.run, pages)
     }
 
     /// The bootstrap's abort of the op it keyed `key`: `{"key", "reason"}`. An op that already

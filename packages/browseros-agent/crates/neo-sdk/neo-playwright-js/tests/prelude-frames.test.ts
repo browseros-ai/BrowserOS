@@ -635,6 +635,176 @@ it("tests that the run's init versions keep its first reply from reading unchang
   expect(reads(runtime.calls).filter(([tab]) => tab === 1009)).toEqual([])
 })
 
+it("tests that a navigation whose bounded snapshot got no tree returns with the tab's whole tree", async () => {
+  let read = 0
+  const runtime = loadPrelude({
+    seed: SEED,
+    answer: (call) => {
+      if (call.name === 'page.frames') return read++ === 0 ? MAIN_ONLY : TREE
+      if (call.name === 'page.goto')
+        return {
+          response: null,
+          url: 'https://a.example/next',
+          frameSnapshotAttempted: true,
+        }
+      return 'ok'
+    },
+  })
+  const counts = json(
+    await runtime.run(`
+      const before = page.frames().length
+      await page.goto('https://a.example/next')
+      return [before, page.frames().length]
+    `),
+  )
+  expect(counts).toEqual([1, 3])
+})
+
+it('tests that a page first seen mid-run whose first read was partial has its retried whole tree when its operation resolves', async () => {
+  let reads1011 = 0
+  const runtime = loadPrelude({
+    seed: SEED,
+    answer: (call) => {
+      if (call.name === 'page.frames')
+        return tabOf(call) === 1011 && reads1011++ === 0
+          ? { ...MAIN_ONLY, incomplete: true }
+          : TREE
+      if (call.name === 'context.newPage')
+        return { page: { $neo: 'page', tab: 1011 }, url: 'https://a.example/' }
+      return 'ok'
+    },
+  })
+  const count = json(
+    await runtime.run(`
+      const other = await context.newPage()
+      return other.frames().length
+    `),
+  )
+  expect(count).toEqual(3)
+})
+
+// A task's tab B, listed at the start with its whole tree, which the built-in `page` (no tab
+// yet) is then bound to by a public task pick.
+const B = {
+  tab: 1101,
+  taskId: 't-b',
+  url: 'https://a.example/',
+  title: 'B',
+  closed: false,
+}
+
+it("tests that a public task pick binds the built-in page with its tab's whole tree", async () => {
+  const runtime = loadPrelude({
+    withNeo: true,
+    seed: { page: null, pages: [B], frames: [{ tab: 1101, version: 2 }] },
+    answer: (call) => {
+      if (call.name === 'page.frames') return TREE
+      if (call.name === 'neo.task')
+        return {
+          ok: { id: 't-b', pages: [{ $neo: 'page', tab: 1101 }] },
+          pickedPage: { tab: 1101 },
+          pages: [B],
+          frames: [{ tab: 1101, version: 2 }],
+        }
+      return 'ok'
+    },
+  })
+  const seen = json(
+    await runtime.run(`
+      await neo.task('t-b')
+      return [page.tabId, page.frames().length]
+    `),
+  )
+  expect(seen).toEqual([1101, 3])
+})
+
+it("tests that a task's new page whose first read was late and partial has its whole tree when newPage resolves", async () => {
+  let reads = 0
+  const runtime = loadPrelude({
+    withNeo: true,
+    seed: SEED,
+    answer: async (call) => {
+      if (call.name === 'page.frames' && tabOf(call) === 1102) {
+        // The first read answers late and partial; the retry answers whole.
+        if (reads++ === 0) {
+          await new Promise((resolve) => setTimeout(resolve, 30))
+          return { ...MAIN_ONLY, incomplete: true }
+        }
+        return TREE
+      }
+      if (call.name === 'page.frames') return TREE
+      if (call.name === 'neo.createTask') return { id: 't-c', pages: [] }
+      if (call.name === 'task.newPage')
+        return {
+          ok: { page: { $neo: 'page', tab: 1102 } },
+          pages: [{ tab: 1102, taskId: 't-c', url: 'https://a.example/' }],
+          frames: [{ tab: 1102, version: 1 }],
+        }
+      return 'ok'
+    },
+  })
+  const count = json(
+    await runtime.run(`
+      const task = await neo.createTask('c')
+      const other = await task.newPage()
+      return other.frames().length
+    `),
+  )
+  expect(count).toEqual(3)
+  expect(reads).toEqual(2)
+})
+
+it('tests that a popup whose first read was late and partial has its whole tree once the op that opened it resolves', async () => {
+  let reads = 0
+  let delivered = false
+  const runtime = loadPrelude({
+    seed: SEED,
+    answer: async (call) => {
+      if (call.name === 'page.frames' && tabOf(call) === 1103) {
+        if (reads++ === 0) {
+          await new Promise((resolve) => setTimeout(resolve, 30))
+          return { ...MAIN_ONLY, incomplete: true }
+        }
+        return TREE
+      }
+      if (call.name === 'page.frames') return TREE
+      if (call.name === 'events.listen') return { since: 0 }
+      if (call.name === 'events.next') {
+        if (delivered) return new Promise(() => {})
+        delivered = true
+        return {
+          events: [
+            {
+              seq: 1,
+              event: 'popup',
+              page: { $neo: 'page', tab: 1007 },
+              popup: {
+                page: { $neo: 'page', tab: 1103 },
+                url: 'https://a.example/',
+              },
+            },
+          ],
+          lost: 0,
+        }
+      }
+      return 'ok'
+    },
+  })
+  const seen = json(
+    await runtime.run(`
+      let popup = null
+      page.on('popup', (p) => { popup = p })
+      const inListener = []
+      page.on('popup', (p) => inListener.push(p.frames().length))
+      await page.waitForEvent('popup')
+      return [popup.frames().length, inListener]
+    `),
+  )
+  // A listener runs as the event is delivered and cannot wait; the awaited op resolves after
+  // the popup's first read, retry included.
+  expect(seen).toEqual([3, [1]])
+})
+
 it('tests that a frame missing from the tree a wait reads is detached', async () => {
   const removed = { frames: TREE.frames.filter((frame) => frame.id !== 'same') }
   let read = 0

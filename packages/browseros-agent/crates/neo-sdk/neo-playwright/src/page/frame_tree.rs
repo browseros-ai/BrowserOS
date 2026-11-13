@@ -456,7 +456,12 @@ async fn oopif_tree_retried(
 ) -> Result<HostedTree, CoreError> {
     let mut failed = None;
     for pause in OOPIF_TRIES {
-        time::sleep(pause).await;
+        // The first try waits for nothing. A zero sleep still yields to the timer (about a
+        // millisecond), and a page's cross-site frames are read one after another, so a page
+        // with a hundred of them would pay it on every read, and so after every operation.
+        if !pause.is_zero() {
+            time::sleep(pause).await;
+        }
         match oopif_tree(browser, page, frame, parent).await {
             Ok(tree) => return Ok(tree),
             Err(error) => failed = Some(error),

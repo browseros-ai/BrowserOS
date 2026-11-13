@@ -86,10 +86,11 @@ impl RunService {
         self.open_pages(run).await
     }
 
-    /// Every tab's frame-tree version now, for a hosted run's init (`RunInit` `frames`).
+    /// The frame-tree versions a hosted run's init carries (`RunInit` `frames`), of the tabs it
+    /// lists, past the read rules ([`Dispatcher::listed_frame_versions`]).
     #[cfg(feature = "hosted-run")]
-    pub(crate) fn frame_versions(&self) -> Vec<FrameVersion> {
-        self.dispatcher.observer().frame_versions()
+    pub(crate) fn frame_versions_of(&self, run: &RunCtx, pages: &[PageFact]) -> Vec<FrameVersion> {
+        self.dispatcher.listed_frame_versions(run, pages)
     }
 
     /// The service.

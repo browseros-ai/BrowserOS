@@ -11049,6 +11049,7 @@ ${changes}`;
     #framesReadAt = 0;
     #framesIncomplete = false;
     #framesRead = null;
+    #firstRead = null;
     _navigationsInFlight = 0;
     #publications = new Publications;
     #childFrames = new Map;
@@ -11506,13 +11507,26 @@ ${changes}`;
     }
     _navigating(work) {
       this._navigationsInFlight++;
-      return this.#publications.track(async (ready, publication) => {
+      const tracked = this.#publications.track(async (ready, publication) => {
         try {
           return await work(ready, publication);
         } finally {
           this._navigationsInFlight--;
         }
       });
+      return this.#settledAfter(tracked);
+    }
+    async#settledAfter(navigation) {
+      let outcome;
+      try {
+        outcome = { value: await navigation };
+      } catch (error) {
+        outcome = { error };
+      }
+      await this._context._settleFrames().catch(() => {});
+      if ("error" in outcome)
+        throw outcome.error;
+      return outcome.value;
     }
     async _publishCompleted() {
       await this.#publications.publishReady();
@@ -11534,27 +11548,45 @@ ${changes}`;
           this._applyFrames(result.frames, at);
         else if (!result?.frameSnapshotAttempted)
           await this._refreshFrames(api);
+        else
+          this._framesUnknown();
       } else if (!this._closed && !result?.frameSnapshotAttempted) {
         await this._refreshFrames(api).catch(() => {
           return;
         });
       }
       ready?.();
-      await this._context._settleFrames().catch(() => {});
+      if (!ready)
+        await this._context._settleFrames().catch(() => {});
       return navigationResponse(frame, result);
     }
     #payloadCurrent(at) {
       return !this._closed && at !== null && at.payloadCurrent === true && at.seq === this.#observedSeq;
     }
-    async _readInitialFrames(timeoutMs = 0) {
+    _readInitialFrames(timeoutMs = 0) {
       if (this._tab === null || this._closed)
-        return;
-      if (await this._readFrames(timeoutMs))
-        return;
-      if (this.#framesIncomplete && !this._closed) {
-        await sleep("page.frames", FRAMES_RETRY_MS).catch(() => {});
+        return Promise.resolve();
+      if (this.#firstRead)
+        return this.#firstRead;
+      const first = (async () => {
+        if (await this._readFrames(timeoutMs))
+          return;
+        if (this.#framesIncomplete && !this._closed) {
+          await sleep("page.frames", FRAMES_RETRY_MS).catch(() => {});
+          await this._readFrames(timeoutMs);
+        }
+      })().finally(() => {
+        if (this.#firstRead === first)
+          this.#firstRead = null;
+      });
+      this.#firstRead = first;
+      return first;
+    }
+    async _settle(timeoutMs) {
+      if (this.#firstRead)
+        await this.#firstRead;
+      if (this._framesStale())
         await this._readFrames(timeoutMs);
-      }
     }
     _readFrames(timeoutMs) {
       if (this.#framesRead)
@@ -11593,7 +11625,7 @@ ${changes}`;
     _framesStale() {
       if (this._tab === null || this._closed || this._navigationsInFlight > 0)
         return false;
-      return this.#framesRead !== null || this.#framesIncomplete || this._framesChanged > this.#framesReadAt;
+      return this.#framesRead !== null || this.#firstRead !== null || this.#framesIncomplete || this._framesChanged > this.#framesReadAt;
     }
     _applyFrames(infos, at = null) {
       const current = (id) => !at || (this.#frameSequences.get(id) ?? 0) <= at.events;
@@ -11950,6 +11982,7 @@ ${changes}`;
     #unopened = null;
     #handed = new WeakSet;
     #started = false;
+    #replyVersions = null;
     constructor() {
       super();
       this._events = new EventHub(this);
@@ -12024,6 +12057,9 @@ ${changes}`;
         page = new Page(this, fact.tab, fact.url);
         page._working = this.#started;
         this.#byTab.set(fact.tab, page);
+        const version = this.#replyVersions?.get(fact.tab);
+        if (version !== undefined)
+          page._frameVersion(version);
       }
       page._applyFact(fact, at, approved);
       if (fresh && this.#started && !page.isClosed())
@@ -12062,7 +12098,7 @@ ${changes}`;
       const stale = this._knownPages().filter((page) => page._framesStale());
       if (stale.length === 0)
         return;
-      await Promise.all(stale.map((page) => page._readFrames(LISTED_FRAMES_TIMEOUT_MS)));
+      await Promise.all(stale.map((page) => page._settle(LISTED_FRAMES_TIMEOUT_MS)));
     }
     async _refreshWorkingFrames(api) {
       const working = this._knownPages().filter((page) => (page._working || page._framesWatched) && page._tab !== null && page._navigationsInFlight === 0);
@@ -12081,21 +12117,35 @@ ${changes}`;
       observed,
       frames
     }) {
+      const versions = new Map;
       for (const { tab, version } of frames ?? [])
+        versions.set(tab, version);
+      for (const [tab, version] of versions)
         this.#byTab.get(tab)?._frameVersion(version);
       const page = this.#unopened;
       const held = pickedPage ? this.#byTab.get(pickedPage.tab) : undefined;
       const bind = defaultPage ?? (held && this.#handed.has(held) ? null : pickedPage);
       if (bind && page) {
+        const known = this.#byTab.get(bind.tab);
         this.#unopened = null;
         page._tab = bind.tab;
         this.#byTab.set(bind.tab, page);
+        const version = versions.get(bind.tab);
+        if (version !== undefined)
+          page._frameVersion(version);
+        if (known || bind === pickedPage)
+          page._readInitialFrames(LISTED_FRAMES_TIMEOUT_MS);
       }
       const approved = new Map;
       for (const close of observed?.closes ?? [])
         approved.set(close.tab, Math.max(approved.get(close.tab) ?? 0, close.seq));
-      for (const fact of pages)
-        this._pageFor(fact, observed, approved.get(fact.tab) ?? null);
+      this.#replyVersions = versions;
+      try {
+        for (const fact of pages)
+          this._pageFor(fact, observed, approved.get(fact.tab) ?? null);
+      } finally {
+        this.#replyVersions = null;
+      }
     }
     async#openPage(api) {
       const site = captureSite();

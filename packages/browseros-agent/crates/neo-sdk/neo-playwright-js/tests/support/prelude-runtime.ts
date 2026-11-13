@@ -64,6 +64,15 @@ const bootstrap = (): string =>
     'utf8',
   )
 
+const neoPrelude = (): string =>
+  readFileSync(
+    new URL(
+      'crates/neo-sdk/neo-server/src/runtime/js/neo_prelude.js',
+      agentRoot,
+    ),
+    'utf8',
+  )
+
 /** claw-sdk evaluates the bootstrap, the preludes and the agent's function as strict code. */
 const strict = (source: string): string => `'use strict';${source}`
 
@@ -128,6 +137,8 @@ export function loadPrelude(
      * the prelude starts: snapshots keep Playwright's modes and text.
      */
     upstreamSnapshots?: boolean
+    /** Also evaluates Neo's task API (neo_prelude.js) after the prelude, as run_script.rs does. */
+    withNeo?: boolean
   } = {},
 ): Runtime {
   const calls: Call[] = []
@@ -244,6 +255,8 @@ export function loadPrelude(
   runInContext(strict(options.prelude ?? committedPrelude()), realm, {
     filename: 'prelude.js',
   })
+  if (options.withNeo)
+    runInContext(strict(neoPrelude()), realm, { filename: 'neo_prelude.js' })
   const parameters = String(runInContext('__neo.parameters()', realm))
   const start = runInContext('__neo.run', realm) as (
     main: (...provided: unknown[]) => Promise<unknown>,
