@@ -54,10 +54,79 @@ export type ProbePage = {
  */
 export function openProbePage(html: string): ProbePage {
   const { window, document } = parseHTML(html)
-  // linkedom computes no styles. The engine reads a missing style as "rendered and visible"
-  // (domUtils computeBox), which is all these tests ask of it.
-  Reflect.set(window, 'getComputedStyle', () => undefined)
-  // No layout means no boxes: every element reads as one without a layout box.
+  // linkedom omits the native defaultValue accessors. Supply their markup reads only in this
+  // harness so the production guard can require every native API instead of silently skipping
+  // a missing privacy boundary. Browser live tests cover independent current/default values.
+  const defaultValues: [object, PropertyDescriptor][] = [
+    [
+      window.HTMLInputElement.prototype,
+      {
+        configurable: true,
+        enumerable: true,
+        get(this: HTMLInputElement) {
+          return this.getAttribute('value') ?? ''
+        },
+        set(this: HTMLInputElement, value: string) {
+          this.setAttribute('value', value)
+        },
+      },
+    ],
+    [
+      window.HTMLTextAreaElement.prototype,
+      {
+        configurable: true,
+        enumerable: true,
+        get(this: HTMLTextAreaElement) {
+          return this.textContent ?? ''
+        },
+        set(this: HTMLTextAreaElement, value: string) {
+          this.textContent = value
+        },
+      },
+    ],
+  ]
+  const suppliedDefaults: object[] = []
+  for (const [prototype, descriptor] of defaultValues) {
+    if ('defaultValue' in prototype) continue
+    Object.defineProperty(prototype, 'defaultValue', descriptor)
+    suppliedDefaults.push(prototype)
+  }
+  // linkedom computes no styles. The privacy scope now proxies a control's normal style as
+  // well as its pseudos, so those reads need objects as in a browser. Leave unrelated normal
+  // reads absent, preserving the fixture's existing no-layout behavior.
+  Reflect.set(
+    window,
+    'getComputedStyle',
+    (element: Element, pseudo?: string) => {
+      if (
+        !pseudo &&
+        element.localName !== 'input' &&
+        element.localName !== 'textarea'
+      )
+        return undefined
+      return {
+        display: 'block',
+        visibility: 'visible',
+        content: 'none',
+        getPropertyValue: () => '',
+      }
+    },
+  )
+  // computeBox treats a missing style as visible and non-inline. Controls now have styles,
+  // so supply only their visibility and box reads to retain that same synthetic result.
+  for (const prototype of [
+    window.HTMLInputElement.prototype,
+    window.HTMLTextAreaElement.prototype,
+  ]) {
+    Reflect.set(prototype, 'checkVisibility', () => true)
+    Reflect.set(prototype, 'getBoundingClientRect', () => ({
+      x: 0,
+      y: 0,
+      width: 10,
+      height: 10,
+    }))
+  }
+  // There are no real layout fragments; the synthetic control boxes above serve computeBox.
   Reflect.set(window.Element.prototype, 'getClientRects', () => [])
   const saved = new Map<string, unknown>()
   const replace = (name: string, value: unknown) => {
@@ -78,6 +147,8 @@ export function openProbePage(html: string): ProbePage {
     // Through Reflect.apply, so tests can hand boot options Rust never would.
     boot: (options) => Reflect.apply(probe.boot, probe, [options]),
     close() {
+      for (const prototype of suppliedDefaults)
+        Reflect.deleteProperty(prototype, 'defaultValue')
       for (const [name, value] of saved) Reflect.set(globalThis, name, value)
     },
   }

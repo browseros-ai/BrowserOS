@@ -138,6 +138,11 @@ it('tests that only the v1 text asks for clickable marking: never mode default, 
       }))
   const v1 = snapshotting(fixture.result)
   await v1.run(script)
+  expect(
+    v1.calls
+      .filter((call) => call.name.endsWith('.ariaSnapshot'))
+      .every((call) => !Object.hasOwn(call.input, 'conformance')),
+  ).toBe(true)
   expect(asked(v1)).toEqual([
     { name: 'page.ariaSnapshot', mode: 'ai', clickable: true },
     { name: 'page.ariaSnapshot', mode: 'ai', clickable: true },
@@ -154,6 +159,9 @@ it('tests that only the v1 text asks for clickable marking: never mode default, 
       call.name.endsWith('.ariaSnapshot') ? fixture.result : null,
   })
   await upstream.run(script)
+  expect(upstream.calls.every((call) => call.input.conformance === true)).toBe(
+    true,
+  )
   expect(asked(upstream)).toEqual([
     { name: 'page.ariaSnapshot', mode: 'default', clickable: 'absent' },
     { name: 'page.ariaSnapshot', mode: 'ai', clickable: 'absent' },
@@ -237,10 +245,21 @@ it('tests that a script setting the switch itself changes nothing: it is read on
   expect(
     await runtime.run(`
       globalThis.__neo_upstream_snapshots = true
-      return await page.ariaSnapshot()
+      await page.getByRole('main').ariaSnapshotJSON({ conformance: true })
+      return await page.ariaSnapshot({ conformance: true })
     `),
   ).toBe(smallV1)
-  expect(runtime.calls.map((call) => call.input.mode)).toEqual(['ai'])
+  expect(
+    runtime.calls
+      .filter((call) => call.name.endsWith('.ariaSnapshot'))
+      .map((call) => ({
+        mode: call.input.mode,
+        conformance: Object.hasOwn(call.input, 'conformance'),
+      })),
+  ).toEqual([
+    { mode: 'default', conformance: false },
+    { mode: 'ai', conformance: false },
+  ])
 })
 
 it('tests that text, urls and maxTokens never reach the wire, and mode default ignores them', async () => {

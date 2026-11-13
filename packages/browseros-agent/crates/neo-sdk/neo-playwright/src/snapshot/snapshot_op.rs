@@ -109,13 +109,21 @@ impl SnapshotOp {
 /// `Describe` walk these same rows; the policy in `spec()` remains independent of the shapes.
 fn route<'a, R: Route<'a>>(op: SnapshotOp, r: R) -> R::Out {
     let command = wire::command("Frame.ariaSnapshot")
-        .adds(&[(
-            "clickable",
-            "Neo also marks elements Chromium reports clickable without a pointer cursor, so the \
-             condensed snapshot keeps their refs; read over CDP, never a script in the page",
-        )])
+        .adds(&[
+            (
+                "clickable",
+                "Neo also marks elements Chromium reports clickable without a pointer cursor, so \
+                 the condensed snapshot keeps their refs; read over CDP, never a script in the page",
+            ),
+            (
+                "conformance",
+                "the prelude's captured spec-harness switch bypasses normal field-value masking \
+                 in every frame; no public snapshot option can set it",
+            ),
+        ])
         .result(
-            "Rust stitches the child frames and answers the JSON tree plus the frames it could \
+            "Each frame masks page-declared private field values outside conformance; Rust \
+             stitches the child frames and answers the JSON tree plus the frames it could \
              not read, with `clickable` also marking `cursor: 'pointer'` on the elements \
              Chromium reports clickable; the prelude renders the text, upstream's YAML for mode \
              'default' and Neo's condensed list of actionable lines for 'ai', each line \
@@ -175,6 +183,10 @@ struct PageInput {
     #[serde(default)]
     #[ts(optional, as = "Option<bool>")]
     clickable: bool,
+    // Spec-harness bypass. Omission keeps normal snapshot value masking enabled.
+    #[serde(default)]
+    #[ts(optional, as = "Option<bool>")]
+    conformance: bool,
 }
 // Snapshots have always sent flat fields, not a nested `options` bag. Keep that wire shape;
 // there is no options bag for the generator's option-key probe to describe.
@@ -199,6 +211,10 @@ struct LocatorInput {
     #[serde(default)]
     #[ts(optional, as = "Option<bool>")]
     clickable: bool,
+    // Spec-harness bypass, carried unchanged into every frame's isolated-world walk.
+    #[serde(default)]
+    #[ts(optional, as = "Option<bool>")]
+    conformance: bool,
 }
 options!(LocatorInput);
 
@@ -278,7 +294,14 @@ async fn page_snapshot(
     // Before the tree: a document that commits after this makes the text stale for the
     // baseline, so a run that ends later cannot hand the new document the old one's text.
     let document = pw.snapshot_baselines().generation(page.target_id());
-    let request = snapshot_request(ProbeTarget::Document, input.mode, input.depth, input.boxes);
+    let request = ProbeRequest::Snapshot {
+        root: ProbeTarget::Document,
+        mode: input.mode,
+        depth: input.depth,
+        boxes: input.boxes,
+        closed_roots: 0,
+        conformance: input.conformance,
+    };
     let backoff = Backoff::outer(scope.timeout());
     for attempt in 0.. {
         if scope.sleep(backoff.wait(attempt)).await.is_err() {
@@ -290,6 +313,7 @@ async fn page_snapshot(
             page: &page,
             mode: input.mode,
             boxes: input.boxes,
+            conformance: input.conformance,
             marking: marks(input.mode, input.clickable).then(Marking::new),
             reading: Mutex::default(),
         };
@@ -343,6 +367,7 @@ async fn locator_snapshot(
             page: &page,
             mode: input.mode,
             boxes: input.boxes,
+            conformance: input.conformance,
             marking: marked.then(Marking::new),
             reading: Mutex::default(),
         };
@@ -357,7 +382,7 @@ async fn locator_snapshot(
                     want: Want::Element,
                 }
             } else {
-                snapshot_request(root, input.mode, input.depth, input.boxes)
+                snapshotter.request(root, input.depth)
             }
         };
         let Ok(attempt) = scope.within(resolver.attempt_at(request)).await else {
@@ -388,22 +413,6 @@ async fn locator_snapshot(
         }
     }
     Err(scope.timed_out(ErrorCode::NoMatch))
-}
-
-/// A `snapshot` request with the op's own options.
-fn snapshot_request(
-    root: ProbeTarget,
-    mode: SnapshotMode,
-    depth: Option<i64>,
-    boxes: bool,
-) -> ProbeRequest {
-    ProbeRequest::Snapshot {
-        root,
-        mode,
-        depth,
-        boxes,
-        closed_roots: 0,
-    }
 }
 
 /// `request` as it goes with `seeds` closed-root seeds first among its nodes; borrowed when it
@@ -499,6 +508,9 @@ struct Snapshotter<'op> {
     mode: SnapshotMode,
     /// Asked of every frame, as upstream passes its options down to each child frame.
     boxes: bool,
+    /// The prelude's captured spec switch. Every descendant uses the same value so a hop or
+    /// retry cannot change whether field values are masked before crossing the protocol.
+    conformance: bool,
     /// Clickable marking, for `clickable` in mode `ai`, the only mode that mints refs.
     marking: Option<Marking>,
     /// When the main frame's tree read began, while it runs: what a timeout logs as the phase it
@@ -554,6 +566,18 @@ fn marks(mode: SnapshotMode, clickable: bool) -> bool {
 }
 
 impl Snapshotter<'_> {
+    /// Each locator, pin and child frame inherits this op's rendering and conformance policy.
+    fn request(&self, root: ProbeTarget, depth: Option<i64>) -> ProbeRequest {
+        ProbeRequest::Snapshot {
+            root,
+            mode: self.mode,
+            depth,
+            boxes: self.boxes,
+            closed_roots: 0,
+            conformance: self.conformance,
+        }
+    }
+
     /// `request` in `world`, with that frame's clickable targets and closed-root seeds when the
     /// snapshot is marked.
     /// `parent` is the world of the frame that holds its iframe, `None` for the main frame;
@@ -652,7 +676,7 @@ impl Snapshotter<'_> {
         pin: Pin,
         depth: Option<i64>,
     ) -> Result<ProbeReply, PlaywrightError> {
-        let request = snapshot_request(ProbeTarget::Pin(pin), self.mode, depth, self.boxes);
+        let request = self.request(ProbeTarget::Pin(pin), depth);
         match self.call(world, parent, None, &request).await {
             Ok(reply) => Ok(reply),
             Err(ProbeFailure::Gone(_)) => {
@@ -776,7 +800,7 @@ impl Snapshotter<'_> {
         let Some(printer) = chunk.jump else {
             return Err(Unread::Failed(ErrorCode::Internal));
         };
-        let request = snapshot_request(ProbeTarget::Document, self.mode, depth, self.boxes);
+        let request = self.request(ProbeTarget::Document, depth);
         for _ in 0..2 {
             let SeqLookup::Live { world: parent, .. } = self.page.frames().by_seq(printer.seq)
             else {
@@ -885,6 +909,7 @@ mod tests {
             "page": { "$neo": "page", "tab": 1007 }, "mode": "ai", "depth": 3,
         }))?;
         assert_eq!((page.mode, page.depth), (SnapshotMode::Ai, Some(3)));
+        assert!(!page.conformance, "normal page inputs mask by default");
         let locator: LocatorInput = serde_json::from_value(json!({
             "target": { "$neo": "locator", "page": { "$neo": "page", "tab": 1007 }, "chunks": [
                 { "parts": [{ "name": "aria-ref", "body": "f2e5", "source": "f2e5" }] },
@@ -893,6 +918,10 @@ mod tests {
             "mode": "default",
         }))?;
         assert_eq!((locator.mode, locator.depth), (SnapshotMode::Default, None));
+        assert!(
+            !locator.conformance,
+            "normal locator inputs mask by default"
+        );
         let boxed: PageInput = serde_json::from_value(
             json!({ "page": { "$neo": "page", "tab": 1007 }, "mode": "default", "boxes": true }),
         )?;
@@ -900,6 +929,17 @@ mod tests {
             boxed.boxes,
             "upstream's boxes option reaches every frame's probe"
         );
+        let upstream_page: PageInput = serde_json::from_value(json!({
+            "page": { "$neo": "page", "tab": 1007 }, "mode": "ai", "conformance": true,
+        }))?;
+        assert!(upstream_page.conformance);
+        let upstream_locator: LocatorInput = serde_json::from_value(json!({
+            "target": { "$neo": "locator", "page": { "$neo": "page", "tab": 1007 }, "chunks": [
+                { "parts": [{ "name": "css", "body": "body", "source": "body" }] },
+            ], "display": "locator('body')" },
+            "strict": "strict", "mode": "default", "conformance": true,
+        }))?;
+        assert!(upstream_locator.conformance);
         for bad in [
             json!({ "page": { "$neo": "page", "tab": 1007 }, "mode": "codegen" }),
             json!({ "page": { "$neo": "page", "tab": 1007 }, "mode": "ai", "depth": 1.5 }),

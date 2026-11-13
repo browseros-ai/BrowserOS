@@ -9,4 +9,4 @@ export type LocatorSnapshotInput = { target: Target, strict: Strictness, mode: i
 /**
  * Neo's clickable marking, as on `page.ariaSnapshot`.
  */
-clickable?: boolean, };
+clickable?: boolean, conformance?: boolean, };

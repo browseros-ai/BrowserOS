@@ -17,13 +17,24 @@
 
 #[path = "support/browseros_rig.rs"]
 pub mod browseros_rig;
+#[path = "../../neo-playwright/tests/support/fixture_server.rs"]
+#[expect(
+    dead_code,
+    reason = "the shared server also supports script and nested-frame fixtures"
+)]
+pub mod fixture_server;
 
+use std::collections::HashMap;
 use std::error::Error;
+use std::fmt::{self, Write as _};
+use std::path::Path;
 use std::time::Duration;
 
 use browseros_rig::{
     CaptchaKey, Client, HOST_TOKEN, Rig, TestResult, browser_or_skip, get, outcome, run,
 };
+use fixture_server::{FixtureServer, Page};
+use neo_trace::{RunId, RunStatus, TraceStore};
 use rmcp::model::CallToolResult;
 use serde_json::{Value, json};
 use tokio::time;
@@ -69,6 +80,440 @@ async fn drive(rig: &mut Rig) -> TestResult {
     client.cancel().await?;
     assert_eq!(rig.stop_neo().await?, Some(0), "SIGTERM is a normal stop");
     Ok(())
+}
+
+/// Inspect persisted snapshot results, before text rendering and after a later run reads the
+/// baseline. Deliberate reads and fixture source can still contain these canaries elsewhere in
+/// a trace, so the invariant belongs to snapshot operations rather than the whole database.
+#[tokio::test(flavor = "multi_thread")]
+async fn private_field_values_never_reach_stored_snapshot_results() -> TestResult {
+    let Some(browser) = browser_or_skip() else {
+        return Ok(());
+    };
+    let mut rig = Rig::start(&browser, CaptchaKey::Absent)?;
+    match time::timeout(TEST_BUDGET, snapshot_trace(&mut rig)).await {
+        Ok(Ok(())) => Ok(()),
+        Ok(Err(error)) => Err(format!("{error}\n{}", rig.logs()).into()),
+        Err(_elapsed) => Err(format!("snapshot trace timed out\n{}", rig.logs()).into()),
+    }
+}
+
+/// Each source and attribute value is a distinct synthetic secret to scan after persistence.
+const TRACE_FIELDS: [(&str, &str, &str, &str); 11] = [
+    (
+        "Password",
+        "input",
+        "type='password'",
+        "Trace-Password-Canary",
+    ),
+    (
+        "Shown",
+        "input",
+        "autocomplete='current-password'",
+        "Trace-Shown-Canary",
+    ),
+    (
+        "Card",
+        "input",
+        "autocomplete='cc-number'",
+        "Trace-Card-Canary",
+    ),
+    (
+        "Security",
+        "input",
+        "autocomplete='cc-csc'",
+        "Trace-Security-Canary",
+    ),
+    (
+        "Code",
+        "input",
+        "autocomplete='one-time-code'",
+        "Trace-Code-Canary",
+    ),
+    (
+        "Note",
+        "textarea",
+        "autocomplete='new-password'",
+        "Trace-Note-Canary",
+    ),
+    (
+        "Self",
+        "textarea",
+        "id='self' role='button' aria-labelledby='self' autocomplete='new-password'",
+        "Trace-Self-Canary",
+    ),
+    (
+        "Numeric",
+        "input",
+        "id='numeric' type='number' autocomplete='one-time-code' aria-valuetext='864213'",
+        "864213",
+    ),
+    (
+        "Styled checkbox",
+        "input",
+        "class='css-private' type='checkbox' autocomplete='one-time-code'",
+        "Trace-CSS-Checkbox-Canary",
+    ),
+    (
+        "Styled text",
+        "input",
+        "class='css-private' autocomplete='current-password'",
+        "Trace-CSS-Text-Canary",
+    ),
+    (
+        "Styled self",
+        "input",
+        "id='css-self' class='css-private-self' type='checkbox' role='button' aria-labelledby='css-self' autocomplete='one-time-code'",
+        "Trace-CSS-Self-Canary",
+    ),
+];
+
+/// Closed roots must contribute their own masked fields, not merely hide every canary.
+const CLOSED_TRACE_SCOPES: [&str; 3] = ["Closed", "Nested", "CrossClosed"];
+
+fn closed_trace_fields(scope: &str) -> String {
+    format!(
+        "<section aria-label='{scope} fields'>\
+         <label>{scope} password<input type='password' value='Trace-{scope}-Password-Canary'></label>\
+         <label>{scope} textarea<textarea autocomplete='new-password'>Trace-{scope}-Textarea-Canary</textarea></label>\
+         <label>{scope} public<input value='Public-{scope}-Readable'></label></section>"
+    )
+}
+
+/// Page scripts retain roots only in their own closures. Neo must discover them through its
+/// first AI walk; the child is served on another site so it owns a separate probe world.
+fn private_trace_pages() -> Result<HashMap<String, Page>, fmt::Error> {
+    let top = format!(
+        r"{}<script>(() => {{
+const closed = document.querySelector('#closed').attachShadow({{ mode: 'closed' }});
+closed.innerHTML = {};
+closed.querySelector('#nested').attachShadow({{ mode: 'closed' }}).innerHTML = {};
+document.querySelector('#cross').src = `http://localhost:${{location.port}}/private-child.html`;
+}})();</script>",
+        private_trace_html()?,
+        json!(format!(
+            "{}<div id='nested'></div>",
+            closed_trace_fields("Closed")
+        )),
+        json!(closed_trace_fields("Nested")),
+    );
+    let child = format!(
+        r#"<!doctype html><html><body><div id="cross-closed"></div><script>(() => {{
+const closed = document.querySelector('#cross-closed').attachShadow({{ mode: 'closed' }});
+closed.innerHTML = {};
+}})();</script></body></html>"#,
+        json!(closed_trace_fields("CrossClosed")),
+    );
+    Ok(HashMap::from([
+        ("/private.html".to_owned(), Page::html(&top)),
+        ("/private-child.html".to_owned(), Page::html(&child)),
+    ]))
+}
+
+fn private_trace_html() -> Result<String, fmt::Error> {
+    let mut html = String::from(
+        "<title>Snapshot trace</title><style>\
+         .css-private{appearance:none;width:40px;height:40px}\
+         .css-private::before,.css-private::after{content:attr(value)}\
+         .css-private-self{content:url(data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7) / attr(value)}\
+         </style><main><h1>Checkout</h1>",
+    );
+    for (label, tag, attributes, value) in TRACE_FIELDS {
+        if tag == "textarea" {
+            write!(
+                html,
+                "<label>{label}<textarea {attributes}>{value}</textarea></label>"
+            )?;
+        } else {
+            write!(
+                html,
+                "<label>{label}<input {attributes} value='{value}'></label>"
+            )?;
+        }
+    }
+    html.push_str(
+        "\
+         <button aria-labelledby='self'></button><button aria-labelledby='numeric'></button>\
+         <label>Expiry<input autocomplete='cc-exp' value='12/30'></label>\
+         <label>Holder<input autocomplete='cc-name' value='Ada Example'></label>",
+    );
+    // Diff context must stay smaller than half the whole output. A small page legitimately
+    // falls back to a whole snapshot even when only one value changes.
+    for index in 0..20 {
+        write!(html, "<button>Stable action {index}</button>")?;
+    }
+    html.push_str(
+        "<div id='closed'></div><iframe id='cross' title='Cross closed fields'></iframe></main>",
+    );
+    Ok(html)
+}
+
+fn assert_trace_canaries_absent(text: &str) {
+    for (_, _, _, canary) in TRACE_FIELDS {
+        assert!(!text.contains(canary), "snapshot exposes {canary}: {text}");
+    }
+    for scope in CLOSED_TRACE_SCOPES {
+        for kind in ["Password", "Textarea"] {
+            let canary = format!("Trace-{scope}-{kind}-Canary");
+            assert!(!text.contains(&canary), "snapshot exposes {canary}: {text}");
+        }
+    }
+}
+
+/// Stored op results wrap trees and baseline text differently. Search the decoded JSON, so
+/// field values are checked at their own node or line before and after persistence.
+fn trace_field_node<'tree>(tree: &'tree Value, name: &str) -> Option<&'tree Value> {
+    match tree {
+        Value::Array(nodes) => nodes.iter().find_map(|node| trace_field_node(node, name)),
+        Value::Object(node) if node.get("name").and_then(Value::as_str) == Some(name) => Some(tree),
+        Value::Object(node) => node
+            .values()
+            .find_map(|value| trace_field_node(value, name)),
+        _ => None,
+    }
+}
+
+fn trace_field_text<'tree>(tree: &'tree Value, label: &str) -> Option<&'tree str> {
+    match tree {
+        Value::String(text) if text.contains(label) => Some(text),
+        Value::Array(nodes) => nodes.iter().find_map(|node| trace_field_text(node, label)),
+        Value::Object(node) => node
+            .values()
+            .find_map(|value| trace_field_text(value, label)),
+        _ => None,
+    }
+}
+
+fn assert_trace_field_value(snapshot: &Value, label: &str, value: &str) -> TestResult {
+    if let Some(node) = trace_field_node(snapshot, label) {
+        assert_eq!(node["role"].as_str(), Some("textbox"), "{node}");
+        assert_eq!(node["text"].as_str(), Some(value), "{node}");
+        return Ok(());
+    }
+    let label = format!("textbox \"{label}\"");
+    let text = trace_field_text(snapshot, &label)
+        .ok_or_else(|| format!("missing {label} in {snapshot}"))?;
+    let line = text
+        .lines()
+        .find(|line| line.contains(&label))
+        .ok_or("the field has its own line")?;
+    assert!(
+        line.ends_with(&format!(": {value}")) || line.ends_with(&format!(": \"{value}\"")),
+        "{line}"
+    );
+    Ok(())
+}
+
+fn assert_closed_trace_visibility(snapshot: &Value, scopes: &[&str]) -> TestResult {
+    for scope in scopes {
+        for (name, kind) in [("password", "Password"), ("textarea", "Textarea")] {
+            let canary = format!("Trace-{scope}-{kind}-Canary");
+            assert_trace_field_value(
+                snapshot,
+                &format!("{scope} {name}"),
+                &"•".repeat(canary.len()),
+            )?;
+        }
+        assert_trace_field_value(
+            snapshot,
+            &format!("{scope} public"),
+            &format!("Public-{scope}-Readable"),
+        )?;
+    }
+    Ok(())
+}
+
+fn assert_returned_snapshot_values(first: &CallToolResult) -> TestResult {
+    let returned = first
+        .structured_content
+        .as_ref()
+        .and_then(|value| value.get("value"))
+        .ok_or_else(|| format!("the first run returns its snapshots: {first:?}"))?;
+    assert_eq!(returned["closedRootsOpaque"], json!([true, true, true]));
+    for key in ["snapshots", "childSnapshots"] {
+        let snapshots = returned[key].as_array().ok_or("the collected snapshots")?;
+        assert_eq!(snapshots.len(), 7);
+        for (index, snapshot) in snapshots.iter().enumerate() {
+            let printed = snapshot.to_string();
+            assert_trace_canaries_absent(&printed);
+            let scopes: &[&str] = match key {
+                // Page default mode and unnamed JSON reads stay in one frame. The child
+                // locator covers that mode without changing the existing traversal contract.
+                "snapshots" if index >= 4 => &["Closed", "Nested"],
+                "snapshots" => &CLOSED_TRACE_SCOPES,
+                _ => &["CrossClosed"],
+            };
+            assert_closed_trace_visibility(snapshot, scopes)?;
+            if key != "snapshots" {
+                continue;
+            }
+            assert!(
+                printed.contains("Ada Example"),
+                "holder remains readable: {printed}"
+            );
+            assert!(
+                printed.contains("12/30"),
+                "expiry remains readable: {printed}"
+            );
+        }
+    }
+    assert_trace_canaries_absent(&returned["baseline"].to_string());
+    assert_closed_trace_visibility(&returned["baseline"], &CLOSED_TRACE_SCOPES)
+}
+
+async fn assert_stored_snapshot_values(trace_path: &Path, ids: [RunId; 2]) -> TestResult {
+    let store = TraceStore::open(trace_path).await?;
+    let mut snapshot_count = 0;
+    let mut baseline_count = 0;
+    let mut closed_counts = [0; 3];
+    for id in ids {
+        let detail = store.run(id).await?.ok_or("the run was persisted")?;
+        assert_eq!(detail.summary.status, RunStatus::Ok);
+        for operation in detail.operations {
+            if !matches!(
+                operation.name.as_str(),
+                "page.ariaSnapshot"
+                    | "locator.ariaSnapshot"
+                    | "page.snapshotBaseline"
+                    | "page.snapshotPending"
+            ) {
+                continue;
+            }
+            assert!(
+                !operation.args_truncated,
+                "snapshot inputs were stored whole"
+            );
+            assert!(
+                !operation.result_truncated,
+                "snapshot results were stored whole"
+            );
+            let args = operation
+                .args
+                .as_ref()
+                .map(Value::to_string)
+                .unwrap_or_default();
+            assert_trace_canaries_absent(&args);
+            let result = operation
+                .result
+                .ok_or("the snapshot operation has a result")?;
+            assert_trace_canaries_absent(&result.to_string());
+            if operation.name == "page.snapshotBaseline" {
+                baseline_count += 1;
+                assert_closed_trace_visibility(&result, &CLOSED_TRACE_SCOPES)?;
+            }
+            if operation.name.ends_with(".ariaSnapshot") {
+                snapshot_count += 1;
+                assert!(
+                    result.to_string().contains('•'),
+                    "the stored tree contains masked values"
+                );
+                for (scope, count) in CLOSED_TRACE_SCOPES.iter().zip(&mut closed_counts) {
+                    if trace_field_node(&result, &format!("{scope} password")).is_some() {
+                        assert_closed_trace_visibility(&result, &[*scope])?;
+                        *count += 1;
+                    }
+                }
+            }
+        }
+    }
+    assert_eq!(snapshot_count, 16);
+    assert_eq!(baseline_count, 1);
+    // The top roots occur in eight page reads and the main locator. The child root is absent
+    // from page default mode and both unnamed JSON reads, and present in all seven child reads.
+    assert_eq!(closed_counts, [9, 9, 13]);
+    Ok(())
+}
+
+const PRIVATE_TRACE_SNAPSHOT_SCRIPT: &str = r"
+const p = await context.newPage();
+await p.goto(__FIXTURE_URL__);
+const child = p.locator('#cross').contentFrame().locator('body');
+await child.locator('#cross-closed').waitFor();
+// The first page AI walk opens closed roots before any locator enters them.
+const snapshots = [
+  await p.ariaSnapshot(), await p.ariaSnapshot({ text: true }),
+  await p.ariaSnapshot({ text: false }),
+  await p.ariaSnapshot({ mode: 'full' }),
+  await p.ariaSnapshot({ mode: 'default' }),
+  await p.ariaSnapshotJSON(), await p.locator('main').ariaSnapshotJSON(),
+];
+const childSnapshots = [
+  await child.ariaSnapshot(), await child.ariaSnapshot({ text: true }),
+  await child.ariaSnapshot({ text: false }),
+  await child.ariaSnapshot({ mode: 'full' }),
+  await child.ariaSnapshot({ mode: 'default' }),
+  await child.ariaSnapshotJSON({ mode: 'ai' }), await child.ariaSnapshotJSON({ mode: 'default' }),
+];
+const closedRootsOpaque = await Promise.all([
+  p.locator('#closed'), p.locator('#closed').locator('#nested'), child.locator('#cross-closed'),
+].map(root => root.evaluate(host => host.shadowRoot === null)));
+await p.getByLabel('Password', { exact: true }).focus();
+const baseline = await p.ariaSnapshot({ text: false });
+return { page: p, snapshots, childSnapshots, closedRootsOpaque, baseline };
+";
+
+async fn snapshot_trace(rig: &mut Rig) -> TestResult {
+    let server = FixtureServer::start(private_trace_pages()?).await?;
+    rig.until_ready().await?;
+    // Keep the entire fixture through the host's current settings contract. Clipped traces
+    // could hide an unmasked field and make the canary scan pass without proving this boundary.
+    let configured = rig
+        .host(
+            "PATCH",
+            "/v1/settings",
+            Some(HOST_TOKEN),
+            Some(&json!({ "trace": { "values": "on", "valueBytes": 262_144 } })),
+        )
+        .await?;
+    assert_eq!(configured.status, 200, "{}", configured.text());
+    let client = rig.client().await?;
+    // Commit the final v1 read as the baseline, with focus already stable for the next fill.
+    // A changed output form or focus state could otherwise legitimately return a whole page.
+    let first = run(
+        &client,
+        &PRIVATE_TRACE_SNAPSHOT_SCRIPT.replace(
+            "__FIXTURE_URL__",
+            &json!(server.url("127.0.0.1", "/private.html")).to_string(),
+        ),
+        &json!({ "requestId": "mask-trace-1", "taskId": "mask-trace" }),
+    )
+    .await?;
+    let first_id: RunId = outcome(&first)?["id"]
+        .as_str()
+        .ok_or("the first run has an id")?
+        .parse()?;
+    assert_returned_snapshot_values(&first)?;
+    let changed = run(
+        &client,
+        "await page.getByLabel('Password', { exact: true }).fill('Trace-Password-Canary!');\n\
+         return await page.ariaSnapshot({ delta: true, text: false });",
+        &json!({ "requestId": "mask-trace-2", "taskId": "mask-trace" }),
+    )
+    .await?;
+    let second_id: RunId = outcome(&changed)?["id"]
+        .as_str()
+        .ok_or("the second run has an id")?
+        .parse()?;
+    let delta = changed
+        .structured_content
+        .as_ref()
+        .and_then(|value| value.get("value"))
+        .and_then(Value::as_str)
+        .ok_or_else(|| format!("the second run returns its delta: {changed:?}"))?;
+    assert_trace_canaries_absent(delta);
+    let baseline = first
+        .structured_content
+        .as_ref()
+        .and_then(|value| value.pointer("/value/baseline"))
+        .and_then(Value::as_str);
+    assert!(
+        delta.starts_with("# changes since"),
+        "a stored baseline is read: {delta}\nprevious: {baseline:?}"
+    );
+    assert!(delta.contains(&"•".repeat("Trace-Password-Canary!".len())));
+    client.cancel().await?;
+    assert_eq!(rig.stop_neo().await?, Some(0));
+    assert_stored_snapshot_values(&rig.trace_path(), [first_id, second_id]).await
 }
 
 /// Run 1: a new tab, a navigation and a read, ending with the tab open and its handle returned.

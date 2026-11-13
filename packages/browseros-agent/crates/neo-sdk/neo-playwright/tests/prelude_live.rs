@@ -1289,6 +1289,423 @@ async fn tests_that_listener_only_elements_print_as_their_pointer_twins_and_the_
     Ok(())
 }
 
+/// Synthetic page declarations shared by documents and open, closed and nested shadow roots.
+/// Values are deliberately distinct from their accessible names.
+fn private_fields(scope: &str) -> String {
+    format!(
+        r#"<section aria-label="{scope}">
+<input aria-label="{scope} password" type="password" value="Pw🔒">
+<input aria-label="{scope} shown password" autocomplete="current-password" value="ShowMe">
+<input aria-label="{scope} card" autocomplete="CC-NUMBER" value="4111-SECRET">
+<input aria-label="{scope} security" autocomplete="section-pay shipping cc-csc" value="Cvc">
+<input aria-label="{scope} code" autocomplete="one-time-code" value="Otp246">
+<textarea aria-label="{scope} new password" autocomplete="new-password">New
+Pass</textarea>
+<input aria-label="{scope} empty" type="password">
+<input aria-label="{scope} expiry" autocomplete="cc-exp" value="12/34">
+<input aria-label="{scope} holder" autocomplete="cc-name" value="Ada Lovelace">
+<input aria-label="{scope} unlabelled card" value="4111111111111111">
+<input aria-label="{scope} off" autocomplete="off" value="Readable off">
+<input aria-label="{scope} near token" autocomplete="cc-numberx" value="Readable near">
+<select aria-label="{scope} month" autocomplete="cc-exp-month"><option selected>December</option></select>
+<input type="submit" value="Continue {scope}">
+</section>{}"#,
+        private_canary_fields(scope)
+    )
+}
+
+/// These controls exercise alternate value/name reads, with different stored and live values.
+/// CSS attr(value) is resolved inside Chromium, bypassing JavaScript attribute accessors.
+/// Every private canary is scanned across whole results, including another control's name.
+fn private_canary_fields(scope: &str) -> String {
+    format!(
+        r##"<section aria-label="{scope} alternate reads">
+<style>
+.css-value-before, .css-value-after {{ appearance: none; width: 40px; height: 40px; }}
+.css-value-before::before {{ content: attr(value); }}
+.css-value-after::after {{ content: attr(value); }}
+.css-value-self {{ content: url("data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7") / attr(value); }}
+</style>
+<input type="password" role="combobox" value="SecretCanary{scope}-password-attribute" data-typed="SecretCanary{scope}-password-value">
+<label>{scope} wrapped search<input autocomplete="current-password" role="searchbox" value="SecretCanary{scope}-shown-attribute" data-typed="SecretCanary{scope}-shown-value"></label>
+<input id="{scope}-number" type="number" autocomplete="cc-number" value="902101" data-typed="902102">
+<button aria-labelledby="{scope}-number"></button>
+<input id="{scope}-slider" autocomplete="cc-csc" role="slider" value="SecretCanary{scope}-slider-attribute" data-typed="SecretCanary{scope}-slider-value" aria-valuetext="SecretCanary{scope}-slider-text" aria-valuenow="SecretCanary{scope}-slider-now">
+<button aria-labelledby="{scope}-slider"></button>
+<input id="{scope}-spin" autocomplete="one-time-code" role="spinbutton" value="SecretCanary{scope}-spin-attribute" data-typed="SecretCanary{scope}-spin-value" aria-valuenow="SecretCanary{scope}-spin-now">
+<button aria-labelledby="{scope}-spin"></button>
+<label>{scope} wrapped textarea<textarea autocomplete="new-password" role="searchbox" value="SecretCanary{scope}-textarea-attribute" data-typed="SecretCanary{scope}-textarea-value">SecretCanary{scope}-textarea-content</textarea></label>
+<textarea id="{scope}-self" aria-labelledby="{scope}-self" role="button" autocomplete="new-password" value="SecretCanary{scope}-self-attribute" data-typed="SecretCanary{scope}-self-value">SecretCanary{scope}-self-content</textarea>
+<textarea id="{scope}-named" role="combobox" autocomplete="new-password" value="SecretCanary{scope}-named-attribute" data-typed="SecretCanary{scope}-named-value" aria-valuetext="SecretCanary{scope}-named-text" aria-valuenow="SecretCanary{scope}-named-now">SecretCanary{scope}-named-content</textarea>
+<button aria-labelledby="{scope}-named"></button>
+<a href="#private"><input autocomplete="new-password" value="SecretCanary{scope}-link-attribute" data-typed="SecretCanary{scope}-link-value"></a>
+<button><input autocomplete="cc-csc" value="SecretCanary{scope}-button-attribute" data-typed="SecretCanary{scope}-button-value"></button>
+<input role="searchbox" value="PublicCanary{scope}-input-attribute" data-typed="PublicCanary{scope}-input-value">
+<textarea role="searchbox" value="PublicCanary{scope}-textarea-attribute" data-typed="PublicCanary{scope}-textarea-value">PublicCanary{scope}-textarea-content</textarea>
+<input class="css-value-before" type="checkbox" autocomplete="one-time-code" value="SecretCanary{scope}-css-checkbox-before-attribute" data-typed="SecretCanary{scope}-css-checkbox-before-value">
+<input class="css-value-after" type="checkbox" autocomplete="one-time-code" value="SecretCanary{scope}-css-checkbox-after-attribute" data-typed="SecretCanary{scope}-css-checkbox-after-value">
+<input class="css-value-before" role="searchbox" autocomplete="cc-number" value="SecretCanary{scope}-css-text-before-attribute" data-typed="SecretCanary{scope}-css-text-before-value">
+<input class="css-value-after" role="searchbox" autocomplete="cc-number" value="SecretCanary{scope}-css-text-after-attribute" data-typed="SecretCanary{scope}-css-text-after-value">
+<input id="{scope}-css-self" class="css-value-self" type="checkbox" role="button" aria-labelledby="{scope}-css-self" autocomplete="one-time-code" value="SecretCanary{scope}-css-self-attribute" data-typed="SecretCanary{scope}-css-self-value">
+<input class="css-value-before" type="checkbox" value="PublicCanary{scope}-css-checkbox-before">
+<input class="css-value-after" type="checkbox" value="PublicCanary{scope}-css-checkbox-after">
+<input class="css-value-before" role="searchbox" value="PublicCanary{scope}-css-text-before-attribute" data-typed="PublicCanary{scope}-css-text-before-value">
+<input class="css-value-after" role="searchbox" value="PublicCanary{scope}-css-text-after-attribute" data-typed="PublicCanary{scope}-css-text-after-value">
+<input id="{scope}-css-public-self" class="css-value-self" type="checkbox" role="button" aria-labelledby="{scope}-css-public-self" value="PublicCanary{scope}-css-self">
+</section>"##
+    )
+}
+
+/// Runs in the page world before a snapshot. Textareas retain distinct default text after
+/// their live value is changed; retained roots let the page initialize closed content too.
+const PRIVATE_FIELD_SETUP: &str = r"
+for (const field of root.querySelectorAll('[data-typed]'))
+  field.value = field.getAttribute('data-typed')
+";
+
+fn private_field_pages() -> HashMap<String, Page> {
+    let top = format!(
+        r#"<!doctype html><html><head><title>Private fields</title></head><body><main>
+{}<div id="shadow"></div><div id="closed"></div><iframe id="cross" title="Cross"></iframe></main>
+<script>
+(() => {{
+const shadow = document.querySelector('#shadow').attachShadow({{ mode: 'open' }});
+shadow.innerHTML = {};
+const closed = document.querySelector('#closed').attachShadow({{ mode: 'closed' }});
+closed.innerHTML = {};
+const nested = closed.querySelector('#nested').attachShadow({{ mode: 'closed' }});
+nested.innerHTML = {};
+for (const root of [document, shadow, closed, nested]) {{ {} }}
+document.querySelector('#cross').src = `http://localhost:${{location.port}}/private-child.html`;
+}})();
+</script></body></html>"#,
+        private_fields("Main"),
+        json!(private_fields("Shadow")),
+        json!(format!(
+            "{}<div id=\"nested\"></div>",
+            private_fields("Closed")
+        )),
+        json!(private_fields("Nested")),
+        PRIVATE_FIELD_SETUP,
+    );
+    let child = format!(
+        r#"<!doctype html><html><body>{}<div id="cross-closed"></div><script>
+(() => {{
+const closed = document.querySelector('#cross-closed').attachShadow({{ mode: 'closed' }});
+closed.innerHTML = {};
+for (const root of [document, closed]) {{ {} }}
+}})();
+</script></body></html>"#,
+        private_fields("Cross"),
+        json!(private_fields("CrossClosed")),
+        PRIVATE_FIELD_SETUP,
+    );
+    HashMap::from([
+        ("/private.html".to_owned(), Page::html(&top)),
+        ("/private-child.html".to_owned(), Page::html(&child)),
+    ])
+}
+
+/// Text and JSON must expose the same lengths after an edit, while ordinary values survive.
+const PRIVATE_FIELD_EXPECTATIONS: &[(&str, &str)] = &[
+    ("password", "••••"),
+    ("shown password", "•••••"),
+    ("card", "•••••••••••"),
+    ("security", "•••"),
+    ("code", "••••••"),
+    ("new password", "••••••"),
+    ("expiry", "12/34"),
+    ("holder", "Ada Lovelace"),
+    ("unlabelled card", "4111111111111111"),
+    ("off", "Readable off"),
+    ("near token", "Readable near"),
+];
+
+/// Verifies each text format at the field line, so a surviving label or an unrelated bullet
+/// elsewhere cannot stand in for the masked value. JSON is checked independently below.
+fn assert_private_field_text(text: &str, scope: &str) -> TestResult {
+    for (name, value) in PRIVATE_FIELD_EXPECTATIONS {
+        let label = format!("textbox \"{scope} {name}\"");
+        let line = text
+            .lines()
+            .find(|line| line.contains(&label))
+            .ok_or_else(|| format!("missing {label} in {text}"))?;
+        assert!(
+            line.ends_with(&format!(": {value}")) || line.ends_with(&format!(": \"{value}\"")),
+            "{line}"
+        );
+    }
+    let empty = format!("textbox \"{scope} empty\"");
+    assert!(
+        text.lines().any(|line| line.trim_end().ends_with(&empty)),
+        "empty fields have no value: {text}"
+    );
+    assert!(text.contains(&format!("button \"Continue {scope}\"")));
+    assert!(text.contains(&format!("combobox \"{scope} month\"")));
+    assert!(text.contains("option \"December\" [selected]"));
+    Ok(())
+}
+
+/// Finds the field in the stitched JSON without depending on its frame or shadow wrappers.
+fn private_field_node<'tree>(tree: &'tree Value, name: &str) -> Option<&'tree Value> {
+    match tree {
+        Value::Array(nodes) => nodes.iter().find_map(|node| private_field_node(node, name)),
+        Value::Object(node) if node.get("name").and_then(Value::as_str) == Some(name) => Some(tree),
+        Value::Object(node) => node
+            .get("children")
+            .and_then(|children| private_field_node(children, name)),
+        _ => None,
+    }
+}
+
+/// Every output route is collected from the same live controls, then direct reads verify that
+/// the scoped read guards have already been removed. These reads are deliberately not
+/// part of the snapshot canary scan. Explicit `inputValue()` remains a clear-value API.
+const PRIVATE_SNAPSHOT_SCRIPT: &str = r"
+      await page.goto(__FIXTURE_URL__)
+      const cross = page.locator('#cross').contentFrame().locator('body')
+      await cross.getByLabel('Cross password', { exact: true }).waitFor()
+      // The first AI walk feeds closed roots in both frame worlds before locators enter them.
+      const initial = await page.ariaSnapshot()
+      const closed = page.locator('#closed')
+      const nested = closed.locator('#nested')
+      const crossClosed = cross.locator('#cross-closed')
+      for (const [root, scope] of [
+        [page, 'Main'], [cross, 'Cross'], [page.locator('#shadow'), 'Shadow'],
+        [closed, 'Closed'], [nested, 'Nested'], [crossClosed, 'CrossClosed'],
+      ]) {
+        await root.getByLabel(scope + ' shown password', { exact: true }).fill('Typed')
+        await root.getByLabel(scope + ' new password', { exact: true }).fill('Edit🔒')
+      }
+      const withoutRefs = text => text.replace(/ \[ref=[^\]]+\]/g, '')
+      async function collect(root, scope) {
+        const texts = {}
+        const reads = []
+        async function readValues() {
+          return await Promise.all(['password', 'shown password', 'new password'].map(
+            name => root.getByLabel(scope + ' ' + name, { exact: true }).inputValue(),
+          ))
+        }
+        for (const [name, options] of [
+          ['automatic', {}], ['text', { text: true }], ['noText', { text: false }],
+          ['full', { mode: 'full' }], ['default', { mode: 'default' }],
+        ]) {
+          texts[name] = withoutRefs(await root.ariaSnapshot(options))
+          reads.push(await readValues())
+        }
+        const trees = []
+        for (const mode of ['ai', 'default']) {
+          trees.push(await root.ariaSnapshotJSON({ mode }))
+          reads.push(await readValues())
+        }
+        return { texts, trees, reads }
+      }
+      const normal = await collect(page, 'Main')
+      const child = await collect(cross, 'Cross')
+      const shadow = await collect(page.locator('#shadow'), 'Shadow')
+      const closedRoot = await collect(closed, 'Closed')
+      const nestedRoot = await collect(nested, 'Nested')
+      const crossClosedRoot = await collect(crossClosed, 'CrossClosed')
+      const closedRootsOpaque = await Promise.all([closed, nested, crossClosed].map(
+        root => root.evaluate(host => host.shadowRoot === null),
+      ))
+      await page.getByLabel('Main password', { exact: true }).focus()
+      const baseline = await page.ariaSnapshot({ text: true })
+      return { initial, normal, child, shadow, closedRoot, nestedRoot, crossClosedRoot, closedRootsOpaque, baseline, tab: page.toJSON().tab }
+";
+
+const PRIVATE_CONFORMANCE_SCRIPT: &str = r"try {
+  const cross = page.locator('#cross').contentFrame().locator('body')
+  return {
+    page: await page.ariaSnapshot({ mode: 'ai' }),
+    child: await cross.ariaSnapshot({ mode: 'default' }),
+    tree: await page.ariaSnapshotJSON({ mode: 'ai' }),
+  }
+} finally { await page.close() }";
+
+fn assert_private_canaries_absent(value: &Value) -> TestResult {
+    let encoded = serde_json::to_string(value)?;
+    for canary in [
+        "Pw🔒",
+        "ShowMe",
+        "Typed",
+        "Edit🔒",
+        "4111-SECRET",
+        "Cvc",
+        "Otp246",
+        "New\\nPass",
+        "Other",
+        "SecretCanary",
+        "902101",
+        "902102",
+    ] {
+        assert!(!encoded.contains(canary), "leaked {canary}: {encoded}");
+    }
+    Ok(())
+}
+
+fn assert_public_canaries_present(text: &str, scope: &str) {
+    let own_css = format!("PublicCanary{scope}-css-self");
+    assert!(text.contains(&own_css), "missing {own_css}: {text}");
+    for kind in ["input", "textarea"] {
+        let visible = format!("PublicCanary{scope}-{kind}-value");
+        assert!(text.contains(&visible), "missing {visible}: {text}");
+    }
+    // Attribute canaries prove generated content survived, independently of the live value.
+    for kind in ["checkbox", "text"] {
+        for pseudo in ["before", "after"] {
+            let suffix = if kind == "text" { "-attribute" } else { "" };
+            let visible = format!("PublicCanary{scope}-css-{kind}-{pseudo}{suffix}");
+            assert!(text.contains(&visible), "missing {visible}: {text}");
+        }
+    }
+}
+
+fn assert_private_field_tree(tree: &Value, scope: &str) -> TestResult {
+    for (name, value) in PRIVATE_FIELD_EXPECTATIONS {
+        let label = format!("{scope} {name}");
+        let node =
+            private_field_node(tree, &label).ok_or_else(|| format!("missing {label} in {tree}"))?;
+        assert_eq!(node["text"].as_str(), Some(*value), "{node}");
+    }
+    let empty = private_field_node(tree, &format!("{scope} empty")).ok_or("the empty field")?;
+    assert!(empty.get("text").is_none(), "{empty}");
+    assert_public_canaries_present(&serde_json::to_string(tree)?, scope);
+    Ok(())
+}
+
+fn assert_private_snapshot_formats(opened: &Value, key: &str, scopes: &[&str]) -> TestResult {
+    let group = opened.get(key).ok_or("the collected snapshot group")?;
+    assert_private_canaries_absent(&group["texts"])?;
+    assert_private_canaries_absent(&group["trees"])?;
+    let texts = group["texts"].as_object().ok_or("the text formats")?;
+    for (format, value) in texts {
+        let text = value.as_str().ok_or("a snapshot text")?;
+        for scope in scopes {
+            // Default mode reads one frame. Its cross-origin counterpart is verified through
+            // the child locator, preserving upstream's existing traversal contract.
+            if key == "normal" && format == "default" && matches!(*scope, "Cross" | "CrossClosed") {
+                continue;
+            }
+            assert_private_field_text(text, scope)?;
+            assert_public_canaries_present(text, scope);
+        }
+    }
+    assert_eq!(
+        group["reads"],
+        json!(vec![json!(["Pw🔒", "Typed", "Edit🔒"]); 7])
+    );
+    for (format, tree) in group["trees"]
+        .as_array()
+        .ok_or("the JSON formats")?
+        .iter()
+        .enumerate()
+    {
+        for scope in scopes {
+            if key == "normal" && format == 1 && matches!(*scope, "Cross" | "CrossClosed") {
+                continue;
+            }
+            assert_private_field_tree(tree, scope)?;
+        }
+    }
+    Ok(())
+}
+
+fn assert_private_value_delta(grown: &Value) -> TestResult {
+    assert_private_canaries_absent(grown)?;
+    let delta = grown.as_str().ok_or("the grown value's delta")?;
+    assert!(
+        delta.starts_with("# changes since your last snapshot of this tab: 1 added, 1 removed"),
+        "{delta}"
+    );
+    for (prefix, value) in [('-', "••••"), ('+', "•••••")] {
+        assert!(
+            delta
+                .lines()
+                .any(|line| line.starts_with(prefix) && line.ends_with(&format!(": {value}"))),
+            "{delta}"
+        );
+    }
+    Ok(())
+}
+
+fn assert_conformance_private_fields_are_clear(unmasked: &Value) -> TestResult {
+    for key in ["page", "child", "tree"] {
+        let text = serde_json::to_string(&unmasked[key])?;
+        for canary in [
+            "Typed",
+            "Edit🔒",
+            "4111-SECRET",
+            "Cvc",
+            "Otp246",
+            "SecretCanary",
+        ] {
+            assert!(text.contains(canary), "conformance {key}: {text}");
+        }
+        assert!(!text.contains('•'), "conformance {key}: {text}");
+    }
+    Ok(())
+}
+
+/// Each frame masks before protocol serialization. This exercises the normal marked page and
+/// pinned locator routes, the unmarked/default/JSON routes, open and closed shadow DOM, and
+/// cross-run baselines. Closed content must appear with its own masked values and public twins.
+/// Direct reads after every walk still see the original field value.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_private_field_values_are_masked_in_every_snapshot_format() -> TestResult {
+    let _alone = ALONE.acquire().await?;
+    let server = FixtureServer::start(private_field_pages()).await?;
+    let run = Arc::new(LiveRun::connect().await?);
+    let host: Arc<dyn OpHost> = Arc::clone(&run) as Arc<dyn OpHost>;
+    let script = PRIVATE_SNAPSHOT_SCRIPT.replace(
+        "__FIXTURE_URL__",
+        &json!(server.url("127.0.0.1", "/private.html")).to_string(),
+    );
+    let opened = js_runner::run_script(&host, &json!({ "page": null }), &script).await?;
+    run.end_run(Some(&opened));
+    let tab = opened["tab"].as_i64().ok_or("the page's tab")?;
+    let init = json!({ "page": { "$neo": "page", "tab": tab } });
+    assert_private_snapshot_formats(
+        &opened,
+        "normal",
+        &["Main", "Shadow", "Closed", "Nested", "Cross", "CrossClosed"],
+    )?;
+    assert_private_snapshot_formats(&opened, "child", &["Cross", "CrossClosed"])?;
+    assert_private_snapshot_formats(&opened, "shadow", &["Shadow"])?;
+    assert_private_snapshot_formats(&opened, "closedRoot", &["Closed", "Nested"])?;
+    assert_private_snapshot_formats(&opened, "nestedRoot", &["Nested"])?;
+    assert_private_snapshot_formats(&opened, "crossClosedRoot", &["CrossClosed"])?;
+    assert_eq!(opened["closedRootsOpaque"], json!([true, true, true]));
+    assert_private_canaries_absent(&opened["initial"])?;
+    assert_private_canaries_absent(&opened["baseline"])?;
+    let grown = js_runner::run_script(
+        &host,
+        &init,
+        "await page.getByLabel('Main password', { exact: true }).fill('Pw🔒x');
+         return await page.ariaSnapshot({ delta: true })",
+    )
+    .await?;
+    assert_private_value_delta(&grown)?;
+    run.end_run(Some(&grown));
+    let same_length = js_runner::run_script(
+        &host,
+        &init,
+        "await page.getByLabel('Main password', { exact: true }).fill('Other');
+         return await page.ariaSnapshot({ delta: true })",
+    )
+    .await?;
+    assert_private_canaries_absent(&same_length)?;
+    assert_eq!(
+        same_length,
+        json!("# no change since your last snapshot of this tab")
+    );
+
+    let upstream: Arc<dyn OpHost> = Arc::new(Upstream(Arc::clone(&run)));
+    let unmasked = js_runner::run_script(&upstream, &init, PRIVATE_CONFORMANCE_SCRIPT).await?;
+    assert_conformance_private_fields_are_clear(&unmasked)
+}
+
 /// The live browser as the spec harness hosts it: the same ops, with the conformance switch set
 /// in the run's realm.
 struct Upstream(Arc<LiveRun>);

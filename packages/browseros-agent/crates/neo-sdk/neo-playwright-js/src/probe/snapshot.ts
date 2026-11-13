@@ -15,6 +15,7 @@ import {
   type EngineReads,
   leafTargets,
 } from './pointer-targets'
+import { withMaskedFieldValues } from './private-field-values'
 import type { ReplyTo, SnapshotIframe, SnapshotRequest } from './protocol'
 import { type Found, resolveTarget } from './resolve'
 import { openClosedRoots } from './shadow-roots'
@@ -34,12 +35,13 @@ function frameRoot(world: World): Found {
 }
 
 /**
- * `nodes`, the call's nodes after its root, come from clickable marking's read of the frame, which
- * Rust makes only in ai mode and never under the spec harness's conformance switch, so without
- * them this is upstream's call. The first `closedRoots` of them sit inside closed shadow roots:
- * their roots are opened to this world's engine (shadow-roots.ts) before anything else runs, so
- * marking's guard and the engine both read inside them, now and in every later call. The rest
- * are the elements Chromium reports clickable without a pointer cursor (pointer-targets.ts).
+ * `nodes`, the call's nodes after its root, come from clickable marking's read of the frame.
+ * Rust sends them only in ai mode and never under the spec harness's conformance switch. The
+ * first `closedRoots` sit inside closed shadow roots, opened to this world's engine before
+ * resolving the root or marking so both read inside them, now and in every later call
+ * (shadow-roots.ts). The rest are the elements Chromium reports clickable without a pointer
+ * cursor (pointer-targets.ts). Value masking is independent of marks: every normal tree,
+ * including marking's fallback, is masked before it can leave this frame's isolated world.
  */
 export function snapshot(
   world: World,
@@ -68,7 +70,10 @@ export function snapshot(
     roleOf: (of) => injected.utils.getAriaRole(of),
     isVisible: (of) => injected.utils.isElementVisible(of),
   }
-  const { result, skipped } = marked(targets, engine, plain)
+  const take = () => marked(targets, engine, plain)
+  const { result, skipped } = request.conformance
+    ? take()
+    : withMaskedFieldValues(take)
   const { json, iframeRefs, iframeDepths } = result
   const iframes: SnapshotIframe[] = []
   if (request.mode === 'ai') {
@@ -93,8 +98,8 @@ export function snapshot(
 /**
  * `snapshot` with clickable marking's targets, or plainly without any. Marking must never fail a
  * snapshot: if the guard or the marked engine call throws on a page shape nobody foresaw, the
- * snapshot is taken again as upstream takes it, with every read real, and `skipped` tells Rust,
- * which notes it on the op's call log.
+ * snapshot is taken again without marks, still inside value masking's scope outside
+ * conformance. `skipped` tells Rust, which notes it on the op's call log.
  */
 function marked<T>(
   targets: readonly unknown[],
