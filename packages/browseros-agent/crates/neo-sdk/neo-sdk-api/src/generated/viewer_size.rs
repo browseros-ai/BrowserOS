@@ -11,6 +11,7 @@
 use crate::models;
 use serde::{Deserialize, Serialize};
 
+/// ViewerSize : Physical framebuffer dimensions in pixels.
 #[derive(Clone, Default, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ViewerSize {
     #[serde(rename = "width")]
@@ -20,6 +21,7 @@ pub struct ViewerSize {
 }
 
 impl ViewerSize {
+    /// Physical framebuffer dimensions in pixels.
     pub fn new(width: i32, height: i32) -> ViewerSize {
         ViewerSize { width, height }
     }

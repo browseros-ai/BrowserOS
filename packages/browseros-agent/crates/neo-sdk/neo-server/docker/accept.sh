@@ -46,6 +46,9 @@
 #                    added mid-run shows after the script's next wait (accept_frames.py)
 #   tab-keep         host keeps survive idle sweeps; DELETE and TTL restart the idle clock;
 #                    agents can fill, read, and close kept tabs, including task.close()
+#   takeover-scale   366x700 phone metrics at 1x/2x, actual RFB 366x700/732x1400; PNG/JPEG
+#                    capture density and fixture pixels; owner input, physical keyboard boxes,
+#                    refits and restoration of display/window and a different agent viewport
 #   mcp-remote       9011 is the same MCP over TLS; with NEO_MCP_REMOTE=false (the default) a
 #                    sibling container is cut off on 9010 and 9011; with true it is answered
 #   settings         PATCH /v1/settings applies and lists an unknown name, a bad value is 400 and
@@ -171,7 +174,7 @@ install_client() { # name: the probes, beside smoke.py whose MCP client they reu
   local file
   for file in "$here/smoke.py" "$here/smoke_sdk.py" "$here/accept_client.py" "$here/accept_files.py" \
     "$here/trace_values.py" "$here/accept_task_page.py" "$here/accept_tab_keep.py" \
-    "$here/accept_frames.py"; do
+    "$here/accept_frames.py" "$here/accept_takeover_scale.py"; do
     docker cp -q "$file" "$1:/opt/neo-accept/" || return 1
   done
 }
@@ -246,7 +249,7 @@ detail="$image_arch, browser $(fact browser), server $(fact marker) $(fact sha |
 if [ ${#problems[@]} -eq 0 ]; then result PASS identity "$detail"; else result FAIL identity "${problems[*]}"; fi
 
 if [ "$image_arch" != "$engine_arch" ]; then
-  for check in boot mcp host-api downloads pdf-downloads blobs frames tab-keep settings files trace-values mcp-remote restart-browser stop persist kill-all captcha-keys; do
+  for check in boot mcp host-api downloads pdf-downloads blobs frames tab-keep takeover-scale settings files trace-values mcp-remote restart-browser stop persist kill-all captcha-keys; do
     result SKIP "$check" "$image_arch image on a $engine_arch engine: emulated, not evidence"
   done
   printf '\n'; printf '%s\n' "${results[@]}"
@@ -309,6 +312,21 @@ if [ "$booted" = 1 ]; then
     result PASS host-api "group+token 200 ($(jget "$good" 'd["body"]["operationCount"]') ops), wrong token 401, no group EACCES, agent uid with token EACCES"
   else
     result FAIL host-api "good=${good:0:200}; wrong=${wrong:0:120}; no_group=$no_group; agent=$agent"
+  fi
+
+  # The probe's tab owns the fit and its original viewport. Release and close it before any
+  # later acceptance case uses the shared display; preserve the actual encoded images in logs.
+  takeover_scale=$(client "$main" "${as_host[@]}" python3 accept_takeover_scale.py \
+    http://127.0.0.1:9010/mcp /run/neo/host.sock /run/neo-accept/host-token /tmp/neo-accept-takeover-scale 2>&1)
+  if [ -n "$logs_dir" ]; then
+    mkdir -p "$logs_dir/takeover-scale"
+    printf '%s\n' "$takeover_scale" > "$logs_dir/takeover-scale.json"
+    docker cp -q "$main:/tmp/neo-accept-takeover-scale/." "$logs_dir/takeover-scale/" >/dev/null 2>&1 || true
+  fi
+  if [ "$(jget "$takeover_scale" 'd["ok"]')" = True ]; then
+    result PASS takeover-scale "$(jget "$takeover_scale" 'd["detail"]')"
+  else
+    result FAIL takeover-scale "$(jget "$takeover_scale" '"; ".join(d["problems"])' || printf '%s' "${takeover_scale:0:300}")"
   fi
 
   # --- downloads -----------------------------------------------------------------------------
@@ -600,7 +618,7 @@ for pid in pids:
     result FAIL captcha-keys "image's own keys listed=$main_captcha (want $want_main); host key file listed=${keyed_captcha:-not booted}"
   fi
 else
-  for check in mcp host-api downloads pdf-downloads blobs frames tab-keep settings files trace-values mcp-remote restart-browser stop persist kill-all captcha-keys; do
+  for check in mcp host-api downloads pdf-downloads blobs frames tab-keep takeover-scale settings files trace-values mcp-remote restart-browser stop persist kill-all captcha-keys; do
     result FAIL "$check" "not run: the image did not boot"
   done
 fi

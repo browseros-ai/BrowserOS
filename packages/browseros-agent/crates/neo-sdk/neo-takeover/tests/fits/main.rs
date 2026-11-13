@@ -9,6 +9,7 @@
     reason = "the shared fake also exposes gates and probes for the takeover flow's tests"
 )]
 mod browser;
+mod scale;
 
 use browser::{CHROME_HEIGHT, FakeBrowser, Metrics};
 use browseros_core::viewport::{Size, ViewportMode, ViewportRequest, Viewports};
@@ -16,7 +17,7 @@ use browseros_core::{BrowserSession, BrowserSessionHooks, BrowserView, TabId, Ta
 use neo_takeover::testing::FakeXvnc;
 use neo_takeover::{
     BarAction, BarOutcome, BrowserBar, BrowserTabs, Fit, FitId, FitMode, FitState, Fits, Fitted,
-    PartError, ScreenSize,
+    PartError, ScreenSize, Viewer,
 };
 use std::sync::Arc;
 use std::time::Duration;
@@ -134,7 +135,7 @@ fn moves(browser: &FakeBrowser) -> Vec<String> {
 #[tokio::test]
 async fn a_phone_viewer_gets_a_fullscreen_mobile_page_in_chromiums_order() -> TestResult {
     let h = harness(&[3]).await?;
-    let fit = h.fits.fit(TabId(3), PHONE).await?;
+    let fit = h.fits.fit(TabId(3), Viewer::new(PHONE, None)?).await?;
     assert_eq!(
         (fit.tab, fit.screen, fit.mode, fit.fitted, fit.state),
         (
@@ -180,7 +181,7 @@ async fn restore_puts_back_the_agents_own_viewport_the_window_and_the_screen() -
         height: 906,
     })?;
     h.agent_sets_viewport(3, agents).await?;
-    let fit = h.fits.fit(TabId(3), PHONE).await?;
+    let fit = h.fits.fit(TabId(3), Viewer::new(PHONE, None)?).await?;
     assert_eq!(h.browser.metrics(3), phone(PHONE));
 
     let restored = h.fits.restore(fit.id).await?;
@@ -236,7 +237,11 @@ async fn a_busy_viewport_times_out_without_stranding_the_surface_or_claiming_a_f
             })?,
         )
         .await?;
-    let failed = tokio::time::timeout(Duration::from_secs(7), h.fits.fit(TabId(3), PHONE)).await?;
+    let failed = tokio::time::timeout(
+        Duration::from_secs(7),
+        h.fits.fit(TabId(3), Viewer::new(PHONE, None)?),
+    )
+    .await?;
     assert!(
         matches!(failed, Err(PartError::TimedOut(_))),
         "a fit must not wait for an unbounded browser acknowledgement"
@@ -254,7 +259,11 @@ async fn a_busy_viewport_times_out_without_stranding_the_surface_or_claiming_a_f
         "no outdated restore target was committed"
     );
     // Tab 3 remains busy while another tab successfully claims and releases the surface.
-    let other = tokio::time::timeout(Duration::from_secs(7), h.fits.fit(TabId(4), PHONE)).await??;
+    let other = tokio::time::timeout(
+        Duration::from_secs(7),
+        h.fits.fit(TabId(4), Viewer::new(PHONE, None)?),
+    )
+    .await??;
     h.fits.restore(other.id).await?;
     assert_eq!(h.xvnc.size(), HOME);
     Ok(())
@@ -295,7 +304,7 @@ async fn a_fit_waits_for_an_inflight_resize_before_saving_what_it_will_restore()
     // A takeover's bounded settle can end while this acknowledged-metrics change still
     // waits. Its fit must snapshot the configuration after that in-flight change commits.
     let fits = Arc::clone(&h.fits);
-    let fitting = tokio::spawn(async move { fits.fit(TabId(3), PHONE).await });
+    let fitting = tokio::spawn(async move { fits.fit(TabId(3), Viewer::new(PHONE, None)?).await });
     tokio::time::sleep(Duration::from_millis(25)).await;
     assert!(!fitting.is_finished(), "the fit waits behind the resize");
     h.browser.let_go(reset);
@@ -328,9 +337,9 @@ async fn a_refitted_owner_view_restores_the_scripts_viewport_and_desktop_context
     };
     let request = ViewportRequest::playwright(size)?;
     h.agent_sets_viewport(3, request).await?;
-    let fit = h.fits.fit(TabId(3), PHONE).await?;
+    let fit = h.fits.fit(TabId(3), Viewer::new(PHONE, None)?).await?;
     assert_eq!(h.browser.metrics(3), phone(PHONE));
-    let refit = h.fits.fit(TabId(3), LAPTOP).await?;
+    let refit = h.fits.fit(TabId(3), Viewer::new(LAPTOP, None)?).await?;
     assert_eq!(
         refit.id, fit.id,
         "a refit keeps the original saved viewport"
@@ -372,7 +381,7 @@ async fn a_refitted_owner_view_restores_the_scripts_viewport_and_desktop_context
 #[tokio::test]
 async fn a_desktop_viewer_gets_the_default_viewport_in_a_maximized_window() -> TestResult {
     let h = harness(&[3]).await?;
-    let fit = h.fits.fit(TabId(3), LAPTOP).await?;
+    let fit = h.fits.fit(TabId(3), Viewer::new(LAPTOP, None)?).await?;
     assert_eq!((fit.mode, fit.fitted), (FitMode::Desktop, Fitted::Full));
     assert_eq!(h.xvnc.size(), LAPTOP);
     assert_eq!(h.browser.window(), "maximized");
@@ -393,11 +402,17 @@ async fn a_desktop_viewer_gets_the_default_viewport_in_a_maximized_window() -> T
 #[tokio::test]
 async fn two_fits_share_one_screen_and_the_last_one_puts_it_home() -> TestResult {
     let h = harness(&[3, 4]).await?;
-    let first = h.fits.fit(TabId(3), PHONE).await?;
-    let second = h.fits.fit(TabId(4), PHONE_TURNED).await?;
+    let first = h.fits.fit(TabId(3), Viewer::new(PHONE, None)?).await?;
+    let second = h
+        .fits
+        .fit(TabId(4), Viewer::new(PHONE_TURNED, None)?)
+        .await?;
     assert_ne!(first.id, second.id);
     assert_eq!(
-        h.fits.fit(TabId(3), PHONE_TURNED).await?.id,
+        h.fits
+            .fit(TabId(3), Viewer::new(PHONE_TURNED, None)?)
+            .await?
+            .id,
         first.id,
         "a tab with an active fit is refitted, not fitted twice"
     );
@@ -432,7 +447,7 @@ async fn two_fits_share_one_screen_and_the_last_one_puts_it_home() -> TestResult
 #[tokio::test]
 async fn the_fit_follows_the_owners_own_resizes() -> TestResult {
     let h = harness(&[3]).await?;
-    let fit = h.fits.fit(TabId(3), PHONE).await?;
+    let fit = h.fits.fit(TabId(3), Viewer::new(PHONE, None)?).await?;
     // The owner's noVNC resizes the screen to the phone turned sideways, then a laptop.
     h.xvnc.resize_from_viewer(PHONE_TURNED);
     h.fit_when(fit.id, |fit| fit.screen == PHONE_TURNED).await?;
@@ -455,7 +470,7 @@ async fn the_fit_follows_the_owners_own_resizes() -> TestResult {
 #[tokio::test]
 async fn a_tab_that_closes_gives_the_screen_back() -> TestResult {
     let h = harness(&[3]).await?;
-    let fit = h.fits.fit(TabId(3), PHONE).await?;
+    let fit = h.fits.fit(TabId(3), Viewer::new(PHONE, None)?).await?;
     h.browser.close_tab(3);
     h.fits.tab_closed(TabId(3)).await;
     assert!(matches!(
@@ -472,13 +487,13 @@ async fn a_screen_that_refuses_the_size_fails_the_fit_and_leaves_nothing_claimed
     let h = harness(&[3]).await?;
     h.xvnc.refuse_next(3);
     assert!(matches!(
-        h.fits.fit(TabId(3), PHONE).await,
+        h.fits.fit(TabId(3), Viewer::new(PHONE, None)?).await,
         Err(PartError::Screen(_))
     ));
     assert_eq!(h.browser.window(), "maximized");
     assert_eq!(h.browser.metrics(3), natural(HOME));
     // The failed claim left no window home behind: the next fit records its own.
-    let fit = h.fits.fit(TabId(3), PHONE).await?;
+    let fit = h.fits.fit(TabId(3), Viewer::new(PHONE, None)?).await?;
     h.fits.restore(fit.id).await?;
     assert_eq!(h.browser.window(), "maximized");
     assert_eq!(h.xvnc.size(), HOME);
@@ -493,11 +508,11 @@ async fn unusable_viewers_and_closed_tabs_fit_nothing() -> TestResult {
         height: 844,
     };
     assert!(matches!(
-        h.fits.fit(TabId(3), tiny).await,
+        Viewer::new(tiny, None),
         Err(PartError::UnusableViewer(size)) if size == tiny
     ));
     assert!(matches!(
-        h.fits.fit(TabId(9), PHONE).await,
+        h.fits.fit(TabId(9), Viewer::new(PHONE, None)?).await,
         Err(PartError::TabNotFound(TabId(9)))
     ));
     assert!(h.xvnc.resizes().is_empty());
@@ -513,7 +528,7 @@ async fn the_owner_view_reads_keyboard_boxes_and_the_current_browser_bar() -> Te
         "form_submit",
     );
     h.browser.focus_fields(&[[16.0, 40.0, 200.0, 30.0]]);
-    let fit = h.fits.fit(TabId(3), PHONE).await?;
+    let fit = h.fits.fit(TabId(3), Viewer::new(PHONE, None)?).await?;
     let read = h.fit_when(fit.id, |fit| fit.keyboard.is_some()).await?;
     let keyboard = read.keyboard.ok_or("boxes")?;
     assert_eq!(keyboard.screen, PHONE);
@@ -528,7 +543,7 @@ async fn the_owner_view_reads_keyboard_boxes_and_the_current_browser_bar() -> Te
     );
 
     // On a desktop the browser shows its own toolbar: no bar.
-    h.fits.fit(TabId(3), LAPTOP).await?;
+    h.fits.fit(TabId(3), Viewer::new(LAPTOP, None)?).await?;
     let desktop = h
         .fit_when(fit.id, |fit| {
             fit.mode == FitMode::Desktop && fit.keyboard.is_some()
@@ -547,7 +562,7 @@ async fn on_a_phone_a_page_the_tab_opens_moves_into_it_unless_it_cannot_load_aga
     let h = harness(&[3]).await?;
     // Open before the owner arrived: it stays where it is.
     h.browser.open_popup(3, 5, "https://kept.example/", "link");
-    let fit = h.fits.fit(TabId(3), PHONE).await?;
+    let fit = h.fits.fit(TabId(3), Viewer::new(PHONE, None)?).await?;
     let first = h.fit_when(fit.id, |fit| !fit.popups.is_empty()).await?;
     assert_eq!(first.popups, [TargetId("target-5".into())]);
 
@@ -580,7 +595,7 @@ async fn on_a_phone_a_page_the_tab_opens_moves_into_it_unless_it_cannot_load_aga
 async fn a_page_the_fitted_tab_cannot_load_stays_where_it_is() -> TestResult {
     let h = harness(&[3]).await?;
     h.browser.unreachable("https://down.example/");
-    let fit = h.fits.fit(TabId(3), PHONE).await?;
+    let fit = h.fits.fit(TabId(3), Viewer::new(PHONE, None)?).await?;
     h.first_read(fit.id).await?;
 
     h.browser.open_popup(3, 6, "https://down.example/", "link");
@@ -604,7 +619,7 @@ async fn a_page_the_fitted_tab_cannot_load_stays_where_it_is() -> TestResult {
 #[tokio::test]
 async fn restore_lets_a_running_owner_view_land_first() -> TestResult {
     let h = harness(&[3]).await?;
-    let fit = h.fits.fit(TabId(3), PHONE).await?;
+    let fit = h.fits.fit(TabId(3), Viewer::new(PHONE, None)?).await?;
     h.first_read(fit.id).await?;
     h.browser.hold_navigations();
     h.browser.open_popup(3, 6, "https://link.example/", "link");
@@ -639,7 +654,7 @@ async fn restore_lets_a_running_owner_view_land_first() -> TestResult {
 #[tokio::test]
 async fn the_owners_browser_bar_moves_the_fitted_tab() -> TestResult {
     let h = harness(&[3]).await?;
-    let fit = h.fits.fit(TabId(3), PHONE).await?;
+    let fit = h.fits.fit(TabId(3), Viewer::new(PHONE, None)?).await?;
     assert_eq!(
         h.fits
             .navigate(fit.id, BarAction::Open("example.org".into()))

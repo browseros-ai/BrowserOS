@@ -23,7 +23,7 @@ use neo_takeover::{
     Admitted, BrowserTabs, DisplayEnd, DisplayRequest, Displays, FitState, Fits, Follow, Front,
     FrontError, LockEnd, LockTarget, Locks, OwnerHasControl, OwnerHasScreen, PartError, Reads,
     ReleaseReason, ScreenHolder, ScreenSize, Takeover, TakeoverRequest, TakeoverState, TakeoverTtl,
-    Takeovers,
+    Takeovers, Viewer as FitViewer, ViewerScale,
 };
 use neo_trace::{
     Effect, EpochMillis, OperationId, OperationKind, OperationStarted, RedactionLimits, Redactor,
@@ -125,7 +125,10 @@ async fn harness(tabs: &[i64]) -> Result<Harness, BoxError> {
 fn request(viewer: Option<ScreenSize>) -> Result<TakeoverRequest, &'static str> {
     Ok(TakeoverRequest {
         tab: TAB,
-        viewer,
+        viewer: viewer
+            .map(|size| FitViewer::new(size, None))
+            .transpose()
+            .map_err(|_| "a valid viewer")?,
         reads: Reads::Block,
         ttl: TakeoverTtl::new(TakeoverTtl::MAX).ok_or("the longest TTL is valid")?,
     })
@@ -343,12 +346,72 @@ async fn a_takeover_locks_the_tab_and_fits_the_owners_viewer() -> TestResult {
 async fn a_failed_fit_gives_back_what_the_start_took() -> TestResult {
     let h = harness(&[3]).await?;
     h.xvnc.refuse_next(3);
-    let refused = h.takeovers.start(request(Some(PHONE))?).await;
+    let refused = h
+        .takeovers
+        .start(TakeoverRequest {
+            viewer: Some(FitViewer::new(PHONE, Some(ViewerScale::Two))?),
+            ..request(None)?
+        })
+        .await;
     assert!(matches!(refused, Err(PartError::Screen(_))), "{refused:?}");
     assert!(!h.locks.is_locked(TAB), "the lock is lifted");
     assert!(h.views_admitted().await?, "spectators remain admitted");
 
     assert_eq!(h.xvnc.size(), HOME);
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_scaled_takeover_ttl_restores_its_preview_before_unlocking() -> TestResult {
+    let h = harness(&[3]).await?;
+    let takeover = h
+        .takeovers
+        .start(TakeoverRequest {
+            viewer: Some(FitViewer::new(PHONE, Some(ViewerScale::Two))?),
+            ..shortest(None)?
+        })
+        .await?;
+    let fit_id = takeover.fit.ok_or("a scaled fit")?;
+    assert_eq!(
+        h.xvnc.size(),
+        ScreenSize {
+            width: 780,
+            height: 1688
+        }
+    );
+    h.probe_writes();
+    let before = h.browser.calls().len();
+    tokio::time::pause();
+    tokio::time::advance(Duration::from_secs(50)).await;
+    tokio::time::resume();
+    let released = h
+        .takeovers
+        .wait(takeover.id, Instant::now() + WITHIN)
+        .await
+        .ok_or("a takeover after its TTL")?;
+    assert_eq!(released_for(&released), Some(ReleaseReason::Expired));
+    assert_eq!(h.xvnc.size(), HOME);
+    assert_eq!(h.browser.window(), "maximized");
+    assert!(matches!(
+        h.fits.view(fit_id).ok_or("the fit")?.state,
+        FitState::Restored(_)
+    ));
+    let restored = h.calls_since(before, "Emulation.clearDeviceMetricsOverride");
+    assert!(
+        !restored.is_empty(),
+        "the TTL must clear the fitted phone preview"
+    );
+    assert!(
+        restored.iter().all(|call| call.probed == Some(true)),
+        "restore runs while the lock still holds"
+    );
+    assert!(!h.locks.is_locked(TAB));
+    assert_eq!(
+        h.takeovers
+            .release(takeover.id, ReleaseReason::Done)
+            .await?,
+        released
+    );
     Ok(())
 }
 
@@ -918,7 +981,7 @@ async fn a_host_fit_holds_the_screen_from_its_claim_to_its_restore() -> TestResu
     h.browser.hold("Browser.getWindowForTarget");
     let fitting = tokio::spawn({
         let fits = Arc::clone(&h.fits);
-        async move { fits.fit(TAB, PHONE).await }
+        async move { fits.fit(TAB, FitViewer::new(PHONE, None)?).await }
     });
     eventually(|| h.browser.held("Browser.getWindowForTarget") > 0).await?;
     assert_eq!(front.check(), held, "held mid-claim");
@@ -942,7 +1005,7 @@ async fn a_host_fit_holds_the_screen_from_its_claim_to_its_restore() -> TestResu
     assert_eq!(front.check(), Ok(()), "the restore gave the screen back");
 
     h.xvnc.refuse_next(3);
-    let refused = h.fits.fit(TAB, PHONE).await;
+    let refused = h.fits.fit(TAB, FitViewer::new(PHONE, None)?).await;
     assert!(matches!(refused, Err(PartError::Screen(_))), "{refused:?}");
     assert_eq!(front.check(), Ok(()), "a claim that failed holds nothing");
     Ok(())
@@ -962,7 +1025,7 @@ async fn follow_pauses_while_a_fit_holds_the_screen() -> TestResult {
             })
             .await?,
     );
-    let fit = h.fits.fit(TAB, PHONE).await?;
+    let fit = h.fits.fit(TAB, FitViewer::new(PHONE, None)?).await?;
     h.operation(&task, 4);
     tokio::time::sleep(QUIET).await;
     assert_eq!(

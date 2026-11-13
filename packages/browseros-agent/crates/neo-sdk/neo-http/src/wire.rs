@@ -15,7 +15,7 @@ use browseros_core::TabId;
 use neo_sdk_api as api;
 use neo_takeover::{
     BarAction, BarOutcome, Fit, FitMode, FitState, Fitted, Lock, LockTtl, Reads, ReleaseReason,
-    ScreenSize, Takeover, TakeoverRequest, TakeoverState, TakeoverTtl,
+    ScreenSize, Takeover, TakeoverRequest, TakeoverState, TakeoverTtl, Viewer, ViewerScale,
 };
 use neo_trace::{
     Delivery, Effect, EpochMillis, ErrorRecord, OperationId, OperationRow, Page, PageState,
@@ -389,6 +389,16 @@ pub(crate) fn fit(fit: &Fit) -> api::Fit {
             fit.screen.width.into(),
             fit.screen.height.into(),
         )),
+        // Pure 1x sessions keep their existing wire shape. At 2x the host needs both units
+        // to fit locally and to send physical dimensions in a remote framebuffer resize.
+        viewer: (fit.viewer.scale == ViewerScale::Two).then(|| {
+            let mut viewer = api::ViewerRequest::new(
+                fit.viewer.size.width.into(),
+                fit.viewer.size.height.into(),
+            );
+            viewer.scale = Some(fit.viewer.scale.factor().into());
+            Box::new(viewer)
+        }),
         mode: Some(
             match fit.mode {
                 FitMode::Mobile => "mobile",
@@ -429,10 +439,13 @@ pub(crate) fn fit(fit: &Fit) -> api::Fit {
     }
 }
 
-/// `POST /v1/tabs/{tabId}/fit`: the viewer's `{width, height}`, each 100 to 4096 px.
-pub(crate) fn viewer_request(body: &[u8]) -> Result<ScreenSize, ApiError> {
-    let viewer = serde_json::from_slice(body)
-        .map_err(|_| not_the_body(r#"{"width": integer, "height": integer}"#))?;
+/// The fit's logical dimensions and optional 1x or 2x preview scale.
+pub(crate) fn viewer_request(body: &[u8]) -> Result<Viewer, ApiError> {
+    let input: serde_json::Value = serde_json::from_slice(body)
+        .map_err(|_| not_the_body(r#"{"width": integer, "height": integer, "scale"?: 1 | 2}"#))?;
+    check_scale(&input)?;
+    let viewer = serde_json::from_value(input)
+        .map_err(|_| not_the_body(r#"{"width": integer, "height": integer, "scale"?: 1 | 2}"#))?;
     viewer_size(viewer)
 }
 
@@ -484,14 +497,20 @@ pub(crate) fn takeover_event(takeover: &Takeover) -> api::Event {
 /// `POST /v1/takeovers`: the tab, an optional viewer (each side 100 to 4096 px), `reads`
 /// (`block` when absent) and a TTL of 60 s to 20 minutes (20 minutes when absent).
 pub(crate) fn takeover_request(body: &[u8]) -> Result<TakeoverRequest, ApiError> {
+    let input: serde_json::Value = serde_json::from_slice(body).map_err(|_| {
+        not_the_body(r#"{"tabId": integer, "viewer"?: {"width": integer, "height": integer, "scale"?: 1 | 2}}"#)
+    })?;
+    if let Some(viewer) = input.get("viewer") {
+        check_scale(viewer)?;
+    }
     let api::TakeoverRequest {
         tab_id,
         viewer,
         reads,
         ttl_seconds,
-    } = serde_json::from_slice(body).map_err(|_| {
+    } = serde_json::from_value(input).map_err(|_| {
         not_the_body(
-            r#"{"tabId": integer, "viewer"?: {"width": integer, "height": integer}, "reads"?: "block" | "allow", "ttlSeconds"?: integer}"#,
+            r#"{"tabId": integer, "viewer"?: {"width": integer, "height": integer, "scale"?: 1 | 2}, "reads"?: "block" | "allow", "ttlSeconds"?: integer}"#,
         )
     })?;
     let ttl = match ttl_seconds {
@@ -539,16 +558,37 @@ fn reads(text: Option<&str>) -> Result<Reads, ApiError> {
     }
 }
 
-/// A viewer's size, each side 100 to 4096 px, as a fit and a takeover take it.
-fn viewer_size(viewer: api::ViewerSize) -> Result<ScreenSize, ApiError> {
-    let api::ViewerSize { width, height } = viewer;
+/// Generated optional fields treat explicit null as absence. Preserve scale omission for
+/// refit inheritance, but reject null before decoding into the generated request model.
+fn check_scale(viewer: &serde_json::Value) -> Result<(), ApiError> {
+    if viewer.get("scale").is_some_and(serde_json::Value::is_null) {
+        return Err(ApiError::invalid("`scale` must be the integer 1 or 2"));
+    }
+    Ok(())
+}
+
+/// Validates the request once at the host boundary; Surface resolves omitted-scale inheritance.
+fn viewer_size(viewer: api::ViewerRequest) -> Result<Viewer, ApiError> {
+    let api::ViewerRequest {
+        width,
+        height,
+        scale,
+    } = viewer;
+    let scale = match scale {
+        None => None,
+        Some(1) => Some(ViewerScale::One),
+        Some(2) => Some(ViewerScale::Two),
+        Some(_) => return Err(ApiError::invalid("`scale` must be the integer 1 or 2")),
+    };
     let side = |side: i32| {
         u16::try_from(side)
             .ok()
             .filter(|side| VIEWER_SIDE.contains(side))
     };
     match (side(width), side(height)) {
-        (Some(width), Some(height)) => Ok(ScreenSize { width, height }),
+        (Some(width), Some(height)) => {
+            Viewer::new(ScreenSize { width, height }, scale).map_err(ApiError::from)
+        }
         _ => Err(ApiError::invalid(format!(
             "`width` and `height` must each be from {} to {}",
             VIEWER_SIDE.start(),

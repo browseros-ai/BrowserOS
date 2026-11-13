@@ -19,6 +19,9 @@ pub struct Fit {
     pub tab_id: i64,
     #[serde(rename = "screen")]
     pub screen: Box<models::ViewerSize>,
+    /// Effective logical dimensions and scale, present only at scale 2. `screen` remains the physical framebuffer size. Every active fit reflects the latest shared layout.
+    #[serde(rename = "viewer", skip_serializing_if = "Option::is_none")]
+    pub viewer: Option<Box<models::ViewerRequest>>,
     #[serde(rename = "mode", skip_serializing_if = "Option::is_none")]
     pub mode: Option<String>,
     /// `partial` when the page did not report the size asked for; Neo does not retry.
@@ -50,6 +53,7 @@ impl Fit {
             id,
             tab_id,
             screen: Box::new(screen),
+            viewer: None,
             mode: None,
             fit,
             keyboard: None,

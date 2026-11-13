@@ -99,6 +99,46 @@ async fn a_takeover_starts_and_is_released_through_the_routes() -> TestResult {
     Ok(())
 }
 
+#[tokio::test]
+async fn a_scaled_takeover_keeps_its_fit_through_retries_and_host_refits() -> TestResult {
+    let h = harness().await?;
+    h.browser.open_tab(12);
+    let takeover = start(
+        &h,
+        json!({"tabId":12,"viewer":{"width":366,"height":700,"scale":2}}),
+    )
+    .await?;
+    let repeated = start(
+        &h,
+        json!({"tabId":12,"viewer":{"width":390,"height":844,"scale":1}}),
+    )
+    .await?;
+    assert_eq!(
+        repeated, takeover,
+        "start retries do not resize an active takeover"
+    );
+    let fit_id = takeover["fitId"].as_str().ok_or("a fit id")?;
+    let fit = h.get(&format!("/v1/fits/{fit_id}")).await?;
+    assert_eq!(fit.body["screen"], json!({"width":732,"height":1400}));
+    assert_eq!(
+        fit.body["viewer"],
+        json!({"width":366,"height":700,"scale":2})
+    );
+    let refit = h
+        .post("/v1/tabs/12/fit", r#"{"width":366,"height":500}"#)
+        .await?;
+    assert_eq!(refit.status, StatusCode::OK, "{}", refit.body);
+    assert_eq!(refit.body["id"], fit_id);
+    assert_eq!(refit.body["screen"], json!({"width":732,"height":1000}));
+    let release = format!("/v1/takeovers/{}/release", id(&takeover)?);
+    let released = h.post(&release, "").await?;
+    assert_eq!(released.status, StatusCode::OK, "{}", released.body);
+    assert_eq!(h.xvnc.size(), HOME_SCREEN);
+    assert_eq!(h.browser.window(), "maximized");
+    assert_eq!(h.post(&release, "").await?.body, released.body);
+    Ok(())
+}
+
 /// A host's refit during a takeover refits the takeover's own fit, which its release restores.
 #[tokio::test]
 async fn a_host_refit_during_a_takeover_gives_the_takeovers_fit() -> TestResult {

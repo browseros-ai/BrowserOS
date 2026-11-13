@@ -9,7 +9,7 @@
 
 use crate::fit_rule::FitMode;
 use crate::limits::{MAX_KEYBOARD_BOXES, MAX_SCANNED_FIELDS, POPUP_CLOSE_POLL, POPUP_CLOSE_WAIT};
-use crate::{BrowserBar, BrowserTabs, Keyboard, PartError, ScreenSize};
+use crate::{BrowserBar, BrowserTabs, Keyboard, PartError, ScreenSize, ViewerGeometry};
 use browseros_core::pages::PageInfo;
 use browseros_core::{PageJs, ProtocolSession, TabId, TargetId};
 use neo_trace::EpochMillis;
@@ -38,6 +38,7 @@ pub(crate) async fn read(
     tab: TabId,
     mode: FitMode,
     screen: ScreenSize,
+    viewer: ViewerGeometry,
     known: Option<&[TargetId]>,
 ) -> Result<OwnerView, PartError> {
     let pages = browser.pages().await?;
@@ -51,8 +52,15 @@ pub(crate) async fn read(
         .await
         .map_err(PartError::Browser)?;
     reading.boxes.truncate(MAX_KEYBOARD_BOXES);
-    let shown = reading.screen == [u32::from(screen.width), u32::from(screen.height)]
+    let shown = reading.screen == [u32::from(viewer.size.width), u32::from(viewer.size.height)]
         && reading.touch == (mode == FitMode::Mobile);
+    // The isolated-world script accounts for pinch and browser zoom. Preview zoom is owned
+    // by the fit, so project its logical boxes here while keeping wire geometry physical.
+    for bounds in &mut reading.boxes {
+        for value in bounds {
+            *value *= f64::from(viewer.scale.factor());
+        }
+    }
     let keyboard = shown.then(|| Keyboard {
         screen,
         boxes: reading.boxes,

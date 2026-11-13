@@ -64,6 +64,51 @@ The pre-existing browser infrastructure (`browseros-cdp`, `browseros-core` and t
 workspace crates) stays outside this folder. Desktop depends on `neo-captcha` and
 `neo-screencast`; the SDK server and its other libraries do not enter desktop's dependency graph.
 
+## Phone takeover resolution
+
+A host can request a sharper phone view through the authenticated host API:
+
+```json
+{
+  "tabId": 123,
+  "viewer": { "width": 366, "height": 700, "scale": 2 }
+}
+```
+
+`POST /v1/takeovers` and `POST /v1/tabs/{tabId}/fit` accept logical viewer dimensions.
+An omitted `scale` starts a new fit at 1. The accepted values are the integers 1 and 2.
+Scale 2 requires a logical width of at most 600 pixels. Each logical side must be between
+100 and 4096 pixels, and each side multiplied by scale must stay at or below 4096 pixels.
+Invalid requests return HTTP 400 with `invalid_request` before changing the display.
+
+At scale 2, a 366 by 700 phone uses a 732 by 1400 framebuffer. The page keeps its existing
+mobile device size, touch behavior, and device pixel ratio of 2. The fit uses the browser's
+existing 200 percent mobile preview zoom. It does not change the page's pixel density.
+The physical display and browser window are shared, so another tab without emulation can
+observe the larger display.
+
+`Fit.screen` and `Fit.keyboard` use physical framebuffer pixels. Scaled fits also return
+`Fit.viewer` with the logical size and active scale. A host maps its displayed canvas to the
+framebuffer before sending RFB pointer coordinates. Agent locator boxes and mouse positions
+remain logical CSS coordinates. Screenshot density follows the page's DPR and the screenshot's
+own `scale` option, independently of the viewer scale.
+
+Refit an active tab through `POST /v1/tabs/{tabId}/fit`. Omitting `scale` preserves its active
+scale, and an explicit 1 returns it to 1x. Repeating takeover start returns the existing
+takeover without refitting it. All active fits follow the latest shared display layout.
+A host that sends remote framebuffer resizes must send physical dimensions at the active
+scale, or fit its local canvas without resizing the remote display.
+At 2x, an odd physical side rounds down to whole logical pixels and can leave one unused
+edge pixel. An external resize past the logical phone width limit returns all fits to
+desktop at 1x. A later resize does not restore 2x without an explicit refit.
+
+Release restores the tab's original viewport request, including its previous preview zoom.
+The last fit also restores the resting display size and saved window state. These use the
+existing best-effort restoration path. A failed or timed-out release can leave restoration
+incomplete, and restoring geometry cannot undo page events or requests caused during the fit.
+The default takeover blocks agent reads, including screenshots. Use `reads: "allow"` when
+scripts need to capture the tab during a takeover.
+
 From `packages/browseros-agent`, run the existing SDK gate with private build state:
 
 ```sh

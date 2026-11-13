@@ -16,7 +16,7 @@ pub struct TakeoverRequest {
     #[serde(rename = "tabId")]
     pub tab_id: i64,
     #[serde(rename = "viewer", skip_serializing_if = "Option::is_none")]
-    pub viewer: Option<Box<models::ViewerSize>>,
+    pub viewer: Option<Box<models::ViewerRequest>>,
     /// The lock's `reads`, as on `LockRequest`.
     #[serde(rename = "reads", skip_serializing_if = "Option::is_none")]
     pub reads: Option<String>,

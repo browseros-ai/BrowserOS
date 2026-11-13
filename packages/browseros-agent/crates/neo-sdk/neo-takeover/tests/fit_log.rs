@@ -13,7 +13,7 @@ use browser::FakeBrowser;
 use browseros_core::viewport::Viewports;
 use browseros_core::{BrowserSession, BrowserSessionHooks, TabId};
 use neo_takeover::testing::FakeXvnc;
-use neo_takeover::{BarAction, BarOutcome, BrowserTabs, Fits, ScreenSize};
+use neo_takeover::{BarAction, BarOutcome, BrowserTabs, Fits, ScreenSize, Viewer};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -95,7 +95,7 @@ async fn failed_navigations_log_their_original_addresses() -> Result<(), BoxErro
     );
     let address = format!("https://down.example/?code={QUERY_VALUE}");
     browser.unreachable(&address);
-    let fit = fits.fit(TabId(3), PHONE).await?;
+    let fit = fits.fit(TabId(3), Viewer::new(PHONE, None)?).await?;
 
     let typed = BarAction::Open(address.clone());
     assert_eq!(fits.navigate(fit.id, typed).await?, BarOutcome::Failed);
