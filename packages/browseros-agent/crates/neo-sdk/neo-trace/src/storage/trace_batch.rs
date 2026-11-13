@@ -89,6 +89,7 @@ pub(crate) struct OperationEndRow<'a> {
     pub(crate) notes: &'a [String],
     pub(crate) page: Option<&'a PageState>,
     pub(crate) main_world: bool,
+    pub(crate) frames_incomplete: bool,
 }
 
 /// The recoverable request-id portion of a damaged run; salvage has already validated it.
@@ -346,6 +347,7 @@ impl TraceBatch {
             url: Set(page.url),
             title: Set(page.title),
             main_world: Set(Some(op.main_world)),
+            frames_incomplete: Set(Some(op.frames_incomplete)),
             ..Default::default()
         };
         if let Some((args, cut)) = op.args {

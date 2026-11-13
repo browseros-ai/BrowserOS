@@ -89,6 +89,12 @@ pub trait OpEnv: Send + Sync {
     /// The default ignores it.
     fn main_world(&self) {}
 
+    /// The op read a tab's frame tree that is not whole: an out-of-process frame's subtree could
+    /// not be read, or no tree came back at all (`page.frames`, `page/frame_tree.rs`). The host
+    /// stores it on the op's record, so a host can find a run whose script was handed a short
+    /// tree; the frames themselves stay in the op's answer. The default ignores it.
+    fn frames_incomplete(&self) {}
+
     /// One line of Playwright's call log, mirrored into the op's trace record. Lines never
     /// carry a typed value.
     fn note(&self, line: String);

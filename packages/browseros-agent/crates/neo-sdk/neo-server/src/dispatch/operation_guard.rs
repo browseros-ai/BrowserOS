@@ -377,6 +377,7 @@ fn settle(
         error,
         page_after,
         main_world: state.main_world(),
+        frames_incomplete: state.frames_incomplete(),
         at: EpochMillis::now(),
     });
     let line = OpLine {

@@ -68,6 +68,27 @@ This is a read view. Values remain stored in `trace.db`, and full reads, downloa
 screenshot endpoints retain their existing access. URL and title can themselves contain values;
 the host applies its own redaction to these audit fields.
 
+## Frame trees Neo could not read whole
+
+A script's `page.frames()` lists a tab's whole frame tree, cross-site frames included, from Neo's
+own `page.frames` reads: before the script's first statement, and before each operation settles
+for a tab whose frames changed. A read that could not get the whole tree ends with
+`framesIncomplete: true`: an out-of-process frame's subtree would not read, or no tree came back
+at all. A whole read ends with `false`. After a short read the script's `frames()` lists the
+frames that were read, and the tab is read again before the script's next operation settles.
+
+To find a run whose script was handed a short tree, read it and look for a `page.frames`
+operation with `framesIncomplete: true`:
+
+```http
+GET /v1/runs/{runId}?fields=summary
+```
+
+These reads are Neo's own (`internal: true`), so `internal=false` leaves them out; keep the
+default. `fields=summary` keeps the field. Operations recorded before it, and those whose end Neo
+never recorded, have none. The server also logs each such read at warn, `a tab's frame tree is
+not whole`, with the tab and the frame's error.
+
 ## Source layout and package names
 
 The SDK's source packages now live together under `crates/neo-sdk/`, relative to

@@ -62,6 +62,12 @@ pub struct OperationRow {
     ///
     /// [`OperationEnded::main_world`]: crate::OperationEnded::main_world
     pub main_world: Option<bool>,
+    /// Whether it read a tab's frame tree that was not whole
+    /// ([`OperationEnded::frames_incomplete`]). `None` while it runs, when its end never
+    /// arrived, and for rows stored before the column.
+    ///
+    /// [`OperationEnded::frames_incomplete`]: crate::OperationEnded::frames_incomplete
+    pub frames_incomplete: Option<bool>,
 }
 
 impl OperationRow {

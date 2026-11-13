@@ -212,7 +212,8 @@ async fn expected_current_columns(path: &Path) -> TestResult {
         ALTER TABLE "operations" ADD COLUMN "main_world" integer;
         ALTER TABLE "runs" ADD COLUMN "values" varchar;
         ALTER TABLE "operations" ADD COLUMN "values" varchar;
-        PRAGMA user_version = 4"#,
+        ALTER TABLE "operations" ADD COLUMN "frames_incomplete" integer;
+        PRAGMA user_version = 5"#,
     )
     .execute(&mut conn)
     .await?;
@@ -339,8 +340,8 @@ async fn a_fresh_file_has_exactly_the_current_schema() -> TestResult {
     expected_current_columns(&old).await?;
     assert_eq!(shape(&path).await?, shape(&old).await?);
     let dump = logical_dump(&path).await?;
-    assert_eq!(dump.version, 4);
-    assert_eq!(dump.rows.get("seaql_migrations").map(Vec::len), Some(4));
+    assert_eq!(dump.version, 5);
+    assert_eq!(dump.rows.get("seaql_migrations").map(Vec::len), Some(5));
     assert_eq!(
         dump.rows["seaql_migrations"][0][0],
         "'m0001_trace_baseline'"
@@ -496,6 +497,7 @@ async fn an_s4_file_gains_notes_and_takes_operation_ends() -> TestResult {
         error: None,
         page_after: None,
         main_world: false,
+        frames_incomplete: false,
         at: EpochMillis::from_millis(41),
     });
     sink.flush().await?;
@@ -562,7 +564,8 @@ async fn a_session_era_file_is_refused_untouched() -> TestResult {
 async fn a_newer_user_version_is_refused_untouched() -> TestResult {
     let (_dir, path) = fixture("s5", true).await?;
     let mut conn = connection(&path).await?;
-    sqlx::raw_sql("PRAGMA user_version = 5")
+    // One past this build's fence (`USER_VERSION_FENCE`, 5 since `m0005`).
+    sqlx::raw_sql("PRAGMA user_version = 6")
         .execute(&mut conn)
         .await?;
     conn.close().await?;
@@ -803,6 +806,7 @@ async fn legacy_page_ids_stay_inert_while_native_tab_records_round_trip() -> Tes
         error: None,
         page_after: Some(page.clone()),
         main_world: false,
+        frames_incomplete: false,
         at: EpochMillis::from_millis(41),
     });
     sink.flush().await?;
@@ -906,7 +910,7 @@ async fn a_site_era_file_gains_main_world_without_losing_its_operations() -> Tes
     let (_expected_dir, expected) = fixture("s5", false).await?;
     expected_current_columns(&expected).await?;
     assert_eq!(shape(&path).await?, shape(&expected).await?);
-    assert_eq!(logical_dump(&path).await?.version, 4);
+    assert_eq!(logical_dump(&path).await?.version, 5);
     let old = OperationId::new(A.parse()?, 1);
     assert_eq!(
         store
@@ -943,6 +947,7 @@ async fn a_site_era_file_gains_main_world_without_losing_its_operations() -> Tes
         error: None,
         page_after: None,
         main_world: true,
+        frames_incomplete: false,
         at: EpochMillis::from_millis(41),
     });
     sink.flush().await?;
@@ -965,5 +970,89 @@ async fn a_site_era_file_gains_main_world_without_losing_its_operations() -> Tes
             .main_world,
         None
     );
+    Ok(())
+}
+
+/// A file the previous build (fence 4, through `m0004_trace_values`) left runs only the new
+/// additive migration: its rows read no frame-tree answer, and nothing else about them changes.
+/// An operation that ends now stores its answer, which a reopen keeps.
+#[tokio::test]
+async fn a_values_era_file_gains_frames_incomplete_without_losing_its_operations() -> TestResult {
+    let (_dir, path) = fixture("s5", true).await?;
+    let mut conn = connection(&path).await?;
+    sqlx::raw_sql(
+        r#"ALTER TABLE "operations" ADD COLUMN "site" text;
+        ALTER TABLE "operations" ADD COLUMN "main_world" integer;
+        ALTER TABLE "runs" ADD COLUMN "values" varchar;
+        ALTER TABLE "operations" ADD COLUMN "values" varchar;
+        PRAGMA user_version = 4;
+        CREATE TABLE seaql_migrations (version TEXT PRIMARY KEY, applied_at BIGINT NOT NULL);
+        INSERT INTO seaql_migrations VALUES ('m0001_trace_baseline', 1), ('m0002_operation_site', 1),
+          ('m0003_operation_main_world', 1), ('m0004_trace_values', 1)"#,
+    )
+    .execute(&mut conn)
+    .await?;
+    conn.close().await?;
+    let before = logical_dump(&path).await?;
+    let store = TraceStore::open(&path).await?;
+    let (_expected_dir, expected) = fixture("s5", false).await?;
+    expected_current_columns(&expected).await?;
+    assert_eq!(shape(&path).await?, shape(&expected).await?);
+    let after = logical_dump(&path).await?;
+    assert_eq!(after.version, 5);
+    assert_eq!(
+        after.rows.get("operations").map(Vec::len),
+        before.rows.get("operations").map(Vec::len),
+        "every stored operation stays"
+    );
+    let old = OperationId::new(A.parse()?, 1);
+    let old_row = store.operation(old).await?.ok_or("old operation")?;
+    assert_eq!(old_row.frames_incomplete, None);
+    let sink = spawn_writer(
+        &store,
+        Redactor::new(RedactionLimits::default()),
+        WriterConfig::default(),
+        None,
+    );
+    let id = OperationId::new(A.parse()?, 4);
+    sink.op_started(OperationStarted {
+        site: None,
+        id,
+        parent: None,
+        name: "page.frames".into(),
+        kind: OperationKind::Builtin,
+        effect: Effect::Read,
+        tab: Some(TabId(3)),
+        args: Value::Null,
+        at: EpochMillis::from_millis(40),
+    });
+    sink.op_ended(OperationEnded {
+        id,
+        outcome: Outcome::Ok,
+        delivery: Delivery::Done,
+        sent_at: None,
+        result: None,
+        error: None,
+        page_after: None,
+        main_world: false,
+        frames_incomplete: true,
+        at: EpochMillis::from_millis(41),
+    });
+    sink.flush().await?;
+    drop(sink);
+    drop(store);
+    let reopened = TraceStore::open(&path).await?;
+    assert_eq!(
+        reopened
+            .operation(id)
+            .await?
+            .ok_or("reopened operation")?
+            .frames_incomplete,
+        Some(true)
+    );
+    let old_after = reopened.operation(old).await?.ok_or("old operation")?;
+    assert_eq!(old_after.frames_incomplete, None);
+    assert_eq!(old_after.main_world, old_row.main_world);
+    assert_eq!(old_after.notes, old_row.notes);
     Ok(())
 }

@@ -815,6 +815,7 @@ impl Writer {
                 notes: &notes,
                 page: page.as_ref(),
                 main_world: event.main_world,
+                frames_incomplete: event.frames_incomplete,
             })
             .await?;
         if !matched {
@@ -1103,6 +1104,7 @@ mod tests {
             error: None,
             page_after: None,
             main_world: false,
+            frames_incomplete: false,
             at: EpochMillis::from_millis(3),
         });
         sink.flush().await?;
@@ -1270,6 +1272,7 @@ mod tests {
             error: None,
             page_after: None,
             main_world: false,
+            frames_incomplete: false,
             at: EpochMillis::from_millis(3),
         });
         let lost = sink.flush().await;
@@ -1348,6 +1351,7 @@ mod tests {
                 error: None,
                 page_after: None,
                 main_world: false,
+                frames_incomplete: false,
                 at: EpochMillis::from_millis(3),
             });
         }

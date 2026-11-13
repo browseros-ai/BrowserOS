@@ -676,6 +676,7 @@ async fn values_off_reaches_records_and_events_without_payloads() -> TestResult 
             title: Some("Form".into()),
         }),
         main_world: false,
+        frames_incomplete: false,
         at: at(3),
     });
     h.sink.run_ended(RunEnded {

@@ -97,6 +97,7 @@ async fn summary_omits_values_everywhere_and_keeps_audit_metadata() -> TestResul
             title: Some("Form".into()),
         }),
         main_world: false,
+        frames_incomplete: false,
         at: at(3),
     });
     h.sink.run_ended(RunEnded {

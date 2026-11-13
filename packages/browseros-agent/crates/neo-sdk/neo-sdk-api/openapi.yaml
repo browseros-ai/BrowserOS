@@ -1730,6 +1730,17 @@ components:
             JavaScript world, rather than Neo's isolated world. Present once the operation has
             ended, so an operation still running, one whose end Neo never recorded, or one
             recorded before this field has none.
+        framesIncomplete:
+          type: boolean
+          description: >-
+            True when the operation read a tab's frame tree that was not whole: an out-of-process
+            frame's subtree (a cross-site iframe's) could not be read, or no tree came back at
+            all. Neo's own `page.frames` reads carry it. The script's `page.frames()` then lists
+            the frames that were read, and the tree is read again before the script's next
+            operation settles, so a later `page.frames` operation of the same tab shows whether
+            that read was whole. Present once the operation has ended, so an operation still
+            running, one whose end Neo never recorded, or one recorded before this field has
+            none.
         internal:
           type: boolean
           description: >-

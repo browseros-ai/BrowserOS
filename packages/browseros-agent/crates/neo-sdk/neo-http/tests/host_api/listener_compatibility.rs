@@ -84,6 +84,7 @@ async fn record_listeners(h: &Harness) -> Result<RunId, crate::support::BoxError
                 title: Some("Compatibility".into()),
             }),
             main_world: false,
+            frames_incomplete: false,
             at: at(100 + i64::from(seq)),
         });
     }

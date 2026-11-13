@@ -17,11 +17,12 @@ mod m0001_trace_baseline;
 mod m0002_operation_site;
 mod m0003_operation_main_world;
 mod m0004_trace_values;
+mod m0005_operation_frames_incomplete;
 
 /// The ordered schema history, applied only inside prepare's owned SQLite transaction.
 pub(crate) struct TraceMigrator;
 
-const USER_VERSION_FENCE: i64 = 4;
+const USER_VERSION_FENCE: i64 = 5;
 
 #[async_trait::async_trait]
 impl MigratorTrait for TraceMigrator {
@@ -31,6 +32,7 @@ impl MigratorTrait for TraceMigrator {
             Box::new(m0002_operation_site::Migration),
             Box::new(m0003_operation_main_world::Migration),
             Box::new(m0004_trace_values::Migration),
+            Box::new(m0005_operation_frames_incomplete::Migration),
         ]
     }
 }

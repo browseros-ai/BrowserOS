@@ -56,7 +56,8 @@ pub(crate) struct PageFrames {
     #[ts(optional)]
     frames: Option<Vec<FrameInfo>>,
     /// `true` when an out-of-process frame under the tree could not be read: `frames` then lacks
-    /// it (and what it holds). The operation's notes name each such frame, for the host.
+    /// it (and what it holds). The operation's record is marked `framesIncomplete` for the host,
+    /// and the server's warn line names each such frame and its error.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     incomplete: Option<bool>,
@@ -274,12 +275,21 @@ pub(crate) async fn frames(
         Ok(result) => result?,
         Err(_expired) => return Err(scope.timed_out(ErrorCode::WaitTimeout)),
     };
-    // Neither a short tree nor a missing one is silent: the run's record keeps a note of it, and
-    // the prelude reads the tree again before the script's next operation resolves.
+    Ok(answer(scope, frames))
+}
+
+/// `page.frames()`'s answer from what its read got. Neither a short tree nor a missing one is
+/// silent: the op's record is marked (`OpScope::frames_incomplete`), its notes name each frame
+/// and error for the server's warn line, and the prelude reads the tree again before the
+/// script's next operation resolves.
+fn answer(scope: &OpScope<'_>, frames: Option<FrameTree>) -> PageFrames {
     let incomplete = frames.as_ref().is_some_and(|tree| !tree.unread.is_empty());
+    if incomplete || frames.is_none() {
+        scope.frames_incomplete();
+    }
     match &frames {
-        // Debug notes, never stored in the run's record; neo-server logs those starting `frame tree`
-        // at warn (operation_guard), so a read that was not whole can be found afterwards.
+        // Debug notes, never stored in the run's record (the mark above is); neo-server logs those
+        // starting `frame tree` at warn (operation_guard), naming the frame and the error.
         None => scope.log(
             "frame tree not read: the tab was loading or navigating past the read's time; its \
              frames stay as they were"
@@ -294,10 +304,10 @@ pub(crate) async fn frames(
             }
         }
     }
-    Ok(PageFrames {
+    PageFrames {
         incomplete: incomplete.then_some(true),
         frames: frames.map(FrameTree::into_frames),
-    })
+    }
 }
 
 /// Cache metadata must not become a renderer barrier. Bound discovery even after loading has
@@ -531,8 +541,36 @@ mod tests {
     use serde::Serialize;
     use serde_json::json;
 
-    use super::{FrameTree, PageFrames, sample_tree};
+    use super::{FrameTree, PageFrames, answer, sample_tree};
+    use crate::Op;
+    use crate::op_scope::OpScope;
     use crate::page::document_watch::FrameTreeReply;
+    use crate::target::CallHeader;
+    use crate::test_env::{EnvCall, TestEnv};
+
+    /// A read that came back whole leaves the op's record unmarked. One that lacks an
+    /// out-of-process frame, or got no tree at all, marks it (`OpEnv::frames_incomplete`), so a
+    /// host finds the run whose script was handed a short tree.
+    #[tokio::test]
+    async fn tests_that_only_a_short_or_missing_tree_marks_the_operation()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let marked = |frames: Option<FrameTree>| -> Result<bool, Box<dyn std::error::Error>> {
+            let env = TestEnv::new();
+            let op = Op::from_name("page.frames").ok_or("page.frames is an op")?;
+            let scope = OpScope::new(&env, op, CallHeader::default());
+            answer(&scope, frames);
+            Ok(env.calls().contains(&EnvCall::FramesIncomplete))
+        };
+        let mut short = sample_tree()?;
+        short.unread.push((
+            "cross".to_owned(),
+            "frame cross's own session is not attached yet".to_owned(),
+        ));
+        assert!(!marked(Some(sample_tree()?))?, "a whole tree");
+        assert!(marked(Some(short))?, "a tree that lacks a frame");
+        assert!(marked(None)?, "no tree");
+        Ok(())
+    }
 
     /// `page.frames()` answers the bytes the flattened `Option<FrameTree>` it replaced wrote,
     /// key order included, with frames and without: a later edit cannot drift unseen.

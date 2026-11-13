@@ -38,6 +38,7 @@ pub struct Model {
     pub screenshot: Option<String>,
     pub screenshot_bytes: Option<i64>,
     pub main_world: Option<bool>,
+    pub frames_incomplete: Option<bool>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

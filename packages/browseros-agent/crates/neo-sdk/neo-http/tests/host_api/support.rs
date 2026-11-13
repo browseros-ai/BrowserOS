@@ -396,6 +396,7 @@ pub(crate) fn op_ended(
         error: None,
         page_after: None,
         main_world: false,
+        frames_incomplete: false,
         at: at(10_000),
     });
 }

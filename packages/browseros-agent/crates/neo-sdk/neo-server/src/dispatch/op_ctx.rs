@@ -96,6 +96,9 @@ pub(super) struct OpState {
     /// like the sent flag, and the op's own: a child op that ran the script has its own record
     /// saying so, and the parent's effect is not script of its own.
     main_world: AtomicBool,
+    /// Whether the op read a tab's frame tree that was not whole, for its trace record. Set-once
+    /// and the op's own, like `main_world`.
+    frames_incomplete: AtomicBool,
     /// The latest `recheck` refusal, until a later `recheck` passes. However the method then
     /// ends, a value included, this is the op's error, so a refusal survives a crate's own error
     /// mapping (sdk-playwright returns its own marker type and never names the app's error).
@@ -218,6 +221,15 @@ impl<M> OpCtx<M> {
     /// `neo.*` method whose browser work runs there. Only the trace reads it.
     pub(crate) fn mark_main_world(&self) {
         self.core.state.main_world.store(true, Ordering::Release);
+    }
+
+    /// The op read a tab's frame tree that was not whole: sdk-playwright's
+    /// `OpEnv::frames_incomplete`. Only the trace reads it, so a host can find the run.
+    pub(crate) fn mark_frames_incomplete(&self) {
+        self.core
+            .state
+            .frames_incomplete
+            .store(true, Ordering::Release);
     }
 
     /// One call-log line for the op's record. The first lines are kept; a runaway method
@@ -441,6 +453,7 @@ impl OpState {
             abort,
             sent_at: OnceLock::new(),
             main_world: AtomicBool::new(false),
+            frames_incomplete: AtomicBool::new(false),
             refusal: Mutex::new(None),
             notes: Mutex::new(Vec::new()),
             reports: Mutex::new(Vec::new()),
@@ -477,6 +490,12 @@ impl OpState {
     /// Whether the op marked itself main-world ([`OpCtx::mark_main_world`]).
     pub(super) fn main_world(&self) -> bool {
         self.main_world.load(Ordering::Acquire)
+    }
+
+    /// Whether the op marked its frame-tree read not whole
+    /// ([`OpCtx::mark_frames_incomplete`]).
+    pub(super) fn frames_incomplete(&self) -> bool {
+        self.frames_incomplete.load(Ordering::Acquire)
     }
 
     pub(super) fn take_publications(&self) -> Vec<u64> {

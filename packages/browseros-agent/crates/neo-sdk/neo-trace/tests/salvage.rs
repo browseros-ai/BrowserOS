@@ -127,6 +127,7 @@ async fn old_trace(dir: &Path) -> TestResult<Old> {
             error: None,
             page_after: None,
             main_world: false,
+            frames_incomplete: false,
             at: at(3_000 + i64::from(seq)),
         });
     }

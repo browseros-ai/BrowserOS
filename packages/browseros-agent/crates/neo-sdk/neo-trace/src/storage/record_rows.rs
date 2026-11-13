@@ -142,6 +142,7 @@ pub(crate) fn operation_row(row: operations::Model) -> Result<OperationRow, Trac
             .map(|text| ShotState::parse(text).ok_or_else(|| corrupt("screenshot", text)))
             .transpose()?,
         main_world: row.main_world,
+        frames_incomplete: row.frames_incomplete,
     })
 }
 
