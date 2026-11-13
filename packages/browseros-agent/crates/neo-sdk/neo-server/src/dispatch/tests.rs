@@ -1300,3 +1300,31 @@ async fn every_rule_seam_keeps_a_bound_run_to_its_family() -> Result<(), Box<dyn
     );
     Ok(())
 }
+
+#[tokio::test]
+async fn a_bound_run_hears_its_own_family_tab_close() -> Result<(), Box<dyn Error>> {
+    let harness = Harness::new().await?;
+    let tabs = families(&harness).await?;
+    let (run, _guard) = harness.run_in(TabsScope::Task, Some(&tabs.host))?;
+    let (_, closed) = harness
+        .submit(&run, "test.close", json!({ "page": handle(&tabs.mine) }))
+        .await;
+    let fact = closed.pages.first().ok_or("the closed page is reported")?;
+    assert!(
+        fact.closed,
+        "the family's closed tab still reaches the run as closed"
+    );
+    assert_eq!(
+        failure(
+            harness
+                .submit(&run, "test.read", json!({ "page": handle(&tabs.mine) }))
+                .await
+                .1
+        )?
+        .error
+        .code(),
+        ErrorCode::PAGE_CLOSED,
+        "naming it afterwards is refused as closed"
+    );
+    Ok(())
+}

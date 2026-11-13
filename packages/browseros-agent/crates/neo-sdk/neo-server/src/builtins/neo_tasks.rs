@@ -230,12 +230,15 @@ impl Method for CloseTask {
     async fn call(&self, op: &OpCtx<Self>, input: TaskInput) -> Result<Value, LeafError> {
         let task = usable_task(op, &input.task)?;
         let _turn = op.race_classified(task.turn.lock()).await?;
+        // Asked again with the turn held, and before each close: a host may name the task
+        // while this close waits, and a run with no task never closes a host's task.
+        usable_task(op, &input.task)?;
         let mut closed = Vec::new();
         let mut attempted = HashSet::new();
         let mut failure: Option<OpFailure> = None;
         let mut uncertain = false;
         loop {
-            let current = op.tabs().task(&input.task).map_err(OperationError::from)?;
+            let current = usable_task(op, &input.task)?;
             let Some(tab) = current
                 .tabs
                 .into_iter()

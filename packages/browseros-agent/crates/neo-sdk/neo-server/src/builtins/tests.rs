@@ -5858,3 +5858,43 @@ async fn a_bound_runs_own_open_is_its_own_though_no_task_holds_it() -> Result<()
     );
     Ok(())
 }
+
+/// A host may name an agent's task while a close by a run with no task waits for the task's
+/// turn: the close asks again once it holds the turn, and leaves the host's task as it is.
+#[tokio::test]
+#[expect(
+    clippy::await_holding_invalid_type,
+    reason = "the test holds the task's turn on purpose, so the close waits for it"
+)]
+async fn a_taskless_close_asks_again_once_it_holds_the_turn() -> Result<(), Box<dyn Error>> {
+    let harness = Harness::new().await?;
+    let (taskless, _taskless_guard) = run_scoped(&harness, TabsScope::Task, None)?;
+    let created = created_in(&harness, &taskless).await?;
+    let record = harness.tabs.task(&created)?;
+    let held = record.turn.lock().await;
+    let base = Arc::strong_count(&record.turn);
+    let pending = harness.dispatcher.submit(
+        &taskless,
+        Call::script(
+            "task.close".to_owned(),
+            json!({ "task": created.as_str() }),
+            None,
+        ),
+    );
+    // The close has its copy of the task and waits for the turn.
+    within(async {
+        while Arc::strong_count(&record.turn) == base {
+            task::yield_now().await;
+        }
+    })
+    .await?;
+    harness.tabs.ensure_task(&created)?;
+    drop(held);
+    assert_eq!(
+        failure(pending.wait().await)?.error.code(),
+        ErrorCode::TASK_NOT_FOUND,
+        "the task is a host's now"
+    );
+    assert!(harness.tabs.task(&created).is_ok(), "and it stays open");
+    Ok(())
+}

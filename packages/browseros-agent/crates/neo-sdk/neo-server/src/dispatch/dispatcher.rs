@@ -524,7 +524,7 @@ impl Dispatcher {
                 tabs_named(&input, &mut named);
                 named
                     .into_iter()
-                    .try_for_each(|tab| self.reach(run, tab))
+                    .try_for_each(|tab| reach(run, tab))
                     .map(|()| decoded)
             }
             decided => decided,
@@ -602,14 +602,6 @@ impl Dispatcher {
                 return guard.end_early(ending, None, frames);
             }
         };
-        // The default page has no tab until it resolves, so the admission walk could not ask
-        // about it: asked here, before the record names it.
-        if let Some(default) = &default_page
-            && let Err(refusal) = self.reach(&run, default.tab)
-        {
-            let frames = self.visible_frame_versions(&run, &spec, caller, state.id());
-            return guard.end_early(Ending::Refused(refusal), None, frames);
-        }
         let page = target.as_ref().map(|target| &target.page);
         guard.started_on(page.map(|page| page.tab));
         self.note_use(&run, caller, scripted, &spec, target.as_ref());
@@ -669,7 +661,7 @@ impl Dispatcher {
         } else {
             ending
         };
-        if let Some(refusal) = self.hidden_in_result(&run, &ending) {
+        if let Some(refusal) = hidden_in_result(&run, &ending) {
             ending = Ending::Refused(refusal);
         }
         let facts = self
@@ -824,6 +816,9 @@ impl Dispatcher {
                             .map_or(Ending::Refused(error), Ending::Stopped));
                     }
                 };
+                // The default page has no tab until it resolves, so the admission walk could not
+                // ask about it: asked here, before the record names it.
+                reach(run, default.tab).map_err(Ending::Refused)?;
                 // Checked like any handle, so a default page closed earlier in the run is
                 // `page_closed` too.
                 let target = self
@@ -835,51 +830,6 @@ impl Dispatcher {
                     target: Some(target),
                 })
             }
-        }
-    }
-
-    /// A backstop: a bound run's result never names a tab the run may not reach. The engine and
-    /// the rules keep such tabs out of what a method returns, so one that slips through is Neo's
-    /// bug, and the result is withheld rather than shown. A tab of the family that closed may be
-    /// named: it was the run's to know. Every other run's result passes unread.
-    fn hidden_in_result(&self, run: &RunCtx, ending: &Ending) -> Option<OperationError> {
-        let Ending::Returned(value) = ending else {
-            return None;
-        };
-        if !run.scope().is_bound() {
-            return None;
-        }
-        let mut named = Vec::new();
-        tabs_named(value, &mut named);
-        named
-            .into_iter()
-            .any(|tab| matches!(run.sight(tab), Sight::Foreign | Sight::Reserved))
-            .then(|| {
-                OperationError::neo(
-                    ErrorCode::INTERNAL_ERROR,
-                    "Neo withheld this result: it named a tab outside your task's tabs",
-                )
-            })
-    }
-
-    /// Whether `run` may reach `tab`, as the door answers a script. A run that is not bound is
-    /// never refused here: its handles meet the door's own checks, as before task scope. A bound
-    /// run gets `page_not_in_task` for a tab outside its family, whether another task's, no
-    /// task's or no tab at all, so the answer reveals nothing about which tabs exist;
-    /// `page_closed` for its family's tab that closed; and Neo's blank tab's own refusal. The
-    /// refusal is the script's, and nothing was sent, so it is retryable.
-    pub(crate) fn reach(&self, run: &RunCtx, tab: TabId) -> Result<(), OperationError> {
-        if !run.scope().is_bound() {
-            return Ok(());
-        }
-        match run.sight(tab) {
-            Sight::Shown => Ok(()),
-            Sight::Closed => Err(page_closed(run, tab)),
-            Sight::Reserved => Err(neo_tab()),
-            Sight::Foreign => Err(OperationError::script(
-                ErrorCode::PAGE_NOT_IN_TASK,
-                "this tab is not one of your task's tabs; context.pages() lists them",
-            )),
         }
     }
 
@@ -904,7 +854,7 @@ impl Dispatcher {
         }
     }
 
-    /// The run's reach first ([`Dispatcher::reach`]), then every rule in order; the first
+    /// Whether the run sees the tab ([`sees`]), then every rule in order; the first
     /// refusal wins. Every seam asks here (admission, the recheck before a send, a read's
     /// release, each page fact, each frame version, each tab an event names), so a door built
     /// with any list of rules still keeps a bound run to its family's tabs.
@@ -914,7 +864,7 @@ impl Dispatcher {
         check: &PolicyCheck<'_>,
     ) -> Result<(), OperationError> {
         if let Some(tab) = check.tab {
-            self.reach(run, tab)?;
+            sees(run, tab)?;
         }
         for policy in &self.policies {
             policy.check(check)?;
@@ -1318,11 +1268,76 @@ fn disconnected() -> OperationError {
     )
 }
 
+/// Whether `run` may reach `tab`, as the door answers a script. A run that is not bound is
+/// never refused here: its handles meet the door's own checks, as before task scope. A bound
+/// run gets `page_not_in_task` for a tab outside its family, whether another task's, no
+/// task's or no tab at all, so the answer reveals nothing about which tabs exist;
+/// `page_closed` for its family's tab that closed; and Neo's blank tab's own refusal. The
+/// refusal is the script's, and nothing was sent, so it is retryable.
+fn reach(run: &RunCtx, tab: TabId) -> Result<(), OperationError> {
+    if !run.scope().is_bound() {
+        return Ok(());
+    }
+    match run.sight(tab) {
+        Sight::Shown => Ok(()),
+        Sight::Closed => Err(page_closed(run, tab)),
+        Sight::Reserved => Err(neo_tab()),
+        Sight::Foreign => Err(not_in_task()),
+    }
+}
+
+/// [`reach`] for the rules' seams, which release what the run hears as much as
+/// they admit what it does: a tab of its family that closed passes, so its close reaches the
+/// run (the closed page's fact, its close event). Naming that tab in an op is still refused,
+/// at admission, with `page_closed`.
+fn sees(run: &RunCtx, tab: TabId) -> Result<(), OperationError> {
+    if !run.scope().is_bound() {
+        return Ok(());
+    }
+    match run.sight(tab) {
+        Sight::Shown | Sight::Closed => Ok(()),
+        Sight::Reserved => Err(neo_tab()),
+        Sight::Foreign => Err(not_in_task()),
+    }
+}
+
+/// A backstop: a bound run's result never names a tab the run may not reach. The engine and
+/// the rules keep such tabs out of what a method returns, so one that slips through is Neo's
+/// bug, and the result is withheld rather than shown. A tab of the family that closed may be
+/// named: it was the run's to know. Every other run's result passes unread.
+fn hidden_in_result(run: &RunCtx, ending: &Ending) -> Option<OperationError> {
+    let Ending::Returned(value) = ending else {
+        return None;
+    };
+    if !run.scope().is_bound() {
+        return None;
+    }
+    let mut named = Vec::new();
+    tabs_named(value, &mut named);
+    named
+        .into_iter()
+        .any(|tab| matches!(run.sight(tab), Sight::Foreign | Sight::Reserved))
+        .then(|| {
+            OperationError::neo(
+                ErrorCode::INTERNAL_ERROR,
+                "Neo withheld this result: it named a tab outside your task's tabs",
+            )
+        })
+}
+
 /// A handle to Neo's blank tab, which keeps the browser open and which no script may use.
 fn neo_tab() -> OperationError {
     OperationError::script(
         ErrorCode::INVALID_INPUT,
         "this tab is Neo's own blank tab, which keeps the browser open; a script cannot use it",
+    )
+}
+
+/// A tab outside a bound run's family: another task's, no task's, or none at all, answered alike.
+fn not_in_task() -> OperationError {
+    OperationError::script(
+        ErrorCode::PAGE_NOT_IN_TASK,
+        "this tab is not one of your task's tabs; context.pages() lists them",
     )
 }
 
