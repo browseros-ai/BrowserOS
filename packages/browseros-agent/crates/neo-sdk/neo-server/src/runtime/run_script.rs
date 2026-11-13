@@ -147,6 +147,9 @@ enum Thrown {
         name: String,
         message: String,
         stack: String,
+        /// The thrown value was `null` (`message` and `name` are then empty).
+        #[serde(default, rename = "thrownNull")]
+        thrown_null: bool,
     },
 }
 
@@ -447,7 +450,8 @@ fn settle(json: &str, bridge: &Bridge, blobs: &mut Vec<ResultBlob>) -> ScriptOut
             name,
             message,
             stack,
-        })) => ScriptOutcome::Failed(thrown_error(name, message, &stack)),
+            thrown_null,
+        })) => ScriptOutcome::Failed(thrown_error(name, message, &stack, thrown_null)),
         Err(error) => ScriptOutcome::Failed(OperationError::neo(
             ErrorCode::INTERNAL_ERROR,
             format_args!("the bootstrap settled the run with JSON Neo cannot read: {error}"),
@@ -455,11 +459,10 @@ fn settle(json: &str, bridge: &Bridge, blobs: &mut Vec<ResultBlob>) -> ScriptOut
     }
 }
 
-/// What the script threw, as the run's error, its name and message each cut to [`TEXT_CHARS`].
-/// QuickJS reports a full heap as a catchable `InternalError`, which the bootstrap caught like any
-/// other throw.
-fn thrown_error(name: String, message: String, stack: &str) -> OperationError {
-    if name == "InternalError" && message == "out of memory" {
+/// What the script threw, as the run's error, its name and message each cut to [`TEXT_CHARS`],
+/// unless it is QuickJS's report of a full heap ([`is_out_of_memory`]).
+fn thrown_error(name: String, message: String, stack: &str, thrown_null: bool) -> OperationError {
+    if is_out_of_memory(&name, &message, thrown_null) {
         return out_of_memory();
     }
     let (name, message) = (
@@ -495,11 +498,30 @@ fn halted(run: &RunCtx, cause: Option<Halt>, message: &str) -> ScriptOutcome {
     }
 }
 
+/// Whether a thrown value is the engine's report that the run's heap reached its limit.
+///
+/// The rule: QuickJS reports an allocation past `set_memory_limit` as an exception, which is all
+/// rquickjs commits to (its `big_int_oom_is_reported`); what that exception is, neither promises.
+/// QuickJS-ng 0.15.1 throws an `InternalError` whose message begins `out of memory` (also `out
+/// of memory in regexp execution`), or `null` when the heap is too full to build that error. Both
+/// forms are pinned by tests that drive the real runtime past its limit
+/// (`runtime/tests.rs`, `a_full_heap_*`), so an engine that reports otherwise fails there, not
+/// silently here.
+///
+/// Its one limit: the realm cannot vouch which allocation failed, so a script that itself throws
+/// `null`, or builds an `InternalError` with that message, is reported as out of memory too.
+fn is_out_of_memory(name: &str, message: &str, thrown_null: bool) -> bool {
+    thrown_null || (name == "InternalError" && message.starts_with("out of memory"))
+}
+
+/// Neo's error for a run whose heap reached its limit (lead's decision, 2026-11-12): the limit is
+/// Neo's, and what fills it is most often what a page hands the script (a snapshot's tree, a
+/// page's text), not the script's own code.
 fn out_of_memory() -> OperationError {
-    OperationError::script(
+    OperationError::neo(
         ErrorCode::OUT_OF_MEMORY,
         format_args!(
-            "the script used all of its run's {} MiB of JavaScript memory",
+            "the script ran out of its {} MiB memory limit",
             Defaults::JS_MEMORY_BYTES / (1024 * 1024)
         ),
     )

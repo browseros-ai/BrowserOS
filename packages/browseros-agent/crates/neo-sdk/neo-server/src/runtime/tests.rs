@@ -1062,20 +1062,86 @@ fn console_lines_come_back_with_their_level() -> Result<(), TestError> {
     })
 }
 
+/// The two forms QuickJS reports a full heap in, which `run_script::is_out_of_memory` relies on:
+/// rquickjs commits only to an exception at the limit, so this pins what that exception is, on
+/// the real engine. A large allocation that fails leaves room for an `InternalError`; a heap
+/// filled to the brim by small ones cannot build one, and QuickJS throws `null`. A small limit
+/// keeps the fill quick, so the long-task bound never cuts it short on a loaded machine.
 #[test]
-fn a_full_heap_is_out_of_memory() -> Result<(), TestError> {
+fn a_full_heap_is_reported_in_quickjs_s_two_forms() -> Result<(), TestError> {
+    let runtime = Runtime::new()?;
+    let context = Context::full(&runtime)?;
+    runtime.set_memory_limit(8 * 1024 * 1024);
+    // A list of small objects has no backing store to grow, so its last failed allocation is
+    // small and leaves no room for the error; an array of `{}` can fail on its store instead.
+    for (fill, expected) in [
+        (
+            "held = [held, new Array(1e5).fill(7)]",
+            "InternalError: out of memory",
+        ),
+        ("held = { next: held }", "null"),
+    ] {
+        let code = format!(
+            "(() => {{ let held = null; try {{ for (;;) {fill}; }} catch (e) {{ held = null; \
+             return e === null ? 'null' : e.name + ': ' + e.message }} }})()"
+        );
+        let got = context.with(|ctx| ctx.eval::<String, _>(code.as_str()))?;
+        assert_eq!(got, expected, "{fill}");
+    }
+    Ok(())
+}
+
+#[test]
+fn a_full_heap_is_neo_s_out_of_memory_with_its_limit() -> Result<(), TestError> {
     on_neo_runtime(async {
         let rig = TestRig::new().await?;
-        let end = script(
-            &rig,
+        for fill in [
+            // A large allocation fails: QuickJS's InternalError.
             "const chunks = []; for (;;) chunks.push(new Array(1e6).fill(7));",
-        )
-        .await?;
-        let error = failed(end)?;
+            // Small objects fill the heap to the brim: QuickJS throws null, and the bootstrap
+            // must still build its reply once the script's frames have let go of them.
+            "let held = null; for (;;) held = { next: held };",
+        ] {
+            let error = failed(script(&rig, fill).await?)?;
+            assert_eq!(
+                (error.owner(), error.code()),
+                (ErrorOwner::Neo, ErrorCode::OUT_OF_MEMORY),
+                "the heap cap stops the script, not the process: {fill}: {error}"
+            );
+            assert!(
+                error
+                    .message()
+                    .contains("the script ran out of its 128 MiB memory limit"),
+                "the error names the limit: {fill}: {error}"
+            );
+        }
+        Ok(())
+    })
+}
+
+/// An ordinary throw keeps its own error. A script's own `throw null` reads as out of memory:
+/// the rule's one limit, since the realm cannot vouch which allocation failed.
+#[test]
+fn an_ordinary_throw_is_the_script_s_error_and_a_thrown_null_is_out_of_memory()
+-> Result<(), TestError> {
+    on_neo_runtime(async {
+        let rig = TestRig::new().await?;
+        let error = failed(script(&rig, "throw new Error('boom')").await?)?;
         assert_eq!(
             (error.owner(), error.code()),
-            (ErrorOwner::Script, ErrorCode::OUT_OF_MEMORY),
-            "the 64 MiB heap cap stops the script, not the process: {error}"
+            (ErrorOwner::Script, ErrorCode::SCRIPT_ERROR)
+        );
+        assert!(error.message().starts_with("Error: boom"), "{error}");
+        let error = failed(script(&rig, "throw undefined").await?)?;
+        assert_eq!(
+            (error.owner(), error.code()),
+            (ErrorOwner::Script, ErrorCode::SCRIPT_ERROR),
+            "only null is the engine's form: {error}"
+        );
+        let error = failed(script(&rig, "throw null").await?)?;
+        assert_eq!(
+            (error.owner(), error.code()),
+            (ErrorOwner::Neo, ErrorCode::OUT_OF_MEMORY)
         );
         Ok(())
     })
@@ -1530,7 +1596,7 @@ fn web_base64_keeps_forgiving_decode_and_dom_exception_errors() -> Result<(), Te
     })
 }
 
-/// A two-byte pair must not buy 48 bytes of Rust storage outside the 64 MiB realm cap.
+/// A two-byte pair must not buy 48 bytes of Rust storage outside the realm's heap cap.
 /// The native's lower-bound scan refuses this result before allocating decoded pairs/output.
 #[test]
 fn pair_dense_web_parameters_fail_with_the_existing_memory_outcome() -> Result<(), TestError> {
@@ -1539,8 +1605,8 @@ fn pair_dense_web_parameters_fail_with_the_existing_memory_outcome() -> Result<(
         let error = failed(script(&rig, "new URLSearchParams('=&'.repeat(1 << 23));").await?)?;
         assert_eq!(
             (error.owner(), error.code()),
-            (ErrorOwner::Script, ErrorCode::OUT_OF_MEMORY),
-            "native bounds use QuickJS's allocation exception and preserve resource-limit ownership"
+            (ErrorOwner::Neo, ErrorCode::OUT_OF_MEMORY),
+            "native bounds use QuickJS's allocation exception and the heap's own outcome"
         );
         Ok(())
     })
@@ -1587,22 +1653,26 @@ fn web_url_setters_apply_after_conversion_to_the_current_live_state() -> Result<
 fn web_linked_parameter_append_keeps_both_views_after_caught_oom() -> Result<(), TestError> {
     on_neo_runtime(async {
         let rig = TestRig::new().await?;
+        // A seventh of the run's heap: the value fits the heap, and the append's native work
+        // (`form_serialize`, then the href rewrite) runs out of the same allowance.
+        let value_chars = Defaults::JS_MEMORY_BYTES / 7;
         let code = r"
             const u = new URL('https://a.test/?a=1');
             const p = u.searchParams;
             const keys = p.keys();
             const first = keys.next().value;
             let error;
-            try { p.append('x', 'a'.repeat(9600000)); }
+            try { p.append('x', 'a'.repeat(VALUE_CHARS)); }
             catch (e) { error = [e.name, e.message]; }
             const caught = [u.href, p.size, p.get('x'), p.toString(), p === u.searchParams];
             p.append({ toString() { u.search = '?b=2'; return 'c'; } }, '3');
             const added = keys.next().value;
             u.href = 'https://b.test/?x=1&y=2&z=3';
             return [error, caught, first, added, keys.next().value, u.href,
-                p.toString(), p === u.searchParams];";
+                p.toString(), p === u.searchParams];"
+            .replace("VALUE_CHARS", &value_chars.to_string());
         assert_eq!(
-            returned(script(&rig, code).await?)?,
+            returned(script(&rig, &code).await?)?,
             json!([
                 ["InternalError", "out of memory"],
                 ["https://a.test/?a=1", 1, null, "a=1", true],
