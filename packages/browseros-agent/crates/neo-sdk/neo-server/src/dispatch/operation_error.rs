@@ -261,6 +261,44 @@ error_codes! {
     TARGET_CLOSED = "target_closed";
     /// The script aborted the op through Playwright's `signal` option.
     ABORTED = "aborted";
+
+    // The host's private typing (`POST /v1/tabs/{tabId}/fill`, protected-fill design section
+    // 4.4). The look refuses with the first eight before any key; the next four stop an entry.
+    // Each message is a fixed sentence that quotes neither the page nor the value.
+    // `element_detached`, `not_focused`, `owner_has_control`, `page_busy` and `run_timeout` keep
+    // their meaning above.
+
+    /// The named element is not a text input.
+    NOT_AN_INPUT = "not_an_input";
+    /// The box's frame is not on the origin the host expected.
+    WRONG_ORIGIN = "wrong_origin";
+    /// The box's type is not the type the host approved: the host's own input disagrees with
+    /// itself, as when an agent swapped two refs.
+    WRONG_TYPE = "wrong_type";
+    /// A fact of the box the host approved (its type, autocomplete, maxlength...) differs now.
+    BOX_CHANGED = "box_changed";
+    /// The tab is no longer at the address the host sent.
+    PAGE_CHANGED = "page_changed";
+    /// The box is disabled or read-only.
+    BOX_NOT_EDITABLE = "box_not_editable";
+    /// The box has a size and does not show.
+    BOX_HIDDEN = "box_hidden";
+    /// Something else on the page takes the pointer at the box (main's covered rule).
+    BOX_COVERED = "box_covered";
+    /// The value is longer than the box's `maxlength`, and the host did not accept a cut.
+    VALUE_TOO_LONG = "value_too_long";
+    /// The focus left the box after some characters went in.
+    FOCUS_LOST = "focus_lost";
+    /// The box holds something other than the value at the read-back.
+    VALUE_NOT_TAKEN = "value_not_taken";
+    /// The page moved before Neo saw all but the last character in the box.
+    PAGE_MOVED = "page_moved";
+    /// A repeat of a fill's `requestId` whose first call Neo started and never finished: Neo
+    /// restarted in the middle of it. The repeat types nothing.
+    FILL_INTERRUPTED = "fill_interrupted";
+    /// The lock a fill names stopped being held during the fill: the agent is no longer locked
+    /// out as the host believed, so the fill stopped.
+    LOCK_RELEASED = "lock_released";
 }
 
 impl ErrorCode {

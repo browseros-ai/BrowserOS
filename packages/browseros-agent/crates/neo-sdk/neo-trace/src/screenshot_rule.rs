@@ -11,24 +11,43 @@
 //! - Except a tab with one of the run's jobs still out (decision 37). That job is answered only
 //!   after the run's end reached the writer, so its picture shows the tab as the run left it,
 //!   and a second capture would only repeat it. The run-end shot folds into it.
+//! - Never for the host's private typing (`OperationKind::Protected`, `host.fill`): its
+//!   operation gets no picture, and a tab it typed into gets no run-end picture from that run,
+//!   since the page then shows what the host typed (protected-fill design, section 8).
 //!
 //! Switching to the `run_end` mode (R5) is a change to this file alone.
 
-use crate::{Effect, ErrorOwner, ErrorRecord, Outcome};
+use crate::{Effect, ErrorOwner, ErrorRecord, OperationKind, Outcome};
 use browseros_core::TabId;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// The tab to capture once an operation ended, or `None`.
 pub(crate) fn after_op(
+    kind: OperationKind,
     effect: Effect,
     tab: Option<TabId>,
     outcome: Outcome,
     error: Option<&ErrorRecord>,
 ) -> Option<TabId> {
+    if !pictured(kind) {
+        return None;
+    }
     let page_failure = outcome == Outcome::Error
         && error
             .is_some_and(|error| matches!(error.owner, ErrorOwner::Website | ErrorOwner::Script));
     tab.filter(|_| effect == Effect::Write || page_failure)
+}
+
+/// Whether an operation of this kind may be photographed at all. The host's private typing may
+/// not: its picture would show the value it typed (a card number is painted as digits).
+pub(crate) const fn pictured(kind: OperationKind) -> bool {
+    match kind {
+        OperationKind::Protected => false,
+        OperationKind::Builtin
+        | OperationKind::Defined
+        | OperationKind::Next { .. }
+        | OperationKind::HostCall => true,
+    }
 }
 
 /// The tabs one run touched, each with its last operation (by admission order) and whether that
@@ -38,6 +57,9 @@ pub(crate) struct TouchedTabs {
     last: BTreeMap<TabId, LastOp>,
     /// Each job still out: its operation's seq, and its tab.
     out: BTreeMap<u32, TabId>,
+    /// Tabs an operation that may not be pictured ran on: no run-end shot for them, whatever
+    /// ran there after it in the run.
+    withheld: BTreeSet<TabId>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -70,12 +92,22 @@ impl TouchedTabs {
         self.out.remove(&seq);
     }
 
+    /// An operation that may not be pictured ([`pictured`]) ran on `tab`: the run takes no
+    /// run-end shot of it.
+    pub(crate) fn withhold(&mut self, tab: TabId) {
+        self.withheld.insert(tab);
+    }
+
     /// The run-end jobs, `(tab, seq)` in tab order: each touched tab whose last operation got
     /// none and that has no job out.
     pub(crate) fn run_end(&self) -> Vec<(TabId, u32)> {
         self.last
             .iter()
-            .filter(|(tab, last)| !last.shot && !self.out.values().any(|out| out == *tab))
+            .filter(|(tab, last)| {
+                !last.shot
+                    && !self.withheld.contains(*tab)
+                    && !self.out.values().any(|out| out == *tab)
+            })
             .map(|(tab, last)| (*tab, last.seq))
             .collect()
     }
@@ -84,7 +116,7 @@ impl TouchedTabs {
 #[cfg(test)]
 mod tests {
     use super::{TouchedTabs, after_op};
-    use crate::{Effect, ErrorOwner, ErrorRecord, Outcome};
+    use crate::{Effect, ErrorOwner, ErrorRecord, OperationKind, Outcome};
     use browseros_core::TabId;
 
     fn failure(owner: ErrorOwner) -> ErrorRecord {
@@ -160,11 +192,33 @@ mod tests {
         for (effect, tab, outcome, owner, shot) in cases {
             let error = owner.map(failure);
             assert_eq!(
-                after_op(effect, tab, outcome, error.as_ref()),
+                after_op(OperationKind::Builtin, effect, tab, outcome, error.as_ref()),
                 tab.filter(|_| shot),
                 "{effect:?} {tab:?} {outcome:?} {owner:?}"
             );
+            assert_eq!(
+                after_op(
+                    OperationKind::Protected,
+                    effect,
+                    tab,
+                    outcome,
+                    error.as_ref()
+                ),
+                None,
+                "the host's private typing is never pictured: {effect:?} {outcome:?} {owner:?}"
+            );
         }
+    }
+
+    #[test]
+    fn a_tab_the_host_typed_into_privately_gets_no_run_end_shot() {
+        let mut tabs = TouchedTabs::default();
+        tabs.admitted(TabId(3), 1);
+        tabs.withhold(TabId(3));
+        // A later operation of the same run on that tab does not bring the picture back.
+        tabs.admitted(TabId(3), 2);
+        tabs.admitted(TabId(4), 3);
+        assert_eq!(tabs.run_end(), vec![(TabId(4), 3)]);
     }
 
     #[test]

@@ -6,6 +6,7 @@ mod display;
 mod downloads;
 mod errors;
 mod events;
+mod fill;
 mod fits;
 mod listener_compatibility;
 mod live;

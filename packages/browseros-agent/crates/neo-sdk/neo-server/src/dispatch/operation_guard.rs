@@ -68,6 +68,8 @@ struct Unsent {
     name: String,
     // A lazy default page delays the start event; retain the original script location here.
     site: Option<CallSite>,
+    /// The method's record kind (`MethodSpec::record`).
+    kind: OperationKind,
     effect: Effect,
     /// The raw input. The trace writer bounds it at the operation's end.
     args: Value,
@@ -212,6 +214,7 @@ impl OperationGuard {
                 Lifetime::Operation | Lifetime::Background => site,
             },
             name,
+            kind: spec.record,
             effect: spec.effect,
             args,
             at: EpochMillis::now(),
@@ -307,7 +310,13 @@ fn settle(
     let settlement = Settlement::decide(sent_at.is_some(), &spec, ending);
     // Notes remain debug output, not stored values. The settings watcher flips this live
     // flag before answering; check each line so a change also reaches operations in flight.
-    for note in state.take_notes() {
+    // The host's private typing keeps no call-log line at all, as it keeps no page address
+    // (ruling R35): a shared typing helper's note could name the page, or worse.
+    let notes = state.take_notes();
+    for note in notes
+        .into_iter()
+        .filter(|_| spec.record != OperationKind::Protected)
+    {
         if trace.values() == Values::On {
             tracing::debug!(operation = %id, method = spec.name, %note, "op note");
         }
@@ -317,7 +326,27 @@ fn settle(
         Settled::Failed(error) => (None, Some(error.record(settlement.retryable, Some(id)))),
         Settled::Retired(_) => (None, None),
     };
-    let page_after = recorded_page_state(&pages, tab);
+    // The host's private typing keeps no page facts at all, on the record or in the reply: a
+    // form that submits by GET on its last character puts the typed value in the address, and a
+    // page can echo it into its title (protected-fill ruling R13). Its tab is enough to find it.
+    let pages = match spec.record {
+        OperationKind::Protected => Vec::new(),
+        OperationKind::Builtin
+        | OperationKind::Defined
+        | OperationKind::Next { .. }
+        | OperationKind::HostCall => pages,
+    };
+    let page_after = match spec.record {
+        OperationKind::Protected => tab.map(|tab| PageState {
+            tab_id: Some(tab),
+            url: None,
+            title: None,
+        }),
+        OperationKind::Builtin
+        | OperationKind::Defined
+        | OperationKind::Next { .. }
+        | OperationKind::HostCall => recorded_page_state(&pages, tab),
+    };
     trace.op_ended(OperationEnded {
         id,
         outcome: settlement.outcome,
@@ -380,6 +409,7 @@ impl Unsent {
             parent,
             name,
             site,
+            kind,
             effect,
             args,
             at,
@@ -392,7 +422,7 @@ impl Unsent {
             id,
             parent,
             name,
-            kind: OperationKind::Builtin,
+            kind,
             effect,
             tab,
             args,

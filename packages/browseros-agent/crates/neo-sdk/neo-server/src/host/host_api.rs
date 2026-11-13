@@ -13,7 +13,7 @@ use neo_trace::{ShotJobs, TraceSink, TraceStore};
 use tokio::fs;
 use tokio_util::sync::CancellationToken;
 
-use super::{AgentFront, HostHolds, TakeoverLock, tab_feed};
+use super::{AgentFront, FillService, HostHolds, TakeoverLock, tab_feed};
 use crate::browser::{BrowserLink, NeoTab};
 use crate::config::HostApiConfig;
 use crate::http::{BindError, HostListener};
@@ -24,7 +24,7 @@ use crate::http::{BindError, HostListener};
 ///  start ─ bind: token file ─ unset or unusable: no socket (run still works), default settings
 ///                           └ usable: HostListener::bind (failure fails the start) + peer rule,
 ///                                     then the settings the host saved (settings.json)
-///  serve ─ the link's first connect ─▶ Service::start ─▶ TakeoverLock, HostHolds armed
+///  serve ─ the link's first connect ─▶ Service::start ─▶ TakeoverLock, HostHolds, the fill routes armed
 ///        ─▶ tab events subscribed ─▶ tab state reconciled with a watched listing ─▶ tab_feed
 ///        └▶ host_service(service.router(), auth) on the socket, until SIGTERM
 /// ```
@@ -37,6 +37,8 @@ pub(crate) struct HostApi {
     inputs: HostInputs,
     socket: Option<HostSocket>,
     settings: Settings,
+    /// The host's private typing, armed into the service as it starts ([`HostApi::with_fill`]).
+    fill: Option<Arc<FillService>>,
 }
 
 /// What the service is built from that Neo holds at startup. The browser's half, the session
@@ -116,7 +118,16 @@ impl HostApi {
             inputs,
             socket,
             settings,
+            fill: None,
         })
+    }
+
+    /// The host's private typing (`POST /v1/tabs/{tabId}/fill`), which `serve` arms into the
+    /// service before its socket serves. Without it the fill routes answer 503.
+    #[must_use]
+    pub(crate) fn with_fill(mut self, fill: Arc<FillService>) -> Self {
+        self.fill = Some(fill);
+        self
     }
 
     /// The settings every part reads (the janitor, the retention sweep), live: a host's change
@@ -144,6 +155,7 @@ impl HostApi {
             inputs,
             socket,
             settings,
+            fill,
         } = self;
         let session = tokio::select! {
             () = shutdown.cancelled() => return,
@@ -178,6 +190,10 @@ impl HostApi {
             let service = service.clone();
             move |tab| service.tab_hold(tab)
         });
+        // Before the socket serves, so no host request reaches an unarmed fill route.
+        if let Some(fill) = &fill {
+            service.arm_fill(fill.door());
+        }
         // The owner's two claims, the tab and the screen, from the same moment: no implicit
         // agent move runs past a viewer or a takeover once a host can open one.
         front.arm(service.front().clone());

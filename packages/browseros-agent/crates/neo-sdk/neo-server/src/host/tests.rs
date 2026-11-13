@@ -18,11 +18,21 @@ use tokio::task::JoinHandle;
 use tokio::{fs, time};
 use tokio_util::sync::CancellationToken;
 
-use super::{HostApi, HostInputs, TakeoverLock};
+use super::{FillLedger, FillService, FillServiceParts, HostApi, HostInputs, TakeoverLock};
 use crate::browser::{Adopt, BrowserLink, NeoTab, TabRegistry};
+use crate::builtins::{self, EntryParts, PrivateEntry};
 use crate::config::HostApiConfig;
-use crate::dispatch::{Caller, ErrorCode, MethodSpec, OperationError, Policy, PolicyCheck};
+use crate::dispatch::{
+    Caller, Dispatcher, ErrorCode, MethodSpec, Observer, OperationError, Policy, PolicyCheck,
+    RegistryBuilder,
+};
 use crate::test_support::{CLOSED_XVNC, FakeCdp};
+use neo_playwright::FileAccess;
+use neo_trace::TraceSink;
+
+mod fill;
+
+use self::fill::{ScriptedEntry, register_controls};
 
 type TestResult = Result<(), Box<dyn Error>>;
 
@@ -36,8 +46,9 @@ struct Reply {
     body: Value,
 }
 
-/// A host API started the way app.rs starts it, over the fake browser. Fields drop in order:
-/// the serving task is stopped before the directory holding its socket goes.
+/// A host API started the way app.rs starts it, over the fake browser, with the fill routes
+/// armed over a scripted entry. Fields drop in order: the serving task is stopped before the
+/// directory holding its socket goes.
 struct Host {
     shutdown: CancellationToken,
     serving: JoinHandle<()>,
@@ -48,6 +59,14 @@ struct Host {
     /// Neo's blank tab, as `GET /v1/tabs` marks it. Nothing opens one until a test asks.
     blank_tab: Arc<NeoTab>,
     socket: PathBuf,
+    /// The door the fill runs through, with the scripted entry and the test's control methods.
+    dispatcher: Arc<Dispatcher>,
+    link: Arc<BrowserLink>,
+    /// The tabs as the idle-tab janitor reads them.
+    tabs: Arc<TabRegistry>,
+    sink: TraceSink,
+    /// The stand-in for the entry (protected-fill pull request 2), which the tests script.
+    entry: Arc<ScriptedEntry>,
     dir: TempDir,
 }
 
@@ -73,7 +92,7 @@ impl Host {
             move || future::ready(connect.connect()),
         );
         let store = TraceStore::open(&dir.path().join("trace.db")).await?;
-        let blank_tab = NeoTab::new(Arc::clone(&link), tabs, store.clone());
+        let blank_tab = NeoTab::new(Arc::clone(&link), Arc::clone(&tabs), store.clone());
         let redactor = Redactor::new(RedactionLimits::default());
         let (shots, screenshots) = neo_trace::screenshot_queue();
         let sink = neo_trace::spawn_writer(&store, redactor, WriterConfig::default(), Some(shots));
@@ -100,12 +119,43 @@ impl Host {
             settings_file: dir.path().join("settings.json"),
             settings_defaults: SettingsDefaults::default(),
         };
+        let sink = inputs.sink.clone();
         let host = HostApi::bind(&config, inputs).await?;
         let settings = host.settings().clone();
         let takeover = Arc::new(TakeoverLock::default());
         let shutdown = CancellationToken::new();
-        let serving = tokio::spawn(host.serve(
-            link,
+        // The door as app.rs builds it for the fill: the takeover rule, the two internal
+        // methods over the scripted entry, and the controls a script calls.
+        let entry = Arc::new(ScriptedEntry::default());
+        let mut registry = RegistryBuilder::default();
+        builtins::register_host_fill(
+            &mut registry,
+            EntryParts {
+                entry: Arc::clone(&entry) as Arc<dyn PrivateEntry>,
+                hosted: false,
+                front: Arc::default(),
+                // The fill touches no file; an empty policy reads nothing.
+                file_access: Arc::new(FileAccess::new(Vec::new, Vec::new())),
+            },
+        )?;
+        register_controls(&mut registry)?;
+        let dispatcher = Arc::new(Dispatcher::new(
+            registry.build(),
+            vec![Arc::clone(&takeover) as Arc<dyn Policy>],
+            sink.clone(),
+            Arc::clone(&link),
+            Arc::clone(&tabs),
+            Observer::unrecorded(),
+        ));
+        let fill = FillService::new(FillServiceParts {
+            dispatcher: Arc::clone(&dispatcher),
+            browser: Arc::clone(&link),
+            takeover: Arc::clone(&takeover),
+            ledger: FillLedger::open(dir.path(), || Duration::from_hours(7 * 24)).await,
+            shutdown: shutdown.clone(),
+        });
+        let serving = tokio::spawn(host.with_fill(fill).serve(
+            Arc::clone(&link),
             Arc::clone(&takeover),
             Arc::default(),
             Arc::default(),
@@ -120,6 +170,11 @@ impl Host {
             fake,
             blank_tab,
             socket: config.socket,
+            dispatcher,
+            link,
+            tabs,
+            sink,
+            entry,
             dir,
         })
     }
@@ -170,6 +225,7 @@ impl Host {
             caller: Caller::Script,
             tab: Some(tab),
             operation: OperationId::new(RunId::new(), 1),
+            lock_pass: None,
         })
     }
 }

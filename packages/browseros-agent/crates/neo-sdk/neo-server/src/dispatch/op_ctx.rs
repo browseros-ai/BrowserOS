@@ -423,6 +423,7 @@ impl OpCore {
             caller: self.caller,
             tab: self.page.as_ref().map(|page| page.tab),
             operation: self.state.id,
+            lock_pass: self.run.lock_pass(),
         }
     }
 }

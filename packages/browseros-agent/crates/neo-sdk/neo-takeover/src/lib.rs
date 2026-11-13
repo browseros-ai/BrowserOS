@@ -85,7 +85,8 @@ pub use fit_rule::FitMode;
 pub use fits::{BarAction, BarOutcome, BrowserBar, Fit, FitState, Fits, Fitted, Keyboard};
 pub use front::{Forward, Front, FrontError};
 pub use locks::{
-    Lock, LockBinding, LockEnd, LockEnded, LockTarget, LockTtl, Locks, OwnerHasControl, Reads,
+    Lock, LockBinding, LockEnd, LockEnded, LockTarget, LockTtl, Locks, NamedLock, OwnerHasControl,
+    Reads,
 };
 pub use part_error::PartError;
 pub use part_ids::{FitId, LockId, TakeoverId, UnknownId};

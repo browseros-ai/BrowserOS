@@ -120,6 +120,7 @@ mod tests {
                 caller: Caller::Script,
                 tab,
                 operation,
+                lock_pass: None,
             })
             .map_err(|error| error.code())
     }

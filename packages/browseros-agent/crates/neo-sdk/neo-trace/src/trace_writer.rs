@@ -47,10 +47,10 @@ use crate::storage::{
 };
 use crate::trace_store::{self, RetentionPolicy, Swept};
 use crate::{
-    Delivery, Effect, EpochMillis, OperationEnded, OperationId, OperationReached, OperationStarted,
-    Outcome, RecordPolicy, Redactor, RunEffects, RunEnded, RunId, RunStarted, RunStatus,
-    Screenshots, Shot, ShotAnswer, ShotJob, ShotQueue, TaskId, TraceError, TraceStore, Truncation,
-    Values,
+    Delivery, Effect, EpochMillis, OperationEnded, OperationId, OperationKind, OperationReached,
+    OperationStarted, Outcome, RecordPolicy, Redactor, RunEffects, RunEnded, RunId, RunStarted,
+    RunStatus, Screenshots, Shot, ShotAnswer, ShotJob, ShotQueue, TaskId, TraceError, TraceStore,
+    Truncation, Values,
 };
 use browseros_core::TabId;
 use serde_json::Value;
@@ -471,6 +471,8 @@ struct OpenOperation {
     tab: Option<TabId>,
     /// The operation opens a tab (`trace_store::OPENERS`), whose end names it.
     opens: bool,
+    /// Its place in the tree; the host's private typing is never pictured.
+    kind: OperationKind,
     effect: Effect,
     args: Value,
     /// Raw, like `args`: bounded only when the end stores them.
@@ -727,12 +729,16 @@ impl Writer {
         let touched = trace_store::touched_tab(&event.name, event.tab);
         if let Some(tab) = touched {
             run.tabs.admitted(tab, event.id.seq);
+            if !screenshot_rule::pictured(event.kind) {
+                run.tabs.withhold(tab);
+            }
         }
         run.operations.insert(
             event.id.seq,
             OpenOperation {
                 tab: event.tab,
                 opens: trace_store::OPENERS.contains(&event.name.as_str()),
+                kind: event.kind,
                 effect: event.effect,
                 args: event.args,
                 notes: Vec::new(),
@@ -824,7 +830,13 @@ impl Writer {
             }
         }
         let shot_tab = open.as_ref().and_then(|open| {
-            screenshot_rule::after_op(open.effect, open.tab, event.outcome, error.as_ref())
+            screenshot_rule::after_op(
+                open.kind,
+                open.effect,
+                open.tab,
+                event.outcome,
+                error.as_ref(),
+            )
         });
         // Only while its run is open: a job for an ended run would hold it incomplete again. An
         // operation that starts after its run ended reopens the run here, so `finishing` is

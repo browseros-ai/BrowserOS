@@ -1,6 +1,7 @@
 //! The rules every op must pass.
 
 use browseros_core::TabId;
+use neo_takeover::LockId;
 use neo_trace::OperationId;
 
 use super::{Caller, MethodSpec, OperationError};
@@ -34,4 +35,8 @@ pub(crate) struct PolicyCheck<'a> {
     pub(crate) tab: Option<TabId>,
     /// The op being checked. The CAPTCHA rule uses it to let a solve pass its own recheck.
     pub(crate) operation: OperationId,
+    /// The one host lock this op's run may pass ([`RunCtx::pass_lock`](super::RunCtx::pass_lock)):
+    /// only the host's private typing sets it, naming the lock the host holds on the tab it
+    /// types into. Every other lock refuses as usual.
+    pub(crate) lock_pass: Option<LockId>,
 }

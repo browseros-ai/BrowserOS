@@ -409,6 +409,125 @@ paths:
           $ref: '#/components/responses/NotFound'
         '503':
           $ref: '#/components/responses/Unavailable'
+  /v1/tabs/{tabId}/fill:
+    post:
+      operationId: fillTab
+      summary: Type the host's secrets into named boxes, privately. The host only.
+      description: |
+        The host names each box by ref (`e5`, or `f2e4` for a box in frame document 2, as a
+        snapshot prints it or `locator.ref()` mints it), the origin the box's own frame must be
+        on, and the value: a password, a one-time code, a card number. Neo looks at every box
+        first; a box that is gone, not a text input, on another origin, of another type,
+        changed from what the host approved, disabled, hidden, covered, or too short for the
+        value refuses the whole call before any key. Then it types each value, in one insertion
+        or (`keys`) key by key with the focus checked before each character, asking the rules
+        again before each box and each key (a lock taken mid-entry stops the entry there), and
+        reads each box back. It does not wait: a box in another state now is refused now;
+        `timeoutMs` only bounds a browser that stops answering.
+
+        The value is in no record. Neo starts a run of its own with one operation, `host.fill`
+        (kind `protected`), whose `args` name the boxes, the expected origins and the number of
+        characters, never the value; the run's `code` is one fixed line and its `result` is this
+        answer. The operation records no screenshot and no page address or title (a form that
+        submits by GET would put the value there), nor does its tab get a run-end picture. The
+        answer, events, logs and the fill's request record hold no value either.
+
+        Who may call it: the host, with the host token, on the host listener. A request a web
+        page sent is refused (403), whatever its token. No script reaches it: the method is
+        internal, and a script naming it gets `method_unavailable`.
+
+        A lock on the tab refuses the fill as it refuses any write (`host / owner_has_control`,
+        nothing typed), unless the request names it in `lockId` and the host took it itself with
+        `POST /v1/locks`: a host types through the one lock it holds on that tab. Any other lock
+        still refuses, a takeover's included, named or not (the owner holds that tab). A named
+        lock that is not held on this tab refuses the call (409 `lock_released`); one released
+        during the fill stops it at its next ask of the rules (`lock_released` in the answer).
+
+        A `requestId` makes the fill type once, across a Neo restart too. Fills keep their own
+        record of ids, beside the trace and apart from `run`'s: the start is written to disk
+        before the first key, the answer when it ends. While the first call runs, a repeat waits
+        for its answer; after it, a repeat gets the stored answer and types nothing, for as long
+        as the trace keeps the fill. A refused fill's id is spent too: send a new one to try
+        again. A first call Neo started and never finished (Neo restarted in the middle) answers
+        `uncertain` with `fill_interrupted`. Neo keeps no value to compare a repeat with. The
+        call runs to its end if the host hangs up. Only a request error (400, 404, 409, 503)
+        leaves the id unused.
+
+        Every answer about the page is a 200: read `outcome` first; `refused` with `typed` all
+        zero is "no character went out", whatever `delivery` says.
+      parameters:
+        - $ref: '#/components/parameters/TabId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FillRequest'
+      responses:
+        '200':
+          description: What happened to the boxes.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FillResult'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/LockReleased'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+  /v1/tabs/{tabId}/fill/check:
+    post:
+      operationId: checkFill
+      summary: Look at boxes as a fill would, without typing. The host only.
+      description: |
+        The fill's look, alone (a read): each box answers on its own, with its facts and the
+        first refusal a fill would meet there now (a covered box answers both). The host can
+        approve the facts and send them back as `expect`, so the look at approval and the look at
+        typing are one rule. `expect` is optional here: without it the look checks no origin and
+        no fact, and answers only the refusals that need no approval. It takes no value and no
+        `requestId`, types nothing, and skips the length check (it has no value); compare
+        `maxLength` with the value yourself. It takes `lockId` as the fill does, so a host whose
+        own lock blocks reads can look at its tab. Recorded as a run with one operation,
+        `host.fillCheck` (kind `protected`, a read), with no screenshot. The same host-only rules
+        as the fill.
+      parameters:
+        - $ref: '#/components/parameters/TabId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FillCheckRequest'
+      responses:
+        '200':
+          description: Each box's facts or refusal, in the request's order.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FillCheckResult'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/LockReleased'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/Unavailable'
   /v1/display:
     get:
       operationId: openDisplay
@@ -1026,10 +1145,29 @@ components:
         application/json:
           schema:
             $ref: '#/components/schemas/Error'
+    InternalError:
+      description: >-
+        A failure inside Neo before any answer about the page (`internal_error`): a check's own
+        task failed, or the first call a repeat joined vanished without a word. Nothing about the
+        boxes is known from this call; read the run, or look again.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    LockReleased:
+      description: >-
+        The `lockId` the fill names is not held on this tab (`lock_released`): the agent is not
+        locked out as the host believed. Nothing was typed, and the `requestId` is not used.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
     Unavailable:
       description: >-
         Neo could not start the takeover (`internal_error`), the display is unavailable
-        (`display_unavailable`), or Neo could not reach the browser (`browser_unavailable`).
+        (`display_unavailable`), Neo could not reach the browser (`browser_unavailable`), or it
+        cannot write a fill's request record, so it cannot promise one typing
+        (`trace_unavailable`).
       content:
         application/json:
           schema:
@@ -1690,6 +1828,256 @@ components:
           type: string
           x-extensible-enum: [done, idle, host]
           default: done
+    FillRequest:
+      type: object
+      required: [fields]
+      properties:
+        requestId:
+          type: string
+          maxLength: 128
+          description: >-
+            The host's id for this call, as on `run`: a repeat never types again. Not the HTTP
+            layer's `x-request-id`.
+        taskId:
+          type: string
+          maxLength: 128
+          description: Lists the fill's run with that task's runs.
+        url:
+          type: string
+          description: >-
+            The tab's address must still equal this, compared character for character with the
+            main frame's `location.href` when Neo looks: a changed fragment is a changed address
+            (`page_changed`).
+        lockId:
+          type: string
+          description: >-
+            A lock the host took on this tab with `POST /v1/locks`. The fill passes that lock and
+            no other; a takeover's lock refuses the fill, named or not. `409 lock_released` when
+            no lock with this id holds this tab.
+        timeoutMs:
+          type: integer
+          format: int32
+          minimum: 1000
+          maximum: 60000
+          default: 15000
+          description: >-
+            The whole call's limit. It only bounds a browser that stops answering: the entry
+            stops itself there and still answers `at` and `typed` (`run_timeout`).
+        fields:
+          type: array
+          minItems: 1
+          maxItems: 16
+          description: The boxes, in typing order. A code in six boxes is six fields.
+          items:
+            $ref: '#/components/schemas/FillField'
+    FillField:
+      type: object
+      required: [ref, value, expect]
+      properties:
+        ref:
+          type: string
+          description: >-
+            The box: a ref a snapshot printed or `locator.ref()` minted. It names one node and
+            never re-binds; it must be the `<input>` itself, of a type that takes text.
+        value:
+          type: string
+          writeOnly: true
+          minLength: 1
+          maxLength: 256
+          description: >-
+            What Neo types, 1 to 256 characters, no control character (a newline would press
+            Enter). Never recorded, never echoed, never quoted in an error.
+        expect:
+          $ref: '#/components/schemas/FillExpect'
+        cut:
+          type: boolean
+          default: false
+          description: Accept a value the box's own `maxlength` cuts; Neo types the part that fits.
+        spaced:
+          type: boolean
+          default: false
+          description: >-
+            Compare the read-back with spaces, dashes and slashes set aside, for a box that groups
+            digits or formats an expiry (`12 / 29`).
+        keys:
+          type: boolean
+          default: false
+          description: >-
+            Type key by key, with the focus checked before each character, for a code with one
+            character in each box, a box with no size, or a masked box that needs key events.
+            Default: one insertion, as `fill` types, which needs a box that shows.
+    FillExpect:
+      type: object
+      required: [origin]
+      description: Facts the host approved about the box. Each one sent must still hold (`box_changed`).
+      properties:
+        origin:
+          type: string
+          description: The origin of the box's own frame, e.g. `https://pay.example` (`wrong_origin`).
+        type:
+          type: string
+          description: The input's `type`, as the DOM reports it (`wrong_type`).
+        autocomplete:
+          type: string
+        maxLength:
+          type: integer
+          format: int32
+        inputMode:
+          type: string
+        name:
+          type: string
+        id:
+          type: string
+    FillResult:
+      type: object
+      required: [runId, outcome, delivery]
+      properties:
+        runId:
+          type: string
+          description: The fill's own run, with its one `host.fill` operation.
+        outcome:
+          type: string
+          description: >-
+            `entered`: every box holds its value, read back. `entered_page_moved`: every
+            character went in and the page moved after the last one, so the form may have
+            submitted. `refused`: no character was typed anywhere. `partial`: the boxes before
+            `at` hold their values, box `at` got none. `uncertain`: box `at` got some characters,
+            or could not be read back; look at the page before repeating.
+          x-extensible-enum: [entered, entered_page_moved, refused, partial, uncertain]
+        delivery:
+          type: string
+          description: The operation's delivery, as on every operation.
+          x-extensible-enum: [not_sent, done, unknown]
+        at:
+          type: integer
+          format: int32
+          description: The index of the field the fill stopped at; absent when it did not stop.
+        typed:
+          type: array
+          description: >-
+            How many characters went to each box, in the request's order. Never text. Absent
+            when Neo could not count them: a fill Neo cut short itself (shutting down), or a
+            repeat of a fill Neo never finished (`fill_interrupted`).
+          items:
+            type: integer
+            format: int32
+        error:
+          description: >-
+            Why it stopped: the operation's error, as on every operation (`retryable` only when
+            nothing was sent). Codes of this route: `owner_has_control`, `page_busy`,
+            `lock_released` (the named lock was released after the call was admitted),
+            `element_detached`, `not_an_input`, `wrong_origin`, `wrong_type`, `box_changed`,
+            `page_changed`, `box_not_editable`, `box_hidden`, `box_covered`, `value_too_long`,
+            `not_focused`, `focus_lost`, `value_not_taken`, `page_moved`, `run_timeout`,
+            `target_closed`, `browser_disconnected`, `shutting_down`, `internal_error` (a
+            failure inside Neo, the fill's own task included: look at the page before trying
+            again), and `fill_interrupted` (a repeat of a fill Neo restarted in the middle of).
+            Messages are fixed sentences; none quotes the page or a value.
+          allOf:
+            - $ref: '#/components/schemas/OperationError'
+    FillCheckRequest:
+      type: object
+      required: [fields]
+      properties:
+        taskId:
+          type: string
+          maxLength: 128
+        url:
+          type: string
+          description: >-
+            As on the fill: compared character for character with the main frame's
+            `location.href`, a changed fragment included (`page_changed`).
+        lockId:
+          type: string
+          description: >-
+            As on the fill: a lock the host took with `POST /v1/locks` on this tab, which the
+            look passes, so a host whose own lock blocks reads can check its tab. A takeover's
+            lock refuses, named or not; `409 lock_released` when no lock with this id holds this
+            tab.
+        timeoutMs:
+          type: integer
+          format: int32
+          minimum: 1000
+          maximum: 60000
+          default: 15000
+        fields:
+          type: array
+          minItems: 1
+          maxItems: 16
+          items:
+            $ref: '#/components/schemas/FillCheckField'
+    FillCheckField:
+      type: object
+      required: [ref]
+      description: A fill's field without its value. `expect` may be left out.
+      properties:
+        ref:
+          type: string
+        expect:
+          $ref: '#/components/schemas/FillExpect'
+        cut:
+          type: boolean
+          default: false
+        spaced:
+          type: boolean
+          default: false
+        keys:
+          type: boolean
+          default: false
+          description: The field will be typed key by key, so a box with no size is not refused.
+    FillCheckResult:
+      type: object
+      required: [runId, fields]
+      properties:
+        runId:
+          type: string
+          description: The check's own run, with its one `host.fillCheck` operation.
+        fields:
+          type: array
+          items:
+            $ref: '#/components/schemas/FillBoxCheck'
+    FillBoxCheck:
+      type: object
+      description: >-
+        One box, on its own: neither field means every check a fill makes before typing
+        passed (but the length).
+      properties:
+        facts:
+          description: The box's facts, whenever the ref names a text input.
+          allOf:
+            - $ref: '#/components/schemas/BoxFacts'
+        refusal:
+          description: The first rule a fill would be refused by now; absent when none.
+          allOf:
+            - $ref: '#/components/schemas/OperationError'
+    BoxFacts:
+      type: object
+      required: [origin, type, autocomplete, inputMode, name, id, sized, empty]
+      description: >-
+        What the look read of a box in Neo's isolated world. Never what it holds, beyond
+        whether it is empty.
+      properties:
+        origin:
+          type: string
+        type:
+          type: string
+        autocomplete:
+          type: string
+        maxLength:
+          type: integer
+          format: int32
+          description: Absent when the box has none.
+        inputMode:
+          type: string
+        name:
+          type: string
+        id:
+          type: string
+        sized:
+          type: boolean
+          description: Whether the box has a size. One with none is reached by focus, never covered.
+        empty:
+          type: boolean
     Event:
       type: object
       required: [type, at]
@@ -1864,6 +2252,7 @@ components:
               display_unavailable,
               browser_unavailable,
               internal_error,
+              trace_unavailable,
             ]
         message:
           type: string

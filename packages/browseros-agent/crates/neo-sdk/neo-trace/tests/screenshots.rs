@@ -800,3 +800,74 @@ async fn with_screenshots_off_no_job_is_made_from_the_next_operation() -> TestRe
     );
     Ok(())
 }
+
+/// The host's private typing (`OperationKind::Protected`, `host.fill`) is never pictured: its
+/// operation gets no job, failing or not, and a tab it typed into gets no run-end shot from its
+/// run, whatever ran there after it (protected-fill design, section 8). A write of the same run on
+/// another tab is pictured as usual, so the rule cannot pass by taking no picture at all.
+#[tokio::test]
+async fn a_protected_operation_and_its_tab_get_no_picture() -> TestResult {
+    let mut h = harness().await?;
+    let run = start_run(&h.sink, 0);
+    let op = |seq| OperationId::new(run, seq);
+    for (seq, outcome, owner) in [
+        (1, Outcome::Ok, None),
+        (2, Outcome::Error, Some(ErrorOwner::Website)),
+    ] {
+        h.sink.op_started(OperationStarted {
+            site: None,
+            id: op(seq),
+            parent: None,
+            name: "host.fill".into(),
+            kind: OperationKind::Protected,
+            effect: Effect::Write,
+            tab: Some(TabId(3)),
+            args: serde_json::json!({ "fields": [{ "ref": "e5", "characters": 8 }] }),
+            at: at(i64::from(seq)),
+        });
+        h.sink.op_ended(OperationEnded {
+            id: op(seq),
+            outcome,
+            delivery: Delivery::Done,
+            sent_at: None,
+            result: None,
+            error: owner.map(|owner| ErrorRecord {
+                owner,
+                code: "focus_lost".into(),
+                message: "The focus left the box during the entry.".into(),
+                host_code: None,
+                retryable: false,
+                operation_id: None,
+            }),
+            page_after: Some(PageState {
+                tab_id: Some(TabId(3)),
+                url: None,
+                title: None,
+            }),
+            main_world: false,
+            at: at(i64::from(seq) + 1),
+        });
+    }
+    // A later read on the typed tab, and a write on another tab.
+    named(&h.sink, op(3), "locator.textContent", Effect::Read, 3);
+    named(&h.sink, op(4), "locator.click", Effect::Write, 4);
+    let after = waiting_jobs(&mut h).await?;
+    assert_eq!(
+        jobs_of(&after),
+        vec![(4, TabId(4))],
+        "only the other tab's write"
+    );
+    for job in after {
+        job.answer.send(Shot::Dropped);
+    }
+    end_run(&h.sink, run, 100);
+    let at_end = waiting_jobs(&mut h).await?;
+    assert!(
+        jobs_of(&at_end).iter().all(|(_, tab)| *tab != TabId(3)),
+        "no run-end picture of the typed tab: {:?}",
+        jobs_of(&at_end)
+    );
+    let operation = h.store.operation(op(1)).await?.ok_or("no such operation")?;
+    assert_eq!(operation.kind, OperationKind::Protected);
+    Ok(())
+}

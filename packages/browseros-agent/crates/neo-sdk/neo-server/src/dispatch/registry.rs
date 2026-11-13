@@ -5,11 +5,15 @@ use std::collections::hash_map::Entry;
 use std::sync::Arc;
 
 use futures_util::future::BoxFuture;
+use neo_trace::OperationKind;
 use serde_json::Value;
 use serde_path_to_error::Error as PathError;
 
 use super::op_ctx::OpCore;
-use super::{ErrorCode, LeafError, Listing, Method, MethodSpec, OpCtx, OperationError, PageTarget};
+use super::{
+    ErrorCode, LeafError, Listing, Method, MethodSpec, OpCtx, OperationError, PageTarget,
+    Visibility,
+};
 
 /// The methods this process serves. Built once at startup, then shared read-only by every run:
 /// agent code can never add, replace or wrap one (skeleton D7 rule 1).
@@ -30,6 +34,10 @@ pub(crate) enum RegistryError {
     /// Two methods claim one name.
     #[error("method {0} is registered twice")]
     Duplicate(&'static str),
+    /// A method a script may call says its ops are the host's private typing, which the trace
+    /// never pictures: a script could then act unseen.
+    #[error("method {0} is protected but a script may call it")]
+    ProtectedForScripts(&'static str),
 }
 
 /// One registered method: its spec and its erased run step.
@@ -42,6 +50,9 @@ impl RegistryBuilder {
     /// Adds one method.
     pub(crate) fn define<M: Method>(&mut self, method: M) -> Result<(), RegistryError> {
         let spec = method.spec();
+        if spec.record == OperationKind::Protected && spec.visibility != Visibility::Internal {
+            return Err(RegistryError::ProtectedForScripts(spec.name));
+        }
         match self.methods.entry(spec.name) {
             Entry::Occupied(_) => Err(RegistryError::Duplicate(spec.name)),
             Entry::Vacant(slot) => {
@@ -201,11 +212,11 @@ fn invalid_input(name: &str, error: &PathError<serde_json::Error>) -> OperationE
 mod tests {
     use std::future::{self, Future};
 
-    use neo_trace::Effect;
+    use neo_trace::{Effect, OperationKind};
     use serde_json::Value;
 
     use super::{RegistryBuilder, RegistryError};
-    use crate::dispatch::{LeafError, Listing, Method, MethodSpec, OpCtx, PageTarget};
+    use crate::dispatch::{LeafError, Listing, Method, MethodSpec, OpCtx, PageTarget, Visibility};
 
     /// A method that is only its spec.
     struct Named(MethodSpec);
@@ -271,6 +282,31 @@ mod tests {
                 Err(RegistryError::Duplicate("page.title"))
             ),
             "a placeholder and its replacement can never both be served"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn only_neo_may_call_a_method_whose_ops_are_protected() -> Result<(), RegistryError> {
+        let mut builder = RegistryBuilder::default();
+        let protected = |visibility| {
+            Named(MethodSpec {
+                visibility,
+                record: OperationKind::Protected,
+                ..MethodSpec::new("host.fill", Effect::Write)
+            })
+        };
+        assert!(
+            matches!(
+                builder.define(protected(Visibility::Script)),
+                Err(RegistryError::ProtectedForScripts("host.fill"))
+            ),
+            "the trace never pictures a protected op, so a script must not act through one"
+        );
+        builder.define(protected(Visibility::Internal))?;
+        assert!(
+            builder.build().listed().is_empty(),
+            "the run description never names it"
         );
         Ok(())
     }

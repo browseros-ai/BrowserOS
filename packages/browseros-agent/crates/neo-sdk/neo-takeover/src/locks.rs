@@ -92,6 +92,17 @@ pub enum LockTarget {
     UnmappedPage,
 }
 
+/// What a lock a request names is on the tab it names ([`Locks::named`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NamedLock {
+    /// The host took it (`POST /v1/locks`), and it holds the tab: a fill naming it passes it.
+    HostHeld,
+    /// A takeover took it, and it holds the tab: the owner's, which a fill never passes.
+    TakeoverHeld,
+    /// No lock with that id holds that tab now: released, expired, or on another tab.
+    NotHeld,
+}
+
 /// Who may end a lock before its TTL.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LockBinding {
@@ -339,6 +350,43 @@ impl Locks {
     pub fn check(&self, target: LockTarget, effect: Effect) -> Result<(), OwnerHasControl> {
         let table = self.table.lock().unwrap_or_else(PoisonError::into_inner);
         lock_decision::decide(table.held.values(), target, effect, Instant::now())
+    }
+
+    /// [`Self::check`], with one held lock passed: the lock a host took itself
+    /// ([`LockBinding::Host`]) and named when it typed through it into the tab it holds
+    /// (claw-sdk's private typing, the fill's `lockId`). Every other lock refuses as in `check`,
+    /// a takeover's included even when named: the owner holds that tab, and only the owner may
+    /// let the host type into it. A `pass` that is not such a lock on this tab passes nothing.
+    ///
+    /// # Errors
+    /// `OwnerHasControl` when a held lock other than `pass` refuses it.
+    pub fn check_passing(
+        &self,
+        target: LockTarget,
+        effect: Effect,
+        pass: LockId,
+    ) -> Result<(), OwnerHasControl> {
+        let table = self.table.lock().unwrap_or_else(PoisonError::into_inner);
+        let others = table.held.values().filter(|held| {
+            !(held.lock.id == pass
+                && held.lock.binding == LockBinding::Host
+                && LockTarget::Tab(held.lock.tab) == target)
+        });
+        lock_decision::decide(others, target, effect, Instant::now())
+    }
+
+    /// What lock `id` is on `tab` now, for a fill that names it. A lock past its deadline is not
+    /// held, though its timer may not have ended it yet.
+    #[must_use]
+    pub fn named(&self, id: LockId, tab: TabId) -> NamedLock {
+        let now = Instant::now();
+        match self.table().held.get(&id) {
+            Some(held) if held.lock.tab == tab && held.deadline > now => match held.lock.binding {
+                LockBinding::Host => NamedLock::HostHeld,
+                LockBinding::Takeover(_) => NamedLock::TakeoverHeld,
+            },
+            Some(_) | None => NamedLock::NotHeld,
+        }
     }
 
     /// Whether the locks refused an agent operation with `effect` on `target` at `at`, a past
