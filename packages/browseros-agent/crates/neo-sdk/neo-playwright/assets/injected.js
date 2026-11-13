@@ -8630,8 +8630,165 @@ ${value.stack}`;
     };
   }
 
+  // crates/neo-sdk/neo-playwright-js/src/probe/private-look.ts
+  var TEXT_TYPES = new Set([
+    "text",
+    "password",
+    "tel",
+    "email",
+    "search",
+    "url",
+    "number"
+  ]);
+  var MAXLENGTH_TYPES = new Set([
+    "text",
+    "search",
+    "url",
+    "tel",
+    "email",
+    "password"
+  ]);
+  function look(world, request) {
+    const element = world.pins.live(request.pin);
+    if (!element)
+      return { kind: "detached" };
+    return { kind: "value", value: lookAt(world, element, request.look) };
+  }
+  function lookAt(world, element, ask) {
+    if (!isTextInput(element))
+      return { refusal: { code: "notAnInput" } };
+    const facts = factsOf(element);
+    const refusal = firstRefusal(world, element, facts, ask);
+    return refusal ? { facts, refusal } : { facts };
+  }
+  function firstRefusal(world, element, facts, ask) {
+    const { expect } = ask;
+    if (expect && facts.origin !== expect.origin)
+      return { code: "wrongOrigin" };
+    if (expect?.type !== undefined && expect.type !== facts.type)
+      return { code: "wrongType" };
+    const fact = expect && changedFact(facts, expect);
+    if (fact)
+      return { code: "boxChanged", fact };
+    if (element.disabled || element.readOnly || element.matches(":disabled"))
+      return { code: "boxNotEditable" };
+    if (!facts.sized) {
+      if (!ask.keys)
+        return { code: "boxHidden" };
+    } else if (!world.injected.elementState(element, "visible", ask.frameVisible).matches)
+      return { code: "boxHidden" };
+    else if (covered(element))
+      return { code: "boxCovered" };
+    if (ask.length !== undefined && !ask.cut && facts.maxLength !== null && MAXLENGTH_TYPES.has(facts.type) && ask.length > facts.maxLength)
+      return { code: "valueTooLong" };
+    return;
+  }
+  function factsOf(input) {
+    const rect = input.getBoundingClientRect();
+    return {
+      origin: originOf(input.ownerDocument),
+      type: input.type,
+      autocomplete: input.getAttribute("autocomplete") ?? "",
+      maxLength: input.maxLength >= 0 ? input.maxLength : null,
+      inputMode: input.getAttribute("inputmode") ?? "",
+      name: input.getAttribute("name") ?? "",
+      id: input.getAttribute("id") ?? "",
+      sized: rect.width > 0 && rect.height > 0,
+      empty: input.value === ""
+    };
+  }
+  function originOf(document) {
+    const origin = document.defaultView ? Reflect.get(document.defaultView, "origin") : undefined;
+    return typeof origin === "string" ? origin : document.location.origin;
+  }
+  function changedFact(facts, expect) {
+    if (expect.autocomplete !== undefined && expect.autocomplete !== facts.autocomplete)
+      return "autocomplete";
+    if (expect.maxLength !== undefined && expect.maxLength !== facts.maxLength)
+      return "maxLength";
+    if (expect.inputMode !== undefined && expect.inputMode !== facts.inputMode)
+      return "inputMode";
+    if (expect.name !== undefined && expect.name !== facts.name)
+      return "name";
+    if (expect.id !== undefined && expect.id !== facts.id)
+      return "id";
+    return;
+  }
+  function isTextInput(element) {
+    return element.localName === "input" && element.namespaceURI === "http://www.w3.org/1999/xhtml" && TEXT_TYPES.has(String(Reflect.get(element, "type")));
+  }
+  function covered(box) {
+    try {
+      scrollIntoViewIfNeeded(box);
+      const rect = box.getBoundingClientRect();
+      let document = box.ownerDocument;
+      let x = rect.left + rect.width / 2;
+      let y = rect.top + rect.height / 2;
+      for (let frame = document.defaultView?.frameElement;frame; frame = document.defaultView?.frameElement) {
+        const frameRect = frame.getBoundingClientRect();
+        x += frameRect.x + frame.clientLeft;
+        y += frameRect.y + frame.clientTop;
+        document = frame.ownerDocument;
+      }
+      return blockerAt(document, box, x, y);
+    } catch {
+      return true;
+    }
+  }
+  function scrollIntoViewIfNeeded(box) {
+    const scroll = Reflect.get(box, "scrollIntoViewIfNeeded");
+    if (typeof scroll === "function")
+      Reflect.apply(scroll, box, [true]);
+    else
+      box.scrollIntoView({ block: "center", inline: "center" });
+  }
+  function blockerAt(document, box, pointX, pointY) {
+    let currentDocument = document;
+    let x = pointX;
+    let y = pointY;
+    let hit = currentDocument.elementFromPoint(x, y);
+    while (hit && (hit.tagName === "IFRAME" || hit.tagName === "FRAME") && hit !== box) {
+      let child = null;
+      try {
+        child = Reflect.get(hit, "contentDocument");
+      } catch {
+        child = null;
+      }
+      if (!isDocument(child))
+        break;
+      const frameRect = hit.getBoundingClientRect();
+      x -= frameRect.x + hit.clientLeft;
+      y -= frameRect.y + hit.clientTop;
+      currentDocument = child;
+      hit = currentDocument.elementFromPoint(x, y);
+    }
+    if (!hit || hit === box || reaches(hit, box) || reaches(box, hit))
+      return false;
+    const hitLabel = hit.closest("label");
+    if (hitLabel && (hitLabel.control === box || hitLabel.contains(box)))
+      return false;
+    const boxLabel = box.closest("label");
+    return !(boxLabel?.contains(hit) ?? false);
+  }
+  function up(node) {
+    const next = node.parentNode ?? Reflect.get(node, "host") ?? Reflect.get(node.getRootNode(), "host");
+    return isNode(next) ? next : null;
+  }
+  function isNode(value) {
+    return typeof value === "object" && value !== null && typeof Reflect.get(value, "nodeType") === "number";
+  }
+  function isDocument(value) {
+    return isNode(value) && value.nodeType === Node.DOCUMENT_NODE;
+  }
+  function reaches(from, to) {
+    for (let node = from;node; node = up(node))
+      if (node === to)
+        return true;
+    return false;
+  }
+
   // crates/neo-sdk/neo-playwright-js/src/probe/protocol.ts
-  var PROTOCOL = 31;
+  var PROTOCOL = 32;
 
   // crates/neo-sdk/neo-playwright-js/src/probe/read.ts
   var XHTML = "http://www.w3.org/1999/xhtml";
@@ -9378,6 +9535,7 @@ ${value.stack}`;
     disarm,
     frameBox,
     edit,
+    look,
     read,
     readAll,
     selector: generatedSelector,

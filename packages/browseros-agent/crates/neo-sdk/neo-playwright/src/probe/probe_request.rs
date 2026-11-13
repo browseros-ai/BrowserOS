@@ -13,6 +13,7 @@ use serde_json::value::{self, RawValue};
 use serde_json::{Map, Value, json};
 use ts_rs::TS;
 
+use crate::private_entry::BoxAsk;
 use crate::probe::probe_reply::{Point, Rect};
 use crate::target::{Chunk, Strictness};
 use crate::world::{FrameSeq, Pin};
@@ -140,6 +141,9 @@ pub(crate) enum ProbeRequest {
     /// `fill`, `selectOptions`, `selectText`, `focus`, `focusToType`, `blur` or
     /// `dispatchEvent` on a pin.
     Edit { pin: Pin, edit: Edit },
+    /// The private entry's look at a pinned box (protected-fill design section 5.3): `value`
+    /// with its facts or the first check it fails (`Looked`), or `detached`. Reads no value.
+    Look { pin: Pin, look: BoxAsk },
     /// One read of one element, resolved in the same call.
     Read {
         target: ProbeTarget,

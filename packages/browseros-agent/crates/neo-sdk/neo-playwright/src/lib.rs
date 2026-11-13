@@ -56,6 +56,7 @@ mod page;
 mod playwright;
 mod playwright_error;
 mod prelude_source;
+mod private_entry;
 mod probe;
 mod read;
 mod resolve;
@@ -78,6 +79,11 @@ pub use op_spec::{Capability, OpLifetime, OpSpec, OpTarget};
 pub use playwright::Playwright;
 pub use playwright_error::{Answer, ErrorCode, PlaywrightError, TimedOut};
 pub use prelude_source::PRELUDE_JS;
+pub use private_entry::{
+    BoxFact, BoxFacts, BoxLook, BoxSpec, Entry, EntryCode, EntryError, EntryOutcome, EntryRequest,
+    Expect, LookField, LookRequest, MAX_PRIVATE_CHARS, PrivateField, PrivateText,
+    PrivateTextRefused, Sending, delivery_of,
+};
 pub use probe::protocol::render as render_probe_protocol;
 pub use run_state::RunState;
 pub use wire::{Command, OpWire, OptionNesting, Upstream, WireType};

@@ -1,5 +1,5 @@
 {
-  "protocol": 31,
+  "protocol": 32,
   "callFunction": "function (request, root, ...nodes) { const probe = globalThis.__neoProbe; return probe ? probe.call(request, root ?? this, nodes) : { kind: \"uninstalled\" }; }",
   "replyKinds": {
     "describe": [
@@ -41,6 +41,10 @@
       "value",
       "detached",
       "notFocused"
+    ],
+    "look": [
+      "value",
+      "detached"
     ],
     "read": [
       "read",
@@ -449,6 +453,46 @@
           "x": 20,
           "y": 30
         }
+      }
+    },
+    {
+      "op": "look",
+      "pin": 3,
+      "look": {
+        "expect": {
+          "origin": "https://pay.example"
+        },
+        "length": 16,
+        "cut": false,
+        "keys": false,
+        "frameVisible": true
+      }
+    },
+    {
+      "op": "look",
+      "pin": 3,
+      "look": {
+        "expect": {
+          "origin": "https://bank.example",
+          "type": "password",
+          "autocomplete": "current-password",
+          "maxLength": 8,
+          "inputMode": "",
+          "name": "password",
+          "id": "pw"
+        },
+        "cut": true,
+        "keys": false,
+        "frameVisible": true
+      }
+    },
+    {
+      "op": "look",
+      "pin": 5,
+      "look": {
+        "cut": false,
+        "keys": true,
+        "frameVisible": true
       }
     },
     {
@@ -1051,19 +1095,19 @@
   "replies": [
     {
       "kind": "described",
-      "protocol": 31,
+      "protocol": 32,
       "seq": 0,
       "url": "https://example.com/"
     },
     {
       "kind": "described",
-      "protocol": 31,
+      "protocol": 32,
       "seq": 347,
       "url": "https://pay.example/frame"
     },
     {
       "kind": "described",
-      "protocol": 31,
+      "protocol": 32,
       "seq": 512340,
       "url": "https://example.com/",
       "retired": 0
@@ -1265,6 +1309,49 @@
     {
       "kind": "value",
       "value": true
+    },
+    {
+      "kind": "value",
+      "value": {
+        "facts": {
+          "origin": "https://pay.example",
+          "type": "text",
+          "autocomplete": "cc-number",
+          "maxLength": 19,
+          "inputMode": "numeric",
+          "name": "cardnumber",
+          "id": "",
+          "sized": true,
+          "empty": true
+        }
+      }
+    },
+    {
+      "kind": "value",
+      "value": {
+        "facts": {
+          "origin": "https://bank.example",
+          "type": "password",
+          "autocomplete": "current-password",
+          "maxLength": null,
+          "inputMode": "",
+          "name": "password",
+          "id": "pw",
+          "sized": true,
+          "empty": true
+        },
+        "refusal": {
+          "code": "boxCovered"
+        }
+      }
+    },
+    {
+      "kind": "value",
+      "value": {
+        "refusal": {
+          "code": "notAnInput"
+        }
+      }
     },
     {
       "kind": "read",

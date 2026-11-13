@@ -157,6 +157,42 @@ export const REQUEST_EXAMPLES: { [O in Op]: AtLeastOne<RequestOf<O>> } = {
       },
     },
   ],
+  look: [
+    {
+      op: 'look',
+      pin: 3,
+      look: {
+        expect: { origin: 'https://pay.example' },
+        length: 16,
+        cut: false,
+        keys: false,
+        frameVisible: true,
+      },
+    },
+    {
+      op: 'look',
+      pin: 3,
+      look: {
+        expect: {
+          origin: 'https://bank.example',
+          type: 'password',
+          autocomplete: 'current-password',
+          maxLength: 8,
+          inputMode: '',
+          name: 'password',
+          id: 'pw',
+        },
+        cut: true,
+        keys: false,
+        frameVisible: true,
+      },
+    },
+    {
+      op: 'look',
+      pin: 5,
+      look: { cut: false, keys: true, frameVisible: true },
+    },
+  ],
   read: [
     {
       op: 'read',
@@ -462,6 +498,43 @@ const REPLY_EXAMPLES: {
     { kind: 'value', value: { threw: 'DOMException' } },
     { kind: 'value', value: [{ name: 'token', value: 'abc' }] },
     { kind: 'value', value: true },
+    {
+      kind: 'value',
+      value: {
+        facts: {
+          origin: 'https://pay.example',
+          type: 'text',
+          autocomplete: 'cc-number',
+          maxLength: 19,
+          inputMode: 'numeric',
+          name: 'cardnumber',
+          id: '',
+          sized: true,
+          empty: true,
+        },
+      },
+    },
+    {
+      kind: 'value',
+      value: {
+        facts: {
+          origin: 'https://bank.example',
+          type: 'password',
+          autocomplete: 'current-password',
+          maxLength: null,
+          inputMode: '',
+          name: 'password',
+          id: 'pw',
+          sized: true,
+          empty: true,
+        },
+        refusal: { code: 'boxCovered' },
+      },
+    },
+    {
+      kind: 'value',
+      value: { refusal: { code: 'notAnInput' } },
+    },
   ],
   read: [
     { kind: 'read', value: 'Welcome' },
