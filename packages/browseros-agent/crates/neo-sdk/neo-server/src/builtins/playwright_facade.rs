@@ -2,13 +2,13 @@
 
 use std::sync::{Arc, Weak};
 
-use browseros_core::TargetId;
+use browseros_core::{TabId, TargetId};
 
 use futures_util::future::BoxFuture;
 use neo_playwright::{EventFence, FileAccess, Playwright};
 use tokio::sync::{OnceCell, SetOnce};
 
-use crate::browser::{Adopt, BrowserLink, NeoTab};
+use crate::browser::{BrowserLink, NeoTab};
 use crate::dispatch::{EventLog, WorkerFact};
 use crate::host::AgentFront;
 
@@ -86,11 +86,13 @@ impl PlaywrightFacade {
         self.blank_tab.get()
     }
 
-    /// Makes sure Neo's blank tab is open before a close, without adopting another tab (a script
-    /// may be about to use it). Nothing when the sidecar keeps none.
-    pub(crate) async fn keep_blank_tab(&self) {
-        if let Some(blank_tab) = self.blank_tab.get() {
-            blank_tab.ensure(Adopt::Never).await;
+    /// Makes sure Neo's blank tab is open before `closing` closes, without adopting another tab
+    /// (a script may be about to use it). Whether the close may go ahead
+    /// (`NeoTab::keep_before_close`); always, when the sidecar keeps no blank tab.
+    pub(crate) async fn keep_blank_tab(&self, closing: TabId) -> bool {
+        match self.blank_tab.get() {
+            Some(blank_tab) => blank_tab.keep_before_close(closing).await,
+            None => true,
         }
     }
 

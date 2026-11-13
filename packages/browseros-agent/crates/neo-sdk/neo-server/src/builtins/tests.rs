@@ -5269,3 +5269,120 @@ async fn a_handed_back_tab_reaches_a_waiting_script_as_a_new_page() -> Result<()
     Harness::finish(guard);
     Ok(())
 }
+
+/// `page.close({ runBeforeUnload: true })` closes the tab too, so it makes sure of Neo's tab
+/// first, as `page.close` does.
+#[tokio::test]
+async fn a_close_that_runs_beforeunload_makes_sure_of_neos_tab_first() -> Result<(), Box<dyn Error>>
+{
+    let harness = Harness::new().await?;
+    let blank = blank_tab(&harness);
+    let (run, guard) = harness.run()?;
+    let only = page_of(&value(
+        harness.submit(&run, "context.newPage", json!({})).await,
+    )?)?;
+    value(
+        harness
+            .submit(
+                &run,
+                "page.runBeforeUnload",
+                json!({ "page": handle(&only) }),
+            )
+            .await,
+    )?;
+    let calls: Vec<String> = harness
+        .fake
+        .calls()
+        .into_iter()
+        .map(|call| call.method)
+        .filter(|method| method == "Browser.createTab" || method == "Page.close")
+        .collect();
+    assert_eq!(
+        calls,
+        vec!["Browser.createTab", "Browser.createTab", "Page.close"],
+        "the script's tab, then Neo's tab, then the close"
+    );
+    assert!(blank.current().is_some_and(|tab| harness.tabs.is_neo(tab)));
+    Harness::finish(guard);
+    Ok(())
+}
+
+/// When Neo cannot open its blank tab, a close that may be the browser's last is refused before
+/// anything is sent; with another tab open, it goes ahead.
+#[tokio::test]
+async fn a_close_neo_cannot_make_safe_is_refused() -> Result<(), Box<dyn Error>> {
+    let harness = Harness::new().await?;
+    let _blank = blank_tab(&harness);
+    let (run, guard) = harness.run()?;
+    let only = page_of(&value(
+        harness.submit(&run, "context.newPage", json!({})).await,
+    )?)?;
+    // From now on the browser's answer to an open names no tab.
+    harness.fake.answer("Browser.createTab", json!({}));
+    let refused = failure(
+        harness
+            .submit(&run, "page.close", json!({ "page": handle(&only) }))
+            .await,
+    )?;
+    assert_eq!(
+        (
+            refused.error.owner(),
+            refused.error.code(),
+            refused.delivery
+        ),
+        (ErrorOwner::Neo, ErrorCode::CDP_ERROR, Delivery::NotSent),
+        "{}",
+        refused.error
+    );
+    assert!(
+        harness.is_open(only.tab).await?,
+        "the browser keeps its last tab"
+    );
+
+    let owners = harness.fake.open_tab("https://example.com/", "Example");
+    value(
+        harness
+            .submit(&run, "page.close", json!({ "page": handle(&only) }))
+            .await,
+    )?;
+    assert!(
+        !harness.is_open(only.tab).await? && harness.is_open(owners).await?,
+        "with the owner's tab open, the close cannot quit the browser"
+    );
+    Harness::finish(guard);
+    Ok(())
+}
+
+/// An open the browser took outlives a caller that stopped waiting: the tab is still marked
+/// Neo's, and the next ensure finds it instead of opening a second one.
+#[tokio::test]
+async fn an_open_outlives_a_caller_that_stops_waiting() -> Result<(), Box<dyn Error>> {
+    let harness = Harness::new().await?;
+    let blank = blank_tab(&harness);
+    harness.fake.hold_next("Browser.createTab");
+    let caller = tokio::spawn({
+        let blank = Arc::clone(&blank);
+        async move { blank.ensure(Adopt::Never).await }
+    });
+    within(async {
+        while harness.fake.count("Browser.createTab") == 0 {
+            time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await?;
+    caller.abort();
+    harness.fake.release_held();
+    let tab = within(blank.ensure(Adopt::Never))
+        .await?
+        .ok_or("Neo's tab")?;
+    assert!(
+        harness.tabs.is_neo(tab),
+        "the open its caller left was still marked"
+    );
+    assert_eq!(
+        harness.fake.count("Browser.createTab"),
+        1,
+        "never a second tab"
+    );
+    Ok(())
+}

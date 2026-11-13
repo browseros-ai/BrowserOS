@@ -206,6 +206,14 @@ struct PlaywrightOp {
     events: EventRelease,
 }
 
+impl PlaywrightOp {
+    /// `page.close`, and `page.close({ runBeforeUnload: true })`'s `page.runBeforeUnload`, which
+    /// the door does not track as a close but which closes the tab all the same.
+    fn closes_tab(&self) -> bool {
+        self.pages == PageEffect::Closes || self.spec.name == "page.runBeforeUnload"
+    }
+}
+
 impl Method for PlaywrightOp {
     type Input = OpInput;
     type Output = Value;
@@ -239,10 +247,17 @@ impl Method for PlaywrightOp {
         if ruled && let Some(refusal) = refused_page(op, self.spec.name, self.pages).await? {
             return Err(LeafError::definite(refusal));
         }
-        // Neo's blank tab first, then the close: a script's last tab, a task's tabs or the
-        // janitor's idle tab never take the browser's last tab with them (`NeoTab`).
-        if self.pages == PageEffect::Closes {
-            self.facade.keep_blank_tab().await;
+        // Neo's blank tab first, then the close (either variant): a script's last tab, a task's
+        // tabs or the janitor's idle tab never take the browser's last tab with them (`NeoTab`).
+        // A close Neo cannot make safe is refused before anything is sent.
+        if let Some(closing) = page.filter(|_| self.closes_tab())
+            && !self.facade.keep_blank_tab(closing.tab).await
+        {
+            return Err(LeafError::definite(OperationError::neo(
+                ErrorCode::CDP_ERROR,
+                "Neo could not open its blank tab, and this tab may be the browser's last: \
+                 closing it would quit the browser; try again",
+            )));
         }
         let input = input.resolved(page);
         let playwright = self.facade.get().await;

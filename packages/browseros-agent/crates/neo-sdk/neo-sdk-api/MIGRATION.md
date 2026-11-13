@@ -195,6 +195,8 @@ tab the agent left, and Neo's tab keeps the browser alive.
   display follow treat it as any tab.
 - It is the one exception to `context.pages()` listing every tab: no script sees it, no task takes it,
   and an op that names its tab fails `script / invalid_input` with nothing sent.
+- Every close Neo makes opens it first if it is missing. If Neo cannot open it and the browser lists
+  no other tab, `page.close()` fails `neo / cdp_error` with nothing sent, rather than quit the browser.
 - After a browser restart Neo adopts a blank tab no task owns (the launch tab, or its own restored
   tab) before opening another. If the owner closes it, Neo opens another.
 - Neo keeps it only while it is blank. Once the owner browses in it, or `POST /v1/fits/{id}/navigate`
