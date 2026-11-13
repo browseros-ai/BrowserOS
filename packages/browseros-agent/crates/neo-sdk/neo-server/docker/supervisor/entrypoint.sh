@@ -45,6 +45,10 @@ readonly MCP_TLS_PORT=9011
 # claw-sdk's host API socket lives here, off /data: a host's data volume may be
 # private to Neo's uid, and a Docker Desktop share cannot hold a socket.
 readonly HOST_SOCKET_DIR=/run/neo
+# Where profile_in_use reads every process's arguments, and how long, in tenths
+# of a second, clear_sessions waits for the last browser process to go.
+readonly PROC_DIR=/proc
+readonly BROWSER_GONE_TENTHS=100
 
 : "${NEO_SCREEN:=1600x1000}" "${NEO_SANDBOX:=false}" "${NEO_ARGS:=}"
 : "${NEO_SOFTWARE_GRAPHICS:=true}"
@@ -65,6 +69,9 @@ readonly HOST_SOCKET_DIR=/run/neo
 # and turns the browser's product analytics off (start_neo); both processes
 # require exact 1.
 : "${BROWSERCLAW_HOSTED_MODE:=1}"
+# Whether the browser's saved sessions are removed before each of its starts,
+# in hosted mode (clear_sessions, README "Saved sessions"). Off by default.
+: "${NEO_CLEAR_SESSIONS:=false}"
 
 # tr rather than ${1,,}: the host-side tests run this under macOS's bash 3.2.
 is_true() {
@@ -97,6 +104,15 @@ esac
 MCP_REMOTE=false
 if is_true "$NEO_MCP_REMOTE"; then MCP_REMOTE=true; fi
 readonly MCP_REMOTE
+CLEAR_SESSIONS=0
+if is_true "$NEO_CLEAR_SESSIONS"; then
+  if [ "$BROWSERCLAW_HOSTED_MODE" = 1 ]; then
+    CLEAR_SESSIONS=1
+  else
+    log "NEO_CLEAR_SESSIONS applies in hosted mode only; the browser's saved sessions stay"
+  fi
+fi
+readonly CLEAR_SESSIONS
 
 # Starts "$@" as the neo user in the background. The subshell execs, so $! is
 # the program's own pid (setpriv, env and Neo's launcher all exec in turn) and
@@ -181,6 +197,60 @@ forget_zoom_levels() {
   [ -s "$prefs" ] || return 0
   merge_json "$prefs" 'del(.partition.per_host_zoom_levels, .partition.default_zoom_level)' \
     || log "Could not clear saved zoom levels in $prefs"
+}
+
+# Whether a browser process runs on this profile. The browser and each of its
+# child processes (zygote, GPU, renderers, utilities) carry exactly this
+# --user-data-dir; claw-sdk, which the browser starts and which outlives a
+# killed browser for a moment, does not, and never writes the session files.
+# The image has no pgrep or fuser, and this script runs as root, so /proc shows
+# every process.
+profile_in_use() {
+  local cmdline
+  for cmdline in "$PROC_DIR"/[0-9]*/cmdline; do
+    # A process that ended since the glob is skipped.
+    [ -r "$cmdline" ] || continue
+    # One argument per line, so -x matches a whole argument, never a prefix. Not
+    # grep -q: it can stop reading early, and under pipefail tr's SIGPIPE would
+    # turn a match into a miss.
+    tr '\0' '\n' 2>/dev/null < "$cmdline" | grep -xF -- "--user-data-dir=$PROFILE" >/dev/null && return 0
+  done
+  return 1
+}
+
+# Chromium keeps each tab's page state in Default/Sessions (Session_* and
+# Tabs_*), for session restore and "reopen closed tab", and that state holds the
+# values typed into the tab's boxes: a username, a one-time code, a card number
+# and its security code (not a password). They survive the tab's close and a
+# restart, and come back into the boxes when the browser restores the tab
+# (README "Saved sessions"). With NEO_CLEAR_SESSIONS in hosted mode, start_neo
+# removes that folder before every start of the browser: the first, and each one
+# after the browser exited (a crash, neo-quit, a kill). A host that kills every
+# process in the container runs this script again, which starts the browser
+# through here too. Only that folder goes: cookies (a session-cookie sign-in
+# stays signed in), saved logins, Local State and Preferences stay; the restored
+# tabs are lost, and the browser opens one New Tab. Never while a browser
+# process still runs on the profile: the browser writes these files until it
+# exits and would write them back. A browser that outlives the wait keeps them,
+# and says so.
+clear_sessions() {
+  [ "$CLEAR_SESSIONS" = 1 ] || return 0
+  local sessions="$PROFILE/Default/Sessions" waited=0
+  [ -e "$sessions" ] || [ -L "$sessions" ] || return 0
+  while profile_in_use; do
+    if [ "$waited" -ge "$BROWSER_GONE_TENTHS" ]; then
+      log "A browser still runs on $PROFILE; its saved sessions stay"
+      return 0
+    fi
+    sleep 0.1
+    waited=$((waited + 1))
+  done
+  # No trailing slash: a symlink here is removed, never followed.
+  if rm -rf -- "$sessions"; then
+    log "Removed the browser's saved sessions ($sessions)"
+  else
+    log "Could not remove $sessions"
+  fi
 }
 
 # What the display offers depends on which server this image runs. The answer
@@ -386,6 +456,7 @@ apply_minimal_ui() {
 # DevTools emulation, not browser zoom, and still works.
 start_neo() {
   forget_zoom_levels
+  clear_sessions
   local history_flag=""
   [ "$BACK_FORWARD_CACHE" = 1 ] || history_flag=--disable-back-forward-cache
   # The browser's own usage metrics (BrowserOSMetricsService) post to the

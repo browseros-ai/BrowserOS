@@ -69,6 +69,7 @@ class StartNeoTest(unittest.TestCase):
             run_bash(
                 server_is(kind)
                 + f"forget_zoom_levels() {{ echo forget_zoom_levels >> '{calls}'; }}\n"
+                f"clear_sessions() {{ echo clear_sessions >> '{calls}'; }}\n"
                 f"spawn_as_neo() {{ echo spawn_as_neo >> '{calls}'; "
                 f"printf '%s\\n' \"$@\" > '{argv}' & }}\n"
                 "sandbox_flags=(--no-sandbox)\n"
@@ -95,11 +96,11 @@ class StartNeoTest(unittest.TestCase):
         self.assertEqual(argv[-2:], ["--lang=de", "--disable-browseros-features="])
         self.assertLess(argv.index("--disable-pinch"), len(argv) - 2)
 
-    def test_every_launch_first_drops_saved_zoom_levels(self):
+    def test_every_launch_first_drops_saved_zoom_levels_and_saved_sessions(self):
         # The supervisor loop relaunches Neo through start_neo after it closes.
         calls, _ = self.launch("")
 
-        self.assertEqual(calls, ["forget_zoom_levels", "spawn_as_neo"])
+        self.assertEqual(calls, ["forget_zoom_levels", "clear_sessions", "spawn_as_neo"])
 
     def test_claw_sdk_turns_the_back_forward_cache_off_as_playwright_does(self):
         # A page restored from the cache fires no load event, so Playwright's goBack() would hang.
@@ -276,6 +277,206 @@ class ForgetZoomLevelsTest(unittest.TestCase):
 
         self.assertEqual(prefs.read_text(), "{not json")
         self.assertIn("Could not clear saved zoom levels", result.stdout)
+
+
+class ClearSessionsTest(unittest.TestCase):
+    """NEO_CLEAR_SESSIONS: the browser's saved sessions, removed before each of its starts."""
+
+    def profile(self) -> Path:
+        """A profile whose saved sessions hold a typed value, beside what must stay."""
+        directory = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        profile = directory / "data/profile"
+        sessions = profile / "Default/Sessions"
+        sessions.mkdir(parents=True)
+        (sessions / "Session_1").write_text("4111111111111111")
+        (sessions / "Tabs_1").write_text("4111111111111111")
+        for kept in ["Default/Cookies", "Default/Login Data", "Default/Preferences", "Local State"]:
+            (profile / kept).write_text("kept")
+        return profile
+
+    def processes(self, *argvs: list[str]) -> Path:
+        """A /proc with one process per argv, each as its NUL-separated cmdline."""
+        proc = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        for pid, argv in enumerate(argvs, start=100):
+            (proc / str(pid)).mkdir()
+            (proc / str(pid) / "cmdline").write_bytes(b"\0".join(a.encode() for a in argv) + b"\0")
+        return proc
+
+    def run_clear(
+        self,
+        profile: Path,
+        value: str | None,
+        hosted_mode: str = "1",
+        proc: Path | None = None,
+        gone_tenths: int = 20,
+        then: str = "clear_sessions\n",
+    ) -> subprocess.CompletedProcess:
+        default = re.search(r'^: "\$\{NEO_CLEAR_SESSIONS:=false\}"$', SCRIPT, re.MULTILINE)
+        parse = re.search(
+            r"^CLEAR_SESSIONS=0\n.*?^readonly CLEAR_SESSIONS\n", SCRIPT, re.MULTILINE | re.DOTALL
+        )
+        assert default and parse, "entrypoint.sh no longer reads NEO_CLEAR_SESSIONS here"
+        given = "" if value is None else f"NEO_CLEAR_SESSIONS={shlex.quote(value)}\n"
+        if proc is None:
+            proc = self.processes()
+        return run_bash(
+            "log() { printf '[neo] %s\\n' \"$*\"; }\n"
+            'die() { log "$*" >&2; exit 1; }\n'
+            + shell_function("is_true")
+            + f"BROWSERCLAW_HOSTED_MODE={hosted_mode}\n"
+            + given
+            + default.group(0) + "\n"
+            + parse.group(0)
+            + f"PROFILE={shlex.quote(str(profile))} PROC_DIR={shlex.quote(str(proc))}\n"
+            + f"BROWSER_GONE_TENTHS={gone_tenths}\n"
+            + shell_function("profile_in_use")
+            + shell_function("clear_sessions")
+            + then,
+            check=False,
+        )
+
+    def assert_only_sessions_gone(self, profile: Path) -> None:
+        self.assertFalse((profile / "Default/Sessions").exists())
+        for kept in ["Default/Cookies", "Default/Login Data", "Default/Preferences", "Local State"]:
+            self.assertEqual((profile / kept).read_text(), "kept", kept)
+
+    def browser(self, profile: Path) -> list[str]:
+        return ["/usr/lib/browserclaw/browserclaw", "--type=renderer", f"--user-data-dir={profile}"]
+
+    def test_unset_keeps_the_saved_sessions_as_today(self):
+        profile = self.profile()
+
+        result = self.run_clear(profile, None)
+
+        self.assertEqual((result.returncode, result.stdout), (0, ""))
+        self.assertTrue((profile / "Default/Sessions/Session_1").exists())
+
+    def test_off_keeps_them(self):
+        for value in ["false", "0", "OFF"]:
+            with self.subTest(value=value):
+                profile = self.profile()
+
+                self.run_clear(profile, value)
+
+                self.assertTrue((profile / "Default/Sessions/Tabs_1").exists())
+
+    def test_on_removes_the_sessions_folder_and_nothing_else(self):
+        for value in ["1", "true", "ON"]:
+            with self.subTest(value=value):
+                profile = self.profile()
+
+                result = self.run_clear(profile, value)
+
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assert_only_sessions_gone(profile)
+                self.assertIn("Removed the browser's saved sessions", result.stdout)
+
+    def test_a_value_that_is_not_a_boolean_stops_the_container(self):
+        profile = self.profile()
+
+        result = self.run_clear(profile, "sometimes")
+
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("expected true or false, got 'sometimes'", result.stderr)
+        self.assertTrue((profile / "Default/Sessions/Session_1").exists())
+
+    def test_outside_hosted_mode_it_does_nothing_and_says_so(self):
+        profile = self.profile()
+
+        result = self.run_clear(profile, "1", hosted_mode="0")
+
+        self.assertTrue((profile / "Default/Sessions/Session_1").exists())
+        self.assertIn("applies in hosted mode only", result.stdout)
+
+    def test_a_profile_without_the_folder_starts_quietly(self):
+        profile = self.profile()
+        shutil.rmtree(profile / "Default/Sessions")
+
+        result = self.run_clear(profile, "1")
+
+        self.assertEqual((result.returncode, result.stdout), (0, ""))
+        self.assertFalse((profile / "Default/Sessions").exists())
+
+    def test_every_start_of_the_browser_removes_what_the_last_one_saved(self):
+        # The first start and a restart after the browser exited both go through start_neo; each
+        # browser writes its own Session_ file while it runs.
+        profile = self.profile()
+        seen = profile.parent / "seen"
+        result = self.run_clear(
+            profile,
+            "1",
+            then=(
+                "forget_zoom_levels() { :; }\n"
+                # What is in Sessions as the browser starts, then the file this browser saves; a
+                # background job leaves start_neo a pid, as the real spawn does.
+                "spawn_as_neo() {\n"
+                f"  {{ ls {shlex.quote(str(profile))}/Default/Sessions 2>/dev/null || true; }}"
+                f" | tr '\\n' ' ' >> {shlex.quote(str(seen))}; echo >> {shlex.quote(str(seen))}\n"
+                f"  mkdir -p {shlex.quote(str(profile))}/Default/Sessions\n"
+                f"  echo 4111111111111111 > {shlex.quote(str(profile))}/Default/Sessions/Session_2\n"
+                "  : &\n"
+                "}\n"
+                "BACK_FORWARD_CACHE=0 sandbox_flags=(--no-sandbox)\n"
+                "browseros_extension_flags=(--disable-browseros-extensions) gpu_flags=(--disable-gpu-compositing)\n"
+                "CDP_PORT=9110 SERVER_PORT=9210 HIDDEN_BROWSEROS_FEATURES=NewTabPage NEO_ARGS=\n"
+                + shell_function("start_neo")
+                + "start_neo\nstart_neo\n"
+            ),
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(seen.read_text().splitlines(), ["", ""], "each browser started without them")
+        self.assertEqual(result.stdout.count("Removed the browser's saved sessions"), 2)
+
+    def test_it_waits_for_the_last_browser_process_to_go(self):
+        profile = self.profile()
+        proc = self.processes(self.browser(profile))
+
+        result = self.run_clear(
+            profile, "1", proc=proc, gone_tenths=50,
+            then=f"(sleep 0.3; rm -rf {shlex.quote(str(proc))}/100) &\nclear_sessions\nwait\n",
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assert_only_sessions_gone(profile)
+
+    def test_a_browser_that_does_not_go_keeps_them_and_says_so(self):
+        profile = self.profile()
+
+        result = self.run_clear(
+            profile, "1", proc=self.processes(self.browser(profile)), gone_tenths=2
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue((profile / "Default/Sessions/Session_1").exists())
+        self.assertIn("A browser still runs on", result.stdout)
+
+    def test_only_the_browsers_own_argument_counts_as_in_use(self):
+        # claw-sdk names a file in the profile; another profile's browser shares a prefix.
+        profile = self.profile()
+        proc = self.processes(
+            ["browseros-claw-server", f"--config={profile}/.browseros/config.json"],
+            ["browserclaw", f"--user-data-dir={profile}-other"],
+            ["chrome_crashpad_handler", f"--metrics-dir={profile}"],
+        )
+
+        result = self.run_clear(profile, "1", proc=proc, gone_tenths=2)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assert_only_sessions_gone(profile)
+
+    def test_a_symlinked_folder_is_removed_not_followed(self):
+        profile = self.profile()
+        elsewhere = profile.parent / "elsewhere"
+        elsewhere.mkdir()
+        (elsewhere / "keep").write_text("kept")
+        shutil.rmtree(profile / "Default/Sessions")
+        (profile / "Default/Sessions").symlink_to(elsewhere)
+
+        self.run_clear(profile, "1")
+
+        self.assertFalse((profile / "Default/Sessions").is_symlink())
+        self.assertEqual((elsewhere / "keep").read_text(), "kept")
 
 
 class NeoServerInfoTest(unittest.TestCase):

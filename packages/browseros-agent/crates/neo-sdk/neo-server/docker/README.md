@@ -92,6 +92,7 @@ viewer and a trace UI over the host API, and `dev.sh run` to send scripts. `smok
 | `NEO_MCP_REMOTE` | `false` | `false`: the browser's MCP ports refuse every peer but loopback. `true` is needed to publish 9010, and admits every peer that can route to the container. |
 | `BROWSEROS_CAPSOLVER_API_KEY_FILE`, `BROWSEROS_2CAPTCHA_API_KEY_FILE` | `/home/neo/.config/browseros/captcha/capsolver-api-key`, `…/2captcha-api-key` | CAPTCHA provider keys, read if the files exist. The image ships none ([CAPTCHA keys](#captcha-keys)). |
 | `NEO_SCREEN`, `NEO_SANDBOX`, `NEO_SOFTWARE_GRAPHICS`, `NEO_DISABLE_BROWSEROS_EXTENSIONS`, `NEO_ARGS`, `NEO_DOWNLOAD_DIR`, `TZ` | as the Neo image | The same meaning as in [the Neo image's README](../../../../../browseros/docker/neo/README.md). The browser always runs with `--disable-back-forward-cache`, as Playwright launches Chromium; `NEO_ARGS` adds to it. |
+| `NEO_CLEAR_SESSIONS` | `false` | `true`: before every start of the browser, the entrypoint removes the profile's saved sessions, `/data/profile/Default/Sessions`, where values typed into pages rest ([Saved sessions](#saved-sessions)). |
 | `BROWSERCLAW_HOSTED_MODE` | `1` | Must stay `1`. It also starts the browser with `--disable-browseros-metrics` ([Product analytics](#product-analytics)). |
 
 | Output | Where |
@@ -187,6 +188,27 @@ large. It does not create a download or accept a `path` option. For an actual do
 stops claw-sdk with SIGTERM. Then the display stops and the container exits 0, in about a second. A browser
 that exits is restarted by the entrypoint, and a server that exits is relaunched by the browser. A run in
 flight at shutdown is cut.
+
+### Saved sessions
+
+For session restore and "reopen closed tab", Chromium saves each tab's page state in
+`/data/profile/Default/Sessions` (`Session_*` and `Tabs_*`). That state includes the values typed into the
+tab's boxes, in plain UTF-16: a username, a one-time code, a card number and its security code, in a
+cross-site frame too. Passwords and boxes marked `autocomplete=off` are not saved. The values survive
+the tab's close, a site-data clear and a restart. When the browser restores the tab, it puts them back
+into the boxes.
+
+`NEO_CLEAR_SESSIONS=true` removes that folder before every start of the browser:
+- the container's first start;
+- each restart after the browser exits: a crash, `neo-quit`, or a kill;
+- a host that kills every process in the container and runs the entrypoint again.
+
+The folder is removed only once no browser process runs on the profile. The entrypoint waits up to
+10 s for the last one to go; a browser still running after that keeps the folder, and the log says so.
+Nothing else in the profile is touched: cookies (a session-cookie sign-in stays signed in), saved
+logins, `Local State` and `Preferences` all stay. The cost is the restored tabs: the browser opens one
+New Tab, and "reopen closed tab" has nothing to reopen. It applies in hosted mode only. Unset, or
+`false`, the browser keeps its sessions as before.
 
 ### Product analytics
 
