@@ -121,8 +121,8 @@ function createProbe() {
       const { request, policy } = call
       if (request.op === 'pinned') return pinned(booted, request)
       const output = new FailureOutput(booted, policy)
-      // Only the synchronous engine work owns these hooks. Async handlers retain output
-      // explicitly and re-enter it after an await; no mutable mode survives this scope.
+      // Only synchronous engine work owns these hooks. Async handlers retain output for
+      // later diagnostics, through its formatter or tree scope; no mutable mode survives here.
       const reply = output.run(() =>
         dispatch(booted, request.op, request, scope, nodes, output),
       )

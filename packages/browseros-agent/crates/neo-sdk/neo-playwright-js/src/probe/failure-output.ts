@@ -159,7 +159,8 @@ export class FailureOutput {
     return { kind: sensitive ? 'realValue' : 'native' }
   }
 
-  private readonly previewNode = (node: Node): string => {
+  /** Also serves producers that resume after dispatch's shared hooks have restored. */
+  readonly previewNode = (node: Node): string => {
     const parent = node.parentElement
     if (
       node.nodeType === 3 &&

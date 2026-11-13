@@ -51,4 +51,16 @@ await fails('toBeHidden', () => expect(input).toBeHidden(options));
 await fails('missing.fallback', () => expect(page.locator('#missing-private-field')).toHaveText(wrong, options));
 await fails('strict.fields', () => expect(page.locator('.strict-fields')).toHaveValue(wrong, options));
 await fails('strict.alias', () => expect(page.locator('.strict-names')).toHaveText(wrong, options));
-return { failures, snapshots };
+const focusFailures = {};
+for (const [name, act] of [
+  ['fill', () => page.locator('#focus-victim').fill('Public attempt', { timeout: 1000 })],
+  ['type', () => page.locator('#focus-victim').pressSequentially('Public attempt', { timeout: 1000 })],
+]) {
+  try { await act(); throw new Error(name + ' must lose its focus'); }
+  catch (error) {
+    if (error.code !== 'not_focused' || !error.message.includes('value="AttrCanary-1"'))
+      throw new Error(name + ' lost its native focus-holder preview');
+    focusFailures[name] = error.message;
+  }
+}
+return { failures, snapshots, focusFailures };

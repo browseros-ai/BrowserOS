@@ -16,6 +16,7 @@ await input.fill(typed);
 await textarea.fill(typed);
 await publicInput.fill('PublicTyped');
 await publicTextarea.fill('PublicTyped');
+await page.locator('#strict-mirror-private').fill(typed);
 
 const passed = [];
 const failures = {};
@@ -37,7 +38,7 @@ async function passes(name, call) {
 async function fails(name, call) {
   let failure;
   try { await call(); } catch (error) {
-    if (!name.startsWith('toHaveJSProperty.') && name !== 'click.covered' && name !== 'frame.privatePreview')
+    if (!name.startsWith('toHaveJSProperty.') && name !== 'click.covered' && name !== 'frame.privatePreview' && !name.includes('focus'))
       check(Array.isArray(error.matcherResult?.log) && error.matcherResult.log.length > 0, name + ' forwards structured matcher facts');
     failure = diagnostic(error);
   }
@@ -159,9 +160,19 @@ await fails('toBeHidden', () => expect(input).toBeHidden({ timeout: 1000 }));
 await fails('toBeEmpty.textarea', () => expect(textarea).toBeEmpty(options));
 await fails('click.covered', () => page.locator('#covered-input').click({ timeout: 1000 }));
 await fails('missing.fallback', () => expect(page.locator('#missing-private-field')).toHaveText(wrong, options));
+await fails('strict.mirrored.fields', () => expect(page.locator('.strict-mirror-fields')).toHaveValue(wrong, options));
+check(failures['strict.mirrored.fields'].message.includes('value="' + marker(typed) + '"'), 'strict violation projects the mirrored typed attribute');
 await fails('strict.fields', () => expect(page.locator('.strict-fields')).toHaveValue(wrong, options));
 await fails('strict.alias', () => expect(page.locator('.strict-names')).toHaveText(wrong, options));
 await fails('frame.privatePreview', () => page.locator('#private-input').contentFrame().locator('body').textContent(options));
+await fails('fill.focus', () => page.locator('#focus-victim').fill('Public attempt', { timeout: 1000 }));
+await fails('type.focus', () => page.locator('#focus-victim').pressSequentially('Public attempt', { timeout: 1000 }));
+await fails('public.fill.focus', () => page.locator('#public-focus-victim').fill('Public attempt', { timeout: 1000 }));
+for (const name of ['fill.focus', 'type.focus']) {
+  check(failures[name].code === 'not_focused', name + ' reports focus loss after its microtask');
+  check(failures[name].message.includes('value="' + marker(attribute) + '"'), name + ' projects the private focus holder');
+}
+check(failures['public.fill.focus'].message.includes('value="PublicFocus"'), 'an ordinary focus holder keeps its attribute');
 for (const name of ['toBeEmpty', 'toBeHidden', 'click.covered', 'strict.fields']) {
   for (const attributeName of ['value', 'aria-valuetext', 'aria-valuenow'])
     check(failures[name].message.includes(attributeName + '="' + marker(attribute) + '"'), name + ' masks ' + attributeName);

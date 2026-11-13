@@ -51,3 +51,22 @@
 <button id="intercept-target">Trusted event target</button>
 <input id="delayed-cover" type="password" value="AttrCanary-1"
   aria-valuetext="AttrCanary-1" aria-valuenow="AttrCanary-1">
+
+<input id="focus-victim" type="text" aria-label="Focus victim">
+<input id="focus-thief" type="password" value="AttrCanary-1"
+  aria-valuetext="AttrCanary-1" aria-valuenow="AttrCanary-1">
+<input id="public-focus-victim" type="text" aria-label="Public focus victim">
+<input id="public-focus-thief" type="text" value="PublicFocus">
+<script>
+for (const prefix of ['', 'public-']) {
+  document.getElementById(prefix + 'focus-victim').addEventListener('focus', () =>
+    queueMicrotask(() => document.getElementById(prefix + 'focus-thief').focus()));
+}
+</script>
+
+<input id="strict-mirror-private" class="strict-mirror-fields" type="password" value="AttrCanary-1">
+<input class="strict-mirror-fields" type="text" value="PublicMirror">
+<script>
+const mirrored = document.getElementById('strict-mirror-private');
+mirrored.addEventListener('input', () => mirrored.setAttribute('value', mirrored.value));
+</script>

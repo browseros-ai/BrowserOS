@@ -101,6 +101,7 @@ async fn tests_that_a_key_owed_by_a_burst_on_a_frames_session_is_let_go_on_that_
     let header = CallHeader {
         api: None,
         timeout_ms: Some(100),
+        conformance: false,
     };
     let scope = OpScope::new(&env, op, header);
     let sent = scope.send_effect()?;

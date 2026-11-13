@@ -1594,8 +1594,11 @@ async fn tests_that_marked_previews_hide_mirrored_attributes_in_every_diagnostic
         bench.live.main_world(&opened.page, "(() => { const u = document.getElementById('user'); u.value = 'PublicAttrControl'; u.setAttribute('value', u.value); u.addEventListener('input', () => u.setAttribute('value', u.value)); const p = document.getElementById('pw'); p.value = 'DeclaredPreviewCanary'; p.setAttribute('value', p.value); return true; })()").await?;
         let page = opened.page.brand();
         let on_box = || ("target", ref_target(&page, &email));
-        bench.live.main_world(&opened.page, r#"document.body.insertAdjacentHTML('beforeend', '<input aria-label="Error target" aria-invalid="true" aria-errormessage="marked-error-message"><div id="marked-error-message">Wrong: <button aria-labelledby="user">Error source</button></div>'); true"#).await?;
+        bench.live.main_world(&opened.page, r#"document.body.insertAdjacentHTML('beforeend', '<input aria-label="Error target" aria-invalid="true" aria-errormessage="marked-error-message"><div id="marked-error-message">Wrong: <button aria-labelledby="user">Error source</button></div><input id="marked-focus-victim" aria-label="Marked focus victim">'); document.getElementById('marked-focus-victim').addEventListener('focus', () => queueMicrotask(() => document.getElementById('user').focus())); true"#).await?;
         let error_ref = bench.r#ref(&opened, "textbox", "Error target").await?;
+        let focus_victim = bench
+            .r#ref(&opened, "textbox", "Marked focus victim")
+            .await?;
         let hidden = || {
             expectation(
                 on_box(),
@@ -1627,6 +1630,50 @@ async fn tests_that_marked_previews_hide_mirrored_attributes_in_every_diagnostic
             "the page really copied the host's typed value into the attribute",
         );
         for conformance in [false, true] {
+            let fields = json!({
+                "$neo": "locator", "page": page,
+                "chunks": [{ "parts": [{ "name": "css", "body": [{ "simples": [{ "selector": { "css": "input", "functions": [] }, "combinator": "" }] }], "source": "input" }] }],
+                "display": "locator('input')",
+            });
+            let mut input = expectation(
+                ("target", fields),
+                "toBeHidden",
+                &json!({ "expression": "to.be.hidden", "isNot": false }),
+            );
+            input["call"]["conformance"] = json!(conformance);
+            let strict = preview_failure(&bench, &opened, "expect.locator", input).await?;
+            let marker = format!("value=\"<{} characters>\"", MARKED.len());
+            assert!(
+                strict.message.contains("strict mode violation"),
+                "{}",
+                strict.message
+            );
+            assert!(strict.message.contains(&marker), "{}", strict.message);
+            for text in iter::once(&strict.message).chain(&strict.notes) {
+                assert!(
+                    !text.contains(MARKED),
+                    "strict match preview leaked: {text}"
+                );
+            }
+            for operation in ["locator.fill", "locator.pressSequentially"] {
+                let mut input = json!({
+                    "call": { "api": operation, "timeoutMs": 1000, "conformance": conformance },
+                    "target": ref_target(&page, &focus_victim), "strict": "strict",
+                });
+                let argument = if operation == "locator.fill" {
+                    "value"
+                } else {
+                    "text"
+                };
+                input[argument] = json!("Public attempt");
+                let failure = preview_failure(&bench, &opened, operation, input).await?;
+                let marker = format!("value=\"<{} characters>\"", MARKED.len());
+                assert!(failure.message.contains(&marker), "{}", failure.message);
+                assert!(failure.message.contains("focus"), "{}", failure.message);
+                for text in iter::once(&failure.message).chain(&failure.notes) {
+                    assert!(!text.contains(MARKED), "marked focus holder leaked: {text}");
+                }
+            }
             let mut error_input = expectation(
                 ("target", ref_target(&page, &error_ref)),
                 "toHaveAccessibleErrorMessage",

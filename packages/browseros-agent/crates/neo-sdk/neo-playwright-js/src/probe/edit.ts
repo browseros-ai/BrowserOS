@@ -20,6 +20,7 @@
  */
 
 import { drop } from './drop'
+import type { FailureOutput } from './failure-output'
 import { setFiles } from './files'
 import type { Edit, EditRequest, NotFocused, ReplyTo, Value } from './protocol'
 import type { World } from './world'
@@ -31,6 +32,7 @@ function apply(
   world: World,
   edit: Edit,
   element: Element,
+  output: FailureOutput,
 ): Edited | Promise<Edited> {
   const { injected } = world
   switch (edit.kind) {
@@ -42,7 +44,7 @@ function apply(
       const filled = injected.fill(element, edit.value)
       if (filled === 'error:notconnected') return filled
       const typed = filled === 'needsinput' ? field : undefined
-      return keptFocus(world, [element, field], typed, valueReply(filled))
+      return keptFocus(output, [element, field], typed, valueReply(filled))
     }
     case 'selectOptions': {
       const selected = injected.selectOptions(element, edit.options)
@@ -59,7 +61,7 @@ function apply(
       const typed = labelControl(element) ?? element
       const focused = injected.focusNode(element, true)
       if (focused === 'error:notconnected') return focused
-      return keptFocus(world, [element, typed], typed, valueReply(null))
+      return keptFocus(output, [element, typed], typed, valueReply(null))
     }
     case 'blur':
       return doneOf(injected.blurNode(element))
@@ -95,7 +97,7 @@ function apply(
  * task can still land between this check and Rust's keys.
  */
 async function keptFocus(
-  world: World,
+  output: FailureOutput,
   connected: readonly Element[],
   typed: Element | undefined,
   kept: Value,
@@ -104,7 +106,9 @@ async function keptFocus(
   if (connected.some((element) => !element.isConnected))
     return 'error:notconnected'
   if (!typed || holdsFocus(typed)) return kept
-  return { kind: 'notFocused', ...holderOf(world, typed.ownerDocument) }
+  // Dispatch's synchronous hooks have restored before this microtask. The request owner
+  // formats the holder directly, without leasing shared engine hooks across the await.
+  return { kind: 'notFocused', ...holderOf(output, typed.ownerDocument) }
 }
 
 /** A `<label>`'s control, which takes the label's focus; none for any other element. */
@@ -144,7 +148,7 @@ function isEditable(element: Element): boolean {
 /** Upstream's preview of the element that holds the document's focus, down open shadow roots;
  * none when only the document itself does (`<body>`). */
 function holderOf(
-  world: World,
+  output: FailureOutput,
   document: Document | undefined,
 ): { holder?: string } {
   let holder = document?.activeElement ?? null
@@ -156,7 +160,7 @@ function holderOf(
     holder === document?.documentElement
   )
     return {}
-  return { holder: world.injected.previewNode(holder) }
+  return { holder: output.previewNode(holder) }
 }
 
 function valueReply(value: unknown): Value {
@@ -174,6 +178,9 @@ function replyOf(edited: Edited): ReplyTo<'edit'> {
 export function edit(
   world: World,
   request: EditRequest,
+  _root: Node | undefined,
+  _nodes: readonly unknown[],
+  output: FailureOutput,
 ): ReplyTo<'edit'> | Promise<ReplyTo<'edit'>> {
   // File selection operates on the held input even when its chooser came from a
   // detached node. Other edits retain their actionability requirement.
@@ -182,6 +189,6 @@ export function edit(
       ? world.pins.held(request.pin)
       : world.pins.live(request.pin)
   if (!element) return { kind: 'detached' }
-  const edited = apply(world, request.edit, element)
+  const edited = apply(world, request.edit, element, output)
   return edited instanceof Promise ? edited.then(replyOf) : replyOf(edited)
 }

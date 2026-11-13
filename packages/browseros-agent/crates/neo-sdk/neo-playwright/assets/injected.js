@@ -8588,7 +8588,7 @@ ${value.stack}`;
   }
 
   // crates/neo-sdk/neo-playwright-js/src/probe/edit.ts
-  function apply(world, edit, element) {
+  function apply(world, edit, element, output) {
     const { injected } = world;
     switch (edit.kind) {
       case "fill": {
@@ -8597,7 +8597,7 @@ ${value.stack}`;
         if (filled === "error:notconnected")
           return filled;
         const typed = filled === "needsinput" ? field : undefined;
-        return keptFocus(world, [element, field], typed, valueReply(filled));
+        return keptFocus(output, [element, field], typed, valueReply(filled));
       }
       case "selectOptions": {
         const selected = injected.selectOptions(element, edit.options);
@@ -8614,7 +8614,7 @@ ${value.stack}`;
         const focused = injected.focusNode(element, true);
         if (focused === "error:notconnected")
           return focused;
-        return keptFocus(world, [element, typed], typed, valueReply(null));
+        return keptFocus(output, [element, typed], typed, valueReply(null));
       }
       case "blur":
         return doneOf(injected.blurNode(element));
@@ -8627,13 +8627,13 @@ ${value.stack}`;
         return valueReply(setFiles(world, element, edit.payloads));
     }
   }
-  async function keptFocus(world, connected, typed, kept) {
+  async function keptFocus(output, connected, typed, kept) {
     await Promise.resolve();
     if (connected.some((element) => !element.isConnected))
       return "error:notconnected";
     if (!typed || holdsFocus(typed))
       return kept;
-    return { kind: "notFocused", ...holderOf(world, typed.ownerDocument) };
+    return { kind: "notFocused", ...holderOf(output, typed.ownerDocument) };
   }
   function labelControl(element) {
     if (element.localName !== "label")
@@ -8656,13 +8656,13 @@ ${value.stack}`;
   function isEditable(element) {
     return Reflect.get(element, "isContentEditable") === true;
   }
-  function holderOf(world, document2) {
+  function holderOf(output, document2) {
     let holder = document2?.activeElement ?? null;
     while (holder?.shadowRoot?.activeElement)
       holder = holder.shadowRoot.activeElement;
     if (!holder || holder === document2?.body || holder === document2?.documentElement)
       return {};
-    return { holder: world.injected.previewNode(holder) };
+    return { holder: output.previewNode(holder) };
   }
   function valueReply(value) {
     return { kind: "value", value };
@@ -8673,11 +8673,11 @@ ${value.stack}`;
   function replyOf(edited) {
     return edited === "error:notconnected" ? { kind: "detached" } : edited;
   }
-  function edit(world, request) {
+  function edit(world, request, _root, _nodes, output) {
     const element = request.edit.kind === "setFiles" ? world.pins.held(request.pin) : world.pins.live(request.pin);
     if (!element)
       return { kind: "detached" };
-    const edited = apply(world, request.edit, element);
+    const edited = apply(world, request.edit, element, output);
     return edited instanceof Promise ? edited.then(replyOf) : replyOf(edited);
   }
 
