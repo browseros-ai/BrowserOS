@@ -117,6 +117,10 @@ declare global {
     owner?: 'neo' | 'script' | 'website' | 'host'
     /** `unknown`: a write may have happened. Look at the page before repeating it. */
     delivery?: 'not_sent' | 'done' | 'unknown'
+    /**
+     * A repeat is safe: nothing was sent, or the call only read. Never a promise that a repeat
+     * will succeed; read `message` before trying again.
+     */
     retryable?: boolean
     operationId?: string
   }

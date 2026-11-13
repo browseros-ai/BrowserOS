@@ -186,7 +186,7 @@ Task metadata adds no reply text; the agent must return `task.id` to keep it.
 | `GET /v1/sessions/{id}` (`status`, `toolCalls[].page`) | `GET /v1/trace?taskId={taskId}&tail=20` | Nothing is live or ended without a session; each run has its own `status`. zuzu's `CurrentTab` becomes the newest operation's `tabId` in the tail. `GET /v1/runs?tab={tabId}` lists the runs that acted on one tab |
 | `GET /v1/sessions/{id}?include=screenshots` (zuzu's `Audit`) | `GET /v1/trace?taskId={taskId}&tail=20&screenshots=last:4` | `tail` and `screenshots=last:N` replace `trimNeoAudit`. Add `tab={tabId}` to keep only the operations on one tab |
 | `GET /v1/sessions/{id}?wait=60` | `GET /v1/runs/{runId}?wait=60` | Completeness is per run (`complete`), not per session |
-| `toolCalls[]` | `GET /v1/runs/{runId}`: `operations[]` | `parentId` links wrap retries, host calls and protected fills; `tabId` is the tab each operation targeted. The run id is on the `run` result's `_meta["com.browseros.neo/run"].id` |
+| `toolCalls[]` | `GET /v1/runs/{runId}`: `operations[]` | `parentId` links wrap retries and host calls; `tabId` is the tab each operation targeted. The run id is on the `run` result's `_meta["com.browseros.neo/run"].id` |
 | — (zuzu's before/after audit diff) | `GET /v1/runs?requestId={toolCallId}&taskId={taskId}` | With a `requestId`, a lookup after a transport timeout says whether the run started and what it sent. Neo always returns its own run id |
 | `GET /v1/sessions/{id}/recording` (rrweb) | — | Recording is deferred. The old endpoint returned no pages in the Docker image anyway, because the bundled extensions are off |
 | `GET /v1/sessions/{id}/screencast?quality=&tab=` | `GET /v1/tabs/{tabId}/screencast?quality=` | The tab is in the path; there is no stream that follows a session's current tab. Read parts by `Content-Length`, as today. The stream ends when the tab closes. `tab.closed` on `/v1/events` replaces the five-second `Live()` poll |
@@ -286,17 +286,87 @@ const shot = await page.screenshot({ type: 'png', fullPage: true });
 return { shot };   // {"shot": {"$neo":"blob","id":"b0","size":1505153}} when it is over the limit
 ```
 
+## Typing a host's secret
+
+zuzu's own entry scripts (`fill.js`, `login_fill.js`, `code_entry.js`, `focus_box.js`), sent as
+`run` code with the secret inside, become one host call. The value never enters a script, a
+record or a picture:
+
+```http
+POST /v1/tabs/{tabId}/fill
+{"requestId": "fill-7f3a", "taskId": "checkout", "url": "https://pay.example/card",
+ "fields": [
+   {"ref": "f2e4", "value": "4242424242424242", "spaced": true,
+    "expect": {"origin": "https://pay.example", "autocomplete": "cc-number"}},
+   {"ref": "f2e6", "value": "123", "expect": {"origin": "https://pay.example"}}
+ ]}
+```
+
+- **Name the box by ref**, as the agent's snapshot printed it or `locator.ref()` minted it, never
+  by selector. `expect.origin` is required: the box's own frame must be on it. Every other fact
+  sent in `expect` must still hold when Neo looks (`box_changed`).
+- **Look first, without a value**: `POST /v1/tabs/{tabId}/fill/check` takes the same fields
+  with no `value` and answers each box's facts and the first refusal a fill would meet now. It
+  replaces `fields.js` and the box checks in `auth_fields.go`; zuzu's rule for which box may take
+  which secret stays in Go, on these facts. Send the facts you approved back as `expect` on the
+  fill, so the look at approval and the look at typing are one rule. It takes `lockId` as the
+  fill does.
+- **Read `outcome` first.** Every answer about the page is a 200: `entered`,
+  `entered_page_moved` (the form may have submitted), `refused` (no character went out),
+  `partial` (boxes before `at` hold their values, box `at` none) or `uncertain` (look at the page
+  before repeating). `error` is the operation's error, with the route's codes listed in the
+  contract; `typed` counts characters per box, never text.
+- **A `requestId` types once**, across a restart too. A repeat while the first runs waits for
+  its answer; after it, it gets the stored answer and types nothing. A refused fill's id is
+  spent; only a request error (400, 404, 409, 503) leaves it free. After a restart in the middle
+  of a fill, its id answers `uncertain` with `fill_interrupted`.
+- **Locks.** A lock on the tab refuses the fill as any write. To type through your own lock,
+  send its id as `lockId`; only a lock the host took with `POST /v1/locks` on that tab passes. A
+  takeover's lock refuses, named or not. A named lock no longer held is `409 lock_released`.
+- **Host only.** The host token on the host listener. A request a web page sent (`Origin` or
+  `Sec-Fetch-Site`) is `403 forbidden`, and no script can name the methods.
+- **The record.** The fill is a run of Neo's own with one operation, `host.fill` (kind
+  `protected`), whose `args` name the boxes and each value's length. It records no page address,
+  no title and no call-log notes. Drop the trace exclusion of scenario `88-secret-canary`.
+- **No pictures of that tab again.** From the fill on, Neo takes no screenshot of the tab for
+  the rest of its life: going back in history restores a plain box's value into a new document.
+  Its operations keep `hasScreenshot: false`, and their screenshot answers `404 not_found`. A
+  script's own `page.screenshot()`, `locator.screenshot()` and `page.pdf()` of the tab fail
+  `host / private_tab` with nothing sent. It is permanent for that tab, and the message the
+  agent reads says trying again will not succeed. `retryable: true` on any error means a repeat
+  is safe, never that it will succeed.
+- **Bullets for the boxes Neo typed into.** Every read Neo makes of such a box answers one `•`
+  per character, whatever the page declares: the snapshot, `locator.inputValue()`, and every
+  assertion (the received value and aria tree, the preview and the failure's snapshot), so
+  `toHaveValue` compares against the bullets. A script's own code in the page (`evaluate`) still
+  reads the value; zuzu's redactor for its own secrets stays.
+- **Two gaps, until later masking work.** An element preview in a call log or error (`locator
+  resolved to <input …>`) prints the box's attributes unmasked, so a page that writes the typed
+  value into the `value` attribute shows it in a failed assertion or action on that box. And
+  the mark stays in the box's frame: a box the page moves into another same-origin frame reads
+  its value there from `inputValue()` and assertions.
+- **Not covered**: what the owner types in a takeover or on the display, a script's own fill
+  and the browser's autofill; a Neo restart forgets which tabs took a fill, so Neo pictures them
+  again; a box the page re-creates, or a value Back restores, has no mark. `neo.solveCaptcha`
+  still photographs its challenge. A dropdown (`expiry_select.js` stays), a link with a token in
+  its address (`open_link.js` stays), and the browser's saved form state, which can bring a
+  value back after a restore (the host clears it). The contract's fill route lists each limit.
+- **A script's own fill of a card number** is not this route: Neo's own picture after it shows
+  the number in clear, because masking covers text only. Set `trace.screenshots` to `off` to
+  close that until Neo withholds such pictures.
+
 ## Error bodies
 
 The body shape is unchanged: `{code, message, requestId}`. The codes are new
 (`unauthorized`, `expired`, `tab_not_found`, `lock_released`, `fit_restored`,
-`takeover_released`, …). As before, clients must accept
+`takeover_released`, `forbidden`, `trace_unavailable`, …). As before, clients must accept
 codes they do not know.
 
 ## Removed privacy endpoints and fields
 
 - Stop calling `POST /v1/tabs/{tabId}/private`, `POST /v1/tabs/{tabId}/sweep` and
-  `POST /v1/secrets`. Use `POST /v1/locks` or the takeover flow to block agent actions.
+  `POST /v1/secrets`. Use `POST /v1/locks` or the takeover flow to block agent actions, and
+  `POST /v1/tabs/{tabId}/fill` to type a secret (see "Typing a host's secret").
 - Stop subscribing to `tab.private` or reading `Event.privacy` and `TraceTail.visuals`.
   Use each operation's `hasScreenshot` to check for a stored image.
 - Drop handlers for the host API codes `page_private`, `withheld` and `privacy_unavailable`.

@@ -150,7 +150,7 @@ pub struct OperationStarted {
     pub id: OperationId,
     /// The operation it runs inside: a wrap's method, a defined method, a host call.
     pub parent: Option<OperationId>,
-    /// The method name as called, e.g. `locator.click` or `zuzu.auth.fill`, clipped when the
+    /// The method name as called, e.g. `locator.click` or `host.fill`, clipped when the
     /// start is stored. Arguments remain in memory until the operation ends.
     pub name: String,
     /// Its place in the tree.
