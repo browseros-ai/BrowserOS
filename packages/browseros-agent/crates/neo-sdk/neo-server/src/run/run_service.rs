@@ -21,7 +21,7 @@ use tokio_util::sync::CancellationToken;
 use super::request_ledger::{Admission, LedgerLimits, RunTicket};
 use super::snapshot_tips::SnapshotTips;
 use super::{HostData, RequestLedger, RunHandle, RunMeta, RunReply, RunRequest};
-use crate::browser::{BrowserLink, NeoTab, PageRef, RunView, TabRegistry};
+use crate::browser::{BrowserLink, NeoTab, PageRef, RunView, TabRegistry, TaskPage};
 use crate::builtins;
 use crate::config::Defaults;
 use crate::dispatch::{
@@ -217,10 +217,11 @@ impl RunService {
         };
         let page = self.default_page(meta.task_id.as_ref(), &view).await;
         if let Some(page) = &page {
-            // In use from now on, so the idle-tab janitor leaves it, and the task's tab.
+            // In use from now on, so the idle-tab janitor leaves it. Starting on a tab is no act:
+            // the task's page is already this tab.
             let seen = self.tabs.seen();
             if self.browser.page(page.tab).await.is_some() {
-                self.tabs.touched(page, seen, meta.task_id.as_ref());
+                self.tabs.touched(page, seen);
             }
         }
         let RunMeta {
@@ -393,28 +394,63 @@ impl RunService {
         future::pending().await
     }
 
-    /// `page` at the start of a run. With a `taskId`: the task's last tab, from memory, or
-    /// after a restart from the trace (`task_last_tab`), resolved to a live page; with no
-    /// history, `None`, and the run opens a fresh tab on first use, so parallel tasks never
-    /// share one by accident. Without a `taskId`, a fresh tab opens on first use.
+    /// `page` at the start of a run. With a `taskId`, the task's own tab: one it opened or was
+    /// given (a popup of its tab, a `neo.task` pick's open), the open one its own script last
+    /// acted on, else its newest. Never another task's tab, a task-less tab or the browser's
+    /// New Tab, even one the task's script reached through `context.pages()`, and never moved by
+    /// Neo's own operations ([`TabRegistry::acted_on`]). A task with no open tab gets `None`, and
+    /// the run opens a new tab for it on first use, so parallel tasks never share one.
+    ///
+    /// Memory decides for every task it knows. A task it does not know (Neo restarted) gets its
+    /// tabs back from the trace first ([`TraceStore::task_tabs`]): the ones it surely opened that
+    /// are still open and that no task here owns rejoin it, so its script's acts on any of them
+    /// count again, and the trace's page among them is its page. Without a `taskId`, a fresh tab
+    /// opens on first use.
     async fn default_page(&self, task: Option<&TaskId>, view: &RunView) -> Option<PageRef> {
         let task = task?;
-        if let Some(page) = self.tabs.default_page(task) {
-            return Some(page);
+        match self.tabs.task_page(task) {
+            TaskPage::Tab(page) => return Some(page),
+            TaskPage::NoTab => return None,
+            TaskPage::Unknown => {}
         }
-        let tab = match self.store.task_last_tab(task).await {
-            Ok(tab) => tab?,
+        let tabs = match self.store.task_tabs(task).await {
+            Ok(tabs) => tabs,
             Err(error) => {
-                tracing::warn!(%error, %task, "cannot read the task's last tab; the run opens a fresh one");
+                tracing::warn!(%error, %task, "cannot read the task's tabs; the run opens a fresh one");
                 return None;
             }
         };
-        match view.view.resolve_tab_ids(&[tab]).await {
-            Ok(pages) => pages.get(&tab).map(|_| PageRef { tab }),
+        if tabs.opened.is_empty() {
+            return None;
+        }
+        let live = match view.view.resolve_tab_ids(&tabs.opened).await {
+            Ok(live) => live,
             Err(error) => {
-                tracing::debug!(%error, %task, "the task's last tab is gone; the run opens a fresh one");
-                None
+                tracing::debug!(%error, %task, "the task's tabs are gone; the run opens a fresh one");
+                return None;
             }
+        };
+        let mut mine = Vec::new();
+        for tab in tabs.opened {
+            // A tab number may be reused after a browser restart; a task here may already own it.
+            // Neo may also have taken a blank one as its own tab (`NeoTab`), which no task has.
+            if !live.contains_key(&tab) || self.tabs.owner(tab).is_some() || self.tabs.is_neo(tab) {
+                continue;
+            }
+            // Registered first: only a tab with an entry can have an owner.
+            let seen = self.tabs.seen();
+            if self.browser.page(tab).await.is_some() {
+                self.tabs.touched(&PageRef { tab }, seen);
+                mine.push(tab);
+            }
+        }
+        if let Err(error) = self.tabs.restore(task, &mine, tabs.page) {
+            tracing::warn!(%error, %task, "cannot restore the task's tabs; the run opens a fresh one");
+            return None;
+        }
+        match self.tabs.task_page(task) {
+            TaskPage::Tab(page) => Some(page),
+            TaskPage::NoTab | TaskPage::Unknown => None,
         }
     }
 
@@ -567,7 +603,7 @@ mod observation_tests {
             let owned = rig.owner_tab("https://task.example/").await?;
             let user = rig.owner_tab("https://user.example/").await?;
             let task = rig.tabs.create_task(None)?;
-            rig.tabs.touched(&owned, rig.tabs.seen(), None);
+            rig.tabs.touched(&owned, rig.tabs.seen());
             rig.tabs.own(&owned, &task.id)?;
             let service = rig.run_service(Duration::ZERO);
             let (run, _guard) = rig.run(Duration::from_secs(30), None)?;

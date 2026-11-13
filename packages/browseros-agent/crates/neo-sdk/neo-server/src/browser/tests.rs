@@ -127,7 +127,7 @@ async fn a_tab_closed_by_someone_else_drops_its_slots() -> Result<(), Box<dyn Er
     })
     .await?;
     let page = page_for(&link, owners_tab).await?;
-    tabs.touched(&page, tabs.seen(), None);
+    tabs.touched(&page, tabs.seen());
     let slot = tabs
         .slot::<Marker>(&page)
         .ok_or("a touched tab has slots")?;
@@ -159,7 +159,7 @@ async fn a_reconnect_renews_discovery_and_catches_tabs_closed_meanwhile()
     .await?;
     let first = link.view().ok_or("linked")?.epoch;
     let page = page_for(&link, tab).await?;
-    tabs.touched(&page, tabs.seen(), None);
+    tabs.touched(&page, tabs.seen());
 
     fake.drop_connection();
     assert!(!link.is_ready(), "a dropped socket is not ready");

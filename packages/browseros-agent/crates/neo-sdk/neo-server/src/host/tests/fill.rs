@@ -1346,7 +1346,7 @@ async fn a_fill_keeps_its_tab_in_use_and_restarts_its_idle_clock() -> TestResult
     use std::collections::HashMap;
     let (host, tab) = ready().await?;
     let page = PageRef { tab };
-    host.tabs.opened_by_agent(&page, host.tabs.seen(), None);
+    host.tabs.opened_by_agent(&page, host.tabs.seen());
     // The tab's idle clock starts here; the fill comes well after, so a clock the fill did not
     // restart would still count from here.
     let opened = Instant::now();

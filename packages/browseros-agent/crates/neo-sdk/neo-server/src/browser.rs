@@ -38,6 +38,6 @@ pub(crate) use browser_link::{BrowserLink, LinkStatus, RunView};
 pub(crate) use neo_tab::Adopt;
 pub(crate) use neo_tab::NeoTab;
 pub(crate) use page_ref::PageRef;
-pub(crate) use tab_registry::{Seen, TabRegistry};
+pub(crate) use tab_registry::{Seen, TabRegistry, TaskPage};
 pub(crate) use tab_watch::{TabEvent, TabListing, Watched};
 pub(crate) use task_book::{TaskError, TaskRecord};

@@ -1,12 +1,14 @@
 //! The run lifecycle end to end: the run service over the real dispatcher and runtime on the
 //! fake browser, with the trace store read back. Covers `requestId` admission (replay, join,
 //! duplicates, per-task scope, an unreadable store), orphan grace, teardown, the panic
-//! boundary, the door's text clips and the task's page default across a restart.
+//! boundary, the door's text clips, and the task's page: its own tab, kept by its own acts
+//! only, and across a restart.
 
 use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Duration;
 
+use browseros_core::TabId;
 use neo_trace::{
     BlobId, Delivery, EpochMillis, ErrorOwner, OperationId, Outcome, RequestId, RunEnded, RunId,
     RunQuery, RunStarted, RunStatus, RunSummary, TaskId, WriterConfig,
@@ -21,6 +23,7 @@ use super::run_reply::{ReplyDelivery, ReplyEffects, ReplyStatus};
 use super::{
     ReplyError, RequestLedger, RunHandle, RunMeta, RunReply, RunRequest, RunService, RunTimeout,
 };
+use crate::browser::TaskPage;
 use crate::config::Defaults;
 use crate::dispatch::{ErrorCode, OperationError, TEXT_CHARS, TaskKind};
 use crate::test_rig::{TestError, TestRig, on_neo_runtime, within};
@@ -638,7 +641,7 @@ fn a_new_task_gets_a_fresh_tab_and_a_known_task_keeps_its_tab_across_a_restart()
         let rig = TestRig::new().await?;
         let owner = rig.owner_tab("https://owner.example/").await?;
         // Two ops: the first one on a fresh page opens it, so only later ones record its tab
-        // when they start, and the trace's `task_last_tab` reads the start records.
+        // when they start, and the trace's `task_tabs` reads the start records.
         let touch = "await __neo.invoke('test.touch', { page });\nreturn (await __neo.invoke('test.touch', { page })).tab;";
         let first = rig
             .run_service(GRACE)
@@ -978,10 +981,9 @@ fn closing_a_script_pick_restores_the_host_task_and_known_defaults_stay_fixed()
         assert_eq!(first.value["owner"], "host-task");
         assert_eq!(first.value["openedOwner"], "host-task");
         assert_eq!(first.tasks[0].kind, TaskKind::Closed);
-        let host_tab = rig
-            .tabs
-            .default_page(&TaskId::parse("host-task")?)
-            .ok_or("host tab")?;
+        let TaskPage::Tab(host_tab) = rig.tabs.task_page(&TaskId::parse("host-task")?) else {
+            return Err("host tab".into());
+        };
         let second = service
             .run(request(
                 r"
@@ -1027,7 +1029,7 @@ fn failed_scripts_keep_created_and_fetched_tasks_in_first_touch_order() -> Resul
 }
 
 #[test]
-fn host_defaults_keep_their_last_tab_and_only_report_explicit_fetches() -> Result<(), TestError> {
+fn host_defaults_keep_their_own_tab_and_only_report_explicit_fetches() -> Result<(), TestError> {
     on_neo_runtime(async {
         let rig = TestRig::new().await?;
         let service = rig.run_service(GRACE);
@@ -1042,7 +1044,7 @@ fn host_defaults_keep_their_last_tab_and_only_report_explicit_fetches() -> Resul
             first.tasks.is_empty(),
             "host-only task ids stay out of recovery notes"
         );
-        let tab = browseros_core::TabId(first.value.as_i64().ok_or("tab id")?);
+        let tab = TabId(first.value.as_i64().ok_or("tab id")?);
         assert_eq!(rig.tabs.owner(tab), Some(TaskId::parse("host-task")?));
         let again = service
             .run(request(
@@ -1075,9 +1077,8 @@ fn host_defaults_keep_their_last_tab_and_only_report_explicit_fetches() -> Resul
             )?)
             .await;
         assert_eq!(
-            last.value,
-            json!(other.tab),
-            "the existing host rule follows the last explicit touch"
+            last.value, first.value,
+            "a script's act on a user's tab never makes it the task's page: that is its own tab"
         );
         assert_eq!(
             rig.tabs.owner(other.tab),
@@ -1346,4 +1347,304 @@ fn trace_values_log_probe() -> Result<(), TestError> {
     })?;
     drop(logging);
     Ok(())
+}
+
+// A run's built-in `page` is its task's own tab, the one its own script last acted on. These
+// replay what broke it for the first host: `page.waitForTimeout` ends with the prelude reading
+// the frames of every tab the run lists (FR-1), and the door counted those reads as the task
+// acting on each tab, so the task's next run started on whichever tab answered last: another
+// task's, or the browser's New Tab.
+
+/// A task's first act opens its tab; the run returns that tab.
+const OPEN_OWN_TAB: &str = "return (await __neo.invoke('test.touch', { page })).tab;";
+
+/// What the prelude sends as `waitForTimeout` ends: a read of every listed tab, each with the
+/// explicit empty call site that marks the prelude's own work (bootstrap.js `invoke`). The run's
+/// own tab is read first, so a door that counted these reads would end on another tab.
+const NEO_READS_EVERY_TAB: &str = r"
+    await __neo.invoke('test.touch', { page }, { site: '' });
+    for (const other of context.pages()) {
+      if (other !== page) await __neo.invoke('test.touch', { page: other }, { site: '' });
+    }
+    return 1;";
+
+/// The same reads in a loop that only the run's deadline ends, as a wait loop does when its
+/// time runs out (the first host's card entry).
+const NEO_READS_UNTIL_THE_DEADLINE: &str = r"
+    for (;;) {
+      await __neo.invoke('test.touch', { page }, { site: '' });
+      for (const other of context.pages()) {
+        if (other !== page) await __neo.invoke('test.touch', { page: other }, { site: '' });
+      }
+    }";
+
+/// The script itself acts on every other tab it can reach through `context.pages()`.
+const SCRIPT_ACTS_ON_OTHER_TABS: &str = r"
+    for (const other of context.pages()) {
+      if (other !== page) await __neo.invoke('test.touch', { page: other });
+    }
+    return 1;";
+
+async fn run_in(
+    service: &Arc<RunService>,
+    task: &str,
+    code: &str,
+) -> Result<Arc<RunReply>, TestError> {
+    Ok(service.run(request(code, meta(None, Some(task))?)?).await)
+}
+
+/// The tab the task's next run starts on, or null when it has none yet.
+async fn next_page(service: &Arc<RunService>, task: &str) -> Result<Value, TestError> {
+    let reply = run_in(service, task, "return page.tabId;").await?;
+    assert_eq!(reply.status, ReplyStatus::Ok, "{reply:?}");
+    Ok(reply.value.clone())
+}
+
+#[test]
+fn neos_own_reads_of_other_tabs_leave_a_task_on_its_own_tab() -> Result<(), TestError> {
+    on_neo_runtime(async {
+        let rig = TestRig::new().await?;
+        let service = rig.run_service(GRACE);
+        let new_tab = rig.owner_tab("chrome://newtab/").await?;
+        let mine = run_in(&service, "task-mine", OPEN_OWN_TAB)
+            .await?
+            .value
+            .clone();
+        let theirs = run_in(&service, "task-theirs", OPEN_OWN_TAB)
+            .await?
+            .value
+            .clone();
+        assert_ne!(mine, theirs, "each task opened its own tab");
+
+        let waited = run_in(&service, "task-mine", NEO_READS_EVERY_TAB).await?;
+        assert_eq!(waited.status, ReplyStatus::Ok, "{waited:?}");
+        assert_eq!(
+            next_page(&service, "task-mine").await?,
+            mine,
+            "a run that only waited leaves its task on its own tab, not {theirs} or the New Tab {}",
+            new_tab.tab.0
+        );
+
+        let looped = service
+            .run(RunRequest {
+                code: NEO_READS_UNTIL_THE_DEADLINE.to_owned(),
+                timeout: RunTimeout::from_millis(Some(300))?,
+                meta: meta(None, Some("task-mine"))?,
+            })
+            .await;
+        assert_eq!(looped.status, ReplyStatus::Timeout, "{looped:?}");
+        assert_eq!(
+            next_page(&service, "task-mine").await?,
+            mine,
+            "nor one whose wait loop ran out of time"
+        );
+        assert_eq!(
+            next_page(&service, "task-theirs").await?,
+            theirs,
+            "and the other task keeps its own tab"
+        );
+        Ok(())
+    })
+}
+
+#[test]
+fn a_script_acting_on_other_tabs_does_not_move_its_own_page() -> Result<(), TestError> {
+    on_neo_runtime(async {
+        let rig = TestRig::new().await?;
+        let service = rig.run_service(GRACE);
+        rig.owner_tab("chrome://newtab/").await?;
+        let mine = run_in(&service, "task-mine", OPEN_OWN_TAB)
+            .await?
+            .value
+            .clone();
+        let theirs = run_in(&service, "task-theirs", OPEN_OWN_TAB)
+            .await?
+            .value
+            .clone();
+
+        let acted = run_in(&service, "task-mine", SCRIPT_ACTS_ON_OTHER_TABS).await?;
+        assert_eq!(acted.status, ReplyStatus::Ok, "{acted:?}");
+        assert_eq!(
+            next_page(&service, "task-mine").await?,
+            mine,
+            "its own tab, though its script last acted on another task's tab and the New Tab"
+        );
+        assert_eq!(next_page(&service, "task-theirs").await?, theirs);
+        Ok(())
+    })
+}
+
+#[test]
+fn a_task_whose_tab_closed_gets_a_new_tab_not_a_neighbours() -> Result<(), TestError> {
+    on_neo_runtime(async {
+        let rig = TestRig::new().await?;
+        let service = rig.run_service(GRACE);
+        let new_tab = rig.owner_tab("chrome://newtab/").await?;
+        let mine = run_in(&service, "task-mine", OPEN_OWN_TAB)
+            .await?
+            .value
+            .clone();
+        let theirs = run_in(&service, "task-theirs", OPEN_OWN_TAB)
+            .await?
+            .value
+            .clone();
+        let waited = run_in(&service, "task-mine", NEO_READS_EVERY_TAB).await?;
+        assert_eq!(waited.status, ReplyStatus::Ok, "{waited:?}");
+
+        let tab = TabId(mine.as_i64().ok_or("a tab id")?);
+        assert!(rig.fake.close_tab(tab), "the owner closes the task's tab");
+        within(Duration::from_secs(5), async {
+            while rig.tabs.is_open(tab) {
+                time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await?;
+
+        assert_eq!(
+            next_page(&service, "task-mine").await?,
+            Value::Null,
+            "no tab yet: not {theirs} or the New Tab {}",
+            new_tab.tab.0
+        );
+        let fresh = run_in(&service, "task-mine", OPEN_OWN_TAB)
+            .await?
+            .value
+            .clone();
+        for neighbour in [&mine, &theirs, &json!(new_tab.tab.0)] {
+            assert_ne!(&fresh, neighbour, "its first act opens a new tab");
+        }
+        Ok(())
+    })
+}
+
+/// Opens a second tab in the run's own task, acts on it and returns it.
+const OPEN_SECOND_TAB: &str = r"
+    const second = await context.newPage();
+    return (await __neo.invoke('test.touch', { page: second })).tab;";
+
+#[test]
+fn after_a_restart_a_task_never_takes_a_tab_a_task_it_picked_opened() -> Result<(), TestError> {
+    on_neo_runtime(async {
+        let rig = TestRig::new().await?;
+        let service = rig.run_service(GRACE);
+        let mine = run_in(&service, "task-a", OPEN_OWN_TAB)
+            .await?
+            .value
+            .clone();
+        // The host task's run picks another task; the tab it opens then is that task's.
+        let picked = run_in(
+            &service,
+            "task-a",
+            r"
+            await neo.createTask('picked');
+            const theirs = await context.newPage();
+            await __neo.invoke('test.touch', { page: theirs });
+            return { tab: theirs.tabId, owner: theirs.taskId };",
+        )
+        .await?;
+        assert_eq!(picked.status, ReplyStatus::Ok, "{picked:?}");
+        assert_ne!(picked.value["owner"], json!("task-a"), "{picked:?}");
+        rig.sink.flush().await?;
+
+        let restarted = rig.restarted_service(GRACE)?;
+        assert_eq!(
+            next_page(&restarted, "task-a").await?,
+            mine,
+            "its own tab, not {} that the task it picked opened and its script acted on last",
+            picked.value["tab"]
+        );
+        Ok(())
+    })
+}
+
+#[test]
+fn after_a_restart_every_surviving_tab_of_a_task_is_its_own_again() -> Result<(), TestError> {
+    on_neo_runtime(async {
+        let rig = TestRig::new().await?;
+        let service = rig.run_service(GRACE);
+        let first = run_in(&service, "task-a", OPEN_OWN_TAB)
+            .await?
+            .value
+            .clone();
+        let second = run_in(&service, "task-a", OPEN_SECOND_TAB)
+            .await?
+            .value
+            .clone();
+        rig.sink.flush().await?;
+
+        let restarted = rig.restarted_service(GRACE)?;
+        assert_eq!(
+            next_page(&restarted, "task-a").await?,
+            second,
+            "its last act"
+        );
+        let acted = run_in(
+            &restarted,
+            "task-a",
+            &format!(
+                "const first = context.pages().find((q) => q.tabId === {first});\n\
+                 await __neo.invoke('test.touch', {{ page: first }});\nreturn first.taskId;"
+            ),
+        )
+        .await?;
+        assert_eq!(acted.value, json!("task-a"), "{acted:?}");
+        assert_eq!(
+            next_page(&restarted, "task-a").await?,
+            first,
+            "an act on its other surviving tab counts: that tab is the task's again"
+        );
+        Ok(())
+    })
+}
+
+#[test]
+fn after_a_restart_a_task_never_takes_a_tab_a_task_it_named_opened() -> Result<(), TestError> {
+    on_neo_runtime(async {
+        let rig = TestRig::new().await?;
+        let service = rig.run_service(GRACE);
+        let mine = run_in(&service, "task-a", OPEN_OWN_TAB)
+            .await?
+            .value
+            .clone();
+        let created = run_in(
+            &service,
+            "task-other",
+            "return (await neo.createTask('named')).id;",
+        )
+        .await?;
+        let named = created.value.as_str().ok_or("a task id")?.to_owned();
+        // No pick: the host task's script opens a tab in the task it names. The open is a
+        // child of `task.newPage` in the host task's run, and the tab is the named task's.
+        let opened = run_in(
+            &service,
+            "task-a",
+            &format!(
+                "const {{ page: theirs }} = await __neo.invoke('task.newPage', {{ task: {named:?} }});\n\
+                 await __neo.invoke('test.touch', {{ page: theirs }});\n\
+                 return {{ tab: theirs.tabId, owner: theirs.taskId }};"
+            ),
+        )
+        .await?;
+        assert_eq!(opened.status, ReplyStatus::Ok, "{opened:?}");
+        assert_eq!(
+            opened.value["owner"],
+            json!(named),
+            "the named task's tab: {opened:?}"
+        );
+        assert_eq!(
+            next_page(&service, "task-a").await?,
+            mine,
+            "and not the host task's page"
+        );
+        rig.sink.flush().await?;
+
+        let restarted = rig.restarted_service(GRACE)?;
+        assert_eq!(
+            next_page(&restarted, "task-a").await?,
+            mine,
+            "after a restart too: not {}, which the task it named opened",
+            opened.value["tab"]
+        );
+        Ok(())
+    })
 }

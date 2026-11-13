@@ -5,9 +5,10 @@
 use browseros_core::TabId;
 use neo_trace::{
     Delivery, Effect, EpochMillis, ErrorOwner, ErrorRecord, OperationEnded, OperationId,
-    OperationKind, OperationStarted, Outcome, PageState, RedactionLimits, Redactor, RequestId,
-    RetentionPolicy, RunEffects, RunEnded, RunId, RunQuery, RunStarted, RunStatus, TailQuery,
-    TaskAct, TaskId, TraceRecordEvent, TraceSink, TraceStore, WriterConfig, spawn_writer,
+    OperationKind, OperationSite, OperationStarted, Outcome, PageState, RedactionLimits, Redactor,
+    RequestId, RetentionPolicy, RunEffects, RunEnded, RunId, RunQuery, RunStarted, RunStatus,
+    TailQuery, TaskAct, TaskId, TaskTabs, TraceRecordEvent, TraceSink, TraceStore, WriterConfig,
+    spawn_writer,
 };
 use serde_json::{Value, json};
 use std::time::Duration;
@@ -1122,9 +1123,10 @@ async fn a_tasks_last_tab_is_its_latest_operation_with_a_target_and_survives_a_r
 
     let last_tab = |store: TraceStore, name: &'static str| async move {
         store
-            .task_last_tab(&task(name))
+            .task_last_act(&task(name))
             .await
-            .unwrap_or_else(|error| panic!("task_last_tab: {error}"))
+            .unwrap_or_else(|error| panic!("task_last_act: {error}"))
+            .map(|act| act.tab)
     };
     assert_eq!(
         last_tab(h.store.clone(), "checkout").await,
@@ -1153,9 +1155,10 @@ async fn a_tasks_last_tab_falls_back_to_the_tab_an_operation_ended_on() {
     flushed(&h).await;
     let last_tab = || async {
         h.store
-            .task_last_tab(&task("checkout"))
+            .task_last_act(&task("checkout"))
             .await
-            .unwrap_or_else(|error| panic!("task_last_tab: {error}"))
+            .unwrap_or_else(|error| panic!("task_last_act: {error}"))
+            .map(|act| act.tab)
     };
     assert_eq!(
         last_tab().await,
@@ -1169,6 +1172,109 @@ async fn a_tasks_last_tab_falls_back_to_the_tab_an_operation_ended_on() {
     op_ended(&h.sink, later, Delivery::Done, None);
     flushed(&h).await;
     assert_eq!(last_tab().await, Some(TabId(3)));
+}
+
+/// What survives a restart of a task's tabs: the tabs its runs opened, and its page among them,
+/// the one its own script last acted on, else one it opened since. Neo's own reads (stored with
+/// no call site, as the prelude's frame refresh after `waitForTimeout` is), another task's tab and
+/// a tab the script reached without opening it never count. A run that picked another task
+/// proves no owner for its opens, so its tabs are left out.
+#[tokio::test]
+async fn a_tasks_tabs_after_a_restart_are_the_ones_it_surely_opened() {
+    let h = harness(WriterConfig::default()).await;
+    let theirs = start_in(&h.sink, Some("search"), 0);
+    new_page(&h.sink, OperationId::new(theirs, 1), TabId(4), 1);
+    let run = start_in(&h.sink, Some("checkout"), 10);
+    new_page(&h.sink, OperationId::new(run, 1), TabId(5), 10);
+    new_page(&h.sink, OperationId::new(run, 2), TabId(6), 20);
+    scripted_read(&h.sink, OperationId::new(run, 3), TabId(5), 30);
+    read_on(&h.sink, OperationId::new(run, 4), Some(TabId(6)), 40);
+    scripted_read(&h.sink, OperationId::new(run, 5), TabId(4), 50);
+    scripted_read(&h.sink, OperationId::new(run, 6), TabId(9), 60);
+    // A later run of the same host task picks another task and opens a tab, which is that
+    // task's, then acts on it.
+    let picking = start_in(&h.sink, Some("checkout"), 70);
+    op_started(
+        &h.sink,
+        simple(OperationId::new(picking, 1), "neo.createTask", Effect::Read),
+    );
+    new_page(&h.sink, OperationId::new(picking, 2), TabId(8), 80);
+    scripted_read(&h.sink, OperationId::new(picking, 3), TabId(8), 90);
+    flushed(&h).await;
+    let tabs = |name: &'static str| {
+        let store = h.store.clone();
+        async move {
+            store
+                .task_tabs(&task(name))
+                .await
+                .unwrap_or_else(|error| panic!("task_tabs: {error}"))
+        }
+    };
+    assert_eq!(
+        tabs("checkout").await,
+        TaskTabs {
+            opened: vec![TabId(5), TabId(6)],
+            page: Some(TabId(5)),
+        },
+        "its script's last act on a tab it opened: not Neo's read of 6, another task's 4, the \
+         New Tab 9, or 8, opened after a pick"
+    );
+    assert_eq!(
+        tabs("search").await,
+        TaskTabs {
+            opened: vec![TabId(4)],
+            page: Some(TabId(4)),
+        },
+        "the tab it opened"
+    );
+    assert_eq!(tabs("unknown").await, TaskTabs::default());
+
+    let later = start_in(&h.sink, Some("checkout"), 100);
+    new_page(&h.sink, OperationId::new(later, 1), TabId(7), 100);
+    // An open that is a child operation proves no owner: `task.newPage`'s is for the task it
+    // names, which need not be this run's.
+    let parent = OperationId::new(later, 2);
+    op_started(&h.sink, simple(parent, "task.newPage", Effect::Write));
+    let child = OperationId::new(later, 3);
+    op_started(
+        &h.sink,
+        Op {
+            parent: Some(parent),
+            tab: None,
+            at: at(110),
+            ..simple(child, "context.newPage", Effect::Write)
+        },
+    );
+    let opened_page = PageState {
+        tab_id: Some(TabId(10)),
+        url: Some("about:blank".into()),
+        title: None,
+    };
+    h.sink
+        .op_ended(answered(child, 110, Some(at(111)), Some(opened_page)));
+    scripted_read(&h.sink, OperationId::new(later, 4), TabId(10), 120);
+    flushed(&h).await;
+    assert_eq!(
+        tabs("checkout").await,
+        TaskTabs {
+            opened: vec![TabId(5), TabId(6), TabId(7)],
+            page: Some(TabId(7)),
+        },
+        "a tab it opened since its script last acted, and not 10, a child's open"
+    );
+}
+
+/// A read of `tab` the script itself made (it carries a call site), admitted at `millis`.
+fn scripted_read(sink: &TraceSink, id: OperationId, tab: TabId, millis: i64) {
+    sink.op_started(OperationStarted {
+        site: Some(OperationSite { line: 1, column: 1 }),
+        ..started(Op {
+            tab: Some(tab),
+            at: at(millis),
+            ..simple(id, "page.title", Effect::Read)
+        })
+    });
+    sink.op_ended(answered(id, millis, None, None));
 }
 
 /// When a task last acted on its last tab, for a follow view that lost the task's live events:

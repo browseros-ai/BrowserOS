@@ -36,6 +36,10 @@
 #   blank-tab        GET /v1/tabs marks one tab owner "neo"; a script closes every tab it sees
 #                    (context.pages()); only Neo's tab is left, the server is the same process,
 #                    and the next run passes
+#   task-page        20 times each, a task's next run starts on its own tab after a run that ends
+#                    on a wait, a wait loop cut by its deadline, or its script's act on another
+#                    task's tab and the New Tab; two tasks interleaved; once another task closed
+#                    the tab, a new tab of its own (accept_task_page.py)
 #   mcp-remote       9011 is the same MCP over TLS; with NEO_MCP_REMOTE=false (the default) a
 #                    sibling container is cut off on 9010 and 9011; with true it is answered
 #   settings         PATCH /v1/settings applies and lists an unknown name, a bad value is 400 and
@@ -156,7 +160,8 @@ wait_ready() { # name seconds: /system/ready through the browser's proxy, from i
 install_client() { # name: the probes, beside smoke.py whose MCP client they reuse
   docker exec "$1" mkdir -p /opt/neo-accept
   local file
-  for file in "$here/smoke.py" "$here/smoke_sdk.py" "$here/accept_client.py" "$here/accept_files.py" "$here/trace_values.py"; do
+  for file in "$here/smoke.py" "$here/smoke_sdk.py" "$here/accept_client.py" "$here/accept_files.py" \
+    "$here/trace_values.py" "$here/accept_task_page.py"; do
     docker cp -q "$file" "$1:/opt/neo-accept/" || return 1
   done
 }
@@ -357,6 +362,18 @@ if [ "$booted" = 1 ]; then
     result FAIL blank-tab "neo before=[$neo_before] closed=${closed:0:200} after=[$(all_tabs "$tabs_after")] neo after=[$(neo_tabs "$tabs_after")] pid $blank_pid->$(server_pid "$main") run=${blank_run:0:200}"
   fi
 
+  # --- task-page -----------------------------------------------------------------------------
+  # Which tab a task's next run starts on: its own, whatever the last run ended on (a wait, a
+  # wait loop cut by the deadline, the script's own act on another task's tab), and a new one
+  # once someone else closed it (accept_task_page.py).
+  task_page=$(client "$main" "${as_host[@]}" python3 accept_task_page.py http://127.0.0.1:9010/mcp 20 2>&1)
+  if [ -n "$logs_dir" ]; then mkdir -p "$logs_dir"; printf '%s\n' "$task_page" > "$logs_dir/task-page.json"; fi
+  if [ "$(jget "$task_page" 'd["ok"]')" = True ]; then
+    result PASS task-page "$(jget "$task_page" 'd["detail"]')"
+  else
+    result FAIL task-page "$(jget "$task_page" 'd["detail"] + "; " + "; ".join(d["problems"][:3])' || printf '%s' "${task_page:0:300}")"
+  fi
+
   # --- mcp-remote, loopback-only half ----------------------------------------------------------
   tls=$(docker exec "$main" curl -sk -o /dev/null -w '%{http_code}' https://127.0.0.1:9011/system/ready)
   main_ip=$(docker inspect -f "{{(index .NetworkSettings.Networks \"$network\").IPAddress}}" "$main")
@@ -416,7 +433,9 @@ if [ "$booted" = 1 ]; then
   # --- restart-browser -----------------------------------------------------------------------
   docker exec "$main" neo-quit 9110; quit_status=$?
   restarted=0
-  for _ in $(seq 1 60); do docker logs "$main" 2>&1 | grep -q 'Neo exited; restarting' && { restarted=1; break; }; sleep 1; done
+  # grep reads the whole log, not -q: under pipefail an early -q match kills `docker logs`
+  # with SIGPIPE while it is still writing, and the pipeline then fails on a long log.
+  for _ in $(seq 1 60); do docker logs "$main" 2>&1 | grep -F 'Neo exited; restarting' >/dev/null && { restarted=1; break; }; sleep 1; done
   if [ "$quit_status" = 0 ] && [ "$restarted" = 1 ] && back=$(wait_ready "$main" 90) \
       && after=$(run_call "$main" "$task" "req-$run_id-after-quit" 2>&1) && run_ok "$after"; then
     result PASS restart-browser "neo-quit exit 0; Neo restarted and ready again after ${back}s; new run ok"
@@ -480,7 +499,7 @@ for pid in pids:
         except OSError: pass
 '
     restarted=0
-    for _ in $(seq 1 30); do docker logs "$looped" 2>&1 | grep -q '^\[accept\] entrypoint exited 137' && { restarted=1; break; }; sleep 1; done
+    for _ in $(seq 1 30); do docker logs "$looped" 2>&1 | grep '^\[accept\] entrypoint exited 137' >/dev/null && { restarted=1; break; }; sleep 1; done
     ready=0
     for _ in $(seq 1 90); do [ "$(docker logs "$looped" 2>&1 | grep -c '^\[neo\] Ready')" -ge 2 ] && { ready=1; break; }; sleep 1; done
     healthy=$(wait_healthy "$looped" 30 >/dev/null && echo yes || echo no)
