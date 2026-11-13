@@ -97,7 +97,11 @@ export function stopBrowser(owner) {
 }
 
 /** Recovery callers have no child handle; validate paths and prove the group stopped before deletion. */
-export async function cleanupBrowser(owner, outputDir, exited) {
+export async function cleanupBrowser(
+  owner,
+  outputDir,
+  { exited, retainState = false } = {},
+) {
   for (const [key, prefix] of [
     ['profile', 'profile-'],
     ['home', 'home-'],
@@ -111,9 +115,17 @@ export async function cleanupBrowser(owner, outputDir, exited) {
   }
   await stopBrowser(owner)
   const exit = await exited
-  if (owner.profile) fs.rmSync(owner.profile, { recursive: true, force: true })
-  if (owner.home) fs.rmSync(owner.home, { recursive: true, force: true })
-  writeReceipt(path.join(outputDir, 'cleanup.json'), { ...owner, exit })
+  // A different owned group may still be unproven; stopping this browser must not erase evidence.
+  if (!retainState) {
+    if (owner.profile)
+      fs.rmSync(owner.profile, { recursive: true, force: true })
+    if (owner.home) fs.rmSync(owner.home, { recursive: true, force: true })
+  }
+  writeReceipt(path.join(outputDir, 'cleanup.json'), {
+    ...owner,
+    exit,
+    retained: retainState || undefined,
+  })
 }
 
 export function browserFlags(profile) {
@@ -205,10 +217,10 @@ export async function startOwnedBrowser(
   let exit
   let exited
   let closing
-  const close = () =>
+  const close = ({ retainState = false } = {}) =>
     (closing ??= (async () => {
       try {
-        await cleanupBrowser(owner, outputDir, exited)
+        await cleanupBrowser(owner, outputDir, { exited, retainState })
       } catch (error) {
         // An unproven group must remain untouched, but its handle must not pin a failed owner.
         child?.unref()

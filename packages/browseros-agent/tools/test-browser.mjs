@@ -75,6 +75,7 @@ async function commandKeeper() {
   let closing
   const close = () =>
     (closing ??= (async () => {
+      // The keeper handles its own TERM while descendants drain, keeping the group identifiable.
       process.kill(-process.pid, 'SIGTERM')
       const deadline = Date.now() + 2000
       while (Date.now() < deadline) {
@@ -200,7 +201,7 @@ async function owner(runDir) {
       keeper?.unref()
     }
     try {
-      await browser?.close()
+      await browser?.close({ retainState: errors.length > 0 })
     } catch (error) {
       errors.push(error.message)
     }
@@ -278,7 +279,9 @@ async function main() {
   const browserFile = path.join(runDir, 'owner.json')
   try {
     if (fs.existsSync(browserFile))
-      await cleanupBrowser(read(browserFile), runDir)
+      await cleanupBrowser(read(browserFile), runDir, {
+        retainState: errors.length > 0,
+      })
     else
       errors.push(
         'Browser ownership record unavailable; retained state for inspection',

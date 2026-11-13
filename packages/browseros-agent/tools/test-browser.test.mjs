@@ -17,12 +17,24 @@ const fixture = fileURLToPath(
 function run(t, args, overrides = {}, viaBun = false) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'test-browser-check-'))
   const record = path.join(dir, 'browser.json')
+  const bin = path.join(dir, 'bin')
+  if (overrides.FIXTURE_MASK_COMMAND === '1') {
+    fs.mkdirSync(bin)
+    fs.copyFileSync(
+      fileURLToPath(new URL('./fixtures/test-browser-ps.mjs', import.meta.url)),
+      path.join(bin, 'ps'),
+    )
+    fs.chmodSync(path.join(bin, 'ps'), 0o755)
+  }
   const env = {
     ...process.env,
     HOME: dir,
     NEO_E2E_BROWSER: fixture,
     FIXTURE_BROWSER_RECORD: record,
     ...overrides,
+    ...(overrides.FIXTURE_MASK_COMMAND === '1'
+      ? { PATH: `${bin}${path.delimiter}${process.env.PATH}` }
+      : {}),
   }
   const child = spawn(
     viaBun ? 'bun' : process.execPath,
@@ -355,4 +367,28 @@ test('a browser that never publishes readiness fails at the startup deadline', {
   assert.equal(fs.existsSync(browser.profile), false)
   assert.equal(fs.existsSync(browser.home), false)
   assert.equal(receipt(running).cleaned, true)
+})
+
+test('failed command-group ownership stops the browser but preserves its state', {
+  timeout: 20_000,
+}, async (t) => {
+  const running = run(t, [process.execPath, fixture, 'command'], {
+    FIXTURE_MASK_COMMAND: '1',
+  })
+  try {
+    const result = await running.exited
+    assert.equal(result.code, 125, result.stderr)
+    const completed = receipt(running)
+    assert.equal(completed.cleaned, false)
+    assert.match(
+      completed.cleanupErrors.join(' '),
+      /Cannot revalidate command group/,
+    )
+    const browser = JSON.parse(fs.readFileSync(running.record, 'utf8'))
+    assert.throws(() => process.kill(browser.pid, 0), { code: 'ESRCH' })
+    assert.equal(fs.existsSync(browser.profile), true)
+    assert.equal(fs.existsSync(browser.home), true)
+  } finally {
+    await stopFixture(running)
+  }
 })

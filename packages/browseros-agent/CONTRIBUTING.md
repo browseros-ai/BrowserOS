@@ -53,7 +53,7 @@ cleans up before returning its exit status. It preserves your command's argument
 directory, home, and Cargo settings. Use an explicit shell for a sequence of commands:
 
 ```sh
-bun run test:browser -- sh -c 'cargo test <first suite> && cargo test <second suite>'
+bun run test:browser -- sh -c 'cargo test -p neo-playwright --test pages_live -- --ignored && cargo test -p neo-playwright --test evaluate_values_live -- --ignored'
 ```
 
 Each invocation owns its browser, temporary profile, and browser home. The packaged server,

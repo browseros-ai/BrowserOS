@@ -6,7 +6,7 @@ on:
       - .github/workflows/test-browser.yml
       - packages/browseros-agent/tools/browser-process.mjs
       - packages/browseros-agent/tools/test-browser*.mjs
-      - packages/browseros-agent/tools/fixtures/test-browser.mjs
+      - packages/browseros-agent/tools/fixtures/test-browser*.mjs
       - packages/browseros-agent/crates/neo-sdk/neo-playwright-tests/node/browser*.mjs
       - packages/browseros-agent/crates/neo-sdk/neo-playwright-tests/node/lifecycle.test.mjs
       - packages/browseros-agent/crates/neo-sdk/neo-playwright-tests/node/process-ownership.test.mjs
@@ -17,7 +17,7 @@ on:
       - .github/workflows/test-browser.yml
       - packages/browseros-agent/tools/browser-process.mjs
       - packages/browseros-agent/tools/test-browser*.mjs
-      - packages/browseros-agent/tools/fixtures/test-browser.mjs
+      - packages/browseros-agent/tools/fixtures/test-browser*.mjs
       - packages/browseros-agent/crates/neo-sdk/neo-playwright-tests/node/browser*.mjs
       - packages/browseros-agent/crates/neo-sdk/neo-playwright-tests/node/lifecycle.test.mjs
       - packages/browseros-agent/crates/neo-sdk/neo-playwright-tests/node/process-ownership.test.mjs
