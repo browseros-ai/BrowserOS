@@ -28,8 +28,14 @@ impl Defaults {
     pub(crate) const RUN_TIMEOUT: Duration = Duration::from_secs(300);
     /// The longest `timeout` a model may ask for.
     pub(crate) const RUN_TIMEOUT_MAX: Duration = Duration::from_mins(15);
-    /// QuickJS's heap per run.
-    pub(crate) const JS_MEMORY_BYTES: usize = 64 * 1024 * 1024;
+    /// The most one run's QuickJS heap may grow to: a ceiling, never memory set aside. Each run
+    /// has its own runtime, which allocates as the script needs and frees all of it when the run
+    /// ends. Measured on Neo's Linux image (2026-11-12): `return 1` and a small page's snapshot
+    /// stay under 8 MiB; an 88,000-element Hacker News thread needs 64 MiB for
+    /// `ariaSnapshot()`, 76 for `{ mode: 'full' }` and 88 for `{ mode: 'default' }`, while that
+    /// tab's renderer alone holds about 880 MiB. 128 MiB, the owner's choice, leaves the largest
+    /// of those about half again.
+    pub(crate) const JS_MEMORY_BYTES: usize = 128 * 1024 * 1024;
     /// QuickJS's stack per run.
     pub(crate) const JS_STACK_BYTES: usize = 512 * 1024;
     /// The longest one synchronous slice of JS may run before `script / long_task`. Without a

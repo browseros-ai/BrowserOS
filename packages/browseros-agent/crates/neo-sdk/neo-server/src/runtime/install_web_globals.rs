@@ -246,7 +246,7 @@ fn form_serialize(name: &str, value: &str, budget: NativeBudget) -> rquickjs::Re
 
 /// Accounts native string work against the run's existing allowance, outside the JS heap.
 /// rquickjs emits QuickJS's OOM exception for `Error::Allocation`; the run then reports
-/// the same `script/out_of_memory` outcome as exhausting the JS heap.
+/// the same `neo/out_of_memory` outcome as exhausting the JS heap.
 #[derive(Clone, Copy)]
 struct NativeBudget(usize);
 

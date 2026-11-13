@@ -68,7 +68,7 @@ export function encodingNamed(name: string): Encoding | undefined {
 
 /**
  * Text written one UTF-16 code unit at a time, never held whole as numbers. A run's QuickJS
- * heap is 64 MiB (claw-sdk's config/defaults.rs) and an array spends a 16-byte value on each
+ * heap is at most 128 MiB (claw-sdk's config/defaults.rs) and an array spends a 16-byte value on each
  * number it holds, so text kept as an array of character codes costs 16 bytes a character: 2 MiB
  * of bytes as base64 would not fit. Here a CHUNK-long typed array takes the units, each full one
  * becomes a string, and the strings join once, so text costs about twice its own size while it

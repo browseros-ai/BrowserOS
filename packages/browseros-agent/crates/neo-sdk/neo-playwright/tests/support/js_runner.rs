@@ -61,9 +61,10 @@ const BOOTSTRAP: &str = include_str!("../../../neo-server/src/runtime/js/bootstr
 /// sites look for in stacks.
 const AGENT_FILE: &str = "run";
 
-/// claw-sdk's limits for one run's QuickJS (`config/defaults.rs` `JS_MEMORY_BYTES` and
-/// `JS_STACK_BYTES`), so a value too deep or too large for the agent's realm fails here as it
-/// does there.
+/// One run's QuickJS limits, so a value too deep or too large for the agent's realm fails here as
+/// it does there. The stack is claw-sdk's (`config/defaults.rs` `JS_STACK_BYTES`). The heap stays
+/// 64 MiB, half of claw-sdk's 128 MiB `JS_MEMORY_BYTES`, on purpose: the prelude's large-value
+/// tests (`prelude_live.rs`) were measured against 64 MiB, and what fits here fits there.
 const JS_MEMORY_BYTES: usize = 64 * 1024 * 1024;
 const JS_STACK_BYTES: usize = 512 * 1024;
 

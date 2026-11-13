@@ -550,6 +550,9 @@
         name: isError ? textOf(() => error.name) : '',
         message: textOf(() => (isError ? error.message : error)),
         stack: isError ? clip(textOf(() => error.stack)) : '',
+        // QuickJS throws `null` when its heap is too full to build even its out-of-memory
+        // error; run_script.rs reads this as running out of memory.
+        ...(error === null ? { thrownNull: true } : {}),
       },
     })
   }

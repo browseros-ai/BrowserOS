@@ -23,12 +23,13 @@ import type { FilesInput } from './wire'
 const UPLOAD_LIMIT = 50 * 1024 * 1024
 
 /**
- * Neo's own limit on a call's payloads, under upstream's. claw-sdk runs a script in a 64 MiB
- * QuickJS heap (config/defaults.rs), and while its bootstrap encodes the op, the heap holds the
- * payload's bytes, their base64, JSON's quoted copy of that and the JSON: five times the bytes.
- * From a script that holds nothing else, 12.38 MiB is the most that reaches the op whole
- * (js_runner, under claw-sdk's limits). 10 MiB leaves a script 11.5 MiB for everything else,
- * and a larger payload fails here with upstream's advice rather than QuickJS's out of memory.
+ * Neo's own limit on a call's payloads, under upstream's. claw-sdk runs a script in a QuickJS
+ * heap of at most 128 MiB (config/defaults.rs), and while its bootstrap encodes the op, the heap
+ * holds the payload's bytes, their base64, JSON's quoted copy of that and the JSON: five times
+ * the bytes. From a script that holds nothing else, 12.38 MiB is the most that reaches the op
+ * whole in a 64 MiB heap (js_runner's, half of claw-sdk's). 10 MiB leaves a script room for
+ * everything else, and a larger payload fails here with upstream's advice rather than QuickJS's
+ * out of memory.
  */
 const NEO_UPLOAD_LIMIT = 10 * 1024 * 1024
 

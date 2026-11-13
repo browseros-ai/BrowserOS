@@ -393,7 +393,7 @@ async fn tests_that_context_pages_lists_the_tabs_the_run_init_names() -> TestRes
 
 #[tokio::test]
 async fn tests_that_buffer_text_of_megabytes_fits_in_claw_sdks_heap() -> TestResult {
-    // Each size is past where the codec ran out of claw-sdk's 64 MiB while it gathered text as
+    // Each size is past where the codec ran out of a 64 MiB heap (claw-sdk's then, js_runner's now) while it gathered text as
     // an array of numbers: base64, hex and UTF-8 encoding from 2 MiB, UTF-8 decoding from 3 MiB.
     let script = "const bytes = Buffer.alloc(3 * 1024 * 1024)\n\
                   return {\n\
