@@ -113,7 +113,7 @@ export class FailureOutput {
     // Restore getters now, then await its result; viewport's later read is never guarded.
     const check = await (mode.kind === 'guardedTree'
       ? this.tree(element, compare)
-      : this.run(() => withMarkedFieldsMasked(compare)))
+      : this.run(() => withMarkedFieldsMasked(compare, element)))
     return mode.kind === 'realValue' && typeof check.received === 'string'
       ? { ...check, received: characterMarker(check.received) }
       : check
@@ -126,7 +126,7 @@ export class FailureOutput {
           elements[0] ?? this.world.injected.document.documentElement,
           compare,
         )
-      : this.run(() => withMarkedFieldsMasked(compare))
+      : this.run(() => withMarkedFieldsMasked(compare, elements[0] ?? null))
   }
 
   /** Its vendor listener and stop closure retain this request's preview after dispatch ends. */

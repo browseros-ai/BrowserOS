@@ -33,7 +33,7 @@ use fixture_server::FixtureServer;
 use input_recording::{InputCall, InputRecording};
 use live_browser::{LiveBrowser, TestPage, TestResult};
 use neo_playwright::{
-    BoxSpec, Entry, EntryOutcome, EntryRequest, Expect, PrivateField, PrivateText,
+    BoxSpec, Entry, EntryOutcome, EntryRequest, Expect, Op, PrivateField, PrivateText,
 };
 use neo_trace::{Delivery, ErrorOwner};
 use private_host::HostEnv;
@@ -1534,6 +1534,147 @@ async fn tests_that_a_character_costs_a_few_browser_messages() -> TestResult {
 /// is the mark alone.
 const MARKED: &str = "CANARY-marked-4242";
 
+/// The diagnostic a real host operation returned and the call-log lines its host received.
+struct PreviewFailure {
+    message: String,
+    notes: Vec<String>,
+}
+
+async fn preview_failure(
+    bench: &Bench,
+    opened: &Opened,
+    operation: &str,
+    input: Value,
+) -> TestResult<PreviewFailure> {
+    let operation = Op::from_name(operation).ok_or("the preview operation exists")?;
+    let env = bench.host(opened);
+    let error = bench
+        .live
+        .playwright
+        .invoke(&env, operation, input)
+        .await
+        .err()
+        .ok_or("the preview operation must fail")?;
+    Ok(PreviewFailure {
+        message: error.message,
+        notes: env.notes(),
+    })
+}
+
+fn assert_marked_preview(failure: &PreviewFailure) {
+    let marker = format!("value=\"<{} characters>\"", MARKED.chars().count());
+    assert!(failure.message.contains(&marker), "{}", failure.message);
+    assert!(
+        failure.notes.iter().any(|line| line.contains(&marker)),
+        "the native call log contains the projected preview: {:?}",
+        failure.notes,
+    );
+    for text in std::iter::once(&failure.message).chain(&failure.notes) {
+        assert!(!text.contains(MARKED), "marked preview leaked: {text}");
+    }
+}
+
+/// R52 covers marked boxes whose page mirrors input into markup. Run both host placements,
+/// both conformance policies, direct previews and the engine's preview of an intercepting box.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one native preview matrix shares a real private fill and the same marked node"
+)]
+async fn tests_that_marked_previews_hide_mirrored_attributes_in_every_diagnostic() -> TestResult {
+    let bench = Bench::start().await?;
+    for place in PLACES {
+        let opened = bench
+            .open("/private/covered-login.html?mode=none", place)
+            .await?;
+        let email = bench.r#ref(&opened, "textbox", "Email").await?;
+        let password = bench.r#ref(&opened, "textbox", "Password").await?;
+        bench.live.main_world(&opened.page, "(() => { const u = document.getElementById('user'); u.value = 'PublicAttrControl'; u.setAttribute('value', u.value); u.addEventListener('input', () => u.setAttribute('value', u.value)); const p = document.getElementById('pw'); p.value = 'DeclaredPreviewCanary'; p.setAttribute('value', p.value); return true; })()").await?;
+        let page = opened.page.brand();
+        let on_box = || ("target", ref_target(&page, &email));
+        let hidden = || {
+            expectation(
+                on_box(),
+                "toBeHidden",
+                &json!({ "expression": "to.be.hidden", "isNot": false }),
+            )
+        };
+        let control = preview_failure(&bench, &opened, "expect.locator", hidden()).await?;
+        assert!(control.message.contains("value=\"PublicAttrControl\""));
+
+        let env = bench.host(&opened);
+        let entry = bench
+            .enter(
+                &env,
+                &opened,
+                vec![Field::new(&email, &bench.page_origin).with(MARKED)?],
+            )
+            .await;
+        assert_eq!(entry.outcome, EntryOutcome::Entered, "{place:?}: {entry:?}");
+        assert_eq!(
+            bench
+                .live
+                .main_world(
+                    &opened.page,
+                    "document.getElementById('user').getAttribute('value')"
+                )
+                .await?,
+            json!(MARKED),
+            "the page really copied the host's typed value into the attribute",
+        );
+        for conformance in [false, true] {
+            for mut input in [
+                hidden(),
+                expectation(
+                    on_box(),
+                    "toHaveAttribute",
+                    &json!({ "expression": "to.have.attribute.value", "expressionArg": "value", "expectedText": [{ "string": "wrong" }], "isNot": false }),
+                ),
+            ] {
+                input["call"]["conformance"] = json!(conformance);
+                assert_marked_preview(
+                    &preview_failure(&bench, &opened, "expect.locator", input).await?,
+                );
+            }
+            if conformance {
+                let mut input = expectation(
+                    ("target", ref_target(&page, &password)),
+                    "toBeHidden",
+                    &json!({ "expression": "to.be.hidden", "isNot": false }),
+                );
+                input["call"]["conformance"] = json!(true);
+                let native = preview_failure(&bench, &opened, "expect.locator", input).await?;
+                assert!(native.message.contains("value=\"DeclaredPreviewCanary\""));
+                assert!(!native.message.contains(MARKED));
+            }
+        }
+
+        bench.live.main_world(&opened.page, "(() => { const r = document.getElementById('user').getBoundingClientRect(); const d = document.createElement('div'); d.id = 'preview-cover'; d.style.cssText = `position:fixed;left:${r.left}px;top:${r.top}px;width:${r.width}px;height:${r.height}px;z-index:2147483000;background:red`; document.body.appendChild(d); return true; })()").await?;
+        for conformance in [false, true] {
+            let input = json!({ "call": { "api": "locator.click", "timeoutMs": 700, "conformance": conformance }, "target": ref_target(&page, &email), "strict": "strict" });
+            let failure = preview_failure(&bench, &opened, "locator.click", input).await?;
+            assert!(failure.message.contains("intercepts pointer events"));
+            assert_marked_preview(&failure);
+        }
+
+        bench.live.main_world(&opened.page, "(() => { document.getElementById('preview-cover').remove(); const u = document.getElementById('user'); const r = u.getBoundingClientRect(); const b = document.createElement('button'); b.id = 'under-marked-field'; b.type = 'button'; b.textContent = 'Under marked field'; b.style.cssText = `position:fixed;left:${r.left}px;top:${r.top}px;width:${r.width}px;height:${r.height}px;z-index:2147483000`; document.body.appendChild(b); u.style.cssText = `position:fixed;box-sizing:border-box;left:${r.left}px;top:${r.top}px;width:${r.width}px;height:${r.height}px;z-index:2147483001`; return true; })()").await?;
+        let button = json!({
+            "$neo": "locator", "page": page,
+            "chunks": [{ "parts": [{ "name": "css", "body": [{ "simples": [{ "selector": { "css": "#under-marked-field", "functions": [] }, "combinator": "" }] }], "source": "#under-marked-field" }] }],
+            "display": "locator('#under-marked-field')",
+        });
+        for conformance in [false, true] {
+            let input = json!({ "call": { "api": "locator.click", "timeoutMs": 700, "conformance": conformance }, "target": button, "strict": "strict" });
+            let failure = preview_failure(&bench, &opened, "locator.click", input).await?;
+            assert!(failure.message.contains("intercepts pointer events"));
+            assert_marked_preview(&failure);
+        }
+        bench.close(opened).await?;
+    }
+    Ok(())
+}
+
 /// A `locator` handle on `page` for an aria ref.
 fn ref_target(page: &Value, r#ref: &str) -> Value {
     json!({
@@ -1554,8 +1695,8 @@ fn input_value(target: &Value) -> Value {
 /// A `page.ariaSnapshot` input in ai mode, under the spec harness's switch or not.
 fn page_snapshot(page: &Value, conformance: bool) -> Value {
     json!({
-        "call": { "api": "page.ariaSnapshot", "timeoutMs": 10_000 },
-        "page": page, "mode": "ai", "conformance": conformance,
+        "call": { "api": "page.ariaSnapshot", "timeoutMs": 10_000, "conformance": conformance },
+        "page": page, "mode": "ai",
     })
 }
 

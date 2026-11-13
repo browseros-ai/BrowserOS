@@ -57,7 +57,7 @@ export function isHtmlField(element: Node): element is Field {
 }
 
 /** Declaration masking is a synchronous scope; a host-typing mark has no bypass. */
-let declaredMasked = true
+let declaredMasked: boolean | undefined
 
 function isHtmlTextarea(node: Node | null): node is HTMLTextAreaElement {
   return (
@@ -145,12 +145,12 @@ function collectFieldPrototypes({
 /** One privacy decision for tree reads and diagnostics, including fields adopted from another realm. */
 export function isPrivateField(
   field: Node,
-  { declared = declaredMasked }: { declared?: boolean } = {},
+  { declared = declaredMasked ?? true }: { declared?: boolean } = {},
 ): field is Field {
   return (
     isHtmlField(field) &&
     (privatelyTyped(field) ||
-      (declared &&
+      ((declaredMasked === true || declared) &&
         (field.getAttribute('type')?.toLowerCase() === 'password' ||
           (field.getAttribute('autocomplete') ?? '')
             .toLowerCase()
@@ -326,13 +326,14 @@ function restoreOverrides(installed: PropertyOverride[]): void {
 }
 
 /** Mark-only reads install no guards until this world has privately typed a box (R44/R47). */
-export function withMarkedFieldsMasked<T>(walk: () => T): T {
+export function withMarkedFieldsMasked<T>(
+  walk: () => T,
+  root: Element | null = document.documentElement,
+): T {
   return anyPrivatelyTyped()
-    ? withMaskedFieldValues(
-        { root: document.documentElement, mayHaveOtherFrame: true },
-        walk,
-        { declared: false },
-      )
+    ? withMaskedFieldValues({ root, mayHaveOtherFrame: true }, walk, {
+        declared: false,
+      })
     : walk()
 }
 
@@ -404,7 +405,9 @@ export function withMaskedFieldValues<T>(
       Object.defineProperty(override.target, override.property, override.masked)
       installed.push(override)
     }
-    declaredMasked = declared
+    // Nested scopes may strengthen privacy, never weaken a full outer walk into mark-only.
+    // Undefined means no active scope, so a standalone conformance scope can remain mark-only.
+    declaredMasked = declared || outer === true
     return walk()
   } finally {
     declaredMasked = outer

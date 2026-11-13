@@ -328,10 +328,9 @@ async fn assert_stored_failure_diagnostics(
         public >= 4,
         "public twins retain their real received values"
     );
-    assert!(
-        notes > failed,
-        "the trace retained the original operation notes"
-    );
+    // Hosted call logs are carried in the failure message and debug channel, not trace
+    // notes (neo-server run::tests asserts that contract). The full message was scanned above.
+    assert_eq!(notes, 0, "call logs stay in complete safe failure messages");
     Ok(())
 }
 
