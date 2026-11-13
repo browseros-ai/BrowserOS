@@ -91,9 +91,15 @@ export function openProbePage(html: string): ProbePage {
     Object.defineProperty(prototype, 'defaultValue', descriptor)
     suppliedDefaults.push(prototype)
   }
-  // linkedom computes no styles. The engine reads a missing style as "rendered and visible"
-  // (domUtils computeBox), which is all these tests ask of it.
-  Reflect.set(window, 'getComputedStyle', () => undefined)
+  // linkedom computes no styles. Keep ordinary reads missing for its no-layout model, but
+  // supply an empty pseudo style object as the native API does: the privacy scope proxies
+  // those objects for private controls, even when no generated content exists.
+  Reflect.set(
+    window,
+    'getComputedStyle',
+    (_element: Element, pseudo?: string) =>
+      pseudo ? { content: 'none', getPropertyValue: () => '' } : undefined,
+  )
   // No layout means no boxes: every element reads as one without a layout box.
   Reflect.set(window.Element.prototype, 'getClientRects', () => [])
   const saved = new Map<string, unknown>()
