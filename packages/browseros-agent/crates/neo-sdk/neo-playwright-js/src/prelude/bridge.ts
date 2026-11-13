@@ -71,9 +71,11 @@ export type PageFact = Pick<Wire.PageFact, 'tab'> & {
 }
 
 /** What a run starts with: Rust's `RunInit`, its facts as the readers keep them. */
-export type RunInit = Omit<Wire.RunInit, 'pages' | 'observed'> & {
+export type RunInit = Omit<Wire.RunInit, 'pages' | 'observed' | 'frames'> & {
   pages: PageFact[]
   observed: Observation | null
+  /** Every tab's frame-tree version when the run started (`RunInit.frames`). */
+  frames: Wire.FrameVersion[]
 }
 
 /** What one reply envelope says about pages, as `onReply` reads it: an absent field is none. */
@@ -82,6 +84,8 @@ export type Reply = {
   pages: PageFact[]
   defaultPage: Wire.DefaultPage | null
   pickedPage: Wire.DefaultPage | null
+  /** Every tab's frame-tree version (`Envelope.frames`); empty when absent. */
+  frames?: Wire.FrameVersion[]
 }
 
 /** Keep the header's recorded byte position while stamping policy after all arguments. */
@@ -98,6 +102,25 @@ function requestInput<Op extends OpName>(call: CallHeader, args: OpInputs[Op]) {
  * the op (signal.ts). The method checked it when the script called it; one that fired since is
  * the call in flight, which the bootstrap aborts as soon as it is sent.
  */
+/**
+ * Runs after each of the script's own operations, answered or rejected, before its promise
+ * settles: the context reads again the frame tree of every page whose frames changed since it
+ * last read them (`BrowserContext._settleFrames`), so `frames()` is the page's real tree after
+ * every awaited operation. Neo's own operations (an empty site) never run it, so its reads do
+ * not recurse.
+ */
+let settle: () => Promise<void> = async () => {}
+
+/** Sets the step [`settle`] runs. */
+export function onSettle(step: () => Promise<void>): void {
+  settle = step
+}
+
+async function settled(site: CallSite): Promise<void> {
+  // Neo's own reads that fail are the settle step's own business; they never fail the script.
+  if (site.value !== '') await settle().catch(() => {})
+}
+
 export async function invoke<Op extends OpName>(
   op: Op,
   site: CallSite,
@@ -115,10 +138,13 @@ export async function invoke<Op extends OpName>(
     })) as OpOutputs[Op]
     const held = pumpsCaughtUp(op)
     if (held) await held
+    await settled(site)
     return value
   } catch (thrown) {
     const held = pumpsCaughtUp(op)
     if (held) await held
+    // A failed operation may still have changed the page (an action that threw midway).
+    await settled(site)
     throw withAbortCause(shapeBridgeError(op, call.api, thrown), signal)
   }
 }
@@ -126,6 +152,12 @@ export async function invoke<Op extends OpName>(
 /**
  * A page-state result and its ordering evidence. An optional consumer reserves delivery
  * synchronously, before any caller awaiting this reply can run. `signal` as for [`invoke`].
+ *
+ * `apply` takes the reply's page facts (a supplemental frame tree, a navigation's URL) after the
+ * events before the reply were dispatched and before the settle step. The settle step may read
+ * the same tab again, a newer observation of it that makes this reply's facts stale; one that
+ * got no tree would then leave the script the tree from before this operation. Applied first,
+ * the reply's tree stays as the last good one and the failed read only marks it to be read again.
  */
 export async function invokeObserved<Op extends OpName>(
   op: Op,
@@ -134,6 +166,7 @@ export async function invokeObserved<Op extends OpName>(
   args: OpInputs[Op],
   onResult?: (value: OpOutputs[Op], observed: Observation | null) => void,
   signal?: SignalLike,
+  apply?: (value: OpOutputs[Op], observed: Observation | null) => void,
 ): Promise<{ value: OpOutputs[Op]; observed: Observation | null }> {
   try {
     const ready = readyChoosers(op)
@@ -150,13 +183,16 @@ export async function invokeObserved<Op extends OpName>(
     })
     const held = pumpsCaughtUp(op)
     if (held) await held
-    return {
-      value: field(reply, 'value') as OpOutputs[Op],
-      observed: readObservation(field(reply, 'observed')),
-    }
+    const value = field(reply, 'value') as OpOutputs[Op]
+    const observed = readObservation(field(reply, 'observed'))
+    apply?.(value, observed)
+    await settled(site)
+    return { value, observed }
   } catch (thrown) {
     const held = pumpsCaughtUp(op)
     if (held) await held
+    // A failed operation may still have changed the page (an action that threw midway).
+    await settled(site)
     throw withAbortCause(shapeBridgeError(op, call.api, thrown), signal)
   }
 }
@@ -253,6 +289,7 @@ export function onReply(listener: (reply: Reply) => void): void {
       pages: readPageFacts(field<Wire.Envelope>(envelope, 'pages')),
       defaultPage: readTab(field<Wire.Envelope>(envelope, 'defaultPage')),
       pickedPage: readTab(field<Wire.Envelope>(envelope, 'pickedPage')),
+      frames: readFrameVersions(field<Wire.Envelope>(envelope, 'frames')),
     })
   })
 }
@@ -269,6 +306,7 @@ export function provide(name: string, build: (init: RunInit) => unknown): void {
       page: page ? { $neo: 'page', ...page } : null,
       pages: readPageFacts(field<Wire.RunInit>(init, 'pages')),
       observed: readObservation(field<Wire.RunInit>(init, 'observed')),
+      frames: readFrameVersions(field<Wire.RunInit>(init, 'frames')),
     })
   })
 }
@@ -367,6 +405,18 @@ function readPageFacts(pages: unknown): PageFact[] {
     facts.push(fact)
   }
   return facts
+}
+
+/** The tabs' frame-tree versions a reply carries, dropping any entry that is not two numbers. */
+function readFrameVersions(value: unknown): Wire.FrameVersion[] {
+  if (!Array.isArray(value)) return []
+  return value.flatMap((entry) => {
+    const tab = field<Wire.FrameVersion>(entry, 'tab')
+    const version = field<Wire.FrameVersion>(entry, 'version')
+    return typeof tab === 'number' && typeof version === 'number'
+      ? [{ tab, version }]
+      : []
+  })
 }
 
 /** Worker metadata is validated once at the reply boundary, independently of page facts. */

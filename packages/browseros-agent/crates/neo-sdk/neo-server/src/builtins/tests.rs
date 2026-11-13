@@ -37,10 +37,10 @@ use super::{BuiltinDeps, CaptchaClaims, PlaywrightFacade, TabJanitor};
 use crate::browser::{Adopt, BrowserLink, NeoTab, PageRef, TabRegistry};
 use crate::config::Defaults;
 use crate::dispatch::{
-    Call, CallSite, Dispatcher, ErrorCode, EventLog, LeafError, Lifetime, Listing, Method,
-    MethodSpec, Observer, OpCtx, OpFailure, OpReply, OperationError, PageChange, PageScript,
-    PageTarget, PendingReply, Policy, PolicyCheck, RegistryBuilder, RegistryError, RunCtx, RunEnd,
-    RunGuard, RunStart, StopReason, Visibility,
+    Call, CallSite, Dispatcher, ErrorCode, EventLog, FrameVersion, LeafError, Lifetime, Listing,
+    Method, MethodSpec, Observer, OpCtx, OpFailure, OpReply, OperationError, PageChange, PageFact,
+    PageScript, PageTarget, PendingReply, Policy, PolicyCheck, RegistryBuilder, RegistryError,
+    RunCtx, RunEnd, RunGuard, RunStart, StopReason, Visibility,
 };
 use crate::host::{FilledTabs, HostHolds, TakeoverLock};
 use crate::runtime::{Script, ScriptOutcome, run_script};
@@ -2865,6 +2865,116 @@ impl EventLog for RecordedClose {
     fn closed(&self, target: &TargetId) -> Option<u64> {
         (target == &self.0).then_some(7)
     }
+}
+
+/// A watcher holding a frame-tree version for each of the given tabs.
+struct Versions(Vec<TabId>);
+impl EventLog for Versions {
+    fn head(&self) -> u64 {
+        0
+    }
+    fn closed(&self, _target: &TargetId) -> Option<u64> {
+        None
+    }
+    fn frame_versions(&self) -> Vec<(TabId, u64)> {
+        self.0.iter().map(|tab| (*tab, 3)).collect()
+    }
+}
+
+/// A page read that answers at once.
+struct Peek;
+#[derive(Deserialize)]
+struct PeekInput {
+    page: PageTarget,
+}
+impl Method for Peek {
+    type Input = PeekInput;
+    type Output = Value;
+    fn spec(&self) -> MethodSpec {
+        MethodSpec::new("page.title", Effect::Read)
+    }
+    fn target(input: &PeekInput) -> Option<&PageTarget> {
+        Some(&input.page)
+    }
+    fn call(
+        &self,
+        _op: &OpCtx<Self>,
+        _input: PeekInput,
+    ) -> impl Future<Output = Result<Value, LeafError>> + Send {
+        future::ready(Ok(json!("title")))
+    }
+}
+
+/// A run's frame versions cross the boundary its page facts do. The raw reply, which a script
+/// can read through `__neo.onReply`, names the frame activity of no tab the run was not given
+/// a fact of, never Neo's own tab, and none of a tab whose reads the owner's lock blocks.
+#[tokio::test]
+async fn a_reply_carries_frame_versions_only_of_the_runs_readable_listed_tabs()
+-> Result<(), Box<dyn Error>> {
+    let harness = Harness::new().await?;
+    let listed = harness.owner_tab("https://a.example/").await?;
+    let locked = harness.owner_tab("https://b.example/").await?;
+    let unlisted = harness.owner_tab("https://c.example/").await?;
+    let neo = within(blank_tab(&harness).ensure(Adopt::Allowed))
+        .await?
+        .ok_or("Neo's tab opened")?;
+    let mut registry = RegistryBuilder::default();
+    registry.define(Peek)?;
+    let claims = Arc::new(CaptchaClaims::default());
+    let door = Arc::new(Dispatcher::new(
+        registry.build(),
+        super::door_rules(&harness.takeover, &claims),
+        harness.sink.clone(),
+        Arc::clone(&harness.link),
+        Arc::clone(&harness.tabs),
+        Observer::new(Arc::new(Versions(vec![
+            listed.tab,
+            locked.tab,
+            unlisted.tab,
+            neo,
+        ]))),
+    ));
+    let (run, _guard) = harness.run()?;
+    let fact = |tab: TabId| PageFact {
+        tab,
+        task_id: None,
+        url: Some("https://a.example/".to_owned()),
+        title: None,
+        closed: false,
+        viewport_size: None,
+        workers: None,
+    };
+    let tabs = |versions: &[FrameVersion]| {
+        versions
+            .iter()
+            .map(|version| version.tab)
+            .collect::<Vec<_>>()
+    };
+    let start = door.listed_frame_versions(&run, &[fact(listed.tab), fact(locked.tab), fact(neo)]);
+    assert_eq!(
+        tabs(&start),
+        [listed.tab, locked.tab],
+        "the init names the listed tabs, never Neo's, and no tab it does not list"
+    );
+    let _lock = harness.lock(locked.tab, Reads::Block).await?;
+    let reply = door
+        .submit(
+            &run,
+            Call::script(
+                "page.title".into(),
+                json!({ "page": handle(&listed) }),
+                None,
+            ),
+        )
+        .wait()
+        .await;
+    assert!(reply.outcome.is_ok(), "{:?}", reply.outcome);
+    assert_eq!(
+        tabs(&reply.frames),
+        [listed.tab],
+        "the owner's lock blocks reads of the locked tab: its activity is not named either"
+    );
+    Ok(())
 }
 
 /// An already-delivered event entering the door's normal post-operation fact observation.

@@ -41,7 +41,7 @@ pub fn envelope_examples() -> Result<Vec<EnvelopeExample>, IdError> {
         example("reply.ok", reply_ok()),
         example(
             "reply.okBare",
-            runtime::envelope(&bare(Ok(Value::Null)), &[]),
+            runtime::envelope(&bare(Ok(Value::Null)), &[], &[]),
         ),
         example("reply.err", reply_err(operation)),
         example("reply.errBare", reply_err_bare(operation)),
@@ -54,7 +54,7 @@ fn example(name: &'static str, text: String) -> EnvelopeExample {
 
 /// The run's init, as `run_script` and the hosted run hand it to the realm.
 fn init(page: Option<&PageRef>, pages: &[PageFact], observed: Option<&Observation>) -> String {
-    RunInit::new(page, pages, observed).to_json()
+    RunInit::new(page, pages, observed, &[]).to_json()
 }
 
 /// A `page.title` answer carrying every optional field the envelope has.
@@ -75,7 +75,7 @@ fn reply_ok() -> String {
         pumped: 2,
         ..bare(Ok(json!("Facts")))
     };
-    runtime::envelope(&reply, &[7])
+    runtime::envelope(&reply, &[7], &[])
 }
 
 /// A failed `expect` carrying every optional field the envelope has, its matcher's facts
@@ -105,7 +105,7 @@ fn reply_err(operation: OperationId) -> String {
             operation,
         }))
     };
-    runtime::envelope(&reply, &[8, 9])
+    runtime::envelope(&reply, &[8, 9], &[])
 }
 
 /// A refused write: no facts, no observation, nothing sent.
@@ -120,7 +120,7 @@ fn reply_err_bare(operation: OperationId) -> String {
         retryable: false,
         operation,
     }));
-    runtime::envelope(&reply, &[])
+    runtime::envelope(&reply, &[], &[])
 }
 
 fn bare(outcome: Result<Value, OpFailure>) -> OpReply {
@@ -132,6 +132,7 @@ fn bare(outcome: Result<Value, OpFailure>) -> OpReply {
         picked_page: None,
         pumped: 0,
         completed_publications: Vec::new(),
+        frames: Vec::new(),
     }
 }
 

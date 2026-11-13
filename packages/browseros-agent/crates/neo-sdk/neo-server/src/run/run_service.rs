@@ -24,6 +24,8 @@ use super::{HostData, RequestLedger, RunHandle, RunMeta, RunReply, RunRequest};
 use crate::browser::{BrowserLink, NeoTab, PageRef, RunView, TabRegistry, TaskPage};
 use crate::builtins;
 use crate::config::Defaults;
+#[cfg(feature = "hosted-run")]
+use crate::dispatch::FrameVersion;
 use crate::dispatch::{
     Dispatcher, ErrorCode, OperationError, PageFact, PageFacts, RunCtx, RunStart, StopReason,
 };
@@ -82,6 +84,13 @@ impl RunService {
     #[cfg(feature = "hosted-run")]
     pub(crate) async fn hosted_open_pages(&self, run: &RunCtx) -> PageFacts {
         self.open_pages(run).await
+    }
+
+    /// The frame-tree versions a hosted run's init carries (`RunInit` `frames`), of the tabs it
+    /// lists, past the read rules ([`Dispatcher::listed_frame_versions`]).
+    #[cfg(feature = "hosted-run")]
+    pub(crate) fn frame_versions_of(&self, run: &RunCtx, pages: &[PageFact]) -> Vec<FrameVersion> {
+        self.dispatcher.listed_frame_versions(run, pages)
     }
 
     /// The service.

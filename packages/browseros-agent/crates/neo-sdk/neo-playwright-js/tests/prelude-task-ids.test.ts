@@ -71,7 +71,11 @@ it('leaves a pick to the first action when the script holds the tab', async () =
       observed: { seq: 3, events: 0 },
     },
   ]
-  const runtime = loadPrelude({ answer: () => replies.shift() })
+  // Neo's own frame reads (of a page first seen mid-run, and the retry of a tree it could not
+  // read) get no tree and leave the scripted replies to the script's calls.
+  const runtime = loadPrelude({
+    answer: (call) => (call.name === 'page.frames' ? null : replies.shift()),
+  })
   expect(
     json(
       await runtime.run(`
@@ -88,7 +92,8 @@ it('leaves a pick to the first action when the script holds the tab', async () =
 it('counts a tab context.pages() listed as held at a pick', async () => {
   const runtime = loadPrelude({
     seed: { page: null, pages: [open] },
-    answer: () => picked,
+    // The listed tab's frame read at the run's start gets no tree; every other op the pick.
+    answer: (call) => (call.name === 'page.frames' ? null : picked),
   })
   expect(
     json(
@@ -137,7 +142,8 @@ it('retains an omitted task id and clears an explicit null in reply facts', asyn
     { tab: 101, taskId: null },
   ]
   const runtime = loadPrelude({
-    answer: () => ({ ok: null, pages: [facts.shift()] }),
+    answer: (call) =>
+      call.name === 'page.frames' ? null : { ok: null, pages: [facts.shift()] },
   })
   expect(
     json(
@@ -159,7 +165,9 @@ it('revives result facts with task ids and preserves them on later bare brands',
     { $neo: 'page', tab: 101 },
     { $neo: 'page', tab: 101, taskId: null },
   ]
-  const runtime = loadPrelude({ answer: () => results.shift() })
+  const runtime = loadPrelude({
+    answer: (call) => (call.name === 'page.frames' ? null : results.shift()),
+  })
   expect(
     json(
       await runtime.run(`
