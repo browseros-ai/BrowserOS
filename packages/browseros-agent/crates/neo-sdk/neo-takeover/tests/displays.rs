@@ -429,6 +429,31 @@ impl Harness {
         });
     }
 
+    /// Starts a run of `task` at `at` as the prelude starts every run: Neo's own `events.listen`
+    /// on each tab of `listened`, then its event pump's `events.next` on the last. They name a
+    /// tab without acting on it. The run's next operation is number `listened.len() + 2`.
+    fn run_with_listeners(&self, task: &TaskId, listened: &[i64], at: EpochMillis) -> RunId {
+        let run = RunId::new();
+        self.sink.run_started(run_of(run, task, at));
+        let mut seq = 0;
+        for &tab in listened {
+            seq += 1;
+            self.run_op(run, seq, "events.listen", tab, at);
+        }
+        if let Some(&pumped) = listened.last() {
+            self.run_op(run, seq + 1, "events.next", pumped, at);
+        }
+        run
+    }
+
+    /// Records operation `seq` of `run`, `name` on `tab`, started at `at`.
+    fn run_op(&self, run: RunId, seq: u32, name: &str, tab: i64, at: EpochMillis) {
+        self.sink.op_started(OperationStarted {
+            id: OperationId::new(run, seq),
+            ..first_operation(run, name, Effect::Read, Some(TabId(tab)), at)
+        });
+    }
+
     /// Records an operation of task `task` with no page, started and ended at `at`: a
     /// context-level call, or one refused before it had a page. Its end names no tab.
     fn operation_with_no_page(&self, task: &TaskId, at: EpochMillis) {
@@ -848,21 +873,9 @@ async fn follow_never_moves_for_neos_own_listeners() -> TestResult {
     let _view = h.view(Some(Follow::Task(task.clone()))).await?;
     eventually(|| h.activated().is_ok_and(|tabs| tabs == [3])).await?;
 
-    let run = RunId::new();
     let at = EpochMillis::now();
-    h.sink.run_started(run_of(run, &task, at));
-    let steps = [
-        (1, "events.listen", 5),
-        (2, "events.listen", 4),
-        (3, "events.next", 4),
-        (4, "locator.textContent", 3),
-    ];
-    for (seq, name, tab) in steps {
-        h.sink.op_started(OperationStarted {
-            id: OperationId::new(run, seq),
-            ..first_operation(run, name, Effect::Read, Some(TabId(tab)), at)
-        });
-    }
+    let run = h.run_with_listeners(&task, &[5, 4], at);
+    h.run_op(run, 4, "locator.textContent", 3, at);
     h.sink.flush().await?;
     tokio::time::sleep(QUIET).await;
     assert_eq!(
@@ -873,6 +886,87 @@ async fn follow_never_moves_for_neos_own_listeners() -> TestResult {
 
     h.operation(&task, 4);
     eventually(|| h.activated().is_ok_and(|tabs| tabs == [3, 4])).await?;
+    Ok(())
+}
+
+/// The follower and the agent's own move before input (`Front::bring_forward`), for a view on
+/// the run's task. The run starts with Neo's listeners on the blank tab 5 and another task's tab
+/// 4, then clicks on 4 and on 3, and each click brings its tab forward first. Whichever of the
+/// two reacts first, each tab comes forward once and nothing else does:
+/// - the click's start reaches the follower first: it brings 4, and the agent finds 4 in front;
+/// - the agent brings 3 first: the follower adopts its own task's move, and the click's start,
+///   read after that move, is old news.
+#[tokio::test]
+async fn follow_and_the_agents_bring_forward_bring_each_tab_once_in_either_order() -> TestResult {
+    let h = harness().await?;
+    h.browser.list_tabs(&[3, 4, 5], 3)?;
+    let task = TaskId::parse("checkout")?;
+    h.operation(&task, 3);
+    h.sink.flush().await?;
+    let _view = h.view(Some(Follow::Task(task.clone()))).await?;
+    eventually(|| h.activated().is_ok_and(|tabs| tabs == [3])).await?;
+    let front = h.front();
+
+    let run = h.run_with_listeners(&task, &[5, 4], EpochMillis::now());
+    h.run_op(run, 4, "locator.click", 4, EpochMillis::now());
+    h.sink.flush().await?;
+    eventually(|| h.activated().is_ok_and(|tabs| tabs == [3, 4])).await?;
+    assert!(
+        matches!(
+            front.bring_forward(TabId(4), Some(task.clone())).await?,
+            Forward::AlreadyInFront
+        ),
+        "the follower brought 4 first: the agent sends nothing"
+    );
+
+    let began = EpochMillis::now();
+    assert!(
+        matches!(
+            front.bring_forward(TabId(3), Some(task.clone())).await?,
+            Forward::Brought
+        ),
+        "the agent brings 3 before the click's start reaches the follower"
+    );
+    h.run_op(run, 5, "locator.click", 3, began);
+    h.sink.flush().await?;
+    tokio::time::sleep(QUIET).await;
+    assert_eq!(
+        h.activated()?,
+        [3, 4, 3],
+        "each tab came forward once, and the blank tab never did"
+    );
+    Ok(())
+}
+
+/// A view follows task "search" on its tab 5 while a run of "checkout" starts (Neo's listeners
+/// on 5 and 4) and clicks on its own tab 3. The agent's tab stays behind, since the view watches
+/// another task, and the follower ignores another task's operations: the front stays on 5.
+#[tokio::test]
+async fn the_agents_bring_forward_never_moves_a_view_that_follows_another_task() -> TestResult {
+    let h = harness().await?;
+    h.browser.list_tabs(&[3, 4, 5], 3)?;
+    let (task, watched) = (TaskId::parse("checkout")?, TaskId::parse("search")?);
+    h.operation(&watched, 5);
+    h.sink.flush().await?;
+    let _view = h.view(Some(Follow::Task(watched))).await?;
+    eventually(|| h.activated().is_ok_and(|tabs| tabs == [5])).await?;
+
+    let run = h.run_with_listeners(&task, &[5, 4], EpochMillis::now());
+    h.run_op(run, 4, "locator.click", 3, EpochMillis::now());
+    h.sink.flush().await?;
+    assert!(
+        matches!(
+            h.front().bring_forward(TabId(3), Some(task)).await?,
+            Forward::ViewerElsewhere
+        ),
+        "the view watches another task: the agent's tab stays behind"
+    );
+    tokio::time::sleep(QUIET).await;
+    assert_eq!(
+        h.activated()?,
+        [5],
+        "the front never left the watched task's tab"
+    );
     Ok(())
 }
 
