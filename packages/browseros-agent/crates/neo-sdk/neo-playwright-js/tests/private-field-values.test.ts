@@ -15,10 +15,11 @@ beforeEach(() => {
 afterEach(() => page.close())
 
 /** Existing local-realm cases keep the ordinary no-neighbour snapshot path. */
-function masked<T>(walk: () => T): T {
+function masked<T>(walk: () => T, options: { declared?: boolean } = {}): T {
   return withMaskedFieldValues(
     { root: page.document.body, mayHaveOtherFrame: false },
     walk,
+    options,
   )
 }
 
@@ -190,8 +191,8 @@ it('masks a box Neo typed a host value into, whatever the page declares (ruling 
     step: { kind: 'focus', text: 'A🔒z', spaced: false },
   })
   privateStep(world, { op: 'private', pin: 7, step: { kind: 'forget' } })
-  expect(withMaskedFieldValues(() => typed.value)).toBe('••••')
-  expect(withMaskedFieldValues(() => ordinary.value)).toBe('plain')
+  expect(masked(() => typed.value)).toBe('••••')
+  expect(masked(() => ordinary.value)).toBe('plain')
   expect(typed.value).toBe('A🔒z')
 })
 
@@ -213,11 +214,9 @@ it('masks a box Neo typed into under the conformance switch, where declared fiel
   expect(withMarkedFieldsMasked(() => typed.value)).toBe('••••')
   expect(withMarkedFieldsMasked(() => declared.value)).toBe('hunter2')
   const conformance = { declared: false }
-  expect(withMaskedFieldValues(() => typed.value, conformance)).toBe('••••')
-  expect(withMaskedFieldValues(() => declared.value, conformance)).toBe(
-    'hunter2',
-  )
-  expect(withMaskedFieldValues(() => declared.value)).toBe('•••••••')
+  expect(masked(() => typed.value, conformance)).toBe('••••')
+  expect(masked(() => declared.value, conformance)).toBe('hunter2')
+  expect(masked(() => declared.value)).toBe('•••••••')
 })
 
 it('keeps empty secrets and ordinary fields, submit labels and expiry selects unchanged', () => {

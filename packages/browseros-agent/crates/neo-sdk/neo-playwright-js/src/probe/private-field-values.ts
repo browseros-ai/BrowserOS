@@ -51,6 +51,7 @@ const PRIVATE_VALUE_ATTRIBUTES = new Set([
  * conformance switch it does not, so declared fields print as upstream prints them.
  */
 let declaredMasked = true
+
 function isHtmlField(element: Element): element is Field {
   return (
     FIELD_TAGS.has(element.localName) && element.namespaceURI === HTML_NAMESPACE
@@ -328,7 +329,8 @@ function restoreOverrides(installed: PropertyOverride[]): void {
 export function withMarkedFieldsMasked<T>(walk: () => T): T {
   return anyPrivatelyTyped()
     ? withMaskedFieldValues(
-        { root: document.documentElement, sameProcessNeighbour: true },
+        // These mark-only callers have no frame hint yet, so discovery stays conservative.
+        { root: document.documentElement, mayHaveOtherFrame: true },
         walk,
         { declared: false },
       )
