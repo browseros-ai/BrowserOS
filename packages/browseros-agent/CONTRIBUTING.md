@@ -66,7 +66,8 @@ The default browser is `/Applications/BrowserOS neo.app/Contents/MacOS/BrowserOS
 and `browserclaw` on Linux. Set `NEO_E2E_BROWSER=/absolute/path/to/browser` for a different
 build. The helper selects its own unused port; do not start a browser or set a port first.
 
-Use this for standalone browser/CDP tests. `bun run test:neo-spec` and the full MCP fixtures
+Use this for standalone browser/CDP tests. `bun run test:neo-spec`, the server's browser tests
+(`apps/server/tests/__helpers__`), and the claw-mcp contract suite (`bun run test:claw-mcp-contract`)
 already own their browsers and should use their existing launchers. Full app development
 uses the watch command below. Tests should not share a running browser across agents:
 closing tabs or clearing cookies/cache in one suite can affect another.
