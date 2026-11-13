@@ -69,6 +69,13 @@ pub(crate) trait EventLog: Send + Sync {
     }
 }
 
+/// One tab's frame-tree version on a reply (`Envelope::Ok` `frames`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, TS)]
+pub(crate) struct FrameVersion {
+    pub(crate) tab: TabId,
+    pub(crate) version: u64,
+}
+
 /// A worker identity in the host protocol, independent of the browser adapter. The prelude's
 /// `Worker` objects are keyed by `id`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, TS)]
@@ -176,8 +183,12 @@ impl Observer {
     }
 
     /// Every tab's frame-tree version (`Envelope::Ok` `frames`).
-    pub(crate) fn frame_versions(&self) -> Vec<(TabId, u64)> {
-        self.log.frame_versions()
+    pub(crate) fn frame_versions(&self) -> Vec<FrameVersion> {
+        self.log
+            .frame_versions()
+            .into_iter()
+            .map(|(tab, version)| FrameVersion { tab, version })
+            .collect()
     }
 
     /// Groups all delivered closes by tab. Multiple target-bound subscriptions can coexist

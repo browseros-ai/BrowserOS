@@ -4,9 +4,8 @@ use serde::Serialize;
 use serde_json::Value;
 use ts_rs::TS;
 
-use super::FrameVersion;
 use crate::browser::PageRef;
-use crate::dispatch::{Observation, PageFact};
+use crate::dispatch::{FrameVersion, Observation, PageFact};
 
 /// The run's init: the bootstrap's `__neo.run` hands it to each parameter's build
 /// (`__neo.provide`), which the prelude's bridge.ts `provide` reads. `run_script` and the hosted

@@ -4,7 +4,6 @@ use std::collections::{HashMap, VecDeque};
 use std::mem;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
-use browseros_core::TabId;
 use futures_util::FutureExt;
 use futures_util::future::{BoxFuture, Shared};
 use neo_trace::{Delivery, ErrorOwner, OperationId};
@@ -16,8 +15,8 @@ use ts_rs::TS;
 use super::{LogLevel, RunLogs};
 use crate::browser::PageRef;
 use crate::dispatch::{
-    Call, CallSite, Dispatcher, Observation, OpAbort, OpFailure, OpReply, PageFact, PendingReply,
-    RunCtx, StopReason,
+    Call, CallSite, Dispatcher, FrameVersion, Observation, OpAbort, OpFailure, OpReply, PageFact,
+    PendingReply, RunCtx, StopReason,
 };
 
 /// How many failed ops a run remembers for its own error. A script's uncaught `NeoError` is
@@ -183,23 +182,6 @@ pub(crate) enum Envelope<'a> {
     },
 }
 
-/// Every tab's frame-tree version the dispatcher's observer knows, as replies carry them.
-pub(crate) fn frame_versions(dispatcher: &Dispatcher) -> Vec<FrameVersion> {
-    dispatcher
-        .observer()
-        .frame_versions()
-        .into_iter()
-        .map(|(tab, version)| FrameVersion { tab, version })
-        .collect()
-}
-
-/// One tab's frame-tree version on a reply (`Envelope::Ok` `frames`).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, TS)]
-pub(crate) struct FrameVersion {
-    pub(crate) tab: TabId,
-    pub(crate) version: u64,
-}
-
 /// The fields of the script's `NeoError`, named as the trace names them. errors.ts copies all
 /// but `message` and `matcher` onto the error the script catches.
 #[derive(Serialize, TS)]
@@ -328,7 +310,7 @@ impl Bridge {
 
     /// Every tab's frame-tree version now, for a reply or the run's init.
     pub(crate) fn frame_versions(&self) -> Vec<FrameVersion> {
-        frame_versions(&self.dispatcher)
+        self.dispatcher.observer().frame_versions()
     }
 
     /// The bootstrap's abort of the op it keyed `key`: `{"key", "reason"}`. An op that already
