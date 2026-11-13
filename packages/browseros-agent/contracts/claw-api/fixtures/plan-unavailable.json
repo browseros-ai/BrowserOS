@@ -1,0 +1,13 @@
+{
+  "available": false,
+  "plan": null,
+  "planName": null,
+  "features": [],
+  "status": "none",
+  "periodEnd": null,
+  "endsAt": null,
+  "graceUntil": null,
+  "onKey": false,
+  "checkedAt": null,
+  "stale": false
+}

@@ -19,6 +19,7 @@ type clawBackend struct {
 	Label           string
 	Package         string
 	Bin             string
+	Features        []string
 	SidecarName     string
 	ResourcesDir    string
 	ExecutionDir    func(profile string) string
@@ -26,9 +27,12 @@ type clawBackend struct {
 	ReadyPath       string
 }
 
+// billing-staging points the dev claw-server at the staging billing gateway, so neo sells and
+// verifies ultrafast against the staging Stripe sandbox.
 var clawServerBackend = clawBackend{
 	Label:           "claw-server",
 	Package:         "claw-server",
+	Features:        []string{"billing-staging"},
 	SidecarName:     "claw-server",
 	ResourcesDir:    "apps/claw-server/resources",
 	ExecutionDir:    func(profile string) string { return profile },
@@ -63,6 +67,9 @@ func clawBackendProcConfig(backend clawBackend, root string, env []string, p pro
 	command := []string{"cargo", "run", "-p", backend.Package}
 	if backend.Bin != "" {
 		command = append(command, "--bin", backend.Bin)
+	}
+	if len(backend.Features) > 0 {
+		command = append(command, "--features", strings.Join(backend.Features, ","))
 	}
 	return proc.ProcConfig{
 		Tag:     proc.TagServer,

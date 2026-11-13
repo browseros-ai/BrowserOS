@@ -30,7 +30,70 @@ impl MigratorTrait for Migrator {
             Box::new(m0021_add_skill_flows::Migration),
             Box::new(m0022_add_mode_to_skill_runs::Migration),
             Box::new(m0023_add_tool_calls_daily::Migration),
+            Box::new(m0024_add_write_consent_to_skill_flows::Migration),
         ]
+    }
+}
+
+mod m0024_add_write_consent_to_skill_flows {
+    use super::*;
+
+    pub struct Migration;
+
+    impl MigrationName for Migration {
+        fn name(&self) -> &str {
+            "m0024_add_write_consent_to_skill_flows"
+        }
+    }
+
+    /// The user's answer to "with your agent or without", and the one click it covers.
+    const COLUMNS: [(&str, bool); 6] = [
+        ("approved_commit", false),
+        ("approved_via", false),
+        ("approved_at", true),
+        ("approved_answer", false),
+        ("approved_client", false),
+        ("with_agent_commit", false),
+    ];
+
+    #[async_trait::async_trait]
+    impl MigrationTrait for Migration {
+        async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+            for (column, integer) in COLUMNS {
+                if manager.has_column("skill_flows", column).await? {
+                    continue;
+                }
+                let mut definition = ColumnDef::new(Alias::new(column));
+                if integer {
+                    definition.big_integer();
+                } else {
+                    definition.string();
+                }
+                manager
+                    .alter_table(
+                        Table::alter()
+                            .table(Alias::new("skill_flows"))
+                            .add_column(definition.null())
+                            .to_owned(),
+                    )
+                    .await?;
+            }
+            Ok(())
+        }
+
+        async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+            for (column, _) in COLUMNS {
+                manager
+                    .alter_table(
+                        Table::alter()
+                            .table(Alias::new("skill_flows"))
+                            .drop_column(Alias::new(column))
+                            .to_owned(),
+                    )
+                    .await?;
+            }
+            Ok(())
+        }
     }
 }
 

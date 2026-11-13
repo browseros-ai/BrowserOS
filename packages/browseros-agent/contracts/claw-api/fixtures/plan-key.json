@@ -1,0 +1,22 @@
+{
+  "hint": "7K2QM",
+  "cap": 5,
+  "computers": [
+    {
+      "installId": "8f3e2b14-6c0a-4d9e-b5a7-1c2d3e4f5a60",
+      "label": "Sam’s MacBook Air",
+      "platform": "macos",
+      "lastSeenAt": 1793145600000,
+      "activatedAt": 1792540800000,
+      "thisComputer": true
+    },
+    {
+      "installId": "2a9b7c6d-1e0f-4a3b-8c5d-6e7f8091a2b3",
+      "label": "DESKTOP-4FQ7K2L",
+      "platform": "windows",
+      "lastSeenAt": 1793059200000,
+      "activatedAt": 1792627200000,
+      "thisComputer": false
+    }
+  ]
+}

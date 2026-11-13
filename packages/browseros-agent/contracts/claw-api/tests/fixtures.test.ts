@@ -1,7 +1,12 @@
 import { describe, expect, test } from 'bun:test'
-import { readFileSync } from 'node:fs'
+import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import type { CockpitStats } from '@browseros/claw-api'
+import type {
+  CockpitStats,
+  Plan,
+  PlanKey,
+  PlanKeyFullError,
+} from '@browseros/claw-api'
 import { parse } from 'yaml'
 
 const fixturesDir = join(import.meta.dir, '../fixtures')
@@ -142,5 +147,188 @@ describe('skills API fixtures', () => {
     const entry = list.items[0] as Record<string, unknown>
     expect(entry.category).toBe('RESEARCH')
     expect(Number.isSafeInteger(entry.installs as number)).toBe(true)
+  })
+})
+
+interface ContractSchema {
+  $ref?: string
+  allOf?: ContractSchema[]
+  nullable?: boolean
+  type?: string
+  enum?: unknown[]
+  pattern?: string
+  minLength?: number
+  maxLength?: number
+  minimum?: number
+  required?: string[]
+  properties?: Record<string, ContractSchema>
+  items?: ContractSchema
+}
+
+type SchemaFile = Record<string, ContractSchema>
+
+function schemaFiles(): Record<string, SchemaFile> {
+  return {
+    'plan.yaml': yaml('schemas/plan.yaml') as SchemaFile,
+    'common.yaml': yaml('schemas/common.yaml') as SchemaFile,
+  }
+}
+
+function resolveRef(
+  ref: string,
+  file: string,
+  files: Record<string, SchemaFile>,
+): [ContractSchema, string] {
+  const [target, name] = ref.split('#/') as [string, string]
+  const targetFile = target ? (target.split('/').at(-1) as string) : file
+  const schema = files[targetFile]?.[name]
+  if (!schema) throw new Error(`unresolved schema ref ${ref} in ${file}`)
+  return [schema, targetFile]
+}
+
+interface ShapeContext {
+  file: string
+  files: Record<string, SchemaFile>
+}
+
+function shapeErrors(
+  value: unknown,
+  schema: ContractSchema,
+  context: ShapeContext,
+  path = '$',
+): string[] {
+  if (schema.$ref) {
+    const [resolved, file] = resolveRef(
+      schema.$ref,
+      context.file,
+      context.files,
+    )
+    return shapeErrors(value, resolved, { ...context, file }, path)
+  }
+  if (value === null) {
+    return schema.nullable ? [] : [`${path} is null`]
+  }
+  if (schema.allOf) {
+    return schema.allOf.flatMap((part) =>
+      shapeErrors(value, part, context, path),
+    )
+  }
+  if (schema.enum && !schema.enum.includes(value)) {
+    return [`${path} is not one of ${schema.enum.join(', ')}`]
+  }
+  switch (schema.type) {
+    case 'boolean':
+      return typeof value === 'boolean' ? [] : [`${path} is not a boolean`]
+    case 'integer':
+      return Number.isSafeInteger(value) &&
+        (value as number) >= (schema.minimum ?? Number.NEGATIVE_INFINITY)
+        ? []
+        : [`${path} is not an integer of at least ${schema.minimum}`]
+    case 'string':
+      return stringErrors(value, schema, path)
+    case 'array':
+      if (!Array.isArray(value)) return [`${path} is not an array`]
+      return value.flatMap((item, index) =>
+        shapeErrors(item, schema.items ?? {}, context, `${path}[${index}]`),
+      )
+    case 'object':
+      return objectErrors(value, schema, context, path)
+    default:
+      return []
+  }
+}
+
+function stringErrors(
+  value: unknown,
+  schema: ContractSchema,
+  path: string,
+): string[] {
+  if (typeof value !== 'string') return [`${path} is not a string`]
+  const fits =
+    value.length >= (schema.minLength ?? 0) &&
+    value.length <= (schema.maxLength ?? Number.POSITIVE_INFINITY) &&
+    (!schema.pattern || new RegExp(schema.pattern).test(value))
+  return fits ? [] : [`${path} does not fit its length or pattern`]
+}
+
+function objectErrors(
+  value: unknown,
+  schema: ContractSchema,
+  context: ShapeContext,
+  path: string,
+): string[] {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    return [`${path} is not an object`]
+  }
+  const record = value as Record<string, unknown>
+  const properties = schema.properties ?? {}
+  return [
+    ...(schema.required ?? [])
+      .filter((key) => !(key in record))
+      .map((key) => `${path}.${key} is missing`),
+    ...Object.entries(record).flatMap(([key, field]) => {
+      const fieldSchema = properties[key]
+      return fieldSchema
+        ? shapeErrors(field, fieldSchema, context, `${path}.${key}`)
+        : [`${path}.${key} is not in the schema`]
+    }),
+  ]
+}
+
+describe('plan API fixtures', () => {
+  const planFixtures = {
+    'plan-none.json': 'Plan',
+    'plan-active.json': 'Plan',
+    'plan-ending.json': 'Plan',
+    'plan-payment-failed.json': 'Plan',
+    'plan-unpaid.json': 'Plan',
+    'plan-stale.json': 'Plan',
+    'plan-unavailable.json': 'Plan',
+    'plan-pricing.json': 'PlanPricing',
+    'plan-checkout.json': 'PlanCheckout',
+    'plan-checkout-complete.json': 'PlanCheckoutStatus',
+    'plan-key.json': 'PlanKey',
+    'plan-error-key-full.json': 'PlanKeyFullError',
+    'plan-error-key-invalid.json': 'ApiError',
+    'plan-error-already-subscribed.json': 'ApiError',
+  } as const
+
+  test('every plan fixture matches its schema', () => {
+    const files = schemaFiles()
+    for (const [name, model] of Object.entries(planFixtures)) {
+      const file = model === 'ApiError' ? 'common.yaml' : 'plan.yaml'
+      const schema = files[file]?.[model] ?? {}
+      expect({
+        name,
+        errors: shapeErrors(fixture(name), schema, { file, files }),
+      }).toEqual({ name, errors: [] })
+    }
+  })
+
+  test('no fixture contains a licence key', () => {
+    const licenceKey = /NEO(-[0-9A-Z]{5}){5}/
+    for (const name of readdirSync(fixturesDir)) {
+      expect({
+        name,
+        leaks: licenceKey.test(JSON.stringify(fixture(name))),
+      }).toEqual({ name, leaks: false })
+    }
+  })
+
+  test('the plan states carry the fields their status promises', () => {
+    const unpaid = fixture('plan-unpaid.json') as Plan
+    const ending = fixture('plan-ending.json') as Plan
+    const failed = fixture('plan-payment-failed.json') as Plan
+    const unavailable = fixture('plan-unavailable.json') as Plan
+    const full = fixture('plan-error-key-full.json') as PlanKeyFullError
+
+    expect(unpaid.features).toEqual([])
+    expect(ending.endsAt).not.toBeNull()
+    expect(failed.graceUntil).not.toBeNull()
+    expect(unavailable.available).toBe(false)
+    expect(full.code).toBe('key_full')
+    expect(full.computers).toHaveLength(
+      (fixture('plan-key.json') as PlanKey).cap,
+    )
   })
 })

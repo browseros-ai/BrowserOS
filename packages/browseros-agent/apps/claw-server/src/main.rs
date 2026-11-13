@@ -95,9 +95,7 @@ async fn async_main() -> anyhow::Result<()> {
     record_startup(&logs_dir, "initialized", None);
     // Debug builds only, so the MCP conformance suite can drive compiled flows end to end.
     if cfg!(debug_assertions) && std::env::var_os("CLAW_SERVER_ULTRAFAST").is_some() {
-        state
-            .ultrafast
-            .store(true, std::sync::atomic::Ordering::Relaxed);
+        state.ultrafast.pin_on();
     }
     // Report one-time startup conditions worth seeing remotely, such as a database migrated by a
     // newer BrowserOS neo (read-forward). Consent-gated and drawn from the shared daily budget.

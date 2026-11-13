@@ -7,6 +7,7 @@
  * functions; the single ToastHost in the app layout renders them.
  */
 
+import { ApiResponseError } from '@browseros/claw-api-client'
 import type { ToastInput } from '@/components/motion/animated-toast-stack'
 
 export interface ToastHostHandle {
@@ -42,11 +43,16 @@ export function toastSuccess(title: string, description?: string): void {
   toast({ title, description, status: 'success' })
 }
 
-/** Shows a failed request in plain words, with the error's own message when it has one. */
+/** Shows a failed request in plain words, with the server's message when it sent one. */
 export function toastApiError(title: string, error?: unknown): void {
-  const description =
-    error instanceof Error && error.message ? error.message : undefined
-  toast({ title, description, status: 'error' })
+  toast({ title, description: errorDescription(error), status: 'error' })
+}
+
+function errorDescription(error: unknown): string | undefined {
+  if (error instanceof ApiResponseError && error.apiMessage) {
+    return error.apiMessage
+  }
+  return error instanceof Error && error.message ? error.message : undefined
 }
 
 export interface ToastPromiseMessages<T> {
@@ -85,9 +91,11 @@ export function toastPromise<T>(
       settle({ title, status: 'success' })
     },
     (error: unknown) => {
-      const description =
-        error instanceof Error && error.message ? error.message : undefined
-      settle({ title: messages.error, description, status: 'error' })
+      settle({
+        title: messages.error,
+        description: errorDescription(error),
+        status: 'error',
+      })
     },
   )
 }

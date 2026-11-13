@@ -626,6 +626,288 @@ async fn seed_dispatch_with_estimates(
         .await?)
 }
 
+fn ultrafast_dispatch(
+    tool_name: &str,
+    created_at: i64,
+    duration_ms: i64,
+    structured: &Value,
+    dispatch_id: DispatchId,
+    parent_dispatch_id: Option<DispatchId>,
+    output_tokens: i64,
+) -> RecordToolDispatchInput {
+    RecordToolDispatchInput {
+        agent_id: "claude-ultrafast".to_string(),
+        slug: "claude".to_string(),
+        agent_label: "claude".to_string(),
+        session_id: "ultrafast-session".to_string(),
+        tool_name: tool_name.to_string(),
+        page_id: None,
+        tab_id: None,
+        target_id: None,
+        url: None,
+        title: None,
+        args_json: bounded_args_json(&json!({})),
+        result_meta: result_meta(false, false, structured, 1),
+        duration_ms,
+        dispatch_id,
+        created_at: Some(created_at),
+        parent_dispatch_id,
+        tool_input_token_estimate: 5,
+        tool_output_token_estimate: output_tokens,
+        token_estimator_version: 1,
+    }
+}
+
+#[tokio::test]
+async fn sessions_say_what_an_ultrafast_skill_run_did() -> anyhow::Result<()> {
+    let app = test_app().await?;
+    let done = json!({ "status": "done", "output": {}, "steps": 3, "durationMs": 15_000 });
+    let script = DispatchId::new();
+    let rows = [
+        ultrafast_dispatch(
+            "run_skill",
+            1_000,
+            15_354,
+            &done,
+            DispatchId::new(),
+            None,
+            1_701,
+        ),
+        ultrafast_dispatch(
+            "run",
+            1_002,
+            15_349,
+            &json!({ "ok": true, "value": {}, "logs": [] }),
+            script.clone(),
+            None,
+            1_861,
+        ),
+        ultrafast_dispatch(
+            "read",
+            3_000,
+            10,
+            &json!({}),
+            DispatchId::new(),
+            Some(script.clone()),
+            6_778,
+        ),
+        ultrafast_dispatch(
+            "read",
+            5_000,
+            10,
+            &json!({}),
+            DispatchId::new(),
+            Some(script),
+            7_001,
+        ),
+    ];
+    for row in rows {
+        app.state.audit_log.record_tool_dispatch(row).await?;
+    }
+    app.state
+        .audit_log
+        .record_session_end("ultrafast-session", "closed", None)
+        .await?;
+    seed_dispatch(&app, "ordinary-session").await?;
+
+    let expected = json!({ "durationMs": 15_354, "pagesRead": 2, "tokensSaved": 13_779 });
+    let (status, _, bytes) = request(
+        &app.router,
+        "GET",
+        "/api/v1/sessions/ultrafast-session",
+        None,
+        Body::empty(),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(json_body(&bytes)?["session"]["ultrafast"], expected);
+
+    let (status, _, bytes) =
+        request(&app.router, "GET", "/api/v1/sessions", None, Body::empty()).await?;
+    assert_eq!(status, StatusCode::OK);
+    let body = json_body(&bytes)?;
+    let items = body["items"]
+        .as_array()
+        .ok_or_else(|| anyhow::anyhow!("items missing"))?;
+    let ultrafast = |id: &str| {
+        items
+            .iter()
+            .find(|item| item["sessionId"] == id)
+            .map(|item| item.get("ultrafast").cloned())
+    };
+    assert_eq!(ultrafast("ultrafast-session"), Some(Some(expected)));
+    assert_eq!(ultrafast("ordinary-session"), Some(None));
+    Ok(())
+}
+
+fn in_session(session_id: &str, row: RecordToolDispatchInput) -> RecordToolDispatchInput {
+    RecordToolDispatchInput {
+        session_id: session_id.to_string(),
+        ..row
+    }
+}
+
+async fn get_json(app: &TestApp, uri: &str) -> anyhow::Result<Value> {
+    let (status, _, bytes) = request_with_headers(
+        &app.router,
+        "GET",
+        uri,
+        None,
+        &[("origin", BROWSERCLAW_EXTENSION_ORIGIN)],
+        Body::empty(),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK, "{uri}");
+    json_body(&bytes)
+}
+
+#[tokio::test]
+async fn a_pursue_run_counts_the_pages_neo_read_and_older_runs_count_nothing() -> anyhow::Result<()>
+{
+    let app = test_app().await?;
+    let pursued = json!({ "outcome": "handed_back", "pagesRead": 5, "pageTokens": 18_204 });
+    let before_counts = json!({ "outcome": "completed" });
+    let refused = json!({ "outcome": "handed_back", "pagesRead": 0, "pageTokens": 0 });
+    for row in [
+        in_session(
+            "pursue-session",
+            ultrafast_dispatch(
+                "pursue",
+                9_000,
+                7_317,
+                &pursued,
+                DispatchId::new(),
+                None,
+                120,
+            ),
+        ),
+        in_session(
+            "older-pursue",
+            ultrafast_dispatch(
+                "pursue",
+                8_000,
+                4_000,
+                &before_counts,
+                DispatchId::new(),
+                None,
+                90,
+            ),
+        ),
+        in_session(
+            "refused-pursue",
+            ultrafast_dispatch("pursue", 7_000, 30, &refused, DispatchId::new(), None, 40),
+        ),
+    ] {
+        app.state.audit_log.record_tool_dispatch(row).await?;
+    }
+
+    let expected = json!({ "durationMs": 7_317, "pagesRead": 5, "tokensSaved": 18_204 });
+    let detail = get_json(&app, "/api/v1/sessions/pursue-session").await?;
+    assert_eq!(detail["session"]["ultrafast"], expected);
+    for session in ["older-pursue", "refused-pursue"] {
+        let detail = get_json(&app, &format!("/api/v1/sessions/{session}")).await?;
+        assert!(detail["session"].get("ultrafast").is_none(), "{session}");
+    }
+    let list = get_json(&app, "/api/v1/sessions").await?;
+    let listed = list["items"]
+        .as_array()
+        .ok_or_else(|| anyhow::anyhow!("items missing"))?
+        .iter()
+        .find(|item| item["sessionId"] == "pursue-session")
+        .and_then(|item| item.get("ultrafast").cloned());
+    assert_eq!(listed, Some(expected));
+    Ok(())
+}
+
+#[tokio::test]
+async fn savings_sum_every_ultrafast_task_and_list_the_newest_first() -> anyhow::Result<()> {
+    let app = test_app().await?;
+    let done = json!({ "status": "done", "output": {}, "steps": 3, "durationMs": 15_000 });
+    let script = DispatchId::new();
+    let pursued = json!({ "outcome": "completed", "pagesRead": 4, "pageTokens": 10_000 });
+    for row in [
+        ultrafast_dispatch(
+            "run_skill",
+            1_000,
+            15_354,
+            &done,
+            DispatchId::new(),
+            None,
+            1_701,
+        ),
+        ultrafast_dispatch(
+            "run",
+            1_002,
+            15_349,
+            &json!({ "ok": true, "value": {}, "logs": [] }),
+            script.clone(),
+            None,
+            1_861,
+        ),
+        ultrafast_dispatch(
+            "read",
+            3_000,
+            10,
+            &json!({}),
+            DispatchId::new(),
+            Some(script),
+            6_778,
+        ),
+        in_session(
+            "pursue-session",
+            ultrafast_dispatch(
+                "pursue",
+                40_000,
+                6_000,
+                &pursued,
+                DispatchId::new(),
+                None,
+                100,
+            ),
+        ),
+    ] {
+        app.state.audit_log.record_tool_dispatch(row).await?;
+    }
+    seed_dispatch(&app, "ordinary-session").await?;
+
+    let savings = get_json(&app, "/api/v1/plan/savings").await?;
+    assert_eq!(
+        savings["totals"],
+        json!({ "durationMs": 21_354, "pagesRead": 5, "tokensSaved": 16_778 })
+    );
+    assert_eq!(savings["tasks"], 2);
+    let latest = savings["latest"]
+        .as_array()
+        .ok_or_else(|| anyhow::anyhow!("latest missing"))?;
+    let order = latest
+        .iter()
+        .map(|item| item["sessionId"].as_str().unwrap_or_default())
+        .collect::<Vec<_>>();
+    assert_eq!(order, ["pursue-session", "ultrafast-session"]);
+    assert_eq!(
+        latest[0]["ultrafast"],
+        json!({ "durationMs": 6_000, "pagesRead": 4, "tokensSaved": 10_000 })
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn savings_start_at_zero() -> anyhow::Result<()> {
+    let app = test_app().await?;
+    seed_dispatch(&app, "ordinary-session").await?;
+
+    let savings = get_json(&app, "/api/v1/plan/savings").await?;
+    assert_eq!(
+        savings,
+        json!({
+            "totals": { "durationMs": 0, "pagesRead": 0, "tokensSaved": 0 },
+            "tasks": 0,
+            "latest": [],
+        })
+    );
+    Ok(())
+}
+
 #[tokio::test]
 async fn retired_rest_routes_are_unmounted() -> anyhow::Result<()> {
     let app = test_app().await?;
@@ -2262,5 +2544,298 @@ async fn extension_update_notification_is_an_origin_restricted_wakeup() -> anyho
             .await?;
         assert_eq!(response.status(), expected);
     }
+    Ok(())
+}
+
+#[tokio::test]
+async fn plan_routes_answer_in_the_contract_without_a_billing_gateway() -> anyhow::Result<()> {
+    let app = test_app().await?;
+    let (status, headers, bytes) =
+        request(&app.router, "GET", "/api/v1/plan", None, Body::empty()).await?;
+    assert_eq!(status, StatusCode::OK);
+    assert_permissive_cors(&headers);
+    let plan: claw_api::models::Plan = serde_json::from_slice(&bytes)?;
+    assert!(!plan.available);
+    assert_eq!(plan.status, claw_api::models::PlanStatus::None);
+
+    for (method, uri, body) in [
+        ("GET", "/api/v1/plan/pricing", None),
+        ("GET", "/api/v1/plan/key", None),
+        ("POST", "/api/v1/plan/key/reset", None),
+        ("POST", "/api/v1/plan/refresh", None),
+        (
+            "POST",
+            "/api/v1/plan/key/activate",
+            Some(json!({ "key": "NEO-7K2QM" })),
+        ),
+    ] {
+        let (content_type, payload) = match body {
+            Some(body) => (Some("application/json"), Body::from(body.to_string())),
+            None => (None, Body::empty()),
+        };
+        let (status, headers, bytes) =
+            request(&app.router, method, uri, content_type, payload).await?;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{uri}");
+        let error: claw_api::models::ApiError = serde_json::from_slice(&bytes)?;
+        assert_eq!(error.code, "billing_unavailable", "{uri}");
+        assert_eq!(
+            error.request_id.as_deref(),
+            headers
+                .get("x-request-id")
+                .and_then(|value| value.to_str().ok()),
+            "{uri}"
+        );
+    }
+
+    let (status, headers, bytes) = request_with_headers(
+        &app.router,
+        "GET",
+        "/api/v1/plan",
+        None,
+        &[("origin", "https://example.com")],
+        Body::empty(),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert!(!headers.contains_key(header::ACCESS_CONTROL_ALLOW_ORIGIN));
+    let error: claw_api::models::ApiError = serde_json::from_slice(&bytes)?;
+    assert_eq!(error.code, "forbidden");
+    Ok(())
+}
+
+fn neo_step(session_id: &str, created_at: i64, args: Value) -> RecordToolDispatchInput {
+    in_session(
+        session_id,
+        RecordToolDispatchInput {
+            args_json: bounded_args_json(&args),
+            ..ultrafast_dispatch(
+                "act",
+                created_at,
+                200,
+                &json!({ "kind": "x" }),
+                DispatchId::new(),
+                None,
+                10,
+            )
+        },
+    )
+}
+
+#[tokio::test]
+async fn sessions_say_what_neo_did_with_pursue_even_before_pages_were_counted() -> anyhow::Result<()>
+{
+    let app = test_app().await?;
+    let handed_back = json!({ "outcome": "handed_back" });
+    let finished = json!({ "outcome": "completed" });
+    for row in [
+        in_session(
+            "flights",
+            ultrafast_dispatch(
+                "pursue",
+                1_000,
+                5_662,
+                &handed_back,
+                DispatchId::new(),
+                None,
+                273,
+            ),
+        ),
+        neo_step(
+            "flights",
+            2_000,
+            json!({ "kind": "focus", "page": 9, "ref": "e12" }),
+        ),
+        neo_step(
+            "flights",
+            2_200,
+            json!({ "kind": "click", "page": 9, "ref": "e12" }),
+        ),
+        neo_step(
+            "flights",
+            2_600,
+            json!({ "kind": "click", "page": 9, "ref": "e81" }),
+        ),
+        neo_step(
+            "flights",
+            4_000,
+            json!({ "kind": "fill", "page": 9, "ref": "e17", "value": "Singapore" }),
+        ),
+        neo_step(
+            "flights",
+            9_000,
+            json!({ "kind": "click", "page": 9, "ref": "e40" }),
+        ),
+        in_session(
+            "colgate",
+            ultrafast_dispatch(
+                "pursue",
+                20_000,
+                7_317,
+                &finished,
+                DispatchId::new(),
+                None,
+                82,
+            ),
+        ),
+        neo_step(
+            "colgate",
+            21_000,
+            json!({ "kind": "fill", "page": 3, "ref": "e57", "value": "colgate toothpaste" }),
+        ),
+        neo_step(
+            "colgate",
+            22_000,
+            json!({ "kind": "press", "page": 3, "ref": "e57", "key": "Enter" }),
+        ),
+    ] {
+        app.state.audit_log.record_tool_dispatch(row).await?;
+    }
+    seed_dispatch(&app, "ordinary-session").await?;
+
+    let flights = json!({
+        "outcome": "handed_back",
+        "durationMs": 5_662,
+        "steps": [
+            { "action": "click" },
+            { "action": "click" },
+            { "action": "type", "text": "Singapore" },
+        ],
+    });
+    let colgate = json!({
+        "outcome": "completed",
+        "durationMs": 7_317,
+        "steps": [
+            { "action": "type", "text": "colgate toothpaste" },
+            { "action": "press", "text": "Enter" },
+        ],
+    });
+    let detail = get_json(&app, "/api/v1/sessions/flights").await?;
+    assert_eq!(detail["session"]["pursue"], flights);
+    assert!(detail["session"].get("ultrafast").is_none());
+    let list = get_json(&app, "/api/v1/sessions").await?;
+    let items = list["items"]
+        .as_array()
+        .ok_or_else(|| anyhow::anyhow!("items missing"))?;
+    let pursue_of = |session: &str| {
+        items
+            .iter()
+            .find(|item| item["sessionId"] == session)
+            .and_then(|item| item.get("pursue").cloned())
+    };
+    assert_eq!(pursue_of("flights"), Some(flights));
+    assert_eq!(pursue_of("colgate"), Some(colgate));
+    assert_eq!(pursue_of("ordinary-session"), None);
+    Ok(())
+}
+
+#[tokio::test]
+async fn savings_count_every_pursue_run_and_add_pages_only_where_neo_counted_them()
+-> anyhow::Result<()> {
+    let app = test_app().await?;
+    let done = json!({ "status": "done", "output": {}, "steps": 3, "durationMs": 15_000 });
+    let script = DispatchId::new();
+    let counted = json!({ "outcome": "completed", "pagesRead": 4, "pageTokens": 10_000 });
+    let before_counts = json!({ "outcome": "handed_back" });
+    for row in [
+        ultrafast_dispatch(
+            "run_skill",
+            1_000,
+            15_354,
+            &done,
+            DispatchId::new(),
+            None,
+            1_701,
+        ),
+        ultrafast_dispatch(
+            "run",
+            1_002,
+            15_349,
+            &json!({ "ok": true, "value": {}, "logs": [] }),
+            script.clone(),
+            None,
+            1_861,
+        ),
+        ultrafast_dispatch(
+            "read",
+            3_000,
+            10,
+            &json!({}),
+            DispatchId::new(),
+            Some(script),
+            6_778,
+        ),
+        in_session(
+            "counted-pursue",
+            ultrafast_dispatch(
+                "pursue",
+                40_000,
+                6_000,
+                &counted,
+                DispatchId::new(),
+                None,
+                100,
+            ),
+        ),
+        in_session(
+            "older-pursue",
+            ultrafast_dispatch(
+                "pursue",
+                60_000,
+                5_662,
+                &before_counts,
+                DispatchId::new(),
+                None,
+                273,
+            ),
+        ),
+        neo_step(
+            "older-pursue",
+            61_000,
+            json!({ "kind": "click", "page": 9, "ref": "e12" }),
+        ),
+        neo_step(
+            "older-pursue",
+            62_000,
+            json!({ "kind": "click", "page": 9, "ref": "e81" }),
+        ),
+        neo_step(
+            "older-pursue",
+            63_000,
+            json!({ "kind": "fill", "page": 9, "ref": "e17", "value": "Singapore" }),
+        ),
+    ] {
+        app.state.audit_log.record_tool_dispatch(row).await?;
+    }
+    seed_dispatch(&app, "ordinary-session").await?;
+
+    let savings = get_json(&app, "/api/v1/plan/savings").await?;
+    assert_eq!(
+        savings["totals"],
+        json!({ "durationMs": 27_016, "pagesRead": 5, "tokensSaved": 16_778 })
+    );
+    assert_eq!(savings["tasks"], 3);
+    let latest = savings["latest"]
+        .as_array()
+        .ok_or_else(|| anyhow::anyhow!("latest missing"))?;
+    let order = latest
+        .iter()
+        .map(|item| item["sessionId"].as_str().unwrap_or_default())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        order,
+        ["older-pursue", "counted-pursue", "ultrafast-session"]
+    );
+    assert!(latest[0].get("ultrafast").is_none());
+    assert_eq!(latest[0]["pursue"]["outcome"], "handed_back");
+    assert_eq!(
+        latest[0]["pursue"]["steps"].as_array().map(Vec::len),
+        Some(3)
+    );
+    assert_eq!(
+        latest[1]["ultrafast"],
+        json!({ "durationMs": 6_000, "pagesRead": 4, "tokensSaved": 10_000 })
+    );
+    assert_eq!(latest[1]["pursue"]["outcome"], "completed");
+    assert!(latest[2].get("pursue").is_none());
     Ok(())
 }

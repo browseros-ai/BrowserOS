@@ -345,6 +345,63 @@ describe('calls made inside a run script', () => {
   })
 })
 
+describe('when neo takes a task over', () => {
+  const STORE = 'https://shop.example.com/item/2-pack'
+  const GOAL = 'Add the 2-pack to the cart'
+
+  function pursue(outcome: string, at: number, durationMs: number) {
+    return {
+      ...call('pursue', {
+        args: { page: 1, goal: GOAL },
+        url: STORE,
+        meta: { isError: false, outcome },
+        at,
+      }),
+      durationMs,
+    }
+  }
+
+  it('says neo took over the clicking, with the goal', () => {
+    const step = pursue('completed', 1_000, 4_000)
+    expect(describeStep(step)).toBe(
+      'neo took over the clicking: “Add the 2-pack to the cart”',
+    )
+    expect(verbForCall(step)).toBe('browse')
+  })
+
+  it('marks where the agent carries on after a hand back', () => {
+    const { steps } = describeSteps([
+      pursue('handed_back', 1_000, 4_000),
+      call('act', { args: { kind: 'click' }, url: STORE, at: 2_000 }),
+      call('act', { args: { kind: 'fill' }, url: STORE, at: 6_000 }),
+    ])
+
+    expect(steps.map((step) => step.sentence)).toEqual([
+      'neo took over the clicking: “Add the 2-pack to the cart”',
+      'Clicked on shop.example.com',
+      'Typed into shop.example.com',
+    ])
+    expect(steps.map((step) => step.afterHandBack ?? false)).toEqual([
+      false,
+      false,
+      true,
+    ])
+    expect(steps[0]?.handedBack).toBe(true)
+    expect(steps.some((step) => step.isError)).toBe(false)
+  })
+
+  it('marks nothing when neo finishes the task', () => {
+    const { steps } = describeSteps([
+      pursue('completed', 1_000, 4_000),
+      call('read', { url: 'https://other.example.com', at: 6_000 }),
+    ])
+
+    expect(steps.some((step) => step.handedBack || step.afterHandBack)).toBe(
+      false,
+    )
+  })
+})
+
 describe('describeLiveStep', () => {
   it('says what the agent is doing on the page, in the present tense', () => {
     expect(

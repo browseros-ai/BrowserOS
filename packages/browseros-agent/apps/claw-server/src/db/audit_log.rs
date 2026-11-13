@@ -7,7 +7,11 @@ use crate::{
             prelude::{AgentSessionEnds, AgentSessionStarts, Tasks, ToolDispatches},
             tasks, tool_dispatches,
         },
+        pursue_runs::{PursueRun, pursue_outcome, pursue_run},
         session_efficiency_stats::ELIGIBLE_TOKEN_ESTIMATOR_VERSION,
+        ultrafast_runs::{
+            UltrafastRunStats, finished_without_agent, pursue_reads, ultrafast_run_stats,
+        },
     },
     error::AppResult,
     ids::DispatchId,
@@ -26,6 +30,18 @@ use std::collections::HashMap;
 use url::Url;
 
 pub use crate::db::entities::tool_dispatches::Model as ToolDispatchRow;
+
+/// A session where ultrafast did work: what it counts toward the savings totals, what neo
+/// measured, what it did with pursue, and when its last row was recorded.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UltrafastSession {
+    pub session_id: String,
+    /// The measured stats plus the time of pursue calls recorded before pages were counted.
+    pub totals: UltrafastRunStats,
+    pub measured: Option<UltrafastRunStats>,
+    pub pursue: Option<PursueRun>,
+    pub last_run_at: i64,
+}
 
 const ARGS_JSON_MAX: usize = 4096;
 const RESULT_META_MAX: usize = 4096;
@@ -768,6 +784,139 @@ impl AuditLog {
         }))
     }
 
+    /// Ultrafast stats for each listed session that had an ultrafast run (a skill run without the
+    /// agent, or a pursue that read the page); sessions without one are missing from the map.
+    pub async fn ultrafast_run_stats(
+        &self,
+        session_ids: &[String],
+    ) -> AppResult<HashMap<String, UltrafastRunStats>> {
+        if session_ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let candidates = ToolDispatches::find()
+            .filter(tool_dispatches::Column::SessionId.is_in(session_ids.iter().cloned()))
+            .filter(tool_dispatches::Column::ToolName.is_in(["run_skill", "pursue"]))
+            .all(self.db.connection())
+            .await?;
+        Ok(self
+            .ultrafast_sessions(candidates)
+            .await?
+            .into_iter()
+            .filter_map(|session| session.measured.map(|stats| (session.session_id, stats)))
+            .collect())
+    }
+
+    /// What neo did with pursue in each listed session that had a pursue call finish or hand
+    /// back; sessions without one are missing from the map.
+    pub async fn pursue_runs(
+        &self,
+        session_ids: &[String],
+    ) -> AppResult<HashMap<String, PursueRun>> {
+        if session_ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let conn = self.db.connection();
+        let with_pursue = ToolDispatches::find()
+            .filter(tool_dispatches::Column::SessionId.is_in(session_ids.iter().cloned()))
+            .filter(tool_dispatches::Column::ToolName.eq("pursue"))
+            .all(conn)
+            .await?
+            .into_iter()
+            .filter(|row| pursue_outcome(row).is_some())
+            .map(|row| row.session_id)
+            .collect::<std::collections::HashSet<_>>();
+        if with_pursue.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let rows = ToolDispatches::find()
+            .filter(tool_dispatches::Column::SessionId.is_in(with_pursue))
+            .filter(tool_dispatches::Column::ToolName.is_in(["pursue", "act", "navigate"]))
+            .order_by_asc(tool_dispatches::Column::CreatedAt)
+            .order_by_asc(tool_dispatches::Column::Id)
+            .all(conn)
+            .await?;
+        let mut grouped: HashMap<String, Vec<ToolDispatchRow>> = HashMap::new();
+        for row in rows {
+            grouped.entry(row.session_id.clone()).or_default().push(row);
+        }
+        Ok(grouped
+            .into_iter()
+            .filter_map(|(session_id, rows)| pursue_run(&rows).map(|run| (session_id, run)))
+            .collect())
+    }
+
+    /// Every session where ultrafast did work (a skill that ran without the agent, or a pursue
+    /// that finished or handed back), newest run first.
+    pub async fn all_ultrafast_sessions(&self) -> AppResult<Vec<UltrafastSession>> {
+        let candidates = ToolDispatches::find()
+            .filter(tool_dispatches::Column::ToolName.is_in(["run_skill", "pursue"]))
+            .all(self.db.connection())
+            .await?;
+        let mut sessions = self.ultrafast_sessions(candidates).await?;
+        sessions.sort_by(|a, b| {
+            b.last_run_at
+                .cmp(&a.last_run_at)
+                .then_with(|| b.session_id.cmp(&a.session_id))
+        });
+        Ok(sessions)
+    }
+
+    /// Loads the sessions whose `run_skill` or `pursue` rows show ultrafast did work and derives
+    /// each one's stats and pursue steps from all of its rows.
+    async fn ultrafast_sessions(
+        &self,
+        candidates: Vec<ToolDispatchRow>,
+    ) -> AppResult<Vec<UltrafastSession>> {
+        let mut sessions = Vec::new();
+        let with_runs = candidates
+            .into_iter()
+            .filter(|row| {
+                (row.tool_name == "run_skill" && finished_without_agent(row))
+                    || pursue_reads(row).is_some()
+                    || pursue_outcome(row).is_some()
+            })
+            .map(|row| row.session_id)
+            .collect::<std::collections::HashSet<_>>();
+        if with_runs.is_empty() {
+            return Ok(sessions);
+        }
+        let conn = self.db.connection();
+        let rows = ToolDispatches::find()
+            .filter(tool_dispatches::Column::SessionId.is_in(with_runs))
+            .order_by_asc(tool_dispatches::Column::CreatedAt)
+            .order_by_asc(tool_dispatches::Column::Id)
+            .all(conn)
+            .await?;
+        let mut grouped: HashMap<String, Vec<ToolDispatchRow>> = HashMap::new();
+        for row in rows {
+            grouped.entry(row.session_id.clone()).or_default().push(row);
+        }
+        for (session_id, dispatches) in grouped {
+            let measured = ultrafast_run_stats(&dispatches);
+            let pursue = pursue_run(&dispatches);
+            if measured.is_none() && pursue.is_none() {
+                continue;
+            }
+            // Pursue calls from before pages were counted still add the time neo worked.
+            let unmeasured_ms = dispatches
+                .iter()
+                .filter(|row| pursue_outcome(row).is_some() && pursue_reads(row).is_none())
+                .map(|row| row.duration_ms.unwrap_or(0).max(0))
+                .fold(0_i64, i64::saturating_add);
+            let mut totals = measured.unwrap_or_default();
+            totals.duration_ms = totals.duration_ms.saturating_add(unmeasured_ms);
+            let last_run_at = dispatches.last().map_or(0, |row| row.created_at);
+            sessions.push(UltrafastSession {
+                session_id,
+                totals,
+                measured,
+                pursue,
+                last_run_at,
+            });
+        }
+        Ok(sessions)
+    }
+
     pub async fn list_session_screenshots(
         &self,
         session_id: &str,
@@ -1244,6 +1393,23 @@ pub fn result_meta(
     {
         summary["fileChooserOpen"] = json!(true);
     }
+    // pursue's ending, so the task timeline can tell a hand back from a finish.
+    if let Some(outcome) = structured_content
+        .get("outcome")
+        .and_then(serde_json::Value::as_str)
+        .filter(|outcome| matches!(*outcome, "completed" | "handed_back" | "cancelled"))
+    {
+        summary["outcome"] = json!(outcome);
+        // What neo read itself during the run, for the session's ultrafast numbers.
+        for key in ["pagesRead", "pageTokens"] {
+            if let Some(count) = structured_content
+                .get(key)
+                .and_then(serde_json::Value::as_u64)
+            {
+                summary[key] = json!(count);
+            }
+        }
+    }
     let serialized = summary.to_string();
     debug_assert!(serialized.len() <= RESULT_META_MAX);
     serialized
@@ -1482,6 +1648,36 @@ mod tests {
 
         assert!(meta.len() <= 4096);
         serde_json::from_str::<serde_json::Value>(&meta)?;
+        Ok(())
+    }
+
+    #[test]
+    fn result_metadata_keeps_only_a_known_pursue_outcome() -> anyhow::Result<()> {
+        let handed_back = result_meta(false, false, &json!({ "outcome": "handed_back" }), 1);
+        let free_text = result_meta(false, false, &json!({ "outcome": "anything else" }), 1);
+
+        let handed_back: serde_json::Value = serde_json::from_str(&handed_back)?;
+        let free_text: serde_json::Value = serde_json::from_str(&free_text)?;
+        assert_eq!(handed_back["outcome"], "handed_back");
+        assert!(free_text.get("outcome").is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn result_metadata_keeps_what_pursue_read() -> anyhow::Result<()> {
+        let pursued = result_meta(
+            false,
+            false,
+            &json!({ "outcome": "completed", "pagesRead": 5, "pageTokens": 18_204 }),
+            1,
+        );
+        let other_tool = result_meta(false, false, &json!({ "pagesRead": 5 }), 1);
+
+        let pursued: serde_json::Value = serde_json::from_str(&pursued)?;
+        let other_tool: serde_json::Value = serde_json::from_str(&other_tool)?;
+        assert_eq!(pursued["pagesRead"], 5);
+        assert_eq!(pursued["pageTokens"], 18_204);
+        assert!(other_tool.get("pagesRead").is_none());
         Ok(())
     }
 

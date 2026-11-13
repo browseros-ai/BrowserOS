@@ -2,12 +2,14 @@ pub mod audit_log;
 pub mod entities;
 pub mod feedback_invite;
 mod migration;
+pub mod pursue_runs;
 pub mod recording_index;
 pub mod run_error_budget;
 pub mod session_efficiency_stats;
 pub mod session_tabs;
 pub mod skills;
 pub mod tool_calls_daily;
+pub mod ultrafast_runs;
 
 pub use audit_log::AuditLog;
 pub use recording_index::{
@@ -450,7 +452,7 @@ mod tests {
                 "SELECT version FROM seaql_migrations".to_string(),
             ))
             .await?;
-        assert_eq!(migrations.len(), 23);
+        assert_eq!(migrations.len(), 24);
         assert_eq!(
             migrations[0].try_get::<String>("", "version")?,
             "m0001_baseline"
@@ -681,7 +683,7 @@ mod tests {
         let migration_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM seaql_migrations")
             .fetch_one(&mut conn)
             .await?;
-        assert_eq!(migration_count, 23);
+        assert_eq!(migration_count, 24);
         conn.close().await?;
         Ok(())
     }
@@ -790,7 +792,7 @@ mod tests {
                 "SELECT version FROM seaql_migrations ORDER BY version".to_string(),
             ))
             .await?;
-        assert_eq!(migrations.len(), 23);
+        assert_eq!(migrations.len(), 24);
         assert_eq!(
             migrations
                 .iter()
@@ -813,7 +815,7 @@ mod tests {
             .await?
             .ok_or_else(|| anyhow::anyhow!("migration count missing"))?
             .try_get::<i64>("", "count")?;
-        assert_eq!(migration_count, 23);
+        assert_eq!(migration_count, 24);
         Ok(())
     }
 
@@ -949,7 +951,7 @@ mod tests {
                 "SELECT version FROM seaql_migrations".to_string(),
             ))
             .await?;
-        assert_eq!(migrations.len(), 23);
+        assert_eq!(migrations.len(), 24);
         Ok(())
     }
 
@@ -1007,7 +1009,7 @@ mod tests {
                 .await?;
             assert_eq!(
                 migrations.len(),
-                23,
+                24,
                 "doctor pass {attempt} was not repaired"
             );
 
