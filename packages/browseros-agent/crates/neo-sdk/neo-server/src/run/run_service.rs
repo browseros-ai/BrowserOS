@@ -433,7 +433,8 @@ impl RunService {
         let mut mine = Vec::new();
         for tab in tabs.opened {
             // A tab number may be reused after a browser restart; a task here may already own it.
-            if !live.contains_key(&tab) || self.tabs.owner(tab).is_some() {
+            // Neo may also have taken a blank one as its own tab (`NeoTab`), which no task has.
+            if !live.contains_key(&tab) || self.tabs.owner(tab).is_some() || self.tabs.is_neo(tab) {
                 continue;
             }
             // Registered first: only a tab with an entry can have an owner.
