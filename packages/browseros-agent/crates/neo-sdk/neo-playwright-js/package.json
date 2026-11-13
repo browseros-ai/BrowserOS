@@ -12,8 +12,8 @@
     "gen:probe": "cargo run -p neo-playwright --example probe-gen"
   },
   "devDependencies": {
-    "acorn": "^8.17.0",
-    "linkedom": "^0.18.13",
+    "acorn": "^8.19.0",
+    "linkedom": "^0.18.15",
     "yaml": "2.9.1"
   }
 }
