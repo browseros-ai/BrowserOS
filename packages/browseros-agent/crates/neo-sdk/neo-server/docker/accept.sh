@@ -433,7 +433,9 @@ if [ "$booted" = 1 ]; then
   # --- restart-browser -----------------------------------------------------------------------
   docker exec "$main" neo-quit 9110; quit_status=$?
   restarted=0
-  for _ in $(seq 1 60); do docker logs "$main" 2>&1 | grep -q 'Neo exited; restarting' && { restarted=1; break; }; sleep 1; done
+  # grep reads the whole log, not -q: under pipefail an early -q match kills `docker logs`
+  # with SIGPIPE while it is still writing, and the pipeline then fails on a long log.
+  for _ in $(seq 1 60); do docker logs "$main" 2>&1 | grep -F 'Neo exited; restarting' >/dev/null && { restarted=1; break; }; sleep 1; done
   if [ "$quit_status" = 0 ] && [ "$restarted" = 1 ] && back=$(wait_ready "$main" 90) \
       && after=$(run_call "$main" "$task" "req-$run_id-after-quit" 2>&1) && run_ok "$after"; then
     result PASS restart-browser "neo-quit exit 0; Neo restarted and ready again after ${back}s; new run ok"
@@ -497,7 +499,7 @@ for pid in pids:
         except OSError: pass
 '
     restarted=0
-    for _ in $(seq 1 30); do docker logs "$looped" 2>&1 | grep -q '^\[accept\] entrypoint exited 137' && { restarted=1; break; }; sleep 1; done
+    for _ in $(seq 1 30); do docker logs "$looped" 2>&1 | grep '^\[accept\] entrypoint exited 137' >/dev/null && { restarted=1; break; }; sleep 1; done
     ready=0
     for _ in $(seq 1 90); do [ "$(docker logs "$looped" 2>&1 | grep -c '^\[neo\] Ready')" -ge 2 ] && { ready=1; break; }; sleep 1; done
     healthy=$(wait_healthy "$looped" 30 >/dev/null && echo yes || echo no)
