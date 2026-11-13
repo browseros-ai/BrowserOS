@@ -8,6 +8,7 @@ use browseros_cdp::CdpError;
 use browseros_core::{
     BrowserView, CoreError, FrameId, PageId, PageJs, ProtocolSession, TargetError,
     input::{ClickOptions, Point},
+    page_js,
     screenshot::{ScreenshotCaptureOptions, ScreenshotFormat, Viewport},
 };
 use serde_json::{Value, json};
@@ -27,6 +28,23 @@ const VISIBLE_RECT: &str = r"function(selector) {
     }
     return null;
 }";
+
+/// Closed shadow roots one document hands its DOM scan; the rest are reported as truncated.
+const MAX_CLOSED_ROOTS: usize = 64;
+/// Leaves a closed root in the DOM world's own global until the scan in the same world takes it.
+const MARK: &str = "function(nonce) { const k = '__browserosCaptchaRoots'; let m = globalThis[k]; if (!m || m.nonce !== nonce) m = globalThis[k] = {nonce, roots: []}; m.roots.push(this); return true; }";
+
+/// Takes and deletes the marks, and refuses a document other than the one that was marked.
+fn marked_scan(nonce: &str, count: usize, truncated: bool, function: &str) -> String {
+    let nonce = Value::String(nonce.to_owned());
+    format!(
+        "(() => {{ const k = '__browserosCaptchaRoots', m = globalThis[k]; delete globalThis[k]; const roots = m && m.nonce === {nonce} ? m.roots : []; if (roots.length !== {count}) return {{stale: true}}; return (\n{function}\n)(roots, {truncated}); }})()"
+    )
+}
+
+fn scan_nonce() -> String {
+    ulid::Ulid::new().to_string()
+}
 
 pub trait CaptchaPage: Send + Sync {
     fn eval_main(&self, expression: &str) -> impl Future<Output = Result<Value, PageError>> + Send;
@@ -49,12 +67,17 @@ pub trait CaptchaPage: Send + Sync {
     ) -> impl Future<Output = Result<Value, PageError>> + Send {
         std::future::ready(Err(bad("main-world frame evaluation unavailable")))
     }
-    fn scan_closed_shadow_roots(
+    /// Detection's DOM probe of one document; `None` is the top document. `function` is a
+    /// JavaScript function expression, called once as `function(closedRoots, truncated)` in this
+    /// adapter's DOM world for that document. `closedRoots` are the document's closed shadow
+    /// roots, which script cannot reach by itself; `truncated` says some were left out.
+    /// Never another world: a document that cannot run it there is an error.
+    fn scan_dom(
         &self,
-        _frame: &FrameRef,
-        _function_declaration: &str,
-    ) -> impl Future<Output = Result<Vec<Value>, PageError>> + Send {
-        async { Ok(vec![]) }
+        _frame: Option<&FrameRef>,
+        _function: &str,
+    ) -> impl Future<Output = Result<Value, PageError>> + Send {
+        std::future::ready(Err(bad("DOM scan unavailable")))
     }
     fn click_at(&self, x: f64, y: f64) -> impl Future<Output = Result<(), PageError>> + Send;
     fn screenshot_clip(&self, rect: Rect)
@@ -70,20 +93,45 @@ pub trait CaptchaPage: Send + Sync {
     ) -> impl Future<Output = Result<Option<Rect>, PageError>> + Send;
 }
 
+/// Where detection's DOM scripts run. Captured once per [`LivePage`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DomWorld {
+    /// BrowserOS's isolated world, strictly (`PageJs::isolated_only`).
+    Isolated,
+    /// The page's own world: only under the host's `scripts.isolated_world = false` opt-out.
+    Page,
+}
+
 pub struct LivePage {
     pub view: BrowserView,
     pub page: PageId,
     last_point: Mutex<(f64, f64)>,
     frame_parents: Mutex<HashMap<String, String>>,
+    dom: DomWorld,
 }
 
 impl LivePage {
     pub fn new(view: BrowserView, page: PageId) -> Self {
+        let dom = if page_js::isolated_world_enabled() {
+            DomWorld::Isolated
+        } else {
+            DomWorld::Page
+        };
+        Self::with_dom_world(view, page, dom)
+    }
+    pub(crate) fn with_dom_world(view: BrowserView, page: PageId, dom: DomWorld) -> Self {
         Self {
             view,
             page,
             last_point: Mutex::new((0.0, 0.0)),
             frame_parents: Mutex::new(HashMap::new()),
+            dom,
+        }
+    }
+    fn dom_js<'a>(&self, session: &'a ProtocolSession) -> PageJs<'a> {
+        match self.dom {
+            DomWorld::Isolated => PageJs::isolated_only(session),
+            DomWorld::Page => PageJs::page_world(session),
         }
     }
     async fn top(&self) -> Result<ProtocolSession, PageError> {
@@ -249,39 +297,65 @@ impl CaptchaPage for LivePage {
         })
         .await
     }
-    async fn scan_closed_shadow_roots(
-        &self,
-        frame: &FrameRef,
-        function_declaration: &str,
-    ) -> Result<Vec<Value>, PageError> {
+    async fn scan_dom(&self, frame: Option<&FrameRef>, function: &str) -> Result<Value, PageError> {
         self.frame_operation(async {
-            let session = self.frame(&frame.frame_id).await?;
+            let session = match frame {
+                Some(frame) => self.frame(&frame.frame_id).await?,
+                None => self.top().await?,
+            };
             let tree = send(&session, "Page.getFrameTree", json!({})).await?;
-            let dom = send(&session, "DOM.getDocument", json!({"depth":-1,"pierce":true})).await?;
-            let document = if tree["frameTree"]["frame"]["id"] == frame.frame_id {
+            let root = text(&tree["frameTree"]["frame"], "id")?;
+            let id = frame.map_or_else(|| root.clone(), |frame| frame.frame_id.clone());
+            let dom = send(
+                &session,
+                "DOM.getDocument",
+                json!({"depth":-1,"pierce":true}),
+            )
+            .await?;
+            let document = if id == root {
                 Some(&dom["root"])
             } else {
-                find_document(&dom["root"], &frame.frame_id)
-            }.ok_or_else(|| bad("Frame document is unavailable"))?;
+                find_document(&dom["root"], &id)
+            }
+            .ok_or_else(|| bad("Frame document is unavailable"))?;
             let mut roots = Vec::new();
             collect_shadow_roots(document, &mut roots);
             roots.retain(|root| root["shadowRootType"] == "closed");
-            let mut values = Vec::new();
-            if roots.len() > 64 {
-                values.push(json!({"widgets":[],"frames":[],"checked":null,"expired":false,"complete":false}));
+            let mut truncated = roots.len() > MAX_CLOSED_ROOTS;
+            let frame_id = FrameId(id);
+            let nonce = scan_nonce();
+            let mut marked = 0;
+            for root in roots.into_iter().take(MAX_CLOSED_ROOTS) {
+                let result = match node_id(root) {
+                    Ok(node) => {
+                        browser(self.dom_js(&session).in_frame(&frame_id).call::<bool>(
+                            node,
+                            MARK,
+                            &[json!(nonce)],
+                        ))
+                        .await
+                    }
+                    Err(error) => Err(error),
+                };
+                match result {
+                    Ok(true) => marked += 1,
+                    Err(error @ (PageError::Closed | PageError::Cancelled)) => return Err(error),
+                    Ok(false) | Err(_) => truncated = true,
+                }
             }
-            for root in roots.into_iter().take(64) {
-                values.push(
-                    browser(PageJs::page_world(&session).call(
-                        node_id(root)?,
-                        function_declaration,
-                        &[],
-                    ))
-                    .await?,
-                );
+            let value: Value = browser(
+                self.dom_js(&session)
+                    .in_frame(&frame_id)
+                    .timeout(EVAL_TIMEOUT)
+                    .eval(&marked_scan(&nonce, marked, truncated, function)),
+            )
+            .await?;
+            if value["stale"] == true {
+                return Err(bad("Document changed during the CAPTCHA scan"));
             }
-            Ok(values)
-        }).await
+            Ok(value)
+        })
+        .await
     }
     async fn click_at(&self, x: f64, y: f64) -> Result<(), PageError> {
         if !x.is_finite() || !y.is_finite() || x < 0.0 || y < 0.0 {
@@ -613,6 +687,9 @@ mod tests {
         same_process: AtomicBool,
         child_failure: Mutex<Option<(&'static str, bool, CdpError)>>,
         document: Mutex<Option<Value>>,
+        top_document: Mutex<Option<Value>>,
+        isolated_refused: AtomicBool,
+        mark_failures: Mutex<Vec<i64>>,
         page_open: AtomicBool,
         events: broadcast::Sender<CdpEvent>,
         targeted: TargetedEvents,
@@ -627,6 +704,9 @@ mod tests {
                 same_process: AtomicBool::new(false),
                 child_failure: Mutex::new(None),
                 document: Mutex::new(None),
+                top_document: Mutex::new(None),
+                isolated_refused: AtomicBool::new(false),
+                mark_failures: Mutex::new(Vec::new()),
                 page_open: AtomicBool::new(true),
                 events: broadcast::channel(32).0,
                 targeted: TargetedEvents::default(),
@@ -660,6 +740,35 @@ mod tests {
                     }
                     return Err(error);
                 }
+            }
+            if method == "DOM.getDocument"
+                && !child
+                && let Some(document) = self
+                    .top_document
+                    .lock()
+                    .map_err(|_| CdpError::SessionGone)?
+                    .clone()
+            {
+                return Ok(json!({"root":document}));
+            }
+            if method == "Page.createIsolatedWorld" && self.isolated_refused.load(Ordering::SeqCst)
+            {
+                return Err(CdpError::Protocol {
+                    code: -32000,
+                    message: "No frame for given id found".into(),
+                });
+            }
+            if method == "DOM.resolveNode"
+                && self
+                    .mark_failures
+                    .lock()
+                    .map_err(|_| CdpError::SessionGone)?
+                    .contains(&params["backendNodeId"].as_i64().unwrap_or_default())
+            {
+                return Err(CdpError::Protocol {
+                    code: -32000,
+                    message: "No node with given id found".into(),
+                });
             }
             if method == "DOM.getDocument"
                 && child
@@ -745,9 +854,9 @@ mod tests {
                     }
                     if params["functionDeclaration"]
                         .as_str()
-                        .is_some_and(|s| s.contains("shadow-probe"))
+                        .is_some_and(|s| s.contains("__browserosCaptchaRoots"))
                     {
-                        return Ok(json!({"result":{"value":{"root":params["objectId"]}}}));
+                        return Ok(json!({"result":{"value":true}}));
                     }
                     json!({"result":{"value":if params["objectId"] == "node-42" && params["arguments"][0]["value"] == "input[type=checkbox]" {json!({"x":9,"y":20,"width":24,"height":24})} else {Value::Null}}})
                 }
@@ -820,7 +929,10 @@ mod tests {
             BrowserSession::new(native.clone(), Default::default()),
             None,
         );
-        (native, LivePage::new(view, PageId(1)))
+        (
+            native,
+            LivePage::with_dom_world(view, PageId(1), DomWorld::Isolated),
+        )
     }
     fn widget() -> FrameRef {
         FrameRef {
@@ -835,10 +947,36 @@ mod tests {
         }
     }
 
-    const SHADOW_PROBE: &str = "function() { /* shadow-probe */ return {root: this.nodeType}; }";
+    const DOM_PROBE: &str = "function(closedRoots, truncated) { /* dom-probe */ }";
+
+    fn scanned(native: &Native, value: Value) -> Result<(), String> {
+        native
+            .evaluations
+            .lock()
+            .map_err(|_| "poisoned")?
+            .push_back(Ok(json!({"result":{"value":value}})));
+        Ok(())
+    }
+
+    fn scan_expression(native: &Native) -> Result<String, String> {
+        native
+            .calls("Runtime.evaluate")?
+            .into_iter()
+            .filter_map(|call| call.1["expression"].as_str().map(str::to_owned))
+            .find(|expression| expression.contains("dom-probe"))
+            .ok_or_else(|| "no DOM scan was evaluated".to_owned())
+    }
+
+    fn marked(native: &Native) -> Result<Vec<Value>, String> {
+        Ok(native
+            .calls("DOM.resolveNode")?
+            .into_iter()
+            .map(|call| call.1["backendNodeId"].clone())
+            .collect())
+    }
 
     #[tokio::test]
-    async fn tests_that_only_closed_roots_in_the_frame_document_are_scanned() -> TestResult {
+    async fn tests_that_only_closed_roots_in_the_frame_document_are_marked() -> TestResult {
         let (native, page) = fixture();
         *native.document.lock().map_err(|_| "poisoned")? = Some(json!({
             "nodeType":9,"backendNodeId":40,"children":[{
@@ -855,54 +993,193 @@ mod tests {
                 }
             }]
         }));
-        let result = page
-            .scan_closed_shadow_roots(&widget(), SHADOW_PROBE)
-            .await?;
-        assert_eq!(
-            result,
-            vec![json!({"root":"node-42"}), json!({"root":"node-44"})]
-        );
-        let calls = native.calls("Runtime.callFunctionOn")?;
-        assert!(calls.iter().all(|call| call.1["returnByValue"] == true));
+        scanned(&native, json!({"widgets":[]}))?;
+        let result = page.scan_dom(Some(&widget()), DOM_PROBE).await?;
+        assert_eq!(result, json!({"widgets":[]}));
+        assert_eq!(marked(&native)?, [json!(42), json!(44)]);
+        for call in native.calls("DOM.resolveNode")? {
+            assert_eq!(call.1["executionContextId"], 77);
+            assert_eq!(call.2.as_ref().map(SessionId::as_str), Some("s-widget"));
+        }
+        let expression = scan_expression(&native)?;
+        assert!(expression.contains("roots.length !== 2"));
+        assert!(expression.contains("(roots, false)"));
+        let evaluate = native.calls("Runtime.evaluate")?;
+        assert!(evaluate.iter().all(|call| call.1["contextId"] == 77));
         assert_eq!(native.calls("Runtime.releaseObject")?.len(), 2);
         Ok(())
     }
 
     #[tokio::test]
-    async fn tests_that_closed_root_scans_stop_at_64_and_report_truncation() -> TestResult {
+    async fn tests_that_closed_root_marks_stop_at_64_and_report_truncation() -> TestResult {
         for count in [64, 65] {
             let (native, page) = fixture();
             let roots: Vec<_> = (0..count)
                 .map(|id| json!({"shadowRootType":"closed","backendNodeId":id}))
                 .collect();
             *native.document.lock().map_err(|_| "poisoned")? = Some(json!({"shadowRoots":roots}));
-            let result = page
-                .scan_closed_shadow_roots(&widget(), SHADOW_PROBE)
-                .await?;
-            assert_eq!(
-                result.iter().filter(|v| v.get("root").is_some()).count(),
-                64
-            );
-            assert_eq!(result.iter().any(|v| v["complete"] == false), count > 64);
+            scanned(&native, json!({}))?;
+            page.scan_dom(Some(&widget()), DOM_PROBE).await?;
             assert_eq!(native.calls("DOM.resolveNode")?.len(), 64);
+            let expression = scan_expression(&native)?;
+            assert!(expression.contains("roots.length !== 64"));
+            assert!(expression.contains(&format!("(roots, {})", count > 64)));
         }
         Ok(())
     }
 
     #[tokio::test]
-    async fn tests_that_closed_root_transport_errors_are_typed() -> TestResult {
+    async fn tests_that_an_unmarkable_closed_root_is_skipped_as_truncated() -> TestResult {
         let (native, page) = fixture();
-        *native.child_failure.lock().map_err(|_| "poisoned")? = Some((
-            "DOM.resolveNode",
-            false,
-            CdpError::Timeout {
-                method: "DOM.resolveNode".into(),
-            },
-        ));
+        *native.document.lock().map_err(|_| "poisoned")? = Some(json!({"shadowRoots":[
+            {"shadowRootType":"closed","backendNodeId":42},
+            {"shadowRootType":"closed","backendNodeId":43}
+        ]}));
+        native
+            .mark_failures
+            .lock()
+            .map_err(|_| "poisoned")?
+            .push(42);
+        scanned(&native, json!({"widgets":[]}))?;
         assert_eq!(
-            page.scan_closed_shadow_roots(&widget(), SHADOW_PROBE).await,
+            page.scan_dom(Some(&widget()), DOM_PROBE).await?,
+            json!({"widgets":[]})
+        );
+        let expression = scan_expression(&native)?;
+        assert!(expression.contains("roots.length !== 1"));
+        assert!(expression.contains("(roots, true)"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_closed_root_transport_errors_are_typed() -> TestResult {
+        for (error, close_page, expected) in [
+            (CdpError::SessionGone, true, PageError::Closed),
+            (
+                CdpError::Protocol {
+                    code: -32800,
+                    message: "cancelled".into(),
+                },
+                false,
+                PageError::Cancelled,
+            ),
+        ] {
+            let (native, page) = fixture();
+            *native.document.lock().map_err(|_| "poisoned")? =
+                Some(json!({"shadowRoots":[{"shadowRootType":"closed","backendNodeId":42}]}));
+            *native.child_failure.lock().map_err(|_| "poisoned")? =
+                Some(("DOM.resolveNode", close_page, error));
+            assert_eq!(
+                page.scan_dom(Some(&widget()), DOM_PROBE).await,
+                Err(expected)
+            );
+            assert!(scan_expression(&native).is_err());
+        }
+        let (native, page) = fixture();
+        native
+            .evaluations
+            .lock()
+            .map_err(|_| "poisoned")?
+            .push_back(Err(CdpError::Timeout {
+                method: "Runtime.evaluate".into(),
+            }));
+        assert_eq!(
+            page.scan_dom(Some(&widget()), DOM_PROBE).await,
             Err(PageError::Timeout)
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_a_replaced_document_fails_the_scan() -> TestResult {
+        let (native, page) = fixture();
+        scanned(&native, json!({"stale":true}))?;
+        assert!(matches!(
+            page.scan_dom(Some(&widget()), DOM_PROBE).await,
+            Err(PageError::Browser(_))
+        ));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_a_refused_isolated_world_never_falls_back_to_the_page() -> TestResult {
+        let (native, page) = fixture();
+        *native.document.lock().map_err(|_| "poisoned")? =
+            Some(json!({"shadowRoots":[{"shadowRootType":"closed","backendNodeId":42}]}));
+        native.isolated_refused.store(true, Ordering::SeqCst);
+        assert!(page.scan_dom(Some(&widget()), DOM_PROBE).await.is_err());
+        assert!(page.scan_dom(None, DOM_PROBE).await.is_err());
+        assert!(
+            !native.calls("Page.createIsolatedWorld")?.is_empty(),
+            "the scan asked for an isolated world before it gave up"
+        );
+        assert!(
+            native
+                .calls("DOM.resolveNode")?
+                .iter()
+                .all(|call| call.1.get("executionContextId").is_some()),
+            "a context-less resolveNode would run in the page world"
+        );
+        assert!(scan_expression(&native).is_err());
+        assert!(native.calls("Runtime.callFunctionOn")?.is_empty());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_the_page_world_policy_never_creates_an_isolated_world() -> TestResult {
+        let native = Native::new("https://widget.test");
+        let view = BrowserView::unbound(
+            BrowserSession::new(native.clone(), Default::default()),
+            None,
+        );
+        let page = LivePage::with_dom_world(view, PageId(1), DomWorld::Page);
+        *native.document.lock().map_err(|_| "poisoned")? =
+            Some(json!({"shadowRoots":[{"shadowRootType":"closed","backendNodeId":42}]}));
+        scanned(&native, json!({"widgets":[]}))?;
+        assert_eq!(
+            page.scan_dom(Some(&widget()), DOM_PROBE).await?,
+            json!({"widgets":[]})
+        );
+        assert!(native.calls("Page.createIsolatedWorld")?.is_empty());
+        assert_eq!(marked(&native)?, [json!(42)]);
+        assert!(
+            native
+                .calls("DOM.resolveNode")?
+                .iter()
+                .all(|call| call.1.get("executionContextId").is_none())
+        );
+        scan_expression(&native)?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_a_same_process_child_is_scanned_on_its_parent_session() -> TestResult {
+        let (native, page) = fixture();
+        native.same_process.store(true, Ordering::Relaxed);
+        *native.top_document.lock().map_err(|_| "poisoned")? = Some(json!({
+            "nodeType":9,"backendNodeId":1,"children":[
+                {"shadowRoots":[{"shadowRootType":"closed","backendNodeId":60}]},
+                {"nodeName":"IFRAME","frameId":"widget","backendNodeId":5,"contentDocument":{
+                    "nodeType":9,"backendNodeId":70,"children":[{
+                        "shadowRoots":[{"shadowRootType":"closed","backendNodeId":71}]
+                    }]
+                }}
+            ]
+        }));
+        scanned(&native, json!({"widgets":[]}))?;
+        page.scan_dom(Some(&widget()), DOM_PROBE).await?;
+        assert_eq!(marked(&native)?, [json!(71)]);
+        let worlds = native.calls("Page.createIsolatedWorld")?;
+        assert!(!worlds.is_empty());
+        for call in worlds {
+            assert_eq!(call.1["frameId"], "widget");
+            assert_eq!(call.2.as_ref().map(SessionId::as_str), Some("s-page"));
+        }
+        for call in native.calls("DOM.resolveNode")? {
+            assert_eq!(call.2.as_ref().map(SessionId::as_str), Some("s-page"));
+        }
+        let expression = scan_expression(&native)?;
+        assert!(expression.contains("roots.length !== 1"));
         Ok(())
     }
 

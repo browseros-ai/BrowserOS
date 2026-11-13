@@ -23,13 +23,17 @@
 
 #[path = "support/browseros_rig.rs"]
 pub mod browseros_rig;
+#[path = "support/captcha_pages.rs"]
+mod captcha_pages;
 
 use std::error::Error;
 use std::time::Duration;
+use std::{env, fs};
 
 use browseros_rig::{
     CaptchaKey, Client, HOST_TOKEN, PATIENCE, Rig, TestResult, browser_or_skip, get, outcome, run,
 };
+use captcha_pages::CaptchaPages;
 use neo_trace::{Delivery, Effect, Outcome, RunId, RunStatus, TraceStore};
 use serde_json::{Value, json};
 use tokio::time;
@@ -262,6 +266,123 @@ async fn solve_on_a_clear_page(rig: &Rig) -> TestResult {
     assert_eq!(
         field("message"),
         json!("No CAPTCHA blocks the page (no CAPTCHA was found); carry on with the task.")
+    );
+    client.cancel().await?;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn solve_captcha_reads_poisoned_pages_through_the_isolated_world() -> TestResult {
+    let Some(browser) = browser_or_skip() else {
+        return Ok(());
+    };
+    let pages = CaptchaPages::start().await?;
+    let provider = pages.provider();
+    let rig = Rig::start_with(
+        &browser,
+        CaptchaKey::Placeholder,
+        &[
+            ("BROWSEROS_CAPSOLVER_API_URL", &provider),
+            (
+                "CLAW_LOG",
+                "info,neo_server::dispatch::operation_guard=debug",
+            ),
+        ],
+    )?;
+    let failure = match time::timeout(TEST_BUDGET, solve_on_captcha_pages(&rig, &pages)).await {
+        Ok(Ok(())) => return Ok(()),
+        Ok(Err(error)) => error.to_string(),
+        Err(_elapsed) => format!("the drive did not finish within {TEST_BUDGET:?}"),
+    };
+    Err(format!("{failure}\n{}", rig.logs()).into())
+}
+
+/// Each page through MCP `run` → `neo.solveCaptcha`, with the solver's `captcha.detected` note
+/// read back from claw-sdk's debug log. `CAPTCHA_ENTRY_OUT` names a file for the observed values.
+async fn solve_on_captcha_pages(rig: &Rig, pages: &CaptchaPages) -> TestResult {
+    rig.until_ready().await?;
+    let client = rig.client().await?;
+    let cases = [
+        ("/clear", Value::Null, "already_clear", "no_captcha"),
+        ("/awkward", Value::Null, "already_clear", "no_captcha"),
+        (
+            "/aws-oopif",
+            json!("aws_waf"),
+            "already_clear",
+            "already_passed",
+        ),
+        (
+            "/aws-same",
+            json!("aws_waf"),
+            "already_clear",
+            "already_passed",
+        ),
+        (
+            "/turnstile",
+            json!("turnstile"),
+            "already_clear",
+            "already_passed",
+        ),
+        (
+            "/hcaptcha",
+            json!("hcaptcha"),
+            "unsolved",
+            "unsupported_type",
+        ),
+    ];
+    let mut observed = Vec::new();
+    let mut logged = rig.neo_log()?.len();
+    for (route, ..) in &cases {
+        let url = pages.url(route);
+        let code = format!(
+            r"
+            const p = await context.newPage();
+            await p.goto({url:?});
+            const solved = await neo.solveCaptcha(p);
+            await p.close();
+            return solved;"
+        );
+        let result = run(&client, &code, &json!({ "taskId": "e2e-captcha-pages" })).await?;
+        let solved = result
+            .structured_content
+            .as_ref()
+            .and_then(|content| content.get("value"))
+            .cloned()
+            .unwrap_or_else(|| json!({ "noValue": format!("{result:?}") }));
+        // The solver's events are op notes, which reach only the debug log.
+        let log = rig.neo_log()?;
+        let notes: Vec<&str> = log
+            .get(logged..)
+            .unwrap_or_default()
+            .lines()
+            .filter_map(|line| {
+                line.split_once("note=captcha.detected at ")
+                    .map(|(_, note)| note)
+            })
+            .collect();
+        logged = log.len();
+        observed.push(json!({ "route": route, "solved": solved, "detected": notes }));
+    }
+    if let Some(path) = env::var_os("CAPTCHA_ENTRY_OUT") {
+        fs::write(path, serde_json::to_vec_pretty(&observed)?)?;
+    }
+    for ((route, kind, verdict, reason), seen) in cases.iter().zip(&observed) {
+        let solved = &seen["solved"];
+        assert_eq!(
+            (
+                &solved["type"],
+                &solved["verdict"],
+                &solved["reason"],
+                &solved["paidTasks"]
+            ),
+            (kind, &json!(verdict), &json!(reason), &json!(0)),
+            "{route}: {seen}"
+        );
+    }
+    assert_eq!(
+        pages.provider_calls(),
+        0,
+        "no request reached the provider stub"
     );
     client.cancel().await?;
     Ok(())
