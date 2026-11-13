@@ -183,6 +183,10 @@ pub(crate) enum ProbeRequest {
         #[serde(default, skip_serializing_if = "is_zero")]
         #[ts(optional, as = "Option<u32>")]
         closed_roots: u32,
+        // Spec-harness bypass. Omission keeps normal snapshot value masking enabled.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        #[ts(optional, as = "Option<bool>")]
+        conformance: bool,
     },
     /// One poll of one retrying matcher; Rust's loop owns the timing, `.not` and the failure.
     Expect {

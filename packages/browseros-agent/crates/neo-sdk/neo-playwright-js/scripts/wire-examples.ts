@@ -306,7 +306,20 @@ export async function recordEveryOp(prelude?: string): Promise<Call[]> {
   })
   await retired.run('await page.close()')
   await new Promise((resolve) => setTimeout(resolve, 0))
-  return [...runtime.calls, ...retired.calls]
+  // The bypass is an internal bootstrap choice, so record it from a spec-harness realm
+  // rather than teaching public snapshot options how to request it.
+  const upstream = loadPrelude({
+    seed: SEED,
+    upstreamSnapshots: true,
+    answer: everyOpAnswer(),
+    now: RECORDED_AT,
+    ...(prelude === undefined ? {} : { prelude }),
+  })
+  await upstream.run(`
+    await page.ariaSnapshot()
+    await page.locator('body').ariaSnapshotJSON({ mode: 'ai' })
+  `)
+  return [...runtime.calls, ...retired.calls, ...upstream.calls]
 }
 
 /**

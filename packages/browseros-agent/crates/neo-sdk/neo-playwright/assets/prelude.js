@@ -8882,10 +8882,11 @@ ${changes}`;
       const site = captureSite();
       const { depth, boxes } = options;
       const marking = clickable ? { clickable } : {};
+      const conformance = upstreamSnapshots ? { conformance: true } : {};
       const wait = this._wait(api, options);
       if (selector !== null) {
         const addressed = await this._targetArgs(api, selector, true);
-        return await send["locator.ariaSnapshot"](site, this._call(api, wait.timeout), { ...addressed, mode, depth, boxes, ...marking }, wait.signal);
+        return await send["locator.ariaSnapshot"](site, this._call(api, wait.timeout), { ...addressed, mode, depth, boxes, ...marking, ...conformance }, wait.signal);
       }
       if (this._id !== null)
         throw unsupportedError(api, "snapshot a child frame through its iframe: page.locator('iframe').contentFrame().locator('body').ariaSnapshot()");
@@ -8894,7 +8895,8 @@ ${changes}`;
         mode,
         depth,
         boxes,
-        ...marking
+        ...marking,
+        ...conformance
       }, wait.signal);
     }
     async _ariaSnapshot(api, selector, options = {}) {

@@ -54,6 +54,43 @@ export type ProbePage = {
  */
 export function openProbePage(html: string): ProbePage {
   const { window, document } = parseHTML(html)
+  // linkedom omits the native defaultValue accessors. Supply their markup reads only in this
+  // harness so the production guard can require every native API instead of silently skipping
+  // a missing privacy boundary. Browser live tests cover independent current/default values.
+  const defaultValues: [object, PropertyDescriptor][] = [
+    [
+      window.HTMLInputElement.prototype,
+      {
+        configurable: true,
+        enumerable: true,
+        get(this: HTMLInputElement) {
+          return this.getAttribute('value') ?? ''
+        },
+        set(this: HTMLInputElement, value: string) {
+          this.setAttribute('value', value)
+        },
+      },
+    ],
+    [
+      window.HTMLTextAreaElement.prototype,
+      {
+        configurable: true,
+        enumerable: true,
+        get(this: HTMLTextAreaElement) {
+          return this.textContent ?? ''
+        },
+        set(this: HTMLTextAreaElement, value: string) {
+          this.textContent = value
+        },
+      },
+    ],
+  ]
+  const suppliedDefaults: object[] = []
+  for (const [prototype, descriptor] of defaultValues) {
+    if ('defaultValue' in prototype) continue
+    Object.defineProperty(prototype, 'defaultValue', descriptor)
+    suppliedDefaults.push(prototype)
+  }
   // linkedom computes no styles. The engine reads a missing style as "rendered and visible"
   // (domUtils computeBox), which is all these tests ask of it.
   Reflect.set(window, 'getComputedStyle', () => undefined)
@@ -78,6 +115,8 @@ export function openProbePage(html: string): ProbePage {
     // Through Reflect.apply, so tests can hand boot options Rust never would.
     boot: (options) => Reflect.apply(probe.boot, probe, [options]),
     close() {
+      for (const prototype of suppliedDefaults)
+        Reflect.deleteProperty(prototype, 'defaultValue')
       for (const [name, value] of saved) Reflect.set(globalThis, name, value)
     },
   }

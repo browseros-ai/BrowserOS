@@ -59,6 +59,7 @@
     "locator.ariaSnapshot": [
       "boxes",
       "clickable",
+      "conformance",
       "depth"
     ],
     "locator.blur": [],
@@ -212,6 +213,7 @@
     "page.ariaSnapshot": [
       "boxes",
       "clickable",
+      "conformance",
       "depth"
     ],
     "page.close": [],
@@ -1089,6 +1091,47 @@
         "mode": "default",
         "depth": 1,
         "boxes": false
+      },
+      {
+        "call": {
+          "api": "locator.ariaSnapshotJSON",
+          "timeoutMs": 30000
+        },
+        "target": {
+          "$neo": "locator",
+          "page": {
+            "$neo": "page",
+            "tab": 1007
+          },
+          "frame": null,
+          "chunks": [
+            {
+              "parts": [
+                {
+                  "name": "css",
+                  "body": [
+                    {
+                      "simples": [
+                        {
+                          "selector": {
+                            "css": "body",
+                            "functions": []
+                          },
+                          "combinator": ""
+                        }
+                      ]
+                    }
+                  ],
+                  "source": "body"
+                }
+              ]
+            }
+          ],
+          "display": "locator('body')"
+        },
+        "strict": "strict",
+        "mode": "ai",
+        "conformance": true
       }
     ],
     "locator.blur": [
@@ -3069,6 +3112,18 @@
         "mode": "default",
         "depth": 1,
         "boxes": false
+      },
+      {
+        "call": {
+          "api": "page.ariaSnapshot",
+          "timeoutMs": 30000
+        },
+        "page": {
+          "$neo": "page",
+          "tab": 1007
+        },
+        "mode": "default",
+        "conformance": true
       }
     ],
     "page.close": [

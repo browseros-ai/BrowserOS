@@ -2,7 +2,7 @@
 // element is answered, and what a frame-level snapshot carries. linkedom has no
 // layout, so ai-mode refs and the rendered iframes are covered by the crate's
 // tests/snapshot_live.rs on a real browser.
-import { afterEach, expect, it } from 'bun:test'
+import { afterEach, expect, it, spyOn } from 'bun:test'
 import { parseSelector } from '../../neo-playwright/third_party/playwright/packages/isomorphic/selectorParser'
 import { openProbePage, type ProbePage } from './support/probe-page'
 
@@ -26,6 +26,28 @@ const atLocator = (selector: string) => ({
   root: { chunk: parseSelector(selector) },
   mode: 'ai',
 })
+
+/** A deterministic visible layout lets the real engine serialize this fixture in linkedom. */
+function showFixture(probe: ProbePage) {
+  const view = probe.document.defaultView
+  if (!view) throw new Error('the fixture has a window')
+  Reflect.set(view, 'getComputedStyle', () => ({
+    display: 'block',
+    visibility: 'visible',
+    cursor: 'auto',
+    content: 'none',
+    getPropertyValue: () => '',
+  }))
+  for (const element of probe.document.querySelectorAll('*')) {
+    Reflect.set(element, 'checkVisibility', () => true)
+    Reflect.set(element, 'getBoundingClientRect', () => ({
+      x: 0,
+      y: 0,
+      width: 10,
+      height: 10,
+    }))
+  }
+}
 
 it('tests that a locator root matching no element, several, or a stale ref is answered before any snapshot', () => {
   const probe = booted()
@@ -53,19 +75,126 @@ it('tests that a snapshot whose clickable marking throws is still taken, as upst
   const target = probe.document.querySelector('h1')
   const inside = probe.document.createElement('span')
   target?.append(inside)
-  // A shape marking's guard trips on and the engine never asks about: `aria-owns` read on an
-  // element that has none.
+  showFixture(probe)
+  // Fail marking's guard once; the engine's unmarked retry must still serialize bullets.
   const read = inside.getAttribute.bind(inside)
+  const password = probe.document.querySelector('input')
+  if (!(password instanceof HTMLInputElement))
+    throw new Error('the fixture password exists')
+  let valueDuringRetry = ''
+  let markFailed = false
   inside.getAttribute = (name: string) => {
-    if (name === 'aria-owns') throw new Error('unforeseen page shape')
+    if (name === 'aria-owns' && !markFailed) {
+      markFailed = true
+      valueDuringRetry = password.value
+      throw new Error('unforeseen page shape')
+    }
     return read(name)
   }
   const request = { op: 'snapshot', root: 'document', mode: 'ai' }
-  expect(probe.call(request, null, target)).toMatchObject({
+  const retried = probe.call(request, null, target)
+  expect(retried).toMatchObject({
     kind: 'snapshot',
     marksSkipped: true,
   })
+  expect(JSON.stringify(retried)).toContain('"text":"•••••••"')
+  expect(JSON.stringify(retried)).not.toContain('hunter2')
+  expect(valueDuringRetry).toBe('•••••••')
+  expect(password.value).toBe('hunter2')
   const plain = probe.call(request)
   expect(plain).toMatchObject({ kind: 'snapshot' })
   expect(plain).not.toHaveProperty('marksSkipped')
+  expect(JSON.stringify(plain)).toContain('"text":"•••••••"')
+})
+
+it('never installs any field or text override under conformance', () => {
+  const probe = booted()
+  showFixture(probe)
+  const replacements: unknown[] = []
+  const define = Object.defineProperty
+  const observe = spyOn(Object, 'defineProperty').mockImplementation(
+    (object, name, descriptor) => {
+      if (
+        object === HTMLInputElement.prototype ||
+        object === HTMLTextAreaElement.prototype ||
+        object === Text.prototype
+      )
+        replacements.push({ object, name })
+      return define(object, name, descriptor)
+    },
+  )
+  try {
+    const result = probe.call({
+      op: 'snapshot',
+      root: 'document',
+      mode: 'ai',
+      conformance: true,
+    })
+    expect(result).toMatchObject({ kind: 'snapshot' })
+    expect(JSON.stringify(result)).toContain('"text":"hunter2"')
+    expect(replacements).toEqual([])
+  } finally {
+    observe.mockRestore()
+  }
+})
+
+it('masks textarea child text and control attributes used as another element name', () => {
+  const probe = openProbePage(`<html><body>
+    <textarea role="searchbox" autocomplete="new-password">CANARY-TEXTAREA</textarea>
+    <input id="private-number" type="number" autocomplete="cc-number" value="938217">
+    <button aria-labelledby="private-number"></button>
+    <textarea id="self" role="button" aria-labelledby="self" autocomplete="new-password">CANARY-SELF</textarea>
+    <textarea id="named" autocomplete="new-password">CANARY-NAMED</textarea>
+    <button aria-labelledby="named"></button>
+    <textarea role="searchbox">PUBLIC-TEXTAREA</textarea>
+    <input id="public-number" type="number" value="817236">
+    <button aria-labelledby="public-number"></button>
+  </body></html>`)
+  page = probe
+  probe.boot({ frameSeq: 3, epoch: 'a' })
+  showFixture(probe)
+  for (const mode of ['ai', 'default']) {
+    const snapshot = probe.call({ op: 'snapshot', root: 'document', mode })
+    expect(snapshot).toMatchObject({ kind: 'snapshot' })
+    const encoded = JSON.stringify(snapshot)
+    for (const canary of [
+      'CANARY-TEXTAREA',
+      '938217',
+      'CANARY-SELF',
+      'CANARY-NAMED',
+    ])
+      expect(encoded).not.toContain(canary)
+    for (const visible of ['PUBLIC-TEXTAREA', '817236', '••••••'])
+      expect(encoded).toContain(visible)
+  }
+})
+
+it('refuses the snapshot rather than falling back when masking cannot be installed', () => {
+  const probe = booted()
+  const before = Object.getOwnPropertyDescriptor(
+    HTMLInputElement.prototype,
+    'value',
+  )
+  const define = Object.defineProperty
+  const refuse = spyOn(Object, 'defineProperty').mockImplementation(
+    (object, name, descriptor) => {
+      if (object === HTMLTextAreaElement.prototype && name === 'value')
+        throw new TypeError('mask installation refused')
+      return define(object, name, descriptor)
+    },
+  )
+  try {
+    const result = probe.call(
+      { op: 'snapshot', root: 'document', mode: 'ai' },
+      null,
+      probe.document.querySelector('h1'),
+    )
+    expect(result).toMatchObject({ kind: 'error', class: 'internal' })
+    expect(result).not.toHaveProperty('json')
+    expect(
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value'),
+    ).toEqual(before)
+  } finally {
+    refuse.mockRestore()
+  }
 })

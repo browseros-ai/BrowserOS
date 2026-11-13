@@ -19,11 +19,13 @@
 pub mod browseros_rig;
 
 use std::error::Error;
+use std::path::Path;
 use std::time::Duration;
 
 use browseros_rig::{
     CaptchaKey, Client, HOST_TOKEN, Rig, TestResult, browser_or_skip, get, outcome, run,
 };
+use neo_trace::{RunId, RunStatus, TraceStore};
 use rmcp::model::CallToolResult;
 use serde_json::{Value, json};
 use tokio::time;
@@ -69,6 +71,259 @@ async fn drive(rig: &mut Rig) -> TestResult {
     client.cancel().await?;
     assert_eq!(rig.stop_neo().await?, Some(0), "SIGTERM is a normal stop");
     Ok(())
+}
+
+/// Inspect persisted snapshot results, before text rendering and after a later run reads the
+/// baseline. Deliberate reads and fixture source can still contain these canaries elsewhere in
+/// a trace, so the invariant belongs to snapshot operations rather than the whole database.
+#[tokio::test(flavor = "multi_thread")]
+async fn private_field_values_never_reach_stored_snapshot_results() -> TestResult {
+    let Some(browser) = browser_or_skip() else {
+        return Ok(());
+    };
+    let mut rig = Rig::start(&browser, CaptchaKey::Absent)?;
+    match time::timeout(TEST_BUDGET, snapshot_trace(&mut rig)).await {
+        Ok(Ok(())) => Ok(()),
+        Ok(Err(error)) => Err(format!("{error}\n{}", rig.logs()).into()),
+        Err(_elapsed) => Err(format!("snapshot trace timed out\n{}", rig.logs()).into()),
+    }
+}
+
+/// Each source and attribute value is a distinct synthetic secret to scan after persistence.
+const TRACE_FIELDS: [(&str, &str, &str, &str); 8] = [
+    (
+        "Password",
+        "input",
+        "type='password'",
+        "Trace-Password-Canary",
+    ),
+    (
+        "Shown",
+        "input",
+        "autocomplete='current-password'",
+        "Trace-Shown-Canary",
+    ),
+    (
+        "Card",
+        "input",
+        "autocomplete='cc-number'",
+        "Trace-Card-Canary",
+    ),
+    (
+        "Security",
+        "input",
+        "autocomplete='cc-csc'",
+        "Trace-Security-Canary",
+    ),
+    (
+        "Code",
+        "input",
+        "autocomplete='one-time-code'",
+        "Trace-Code-Canary",
+    ),
+    (
+        "Note",
+        "textarea",
+        "autocomplete='new-password'",
+        "Trace-Note-Canary",
+    ),
+    (
+        "Self",
+        "textarea",
+        "id='self' role='button' aria-labelledby='self' autocomplete='new-password'",
+        "Trace-Self-Canary",
+    ),
+    (
+        "Numeric",
+        "input",
+        "id='numeric' type='number' autocomplete='one-time-code' aria-valuetext='864213'",
+        "864213",
+    ),
+];
+
+fn private_trace_html() -> String {
+    let mut html = String::from("<title>Snapshot trace</title><main><h1>Checkout</h1>");
+    for (label, tag, attributes, value) in TRACE_FIELDS {
+        if tag == "textarea" {
+            html.push_str(&format!(
+                "<label>{label}<textarea {attributes}>{value}</textarea></label>"
+            ));
+        } else {
+            html.push_str(&format!(
+                "<label>{label}<input {attributes} value='{value}'></label>"
+            ));
+        }
+    }
+    html.push_str(
+        "<button aria-labelledby='self'></button><button aria-labelledby='numeric'></button>",
+    );
+    html.push_str(
+        "<label>Expiry<input autocomplete='cc-exp' value='12/30'></label>\
+        <label>Holder<input autocomplete='cc-name' value='Ada Example'></label></main>",
+    );
+    html
+}
+
+fn assert_returned_snapshot_values(first: &CallToolResult) -> TestResult {
+    let snapshots = first
+        .structured_content
+        .as_ref()
+        .and_then(|value| value.pointer("/value/snapshots"))
+        .and_then(Value::as_array)
+        .ok_or_else(|| format!("the first run returns its snapshots: {first:?}"))?;
+    assert_eq!(snapshots.len(), 7);
+    for snapshot in snapshots {
+        let printed = snapshot.to_string();
+        for (_, _, _, canary) in TRACE_FIELDS {
+            assert!(
+                !printed.contains(canary),
+                "snapshot exposes {canary}: {printed}"
+            );
+        }
+        assert!(
+            printed.contains("Ada Example"),
+            "holder remains readable: {printed}"
+        );
+        assert!(
+            printed.contains("12/30"),
+            "expiry remains readable: {printed}"
+        );
+    }
+    Ok(())
+}
+
+async fn assert_stored_snapshot_values(trace_path: &Path, ids: [RunId; 2]) -> TestResult {
+    let store = TraceStore::open(trace_path).await?;
+    let mut snapshot_count = 0;
+    let mut baseline_count = 0;
+    for id in ids {
+        let detail = store.run(id).await?.ok_or("the run was persisted")?;
+        assert_eq!(detail.summary.status, RunStatus::Ok);
+        for operation in detail.operations {
+            if !matches!(
+                operation.name.as_str(),
+                "page.ariaSnapshot"
+                    | "locator.ariaSnapshot"
+                    | "page.snapshotBaseline"
+                    | "page.snapshotPending"
+            ) {
+                continue;
+            }
+            assert!(
+                !operation.args_truncated,
+                "snapshot inputs were stored whole"
+            );
+            assert!(
+                !operation.result_truncated,
+                "snapshot results were stored whole"
+            );
+            let args = operation
+                .args
+                .as_ref()
+                .map(Value::to_string)
+                .unwrap_or_default();
+            for (_, _, _, canary) in TRACE_FIELDS {
+                assert!(
+                    !args.contains(canary),
+                    "{} persisted {canary} in snapshot or pending-baseline input: {args}",
+                    operation.name
+                );
+            }
+            let result = operation
+                .result
+                .ok_or("the snapshot operation has a result")?;
+            let result = result.to_string();
+            for (_, _, _, canary) in TRACE_FIELDS {
+                assert!(
+                    !result.contains(canary),
+                    "{} persisted {canary}: {result}",
+                    operation.name
+                );
+            }
+            if operation.name == "page.snapshotBaseline" {
+                baseline_count += 1;
+                assert!(
+                    result.contains('•'),
+                    "the stored baseline contains masked values"
+                );
+            }
+            if operation.name.ends_with(".ariaSnapshot") {
+                snapshot_count += 1;
+                assert!(
+                    result.contains('•'),
+                    "the stored tree contains masked values"
+                );
+            }
+        }
+    }
+    assert_eq!(snapshot_count, 8);
+    assert_eq!(baseline_count, 1);
+    Ok(())
+}
+
+async fn snapshot_trace(rig: &mut Rig) -> TestResult {
+    let html = private_trace_html();
+    rig.until_ready().await?;
+    // Keep the entire fixture through the host's current settings contract. Clipped traces
+    // could hide an unmasked field and make the canary scan pass without proving this boundary.
+    let configured = rig
+        .host(
+            "PATCH",
+            "/v1/settings",
+            Some(HOST_TOKEN),
+            Some(&json!({ "trace": { "valueBytes": 262_144 } })),
+        )
+        .await?;
+    assert_eq!(configured.status, 200, "{}", configured.text());
+    let client = rig.client().await?;
+    let first = run(
+        &client,
+        &format!(
+            "const p = await context.newPage();\n\
+             await p.goto('data:text/html,' + encodeURIComponent({}));\n\
+             return {{ page: p, snapshots: [\n\
+               await p.ariaSnapshot(), await p.ariaSnapshot({{ text: true }}),\n\
+               await p.ariaSnapshot({{ text: false }}),\n\
+               await p.ariaSnapshot({{ mode: 'full' }}),\n\
+               await p.ariaSnapshot({{ mode: 'default' }}),\n\
+               await p.ariaSnapshotJSON(),\n\
+               await p.locator('main').ariaSnapshotJSON()\n\
+             ] }};",
+            json!(html)
+        ),
+        &json!({ "requestId": "mask-trace-1", "taskId": "mask-trace" }),
+    )
+    .await?;
+    let first_id: RunId = outcome(&first)?["id"]
+        .as_str()
+        .ok_or("the first run has an id")?
+        .parse()?;
+    assert_returned_snapshot_values(&first)?;
+    let changed = run(
+        &client,
+        "await page.getByLabel('Password', { exact: true }).fill('Trace-Password-Canary!');\n\
+         return await page.ariaSnapshot({ delta: true });",
+        &json!({ "requestId": "mask-trace-2", "taskId": "mask-trace" }),
+    )
+    .await?;
+    let second_id: RunId = outcome(&changed)?["id"]
+        .as_str()
+        .ok_or("the second run has an id")?
+        .parse()?;
+    let delta = changed
+        .structured_content
+        .as_ref()
+        .and_then(|value| value.get("value"))
+        .and_then(Value::as_str)
+        .ok_or_else(|| format!("the second run returns its delta: {changed:?}"))?;
+    assert!(
+        delta.starts_with("# changes since"),
+        "a stored baseline is read: {delta}"
+    );
+    assert!(delta.contains(&"•".repeat("Trace-Password-Canary!".len())));
+    client.cancel().await?;
+    assert_eq!(rig.stop_neo().await?, Some(0));
+    assert_stored_snapshot_values(&rig.trace_path(), [first_id, second_id]).await
 }
 
 /// Run 1: a new tab, a navigation and a read, ending with the tab open and its handle returned.

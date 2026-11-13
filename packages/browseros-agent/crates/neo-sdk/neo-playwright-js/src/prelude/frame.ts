@@ -1396,8 +1396,8 @@ export class Frame extends EventEmitter {
    * A snapshot rooted at `selector`, or at the page when `selector` is null, in `mode`: the
    * caller decides what an absent mode means (the text and JSON paths differ). `clickable`
    * asks Rust to mark what Chromium reports clickable without a pointer cursor (its
-   * `clickable_targets`); only the v1 format asks, so upstream's modes, and every snapshot under
-   * the conformance switch, send exactly the keys they always did.
+   * `clickable_targets`); only the v1 format asks. The captured spec switch is the only source
+   * of the internal value-masking bypass, shared by page and locator snapshots.
    */
   async _snapshot(
     api: string,
@@ -1410,13 +1410,14 @@ export class Frame extends EventEmitter {
     // Capture options before resolving a locator's page, which can await opening its tab.
     const { depth, boxes } = options
     const marking = clickable ? { clickable } : {}
+    const conformance = upstreamSnapshots ? { conformance: true } : {}
     const wait = this._wait(api, options)
     if (selector !== null) {
       const addressed = await this._targetArgs(api, selector, true)
       return await send['locator.ariaSnapshot'](
         site,
         this._call(api, wait.timeout),
-        { ...addressed, mode, depth, boxes, ...marking },
+        { ...addressed, mode, depth, boxes, ...marking, ...conformance },
         wait.signal,
       )
     }
@@ -1434,6 +1435,7 @@ export class Frame extends EventEmitter {
         depth,
         boxes,
         ...marking,
+        ...conformance,
       },
       wait.signal,
     )
