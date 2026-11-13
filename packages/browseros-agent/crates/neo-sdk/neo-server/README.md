@@ -84,7 +84,7 @@ From the launch JSON it reads `ports.server` (default 9200), `ports.cdp` (defaul
 | `CLAW_DOWNLOADS_DIR` | `$HOME/Downloads` | The browser downloads folder and default `files.readDirs` entry. With no override and no discoverable home, the default is an empty list and startup logs a warning. |
 | `CLAW_PROFILE_DIR` | launch profile | Protected browser profile. Without an override, `directories.execution` named `.browseros` identifies its parent as the profile; otherwise startup warns that the profile is unprotected. |
 | `BROWSERCLAW_DIR` | `$HOME/.browserclaw` | The state directory. The start fails when both it and `HOME` are unset. |
-| `CLAW_LOG` | `info,rmcp=warn` | The `tracing` filter. A filter that does not parse falls back to the default with a warning. |
+| `CLAW_LOG` | `info,rmcp=warn` | The `tracing` filter. A filter that does not parse falls back to the default with a warning. `rmcp` is capped at info, and `sea_orm` and `tungstenite` at debug, in both log sinks; explicit crate directives cannot enable MCP request/reply or WebSocket frame dumps. |
 | `BROWSERCLAW_HOSTED_MODE` | unset | Must be `1`. Any other value logs an error, because popups then open as windows Neo cannot drive. Neo still starts. |
 | `CLAW_NATIVE_BROWSEROS_VERSION` | the launch JSON's | Overrides the browser version that gates core's native features. |
 | `CLAW_HOST_SOCKET` | `$BROWSERCLAW_DIR/host.sock` | The host API's Unix socket. |
