@@ -9,8 +9,8 @@ use std::time::Duration;
 use std::{future, io, mem};
 
 use browseros_core::TabId;
+use neo_http::Settings;
 use neo_playwright::RunState;
-use neo_service::Settings;
 use neo_trace::{
     EpochMillis, RunEnded, RunId, RunOutputs, RunStarted, TaskId, TraceSink, TraceStore, Values,
 };

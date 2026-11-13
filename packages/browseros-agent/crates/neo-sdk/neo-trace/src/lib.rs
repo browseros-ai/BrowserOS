@@ -17,7 +17,7 @@
 //! ```
 //!
 //! The writer decides which operations get a screenshot and when a run is `complete`; the
-//! camera that takes the pictures lives in `neo-service`, so this crate makes no browser
+//! camera that takes the pictures lives in `neo-http`, so this crate makes no browser
 //! calls.
 //!
 //! claw-sdk is stateless. Records hang off the browser's tab id

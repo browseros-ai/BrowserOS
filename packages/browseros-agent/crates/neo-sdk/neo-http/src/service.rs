@@ -18,7 +18,7 @@ use crate::{router, wire};
 use axum::Router;
 use browseros_core::viewport::Viewports;
 use browseros_core::{BrowserSession, ProtocolSession, TabId};
-use neo_capture::{CaptureHub, CaptureTransport, CdpPortTransport};
+use neo_screencast::{CaptureHub, CaptureTransport, CdpPortTransport};
 use neo_takeover::{BrowserTabs, Displays, Fits, Front, Locks, TabHold, Takeovers, Xvnc};
 use neo_trace::{EpochMillis, ShotJobs, TraceSink, TraceStore};
 use std::sync::Arc;
@@ -113,7 +113,7 @@ impl Service {
     }
 
     /// [`Service::start`], with live views captured over `capture` instead of a connection to
-    /// `inputs.cdp_port`: tests pass `neo_capture::testing`'s scripted browser.
+    /// `inputs.cdp_port`: tests pass `neo_screencast::testing`'s scripted browser.
     ///
     /// # Panics
     /// Outside a Tokio runtime, as `tokio::spawn` does.

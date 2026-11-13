@@ -92,7 +92,7 @@ pub const BROWSER_ENV: &str = "CLAW_SDK_E2E_BROWSER";
 pub const RUN_META: &str = "com.browseros.neo/run";
 /// A cold BrowserOS start plus the link's first connect, on a loaded machine.
 pub const PATIENCE: Duration = Duration::from_secs(60);
-/// The bearer token the host presents on the host socket; neo-service wants 32 bytes.
+/// The bearer token the host presents on the host socket; neo-http wants 32 bytes.
 pub const HOST_TOKEN: &str = "e2e-host-token-0123456789-abcdefghij";
 /// In the rig's root: the token's file, the CAPTCHA placeholder key's file, and the browser's
 /// user-data dir. All three are among Neo's secret files, which no upload hands a page.

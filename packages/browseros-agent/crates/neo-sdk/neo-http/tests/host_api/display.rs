@@ -4,7 +4,7 @@
 
 use crate::support::{BoxError, Harness, TestResult, harness};
 use futures_util::{SinkExt, StreamExt};
-use neo_service::{HostAuth, HostToken, PeerRule, host_service};
+use neo_http::{HostAuth, HostToken, PeerRule, host_service};
 use neo_takeover::{OwnerHasScreen, ScreenHolder};
 use std::future::IntoFuture;
 use std::path::{Path, PathBuf};

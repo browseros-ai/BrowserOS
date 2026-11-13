@@ -1288,7 +1288,7 @@ fn values_off_suppresses_real_call_log_values_at_debug() -> Result<(), TestError
     let output = Command::new(env::current_exe()?)
         .args(["--ignored", "--exact", "run::tests::trace_values_log_probe", "--nocapture"])
         .env_clear().env("BROWSERCLAW_DIR", state.path()).env("HOME", state.path())
-        .env("CLAW_LOG", "neo_server=debug,neo_playwright=debug,neo_trace=debug,neo_service=debug,neo_takeover=debug")
+        .env("CLAW_LOG", "neo_server=debug,neo_playwright=debug,neo_trace=debug,neo_http=debug,neo_takeover=debug")
         .output()?;
     assert!(
         output.status.success(),

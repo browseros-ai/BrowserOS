@@ -1,4 +1,4 @@
-//! The host side as zuzu and the door meet it: the real neo-service behind the real
+//! The host side as zuzu and the door meet it: the real neo-http behind the real
 //! `host_service` auth on a temp Unix socket, over the fake browser and a real trace store.
 
 use std::error::Error;
@@ -8,7 +8,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use browseros_core::{NativeCapabilities, TabId};
-use neo_service::{Settings, SettingsDefaults};
+use neo_http::{Settings, SettingsDefaults};
 use neo_trace::{Effect, OperationId, RedactionLimits, Redactor, RunId, TraceStore, WriterConfig};
 use serde_json::{Value, json};
 use tempfile::TempDir;
@@ -26,7 +26,7 @@ use crate::test_support::{CLOSED_XVNC, FakeCdp};
 
 type TestResult = Result<(), Box<dyn Error>>;
 
-/// Long enough for the neo-service's 32-byte minimum.
+/// Long enough for the neo-http's 32-byte minimum.
 const TOKEN: &str = "host-test-token-0123456789-abcdefghij";
 
 /// One reply off the socket. A plain data bag.

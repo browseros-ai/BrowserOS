@@ -65,7 +65,7 @@ pub(crate) struct HostApiConfig {
     /// `CLAW_HOST_SOCKET`, else `$BROWSERCLAW_DIR/host.sock`.
     pub(crate) socket: PathBuf,
     /// `CLAW_HOST_TOKEN_FILE`, the bearer token the host presents. Without it, or with a token
-    /// neo-service refuses (empty, under 32 bytes, not visible ASCII), there is no host
+    /// neo-http refuses (empty, under 32 bytes, not visible ASCII), there is no host
     /// listener at all, and `run` still works.
     pub(crate) token_file: Option<PathBuf>,
     /// `CLAW_HOST_TCP`: a TCP address served in addition to the socket, only by explicit opt-in.

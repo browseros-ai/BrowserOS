@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use browseros_cdp::browser;
 use browseros_core::{ProtocolSession, TabId};
-use neo_service::Settings;
+use neo_http::Settings;
 use neo_takeover::TabHold;
 use neo_trace::{RunId, RunStatus};
 use serde_json::json;

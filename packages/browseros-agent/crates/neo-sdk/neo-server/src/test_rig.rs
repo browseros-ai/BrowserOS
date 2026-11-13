@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use browseros_core::NativeCapabilities;
 use browseros_core::pages::NewPageOptions;
-use neo_service::{Settings, SettingsDefaults};
+use neo_http::{Settings, SettingsDefaults};
 use neo_trace::{
     Effect, RedactionLimits, Redactor, RunId, TaskId, TraceSink, TraceStore, WriterConfig,
     spawn_writer,

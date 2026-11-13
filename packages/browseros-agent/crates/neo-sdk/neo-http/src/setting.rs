@@ -380,7 +380,7 @@ mod tests {
     {
         let crates = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
-            .ok_or("neo-service sits in crates/neo-sdk")?;
+            .ok_or("neo-http sits in crates/neo-sdk")?;
         let yaml = std::fs::read_to_string(crates.join("neo-sdk-api/openapi.yaml"))?;
         let text = std::fs::read_to_string(crates.join("neo-server/README.md"))?;
         let table = table();

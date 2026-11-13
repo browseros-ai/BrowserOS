@@ -2,7 +2,7 @@
 //! owner take a tab from the agent and give it back.
 //!
 //! Each part is small, useful alone, and owns only its own state (design D13). A host composes
-//! them over HTTP through `neo-service`, which is the only crate that knows the wire; the
+//! them over HTTP through `neo-http`, which is the only crate that knows the wire; the
 //! app adapts the types here to its dispatcher (decision 9). The parts:
 //! - [`Locks`] keeps the agent off a tab. The dispatcher's lock policy asks [`Locks::check`]
 //!   about every agent operation, synchronously, and [`Locks::check_at`] asks it about a past

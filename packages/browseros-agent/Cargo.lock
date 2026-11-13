@@ -534,7 +534,7 @@ dependencies = [
  "harness-integrations",
  "hosted-api",
  "neo-captcha",
- "neo-capture",
+ "neo-screencast",
  "os_info",
  "posthog-rs",
  "pulldown-cmark",
@@ -1882,19 +1882,33 @@ dependencies = [
 ]
 
 [[package]]
-name = "neo-capture"
+name = "neo-http"
 version = "0.1.0"
 dependencies = [
+ "axum",
  "base64 0.22.1",
  "browseros-cdp",
  "browseros-core",
- "bytes",
  "futures-util",
+ "neo-screencast",
+ "neo-sdk-api",
+ "neo-takeover",
+ "neo-trace",
+ "percent-encoding",
+ "serde",
  "serde_json",
+ "sha2",
+ "sqlx",
+ "tempfile",
  "thiserror",
  "tokio",
+ "tokio-tungstenite",
  "tokio-util",
+ "tower",
  "tracing",
+ "tracing-subscriber",
+ "ulid",
+ "url",
 ]
 
 [[package]]
@@ -1920,6 +1934,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "neo-screencast"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "browseros-cdp",
+ "browseros-core",
+ "bytes",
+ "futures-util",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "tokio-util",
+ "tracing",
+]
+
+[[package]]
 name = "neo-sdk-api"
 version = "1.0.0"
 dependencies = [
@@ -1939,9 +1969,9 @@ dependencies = [
  "clap",
  "futures-util",
  "neo-captcha",
+ "neo-http",
  "neo-playwright",
  "neo-server",
- "neo-service",
  "neo-takeover",
  "neo-trace",
  "rmcp",
@@ -1962,36 +1992,6 @@ dependencies = [
  "tracing-appender",
  "tracing-subscriber",
  "ts-rs",
- "url",
-]
-
-[[package]]
-name = "neo-service"
-version = "0.1.0"
-dependencies = [
- "axum",
- "base64 0.22.1",
- "browseros-cdp",
- "browseros-core",
- "futures-util",
- "neo-capture",
- "neo-sdk-api",
- "neo-takeover",
- "neo-trace",
- "percent-encoding",
- "serde",
- "serde_json",
- "sha2",
- "sqlx",
- "tempfile",
- "thiserror",
- "tokio",
- "tokio-tungstenite",
- "tokio-util",
- "tower",
- "tracing",
- "tracing-subscriber",
- "ulid",
  "url",
 ]
 

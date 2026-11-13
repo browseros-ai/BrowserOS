@@ -100,7 +100,7 @@ browseros-core = { workspace = true, features = ["ts-rs"] }
 # The Playwright API agent scripts call: its op table and the facade that runs each op.
 neo-playwright.workspace = true
 # The host API: its routes, auth and event log, and the takeover locks the door asks.
-neo-service.workspace = true
+neo-http.workspace = true
 neo-takeover.workspace = true
 # `ts-rs`: an error's owner, delivery and operation id in the run envelope print as TypeScript.
 neo-trace = { workspace = true, features = ["ts-rs"] }

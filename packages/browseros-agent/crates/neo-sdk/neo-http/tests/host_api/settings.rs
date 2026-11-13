@@ -6,7 +6,7 @@ use crate::support::{BoxError, Harness, Reply, TestResult, harness};
 use axum::body::Body;
 use axum::http::{Method, StatusCode};
 use browseros_core::TabId;
-use neo_service::Settings;
+use neo_http::Settings;
 use neo_takeover::TabHold;
 use neo_trace::{RecordPolicy, Screenshots};
 use serde_json::{Value, json};

@@ -7,7 +7,7 @@ use axum::http::{HeaderMap, Request, StatusCode, header};
 use browseros_core::CdpConnection;
 use futures_util::StreamExt;
 use futures_util::future::BoxFuture;
-use neo_capture::{CaptureFailure, CaptureResult, CaptureTransport};
+use neo_screencast::{CaptureFailure, CaptureResult, CaptureTransport};
 
 use serde_json::json;
 use std::sync::Arc;

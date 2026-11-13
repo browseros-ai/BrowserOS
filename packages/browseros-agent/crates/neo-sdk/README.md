@@ -30,11 +30,11 @@ host / MCP run
       |
    neo-server -----> neo-playwright <--- neo-playwright-js (builds its assets)
       |                    |
-      +----> neo-service --+----> neo-trace
+      +----> neo-http -----+----> neo-trace
       |          |                    ^
       |          +----> neo-takeover --+
       |          +----> neo-sdk-api (spec + generated types)
-      |          +----> neo-capture <----- claw-server (desktop)
+      |          +----> neo-screencast <----- claw-server (desktop)
       +---------------> neo-captcha <----- claw-server (desktop)
 ```
 
@@ -43,19 +43,19 @@ host / MCP run
 | `neo-server` | Stateless MCP `run`, JavaScript runtime, dispatch and application wiring. Builds `browseros-claw-sdk`. |
 | `neo-playwright` | Browser operations, locators, snapshots and the isolated-world engine boundary. |
 | `neo-playwright-js` | JavaScript probe and agent prelude; builds the engine's committed assets and fixtures. |
-| `neo-service` | Authenticated host API, traces, live views and takeover routes. |
+| `neo-http` | Authenticated host API, traces, live views and takeover routes. |
 | `neo-takeover` | Tab locks, display control, viewport fitting and owner handoff. |
 | `neo-trace` | Run and operation records, storage and bounded trace values. |
 | `neo-sdk-api` | Host API specification, generated Rust models and migration notes. |
 | `neo-captcha` | Shared CAPTCHA solver, also used by desktop. `testbed/` checks it end to end through `run` ([README](neo-captcha/testbed/README.md)). |
-| `neo-capture` | Shared capture hub, also used by desktop. |
+| `neo-screencast` | Shared capture hub, also used by desktop. |
 
 `neo-server/docker/` builds the Neo SDK image, the browser plus this server, for hosts such as
 zuzu: see [its README](neo-server/docker/README.md).
 
 The pre-existing browser infrastructure (`browseros-cdp`, `browseros-core` and the other
 workspace crates) stays outside this folder. Desktop depends on `neo-captcha` and
-`neo-capture`; the SDK server and its other libraries do not enter desktop's dependency graph.
+`neo-screencast`; the SDK server and its other libraries do not enter desktop's dependency graph.
 
 From `packages/browseros-agent`, run the existing SDK gate with private build state:
 
@@ -73,7 +73,7 @@ edit `neo-sdk-api/src/generated` by hand.
 
 Release and protocol identities remain `claw-sdk`, `browseros-claw-sdk`, the existing version
 marker, MCP name and `CLAW_*` environment variables. The package rename changes tracing
-targets to `neo_captcha::…` and `neo_capture::…`, including in desktop logs. Custom `CLAW_LOG`
+targets to `neo_captcha::…` and `neo_screencast::…`, including in desktop logs. Custom `CLAW_LOG`
 directives naming either crate must use its new target; the default filter is unchanged.
 
 The server crate now uses `neo_server::…` tracing targets. Custom `CLAW_LOG` directives

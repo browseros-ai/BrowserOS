@@ -12,7 +12,7 @@ use crate::dispatch::{ErrorCode, OperationError, Policy, PolicyCheck};
 /// tab refuses it with `host / owner_has_control`, which the door reports `not_sent`. The
 /// idle-tab janitor reads the same locks, with the fits, through `HostHolds`.
 ///
-/// The locks belong to neo-service, which starts only once the browser link's first
+/// The locks belong to neo-http, which starts only once the browser link's first
 /// connect lands (its camera screenshots on the agent's own session). Until the host API arms
 /// this rule it refuses nothing, which is exact rather than lenient: a lock is taken only
 /// through the host API's routes, and those are served only after arming. `default()` is

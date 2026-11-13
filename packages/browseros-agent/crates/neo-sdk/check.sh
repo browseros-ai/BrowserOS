@@ -6,7 +6,7 @@
 #   - claw-sdk's lint set: a restated [lints] table (neo-server, neo-playwright). On top of the
 #     rest, Google's rustfmt options (stable rustfmt applies them only through --config) and the
 #     dependency boundary.
-#   - the workspace's lints (`[lints] workspace = true`: neo-takeover, neo-trace, neo-service,
+#   - the workspace's lints (`[lints] workspace = true`: neo-takeover, neo-trace, neo-http,
 #     ...): plain rustfmt, as CI's `cargo fmt --all --check` and their own `lint:rust` run it.
 # Every crate gets clippy -D warnings on all targets and its tests (except TESTS_NOT_RUN below),
 # on CI's exact toolchain. None of these tests needs a display or a browser: the live suites skip

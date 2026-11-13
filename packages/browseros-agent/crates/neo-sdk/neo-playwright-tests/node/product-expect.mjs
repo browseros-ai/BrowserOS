@@ -17,7 +17,7 @@ export const EXPECT_TIMEOUT = 10000
 
 /** Annotation descriptions, one per owner of the assertion. */
 const PRODUCT = 'product'
-const VISUAL = 'playwright-visual/neo-capture'
+const VISUAL = 'playwright-visual/neo-screenshot'
 const CUSTOM = 'playwright-custom/neo-calls'
 
 export function productExpect(

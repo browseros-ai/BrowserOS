@@ -19,7 +19,7 @@ use crate::config::HostApiConfig;
 /// (design D1).
 ///
 /// It binds and serves; who may call is decided entirely by the make-service it is given. In
-/// the app that is neo-service's `host_service(routes, auth)`, which carries the routes,
+/// the app that is neo-http's `host_service(routes, auth)`, which carries the routes,
 /// the constant-time bearer check, the peer-uid check and the connect info. claw-sdk writes no
 /// auth and no connect-info layer of its own (decisions 12 and 16). Whether there is a host
 /// socket at all is `host::HostApi`'s call: none without a usable token.
@@ -91,7 +91,7 @@ impl HostListener {
 
     /// Serves `make_service` on every bound socket until `shutdown`, then removes the socket
     /// file. The bounds are exactly what `axum::serve` needs for both listener kinds, so
-    /// neo-service's `host_service(routes, auth)` and a plain `Router` both fit.
+    /// neo-http's `host_service(routes, auth)` and a plain `Router` both fit.
     pub(crate) async fn serve<M, S>(
         self,
         make_service: M,
@@ -188,7 +188,7 @@ mod tests {
         }
     }
 
-    /// Stands in for neo-service's `host_service`: any axum make-service must fit.
+    /// Stands in for neo-http's `host_service`: any axum make-service must fit.
     fn routes() -> Router {
         Router::new().route("/ping", get(|| async { "pong" }))
     }

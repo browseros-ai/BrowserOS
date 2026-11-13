@@ -1,4 +1,4 @@
-//! Live views of one tab through the `neo-capture` hub serve MJPEG at `/screencast` and
+//! Live views of one tab through the `neo-screencast` hub serve MJPEG at `/screencast` and
 //! fragmented AV1 MP4 at `/video`.
 //!
 //! Each stream uses its tab id as the hub session id and stays pinned to that tab. The hub
@@ -15,7 +15,7 @@ use axum::response::{IntoResponse, Response};
 use browseros_core::TabId;
 use futures_util::StreamExt;
 use futures_util::future::BoxFuture;
-use neo_capture::{CaptureFailure, CaptureResult, CaptureTab, Frame, SessionTabs, SessionView};
+use neo_screencast::{CaptureFailure, CaptureResult, CaptureTab, Frame, SessionTabs, SessionView};
 use neo_takeover::{BrowserTabs, PartError};
 use percent_encoding::{AsciiSet, CONTROLS};
 use std::convert::Infallible;
@@ -139,7 +139,7 @@ fn streaming(content_type: &str, body: Body) -> Response {
 #[cfg(test)]
 mod tests {
     use super::mjpeg_part;
-    use neo_capture::Frame;
+    use neo_screencast::Frame;
 
     #[test]
     fn a_part_keeps_the_url_on_one_header_line() {
