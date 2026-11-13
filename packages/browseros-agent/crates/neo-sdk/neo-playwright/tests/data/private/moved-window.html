@@ -1,0 +1,41 @@
+<!doctype html><meta charset=utf-8><title>Moved window box</title>
+<style>input { width: 240px; height: 28px; }</style>
+<!-- The kit is born in one window's document, then adopted into its related window without
+     cloning. The plain text box declares no private kind: only the host's entry marks it.
+     Its foreign wrapper can lose its own value line; the button's derived name must stay masked. -->
+<script>
+const query = new URLSearchParams(location.search);
+const popup = query.has('popup');
+const bornInPopup = query.get('source') === 'popup';
+const KIT = '<div id=kit><label>Code <input id=code type=text></label>' +
+  '<div><button id=go aria-labelledby="pre code">Go</button> <span id=pre>Send</span></div></div>';
+document.addEventListener('DOMContentLoaded', () => {
+  if (popup === bornInPopup) document.body.insertAdjacentHTML('afterbegin', KIT);
+  if (!popup) {
+    const button = document.createElement('button');
+    button.id = 'open';
+    button.textContent = 'Open related tab';
+    button.addEventListener('click', () => {
+      const url = new URL(location.href);
+      url.searchParams.set('popup', '1');
+      window.related = window.open(url.href, '_blank');
+    });
+    document.body.appendChild(button);
+  }
+  window.ready = true;
+});
+// The existing live wait helper repeats these until the related document is ready.
+window.popupReady = () => window.related && !window.related.closed && window.related.ready ? 1 : 0;
+window.moveToOpener = () => {
+  const kit = document.getElementById('kit');
+  if (!kit || !window.opener || window.opener.closed || !window.opener.ready) return 0;
+  window.opener.document.body.appendChild(kit);
+  return 1;
+};
+window.moveToPopup = () => {
+  const kit = document.getElementById('kit');
+  if (!kit || !window.popupReady()) return 0;
+  window.related.document.body.appendChild(kit);
+  return 1;
+};
+</script>

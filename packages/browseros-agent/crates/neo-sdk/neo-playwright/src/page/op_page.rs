@@ -120,12 +120,11 @@ impl<'op> OpPage<'op> {
     /// gap-free observation while checking it; uncertainty enables the scan rather than
     /// fetching topology or changing frame storage.
     ///
-    /// A tab that took a private entry always answers true (ruling R53). A marked box keeps the
-    /// prototype of the frame it was created in; once the page moved it into this document and
-    /// removed that frame, the tree proves one frame, and only the document-wide scan still
-    /// finds that prototype to guard it.
+    /// Private-entry history in any tab always answers true (ruling R59). A marked box keeps
+    /// its original prototype when the page moves it into another frame or window; even after
+    /// the source closes, only a document-wide scan finds that foreign prototype to guard it.
     pub(crate) fn may_have_other_frame(&self, scope: &OpScope<'_>, world: &IsolatedWorld) -> bool {
-        if self.pw.took_private_text(self.tab()) {
+        if self.pw.private_tabs().any() {
             return true;
         }
         let fence = self.pw.event_fence();

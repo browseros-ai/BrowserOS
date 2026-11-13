@@ -557,11 +557,18 @@ paths:
           `<N characters>`, so a page that keeps the `value` attribute in step with what is
           typed, as many frameworks do, does not show the value there. Another attribute the
           page copies the value into prints as it is.
-        - The mark travels with the box: a box the page moves into another frame of the same
-          origin is still marked there. `inputValue()` reads the bullets, a name built from it
-          prints them, and its own snapshot line prints no text. An assertion on it
+        - The mark travels with the box: a box the page moves into another frame or window of
+          the same origin, including a pop-up or the window that opened it, is still marked
+          there. `inputValue()` reads the bullets, a name built from it prints them, and its
+          own snapshot line can stay bare. An assertion on it
           (`toHaveValue`, on the box or on its label) compares against the bullets there too,
-          and its message prints the box's value as `<N characters>`.
+          and its message prints the box's value as `<N characters>`. The search that finds a
+          moved box stays on for every tab after a private fill, even after the filled tab
+          closes. After a restart of Neo it is on again when Neo's record restores a tab
+          that took a fill, or at the next private fill. If Neo cannot tell which tabs the
+          record names, it enables the search for every tab. Until then a name built from a
+          moved box can print its value. Its own line still prints no clear value, and `inputValue()`
+          and assertions on the box or its label still use bullets: they ask the node itself.
         - A script's own code in the page (`evaluate`) reads what the page holds.
       parameters:
         - $ref: '#/components/parameters/TabId'
