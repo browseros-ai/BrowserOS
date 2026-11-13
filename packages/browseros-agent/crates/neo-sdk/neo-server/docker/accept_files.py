@@ -432,7 +432,7 @@ def policy(proof, places):
                     proof.denied(f'missing credential target remains protected #{index}',
                                  upload(target), target, own=True)
                     proof.denied(f'dangling credential target cannot be created #{index}',
-                                 f'await page.screenshot({{path:{json.dumps(str(target))}}})',
+                                 f"await page.screenshot({{path:{json.dumps(str(target))},type:'png'}})",
                                  target, own=True)
                     proof.check(f'dangling credential target stays absent #{index}', not target.exists())
                     proof.allowed(f'dangling credential permits unrelated allowed read #{index}',
