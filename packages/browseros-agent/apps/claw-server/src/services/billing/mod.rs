@@ -710,8 +710,9 @@ impl State {
         let live = self
             .licence
             .as_ref()
-            .filter(|licence| now < licence.expires_at && !plan_has_ended(licence, now));
-        let Some(licence) = live else {
+            .filter(|licence| now < licence.expires_at)
+            .and_then(|licence| status_now(licence, now).map(|status| (licence, status)));
+        let Some((licence, status)) = live else {
             return PlanSnapshot {
                 available: true,
                 on_key: self.on_key,
@@ -726,8 +727,12 @@ impl State {
                 .plan
                 .as_ref()
                 .and_then(|plan| self.plan_names.get(plan).cloned()),
-            features: licence.features.clone(),
-            status: licence.status,
+            features: if status == Status::Unpaid {
+                Vec::new()
+            } else {
+                licence.features.clone()
+            },
+            status,
             period_end: licence.period_end,
             ends_at: licence.ends_at,
             grace_until: licence.grace_until,
@@ -738,14 +743,15 @@ impl State {
     }
 }
 
-/// Whether the plan a still-valid licence names has already stopped, the way the gateway would
-/// see it on the next refresh: a cancelled plan past its end, or a failed payment past its grace.
-fn plan_has_ended(licence: &Licence, now: i64) -> bool {
+/// Where a still-valid licence's plan stands right now, the way the gateway will see it on the
+/// next refresh: a cancelled plan past its end is over (`None`), and a failed payment past its
+/// grace is unpaid, which unlocks nothing but keeps the plan so the card can still be updated.
+fn status_now(licence: &Licence, now: i64) -> Option<Status> {
     let over = |time: Option<i64>| time.is_some_and(|time| time <= now);
     match licence.status {
-        Status::Ending => over(licence.ends_at),
-        Status::PaymentFailed => over(licence.grace_until),
-        Status::None | Status::Active | Status::Unpaid => false,
+        Status::Ending if over(licence.ends_at) => None,
+        Status::PaymentFailed if over(licence.grace_until) => Some(Status::Unpaid),
+        status => Some(status),
     }
 }
 
@@ -820,9 +826,17 @@ mod tests {
     }
 
     #[test]
-    fn a_failed_payment_turns_off_when_its_grace_ends() {
+    fn a_failed_payment_becomes_unpaid_when_its_grace_ends() {
         let state = state_with(Status::PaymentFailed, None, Some(NOW));
-        assert!(!has_ultrafast(&state.snapshot(NOW + 1)));
+        let after_grace = state.snapshot(NOW + 1);
+        assert_eq!(after_grace.status, Status::Unpaid);
+        assert!(after_grace.features.is_empty());
+        assert_eq!(
+            after_grace.plan.as_deref(),
+            Some("ultrafast"),
+            "the plan stays so the card can still be updated"
+        );
+        assert_eq!(after_grace.grace_until, Some(NOW));
         let during_grace = state.snapshot(NOW - 1);
         assert!(has_ultrafast(&during_grace));
         assert_eq!(during_grace.status, Status::PaymentFailed);
