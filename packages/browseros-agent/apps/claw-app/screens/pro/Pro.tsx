@@ -4,7 +4,6 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-import type { Plan } from '@browseros/claw-api'
 import { ChevronDown } from 'lucide-react'
 import { useState } from 'react'
 import { Navigate } from 'react-router'
@@ -19,19 +18,24 @@ import {
 } from '@/components/motion/collapsible'
 import { CancelProDialog } from '@/components/pro/CancelProDialog'
 import { KeySection } from '@/components/pro/KeySection'
-import { UltrafastPicture } from '@/components/pro/UltrafastPictures'
+import {
+  StepRacePicture,
+  UltrafastPicture,
+} from '@/components/pro/UltrafastPictures'
 import { UltrafastTour } from '@/components/pro/UltrafastTour'
 import { UseKeyDialog } from '@/components/pro/UseKeyDialog'
 import { Skeleton } from '@/components/ui/skeleton'
+import { cn } from '@/lib/utils'
 import { AnalyticsEvent, track } from '@/modules/analytics/events'
 import { PlanPanel } from './PlanPanel'
-import { PricePanel } from './PricePanel'
+import { BuyButton, PricePanel } from './PricePanel'
 import { useProData } from './pro.data'
 import {
   apiErrorMessage,
   type BillingPeriod,
-  formatPrice,
+  formatDate,
   isPro,
+  keyHasEnded,
   PLAN_UNCHECKED,
   type ProPrices,
   pickPeriod,
@@ -44,7 +48,11 @@ const TITLE = (
   </>
 )
 
-/** Everything about Pro in one place: what it adds, buying it, the key and the plan. */
+/**
+ * Everything about Pro in one place. Every state follows one rule: a plain
+ * hero with no panel, only the feature tiles are boxes, and the questions are
+ * a plain list.
+ */
 export function Pro() {
   const { plan, pricing, prices, planKey, checkout, portal } = useProData()
   const [wantedPeriod, setWantedPeriod] = useState<BillingPeriod>('month')
@@ -76,7 +84,9 @@ export function Pro() {
 
   const current = plan.data
   const pro = isPro(current)
+  const ended = keyHasEnded(current)
   const period = prices ? pickPeriod(prices, wantedPeriod) : wantedPeriod
+  const idle = checkout.phase !== 'waiting' && checkout.phase !== 'confirming'
 
   const buy = () => {
     const price = prices?.[period]
@@ -85,50 +95,84 @@ export function Pro() {
   }
 
   return (
-    <Page>
-      <PageHeader title={TITLE} lede={lede(current, prices)} />
-      <div className="grid items-start gap-6 lg:grid-cols-[minmax(0,1.35fr)_minmax(300px,1fr)]">
-        <PictureTiles
-          onShowMe={
-            pro
-              ? (step) => {
-                  setTourOpens((count) => count + 1)
-                  setTourAt(step)
-                }
-              : undefined
-          }
-        />
-        <Card
-          aria-live="polite"
-          className="gap-[18px] border-border-2 bg-card-tint p-6 shadow-card lg:sticky lg:top-6"
-        >
-          {pro ? (
-            <PlanPanel
-              plan={current}
-              planKey={planKey.data}
-              portal={portal}
-              onCancel={() => setCancelOpen(true)}
-            />
-          ) : (
-            <PricePanel
-              plan={current}
-              pricing={pricing}
-              prices={prices}
-              period={period}
-              onPeriodChange={setWantedPeriod}
-              checkout={checkout}
-              onBuy={buy}
-              onUseKey={() => {
-                setKeyDialogOpens((count) => count + 1)
-                setKeyDialogOpen(true)
-                track(AnalyticsEvent.ProKeyDialogOpened)
-              }}
-            />
-          )}
-        </Card>
-      </div>
-      {pro && current.onKey ? <KeySection planKey={planKey} /> : null}
-      <ProQuestions prices={prices} />
+    <Page className="gap-12 md:gap-16">
+      {pro ? (
+        <>
+          <PageHeader title={TITLE} />
+          <PlanPanel
+            plan={current}
+            portal={portal}
+            onCancel={() => setCancelOpen(true)}
+          />
+          {current.onKey ? <KeySection planKey={planKey} /> : null}
+          <FeatureTiles
+            all
+            onShowMe={(step) => {
+              setTourOpens((count) => count + 1)
+              setTourAt(step)
+            }}
+          />
+        </>
+      ) : (
+        <>
+          <section
+            aria-label="Get ultrafast"
+            className="grid items-center gap-4 lg:grid-cols-2 lg:gap-12"
+          >
+            <div className="flex min-w-0 flex-col items-start gap-3.5">
+              <PageHeader title={TITLE} />
+              <p className="max-w-[16ch] font-extrabold text-[28px] text-cyanotype-ink leading-[1.12] tracking-[-0.03em] md:text-[34px]">
+                More from your AI agents.
+              </p>
+              <div
+                aria-live="polite"
+                className="mt-3.5 flex w-full flex-col items-start gap-4"
+              >
+                <PricePanel
+                  plan={current}
+                  pricing={pricing}
+                  prices={prices}
+                  period={period}
+                  onPeriodChange={setWantedPeriod}
+                  checkout={checkout}
+                  onBuy={buy}
+                  onUseKey={() => {
+                    setKeyDialogOpens((count) => count + 1)
+                    setKeyDialogOpen(true)
+                    track(AnalyticsEvent.ProKeyDialogOpened)
+                  }}
+                />
+              </div>
+            </div>
+            <div className="relative isolate min-w-0 py-4 before:pointer-events-none before:absolute before:inset-x-0 before:-inset-y-6 before:-z-10 before:bg-[radial-gradient(closest-side,var(--color-accent-tint),transparent)] sm:px-2 sm:py-7 lg:before:-inset-x-6 lg:before:-inset-y-10">
+              <StepRacePicture large />
+            </div>
+          </section>
+          <FeatureTiles />
+          {idle && prices ? (
+            <section
+              aria-label="Get ultrafast again"
+              className="flex flex-wrap items-center justify-between gap-x-6 gap-y-4"
+            >
+              <h2 className="font-extrabold text-[22px] text-cyanotype-ink tracking-[-0.025em] md:text-[26px]">
+                {ended
+                  ? 'Turn ultrafast back on'
+                  : 'Make your agents ultrafast'}
+              </h2>
+              <BuyButton
+                isStarting={checkout.isStarting}
+                ended={ended}
+                onBuy={buy}
+              />
+            </section>
+          ) : null}
+        </>
+      )}
+      <ProQuestions
+        prices={prices}
+        on={pro}
+        nextPayment={current.status === 'active' ? current.periodEnd : null}
+      />
 
       <UseKeyDialog
         key={keyDialogOpens}
@@ -157,132 +201,164 @@ export function Pro() {
   )
 }
 
-function lede(plan: Plan, prices: ProPrices | null): string | null {
-  if (isPro(plan)) {
-    return 'Thanks for supporting BrowserOS. Here’s what ultrafast adds to neo.'
-  }
-  if (!prices?.month) return null
-  const yearly = prices.year ? ', or less if you pay yearly' : ''
-  return `More from your AI agents, for ${formatPrice(prices.month)} a month${yearly}. Cancel whenever you like.`
-}
-
 // ---------------------------------------------------------------------------
 
-/** What ultrafast adds: the welcome's three pictures, each with its headline. */
-function PictureTiles({
+/**
+ * What ultrafast adds, one box each. Before buying, the hero already shows
+ * browsing, so only the other two are here.
+ */
+function FeatureTiles({
+  all = false,
   onShowMe,
 }: {
+  all?: boolean
   /** Set once ultrafast is on: opens the welcome at that picture. */
   onShowMe?: (step: number) => void
 }) {
+  const shown = ULTRAFAST_STEPS.map((step, index) => ({ step, index })).filter(
+    ({ index }) => all || index > 0,
+  )
   return (
-    <section aria-label="What ultrafast adds" className="flex flex-col gap-4">
-      {ULTRAFAST_STEPS.map((step, index) => (
-        <Card
-          key={step.name}
-          className="gap-0 overflow-hidden border-border-2 bg-card p-0 shadow-card"
-        >
-          <div className="flex flex-col items-start gap-1.5 px-[22px] pt-5 pb-4">
-            <span className="inline-flex items-center gap-2 font-semibold text-[13.5px] text-accent-ink">
-              <step.icon aria-hidden className="size-4" />
-              {step.name}
-            </span>
-            <h2 className="font-bold text-[21px] text-cyanotype-ink leading-[1.2] tracking-[-0.015em]">
-              {step.title}
-            </h2>
-            <p className="text-[15px] text-ink-2">{step.line}</p>
-            {onShowMe ? (
-              <button
-                type="button"
-                aria-label={`Show me ${step.name}`}
-                onClick={() => onShowMe(index)}
-                className="mt-1 rounded-sm font-semibold text-[14px] text-accent-ink underline-offset-4 outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring"
+    <section
+      aria-labelledby="ultrafast-features"
+      className="flex flex-col gap-3.5"
+    >
+      <h2
+        id="ultrafast-features"
+        className={cn(
+          'font-bold text-[19px] text-cyanotype-ink tracking-[-0.015em]',
+          !all && 'sr-only',
+        )}
+      >
+        What’s in ultrafast
+      </h2>
+      <div className="grid gap-4 md:grid-cols-2">
+        {shown.map(({ step, index }) => {
+          const wide = all && index === 0
+          return (
+            <Card
+              key={step.name}
+              className={cn(
+                'gap-0 overflow-hidden border-border-2 bg-card p-0 shadow-card',
+                wide &&
+                  'md:col-span-2 lg:grid lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]',
+              )}
+            >
+              <div
+                className={cn(
+                  'flex flex-col items-start gap-2 px-6 pt-[22px] pb-5',
+                  wide && 'lg:justify-center',
+                )}
               >
-                Show me
-              </button>
-            ) : null}
-          </div>
-          <div className="border-border-2 border-t bg-accent-tint px-[22px] py-5">
-            <UltrafastPicture step={index} />
-          </div>
-        </Card>
-      ))}
+                <h3 className="flex items-center gap-2.5 font-bold text-[19px] text-cyanotype-ink leading-[1.2] tracking-[-0.015em]">
+                  <step.icon
+                    aria-hidden
+                    className="size-5 shrink-0 text-primary"
+                  />
+                  {step.title}
+                </h3>
+                {onShowMe ? (
+                  <button
+                    type="button"
+                    aria-label={`Show me ${step.name}`}
+                    onClick={() => onShowMe(index)}
+                    className="rounded-sm font-semibold text-[14px] text-accent-ink underline-offset-4 outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring"
+                  >
+                    Show me
+                  </button>
+                ) : null}
+              </div>
+              <div
+                className={cn(
+                  'flex-1 border-border-2 border-t bg-accent-tint px-6 py-5',
+                  wide && 'lg:flex lg:items-center lg:border-t-0 lg:border-l',
+                )}
+              >
+                <UltrafastPicture step={index} />
+              </div>
+            </Card>
+          )
+        })}
+      </div>
     </section>
   )
 }
 
-function ProQuestions({ prices }: { prices: ProPrices | null }) {
-  const both = Boolean(prices?.month && prices.year)
+function ProQuestions({
+  prices,
+  on,
+  nextPayment,
+}: {
+  prices: ProPrices | null
+  on: boolean
+  nextPayment: number | null
+}) {
+  const yearly = prices?.year ? ', or each year if you pay yearly' : ''
+  const charged =
+    nextPayment !== null
+      ? `Next on ${formatDate(nextPayment)}. Stripe emails you a receipt each time.`
+      : on
+        ? null
+        : `Today, then on the same date each month${yearly}.`
   const questions = [
+    ...(charged ? [{ q: 'When am I charged?', a: charged }] : []),
     {
-      q: 'When am I charged?',
-      a: `Today, and then on the same date every month${both ? ', or every year if you pay yearly' : ''}. Stripe emails you a receipt each time.`,
+      q: 'What if I cancel?',
+      a: 'ultrafast stays on until your paid time ends. Your skills keep working, with your agent at normal speed.',
     },
-    ...(both
+    {
+      q: 'Does neo change sites without asking?',
+      a: 'No. For skills that change a site, like adding to a cart, you choose how they run. Your agent asks you first.',
+    },
+    ...(on
       ? [
           {
-            q: 'Can I switch between monthly and yearly?',
-            a: 'Yes. Choose Billing and receipts on this page and change your plan there. Going yearly starts right away, and you only pay the difference. Going back to monthly starts when your paid year ends.',
+            q: 'New computer, or reinstalled neo?',
+            a: 'Choose Use a licence key and paste your key.',
           },
         ]
       : []),
     {
-      q: 'How do I cancel?',
-      a: 'Come back to this page and choose Cancel ultrafast. You keep ultrafast until the end of the month you already paid for, and you are not charged again. After that, your skills still work, with your agent at normal speed.',
+      q: 'More than one computer?',
+      a: on
+        ? 'Yes, up to 5 with one key. They’re listed above.'
+        : 'Yes, up to 5 with one key.',
     },
-    {
-      q: 'Does neo change things on sites without asking?',
-      a: 'No. When a skill adds to a cart or changes anything else on a site, you choose how it runs: with your agent checking each page, or without it. Your agent asks you the first time. You can change it on the skill’s page.',
-    },
-    {
-      q: 'I reinstalled neo or got a new computer.',
-      a: 'Choose Use a licence key and paste your key. ultrafast turns on right away.',
-    },
-    {
-      q: 'Can I use ultrafast on more than one computer?',
-      a: 'Yes, on up to 5 computers with one key. You can see them all, and remove any, on this page.',
-    },
-    {
-      q: 'Where’s my licence key?',
-      a: 'In the email we sent when you paid. Search for “ultrafast licence key”. Can’t find it? Reset your key on this page and we’ll email a new one.',
-    },
-    {
-      q: 'What if someone else gets my key?',
-      a: 'Choose Reset key on this page. You get a new key, and ultrafast turns off on every other computer until you paste the new key there.',
-    },
-    {
-      q: 'Who sees my card details?',
-      a: 'Only Stripe, the payment company that runs the checkout page. neo and BrowserOS never see or store your card.',
-    },
+    ...(on
+      ? []
+      : [
+          {
+            q: 'Who sees my card?',
+            a: 'Only Stripe. neo never sees or stores it.',
+          },
+        ]),
   ]
   return (
     <section
-      aria-label="Questions people ask"
+      aria-labelledby="ultrafast-questions"
       className="flex flex-col gap-3.5"
     >
-      <h2 className="font-bold text-[19px] text-cyanotype-ink tracking-[-0.015em]">
-        Questions people ask
-      </h2>
-      <Card
-        size="compact"
-        className="gap-0 border-border-2 bg-card py-1 shadow-card"
+      <h2
+        id="ultrafast-questions"
+        className="font-bold text-[19px] text-cyanotype-ink tracking-[-0.015em]"
       >
-        <div className="flex flex-col divide-y divide-border-2">
-          {questions.map(({ q, a }, index) => (
-            <Collapsible key={q} defaultOpen={index === 0}>
-              <CollapsibleTrigger className="flex w-full items-center justify-between gap-3 px-[22px] py-4 text-left font-semibold text-[15.5px] text-cyanotype-ink outline-none focus-visible:ring-2 focus-visible:ring-ring">
-                {q}
-                <CollapsibleIndicator>
-                  <ChevronDown aria-hidden className="size-4 text-ink-3" />
-                </CollapsibleIndicator>
-              </CollapsibleTrigger>
-              <CollapsibleContent contentClassName="px-[22px] pb-4">
-                <p className="max-w-[70ch] text-[14.5px] text-ink-2">{a}</p>
-              </CollapsibleContent>
-            </Collapsible>
-          ))}
-        </div>
-      </Card>
+        Questions
+      </h2>
+      <div className="flex flex-col divide-y divide-border-2 border-border-2 border-y">
+        {questions.map(({ q, a }) => (
+          <Collapsible key={q}>
+            <CollapsibleTrigger className="flex w-full items-center justify-between gap-3 py-[18px] text-left font-semibold text-[15px] text-cyanotype-ink outline-none focus-visible:ring-2 focus-visible:ring-ring">
+              {q}
+              <CollapsibleIndicator>
+                <ChevronDown aria-hidden className="size-4 text-ink-3" />
+              </CollapsibleIndicator>
+            </CollapsibleTrigger>
+            <CollapsibleContent contentClassName="pb-[18px]">
+              <p className="max-w-[70ch] text-[14.5px] text-ink-2">{a}</p>
+            </CollapsibleContent>
+          </Collapsible>
+        ))}
+      </div>
     </section>
   )
 }

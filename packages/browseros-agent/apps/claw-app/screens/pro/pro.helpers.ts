@@ -145,10 +145,6 @@ export function perPeriod(period: BillingPeriod): string {
   return period === 'year' ? 'a year' : 'a month'
 }
 
-export function eachPeriod(period: BillingPeriod): string {
-  return period === 'year' ? 'each year' : 'each month'
-}
-
 export function isPro(plan: Plan): boolean {
   return plan.status !== 'none'
 }

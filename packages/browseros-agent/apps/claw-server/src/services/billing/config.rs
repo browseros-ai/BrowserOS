@@ -18,15 +18,21 @@ const DEV_KEYS: &[(&str, &str)] = &[("dev-1", "tHSf_0xpRZQb_Zelg55jNqn1GmyWbV6cm
 
 /// The staging gateway on fly.io, for builds with the `billing-staging` feature.
 const STAGING_GATEWAY: Option<Gateway> = Some((
-    "https://neo-billing-staging.fly.dev",
+    "https://neo-billing-staging.browseros.com",
     &[(
         "staging-2026-10",
         "FMJahZNybppPIcgi62EYlPk7JzbBCxgfLZ9OSxFuiwI",
     )],
 ));
 
-/// The production gateway. `None` until launch, so release builds are Free.
-const RELEASE_GATEWAY: Option<Gateway> = None;
+/// The production gateway on fly.io.
+const RELEASE_GATEWAY: Option<Gateway> = Some((
+    "https://neo-billing.browseros.com",
+    &[(
+        "prod-2026-10",
+        "Gzb--6n9M6XzCVDS7kVpOP9z2oRFxfspulexnTCFQTE",
+    )],
+));
 
 /// Key ids that only local and test gateways sign with.
 const NON_RELEASE_KID_PREFIXES: &[&str] = &["dev-", "test-"];
@@ -125,7 +131,7 @@ mod tests {
         };
         assert_eq!(
             config.gateway.as_str(),
-            "https://neo-billing-staging.fly.dev/"
+            "https://neo-billing-staging.browseros.com/"
         );
         assert!(config.release);
         assert!(config.trusted_key("staging-2026-10").is_some());
@@ -146,8 +152,18 @@ mod tests {
 
     #[cfg(not(feature = "billing-staging"))]
     #[test]
-    fn release_builds_have_no_billing_until_launch() {
-        assert!(BillingConfig::for_build(false).is_none());
+    fn a_release_build_uses_the_production_gateway_and_trusts_only_its_key() {
+        let Some(config) = BillingConfig::for_build(false) else {
+            panic!("a release build has billing");
+        };
+        assert_eq!(
+            config.gateway.as_str(),
+            "https://neo-billing.browseros.com/"
+        );
+        assert!(config.release);
+        assert!(config.trusted_key("prod-2026-10").is_some());
+        assert!(config.trusted_key("staging-2026-10").is_none());
+        assert!(config.trusted_key("dev-1").is_none());
     }
 
     #[test]

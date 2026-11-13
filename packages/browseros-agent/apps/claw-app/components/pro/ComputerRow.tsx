@@ -28,26 +28,43 @@ interface ComputerRowProps {
   now: number
   /** Buttons at the end of the row, in one aligned column. */
   actions: ReactNode
+  /** Only when another computer was last used; this computer gets no line. */
+  brief?: boolean
 }
 
 /** One computer on the key: its name, when it was added and last used. */
-export function ComputerRow({ computer, now, actions }: ComputerRowProps) {
+export function ComputerRow({
+  computer,
+  now,
+  actions,
+  brief = false,
+}: ComputerRowProps) {
+  const lastUsed = lastUsedLine(computer.lastSeenAt, now)
   return (
-    <li className="grid grid-cols-[36px_minmax(0,1fr)_auto] items-center gap-3 py-2.5">
+    <li
+      className={cn(
+        'grid grid-cols-[36px_minmax(0,1fr)_auto] items-center gap-3',
+        brief ? 'py-3' : 'py-2.5',
+      )}
+    >
       <ComputerIcon platform={computer.platform} />
       <div className="min-w-0">
         <div className="truncate font-semibold text-[14.5px] text-cyanotype-ink">
           {computerName(computer)}
         </div>
-        <div className="text-[13px] text-ink-3">
-          <span className="whitespace-nowrap">
-            Added {formatAdded(computer.activatedAt)}
-          </span>
-          {' · '}
-          {computer.thisComputer
-            ? 'You’re using it now'
-            : lastUsedLine(computer.lastSeenAt, now)}
-        </div>
+        {brief ? (
+          computer.thisComputer ? null : (
+            <div className="text-[13px] text-ink-3">{lastUsed}</div>
+          )
+        ) : (
+          <div className="text-[13px] text-ink-3">
+            <span className="whitespace-nowrap">
+              Added {formatAdded(computer.activatedAt)}
+            </span>
+            {' · '}
+            {computer.thisComputer ? 'You’re using it now' : lastUsed}
+          </div>
+        )}
       </div>
       <span className="flex items-center gap-1">{actions}</span>
     </li>

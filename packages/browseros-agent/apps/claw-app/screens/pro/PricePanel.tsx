@@ -5,20 +5,8 @@
  */
 
 import type { Plan, PlanPrice } from '@browseros/claw-api'
-import {
-  Check,
-  ExternalLink,
-  Info,
-  KeyRound,
-  LoaderCircle,
-  Lock,
-} from 'lucide-react'
+import { Check, ExternalLink, Info, KeyRound, LoaderCircle } from 'lucide-react'
 import type { ReactNode } from 'react'
-import {
-  Alert,
-  AlertContent,
-  AlertDescription,
-} from '@/components/motion/alert'
 import { Button } from '@/components/motion/button/base'
 import { StatefulButton } from '@/components/motion/button/stateful'
 import { Tabs, TabsList, TabsTrigger } from '@/components/motion/tabs'
@@ -28,7 +16,6 @@ import {
   apiErrorMessage,
   type BillingPeriod,
   billingPeriods,
-  eachPeriod,
   formatPrice,
   isBillingPeriod,
   keyHasEnded,
@@ -52,7 +39,7 @@ interface PricePanelProps {
   onUseKey: () => void
 }
 
-/** What Free sees: the price, Get Pro, and the way in for someone who already paid. */
+/** What Free sees: the price, Get ultrafast, and the way in for someone who already paid. */
 export function PricePanel({
   plan,
   pricing,
@@ -65,10 +52,10 @@ export function PricePanel({
 }: PricePanelProps) {
   if (pricing.isPending) {
     return (
-      <div className="flex flex-col gap-4">
+      <div className="flex w-full flex-col gap-4">
+        <Skeleton className="h-9 w-56" />
         <Skeleton className="h-12 w-40" />
-        <Skeleton className="h-24 w-full" />
-        <Skeleton className="h-10 w-full" />
+        <Skeleton className="h-[46px] w-44" />
       </div>
     )
   }
@@ -83,6 +70,7 @@ export function PricePanel({
   const price = prices[period] ?? prices.month ?? prices.year
   if (!price) return null
   const amount = formatPrice(price)
+  const ended = keyHasEnded(plan)
 
   if (checkout.phase === 'waiting' || checkout.phase === 'confirming') {
     return (
@@ -98,14 +86,11 @@ export function PricePanel({
   return (
     <>
       {checkout.phase === 'abandoned' ? (
-        <PanelNote icon={<Info />}>
-          No payment was made. You can try again whenever you like.
-        </PanelNote>
-      ) : keyHasEnded(plan) ? (
-        <PanelNote icon={<KeyRound />} tone="warn">
-          This computer’s licence key has no ultrafast plan right now. Get
-          ultrafast to start it again.
-        </PanelNote>
+        <Note icon={<Info />}>No payment was made.</Note>
+      ) : ended ? (
+        <Note icon={<KeyRound />} warn>
+          Renew and your key works again.
+        </Note>
       ) : null}
 
       {billingPeriods(prices).length > 1 ? (
@@ -116,33 +101,51 @@ export function PricePanel({
         />
       ) : null}
 
-      <PriceLines price={price} amount={amount} />
+      <PriceLine price={price} amount={amount} />
 
-      <StatefulButton
-        state={checkout.isStarting ? 'loading' : 'idle'}
-        loadingText="Get ultrafast"
-        disabled={checkout.isStarting}
-        onClick={onBuy}
-        className="w-full font-semibold"
-      >
-        Get ultrafast
-      </StatefulButton>
-      <p className="flex items-start gap-2 text-[13px] text-ink-3">
-        <Lock aria-hidden className="mt-0.5 size-3.5 shrink-0" />
-        <span>You pay on Stripe’s secure page. neo never sees your card.</span>
+      <BuyButton isStarting={checkout.isStarting} ended={ended} onBuy={onBuy} />
+      <p className="flex flex-wrap items-baseline gap-x-3 gap-y-1 text-[13.5px] text-ink-3">
+        <span>
+          {price.interval === 'year'
+            ? `Works out to ${monthlyEquivalent(price)} a month. `
+            : null}
+          Cancel any time.
+        </span>
+        {ended ? null : (
+          <button
+            type="button"
+            onClick={onUseKey}
+            className="rounded-sm font-semibold text-accent-ink underline-offset-4 outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            Use a licence key
+          </button>
+        )}
       </p>
-      <div className="flex items-center gap-3 text-[13px] text-ink-3 before:h-px before:flex-1 before:bg-border-2 after:h-px after:flex-1 after:bg-border-2">
-        Already paid?
-      </div>
-      <Button
-        variant="secondary"
-        onClick={onUseKey}
-        className="w-full font-semibold"
-      >
-        <KeyRound aria-hidden className="size-4" />
-        Use a licence key
-      </Button>
     </>
+  )
+}
+
+/** Get ultrafast, or Renew ultrafast once a key's plan has ended. */
+export function BuyButton({
+  isStarting,
+  ended,
+  onBuy,
+}: {
+  isStarting: boolean
+  ended: boolean
+  onBuy: () => void
+}) {
+  const label = ended ? 'Renew ultrafast' : 'Get ultrafast'
+  return (
+    <StatefulButton
+      state={isStarting ? 'loading' : 'idle'}
+      loadingText={label}
+      disabled={isStarting}
+      onClick={onBuy}
+      className="h-[46px] px-[26px] font-semibold text-[15.5px] max-sm:w-full"
+    >
+      {label}
+    </StatefulButton>
   )
 }
 
@@ -183,69 +186,46 @@ function PeriodSwitch({
   )
 }
 
-function PriceLines({ price, amount }: { price: PlanPrice; amount: string }) {
+function PriceLine({ price, amount }: { price: PlanPrice; amount: string }) {
   const period: BillingPeriod = price.interval === 'year' ? 'year' : 'month'
   return (
-    <>
-      <div className="flex flex-col gap-1">
-        <div className="flex items-baseline gap-1.5 text-cyanotype-ink">
-          <strong className="font-extrabold text-[44px] tabular-nums leading-none tracking-[-0.035em]">
-            {amount}
-          </strong>
-          <span className="font-medium text-base text-ink-2">
-            {perPeriod(period)}
-          </span>
-        </div>
-        {period === 'year' ? (
-          <p className="text-[13px] text-ink-3">
-            Works out to {monthlyEquivalent(price)} a month.
-          </p>
-        ) : null}
-      </div>
-      <ul className="flex flex-col gap-2.5 text-[14.5px] text-ink">
-        {[
-          'Everything in ultrafast, starting today',
-          `Renews by itself ${eachPeriod(period)}`,
-          'Cancel right here, any time',
-        ].map((line) => (
-          <li key={line} className="flex items-start gap-2.5">
-            <Check aria-hidden className="mt-1 size-4 shrink-0 text-green" />
-            {line}
-          </li>
-        ))}
-      </ul>
-    </>
+    <div className="mt-1 flex items-baseline gap-1.5 text-cyanotype-ink">
+      <strong className="font-extrabold text-[52px] tabular-nums leading-none tracking-[-0.035em]">
+        {amount}
+      </strong>
+      <span className="font-medium text-base text-ink-2">
+        {perPeriod(period)}
+      </span>
+    </div>
   )
 }
 
-function PanelNote({
+/** A one-line note in the hero, with no box around it. */
+function Note({
   icon,
-  tone = 'info',
+  warn = false,
   children,
 }: {
   icon: ReactNode
-  tone?: 'info' | 'warn'
+  warn?: boolean
   children: ReactNode
 }) {
   return (
-    <Alert
-      variant={tone === 'warn' ? 'warning' : 'default'}
+    <p
       role="status"
-      className={cn(
-        'rounded-xl px-3.5 py-3',
-        tone === 'warn'
-          ? 'border-transparent bg-amber-tint text-amber-ink'
-          : 'border-border-2 bg-card text-ink-2',
-      )}
-      contentClassName="items-start gap-2.5"
+      className="flex items-center gap-2 font-semibold text-[14.5px] text-ink-2"
     >
-      <span aria-hidden className="mt-0.5 shrink-0 [&>svg]:size-4">
+      <span
+        aria-hidden
+        className={cn(
+          'shrink-0 [&>svg]:size-4',
+          warn ? 'text-amber-ink' : 'text-ink-3',
+        )}
+      >
         {icon}
       </span>
-      <AlertContent className="space-y-0">
-        <AlertDescription className="text-[14px]">{children}</AlertDescription>
-      </AlertContent>
-    </Alert>
+      {children}
+    </p>
   )
 }
 
@@ -268,18 +248,11 @@ function WaitingPanel({
     { label: 'ultrafast turns on here', state: paid ? 'now' : 'next' },
   ]
   return (
-    <div role="status" className="flex flex-col gap-5">
-      <div>
-        <div className="font-bold text-[19px] text-cyanotype-ink tracking-[-0.015em]">
-          {paid ? 'Payment received' : 'Finish in the payment tab'}
-        </div>
-        <p className="mt-1 text-[14.5px] text-ink-2">
-          {paid
-            ? 'One moment while neo turns on ultrafast.'
-            : 'We opened Stripe’s secure payment page in a new tab.'}
-        </p>
-      </div>
-      <ol className="flex flex-col gap-3.5">
+    <div role="status" className="flex w-full flex-col items-start gap-4">
+      <h2 className="font-bold text-[19px] text-cyanotype-ink tracking-[-0.015em]">
+        {paid ? 'Payment received' : 'Finish in the payment tab'}
+      </h2>
+      <ol className="flex w-full max-w-[380px] flex-col gap-3.5">
         {steps.map((step) => (
           <li
             key={step.label}
@@ -296,8 +269,8 @@ function WaitingPanel({
                 step.state === 'done'
                   ? 'border-green bg-green text-white'
                   : step.state === 'now'
-                    ? 'border-primary bg-card text-primary'
-                    : 'border-border-strong bg-card',
+                    ? 'border-primary text-primary'
+                    : 'border-border-strong',
               )}
             >
               {step.state === 'done' ? (
@@ -312,23 +285,25 @@ function WaitingPanel({
       </ol>
       {paid ? null : (
         <>
-          <Button
-            variant="secondary"
-            onClick={onReopen}
-            className="w-full font-semibold"
-          >
-            <ExternalLink aria-hidden className="size-4" />
-            Open the payment page again
-          </Button>
-          <p className="text-[13.5px] text-ink-3">
-            Nothing is charged until you press Subscribe on that page.{' '}
-            <button
-              type="button"
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-3">
+            <Button
+              variant="secondary"
+              onClick={onReopen}
+              className="font-semibold"
+            >
+              <ExternalLink aria-hidden className="size-4" />
+              Open payment page
+            </Button>
+            <Button
+              variant="ghost"
               onClick={onCancel}
-              className="font-semibold text-accent-ink hover:underline"
+              className="font-semibold"
             >
               Cancel
-            </button>
+            </Button>
+          </div>
+          <p className="text-[13.5px] text-ink-3">
+            Nothing is charged until you subscribe.
           </p>
         </>
       )}
