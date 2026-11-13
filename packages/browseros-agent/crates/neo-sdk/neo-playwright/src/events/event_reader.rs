@@ -260,7 +260,7 @@ pub(crate) enum WindowPopup {
 pub(crate) struct Tabs {
     listed: Option<Vec<(TargetId, PageHandle)>>,
     /// The host's own tabs that listing named (`OpEnv::is_reserved_tab`): never handed out, and
-    /// never waited for as a tab not listed yet.
+    /// never waited for as a tab not listed yet. A lookup of one lists again first.
     reserved: Vec<TargetId>,
 }
 
@@ -311,6 +311,11 @@ impl Tabs {
         scope: &OpScope<'_>,
         target: &TargetId,
     ) -> Result<Option<PageHandle>, PlaywrightError> {
+        // A wait keeps its tabs for its whole life: a tab the host held at the last listing may
+        // have been handed back since (`Playwright::hand_back`), so it is listed again.
+        if self.reserved.contains(target) {
+            self.listed = None;
+        }
         if self.listed.is_none() {
             let listing = scope
                 .view()

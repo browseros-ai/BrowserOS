@@ -3,6 +3,7 @@ import type { ContextPageEntry } from "./ContextPageEntry";
 
 /**
  * `context.pages()`: every tab the run's view admits, the owner's and other sessions' tabs
- * included (D8, the owner's decision: no ownership filter).
+ * included (D8, the owner's decision: no ownership filter), except a tab the host keeps for
+ * itself (`OpEnv::is_reserved_tab`).
  */
 export type ContextPages = { pages: Array<ContextPageEntry>, };

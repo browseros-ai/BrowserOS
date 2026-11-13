@@ -5231,10 +5231,30 @@ async fn neo_hands_its_tab_back_once_the_owner_browses_in_it() -> Result<(), Box
 #[tokio::test]
 async fn a_handed_back_tab_reaches_a_waiting_script_as_a_new_page() -> Result<(), Box<dyn Error>> {
     let harness = Harness::new().await?;
-    let launch = harness.fake.open_tab("about:blank", "");
     let blank = blank_tab(&harness);
-    assert_eq!(within(blank.ensure(Adopt::Allowed)).await?, Some(launch));
     let (run, guard) = harness.run()?;
+    // The engine's watcher starts with the run's first op. The fake answers no
+    // `Target.getTargets`, so the launch tab opens after it, as Chromium would report it.
+    value(harness.submit(&run, "context.pages", json!({})).await)?;
+    within(async {
+        while harness.fake.count("Target.getTargets") == 0 {
+            time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await?;
+    let playwright = harness.playwright.get().await;
+    let head = playwright.event_head();
+    let launch = harness.fake.open_tab("about:blank", "");
+    // Its open is in the log (about a second later: it announced no URL) before Neo takes it, so
+    // only the hand-back can bring it to the script.
+    within(async {
+        while playwright.event_head() == head {
+            time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await?;
+    // A watch start adopts it.
+    assert_eq!(within(blank.ensure(Adopt::Allowed)).await?, Some(launch));
     let wait = json!({
         "call": { "api": "browserContext.waitForEvent", "timeoutMs": 10000 },
         "page": null,
@@ -5244,12 +5264,6 @@ async fn a_handed_back_tab_reaches_a_waiting_script_as_a_new_page() -> Result<()
     let pending = harness
         .dispatcher
         .submit(&run, Call::script("events.wait".to_owned(), wait, None));
-    within(async {
-        while harness.fake.count("Target.getTargets") == 0 {
-            time::sleep(Duration::from_millis(5)).await;
-        }
-    })
-    .await?;
     assert!(
         harness
             .fake
