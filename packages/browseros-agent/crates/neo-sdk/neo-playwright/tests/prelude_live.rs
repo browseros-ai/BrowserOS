@@ -1315,10 +1315,16 @@ Pass</textarea>
 }
 
 /// These controls exercise alternate value/name reads, with different stored and live values.
+/// CSS attr(value) is resolved inside Chromium, bypassing JavaScript attribute accessors.
 /// Every private canary is scanned across whole results, including another control's name.
 fn private_canary_fields(scope: &str) -> String {
     format!(
         r##"<section aria-label="{scope} alternate reads">
+<style>
+.css-value-before, .css-value-after {{ appearance: none; width: 40px; height: 40px; }}
+.css-value-before::before {{ content: attr(value); }}
+.css-value-after::after {{ content: attr(value); }}
+</style>
 <input type="password" role="combobox" value="SecretCanary{scope}-password-attribute" data-typed="SecretCanary{scope}-password-value">
 <label>{scope} wrapped search<input autocomplete="current-password" role="searchbox" value="SecretCanary{scope}-shown-attribute" data-typed="SecretCanary{scope}-shown-value"></label>
 <input id="{scope}-number" type="number" autocomplete="cc-number" value="902101" data-typed="902102">
@@ -1335,6 +1341,14 @@ fn private_canary_fields(scope: &str) -> String {
 <button><input autocomplete="cc-csc" value="SecretCanary{scope}-button-attribute" data-typed="SecretCanary{scope}-button-value"></button>
 <input role="searchbox" value="PublicCanary{scope}-input-attribute" data-typed="PublicCanary{scope}-input-value">
 <textarea role="searchbox" value="PublicCanary{scope}-textarea-attribute" data-typed="PublicCanary{scope}-textarea-value">PublicCanary{scope}-textarea-content</textarea>
+<input class="css-value-before" type="checkbox" autocomplete="one-time-code" value="SecretCanary{scope}-css-checkbox-before-attribute" data-typed="SecretCanary{scope}-css-checkbox-before-value">
+<input class="css-value-after" type="checkbox" autocomplete="one-time-code" value="SecretCanary{scope}-css-checkbox-after-attribute" data-typed="SecretCanary{scope}-css-checkbox-after-value">
+<input class="css-value-before" role="searchbox" autocomplete="cc-number" value="SecretCanary{scope}-css-text-before-attribute" data-typed="SecretCanary{scope}-css-text-before-value">
+<input class="css-value-after" role="searchbox" autocomplete="cc-number" value="SecretCanary{scope}-css-text-after-attribute" data-typed="SecretCanary{scope}-css-text-after-value">
+<input class="css-value-before" type="checkbox" value="PublicCanary{scope}-css-checkbox-before">
+<input class="css-value-after" type="checkbox" value="PublicCanary{scope}-css-checkbox-after">
+<input class="css-value-before" role="searchbox" value="PublicCanary{scope}-css-text-before-attribute" data-typed="PublicCanary{scope}-css-text-before-value">
+<input class="css-value-after" role="searchbox" value="PublicCanary{scope}-css-text-after-attribute" data-typed="PublicCanary{scope}-css-text-after-value">
 </section>"##
     )
 }
@@ -1424,7 +1438,7 @@ fn private_field_node<'tree>(tree: &'tree Value, name: &str) -> Option<&'tree Va
 }
 
 /// Every output route is collected from the same live controls, then direct reads verify that
-/// the scoped prototype guards have already been removed. These reads are deliberately not
+/// the scoped read guards have already been removed. These reads are deliberately not
 /// part of the snapshot canary scan. Explicit `inputValue()` remains a clear-value API.
 const PRIVATE_SNAPSHOT_SCRIPT: &str = r"
       await page.goto(__FIXTURE_URL__)
@@ -1499,6 +1513,14 @@ fn assert_public_canaries_present(text: &str, scope: &str) {
     for kind in ["input", "textarea"] {
         let visible = format!("PublicCanary{scope}-{kind}-value");
         assert!(text.contains(&visible), "missing {visible}: {text}");
+    }
+    // Attribute canaries prove generated content survived, independently of the live value.
+    for kind in ["checkbox", "text"] {
+        for pseudo in ["before", "after"] {
+            let suffix = if kind == "text" { "-attribute" } else { "" };
+            let visible = format!("PublicCanary{scope}-css-{kind}-{pseudo}{suffix}");
+            assert!(text.contains(&visible), "missing {visible}: {text}");
+        }
     }
 }
 

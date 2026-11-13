@@ -13,8 +13,8 @@ const PRIVATE_AUTOCOMPLETE = new Set([
 type Field = HTMLInputElement | HTMLTextAreaElement
 
 /** One reversible own-property shadow, including an inherited property's original absence. */
-type PrototypeOverride = {
-  prototype: object
+type PropertyOverride = {
+  target: object
   property: string
   original: PropertyDescriptor | undefined
   masked: PropertyDescriptor
@@ -26,7 +26,7 @@ const PRIVATE_VALUE_ATTRIBUTES = new Set([
   'aria-valuenow',
 ])
 
-function isPrivateField(field: Field): boolean {
+function isPrivateField(field: Element): boolean {
   return (
     field.getAttribute('type')?.toLowerCase() === 'password' ||
     (field.getAttribute('autocomplete') ?? '')
@@ -67,25 +67,25 @@ function maskedValue(
  * Resolves the accessor or method as the DOM would, before installing an own-property shadow.
  * Native Text.nodeValue and getAttribute are inherited; their shadows must be removed later.
  */
-function prototypeOverride(
-  prototype: object,
+function propertyOverride(
+  target: object,
   property: string,
   mask: (descriptor: PropertyDescriptor) => PropertyDescriptor,
-): PrototypeOverride {
-  const original = Object.getOwnPropertyDescriptor(prototype, property)
+): PropertyOverride {
+  const original = Object.getOwnPropertyDescriptor(target, property)
   if (
     original?.configurable === false ||
-    (!original && !Object.isExtensible(prototype))
+    (!original && !Object.isExtensible(target))
   )
     throw new TypeError(`snapshot field ${property} cannot be overridden`)
-  let owner: object | null = prototype
+  let owner: object | null = target
   while (owner) {
     const descriptor = Object.getOwnPropertyDescriptor(owner, property)
     if (descriptor) {
       // An inherited non-configurable property can be shadowed, but our temporary own
       // property must be configurable so cleanup can remove it.
       return {
-        prototype,
+        target,
         property,
         original,
         masked: { ...mask(descriptor), configurable: true },
@@ -139,20 +139,56 @@ function parentTextarea(node: Node): HTMLTextAreaElement | null {
     : null
 }
 
+/**
+ * Chromium resolves CSS attr(value) without calling getAttribute. Suppress generated content
+ * on private controls in this world, while retaining the browser's style for every other read.
+ */
+function maskedComputedStyle(
+  descriptor: PropertyDescriptor,
+): PropertyDescriptor {
+  if (typeof descriptor.value !== 'function')
+    throw new TypeError('snapshot getComputedStyle method is unavailable')
+  const read = descriptor.value
+  return {
+    ...descriptor,
+    value(this: unknown, element: Element, pseudo?: string | null) {
+      const style: CSSStyleDeclaration = Reflect.apply(read, this, [
+        element,
+        pseudo,
+      ])
+      // Ordinary style reads are the hot path. They retain the native object after one test.
+      if (!pseudo) return style
+      const tag = element.localName
+      if (tag !== 'input' && tag !== 'textarea') return style
+      if (!isPrivateField(element)) return style
+      return new Proxy(style, {
+        get(target, key) {
+          if (key === 'content') return 'none'
+          if (key === 'getPropertyValue')
+            return (property: string) =>
+              property === 'content'
+                ? 'none'
+                : target.getPropertyValue(property)
+          const value: unknown = Reflect.get(target, key)
+          return typeof value === 'function' ? value.bind(target) : value
+        },
+      })
+    },
+  }
+}
+
 /** A cleanup error must refuse the result, but cannot prevent the remaining restorations. */
-function restoreOverrides(installed: PrototypeOverride[]): void {
+function restoreOverrides(installed: PropertyOverride[]): void {
   const failures: unknown[] = []
   for (const override of installed.reverse()) {
     try {
       if (override.original) {
         Object.defineProperty(
-          override.prototype,
+          override.target,
           override.property,
           override.original,
         )
-      } else if (
-        !Reflect.deleteProperty(override.prototype, override.property)
-      ) {
+      } else if (!Reflect.deleteProperty(override.target, override.property)) {
         throw new TypeError(
           `snapshot field ${override.property} could not be removed`,
         )
@@ -171,32 +207,34 @@ function restoreOverrides(installed: PrototypeOverride[]): void {
  * Owns every field read the engine uses until `walk` returns or throws. The entire marking
  * retry stays inside this scope, so its fallback cannot create a clear-value tree. Validate
  * every patch before installing any; cleanup attempts all installed patches in reverse order.
+ * The style guard shares this registry so it restores the function it found, including a
+ * pointer-target wrapper when the two scopes are nested in either order.
  */
 export function withMaskedFieldValues<T>(walk: () => T): T {
   const input = HTMLInputElement.prototype
   const textarea = HTMLTextAreaElement.prototype
   const valueReads = new Set<Field>()
   const overrides = [
-    prototypeOverride(input, 'value', (descriptor) =>
+    propertyOverride(input, 'value', (descriptor) =>
       maskedValue(descriptor, valueReads),
     ),
-    prototypeOverride(textarea, 'value', (descriptor) =>
+    propertyOverride(textarea, 'value', (descriptor) =>
       maskedValue(descriptor, valueReads),
     ),
-    prototypeOverride(input, 'defaultValue', (descriptor) =>
+    propertyOverride(input, 'defaultValue', (descriptor) =>
       maskedValue(descriptor, valueReads),
     ),
     // Element.getAttribute is a hot path for every node. Shadow only the two control types.
-    prototypeOverride(input, 'getAttribute', maskedAttributes),
-    prototypeOverride(textarea, 'getAttribute', maskedAttributes),
+    propertyOverride(input, 'getAttribute', maskedAttributes),
+    propertyOverride(textarea, 'getAttribute', maskedAttributes),
     ...['nodeValue', 'textContent', 'data', 'wholeText'].map((property) =>
-      prototypeOverride(Text.prototype, property, (descriptor) =>
+      propertyOverride(Text.prototype, property, (descriptor) =>
         emptyTextareaText(descriptor, parentTextarea, valueReads),
       ),
     ),
     ...['textContent', 'innerText', 'innerHTML', 'defaultValue'].map(
       (property) =>
-        prototypeOverride(textarea, property, (descriptor) =>
+        propertyOverride(textarea, property, (descriptor) =>
           emptyTextareaText(
             descriptor,
             (node) => (node instanceof HTMLTextAreaElement ? node : null),
@@ -204,15 +242,12 @@ export function withMaskedFieldValues<T>(walk: () => T): T {
           ),
         ),
     ),
+    propertyOverride(globalThis, 'getComputedStyle', maskedComputedStyle),
   ]
-  const installed: PrototypeOverride[] = []
+  const installed: PropertyOverride[] = []
   try {
     for (const override of overrides) {
-      Object.defineProperty(
-        override.prototype,
-        override.property,
-        override.masked,
-      )
+      Object.defineProperty(override.target, override.property, override.masked)
       installed.push(override)
     }
     return walk()

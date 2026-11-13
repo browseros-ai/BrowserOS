@@ -19,6 +19,7 @@
 pub mod browseros_rig;
 
 use std::error::Error;
+use std::fmt::{self, Write as _};
 use std::path::Path;
 use std::time::Duration;
 
@@ -90,7 +91,7 @@ async fn private_field_values_never_reach_stored_snapshot_results() -> TestResul
 }
 
 /// Each source and attribute value is a distinct synthetic secret to scan after persistence.
-const TRACE_FIELDS: [(&str, &str, &str, &str); 8] = [
+const TRACE_FIELDS: [(&str, &str, &str, &str); 10] = [
     (
         "Password",
         "input",
@@ -139,26 +140,47 @@ const TRACE_FIELDS: [(&str, &str, &str, &str); 8] = [
         "id='numeric' type='number' autocomplete='one-time-code' aria-valuetext='864213'",
         "864213",
     ),
+    (
+        "Styled checkbox",
+        "input",
+        "class='css-private' type='checkbox' autocomplete='one-time-code'",
+        "Trace-CSS-Checkbox-Canary",
+    ),
+    (
+        "Styled text",
+        "input",
+        "class='css-private' autocomplete='current-password'",
+        "Trace-CSS-Text-Canary",
+    ),
 ];
 
-fn private_trace_html() -> String {
-    let fields = TRACE_FIELDS
-        .into_iter()
-        .map(|(label, tag, attributes, value)| {
-            let control = if tag == "textarea" {
-                format!("<textarea {attributes}>{value}</textarea>")
-            } else {
-                format!("<input {attributes} value='{value}'>")
-            };
-            format!("<label>{label}{control}</label>")
-        })
-        .collect::<String>();
-    format!(
-        "<title>Snapshot trace</title><main><h1>Checkout</h1>{fields}\
+fn private_trace_html() -> Result<String, fmt::Error> {
+    let mut html = String::from(
+        "<title>Snapshot trace</title><style>\
+         .css-private{appearance:none;width:40px;height:40px}\
+         .css-private::before,.css-private::after{content:attr(value)}\
+         </style><main><h1>Checkout</h1>",
+    );
+    for (label, tag, attributes, value) in TRACE_FIELDS {
+        if tag == "textarea" {
+            write!(
+                html,
+                "<label>{label}<textarea {attributes}>{value}</textarea></label>"
+            )?;
+        } else {
+            write!(
+                html,
+                "<label>{label}<input {attributes} value='{value}'></label>"
+            )?;
+        }
+    }
+    html.push_str(
+        "\
          <button aria-labelledby='self'></button><button aria-labelledby='numeric'></button>\
          <label>Expiry<input autocomplete='cc-exp' value='12/30'></label>\
-         <label>Holder<input autocomplete='cc-name' value='Ada Example'></label></main>"
-    )
+         <label>Holder<input autocomplete='cc-name' value='Ada Example'></label></main>",
+    );
+    Ok(html)
 }
 
 fn assert_returned_snapshot_values(first: &CallToolResult) -> TestResult {
@@ -253,13 +275,13 @@ async fn assert_stored_snapshot_values(trace_path: &Path, ids: [RunId; 2]) -> Te
             }
         }
     }
-    assert_eq!(snapshot_count, 8);
+    assert_eq!(snapshot_count, 9);
     assert_eq!(baseline_count, 1);
     Ok(())
 }
 
 async fn snapshot_trace(rig: &mut Rig) -> TestResult {
-    let html = private_trace_html();
+    let html = private_trace_html()?;
     rig.until_ready().await?;
     // Keep the entire fixture through the host's current settings contract. Clipped traces
     // could hide an unmasked field and make the canary scan pass without proving this boundary.
@@ -278,14 +300,17 @@ async fn snapshot_trace(rig: &mut Rig) -> TestResult {
         &format!(
             "const p = await context.newPage();\n\
              await p.goto('data:text/html,' + encodeURIComponent({}));\n\
-             return {{ page: p, snapshots: [\n\
+             const snapshots = [\n\
                await p.ariaSnapshot(), await p.ariaSnapshot({{ text: true }}),\n\
                await p.ariaSnapshot({{ text: false }}),\n\
                await p.ariaSnapshot({{ mode: 'full' }}),\n\
                await p.ariaSnapshot({{ mode: 'default' }}),\n\
                await p.ariaSnapshotJSON(),\n\
                await p.locator('main').ariaSnapshotJSON()\n\
-             ] }};",
+             ];\n\
+             await p.getByLabel('Password', {{ exact: true }}).focus();\n\
+             const baseline = await p.ariaSnapshot({{ text: false }});\n\
+             return {{ page: p, snapshots, baseline }};",
             json!(html)
         ),
         &json!({ "requestId": "mask-trace-1", "taskId": "mask-trace" }),

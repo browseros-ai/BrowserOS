@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, expect, it, spyOn } from 'bun:test'
+import { asPointerTargets } from '../src/probe/pointer-targets'
 import { withMaskedFieldValues } from '../src/probe/private-field-values'
 import { openProbePage, type ProbePage } from './support/probe-page'
 
@@ -64,6 +65,10 @@ const descriptors = () => ({
   ),
   nodeValue: Object.getOwnPropertyDescriptor(Node.prototype, 'nodeValue'),
   nodeContent: Object.getOwnPropertyDescriptor(Node.prototype, 'textContent'),
+  computedStyle: Object.getOwnPropertyDescriptor(
+    globalThis,
+    'getComputedStyle',
+  ),
 })
 
 function inheritedDescriptor(prototype: object, property: string) {
@@ -89,6 +94,7 @@ function overrideProperties(): [object, string][] {
     ...['textContent', 'innerText', 'innerHTML', 'defaultValue'].map(
       (property): [object, string] => [HTMLTextAreaElement.prototype, property],
     ),
+    [globalThis, 'getComputedStyle'],
   ]
 }
 
@@ -219,6 +225,86 @@ it('suppresses secret textarea text reads without suppressing its masked value o
   ]).toEqual(['A🔒z', 'A🔒z', 'A🔒z', 'A🔒z'])
 })
 
+it('suppresses both CSS content reads only for pseudo-elements of private controls', () => {
+  const nativeStyle = page.document.createElement('div').style
+  nativeStyle.content = '"CSSSecretCanary"'
+  nativeStyle.cursor = 'text'
+  nativeStyle.display = 'inline-block'
+  const read = spyOn(globalThis, 'getComputedStyle').mockReturnValue(
+    nativeStyle,
+  )
+  try {
+    for (const tag of ['input', 'textarea'] as const) {
+      const secret = field(tag, { autocomplete: 'one-time-code' }, 'private')
+      const ordinary = field(tag, {}, 'public')
+      withMaskedFieldValues(() => {
+        for (const pseudo of [undefined, null, ''])
+          expect(getComputedStyle(secret, pseudo)).toBe(nativeStyle)
+        for (const pseudo of ['::before', '::after', ':before', '::marker']) {
+          const style = getComputedStyle(secret, pseudo)
+          expect(style.content).toBe('none')
+          expect(style.getPropertyValue('content')).toBe('none')
+          expect(style.cursor).toBe('text')
+          expect(style.getPropertyValue('display')).toBe('inline-block')
+          expect(getComputedStyle(ordinary, pseudo)).toBe(nativeStyle)
+        }
+        const other = page.document.createElement('div')
+        other.setAttribute('autocomplete', 'one-time-code')
+        expect(getComputedStyle(other, '::before')).toBe(nativeStyle)
+      })
+      expect(getComputedStyle(secret, '::before')).toBe(nativeStyle)
+      expect(nativeStyle.content).toBe('"CSSSecretCanary"')
+    }
+  } finally {
+    read.mockRestore()
+  }
+})
+
+it('composes with pointer marking in either nesting order and restores each enclosing style reader', () => {
+  const secret = field('input', { autocomplete: 'cc-number' }, 'private')
+  const nativeStyle = page.document.createElement('div').style
+  nativeStyle.content = '"CSSSecretCanary"'
+  nativeStyle.cursor = 'text'
+  const read = spyOn(globalThis, 'getComputedStyle').mockReturnValue(
+    nativeStyle,
+  )
+  const marked = <T>(walk: () => T) => asPointerTargets([secret], walk)
+  const assertCombinedReads = () => {
+    expect(getComputedStyle(secret).cursor).toBe('pointer')
+    for (const pseudo of ['::before', '::after']) {
+      const style = getComputedStyle(secret, pseudo)
+      expect(style.content).toBe('none')
+      expect(style.getPropertyValue('content')).toBe('none')
+      expect(style.cursor).toBe('text')
+    }
+  }
+  try {
+    const before = descriptors()
+    for (const [outer, inner] of [
+      [withMaskedFieldValues, marked],
+      [marked, withMaskedFieldValues],
+    ] as const) {
+      outer(() => {
+        const enclosing = descriptors()
+        inner(assertCombinedReads)
+        expect(descriptors()).toEqual(enclosing)
+        expect(() =>
+          inner(() => {
+            assertCombinedReads()
+            throw new Error('combined walk failed')
+          }),
+        ).toThrow('combined walk failed')
+        expect(descriptors()).toEqual(enclosing)
+      })
+      expect(descriptors()).toEqual(before)
+      expect(getComputedStyle(secret)).toBe(nativeStyle)
+      expect(getComputedStyle(secret, '::before')).toBe(nativeStyle)
+    }
+  } finally {
+    read.mockRestore()
+  }
+})
+
 it('preserves setters and descriptor flags, restoring all own descriptors after success', () => {
   const input = field('input', { type: 'password' }, 'old')
   const textarea = field('textarea', { autocomplete: 'new-password' }, 'old')
@@ -275,7 +361,7 @@ it('restores all shadows when the walk throws and preserves nested synchronous s
   expect(input.value).toBe('secret')
 })
 
-it('restores every earlier patch and never walks after any of the thirteen installations fails', () => {
+it('restores every earlier patch and never walks after any of the fourteen installations fails', () => {
   const before = descriptors()
   const define = Object.defineProperty
   for (const [prototype, property] of overrideProperties()) {
@@ -347,6 +433,26 @@ it('validates the last accessor before installing any override', () => {
   expect(descriptors()).toEqual(before)
 })
 
+it('validates the style reader before installing any override', () => {
+  const before = descriptors()
+  if (!before.computedStyle) throw new Error('the style reader exists')
+  Object.defineProperty(globalThis, 'getComputedStyle', {
+    ...before.computedStyle,
+    value: undefined,
+  })
+  const define = spyOn(Object, 'defineProperty')
+  try {
+    expect(() => withMaskedFieldValues(() => 'unreachable')).toThrow(
+      'snapshot getComputedStyle method is unavailable',
+    )
+    expect(define).not.toHaveBeenCalled()
+  } finally {
+    define.mockRestore()
+    Object.defineProperty(globalThis, 'getComputedStyle', before.computedStyle)
+  }
+  expect(descriptors()).toEqual(before)
+})
+
 it('attempts every restoration in reverse even when a cleanup reports failure', () => {
   const before = descriptors()
   const define = Object.defineProperty
@@ -358,7 +464,10 @@ it('attempts every restoration in reverse even when a cleanup reports failure', 
       const result = define(object, name, descriptor)
       if (cleaning) {
         restored.push(String(name))
-        if (object === HTMLTextAreaElement.prototype && name === 'value')
+        if (
+          (object === HTMLTextAreaElement.prototype && name === 'value') ||
+          (object === globalThis && name === 'getComputedStyle')
+        )
           throw new Error('restoration reported failure')
       }
       return result
@@ -383,6 +492,7 @@ it('attempts every restoration in reverse even when a cleanup reports failure', 
       }),
     ).toThrow('snapshot field overrides could not be restored')
     expect(restored).toEqual([
+      'getComputedStyle',
       'defaultValue',
       'innerHTML',
       'innerText',
