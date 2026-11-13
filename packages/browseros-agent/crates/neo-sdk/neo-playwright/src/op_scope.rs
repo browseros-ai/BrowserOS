@@ -90,16 +90,6 @@ pub(crate) struct AdmittedPage {
     pub(crate) session: PageSession,
 }
 
-/// A tab admitted for an op the browser carries out on the tab itself
-/// ([`OpScope::admit_target`]): the view's checks ran, and no page session exists for it.
-#[derive(Debug)]
-pub(crate) struct AdmittedTarget {
-    /// Core cache identity: private to this admission and never serialized.
-    pub(crate) core_page: PageId,
-    /// The tab's page target as the view knew it at admission.
-    pub(crate) target_id: TargetId,
-}
-
 /// The op's own wait ended: its Playwright timeout passed, or the script aborted it through
 /// `signal`. The leaf turns it into its timed-out code with [`OpScope::timed_out`], which
 /// reports an abort instead when there was one, so every leaf's timeout path is its abort path.
@@ -273,13 +263,13 @@ impl<'env> OpScope<'env> {
     /// each of those waits on the page's renderer: while a committed page's navigation is in
     /// flight, Chromium answers no page command from any session until it commits or fails
     /// (measured on BrowserOS; the class #3317 met for reads), so an attach would hold such an
-    /// op to the CDP request timeout. Unlike `admit`, nothing is kept: these ops send nothing
-    /// to the page afterwards.
+    /// op to the CDP request timeout. Returns the tab's page target as the view knows it; unlike
+    /// `admit`, nothing is kept, since these ops send nothing to the page afterwards.
     pub(crate) async fn admit_target(
         &self,
         browser: &BrowserSession,
         tab: TabId,
-    ) -> Result<AdmittedTarget, PlaywrightError> {
+    ) -> Result<TargetId, PlaywrightError> {
         let core = |error: CoreError| self.core_error(&error);
         let info = self
             .known_tab(browser, tab)
@@ -297,10 +287,7 @@ impl<'env> OpScope<'env> {
         };
         self.run_state().events.remember_page(&info.target_id, tab);
         self.env.report_target(tab, &info.target_id);
-        Ok(AdmittedTarget {
-            core_page: info.page_id,
-            target_id: info.target_id,
-        })
+        Ok(info.target_id)
     }
 
     /// Core's cached entry for a native tab, listing the browser's tabs once on a miss: a tab

@@ -20,7 +20,9 @@ const EVENT_BACKLOG: usize = 1024;
 /// A browser that answers the CDP calls core and claw-sdk make, from an in-memory list of tabs.
 ///
 /// It models what the real seam does and core's own test connection cannot:
-/// - tabs that stay open or closed (`Browser.getTabs`, `getTabInfo`, `createTab`, `closeTab`);
+/// - tabs that stay open or closed (`Browser.getTabs`, `getTabInfo`, `createTab`, `closeTab`,
+///   `Target.closeTarget`), and closed tabs a listing still shows for a while or for good
+///   ([`FakeCdp::linger_closed_tabs_for`], [`FakeCdp::linger_closed_tabs`]);
 /// - target events only after `Target.setDiscoverTargets` on the current socket, which first
 ///   announces every target that exists, as Chromium sends them; a tab can change target
 ///   and stay open ([`FakeCdp::replace_target`]);
@@ -77,8 +79,18 @@ struct FakeState {
     /// Target events waiting for [`FakeCdp::release_events`]; `None` while events flow.
     held_events: Option<Vec<CdpEvent>>,
     /// Closed tabs `Browser.getTabs` still lists; `None` unless
-    /// [`FakeCdp::linger_closed_tabs`] was called.
-    lingering: Option<Vec<FakeTab>>,
+    /// [`FakeCdp::linger_closed_tabs`] or [`FakeCdp::linger_closed_tabs_for`] was called.
+    lingering: Option<Vec<Lingering>>,
+    /// How many listings a tab closed from now on lingers in; `None` for good.
+    linger_listings: Option<usize>,
+}
+
+/// A closed tab `Browser.getTabs` still lists, and for how many more listings (`None`: for
+/// good).
+#[derive(Clone, Debug)]
+struct Lingering {
+    tab: FakeTab,
+    listings: Option<usize>,
 }
 
 #[derive(Clone, Debug)]
@@ -112,6 +124,7 @@ impl FakeCdp {
                 held_replies: Vec::new(),
                 held_events: None,
                 lingering: None,
+                linger_listings: None,
             }),
             events: broadcast::channel(EVENT_BACKLOG).0,
             targeted: TargetedEvents::default(),
@@ -193,6 +206,12 @@ impl FakeCdp {
         true
     }
 
+    /// The tab leaves `Browser.getTabs` with no target event, as a closing tab does once its
+    /// target was already reported destroyed. `false` when the fake has no such tab.
+    pub fn unlist_tab(&self, tab: TabId) -> bool {
+        self.lock().remove_tab(tab.0).is_some()
+    }
+
     /// The tab's page target is replaced while the tab stays open, as when Chromium swaps the
     /// tab's contents: the new target is created, then the old one destroyed. `false` when the
     /// fake has no such tab.
@@ -271,6 +290,11 @@ impl FakeCdp {
         self.lock().answers.insert(method.to_owned(), result);
     }
 
+    /// Calls to `method` get the fake's own answer again, after [`FakeCdp::answer`].
+    pub fn unanswer(&self, method: &str) {
+        self.lock().answers.remove(method);
+    }
+
     /// The next call to `method` is answered as the browser would answer it at once, and its
     /// events go out at once, but the reply reaches the caller only on
     /// [`FakeCdp::release_held`]: a tab listing that was true when Chromium sent it and arrives
@@ -295,9 +319,20 @@ impl FakeCdp {
     }
 
     /// From now on a closed tab stays in `Browser.getTabs` for good: Chromium acknowledges a
-    /// close before the tab leaves its listing, and this holds that moment still.
+    /// close before the tab leaves its listing, and this holds that moment still, as a tab the
+    /// browser never lets go of would.
     pub fn linger_closed_tabs(&self) {
-        self.lock().lingering.get_or_insert_with(Vec::new);
+        let mut state = self.lock();
+        state.lingering.get_or_insert_with(Vec::new);
+        state.linger_listings = None;
+    }
+
+    /// From now on a closed tab stays in the next `listings` replies to `Browser.getTabs`, then
+    /// leaves: Chromium acknowledges a close before the tab leaves its listing.
+    pub fn linger_closed_tabs_for(&self, listings: usize) {
+        let mut state = self.lock();
+        state.lingering.get_or_insert_with(Vec::new);
+        state.linger_listings = Some(listings);
     }
 
     /// Sends every held target event, in the order the browser made them, and stops holding.
@@ -448,8 +483,17 @@ impl FakeState {
                 let mut tabs: Vec<Value> = (0..self.tabs.len())
                     .filter_map(|index| self.tab_json(index))
                     .collect();
-                for entry in self.lingering.iter().flatten() {
-                    tabs.push(entry_json(entry, tabs.len()));
+                if let Some(lingering) = &mut self.lingering {
+                    for entry in lingering.iter() {
+                        tabs.push(entry_json(&entry.tab, tabs.len()));
+                    }
+                    lingering.retain_mut(|entry| match &mut entry.listings {
+                        None => true,
+                        Some(left) => {
+                            *left = left.saturating_sub(1);
+                            *left > 0
+                        }
+                    });
                 }
                 Reply::Now(Ok(json!({ "tabs": tabs })), Vec::new())
             }
@@ -467,6 +511,13 @@ impl FakeState {
                 Reply::Now(self.tab_reply(tab).ok_or_else(no_tab), events)
             }
             "Browser.closeTab" => self.close_by_call(params),
+            // Chromium answers `{ success }` and closes the target's tab, as `closeTab` does; a
+            // target it does not know is its own error.
+            "Target.closeTarget" => match self.close_by_call(params) {
+                Reply::Now(Ok(_), events) => Reply::Now(Ok(json!({ "success": true })), events),
+                Reply::Now(Err(_), events) => Reply::Now(Err(no_target()), events),
+                Reply::Never => Reply::Never,
+            },
             "Page.navigate" => {
                 self.arrive(params, session);
                 Reply::Now(Ok(json!({})), Vec::new())
@@ -515,7 +566,10 @@ impl FakeState {
             return Reply::Now(Err(no_tab()), Vec::new());
         };
         if let Some(lingering) = &mut self.lingering {
-            lingering.push(closed.clone());
+            lingering.push(Lingering {
+                tab: closed.clone(),
+                listings: self.linger_listings,
+            });
         }
         let events = self.destroyed_events(&closed.target);
         Reply::Now(Ok(json!({})), events)
@@ -598,6 +652,14 @@ impl FakeState {
 
 fn tab_param(params: &Value) -> Option<i64> {
     params.get("tabId").and_then(Value::as_i64)
+}
+
+/// Chromium's refusal of a target id it does not know.
+fn no_target() -> CdpError {
+    CdpError::Protocol {
+        code: -32602,
+        message: "No target with given id found".to_owned(),
+    }
 }
 
 fn no_tab() -> CdpError {

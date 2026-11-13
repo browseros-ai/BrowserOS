@@ -1556,6 +1556,92 @@ async fn the_janitor_closes_an_idle_tab_that_answers_no_page_command() -> Result
     Ok(())
 }
 
+/// A close is answered closed only once the browser's own tab list drops the tab. A browser that
+/// acknowledges the close and keeps the tab (as `Browser.closeTab` does for a page that asks to
+/// stay) fails the janitor's close as a timeout, and the tab stays a candidate: the next sweep
+/// closes it once the browser does.
+#[tokio::test]
+async fn the_janitor_keeps_a_tab_the_browser_keeps_and_closes_it_later()
+-> Result<(), Box<dyn Error>> {
+    let harness = Harness::new().await?;
+    let kept = {
+        let (run, _guard) = harness.run()?;
+        page_of(&value(
+            harness.submit(&run, "context.newPage", json!({})).await,
+        )?)?
+    };
+    harness
+        .fake
+        .answer("Target.closeTarget", json!({ "success": true }));
+    let janitor = harness.janitor();
+    // The close waits its 10 s for the listing, inside the sweep's 30 s budget.
+    let first = time::timeout(
+        Duration::from_secs(25),
+        janitor.sweep(Instant::now() + Defaults::TAB_IDLE),
+    )
+    .await?
+    .ok_or("the sweep ran")?;
+    harness.sink.flush().await?;
+    let detail = harness
+        .store
+        .run(first)
+        .await?
+        .ok_or("the sweep is recorded")?;
+    let close = detail
+        .operations
+        .iter()
+        .find(|row| row.name == "page.close")
+        .ok_or("the sweep tried the close")?;
+    assert_eq!(
+        close.error.as_ref().map(|error| error.code.as_str()),
+        Some("wait_timeout"),
+        "a tab the browser keeps is not answered closed: {close:?}"
+    );
+    assert!(harness.is_open(kept.tab).await?, "the browser kept it");
+    assert!(
+        harness
+            .tabs
+            .idle_agent_tabs(Duration::ZERO, Instant::now() + Defaults::TAB_IDLE)
+            .contains(&kept),
+        "nothing reported it closed, so it stays the janitor's"
+    );
+
+    harness.fake.unanswer("Target.closeTarget");
+    within(janitor.sweep(Instant::now() + Defaults::TAB_IDLE))
+        .await?
+        .ok_or("the second sweep ran")?;
+    assert!(
+        !harness.is_open(kept.tab).await?,
+        "the next sweep closed it"
+    );
+    Ok(())
+}
+
+/// The target core named at admission can have been replaced since. The browser then knows no
+/// such target, which must not read as a tab already gone: the tab's current target, from the
+/// browser's tab list, is closed. The swap's target events are held, so core still names the old
+/// target when the close starts.
+#[tokio::test]
+async fn a_close_closes_the_tabs_current_target_after_a_swap() -> Result<(), Box<dyn Error>> {
+    let harness = Harness::new().await?;
+    let (run, _guard) = harness.run()?;
+    let page = page_of(&value(
+        harness.submit(&run, "context.newPage", json!({})).await,
+    )?)?;
+    harness.fake.hold_events();
+    assert!(harness.fake.replace_target(page.tab));
+    value(within(harness.submit(&run, "page.close", json!({ "page": handle(&page) }))).await?)?;
+    harness.fake.release_events();
+    assert_eq!(
+        harness.fake.count("Target.closeTarget"),
+        2,
+        "the old target first, which the browser no longer knows, then the current one"
+    );
+    assert!(harness.fake.tabs().iter().all(|tab| *tab != page.tab));
+    assert!(!harness.is_open(page.tab).await?, "the tab is gone");
+    Ok(())
+}
+
 #[tokio::test]
 async fn solving_without_a_provider_key_is_the_deployments_to_fix() -> Result<(), Box<dyn Error>> {
     let harness = Harness::new().await?;
@@ -3547,16 +3633,18 @@ async fn explicit_close_cleans_a_replacement_with_delivered_dead_evidence()
     let harness = Harness::new().await?;
     let (run, _guard) = harness.run()?;
     let EventTabs { page, .. } = prepare_event_tabs(&harness, &run).await?;
-    // Keep the native tab around until the controlled reply, allowing a target swap
-    // while PageManager::close holds the old pre-transport PageInfo.
-    harness.fake.answer("Browser.closeTab", json!({}));
-    harness.fake.hold_next("Browser.closeTab");
+    // Keep the native tab around until the controlled reply, allowing a target swap while
+    // the close waits for the browser to answer its `Target.closeTarget`.
+    harness
+        .fake
+        .answer("Target.closeTarget", json!({ "success": true }));
+    harness.fake.hold_next("Target.closeTarget");
     let pending = harness.dispatcher.submit(
         &run,
         Call::script("page.close".into(), json!({"page":handle(&page)}), None),
     );
     within(async {
-        while harness.fake.count("Browser.closeTab") == 0 {
+        while harness.fake.count("Target.closeTarget") == 0 {
             task::yield_now().await;
         }
     })
@@ -3610,6 +3698,8 @@ async fn explicit_close_cleans_a_replacement_with_delivered_dead_evidence()
     assert!(delivered.outcome.is_ok());
     assert_eq!(delivered.pages.first().map(|fact| fact.closed), Some(true));
     assert_eq!(harness.tabs.gone_target(page.tab), Some(replacement));
+    // The browser finishes the close: the tab leaves its list, which the close waits for.
+    assert!(harness.fake.unlist_tab(page.tab));
     harness.fake.release_held();
     value(within(pending.wait()).await?)?;
     assert!(harness.link.page(page.tab).await.is_none());
@@ -4329,7 +4419,7 @@ async fn a_task_fetch_never_lists_a_tab_this_run_closed() -> Result<(), Box<dyn 
     let open = page_of(&value(
         harness.submit(&run, "context.newPage", json!({})).await,
     )?)?;
-    harness.fake.linger_closed_tabs();
+    harness.fake.linger_closed_tabs_for(2);
     value(
         harness
             .submit(&run, "page.close", json!({ "page": closed }))
@@ -4611,7 +4701,8 @@ async fn a_popup_event_assigns_ownership_before_its_first_fact() -> Result<(), B
 fn task_pages_stay_closed_after_a_stale_browser_listing() -> Result<(), TestError> {
     on_neo_runtime(async {
         let harness = Harness::new().await.map_err(|error| error.to_string())?;
-        harness.fake.linger_closed_tabs();
+        // Chromium can acknowledge a close while its next listing still includes that tab.
+        harness.fake.linger_closed_tabs_for(2);
         let (run, _guard) = harness.run().map_err(|error| error.to_string())?;
         let script = Script {
             code: r"
