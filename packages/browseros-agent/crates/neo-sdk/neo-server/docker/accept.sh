@@ -161,9 +161,12 @@ host_get() { client "$1" "${as_host[@]}" python3 accept_client.py host /run/neo/
 host_send() { # name method path json
   client "$1" "${as_host[@]}" python3 accept_client.py host-send /run/neo/host.sock /run/neo-accept/host-token "$2" "$3" "$4"
 }
-server_pid() { # name: the claw-sdk server's pid, by its executable (only this check's container)
-  docker exec "$1" sh -c 'server=$(readlink -f "$(neo-server-info path)")
-    for p in /proc/[0-9]*; do [ "$(readlink "$p/exe" 2>/dev/null)" = "$server" ] && echo "${p#/proc/}"; done' | head -1
+server_pid() { # name: the claw-sdk server's pid, by its argv[0] (only this check's container).
+  # Not /proc/<pid>/exe: under the dropped capabilities root may not read another uid's.
+  docker exec "$1" sh -c 'server=$(neo-server-info path)
+    for p in /proc/[0-9]*; do
+      [ "$(tr "\0" "\n" < "$p/cmdline" 2>/dev/null | head -1)" = "$server" ] && echo "${p#/proc/}"
+    done' | head -1
 }
 probe() { # target-ip port scheme, from a throwaway sibling on the same network
   docker run --rm -i --name "$prefix-probe" --network "$network" --entrypoint python3 "$image" \
