@@ -11551,7 +11551,7 @@ ${changes}`;
         this.#framesIncomplete = tree.incomplete === true;
         return !this.#framesIncomplete;
       }
-      if (this.#payloadCurrent(observed))
+      if (tree !== null && typeof tree === "object" && this.#payloadCurrent(observed))
         this._framesUnknown();
       return false;
     }

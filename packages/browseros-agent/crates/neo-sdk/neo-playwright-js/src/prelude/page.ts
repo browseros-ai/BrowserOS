@@ -1290,7 +1290,14 @@ export class Page extends EventEmitter {
       this.#framesIncomplete = tree.incomplete === true
       return !this.#framesIncomplete
     }
-    if (this.#payloadCurrent(observed)) this._framesUnknown()
+    // The host answers an object, `{}` when its bounded read got no tree; `null` is no answer at
+    // all (a host without frame reads), which leaves nothing to read again.
+    if (
+      tree !== null &&
+      typeof tree === 'object' &&
+      this.#payloadCurrent(observed)
+    )
+      this._framesUnknown()
     return false
   }
 
