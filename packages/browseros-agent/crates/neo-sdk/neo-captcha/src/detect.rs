@@ -613,18 +613,22 @@ async fn scan(
         }
         let invisible = param(&url, "size").as_deref() == Some("invisible");
         if !invisible
-            && (frame
+            && frame
                 .rect
                 .is_some_and(|r| r.width <= 0.0 || r.height <= 0.0)
-                || visibility.iter().any(|v| v.url == frame_url && !v.visible))
         {
             continue;
         }
-        let sitekey = sitekey(kind, &url);
         let owners: Vec<_> = visibility.iter().filter(|v| v.url == frame_url).collect();
-        if owners.len() > 1 {
+        // Iframes that share this address leave which of them this frame is unknown, unless
+        // every one is hidden.
+        if owners.len() > 1 && (invisible || owners.iter().any(|v| v.visible)) {
             complete = false;
         }
+        if !invisible && owners.iter().any(|v| !v.visible) {
+            continue;
+        }
+        let sitekey = sitekey(kind, &url);
         let owner = match owners.as_slice() {
             [owner] => Some(*owner),
             _ => None,
@@ -1429,6 +1433,26 @@ mod tests {
         let result = scan(&page).await?;
         assert!(!result.complete);
         assert_eq!(result.challenges.len(), 1);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_a_hidden_twin_cannot_hide_a_shown_frame() -> Result<(), PageError> {
+        let url = "https://challenges.cloudflare.com/cdn-cgi/challenge-platform/h/g/turnstile/if/ov2/av0/rcv/id/1x00000000000000000000AA/light/normal";
+        // Two frames at one address. With one iframe shown, which frame is the shown one is
+        // unknown; with both hidden, neither is a widget and nothing is unknown.
+        for (shown, outcome) in [(true, ScanOutcome::Unknown), (false, ScanOutcome::None)] {
+            let mut page = FakePage::new(json!([]));
+            page.frames.extend([frame("a", url), frame("b", url)]);
+            let mut main = probe(json!([]));
+            main["frames"] =
+                json!([{"url": url, "visible": false}, {"url": url, "visible": shown}]);
+            page.main = Mutex::new(VecDeque::from([main]));
+            let result = scan(&page).await?;
+            assert_eq!(result.outcome, outcome, "second iframe shown: {shown}");
+            assert_eq!(result.complete, !shown);
+            assert!(result.challenges.is_empty(), "{:?}", result.challenges);
+        }
         Ok(())
     }
 
