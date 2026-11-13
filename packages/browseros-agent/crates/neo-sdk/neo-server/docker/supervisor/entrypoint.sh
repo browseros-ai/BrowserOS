@@ -472,26 +472,65 @@ start_neo() {
   # Releases verify the packaged/overlaid server, so pin it for the image's
   # lifetime. Keep this outside NEO_ARGS, which Compose/callers may replace.
   # NEO_ARGS goes last so a caller's value for a repeated switch wins.
-  # shellcheck disable=SC2086  # NEO_ARGS is a flag list by design
-  spawn_as_neo browserclaw \
-    "${sandbox_flags[@]}" \
-    "${browseros_extension_flags[@]}" \
-    "${gpu_flags[@]}" \
-    ${history_flag:+"$history_flag"} \
-    ${metrics_flag:+"$metrics_flag"} \
-    --user-data-dir="$PROFILE" \
-    --no-first-run \
-    --no-default-browser-check \
-    --password-store=basic \
-    --browseros-proxy-port=9010 \
-    --browseros-cdp-port="$CDP_PORT" \
-    --browseros-server-port="$SERVER_PORT" \
-    --disable-browseros-server-updater \
-    --hide-crash-restore-bubble \
-    --start-maximized \
-    --disable-pinch \
-    --disable-browseros-features="$HIDDEN_BROWSEROS_FEATURES" \
+  # Rebuild local argv on each restart without changing caller-owned NEO_ARGS.
+  # shellcheck disable=SC2206  # NEO_ARGS is a flag list by design
+  local neo_argv=(
+    "${sandbox_flags[@]}"
+    "${browseros_extension_flags[@]}"
+    "${gpu_flags[@]}"
+    ${history_flag:+"$history_flag"}
+    ${metrics_flag:+"$metrics_flag"}
+    --user-data-dir="$PROFILE"
+    --no-first-run
+    --no-default-browser-check
+    --password-store=basic
+    --browseros-proxy-port=9010
+    --browseros-cdp-port="$CDP_PORT"
+    --browseros-server-port="$SERVER_PORT"
+    --disable-browseros-server-updater
+    --hide-crash-restore-bubble
+    --start-maximized
+    --disable-pinch
+    --disable-browseros-features="$HIDDEN_BROWSEROS_FEATURES"
     $NEO_ARGS
+  )
+  if [ "$BROWSERCLAW_HOSTED_MODE" = 1 ]; then
+    # Background tabs may never present another frame while a live viewer holds
+    # another tab in front. Copy a fresh surface instead of waiting for that
+    # presentation. Chromium accepts both switch prefixes and uses only the last
+    # enable-features switch before --, where positional arguments begin.
+    local feature_index=-1 index feature_switch features
+    for index in "${!neo_argv[@]}"; do
+      case "${neo_argv[$index]}" in
+        --) break ;;
+        --enable-features | --enable-features=* | -enable-features | -enable-features=*)
+          feature_index=$index ;;
+      esac
+    done
+    if [ "$feature_index" = -1 ]; then
+      neo_argv=(--enable-features=CDPScreenshotNewSurface "${neo_argv[@]}")
+    else
+      feature_switch=${neo_argv[$feature_index]%%=*}
+      features=${neo_argv[$feature_index]#"$feature_switch"}
+      features=${features#=}
+      # Chromium's first override wins. A leading * requests the browser default,
+      # so promote this feature while preserving its trial/parameter suffixes.
+      # Comma sentinels keep lookalike names and unrelated list bytes intact.
+      local default_capture=',\*CDPScreenshotNewSurface([,:<])'
+      features=,$features,
+      while [[ $features =~ $default_capture ]]; do
+        features=${features/"${BASH_REMATCH[0]}"/",CDPScreenshotNewSurface${BASH_REMATCH[1]}"}
+      done
+      features=${features#,}
+      features=${features%,}
+      case ",$features," in
+        *,CDPScreenshotNewSurface,* | *,CDPScreenshotNewSurface\<* | *,CDPScreenshotNewSurface:*) ;;
+        *) features="${features:+$features,}CDPScreenshotNewSurface" ;;
+      esac
+      neo_argv[feature_index]="$feature_switch=$features"
+    fi
+  fi
+  spawn_as_neo browserclaw "${neo_argv[@]}"
   neo_pid=$!
   neo_signaled=0
 }
