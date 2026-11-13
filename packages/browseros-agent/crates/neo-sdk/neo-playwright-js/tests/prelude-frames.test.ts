@@ -212,6 +212,102 @@ it('tests that a wait reads nothing for a lazy page or a listed tab the script n
   expect([...runtime.startCalls, ...runtime.calls]).toEqual([])
 })
 
+// The host's init lists every open tab with its workers, and the prelude subscribes to each
+// one's worker state (`observeWorkers`), so Neo's own `events.listen` reaches every listed tab.
+// That upkeep is not the script using a tab: a wait still reads only the pages the script used.
+// Each read is an op on its tab, which a view following the run's task would go to.
+
+/** The init of a run on tab 1007 that lists the launch tab 1001, 1007 and 1009, with workers. */
+const LISTED = {
+  page: { $neo: 'page', tab: 1007 },
+  pages: [1001, 1007, 1009].map((tab) => ({
+    tab,
+    url: `https://${tab}.example/`,
+    title: String(tab),
+    closed: false,
+    workers: [],
+  })),
+  observed: { seq: 0, events: 0 },
+}
+
+/** `page.frames` reads the tree; `events.next` never answers, so the pump idles. */
+const listedAnswer = (call: Call) => {
+  if (call.name === 'page.frames') return TREE
+  if (call.name === 'events.next') return new Promise(() => {})
+  return null
+}
+
+/** The tab and event of every `events.listen` the run sent, its start's included. */
+const listens = (runtime: { startCalls: Call[]; calls: Call[] }) =>
+  [...runtime.startCalls, ...runtime.calls]
+    .filter((call) => call.name === 'events.listen')
+    .map((call) => [
+      Reflect.get(Object(call.input.page), 'tab'),
+      call.input.event,
+    ])
+
+it("tests that Neo's own listener on every listed tab leaves a wait reading only the run's page", async () => {
+  const runtime = loadPrelude({ seed: LISTED, answer: listedAnswer })
+  await runtime.run(`
+    await page.waitForTimeout(1)
+    await page.waitForTimeout(1)
+  `)
+  expect(listens(runtime)).toEqual([
+    [1001, 'workerstate'],
+    [1007, 'workerstate'],
+    [1009, 'workerstate'],
+  ])
+  expect(reads(runtime.calls)).toEqual([
+    [1007, 'page.waitForTimeout'],
+    [1007, 'page.waitForTimeout'],
+  ])
+})
+
+/** The door's answer to an interception it could not set up. */
+const REFUSED = {
+  err: {
+    code: 'owner_has_control',
+    owner: 'host',
+    delivery: 'not_sent',
+    retryable: true,
+    operationId: 'run.1',
+    timeout: false,
+    message: 'page.filechooser: the owner has control of this tab',
+  },
+}
+
+// A file chooser listener's interception is set up before its `events.listen` goes out, so the
+// page is working from the script's call on, whether that setup is answered, still pending as
+// the wait ends, or refused.
+it("tests that the script's own listener on another listed tab makes that tab working", async () => {
+  const cases: [string, unknown][] = [
+    ['framenavigated', null],
+    ['filechooser', null],
+    ['filechooser', new Promise(() => {})],
+    ['filechooser', REFUSED],
+  ]
+  for (const [event, interception] of cases) {
+    const runtime = loadPrelude({
+      seed: LISTED,
+      answer: (call) =>
+        call.name === 'events.interceptFileChooser'
+          ? interception
+          : listedAnswer(call),
+    })
+    await runtime.run(`
+      context.pages().find((other) => other.url().includes('1009')).on('${event}', () => {})
+      await page.waitForTimeout(1)
+      await page.waitForTimeout(1)
+    `)
+    expect(reads(runtime.calls)).toEqual([
+      [1007, 'page.waitForTimeout'],
+      [1009, 'page.waitForTimeout'],
+      [1007, 'page.waitForTimeout'],
+      [1009, 'page.waitForTimeout'],
+    ])
+  }
+})
+
 it('tests that a frame missing from the tree a wait reads is detached', async () => {
   const removed = { frames: TREE.frames.filter((frame) => frame.id !== 'same') }
   let read = 0

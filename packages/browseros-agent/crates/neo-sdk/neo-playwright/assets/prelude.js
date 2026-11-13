@@ -10280,7 +10280,9 @@ ${changes}`;
           await send["events.listen"](site, { api, timeoutMs: 0 }, { page: null, retiredTab: page._tab, event, enabled: false, since });
         else
           await send["events.listen"](site, { api, timeoutMs: 0 }, {
-            page: page === null ? null : await page._openedBrand(api),
+            page: page === null ? null : await page._openedBrand(api, {
+              working: site !== INTERNAL_SITE
+            }),
             event,
             enabled: on,
             since
@@ -11440,19 +11442,20 @@ ${changes}`;
       if (isReported(event, "page"))
         this._context._events.listen(site, this, event, listening);
     }
-    async _brand(api) {
+    async _brand(api, { working = true } = {}) {
       if (this._tab === null) {
         if (this._closed)
           throw clientError(api, "Target page, context or browser has been closed");
         return { $neo: "page", tab: null };
       }
-      this._working = true;
+      if (working)
+        this._working = true;
       return { $neo: "page", tab: this._tab };
     }
-    async _openedBrand(api) {
+    async _openedBrand(api, options = {}) {
       if (this._tab === null)
         await this._refreshFrames(api);
-      const brand = await this._brand(api);
+      const brand = await this._brand(api, options);
       if (brand.tab === null)
         throw new Error(`${api}: Neo opened no tab for the run's page`);
       return brand;
