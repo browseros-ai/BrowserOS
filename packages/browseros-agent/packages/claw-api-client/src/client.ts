@@ -411,6 +411,17 @@ export class ClawApiClient {
     )
   }
 
+  async revokeSkillWrite(request: SkillNameRequest): Promise<Skill> {
+    return this.unwrap(
+      await this.client.DELETE(
+        '/api/v1/skills/{name}/ultrafast/approve-write',
+        {
+          params: { path: request },
+        },
+      ),
+    )
+  }
+
   async getPlan(): Promise<Plan> {
     return this.unwrap(await this.client.GET('/api/v1/plan'))
   }

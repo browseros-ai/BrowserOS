@@ -563,9 +563,10 @@ export interface paths {
     }
     get?: never
     put?: never
-    /** @description Let the skill's write flow run without asking again. */
+    /** @description Run the skill without the agent, so neo does it by itself, including its one click that changes something. */
     post: operations['approveSkillWrite']
-    delete?: never
+    /** @description Run the skill with the agent again, so it reads each page as it goes. */
+    delete: operations['revokeSkillWrite']
     options?: never
     head?: never
     patch?: never
@@ -1079,6 +1080,24 @@ export interface components {
        */
       totalTokenEstimate: number
     }
+    /** @description What neo did on its own while ultrafast skills ran without the agent in this session, summed across every such run. */
+    SessionUltrafastRun: {
+      /**
+       * Format: int64
+       * @description Time the ultrafast skill runs took, in milliseconds.
+       */
+      durationMs: number
+      /**
+       * Format: int64
+       * @description Pages neo read itself during those runs.
+       */
+      pagesRead: number
+      /**
+       * Format: int64
+       * @description Estimated tokens of page text neo read itself that never went to the agent.
+       */
+      tokensSaved: number
+    }
     SessionSummary: {
       sessionId: string
       profileId?: string
@@ -1106,6 +1125,8 @@ export interface components {
       latestScreenshotId?: number
       /** @description Estimated token consumption of this session's tool traffic, summed across all dispatches and refreshed live as they land. Present only when the session has dispatches and every one carries token-estimator v1; absent for legacy or otherwise unmeasured sessions. */
       tokenUsage?: components['schemas']['SessionTokenUsage']
+      /** @description Present only when an ultrafast skill ran to the end without the agent in this session. */
+      ultrafast?: components['schemas']['SessionUltrafastRun']
       /** @description Present only on summaries returned by an explicit `status=live` list query. */
       live?: components['schemas']['LiveSessionState']
     }
@@ -1476,7 +1497,7 @@ export interface components {
       | 'degraded'
       | 'broken'
       | 'off'
-    /** @description The skill's ultrafast flow. Present only while ultrafast skills are enabled. */
+    /** @description The skill's ultrafast flow. Present while ultrafast skills are enabled, and after the plan that turned them on ends (then `locked`). */
     SkillUltrafast: {
       status: components['schemas']['SkillUltrafastStatus']
       /** @description Why the flow is off or broken, in plain words. */
@@ -1485,7 +1506,7 @@ export interface components {
       flowVersion: number
       /** @enum {string} */
       effects?: 'read' | 'write'
-      /** @description Whether the user approved this write flow to run without asking. */
+      /** @description Whether this write flow runs without the agent, by the user's choice for its current click. */
       writeApproved: boolean
       /** Format: int64 */
       p50Ms?: number
@@ -1493,6 +1514,40 @@ export interface components {
       verifiedAt?: number
       /** Format: int64 */
       repairedAt?: number
+      /** @description Ultrafast skills are off for this computer, so every skill runs with the agent and the choice can't change. */
+      locked?: boolean
+      runs?: components['schemas']['SkillUltrafastRuns']
+    }
+    /**
+     * @description Whether the skill runs with the user's agent reading each page, or neo runs it by itself.
+     * @enum {string}
+     */
+    SkillUltrafastRunsMode: 'with_agent' | 'without_agent'
+    /**
+     * @description Why the skill always runs with the agent, whatever the user chose.
+     * @enum {string}
+     */
+    SkillUltrafastAlwaysWith: 'pay' | 'order' | 'send' | 'delete'
+    /** @enum {string} */
+    SkillUltrafastChoiceVia: 'chat' | 'app'
+    /** @description How a skill that changes something runs when the user asks for it. Absent for a skill that only reads pages. */
+    SkillUltrafastRuns: {
+      mode: components['schemas']['SkillUltrafastRunsMode']
+      /** @description Whether the user chose for the skill's current click. Until then it runs with the agent. */
+      chosen: boolean
+      /** @description An earlier choice covered a different click, so the agent asks again. */
+      reask: boolean
+      alwaysWithAgent?: components['schemas']['SkillUltrafastAlwaysWith']
+      /** @description The step that changes something, in the skill's own words. */
+      click?: string
+      site?: string
+      via?: components['schemas']['SkillUltrafastChoiceVia']
+      /** Format: int64 */
+      chosenAt?: number
+      /** @description The user's own words when they chose in chat. */
+      answer?: string
+      /** @description The agent that relayed a chat answer. */
+      client?: string
     }
     SkillFlowSource: {
       /** @description The flow.md file as stored beside SKILL.md. */
@@ -2849,6 +2904,31 @@ export interface operations {
     }
   }
   approveSkillWrite: {
+    parameters: {
+      query?: never
+      header?: never
+      path: {
+        name: components['parameters']['SkillName']
+      }
+      cookie?: never
+    }
+    requestBody?: never
+    responses: {
+      /** @description The skill with its updated ultrafast state. */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['Skill']
+        }
+      }
+      404: components['responses']['NotFound']
+      409: components['responses']['Conflict']
+      500: components['responses']['InternalError']
+    }
+  }
+  revokeSkillWrite: {
     parameters: {
       query?: never
       header?: never

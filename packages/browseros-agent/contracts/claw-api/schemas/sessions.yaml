@@ -132,6 +132,32 @@ SessionTokenUsage:
       minimum: 0
       maximum: 9007199254740991
       description: inputTokenEstimate + outputTokenEstimate — the session's total estimated token consumption.
+SessionUltrafastRun:
+  type: object
+  additionalProperties: false
+  required: [durationMs, pagesRead, tokensSaved]
+  description: >-
+    What neo did on its own while ultrafast skills ran without the agent in
+    this session, summed across every such run.
+  properties:
+    durationMs:
+      type: integer
+      format: int64
+      minimum: 0
+      description: Time the ultrafast skill runs took, in milliseconds.
+    pagesRead:
+      type: integer
+      format: int64
+      minimum: 0
+      description: Pages neo read itself during those runs.
+    tokensSaved:
+      type: integer
+      format: int64
+      minimum: 0
+      maximum: 9007199254740991
+      description: >-
+        Estimated tokens of page text neo read itself that never went to the
+        agent.
 SessionSummary:
   type: object
   additionalProperties: false
@@ -204,6 +230,12 @@ SessionSummary:
         across all dispatches and refreshed live as they land. Present only when
         the session has dispatches and every one carries token-estimator v1;
         absent for legacy or otherwise unmeasured sessions.
+    ultrafast:
+      allOf:
+        - $ref: '#/SessionUltrafastRun'
+      description: >-
+        Present only when an ultrafast skill ran to the end without the agent
+        in this session.
     live:
       allOf:
         - $ref: '#/LiveSessionState'

@@ -237,13 +237,150 @@ export function runModeCounts(runs: Pick<SkillRun, 'mode'>[]): {
   )
 }
 
-/** Whether the skill page should offer the one-time write approval. */
-export function needsWriteApproval(
+/** Which of the skill page's "with or without your agent" states a skill is in. */
+export type RunsChoiceState =
+  | 'read'
+  | 'choose'
+  | 'without'
+  | 'with'
+  | 'reask'
+  | 'always'
+  | 'locked'
+
+export interface RunsChoice {
+  state: RunsChoiceState
+  /** The option shown as selected. */
+  selected: 'with_agent' | 'without_agent'
+  /** "Without your agent" can't be picked: always-with skills and a plan that is off. */
+  withoutLocked: boolean
+  /** Neither option can be picked: the plan is off. */
+  disabled: boolean
+  chip: string
+  chipTone: 'accent' | 'amber' | 'muted'
+  /** How long it takes without the agent, from the verified median. */
+  fastLabel: string | null
+  /** How long it takes with the agent, from runs the agent did itself. */
+  slowLabel: string | null
+}
+
+/** "about 11 sec" or "about 1 min", the way the skill page talks about time. */
+export function durationLabel(ms: number | undefined | null): string | null {
+  if (!ms || ms <= 0) return null
+  const seconds = Math.max(1, Math.round(ms / 1000))
+  if (seconds < 60) return `about ${seconds} sec`
+  return `about ${Math.round(seconds / 60)} min`
+}
+
+function median(values: number[]): number | null {
+  if (!values.length) return null
+  const sorted = [...values].sort((a, b) => a - b)
+  return sorted[Math.floor(sorted.length / 2)] ?? null
+}
+
+/**
+ * Where a skill stands on running with or without the agent, or null when the skill page has
+ * nothing to say (no fast version yet).
+ */
+export function runsChoice(
   ultrafast: SkillUltrafast | undefined,
-): boolean {
-  return (
-    ultrafast?.effects === 'write' &&
-    !ultrafast.writeApproved &&
-    (ultrafast.status === 'verified' || ultrafast.status === 'degraded')
+  runs: Pick<SkillRun, 'mode' | 'durationMs'>[],
+): RunsChoice | null {
+  if (!ultrafast) return null
+  const live =
+    ultrafast.status === 'verified' || ultrafast.status === 'degraded'
+  if (!live) return null
+  const fastLabel = durationLabel(ultrafast.p50Ms)
+  const slowLabel = durationLabel(
+    median(
+      runs
+        .filter((run) => run.mode !== 'ultrafast' && run.durationMs)
+        .map((run) => run.durationMs as number),
+    ),
   )
+  const base = { fastLabel, slowLabel, withoutLocked: false, disabled: false }
+  if (ultrafast.locked) {
+    return {
+      ...base,
+      state: 'locked',
+      selected: 'with_agent',
+      withoutLocked: true,
+      disabled: true,
+      chip: 'Off',
+      chipTone: 'muted',
+    }
+  }
+  const choice = ultrafast.runs
+  if (!choice) {
+    return {
+      ...base,
+      state: 'read',
+      selected: 'without_agent',
+      chip: 'Ready',
+      chipTone: 'accent',
+    }
+  }
+  if (choice.alwaysWithAgent) {
+    return {
+      ...base,
+      state: 'always',
+      selected: 'with_agent',
+      withoutLocked: true,
+      chip: 'Always with your agent',
+      chipTone: 'muted',
+    }
+  }
+  if (choice.chosen && choice.mode === 'without_agent') {
+    return {
+      ...base,
+      state: 'without',
+      selected: 'without_agent',
+      chip: 'Runs without your agent',
+      chipTone: 'accent',
+    }
+  }
+  if (choice.chosen) {
+    return {
+      ...base,
+      state: 'with',
+      selected: 'with_agent',
+      chip: 'Runs with your agent',
+      chipTone: 'muted',
+    }
+  }
+  if (choice.reask) {
+    return {
+      ...base,
+      state: 'reask',
+      selected: 'with_agent',
+      chip: 'Asks again',
+      chipTone: 'amber',
+    }
+  }
+  return {
+    ...base,
+    state: 'choose',
+    selected: 'with_agent',
+    chip: 'Choose how it runs',
+    chipTone: 'amber',
+  }
+}
+
+/** Who chose and how, in the words the skill page uses. */
+export function chosenLine(
+  choice: NonNullable<SkillUltrafast['runs']>,
+  now: number,
+): string | null {
+  if (!choice.chosen || !choice.chosenAt) return null
+  const when = new Date(choice.chosenAt).toLocaleDateString(undefined, {
+    day: 'numeric',
+    month: 'short',
+  })
+  const today =
+    new Date(now).toDateString() === new Date(choice.chosenAt).toDateString()
+  const day = today ? 'today' : `on ${when}`
+  if (choice.via === 'chat') {
+    const who = choice.client ? ` with ${choice.client}` : ''
+    return `You chose this in chat${who} ${day}`
+  }
+  return `You chose this in BrowserOS ${day}`
 }

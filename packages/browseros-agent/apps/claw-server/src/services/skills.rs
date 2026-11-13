@@ -286,6 +286,15 @@ impl SkillService {
                     .is_none_or(|hash| hash == fingerprint(&steps))
         };
         match doc {
+            Some(doc)
+                if lines_up(&doc)
+                    && !crate::services::flow::consent::offers_run_skill(
+                        crate::services::flow::consent::decision(Some(&row), &doc, &steps),
+                    ) =>
+            {
+                // Settled on running with the agent: no "Run it fast" to send it to a refusal.
+                self.rerender(name, SkillMd::Plain).await
+            }
             Some(doc) if lines_up(&doc) => {
                 let fast = RunItFast {
                     status: status.as_str(),

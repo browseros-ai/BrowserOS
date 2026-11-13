@@ -28,16 +28,7 @@ use crate::{
     storage::JsonStore,
 };
 use axum::{Router, middleware};
-use std::{
-    env,
-    ffi::OsString,
-    path::PathBuf,
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    },
-    time::Duration,
-};
+use std::{env, ffi::OsString, path::PathBuf, sync::Arc, time::Duration};
 
 #[derive(Clone)]
 pub struct AppState {
@@ -58,7 +49,9 @@ pub struct AppState {
     pub skills: Arc<SkillService>,
     pub skill_runs: Arc<SkillRunService>,
     /// Read through `ultrafast_enabled`, which also keeps hosted servers out.
-    pub ultrafast: Arc<AtomicBool>,
+    pub ultrafast: Arc<crate::services::flow::switch::UltrafastSwitch>,
+    /// Single-use answers to the "with your agent or without" question, minted per write flow.
+    pub consent_tokens: Arc<crate::services::flow::consent::ConsentTokens>,
     pub analytics: Arc<AnalyticsService>,
     pub error_reporter: Arc<crate::services::error_reporting::ErrorReporter>,
     pub feedback_cohort: Arc<crate::services::feedback_cohort::FeedbackCohort>,
@@ -90,6 +83,9 @@ pub struct AppState {
     /// `/system/info` so the app can prompt an update when the database is ahead of the server.
     pub migration: MigrationOutcome,
 }
+
+/// The plan feature that turns ultrafast skills on.
+pub const ULTRAFAST_FEATURE: &str = "claw.ultrafast";
 
 /// Overall cap on how long a human-help request stays open before it is reaped, so a crashed or
 /// non-looping agent never leaves a stale "needs you" request behind.
@@ -280,6 +276,7 @@ impl AppState {
             skills,
             skill_runs,
             ultrafast: Arc::default(),
+            consent_tokens: Arc::default(),
             analytics,
             error_reporter,
             feedback_cohort,
@@ -309,7 +306,21 @@ impl AppState {
     /// the regular way; hosted servers never offer them.
     #[must_use]
     pub fn ultrafast_enabled(&self) -> bool {
-        self.ultrafast.load(Ordering::Relaxed) && !self.config.mode.is_hosted()
+        self.ultrafast.is_on() && !self.config.mode.is_hosted()
+    }
+
+    /// Follows the plan: ultrafast skills are on while it includes them. When that changes,
+    /// SKILL.md files follow, and connected agents hear about it through their tool list.
+    /// Returns whether it changed.
+    pub async fn sync_ultrafast_with_plan(&self) -> bool {
+        let on = !self.config.mode.is_hosted() && self.billing.has_feature(ULTRAFAST_FEATURE).await;
+        if !self.ultrafast.set(on) {
+            return false;
+        }
+        if let Err(error) = self.skills.sync_skill_md(self.ultrafast_enabled()).await {
+            tracing::warn!(error = %error, "skill file sync failed");
+        }
+        true
     }
 
     pub async fn live_tab_activity(&self) -> Vec<TabActivityRecord> {

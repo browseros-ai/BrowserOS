@@ -1,13 +1,15 @@
 import { describe, expect, it } from 'bun:test'
 import type { Skill, SkillUltrafast } from '@browseros/claw-api'
 import {
+  chosenLine,
+  durationLabel,
   healthLine,
-  needsWriteApproval,
   neoName,
   parseSkillBody,
   runModeCounts,
   runModeLabel,
   runSpeed,
+  runsChoice,
   skillCommand,
   skillSites,
   stuckWhile,
@@ -220,15 +222,94 @@ describe('runModeLabel', () => {
   })
 })
 
-describe('needsWriteApproval', () => {
-  it('asks only for a working write flow not yet approved', () => {
-    expect(needsWriteApproval(ultrafast({ effects: 'write' }))).toBe(true)
+const writeRuns = (
+  patch: Partial<NonNullable<SkillUltrafast['runs']>>,
+): NonNullable<SkillUltrafast['runs']> => ({
+  mode: 'with_agent',
+  chosen: false,
+  reask: false,
+  click: 'Add it to the cart.',
+  site: 'amazon.in',
+  ...patch,
+})
+
+describe('runsChoice', () => {
+  const agentRuns = [
+    { mode: 'agent' as const, durationMs: 62_000 },
+    { mode: 'ultrafast' as const, durationMs: 11_000 },
+  ]
+
+  it('reads a read-only skill as nothing to choose', () => {
+    const choice = runsChoice(ultrafast({ p50Ms: 10_400 }), agentRuns)
+    expect(choice?.state).toBe('read')
+    expect(choice?.fastLabel).toBe('about 10 sec')
+    expect(choice?.slowLabel).toBe('about 1 min')
+  })
+
+  it('runs with the agent until the user chooses', () => {
+    const choice = runsChoice(
+      ultrafast({ effects: 'write', runs: writeRuns({}) }),
+      [],
+    )
+    expect(choice).toMatchObject({
+      state: 'choose',
+      selected: 'with_agent',
+      chip: 'Choose how it runs',
+      withoutLocked: false,
+    })
+    expect(choice?.slowLabel).toBeNull()
+  })
+
+  it('shows each chosen, re-asked, locked and always-with state', () => {
+    const state = (runs: NonNullable<SkillUltrafast['runs']>, locked = false) =>
+      runsChoice(ultrafast({ effects: 'write', runs, locked }), [])
     expect(
-      needsWriteApproval(ultrafast({ effects: 'write', writeApproved: true })),
-    ).toBe(false)
-    expect(needsWriteApproval(ultrafast({ effects: 'read' }))).toBe(false)
+      state(writeRuns({ chosen: true, mode: 'without_agent' }))?.state,
+    ).toBe('without')
+    expect(state(writeRuns({ chosen: true }))?.state).toBe('with')
+    expect(state(writeRuns({ reask: true }))?.state).toBe('reask')
+    expect(state(writeRuns({ alwaysWithAgent: 'order' }))).toMatchObject({
+      state: 'always',
+      withoutLocked: true,
+      disabled: false,
+    })
     expect(
-      needsWriteApproval(ultrafast({ effects: 'write', status: 'broken' })),
-    ).toBe(false)
+      state(writeRuns({ chosen: true, mode: 'without_agent' }), true),
+    ).toMatchObject({ state: 'locked', disabled: true, selected: 'with_agent' })
+  })
+
+  it('stays quiet without a working fast version', () => {
+    expect(runsChoice(ultrafast({ status: 'pending' }), [])).toBeNull()
+    expect(runsChoice(undefined, [])).toBeNull()
+  })
+})
+
+describe('chosenLine', () => {
+  it('says who chose and where', () => {
+    const now = new Date(2026, 10, 11, 18).getTime()
+    expect(
+      chosenLine(
+        writeRuns({
+          chosen: true,
+          via: 'chat',
+          client: 'Claude Code',
+          chosenAt: new Date(2026, 10, 11, 9).getTime(),
+        }),
+        now,
+      ),
+    ).toBe('You chose this in chat with Claude Code today')
+    expect(
+      chosenLine(writeRuns({ chosen: true, via: 'app', chosenAt: now }), now),
+    ).toBe('You chose this in BrowserOS today')
+    expect(chosenLine(writeRuns({}), now)).toBeNull()
+  })
+})
+
+describe('durationLabel', () => {
+  it('rounds to the way the page talks about time', () => {
+    expect(durationLabel(1_180)).toBe('about 1 sec')
+    expect(durationLabel(11_000)).toBe('about 11 sec')
+    expect(durationLabel(92_000)).toBe('about 2 min')
+    expect(durationLabel(undefined)).toBeNull()
   })
 })

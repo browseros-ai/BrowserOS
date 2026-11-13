@@ -60,7 +60,12 @@ export const useSkillFlow = createQuery<
   fetcher: async ({ name }) => (await apiClient()).getSkillFlow({ name }),
 })
 
-/** One-time approval that lets a skill's write flow run without asking. */
-export const useApproveSkillWrite = createMutation<Skill, SkillNameRequest>({
+/** Runs a write skill without the agent: neo does it by itself, including its one click. */
+export const useRunWithoutAgent = createMutation<Skill, SkillNameRequest>({
   mutationFn: async (request) => (await apiClient()).approveSkillWrite(request),
+})
+
+/** Runs a write skill with the agent again, so it reads each page as it goes. */
+export const useRunWithAgent = createMutation<Skill, SkillNameRequest>({
+  mutationFn: async (request) => (await apiClient()).revokeSkillWrite(request),
 })

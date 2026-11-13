@@ -34,7 +34,7 @@ use rmcp::{
         PaginatedRequestParams, ProtocolVersion, ServerCapabilities, SubscriptionFilter, Tool,
         ToolAnnotations,
     },
-    service::{NotificationContext, RequestContext},
+    service::{NotificationContext, Peer, RequestContext, SubscriptionContext},
 };
 use serde_json::{Value, json};
 use std::{
@@ -1054,6 +1054,41 @@ const SUPPORTED_PROTOCOL_VERSIONS: &[ProtocolVersion] = &[
     ProtocolVersion::V_2024_11_05,
 ];
 
+/// How often a connection's tool-list watcher checks that the connection is still there.
+const TOOL_LIST_WATCH_LIVENESS: std::time::Duration = std::time::Duration::from_secs(60);
+
+impl ClawMcpService {
+    /// Tells a connection that negotiated `initialize` when its tool list changes, which happens
+    /// when ultrafast skills turn on or off. Ends with the connection.
+    fn watch_tool_list(&self, peer: Peer<RoleServer>) {
+        if self.mode().is_hosted() {
+            return;
+        }
+        let mut changes = self.state.ultrafast.subscribe();
+        tokio::spawn(async move {
+            let mut liveness = tokio::time::interval(TOOL_LIST_WATCH_LIVENESS);
+            liveness.tick().await;
+            loop {
+                tokio::select! {
+                    changed = changes.changed() => {
+                        if changed.is_err()
+                            || peer.is_transport_closed()
+                            || peer.notify_tool_list_changed().await.is_err()
+                        {
+                            return;
+                        }
+                    }
+                    _ = liveness.tick() => {
+                        if peer.is_transport_closed() {
+                            return;
+                        }
+                    }
+                }
+            }
+        });
+    }
+}
+
 impl ServerHandler for ClawMcpService {
     fn get_info(&self) -> InitializeResult {
         let capabilities = ServerCapabilities::builder()
@@ -1091,6 +1126,7 @@ impl ServerHandler for ClawMcpService {
     ) -> Result<InitializeResult, McpError> {
         context.peer.set_peer_info(request.clone());
         self.set_client_info(&request).await;
+        self.watch_tool_list(context.peer.clone());
         let info = self.get_info();
         let Some(session_id) = session_id_from_extensions(&context.extensions) else {
             return Ok(info);
@@ -1135,6 +1171,30 @@ impl ServerHandler for ClawMcpService {
         requested: &SubscriptionFilter,
     ) -> Option<SubscriptionFilter> {
         Some(requested.supported_by(&self.get_info().capabilities))
+    }
+
+    // Holds the 2026-07-28 stream open, and says so on it whenever ultrafast skills turn on or
+    // off, since that adds or removes `run_skill`.
+    async fn listen(&self, context: SubscriptionContext) -> Result<(), McpError> {
+        if context.accepted().tools_list_changed != Some(true) {
+            context.cancelled().await;
+            return Ok(());
+        }
+        let mut changes = self.state.ultrafast.subscribe();
+        loop {
+            tokio::select! {
+                () = context.cancelled() => return Ok(()),
+                changed = changes.changed() => {
+                    if changed.is_err() {
+                        context.cancelled().await;
+                        return Ok(());
+                    }
+                    if context.sink().notify_tool_list_changed().await.is_err() {
+                        return Ok(());
+                    }
+                }
+            }
+        }
     }
 
     fn get_tool(&self, name: &str) -> Option<Tool> {
@@ -3846,6 +3906,47 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_connected_agent_hears_when_ultrafast_skills_turn_on() -> anyhow::Result<()> {
+        use tokio::io::AsyncBufReadExt;
+        let call = crate::api::mcp::test_support::tool_call("tabs", json!({})).await?;
+        let state = call.state.clone();
+        let (client, transport) = tokio::io::duplex(64 * 1024);
+        let running =
+            rmcp::service::serve_directly(ClawMcpService::new(state.clone()), transport, None);
+        let context =
+            RequestContext::new(rmcp::model::RequestId::Number(1), running.peer().clone());
+        running
+            .service()
+            .initialize(
+                InitializeRequestParams::new(
+                    rmcp::model::ClientCapabilities::default(),
+                    Implementation::new("claude-code", "1.0.0"),
+                ),
+                context,
+            )
+            .await?;
+
+        state.ultrafast.set(true);
+        let mut lines = tokio::io::BufReader::new(client).lines();
+        let line = tokio::time::timeout(std::time::Duration::from_secs(5), lines.next_line())
+            .await??
+            .unwrap_or_default();
+        let message: Value = serde_json::from_str(&line)?;
+        assert_eq!(
+            message["method"], "notifications/tools/list_changed",
+            "{line}"
+        );
+
+        state.ultrafast.set(false);
+        let line = tokio::time::timeout(std::time::Duration::from_secs(5), lines.next_line())
+            .await??
+            .unwrap_or_default();
+        assert!(line.contains("notifications/tools/list_changed"), "{line}");
+        running.cancel().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn run_skill_and_flow_fields_follow_the_ultrafast_switch() -> anyhow::Result<()> {
         let call = crate::api::mcp::test_support::tool_call("tabs", json!({})).await?;
         let service = ClawMcpService::new(call.state.clone());
@@ -3862,9 +3963,7 @@ mod tests {
         };
 
         assert_eq!(offered(&service), (false, false, Some(false)));
-        call.state
-            .ultrafast
-            .store(true, std::sync::atomic::Ordering::Relaxed);
+        call.state.ultrafast.set(true);
         assert_eq!(offered(&service), (true, true, Some(true)));
         Ok(())
     }

@@ -531,6 +531,10 @@ describe('the ultrafast page', () => {
     expect(button('Use a licence key')).toBeTruthy()
     expect(text()).toContain('Questions people ask')
     expect(text()).toContain('Where’s my licence key?')
+    expect(text()).toContain('Does neo change things on sites without asking?')
+    expect(text()).toContain(
+      'After that, your skills still work, with your agent at normal speed.',
+    )
   })
 
   it('tests that Yearly shows the yearly price and what it works out to', async () => {
