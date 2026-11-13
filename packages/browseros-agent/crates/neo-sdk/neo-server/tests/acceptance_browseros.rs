@@ -462,7 +462,7 @@ async fn snapshot_trace(rig: &mut Rig) -> TestResult {
             "PATCH",
             "/v1/settings",
             Some(HOST_TOKEN),
-            Some(&json!({ "trace": { "valueBytes": 262_144 } })),
+            Some(&json!({ "trace": { "values": "on", "valueBytes": 262_144 } })),
         )
         .await?;
     assert_eq!(configured.status, 200, "{}", configured.text());
