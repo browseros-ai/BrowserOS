@@ -36,7 +36,7 @@ use tracing::Dispatch;
 use tracing::subscriber::{self, NoSubscriber};
 
 use super::{Host, Reply, TOKEN, TestResult, request, within};
-use crate::builtins::{HOST_FILL, HOST_FILL_CHECK, HOST_FILL_CODE, PrivateEntry};
+use crate::builtins::{ENTRY_BACKSTOP, HOST_FILL, HOST_FILL_CHECK, HOST_FILL_CODE, PrivateEntry};
 use crate::dispatch::{
     Call, ErrorCode, LeafError, Method, MethodSpec, OpCtx, OpFailure, PageTarget, RegistryBuilder,
     RegistryError, RunCtx, RunEnd, RunStart,
@@ -1259,11 +1259,11 @@ async fn an_entry_that_never_answers_is_stopped_by_the_backstop() -> TestResult 
     host.entry.script(Script::Hang);
     let started = StdInstant::now();
     let hung = fill(&host, tab, &canary_body(&json!({ "timeoutMs": 1000 }))).await?;
-    assert!(
-        started.elapsed() < Duration::from_secs(8),
-        "{:?}",
-        started.elapsed()
-    );
+    // The backstop stops the entry at the fill's 1 s plus `ENTRY_BACKSTOP`, in real time through
+    // a real socket and store, so a loaded machine runs long: the bound only catches an entry
+    // the backstop never stopped.
+    let stopped_by = Duration::from_secs(1) + ENTRY_BACKSTOP + Duration::from_secs(20);
+    assert!(started.elapsed() < stopped_by, "{:?}", started.elapsed());
     assert_eq!(hung.status, 200, "{hung:?}");
     assert_eq!(hung.body["error"]["code"], "run_timeout");
     assert_eq!(hung.body["error"]["owner"], "neo");
