@@ -524,7 +524,7 @@ dependencies = [
 
 [[package]]
 name = "claw-server"
-version = "0.0.93"
+version = "0.0.95"
 dependencies = [
  "anyhow",
  "axum",
