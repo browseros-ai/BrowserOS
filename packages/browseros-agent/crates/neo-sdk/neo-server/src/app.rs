@@ -566,6 +566,10 @@ mod housekeeping_tests {
             Arc::new(HostHolds::default()),
             rig.settings.clone(),
         );
+        // Every wait below only bounds a hang: a passing run takes milliseconds, and a deadline
+        // costs nothing then, so it is generous for GitHub's runners and a loaded machine (one
+        // run in 1,600 missed 5 s with 200 copies running at once).
+        let hang = Duration::from_secs(30);
         let mut upkeep = Box::pin(housekeeping(
             janitor,
             rig.sink.clone(),
@@ -589,7 +593,7 @@ mod housekeeping_tests {
         outputs.keep_blob(sentinel, blob, b"due at startup").await?;
         task::yield_now().await;
         let starting = time::Instant::now();
-        within(Duration::from_secs(5), async {
+        within(hang, async {
             loop {
                 assert!(poll!(upkeep.as_mut()).is_pending());
                 // The retention tick's request settles here, whichever pass the poll took.
@@ -622,7 +626,7 @@ mod housekeeping_tests {
                 .await?;
             Ok::<(), TestError>(())
         });
-        within(Duration::from_secs(5), async {
+        within(hang, async {
             loop {
                 assert!(poll!(upkeep.as_mut()).is_pending());
                 if let Poll::Ready(written) = poll!(writes.as_mut()) {
@@ -655,7 +659,7 @@ mod housekeeping_tests {
         time::advance(next_tick.saturating_duration_since(time::Instant::now())).await;
         time::resume();
 
-        let expired = within(Duration::from_secs(5), async {
+        let expired = within(hang, async {
             while outputs.open_blob(expiring, blob).await?.is_some() {
                 time::sleep(Duration::from_millis(5)).await;
             }
@@ -663,7 +667,7 @@ mod housekeeping_tests {
         })
         .await;
         rig.shutdown.cancel();
-        within(Duration::from_secs(5), worker).await??;
+        within(hang, worker).await??;
         expired??;
         assert!(outputs.open_blob(ordinary, blob).await?.is_some());
         Ok(())
