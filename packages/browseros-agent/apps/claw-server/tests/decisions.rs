@@ -195,10 +195,13 @@ async fn without_a_licence_nothing_is_sent() -> anyhow::Result<()> {
 }
 
 #[test]
-fn hosted_servers_have_no_worker_and_release_builds_wait_for_launch() {
+fn hosted_servers_have_no_worker_and_release_builds_use_the_production_worker() {
     assert!(Decisions::for_build(true).url().is_none());
     if std::env::var_os("CLAW_DECISIONS_URL").is_none() && !cfg!(feature = "billing-staging") {
-        assert!(Decisions::for_build(false).url().is_none());
+        assert_eq!(
+            Decisions::for_build(false).url().map(url::Url::as_str),
+            Some("https://neo-decisions.openrebase.com/")
+        );
     }
 }
 

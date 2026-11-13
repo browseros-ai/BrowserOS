@@ -20,8 +20,8 @@ use crate::services::billing::Billing;
 /// The staging worker, for builds with the `billing-staging` feature.
 const STAGING_URL: Option<&str> = Some("https://decisions-api-worker-staging.eng-6b4.workers.dev");
 
-/// The production worker. `None` until launch, alongside the production billing gateway.
-const RELEASE_URL: Option<&str> = None;
+/// The production worker.
+const RELEASE_URL: Option<&str> = Some("https://neo-decisions.openrebase.com");
 
 /// A debug build may point at another worker, for a stub in tests or a local QA run.
 const URL_OVERRIDE_ENV: &str = "CLAW_DECISIONS_URL";
@@ -196,5 +196,17 @@ impl Writer for WorkerWriter {
             .await
             .map(|written| written.values)
             .map_err(|_| WriterError("the writer's answer could not be read".to_string()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_compiled_in_worker_url_parses() {
+        for url in [STAGING_URL, RELEASE_URL].into_iter().flatten() {
+            assert!(Url::parse(url).is_ok(), "{url}");
+        }
     }
 }
