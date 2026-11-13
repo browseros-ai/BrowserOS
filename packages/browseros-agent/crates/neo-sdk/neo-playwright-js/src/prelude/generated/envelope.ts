@@ -58,7 +58,14 @@ pumped?: number,
  * The navigation publications whose producers have answered (`page.goto` and the
  * history ops' `publication.id`). Absent for none.
  */
-completedNavigations?: Array<number>, } | { 
+completedNavigations?: Array<number>, 
+/**
+ * The browser's frame-change head (`Observer::frames_head`): it moves whenever any
+ * tab's frames change. The prelude reads again the trees of the pages the script uses
+ * once it passes the head their tree was read at, so a tab this op did not touch, whose
+ * facts the reply does not carry, is caught too. Absent before any change.
+ */
+framesHead?: number, } | { 
 /**
  * The failure as the door decided it.
  */
@@ -86,7 +93,11 @@ pumped?: number,
 /**
  * As for `Ok`.
  */
-completedNavigations?: Array<number>, };
+completedNavigations?: Array<number>, 
+/**
+ * As for `Ok`.
+ */
+framesHead?: number, };
 
 /**
  * The fields of the script's `NeoError`, named as the trace names them. errors.ts copies all

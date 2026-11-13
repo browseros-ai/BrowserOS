@@ -138,6 +138,13 @@ pub(crate) enum Envelope<'a> {
         )]
         #[ts(optional = nullable)]
         completed_navigations: &'a [u64],
+        /// The browser's frame-change head (`Observer::frames_head`): it moves whenever any
+        /// tab's frames change. The prelude reads again the trees of the pages the script uses
+        /// once it passes the head their tree was read at, so a tab this op did not touch, whose
+        /// facts the reply does not carry, is caught too. Absent before any change.
+        #[serde(rename = "framesHead", skip_serializing_if = "is_zero")]
+        #[ts(optional = nullable)]
+        frames_head: u64,
     },
     /// The op failed; the bootstrap rejects with a `NeoError` carrying `err`'s fields.
     Err {
@@ -168,6 +175,10 @@ pub(crate) enum Envelope<'a> {
         )]
         #[ts(optional = nullable)]
         completed_navigations: &'a [u64],
+        /// As for `Ok`.
+        #[serde(rename = "framesHead", skip_serializing_if = "is_zero")]
+        #[ts(optional = nullable)]
+        frames_head: u64,
     },
 }
 
@@ -294,7 +305,7 @@ impl Bridge {
         completed.extend(reply.completed_publications.iter().copied());
         completed.sort_unstable();
         completed.dedup();
-        envelope(&reply, &completed)
+        envelope(&reply, &completed, self.dispatcher.observer().frames_head())
     }
 
     /// The bootstrap's abort of the op it keyed `key`: `{"key", "reason"}`. An op that already
@@ -403,7 +414,7 @@ fn navigation_publication(name: &str, input: &Value) -> Option<NavigationPublica
 }
 
 /// The text `__neo_invoke` resolves with for `reply`: [`Envelope`] as JSON, never a failure.
-pub(crate) fn envelope(reply: &OpReply, completed_navigations: &[u64]) -> String {
+pub(crate) fn envelope(reply: &OpReply, completed_navigations: &[u64], frames_head: u64) -> String {
     let pumped = reply.pumped;
     let default_page = reply.default_page.as_ref().map(DefaultPage::from);
     let picked_page = reply.picked_page.as_ref().map(DefaultPage::from);
@@ -416,6 +427,7 @@ pub(crate) fn envelope(reply: &OpReply, completed_navigations: &[u64]) -> String
             picked_page,
             pumped,
             completed_navigations,
+            frames_head,
         },
         Err(failure) => Envelope::Err {
             err: ErrBody::from(failure),
@@ -425,6 +437,7 @@ pub(crate) fn envelope(reply: &OpReply, completed_navigations: &[u64]) -> String
             picked_page,
             pumped,
             completed_navigations,
+            frames_head,
         },
     };
     serde_json::to_string(&envelope).unwrap_or_else(|error| {

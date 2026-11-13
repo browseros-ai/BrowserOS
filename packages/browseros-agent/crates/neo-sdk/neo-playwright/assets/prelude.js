@@ -908,7 +908,8 @@
         observed,
         pages: readPageFacts(field(envelope, "pages")),
         defaultPage: readTab(field(envelope, "defaultPage")),
-        pickedPage: readTab(field(envelope, "pickedPage"))
+        pickedPage: readTab(field(envelope, "pickedPage")),
+        framesHead: Number(field(envelope, "framesHead") ?? 0) || 0
       });
     });
   }
@@ -11035,6 +11036,7 @@ ${changes}`;
     _framesWatched = false;
     _framesChanged = 0;
     #framesReadAt = 0;
+    #framesHeadAt = 0;
     #framesIncomplete = false;
     #settledAt = Number.NEGATIVE_INFINITY;
     _navigationsInFlight = 0;
@@ -11545,6 +11547,7 @@ ${changes}`;
       if (this.#payloadCurrent(observed) && Array.isArray(tree?.frames)) {
         this._applyFrames(tree.frames, observed);
         this.#framesReadAt = version;
+        this.#framesHeadAt = this._context._framesHead;
         this.#framesIncomplete = tree.incomplete === true;
         return !this.#framesIncomplete;
       }
@@ -11559,7 +11562,8 @@ ${changes}`;
     _framesStale(now, minGapMs) {
       if (this._tab === null || this._closed || this._navigationsInFlight > 0)
         return false;
-      if (!this.#framesIncomplete && this._framesChanged <= this.#framesReadAt)
+      const changed = this._framesChanged > this.#framesReadAt || (this._working || this._framesWatched) && this._context._framesHead > this.#framesHeadAt;
+      if (!this.#framesIncomplete && !changed)
         return false;
       if (now - this.#settledAt < minGapMs)
         return false;
@@ -11924,6 +11928,7 @@ ${changes}`;
     #unopened = null;
     #handed = new WeakSet;
     #started = false;
+    _framesHead = 0;
     constructor() {
       super();
       this._events = new EventHub(this);
@@ -12047,7 +12052,14 @@ ${changes}`;
       for (const page of this.#byTab.values())
         page._settleWorkerFacts(at);
     }
-    _applyReply({ pages, defaultPage, pickedPage, observed }) {
+    _applyReply({
+      pages,
+      defaultPage,
+      pickedPage,
+      observed,
+      framesHead
+    }) {
+      this._framesHead = Math.max(this._framesHead, framesHead);
       const page = this.#unopened;
       const held = pickedPage ? this.#byTab.get(pickedPage.tab) : undefined;
       const bind = defaultPage ?? (held && this.#handed.has(held) ? null : pickedPage);

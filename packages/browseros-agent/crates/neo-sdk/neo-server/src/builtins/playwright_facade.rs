@@ -242,4 +242,8 @@ impl EventLog for PlaywrightFacade {
             .get()
             .and_then(|pw| pw.frames_changed_target(target))
     }
+
+    fn frames_head(&self) -> u64 {
+        self.playwright.get().map_or(0, |pw| pw.frames_head())
+    }
 }

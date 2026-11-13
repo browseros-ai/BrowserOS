@@ -162,6 +162,8 @@ export class Page extends EventEmitter {
   _framesChanged = 0
   /** The version the cached tree was read at; the tree is stale once `_framesChanged` passes it. */
   #framesReadAt = 0
+  /** The context's frame-change head when the cached tree was read (`_framesStale`). */
+  #framesHeadAt = 0
   /** Whether the last read answered a partial tree: an out-of-process frame could not be read. */
   #framesIncomplete = false
   /** When a settle step last read this tab, which bounds a page whose frames keep changing. */
@@ -1266,7 +1268,8 @@ export class Page extends EventEmitter {
    */
   async _refreshFrames(api: string, timeoutMs = 0): Promise<boolean> {
     const site = INTERNAL_SITE
-    // Taken before the read: a change the read races is newer than this, so it reads again.
+    // Taken before the read: a change of this tab's frames that the read races is newer than
+    // this, and the read's own reply carries the tab's facts, so it reads again.
     const version = this._framesChanged
     const { value: tree, observed } = await invokeObserved(
       'page.frames',
@@ -1281,6 +1284,9 @@ export class Page extends EventEmitter {
     if (this.#payloadCurrent(observed) && Array.isArray(tree?.frames)) {
       this._applyFrames(tree.frames, observed)
       this.#framesReadAt = version
+      // The head as the read's reply left it: this tab's own changes are tracked by its version
+      // above, so the head only has to catch other tabs' changes after this.
+      this.#framesHeadAt = this._context._framesHead
       this.#framesIncomplete = tree.incomplete === true
       return !this.#framesIncomplete
     }
@@ -1307,8 +1313,15 @@ export class Page extends EventEmitter {
   _framesStale(now: number, minGapMs: number): boolean {
     if (this._tab === null || this._closed || this._navigationsInFlight > 0)
       return false
-    if (!this.#framesIncomplete && this._framesChanged <= this.#framesReadAt)
-      return false
+    // A tab's own version comes only with its facts, which a reply carries for the tabs its op
+    // touched; the head comes with every reply. When only the head moved, the pages the script
+    // uses (acted on, or read the frames of) are read again: one of them may be the tab whose
+    // frames changed, and a page the script never looks into can wait for its next read.
+    const changed =
+      this._framesChanged > this.#framesReadAt ||
+      ((this._working || this._framesWatched) &&
+        this._context._framesHead > this.#framesHeadAt)
+    if (!this.#framesIncomplete && !changed) return false
     if (now - this.#settledAt < minGapMs) return false
     this.#settledAt = now
     return true

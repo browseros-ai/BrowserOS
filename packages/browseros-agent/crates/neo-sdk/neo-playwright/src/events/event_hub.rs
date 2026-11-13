@@ -263,6 +263,11 @@ impl EventHub {
         self.lock_log().frames.get(target).copied()
     }
 
+    /// The newest frame-tree version of any tab: it moves whenever any tab's frames change.
+    pub(crate) fn frames_head(&self) -> u64 {
+        self.lock_log().last_frames
+    }
+
     /// The type of a dialog recorded on `target` after seq `after` that is still open, if
     /// any. An action whose input such a dialog blocks names it when it times out: Chromium
     /// acknowledges no input and answers no page call until the dialog closes (measured).

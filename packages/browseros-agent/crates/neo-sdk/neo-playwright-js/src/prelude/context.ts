@@ -70,6 +70,11 @@ export class BrowserContext extends EventEmitter {
   readonly #handed = new WeakSet<Page>()
   /** Set once the run's page exists: a page first seen after it is working (`Page._working`). */
   #started = false
+  /**
+   * The newest frame-change head a reply gave (`Envelope.framesHead`): it moves when any tab's
+   * frames change, including a tab whose facts no reply carried (`Page._framesStale`).
+   */
+  _framesHead = 0
 
   constructor() {
     super()
@@ -344,7 +349,14 @@ export class BrowserContext extends EventEmitter {
    * script; otherwise `page` stays unopened until its first action, whose `defaultPage` names
    * the same tab, so the object the script holds keeps working until the script uses `page`.
    */
-  _applyReply({ pages, defaultPage, pickedPage, observed }: Reply): void {
+  _applyReply({
+    pages,
+    defaultPage,
+    pickedPage,
+    observed,
+    framesHead,
+  }: Reply): void {
+    this._framesHead = Math.max(this._framesHead, framesHead)
     const page = this.#unopened
     const held = pickedPage ? this.#byTab.get(pickedPage.tab) : undefined
     const bind =

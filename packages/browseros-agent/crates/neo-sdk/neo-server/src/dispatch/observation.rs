@@ -68,6 +68,10 @@ pub(crate) trait EventLog: Send + Sync {
     fn frames_changed(&self, _target: &TargetId) -> Option<u64> {
         None
     }
+    /// The newest frame-tree version of any tab; 0 before any change.
+    fn frames_head(&self) -> u64 {
+        0
+    }
 }
 
 /// A worker identity in the host protocol, independent of the browser adapter. The prelude's
@@ -179,6 +183,11 @@ impl Observer {
     /// `target`'s frame-tree version (`PageFact::frames_changed`).
     pub(crate) fn frames_changed(&self, target: &TargetId) -> Option<u64> {
         self.log.frames_changed(target)
+    }
+
+    /// The newest frame-tree version of any tab (`Envelope::Ok` `frames_head`).
+    pub(crate) fn frames_head(&self) -> u64 {
+        self.log.frames_head()
     }
 
     /// Groups all delivered closes by tab. Multiple target-bound subscriptions can coexist

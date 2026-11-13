@@ -561,6 +561,45 @@ it("tests that a page first seen mid-run has its whole tree by the script's next
   expect(names).toEqual(['', 'same', 'cross'])
 })
 
+// A reply carries the facts of the tabs its op touched, so an op on the script's own page says
+// nothing of another task's tab. Every reply carries the browser's frame-change head instead.
+it("tests that a frame added to a tab the script reads shows after an operation on another page, from the reply's head", async () => {
+  let reads = 0
+  const added = {
+    frames: [
+      ...TREE.frames,
+      { id: 'late', parentId: 'main', name: 'late', url: 'https://c.example/' },
+    ],
+  }
+  const runtime = loadPrelude({
+    seed: OBSERVER,
+    answer: (call) => {
+      if (call.name === 'page.frames')
+        return tabOf(call) === 1009 && reads++ > 0 ? added : TREE
+      return { ok: 'Agent', framesHead: 5 }
+    },
+  })
+  const outcome = json(
+    await runtime.run(`
+      const p = ${OTHER}
+      const before = p.frames().length
+      await page.title()
+      return [before, p.frames().length]
+    `),
+  )
+  expect(outcome).toEqual([3, 4])
+})
+
+it('tests that a moved head reads no page the script neither acted on nor read the frames of', async () => {
+  const runtime = loadPrelude({
+    seed: OBSERVER,
+    answer: (call) =>
+      call.name === 'page.frames' ? TREE : { ok: 'Agent', framesHead: 9 },
+  })
+  await runtime.run('await page.title()')
+  expect(reads(runtime.calls).filter(([tab]) => tab === 1009)).toEqual([])
+})
+
 it('tests that a frame missing from the tree a wait reads is detached', async () => {
   const removed = { frames: TREE.frames.filter((frame) => frame.id !== 'same') }
   let read = 0

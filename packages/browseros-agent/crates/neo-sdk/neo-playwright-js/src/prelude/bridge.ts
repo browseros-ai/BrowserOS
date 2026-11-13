@@ -82,6 +82,8 @@ export type Reply = {
   pages: PageFact[]
   defaultPage: Wire.DefaultPage | null
   pickedPage: Wire.DefaultPage | null
+  /** The browser's frame-change head (`Envelope.framesHead`); 0 when absent. */
+  framesHead: number
 }
 
 /** Keep the header's recorded byte position while stamping policy after all arguments. */
@@ -272,6 +274,8 @@ export function onReply(listener: (reply: Reply) => void): void {
       pages: readPageFacts(field<Wire.Envelope>(envelope, 'pages')),
       defaultPage: readTab(field<Wire.Envelope>(envelope, 'defaultPage')),
       pickedPage: readTab(field<Wire.Envelope>(envelope, 'pickedPage')),
+      framesHead:
+        Number(field<Wire.Envelope>(envelope, 'framesHead') ?? 0) || 0,
     })
   })
 }

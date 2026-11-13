@@ -41,7 +41,7 @@ pub fn envelope_examples() -> Result<Vec<EnvelopeExample>, IdError> {
         example("reply.ok", reply_ok()),
         example(
             "reply.okBare",
-            runtime::envelope(&bare(Ok(Value::Null)), &[]),
+            runtime::envelope(&bare(Ok(Value::Null)), &[], 0),
         ),
         example("reply.err", reply_err(operation)),
         example("reply.errBare", reply_err_bare(operation)),
@@ -75,7 +75,7 @@ fn reply_ok() -> String {
         pumped: 2,
         ..bare(Ok(json!("Facts")))
     };
-    runtime::envelope(&reply, &[7])
+    runtime::envelope(&reply, &[7], 0)
 }
 
 /// A failed `expect` carrying every optional field the envelope has, its matcher's facts
@@ -105,7 +105,7 @@ fn reply_err(operation: OperationId) -> String {
             operation,
         }))
     };
-    runtime::envelope(&reply, &[8, 9])
+    runtime::envelope(&reply, &[8, 9], 0)
 }
 
 /// A refused write: no facts, no observation, nothing sent.
@@ -120,7 +120,7 @@ fn reply_err_bare(operation: OperationId) -> String {
         retryable: false,
         operation,
     }));
-    runtime::envelope(&reply, &[])
+    runtime::envelope(&reply, &[], 0)
 }
 
 fn bare(outcome: Result<Value, OpFailure>) -> OpReply {
