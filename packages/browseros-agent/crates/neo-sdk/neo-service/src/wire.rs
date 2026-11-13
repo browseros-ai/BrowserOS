@@ -588,7 +588,7 @@ pub(crate) fn settings_object(
         let mut parts = name.split('.').peekable();
         while let Some(part) = parts.next() {
             if parts.peek().is_none() {
-                level.insert(part.to_owned(), Setting::json(value));
+                level.insert(part.to_owned(), Setting::json(&value));
             } else {
                 let next = level
                     .entry(part)
@@ -621,7 +621,7 @@ pub(crate) fn settings_state(
     let defaults = settings_object(
         SETTINGS
             .iter()
-            .map(|setting| (setting.name, setting.default_value())),
+            .map(|setting| (setting.name, settings.default_value(setting))),
     );
     // A row the contract's `Settings` schema lacks would be dropped here; a test keeps the
     // table and the schema equal.

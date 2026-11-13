@@ -23,8 +23,8 @@ use std::sync::{Arc, LazyLock};
 use browseros_core::{BrowserView, CoreError, TabId, TargetId};
 use futures_util::future::BoxFuture;
 use neo_playwright::{
-    Answer, ErrorCode as PlaywrightCode, Op, OpEnv, OpTarget, PlaywrightError, Refusal, RunState,
-    TimedOut,
+    Answer, ErrorCode as PlaywrightCode, FileAccess, Op, OpEnv, OpTarget, PlaywrightError, Refusal,
+    RunState, TimedOut,
 };
 use neo_trace::ErrorOwner;
 use serde::{Deserialize, Deserializer};
@@ -113,10 +113,11 @@ const PLAYWRIGHT_API: &str = "Playwright's API on `page`, `context` and `browser
     `goBack` and `goForward` a `file:` history entry, and every call on a tab that shows a \
     `file:` page (one the owner opened) is refused, with nothing sent; a call whose tab moves \
     onto one while it runs gets no answer from it. Write a local page with `page.setContent` \
-    instead. `setInputFiles` uploads any \
-    file Neo's process can read, as Playwright does \
-    (a relative path resolves against Neo's working directory): the caller sandboxes the \
-    filesystem. `{ name, mimeType, buffer }` payloads need no file and total under 10 MiB a \
+    instead. Path reads (`setInputFiles`, `drop`, script/style tags and init scripts) must \
+    be inside the host's `files.readDirs`, the downloads folder by default. Neo's own files \
+    are always protected from reads and writes. Use `download.path()` for downloaded files \
+    or ask the host to allow a staging folder. A relative path uses Neo's working directory. \
+    `{ name, mimeType, buffer }` payloads need no allowed folder and total under 10 MiB a \
     call. A directory upload needs its tab in front, and the tabs Neo opens for an agent stay \
     in the background (`bringToFront` is refused). An init script or a binding stays \
     registered until the run ends, then its tab no longer has it; a context's reaches each tab \
@@ -244,6 +245,7 @@ impl Method for PlaywrightOp {
             op,
             self.facade.hosted_mode(),
             Arc::clone(self.facade.front()),
+            Arc::clone(self.facade.file_access()),
         );
         let result = op
             .race_classified(playwright.invoke(&env, self.op, input))
@@ -669,17 +671,24 @@ pub(super) struct OpCtxEnv<'a, M> {
     op: &'a OpCtx<M>,
     hosted: bool,
     front: Arc<AgentFront>,
+    file_access: Arc<FileAccess>,
     /// The run's one `RunState`, shared by all of its ops and dropped when the run ends.
     run_state: Arc<RunState>,
 }
 
 impl<'a, M> OpCtxEnv<'a, M> {
     /// The env for the op that `op` runs.
-    pub(super) fn new(op: &'a OpCtx<M>, hosted: bool, front: Arc<AgentFront>) -> Self {
+    pub(super) fn new(
+        op: &'a OpCtx<M>,
+        hosted: bool,
+        front: Arc<AgentFront>,
+        file_access: Arc<FileAccess>,
+    ) -> Self {
         Self {
             op,
             hosted,
             front,
+            file_access,
             run_state: op.run().slot::<RunState>(),
         }
     }
@@ -688,6 +697,10 @@ impl<'a, M> OpCtxEnv<'a, M> {
 impl<M> OpEnv for OpCtxEnv<'_, M> {
     fn hosted_mode(&self) -> bool {
         self.hosted
+    }
+
+    fn file_access(&self) -> Option<&FileAccess> {
+        Some(&self.file_access)
     }
 
     fn view(&self) -> &BrowserView {

@@ -12,8 +12,10 @@ use browseros_core::{NativeCapabilities, TabId, TargetId};
 use futures_util::future::{self, Either};
 use neo_captcha::CaptchaSolver;
 use neo_captcha::config::{CAPSOLVER_KEY_FILE_ENV, CAPSOLVER_URL_ENV, CaptchaConfig};
-use neo_playwright::{ErrorCode as PlaywrightCode, Op, OpEnv, PlaywrightError, Refusal, RunState};
-use neo_service::Settings;
+use neo_playwright::{
+    ErrorCode as PlaywrightCode, FileAccess, Op, OpEnv, PlaywrightError, Refusal, RunState,
+};
+use neo_service::{Settings, SettingsDefaults};
 use neo_takeover::{Lock, LockBinding, LockTtl, Locks, Reads, TabHold};
 use neo_trace::{
     Delivery, Effect, ErrorOwner, OperationId, OperationRow, Outcome, RedactionLimits, Redactor,
@@ -126,7 +128,13 @@ impl Harness {
             }
         });
         let claims = Arc::new(CaptchaClaims::default());
-        let playwright = PlaywrightFacade::start(Arc::clone(&link), hosted, Arc::default());
+        let settings = Settings::defaults(SettingsDefaults {
+            read_dirs: vec!["/".into()],
+        });
+        let live = settings.clone();
+        let file_access = Arc::new(FileAccess::new(move || live.read_dirs(), Vec::new()));
+        let playwright =
+            PlaywrightFacade::start(Arc::clone(&link), hosted, Arc::default(), file_access);
         let mut registry = RegistryBuilder::default();
         let deps = BuiltinDeps {
             solver,
@@ -152,7 +160,7 @@ impl Harness {
             takeover,
             holds,
             fits,
-            settings: Settings::defaults(),
+            settings,
             playwright,
             dispatcher,
             _dir: dir,
@@ -1775,7 +1783,12 @@ impl Method for EnvProbe {
         op: &OpCtx<Self>,
         input: EnvProbeInput,
     ) -> impl Future<Output = Result<Value, LeafError>> + Send {
-        let env = OpCtxEnv::new(op, false, Arc::default());
+        let env = OpCtxEnv::new(
+            op,
+            false,
+            Arc::default(),
+            Arc::new(FileAccess::new(|| vec!["/".into()], Vec::new())),
+        );
         let shares_the_runs_state = Arc::ptr_eq(env.run_state(), &op.run().slot::<RunState>());
         future::ready(match env.recheck() {
             Ok(()) => {
@@ -2847,7 +2860,12 @@ impl Method for InFlightClose {
                 "missing event operation",
             ))
         })?;
-        let env = OpCtxEnv::new(op, false, Arc::default());
+        let env = OpCtxEnv::new(
+            op,
+            false,
+            Arc::default(),
+            Arc::new(FileAccess::new(|| vec!["/".into()], Vec::new())),
+        );
         let value = self
             .playwright
             .get()
@@ -3145,7 +3163,12 @@ impl Method for InFlightPayload {
                 "missing payload operation",
             ))
         })?;
-        let env = OpCtxEnv::new(op, false, Arc::default());
+        let env = OpCtxEnv::new(
+            op,
+            false,
+            Arc::default(),
+            Arc::new(FileAccess::new(|| vec!["/".into()], Vec::new())),
+        );
         let result = self
             .playwright
             .get()

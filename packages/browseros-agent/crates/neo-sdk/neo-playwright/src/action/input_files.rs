@@ -6,8 +6,8 @@
 //! ```text
 //!  require(HostFiles)   an op that does not declare it: neo / internal, nothing admitted
 //!  prelude   files.ts: paths mixed with payloads, 50 MiB, payload fields, MIME, base64 text
-//!  classify  each path in order: resolve it as Node's `path.resolve` does and stat the
-//!            path as given. Stat errors use Node's text with no API prefix.
+//!  classify  authorize the original and Node-normalized paths against live host policy;
+//!            stat the path as given. IO errors retain Node's text with no API prefix.
 //!            ─▶ Paths(absolute) │ Directory(absolute) │ Payloads
 //!  admit the page, lease its focus
 //!  outer loop (locator: re-resolve │ handle: once)
@@ -29,6 +29,7 @@
 //! cases, and for `[]`, are MCP's, not Playwright's.
 
 use std::fmt::Write as _;
+use std::path::Path;
 use std::time::Duration;
 use std::{env, io, slice};
 
@@ -90,10 +91,12 @@ pub(crate) struct DropPath {
 
 /// Reads drop paths on Neo's host after the same client classification as uploads.
 /// Directories are refused before page work; files retain their MIME type and mtime.
-pub(crate) async fn drop_payloads(files: DropFiles) -> Result<Vec<FilePayload>, PlaywrightError> {
+pub(crate) async fn drop_payloads(
+    scope: &OpScope<'_>,
+    files: DropFiles,
+) -> Result<Vec<FilePayload>, PlaywrightError> {
     use base64::Engine as _;
     use base64::engine::general_purpose::STANDARD;
-    use std::path::Path;
     use std::time::UNIX_EPOCH;
 
     let paths = match files {
@@ -105,7 +108,7 @@ pub(crate) async fn drop_payloads(files: DropFiles) -> Result<Vec<FilePayload>, 
         .map(|path| (path.path, path.mime_type))
         .unzip();
     let files = FilesInput::Paths(paths);
-    match InputFiles::classify(files).await? {
+    match InputFiles::classify(scope, files).await? {
         InputFiles::Payloads(payloads) => Ok(payloads),
         InputFiles::Directory(_) => Err(client_error(
             "Dropping a directory is not supported — pass individual files.".to_owned(),
@@ -113,6 +116,7 @@ pub(crate) async fn drop_payloads(files: DropFiles) -> Result<Vec<FilePayload>, 
         InputFiles::Paths(paths) => {
             let mut payloads = Vec::with_capacity(paths.len());
             for (HostPath(path), mime_type) in paths.into_iter().zip(mime_types) {
+                scope.read_path(Path::new(&path)).await?;
                 let bytes = fs::read(&path)
                     .await
                     .map_err(|error| client_error(node_error(&error, "open", &path)))?;
@@ -219,7 +223,7 @@ pub(crate) async fn set_input_files(
         strict,
         files,
     } = input;
-    let files = InputFiles::classify(files).await?;
+    let files = InputFiles::classify(scope, files).await?;
     let page = OpPage::admit_handle(pw, scope, target.page()).await?;
     let _lease = focus_lease::lease(scope, &page).await?;
     let subject = Subject::new(&page, scope, &target, strict);
@@ -256,6 +260,9 @@ pub(crate) async fn set_input_files(
         let Some(ready) = ready? else {
             continue;
         };
+        // Locator waits may outlive a host settings change. Check the exact Chromium paths
+        // again after those waits, immediately before marking the upload delivered.
+        files.authorize(scope).await?;
         let sent = scope.send_effect()?;
         match ready
             .set(&sent, scope, &subject, &located, input.pin)
@@ -276,8 +283,9 @@ impl InputFiles {
     /// Upstream's client `resolvePathsAndDirectoryForInputFiles` on Neo's disk: each path
     /// stat'ed as given, in order (relative to Neo's working directory, as the OS resolves
     /// it); a second directory fails at once; files and a directory fail after the loop. Its
-    /// errors are the client's, thrown before any channel call: unprefixed, nothing admitted.
-    async fn classify(files: FilesInput) -> Result<Self, PlaywrightError> {
+    /// IO errors are the client's, unprefixed and before any channel call. Host path-policy
+    /// refusals use the scope's API-prefixed `invalid_input` message; nothing is admitted.
+    async fn classify(scope: &OpScope<'_>, files: FilesInput) -> Result<Self, PlaywrightError> {
         let paths = match files {
             FilesInput::Payloads(payloads) => return Ok(Self::Payloads(payloads)),
             FilesInput::Paths(paths) => paths,
@@ -286,6 +294,7 @@ impl InputFiles {
         let mut found = Vec::new();
         let mut directory = None;
         for path in paths {
+            refuse_nul(&path)?;
             // Node's `path.resolve` reads the working directory only for a relative path.
             let resolved = if path.starts_with('/') {
                 resolve_like_node("/", &path)
@@ -296,6 +305,10 @@ impl InputFiles {
                 };
                 resolve_like_node(cwd, &path)
             };
+            // Stat follows OS symlinks before `..`, while Node normalizes the native path
+            // lexically. Both spellings must be authorized before either reaches disk/CDP.
+            scope.read_path(Path::new(&path)).await?;
+            scope.read_path(Path::new(&resolved)).await?;
             let is_dir = client_stat(&path).await?;
             if !is_dir {
                 found.push(HostPath(resolved));
@@ -314,6 +327,18 @@ impl InputFiles {
             Some(directory) => Ok(Self::Directory(directory)),
             None => Ok(Self::Paths(found)),
         }
+    }
+
+    async fn authorize(&self, scope: &OpScope<'_>) -> Result<(), PlaywrightError> {
+        let paths = match self {
+            Self::Payloads(_) => return Ok(()),
+            Self::Paths(paths) => paths.as_slice(),
+            Self::Directory(directory) => slice::from_ref(directory),
+        };
+        for HostPath(path) in paths {
+            scope.read_path(Path::new(path)).await?;
+        }
+        Ok(())
     }
 
     /// The read upstream's checks run in: whether several files go in (a directory counts as
@@ -350,6 +375,7 @@ impl InputFiles {
             Self::Paths(paths) => (paths.as_slice(), false),
             Self::Directory(directory) => (slice::from_ref(directory), true),
         };
+        self.authorize(scope).await?;
         if let Some(gone) = recheck(paths).await {
             subject.retry_unless_handle(|| scope.fail(ErrorCode::InvalidInput, &gone))?;
             return Ok(None);
@@ -577,9 +603,15 @@ async fn client_stat(path: &str) -> Result<bool, PlaywrightError> {
 /// resolves against Neo's working directory as it does Node's (no lexical normalization, so
 /// `a.txt/../b.js` fails `ENOTDIR` as it does there), and then `addSourceUrlToScript`'s
 /// `//# sourceURL=` line naming that path. A file that is not UTF-8 reads with replacement
-/// characters, as Node's decoder does. A failure is Node's error, unprefixed, with nothing sent.
-pub(crate) async fn read_script_file(path: &str) -> Result<String, PlaywrightError> {
+/// characters, as Node's decoder does. After host path authorization, an IO failure retains
+/// Node's unprefixed error. A policy refusal uses the scope's `invalid_input` message; neither
+/// failure sends anything.
+pub(crate) async fn read_script_file(
+    scope: &OpScope<'_>,
+    path: &str,
+) -> Result<String, PlaywrightError> {
     refuse_nul(path)?;
+    scope.read_path(Path::new(path)).await?;
     match fs::read(path).await {
         Ok(bytes) => Ok(format!(
             "{}\n//# sourceURL={}",

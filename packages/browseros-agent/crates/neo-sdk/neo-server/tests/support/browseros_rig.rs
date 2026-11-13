@@ -223,6 +223,8 @@ impl Rig {
             .env_clear()
             .env("HOME", dir.path().join("home"))
             .env("BROWSERCLAW_DIR", dir.path().join("state"))
+            .env("CLAW_PROFILE_DIR", &profile)
+            .env("CLAW_DOWNLOADS_DIR", dir.path().join("downloads"))
             .env("BROWSERCLAW_HOSTED_MODE", "1")
             .env("CLAW_HOST_TOKEN_FILE", &token_file)
             .env("CLAW_HOST_SOCKET", dir.path().join("host.sock"))

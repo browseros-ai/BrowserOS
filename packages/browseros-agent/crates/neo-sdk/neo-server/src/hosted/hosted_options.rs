@@ -11,7 +11,10 @@ use crate::config::{AppConfig, EnvConfig, LaunchConfig};
 pub struct HostedOptions {
     /// Required state root; the trace is stored in `claw-sdk/trace.db` underneath it.
     pub state_dir: PathBuf,
-    /// Legacy browser launch fact, accepted for compatibility; no upload policy uses it.
+    /// Optional absolute folders for path reads. Omission uses the browser's downloads folder;
+    /// an empty list denies path reads. Neo's own files remain protected with any list.
+    pub read_dirs: Option<Vec<PathBuf>>,
+    /// Browser launch fact, used to discover a .browseros profile when `CLAW_PROFILE_DIR` is unset.
     pub execution_dir: Option<PathBuf>,
     /// The installed browser's version, as `instance.browseros_version` names it.
     pub browseros_version: Option<String>,

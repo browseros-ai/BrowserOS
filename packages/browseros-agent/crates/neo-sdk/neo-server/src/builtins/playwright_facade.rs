@@ -5,7 +5,7 @@ use std::sync::Arc;
 use browseros_core::TargetId;
 
 use futures_util::future::BoxFuture;
-use neo_playwright::{EventFence, Playwright};
+use neo_playwright::{EventFence, FileAccess, Playwright};
 use tokio::sync::OnceCell;
 
 use crate::browser::BrowserLink;
@@ -27,16 +27,24 @@ pub(crate) struct PlaywrightFacade {
     hosted: bool,
     /// Brings an agent tab forward before its input or capture (`OpEnv::bring_forward`).
     front: Arc<AgentFront>,
+    /// Required by the SDK constructor so neither startup mode can omit filesystem policy.
+    file_access: Arc<FileAccess>,
     playwright: OnceCell<Arc<Playwright>>,
 }
 
 impl PlaywrightFacade {
     /// The facade over `link`'s session, built in the background on its first connect.
-    pub(crate) fn start(link: Arc<BrowserLink>, hosted: bool, front: Arc<AgentFront>) -> Arc<Self> {
+    pub(crate) fn start(
+        link: Arc<BrowserLink>,
+        hosted: bool,
+        front: Arc<AgentFront>,
+        file_access: Arc<FileAccess>,
+    ) -> Arc<Self> {
         let facade = Arc::new(Self {
             link,
             hosted,
             front,
+            file_access,
             playwright: OnceCell::new(),
         });
         // Waits for a first connect that may never come; nothing waits on this task.
@@ -55,6 +63,11 @@ impl PlaywrightFacade {
     /// What brings an op's tab forward before its input or capture.
     pub(crate) fn front(&self) -> &Arc<AgentFront> {
         &self.front
+    }
+
+    /// The shared file policy every operation must carry to the library's IO gateways.
+    pub(crate) fn file_access(&self) -> &Arc<FileAccess> {
+        &self.file_access
     }
 
     /// The facade, built here if the background start has not finished. An op runs only

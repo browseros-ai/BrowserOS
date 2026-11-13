@@ -1,5 +1,9 @@
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::{env, io};
+
+use neo_playwright::{FileAccess, ProtectedPath};
+use neo_service::{Settings, SettingsDefaults};
 
 use neo_captcha::config::CaptchaConfig;
 
@@ -62,6 +66,58 @@ impl AppConfig {
         })
     }
 
+    /// The application owns filesystem layout; settings stores only the host's overrides.
+    pub(crate) fn settings_defaults(&self) -> SettingsDefaults {
+        if self.env.downloads_dir.is_none() {
+            tracing::warn!(
+                "downloads directory could not be discovered; files.readDirs defaults to an empty list"
+            );
+        }
+        SettingsDefaults {
+            read_dirs: self.env.downloads_dir.iter().cloned().collect(),
+        }
+    }
+
+    /// Connects live settings to the library's path policy once for either startup mode.
+    /// Protected paths stay configured even before their files or directories exist.
+    pub(crate) fn file_access(&self, settings: Settings) -> Arc<FileAccess> {
+        let mut own = vec![ProtectedPath::Directory(self.env.state_dir.clone())];
+        let profile = self.env.profile_dir.as_deref().or_else(|| {
+            self.launch
+                .execution_dir
+                .as_deref()
+                .filter(|execution| {
+                    execution
+                        .file_name()
+                        .is_some_and(|name| name == ".browseros")
+                })
+                .and_then(Path::parent)
+        });
+        if let Some(profile) = profile {
+            own.push(ProtectedPath::Directory(profile.to_owned()));
+        } else {
+            tracing::warn!(
+                "browser profile is not protected: set CLAW_PROFILE_DIR when the launch execution directory does not identify .browseros"
+            );
+        }
+        own.extend(
+            self.env
+                .host_api
+                .token_file
+                .iter()
+                .cloned()
+                .map(ProtectedPath::File),
+        );
+        own.extend(
+            self.env
+                .captcha_key_files
+                .iter()
+                .cloned()
+                .map(ProtectedPath::File),
+        );
+        Arc::new(FileAccess::new(move || settings.read_dirs(), own))
+    }
+
     /// The native browser's version for core's capability gates: the developer's
     /// `CLAW_NATIVE_BROWSEROS_VERSION` when set, else what Chromium wrote in the launch file.
     #[must_use]
@@ -75,6 +131,7 @@ impl AppConfig {
 
 #[cfg(test)]
 mod tests {
+    use std::error::Error;
     use std::path::PathBuf;
 
     use neo_captcha::config::CaptchaConfig;
@@ -94,6 +151,9 @@ mod tests {
             },
             env: EnvConfig {
                 state_dir: PathBuf::from("/state"),
+                downloads_dir: Some(PathBuf::from("/downloads")),
+                profile_dir: None,
+                captcha_key_files: Vec::new(),
                 log_filter: "info".to_owned(),
                 hosted_mode: HostedMode::On,
                 native_version: env_version.map(str::to_owned),
@@ -123,5 +183,52 @@ mod tests {
             "otherwise the browser's own report"
         );
         assert_eq!(config(None, None).browseros_version(), None, "unknown");
+    }
+    #[tokio::test]
+    async fn file_policy_uses_the_launch_profile_and_retains_missing_protected_files()
+    -> Result<(), Box<dyn Error>> {
+        use neo_playwright::FileAccessError;
+        use neo_service::{Settings, SettingsDefaults};
+
+        let dir = tempfile::tempdir()?;
+        let mut config = config(None, None);
+        let profile = dir.path().join("profile");
+        config.launch.execution_dir = Some(profile.join(".browseros"));
+        config.env.host_api.token_file = Some(dir.path().join("missing-token"));
+        config.env.captcha_key_files = vec![
+            dir.path().join("missing-key-one"),
+            dir.path().join("missing-key-two"),
+        ];
+        let settings = Settings::defaults(SettingsDefaults::new(vec!["/".into()])?);
+        let policy = config.file_access(settings.clone());
+        for path in [
+            profile.join("Local State"),
+            dir.path().join("missing-token"),
+            dir.path().join("missing-key-one"),
+            dir.path().join("missing-key-two"),
+        ] {
+            assert_eq!(
+                policy.read(&path).await.err(),
+                Some(FileAccessError::OwnFiles)
+            );
+            assert_eq!(
+                policy.write(&path).await.err(),
+                Some(FileAccessError::OwnFiles)
+            );
+        }
+        config.env.profile_dir = Some(dir.path().join("override"));
+        let policy = config.file_access(settings);
+        assert!(
+            policy.write(&profile.join("ordinary")).await.is_ok(),
+            "explicit profile wins over launch discovery"
+        );
+        assert_eq!(
+            policy
+                .write(&dir.path().join("override/Local State"))
+                .await
+                .err(),
+            Some(FileAccessError::OwnFiles)
+        );
+        Ok(())
     }
 }

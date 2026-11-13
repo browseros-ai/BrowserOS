@@ -20,8 +20,8 @@ pub(crate) struct LaunchConfig {
     /// `directories.resources`, resolved against the launch file's directory.
     pub(crate) resources_dir: PathBuf,
     /// `directories.execution`, resolved against the launch file's directory as `resources` is:
-    /// A legacy launch fact, retained for compatibility. `None` when missing or empty;
-    /// no upload policy depends on it.
+    /// When named .browseros, its parent is the protected profile if `CLAW_PROFILE_DIR` is unset.
+    /// `None` when missing or empty.
     pub(crate) execution_dir: Option<PathBuf>,
     /// `instance.browseros_version`: the native browser's own version, which gates core's
     /// native capabilities. `None` when missing, blank or not a string, because an unknown

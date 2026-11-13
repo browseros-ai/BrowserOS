@@ -20,6 +20,7 @@ fn defaults() -> Value {
     json!({
         "tabs": { "idleCloseSeconds": 1800 },
         "trace": { "retentionSeconds": 604_800, "screenshots": "perOperation", "valueBytes": 0 },
+        "files": { "readDirs": [] },
     })
 }
 
@@ -74,6 +75,7 @@ async fn put_replaces_everything_and_patch_changes_only_what_it_names() -> TestR
     let set = json!({
         "tabs": { "idleCloseSeconds": 300 },
         "trace": { "retentionSeconds": 86_400, "screenshots": "perOperation", "valueBytes": 0 },
+        "files": { "readDirs": [] },
     });
     assert_eq!(put.status, StatusCode::OK, "{}", put.body);
     assert_eq!(put.body["settings"], set);
@@ -95,6 +97,7 @@ async fn put_replaces_everything_and_patch_changes_only_what_it_names() -> TestR
         json!({
             "tabs": { "idleCloseSeconds": 600 },
             "trace": { "retentionSeconds": 86_400, "screenshots": "perOperation", "valueBytes": 0 },
+            "files": { "readDirs": [] },
         }),
         "PATCH keeps what it does not name"
     );
@@ -121,14 +124,14 @@ async fn an_unknown_name_is_skipped_listed_and_never_stops_the_known_ones() -> T
     let reply = harness
         .put(
             r#"{"tabs":{"idleCloseSeconds":300,"idleCloseMinutes":5},
-                "files":{"readDirs":["/data"]},
+                "futureFiles":{"readDirs":["/data"]},
                 "trace":{"retentionSeconds":7200}}"#,
         )
         .await?;
     assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
     assert_eq!(
         reply.body["unknown"],
-        json!(["files", "tabs.idleCloseMinutes"]),
+        json!(["futureFiles", "tabs.idleCloseMinutes"]),
         "each skipped name, at the level where it stops being a setting"
     );
     assert_eq!(
@@ -136,6 +139,7 @@ async fn an_unknown_name_is_skipped_listed_and_never_stops_the_known_ones() -> T
         json!({
             "tabs": { "idleCloseSeconds": 300 },
             "trace": { "retentionSeconds": 7200, "screenshots": "perOperation", "valueBytes": 0 },
+            "files": { "readDirs": [] },
         }),
         "the known settings in the same call still apply"
     );
@@ -306,7 +310,7 @@ async fn the_saved_values_come_back_in_a_store_opened_again() -> TestResult {
     let mode = std::fs::metadata(&file)?.permissions().mode() & 0o777;
     assert_eq!(mode, 0o600, "the host's file, readable by Neo's uid alone");
 
-    let again = Settings::load(file).await;
+    let again = Settings::load(file, Default::default()).await;
     assert_eq!(again.tab_idle_close(), Duration::from_secs(300));
     assert_eq!(again.trace_retention(), Duration::from_secs(3600));
     Ok(())
@@ -349,7 +353,7 @@ async fn a_saved_file_loads_key_by_key_and_never_stops_a_start() -> TestResult {
     let dir = tempfile::tempdir()?;
     let file = dir.path().join("settings.json");
 
-    let missing = Settings::load(file.clone()).await;
+    let missing = Settings::load(file.clone(), Default::default()).await;
     assert_eq!(
         missing.tab_idle_close(),
         Duration::from_mins(30),
@@ -357,7 +361,7 @@ async fn a_saved_file_loads_key_by_key_and_never_stops_a_start() -> TestResult {
     );
 
     std::fs::write(&file, "{ this is not json")?;
-    let corrupt = Settings::load(file.clone()).await;
+    let corrupt = Settings::load(file.clone(), Default::default()).await;
     assert_eq!(
         corrupt.trace_retention(),
         Duration::from_hours(168),
@@ -365,15 +369,15 @@ async fn a_saved_file_loads_key_by_key_and_never_stops_a_start() -> TestResult {
     );
 
     std::fs::write(&file, "[1, 2]")?;
-    let not_an_object = Settings::load(file.clone()).await;
+    let not_an_object = Settings::load(file.clone(), Default::default()).await;
     assert_eq!(not_an_object.tab_idle_close(), Duration::from_mins(30));
 
     // A newer build's setting, a value this build refuses, and one good value.
     std::fs::write(
         &file,
-        r#"{"tabs":{"idleCloseSeconds":5,"idleCloseMinutes":5},"trace":{"retentionSeconds":7200,"screenshots":"blurred"},"files":{}}"#,
+        r#"{"tabs":{"idleCloseSeconds":5,"idleCloseMinutes":5},"trace":{"retentionSeconds":7200,"screenshots":"blurred"},"futureFiles":{}}"#,
     )?;
-    let mixed = Settings::load(file.clone()).await;
+    let mixed = Settings::load(file.clone(), Default::default()).await;
     assert_eq!(
         mixed.tab_idle_close(),
         Duration::from_mins(30),
@@ -387,7 +391,7 @@ async fn a_saved_file_loads_key_by_key_and_never_stops_a_start() -> TestResult {
     );
 
     std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o000))?;
-    let unreadable = Settings::load(file.clone()).await;
+    let unreadable = Settings::load(file.clone(), Default::default()).await;
     std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o600))?;
     // Root reads any file; then the good value applies, which is also no failure.
     assert!(
@@ -526,5 +530,47 @@ async fn a_request_from_a_web_page_is_refused_whatever_its_token() -> TestResult
         defaults(),
         "nothing applied"
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn read_dirs_round_trip_reset_and_refuse_invalid_lists_atomically() -> TestResult {
+    let harness = harness().await?;
+    for dirs in [
+        json!(["/data/downloads", "/run/uploads"]),
+        json!([]),
+        json!(["/"]),
+    ] {
+        let body = json!({"files": {"readDirs": dirs}}).to_string();
+        let changed = harness.patch(&body).await?;
+        assert_eq!(changed.status, StatusCode::OK, "{}", changed.body);
+        assert_eq!(changed.body["settings"]["files"]["readDirs"], dirs);
+        assert_eq!(changed.body["unknown"], json!([]));
+        let loaded = Settings::load(harness.settings_file(), Default::default()).await;
+        let expected: Vec<PathBuf> = serde_json::from_value(dirs)?;
+        assert_eq!(loaded.read_dirs(), expected);
+    }
+    let before = harness.get("/v1/settings").await?.body;
+    let bytes = std::fs::read(harness.settings_file())?;
+    for dirs in [
+        json!(null),
+        json!("/private-input"),
+        json!(["relative/private-input"]),
+        json!(["/good", false]),
+        json!(vec!["/private-input"; 17]),
+    ] {
+        let body =
+            json!({"tabs": {"idleCloseSeconds": 300}, "files": {"readDirs": dirs}}).to_string();
+        let refused = harness.patch(&body).await?;
+        refused.assert_error(StatusCode::BAD_REQUEST, "invalid_request");
+        let message = refused.body["message"].as_str().ok_or("refusal message")?;
+        assert!(message.contains("files.readDirs"));
+        assert!(message.contains("at most 16 absolute folders"));
+        assert!(!message.contains("private-input"));
+        assert_eq!(harness.get("/v1/settings").await?.body, before);
+        assert_eq!(std::fs::read(harness.settings_file())?, bytes);
+    }
+    let reset = harness.put("{}").await?;
+    assert_eq!(reset.body["settings"], defaults());
     Ok(())
 }

@@ -101,6 +101,24 @@ viewer and a trace UI over the host API, and `dev.sh run` to send scripts. `smok
 | Health | the image's `HEALTHCHECK`: the entrypoint finished and `/system/ready` answers through 9010 |
 | Provenance | `/usr/share/neo-sdk/provenance.json` (commit, the digest of the server's build sources, browser, the server's path, sha256, version and the source digest compiled into it, toolchain), `/usr/share/neo-sdk/browser.lock`, and the OCI `revision` and `version` labels |
 
+### File reads and protected files
+
+The image exports `CLAW_DOWNLOADS_DIR` from its downloads directory and `CLAW_PROFILE_DIR`
+from its browser profile. `GET /v1/settings` reports that downloads folder as the default
+`files.readDirs` list. A downloaded path and a copy saved under that folder can be uploaded
+without changing settings. Owner files can be sent as byte payloads.
+
+To read another folder by path, the host adds it with `PATCH /v1/settings`, such as
+`{"files":{"readDirs":["/data/downloads","/etc"]}}`. The list accepts at most 16 absolute
+folders. Empty denies path reads; nonexistent folders grant nothing. Symlinks resolve before
+component containment is checked. Changes apply to the next file use in an existing run and
+survive a server restart. `PUT {}` restores the downloads default.
+
+Even `["/"]` cannot allow Neo's state directory, browser profile, host token or CAPTCHA key
+files. Scripts cannot overwrite those locations with a download or screenshot either.
+Directory uploads that contain a protected location are refused. Writes elsewhere retain
+Playwright's existing behavior, including `download.saveAs()` outside the read roots.
+
 ### Ports
 
 | Port | What | Auth | Reachable by |

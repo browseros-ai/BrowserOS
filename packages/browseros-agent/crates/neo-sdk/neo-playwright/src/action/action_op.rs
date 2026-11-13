@@ -922,7 +922,7 @@ async fn drop(
     scope.require(Capability::HostFiles)?;
     let payloads = match input.files {
         Some(files) => scope
-            .within(drop_payloads(files))
+            .within(drop_payloads(scope, files))
             .await
             .map_err(|_expired| scope.timed_out(ErrorCode::WaitTimeout))??,
         None => Vec::new(),

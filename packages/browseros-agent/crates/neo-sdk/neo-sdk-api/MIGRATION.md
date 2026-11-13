@@ -22,6 +22,25 @@ Desktop's behavior and dependency graph are unchanged apart from the two shared 
 Tracing targets use `neo_captcha::…` and `neo_capture::…`; update custom `CLAW_LOG` directives
 that name those crates. The default desktop log filter is unchanged.
 
+## Host file paths
+
+Scripts now read files by path only from `files.readDirs`, set through the host's
+`GET`, `PUT` and `PATCH /v1/settings`. Its default is the browser downloads folder. Uploading
+`download.path()` and copies saved inside that folder keeps working. Host code that stages
+uploads elsewhere must add that absolute folder, or send `{ name, mimeType, buffer }` payloads.
+The rule also covers `drop`, script/style tag paths and page/context init-script paths.
+
+The state directory, browser profile, host token and CAPTCHA key files are always protected
+from script reads and writes, even with `["/"]` listed. A directory upload containing a
+protected location is refused. Writes elsewhere stay unchanged. Relative paths use Neo's
+working directory, symlinks resolve before authorization, and allowed aliases retain their
+filenames. Empty lists deny path reads; missing listed folders grant no access. Refusals are
+`script / invalid_input / not_sent` without disclosing the refused path.
+
+Embedders can set `HostedOptions.read_dirs`. Omission uses the downloads default; an explicit
+empty list denies path reads. Server launchers can set `CLAW_DOWNLOADS_DIR` and `CLAW_PROFILE_DIR`
+to identify the browser's actual folders. The SDK image supplies both itself.
+
 ## Hosted API migration
 
 When the Neo Docker image runs claw-sdk instead of claw-server, the hosted `/v1` API on port

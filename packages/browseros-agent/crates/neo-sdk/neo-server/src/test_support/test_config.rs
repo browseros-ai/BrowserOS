@@ -24,6 +24,9 @@ pub fn test_config(state_dir: &Path) -> AppConfig {
     };
     let env = EnvConfig {
         state_dir: state_dir.to_path_buf(),
+        downloads_dir: Some(state_dir.join("downloads")),
+        profile_dir: Some(state_dir.join("profile")),
+        captcha_key_files: Vec::new(),
         log_filter: Defaults::LOG_FILTER.to_owned(),
         hosted_mode: HostedMode::On,
         native_version: None,

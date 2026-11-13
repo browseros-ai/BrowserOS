@@ -5,6 +5,7 @@
 //! (`events/log_lease.rs`).
 
 use std::io::ErrorKind;
+use std::path::Path;
 use std::time::Duration;
 
 use browseros_cdp::CdpEvent;
@@ -324,6 +325,7 @@ async fn file_content(
     path: &str,
     kind: TagKind,
 ) -> Result<String, PlaywrightError> {
+    scope.read_path(Path::new(path)).await?;
     let bytes = fs::read(path).await.map_err(|error| {
         let (code, message) = match error.kind() {
             ErrorKind::NotFound => ("ENOENT", "no such file or directory".to_owned()),
