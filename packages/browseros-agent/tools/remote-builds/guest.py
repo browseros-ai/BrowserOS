@@ -248,10 +248,14 @@ def run(arguments: argparse.Namespace) -> int:
             "PATH": f"{home}/.cargo/bin:{home}/.bun/bin:/usr/local/bin:/usr/bin:/bin",
             "CARGO_BUILD_JOBS": str(os.cpu_count() or 1),
             "CARGO_PROFILE_DEV_DEBUG": "0", "CARGO_PROFILE_TEST_DEBUG": "0",
-            # One admitted job per VM permits dependency-cache reuse across snapshots.
-            # Source roots remain distinct, so Cargo sees each worktree's own inputs.
-            "CARGO_TARGET_DIR": "/work/remote-builds/cache/target",
-            "CARGO_BUILD_BUILD_DIR": "/work/remote-builds/cache/build-private",
+            # Cargo freshness uses mtimes, not source hashes. A snapshot can wait
+            # in the queue while another branch builds newer output; sharing even
+            # sequential target/build directories can then reuse that branch's
+            # generated types. Keep all compiled/generated output inside this UUID.
+            # Registry/Git downloads in HOME remain warm; cleanup removes this job's
+            # build directories together with its source after results are saved.
+            "CARGO_TARGET_DIR": str(namespace / "target"),
+            "CARGO_BUILD_BUILD_DIR": str(namespace / "build-private"),
             "NEO_SDK_SOURCE_ROOT": str(source),
             "NEO_SDK_SOURCE_REVISION": arguments.revision,
             "NEO_SDK_SOURCE_DIRTY": arguments.dirty,

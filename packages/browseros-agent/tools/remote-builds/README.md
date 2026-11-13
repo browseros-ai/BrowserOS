@@ -45,9 +45,12 @@ agent in its worktree
 ```
 
 The four VMs stay running. A job reserves one VM only while it syncs and executes. The next
-job may come from any developer or worktree. Cargo dependencies, the public Playwright corpus,
+job may come from any developer or worktree. Cargo registry/Git downloads, the public Playwright corpus,
 Docker layers and BuildKit caches stay on each host; fresh source directories prevent jobs
-from sharing mutable working files. There is no worktree affinity or developer priority.
+from sharing mutable working files. Cargo target and intermediate build directories are also
+UUID-private: its mtime freshness check can otherwise reuse a later build while an older
+snapshot waits in the queue. Cleanup removes these outputs; compiled Cargo artifacts are
+not shared across jobs. There is no worktree affinity or developer priority.
 
 ```text
 One agent / one worktree
