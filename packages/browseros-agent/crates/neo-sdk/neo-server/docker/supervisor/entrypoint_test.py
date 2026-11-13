@@ -228,11 +228,118 @@ class StartNeoTest(unittest.TestCase):
                     [supplied],
                 )
 
+    def test_hosted_mode_stops_feature_switches_at_the_terminator(self):
+        for supplied, expected, prepended in [
+            (
+                "--enable-features=First -- --enable-features=Second",
+                ["--enable-features=First,CDPScreenshotNewSurface", "--",
+                 "--enable-features=Second"],
+                False,
+            ),
+            (
+                "--enable-features -- -enable-features=Second --enable-features",
+                ["--enable-features=CDPScreenshotNewSurface", "--",
+                 "-enable-features=Second", "--enable-features"],
+                False,
+            ),
+            (
+                "--lang=de -- --enable-features=Second -enable-features "
+                "--enable-features=*CDPScreenshotNewSurface",
+                ["--lang=de", "--", "--enable-features=Second", "-enable-features",
+                 "--enable-features=*CDPScreenshotNewSurface"],
+                True,
+            ),
+        ]:
+            with self.subTest(supplied=supplied):
+                _, argv = self.launch(supplied, kind="claw-sdk")
+
+                self.assertEqual(argv[-len(expected):], expected)
+                self.assertEqual(
+                    argv[1] == "--enable-features=CDPScreenshotNewSurface", prepended
+                )
+
+    def test_hosted_mode_merges_the_last_feature_switch_with_either_prefix(self):
+        for supplied, expected in [
+            (
+                "-enable-features=First --lang=de",
+                ["-enable-features=First,CDPScreenshotNewSurface", "--lang=de"],
+            ),
+            (
+                "-enable-features=",
+                ["-enable-features=CDPScreenshotNewSurface"],
+            ),
+            (
+                "-enable-features",
+                ["-enable-features=CDPScreenshotNewSurface"],
+            ),
+            (
+                "--enable-features=First -enable-features=Second --lang=de",
+                ["--enable-features=First", "-enable-features=Second,CDPScreenshotNewSurface",
+                 "--lang=de"],
+            ),
+            (
+                "-enable-features=First --enable-features=Second",
+                ["-enable-features=First", "--enable-features=Second,CDPScreenshotNewSurface"],
+            ),
+            (
+                "--enable-features=First -enable-features",
+                ["--enable-features=First", "-enable-features=CDPScreenshotNewSurface"],
+            ),
+        ]:
+            with self.subTest(supplied=supplied):
+                _, argv = self.launch(supplied, kind="claw-sdk")
+
+                self.assertEqual(argv[-len(expected):], expected)
+                self.assertEqual(
+                    [arg for arg in argv
+                     if arg.partition("=")[0] in ("--enable-features", "-enable-features")],
+                    [arg for arg in expected
+                     if arg.partition("=")[0] in ("--enable-features", "-enable-features")],
+                )
+
+    def test_hosted_mode_promotes_default_capture_entries_without_changing_the_list(self):
+        for features, expected in [
+            ("*CDPScreenshotNewSurface", "CDPScreenshotNewSurface"),
+            ("First,*CDPScreenshotNewSurface,Last", "First,CDPScreenshotNewSurface,Last"),
+            ("*CDPScreenshotNewSurface<Study", "CDPScreenshotNewSurface<Study"),
+            ("*CDPScreenshotNewSurface:parameter/value", "CDPScreenshotNewSurface:parameter/value"),
+            (
+                "First,,*CDPScreenshotNewSurface<Study:parameter/value,Last,",
+                "First,,CDPScreenshotNewSurface<Study:parameter/value,Last,",
+            ),
+            (
+                "*CDPScreenshotNewSurface<FirstStudy,CDPScreenshotNewSurface<LastStudy",
+                "CDPScreenshotNewSurface<FirstStudy,CDPScreenshotNewSurface<LastStudy",
+            ),
+            (
+                "CDPScreenshotNewSurface<FirstStudy,*CDPScreenshotNewSurface<LastStudy",
+                "CDPScreenshotNewSurface<FirstStudy,CDPScreenshotNewSurface<LastStudy",
+            ),
+            (
+                "*CDPScreenshotNewSurface,*CDPScreenshotNewSurface",
+                "CDPScreenshotNewSurface,CDPScreenshotNewSurface",
+            ),
+            (
+                "Other:parameter/*CDPScreenshotNewSurface,"
+                "*CDPScreenshotNewSurface:parameter/*CDPScreenshotNewSurface",
+                "Other:parameter/*CDPScreenshotNewSurface,"
+                "CDPScreenshotNewSurface:parameter/*CDPScreenshotNewSurface",
+            ),
+        ]:
+            for prefix in ("--", "-"):
+                with self.subTest(features=features, prefix=prefix):
+                    _, argv = self.launch(f"{prefix}enable-features={features}", kind="claw-sdk")
+
+                    self.assertEqual(argv[-1], f"{prefix}enable-features={expected}")
+
     def test_hosted_mode_matches_the_whole_capture_feature_name(self):
         for features in (
             "OtherCDPScreenshotNewSurface,CDPScreenshotNewSurfaceOther",
             "Other<CDPScreenshotNewSurface",
             "Other:parameter/CDPScreenshotNewSurface",
+            "*OtherCDPScreenshotNewSurface,*CDPScreenshotNewSurfaceOther",
+            "Other<*CDPScreenshotNewSurface",
+            "Other:parameter/*CDPScreenshotNewSurface",
         ):
             with self.subTest(features=features):
                 _, argv = self.launch(f"--enable-features={features}", kind="claw-sdk")
@@ -249,6 +356,10 @@ class StartNeoTest(unittest.TestCase):
             "--enable-features",
             "--enable-features=First --lang=de --enable-features=Second",
             "--enable-features=First --lang=de --enable-features",
+            "-enable-features",
+            "--enable-features=First -enable-features=*CDPScreenshotNewSurface<Study:parameter/value",
+            "-enable-features=*CDPScreenshotNewSurface -- --enable-features=Second",
+            "-- --enable-features=*CDPScreenshotNewSurface -enable-features",
         ):
             with self.subTest(supplied=supplied):
                 _, argv = self.launch(supplied, kind="claw-sdk", hosted_mode="0")
@@ -262,16 +373,38 @@ class StartNeoTest(unittest.TestCase):
                     self.assertEqual(argv[-len(expected):], expected)
 
     def test_restarting_does_not_duplicate_or_mutate_caller_features(self):
-        calls, argv = self.launch(
-            "--enable-features=First --lang=de", kind="claw-sdk", start_count=2
-        )
+        for supplied, expected in [
+            (
+                "--enable-features=First --lang=de",
+                ["--enable-features=First,CDPScreenshotNewSurface", "--lang=de"],
+            ),
+            (
+                "--enable-features=First -enable-features=*CDPScreenshotNewSurface<Study:parameter/value "
+                "-- --enable-features=Second",
+                ["--enable-features=First", "-enable-features=CDPScreenshotNewSurface<Study:parameter/value",
+                 "--", "--enable-features=Second"],
+            ),
+            (
+                "-- --enable-features=*CDPScreenshotNewSurface",
+                ["--", "--enable-features=*CDPScreenshotNewSurface"],
+            ),
+        ]:
+            with self.subTest(supplied=supplied):
+                calls, argv = self.launch(supplied, kind="claw-sdk", start_count=2)
+                expected_switches = [
+                    arg for arg in expected
+                    if arg.partition("=")[0] in ("--enable-features", "-enable-features")
+                ]
+                if supplied.startswith("-- --"):
+                    expected_switches.insert(0, "--enable-features=CDPScreenshotNewSurface")
 
-        self.assertEqual(calls, ["forget_zoom_levels", "spawn_as_neo"] * 2)
-        self.assertEqual(
-            [arg for arg in argv if arg.startswith("--enable-features=")],
-            ["--enable-features=First,CDPScreenshotNewSurface"],
-        )
-        self.assertEqual(argv[-1], "--lang=de")
+                self.assertEqual(calls, ["forget_zoom_levels", "spawn_as_neo"] * 2)
+                self.assertEqual(argv[-len(expected):], expected)
+                self.assertEqual(
+                    [arg for arg in argv
+                     if arg.partition("=")[0] in ("--enable-features", "-enable-features")],
+                    expected_switches,
+                )
 
 
 class OutputDirectoryTest(unittest.TestCase):

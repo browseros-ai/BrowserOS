@@ -472,6 +472,7 @@ start_neo() {
   # Releases verify the packaged/overlaid server, so pin it for the image's
   # lifetime. Keep this outside NEO_ARGS, which Compose/callers may replace.
   # NEO_ARGS goes last so a caller's value for a repeated switch wins.
+  # Rebuild local argv on each restart without changing caller-owned NEO_ARGS.
   # shellcheck disable=SC2206  # NEO_ARGS is a flag list by design
   local neo_argv=(
     "${sandbox_flags[@]}"
@@ -496,24 +497,37 @@ start_neo() {
   if [ "$BROWSERCLAW_HOSTED_MODE" = 1 ]; then
     # Background tabs may never present another frame while a live viewer holds
     # another tab in front. Copy a fresh surface instead of waiting for that
-    # presentation. Chromium uses only the last enable-features switch, so merge
-    # into that list in place without reviving earlier, overridden lists.
-    local feature_index=-1 index features
+    # presentation. Chromium accepts both switch prefixes and uses only the last
+    # enable-features switch before --, where positional arguments begin.
+    local feature_index=-1 index feature_switch features
     for index in "${!neo_argv[@]}"; do
       case "${neo_argv[$index]}" in
-        --enable-features | --enable-features=*) feature_index=$index ;;
+        --) break ;;
+        --enable-features | --enable-features=* | -enable-features | -enable-features=*)
+          feature_index=$index ;;
       esac
     done
     if [ "$feature_index" = -1 ]; then
       neo_argv=(--enable-features=CDPScreenshotNewSurface "${neo_argv[@]}")
     else
-      features=${neo_argv[$feature_index]#--enable-features}
+      feature_switch=${neo_argv[$feature_index]%%=*}
+      features=${neo_argv[$feature_index]#"$feature_switch"}
       features=${features#=}
-      # Trial and parameter suffixes belong to the same feature; keep them intact.
+      # Chromium's first override wins. A leading * requests the browser default,
+      # so promote this feature while preserving its trial/parameter suffixes.
+      # Comma sentinels keep lookalike names and unrelated list bytes intact.
+      local default_capture=',\*CDPScreenshotNewSurface([,:<])'
+      features=,$features,
+      while [[ $features =~ $default_capture ]]; do
+        features=${features/"${BASH_REMATCH[0]}"/",CDPScreenshotNewSurface${BASH_REMATCH[1]}"}
+      done
+      features=${features#,}
+      features=${features%,}
       case ",$features," in
         *,CDPScreenshotNewSurface,* | *,CDPScreenshotNewSurface\<* | *,CDPScreenshotNewSurface:*) ;;
-        *) neo_argv[feature_index]="--enable-features=${features:+$features,}CDPScreenshotNewSurface" ;;
+        *) features="${features:+$features,}CDPScreenshotNewSurface" ;;
       esac
+      neo_argv[feature_index]="$feature_switch=$features"
     fi
   fi
   spawn_as_neo browserclaw "${neo_argv[@]}"
