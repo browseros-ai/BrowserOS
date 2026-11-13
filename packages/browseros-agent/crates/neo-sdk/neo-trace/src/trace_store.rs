@@ -281,11 +281,7 @@ impl TraceStore {
             .column_as(Expr::val(Option::<String>::None), "args")
             .column_as(Expr::val(Option::<String>::None), "result")
             .column_as(Expr::val(Option::<String>::None), "notes")
-            // Keep JSON booleans and error ownership intact while dropping arbitrary text.
-            .column_as(
-                Expr::cust("json_set(json_remove(error, '$.hostCode'), '$.message', '')"),
-                "error",
-            )
+            .column_as(operations::summary_error(), "error")
             .filter(operations::Column::RunId.is_in(runs.iter().map(ToString::to_string)))
             .order_by_asc(operations::Column::RunId)
             .order_by_asc(operations::Column::Seq);
