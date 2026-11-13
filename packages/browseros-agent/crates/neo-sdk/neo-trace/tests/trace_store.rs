@@ -1234,6 +1234,7 @@ async fn events_name_the_task_and_the_target_tab() {
                 id: click,
                 task: checkout.clone(),
                 tab: Some(TabId(4)),
+                touched: Some(TabId(4)),
                 effect: Effect::Write,
                 at: at(10),
             },
@@ -1262,11 +1263,43 @@ async fn events_name_the_task_and_the_target_tab() {
                 id: read,
                 task: None,
                 tab: None,
+                touched: None,
                 effect: Effect::Read,
                 at: at(10),
             },
         ]
     );
+}
+
+#[tokio::test]
+async fn a_listener_names_its_tab_and_touches_none()
+-> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    // The prelude's page.on on another task's tab: the event says where it is, and that it
+    // makes that tab nobody's, which is what a task's follower reads.
+    let h = harness(WriterConfig::default()).await;
+    let mut events = h.sink.subscribe();
+    let run = start_in(&h.sink, Some("checkout"), 0);
+    let listen = OperationId::new(run, 1);
+    op_started(
+        &h.sink,
+        Op {
+            tab: Some(TabId(6)),
+            ..simple(listen, "events.listen", Effect::Read)
+        },
+    );
+    h.sink.flush().await?;
+    let mut started = None;
+    while let Ok(event) = events.try_recv() {
+        if let TraceRecordEvent::OperationStarted {
+            id, tab, touched, ..
+        } = event
+            && id == listen
+        {
+            started = Some((tab, touched));
+        }
+    }
+    assert_eq!(started, Some((Some(TabId(6)), None)));
+    Ok(())
 }
 
 #[tokio::test]
