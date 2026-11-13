@@ -17,7 +17,14 @@
 
 #[path = "support/browseros_rig.rs"]
 pub mod browseros_rig;
+#[path = "../../neo-playwright/tests/support/fixture_server.rs"]
+#[expect(
+    dead_code,
+    reason = "the shared server also supports script and nested-frame fixtures"
+)]
+pub mod fixture_server;
 
+use std::collections::HashMap;
 use std::error::Error;
 use std::fmt::{self, Write as _};
 use std::path::Path;
@@ -26,6 +33,7 @@ use std::time::Duration;
 use browseros_rig::{
     CaptchaKey, Client, HOST_TOKEN, Rig, TestResult, browser_or_skip, get, outcome, run,
 };
+use fixture_server::{FixtureServer, Page};
 use neo_trace::{RunId, RunStatus, TraceStore};
 use rmcp::model::CallToolResult;
 use serde_json::{Value, json};
@@ -160,6 +168,48 @@ const TRACE_FIELDS: [(&str, &str, &str, &str); 11] = [
     ),
 ];
 
+/// Closed roots must contribute their own masked fields, not merely hide every canary.
+const CLOSED_TRACE_SCOPES: [&str; 3] = ["Closed", "Nested", "CrossClosed"];
+
+fn closed_trace_fields(scope: &str) -> String {
+    format!(
+        "<section aria-label='{scope} fields'>\
+         <label>{scope} password<input type='password' value='Trace-{scope}-Password-Canary'></label>\
+         <label>{scope} textarea<textarea autocomplete='new-password'>Trace-{scope}-Textarea-Canary</textarea></label>\
+         <label>{scope} public<input value='Public-{scope}-Readable'></label></section>"
+    )
+}
+
+/// Page scripts retain roots only in their own closures. Neo must discover them through its
+/// first AI walk; the child is served on another site so it owns a separate probe world.
+fn private_trace_pages() -> Result<HashMap<String, Page>, fmt::Error> {
+    let top = format!(
+        r#"{}<script>(() => {{
+const closed = document.querySelector('#closed').attachShadow({{ mode: 'closed' }});
+closed.innerHTML = {};
+closed.querySelector('#nested').attachShadow({{ mode: 'closed' }}).innerHTML = {};
+document.querySelector('#cross').src = `http://localhost:${{location.port}}/private-child.html`;
+}})();</script>"#,
+        private_trace_html()?,
+        json!(format!(
+            "{}<div id='nested'></div>",
+            closed_trace_fields("Closed")
+        )),
+        json!(closed_trace_fields("Nested")),
+    );
+    let child = format!(
+        r#"<!doctype html><html><body><div id="cross-closed"></div><script>(() => {{
+const closed = document.querySelector('#cross-closed').attachShadow({{ mode: 'closed' }});
+closed.innerHTML = {};
+}})();</script></body></html>"#,
+        json!(closed_trace_fields("CrossClosed")),
+    );
+    Ok(HashMap::from([
+        ("/private.html".to_owned(), Page::html(&top)),
+        ("/private-child.html".to_owned(), Page::html(&child)),
+    ]))
+}
+
 fn private_trace_html() -> Result<String, fmt::Error> {
     let mut html = String::from(
         "<title>Snapshot trace</title><style>\
@@ -192,42 +242,130 @@ fn private_trace_html() -> Result<String, fmt::Error> {
     for index in 0..20 {
         write!(html, "<button>Stable action {index}</button>")?;
     }
-    html.push_str("</main>");
+    html.push_str(
+        "<div id='closed'></div><iframe id='cross' title='Cross closed fields'></iframe></main>",
+    );
     Ok(html)
 }
 
-fn assert_returned_snapshot_values(first: &CallToolResult) -> TestResult {
-    let snapshots = first
-        .structured_content
-        .as_ref()
-        .and_then(|value| value.pointer("/value/snapshots"))
-        .and_then(Value::as_array)
-        .ok_or_else(|| format!("the first run returns its snapshots: {first:?}"))?;
-    assert_eq!(snapshots.len(), 7);
-    for snapshot in snapshots {
-        let printed = snapshot.to_string();
-        for (_, _, _, canary) in TRACE_FIELDS {
-            assert!(
-                !printed.contains(canary),
-                "snapshot exposes {canary}: {printed}"
-            );
+fn assert_trace_canaries_absent(text: &str) {
+    for (_, _, _, canary) in TRACE_FIELDS {
+        assert!(!text.contains(canary), "snapshot exposes {canary}: {text}");
+    }
+    for scope in CLOSED_TRACE_SCOPES {
+        for kind in ["Password", "Textarea"] {
+            let canary = format!("Trace-{scope}-{kind}-Canary");
+            assert!(!text.contains(&canary), "snapshot exposes {canary}: {text}");
         }
-        assert!(
-            printed.contains("Ada Example"),
-            "holder remains readable: {printed}"
-        );
-        assert!(
-            printed.contains("12/30"),
-            "expiry remains readable: {printed}"
-        );
+    }
+}
+
+/// Stored op results wrap trees and baseline text differently. Search the decoded JSON, so
+/// field values are checked at their own node or line before and after persistence.
+fn trace_field_node<'tree>(tree: &'tree Value, name: &str) -> Option<&'tree Value> {
+    match tree {
+        Value::Array(nodes) => nodes.iter().find_map(|node| trace_field_node(node, name)),
+        Value::Object(node) if node.get("name").and_then(Value::as_str) == Some(name) => Some(tree),
+        Value::Object(node) => node
+            .values()
+            .find_map(|value| trace_field_node(value, name)),
+        _ => None,
+    }
+}
+
+fn trace_field_text<'tree>(tree: &'tree Value, label: &str) -> Option<&'tree str> {
+    match tree {
+        Value::String(text) if text.contains(label) => Some(text),
+        Value::Array(nodes) => nodes.iter().find_map(|node| trace_field_text(node, label)),
+        Value::Object(node) => node
+            .values()
+            .find_map(|value| trace_field_text(value, label)),
+        _ => None,
+    }
+}
+
+fn assert_trace_field_value(snapshot: &Value, label: &str, value: &str) -> TestResult {
+    if let Some(node) = trace_field_node(snapshot, label) {
+        assert_eq!(node["role"].as_str(), Some("textbox"), "{node}");
+        assert_eq!(node["text"].as_str(), Some(value), "{node}");
+        return Ok(());
+    }
+    let label = format!("textbox \"{label}\"");
+    let text = trace_field_text(snapshot, &label)
+        .ok_or_else(|| format!("missing {label} in {snapshot}"))?;
+    let line = text
+        .lines()
+        .find(|line| line.contains(&label))
+        .ok_or("the field has its own line")?;
+    assert!(
+        line.ends_with(&format!(": {value}")) || line.ends_with(&format!(": \"{value}\"")),
+        "{line}"
+    );
+    Ok(())
+}
+
+fn assert_closed_trace_visibility(snapshot: &Value, scopes: &[&str]) -> TestResult {
+    for scope in scopes {
+        for (name, kind) in [("password", "Password"), ("textarea", "Textarea")] {
+            let canary = format!("Trace-{scope}-{kind}-Canary");
+            assert_trace_field_value(
+                snapshot,
+                &format!("{scope} {name}"),
+                &"•".repeat(canary.len()),
+            )?;
+        }
+        assert_trace_field_value(
+            snapshot,
+            &format!("{scope} public"),
+            &format!("Public-{scope}-Readable"),
+        )?;
     }
     Ok(())
+}
+
+fn assert_returned_snapshot_values(first: &CallToolResult) -> TestResult {
+    let returned = first
+        .structured_content
+        .as_ref()
+        .and_then(|value| value.get("value"))
+        .ok_or_else(|| format!("the first run returns its snapshots: {first:?}"))?;
+    assert_eq!(returned["closedRootsOpaque"], json!([true, true, true]));
+    for key in ["snapshots", "childSnapshots"] {
+        let snapshots = returned[key].as_array().ok_or("the collected snapshots")?;
+        assert_eq!(snapshots.len(), 7);
+        for (index, snapshot) in snapshots.iter().enumerate() {
+            let printed = snapshot.to_string();
+            assert_trace_canaries_absent(&printed);
+            let scopes: &[&str] = match key {
+                // Page default mode and unnamed JSON reads stay in one frame. The child
+                // locator covers that mode without changing the existing traversal contract.
+                "snapshots" if index >= 4 => &["Closed", "Nested"],
+                "snapshots" => &CLOSED_TRACE_SCOPES,
+                _ => &["CrossClosed"],
+            };
+            assert_closed_trace_visibility(snapshot, scopes)?;
+            if key != "snapshots" {
+                continue;
+            }
+            assert!(
+                printed.contains("Ada Example"),
+                "holder remains readable: {printed}"
+            );
+            assert!(
+                printed.contains("12/30"),
+                "expiry remains readable: {printed}"
+            );
+        }
+    }
+    assert_trace_canaries_absent(&returned["baseline"].to_string());
+    assert_closed_trace_visibility(&returned["baseline"], &CLOSED_TRACE_SCOPES)
 }
 
 async fn assert_stored_snapshot_values(trace_path: &Path, ids: [RunId; 2]) -> TestResult {
     let store = TraceStore::open(trace_path).await?;
     let mut snapshot_count = 0;
     let mut baseline_count = 0;
+    let mut closed_counts = [0; 3];
     for id in ids {
         let detail = store.run(id).await?.ok_or("the run was persisted")?;
         assert_eq!(detail.summary.status, RunStatus::Ok);
@@ -254,47 +392,68 @@ async fn assert_stored_snapshot_values(trace_path: &Path, ids: [RunId; 2]) -> Te
                 .as_ref()
                 .map(Value::to_string)
                 .unwrap_or_default();
-            for (_, _, _, canary) in TRACE_FIELDS {
-                assert!(
-                    !args.contains(canary),
-                    "{} persisted {canary} in snapshot or pending-baseline input: {args}",
-                    operation.name
-                );
-            }
+            assert_trace_canaries_absent(&args);
             let result = operation
                 .result
                 .ok_or("the snapshot operation has a result")?;
-            let result = result.to_string();
-            for (_, _, _, canary) in TRACE_FIELDS {
-                assert!(
-                    !result.contains(canary),
-                    "{} persisted {canary}: {result}",
-                    operation.name
-                );
-            }
+            assert_trace_canaries_absent(&result.to_string());
             if operation.name == "page.snapshotBaseline" {
                 baseline_count += 1;
-                assert!(
-                    result.contains('•'),
-                    "the stored baseline contains masked values"
-                );
+                assert_closed_trace_visibility(&result, &CLOSED_TRACE_SCOPES)?;
             }
             if operation.name.ends_with(".ariaSnapshot") {
                 snapshot_count += 1;
                 assert!(
-                    result.contains('•'),
+                    result.to_string().contains('•'),
                     "the stored tree contains masked values"
                 );
+                for (scope, count) in CLOSED_TRACE_SCOPES.iter().zip(&mut closed_counts) {
+                    if trace_field_node(&result, &format!("{scope} password")).is_some() {
+                        assert_closed_trace_visibility(&result, &[*scope])?;
+                        *count += 1;
+                    }
+                }
             }
         }
     }
-    assert_eq!(snapshot_count, 9);
+    assert_eq!(snapshot_count, 16);
     assert_eq!(baseline_count, 1);
+    // The top roots occur in eight page reads and the main locator. The child root is absent
+    // from page default mode and both unnamed JSON reads, and present in all seven child reads.
+    assert_eq!(closed_counts, [9, 9, 13]);
     Ok(())
 }
 
+const PRIVATE_TRACE_SNAPSHOT_SCRIPT: &str = r"
+const p = await context.newPage();
+await p.goto(__FIXTURE_URL__);
+const child = p.locator('#cross').contentFrame().locator('body');
+await child.locator('#cross-closed').waitFor();
+// The first page AI walk opens closed roots before any locator enters them.
+const snapshots = [
+  await p.ariaSnapshot(), await p.ariaSnapshot({ text: true }),
+  await p.ariaSnapshot({ text: false }),
+  await p.ariaSnapshot({ mode: 'full' }),
+  await p.ariaSnapshot({ mode: 'default' }),
+  await p.ariaSnapshotJSON(), await p.locator('main').ariaSnapshotJSON(),
+];
+const childSnapshots = [
+  await child.ariaSnapshot(), await child.ariaSnapshot({ text: true }),
+  await child.ariaSnapshot({ text: false }),
+  await child.ariaSnapshot({ mode: 'full' }),
+  await child.ariaSnapshot({ mode: 'default' }),
+  await child.ariaSnapshotJSON({ mode: 'ai' }), await child.ariaSnapshotJSON({ mode: 'default' }),
+];
+const closedRootsOpaque = await Promise.all([
+  p.locator('#closed'), p.locator('#closed').locator('#nested'), child.locator('#cross-closed'),
+].map(root => root.evaluate(host => host.shadowRoot === null)));
+await p.getByLabel('Password', { exact: true }).focus();
+const baseline = await p.ariaSnapshot({ text: false });
+return { page: p, snapshots, childSnapshots, closedRootsOpaque, baseline };
+";
+
 async fn snapshot_trace(rig: &mut Rig) -> TestResult {
-    let html = private_trace_html()?;
+    let server = FixtureServer::start(private_trace_pages()?).await?;
     rig.until_ready().await?;
     // Keep the entire fixture through the host's current settings contract. Clipped traces
     // could hide an unmasked field and make the canary scan pass without proving this boundary.
@@ -312,21 +471,9 @@ async fn snapshot_trace(rig: &mut Rig) -> TestResult {
     // A changed output form or focus state could otherwise legitimately return a whole page.
     let first = run(
         &client,
-        &format!(
-            "const p = await context.newPage();\n\
-             await p.goto('data:text/html,' + encodeURIComponent({}));\n\
-             const snapshots = [\n\
-               await p.ariaSnapshot(), await p.ariaSnapshot({{ text: true }}),\n\
-               await p.ariaSnapshot({{ text: false }}),\n\
-               await p.ariaSnapshot({{ mode: 'full' }}),\n\
-               await p.ariaSnapshot({{ mode: 'default' }}),\n\
-               await p.ariaSnapshotJSON(),\n\
-               await p.locator('main').ariaSnapshotJSON()\n\
-             ];\n\
-             await p.getByLabel('Password', {{ exact: true }}).focus();\n\
-             const baseline = await p.ariaSnapshot({{ text: false }});\n\
-             return {{ page: p, snapshots, baseline }};",
-            json!(html)
+        &PRIVATE_TRACE_SNAPSHOT_SCRIPT.replace(
+            "__FIXTURE_URL__",
+            &json!(server.url("127.0.0.1", "/private.html")).to_string(),
         ),
         &json!({ "requestId": "mask-trace-1", "taskId": "mask-trace" }),
     )
@@ -353,6 +500,7 @@ async fn snapshot_trace(rig: &mut Rig) -> TestResult {
         .and_then(|value| value.get("value"))
         .and_then(Value::as_str)
         .ok_or_else(|| format!("the second run returns its delta: {changed:?}"))?;
+    assert_trace_canaries_absent(delta);
     let baseline = first
         .structured_content
         .as_ref()

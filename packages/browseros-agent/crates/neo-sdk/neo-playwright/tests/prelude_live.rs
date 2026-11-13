@@ -1289,8 +1289,8 @@ async fn tests_that_listener_only_elements_print_as_their_pointer_twins_and_the_
     Ok(())
 }
 
-/// Synthetic page declarations shared by the main document, an open shadow root and an
-/// out-of-process child. Values are deliberately distinct from their accessible names.
+/// Synthetic page declarations shared by documents and open, closed and nested shadow roots.
+/// Values are deliberately distinct from their accessible names.
 fn private_fields(scope: &str) -> String {
     format!(
         r#"<section aria-label="{scope}">
@@ -1357,7 +1357,7 @@ fn private_canary_fields(scope: &str) -> String {
 }
 
 /// Runs in the page world before a snapshot. Textareas retain distinct default text after
-/// their live value is changed; the same setup applies to the document and its shadow root.
+/// their live value is changed; retained roots let the page initialize closed content too.
 const PRIVATE_FIELD_SETUP: &str = r"
 for (const field of root.querySelectorAll('[data-typed]'))
   field.value = field.getAttribute('data-typed')
@@ -1366,20 +1366,38 @@ for (const field of root.querySelectorAll('[data-typed]'))
 fn private_field_pages() -> HashMap<String, Page> {
     let top = format!(
         r#"<!doctype html><html><head><title>Private fields</title></head><body><main>
-{}<div id="shadow"></div><iframe id="cross" title="Cross"></iframe></main>
+{}<div id="shadow"></div><div id="closed"></div><iframe id="cross" title="Cross"></iframe></main>
 <script>
+(() => {{
 const shadow = document.querySelector('#shadow').attachShadow({{ mode: 'open' }});
 shadow.innerHTML = {};
-for (const root of [document, shadow]) {{ {} }}
+const closed = document.querySelector('#closed').attachShadow({{ mode: 'closed' }});
+closed.innerHTML = {};
+const nested = closed.querySelector('#nested').attachShadow({{ mode: 'closed' }});
+nested.innerHTML = {};
+for (const root of [document, shadow, closed, nested]) {{ {} }}
 document.querySelector('#cross').src = `http://localhost:${{location.port}}/private-child.html`;
+}})();
 </script></body></html>"#,
         private_fields("Main"),
         json!(private_fields("Shadow")),
+        json!(format!(
+            "{}<div id=\"nested\"></div>",
+            private_fields("Closed")
+        )),
+        json!(private_fields("Nested")),
         PRIVATE_FIELD_SETUP,
     );
     let child = format!(
-        "<!doctype html><html><body>{}<script>const root = document; {}</script></body></html>",
+        r#"<!doctype html><html><body>{}<div id="cross-closed"></div><script>
+(() => {{
+const closed = document.querySelector('#cross-closed').attachShadow({{ mode: 'closed' }});
+closed.innerHTML = {};
+for (const root of [document, closed]) {{ {} }}
+}})();
+</script></body></html>"#,
         private_fields("Cross"),
+        json!(private_fields("CrossClosed")),
         PRIVATE_FIELD_SETUP,
     );
     HashMap::from([
@@ -1447,7 +1465,15 @@ const PRIVATE_SNAPSHOT_SCRIPT: &str = r"
       await page.goto(__FIXTURE_URL__)
       const cross = page.locator('#cross').contentFrame().locator('body')
       await cross.getByLabel('Cross password', { exact: true }).waitFor()
-      for (const [root, scope] of [[page, 'Main'], [cross, 'Cross'], [page.locator('#shadow'), 'Shadow']]) {
+      // The first AI walk feeds closed roots in both frame worlds before locators enter them.
+      const initial = await page.ariaSnapshot()
+      const closed = page.locator('#closed')
+      const nested = closed.locator('#nested')
+      const crossClosed = cross.locator('#cross-closed')
+      for (const [root, scope] of [
+        [page, 'Main'], [cross, 'Cross'], [page.locator('#shadow'), 'Shadow'],
+        [closed, 'Closed'], [nested, 'Nested'], [crossClosed, 'CrossClosed'],
+      ]) {
         await root.getByLabel(scope + ' shown password', { exact: true }).fill('Typed')
         await root.getByLabel(scope + ' new password', { exact: true }).fill('Edit🔒')
       }
@@ -1477,9 +1503,15 @@ const PRIVATE_SNAPSHOT_SCRIPT: &str = r"
       const normal = await collect(page, 'Main')
       const child = await collect(cross, 'Cross')
       const shadow = await collect(page.locator('#shadow'), 'Shadow')
+      const closedRoot = await collect(closed, 'Closed')
+      const nestedRoot = await collect(nested, 'Nested')
+      const crossClosedRoot = await collect(crossClosed, 'CrossClosed')
+      const closedRootsOpaque = await Promise.all([closed, nested, crossClosed].map(
+        root => root.evaluate(host => host.shadowRoot === null),
+      ))
       await page.getByLabel('Main password', { exact: true }).focus()
       const baseline = await page.ariaSnapshot({ text: true })
-      return { normal, child, shadow, baseline, tab: page.toJSON().tab }
+      return { initial, normal, child, shadow, closedRoot, nestedRoot, crossClosedRoot, closedRootsOpaque, baseline, tab: page.toJSON().tab }
 ";
 
 const PRIVATE_CONFORMANCE_SCRIPT: &str = r"try {
@@ -1552,7 +1584,7 @@ fn assert_private_snapshot_formats(opened: &Value, key: &str, scopes: &[&str]) -
         for scope in scopes {
             // Default mode reads one frame. Its cross-origin counterpart is verified through
             // the child locator, preserving upstream's existing traversal contract.
-            if key == "normal" && format == "default" && *scope == "Cross" {
+            if key == "normal" && format == "default" && matches!(*scope, "Cross" | "CrossClosed") {
                 continue;
             }
             assert_private_field_text(text, scope)?;
@@ -1570,7 +1602,7 @@ fn assert_private_snapshot_formats(opened: &Value, key: &str, scopes: &[&str]) -
         .enumerate()
     {
         for scope in scopes {
-            if key == "normal" && format == 1 && *scope == "Cross" {
+            if key == "normal" && format == 1 && matches!(*scope, "Cross" | "CrossClosed") {
                 continue;
             }
             assert_private_field_tree(tree, scope)?;
@@ -1616,7 +1648,8 @@ fn assert_conformance_private_fields_are_clear(unmasked: &Value) -> TestResult {
 }
 
 /// Each frame masks before protocol serialization. This exercises the normal marked page and
-/// pinned locator routes, the unmarked/default/JSON routes, shadow DOM, and cross-run baselines.
+/// pinned locator routes, the unmarked/default/JSON routes, open and closed shadow DOM, and
+/// cross-run baselines. Closed content must appear with its own masked values and public twins.
 /// Direct reads after every walk still see the original field value.
 #[tokio::test]
 #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
@@ -1633,9 +1666,18 @@ async fn tests_that_private_field_values_are_masked_in_every_snapshot_format() -
     run.end_run(Some(&opened));
     let tab = opened["tab"].as_i64().ok_or("the page's tab")?;
     let init = json!({ "page": { "$neo": "page", "tab": tab } });
-    assert_private_snapshot_formats(&opened, "normal", &["Main", "Shadow", "Cross"])?;
-    assert_private_snapshot_formats(&opened, "child", &["Cross"])?;
+    assert_private_snapshot_formats(
+        &opened,
+        "normal",
+        &["Main", "Shadow", "Closed", "Nested", "Cross", "CrossClosed"],
+    )?;
+    assert_private_snapshot_formats(&opened, "child", &["Cross", "CrossClosed"])?;
     assert_private_snapshot_formats(&opened, "shadow", &["Shadow"])?;
+    assert_private_snapshot_formats(&opened, "closedRoot", &["Closed", "Nested"])?;
+    assert_private_snapshot_formats(&opened, "nestedRoot", &["Nested"])?;
+    assert_private_snapshot_formats(&opened, "crossClosedRoot", &["CrossClosed"])?;
+    assert_eq!(opened["closedRootsOpaque"], json!([true, true, true]));
+    assert_private_canaries_absent(&opened["initial"])?;
     assert_private_canaries_absent(&opened["baseline"])?;
     let grown = js_runner::run_script(
         &host,
