@@ -710,7 +710,7 @@ impl State {
         let live = self
             .licence
             .as_ref()
-            .filter(|licence| now < licence.expires_at);
+            .filter(|licence| now < licence.expires_at && !plan_has_ended(licence, now));
         let Some(licence) = live else {
             return PlanSnapshot {
                 available: true,
@@ -735,6 +735,17 @@ impl State {
             checked_at: self.checked_at,
             stale: self.stale,
         }
+    }
+}
+
+/// Whether the plan a still-valid licence names has already stopped, the way the gateway would
+/// see it on the next refresh: a cancelled plan past its end, or a failed payment past its grace.
+fn plan_has_ended(licence: &Licence, now: i64) -> bool {
+    let over = |time: Option<i64>| time.is_some_and(|time| time <= now);
+    match licence.status {
+        Status::Ending => over(licence.ends_at),
+        Status::PaymentFailed => over(licence.grace_until),
+        Status::None | Status::Active | Status::Unpaid => false,
     }
 }
 
@@ -769,4 +780,64 @@ fn canonical_uuid(raw: &str) -> Option<String> {
     uuid::Uuid::parse_str(raw.trim())
         .ok()
         .map(|id| id.hyphenated().to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const NOW: i64 = 1_800_000_000_000;
+    const HOUR: i64 = 60 * 60 * 1000;
+
+    fn state_with(status: Status, ends_at: Option<i64>, grace_until: Option<i64>) -> State {
+        State {
+            licence: Some(Licence {
+                plan: Some("ultrafast".to_string()),
+                features: vec![ULTRAFAST_FEATURE.to_string()],
+                status,
+                period_end: Some(NOW + 24 * HOUR),
+                ends_at,
+                grace_until,
+                issued_at: NOW - HOUR,
+                expires_at: NOW + 71 * HOUR,
+            }),
+            ..State::default()
+        }
+    }
+
+    fn has_ultrafast(snapshot: &PlanSnapshot) -> bool {
+        snapshot.features.iter().any(|f| f == ULTRAFAST_FEATURE)
+    }
+
+    #[test]
+    fn a_cancelled_plan_turns_off_at_its_end_even_with_a_valid_licence() {
+        let state = state_with(Status::Ending, Some(NOW), None);
+        let snapshot = state.snapshot(NOW);
+        assert!(!has_ultrafast(&snapshot));
+        assert_eq!(snapshot.status, Status::None);
+        assert!(snapshot.plan.is_none());
+        assert!(has_ultrafast(&state.snapshot(NOW - 1)));
+    }
+
+    #[test]
+    fn a_failed_payment_turns_off_when_its_grace_ends() {
+        let state = state_with(Status::PaymentFailed, None, Some(NOW));
+        assert!(!has_ultrafast(&state.snapshot(NOW + 1)));
+        let during_grace = state.snapshot(NOW - 1);
+        assert!(has_ultrafast(&during_grace));
+        assert_eq!(during_grace.status, Status::PaymentFailed);
+    }
+
+    #[test]
+    fn an_active_plan_is_untouched_by_end_dates_it_does_not_use() {
+        let state = state_with(Status::Active, Some(NOW - HOUR), Some(NOW - HOUR));
+        assert!(has_ultrafast(&state.snapshot(NOW)));
+    }
+
+    #[test]
+    fn an_expired_licence_still_turns_ultrafast_off() {
+        let state = state_with(Status::Ending, Some(NOW + 100 * HOUR), None);
+        assert!(has_ultrafast(&state.snapshot(NOW)));
+        assert!(!has_ultrafast(&state.snapshot(NOW + 71 * HOUR)));
+    }
 }
