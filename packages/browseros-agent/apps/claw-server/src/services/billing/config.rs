@@ -18,7 +18,7 @@ const DEV_KEYS: &[(&str, &str)] = &[("dev-1", "tHSf_0xpRZQb_Zelg55jNqn1GmyWbV6cm
 
 /// The staging gateway on fly.io, for builds with the `billing-staging` feature.
 const STAGING_GATEWAY: Option<Gateway> = Some((
-    "https://neo-billing-staging.fly.dev",
+    "https://neo-billing-staging.browseros.com",
     &[(
         "staging-2026-10",
         "FMJahZNybppPIcgi62EYlPk7JzbBCxgfLZ9OSxFuiwI",
@@ -131,7 +131,7 @@ mod tests {
         };
         assert_eq!(
             config.gateway.as_str(),
-            "https://neo-billing-staging.fly.dev/"
+            "https://neo-billing-staging.browseros.com/"
         );
         assert!(config.release);
         assert!(config.trusted_key("staging-2026-10").is_some());
