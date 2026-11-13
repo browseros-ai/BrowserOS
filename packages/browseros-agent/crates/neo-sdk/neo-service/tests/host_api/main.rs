@@ -12,6 +12,7 @@ mod locks;
 mod reconcile;
 mod records;
 mod screenshots;
+mod settings;
 mod socket;
 mod support;
 mod tabs;

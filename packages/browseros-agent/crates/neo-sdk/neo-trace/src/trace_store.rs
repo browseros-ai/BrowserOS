@@ -151,9 +151,13 @@ impl TraceStore {
         if salvage::read_log(path).await == salvage::Log::Damaged {
             return Err(TraceError::DamagedLog);
         }
+        // Secure delete zeroes what a delete frees, so a run that retention removed (the host's
+        // `trace.retentionSeconds`) leaves no readable bytes behind in the file. Without it a
+        // deleted reply stayed findable in `trace.db` until SQLite reused its page.
         let options = SqliteConnectOptions::new()
             .filename(path)
             .busy_timeout(Duration::from_secs(5))
+            .pragma("secure_delete", "ON")
             .disable_statement_logging();
         // Connect lazily without a file-reading PRAGMA: a failed connect is dropped onto SQLx's
         // worker, whose last close could delete the replacement file's WAL after we return.

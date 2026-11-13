@@ -386,7 +386,7 @@ impl Dispatcher {
         &self.browser
     }
 
-    pub(super) fn tabs(&self) -> &TabRegistry {
+    pub(super) fn tabs(&self) -> &Arc<TabRegistry> {
         &self.tabs
     }
 
@@ -550,6 +550,7 @@ impl Dispatcher {
             && !neo_trace::is_subscription(spec.name)
         {
             self.tabs.touched(&target.page, target.seen, run.task_id());
+            self.tabs.used_in_run(target.page.tab, run.id());
         }
         // The rules see the checked tab: the handle's, once verified, or the default page's,
         // once open.
@@ -737,6 +738,7 @@ impl Dispatcher {
                     let seen = self.tabs.seen();
                     if self.browser.page(page.tab).await.is_some() {
                         self.tabs.opened_by_agent(page, seen, run.task_id());
+                        self.tabs.used_in_run(page.tab, run.id());
                         if let Some(task) = opening_task {
                             // The selected task can close while the browser opens this tab.
                             let _ = self.tabs.own(page, task);

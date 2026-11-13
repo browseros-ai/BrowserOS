@@ -1,7 +1,7 @@
 //! The built-ins through the real door, on the fake browser, with a real trace store read back
 //! from a temp dir.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::fs;
 use std::future::Future;
@@ -13,7 +13,8 @@ use futures_util::future::{self, Either};
 use neo_captcha::CaptchaSolver;
 use neo_captcha::config::{CAPSOLVER_KEY_FILE_ENV, CAPSOLVER_URL_ENV, CaptchaConfig};
 use neo_playwright::{ErrorCode as PlaywrightCode, Op, OpEnv, PlaywrightError, Refusal, RunState};
-use neo_takeover::{Lock, LockBinding, LockTtl, Locks, Reads};
+use neo_service::Settings;
+use neo_takeover::{Lock, LockBinding, LockTtl, Locks, Reads, TabHold};
 use neo_trace::{
     Delivery, Effect, ErrorOwner, OperationId, OperationRow, Outcome, RedactionLimits, Redactor,
     RunId, RunStatus, TraceSink, TraceStore, WriterConfig, spawn_writer,
@@ -34,10 +35,10 @@ use crate::config::Defaults;
 use crate::dispatch::{
     Call, Dispatcher, ErrorCode, EventLog, LeafError, Lifetime, Listing, Method, MethodSpec,
     Observer, OpCtx, OpFailure, OpReply, OperationError, PageChange, PageScript, PageTarget,
-    PendingReply, Policy, PolicyCheck, RegistryBuilder, RegistryError, RunCtx, RunGuard, RunStart,
-    StopReason, Visibility,
+    PendingReply, Policy, PolicyCheck, RegistryBuilder, RegistryError, RunCtx, RunEnd, RunGuard,
+    RunStart, StopReason, Visibility,
 };
-use crate::host::TakeoverLock;
+use crate::host::{HostHolds, TakeoverLock};
 use crate::runtime::{Script, ScriptOutcome, run_script};
 use crate::test_rig::{TestError, on_neo_runtime};
 use crate::test_support::FakeCdp;
@@ -51,10 +52,16 @@ struct Harness {
     tabs: Arc<TabRegistry>,
     store: TraceStore,
     sink: TraceSink,
-    /// What the host API's lock routes write; the door and the janitor read it through
-    /// `takeover`.
+    /// What the host API's lock routes write; the door reads it through `takeover`, the janitor
+    /// through `holds`.
     locks: Arc<Locks>,
     takeover: Arc<TakeoverLock>,
+    /// The host's claims as the janitor reads them: `locks`, and the fits a test puts in
+    /// `fits` (a fit needs Neo's screen, which the fake browser has not).
+    holds: Arc<HostHolds>,
+    fits: Arc<Mutex<HashMap<TabId, TabHold>>>,
+    /// The host's settings, at their defaults until a test patches them.
+    settings: Settings,
     /// The facade every Playwright op of `dispatcher` runs on, as app.rs builds it.
     playwright: Arc<PlaywrightFacade>,
     dispatcher: Arc<Dispatcher>,
@@ -104,6 +111,20 @@ impl Harness {
         let locks = Locks::new(store.clone(), sink.clone());
         let takeover = Arc::new(TakeoverLock::default());
         takeover.arm(Arc::clone(&locks));
+        let fits: Arc<Mutex<HashMap<TabId, TabHold>>> = Arc::default();
+        let holds = Arc::new(HostHolds::default());
+        holds.arm({
+            let locks = Arc::clone(&locks);
+            let fits = Arc::clone(&fits);
+            move |tab| {
+                let fit = fits
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .get(&tab)
+                    .copied();
+                TabHold::latest_of(locks.hold(tab), fit)
+            }
+        });
         let claims = Arc::new(CaptchaClaims::default());
         let playwright = PlaywrightFacade::start(Arc::clone(&link), hosted, Arc::default());
         let mut registry = RegistryBuilder::default();
@@ -129,10 +150,32 @@ impl Harness {
             sink,
             locks,
             takeover,
+            holds,
+            fits,
+            settings: Settings::defaults(),
             playwright,
             dispatcher,
             _dir: dir,
         })
+    }
+
+    /// The host's fit on `tab`, as `Service::tab_hold` would report it: `Now` while active,
+    /// `Until` once restored.
+    fn fit(&self, tab: TabId, hold: TabHold) {
+        self.fits
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(tab, hold);
+    }
+
+    /// Ends `guard`'s run as the run service does once its script settled.
+    fn finish(guard: RunGuard) {
+        guard.finish(RunEnd {
+            status: RunStatus::Ok,
+            error: None,
+            result: None,
+            replay: None,
+        });
     }
 
     /// The owner takes `tab`, as `POST /v1/locks` does. Returns once the tab's in-flight writes
@@ -242,7 +285,8 @@ impl Harness {
             Arc::clone(&self.dispatcher),
             Arc::clone(&self.link),
             Arc::clone(&self.tabs),
-            Arc::clone(&self.takeover),
+            Arc::clone(&self.holds),
+            self.settings.clone(),
         )
     }
 }
@@ -328,10 +372,7 @@ async fn a_script_opens_and_closes_a_page_with_the_doors_bookkeeping() -> Result
         "a new tab never takes the owner's focus in the live view"
     );
     assert!(
-        harness
-            .tabs
-            .idle_agent_tabs(Duration::ZERO, Instant::now())
-            .contains(&page),
+        harness.tabs.agent_tabs().contains(&page.tab),
         "agent-opened, so the janitor may close it once idle"
     );
 
@@ -637,10 +678,7 @@ async fn concurrent_calls_on_the_lazy_page_open_one_tab() -> Result<(), Box<dyn 
         );
     }
     assert!(
-        harness
-            .tabs
-            .idle_agent_tabs(Duration::ZERO, Instant::now())
-            .contains(&opened),
+        harness.tabs.agent_tabs().contains(&opened.tab),
         "Neo opened it for the agent"
     );
     Ok(())
@@ -1183,7 +1221,7 @@ async fn a_wait_whose_event_names_a_tab_the_owner_holds_is_refused() -> Result<(
 #[tokio::test]
 async fn the_janitor_closes_idle_agent_tabs_through_the_door() -> Result<(), Box<dyn Error>> {
     let harness = Harness::new().await?;
-    let (run, _guard) = harness.run()?;
+    let (run, guard) = harness.run()?;
     let idle = page_of(&value(
         harness.submit(&run, "context.newPage", json!({})).await,
     )?)?;
@@ -1197,15 +1235,18 @@ async fn the_janitor_closes_idle_agent_tabs_through_the_door() -> Result<(), Box
             .submit(&run, "page.opener", json!({ "page": handle(&owners) }))
             .await,
     )?;
+    // The run that used them ended; until then they are in use.
+    Harness::finish(guard);
     let lock = harness.lock(held.tab, Reads::Block).await?;
     let janitor = harness.janitor();
+    let idle_time = harness.settings.tab_idle_close();
 
     assert_eq!(
         janitor.sweep(Instant::now()).await,
         None,
         "nothing has been idle for 30 minutes yet"
     );
-    let later = Instant::now() + Defaults::TAB_IDLE;
+    let later = Instant::now() + idle_time;
     let sweep = within(janitor.sweep(later)).await?.ok_or("the sweep ran")?;
 
     assert!(
@@ -1245,19 +1286,214 @@ async fn the_janitor_closes_idle_agent_tabs_through_the_door() -> Result<(), Box
     );
 
     assert_eq!(
-        within(janitor.sweep(Instant::now() + Defaults::TAB_IDLE)).await?,
+        within(janitor.sweep(later + idle_time)).await?,
         None,
         "with only a held tab idle there is nothing to close, and no run is recorded"
     );
     harness.locks.unlock_host(lock.id)?;
-    let again = Instant::now() + Defaults::TAB_IDLE;
+    // The pass at `later + idle_time` saw the lock: the tab's idle clock runs from there.
+    assert_eq!(
+        within(janitor.sweep(later + idle_time + Duration::from_secs(1))).await?,
+        None,
+        "not right after the owner lets go"
+    );
+    let again = later + idle_time + idle_time;
     assert!(
         within(janitor.sweep(again)).await?.is_some(),
         "the held tab stayed a candidate"
     );
     assert!(
         !harness.is_open(held.tab).await?,
-        "once the owner lets go, the next sweep closes it"
+        "a full idle time after the owner lets go, a sweep closes it"
+    );
+    Ok(())
+}
+
+/// The owner's 5 minutes for zuzu (the settings design, section 2): the idle time a host sets
+/// applies at the next pass, and a tab in use stays open however long the use lasts. A tab is
+/// in use while a run that used it is in flight, a lock holds it, or a fit is on it, and its
+/// clock restarts when the last of them ends. A popup an agent's tab opened is the agent's.
+#[tokio::test]
+async fn the_janitor_follows_the_idle_time_and_leaves_tabs_in_use() -> Result<(), Box<dyn Error>> {
+    let harness = Harness::new().await?;
+    let new_page = |run: Arc<RunCtx>| {
+        let harness = &harness;
+        async move {
+            page_of(&value(
+                harness.submit(&run, "context.newPage", json!({})).await,
+            )?)
+        }
+    };
+    let (busy_run, busy_guard) = harness.run()?;
+    let busy = new_page(Arc::clone(&busy_run)).await?;
+    let (run, guard) = harness.run()?;
+    let free = new_page(Arc::clone(&run)).await?;
+    let locked = new_page(Arc::clone(&run)).await?;
+    let fitted = new_page(Arc::clone(&run)).await?;
+    let opener = new_page(Arc::clone(&run)).await?;
+    Harness::finish(guard);
+    // The owner's tab keeps the browser open: the janitor never closes its last tab.
+    let owners = harness.owner_tab("https://example.com/").await?;
+    let popup = harness
+        .fake
+        .open_popup(opener.tab, "https://example.com/popup");
+    within(async {
+        while !harness.tabs.agent_tabs().contains(&popup) {
+            time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await?;
+    let lock = harness.lock(locked.tab, Reads::Block).await?;
+    harness.fit(fitted.tab, TabHold::Now);
+    let janitor = harness.janitor();
+    let five_minutes = Duration::from_mins(5);
+
+    assert_eq!(
+        within(janitor.sweep(Instant::now() + five_minutes)).await?,
+        None,
+        "at the default 30 minutes nothing is idle after 5"
+    );
+    let unknown = harness
+        .settings
+        .patch(br#"{"tabs":{"idleCloseSeconds":300}}"#)
+        .await?;
+    assert!(unknown.is_empty(), "{unknown:?}");
+    let first = Instant::now() + five_minutes;
+    within(janitor.sweep(first)).await?.ok_or("the sweep ran")?;
+    assert!(
+        !harness.is_open(free.tab).await?,
+        "the new idle time applies at the next pass, with no restart"
+    );
+    assert!(
+        !harness.is_open(opener.tab).await? && !harness.is_open(popup).await?,
+        "a popup an agent's tab opened goes with the agent's tabs"
+    );
+    for (page, why) in [
+        (
+            &busy,
+            "a run in flight used it, so it stays past the idle time",
+        ),
+        (&locked, "a lock holds it"),
+        (
+            &fitted,
+            "a fit is on it: the owner may be using it, with no lock",
+        ),
+    ] {
+        assert!(harness.is_open(page.tab).await?, "{why}");
+    }
+
+    harness.locks.unlock_host(lock.id)?;
+    harness.fit(fitted.tab, TabHold::Until(Instant::now()));
+    Harness::finish(busy_guard);
+    let ended = Instant::now();
+    // The run's end, and the pass at `first` that saw the lock and the fit, restarted the
+    // clocks: none of the three is idle a moment later.
+    assert_eq!(
+        within(janitor.sweep(ended + Duration::from_secs(1))).await?,
+        None,
+        "not right after a run ends, a lock is released or a fit restored"
+    );
+    within(janitor.sweep(first.max(ended) + five_minutes))
+        .await?
+        .ok_or("the sweep ran")?;
+    for page in [&busy, &locked, &fitted] {
+        assert!(
+            !harness.is_open(page.tab).await?,
+            "a full idle time after its last use ended, the tab is closed"
+        );
+    }
+    assert!(harness.is_open(owners.tab).await?, "never the owner's tab");
+    Ok(())
+}
+
+/// Closing the browser's last tab ends the browser, and Neo's server with it; both come back a
+/// few seconds later with a new browser id (zuzu's last-tab probe, 2026-11-12). A host that keeps
+/// one tab of its own would see that every idle time. "Last" counts every tab the browser
+/// lists, the owner's included.
+#[tokio::test]
+async fn the_janitor_never_closes_the_browsers_last_tab() -> Result<(), Box<dyn Error>> {
+    let harness = Harness::new().await?;
+    let janitor = harness.janitor();
+    let (run, guard) = harness.run()?;
+    let keeper = page_of(&value(
+        harness.submit(&run, "context.newPage", json!({})).await,
+    )?)?;
+    Harness::finish(guard);
+    let later = Instant::now() + harness.settings.tab_idle_close();
+
+    assert_eq!(
+        within(janitor.sweep(later)).await?,
+        None,
+        "nothing it may close, so no run in the trace every minute"
+    );
+    assert!(
+        harness.is_open(keeper.tab).await?,
+        "one idle agent tab alone is still there after the idle time"
+    );
+
+    let owners = harness.owner_tab("https://example.com/").await?;
+    within(janitor.sweep(later)).await?.ok_or("the sweep ran")?;
+    assert!(
+        !harness.is_open(keeper.tab).await?,
+        "with a second tab open, the idle agent tab is closed"
+    );
+    assert!(
+        harness.is_open(owners.tab).await?,
+        "and the owner's tab stays"
+    );
+    Ok(())
+}
+
+/// When the idle agent tabs are all the browser has, every one closes but the one used last.
+/// Chromium answers a close before the tab leaves its listing, so the sweep's next listing still
+/// shows the tab it just closed: that tab must not count as the one keeping the browser open,
+/// or the sweep would close the last tab too.
+#[tokio::test]
+async fn the_janitor_keeps_the_tab_used_last_while_a_closed_one_is_still_listed()
+-> Result<(), Box<dyn Error>> {
+    let harness = Harness::new().await?;
+    harness.fake.linger_closed_tabs();
+    let janitor = harness.janitor();
+    let (run, guard) = harness.run()?;
+    let older = page_of(&value(
+        harness.submit(&run, "context.newPage", json!({})).await,
+    )?)?;
+    let newer = page_of(&value(
+        harness.submit(&run, "context.newPage", json!({})).await,
+    )?)?;
+    Harness::finish(guard);
+    // `newer` is used once more, so it is the one used last.
+    time::sleep(Duration::from_millis(5)).await;
+    let (run, guard) = harness.run()?;
+    value(
+        harness
+            .submit(&run, "page.opener", json!({ "page": handle(&newer) }))
+            .await,
+    )?;
+    Harness::finish(guard);
+
+    let later = Instant::now() + harness.settings.tab_idle_close();
+    let sweep = within(janitor.sweep(later)).await?.ok_or("the sweep ran")?;
+    harness.sink.flush().await?;
+    let detail = harness
+        .store
+        .run(sweep)
+        .await?
+        .ok_or("the sweep is recorded")?;
+    assert_eq!(
+        detail.result,
+        Some(json!({ "closed": [older.tab.0], "kept": [newer.tab.0] })),
+        "the older tab closed; the one used last stayed, though the browser still listed the closed one"
+    );
+    let closes: Vec<&str> = detail
+        .operations
+        .iter()
+        .map(|row| row.name.as_str())
+        .collect();
+    assert_eq!(
+        closes,
+        vec!["page.close"],
+        "one close, never the last tab's"
     );
     Ok(())
 }

@@ -5,6 +5,8 @@
 use crate::api_error::ApiError;
 use crate::event_log::EventKind;
 use crate::limits::{MAX_NAVIGATE_INPUT, VIEWER_SIDE};
+use crate::setting::{SETTINGS, Setting, SettingValue};
+use crate::settings::{SetValues, Settings};
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use browseros_core::TabId;
@@ -499,6 +501,136 @@ pub(crate) fn navigate_result(outcome: BarOutcome) -> api::NavigateResult {
         .to_string(),
         notice: outcome.notice().map(str::to_string),
     }
+}
+
+/// A settings body or a saved settings file, checked against the table: the values of the
+/// settings it named well, the names it used that are no setting, and each setting it named
+/// with a value its rule refuses.
+#[derive(Debug, Default)]
+pub(crate) struct SettingsBody {
+    pub(crate) values: SetValues,
+    /// Dotted names the server skipped: a name no setting has, at the level where it stops
+    /// being one (`tabs.idleCloseMinutes`, or `files` for a whole unknown group).
+    pub(crate) unknown: Vec<String>,
+    /// One per setting at fault: its name and the rule it broke, never the value.
+    pub(crate) faults: Vec<String>,
+}
+
+/// `PUT` and `PATCH /v1/settings`: the values to apply, and the names skipped. The body is
+/// decoded here rather than into the generated `Settings` type, which would drop an unknown
+/// name without a word; the host is told what was skipped instead. A refusal names every
+/// setting at fault, and then nothing is applied.
+pub(crate) fn settings_request(body: &[u8]) -> Result<(SetValues, Vec<String>), ApiError> {
+    let shape = r#"{"tabs"?: {"idleCloseSeconds"?: integer}, …}"#;
+    let json: serde_json::Value = serde_json::from_slice(body).map_err(|_| not_the_body(shape))?;
+    let checked = settings_body(&json).ok_or_else(|| not_the_body(shape))?;
+    if !checked.faults.is_empty() {
+        return Err(ApiError::invalid(checked.faults.join("; ")));
+    }
+    Ok((checked.values, checked.unknown))
+}
+
+/// `json` checked against the table, at any depth; `None` when it is not an object. A group a
+/// setting sits under (`tabs`) must hold an object.
+pub(crate) fn settings_body(json: &serde_json::Value) -> Option<SettingsBody> {
+    let object = json.as_object()?;
+    let mut checked = SettingsBody::default();
+    check_settings("", object, &mut checked);
+    Some(checked)
+}
+
+/// One level of [`settings_body`]. It recurses only into groups of the table, so its depth is
+/// the table's, whatever the body nests.
+fn check_settings(
+    prefix: &str,
+    object: &serde_json::Map<String, serde_json::Value>,
+    checked: &mut SettingsBody,
+) {
+    for (key, value) in object {
+        let name = if prefix.is_empty() {
+            key.clone()
+        } else {
+            format!("{prefix}.{key}")
+        };
+        if let Some(setting) = Setting::find(&name) {
+            match setting.check(value) {
+                Ok(value) => {
+                    checked.values.insert(setting.name, value);
+                }
+                Err(rule) => checked.faults.push(format!("`{}` {rule}", setting.name)),
+            }
+        } else if Setting::is_group(&name) {
+            match value.as_object() {
+                Some(inner) => check_settings(&name, inner, checked),
+                None => checked
+                    .faults
+                    .push(format!("`{name}` must be an object of settings")),
+            }
+        } else {
+            checked.unknown.push(name);
+        }
+    }
+}
+
+/// Settings by dotted name, nested as the contract's `Settings` object: what an answer carries
+/// and what the file saves, so the file is a `PUT` body.
+pub(crate) fn settings_object(
+    values: impl IntoIterator<Item = (&'static str, SettingValue)>,
+) -> serde_json::Value {
+    let mut root = serde_json::Map::new();
+    for (name, value) in values {
+        let mut level = &mut root;
+        let mut parts = name.split('.').peekable();
+        while let Some(part) = parts.next() {
+            if parts.peek().is_none() {
+                level.insert(part.to_owned(), Setting::json(value));
+            } else {
+                let next = level
+                    .entry(part)
+                    .or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()));
+                if !next.is_object() {
+                    *next = serde_json::Value::Object(serde_json::Map::new());
+                }
+                let Some(inner) = next.as_object_mut() else {
+                    break;
+                };
+                level = inner;
+            }
+        }
+    }
+    serde_json::Value::Object(root)
+}
+
+/// The settings as a host reads them: each at its value, and each default. `unknown` is the
+/// names a `PUT` or `PATCH` skipped, absent on a `GET`.
+pub(crate) fn settings_state(
+    settings: &Settings,
+    unknown: Option<Vec<String>>,
+) -> Result<api::SettingsState, ApiError> {
+    let current = settings_object(
+        settings
+            .current()
+            .into_iter()
+            .map(|(setting, value)| (setting.name, value)),
+    );
+    let defaults = settings_object(
+        SETTINGS
+            .iter()
+            .map(|setting| (setting.name, setting.default_value())),
+    );
+    // A row the contract's `Settings` schema lacks would be dropped here; a test keeps the
+    // table and the schema equal.
+    let typed = |json| {
+        serde_json::from_value::<api::Settings>(json).map_err(|error| {
+            ApiError::internal(format!(
+                "the settings table and the contract disagree: {error}"
+            ))
+        })
+    };
+    Ok(api::SettingsState {
+        unknown,
+        ..api::SettingsState::new(typed(current)?, typed(defaults)?)
+    })
 }
 
 /// A body that does not parse. serde's message is not passed on: it can quote the input.

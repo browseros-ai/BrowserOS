@@ -227,6 +227,8 @@ To copy everything to disk, run `./dev.sh export`. It writes `~/.local/state/neo
 
 To call the host API yourself, use `./dev.sh host <METHOD> <path> [json]`, for example `./dev.sh host GET '/v1/runs?taskId=demo'`. It adds the bearer token, which never appears on the command line.
 
+The settings are on the same API. `./dev.sh host GET /v1/settings` shows each one and its default, and `./dev.sh host PATCH /v1/settings '{"tabs":{"idleCloseSeconds":300}}'` changes one at once. The container keeps what you set across its restarts, under `NEO_DATA`; `./dev.sh host PUT /v1/settings '{}'` puts every setting back to its default.
+
 Main-world evaluation (`page.evaluate` and element forms), `page.waitForFunction`, `page.setContent` and `file:`/`javascript:` navigation are supported. The evaluate and file URL probes check successful results.
 
 ## What does not work yet

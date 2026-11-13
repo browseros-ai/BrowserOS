@@ -12,7 +12,6 @@ use std::time::Duration;
 use futures_util::future;
 use neo_trace::{Delivery, Effect, ErrorOwner, OperationId, Outcome, RunEffects, RunStatus};
 use serde_json::{Value, json};
-use tokio::time::Instant;
 
 use self::harness::{GATE_PARTIES, Harness, SeenCheck, within};
 use crate::browser::PageRef;
@@ -569,10 +568,7 @@ async fn concurrent_ops_on_the_lazy_page_open_one_tab() -> Result<(), Box<dyn Er
         assert_eq!(reply.outcome, Ok(json!({ "tab": opened.tab.0 })));
     }
     assert!(
-        harness
-            .tabs
-            .idle_agent_tabs(Duration::ZERO, Instant::now())
-            .contains(&opened),
+        harness.tabs.agent_tabs().contains(&opened.tab),
         "Neo opened it for the agent, so the janitor may close it later"
     );
 

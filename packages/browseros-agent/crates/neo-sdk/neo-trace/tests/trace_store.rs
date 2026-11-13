@@ -1726,3 +1726,51 @@ async fn a_subscription_makes_no_tab_a_runs_or_a_tasks() -> Result<(), Box<dyn s
     assert_eq!(h.store.task_last_act(&task("alpha")).await?, act(2, 20));
     Ok(())
 }
+
+/// zuzu shortens retention to get what a run typed off the disk, so a swept run's bytes must not
+/// stay readable in the file. Secure delete zeroes the freed cells; a checkpoint then leaves the
+/// file the only copy.
+#[tokio::test]
+async fn a_swept_run_leaves_no_readable_bytes_in_the_file()
+-> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    use sea_orm::sqlx::Connection as _;
+    use sea_orm::sqlx::sqlite::SqliteConnection;
+
+    let h = harness(WriterConfig::default()).await;
+    let secret = "swept-reply-7Hc2xQ";
+    let run = start_in(&h.sink, None, 0);
+    h.sink.run_ended(RunEnded {
+        id: run,
+        status: RunStatus::Ok,
+        error: None,
+        result: Some(json!({ "typed": secret })),
+        replay: None,
+        at: at(20),
+    });
+    flushed(&h).await;
+    assert!(
+        store_files(&h)?.iter().any(|file| holds(file, secret)),
+        "the finished run is on disk before the sweep"
+    );
+
+    let eight_days = 8 * 24 * 60 * 60 * 1000;
+    let swept = h
+        .sink
+        .sweep(RetentionPolicy::default(), at(eight_days))
+        .await?;
+    assert_eq!(swept.runs, 1, "{swept:?}");
+    let path = h.dir.path().join("claw-sdk/trace.db");
+    let mut conn = SqliteConnection::connect(&format!("sqlite://{}", path.display())).await?;
+    let (busy, _, _): (i64, i64, i64) = sea_orm::sqlx::query_as("PRAGMA wal_checkpoint(TRUNCATE)")
+        .fetch_one(&mut conn)
+        .await?;
+    conn.close().await?;
+    assert_eq!(busy, 0, "the checkpoint moved every page into the file");
+    for file in store_files(&h)? {
+        assert!(
+            !holds(&file, secret),
+            "a swept run's reply is zeroed in the file, not left in a free page"
+        );
+    }
+    Ok(())
+}
