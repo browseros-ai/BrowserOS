@@ -338,7 +338,8 @@ mod tests {
             );
             rig.sink.flush().await?;
             let replay = rig
-                .restarted_service(Duration::from_secs(30))?
+                .restarted_service(Duration::from_secs(30))
+                .await?
                 .run(request(code.to_owned(), "created")?)
                 .await;
             assert_eq!(

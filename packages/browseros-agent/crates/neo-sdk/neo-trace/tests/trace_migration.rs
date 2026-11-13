@@ -8,7 +8,7 @@ use browseros_core::TabId;
 use neo_trace::{
     Delivery, Effect, EpochMillis, OperationEnded, OperationId, OperationKind, OperationSite,
     OperationStarted, Outcome, PageState, RedactionLimits, Redactor, RequestId, RetentionPolicy,
-    RunEffects, RunQuery, RunStatus, ShotRead, ShotState, TailQuery, TaskId, TaskTabs, TraceError,
+    RunEffects, RunQuery, RunStatus, ShotRead, ShotState, TailQuery, TaskId, TraceError,
     TraceStore, WriterConfig, spawn_writer,
 };
 use sea_orm::sqlx::sqlite::SqliteConnectOptions;
@@ -446,11 +446,6 @@ async fn an_existing_v1_file_is_adopted_with_every_row() -> TestResult {
         .await?
         .ok_or("missing act")?;
     assert_eq!((act.tab, act.at), (TabId(3), EpochMillis::from_millis(13)));
-    assert_eq!(
-        store.task_tabs(&TaskId::parse("task")?).await?,
-        TaskTabs::default(),
-        "a baseline trace has no openers and no call sites, so no tab or page survives it"
-    );
     assert_eq!(
         store
             .trace_tail(TailQuery {

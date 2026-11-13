@@ -40,15 +40,7 @@ mod task_book;
 #[cfg(test)]
 mod tests;
 
-#[cfg_attr(
-    not(test),
-    expect(
-        unused_imports,
-        reason = "the saved-holders record reads the changes; until it is wired nothing does"
-    )
-)]
-pub(crate) use book_change::BookChange;
-pub(crate) use book_change::{BookSink, SavedTask};
+pub(crate) use book_change::{BookChange, BookSink, SavedTask};
 pub(crate) use browser_link::{BrowserLink, LinkStatus, RunView};
 #[cfg(test)]
 pub(crate) use neo_tab::Adopt;

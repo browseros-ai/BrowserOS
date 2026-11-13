@@ -22,7 +22,8 @@
  * The reply is what you return, plus console lines and existing notes. Return `task.id`
  * to keep it. Lost it? `context.pages().find(p => p.url().includes('ycombinator'))?.taskId`
  * Any script may use any tab or task; `context.pages()` lists every tab.
- * Tasks live in Neo's memory: they end with `task.close()` or a Neo restart.
+ * Tasks live in Neo's memory and end with `task.close()`. A task with open tabs comes back
+ * after a restart of Neo's server; a browser restart ends them all.
  */
 
 // A hand-out, not application code: no workspace tsconfig includes it, so these globals

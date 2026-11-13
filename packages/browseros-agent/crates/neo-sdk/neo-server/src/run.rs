@@ -4,8 +4,8 @@
 //!  RunService::run ─ RunHandle + this caller's Waiter
 //!    RequestLedger::admit ─ Join (wait) │ Replay │ Duplicate │ Unavailable ─▶ that reply
 //!     └ Fresh(ticket) ─▶ tokio::spawn(execute), the panic boundary
-//!        view ─ page default (the task's own tab: TaskBook, or after a restart the trace's
-//!          task_tabs) ─ RunCtx::start
+//!        view ─ TabHolders::ready (the book took back its tabs after a restart) ─ page
+//!          default (the task's own tab, from the TaskBook) ─ RunCtx::start
 //!        every open tab (the init's `pages`) ─ run_script
 //!          ‖ deadline, shutdown, orphaned (no waiter for the grace) ─▶ RunCtx::stop
 //!        teardown: stop(ScriptReturned), drain ops, abort stragglers

@@ -266,8 +266,8 @@ impl TabRegistry {
     }
 
     /// Whether `tab` may become Neo's blank tab by adoption: it is not the agent's and no task
-    /// Neo remembers owns it. The trace's own task links are the caller's to check, since the
-    /// registry starts empty after a server restart.
+    /// Neo remembers owns it. The trace's own task links are the caller's to check: after a
+    /// server restart the book holds its saved tabs only once the tab-holders file is restored.
     #[must_use]
     pub(crate) fn adoptable(&self, tab: TabId) -> bool {
         let state = self.lock();
@@ -347,14 +347,6 @@ impl TabRegistry {
 
     /// Who holds `tab` now: its task and that task's family.
     #[must_use]
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "the tab listing reports each tab's holder once task scope ships; until \
-                      then the owner's task id is all a caller reads"
-        )
-    )]
     pub(crate) fn holder(&self, tab: TabId) -> Option<Holder> {
         self.lock().tasks.holder(tab).cloned()
     }
@@ -429,14 +421,6 @@ impl TabRegistry {
 
     /// Where the task book's changes go from now on ([`BookSink`]), once: false when a sink is
     /// already set, which stays. Until one is set, changes go nowhere.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "the saved-holders record sets the sink and restores from it at start; until \
-                      that record is wired the book keeps none"
-        )
-    )]
     pub(crate) fn set_book_sink(&self, sink: Arc<dyn BookSink>) -> bool {
         self.lock().tasks.set_sink(sink)
     }
@@ -445,16 +429,10 @@ impl TabRegistry {
     /// admitted. Each task keeps its saved family and origin unless the book already has it.
     /// A tab joins only if this registry has it open (not Neo's blank tab) and no task holds it,
     /// so the caller registers each live tab first, as a run's start does for a task's tabs it
-    /// restores ([`TabRegistry::touched`] after core resolved the tab). Emits no change, since
-    /// the saved record already holds them all.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "the saved-holders record sets the sink and restores from it at start; until \
-                      that record is wired the book keeps none"
-        )
-    )]
+    /// restores ([`TabRegistry::touched`] after core resolved the tab). Emits no change for the
+    /// tabs it restores, since the saved record already holds them all. A popup the tab watch
+    /// named before the restore, whose opener the restore gave back (one opened while Neo's
+    /// server was down), then joins the opener's task, and that join is reported as any is.
     pub(crate) fn restore_book(&self, tasks: Vec<SavedTask>) -> Result<(), TaskError> {
         let mut guard = self.lock();
         let state = &mut *guard;
@@ -466,6 +444,7 @@ impl TabRegistry {
                     .is_some_and(|entry| entry.origin != TabOrigin::Neo)
             })?;
         }
+        state.inherit_popups();
         Ok(())
     }
 
@@ -496,29 +475,6 @@ impl TabRegistry {
             state.inherit_popups();
         }
         Ok(true)
-    }
-
-    /// After a restart, the task's own tabs as the trace proves them join it again, those still
-    /// open, registered and owned by no task here; `page`, when one of them, is its page again,
-    /// and otherwise its newest. A tab that has an owner keeps it.
-    pub(crate) fn restore(
-        &self,
-        task: &TaskId,
-        tabs: &[TabId],
-        page: Option<TabId>,
-    ) -> Result<(), TaskError> {
-        let mut state = self.lock();
-        state.tasks.ensure(task)?;
-        for tab in tabs {
-            if state.open.contains_key(tab) {
-                state.tasks.join(*tab, task)?;
-            }
-        }
-        if let Some(page) = page {
-            state.tasks.acted(page, task);
-        }
-        state.inherit_popups();
-        Ok(())
     }
 
     /// A popup inherits its opener, even if its event preceded the opener's task assignment.
@@ -762,8 +718,8 @@ pub(crate) enum TaskPage {
     Tab(PageRef),
     /// Neo knows the task and none of its tabs is open: the run opens a new tab for it.
     NoTab,
-    /// Neo does not know the task: it never ran in this process, or Neo restarted since. Only
-    /// then is the trace asked (`TraceStore::task_tabs`).
+    /// Neo does not know the task: it never ran in this process, or Neo restarted since and the
+    /// task had no open tab to give back. The run opens a new tab for it.
     Unknown,
 }
 

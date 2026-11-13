@@ -205,7 +205,7 @@ fn a_repeated_request_id_replays_the_first_reply_and_never_runs_twice() -> Resul
 
         // A restart follows SIGTERM, which flushes the writer.
         rig.sink.flush().await?;
-        let restarted = rig.restarted_service(GRACE)?;
+        let restarted = rig.restarted_service(GRACE).await?;
         let after_restart = restarted
             .run(request(code, meta(Some("call-1"), None)?)?)
             .await;
@@ -254,7 +254,8 @@ fn after_the_replay_window_a_repeat_is_a_duplicate_naming_the_first_run() -> Res
             .await;
         rig.sink.flush().await?;
         let repeat = rig
-            .restarted_service(GRACE)?
+            .restarted_service(GRACE)
+            .await?
             .run(request("return 1;", meta(Some("call-3"), None)?)?)
             .await;
         assert_ne!(
@@ -640,8 +641,6 @@ fn a_new_task_gets_a_fresh_tab_and_a_known_task_keeps_its_tab_across_a_restart()
     on_neo_runtime(async {
         let rig = TestRig::new().await?;
         let owner = rig.owner_tab("https://owner.example/").await?;
-        // Two ops: the first one on a fresh page opens it, so only later ones record its tab
-        // when they start, and the trace's `task_tabs` reads the start records.
         let touch = "await __neo.invoke('test.touch', { page });\nreturn (await __neo.invoke('test.touch', { page })).tab;";
         let first = rig
             .run_service(GRACE)
@@ -654,7 +653,7 @@ fn a_new_task_gets_a_fresh_tab_and_a_known_task_keeps_its_tab_across_a_restart()
         );
         rig.sink.flush().await?;
 
-        let restarted = rig.restarted_service(GRACE)?;
+        let restarted = rig.restarted_service(GRACE).await?;
         let page_tab = "return page.toJSON().tab;";
         let again = restarted
             .run(request(page_tab, meta(None, Some("task-t"))?)?)
@@ -662,7 +661,7 @@ fn a_new_task_gets_a_fresh_tab_and_a_known_task_keeps_its_tab_across_a_restart()
         assert_eq!(
             again.value,
             json!(tab),
-            "the trace remembers the task's tab across a restart"
+            "the tab-holders file keeps the task's tab across a restart of Neo's server"
         );
         let other = restarted
             .run(request(
@@ -909,7 +908,8 @@ fn unhosted_runs_have_fresh_unowned_defaults_and_replay_without_tasks() -> Resul
         assert_eq!(rig.fake.tabs().len(), 6, "earlier runs' tabs remain open");
         rig.sink.flush().await?;
         let replay = rig
-            .restarted_service(GRACE)?
+            .restarted_service(GRACE)
+            .await?
             .run(request(code, meta(Some("plain-one"), None)?)?)
             .await;
         assert_eq!(*replay, *first, "replay never opens another tab");
@@ -1191,7 +1191,8 @@ fn values_off_preserves_the_reply_blobs_and_memory_replay_but_not_restart_replay
             "same-process memory replays the complete reply"
         );
         let after_restart = rig
-            .restarted_service(GRACE)?
+            .restarted_service(GRACE)
+            .await?
             .run(request(code, meta(Some("off-reply"), None)?)?)
             .await;
         assert_eq!(error_of(&after_restart)?.code, "duplicate_request");
@@ -1546,7 +1547,7 @@ fn after_a_restart_a_task_never_takes_a_tab_a_task_it_picked_opened() -> Result<
         assert_ne!(picked.value["owner"], json!("task-a"), "{picked:?}");
         rig.sink.flush().await?;
 
-        let restarted = rig.restarted_service(GRACE)?;
+        let restarted = rig.restarted_service(GRACE).await?;
         assert_eq!(
             next_page(&restarted, "task-a").await?,
             mine,
@@ -1572,7 +1573,7 @@ fn after_a_restart_every_surviving_tab_of_a_task_is_its_own_again() -> Result<()
             .clone();
         rig.sink.flush().await?;
 
-        let restarted = rig.restarted_service(GRACE)?;
+        let restarted = rig.restarted_service(GRACE).await?;
         assert_eq!(
             next_page(&restarted, "task-a").await?,
             second,
@@ -1638,13 +1639,112 @@ fn after_a_restart_a_task_never_takes_a_tab_a_task_it_named_opened() -> Result<(
         );
         rig.sink.flush().await?;
 
-        let restarted = rig.restarted_service(GRACE)?;
+        let restarted = rig.restarted_service(GRACE).await?;
         assert_eq!(
             next_page(&restarted, "task-a").await?,
             mine,
             "after a restart too: not {}, which the task it named opened",
             opened.value["tab"]
         );
+        Ok(())
+    })
+}
+
+#[test]
+fn after_a_restart_a_tasks_popups_and_the_tasks_it_created_keep_their_tabs() -> Result<(), TestError>
+{
+    on_neo_runtime(async {
+        let rig = TestRig::new().await?;
+        let service = rig.run_service(GRACE);
+        let mine = run_in(&service, "task-a", OPEN_OWN_TAB)
+            .await?
+            .value
+            .clone();
+        let opener = TabId(mine.as_i64().ok_or("a tab id")?);
+        let task_a = TaskId::parse("task-a")?;
+        // The task's page opens a popup, which joins the opener's task.
+        let popup = rig.fake.open_popup(opener, "https://popup.example/");
+        within(Duration::from_secs(5), async {
+            while rig.tabs.owner(popup).as_ref() != Some(&task_a) {
+                time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await?;
+        // The task's run creates a task and opens a tab in it.
+        let created = run_in(
+            &service,
+            "task-a",
+            r"
+            const child = await __neo.invoke('neo.createTask', { name: 'child' });
+            const { page: tab } = await __neo.invoke('task.newPage', { task: child.id });
+            await __neo.invoke('test.touch', { page: tab });
+            return { id: child.id, tab: tab.tabId };",
+        )
+        .await?;
+        assert_eq!(created.status, ReplyStatus::Ok, "{created:?}");
+        let child = created.value["id"].as_str().ok_or("a task id")?.to_owned();
+
+        let restarted = rig.restarted_service(GRACE).await?;
+        let listed = run_in(
+            &restarted,
+            "task-a",
+            "return context.pages().map((tab) => [tab.tabId, tab.taskId]);",
+        )
+        .await?;
+        assert_eq!(listed.status, ReplyStatus::Ok, "{listed:?}");
+        let listed = listed.value.as_array().ok_or("a listing")?;
+        for (tab, task) in [
+            (mine.clone(), json!("task-a")),
+            (json!(popup.0), json!("task-a")),
+            (created.value["tab"].clone(), json!(child)),
+        ] {
+            assert!(
+                listed.contains(&json!([tab, task])),
+                "{tab} is {task}'s again: {listed:?}"
+            );
+        }
+        let fetched = run_in(
+            &restarted,
+            "task-a",
+            &format!("return (await __neo.invoke('neo.task', {{ id: {child:?} }})).id;"),
+        )
+        .await?;
+        assert_eq!(
+            fetched.value,
+            json!(child),
+            "the task a run created is still there to continue: {fetched:?}"
+        );
+        assert_eq!(
+            next_page(&restarted, "task-a").await?,
+            mine,
+            "and the host's task starts on its own page, not its popup"
+        );
+        Ok(())
+    })
+}
+
+#[test]
+fn a_run_after_a_restart_starts_once_its_task_has_its_tabs_back() -> Result<(), TestError> {
+    on_neo_runtime(async {
+        let rig = TestRig::new().await?;
+        let service = rig.run_service(GRACE);
+        let mine = run_in(&service, "task-a", OPEN_OWN_TAB)
+            .await?
+            .value
+            .clone();
+        let (restarted, restore) = rig.restart(GRACE).await?;
+        let waiting = tokio::spawn({
+            let restarted = Arc::clone(&restarted);
+            async move { next_page(&restarted, "task-a").await }
+        });
+        time::sleep(Duration::from_millis(300)).await;
+        assert!(
+            !waiting.is_finished(),
+            "the run waits for the book to take its tabs back"
+        );
+        restore.begin();
+        let page = within(Duration::from_secs(10), waiting).await???;
+        assert_eq!(page, mine, "its own tab, not a fresh one");
         Ok(())
     })
 }

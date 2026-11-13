@@ -29,8 +29,8 @@ use crate::builtins::{self, BuiltinDeps, CaptchaClaims, PlaywrightFacade, TabJan
 use crate::config::{AppConfig, Defaults, HostedMode};
 use crate::dispatch::{Dispatcher, Observer, RegistryBuilder};
 use crate::host::{
-    AgentFront, FillLedger, FillService, FillServiceParts, FilledTabs, HostApi, HostHolds,
-    HostInputs, TakeoverLock,
+    AgentFront, FillLedger, FillService, FillServiceParts, FilledTabs, HolderFeed, HostApi,
+    HostHolds, HostInputs, TabHolders, TakeoverLock,
 };
 use crate::http::agent_router;
 use crate::mcp::McpServer;
@@ -104,14 +104,17 @@ async fn forget_closed_filled_tabs(browser: Arc<BrowserLink>, filled: Arc<Filled
 ///  start ─ bind the agent port (taken: exit 2) ─ trace store + writer (with the
 ///          screenshot queue) ─ host socket (with a usable token; bind failure: exit 1)
 ///          and the host's settings (saved beside trace.db, or the defaults with no socket)
-///        ─ TabRegistry + BrowserLink (connects in the background) ─ PlaywrightFacade (built on
-///          the link's first connect) ─ CaptchaSolver (with a provider key) ─ Registry
-///          (built-ins, neo-playwright's ops)
+///        ─ TabRegistry + BrowserLink (connects in the background) ─ TabHolders (the task
+///          book's writer: on the link's first connect it gives every task back the saved tabs
+///          the browser still has, then saves each change) ─ PlaywrightFacade (built on the
+///          link's first connect) ─ CaptchaSolver (with a provider key) ─ Registry (built-ins,
+///          neo-playwright's ops)
 ///        ─ Dispatcher (rules: builtins::door_rules) ─ RunService ─ McpServer ─ FillService
 ///          (the host's private typing, with its request record beside the trace)
 ///        ─ host API task (starts neo-http once the link connects, then serves the
 ///          socket) ─ housekeeping task (reads the host's settings each pass) ─ agent router
-///  serve ─ until SIGTERM ─ runs stop (shutting_down) ─ connections drain ─ trace flushed
+///  serve ─ until SIGTERM ─ runs stop (shutting_down) ─ connections drain ─ trace and tab
+///          holders flushed
 /// ```
 ///
 /// `start` binds the agent port before anything else, so a taken port fails (exit 2) before
@@ -122,6 +125,8 @@ pub struct App {
     /// Cancelled on SIGTERM; every run stops on it.
     shutdown: CancellationToken,
     trace: TraceSink,
+    /// The task book's changes on their way to the tab-holders file, flushed at shutdown.
+    holders: Arc<HolderFeed>,
     #[cfg(feature = "test-support")]
     store: TraceStore,
 }
@@ -250,6 +255,17 @@ impl App {
         let tabs = Arc::new(TabRegistry::new());
         let native = NativeCapabilities::from_browseros_version(config.browseros_version());
         let browser = link(native, Arc::clone(&tabs));
+        // Which task holds which tab, kept across a restart of Neo's server: every change of the
+        // task book goes to the file from now on, and once the link first connects the book takes
+        // back the saved tabs the browser still has. Runs start only after that (`RunService`).
+        let holders = TabHolders::open(&config.env.trace_dir()).await;
+        let (holder_feed, holder_notes) = HolderFeed::channel();
+        tabs.set_book_sink(Arc::clone(&holder_feed) as _);
+        tokio::spawn(Arc::clone(&holders).keep(
+            Arc::clone(&browser),
+            Arc::clone(&tabs),
+            holder_notes,
+        ));
         // Armed by the host API with the owner's screen and views, beside the takeover lock.
         let front = Arc::new(AgentFront::default());
         // Read back before the facade starts, which marks its tabs before any op runs.
@@ -286,7 +302,7 @@ impl App {
             Observer::new(Arc::clone(&playwright) as _),
         ));
         let shutdown = CancellationToken::new();
-        let blank_tab = keep_blank_tab(&browser, &tabs, &store, &playwright, &shutdown);
+        let blank_tab = keep_blank_tab(&browser, &tabs, &store, &playwright, &holders, &shutdown);
         let runs = RunService::new(RunServiceParts {
             dispatcher: Arc::clone(&dispatcher),
             browser: Arc::clone(&browser),
@@ -297,6 +313,7 @@ impl App {
             shutdown: shutdown.clone(),
             orphan_grace: Defaults::ORPHAN_GRACE,
             blank_tab: Some(Arc::clone(&blank_tab)),
+            holders: Some(holders),
         });
         let mcp = McpServer::new(runs, dispatcher.registry());
         // Armed by the host API with its locks and fits, for the janitor.
@@ -340,6 +357,7 @@ impl App {
             router: agent_router(mcp, browser),
             shutdown,
             trace,
+            holders: holder_feed,
             #[cfg(feature = "test-support")]
             store,
         })
@@ -356,6 +374,7 @@ impl App {
             router,
             shutdown,
             trace,
+            holders,
             ..
         } = self;
         let mut terminate = signal::unix::signal(SignalKind::terminate())?;
@@ -377,10 +396,18 @@ impl App {
                 warn!("requests still open after the shutdown budget; exiting anyway");
             }
         }
-        match time::timeout(Defaults::SHUTDOWN_FLUSH, trace.flush()).await {
+        // Both in one budget: the tab holders' last changes need no sync, only a write.
+        let (flushed, holders_written) = tokio::join!(
+            time::timeout(Defaults::SHUTDOWN_FLUSH, trace.flush()),
+            time::timeout(Defaults::SHUTDOWN_FLUSH, holders.flush()),
+        );
+        match flushed {
             Ok(Ok(())) => {}
             Ok(Err(error)) => warn!(%error, "the trace writer failed to commit at shutdown"),
             Err(_elapsed) => warn!("the trace writer did not commit within the shutdown budget"),
+        }
+        if holders_written.is_err() {
+            warn!("which task holds which tab was not all written within the shutdown budget");
         }
         Ok(())
     }
@@ -418,11 +445,21 @@ fn keep_blank_tab(
     tabs: &Arc<TabRegistry>,
     store: &TraceStore,
     playwright: &Arc<PlaywrightFacade>,
+    holders: &Arc<TabHolders>,
     shutdown: &CancellationToken,
 ) -> Arc<NeoTab> {
     let blank_tab = NeoTab::new(Arc::clone(browser), Arc::clone(tabs), store.clone());
     playwright.keep(Arc::clone(&blank_tab));
-    tokio::spawn(Arc::clone(&blank_tab).follow(shutdown.clone()));
+    let follower = Arc::clone(&blank_tab);
+    let holders = Arc::clone(holders);
+    let shutdown = shutdown.clone();
+    tokio::spawn(async move {
+        // Not before the task book took back its saved tabs: until then the registry cannot
+        // tell a task's blank tab from a free one, and Neo's tab would adopt it. The follow
+        // starts from a fresh listing, so nothing it missed meanwhile is lost.
+        holders.ready().await;
+        follower.follow(shutdown).await;
+    });
     blank_tab
 }
 

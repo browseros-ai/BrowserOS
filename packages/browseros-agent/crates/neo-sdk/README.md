@@ -22,8 +22,9 @@ Any script may use any tab or task. `context.pages()` lists every tab with `tabI
 An unknown id throws `task_not_found`, whose hint points to `context.pages()` and `page.taskId`.
 The reply is exactly what the script returned, plus console lines and existing notes.
 Hosts get touched tasks in `_meta["com.browseros.neo/run"].tasks`; host task ids and the
-neo-viewer proxy keep their existing behavior. Tasks live in memory (at most 4096);
-a restart forgets them while tabs stay. The janitor closes agent-opened tabs nobody used for the host's `tabs.idleCloseSeconds`, 30 minutes by default.
+neo-viewer proxy keep their existing behavior. Tasks live in memory (at most 4096). A restart
+of Neo's server gives each task back the tabs it held, as long as the browser kept them; a browser
+restart forgets every task. The janitor closes agent-opened tabs nobody used for the host's `tabs.idleCloseSeconds`, 30 minutes by default.
 
 ```text
 host / MCP run

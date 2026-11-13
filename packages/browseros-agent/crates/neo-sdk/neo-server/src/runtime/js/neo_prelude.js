@@ -94,7 +94,7 @@
         throw refuse(
           api,
           'task_not_found',
-          `no task \`${this.#id}\` is open in Neo (tasks live in memory and end with \`task.close()\` or a Neo restart). Start one with \`neo.createTask(name)\`, or find your tabs in \`context.pages()\` and read \`page.taskId\`.`,
+          `no task \`${this.#id}\` is open in Neo (tasks live in memory and end with \`task.close()\`; a restart keeps only tasks with open tabs). Start one with \`neo.createTask(name)\`, or find your tabs in \`context.pages()\` and read \`page.taskId\`.`,
         )
       }
     }
