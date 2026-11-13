@@ -18,7 +18,7 @@ use url::Url;
 use crate::services::billing::Billing;
 
 /// The staging worker, for builds with the `billing-staging` feature.
-const STAGING_URL: Option<&str> = Some("https://decisions-api-worker-staging.eng-6b4.workers.dev");
+const STAGING_URL: Option<&str> = Some("https://neo-decisions-staging.openrebase.com");
 
 /// The production worker.
 const RELEASE_URL: Option<&str> = Some("https://neo-decisions.openrebase.com");

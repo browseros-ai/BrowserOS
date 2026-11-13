@@ -211,7 +211,7 @@ fn a_staging_build_uses_the_staging_worker() {
     if std::env::var_os("CLAW_DECISIONS_URL").is_none() {
         assert_eq!(
             Decisions::for_build(false).url().map(url::Url::as_str),
-            Some("https://decisions-api-worker-staging.eng-6b4.workers.dev/")
+            Some("https://neo-decisions-staging.openrebase.com/")
         );
     }
 }
