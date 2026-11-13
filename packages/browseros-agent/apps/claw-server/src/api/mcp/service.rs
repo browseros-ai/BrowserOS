@@ -4209,8 +4209,7 @@ mod tests {
     /// arriving together after the recorded successor died must still settle on one
     /// session and one conversation.
     #[tokio::test]
-    async fn concurrent_resends_converge_after_the_recorded_successor_dies()
-    -> anyhow::Result<()> {
+    async fn concurrent_resends_converge_after_the_recorded_successor_dies() -> anyhow::Result<()> {
         let call = crate::api::mcp::test_support::tool_call("tabs", json!({})).await?;
         let service = std::sync::Arc::new(ClawMcpService::new(call.state.clone()));
 
