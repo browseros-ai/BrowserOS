@@ -466,7 +466,12 @@ def check(url, socket_path, token_file, artifacts):
         return result
 
     def restored(before, target, home):
-        metrics = until(facts, lambda value: value and value["metrics"] == before["metrics"], "original page metrics were not restored")
+        # The packaged browser already changes DOM outerHeight after an unscaled fullscreen
+        # fit, despite restoring native bounds. Assert the logical device independently and
+        # compare the complete 2x restoration against the measured 1x restoration below.
+        expected = before["metrics"]
+        metrics = until(facts, lambda value: value and all(value["metrics"][key] == expected[key]
+                        for key in ("logical", "available", "position")), "original logical page metrics were not restored")
         bounds = until(lambda: window.bounds(target), lambda value: value == before["window"], "native window was not restored")
         layout = spectator.layout(home["width"], home["height"])
         display = Rfb(socket_path, token_file, "/v1/display?mode=view")
@@ -582,6 +587,9 @@ def check(url, socket_path, token_file, artifacts):
             control.close()
             control, takeover = None, None
             case["restored"] = restored(before, target, home)
+            case["restored"]["outerMatchesBefore"] = case["restored"]["metrics"]["outer"] == before["metrics"]["outer"]
+            if scale == 2:
+                assert case["restored"]["metrics"] == evidence["cases"]["unscaled"]["restored"]["metrics"], "scaled restoration must match the complete unscaled restoration"
             # JPEG decoding runs only after release. It examines the captured bytes without
             # using evaluate to evade the active takeover's agent-write policy.
             jpeg_content(case["screenshots"], 366, 700, 2)
