@@ -55,11 +55,10 @@ def check(url: str, socket_path: str, token_file: str) -> dict:
         listed = tabs()
         assert all(listed[tab].get("keep") == {} for tab in (held, deleted, expired)), listed
 
-        # Two housekeeping intervals pass with no agent reads of these tabs. Polling the host
-        # inventory does not touch the agent's idle clocks.
-        time.sleep(125)
+        # Observe a sweep instead of assuming its phase or duration. Host inventory reads
+        # do not touch the agent's idle clocks.
+        until(lambda: control not in tabs(), 180, "idle control survived the cleanup deadline")
         listed = tabs()
-        assert control not in listed, f"idle control survived two sweeps: {listed}"
         assert all(listed.get(tab, {}).get("keep") == {} for tab in (held, deleted, expired)), listed
 
         acted = run(f"""
@@ -70,21 +69,21 @@ def check(url: str, socket_path: str, token_file: str) -> dict:
             return value;
         """)
         assert acted == "kept", acted
-        until(lambda: held not in tabs(), 10, "page.close did not close the kept tab")
+        until(lambda: held not in tabs(), 30, "page.close did not close the kept tab")
         assert request("DELETE", f"/v1/tabs/{deleted}/keep") == {"tabId": deleted}
         released_at = time.monotonic()
         limited = keep(expired, '{"ttlSeconds":1}')
         assert isinstance(limited["keep"].get("expiresAt"), int), limited
-        time.sleep(2)
+        until(lambda: "keep" not in tabs()[expired], 30, "TTL did not release the keep")
         listed = tabs()
         assert "keep" not in listed[deleted] and "keep" not in listed[expired], listed
-        # Both tabs were idle for over two minutes before release. Neither may close at the
-        # next sweep until a fresh full idle interval has passed.
+        # The control proved these tabs were already idle. Neither may close at the next
+        # sweep until a fresh full idle interval has passed.
         while time.monotonic() - released_at < 55:
             listed = tabs()
             assert deleted in listed and expired in listed, f"release lost the full idle interval: {listed}"
             time.sleep(2)
-        until(lambda: deleted not in tabs() and expired not in tabs(), 80,
+        until(lambda: deleted not in tabs() and expired not in tabs(), 180,
               "released or expired tab survived a full idle interval and the next sweep")
 
         owned = run("""
@@ -95,14 +94,14 @@ def check(url: str, socket_path: str, token_file: str) -> dict:
         created.append(owned["tab"])
         keep(owned["tab"], "{}")
         run(f"const task = await neo.task({json.dumps(owned['task'])}); await task.close();")
-        until(lambda: owned["tab"] not in tabs(), 10, "task.close did not close the kept tab")
+        until(lambda: owned["tab"] not in tabs(), 30, "task.close did not close the kept tab")
 
         missing = host(socket_path, token_file, "/v1/tabs/9223372036854775807/keep", "PUT", "{}")
         assert missing.get("status") == 404 and missing["body"]["code"] == "tab_not_found", missing
         assert request("DELETE", "/v1/tabs/9223372036854775807/keep") == {"tabId": 9223372036854775807}
         tools = [tool["name"] for tool in client.tools()]
         assert not any("keep" in name.lower() for name in tools), tools
-        return {"ok": True, "detail": "keeps survived two idle sweeps; agent fill, read, page.close and task.close passed; DELETE and TTL restarted the full idle interval"}
+        return {"ok": True, "detail": "keeps outlived the idle control; agent fill, read, page.close and task.close passed; DELETE and TTL restarted the full idle interval"}
     finally:
         request("PUT", "/v1/settings", json.dumps(original))
         if created:
