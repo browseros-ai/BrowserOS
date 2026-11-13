@@ -75,7 +75,8 @@ function hasReadableOpener(document: Document): boolean {
     const opener: unknown = view.opener
     if (opener === null || opener === undefined) return false
     if (typeof opener !== 'object' && typeof opener !== 'function') return true
-    Reflect.get(opener, 'document')
+    // Access is the test: SecurityError, rather than the document's contents, decides it.
+    const _openerDocument: unknown = Reflect.get(opener, 'document')
     return true
   } catch (error: unknown) {
     // A denied opener is not a source realm. Other failures cannot establish its absence.
