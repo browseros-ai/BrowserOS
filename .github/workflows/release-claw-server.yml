@@ -342,6 +342,8 @@ jobs:
       BROWSEROS_TARGET: ${{ matrix.target }}
       RUST_TARGET: ${{ matrix.rust_target }}
       BINARY_EXT: ${{ matrix.binary_ext }}
+      # Match the local Rust release builder, independent of the runner image.
+      LINUX_GLIBC_VERSION: "2.17"
       R2_BUCKET: ${{ secrets.R2_BUCKET }}
       RELEASE_SHA: ${{ needs.prepare.outputs.release_sha }}
 
@@ -434,6 +436,15 @@ jobs:
           rustc --version
           cargo --version
 
+      - name: Setup Linux compatibility toolchain
+        if: ${{ steps.recover.outputs.recovered != 'true' && startsWith(matrix.target, 'linux-') }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install ziglang==0.15.2
+          python -c 'import pathlib, ziglang; print(pathlib.Path(ziglang.__file__).parent)' >> "$GITHUB_PATH"
+          cargo install --locked cargo-zigbuild --version 0.23.0
+
       - name: Stamp release version
         if: ${{ steps.recover.outputs.recovered != 'true' }}
         shell: bash
@@ -470,7 +481,15 @@ jobs:
             aarch64-apple-darwin) export MACOSX_DEPLOYMENT_TARGET=11.0 ;;
             x86_64-apple-darwin) export MACOSX_DEPLOYMENT_TARGET=10.12 ;;
           esac
-          cargo build --release --locked --target "$RUST_TARGET" \
+          cargo_command=build
+          build_target="$RUST_TARGET"
+          case "$RUST_TARGET" in
+            *-unknown-linux-gnu)
+              cargo_command=zigbuild
+              build_target="$RUST_TARGET.$LINUX_GLIBC_VERSION"
+              ;;
+          esac
+          cargo "$cargo_command" --release --locked --target "$build_target" \
             -p "$server_package" \
             --bin browseros-claw-server-rs
           python <<'PY'
@@ -610,6 +629,35 @@ jobs:
           PY
         env:
           ZIP_PATH: ${{ steps.package.outputs.zip_path || steps.recover.outputs.zip_path }}
+
+      # Validate recovered artifacts too: immutable storage is not proof of ABI compatibility.
+      - name: Verify packaged Linux compatibility
+        if: ${{ startsWith(matrix.target, 'linux-') }}
+        shell: bash
+        env:
+          ZIP_PATH: ${{ steps.package.outputs.zip_path || steps.recover.outputs.zip_path }}
+        run: |
+          set -euo pipefail
+          python -m unittest discover -s packages/browseros-agent/scripts/release -p validate_linux_server_test.py
+          compatibility_dir="$(mktemp -d)"
+          trap 'rm -rf "$compatibility_dir"' EXIT
+          unzip -q "$ZIP_PATH" -d "$compatibility_dir"
+          binary="$compatibility_dir/resources/bin/browseros-claw-server"
+          python packages/browseros-agent/scripts/release/validate_linux_server.py \
+            "$binary" --maximum "$LINUX_GLIBC_VERSION"
+          # Exercise the actual packaged executable in the reported distribution,
+          # rather than just executing it on the newer build runner.
+          actual_version="$(docker run --rm --network none \
+            --mount "type=bind,source=$compatibility_dir,target=/artifact,readonly" \
+            debian:12-slim /artifact/resources/bin/browseros-claw-server --version)"
+          if [ "$actual_version" != "$VERSION" ]; then
+            echo "::error::Debian 12 binary version mismatch: $actual_version" >&2
+            exit 1
+          fi
+          docker run --rm --network none \
+            --mount "type=bind,source=$compatibility_dir,target=/artifact,readonly" \
+            --mount "type=bind,source=$GITHUB_WORKSPACE/packages/browseros-agent/scripts/release,target=/verification,readonly" \
+            python:3.13-slim-bookworm python /verification/smoke_linux_server.py /artifact
 
       - name: Upload target zip artifact
         uses: actions/upload-artifact@v7
