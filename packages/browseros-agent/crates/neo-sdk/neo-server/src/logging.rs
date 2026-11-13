@@ -15,8 +15,8 @@ use tracing_subscriber::{EnvFilter, fmt};
 use crate::config::{AppConfig, Defaults};
 
 /// The process's logging, installed once by `main` and held until `main` returns: a daily file
-/// under `$BROWSERCLAW_DIR/logs` plus stderr, both filtered by `CLAW_LOG` with `SeaORM` capped at
-/// `DEBUG` and `rmcp` at `INFO`, and a panic hook.
+/// under `$BROWSERCLAW_DIR/logs` plus stderr, with an `INFO` ceiling for `rmcp` and `DEBUG`
+/// ceilings for `SeaORM` and `tungstenite` alongside `CLAW_LOG`, and a panic hook.
 ///
 /// The file writer is non-blocking: lines are buffered on a worker thread, and dropping this
 /// value flushes them. That is why `main` returns an exit code instead of calling
@@ -47,15 +47,16 @@ impl Logging {
         };
         tracing_subscriber::registry()
             .with(filter)
-            // SeaORM's TRACE spans carry bound values; rmcp's DEBUG events carry entire MCP
-            // requests and replies, including script text. These global caps are separate
-            // from CLAW_LOG, so explicit crate directives cannot expose either payload in
-            // either sink. Filtering only events would still leak SeaORM's span fields.
+            // SeaORM's TRACE spans carry bound values, rmcp's DEBUG events carry whole MCP
+            // requests/replies, and tungstenite's TRACE frames carry typed CDP text. Keep
+            // these caps separate from CLAW_LOG so explicit crate directives cannot expose
+            // payloads in either sink. Event-only filtering would still leak span fields.
             .with(
                 Targets::new()
                     .with_default(LevelFilter::TRACE)
                     .with_target("sea_orm", LevelFilter::DEBUG)
-                    .with_target("rmcp", LevelFilter::INFO),
+                    .with_target("rmcp", LevelFilter::INFO)
+                    .with_target("tungstenite", LevelFilter::DEBUG),
             )
             .with(
                 fmt::layer()

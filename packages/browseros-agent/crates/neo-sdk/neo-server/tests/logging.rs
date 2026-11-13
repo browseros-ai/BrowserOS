@@ -1,4 +1,4 @@
-//! The installed logging stack keeps `SeaORM`'s bound values and MCP payloads out of both
+//! The installed logging stack keeps bound SQL values and MCP/WebSocket payloads out of both
 //! real log sinks, even when the host explicitly requests the library's most verbose level.
 
 use std::error::Error;
@@ -104,12 +104,22 @@ fn logging_caps_sea_orm_even_when_the_host_requests_trace() -> Result<(), Box<dy
 }
 
 #[test]
-fn logging_caps_rmcp_even_when_the_host_names_it_explicitly() -> Result<(), Box<dyn Error>> {
-    for filter in ["debug", "trace,rmcp=trace,rmcp::service=trace"] {
+fn logging_caps_transport_payloads_even_with_explicit_crate_directives()
+-> Result<(), Box<dyn Error>> {
+    for filter in [
+        "debug",
+        "trace",
+        "trace,rmcp=trace,rmcp::service=trace,tungstenite=trace,tungstenite::protocol::frame=trace",
+    ] {
         check_logging(
             filter,
-            &["app-debug", "rmcp-info", "rmcp-warn"],
-            &["rmcp-debug", "rmcp-nested-debug", "rmcp-trace"],
+            &["app-debug", "rmcp-info", "rmcp-warn", "tungstenite-debug"],
+            &[
+                "rmcp-debug",
+                "rmcp-nested-debug",
+                "rmcp-trace",
+                "tungstenite-trace",
+            ],
         )?;
     }
     Ok(())
@@ -178,6 +188,8 @@ fn logging_probe() -> Result<(), Box<dyn Error>> {
     tracing::debug!(target: "rmcp", "rmcp-debug");
     tracing::debug!(target: "rmcp::service", "rmcp-nested-debug");
     tracing::trace!(target: "rmcp::service", "rmcp-trace");
+    tracing::debug!(target: "tungstenite::protocol", "tungstenite-debug");
+    tracing::trace!(target: "tungstenite::protocol::frame", "tungstenite-trace");
 
     // SeaORM 1.1's SQLite driver instruments `execute` at TRACE with a Debug `stmt` field
     // containing bound values. An allowed driver event inherits those fields in both formatters

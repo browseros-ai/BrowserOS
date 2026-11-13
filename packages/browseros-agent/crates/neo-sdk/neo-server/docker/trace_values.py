@@ -318,7 +318,11 @@ def check_control(case):
     # Entered text already prints as a character count in the default call log. Preserve
     # that contract while proving the fill announcement reached the real debug sink.
     require(f"fill(<{len(markers['argument'])} characters>)".encode() in logged, "on control has no debug fill announcement")
-    require(markers["argument"].encode() not in logged, "on call log exposed entered text instead of its length")
+    # The script marker travels through MCP; the typed argument reaches a real CDP
+    # Input.insertText frame. Check plaintext and the frame logger's hexadecimal rendering.
+    for kind, label in (("script", "script text"), ("argument", "typed bytes")):
+        marker = markers[kind].encode()
+        require(marker not in logged and marker.hex().encode() not in logged, f"TRACE log exposed {label}")
     require(any(markers["error"] in (op.get("error") or {}).get("message", "") for op in operations), "on control has no stored operation error canary")
     require(markers["run-error"] in (case["failed_record"].get("error") or {}).get("message", ""), "on control has no stored run error canary")
     database = sqlite3.connect(f"file:{TRACE_DIR / 'trace.db'}?mode=ro", uri=True)
