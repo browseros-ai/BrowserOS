@@ -21,7 +21,9 @@
 #   check            what passes
 #   identity         claw-sdk marker; server sha256 = provenance.json; the server's compiled-in
 #                    source digest = the build's (provenance source_digest); browser recorded; no noVNC
-#                    or websockify; python3 present; CAPTCHA keys present only when baked
+#                    or websockify; python3 present; the CAPTCHA key files are exactly the ones
+#                    provenance.json's captchaKeys names (none in a keyless image), non-empty, 0400
+#                    neo, with the baked label only when it names any
 #   boot             healthy within 90 s with a host group and token, under only the capabilities
 #                    README.md documents and no-new-privileges; listeners as README "Ports"
 #   mcp              smoke_sdk.py; a `run` with the host's _meta fills a page; a repeat replays
@@ -74,8 +76,12 @@
 #   persist          a new container on the same /data reads the run and replays its requestId
 #   kill-all         SIGKILL of the whole Neo tree (the host's OOM cgroup.kill) and a restart loop:
 #                    healthy again, socket recreated, the run readable and replayed
-#   captcha-keys     neo.solveCaptcha is listed only with a key: none in a keyless image, and
-#                    listed once the host mounts a key file read-only and points the variable at it
+#   captcha-keys     neo.solveCaptcha is listed only with a key: not in a keyless image, whose server
+#                    logs that solving is off; listed once the host mounts a key file read-only and
+#                    points the variable at it. A keyed image: listed with its own keys, the server
+#                    logs solving on with each provider it carries, also under other PUID/PGID;
+#                    no file door a script has reads or overwrites a key file even with / listed;
+#                    both variables set empty turn solving off
 set -uo pipefail
 
 usage() { sed -n '2,10p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
@@ -273,6 +279,9 @@ facts=$(docker run --memory 3g --memory-swap 3g --rm --network none --name "$pre
   command -v python3 >/dev/null && echo python3=present || echo python3=absent
   echo "keys=$(find /home/neo/.config/browseros/captcha -type f 2>/dev/null | wc -l)"
   echo "key_modes=$(find /home/neo/.config/browseros/captcha -type f -exec stat -c "%a:%U" {} + 2>/dev/null | sort -u | tr "\n" " ")"
+  echo "key_names=$(find /home/neo/.config/browseros/captcha -type f -printf "%f\n" 2>/dev/null | sort | tr "\n" ",")"
+  echo "key_empty=$(find /home/neo/.config/browseros/captcha -type f -empty 2>/dev/null | wc -l)"
+  echo "captcha_keys=$(jq -r "if has(\"captchaKeys\") then (.captchaKeys | join(\",\")) else \"unrecorded\" end" $p)"
   echo "notices=$(ls /usr/share/doc/neo-sdk/playwright 2>/dev/null | tr "\n" " ")"' 2>&1)
 fact() { printf '%s\n' "$facts" | sed -n "s/^$1=//p"; }
 problems=()
@@ -283,12 +292,29 @@ problems=()
 [ "$(fact novnc)/$(fact websockify)" = absent/absent ] || problems+=("viewer installed")
 [ "$(fact python3)" = present ] || problems+=("no python3 for neo-quit")
 case "$(fact notices)" in *LICENSE*NOTICE*THIRD_PARTY_NOTICES.md*) ;; *) problems+=("Playwright notices missing") ;; esac
-if [ "$keys_label" = baked ]; then
-  [ "$(fact keys)" -ge 1 ] && [ "$(fact key_modes)" = "400:neo " ] || problems+=("baked keys: $(fact keys) files, modes $(fact key_modes)")
+# The image says which CAPTCHA keys it carries (provenance.json captchaKeys, names only); the key
+# files must be exactly those. An image built before captchaKeys is judged by its label alone.
+captcha_keys=$(fact captcha_keys)
+if [ "$captcha_keys" = unrecorded ]; then
+  if [ "$keys_label" = baked ]; then
+    [ "$(fact keys)" -ge 1 ] && [ "$(fact key_modes)" = "400:neo " ] || problems+=("baked keys: $(fact keys) files, modes $(fact key_modes)")
+  else
+    [ "$(fact keys)" = 0 ] || problems+=("keyless image holds $(fact keys) key files")
+  fi
 else
-  [ "$(fact keys)" = 0 ] || problems+=("keyless image holds $(fact keys) key files")
+  expected_files=$(for name in ${captcha_keys//,/ }; do
+    case $name in (capsolver) echo capsolver-api-key ;; (2captcha) echo 2captcha-api-key ;; (*) echo "unknown-$name" ;; esac
+  done | sort | tr '\n' ,)
+  [ "$(fact key_names)" = "$expected_files" ] || problems+=("key files '$(fact key_names)' are not captchaKeys '$captcha_keys'")
+  if [ -n "$captcha_keys" ]; then
+    [ "$keys_label" = baked ] || problems+=("captchaKeys '$captcha_keys' without the baked label")
+    [ "$(fact key_empty)" = 0 ] && [ "$(fact key_modes)" = "400:neo " ] \
+      || problems+=("key files: $(fact key_empty) empty, modes $(fact key_modes)")
+  else
+    [ "$keys_label" != baked ] || problems+=("baked label but captchaKeys is empty")
+  fi
 fi
-detail="$image_arch, browser $(fact browser), server $(fact marker) $(fact sha | cut -c1-12), rev $(fact revision | cut -c1-9), keys ${keys_label:-none}"
+detail="$image_arch, browser $(fact browser), server $(fact marker) $(fact sha | cut -c1-12), rev $(fact revision | cut -c1-9), keys ${captcha_keys:-none}"
 if [ ${#problems[@]} -eq 0 ]; then result PASS identity "$detail"; else result FAIL identity "${problems[*]}"; fi
 
 if [ "$image_arch" != "$engine_arch" ]; then
@@ -670,12 +696,55 @@ for pid in pids:
   else
     result FAIL files "keyed container not healthy or client install failed"
   fi
+  # The server's own word at its start (app.rs), from the key files it read: names of providers
+  # and booleans only, never a key. A keyless image says solving is off.
   want_main=False
-  [ "$keys_label" != baked ] || want_main=True
-  if [ "$main_captcha" = "$want_main" ] && [ "$keyed_captcha" = True ]; then
-    result PASS captcha-keys "listed: image's own keys $main_captcha, a host's read-only key file $keyed_captcha"
+  if [ "$captcha_keys" = unrecorded ]; then [ "$keys_label" != baked ] || want_main=True
+  elif [ -n "$captcha_keys" ]; then want_main=True; fi
+  captcha_problems=()
+  [ "$main_captcha" = "$want_main" ] || captcha_problems+=("image's own keys listed=$main_captcha (want $want_main)")
+  [ "$keyed_captcha" = True ] || captcha_problems+=("host key file listed=${keyed_captcha:-not booted}")
+  started_line=$(docker logs "$main" 2>&1 | grep -F 'neo.solveCaptcha is ' | head -1)
+  if [ "$want_main" = True ]; then
+    grep -qF 'neo.solveCaptcha is on' <<<"$started_line" || captcha_problems+=("server did not log solving on")
+    for name in ${captcha_keys//,/ }; do
+      flag=$([ "$name" = 2captcha ] && echo twocaptcha || echo "$name")
+      grep -qE "\b$flag=true\b" <<<"$started_line" || captcha_problems+=("server did not read the $name key")
+    done
+    # The image's own keys under a host's other ids (the entrypoint re-owns Neo's home, the
+    # keys' folder, to them): the server still reads every key, and no file door a script has
+    # reads or overwrites one, even with / listed.
+    own="$prefix-own-keys" own_keys="" own_captcha=""
+    start_neo "$own" --tmpfs /data:rw,size=1g -e PUID=2345 -e PGID=2345
+    if wait_healthy "$own" 90 >/dev/null && install_client "$own"; then
+      own_captcha=$(lists_captcha "$own")
+      own_line=$(docker logs "$own" 2>&1 | grep -F 'neo.solveCaptcha is ' | head -1)
+      own_keys=$(docker exec --user "0:$host_gid" -w /opt/neo-accept "$own" python3 accept_files.py \
+        http://127.0.0.1:9010/mcp /run/neo/host.sock /run/neo-accept/host-token --image-keys 2>&1)
+    fi
+    remove "$own"
+    [ "$own_captcha" = True ] || captcha_problems+=("under PUID/PGID 2345 listed=${own_captcha:-not booted}")
+    for name in ${captcha_keys//,/ }; do
+      flag=$([ "$name" = 2captcha ] && echo twocaptcha || echo "$name")
+      grep -qE "\b$flag=true\b" <<<"${own_line:-}" || captcha_problems+=("under PUID/PGID 2345 the server did not read the $name key")
+    done
+    [ "$(jget "$own_keys" 'd["ok"]')" = True ] \
+      || captcha_problems+=("own key files: $(jget "$own_keys" '"; ".join(d["problems"])' || printf '%s' "${own_keys:0:200}")")
+    # A host turns solving off by setting both variables empty.
+    off="$prefix-keys-off" off_captcha=""
+    start_neo "$off" --tmpfs /data:rw,size=1g -e BROWSEROS_CAPSOLVER_API_KEY_FILE= -e BROWSEROS_2CAPTCHA_API_KEY_FILE=
+    if wait_healthy "$off" 90 >/dev/null && install_client "$off"; then off_captcha=$(lists_captcha "$off"); fi
+    remove "$off"
+    [ "$off_captcha" = False ] || captcha_problems+=("empty key variables listed=${off_captcha:-not booted} (want False)")
   else
-    result FAIL captcha-keys "image's own keys listed=$main_captcha (want $want_main); host key file listed=${keyed_captcha:-not booted}"
+    grep -qF 'neo.solveCaptcha is off' <<<"$started_line" || captcha_problems+=("server did not log solving off")
+  fi
+  if [ ${#captcha_problems[@]} -eq 0 ]; then
+    detail="listed: image's own keys $main_captcha, a host's read-only key file $keyed_captcha"
+    [ "$want_main" != True ] || detail+="; server read ${captcha_keys//,/ and }, under PUID/PGID 2345 too; every script file door refused on own keys; empty variables turn it off"
+    result PASS captcha-keys "$detail"
+  else
+    result FAIL captcha-keys "${captcha_problems[*]}"
   fi
 else
   for check in mcp host-api downloads pdf-downloads blobs frames tab-keep takeover-scale settings files trace-values mcp-remote restart-browser stop persist kill-all captcha-keys; do
