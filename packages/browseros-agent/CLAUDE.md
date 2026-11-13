@@ -17,22 +17,22 @@ matching `bun run build:*` command.
 
 ## Live browser tests
 
-Run a test that reads `BROWSEROS_CDP_PORT` through the launcher, keeping its own command and
-flags:
+For standalone tests that read `BROWSEROS_CDP_PORT`, run from `packages/browseros-agent`,
+keeping the test's own command and flags:
 
 ```sh
 bun run test:browser -- cargo test -p neo-playwright --test pages_live -- --ignored
 ```
 
-Each run starts a fresh headless Neo on a free port, supplies the port, and cleans up; start no
-browser and set no port beforehand. Give every independent test command its own run, because
-suites that share a browser clear each other's tabs and cookies. Never point a test at the
-installed app: its bundled server reconciles your real MCP configuration and skills. Logs and
-`result.json` stay in the artifact directory printed to stderr. `NEO_E2E_BROWSER` selects
-another browser build. The launcher needs Node 22+.
+Each run starts a private headless Neo, supplies a free port, and cleans up. Give independent
+test commands their own runs: suites can clear shared tabs and cookies. The launcher disables
+the bundled server and isolates the browser home to protect real MCP configuration and
+shared skills. It requires Node 22+.
 
-`bun run test:neo-spec` and the full MCP fixtures launch their own browsers; run them directly,
-not under `test:browser`. Interactive app work uses `bun run dev:claw:watch`.
+`bun run test:neo-spec` and full MCP fixtures keep their own launchers. Use
+`bun run dev:claw:watch` for interactive app work.
+
+For browser overrides or run artifacts, read [the live-test guide](CONTRIBUTING.md#run-live-browser-tests).
 
 ## Conventions
 
