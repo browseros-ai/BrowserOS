@@ -704,7 +704,9 @@ for pid in pids:
   captcha_problems=()
   [ "$main_captcha" = "$want_main" ] || captcha_problems+=("image's own keys listed=$main_captcha (want $want_main)")
   [ "$keyed_captcha" = True ] || captcha_problems+=("host key file listed=${keyed_captcha:-not booted}")
-  started_line=$(docker logs "$main" 2>&1 | grep -F 'neo.solveCaptcha is ' | head -1)
+  # The whole log first: under pipefail a reader that stops early (head) can kill `docker logs`.
+  main_log=$(docker logs "$main" 2>&1)
+  started_line=$(grep -F 'neo.solveCaptcha is ' <<<"$main_log" | sed -n 1p)
   if [ "$want_main" = True ]; then
     grep -qF 'neo.solveCaptcha is on' <<<"$started_line" || captcha_problems+=("server did not log solving on")
     for name in ${captcha_keys//,/ }; do
@@ -727,7 +729,8 @@ for pid in pids:
     scratch_neo "$own" -e PUID=2345 -e PGID=2345
     if wait_healthy "$own" 90 >/dev/null && install_client "$own"; then
       own_captcha=$(lists_captcha "$own")
-      own_line=$(docker logs "$own" 2>&1 | grep -F 'neo.solveCaptcha is ' | head -1)
+      own_log=$(docker logs "$own" 2>&1)
+      own_line=$(grep -F 'neo.solveCaptcha is ' <<<"$own_log" | sed -n 1p)
       own_keys=$(docker exec --user "0:$host_gid" -w /opt/neo-accept "$own" python3 accept_files.py \
         http://127.0.0.1:9010/mcp /run/neo/host.sock /run/neo-accept/host-token --image-keys 2>&1)
     fi
