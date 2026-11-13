@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use neo_captcha::config::CaptchaConfig;
 
 use super::HostedError;
-use crate::config::{AppConfig, EnvConfig, LaunchConfig};
+use crate::config::{AppConfig, EnvConfig, LaunchConfig, NeoHome};
 
 /// The host's launch facts. No process environment is changed.
 #[derive(Clone, Debug, Default)]
@@ -44,6 +44,9 @@ impl HostedOptions {
         let mut env =
             EnvConfig::from_lookup(&lookup, &env::home_dir).map_err(HostedError::from_error)?;
         env.state_dir = self.state_dir;
+        // The host launched the browser under its own home, which may hold the files it hands
+        // a script (the spec suite writes its results there); it is not Neo's to protect.
+        env.neo_home = NeoHome::NotNeos;
         let launch = LaunchConfig {
             server_port: 0,
             cdp_port: 0,
@@ -56,5 +59,32 @@ impl HostedOptions {
             env,
             launch,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::error::Error;
+    use std::path::PathBuf;
+
+    use super::HostedOptions;
+    use crate::config::NeoHome;
+
+    #[test]
+    fn the_node_embedding_never_protects_its_home() -> Result<(), Box<dyn Error>> {
+        for hosted_mode in [true, false] {
+            let config = HostedOptions {
+                state_dir: PathBuf::from("/tmp/neo-state"),
+                hosted_mode,
+                ..HostedOptions::default()
+            }
+            .config()?;
+            assert_eq!(
+                config.env.neo_home,
+                NeoHome::NotNeos,
+                "hosted_mode {hosted_mode}: the host's home holds what it hands a script"
+            );
+        }
+        Ok(())
     }
 }

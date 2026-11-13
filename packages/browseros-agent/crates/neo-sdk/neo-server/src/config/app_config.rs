@@ -7,7 +7,7 @@ use neo_playwright::{FileAccess, ProtectedPath};
 
 use neo_captcha::config::CaptchaConfig;
 
-use super::{EnvConfig, LaunchConfig};
+use super::{EnvConfig, LaunchConfig, NeoHome};
 
 /// Everything a process starts with, parsed once at the boundary (`main`) and trusted after.
 #[derive(Clone, Debug)]
@@ -115,6 +115,18 @@ impl AppConfig {
                 .cloned()
                 .map(ProtectedPath::File),
         );
+        // The home is protected as a whole, except where the host lets a script work: the
+        // downloads folder and the read roots, when they lie in it (`ProtectedPath::Home`).
+        match &self.env.neo_home {
+            NeoHome::Own(home) => own.push(ProtectedPath::Home {
+                path: home.clone(),
+                open: self.env.downloads_dir.iter().cloned().collect(),
+            }),
+            NeoHome::Unknown => tracing::warn!(
+                "Neo's home is not protected: neither HOME nor the passwd entry names one"
+            ),
+            NeoHome::NotNeos => {}
+        }
         Arc::new(FileAccess::new(move || settings.read_dirs(), own))
     }
 
@@ -137,7 +149,7 @@ mod tests {
     use neo_captcha::config::CaptchaConfig;
 
     use super::AppConfig;
-    use crate::config::{EnvConfig, HostApiConfig, HostedMode, LaunchConfig};
+    use crate::config::{EnvConfig, HostApiConfig, HostedMode, LaunchConfig, NeoHome};
     use crate::test_support::CLOSED_XVNC;
 
     fn config(launch_version: Option<&str>, env_version: Option<&str>) -> AppConfig {
@@ -153,6 +165,7 @@ mod tests {
                 state_dir: PathBuf::from("/state"),
                 downloads_dir: Some(PathBuf::from("/downloads")),
                 profile_dir: None,
+                neo_home: NeoHome::NotNeos,
                 captcha_key_files: Vec::new(),
                 log_filter: "info".to_owned(),
                 hosted_mode: HostedMode::On,
@@ -228,6 +241,43 @@ mod tests {
                 .await
                 .err(),
             Some(FileAccessError::OwnFiles)
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn a_hosted_sidecar_protects_its_home_but_not_a_downloads_folder_in_it()
+    -> Result<(), Box<dyn Error>> {
+        use std::fs;
+
+        use neo_http::{Settings, SettingsDefaults};
+        use neo_playwright::FileAccessError;
+
+        let dir = tempfile::tempdir()?;
+        let home = dir.path().join("home");
+        let downloads = home.join("Downloads");
+        fs::create_dir_all(&downloads)?;
+        let mut config = config(None, None);
+        config.env.neo_home = NeoHome::Own(home.clone());
+        config.env.downloads_dir = Some(downloads.clone());
+        let settings = Settings::defaults(SettingsDefaults::new(vec![downloads.clone()])?);
+        let policy = config.file_access(settings.clone());
+        for path in [home.join(".bashrc"), home.join(".pki/nssdb/cert9.db")] {
+            assert_eq!(
+                policy.write(&path).await.err(),
+                Some(FileAccessError::OwnFiles)
+            );
+        }
+        assert!(policy.write(&downloads.join("saved.csv")).await.is_ok());
+        assert!(policy.read(&downloads.join("saved.csv")).await.is_ok());
+        config.env.neo_home = NeoHome::NotNeos;
+        assert!(
+            config
+                .file_access(settings)
+                .write(&home.join(".bashrc"))
+                .await
+                .is_ok(),
+            "outside hosted mode the home is not Neo's"
         );
         Ok(())
     }

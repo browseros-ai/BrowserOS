@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Default, Debug, PartialEq, Serialize, Deserialize)]
 pub struct FilesSettings {
-    /// Absolute folders scripts may read files from by path. Defaults to the browser's downloads folder. Empty denies path reads; missing roots match nothing. Real paths are compared by component at each use, so symlinks cannot escape a root. Neo's state, profile, host token and CAPTCHA key files can never be read or written, even with / allowed. Directory uploads cannot contain those protected locations. Byte payload uploads do not need a listed folder. Changes apply at the next file operation, including inside a running script.
+    /// Absolute folders scripts may read files from by path. Defaults to the browser's downloads folder. Empty denies path reads; missing roots match nothing. Real paths are compared by component at each use, so symlinks cannot escape a root. Neo's state, profile, host token and CAPTCHA key files can never be read or written, even with / allowed. In hosted mode the home of Neo's user is protected the same way, for reads and writes. Inside the home a script works only in the downloads folder or in a listed folder whose first name below the home is not a dot-entry, and there the list also allows writes. Directory uploads cannot contain those protected locations. Byte payload uploads do not need a listed folder. Changes apply at the next file operation, including inside a running script.
     #[serde(rename = "readDirs", skip_serializing_if = "Option::is_none")]
     pub read_dirs: Option<Vec<String>>,
 }

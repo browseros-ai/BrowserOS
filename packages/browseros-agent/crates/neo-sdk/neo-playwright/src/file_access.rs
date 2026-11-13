@@ -30,6 +30,21 @@ pub enum ProtectedPath {
     Directory(PathBuf),
     /// A host token or CAPTCHA key file.
     File(PathBuf),
+    /// The home of the user Neo's server and browser run as, and its whole tree. The browser,
+    /// its crash reporter, fontconfig and GTK read files there without being asked (the
+    /// certificate store `~/.pki/nssdb`, the crash reporter's upload settings, font settings),
+    /// so a script must not plant or replace one.
+    ///
+    /// A folder the host allows lifts this rule for its own tree, judged by real path, when it
+    /// lies inside the home and its first name below the home does not start with a dot. The
+    /// allowed folders are a live read root, or one of `open`. Lifting it changes nothing else:
+    /// a read still needs a read root, and Neo's other places stay refused inside the folder.
+    Home {
+        /// The home, as the processes' `HOME` names it.
+        path: PathBuf,
+        /// Folders the host allows besides the read roots: the downloads folder.
+        open: Vec<PathBuf>,
+    },
 }
 
 /// An authorized read's IO spelling. Canonical paths are private authorization facts, so
@@ -141,7 +156,7 @@ impl FileAccess {
             }
             Err(_error) => return Err(FileAccessError::Unresolvable),
         };
-        let own = self.protected_paths().await;
+        let own = self.protected_paths(&roots).await;
         check_own(target, directory, &own)?;
         for root in roots {
             let Ok(root) = fs::canonicalize(root).await else {
@@ -166,7 +181,7 @@ impl FileAccess {
             .target
             .as_deref()
             .ok_or(FileAccessError::Unresolvable)?;
-        let own = self.protected_paths().await;
+        let own = self.protected_paths(&(self.roots)()).await;
         check_own(target, false, &own)?;
         // mkdir walks the original spelling too. A missing component before `..` may be
         // created even though it disappears from the final target, so authorize those writes
@@ -177,12 +192,35 @@ impl FileAccess {
         Ok(WritePath::unchecked(path))
     }
 
-    async fn protected_paths(&self) -> Vec<ProtectedPath> {
+    /// Every protected spelling, resolved now. A home carries, beside each of its spellings,
+    /// the real paths of the allowed folders that lift its rule (`opens_home`), taken from the
+    /// same `roots` snapshot the read checks against.
+    async fn protected_paths(&self, roots: &[PathBuf]) -> Vec<ProtectedPath> {
         let mut paths = Vec::new();
         for own in &self.own {
             let configured = match own {
-                ProtectedPath::Directory(path) | ProtectedPath::File(path) => path,
+                ProtectedPath::Directory(path)
+                | ProtectedPath::File(path)
+                | ProtectedPath::Home { path, .. } => path,
             };
+            let mut allowed = Vec::new();
+            if let ProtectedPath::Home { open, .. } = own {
+                // A folder not made yet is judged by the real path it will have, so the first
+                // save into the downloads folder can make it. A read still needs an existing
+                // read root. A file, or a link that resolves nowhere, lifts nothing.
+                for folder in roots.iter().chain(open) {
+                    let Ok(Resolution {
+                        target: Some(real), ..
+                    }) = resolve(folder, ResolveMode::Protected).await
+                    else {
+                        continue;
+                    };
+                    if fs::metadata(&real).await.is_ok_and(|meta| !meta.is_dir()) {
+                        continue;
+                    }
+                    allowed.push(real);
+                }
+            }
             // An unusable credential must not disable unrelated file operations. Protection
             // resolution follows dangling links to their future target and retains every known
             // alias even if a cycle or unreadable link leaves no resolvable final target.
@@ -197,11 +235,34 @@ impl FileAccess {
                 paths.push(match own {
                     ProtectedPath::Directory(_) => ProtectedPath::Directory(path),
                     ProtectedPath::File(_) => ProtectedPath::File(path),
+                    ProtectedPath::Home { .. } => ProtectedPath::Home {
+                        open: allowed
+                            .iter()
+                            .filter(|folder| opens_home(&path, folder))
+                            .cloned()
+                            .collect(),
+                        path,
+                    },
                 });
             }
         }
         paths
     }
+}
+
+/// Whether an allowed folder's real path lifts the home rule: it lies inside `home`, and its
+/// first name below `home` is not a dot-entry (`.config`, `.pki`, `.cache`), where the browser
+/// and its helpers keep what they read. So `/`, `/home` or the home itself lift nothing, and a
+/// dot name deeper down, inside a lifted folder, belongs to that folder.
+fn opens_home(home: &Path, folder: &Path) -> bool {
+    folder
+        .strip_prefix(home)
+        .ok()
+        .and_then(|below| below.components().next())
+        .is_some_and(|first| match first {
+            Component::Normal(name) => !name.as_encoded_bytes().starts_with(b"."),
+            _ => false,
+        })
 }
 
 fn check_own(
@@ -210,16 +271,17 @@ fn check_own(
     own: &[ProtectedPath],
 ) -> Result<(), FileAccessError> {
     for own in own {
-        let (path, tree) = match own {
-            ProtectedPath::Directory(path) => (path, true),
-            ProtectedPath::File(path) => (path, false),
+        let (path, tree, open) = match own {
+            ProtectedPath::Directory(path) => (path, true, &[][..]),
+            ProtectedPath::File(path) => (path, false, &[][..]),
+            ProtectedPath::Home { path, open } => (path, true, open.as_slice()),
         };
         // Chromium receives a whole directory upload and cannot omit ordinary protected
         // descendants. Writes check containment/equality only, including prospective parents.
-        if (tree && candidate.starts_with(path))
-            || candidate == path
-            || (directory && path.starts_with(candidate))
-        {
+        let tree_hit = tree
+            && candidate.starts_with(path)
+            && !open.iter().any(|folder| candidate.starts_with(folder));
+        if tree_hit || candidate == path || (directory && path.starts_with(candidate)) {
             return Err(FileAccessError::OwnFiles);
         }
     }
@@ -348,9 +410,10 @@ async fn resolve(path: &Path, mode: ResolveMode) -> Result<Resolution, FileAcces
 mod tests {
     use std::error::Error;
     use std::os::unix::fs::symlink;
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
     use std::sync::{Arc, PoisonError, RwLock};
 
+    use tempfile::TempDir;
     use tokio::fs;
 
     use super::{FileAccess, FileAccessError, ProtectedPath};
@@ -611,6 +674,204 @@ mod tests {
             Some(FileAccessError::OwnFiles),
             "a directory containing the configured alias is protected too"
         );
+        Ok(())
+    }
+
+    /// A home laid out as the SDK image's: dotfiles and caches, a `Downloads` link to the
+    /// downloads folder outside it, and folders a host may list.
+    struct HomeFixture {
+        dir: TempDir,
+        home: PathBuf,
+        downloads: PathBuf,
+    }
+
+    impl HomeFixture {
+        async fn new() -> Result<Self, Box<dyn Error>> {
+            let dir = tempfile::tempdir()?;
+            let home = dir.path().join("home/neo");
+            let downloads = dir.path().join("data/downloads");
+            for folder in ["shared/state", ".hidden", "plain", ".cache/fontconfig"] {
+                fs::create_dir_all(home.join(folder)).await?;
+            }
+            fs::create_dir_all(&downloads).await?;
+            for file in [
+                ".bashrc",
+                ".cache/fontconfig/fonts.cache-9",
+                "shared/readable.txt",
+                "shared/state/settings.json",
+                ".hidden/readable.txt",
+                "plain/readable.txt",
+            ] {
+                fs::write(home.join(file), "private").await?;
+            }
+            symlink(&downloads, home.join("Downloads"))?;
+            symlink(&home, dir.path().join("home-link"))?;
+            Ok(Self {
+                dir,
+                home,
+                downloads,
+            })
+        }
+
+        fn policy(&self, roots: Vec<PathBuf>) -> FileAccess {
+            FileAccess::new(
+                move || roots.clone(),
+                vec![
+                    ProtectedPath::Directory(self.home.join("shared/state")),
+                    ProtectedPath::Home {
+                        path: self.home.clone(),
+                        open: vec![self.downloads.clone()],
+                    },
+                ],
+            )
+        }
+    }
+
+    #[tokio::test]
+    async fn the_home_is_refused_except_inside_a_listed_folder_below_it()
+    -> Result<(), Box<dyn Error>> {
+        let fixture = HomeFixture::new().await?;
+        let (home, outside) = (&fixture.home, fixture.dir.path());
+        let policy = fixture.policy(vec![
+            fixture.downloads.clone(),
+            home.join("shared"),
+            home.join(".hidden"),
+        ]);
+        for path in [
+            home.join(".bashrc"),
+            home.join(".cache/fontconfig/fonts.cache-9"),
+            home.join(".pki/nssdb/cert9.db"),
+            home.join(".config/fontconfig/fonts.conf"),
+            home.join("new.png"),
+            home.join("plain/readable.txt"),
+            // A listed folder whose first name below the home is a dot-entry lifts nothing.
+            home.join(".hidden/readable.txt"),
+            // One of Neo's places inside a listed folder stays Neo's.
+            home.join("shared/state/settings.json"),
+            home.join("shared/../.bashrc"),
+            outside.join("home-link/.bashrc"),
+            outside.join("missing/../home-link/.pki/nssdb/cert9.db"),
+        ] {
+            assert_eq!(
+                policy.read(&path).await.err(),
+                Some(FileAccessError::OwnFiles),
+                "read {}",
+                path.display()
+            );
+            assert_eq!(
+                policy.write(&path).await.err(),
+                Some(FileAccessError::OwnFiles),
+                "write {}",
+                path.display()
+            );
+        }
+        for path in [home.clone(), outside.join("home"), outside.to_owned()] {
+            assert_eq!(
+                policy.read(&path).await.err(),
+                Some(FileAccessError::OwnFiles),
+                "a folder upload of {} would carry the home",
+                path.display()
+            );
+        }
+        assert!(policy.read(&home.join("shared/readable.txt")).await.is_ok());
+        assert!(
+            policy
+                .write(&home.join("shared/deep/.dot/shot.png"))
+                .await
+                .is_ok(),
+            "a dot name inside a listed folder belongs to that folder"
+        );
+        for path in ["Downloads/saved.csv", "Downloads/new/saved.csv"] {
+            assert!(
+                policy.write(&home.join(path)).await.is_ok(),
+                "~/Downloads is judged by its real path, the downloads folder"
+            );
+        }
+        assert!(policy.read(&home.join("Downloads/saved.csv")).await.is_ok());
+        assert!(!home.join(".pki").exists() && !home.join(".config").exists());
+        assert!(!outside.join("missing").exists() && !home.join("shared/deep").exists());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn a_root_at_or_above_the_home_lifts_nothing() -> Result<(), Box<dyn Error>> {
+        let fixture = HomeFixture::new().await?;
+        let home = &fixture.home;
+        for root in ["/".into(), home.clone(), fixture.dir.path().join("home")] {
+            let policy = fixture.policy(vec![root.clone()]);
+            for path in [home.join("plain/readable.txt"), home.join(".bashrc")] {
+                assert_eq!(
+                    policy.read(&path).await.err(),
+                    Some(FileAccessError::OwnFiles),
+                    "{} listed",
+                    root.display()
+                );
+                assert_eq!(
+                    policy.write(&path).await.err(),
+                    Some(FileAccessError::OwnFiles)
+                );
+            }
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn an_open_folder_lifts_only_the_home_rule() -> Result<(), Box<dyn Error>> {
+        let fixture = HomeFixture::new().await?;
+        let home = &fixture.home;
+        let inside = home.join("Inside");
+        fs::create_dir(&inside).await?;
+        fs::write(inside.join("saved.csv"), "ordinary").await?;
+        symlink(home.join(".cache/fontconfig"), home.join("into-cache"))?;
+        let listed = home.join("listed-not-made");
+        let policy = FileAccess::new(
+            move || vec![listed.clone()],
+            vec![ProtectedPath::Home {
+                path: home.clone(),
+                open: vec![
+                    inside.clone(),
+                    home.join("Downloads-not-made"),
+                    home.join(".config/not-made"),
+                    home.join("into-cache"),
+                    home.join(".bashrc"),
+                ],
+            }],
+        );
+        assert!(policy.write(&inside.join("saved.csv")).await.is_ok());
+        assert_eq!(
+            policy.read(&inside.join("saved.csv")).await.err(),
+            Some(FileAccessError::OutsideReadDirs),
+            "a read still needs files.readDirs"
+        );
+        for path in [
+            "Downloads-not-made/new/file.png",
+            "listed-not-made/file.png",
+        ] {
+            assert!(
+                policy.write(&home.join(path)).await.is_ok(),
+                "a folder not made yet is judged by its real path: {path}"
+            );
+        }
+        assert_eq!(
+            policy
+                .read(&home.join("listed-not-made/file.png"))
+                .await
+                .err(),
+            Some(FileAccessError::OutsideReadDirs),
+            "a missing read root grants no read"
+        );
+        for path in [
+            ".config/not-made/file.png",
+            "into-cache/fonts.cache-9",
+            ".bashrc",
+        ] {
+            assert_eq!(
+                policy.write(&home.join(path)).await.err(),
+                Some(FileAccessError::OwnFiles),
+                "{path}: a dot-entry, a link into one, or a file lifts nothing"
+            );
+        }
+        assert!(!home.join("Downloads-not-made").exists() && !home.join(".pki").exists());
         Ok(())
     }
 }

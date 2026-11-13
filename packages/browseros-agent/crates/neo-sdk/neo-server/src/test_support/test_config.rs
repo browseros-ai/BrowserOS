@@ -6,7 +6,9 @@ use std::path::Path;
 use neo_captcha::config::CaptchaConfig;
 use neo_takeover::Xvnc;
 
-use crate::config::{AppConfig, Defaults, EnvConfig, HostApiConfig, HostedMode, LaunchConfig};
+use crate::config::{
+    AppConfig, Defaults, EnvConfig, HostApiConfig, HostedMode, LaunchConfig, NeoHome,
+};
 
 /// The config Chromium would give a hosted Neo, with its state and its browser profile under
 /// `state_dir` and the agent port left to the OS (port 0; `App::local_addr` reports the one it
@@ -26,6 +28,7 @@ pub fn test_config(state_dir: &Path) -> AppConfig {
         state_dir: state_dir.to_path_buf(),
         downloads_dir: Some(state_dir.join("downloads")),
         profile_dir: Some(state_dir.join("profile")),
+        neo_home: NeoHome::NotNeos,
         captcha_key_files: Vec::new(),
         log_filter: Defaults::LOG_FILTER.to_owned(),
         hosted_mode: HostedMode::On,

@@ -49,7 +49,10 @@
 #                    GET answers what the host set; settings.json is 0600 neo under /data
 #   files            downloads-only defaults; all six path reads and file chooser; live PATCH;
 #                    symlinks; Neo's files and directory ancestors protected even with / listed;
-#                    saveAs and all screenshot path forms refuse before send or mkdir
+#                    saveAs and all screenshot path forms refuse before send or mkdir; Neo's home
+#                    (HOME: dotfiles, fontconfig, ~/.pki/nssdb, the crash reporter's settings) is
+#                    refused by every write and read spelling, a folder listed inside it stays
+#                    usable unless it is a dot-folder, and ~/Downloads works by its real path
 #   trace-values     on control detects canaries; off omits values from HTTP/events and raw files;
 #                    blob survives a server restart, expires at startup, and its download stays
 #   restart-browser  neo-quit 9110 quits cleanly, the supervisor restarts Neo, a new run passes
