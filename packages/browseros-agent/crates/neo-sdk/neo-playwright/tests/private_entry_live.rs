@@ -1590,6 +1590,8 @@ async fn tests_that_marked_previews_hide_mirrored_attributes_in_every_diagnostic
         bench.live.main_world(&opened.page, "(() => { const u = document.getElementById('user'); u.value = 'PublicAttrControl'; u.setAttribute('value', u.value); u.addEventListener('input', () => u.setAttribute('value', u.value)); const p = document.getElementById('pw'); p.value = 'DeclaredPreviewCanary'; p.setAttribute('value', p.value); return true; })()").await?;
         let page = opened.page.brand();
         let on_box = || ("target", ref_target(&page, &email));
+        bench.live.main_world(&opened.page, r#"document.body.insertAdjacentHTML('beforeend', '<input aria-label="Error target" aria-invalid="true" aria-errormessage="marked-error-message"><div id="marked-error-message">Wrong: <button aria-labelledby="user">Error source</button></div>'); true"#).await?;
+        let error_ref = bench.r#ref(&opened, "textbox", "Error target").await?;
         let hidden = || {
             expectation(
                 on_box(),
@@ -1621,6 +1623,27 @@ async fn tests_that_marked_previews_hide_mirrored_attributes_in_every_diagnostic
             "the page really copied the host's typed value into the attribute",
         );
         for conformance in [false, true] {
+            let mut error_input = expectation(
+                ("target", ref_target(&page, &error_ref)),
+                "toHaveAccessibleErrorMessage",
+                &json!({ "expression": "to.have.accessible.error.message", "expectedText": [{ "string": "wrong" }], "isNot": false }),
+            );
+            error_input["call"]["conformance"] = json!(conformance);
+            let mut matches = error_input.clone();
+            let expected = format!("Wrong: {}", "•".repeat(MARKED.len()));
+            matches["expectedText"] = json!([{ "string": expected }]);
+            assert_eq!(
+                bench.live.invoke("expect.locator", matches).await??,
+                Value::Null
+            );
+            let error = preview_failure(&bench, &opened, "expect.locator", error_input).await?;
+            assert!(error.message.contains(&expected), "{}", error.message);
+            for text in iter::once(&error.message).chain(&error.notes) {
+                assert!(
+                    !text.contains(MARKED),
+                    "marked error message leaked: {text}"
+                );
+            }
             for mut input in [
                 hidden(),
                 expectation(

@@ -29,6 +29,8 @@
 <!-- Native description reads the referenced button's accessible name. A direct textarea
      describedby is empty in Chromium and cannot establish this regression. -->
 <button id="description-from-private" aria-describedby="name-from-private">Description target</button>
+<input id="error-from-private" aria-label="Invalid private reference" aria-invalid="true" aria-errormessage="error-private-message">
+<div id="error-private-message">Wrong: <button aria-labelledby="private-textarea">Error source</button></div>
 <button id="description-direct" aria-describedby="private-textarea">Direct description control</button>
 <button class="strict-names" aria-labelledby="private-textarea">First alias</button>
 <button class="strict-names" aria-labelledby="private-textarea">Second alias</button>
@@ -44,6 +46,8 @@
 <span class="public-array">Public tail</span>
 <button id="name-from-public" aria-labelledby="name-prefix public-textarea">Public name target</button>
 <button id="description-from-public" aria-describedby="name-from-public">Public description target</button>
+<input id="error-from-public" aria-label="Invalid public reference" aria-invalid="true" aria-errormessage="error-public-message">
+<div id="error-public-message">Wrong: <button aria-labelledby="public-textarea">Public error source</button></div>
 <button id="intercept-target">Trusted event target</button>
 <input id="delayed-cover" type="password" value="AttrCanary-1"
   aria-valuetext="AttrCanary-1" aria-valuenow="AttrCanary-1">

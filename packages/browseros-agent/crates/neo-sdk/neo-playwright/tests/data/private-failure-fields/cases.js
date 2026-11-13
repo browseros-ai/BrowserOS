@@ -76,6 +76,9 @@ await fails('toMatchAriaSnapshot.locator', () => expect(input).toMatchAriaSnapsh
 await fails('toMatchAriaSnapshot.page', () => expect(page).toMatchAriaSnapshot('- button "Wrong expected string without a private marker"', options));
 await passes('toHaveAccessibleName.masked', () => expect(page.locator('#name-from-private')).toHaveAccessibleName('Public label ' + '•'.repeat(typed.length), options));
 await passes('toHaveAccessibleDescription.masked', () => expect(page.locator('#description-from-private')).toHaveAccessibleDescription('Public label ' + '•'.repeat(typed.length), options));
+await passes('toHaveAccessibleErrorMessage.masked', () => expect(page.locator('#error-from-private')).toHaveAccessibleErrorMessage('Wrong: ' + '•'.repeat(typed.length), options));
+await fails('toHaveAccessibleErrorMessage', () => expect(page.locator('#error-from-private')).toHaveAccessibleErrorMessage(wrong, options));
+check(failures.toHaveAccessibleErrorMessage.actual === 'Wrong: ' + '•'.repeat(typed.length), 'error message received is the guarded value');
 await passes('toHaveAccessibleDescription.direct.control', () => expect(page.locator('#description-direct')).toHaveAccessibleDescription('Private textarea', options));
 await fails('toHaveAccessibleName', () => expect(page.locator('#name-from-private')).toHaveAccessibleName(wrong, options));
 await fails('toHaveAccessibleDescription', () => expect(page.locator('#description-from-private')).toHaveAccessibleDescription(wrong, options));
@@ -171,6 +174,8 @@ for (const name of ['toHaveValue', 'toHaveText.direct', 'toHaveText.ancestor', '
 
 // Public twins establish that the guard did not globally suppress received values, text,
 // attributes or names. Intentional private reads remain clear after all failure cleanups.
+await passes('public.toHaveAccessibleErrorMessage', () => expect(page.locator('#error-from-public')).toHaveAccessibleErrorMessage('Wrong: PublicTyped', options));
+await fails('public.toHaveAccessibleErrorMessage', () => expect(page.locator('#error-from-public')).toHaveAccessibleErrorMessage(wrong, options));
 await passes('public.toHaveText', () => expect(publicTextarea).toHaveText('PublicText', options));
 await passes('public.toContainText', () => expect(page.locator('#public-ancestor')).toContainText('PublicText', options));
 await passes('public.toHaveText.array', () => expect(page.locator('.public-array')).toHaveText(['PublicText', 'Public tail'], options));
@@ -184,7 +189,7 @@ await fails('public.toHaveAccessibleName', () => expect(page.locator('#name-from
 await fails('public.toHaveAccessibleDescription', () => expect(page.locator('#description-from-public')).toHaveAccessibleDescription(wrong, options));
 await fails('public.toHaveCSS', () => expect(publicInput).toHaveCSS('content', wrong, options));
 for (const [name, actual] of [
-  ['public.toHaveValue', 'PublicTyped'], ['public.toHaveText', 'PublicText'],
+  ['public.toHaveAccessibleErrorMessage', 'Wrong: PublicTyped'], ['public.toHaveValue', 'PublicTyped'], ['public.toHaveText', 'PublicText'],
   ['public.toHaveAttribute', 'PublicAttr'], ['public.toHaveAccessibleName', 'Public label PublicTyped'],
   ['public.toHaveAccessibleDescription', 'Public label PublicTyped'], ['public.toHaveCSS', '"PublicAttr"'],
 ]) check(failures[name].actual === actual, name + ' preserves public received value');

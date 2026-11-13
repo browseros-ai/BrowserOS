@@ -39,6 +39,7 @@ await fails('toContainText.direct', () => expect(textarea).toContainText(wrong, 
 await fails('toHaveText.array', () => expect(page.locator('.private-array')).toHaveText([wrong, 'Public tail'], options));
 await fails('toContainText.array', () => expect(page.locator('.private-array')).toContainText([wrong], options));
 await fails('toHaveAccessibleName', () => expect(page.locator('#name-from-private')).toHaveAccessibleName(wrong, options));
+await fails('toHaveAccessibleErrorMessage', () => expect(page.locator('#error-from-private')).toHaveAccessibleErrorMessage(wrong, options));
 await fails('toHaveAccessibleDescription', () => expect(page.locator('#description-from-private')).toHaveAccessibleDescription(wrong, options));
 await fails('toHaveCSS.content.own', () => expect(input).toHaveCSS('content', wrong, options));
 await fails('toHaveCSS.content.before', () => expect(input).toHaveCSS('content', wrong, { ...options, pseudo: 'before' }));

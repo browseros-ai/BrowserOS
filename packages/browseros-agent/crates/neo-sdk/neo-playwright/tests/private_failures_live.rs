@@ -289,6 +289,11 @@ fn native_cases() -> Vec<(&'static str, &'static str, Value)> {
             json!({ "expression": "to.have.accessible.name", "expectedText": text }),
         ),
         (
+            "toHaveAccessibleErrorMessage",
+            "#error-from-private",
+            json!({ "expression": "to.have.accessible.error.message", "expectedText": text }),
+        ),
+        (
             "toHaveAccessibleDescription",
             "#description-from-private",
             json!({ "expression": "to.have.accessible.description", "expectedText": text }),

@@ -607,3 +607,73 @@ it('keeps a host-typed mark protected in conformance while declared fields stay 
   expect(JSON.stringify(declared)).toContain('SpokenCanary')
   expect(field.getAttribute('value')).toBe('MarkedCanary')
 })
+
+it('guards accessible error-message comparisons for declared and host-marked sources', async () => {
+  const canary = 'ErrCanary-4'
+  const masked = `Wrong: ${'•'.repeat(canary.length)}`
+  // Linkedom has no CSS.escape. Every id in this fixture is a plain identifier; native
+  // browser rows cover the actual ARIA id-reference resolver and CSS escaping.
+  const css = Object.getOwnPropertyDescriptor(globalThis, 'CSS')
+  Object.defineProperty(globalThis, 'CSS', {
+    configurable: true,
+    value: { escape: (id: string) => id },
+  })
+  try {
+    for (const marked of [false, true]) {
+      const probe = booted(`<html><body>
+      <input id="source" type="${marked ? 'text' : 'password'}" value="${canary}">
+      <input id="invalid" type="text" aria-invalid="true" aria-errormessage="message">
+      <div id="message">Wrong: <button aria-labelledby="source">Error source</button></div>
+    </body></html>`)
+      const params: ExpectParams = {
+        expression: 'to.have.accessible.error.message',
+        expectedText: [{ string: 'wrong' }],
+        isNot: false,
+      }
+      expect(
+        await conformanceCall(expectRequest('#invalid', params)),
+      ).toMatchObject({ received: `Wrong: ${canary}` })
+      if (marked) {
+        const resolved = probe.call({
+          op: 'resolve',
+          target: target('#source'),
+          strictness: 'strict',
+          want: 'element',
+        })
+        if (
+          typeof resolved !== 'object' ||
+          resolved === null ||
+          !('pin' in resolved) ||
+          typeof resolved.pin !== 'number'
+        )
+          throw new Error('the source was pinned for private entry')
+        await probe.call({
+          op: 'private',
+          pin: resolved.pin,
+          step: { kind: 'focus', text: canary, spaced: false },
+        })
+        probe.call({
+          op: 'private',
+          pin: resolved.pin,
+          step: { kind: 'forget' },
+        })
+      }
+      const failed = await check(probe, '#invalid', params)
+      expect(failed).toMatchObject({ matches: false, received: masked })
+      expect(JSON.stringify(failed)).not.toContain(canary)
+      const passing = { ...params, expectedText: [{ string: masked }] }
+      expect(await check(probe, '#invalid', passing)).toMatchObject({
+        matches: true,
+        received: masked,
+      })
+      if (marked)
+        expect(
+          await conformanceCall(expectRequest('#invalid', passing)),
+        ).toMatchObject({ matches: true, received: masked })
+      expect(element(probe, '#source').getAttribute('value')).toBe(canary)
+    }
+  } finally {
+    if (css) Object.defineProperty(globalThis, 'CSS', css)
+    else Reflect.deleteProperty(globalThis, 'CSS')
+  }
+})

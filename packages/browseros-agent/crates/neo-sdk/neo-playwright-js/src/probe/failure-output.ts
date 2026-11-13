@@ -41,6 +41,7 @@ function guardedComparison(params: FrameExpectParams): boolean {
     case 'to.match.aria':
     case 'to.have.accessible.name':
     case 'to.have.accessible.description':
+    case 'to.have.accessible.error.message':
       return true
     case 'to.have.text':
     case 'to.have.text.array':
