@@ -5616,3 +5616,77 @@ async fn a_start_that_cannot_list_the_tabs_treats_every_tab_as_filled() -> Resul
     }
     Ok(())
 }
+
+/// A recorded script run whose host task is `task`.
+fn run_for(harness: &Harness, task: &TaskId) -> Result<(Arc<RunCtx>, RunGuard), Box<dyn Error>> {
+    let view = harness.link.view().ok_or("the link is up")?;
+    let start = RunStart {
+        id: RunId::new(),
+        code: String::new(),
+        request_id: None,
+        task_id: Some(task.clone()),
+        host_data: None,
+        view,
+        deadline: Instant::now() + Defaults::RUN_TIMEOUT,
+        default_page: None,
+    };
+    Ok(RunCtx::start(&harness.dispatcher, start))
+}
+
+/// The id of a task `run`'s script creates.
+async fn created_in(harness: &Harness, run: &Arc<RunCtx>) -> Result<TaskId, Box<dyn Error>> {
+    let created = value(harness.submit(run, "neo.createTask", json!({})).await)?;
+    Ok(TaskId::parse(created["id"].as_str().ok_or("task id")?)?)
+}
+
+/// A task counts as its creating run's own: it joins the family of the run's host task as the run
+/// started, whose root a run naming a created task keeps. A run with no host task makes a family
+/// root, even after it picked another task.
+#[tokio::test]
+async fn a_created_task_joins_the_family_of_its_runs_host_task() -> Result<(), Box<dyn Error>> {
+    let harness = Harness::new().await?;
+    let host = TaskId::parse("host-s")?;
+    let (hosted, _hosted_guard) = run_for(&harness, &host)?;
+    let child = created_in(&harness, &hosted).await?;
+    assert_eq!(
+        harness.tabs.task(&child)?.family,
+        host,
+        "created in the host task's run"
+    );
+    let (naming, _naming_guard) = run_for(&harness, &child)?;
+    let grandchild = created_in(&harness, &naming).await?;
+    assert_eq!(
+        harness.tabs.task(&grandchild)?.family,
+        host,
+        "created in a run that names the created task: still the host task's family"
+    );
+    value(
+        harness
+            .submit(&naming, "task.close", json!({ "task": child.as_str() }))
+            .await,
+    )?;
+    assert!(
+        harness.tabs.task(&child).is_err(),
+        "the run closed its own empty host task"
+    );
+    let late = created_in(&harness, &naming).await?;
+    assert_eq!(
+        harness.tabs.task(&late)?.family,
+        host,
+        "the run's family was fixed at its start"
+    );
+
+    let (free, _free_guard) = harness.run()?;
+    value(
+        harness
+            .submit(&free, "neo.task", json!({ "id": grandchild.as_str() }))
+            .await,
+    )?;
+    let root = created_in(&harness, &free).await?;
+    assert_eq!(
+        harness.tabs.task(&root)?.family,
+        root,
+        "a run with no host task makes a family root, though it picked another task first"
+    );
+    Ok(())
+}

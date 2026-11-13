@@ -35,6 +35,8 @@ use crate::browser::{PageRef, RunView, TabRegistry, TaskRecord};
 pub(crate) struct RunCtx {
     id: RunId,
     task_id: Option<TaskId>,
+    /// The family of the host's task, read once at the run's start ([`RunCtx::family`]).
+    family: Option<TaskId>,
     view: BrowserView,
     /// The CDP epoch the view was taken at. The unbound view would silently follow a new
     /// socket, so the door refuses once the link's epoch differs.
@@ -194,6 +196,13 @@ impl RunCtx {
             // and a task closed later in this run must not be silently recreated.
             let _ = door.tabs().ensure_task(task);
         }
+        // Fixed now, so a task this run creates joins the host task's family even after the run
+        // closed that task. A task the full book could not register roots its own family.
+        let family = task_id.as_ref().map(|task| {
+            door.tabs()
+                .task_family(task)
+                .unwrap_or_else(|| task.clone())
+        });
         let tasks = Mutex::new(RunTasks::new(task_id.clone()));
         // In use from the start: the janitor must not close the task's tab between the run's
         // start and its first op.
@@ -210,6 +219,7 @@ impl RunCtx {
         let run = Arc::new(Self {
             id,
             task_id,
+            family,
             view: view.view,
             epoch: view.epoch,
             deadline,
@@ -256,6 +266,14 @@ impl RunCtx {
     #[must_use]
     pub(crate) fn task_id(&self) -> Option<&TaskId> {
         self.task_id.as_ref()
+    }
+
+    /// The family of the host's task as the run started: tasks this run creates join it. `None`
+    /// for a run with no host task, whose created tasks each root their own family, even after
+    /// it picked another task.
+    #[must_use]
+    pub(crate) fn family(&self) -> Option<&TaskId> {
+        self.family.as_ref()
     }
 
     /// Sets the task used by subsequent opens and the unresolved built-in page.
