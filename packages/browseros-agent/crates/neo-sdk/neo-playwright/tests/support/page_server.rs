@@ -6,7 +6,7 @@
 //! Routes beyond the fixtures: `/slow.png` answers after [`SLOW`], holding the load event of a
 //! page that shows it; `/missing.html` is a 404 page; `/echo.html` prints the request's
 //! `Referer` header in `#referer`; `/stall.html` takes the request and never answers, so a
-//! navigation to it never commits.
+//! navigation to it never commits; `/beforeunload.html` asks to stay whenever it is left.
 
 use std::error::Error;
 use std::future;
@@ -94,6 +94,14 @@ async fn serve(mut stream: TcpStream, port: u16) {
             "200 OK",
             "text/html",
             format!("<!doctype html><p id=\"referer\">{referer}</p>"),
+        ),
+        "/beforeunload.html" => (
+            "200 OK",
+            "text/html",
+            "<!doctype html><body style=\"height: 100vh\"><script>addEventListener(\
+             'beforeunload', (event) => { event.preventDefault(); event.returnValue = ''; \
+             });</script><p>stay</p></body>"
+                .to_owned(),
         ),
         _ => match PAGES.iter().find(|(known, _)| *known == path) {
             Some((_, page)) => (
