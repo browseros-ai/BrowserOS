@@ -2,10 +2,23 @@
 // live for one run; their pages are the Playwright provider's shared Page objects.
 
 ;(() => {
-  const { invoke, provide, refuse } = __neo
+  const { provide, refuse } = __neo
 
   provide('neo', (_init, { context }) => {
     const tasks = new Map()
+
+    // Every task operation settles as the Playwright provider's own operations do: before its
+    // promise settles, answered or rejected, the context reads every tree that went stale
+    // (`BrowserContext._settleFrames`), the tree of a page this operation handed out or bound
+    // the built-in `page` to included. So `frames()` is the page's real tree once the call
+    // resolves. A failed read is the settle step's own business and never fails the call.
+    const invoke = async (name, input) => {
+      try {
+        return await __neo.invoke(name, input)
+      } finally {
+        await context._settleFrames().catch(() => {})
+      }
+    }
 
     class Task {
       #id

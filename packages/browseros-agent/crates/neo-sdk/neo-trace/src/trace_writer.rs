@@ -469,6 +469,9 @@ impl OpenRun {
 
 struct OpenOperation {
     tab: Option<TabId>,
+    /// Whether it acted on `tab` (`trace_store::touched_tab`). Neo's own listeners and frame
+    /// reads name a tab without acting on it, so even when one fails it takes no picture of it.
+    touches: bool,
     /// The operation opens a tab (`trace_store::OPENERS`), whose end names it.
     opens: bool,
     /// Its place in the tree; the host's private typing is never pictured.
@@ -724,9 +727,10 @@ impl Writer {
             .entry(event.id.run)
             .or_insert_with(|| OpenRun::unseen(None));
         // The run-end shots go to the run's tabs as its record names them (`link_tab`): Neo's
-        // own subscriptions (`trace_store::SUBSCRIPTIONS`, its listeners and event pump) name a
+        // own subscriptions (`trace_store::SUBSCRIPTIONS`, its listeners and event pump) and frame
+        // reads (`trace_store::NEO_READS`) name a
         // tab without acting on it, so they make no tab the run's, nor a tab's last operation.
-        let touched = trace_store::touched_tab(&event.name, event.tab);
+        let touched = trace_store::touched_tab(&event.name, event.site.is_some(), event.tab);
         if let Some(tab) = touched {
             run.tabs.admitted(tab, event.id.seq);
             if !screenshot_rule::pictured(event.kind) {
@@ -737,6 +741,7 @@ impl Writer {
             event.id.seq,
             OpenOperation {
                 tab: event.tab,
+                touches: touched.is_some(),
                 opens: trace_store::OPENERS.contains(&event.name.as_str()),
                 kind: event.kind,
                 effect: event.effect,
@@ -829,7 +834,7 @@ impl Writer {
                 run.tabs.admitted(tab, event.id.seq);
             }
         }
-        let shot_tab = open.as_ref().and_then(|open| {
+        let shot_tab = open.as_ref().filter(|open| open.touches).and_then(|open| {
             screenshot_rule::after_op(
                 open.kind,
                 open.effect,

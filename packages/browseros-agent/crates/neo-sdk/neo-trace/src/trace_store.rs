@@ -63,6 +63,13 @@ pub(crate) const SUBSCRIPTIONS: [&str; 3] = [
     "events.next",
 ];
 
+/// Neo's own reads of a tab for a script's caches, sent with no call site: the prelude's frame-tree
+/// read (`page.frames`), made for every listed tab before a run's first statement and at a wait.
+/// Like a subscription, one names a tab without acting on it, so it never makes a tab a run's or a
+/// task's, moves no view that follows the task, and keeps no tab in use. A script never sends
+/// one: its `frames()` reads the cache.
+pub(crate) const NEO_READS: [&str; 1] = ["page.frames"];
+
 /// Operations that open a tab, which arrives on their end (`page_after`) rather than as their
 /// target: the run opened it, so it is the run's even before the script acts on it.
 pub(crate) const OPENERS: [&str; 1] = ["context.newPage"];
@@ -80,13 +87,29 @@ pub fn is_subscription(name: &str) -> bool {
     SUBSCRIPTIONS.contains(&name)
 }
 
-/// The tab an operation `name` on `tab` touches: its target, unless it only subscribes. The one
-/// rule for "the run touched this tab": the run record's tabs (`TraceBatch::link_tab`), its
-/// run-end screenshots (`TouchedTabs`) and a task's follower (`TraceRecordEvent::OperationStarted`
-/// `touched`) all take it, so Neo's own listeners on every known tab move none of them.
+/// Whether the operation `name`, sent with a call site or without (`sited`), is one of Neo's own
+/// reads (see [`NEO_READS`]). The door asks too, for the tab uses it keeps in memory.
 #[must_use]
-pub(crate) fn touched_tab(name: &str, tab: Option<TabId>) -> Option<TabId> {
-    tab.filter(|_| !is_subscription(name))
+pub fn is_neo_read(name: &str, sited: bool) -> bool {
+    !sited && NEO_READS.contains(&name)
+}
+
+/// The tab an operation `name` on `tab` touches: its target, unless it only subscribes or is one
+/// of Neo's own reads. The one rule for "the run touched this tab": the run record's tabs
+/// (`TraceBatch::link_tab`), its run-end screenshots (`TouchedTabs`) and a task's follower
+/// (`TraceRecordEvent::OperationStarted` `touched`) all take it, so Neo's own listeners and frame
+/// reads on every known tab move none of them.
+#[must_use]
+pub(crate) fn touched_tab(name: &str, sited: bool, tab: Option<TabId>) -> Option<TabId> {
+    tab.filter(|_| !is_subscription(name) && !is_neo_read(name, sited))
+}
+
+/// The SQL form of "not one of Neo's own reads" ([`is_neo_read`]), for the reads of what a task
+/// or a tab acted on.
+fn not_neo_read() -> Condition {
+    Condition::any()
+        .add(operations::Column::Name.is_not_in(NEO_READS))
+        .add(operations::Column::Site.is_not_null())
 }
 
 /// The most screenshot bytes kept on disk (D5): about 7,000 JPEGs of 150 KB.
@@ -539,6 +562,7 @@ impl TraceStore {
             ])
             .filter(operations::Column::RunId.in_subquery(task_runs(task)))
             .filter(operations::Column::Name.is_not_in(SUBSCRIPTIONS))
+            .filter(not_neo_read())
             .filter(
                 Condition::any()
                     .add(operations::Column::TargetTabId.is_not_null())
@@ -685,6 +709,7 @@ impl TraceStore {
             .inner_join(runs::Entity)
             .filter(tab.is_in(tabs.iter().map(|tab| tab.0)))
             .filter(operations::Column::Name.is_not_in(SUBSCRIPTIONS))
+            .filter(not_neo_read())
             .filter(runs::Column::TaskId.is_not_null())
             .distinct()
             .order_by_asc(runs::Column::TaskId)
@@ -727,11 +752,13 @@ fn filtered_operations(
     if filter == OperationFilter::All {
         return select;
     }
-    select.filter(
-        Condition::any()
-            .add(operations::Column::Name.is_not_in(SUBSCRIPTIONS))
-            .add(operations::Column::Site.is_not_null()),
-    )
+    select
+        .filter(
+            Condition::any()
+                .add(operations::Column::Name.is_not_in(SUBSCRIPTIONS))
+                .add(operations::Column::Site.is_not_null()),
+        )
+        .filter(not_neo_read())
 }
 
 /// One correlated statement supplies tabs to every summary, including detail and tail reads.

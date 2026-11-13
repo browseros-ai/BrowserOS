@@ -65,13 +65,15 @@ pub struct OperationRow {
 }
 
 impl OperationRow {
-    /// Whether Neo owns this subscription rather than an explicit script listener.
+    /// Whether Neo owns this operation rather than the script: one of its subscriptions, not an
+    /// explicit script listener, or one of its own frame reads (`trace_store::NEO_READS`).
     /// Subscription names are shared with tab ownership and run-end screenshots; the script
     /// site distinguishes public listener calls from the prelude's background maintenance.
     /// Historical listener rows without a recorded site are indistinguishable from Neo's work.
     #[must_use]
     pub fn is_internal(&self) -> bool {
-        crate::is_subscription(&self.name) && self.site.is_none()
+        (crate::is_subscription(&self.name) && self.site.is_none())
+            || crate::is_neo_read(&self.name, self.site.is_some())
     }
 }
 
@@ -81,7 +83,8 @@ pub enum OperationFilter {
     /// Every stored operation.
     #[default]
     All,
-    /// Omit subscriptions without a recorded script site. Historical listeners may lack sites.
+    /// Omit Neo's own operations: subscriptions without a recorded script site, and its frame
+    /// reads (`OperationRow::is_internal`). Historical listeners may lack sites.
     Script,
 }
 

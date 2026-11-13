@@ -22,6 +22,13 @@ import { markHandle } from './options'
 import { Page } from './page'
 import { TimeoutSettings } from './timeouts'
 
+/**
+ * How long a run's start waits for one listed tab's frame tree. Chromium answers no command
+ * for a tab whose navigation is pending, so a tab another run is navigating would otherwise
+ * hold this run's first statement; the tab's tree is read again at the script's next wait.
+ */
+const LISTED_FRAMES_TIMEOUT_MS = 1_000
+
 /** The page an op result names: a revived Page, or a raw `{"$neo":"page","tab":1}` brand. */
 function pageFact(value: unknown): PageFact | null {
   if (value instanceof Page)
@@ -56,6 +63,8 @@ export class BrowserContext extends EventEmitter {
   readonly #handed = new WeakSet<Page>()
   /** Set once the run's page exists: a page first seen after it is working (`Page._working`). */
   #started = false
+  /** The frame versions of the reply `_applyReply` is applying, for the pages it makes. */
+  #replyVersions: Map<number, number> | null = null
 
   constructor() {
     super()
@@ -206,12 +215,24 @@ export class BrowserContext extends EventEmitter {
     approved: number | null = null,
   ): Page {
     let page = this.#byTab.get(fact.tab)
+    const fresh = !page
     if (!page) {
       page = new Page(this, fact.tab, fact.url)
       page._working = this.#started
       this.#byTab.set(fact.tab, page)
+      // The version the reply that names it gave, taken before its first read, so that read
+      // counts as current and the next reply does not read it again.
+      const version = this.#replyVersions?.get(fact.tab)
+      if (version !== undefined) page._frameVersion(version)
     }
     page._applyFact(fact, at, approved)
+    // A page first seen once the run started (a popup, a new page, an op's result, a tab
+    // another run opened, one a start read's reply listed) has its tree read now, in the
+    // background, as the start reads every listed tab's: it is there by the script's next
+    // await. A sync getter cannot wait for it, so in the instant it is handed out (a popup
+    // listener) `frames()` lists what was read so far, as upstream's does as a popup opens.
+    if (fresh && this.#started && !page.isClosed())
+      void page._readInitialFrames(LISTED_FRAMES_TIMEOUT_MS)
     return page
   }
 
@@ -240,6 +261,10 @@ export class BrowserContext extends EventEmitter {
    */
   _runPage(init: RunInit): Page {
     for (const fact of init.pages) this._pageFor(fact, init.observed)
+    // The versions the start's reads are read at, so the first reply does not take them for
+    // changes and read every tab again.
+    for (const { tab, version } of init.frames ?? [])
+      this.#byTab.get(tab)?._frameVersion(version)
     const page = init.page
       ? this._pageFor(init.page, init.observed)
       : new Page(this, null)
@@ -250,19 +275,65 @@ export class BrowserContext extends EventEmitter {
   }
 
   /**
-   * One `page.frames` read per open working page that has a tab, in parallel, each failure
-   * swallowed, as `waitForTimeout` ends (FR-1). A page with no tab yet is skipped, so a wait
-   * never opens the run's lazy tab, and a refused read leaves that page's tree as it was. So is
-   * a page with a navigation op in flight, which Chromium would not answer until that
-   * navigation ends (`Page._navigationsInFlight`).
+   * Every page's frame tree, read in parallel before the agent's first statement (FR-1): the
+   * run's page and every tab the init listed. Page facts carry no frame tree, so without this a
+   * tab the script reaches through `pages()`, another task's say, listed only its main frame. A
+   * listed tab's read is bounded (`LISTED_FRAMES_TIMEOUT_MS`): a tab another run is navigating
+   * answers no command until that navigation commits, and the script must not wait on it. These
+   * reads are Neo's own (`Page._refreshFrames`), so they cost one `page.frames` per open tab
+   * and move nothing the run's acts move.
+   */
+  async _readInitialFrames(runPage: Page): Promise<void> {
+    const pages = new Set([runPage, ...this._knownPages()])
+    await Promise.all(
+      [...pages].map((page) =>
+        page._readInitialFrames(
+          page === runPage ? 0 : LISTED_FRAMES_TIMEOUT_MS,
+        ),
+      ),
+    )
+  }
+
+  /**
+   * Before one of the script's operations settles (bridge.ts `onSettle`): reads again, in
+   * parallel, the tree of every page whose frames changed since it was read (every reply carries
+   * each tab's version), whose last read was not whole, or whose first read is still in flight
+   * (it joins that read), so `frames()` is each page's real tree after every awaited operation.
+   * The bound: one read per such tab per operation, each within `LISTED_FRAMES_TIMEOUT_MS`; a
+   * page whose frames did not change costs nothing, and one whose frames change all the time
+   * costs one read per operation. These reads are Neo's own, like the start's.
+   */
+  async _settleFrames(): Promise<void> {
+    const stale = this._knownPages().filter((page) => page._framesStale())
+    if (stale.length === 0) return
+    await Promise.all(
+      stale.map((page) => page._settle(LISTED_FRAMES_TIMEOUT_MS)),
+    )
+  }
+
+  /**
+   * One `page.frames` read per open page that has a tab and that the script acted on
+   * (`Page._working`) or whose frames it read or could not read whole (`Page._framesWatched`),
+   * in parallel, each failure swallowed, as `waitForTimeout` ends (FR-1). A page with no tab yet
+   * is skipped, so a wait never opens the run's lazy tab, and a refused read leaves that page's
+   * tree as it was. So is a page with a navigation op in flight, which Chromium would not answer
+   * until that navigation ends (`Page._navigationsInFlight`). A page the script never acted on is
+   * read within `LISTED_FRAMES_TIMEOUT_MS`, as at the start and in a settle step: its tab's
+   * attach can stall (another run navigating it), and the script's timer must not wait on it.
    */
   async _refreshWorkingFrames(api: string): Promise<void> {
     const working = this._knownPages().filter(
       (page) =>
-        page._working && page._tab !== null && page._navigationsInFlight === 0,
+        (page._working || page._framesWatched) &&
+        page._tab !== null &&
+        page._navigationsInFlight === 0,
     )
     await Promise.all(
-      working.map((page) => page._refreshFrames(api).catch(() => undefined)),
+      working.map((page) =>
+        page
+          ._refreshFrames(api, page._working ? 0 : LISTED_FRAMES_TIMEOUT_MS)
+          .catch(() => undefined),
+      ),
     )
   }
 
@@ -278,21 +349,46 @@ export class BrowserContext extends EventEmitter {
    * script; otherwise `page` stays unopened until its first action, whose `defaultPage` names
    * the same tab, so the object the script holds keeps working until the script uses `page`.
    */
-  _applyReply({ pages, defaultPage, pickedPage, observed }: Reply): void {
+  _applyReply({
+    pages,
+    defaultPage,
+    pickedPage,
+    observed,
+    frames,
+  }: Reply): void {
+    const versions = new Map<number, number>()
+    for (const { tab, version } of frames ?? []) versions.set(tab, version)
+    for (const [tab, version] of versions)
+      this.#byTab.get(tab)?._frameVersion(version)
     const page = this.#unopened
     const held = pickedPage ? this.#byTab.get(pickedPage.tab) : undefined
     const bind =
       defaultPage ?? (held && this.#handed.has(held) ? null : pickedPage)
     if (bind && page) {
+      const known = this.#byTab.get(bind.tab)
       this.#unopened = null
       page._tab = bind.tab
       this.#byTab.set(bind.tab, page)
+      const version = versions.get(bind.tab)
+      if (version !== undefined) page._frameVersion(version)
+      // The built-in `page` takes over a tab that already has a document: one the context
+      // knew (its object's tree stays with that object) or a task's tab it was picked for. It
+      // has read no tree of it, so it reads it now, and the operation that bound it settles
+      // after that read (the settle steps join a first read). A tab the door opened for it
+      // is new: its reply's version says when its tree is worth reading.
+      if (known || bind === pickedPage)
+        void page._readInitialFrames(LISTED_FRAMES_TIMEOUT_MS)
     }
     const approved = new Map<number, number>()
     for (const close of observed?.closes ?? [])
       approved.set(close.tab, Math.max(approved.get(close.tab) ?? 0, close.seq))
-    for (const fact of pages)
-      this._pageFor(fact, observed, approved.get(fact.tab) ?? null)
+    this.#replyVersions = versions
+    try {
+      for (const fact of pages)
+        this._pageFor(fact, observed, approved.get(fact.tab) ?? null)
+    } finally {
+      this.#replyVersions = null
+    }
   }
 
   async #openPage(api: string): Promise<Page> {

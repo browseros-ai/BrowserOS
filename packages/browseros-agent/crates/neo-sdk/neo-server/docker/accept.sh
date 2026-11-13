@@ -40,6 +40,10 @@
 #                    on a wait, a wait loop cut by its deadline, or its script's act on another
 #                    task's tab and the New Tab; two tasks interleaved; once another task closed
 #                    the tab, a new tab of its own (accept_task_page.py)
+#   frames           10 times each, another task's tab read through context.pages() lists its
+#                    cross-site and same-origin frames at the script's first statement and after
+#                    a title; a later run of the task that opened it too; a cross-site frame
+#                    added mid-run shows after the script's next wait (accept_frames.py)
 #   tab-keep         host keeps survive idle sweeps; DELETE and TTL restart the idle clock;
 #                    agents can fill, read, and close kept tabs, including task.close()
 #   mcp-remote       9011 is the same MCP over TLS; with NEO_MCP_REMOTE=false (the default) a
@@ -166,7 +170,8 @@ install_client() { # name: the probes, beside smoke.py whose MCP client they reu
   docker exec "$1" mkdir -p /opt/neo-accept
   local file
   for file in "$here/smoke.py" "$here/smoke_sdk.py" "$here/accept_client.py" "$here/accept_files.py" \
-    "$here/trace_values.py" "$here/accept_task_page.py" "$here/accept_tab_keep.py"; do
+    "$here/trace_values.py" "$here/accept_task_page.py" "$here/accept_tab_keep.py" \
+    "$here/accept_frames.py"; do
     docker cp -q "$file" "$1:/opt/neo-accept/" || return 1
   done
 }
@@ -241,7 +246,7 @@ detail="$image_arch, browser $(fact browser), server $(fact marker) $(fact sha |
 if [ ${#problems[@]} -eq 0 ]; then result PASS identity "$detail"; else result FAIL identity "${problems[*]}"; fi
 
 if [ "$image_arch" != "$engine_arch" ]; then
-  for check in boot mcp host-api downloads pdf-downloads blobs tab-keep settings files trace-values mcp-remote restart-browser stop persist kill-all captcha-keys; do
+  for check in boot mcp host-api downloads pdf-downloads blobs frames tab-keep settings files trace-values mcp-remote restart-browser stop persist kill-all captcha-keys; do
     result SKIP "$check" "$image_arch image on a $engine_arch engine: emulated, not evidence"
   done
   printf '\n'; printf '%s\n' "${results[@]}"
@@ -377,6 +382,17 @@ if [ "$booted" = 1 ]; then
     result PASS task-page "$(jget "$task_page" 'd["detail"]')"
   else
     result FAIL task-page "$(jget "$task_page" 'd["detail"] + "; " + "; ".join(d["problems"][:3])' || printf '%s' "${task_page:0:300}")"
+  fi
+
+  # --- frames --------------------------------------------------------------------------------
+  # Every page a script reaches lists its whole frame tree, cross-site children included, from
+  # its first statement: another task's tab, the shape a host's observer reads (accept_frames.py).
+  frames=$(client "$main" "${as_host[@]}" python3 accept_frames.py http://127.0.0.1:9010/mcp 10 2>&1)
+  if [ -n "$logs_dir" ]; then mkdir -p "$logs_dir"; printf '%s\n' "$frames" > "$logs_dir/frames.json"; fi
+  if [ "$(jget "$frames" 'd["ok"]')" = True ]; then
+    result PASS frames "$(jget "$frames" 'd["detail"]')"
+  else
+    result FAIL frames "$(jget "$frames" 'd["detail"] + "; " + "; ".join(d["problems"][:3])' || printf '%s' "${frames:0:300}")"
   fi
 
   tab_keep=$(client "$main" "${as_host[@]}" python3 accept_tab_keep.py \
@@ -584,7 +600,7 @@ for pid in pids:
     result FAIL captcha-keys "image's own keys listed=$main_captcha (want $want_main); host key file listed=${keyed_captcha:-not booted}"
   fi
 else
-  for check in mcp host-api downloads pdf-downloads blobs tab-keep settings files trace-values mcp-remote restart-browser stop persist kill-all captcha-keys; do
+  for check in mcp host-api downloads pdf-downloads blobs frames tab-keep settings files trace-values mcp-remote restart-browser stop persist kill-all captcha-keys; do
     result FAIL "$check" "not run: the image did not boot"
   done
 fi

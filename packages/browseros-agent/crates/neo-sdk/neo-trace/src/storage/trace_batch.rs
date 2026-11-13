@@ -297,8 +297,9 @@ impl TraceBatch {
                 .exec(&self.txn)
                 .await?;
         }
-        // A subscription names a tab without acting on it, so it links no tab to the run.
-        if let Some(tab) = trace_store::touched_tab(op.name, op.tab) {
+        // A subscription or one of Neo's own reads names a tab without acting on it, so it links
+        // no tab to the run.
+        if let Some(tab) = trace_store::touched_tab(op.name, op.site.is_some(), op.tab) {
             self.link_tab(op.id.run, tab).await?;
         }
         Ok(())
