@@ -11019,6 +11019,7 @@ ${changes}`;
     #closeEvent = 0;
     #approvedClose = null;
     _working = false;
+    _framesWatched = false;
     _navigationsInFlight = 0;
     #publications = new Publications;
     #childFrames = new Map;
@@ -11053,6 +11054,7 @@ ${changes}`;
       return this._mainFrame;
     }
     frames() {
+      this._framesWatched = true;
       return [this._mainFrame, ...this.#childFrames.values()];
     }
     frame(selector) {
@@ -11514,16 +11516,16 @@ ${changes}`;
     #payloadCurrent(at) {
       return !this._closed && at !== null && at.payloadCurrent === true && at.seq === this.#observedSeq;
     }
-    async _readInitialFrames() {
-      if (this._tab === null)
+    async _readInitialFrames(timeoutMs = 0) {
+      if (this._tab === null || this._closed)
         return;
-      await this._refreshFrames("page.frames").catch(() => {
-        return;
+      await this._refreshFrames("page.frames", timeoutMs).catch(() => {
+        this._framesWatched = true;
       });
     }
     async _refreshFrames(api, timeoutMs = 0) {
       const site = INTERNAL_SITE;
-      const { value: tree, observed } = await invokeObserved("page.frames", site, { api, timeoutMs }, { page: await this._brand(api) });
+      const { value: tree, observed } = await invokeObserved("page.frames", site, { api, timeoutMs }, { page: await this._brand(api, { working: false }) });
       if (this.#payloadCurrent(observed) && Array.isArray(tree?.frames))
         this._applyFrames(tree.frames, observed);
     }
@@ -11856,6 +11858,7 @@ ${changes}`;
   }
 
   // crates/neo-sdk/neo-playwright-js/src/prelude/context.ts
+  var LISTED_FRAMES_TIMEOUT_MS = 1000;
   function pageFact(value) {
     if (value instanceof Page)
       return value._tab === null ? null : { tab: value._tab };
@@ -11980,8 +11983,12 @@ ${changes}`;
       this.#started = true;
       return page;
     }
+    async _readInitialFrames(runPage) {
+      const pages = new Set([runPage, ...this._knownPages()]);
+      await Promise.all([...pages].map((page) => page._readInitialFrames(page === runPage ? 0 : LISTED_FRAMES_TIMEOUT_MS)));
+    }
     async _refreshWorkingFrames(api) {
-      const working = this._knownPages().filter((page) => page._working && page._tab !== null && page._navigationsInFlight === 0);
+      const working = this._knownPages().filter((page) => (page._working || page._framesWatched) && page._tab !== null && page._navigationsInFlight === 0);
       await Promise.all(working.map((page) => page._refreshFrames(api).catch(() => {
         return;
       })));
@@ -19717,7 +19724,7 @@ Call Log:
   onReply((reply) => context2._applyReply(reply));
   provide("page", awaitsProviders() ? async (init) => {
     const page = context2._runPage(init);
-    await page._readInitialFrames();
+    await context2._readInitialFrames(page);
     return page;
   } : (init) => context2._runPage(init));
   provide("context", () => context2);

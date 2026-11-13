@@ -150,6 +150,15 @@ export class Page extends EventEmitter {
    */
   _working = false
   /**
+   * Whether the script read this page's frames (`frames()`, `frame()`, a frame's
+   * `childFrames()`), or Neo's start-of-run read of them failed. `waitForTimeout` then reads the
+   * tree again, as for a working page, so a frame added later to a tab the script only watches
+   * (another task's, say) shows after the script's next wait. Page facts carry no frame tree,
+   * and an ordinary op's reply none either: only Neo's `page.frames` read, a navigation's or
+   * load wait's reply, or an evaluate's reply update it.
+   */
+  _framesWatched = false
+  /**
    * Navigation ops (goto, reload, goBack, goForward) in flight on this page. While Chromium has
    * not answered a `Page.navigate` (or history or reload command) for a tab, it holds every
    * command bound for that tab's renderer, from any session, until the navigation commits or
@@ -206,6 +215,7 @@ export class Page extends EventEmitter {
   }
 
   frames(): Frame[] {
+    this._framesWatched = true
     return [this._mainFrame, ...this.#childFrames.values()]
   }
 
@@ -1226,24 +1236,31 @@ export class Page extends EventEmitter {
   }
 
   /**
-   * The run's page tree, read once before the agent's first statement (FR-1), so a script that
-   * starts on a tab with iframes finds them in `frames()`, as upstream's does. A page with no
-   * tab yet reads nothing, so a run that never touches `page` opens no tab. A refused or failed
-   * read, as under the owner's takeover, keeps the main frame alone and the run starts: the
-   * script's own first op meets the same refusal (sdk-skeleton's A4).
+   * This page's tree, read once before the agent's first statement (FR-1,
+   * `BrowserContext._readInitialFrames`), so a script finds its iframes in `frames()` as upstream's
+   * does. A page with no tab yet reads nothing, so a run that never touches `page` opens no tab.
+   * A refused or failed read, as under the owner's takeover, keeps the main frame alone and the
+   * run starts; the page is then read again at the script's next wait (`_framesWatched`).
    */
-  async _readInitialFrames(): Promise<void> {
-    if (this._tab === null) return
-    await this._refreshFrames('page.frames').catch(() => undefined)
+  async _readInitialFrames(timeoutMs = 0): Promise<void> {
+    if (this._tab === null || this._closed) return
+    await this._refreshFrames('page.frames', timeoutMs).catch(() => {
+      this._framesWatched = true
+    })
   }
 
+  /**
+   * One `page.frames` read of this tab. It is Neo's own (no call site, `working: false`): it makes
+   * no page working, no tab the run's or its task's, and moves no view that follows the task
+   * (neo-trace `NEO_READS`).
+   */
   async _refreshFrames(api: string, timeoutMs = 0): Promise<void> {
     const site = INTERNAL_SITE
     const { value: tree, observed } = await invokeObserved(
       'page.frames',
       site,
       { api, timeoutMs },
-      { page: await this._brand(api) },
+      { page: await this._brand(api, { working: false }) },
     )
     // A reply without a tree leaves the caches as they were rather than failing the
     // navigation that already succeeded. The main frame's entry refreshes `url()`.

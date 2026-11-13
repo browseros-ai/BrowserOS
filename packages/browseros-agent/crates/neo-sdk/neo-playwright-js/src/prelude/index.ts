@@ -66,15 +66,16 @@ onReply((reply) => context._applyReply(reply))
 
 // The agent function's parameters, after the bootstrap's own. claw-sdk's placeholder page
 // prelude provides `page` and `context` too; these replace them when both are loaded.
-// With a bootstrap that awaits its providers (FR/RC C5), the run's page reads its frame tree
-// before the agent's first statement, so `page.frames()` lists the tab's iframes from the start,
-// as upstream's does (FR-1). An older bootstrap would hand the script the promise instead.
+// With a bootstrap that awaits its providers (FR/RC C5), the run's page and every listed tab
+// read their frame trees before the agent's first statement, so `frames()` of any page the
+// script reaches lists its iframes from the start, as upstream's does (FR-1). An older bootstrap
+// would hand the script the promise instead.
 provide(
   'page',
   awaitsProviders()
     ? async (init) => {
         const page = context._runPage(init)
-        await page._readInitialFrames()
+        await context._readInitialFrames(page)
         return page
       }
     : (init) => context._runPage(init),

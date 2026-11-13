@@ -154,7 +154,10 @@ it('tests that waitForTimeout reads the frames of each working page once, and of
     await context.pages()[1].title()
     await page.mainFrame().waitForTimeout(1)
   `)
-  expect(reads(runtime.startCalls)).toEqual([[1007, 'page.frames']])
+  expect(reads(runtime.startCalls)).toEqual([
+    [1007, 'page.frames'],
+    [1009, 'page.frames'],
+  ])
   expect(reads(runtime.calls)).toEqual([
     [1007, 'page.waitForTimeout'],
     [1007, 'frame.waitForTimeout'],
@@ -195,7 +198,7 @@ it('tests that a wait skips a page whose navigation is in flight, which Chromium
   )
 })
 
-it('tests that a wait reads nothing for a lazy page or a listed tab the script never touched', async () => {
+it('tests that a run with no tab of its own reads each listed tab once at its start, and a wait reads none the script left alone', async () => {
   const runtime = loadPrelude({
     seed: {
       page: null,
@@ -209,7 +212,122 @@ it('tests that a wait reads nothing for a lazy page or a listed tab the script n
     ),
   )
   expect(frames).toEqual(1)
-  expect([...runtime.startCalls, ...runtime.calls]).toEqual([])
+  expect(reads(runtime.startCalls)).toEqual([[1009, 'page.frames']])
+  expect(runtime.calls).toEqual([])
+})
+
+// Every page a script can reach lists its whole frame tree from the script's first statement:
+// the init's page facts carry no tree, so before the run starts the prelude reads one for every
+// listed tab, not only for the run's own page. Another task's tab, taken from context.pages(),
+// is the shape a host's observer reads.
+
+/** A run on tab 1007 that lists 1009, another task's tab with a same-origin and a cross-site child. */
+const OBSERVER = {
+  page: { $neo: 'page', tab: 1007 },
+  pages: [
+    { tab: 1007, url: 'https://agent.example/', title: 'Agent', closed: false },
+    { tab: 1009, url: 'https://a.example/', title: 'Other', closed: false },
+  ],
+  observed: { seq: 0, events: 0 },
+}
+
+/** The tab a `page.frames` call names. */
+const tabOf = (call: Call) => Reflect.get(Object(call.input.page), 'tab')
+
+const OTHER = 'context.pages().find((q) => q.toJSON().tab === 1009)'
+
+it("tests that another task's tab lists its cross-site and same-origin frames at the script's first statement", async () => {
+  const runtime = loadPrelude({
+    seed: OBSERVER,
+    answer: (call) => (call.name === 'page.frames' ? TREE : null),
+  })
+  const outcome = json(
+    await runtime.run(`
+      const p = ${OTHER}
+      return { same: p === page, names: p.frames().map((f) => f.name()), urls: p.frames().map((f) => f.url()) }
+    `),
+  )
+  expect(outcome).toEqual({
+    same: false,
+    names: ['', 'same', 'cross'],
+    urls: [
+      'https://a.example/',
+      'https://a.example/child',
+      'https://b.example/',
+    ],
+  })
+  // A listed tab's read is bounded, as a tab another run is navigating answers nothing.
+  expect(
+    runtime.startCalls
+      .filter((call) => call.name === 'page.frames')
+      .map((call) => [
+        tabOf(call),
+        Reflect.get(Object(call.input.call), 'timeoutMs'),
+      ]),
+  ).toEqual([
+    [1007, 0],
+    [1009, 1000],
+  ])
+})
+
+it("tests that a frame added to a tab the script only reads shows after the script's next wait", async () => {
+  let reads1009 = 0
+  const added = {
+    frames: [
+      ...TREE.frames,
+      { id: 'late', parentId: 'main', name: 'late', url: 'https://c.example/' },
+    ],
+  }
+  const runtime = loadPrelude({
+    seed: OBSERVER,
+    answer: (call) => {
+      if (call.name !== 'page.frames') return null
+      if (tabOf(call) !== 1009) return TREE
+      return reads1009++ === 0 ? TREE : added
+    },
+  })
+  const counts = json(
+    await runtime.run(`
+      const p = ${OTHER}
+      const before = p.frames().length
+      await page.waitForTimeout(1)
+      return [before, p.frames().length]
+    `),
+  )
+  expect(counts).toEqual([3, 4])
+})
+
+it('tests that a listed tab whose start read failed is read again at the next wait', async () => {
+  let reads1009 = 0
+  const runtime = loadPrelude({
+    seed: OBSERVER,
+    answer: (call) => {
+      if (call.name !== 'page.frames') return null
+      if (tabOf(call) !== 1009 || reads1009++ > 0) return TREE
+      return {
+        err: {
+          code: 'timeout',
+          owner: 'host',
+          delivery: 'unknown',
+          retryable: true,
+          operationId: 'run.2',
+          timeout: true,
+          message: 'page.frames: Timeout 1000ms exceeded',
+        },
+      }
+    },
+  })
+  const count = json(
+    await runtime.run(`
+      await page.waitForTimeout(1)
+      return ${OTHER}.frames().length
+    `),
+  )
+  expect(count).toEqual(3)
+  expect(reads(runtime.calls)).toEqual([
+    [1007, 'page.waitForTimeout'],
+    [1009, 'page.waitForTimeout'],
+  ])
 })
 
 // The host's init lists every open tab with its workers, and the prelude subscribes to each
@@ -295,7 +413,7 @@ it("tests that the script's own listener on another listed tab makes that tab wo
           : listedAnswer(call),
     })
     await runtime.run(`
-      context.pages().find((other) => other.url().includes('1009')).on('${event}', () => {})
+      context.pages().find((other) => other.toJSON().tab === 1009).on('${event}', () => {})
       await page.waitForTimeout(1)
       await page.waitForTimeout(1)
     `)

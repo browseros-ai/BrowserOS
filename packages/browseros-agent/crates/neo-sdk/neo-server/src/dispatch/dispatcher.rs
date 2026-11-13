@@ -635,10 +635,11 @@ impl Dispatcher {
     /// An op from the script's realm keeps its tab in use (the idle clock, the janitor), but
     /// only the script's own call acts on it, and only an act moves a task's built-in `page`,
     /// among that task's own tabs ([`TabRegistry::acted_on`]). A subscription (`page.on` on
-    /// every tab the run knows) names a tab without acting on it. The prelude's own reads are not
-    /// acts either: `waitForTimeout` refreshes the frames of every tab the run lists, and counting
-    /// those moved the task's next `page` to whichever tab answered last. Neo's own ops (`caller`
-    /// Neo) touch nothing here.
+    /// every tab the run knows) names a tab without using it, and so does one of the prelude's
+    /// frame reads ([`neo_trace::is_neo_read`]), which it makes of every open tab before a run's
+    /// first statement: neither keeps a tab in use. The prelude's other unsited reads are not
+    /// acts either: counting those moved the task's next `page` to whichever tab answered last.
+    /// Neo's own ops (`caller` Neo) touch nothing here.
     fn note_use(
         &self,
         run: &RunCtx,
@@ -650,7 +651,9 @@ impl Dispatcher {
         let (Caller::Script, Some(target)) = (caller, target) else {
             return;
         };
-        if neo_trace::is_subscription(spec.name) {
+        // Neo's own listeners and frame reads name a tab without using it: a run's start reads
+        // every open tab's frames, which must keep none of them from going idle.
+        if neo_trace::is_subscription(spec.name) || neo_trace::is_neo_read(spec.name, scripted) {
             return;
         }
         if scripted {

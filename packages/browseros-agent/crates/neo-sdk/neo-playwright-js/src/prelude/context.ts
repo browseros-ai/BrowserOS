@@ -22,6 +22,13 @@ import { markHandle } from './options'
 import { Page } from './page'
 import { TimeoutSettings } from './timeouts'
 
+/**
+ * How long a run's start waits for one listed tab's frame tree. Chromium answers no command
+ * for a tab whose navigation is pending, so a tab another run is navigating would otherwise
+ * hold this run's first statement; the tab's tree is read again at the script's next wait.
+ */
+const LISTED_FRAMES_TIMEOUT_MS = 1_000
+
 /** The page an op result names: a revived Page, or a raw `{"$neo":"page","tab":1}` brand. */
 function pageFact(value: unknown): PageFact | null {
   if (value instanceof Page)
@@ -250,7 +257,28 @@ export class BrowserContext extends EventEmitter {
   }
 
   /**
-   * One `page.frames` read per open working page that has a tab, in parallel, each failure
+   * Every page's frame tree, read in parallel before the agent's first statement (FR-1): the
+   * run's page and every tab the init listed. Page facts carry no frame tree, so without this a
+   * tab the script reaches through `pages()`, another task's say, listed only its main frame. A
+   * listed tab's read is bounded (`LISTED_FRAMES_TIMEOUT_MS`): a tab another run is navigating
+   * answers no command until that navigation commits, and the script must not wait on it. These
+   * reads are Neo's own (`Page._refreshFrames`), so they cost one `page.frames` per open tab
+   * and move nothing the run's acts move.
+   */
+  async _readInitialFrames(runPage: Page): Promise<void> {
+    const pages = new Set([runPage, ...this._knownPages()])
+    await Promise.all(
+      [...pages].map((page) =>
+        page._readInitialFrames(
+          page === runPage ? 0 : LISTED_FRAMES_TIMEOUT_MS,
+        ),
+      ),
+    )
+  }
+
+  /**
+   * One `page.frames` read per open page that has a tab and that the script acted on
+   * (`Page._working`) or whose frames it read (`Page._framesWatched`), in parallel, each failure
    * swallowed, as `waitForTimeout` ends (FR-1). A page with no tab yet is skipped, so a wait
    * never opens the run's lazy tab, and a refused read leaves that page's tree as it was. So is
    * a page with a navigation op in flight, which Chromium would not answer until that
@@ -259,7 +287,9 @@ export class BrowserContext extends EventEmitter {
   async _refreshWorkingFrames(api: string): Promise<void> {
     const working = this._knownPages().filter(
       (page) =>
-        page._working && page._tab !== null && page._navigationsInFlight === 0,
+        (page._working || page._framesWatched) &&
+        page._tab !== null &&
+        page._navigationsInFlight === 0,
     )
     await Promise.all(
       working.map((page) => page._refreshFrames(api).catch(() => undefined)),

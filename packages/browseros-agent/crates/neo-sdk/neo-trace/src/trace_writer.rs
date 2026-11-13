@@ -724,9 +724,10 @@ impl Writer {
             .entry(event.id.run)
             .or_insert_with(|| OpenRun::unseen(None));
         // The run-end shots go to the run's tabs as its record names them (`link_tab`): Neo's
-        // own subscriptions (`trace_store::SUBSCRIPTIONS`, its listeners and event pump) name a
+        // own subscriptions (`trace_store::SUBSCRIPTIONS`, its listeners and event pump) and frame
+        // reads (`trace_store::NEO_READS`) name a
         // tab without acting on it, so they make no tab the run's, nor a tab's last operation.
-        let touched = trace_store::touched_tab(&event.name, event.tab);
+        let touched = trace_store::touched_tab(&event.name, event.site.is_some(), event.tab);
         if let Some(tab) = touched {
             run.tabs.admitted(tab, event.id.seq);
             if !screenshot_rule::pictured(event.kind) {
