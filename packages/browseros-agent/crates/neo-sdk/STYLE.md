@@ -7,7 +7,7 @@ plus the project rules below. Tools check most of it, and `check.sh` runs them a
 |---|---|
 | `Cargo.toml` `[lints]` | panics on input, docs on exported items, imports, `#[expect]` with a reason, clippy pedantic |
 | `clippy.toml` | no tokio lock across an await, no blocking sleep, path depth |
-| `check.sh` | Google's rustfmt options, forbidden dependencies, the CI toolchain |
+| `check.sh` | Google's rustfmt options and forbidden dependencies (neo-server, neo-playwright); rustfmt, clippy and tests for every SDK crate (not yet `neo-captcha`'s tests); the CI toolchain |
 | `tests/style_boundaries.rs` | P1, P2 (entry points, the door's dependencies), G7, D2 (presence), lint-table drift |
 
 This file is what review checks. Each rule has an id for review comments ("P3").

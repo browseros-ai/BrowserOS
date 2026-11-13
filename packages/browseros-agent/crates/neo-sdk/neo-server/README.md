@@ -193,7 +193,7 @@ A built-in is a private type in `src/builtins/` that implements `dispatch::Metho
 
 ## Test it
 
-`check.sh` is the gate, and the package's `lint:rust` script. It runs rustfmt with Google's options, the forbidden-dependency check, clippy with `-D warnings`, and `cargo test`, all on CI's pinned toolchain. Run it from `packages/browseros-agent`. In a Grove worktree, give it a private build directory, or it waits on the build lock that other worktrees hold:
+`check.sh` is the gate, and the package's `lint:rust` script. It runs rustfmt with Google's options, the forbidden-dependency check, clippy with `-D warnings`, and `cargo test`, all on CI's pinned toolchain. The same rustfmt (with the workspace's defaults), clippy and tests run on every other crate under `crates/neo-sdk` too, such as `neo-takeover` and `neo-trace`; `neo-captcha`'s tests stay out until two flaky ones are fixed (`check.sh` names them). Run it from `packages/browseros-agent`. In a Grove worktree, give it a private build directory, or it waits on the build lock that other worktrees hold:
 
 ```sh
 CARGO_BUILD_BUILD_DIR="$(git rev-parse --show-toplevel)/packages/browseros-agent/target/build-private" \
