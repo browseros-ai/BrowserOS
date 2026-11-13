@@ -17,7 +17,7 @@ afterEach(() => page.close())
 /** Existing local-realm cases keep the ordinary no-neighbour snapshot path. */
 function masked<T>(walk: () => T): T {
   return withMaskedFieldValues(
-    { root: page.document.body, sameProcessNeighbour: false },
+    { root: page.document.body, mayHaveOtherFrame: false },
     walk,
   )
 }
@@ -640,16 +640,13 @@ it('discovers an external retained input from the scoped root owner document', (
   const scopedQuery = spyOn(button, 'querySelectorAll')
   try {
     expect(
-      withMaskedFieldValues(
-        { root: button, sameProcessNeighbour: true },
-        () => [
-          element.value,
-          element.defaultValue,
-          element.getAttribute('value'),
-          element.getAttribute('aria-valuetext'),
-          element.getAttribute('aria-valuenow'),
-        ],
-      ),
+      withMaskedFieldValues({ root: button, mayHaveOtherFrame: true }, () => [
+        element.value,
+        element.defaultValue,
+        element.getAttribute('value'),
+        element.getAttribute('aria-valuetext'),
+        element.getAttribute('aria-valuenow'),
+      ]),
     ).toEqual(Array(5).fill('••••'))
     expect(query.mock.calls).toEqual([['input,textarea'], ['*']])
     expect(scopedQuery).not.toHaveBeenCalled()
@@ -675,7 +672,7 @@ it('always collects a retained field root while document discovery is skipped', 
         const before = Object.getOwnPropertyDescriptors(prototype)
         expect(
           withMaskedFieldValues(
-            { root: element, sameProcessNeighbour: false },
+            { root: element, mayHaveOtherFrame: false },
             () => element.value,
           ),
         ).toBe('••••••••••')
@@ -714,7 +711,7 @@ for (const retainedTextarea of [false, true]) {
     )
     expect(
       withMaskedFieldValues(
-        { root: page.document.body, sameProcessNeighbour: true },
+        { root: page.document.body, mayHaveOtherFrame: true },
         () => ({
           value: element.value,
           ownText: [
@@ -760,7 +757,7 @@ it('skips document and shadow searches on a large page without a neighbour or op
     try {
       expect(
         withMaskedFieldValues(
-          { root: page.document.body, sameProcessNeighbour: false },
+          { root: page.document.body, mayHaveOtherFrame: false },
           () => secret.value,
         ),
       ).toBe('•••••')
@@ -799,7 +796,7 @@ it('recurses through every open and exposed closed shadow root when the hint is 
   const queries = scopes.map((scope) => spyOn(scope, 'querySelectorAll'))
   try {
     expect(
-      withMaskedFieldValues({ root: host, sameProcessNeighbour: true }, () =>
+      withMaskedFieldValues({ root: host, mayHaveOtherFrame: true }, () =>
         secrets.map((secret) => secret.value),
       ),
     ).toEqual(Array(4).fill('••••••'))
@@ -831,7 +828,7 @@ it('enables discovery for a SOP-readable opener without consulting origin string
     try {
       expect(
         withMaskedFieldValues(
-          { root: page.document.body, sameProcessNeighbour: false },
+          { root: page.document.body, mayHaveOtherFrame: false },
           () => element.value,
         ),
       ).toBe('••••••')
@@ -855,7 +852,7 @@ it('skips discovery for a SOP-denied opener and retains the explicit field-root 
     try {
       expect(
         withMaskedFieldValues(
-          { root: element, sameProcessNeighbour: false },
+          { root: element, mayHaveOtherFrame: false },
           () => element.value,
         ),
       ).toBe('••••••')
@@ -878,7 +875,7 @@ it('discovers conservatively when opener inspection fails unexpectedly', () => {
     () => {
       expect(
         withMaskedFieldValues(
-          { root: page.document.body, sameProcessNeighbour: false },
+          { root: page.document.body, mayHaveOtherFrame: false },
           () => element.value,
         ),
       ).toBe('••••••')
@@ -904,7 +901,7 @@ it('rejects input and textarea tag names outside the HTML namespace in every gua
   )
   try {
     expect(
-      withMaskedFieldValues({ root: input, sameProcessNeighbour: true }, () => [
+      withMaskedFieldValues({ root: input, mayHaveOtherFrame: true }, () => [
         input.getAttribute('value'),
         textarea.getAttribute('value'),
         textarea.textContent,
@@ -914,13 +911,10 @@ it('rejects input and textarea tag names outside the HTML namespace in every gua
         text.wholeText,
       ]),
     ).toEqual(Array(7).fill('public'))
-    withMaskedFieldValues(
-      { root: textarea, sameProcessNeighbour: true },
-      () => {
-        expect(getComputedStyle(input)).toBe(nativeStyle)
-        expect(getComputedStyle(textarea, '::before')).toBe(nativeStyle)
-      },
-    )
+    withMaskedFieldValues({ root: textarea, mayHaveOtherFrame: true }, () => {
+      expect(getComputedStyle(input)).toBe(nativeStyle)
+      expect(getComputedStyle(textarea, '::before')).toBe(nativeStyle)
+    })
   } finally {
     style.mockRestore()
   }
@@ -943,7 +937,7 @@ it('deduplicates actual prototypes and restores foreign shadows across nested sc
   const define = spyOn(Object, 'defineProperty')
   try {
     withMaskedFieldValues(
-      { root: input.element, sameProcessNeighbour: true },
+      { root: input.element, mayHaveOtherFrame: true },
       () => {
         for (const [index, count] of [3, 6, 4].entries())
           expect(
@@ -954,7 +948,7 @@ it('deduplicates actual prototypes and restores foreign shadows across nested sc
         )
         expect(
           withMaskedFieldValues(
-            { root: textarea.element, sameProcessNeighbour: true },
+            { root: textarea.element, mayHaveOtherFrame: true },
             () => [
               input.element.value,
               duplicate.value,
@@ -997,7 +991,7 @@ it('validates a foreign accessor before installing any local or foreign override
   try {
     expect(() =>
       withMaskedFieldValues(
-        { root: page.document.body, sameProcessNeighbour: true },
+        { root: page.document.body, mayHaveOtherFrame: true },
         () => {
           throw new Error('walk must not run')
         },
@@ -1023,12 +1017,9 @@ it('refuses non-overridable foreign descriptors before installing any guard', ()
   const define = spyOn(Object, 'defineProperty')
   try {
     expect(() =>
-      withMaskedFieldValues(
-        { root: element, sameProcessNeighbour: false },
-        () => {
-          throw new Error('walk must not run')
-        },
-      ),
+      withMaskedFieldValues({ root: element, mayHaveOtherFrame: false }, () => {
+        throw new Error('walk must not run')
+      }),
     ).toThrow('snapshot field getAttribute cannot be overridden')
     expect(define).not.toHaveBeenCalled()
     expect(descriptors()).toEqual(before)
@@ -1079,7 +1070,7 @@ it('restores all earlier local and foreign guards if any foreign installation fa
     try {
       expect(() =>
         withMaskedFieldValues(
-          { root: input.element, sameProcessNeighbour: true },
+          { root: input.element, mayHaveOtherFrame: true },
           () => {
             throw new Error('walk must not run')
           },
@@ -1143,7 +1134,7 @@ it('attempts every local and foreign restoration in reverse after a foreign clea
   try {
     expect(() =>
       withMaskedFieldValues(
-        { root: input.element, sameProcessNeighbour: true },
+        { root: input.element, mayHaveOtherFrame: true },
         () => {
           expect([input.element.value, textarea.element.value]).toEqual([
             '••••••',

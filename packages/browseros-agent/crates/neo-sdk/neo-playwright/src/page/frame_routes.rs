@@ -101,10 +101,11 @@ impl FrameRoutes {
     }
 
     /// A snapshot may skip its adopted-field scan only when this already discovered tree
-    /// proves no immediate neighbour shares the read world's endpoint. Endpoint dispatch can
-    /// survive new children and same-session commits; this stronger negative cannot. Never
-    /// refresh here: absent, changed or unprovable topology keeps the scan enabled.
-    pub(crate) fn same_process_neighbour(
+    /// proves this tab has only the frame being read. Different CDP sessions can still host
+    /// mutually reachable same-origin frames, so session identity cannot justify skipping.
+    /// Endpoint dispatch can survive new children and same-session commits; this stronger
+    /// negative cannot. Never refresh here: unprovable topology keeps the scan enabled.
+    pub(crate) fn may_have_other_frame(
         &self,
         tab: TabId,
         root: &RootAttachment,
@@ -117,9 +118,9 @@ impl FrameRoutes {
             pages
                 .get(&tab)
                 .filter(|page| page.root == *root)
-                .and_then(|page| Some((page.since, page.neighbour(frame, session)?)))
+                .and_then(|page| Some((page.since, page.other_frame(frame, session)?)))
         };
-        let Some((since, neighbour)) = known else {
+        let Some((since, other_frame)) = known else {
             return true;
         };
         let read = events.read_after(since);
@@ -135,14 +136,14 @@ impl FrameRoutes {
                 PageEvent::Navigation(navigation) => navigation.new_document,
                 _ => false,
             })
-            || neighbour
+            || other_frame
     }
 }
 
 impl PageRoutes {
     /// The stored paths exclude main and include their own frame. Validate every parent
-    /// prefix before using absence: an incomplete or malformed path is not a leaf frame.
-    fn neighbour(&self, frame: &FrameId, session: &SessionId) -> Option<bool> {
+    /// prefix before using absence: an incomplete or malformed tree cannot prove isolation.
+    fn other_frame(&self, frame: &FrameId, session: &SessionId) -> Option<bool> {
         let main = self.frames.get(&self.root.frame)?;
         if !main.ancestors.is_empty() || main.session.session_id() != Some(&self.root.session) {
             return None;
@@ -165,22 +166,7 @@ impl PageRoutes {
                 return None;
             }
         }
-        let parent = self.parent(current);
-        if parent.is_some_and(|parent| {
-            self.frames
-                .get(parent)
-                .is_some_and(|route| route.session.session_id() == Some(session))
-        }) {
-            return Some(true);
-        }
-        Some(self.frames.values().any(|route| {
-            self.parent(route) == Some(frame) && route.session.session_id() == Some(session)
-        }))
-    }
-
-    fn parent<'a>(&'a self, route: &'a FrameRoute) -> Option<&'a FrameId> {
-        let (_, prefix) = route.ancestors.split_last()?;
-        Some(prefix.last().unwrap_or(&self.root.frame))
+        Some(self.frames.keys().any(|id| id != frame))
     }
 }
 
@@ -228,7 +214,7 @@ mod tests {
     }
 
     fn hint(routes: &FrameRoutes, hub: &EventHub, frame: &str, session: &str) -> bool {
-        routes.same_process_neighbour(
+        routes.may_have_other_frame(
             TabId(7),
             &attachment(),
             &FrameId(frame.to_owned()),
@@ -238,23 +224,22 @@ mod tests {
     }
 
     #[test]
-    fn a_known_single_frame_and_other_renderer_neighbours_skip_the_scan() {
+    fn a_known_single_frame_skips_the_scan() {
         let (hub, _writer) = EventHub::new();
         let single = tree(&[("main", "root", &[])]);
         assert!(!hint(&single, &hub, "main", "root"));
-
-        let remote = tree(&[
-            ("main", "root", &[]),
-            ("ad", "oopif", &["ad"]),
-            ("nested-ad", "nested-oopif", &["ad", "nested-ad"]),
-        ]);
-        assert!(!hint(&remote, &hub, "main", "root"));
-        assert!(!hint(&remote, &hub, "ad", "oopif"));
-        assert!(!hint(&remote, &hub, "nested-ad", "nested-oopif"));
     }
 
     #[test]
-    fn both_parent_and_child_matches_count_in_nested_and_shadow_frame_paths() {
+    fn one_cross_site_frame_keeps_the_scan_for_both_frames() {
+        let (hub, _writer) = EventHub::new();
+        let remote = tree(&[("main", "root", &[]), ("ad", "oopif", &["ad"])]);
+        assert!(hint(&remote, &hub, "main", "root"));
+        assert!(hint(&remote, &hub, "ad", "oopif"));
+    }
+
+    #[test]
+    fn nested_and_shadow_frame_paths_keep_the_scan() {
         let (hub, _writer) = EventHub::new();
         let direct = tree(&[
             ("main", "root", &[]),
@@ -267,12 +252,44 @@ mod tests {
             ("outer", "oopif", &["outer"]),
             ("shadow-child", "oopif", &["outer", "shadow-child"]),
         ]);
-        assert!(!hint(&routes, &hub, "main", "root"));
-        assert!(hint(&routes, &hub, "outer", "oopif"), "same-session child");
+        assert!(hint(&routes, &hub, "main", "root"));
+        assert!(hint(&routes, &hub, "outer", "oopif"));
         assert!(
             hint(&routes, &hub, "shadow-child", "oopif"),
-            "same-session parent; DOM placement is irrelevant to cached native ancestry"
+            "DOM placement is irrelevant to cached native ancestry"
         );
+    }
+
+    #[test]
+    fn sibling_frames_below_a_cross_site_intermediary_keep_the_scan_for_every_frame() {
+        let (hub, _writer) = EventHub::new();
+        let routes = tree(&[
+            ("main", "root", &[]),
+            ("cross-site", "oopif", &["cross-site"]),
+            ("left", "shared", &["cross-site", "left"]),
+            ("right", "shared", &["cross-site", "right"]),
+        ]);
+        assert!(hint(&routes, &hub, "main", "root"));
+        assert!(hint(&routes, &hub, "cross-site", "oopif"));
+        assert!(hint(&routes, &hub, "left", "shared"));
+        assert!(hint(&routes, &hub, "right", "shared"));
+    }
+
+    #[test]
+    fn cousin_frames_across_cross_site_intermediaries_keep_the_scan_for_every_frame() {
+        let (hub, _writer) = EventHub::new();
+        let routes = tree(&[
+            ("main", "root", &[]),
+            ("left-parent", "left-oopif", &["left-parent"]),
+            ("right-parent", "right-oopif", &["right-parent"]),
+            ("left", "shared", &["left-parent", "left"]),
+            ("right", "shared", &["right-parent", "right"]),
+        ]);
+        assert!(hint(&routes, &hub, "main", "root"));
+        assert!(hint(&routes, &hub, "left-parent", "left-oopif"));
+        assert!(hint(&routes, &hub, "right-parent", "right-oopif"));
+        assert!(hint(&routes, &hub, "left", "shared"));
+        assert!(hint(&routes, &hub, "right", "shared"));
     }
 
     #[test]
@@ -297,7 +314,7 @@ mod tests {
                 ..attachment()
             },
         ] {
-            assert!(routes.same_process_neighbour(
+            assert!(routes.may_have_other_frame(
                 TabId(7),
                 &root,
                 &FrameId("main".to_owned()),
@@ -328,7 +345,20 @@ mod tests {
                 .iter()
                 .map(|(frame, session, path)| (*frame, *session, path.as_slice()))
                 .collect();
-            assert!(hint(&tree(&borrowed), &hub, "main", "root"), "{entries:?}");
+            let malformed = tree(&borrowed);
+            assert!(hint(&malformed, &hub, "main", "root"), "{entries:?}");
+            // A malformed multi-frame tree also keeps the scan. Verify it remains unknown,
+            // so the conservative fallback does not hide a missing admission check.
+            let pages = malformed
+                .pages
+                .lock()
+                .map_err(|_poisoned| "test cache poisoned")?;
+            let page = pages.get(&TabId(7)).ok_or("test page missing")?;
+            assert_eq!(
+                page.other_frame(&FrameId("main".to_owned()), &SessionId::from("root")),
+                None,
+                "{entries:?}"
+            );
         }
         let missing_session = tree(&[("main", "root", &[]), ("child", "other", &["child"])]);
         let mut pages = missing_session
@@ -341,6 +371,11 @@ mod tests {
             .get_mut(&FrameId("child".to_owned()))
             .ok_or("test child missing")?;
         child.session = ProtocolSession::root(TestConnection::new([]));
+        assert_eq!(
+            page.other_frame(&FrameId("main".to_owned()), &SessionId::from("root")),
+            None,
+            "a route without a session is unknown"
+        );
         drop(pages);
         assert!(hint(&missing_session, &hub, "main", "root"));
         Ok(())

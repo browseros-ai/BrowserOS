@@ -1,0 +1,84 @@
+<!doctype html>
+<!-- A top -> B bridge -> two A siblings. Each leaf has a cross-site parent and no children. -->
+<html><head><title>Sibling adopted fields</title></head><body><main><section id="references"></section></main>
+<script>
+(() => {
+  const role = new URLSearchParams(location.search).get('role');
+  const name = 'document-sibling';
+  const leaf = index => window.frames[0].frames[index];
+  if (role === 'top' || role === 'bridge') {
+    const roles = role === 'top' ? ['bridge'] : ['source', 'destination'];
+    for (const childRole of roles) {
+      const frame = document.createElement('iframe');
+      frame.id = `adoption-${childRole}`;
+      frame.title = `Adoption ${childRole}`;
+      frame.src = `http://${role === 'top' ? 'localhost' : '127.0.0.1'}:${location.port}/adopted-siblings.html?role=${childRole}`;
+      document.body.append(frame);
+    }
+    if (role === 'top') {
+      // Same-origin grandchildren remain reachable through cross-origin WindowProxy indexes.
+      // The top proxy lets the shared snapshot collector make clear reads after every walk.
+      window.adoption = {
+        adopt: () => leaf(1).adoption.adopt(),
+        read: () => leaf(1).adoption.read(),
+        get fields() { return leaf(1).adoption.fields; },
+      };
+    }
+    return;
+  }
+  const privatePrefix = `AdoptedPrivate-${name}`;
+  const publicPrefix = `AdoptedPublic-${name}`;
+  if (role === 'source') document.querySelector('main').insertAdjacentHTML('beforeend', `<section id="adopted-fields">
+    <input id="private-password" aria-label="Moved password" type="password" value="${privatePrefix}-password-attribute">
+    <textarea id="private-textarea" aria-label="Moved textarea" role="searchbox" autocomplete="new-password" value="${privatePrefix}-textarea-attribute">${privatePrefix}-textarea-content</textarea>
+    <input id="public-input" aria-label="Public moved input" value="${publicPrefix}-input-attribute">
+    <textarea id="public-textarea" aria-label="Public moved textarea" role="searchbox">${publicPrefix}-textarea-content</textarea>
+  </section>`);
+  window.adoption = {
+    fields: [],
+    adopt() {
+      const sourceWindow = parent.frames[0];
+      const source = sourceWindow.document;
+      const container = source.getElementById('adopted-fields');
+      this.fields = Array.from(container.querySelectorAll('input, textarea'));
+      document.body.append(document.adoptNode(container));
+      document.getElementById('references').innerHTML = `<span id="password-prefix">Password label</span><span id="textarea-prefix">Textarea label</span>
+        <span id="public-input-prefix">Public input label</span><span id="public-textarea-prefix">Public textarea label</span>
+        <button id="password-label" aria-labelledby="password-prefix private-password"></button>
+        <button id="textarea-label" aria-labelledby="textarea-prefix private-textarea"></button>
+        <button id="password-owner" aria-owns="private-password">Owned password</button>
+        <button id="textarea-owner" aria-owns="private-textarea">Owned textarea</button>
+        <button aria-labelledby="public-input-prefix public-input"></button>
+        <button aria-labelledby="public-textarea-prefix public-textarea"></button>
+        <button aria-owns="public-input">Owned public input</button>
+        <button aria-owns="public-textarea">Owned public textarea</button>`;
+      let parentReadable;
+      try { void parent.document; parentReadable = true; } catch { parentReadable = false; }
+      return {
+        sourcePresent: !sourceWindow.closed,
+        parentReadable,
+        frameCount: window.length,
+        siblingCount: parent.length,
+        sourcePrototypes: [
+          Object.getPrototypeOf(this.fields[0]) === sourceWindow.HTMLInputElement.prototype,
+          Object.getPrototypeOf(this.fields[1]) === sourceWindow.HTMLTextAreaElement.prototype,
+        ],
+        destinationInstances: [
+          this.fields[0] instanceof HTMLInputElement,
+          this.fields[1] instanceof HTMLTextAreaElement,
+        ],
+      };
+    },
+    read() {
+      return {
+        values: this.fields.map(field => field.value),
+        defaults: this.fields.slice(0, 2).map(field => field.defaultValue),
+        attributes: this.fields.slice(0, 2).map(field => field.getAttribute('value')),
+        content: this.fields[1].textContent,
+        childPresent: !parent.frames[0].closed,
+      };
+    },
+  };
+  document.querySelector('main').insertAdjacentHTML('beforeend', '<p id="ready">Sibling ready</p>');
+})();
+</script></body></html>

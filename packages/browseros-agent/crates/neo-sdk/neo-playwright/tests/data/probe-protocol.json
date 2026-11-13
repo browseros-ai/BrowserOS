@@ -979,7 +979,7 @@
       "op": "snapshot",
       "root": "document",
       "mode": "ai",
-      "sameProcessNeighbour": false
+      "mayHaveOtherFrame": false
     },
     {
       "op": "snapshot",

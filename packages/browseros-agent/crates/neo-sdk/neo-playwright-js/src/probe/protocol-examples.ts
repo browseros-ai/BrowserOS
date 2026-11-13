@@ -325,7 +325,7 @@ export const REQUEST_EXAMPLES: { [O in Op]: AtLeastOne<RequestOf<O>> } = {
       op: 'snapshot',
       root: 'document',
       mode: 'ai',
-      sameProcessNeighbour: false,
+      mayHaveOtherFrame: false,
     },
     { op: 'snapshot', root: chunk('main'), mode: 'default', depth: 3 },
     { op: 'snapshot', root: 'document', mode: 'default', boxes: true },

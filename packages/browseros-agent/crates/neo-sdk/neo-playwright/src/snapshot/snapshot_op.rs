@@ -302,7 +302,7 @@ async fn page_snapshot(
         boxes: input.boxes,
         closed_roots: 0,
         conformance: input.conformance,
-        same_process_neighbour: true,
+        may_have_other_frame: true,
     };
     let backoff = Backoff::outer(scope.timeout());
     for attempt in 0.. {
@@ -385,7 +385,7 @@ async fn locator_snapshot(
                 }
             } else {
                 with_frame_context(Cow::Owned(snapshotter.request(root, input.depth)), || {
-                    page.same_process_neighbour(scope, world)
+                    page.may_have_other_frame(scope, world)
                 })
                 .into_owned()
             }
@@ -436,22 +436,22 @@ fn with_closed_roots(request: &ProbeRequest, seeds: usize) -> Cow<'_, ProbeReque
 /// Keeping the read inside this closure makes conformance perform no topology work at all.
 fn with_frame_context(
     mut request: Cow<'_, ProbeRequest>,
-    neighbour: impl FnOnce() -> bool,
+    hint: impl FnOnce() -> bool,
 ) -> Cow<'_, ProbeRequest> {
     if let ProbeRequest::Snapshot {
         conformance: false,
-        same_process_neighbour,
+        may_have_other_frame,
         ..
     } = request.as_ref()
     {
-        let neighbour = neighbour();
-        if neighbour != *same_process_neighbour
+        let hint = hint();
+        if hint != *may_have_other_frame
             && let ProbeRequest::Snapshot {
-                same_process_neighbour,
+                may_have_other_frame,
                 ..
             } = request.to_mut()
         {
-            *same_process_neighbour = neighbour;
+            *may_have_other_frame = hint;
         }
     }
     request
@@ -605,7 +605,7 @@ impl Snapshotter<'_> {
             boxes: self.boxes,
             closed_roots: 0,
             conformance: self.conformance,
-            same_process_neighbour: true,
+            may_have_other_frame: true,
         }
     }
 
@@ -658,7 +658,7 @@ impl Snapshotter<'_> {
         };
         let request = with_closed_roots(request, feed.seeds.len());
         let request = with_frame_context(request, || {
-            self.page.same_process_neighbour(self.scope, world)
+            self.page.may_have_other_frame(self.scope, world)
         });
         let nodes = [feed.seeds, feed.targets].concat();
         let started = Instant::now();
@@ -939,7 +939,7 @@ mod tests {
         assert!(matches!(
             contextual.as_ref(),
             ProbeRequest::Snapshot {
-                same_process_neighbour: false,
+                may_have_other_frame: false,
                 ..
             }
         ));
@@ -1010,7 +1010,7 @@ mod tests {
         for bad in [
             json!({ "page": { "$neo": "page", "tab": 1007 }, "mode": "codegen" }),
             json!({ "page": { "$neo": "page", "tab": 1007 }, "mode": "ai", "depth": 1.5 }),
-            json!({ "page": { "$neo": "page", "tab": 1007 }, "mode": "ai", "sameProcessNeighbour": false }),
+            json!({ "page": { "$neo": "page", "tab": 1007 }, "mode": "ai", "mayHaveOtherFrame": false }),
         ] {
             assert!(
                 serde_json::from_value::<PageInput>(bad.clone()).is_err(),

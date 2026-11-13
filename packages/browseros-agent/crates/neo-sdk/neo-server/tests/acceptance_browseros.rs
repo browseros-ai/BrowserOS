@@ -683,29 +683,30 @@ fn assert_adopted_reads(reads: &Value, name: &str, grown: bool) -> TestResult {
         values[0].push('!');
     }
     for read in reads.as_array().ok_or("the reads after the walks")? {
+        let main = read.get("main").ok_or("the main-world clear reads")?;
         assert_eq!(read["direct"], json!(&values[..2]));
-        assert_eq!(read["main"]["values"], json!(values));
+        assert_eq!(main["values"], json!(values));
         assert_eq!(
-            read["main"]["defaults"],
+            main["defaults"],
             json!([
                 format!("AdoptedPrivate-{name}-password-attribute"),
                 format!("AdoptedPrivate-{name}-textarea-content"),
             ])
         );
         assert_eq!(
-            read["main"]["attributes"],
+            main["attributes"],
             json!([
                 format!("AdoptedPrivate-{name}-password-attribute"),
                 format!("AdoptedPrivate-{name}-textarea-attribute"),
             ])
         );
         assert_eq!(
-            read["main"]["content"],
+            main["content"],
             format!("AdoptedPrivate-{name}-textarea-content")
         );
-        assert_eq!(read["main"]["childPresent"], true);
+        assert_eq!(main["childPresent"], true);
         if name.starts_with("closed-") {
-            assert_eq!(read["main"]["closedOpaque"], true);
+            assert_eq!(main["closedOpaque"], true);
         }
     }
     Ok(())
@@ -744,20 +745,13 @@ fn assert_adopted_returned_snapshots(
         Some(6)
     );
     assert_eq!(opened["reads"].as_array().map(Vec::len), Some(6));
-    assert_eq!(opened["facts"]["childPresent"], true, "{name}");
-    assert_eq!(opened["facts"]["childURL"], "about:srcdoc", "{name}");
+    let facts = opened.get("facts").ok_or("the native adoption facts")?;
+    assert_eq!(facts["childPresent"], true, "{name}");
+    assert_eq!(facts["childURL"], "about:srcdoc", "{name}");
+    assert_eq!(facts["frameCount"], i32::from(root == "document"), "{name}");
+    assert_eq!(facts["sourcePrototypes"], json!([true, true]), "{name}");
     assert_eq!(
-        opened["facts"]["frameCount"],
-        if root == "document" { 1 } else { 0 },
-        "{name}"
-    );
-    assert_eq!(
-        opened["facts"]["sourcePrototypes"],
-        json!([true, true]),
-        "{name}"
-    );
-    assert_eq!(
-        opened["facts"]["destinationInstances"],
+        facts["destinationInstances"],
         json!([false, false]),
         "{name}"
     );

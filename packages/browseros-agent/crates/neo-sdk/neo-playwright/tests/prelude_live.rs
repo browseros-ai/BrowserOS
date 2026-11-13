@@ -30,7 +30,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 use std::{env, fs, mem};
 
-use browseros_core::{ProtocolSession, TabId};
+use browseros_core::{FrameId, ProtocolSession, TabId};
 use fixture_server::{FixtureServer, Page};
 use futures_util::future::BoxFuture;
 use js_runner::OpHost;
@@ -1865,29 +1865,30 @@ fn assert_adopted_reads(reads: &Value, name: &str, grown: bool) -> TestResult {
         values[0].push('!');
     }
     for read in reads.as_array().ok_or("the reads after the walks")? {
+        let main = read.get("main").ok_or("the main-world clear reads")?;
         assert_eq!(read["direct"], json!(&values[..2]));
-        assert_eq!(read["main"]["values"], json!(values));
+        assert_eq!(main["values"], json!(values));
         assert_eq!(
-            read["main"]["defaults"],
+            main["defaults"],
             json!([
                 format!("AdoptedPrivate-{name}-password-attribute"),
                 format!("AdoptedPrivate-{name}-textarea-content"),
             ])
         );
         assert_eq!(
-            read["main"]["attributes"],
+            main["attributes"],
             json!([
                 format!("AdoptedPrivate-{name}-password-attribute"),
                 format!("AdoptedPrivate-{name}-textarea-attribute"),
             ])
         );
         assert_eq!(
-            read["main"]["content"],
+            main["content"],
             format!("AdoptedPrivate-{name}-textarea-content")
         );
-        assert_eq!(read["main"]["childPresent"], true);
+        assert_eq!(main["childPresent"], true);
         if name.starts_with("closed-") {
-            assert_eq!(read["main"]["closedOpaque"], true);
+            assert_eq!(main["closedOpaque"], true);
         }
     }
     Ok(())
@@ -1926,20 +1927,13 @@ fn assert_adopted_returned_snapshots(
         Some(6)
     );
     assert_eq!(opened["reads"].as_array().map(Vec::len), Some(6));
-    assert_eq!(opened["facts"]["childPresent"], true, "{name}");
-    assert_eq!(opened["facts"]["childURL"], "about:srcdoc", "{name}");
+    let facts = opened.get("facts").ok_or("the native adoption facts")?;
+    assert_eq!(facts["childPresent"], true, "{name}");
+    assert_eq!(facts["childURL"], "about:srcdoc", "{name}");
+    assert_eq!(facts["frameCount"], i32::from(root == "document"), "{name}");
+    assert_eq!(facts["sourcePrototypes"], json!([true, true]), "{name}");
     assert_eq!(
-        opened["facts"]["frameCount"],
-        if root == "document" { 1 } else { 0 },
-        "{name}"
-    );
-    assert_eq!(
-        opened["facts"]["sourcePrototypes"],
-        json!([true, true]),
-        "{name}"
-    );
-    assert_eq!(
-        opened["facts"]["destinationInstances"],
+        facts["destinationInstances"],
         json!([false, false]),
         "{name}"
     );
@@ -1998,8 +1992,9 @@ async fn snapshot_native_world(session: &ProtocolSession, frame: &Value) -> Test
             }),
         )
         .await?;
-    reply["executionContextId"]
-        .as_i64()
+    reply
+        .get("executionContextId")
+        .and_then(Value::as_i64)
         .ok_or_else(|| "the native snapshot world exists".into())
 }
 
@@ -2115,10 +2110,16 @@ async fn tests_that_adopted_private_fields_are_masked_in_every_snapshot_format()
                 .map(Vec::len),
             Some(1)
         );
-        let main = snapshot_native_world(&session, &tree["frameTree"]["frame"]["id"]).await?;
+        let main = snapshot_native_world(
+            &session,
+            tree.pointer("/frameTree/frame/id")
+                .ok_or("the main frame id")?,
+        )
+        .await?;
         let child = snapshot_native_world(
             &session,
-            &tree["frameTree"]["childFrames"][0]["frame"]["id"],
+            tree.pointer("/frameTree/childFrames/0/frame/id")
+                .ok_or("the child frame id")?,
         )
         .await?;
         let (source_world, destination_world) = if destination == "child" {
@@ -2158,13 +2159,170 @@ async fn tests_that_adopted_private_fields_are_masked_in_every_snapshot_format()
     Ok(())
 }
 
-/// Count the native document-wide field query, independently of its implementation's hint.
-/// Large single-frame pages and pages with only a cross-site child must keep scoped reads
-/// free of that search. Ordinary public controls prove the snapshots still read the page.
+/// A → B → two A siblings exercises adoption through a cross-site intermediate frame.
+/// Neither leaf has a same-process parent or child, and both source realms stay alive until
+/// the public snapshots and the independent native-walk witness have been inspected.
 #[tokio::test]
 #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
-async fn tests_that_pages_without_a_same_process_neighbour_skip_the_adopted_field_search()
+async fn tests_that_sibling_adopted_private_fields_are_masked_across_a_cross_site_parent()
 -> TestResult {
+    let _alone = ALONE.acquire().await?;
+    let server = FixtureServer::start(HashMap::from([(
+        "/adopted-siblings.html".to_owned(),
+        Page::html(include_str!(
+            "data/adopted-private-fields/sibling-page.html"
+        )),
+    )]))
+    .await?;
+    let run = Arc::new(LiveRun::connect().await?);
+    let host: Arc<dyn OpHost> = Arc::clone(&run) as Arc<dyn OpHost>;
+    let url = server.url("127.0.0.1", "/adopted-siblings.html?role=top");
+    let prepared = js_runner::run_script(
+        &host,
+        &json!({ "page": null }),
+        &format!(
+            "const p = page; await p.goto({url});\n\
+             const bridge = p.locator('#adoption-bridge').contentFrame();\n\
+             const source = bridge.locator('#adoption-source').contentFrame().locator('body');\n\
+             const destination = bridge.locator('#adoption-destination').contentFrame().locator('body');\n\
+             await source.locator('#ready').waitFor(); await destination.locator('#ready').waitFor();\n\
+             const initial = [await p.ariaSnapshot({{ mode: 'ai' }}), await source.ariaSnapshot({{ mode: 'ai' }})];\n\
+             const values = {values};\n\
+             for (const [index, id] of ['private-password', 'private-textarea', 'public-input', 'public-textarea'].entries())\n\
+               await source.locator('#' + id).fill(values[index]);\n\
+             return {{ page: p, initial }};",
+            url = json!(url),
+            values = json!(adopted_field_values("document-sibling")),
+        ),
+    )
+    .await?;
+    let page = live_run::test_page(&prepared["page"])?;
+    let core_page = run.core_page(&page).await?;
+    let frames = run
+        .invoke(
+            "page.frames",
+            json!({ "call": {}, "page": prepared["page"] }),
+        )
+        .await?;
+    let frame_id = |role: &str| -> TestResult<FrameId> {
+        frames
+            .get("frames")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .find(|frame| {
+                frame
+                    .get("url")
+                    .and_then(Value::as_str)
+                    .is_some_and(|url| url.ends_with(&format!("role={role}")))
+            })
+            .and_then(|frame| frame.get("id"))
+            .and_then(Value::as_str)
+            .map(|id| FrameId(id.to_owned()))
+            .ok_or_else(|| format!("the {role} sibling is in the admitted frame tree").into())
+    };
+    let source_frame = frame_id("source")?;
+    let destination_frame = frame_id("destination")?;
+    let source_session = run
+        .browser()
+        .frames()
+        .resolve_frame_target(core_page.clone(), Some(source_frame.clone()), None, true)
+        .await?
+        .session;
+    let destination_session = run
+        .browser()
+        .frames()
+        .resolve_frame_target(core_page, Some(destination_frame.clone()), None, true)
+        .await?
+        .session;
+    let source_world =
+        snapshot_native_world(&source_session, &json!(source_frame.as_str())).await?;
+    let destination_world =
+        snapshot_native_world(&destination_session, &json!(destination_frame.as_str())).await?;
+    snapshot_world_eval(&source_session, source_world, ADOPTED_SOURCE_WITNESS).await?;
+    snapshot_world_eval(
+        &destination_session,
+        destination_world,
+        ADOPTED_STYLE_WITNESS,
+    )
+    .await?;
+    // Reuse the full text/JSON/scoped-output matrix. The top fixture proxies explicit reads
+    // to the destination while its source sibling and cross-site bridge remain connected.
+    let (_, collect) = ADOPTED_FIELD_SNAPSHOT_SCRIPT
+        .split_once("const snapshots = {};")
+        .ok_or("the shared fixture has a snapshot collection boundary")?;
+    let init = json!({ "page": prepared["page"] });
+    let collected = js_runner::run_script(&host, &init, &format!(
+        "const p = page; const initial = {initial};\n\
+         const destination = p.locator('#adoption-bridge').contentFrame().locator('#adoption-destination').contentFrame().locator('body');\n\
+         const facts = await p.evaluate(() => window.adoption.adopt());\n\
+         const snapshots = {{}};\n{collect}",
+        initial = prepared["initial"],
+    )).await;
+    let during = snapshot_world_eval(
+        &destination_session,
+        destination_world,
+        ADOPTED_STYLE_WITNESS_RESULT,
+    )
+    .await;
+    let after =
+        snapshot_world_eval(&source_session, source_world, ADOPTED_SOURCE_WITNESS_RESULT).await;
+    let closed = js_runner::run_script(&host, &init, "await page.close();").await;
+    let opened = collected?;
+    assert_adopted_native_witness(&during?, &after?, "document-sibling")?;
+    assert_eq!(opened["initial"].as_array().map(Vec::len), Some(2));
+    assert_eq!(
+        opened["snapshots"].as_object().map(serde_json::Map::len),
+        Some(6)
+    );
+    assert_eq!(opened["reads"].as_array().map(Vec::len), Some(6));
+    assert_adopted_canaries_absent(&opened["initial"])?;
+    assert_adopted_snapshot(&opened["baseline"], "document-sibling", "page")?;
+    let facts = opened.get("facts").ok_or("the sibling topology facts")?;
+    assert_eq!(facts["sourcePresent"], true, "{facts}");
+    assert_eq!(facts["parentReadable"], false, "{facts}");
+    assert_eq!(facts["frameCount"], 0, "{facts}");
+    assert_eq!(facts["siblingCount"], 2, "{facts}");
+    assert_eq!(facts["sourcePrototypes"], json!([true, true]), "{facts}");
+    assert_eq!(
+        facts["destinationInstances"],
+        json!([false, false]),
+        "{facts}"
+    );
+    for (scope, group) in opened["snapshots"]
+        .as_object()
+        .ok_or("the sibling snapshot scopes")?
+    {
+        for format in ["texts", "trees"] {
+            assert_eq!(
+                group[format].as_object().map(serde_json::Map::len),
+                Some(if format == "texts" { 6 } else { 2 })
+            );
+            for (mode, snapshot) in group[format]
+                .as_object()
+                .ok_or("the sibling snapshot formats")?
+            {
+                assert_adopted_canaries_absent(snapshot)?;
+                // Default page mode does not descend into frames; locator defaults do.
+                if scope != "page" || mode != "default" {
+                    assert_adopted_snapshot(snapshot, "document-sibling", scope)?;
+                }
+            }
+        }
+    }
+    assert_adopted_reads(&opened["reads"], "document-sibling", false)?;
+    closed?;
+    run.end_run(None);
+    Ok(())
+}
+
+/// Count the native document-wide field query, independently of its implementation's hint.
+/// A single-frame page skips the scan, while any other frame enables it, including a
+/// cross-site child. CDP targets do not identify all realms a same-origin sibling can move
+/// fields from, so renderer-session equality cannot justify skipping the scan.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_only_single_frame_pages_skip_the_adopted_field_search() -> TestResult {
     let _alone = ALONE.acquire().await?;
     let fields = "<main><button id='snapshot-target'>Public scope</button><input aria-label='Public value' value='Readable public value'></main>";
     let large = format!(
@@ -2188,11 +2346,12 @@ async fn tests_that_pages_without_a_same_process_neighbour_skip_the_adopted_fiel
     .await?;
     let run = Arc::new(LiveRun::connect().await?);
     let host: Arc<dyn OpHost> = Arc::clone(&run) as Arc<dyn OpHost>;
-    for (path, wait) in [
-        ("/query-single.html", ""),
+    for (path, wait, expected_queries) in [
+        ("/query-single.html", "", 0),
         (
             "/query-cross.html",
             "await page.locator('#cross').contentFrame().locator('#ready').waitFor();",
+            2,
         ),
     ] {
         let prepared = js_runner::run_script(
@@ -2212,7 +2371,12 @@ async fn tests_that_pages_without_a_same_process_neighbour_skip_the_adopted_fiel
             .await?
             .session;
         let tree: Value = session.send("Page.getFrameTree", json!({})).await?;
-        let world = snapshot_native_world(&session, &tree["frameTree"]["frame"]["id"]).await?;
+        let world = snapshot_native_world(
+            &session,
+            tree.pointer("/frameTree/frame/id")
+                .ok_or("the main frame id")?,
+        )
+        .await?;
         snapshot_world_eval(
             &session,
             world,
@@ -2256,10 +2420,11 @@ async fn tests_that_pages_without_a_same_process_neighbour_skip_the_adopted_fiel
                 .is_some_and(|text| text.contains("Public scope")),
             "{path}: {snapshots}"
         );
+        let queries = queries?;
         assert_eq!(
-            queries?,
-            json!([]),
-            "{path}: neither snapshot may search the whole document for moved fields"
+            queries.as_array().map(Vec::len),
+            Some(expected_queries),
+            "{path}: the whole-page and scoped snapshots each search exactly once when another frame exists: {queries}"
         );
         run.end_run(None);
     }

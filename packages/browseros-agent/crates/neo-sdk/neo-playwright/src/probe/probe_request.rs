@@ -190,11 +190,11 @@ pub(crate) enum ProbeRequest {
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         #[ts(optional, as = "Option<bool>")]
         conformance: bool,
-        /// A trusted cached parent or child shares this frame's renderer endpoint, or Rust
-        /// cannot prove otherwise. Only explicit false permits skipping the adopted-field scan.
+        /// This tab has another frame, or Rust cannot prove it has none. Different sessions
+        /// can host frames that exchange nodes; only explicit false skips the adopted-field scan.
         #[serde(default = "default_true", skip_serializing_if = "is_true")]
         #[ts(optional, as = "Option<bool>")]
-        same_process_neighbour: bool,
+        may_have_other_frame: bool,
     },
     /// One poll of one retrying matcher; Rust's loop owns the timing, `.not` and the failure.
     Expect {
@@ -596,31 +596,32 @@ mod tests {
     const PROTOCOL: &str = include_str!("../../tests/data/probe-protocol.json");
 
     #[test]
-    fn snapshot_neighbour_defaults_true_and_false_stays_explicit() -> Result<(), Box<dyn Error>> {
+    fn snapshot_other_frame_hint_defaults_true_and_false_stays_explicit()
+    -> Result<(), Box<dyn Error>> {
         let omitted = json!({"op": "snapshot", "root": "document", "mode": "ai"});
         let mut request: ProbeRequest = serde_json::from_value(omitted.clone())?;
         assert!(matches!(
             &request,
             ProbeRequest::Snapshot {
-                same_process_neighbour: true,
+                may_have_other_frame: true,
                 ..
             }
         ));
         assert_eq!(serde_json::to_value(&request)?, omitted);
         let ProbeRequest::Snapshot {
-            same_process_neighbour,
+            may_have_other_frame,
             ..
         } = &mut request
         else {
             return Err("expected snapshot".into());
         };
-        *same_process_neighbour = false;
+        *may_have_other_frame = false;
         let written = serde_json::to_value(&request)?;
-        assert_eq!(written["sameProcessNeighbour"], false);
+        assert_eq!(written["mayHaveOtherFrame"], false);
         assert!(matches!(
             serde_json::from_value::<ProbeRequest>(written)?,
             ProbeRequest::Snapshot {
-                same_process_neighbour: false,
+                may_have_other_frame: false,
                 ..
             }
         ));

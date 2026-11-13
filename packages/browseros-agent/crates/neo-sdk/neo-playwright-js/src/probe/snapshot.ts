@@ -84,7 +84,7 @@ export function snapshot(
           root: element,
           // Rust's topology includes frames hidden from window.frames by shadow roots.
           // Unknown hints still discover foreign prototypes; false only skips that search.
-          sameProcessNeighbour: request.sameProcessNeighbour !== false,
+          mayHaveOtherFrame: request.mayHaveOtherFrame !== false,
         },
         take,
       )

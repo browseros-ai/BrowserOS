@@ -19,10 +19,10 @@ type Field = HTMLInputElement | HTMLTextAreaElement
 const HTML_NAMESPACE = 'http://www.w3.org/1999/xhtml'
 const FIELD_TAGS: ReadonlySet<string> = new Set(['input', 'textarea'])
 
-/** The resolved walk root and Rust's conservative same-renderer parent/child hint. */
+/** The resolved walk root and Rust's conservative other-frame hint. */
 type FieldDiscovery = {
   readonly root: Element
-  readonly sameProcessNeighbour: boolean
+  readonly mayHaveOtherFrame: boolean
 }
 
 /** Actual wrapper prototypes for this walk only. A textarea and its Text can come from different realms. */
@@ -97,7 +97,7 @@ function hasReadableOpener(document: Document): boolean {
  */
 function collectFieldPrototypes({
   root,
-  sameProcessNeighbour,
+  mayHaveOtherFrame,
 }: FieldDiscovery): FieldPrototypes {
   const prototypes: FieldPrototypes = {
     inputs: new Set([HTMLInputElement.prototype]),
@@ -123,7 +123,7 @@ function collectFieldPrototypes({
     }
   }
   collect(root)
-  if (!sameProcessNeighbour && !hasReadableOpener(root.ownerDocument))
+  if (!mayHaveOtherFrame && !hasReadableOpener(root.ownerDocument))
     return prototypes
   const roots: (Document | ShadowRoot)[] = [root.ownerDocument]
   for (const tree of roots) {

@@ -115,14 +115,11 @@ impl<'op> OpPage<'op> {
         }
     }
 
-    /// The snapshot's exact frame, checked against the run's existing admitted tree. A cache
-    /// only proves absence with live, gap-free observation while checking it; uncertainty
-    /// enables the scan rather than fetching topology or changing frame storage.
-    pub(crate) fn same_process_neighbour(
-        &self,
-        scope: &OpScope<'_>,
-        world: &IsolatedWorld,
-    ) -> bool {
+    /// Whether this tab may have any frame besides the snapshot's exact frame, checked
+    /// against the run's existing admitted tree. A cache only proves absence with live,
+    /// gap-free observation while checking it; uncertainty enables the scan rather than
+    /// fetching topology or changing frame storage.
+    pub(crate) fn may_have_other_frame(&self, scope: &OpScope<'_>, world: &IsolatedWorld) -> bool {
         let fence = self.pw.event_fence();
         if self.frames().lifecycle_has_gaps() || !self.pw.events_live_through(fence) {
             return true;
@@ -136,14 +133,14 @@ impl<'op> OpPage<'op> {
             frame: FrameId(self.target_id().as_str().to_owned()),
             epoch,
         };
-        let neighbour = scope.run_state().frames.same_process_neighbour(
+        let other_frame = scope.run_state().frames.may_have_other_frame(
             self.tab(),
             &root,
             world.frame(),
             session,
             self.pw.events(),
         );
-        neighbour
+        other_frame
             || self.frames().lifecycle_has_gaps()
             || self.browser().connection().connection_epoch() != epoch
             || self.pw.event_fence() != fence
