@@ -249,21 +249,30 @@ def check_reads(socket_path, token_file, case, events):
     require(tail.get("operations"), "off trace tail lost its operations")
     for record in tail["runs"] + tail["operations"]:
         check_stripped(record, "trace tail")
-    audit_query = urllib.parse.urlencode({"taskId": case["task"], "fields": "summary"})
-    audit = api(socket_path, token_file, "/v1/runs?" + audit_query)
-    require({row["id"] for row in audit["items"]} == {case["run"], case["failed_run"]}, "off audit lost or duplicated a run")
-    summaries = [audit]
-    for record in audit["items"]:
-        check_stripped(record, "audit run")
-        for op in record.get("operations", []):
-            check_stripped(op, "audit operation")
-    for path in (f"/v1/runs/{case['run']}?fields=summary", "/v1/trace?" + query + "&fields=summary"):
-        summary = api(socket_path, token_file, path)
-        summaries.append(summary)
-        for record in summary.get("runs", [summary] if "id" in summary else []):
-            check_stripped(record, "summary run")
-        for op in summary["operations"]:
-            check_stripped(op, "summary operation")
+    summaries = []
+    for options in (
+        {"fields": "summary"}, {"internal": "false"},
+        {"fields": "summary", "internal": "false"},
+    ):
+        audit_query = urllib.parse.urlencode({"taskId": case["task"], **options})
+        audit = api(socket_path, token_file, "/v1/runs?" + audit_query)
+        summaries.append(audit)
+        require({row["id"] for row in audit["items"]} == {case["run"], case["failed_run"]}, "off audit lost or duplicated a run")
+        if options.get("fields") == "summary":
+            require(any(row.get("operations") for row in audit["items"]), "off audit lost its steps")
+        for record in audit["items"]:
+            check_stripped(record, "audit run")
+            for op in record.get("operations", []):
+                check_stripped(op, "audit operation")
+        suffix = urllib.parse.urlencode(options)
+        for path in (f"/v1/runs/{case['run']}?" + suffix, "/v1/trace?" + query + "&" + suffix):
+            summary = api(socket_path, token_file, path)
+            summaries.append(summary)
+            for record in summary.get("runs", [summary] if "id" in summary else []):
+                check_stripped(record, "summary run")
+            require(summary["operations"], "off summary or filtered view lost all operations")
+            for op in summary["operations"]:
+                check_stripped(op, "summary operation")
     ended_ops = [event["operation"] for event in events if event.get("type") == "operation.ended"]
     require(ended_ops, "off event stream had no operation.ended records")
     for op in ended_ops:

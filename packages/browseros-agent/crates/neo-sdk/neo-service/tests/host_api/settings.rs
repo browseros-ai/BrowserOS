@@ -709,21 +709,32 @@ async fn values_off_reaches_records_and_events_without_payloads() -> TestResult 
     assert_eq!(list.body["items"][0]["values"], "off");
     let tail = h.get("/v1/trace").await?;
     assert_eq!(tail.body["operations"][0]["values"], "off");
-    let audit = h.get("/v1/runs?fields=summary").await?;
-    assert_eq!(audit.body["items"][0]["values"], "off");
-    assert_eq!(audit.body["items"][0]["operations"][0]["values"], "off");
-    let summary = h.get(&format!("/v1/runs/{run}?fields=summary")).await?;
-    assert_eq!(summary.body["values"], "off");
-    assert_eq!(summary.body["operations"][0]["values"], "off");
-    let summary_tail = h.get("/v1/trace?fields=summary").await?;
-    assert_eq!(summary_tail.body["operations"][0]["values"], "off");
+    let mut views = Vec::new();
+    for (query, audit_has_steps) in [
+        ("fields=summary", true),
+        ("internal=false", false),
+        ("fields=summary&internal=false", true),
+    ] {
+        let audit = h.get(&format!("/v1/runs?{query}")).await?;
+        assert_eq!(audit.status, StatusCode::OK, "{}", audit.body);
+        assert_eq!(audit.body["items"][0]["values"], "off");
+        if audit_has_steps {
+            assert_eq!(audit.body["items"][0]["operations"][0]["values"], "off");
+        }
+        let summary = h.get(&format!("/v1/runs/{run}?{query}")).await?;
+        assert_eq!(summary.status, StatusCode::OK, "{}", summary.body);
+        assert_eq!(summary.body["values"], "off");
+        assert_eq!(summary.body["operations"][0]["values"], "off");
+        let summary_tail = h.get(&format!("/v1/trace?{query}")).await?;
+        assert_eq!(summary_tail.status, StatusCode::OK, "{}", summary_tail.body);
+        assert_eq!(summary_tail.body["operations"][0]["values"], "off");
+        views.extend([audit.body, summary.body, summary_tail.body]);
+    }
     let all = json!([
         record.body,
         list.body,
         tail.body,
-        audit.body,
-        summary.body,
-        summary_tail.body,
+        views,
         events.iter().map(|event| &event.data).collect::<Vec<_>>()
     ])
     .to_string();
