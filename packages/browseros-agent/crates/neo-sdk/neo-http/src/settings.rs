@@ -461,6 +461,42 @@ mod tests {
              decision, where before it never was"
         );
     }
+    /// Ruling R58 with the saved settings file: a saved `fill.pictures: never` is honoured from
+    /// the start, before any fill; a saved value this build cannot use (an unknown name, a value
+    /// of the wrong type) reads as `allowed`, the default, while the file's other settings still
+    /// apply. Fails with `never` as the row's saved fallback (the unusable one reads `never`).
+    #[tokio::test]
+    async fn a_saved_fill_pictures_is_honoured_and_an_unusable_one_reads_allowed()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use super::SettingsDefaults;
+
+        let dir = tempfile::tempdir()?;
+        let file = dir.path().join("settings.json");
+        tokio::fs::write(&file, br#"{"fill":{"pictures":"never"}}"#).await?;
+        let saved = Settings::load(file.clone(), SettingsDefaults::default()).await;
+        assert!(
+            saved.fill_pictures_never(),
+            "a saved never holds from the start"
+        );
+        for unusable in [
+            &br#"{"fill":{"pictures":"sometimes"},"trace":{"retentionSeconds":7200}}"#[..],
+            &br#"{"fill":{"pictures":false},"trace":{"retentionSeconds":7200}}"#[..],
+        ] {
+            tokio::fs::write(&file, unusable).await?;
+            let loaded = Settings::load(file.clone(), SettingsDefaults::default()).await;
+            assert!(
+                !loaded.fill_pictures_never(),
+                "an unusable value reads allowed"
+            );
+            assert_eq!(
+                loaded.trace_retention(),
+                Duration::from_secs(7200),
+                "the file's other settings still apply"
+            );
+        }
+        Ok(())
+    }
+
     #[tokio::test]
     async fn application_defaults_drive_answers_reset_and_saved_fallback()
     -> Result<(), Box<dyn std::error::Error>> {

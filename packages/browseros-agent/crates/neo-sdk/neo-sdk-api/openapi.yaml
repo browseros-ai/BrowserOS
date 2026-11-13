@@ -1101,7 +1101,9 @@ paths:
         `trace.values` and `trace.screenshots` off. An invalid known value for either switch
         uses off; an invalid `trace` group turns both off. Other invalid values keep their
         defaults, including retention. Unknown names are skipped with a warning. Neo always
-        starts; recording-off fallbacks appear in GET and persist in the next API save.
+        starts; recording-off fallbacks appear in GET and persist in the next API save. A saved
+        `fill.pictures` that this server cannot use falls back to `allowed`, so a host that needs
+        `never` reads `GET /v1/settings` after start.
 
         In the SDK image the saved path is `/data/browserclaw/claw-sdk/settings.json`.
         At every entrypoint start, a regular `/etc/neo/settings.json` atomically replaces it,
@@ -2482,7 +2484,8 @@ components:
             that sets `fill.pictures` to `never` before the first fill. Under either value Neo's
             own picture is withheld while a frame shows a private box's value in clear
             (`trace.screenshots`). A name this server does not have is skipped and listed in
-            `unknownValues`.
+            `unknownValues`: then `PUT` applies the default, `allowed`, and `PATCH` keeps the
+            value it had, so a host that needs `never` checks `unknownValues`.
     FilesSettings:
       type: object
       properties:

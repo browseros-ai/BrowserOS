@@ -140,6 +140,13 @@ pub(crate) const TRACE_VALUES: Setting = Setting {
 /// rule sets `never` before its first fill.
 pub(crate) const FILL_PICTURES: Setting = Setting {
     name: "fill.pictures",
+    // A saved value this build cannot use reads as the default, `allowed`, with the load's loud
+    // warning (the lead's decision, protected-fill spec R58, "A saved settings file at start"). A
+    // bad settings file never costs the product a function: a recording switch falls to `off`
+    // because that loses nothing a run does, and this one falls to `allowed` because `never`
+    // refuses pictures, and refuses a fill when its record cannot be written. A host that needs
+    // `never` reads `GET /v1/settings` after start.
+    invalid_saved: None,
     rule: Rule::Choice {
         default: FILL_PICTURES_ALLOWED,
         values: &[FILL_PICTURES_ALLOWED, FILL_PICTURES_NEVER],
