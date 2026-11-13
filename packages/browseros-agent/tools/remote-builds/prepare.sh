@@ -60,9 +60,15 @@ sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "
 # Helpers are copied from this audited source transfer. Mutable slot/job records live
 # separately; reinstalling code never resets a busy slot or a cancellation fence.
 sudo install -d -m 0755 /usr/local/lib/browseros-remote-builds
-for helper in pool guest reaper; do
+# Install the imported module before publishing guest.py, even with caching off.
+# An upgrade may admit a new payload between these atomic file replacements.
+for helper in dependency_cache pool reaper guest; do
   sudo install -m 0644 "$here/$helper.py" "/usr/local/lib/browseros-remote-builds/$helper.py.new"
   sudo mv "/usr/local/lib/browseros-remote-builds/$helper.py.new" "/usr/local/lib/browseros-remote-builds/$helper.py"
+done
+for helper in rustc-cache.sh prepare-cache.sh cache-benchmark.py; do
+  sudo install -m 0755 "$here/$helper" "/usr/local/lib/browseros-remote-builds/$helper.new"
+  sudo mv "/usr/local/lib/browseros-remote-builds/$helper.new" "/usr/local/lib/browseros-remote-builds/$helper"
 done
 for helper in recipes.sh source-metadata-compat.cjs; do
   sudo install -m 0644 "$here/$helper" "/usr/local/lib/browseros-remote-builds/$helper.new"

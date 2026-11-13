@@ -133,6 +133,11 @@ class RecoveryTests(unittest.TestCase):
         self.assertFalse((self.root.parent / "escape").exists())
 
 
+def submission_for(worker="a" * 32, kind="gate"):
+    return {"worker": worker, "label": "worker-" + worker[:8], "kind": kind,
+            "clientPid": 123, "clientMachine": "fixture", "protocol": 2}
+
+
 class PoolTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
@@ -144,7 +149,7 @@ class PoolTests(unittest.TestCase):
 
     def request(self, operation, job=""):
         result = subprocess.run([sys.executable, str(HERE / "pool.py"), "--state", str(self.state)],
-                                input=json.dumps({"operation": operation, "job": job}),
+                                input=json.dumps({"operation": operation, "job": job, "submission": submission_for(job or "a" * 32)}),
                                 text=True, capture_output=True)
         return json.loads(result.stdout)
 
@@ -191,8 +196,91 @@ class PoolTests(unittest.TestCase):
         self.assertIn("error", self.request("unavailable", job))
         self.assertEqual(job, self.request("status")["hosts"][0]["job"]["id"])
 
+    def test_waiting_requests_are_visible_idempotent_and_withdraw_does_not_free_a_slot(self):
+        for number in range(4):
+            self.request("acquire", f"{number:032x}")
+        metadata = {"worker": "a" * 32, "label": "worker-a", "kind": "spec",
+                    "clientPid": 123, "clientMachine": "fixture", "protocol": 2}
+        message = {"operation": "acquire", "job": "b" * 32, "submission": metadata}
+        self.assertIsNone(pool.request(self.state, message)["host"])
+        self.assertIsNone(pool.request(self.state, message)["host"])
+        queued = pool.request(self.state, {"operation": "queue"})
+        self.assertEqual(["worker-a"], [row["label"] for row in queued["waiting"]])
+        pool.request(self.state, {"operation": "withdraw", "job": "b" * 32})
+        self.assertEqual([], pool.request(self.state, {"operation": "queue"})["waiting"])
+        pool.request(self.state, {"operation": "withdraw", "job": "0" * 32})
+        self.assertEqual("0" * 32, self.request("status")["hosts"][0]["job"]["id"])
+
+    def test_worker_limit_counts_running_and_waiting_and_names_both_jobs(self):
+        # Default state needs no optional policy flag to enforce the limit.
+        worker = {"worker": "a" * 32, "label": "worker-a", "kind": "gate", "clientPid": 123,
+                  "clientMachine": "fixture", "protocol": 2}
+        first, second, third = "b" * 32, "c" * 32, "d" * 32
+        pool.request(self.state, {"operation": "acquire", "job": first, "submission": worker})
+        # Keep the other machines busy so A's second job is waiting, rather than running.
+        state = json.loads(self.state.read_text())
+        for index, host in enumerate(state["hosts"][1:]):
+            host["job"] = {"id": f"{index:032x}", "state": "reserved"}
+        self.state.write_text(json.dumps(state))
+        self.assertIsNone(pool.request(self.state, {"operation": "acquire", "job": second,
+                                                  "submission": {**worker, "kind": "image"}})["host"])
+        with self.assertRaises(ValueError) as refused:
+            pool.request(self.state, {"operation": "acquire", "job": third, "submission": worker})
+        self.assertIn("gate bbbbbbbb", str(refused.exception));self.assertIn("image cccccccc", str(refused.exception))
+        pool.request(self.state, {"operation": "withdraw", "job": second})
+        with self.assertRaises(ValueError):
+            pool.request(self.state, {"operation": "acquire", "job": third, "submission": worker})
+
+    def test_dead_waiter_expiry_never_releases_running_work(self):
+        for number in range(4):self.request("acquire", f"{number:032x}")
+        metadata = {"worker": "a" * 32, "label": "worker-a", "kind": "spec", "clientPid": 123,
+                    "clientMachine": "fixture", "protocol": 2}
+        with patch.object(pool.time, "time", return_value=100):
+            pool.request(self.state, {"operation": "acquire", "job": "b" * 32, "submission": metadata})
+        with patch.object(pool.time, "time", return_value=111):
+            state = pool.request(self.state, {"operation": "queue"})
+        self.assertEqual([], state["waiting"])
+        self.assertEqual(4, sum(bool(host.get("job")) for host in state["hosts"]))
+
+    def test_priority_prevents_a_spec_poll_from_overtaking_gate_and_image(self):
+        state = json.loads(self.state.read_text())
+        for index, host in enumerate(state["hosts"]):
+            host["job"] = {"id": f"{index:032x}", "state": "reserved"}
+        self.state.write_text(json.dumps(state))
+        messages = []
+        for number, kind in enumerate(("spec", "image", "gate", "gate"), start=10):
+            message = {"operation": "acquire", "job": f"{number:032x}", "submission": {
+                "worker": f"{number:032x}", "kind": kind, "label": kind + str(number),
+                "clientPid": number, "clientMachine": "fixture", "protocol": 2}}
+            self.assertIsNone(pool.request(self.state, message)["host"])
+            messages.append(message)
+        expected = [messages[index] for index in (2, 3, 1, 0)]
+        queue = pool.request(self.state, {"operation": "queue"})["waiting"]
+        self.assertEqual([row["job"] for row in expected], [row["id"] for row in queue])
+        pool.request(self.state, {"operation": "release", "job": "0" * 32})
+        for message in expected:
+            # Aggressive polling by lower classes must not steal the free slot.
+            for lower in expected[expected.index(message) + 1:]:
+                self.assertIsNone(pool.request(self.state, lower)["host"])
+            self.assertEqual("vm-1", pool.request(self.state, message)["host"]["name"])
+            pool.request(self.state, {"operation": "release", "job": message["job"]})
+
 
 class ReachabilityTests(unittest.TestCase):
+    def test_capacity_refusal_is_not_retried_and_keeps_the_explanation(self):
+        client = object.__new__(remote.PoolClient);client.submission = None;client.profile = {"coordinator": {}}
+        reason = "worker-a already has two jobs: gate bbbbbbbb; image cccccccc"
+        with patch.object(client, "ssh_args", return_value=["ssh"]), \
+                patch.object(remote.subprocess, "run", return_value=SimpleNamespace(stdout=json.dumps({"error": reason}), stderr=reason, returncode=2)) as run:
+            with self.assertRaisesRegex(remote.Failure, "gate bbbbbbbb; image cccccccc"):
+                client.control("acquire", "d" * 32)
+        self.assertEqual(1, run.call_count)
+
+    def test_explicit_run_batches_keep_their_actual_job_kind(self):
+        self.assertEqual("spec", remote.job_kind("run", ["bash", "-lc", "bun run test:neo-spec a; bun run test:neo-spec b"]))
+        self.assertEqual("gate", remote.job_kind("run", ["bash", "crates/neo-sdk/check.sh"]))
+        self.assertEqual("image", remote.job_kind("run", ["docker", "buildx", "build", "."]))
+
     def test_unreachable_slot_is_cooled_down_before_trying_the_next(self):
         client = object.__new__(remote.PoolClient)
         first, second = {"name": "broken"}, {"name": "healthy"}
@@ -221,7 +309,7 @@ class LeaseTests(unittest.TestCase):
 
     def expire(self):
         with patch.object(pool.time, "time", return_value=100):
-            pool.request(self.state, {"operation": "acquire", "job": self.job, "lease": True})
+            pool.request(self.state, {"operation": "acquire", "job": self.job, "lease": True, "submission": submission_for()})
 
     def test_expiry_fences_renewal_without_releasing_unproven_work(self):
         self.expire()
@@ -229,7 +317,7 @@ class LeaseTests(unittest.TestCase):
             self.assertEqual(1, len(self.call("expired")["hosts"]))
             with self.assertRaisesRegex(ValueError, "no longer renewable"):
                 self.call("heartbeat")
-            self.assertIsNone(pool.request(self.state, {"operation": "acquire", "job": "b" * 32})["host"])
+            self.assertIsNone(pool.request(self.state, {"operation": "acquire", "job": "b" * 32, "submission": submission_for("b" * 32)})["host"])
 
     def test_heartbeat_extends_a_live_lease(self):
         self.expire()

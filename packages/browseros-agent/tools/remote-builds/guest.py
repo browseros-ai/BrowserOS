@@ -315,7 +315,15 @@ def payload(arguments: argparse.Namespace) -> int:
         raise ValueError("missing payload command")
     started = time.monotonic()
     cancelled = (ROOT / (job + ".cancelled")).exists()
-    code = 130 if cancelled else subprocess.run(command).returncode
+    if cancelled:
+        code = 130
+    else:
+        # The cache server belongs to this systemd payload, not a persistent host
+        # daemon. Lease expiry therefore stops its compiler children as well.
+        from dependency_cache import dependency_cache
+        with dependency_cache(Path(os.environ["NEO_SDK_SOURCE_ROOT"]),
+                              Path("/work/remote-builds") / job) as environment:
+            code = subprocess.run(command, env=environment).returncode
     if code < 0:
         code = 128 - code
     # A service killed during cancellation has no normal command outcome; recovery

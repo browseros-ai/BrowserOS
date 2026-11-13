@@ -14,6 +14,7 @@ bun run remote spec
 bun run remote detector
 bun run remote run -- cargo +1.98.0 check -p neo-server --locked
 bun run remote status
+bun run remote queue
 bun run remote fetch-image IMAGE_JOB_UUID
 ```
 
@@ -29,8 +30,10 @@ Both commands print a viewer command with a unique instance name, an automatic p
 `--image`, so it reuses that image without building or touching the owner's default viewer.
 No image is pushed. `spec` preserves the checkout's runner and exit status, using up to
 eight workers within that branch's browser cap. Selection flags pass through unchanged;
-add `--ci` for the baseline verdict on branches that support it. `detector` starts its own
-headless Linux browser with a fresh profile and random CDP port.
+add `--ci` for the baseline verdict on branches that support it. The experimental `detector`
+recipe owns a fresh headless Linux browser and random CDP port, but current-main/control runs
+lose CDP in the console-listener phase. **Keep detector runs local** under existing heavy/live
+locks until a complete current-main remote run passes; the wrapper preserves its actual 101.
 
 ## What the command does
 
@@ -45,12 +48,32 @@ agent in its worktree
 ```
 
 The four VMs stay running. A job reserves one VM only while it syncs and executes. The next
-job may come from any developer or worktree. Cargo registry/Git downloads, the public Playwright corpus,
+job may come from any developer or worktree. `queue` lists running and waiting jobs by worker
+and kind. Each worker may have two jobs total, including waiters; a third is refused with
+the two existing job IDs. Gates go before images (including viewer images), then specs,
+detectors and other commands, with FIFO within each class. A dead client's waiter is
+withdrawn by its independent pipe observer; loss of the Mac expires it after ten seconds.
+Running jobs use the separate two-minute cleanup lease described below.
+
+Cargo registry/Git downloads, the public Playwright corpus,
 Docker layers and BuildKit caches stay on each host; fresh source directories prevent jobs
 from sharing mutable working files. Cargo target and intermediate build directories are also
 UUID-private: its mtime freshness check can otherwise reuse a later build while an older
 snapshot waits in the queue. Cleanup removes these outputs; compiled Cargo artifacts are
-not shared across jobs. There is no worktree affinity or developer priority.
+not shared as Cargo-fresh output across jobs. Optional pinned sccache 0.19.0 caches only
+registry/Git dependency compilations by content; workspace/path crates always reach rustc
+directly. Stable relative Cargo selectors resolve into each job's private directories.
+The 20-GiB local disk cache persists, while its foreground server and compiler children
+belong to the job's systemd cgroup. Lockfiles and the toolchain partition entries; per-job
+`dependency-cache.json` records statistics. Docker's existing dependency-layer cache is
+independent. There is no worktree affinity or developer priority.
+
+To compare a suspect gate without compiler caching, use
+`bun run remote run -- env REMOTE_DEPENDENCY_CACHE=0 bash crates/neo-sdk/check.sh`.
+For administrator rollout, `prepare.sh` installs the cache helpers before publishing
+the guest helper. Run `/usr/local/lib/browseros-remote-builds/prepare-cache.sh`, then create
+`/etc/browseros-remote-builds/dependency-cache.enabled` after the benchmark passes.
+Removing that marker disables caching for new jobs; active jobs continue unchanged.
 
 ```text
 One agent / one worktree
@@ -203,7 +226,7 @@ TEST_CRABBOX=/path/to/0.83.0/crabbox python3 -m unittest discover -s tools/remot
 ```
 
 Local Mac jobs still obey the lead's heavy/image/spec locks. Proposed worker-rule changes:
-use `bun run remote gate|image|spec|detector` for supported Linux steps, with the shared remote
+use `bun run remote gate|image|spec` for supported Linux steps, with the shared remote
 slot replacing the local heavy/image/spec locks for those commands only. Keep Mac app/UI,
-macOS Rust targets, native arm64 runtime acceptance and Chromium work on the Mac with their existing gates. The lead applies its
+macOS Rust targets, detector runs, native arm64 runtime acceptance and Chromium work on the Mac with their existing gates. The lead applies its
 own `WORKER.md` and launcher changes; this implementation does not edit them.

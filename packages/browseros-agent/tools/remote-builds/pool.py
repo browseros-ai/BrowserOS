@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Shared first-free VM slots reached over SSH, without a daemon or cloud credentials.
+"""Prioritized first-free VM slots over SSH, without a daemon or cloud credentials.
 
 The sidecar flock protects a small JSON file on the coordinator VM. New clients renew
 a short lease; expiry fences admission until the independent reaper proves job cleanup.
@@ -18,6 +18,57 @@ import tempfile
 import time
 
 JOB_ID = re.compile(r"[a-f0-9]{32}\Z")
+# The owner requires this admission limit even in a freshly initialized hosts file.
+WORKER_LIMIT = 2
+KINDS = {"gate", "image", "viewer-image", "spec", "detector", "run"}
+PRIORITY = {"gate": 0, "image": 1, "viewer-image": 1, "spec": 2, "detector": 2, "run": 2}
+
+
+def queue_order(row: dict) -> tuple:
+    return PRIORITY[row["kind"]], row["submitted"], row["id"]
+
+
+def submission(message: dict) -> dict | None:
+    """Keep job identity/display metadata separate from SSH and cloud credentials."""
+    value = message.get("submission")
+    if value is None:
+        return None  # Already running clients remain protocol-compatible during rollout.
+    if (value.get("kind") not in KINDS or not JOB_ID.fullmatch(value.get("worker", ""))
+            or not isinstance(value.get("label"), str) or len(value["label"]) > 120):
+        raise ValueError("invalid worker/kind metadata")
+    return {**{name: value[name] for name in ("kind", "worker", "label", "clientPid", "clientMachine")},
+            "protocol": value.get("protocol", 0)}
+
+
+def worker_jobs(state: dict, worker: str) -> list[tuple[dict, str]]:
+    """Count compute reservations and waiting requests under the same pool lock."""
+    running = [(host["job"], "running on " + host["name"]) for host in state["hosts"]
+               if (host.get("job") or {}).get("worker") == worker]
+    waiting = [(row, "waiting") for row in sorted(state.get("waiting", []), key=lambda row: row["submitted"])
+               if row.get("worker") == worker]
+    return running + waiting
+
+
+def refusal(label: str, jobs: list[tuple[dict, str]]) -> str:
+    present = "; ".join(f"{row.get('kind', 'run')} {row['id'][:8]} ({where})" for row, where in jobs)
+    return f"{label} already has two jobs in the pool: {present}. Wait for one to finish before submitting another."
+
+
+def enforce_worker_cap(state: dict, now: float) -> None:
+    """Grandfather active work, but refuse excess waiters deterministically on upgrade.
+
+    Keep refusals briefly so an acquire reply lost in transit cannot turn a rejected
+    third request into an accepted request when another job finishes during retry.
+    """
+    state["rejected"] = {job: value for job, value in state.get("rejected", {}).items() if value["until"] > now}
+    maximum = WORKER_LIMIT
+    for worker in {row["worker"] for row in state.get("waiting", [])}:
+        jobs = worker_jobs(state, worker)
+        keep = jobs[:maximum]
+        for row, where in jobs[maximum:]:
+            if where == "waiting":
+                state["rejected"][row["id"]] = {"reason": refusal(row["label"], keep), "until": now + 3600}
+    state["waiting"] = [row for row in state["waiting"] if row["id"] not in state["rejected"]]
 
 
 def write_state(path: Path, state: dict) -> None:
@@ -43,10 +94,10 @@ def write_state(path: Path, state: dict) -> None:
 
 def request(path: Path, message: dict) -> dict:
     operation = message.get("operation")
-    if operation not in {"status", "acquire", "release", "unknown", "unavailable", "heartbeat", "expired"}:
+    if operation not in {"status", "queue", "acquire", "release", "unknown", "unavailable", "heartbeat", "expired", "withdraw", "annotate"}:
         raise ValueError("unknown pool operation")
     job = message.get("job", "")
-    if operation not in {"status", "expired"} and not JOB_ID.fullmatch(job):
+    if operation not in {"status", "queue", "expired"} and not JOB_ID.fullmatch(job):
         raise ValueError("job must be a 32-character hexadecimal identifier")
     with path.with_suffix(".lock").open("a+") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
@@ -56,8 +107,28 @@ def request(path: Path, message: dict) -> dict:
                 or len({host["host"] for host in hosts}) != len(hosts)):
             raise ValueError("pool hosts must have unique names and canonical endpoints")
         assigned = next((host for host in hosts if (host.get("job") or {}).get("id") == job), None)
-        if operation == "status":
-            return {"hosts": hosts}
+        now = time.time()
+        waiting = [row for row in state.get("waiting", []) if row["until"] > now]
+        state["waiting"] = waiting
+        enforce_worker_cap(state, now)
+        waiting = state["waiting"]
+        if operation in {"status", "queue"}:
+            write_state(path, state)
+            return {"hosts": hosts, "waiting": sorted(waiting, key=queue_order)}
+        if operation == "withdraw":
+            state["waiting"] = [row for row in waiting if row["id"] != job]
+            write_state(path, state)
+            # A lost acquire reply may already own a reservation. Withdrawal only
+            # removes waiters; the independent lease reaper fences uncertain slots.
+            return {"withdrawn": True}
+        if operation == "annotate":
+            if assigned is not None:
+                assigned["job"].update(submission(message) or {})
+            queued = next((row for row in waiting if row["id"] == job), None)
+            if queued is not None:
+                queued.update(submission(message) or {})
+            write_state(path, state)
+            return {"annotated": assigned is not None or queued is not None}
         if operation == "expired":
             expired = []
             for host in hosts:
@@ -72,17 +143,49 @@ def request(path: Path, message: dict) -> dict:
                 write_state(path, state)
             return {"hosts": expired}
         if operation == "acquire":
+            metadata = submission(message)
             # Retrying after a lost SSH reply must not consume another slot.
             if assigned is not None:
                 if assigned["job"]["state"] != "reserved":
                     raise ValueError("job outcome is unknown; recover it before reuse")
                 return {"host": assigned}
+            if job in state["rejected"]:
+                write_state(path, state)
+                raise ValueError(state["rejected"][job]["reason"])
+            if metadata is None or metadata.get("protocol", 0) < 2:
+                state["waiting"] = [row for row in waiting if row["id"] != job]
+                write_state(path, state)
+                raise ValueError("This waiting client predates queue identity. No check ran: rerun the same shared launcher command to use the two-job limit.")
+            if metadata is not None:
+                queued = next((row for row in waiting if row["id"] == job), None)
+                if queued is None:
+                    existing = worker_jobs(state, metadata["worker"])
+                    if len(existing) >= WORKER_LIMIT:
+                        reason = refusal(metadata["label"], existing[:2])
+                        state["rejected"][job] = {"reason": reason, "until": now + 3600}
+                        write_state(path, state)
+                        raise ValueError(reason)
+                    queued = {"id": job, "submitted": now, **metadata}
+                    waiting.append(queued)
+                queued["until"] = now + 10
+                metadata = {**{name: queued[name] for name in ("kind", "worker", "label", "clientPid", "clientMachine")},
+                            "protocol": queued.get("protocol", 0)}
             free = next((host for host in hosts if not host.get("job")
                          and not host.get("maintenance")
                          and host.get("unavailableUntil", 0) <= time.time()), None)
             if free is None:
+                write_state(path, state)
                 return {"host": None}
-            free["job"] = {"id": job, "started": time.time(), "state": "reserved"}
+            if waiting:
+                # Only the highest-priority live waiter can claim a free host.
+                # We do not reserve on somebody else's behalf: their next poll
+                # claims it, or their ten-second expiry removes the dead client.
+                # FIFO within each class avoids racing clients jumping the queue.
+                if min(waiting, key=queue_order)["id"] != job:
+                    write_state(path, state)
+                    return {"host": None}
+            state["waiting"] = [row for row in waiting if row["id"] != job]
+            free["job"] = {"id": job, "started": now, "state": "reserved", **(metadata or {})}
             if message.get("lease"):
                 free["job"]["clientUntil"] = time.time() + 120
             write_state(path, state)
@@ -127,6 +230,7 @@ def main() -> int:
         return 0
     except (OSError, ValueError, KeyError, TypeError) as error:
         print(json.dumps({"error": str(error)}))
+        print(str(error), file=sys.stderr)  # Pre-upgrade clients read SSH stderr on nonzero exit.
         return 2
 
 

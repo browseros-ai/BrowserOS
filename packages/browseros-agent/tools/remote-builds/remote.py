@@ -12,6 +12,7 @@ import contextlib
 import hashlib
 import json
 import os
+import platform
 import re
 from pathlib import Path, PurePosixPath
 import shlex
@@ -30,6 +31,7 @@ HELPER = "/usr/local/lib/browseros-remote-builds/"
 INCLUDE = ["packages/browseros-agent", ".github/workflows/test.yml"]
 LEGACY_SUPERVISOR = ["packages/browseros/docker/neo/" + name for name in
                      ("neo-server-info.sh", "openbox-rc.xml", "entrypoint.sh", "healthcheck.sh", "neo-quit.py")]
+JOB_KINDS = {"gate", "image", "viewer-image", "spec", "detector", "run"}
 EXCLUDE = [".git", ".internal-docs", ".llm", ".scratch", ".grove", ".agents", ".claude", ".auctor", ".crabbox",
            ".env", ".env.*", "*.pem", "*.key", "*.p12", "*.pfx", "id_rsa*", "id_ed25519*",
            ".credentials", ".credentials.*", "credentials.json", "credentials.yaml", "credentials.yml",
@@ -39,6 +41,129 @@ EXCLUDE = [".git", ".internal-docs", ".llm", ".scratch", ".grove", ".agents", ".
 
 class Failure(RuntimeError):
     pass
+
+
+def job_kind(action: str, arguments: list[str]) -> str:
+    """Classify explicit `run` calls too, so a spec batch cannot hide as generic work."""
+    if action != "run":
+        return action
+    command = " ".join(arguments)
+    if any(value in command for value in ("test:neo-spec", "recipes.sh spec", "neo-playwright-tests/spec.ts", "neo-playwright-tests/node/run.mjs")):
+        return "spec"
+    if "devtools_detection_live" in command or "recipes.sh detector" in command:
+        return "detector"
+    if "crates/neo-sdk/check.sh" in command:
+        return "gate"
+    if "neo-server/docker/build.sh" in command or re.search(r"\bdocker\s+(?:buildx\s+)?build\b", command):
+        return "image"
+    return "run"
+
+
+def worker_info(repository: Path, profile: dict, kind: str) -> dict:
+    """A worktree is a worker; aliases group the administrator's proof checkouts.
+
+    This is scheduling/display identity for trusted builders, not an authentication
+    boundary. Hostnames and full paths are hashed rather than sent as display text.
+    """
+    canonical = Path(profile.get("workerAliases", {}).get(str(repository), str(repository)))
+    label = canonical.name
+    temporary = re.search(r"-wt-feat-([^/]+)", str(canonical))
+    if temporary:
+        label = temporary.group(1)
+    machine = hashlib.sha256(platform.node().encode()).hexdigest()[:16]
+    try:
+        common = checked(["git", "-C", str(canonical), "rev-parse", "--git-common-dir"]).strip()
+        common = str((canonical / common).resolve())
+    except (Failure, OSError):
+        common = str(canonical)  # A retired legacy checkout may still have a lease to reap.
+    identity = hashlib.sha256((machine + "\0" + common + "\0" + label).encode()).hexdigest()[:32]
+    return {"worker": identity, "label": label, "kind": kind,
+            "clientPid": os.getpid(), "clientMachine": machine, "protocol": 2}
+
+
+def queue_report(client) -> None:
+    """Show shared metadata plus pre-upgrade waiters still alive on this Mac.
+
+    Older clients did not register waiters. Read their process/cwd metadata until
+    they drain; never signal or alter another worker just to inspect the queue.
+    """
+    state = client.control("queue")
+    runs = Path(client.profile.get("runs", "~/.local/state/browseros-remote-builds/runs")).expanduser()
+    rows = {}
+    local = []
+    try:
+        output = checked(["ps", "-ww", "-axo", "pid=,ppid=,command="])
+        for line in output.splitlines():
+            parts = line.strip().split(None, 2)
+            if len(parts) == 3:
+                rows[int(parts[0])] = (int(parts[1]), parts[2])
+        for pid, (_, command) in rows.items():
+            try:
+                args = shlex.split(command)
+            except ValueError:
+                continue
+            index = next((n for n, value in enumerate(args) if value.endswith("remote.py")
+                          and "remote-builds" in value), None)
+            if index is None:
+                continue
+            tail = args[index + 1:]
+            if tail[:1] == ["--config"]:
+                tail = tail[2:]
+            if not tail or tail[0] not in JOB_KINDS:
+                continue
+            try:
+                cwd = checked(["lsof", "-a", "-p", str(pid), "-d", "cwd", "-Fn"])
+                directory = next((line[1:] for line in cwd.splitlines() if line.startswith("n")), "")
+                repository = Path(checked(["git", "-C", directory, "rev-parse", "--show-toplevel"]).strip())
+                info = worker_info(repository, client.profile, job_kind(tail[0], tail[1:]))
+            except (Failure, OSError, ValueError):
+                continue  # A client may finish while this read-only view is collected.
+            descendants = {pid}
+            while True:
+                expanded = descendants | {child for child, (parent, _) in rows.items() if parent in descendants}
+                if expanded == descendants:
+                    break
+                descendants = expanded
+            info.update(clientPid=pid, commands="\n".join(rows[child][1] for child in descendants))
+            local.append(info)
+    except (Failure, OSError, ValueError):
+        # Other platforms still see every new registered request through SSH.
+        pass
+    active = [host for host in state["hosts"] if host.get("job")]
+    print(f"RUNNING {len(active)}/{len(state['hosts'])}")
+    for host in active:
+        job = host["job"]
+        match = next((row for row in local if job["id"] in row["commands"]), None)
+        saved = runs / job["id"] / "job.json"
+        try:
+            metadata = json.loads(saved.read_text())
+        except (OSError, ValueError):
+            # A client may still be adding its host receipt; central queue metadata
+            # remains authoritative, and a display fallback must not break the view.
+            metadata = {}
+        label = job.get("label") or (match or {}).get("label")
+        if not label and metadata.get("worktree"):
+            label = worker_info(Path(metadata["worktree"]), client.profile, "run")["label"]
+        commands = "\n".join(command for _, command in rows.values() if job["id"] in command)
+        kind = job.get("kind") or (match or {}).get("kind") or metadata.get("kind")
+        if not kind:
+            kind = job_kind("run", [commands])
+        if kind == "run":
+            kind = job_kind("run", [commands])
+        print(f"  {host['name']}  {label or 'legacy/unknown'}  {kind}  {job['id'][:8]}")
+    waiting = list(state.get("waiting", []))
+    registered = {(row.get("clientMachine"), row.get("clientPid")) for row in waiting}
+    for row in local:
+        if (row["clientMachine"], row["clientPid"]) in registered:
+            continue
+        if any(host["job"]["id"] in row["commands"] for host in active):
+            continue
+        if any("guest.py " + operation in row["commands"] for operation in ("artifacts", "cleanup", "image")):
+            continue  # Results/export happen after releasing compute.
+        waiting.append({**row, "id": "legacy:" + str(row["clientPid"])})
+    print(f"WAITING {len(waiting)} (includes pre-upgrade clients visible on this Mac)")
+    for row in waiting:
+        print(f"  {row.get('label', 'unknown')}  {row.get('kind', 'run')}  {row['id'][:16]}")
 
 
 def checked(argv: list[str], **options) -> str:
@@ -203,6 +328,7 @@ class PoolClient:
         self.profile = profile
         self.key = Path(profile["key"]).expanduser().resolve()
         self.known_hosts = self.key.parent / "known_hosts"
+        self.submission = None
         if not self.key.is_file() or not self.known_hosts.is_file():
             raise Failure("configure a private SSH key and its adjacent pinned known_hosts file")
 
@@ -276,17 +402,45 @@ class PoolClient:
         # reply can be retried without reserving a second VM or releasing another job.
         for attempt in range(3):
             try:
-                response = self.ssh(self.profile["coordinator"], ["python3", HELPER + "pool.py"],
-                                    input=json.dumps({"operation": operation, "job": job, "lease": True}), timeout=100)
-                break
-            except (Failure, subprocess.TimeoutExpired):
+                result = subprocess.run(self.ssh_args(self.profile["coordinator"], ["python3", HELPER + "pool.py"]),
+                                        input=json.dumps({"operation": operation, "job": job, "lease": True,
+                                                          "submission": self.submission}),
+                                        capture_output=True, text=True, timeout=100)
+                # Application refusals are definitive, not a reason to retry admission.
+                # Parse stdout even on exit 2 so the caller sees its two existing jobs.
+                if result.stdout.strip():
+                    value = json.loads(result.stdout)
+                    break
+                raise Failure(result.stderr.strip() or "coordinator returned no result")
+            except (Failure, ValueError, subprocess.TimeoutExpired):
                 if attempt == 2:
                     raise
                 time.sleep(attempt + 1)
-        value = json.loads(response)
         if "error" in value:
             raise Failure(value["error"])
         return value
+
+    @contextlib.contextmanager
+    def queue_guard(self, job: str, run_dir: Path):
+        """An IPC observer withdraws a waiter even if its client is SIGKILLed.
+
+        The observer has its own process group, while only the parent holds the
+        pipe's write end. Whole-Mac loss is covered by the short server-side expiry.
+        Withdrawal never frees a potentially running reservation.
+        """
+        profile = run_dir / "queue-profile.json"
+        profile.write_text(json.dumps(self.profile))
+        profile.chmod(0o600)
+        with (run_dir / "queue-watch.log").open("a") as diagnostic:
+            watcher = subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "--queue-watch", str(profile), job],
+                                       stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=diagnostic,
+                                       start_new_session=True, close_fds=True)
+        try:
+            yield
+        finally:
+            watcher.stdin.close()
+            with contextlib.suppress(subprocess.TimeoutExpired):
+                watcher.wait(timeout=2)
 
     @contextlib.contextmanager
     def lease(self, job: str):
@@ -390,6 +544,7 @@ def execute(profile: dict, action: str, arguments: list[str]) -> int:
     config.write_text(json.dumps(source_policy(client.key, include)))
     config.chmod(0o600)
     host = None
+    acquiring = False
     safe = False
     process = None
     with tempfile.TemporaryDirectory(prefix="source-", dir=run_dir) as name:
@@ -402,6 +557,10 @@ def execute(profile: dict, action: str, arguments: list[str]) -> int:
         if len(frozen) != metadata["files"] or sum(row["bytes"] for row in frozen) != metadata["bytes"]:
             raise Failure("frozen transfer differs from accepted source manifest")
         print(f"Job {job}; logs: {run_dir}", file=sys.stderr)
+        client.submission = worker_info(repository, profile, job_kind(action, arguments))
+        job_metadata = {"job": job, "source": metadata, "worktree": str(repository),
+                        "kind": action, **client.submission}
+        (run_dir / "job.json").write_text(json.dumps(job_metadata))
         prefix = ["python3", HELPER + "guest.py", "run", "--job", job, "--source-root"]
         command = ["--cwd", str(cwd), "--revision", metadata["revision"],
                    "--dirty", str(metadata["dirty"]).lower(), "--", *command_for(action, arguments)]
@@ -409,9 +568,11 @@ def execute(profile: dict, action: str, arguments: list[str]) -> int:
         # arguments, including a literal "$PWD", retain their exact argument value.
         shell = "exec " + shlex.join(prefix) + ' "$PWD" ' + shlex.join(command)
         try:
-            host = client.acquire(job)
-            (run_dir / "job.json").write_text(json.dumps({"job": job, "host": host, "source": metadata,
-                                                         "worktree": str(repository)}))
+            acquiring = True
+            with client.queue_guard(job, run_dir):
+                host = client.acquire(job)
+            acquiring = False
+            (run_dir / "job.json").write_text(json.dumps({**job_metadata, "host": host}))
             print(f"Running on {host['name']}", file=sys.stderr)
             argv = [crabbox, "run", "--provider", "ssh", "--static-host", host["host"],
                     "--static-user", host.get("user", "buildrunner"), "--static-port", str(host.get("port", 22)),
@@ -454,6 +615,9 @@ def execute(profile: dict, action: str, arguments: list[str]) -> int:
                     client.artifacts(finished_host, job, run_dir)
             return 130
         finally:
+            if acquiring:
+                with contextlib.suppress(Failure, OSError, subprocess.SubprocessError):
+                    client.control("withdraw", job)
             if host:
                 if safe:
                     client.control("release", job)
@@ -463,14 +627,28 @@ def execute(profile: dict, action: str, arguments: list[str]) -> int:
 
 
 def main() -> int:
+    if sys.argv[1:2] == ["--queue-watch"]:
+        if len(sys.argv) != 4 or not re.fullmatch(r"[a-f0-9]{32}", sys.argv[3]):
+            return 2
+        try:
+            profile = json.loads(Path(sys.argv[2]).read_text())
+            sys.stdin.buffer.read()  # EOF proves that this submitting process released its pipe.
+            PoolClient(profile).control("withdraw", sys.argv[3])
+            return 0
+        except (Failure, OSError, ValueError, subprocess.SubprocessError) as error:
+            print(f"queue withdrawal: {error}", file=sys.stderr)
+            return 1
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", type=Path,
                         default=Path(os.environ.get("REMOTE_BUILDS_CONFIG", "~/.config/browseros-remote-builds/config.json")).expanduser())
-    parser.add_argument("action", choices=["run", "gate", "image", "viewer-image", "spec", "detector", "status", "recover", "fetch-image"])
+    parser.add_argument("action", choices=["run", "gate", "image", "viewer-image", "spec", "detector", "status", "queue", "recover", "fetch-image"])
     parser.add_argument("arguments", nargs=argparse.REMAINDER)
     arguments = parser.parse_args()
     try:
         profile = json.loads(arguments.config.read_text())
+        if arguments.action == "queue":
+            queue_report(PoolClient(profile))
+            return 0
         if arguments.action == "fetch-image":
             if len(arguments.arguments) != 1:
                 raise Failure("fetch-image needs exactly one completed image job UUID")
