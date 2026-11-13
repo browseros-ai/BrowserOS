@@ -168,7 +168,7 @@ def run_case(client, socket_path, token_file, tag, mode, origin, server):
     meta = {"taskId": task, "requestId": request, "hostData": {"canary": markers["host-data"]}}
     code = script(markers, origin)
     before = server.downloads
-    reply = call_run(client, code, meta)
+    reply = call_run(client, code, meta, text_limit=None)
     require(reply["meta"].get("status") == "ok", f"{mode} canary script failed")
     envelope = reply.get("value") or {}
     value = envelope.get("value") or {}
@@ -176,7 +176,7 @@ def run_case(client, socket_path, token_file, tag, mode, origin, server):
     require(value.get("read") == markers["operation-result"], f"{mode} reply lost its operation result")
     failure = value.get("failure") or {}
     require(markers["error"] in failure.get("message", ""), f"{mode} found-element fill did not produce the error canary")
-    require(any(markers["console"] in line.get("text", "") for line in envelope.get("logs", [])), f"{mode} reply lost its console line")
+    require(markers["console"] in reply.get("text", "").splitlines(), f"{mode} reply lost its console line")
     marker = value.get("bytes") or {}
     require(marker.get("$neo") == "blob" and marker.get("size") == BLOB_SIZE, f"{mode} Uint8Array was not externalized as a blob")
     run_id = reply["meta"].get("id")

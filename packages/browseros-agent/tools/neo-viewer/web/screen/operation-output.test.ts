@@ -81,6 +81,46 @@ describe('what a call gave the script', () => {
     ])
   })
 
+  it('pairs recorded snapshot text again after omitted snapshot bookkeeping', () => {
+    const tree = { document: 4, json: [] }
+    const first = operation(1, 'page.ariaSnapshot', {
+      line: 1,
+      result: tree,
+    })
+    const second = operation(3, 'page.ariaSnapshot', {
+      line: 1,
+      result: tree,
+    })
+    const pending = operation(4, 'page.snapshotPending', {
+      line: 1,
+      args: { document: 4, text: 'second snapshot text', form: 'text' },
+    })
+    // Either bookkeeping operation can finish the snapshot after its values were omitted.
+    for (const omitted of [
+      operation(2, 'page.snapshotPending', {
+        line: 1,
+        values: 'off',
+        args: null,
+        result: null,
+      }),
+      operation(2, 'page.snapshotBaseline', {
+        line: 1,
+        values: 'off',
+        args: null,
+        result: null,
+        outcome: 'error',
+      }),
+    ]) {
+      const all = [first, omitted, second, pending]
+      expect(shown(second, all).lines).toEqual(['second snapshot text'])
+      expect(shown(first, all).formattedText).toBe(
+        JSON.stringify(tree, null, 2),
+      )
+      expect(shown(first, all).source).not.toContain('overlapped')
+      expect(shown(omitted, all).formattedText).toBe('(values not recorded)')
+    }
+  })
+
   it("renders mode 'default' with the run's own renderer, and shows a locator's v1 snapshot as the tree", () => {
     const tree = {
       document: 4,

@@ -257,6 +257,12 @@ function pendingOf(
   for (const operation of call) {
     if (recordsText(operation)) open.push(operation)
     if (!closesSnapshot(operation)) continue
+    // Omitted bookkeeping has no document id. It cannot identify which open call ended, so
+    // abandon those pairings before later recorded text can be assigned to an earlier call.
+    if (operation.values === 'off') {
+      open = []
+      continue
+    }
     const owners = open.filter(
       (candidate) => documentOf(candidate) === argsOf(operation).document,
     )
