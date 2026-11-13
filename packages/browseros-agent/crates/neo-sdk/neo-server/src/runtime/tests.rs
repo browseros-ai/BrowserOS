@@ -1095,21 +1095,26 @@ fn a_full_heap_is_reported_in_quickjs_s_two_forms() -> Result<(), TestError> {
 fn a_full_heap_is_neo_s_out_of_memory_with_its_limit() -> Result<(), TestError> {
     on_neo_runtime(async {
         let rig = TestRig::new().await?;
-        // The null form reaches the same outcome through the bootstrap's `thrownNull`, which
-        // `an_ordinary_throw_is_the_script_s_error_and_a_thrown_null_is_out_of_memory` drives.
-        let code = "const chunks = []; for (;;) chunks.push(new Array(1e6).fill(7));";
-        let error = failed(script(&rig, code).await?)?;
-        assert_eq!(
-            (error.owner(), error.code()),
-            (ErrorOwner::Neo, ErrorCode::OUT_OF_MEMORY),
-            "the heap cap stops the script, not the process: {error}"
-        );
-        assert!(
-            error
-                .message()
-                .contains("the script ran out of its 128 MiB memory limit"),
-            "the error names the limit: {error}"
-        );
+        for fill in [
+            // A large allocation fails: QuickJS's InternalError.
+            "const chunks = []; for (;;) chunks.push(new Array(1e6).fill(7));",
+            // Small objects fill the heap to the brim: QuickJS throws null, and the bootstrap
+            // must still build its reply once the script's frames have let go of them.
+            "let held = null; for (;;) held = { next: held };",
+        ] {
+            let error = failed(script(&rig, fill).await?)?;
+            assert_eq!(
+                (error.owner(), error.code()),
+                (ErrorOwner::Neo, ErrorCode::OUT_OF_MEMORY),
+                "the heap cap stops the script, not the process: {fill}: {error}"
+            );
+            assert!(
+                error
+                    .message()
+                    .contains("the script ran out of its 128 MiB memory limit"),
+                "the error names the limit: {fill}: {error}"
+            );
+        }
         Ok(())
     })
 }
