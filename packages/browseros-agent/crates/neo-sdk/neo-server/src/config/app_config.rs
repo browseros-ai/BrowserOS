@@ -104,7 +104,7 @@ mod tests {
                     tcp: None,
                 },
                 xvnc: CLOSED_XVNC,
-                trace_value_bytes: None,
+                ignored_trace_value_bytes: false,
             },
             captcha: CaptchaConfig::default(),
         }

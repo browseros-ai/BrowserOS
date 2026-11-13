@@ -8,6 +8,7 @@ use axum::http::{Method, StatusCode};
 use browseros_core::TabId;
 use neo_service::Settings;
 use neo_takeover::TabHold;
+use neo_trace::{RecordPolicy, Screenshots};
 use serde_json::{Value, json};
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
@@ -18,8 +19,17 @@ use tokio::time::Instant;
 fn defaults() -> Value {
     json!({
         "tabs": { "idleCloseSeconds": 1800 },
-        "trace": { "retentionSeconds": 604_800 },
+        "trace": { "retentionSeconds": 604_800, "screenshots": "perOperation", "valueBytes": 0 },
     })
+}
+
+/// `defaults()` with the `trace` values in `trace` set on top.
+fn with_trace(trace: &Value) -> Value {
+    let mut settings = defaults();
+    if let (Some(into), Some(from)) = (settings["trace"].as_object_mut(), trace.as_object()) {
+        into.extend(from.clone());
+    }
+    settings
 }
 
 impl Harness {
@@ -63,12 +73,17 @@ async fn put_replaces_everything_and_patch_changes_only_what_it_names() -> TestR
         .await?;
     let set = json!({
         "tabs": { "idleCloseSeconds": 300 },
-        "trace": { "retentionSeconds": 86_400 },
+        "trace": { "retentionSeconds": 86_400, "screenshots": "perOperation", "valueBytes": 0 },
     });
     assert_eq!(put.status, StatusCode::OK, "{}", put.body);
     assert_eq!(put.body["settings"], set);
     assert_eq!(put.body["defaults"], defaults(), "defaults never move");
     assert_eq!(put.body["unknown"], json!([]), "every name was known");
+    assert_eq!(
+        put.body["unknownValues"],
+        json!([]),
+        "both lists, always, on a change"
+    );
     let read = harness.get("/v1/settings").await?;
     assert_eq!(read.body["settings"], set, "GET agrees with the PUT");
 
@@ -79,7 +94,7 @@ async fn put_replaces_everything_and_patch_changes_only_what_it_names() -> TestR
         patched.body["settings"],
         json!({
             "tabs": { "idleCloseSeconds": 600 },
-            "trace": { "retentionSeconds": 86_400 },
+            "trace": { "retentionSeconds": 86_400, "screenshots": "perOperation", "valueBytes": 0 },
         }),
         "PATCH keeps what it does not name"
     );
@@ -120,10 +135,11 @@ async fn an_unknown_name_is_skipped_listed_and_never_stops_the_known_ones() -> T
         reply.body["settings"],
         json!({
             "tabs": { "idleCloseSeconds": 300 },
-            "trace": { "retentionSeconds": 7200 },
+            "trace": { "retentionSeconds": 7200, "screenshots": "perOperation", "valueBytes": 0 },
         }),
         "the known settings in the same call still apply"
     );
+    assert_eq!(reply.body["unknownValues"], json!([]));
     let saved: Value = serde_json::from_slice(&std::fs::read(harness.settings_file())?)?;
     assert_eq!(
         saved,
@@ -173,6 +189,18 @@ async fn a_wrong_value_is_refused_by_name_and_nothing_is_applied_or_saved() -> T
             r#"{"trace":{"retentionSeconds":60}}"#,
             "`trace.retentionSeconds` must be a whole number from 3600 to 2592000",
         ),
+        (
+            r#"{"trace":{"valueBytes":262145}}"#,
+            "`trace.valueBytes` must be a whole number from 0 to 262144",
+        ),
+        (
+            r#"{"trace":{"screenshots":5}}"#,
+            "`trace.screenshots` must be one of perOperation, off",
+        ),
+        (
+            r#"{"trace":{"screenshots":null}}"#,
+            "`trace.screenshots` must be one of perOperation, off",
+        ),
         (r#"{"tabs":300}"#, "`tabs` must be an object of settings"),
         ("[1]", "the body must be JSON"),
         ("not json", "the body must be JSON"),
@@ -219,6 +247,51 @@ async fn a_wrong_value_is_refused_by_name_and_nothing_is_applied_or_saved() -> T
         "a refused call applied nothing"
     );
     assert_eq!(std::fs::read(&file)?, saved, "a refused call saved nothing");
+    Ok(())
+}
+
+/// A mode a newer server has (an open list): skipped as if left out, its setting named in
+/// `unknownValues`, never the value. Only a string can be such a name.
+#[tokio::test]
+async fn an_unknown_value_of_an_open_list_is_skipped_and_named_never_quoted() -> TestResult {
+    let harness = harness().await?;
+    let off = harness.patch(r#"{"trace":{"screenshots":"off"}}"#).await?;
+    assert_eq!(
+        off.body["settings"],
+        with_trace(&json!({ "screenshots": "off" }))
+    );
+
+    let patched = harness
+        .patch(r#"{"trace":{"screenshots":"blurred","valueBytes":65536}}"#)
+        .await?;
+    assert_eq!(patched.status, StatusCode::OK, "{}", patched.body);
+    assert_eq!(patched.body["unknown"], json!([]));
+    assert_eq!(patched.body["unknownValues"], json!(["trace.screenshots"]));
+    assert_eq!(
+        patched.body["settings"],
+        with_trace(&json!({ "screenshots": "off", "valueBytes": 65_536 })),
+        "PATCH: the setting keeps its value; the rest of the call applies"
+    );
+    assert!(
+        !patched.body.to_string().contains("blurred"),
+        "the value sent is never repeated: {}",
+        patched.body
+    );
+
+    let put = harness
+        .put(r#"{"trace":{"screenshots":"blurred"}}"#)
+        .await?;
+    assert_eq!(put.body["unknownValues"], json!(["trace.screenshots"]));
+    assert_eq!(
+        put.body["settings"],
+        defaults(),
+        "PUT: as if left out, so the default"
+    );
+    let saved = std::fs::read_to_string(harness.settings_file())?;
+    assert!(
+        !saved.contains("blurred"),
+        "nothing skipped is saved: {saved}"
+    );
     Ok(())
 }
 
@@ -298,7 +371,7 @@ async fn a_saved_file_loads_key_by_key_and_never_stops_a_start() -> TestResult {
     // A newer build's setting, a value this build refuses, and one good value.
     std::fs::write(
         &file,
-        r#"{"tabs":{"idleCloseSeconds":5,"idleCloseMinutes":5},"trace":{"retentionSeconds":7200},"files":{}}"#,
+        r#"{"tabs":{"idleCloseSeconds":5,"idleCloseMinutes":5},"trace":{"retentionSeconds":7200,"screenshots":"blurred"},"files":{}}"#,
     )?;
     let mixed = Settings::load(file.clone()).await;
     assert_eq!(
@@ -306,6 +379,7 @@ async fn a_saved_file_loads_key_by_key_and_never_stops_a_start() -> TestResult {
         Duration::from_mins(30),
         "a value out of range falls back to its default"
     );
+    assert_eq!(mixed.trace_policy(), RecordPolicy::default());
     assert_eq!(
         mixed.trace_retention(),
         Duration::from_secs(7200),
@@ -339,6 +413,39 @@ async fn the_routes_need_the_host_auth() -> TestResult {
         harness.get("/v1/settings").await?.body["settings"],
         defaults(),
         "the refused call changed nothing"
+    );
+    Ok(())
+}
+
+/// The trace writer is handed its policy at once and after every change, before the change
+/// answers, so the next operation follows it.
+#[tokio::test]
+async fn a_watcher_hears_the_trace_policy_before_the_change_answers() -> TestResult {
+    let harness = harness().await?;
+    let heard = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    harness.settings.watch({
+        let heard = std::sync::Arc::clone(&heard);
+        move |settings| {
+            if let Ok(mut heard) = heard.lock() {
+                heard.push(settings.trace_policy());
+            }
+        }
+    });
+    let reply = harness
+        .patch(r#"{"trace":{"screenshots":"off","valueBytes":262144}}"#)
+        .await?;
+    assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
+    let heard = heard.lock().map_err(|_| "poisoned")?.clone();
+    assert_eq!(
+        heard,
+        vec![
+            RecordPolicy::default(),
+            RecordPolicy {
+                screenshots: Screenshots::Off,
+                value_bytes: 262_144,
+            },
+        ],
+        "once when watched, once for the change, before its answer"
     );
     Ok(())
 }

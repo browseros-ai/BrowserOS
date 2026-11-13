@@ -742,3 +742,61 @@ async fn over_the_cap_a_run_whose_files_cannot_be_deleted_still_counts() -> Test
     );
     Ok(())
 }
+
+/// The host's `trace.screenshots: off` reaches the writer as a policy in its own queue: from the
+/// next operation that ends there is no job, after an operation or at a run's end, and the run is
+/// complete when it ends. A job made before the change is still taken. `perOperation` brings
+/// them back.
+#[tokio::test]
+async fn with_screenshots_off_no_job_is_made_from_the_next_operation() -> TestResult {
+    use neo_trace::{RecordPolicy, Screenshots};
+
+    let mut h = harness().await?;
+    let mut events = h.sink.subscribe();
+    let run = start_run(&h.sink, 0);
+    let op = |seq| OperationId::new(run, seq);
+    operation(&h.sink, op(1), Effect::Write, Some(3), None);
+    h.sink.record_policy(RecordPolicy {
+        screenshots: Screenshots::Off,
+        ..RecordPolicy::default()
+    });
+    operation(&h.sink, op(2), Effect::Write, Some(4), None);
+    operation(
+        &h.sink,
+        op(3),
+        Effect::Read,
+        Some(4),
+        Some(ErrorOwner::Website),
+    );
+    let jobs = waiting_jobs(&mut h).await?;
+    assert_eq!(
+        jobs_of(&jobs),
+        vec![(1, TabId(3))],
+        "the job made before the change only"
+    );
+    for job in jobs {
+        take(job, b"jpeg").await?;
+    }
+    end_run(&h.sink, run, 100);
+    assert!(
+        waiting_jobs(&mut h).await?.is_empty(),
+        "no run-end shot of tab 4 either"
+    );
+    completed(&mut events, run).await?;
+
+    h.sink.record_policy(RecordPolicy::default());
+    let again = start_run(&h.sink, 200);
+    operation(
+        &h.sink,
+        OperationId::new(again, 1),
+        Effect::Write,
+        Some(3),
+        None,
+    );
+    assert_eq!(
+        jobs_of(&waiting_jobs(&mut h).await?),
+        vec![(1, TabId(3))],
+        "perOperation takes them again"
+    );
+    Ok(())
+}

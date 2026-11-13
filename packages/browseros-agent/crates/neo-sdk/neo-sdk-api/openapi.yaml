@@ -773,10 +773,11 @@ paths:
       description: |
         Replaces everything the host set, so a host's start step always ends in the same state.
         Every setting is optional. A name this server does not know is skipped, never refused:
-        the rest still applies, and the answer lists the skipped names in `unknown`. A known
-        setting with a value it cannot use (out of its range, the wrong type, or `null`) refuses
-        the whole call with 400 `invalid_request`, which names every setting at fault and its
-        rule; nothing is applied.
+        the rest still applies, and the answer lists the skipped names in `unknown`. A name of an
+        open list it does not have yet (a new `trace.screenshots` mode) is skipped the same way
+        and its setting listed in `unknownValues`. A known setting with a value it cannot use
+        (out of its range, the wrong type, or `null`) refuses the whole call with 400
+        `invalid_request`, which names every setting at fault and its rule; nothing is applied.
 
         Neo saves what the host set beside its trace and loads it at every start, so a setting
         survives a restart of the server. A change takes effect at once, with no restart: each
@@ -812,7 +813,8 @@ paths:
       summary: Change the settings sent. A setting left out keeps its value.
       description: |
         `PUT`'s rules for each setting sent: an unknown name is skipped and listed in `unknown`,
-        a wrong value refuses the whole call. A setting changed this way stays changed across
+        an unknown name of an open list in `unknownValues` (the setting keeps its value), a wrong
+        value refuses the whole call. A setting changed this way stays changed across
         restarts, until another call changes it.
       requestBody:
         required: true
@@ -1630,6 +1632,15 @@ components:
             know them, such as `tabs.idleCloseMinutes`. Empty when it knew every name.
           items:
             type: string
+        unknownValues:
+          type: array
+          description: >-
+            On a `PUT` or `PATCH` answer only: the settings the server has that were sent with a
+            name of an open list it does not have yet, such as a new `trace.screenshots` mode.
+            Each is skipped as if it were left out (`PUT`: its default; `PATCH`: its value
+            stays). The value is never repeated. Empty when it knew every value.
+          items:
+            type: string
     Settings:
       type: object
       description: >-
@@ -1668,6 +1679,27 @@ components:
             Runs older than this are deleted with their operations, their screenshots and Neo's
             copy of their downloads; a repeat of a deleted run's `requestId` runs again. Neo
             sweeps every 10 minutes. A file the browser saved in the downloads folder stays.
+        screenshots:
+          type: string
+          x-extensible-enum: [perOperation, off]
+          default: perOperation
+          description: >-
+            Neo's own screenshots. `perOperation`: after each write, after a failure the website
+            or the script caused, and of each tab a run touched when it ends. `off`: none, from
+            the next operation that ends (a screenshot already ordered is still taken). A
+            script's own `page.screenshot()` is its result and is kept either way. A name this
+            server does not have is skipped and listed in `unknownValues`.
+        valueBytes:
+          type: integer
+          format: int64
+          minimum: 0
+          maximum: 262144
+          default: 0
+          description: >-
+            Keeps each operation's arguments and result, a run's result, and any one string in
+            them whole up to this many bytes, from the next operation that ends. `0` keeps the
+            trace's own limits: 4 KiB arguments, 2 KiB results, 1 KiB strings. A higher value
+            stores more of what a script typed and got.
     Error:
       type: object
       required: [code, message]

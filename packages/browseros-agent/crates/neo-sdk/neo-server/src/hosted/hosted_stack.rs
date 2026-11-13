@@ -4,7 +4,7 @@ use std::time::Duration;
 use browseros_core::NativeCapabilities;
 use neo_captcha::CaptchaSolver;
 use neo_service::Settings;
-use neo_trace::{Redactor, TraceSink, WriterConfig};
+use neo_trace::{RedactionLimits, Redactor, TraceSink, WriterConfig};
 use tokio::time;
 use tokio_util::sync::CancellationToken;
 
@@ -37,7 +37,8 @@ impl HostedStack {
         let store = App::hosted_trace(&config.env.trace_dir())
             .await
             .map_err(HostedError::from_error)?;
-        let redactor = Redactor::new(config.env.redaction_limits());
+        // No host API here, so nothing sets `trace.valueBytes`: the default limits.
+        let redactor = Redactor::new(RedactionLimits::default());
         let trace = neo_trace::spawn_writer(
             &store,
             redactor,

@@ -80,3 +80,7 @@ pub(crate) const IDLE_CLOSE_SECONDS: RangeInclusive<u64> = 60..=86_400;
 /// answer a repeat of its `requestId` for 10 minutes, and a run can last 15. No longer than 30
 /// days, which protects the disk.
 pub(crate) const RETENTION_SECONDS: RangeInclusive<u64> = 3_600..=2_592_000;
+
+/// `trace.valueBytes`, in bytes: up to Neo's own reply limit, 256 KiB, which is what the Neo
+/// viewer asks for. `0` keeps the trace's default limits.
+pub(crate) const VALUE_BYTES: RangeInclusive<u64> = 0..=262_144;

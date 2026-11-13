@@ -14,7 +14,6 @@ import {
   settleImages,
   startContainer,
   stopContainer,
-  TRACE_VALUE_BYTES,
 } from './neo-container'
 
 const ok = (stdout = ''): CommandResult => ({ code: 0, stdout, stderr: '' })
@@ -499,7 +498,7 @@ describe('cleanup touches only what the viewer created', () => {
   })
 })
 
-test("the container keeps a call's arguments and result whole up to Neo's reply limit", async () => {
+test('the container gets no CLAW_TRACE_VALUE_BYTES: the viewer sets trace.valueBytes through the host API', async () => {
   // docker run fails here, after its arguments are recorded: they are what this checks.
   const docker = fakeDocker((args) =>
     args[0] === 'run'
@@ -515,11 +514,9 @@ test("the container keeps a call's arguments and result whole up to Neo's reply 
     }),
   ).rejects.toThrow()
   const run = docker.calls.find((call) => call[1] === 'run') ?? []
-  expect(TRACE_VALUE_BYTES).toBe(256 * 1024)
-  expect(run).toContain(`CLAW_TRACE_VALUE_BYTES=${TRACE_VALUE_BYTES}`)
-  expect(
-    run[run.indexOf(`CLAW_TRACE_VALUE_BYTES=${TRACE_VALUE_BYTES}`) - 1],
-  ).toBe('-e')
+  expect(run.some((arg) => arg.startsWith('CLAW_TRACE_VALUE_BYTES'))).toBe(
+    false,
+  )
 })
 
 test('a machine whose Docker address pools are used up still gets a network, on an explicit subnet', async () => {

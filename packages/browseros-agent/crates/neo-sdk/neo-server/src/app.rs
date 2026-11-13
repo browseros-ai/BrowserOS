@@ -12,7 +12,8 @@ use neo_captcha::CaptchaSolver;
 use neo_captcha::config::{CAPSOLVER_KEY_FILE_ENV, TWOCAPTCHA_KEY_FILE_ENV};
 use neo_service::Settings;
 use neo_trace::{
-    EpochMillis, Redactor, RetentionPolicy, TraceError, TraceSink, TraceStore, WriterConfig,
+    EpochMillis, RedactionLimits, Redactor, RetentionPolicy, TraceError, TraceSink, TraceStore,
+    WriterConfig,
 };
 use tokio::net::TcpListener;
 use tokio::runtime::{Builder, Runtime};
@@ -158,7 +159,9 @@ impl App {
         log_startup(&config, address);
 
         let store = open_trace(&config.env.trace_dir()).await?;
-        let redactor = Redactor::new(config.env.redaction_limits());
+        // The default limits until the host's `trace.valueBytes` reaches the writer, which
+        // happens below, as soon as the settings are loaded and before any run.
+        let redactor = Redactor::new(RedactionLimits::default());
         let writer = WriterConfig {
             replay_window: Defaults::REPLAY_WINDOW,
             ..WriterConfig::default()
@@ -182,6 +185,7 @@ impl App {
         .map_err(|error| StartError::HostSocket(error.to_string()))?;
         // Loaded by the bind, before anything below reads them, so the first run follows them.
         let settings = host.settings().clone();
+        follow_trace_policy(&settings, trace.clone());
 
         let tabs = Arc::new(TabRegistry::new());
         let native = NativeCapabilities::from_browseros_version(config.browseros_version());
@@ -307,6 +311,13 @@ impl fmt::Debug for App {
     }
 }
 
+/// Tells the trace writer what to record (`trace.screenshots`, `trace.valueBytes`) now and after
+/// every change of the host's settings, before the change answers. The policy travels in the
+/// writer's own queue, so a change applies from the next operation that ends.
+fn follow_trace_policy(settings: &Settings, trace: TraceSink) {
+    settings.watch(move |settings| trace.record_policy(settings.trace_policy()));
+}
+
 /// Neo's periodic upkeep, one task until `shutdown`: every [`Defaults::HOUSEKEEPING_EVERY`] the
 /// janitor closes idle agent tabs; every
 /// [`Defaults::TRACE_SWEEP_EVERY`] the trace writer deletes records past retention.
@@ -418,6 +429,11 @@ fn log_startup(config: &AppConfig, address: SocketAddr) {
         error!(
             ?value,
             "BROWSERCLAW_HOSTED_MODE is not \"1\": popups will open as windows Neo cannot drive"
+        );
+    }
+    if env.ignored_trace_value_bytes {
+        warn!(
+            "CLAW_TRACE_VALUE_BYTES is ignored: set trace.valueBytes through PUT or PATCH /v1/settings"
         );
     }
     if let Some(path) = &env.ignored_config_file {

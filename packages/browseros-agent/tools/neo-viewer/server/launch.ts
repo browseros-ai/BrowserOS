@@ -11,7 +11,7 @@ import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { type LaunchOptions, launchOptionsFrom, stateRoot } from './config'
 import { describeError } from './errors'
-import type { HostApiConfig } from './hostApi'
+import { configureHostApi, type HostApiConfig } from './hostApi'
 import { LOG_FILE } from './log/run-log'
 import {
   buildScript,
@@ -30,6 +30,7 @@ import {
   startContainer,
   stopContainer,
 } from './neo-container'
+import { applyViewerSettings } from './neo-settings'
 import { buildPage } from './page'
 import {
   claimStateFolder,
@@ -149,10 +150,16 @@ async function startNeo(
     tokenFile,
     launch: launchId,
   })
-  return {
-    mcpUrl: container.mcpUrl,
-    hostApi: { url: container.hostApiUrl, tokenFile },
+  const hostApi = { url: container.hostApiUrl, tokenFile }
+  // The viewer's own Neo keeps whole values for the operation panel (neo-settings.ts), set
+  // before the viewer serves; startViewer configures the same host API again.
+  await configureHostApi(hostApi)
+  if ((await applyViewerSettings()) === 'unsupported') {
+    console.warn(
+      `neo-viewer: ${currentImage} does not take trace.valueBytes, so its trace cuts operation values at 2 KiB`,
+    )
   }
+  return { mcpUrl: container.mcpUrl, hostApi }
 }
 
 /** `--image`, `--no-build`'s newest image, or this checkout's image (built when missing or stale). */

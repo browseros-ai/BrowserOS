@@ -9,7 +9,7 @@
 //! a setting never changes its name, its type or its meaning. A retired setting keeps its row
 //! and is read by nobody, so its name is never reused.
 
-use crate::limits::{IDLE_CLOSE_SECONDS, RETENTION_SECONDS};
+use crate::limits::{IDLE_CLOSE_SECONDS, RETENTION_SECONDS, VALUE_BYTES};
 use serde_json::Value;
 use std::ops::RangeInclusive;
 
@@ -33,6 +33,14 @@ pub(crate) enum Rule {
         /// The values a host may set, both ends included.
         range: RangeInclusive<u64>,
     },
+    /// One name from an open list: a later server may know more names than `values`. A name
+    /// this server does not know is skipped, as an unknown setting is, and never refused.
+    Choice {
+        /// Used when the host set nothing: today's behaviour.
+        default: &'static str,
+        /// The names this server knows.
+        values: &'static [&'static str],
+    },
 }
 
 /// One setting's value, as checked against its rule.
@@ -40,6 +48,20 @@ pub(crate) enum Rule {
 pub(crate) enum SettingValue {
     /// A [`Rule::Whole`] value.
     Whole(u64),
+    /// A [`Rule::Choice`] value, one of its `values`.
+    Choice(&'static str),
+}
+
+/// What a value sent for a known setting is, against its rule.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum Checked {
+    /// A value the setting takes.
+    Value(SettingValue),
+    /// A string that is no name this server knows for an open list: skipped and named in
+    /// `unknownValues`, as a name from a newer server would be.
+    UnknownValue,
+    /// A value the rule refuses, with the rule worded to follow the setting's name.
+    Refused(String),
 }
 
 /// Neo closes an agent's tab once nothing used it for this long (the idle-tab janitor).
@@ -61,8 +83,35 @@ pub(crate) const TRACE_RETENTION: Setting = Setting {
     },
 };
 
+/// Neo's own screenshots: `perOperation`, or `off` (the trace writer's `RecordPolicy`).
+pub(crate) const TRACE_SCREENSHOTS: Setting = Setting {
+    name: "trace.screenshots",
+    rule: Rule::Choice {
+        default: SCREENSHOTS_PER_OPERATION,
+        values: &[SCREENSHOTS_PER_OPERATION, SCREENSHOTS_OFF],
+    },
+};
+
+/// The size up to which the trace keeps values whole; `0` keeps the trace writer's defaults.
+pub(crate) const TRACE_VALUE_BYTES: Setting = Setting {
+    name: "trace.valueBytes",
+    rule: Rule::Whole {
+        default: 0,
+        range: VALUE_BYTES,
+    },
+};
+
+/// `trace.screenshots`'s names.
+pub(crate) const SCREENSHOTS_PER_OPERATION: &str = "perOperation";
+pub(crate) const SCREENSHOTS_OFF: &str = "off";
+
 /// Every setting this server knows, in the order the README lists them.
-pub(crate) const SETTINGS: &[Setting] = &[TAB_IDLE_CLOSE, TRACE_RETENTION];
+pub(crate) const SETTINGS: &[Setting] = &[
+    TAB_IDLE_CLOSE,
+    TRACE_RETENTION,
+    TRACE_SCREENSHOTS,
+    TRACE_VALUE_BYTES,
+];
 
 impl Setting {
     /// The row named `name`, if this server knows it.
@@ -85,24 +134,46 @@ impl Setting {
     pub(crate) const fn default_value(&self) -> SettingValue {
         match self.rule {
             Rule::Whole { default, .. } => SettingValue::Whole(default),
+            Rule::Choice { default, .. } => SettingValue::Choice(default),
         }
     }
 
-    /// `value` checked against the rule, or the rule it broke, worded to follow the setting's
-    /// name in a message. The rule never quotes the value, as the other routes never do.
-    pub(crate) fn check(&self, value: &Value) -> Result<SettingValue, String> {
+    /// `value` checked against the rule. A refusal's rule never quotes the value, as the other
+    /// routes never do.
+    pub(crate) fn check(&self, value: &Value) -> Checked {
         match &self.rule {
             Rule::Whole { range, .. } => value
                 .as_u64()
                 .filter(|whole| range.contains(whole))
-                .map(SettingValue::Whole)
-                .ok_or_else(|| {
-                    format!(
-                        "must be a whole number from {} to {}",
-                        range.start(),
-                        range.end()
-                    )
-                }),
+                .map_or_else(
+                    || {
+                        Checked::Refused(format!(
+                            "must be a whole number from {} to {}",
+                            range.start(),
+                            range.end()
+                        ))
+                    },
+                    |whole| Checked::Value(SettingValue::Whole(whole)),
+                ),
+            // Only a string can be a name a newer server knows; any other type is wrong here.
+            Rule::Choice { values, .. } => match value.as_str() {
+                Some(name) => values
+                    .iter()
+                    .find(|known| **known == name)
+                    .map_or(Checked::UnknownValue, |known| {
+                        Checked::Value(SettingValue::Choice(known))
+                    }),
+                None => Checked::Refused(format!("must be one of {}", self.values_text())),
+            },
+        }
+    }
+
+    /// The names an open list's setting takes, for a refusal or a warning: `perOperation, off`.
+    /// Empty for any other rule.
+    pub(crate) fn values_text(&self) -> String {
+        match &self.rule {
+            Rule::Choice { values, .. } => values.join(", "),
+            Rule::Whole { .. } => String::new(),
         }
     }
 
@@ -110,6 +181,7 @@ impl Setting {
     pub(crate) fn json(value: SettingValue) -> Value {
         match value {
             SettingValue::Whole(whole) => Value::from(whole),
+            SettingValue::Choice(name) => Value::from(name),
         }
     }
 }
@@ -139,6 +211,10 @@ mod tests {
                         default.to_string(),
                         format!("{} to {}", range.start(), range.end()),
                     ),
+                ),
+                Rule::Choice { default, values } => (
+                    setting.name.to_owned(),
+                    ((*default).to_owned(), values.join(", ")),
                 ),
             })
             .collect()
@@ -195,13 +271,14 @@ mod tests {
                         .map(str::to_owned)
                         .unwrap_or_default()
                 };
-                listed.insert(
-                    format!("{group}.{key}"),
-                    (
-                        field("default: "),
-                        format!("{} to {}", field("minimum: "), field("maximum: ")),
-                    ),
-                );
+                // An open list states its names as `x-extensible-enum: [a, b]`; a number, its
+                // bounds.
+                let names = field("x-extensible-enum: [");
+                let range = match names.strip_suffix(']') {
+                    Some(names) => names.to_owned(),
+                    None => format!("{} to {}", field("minimum: "), field("maximum: ")),
+                };
+                listed.insert(format!("{group}.{key}"), (field("default: "), range));
             }
         }
         Ok(listed)
@@ -217,15 +294,16 @@ mod tests {
             .filter_map(|line| {
                 let cells: Vec<&str> = line.split('|').map(str::trim).collect();
                 let name = cells.get(1)?.strip_prefix('`')?.strip_suffix('`')?;
-                name.contains('.').then(|| {
-                    (
-                        name.to_owned(),
-                        (
-                            cells.get(2).copied().unwrap_or_default().to_owned(),
-                            cells.get(3).copied().unwrap_or_default().to_owned(),
-                        ),
-                    )
-                })
+                // Names in a cell are backquoted: `perOperation`, `off`.
+                let cell = |index: usize| {
+                    cells
+                        .get(index)
+                        .copied()
+                        .unwrap_or_default()
+                        .replace('`', "")
+                };
+                name.contains('.')
+                    .then(|| (name.to_owned(), (cell(2), cell(3))))
             })
             .collect()
     }

@@ -68,6 +68,8 @@ pub(crate) struct Harness {
     pub(crate) capture: Arc<ScriptedCdp>,
     /// The started service, for what the app calls directly: the locks and the tab events.
     pub(crate) service: Service,
+    /// The settings the service serves, as the app hands them to the parts that read them.
+    pub(crate) settings: Settings,
     /// The routes behind the host auth, as a host reaches them.
     pub(crate) router: Router,
     /// `Service::router()` alone, for tests that serve it themselves.
@@ -159,6 +161,7 @@ async fn start(
         WriterConfig::default(),
         camera.then_some(queue),
     );
+    let settings = Settings::load(dir.path().join("settings.json")).await;
     let browser = ScriptedBrowser::new();
     browser.set_window(window);
     let xvnc = FakeXvnc::start(screen).await?;
@@ -173,7 +176,7 @@ async fn start(
             xvnc: xvnc.xvnc(HOME_SCREEN),
             // Never dialed: the live views capture over the transport below.
             cdp_port: 0,
-            settings: Settings::load(dir.path().join("settings.json")).await,
+            settings: settings.clone(),
         },
         capture_transport.unwrap_or_else(|| Arc::new(ScriptedTransport(Arc::clone(&capture)))),
     );
@@ -194,6 +197,7 @@ async fn start(
         router: authenticated(&service)?,
         routes: service.router(),
         service,
+        settings,
     })
 }
 

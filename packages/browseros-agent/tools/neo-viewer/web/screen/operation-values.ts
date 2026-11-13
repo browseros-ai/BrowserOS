@@ -5,7 +5,7 @@
  * its `display`, the timeout as `timeout`, and, when the script called the method by another name
  * (`page.waitForEvent` recorded as `events.wait`), that name as `called as`. Everything else is
  * the recorded JSON, with any long string cut to its start: the viewer asks Neo to keep values
- * whole (`CLAW_TRACE_VALUE_BYTES`), so one argument can hold a whole snapshot's text, which the
+ * whole (the host setting `trace.valueBytes`), so one argument can hold a whole snapshot's text, which the
  * right panel shows in full.
  */
 
